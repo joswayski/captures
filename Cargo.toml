@@ -2,6 +2,7 @@
 members = [
     "apps/desktop/src-tauri",
     "crates/ces-capture",
+    "crates/ces-macos-window",
 ]
 resolver = "2"
 

@@ -897,7 +897,7 @@ fn show_thumbnail(app: &AppHandle) {
 
 fn create_thumbnail_window(app: &AppHandle, visible: bool) -> Result<(), tauri::Error> {
     let (x, y, height) = thumbnail_window_geometry(app, 1);
-    WebviewWindowBuilder::new(
+    let window = WebviewWindowBuilder::new(
         app,
         "thumbnail",
         WebviewUrl::App("index.html?view=thumbnail".into()),
@@ -915,9 +915,17 @@ fn create_thumbnail_window(app: &AppHandle, visible: bool) -> Result<(), tauri::
     .background_color(Color(0, 0, 0, 0))
     .accept_first_mouse(true)
     .focused(false)
-    .visible(visible)
-    .build()
-    .map(|_| ())
+    .visible(false)
+    .build()?;
+
+    #[cfg(target_os = "macos")]
+    ces_macos_window::configure_inactive_hover(&window)
+        .map_err(|error| tauri::Error::Anyhow(anyhow::anyhow!(error)))?;
+
+    if visible {
+        show_thumbnail_window(&window);
+    }
+    Ok(())
 }
 
 const THUMBNAIL_WIDTH: f64 = 300.0;
@@ -942,8 +950,18 @@ fn update_thumbnail_stack(app: &AppHandle, count: usize) {
         let (x, y, height) = thumbnail_window_geometry(&handle, count);
         let _ = window.set_size(LogicalSize::new(THUMBNAIL_WIDTH, height));
         let _ = window.set_position(tauri::LogicalPosition::new(x, y));
-        let _ = window.show();
+        show_thumbnail_window(&window);
     });
+}
+
+fn show_thumbnail_window(window: &tauri::WebviewWindow) {
+    #[cfg(target_os = "macos")]
+    if let Err(error) = ces_macos_window::show_without_activating(window) {
+        eprintln!("failed to raise capture thumbnail stack: {error}");
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    let _ = window.show();
 }
 
 fn restore_thumbnail_stack(app: &AppHandle, state: &Arc<AppState>) {
