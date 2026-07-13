@@ -480,6 +480,7 @@ fn set_thumbnail_cursor(app: AppHandle, pointing: bool) -> CommandResult<()> {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn thumbnail_pointer_position(
     mouse_x: f64,
     mouse_y: f64,
@@ -1445,10 +1446,9 @@ fn capture_error_message(error: &AppError) -> String {
         AppError::Capture(CaptureError::PermissionDenied | CaptureError::PermissionRequestStarted)
     ) {
         #[cfg(target_os = "windows")]
-        {
-            return "CES could not access the screen. Windows desktop capture does not use a separate Screen Recording permission; secure/UAC windows and protected content cannot be captured.".to_owned();
-        }
+        return "CES could not access the screen. Windows desktop capture does not use a separate Screen Recording permission; secure/UAC windows and protected content cannot be captured.".to_owned();
 
+        #[cfg(not(target_os = "windows"))]
         return "CES needs Screen Recording permission to capture your open windows. Enable it in your operating system's privacy settings, then restart CES.".to_owned();
     }
 
