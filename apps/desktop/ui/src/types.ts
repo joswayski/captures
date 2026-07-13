@@ -26,6 +26,7 @@ export interface ActiveSession {
   id: string;
   mode: CaptureMode;
   display: DisplayDescriptor;
+  window_coordinate_scale: number;
   snapshot_url: string;
   windows: WindowDescriptor[];
 }
@@ -48,4 +49,3 @@ export interface CaptureArtifact {
   mode: CaptureMode;
   clipboard_copied: boolean;
 }
-

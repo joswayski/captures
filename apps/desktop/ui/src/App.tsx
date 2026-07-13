@@ -38,23 +38,39 @@ function IdleView() {
 }
 
 function CaptureOverlay() {
-  const sessionId = query("session_id");
-  const mode = (query("mode") ?? "region") as CaptureMode;
   const [session, setSession] = useState<ActiveSession | null>(null);
   const [start, setStart] = useState<SelectionPoint | null>(null);
   const [current, setCurrent] = useState<SelectionPoint | null>(null);
   const [hoveredWindow, setHoveredWindow] = useState<string | null>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
+  const sessionId = session?.id ?? query("session_id");
+  const mode = session?.mode ?? ((query("mode") ?? "region") as CaptureMode);
 
   useEffect(() => {
-    if (!sessionId) return;
-    void invoke<ActiveSession | null>("get_active_session", { sessionId }).then(setSession);
-  }, [sessionId]);
+    let active = true;
+    let dispose: (() => void) | undefined;
+    void (async () => {
+      dispose = await listen<ActiveSession>("capture-session-ready", ({ payload }) => {
+        setSession(payload);
+        setStart(null);
+        setCurrent(null);
+        setHoveredWindow(null);
+      });
+      const initialSession = query("session_id")
+        ? await invoke<ActiveSession | null>("get_active_session", { sessionId: query("session_id") })
+        : await invoke<ActiveSession | null>("get_pending_session");
+      if (active && initialSession) setSession(initialSession);
+    })();
+    return () => {
+      active = false;
+      dispose?.();
+    };
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || !sessionId) return;
-      void invoke("cancel_capture", { sessionId }).finally(() => void currentWindow?.close());
+      void invoke("cancel_capture", { sessionId });
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -77,7 +93,7 @@ function CaptureOverlay() {
 
   const commitRegion = () => {
     if (!rect || rect.width < 2 || rect.height < 2) return;
-    void invoke("commit_region", { sessionId, rect }).finally(() => void currentWindow?.close());
+    void invoke("commit_region", { sessionId, rect });
   };
 
   const onPointerDown = (event: React.PointerEvent) => {
@@ -104,11 +120,17 @@ function CaptureOverlay() {
     <main
       ref={surfaceRef}
       className={`capture-surface capture-${mode}`}
-      style={{ backgroundImage: `url(${session.snapshot_url})` }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
     >
+      <img
+        className="capture-snapshot"
+        src={session.snapshot_url}
+        alt=""
+        draggable={false}
+        onLoad={() => void invoke("show_capture_overlay", { sessionId })}
+      />
       <div className="capture-shade" />
       <div className="capture-hint">
         {mode === "region" ? "Drag to capture · Esc to cancel" : "Select a window · Esc to cancel"}
@@ -125,11 +147,11 @@ function CaptureOverlay() {
         <WindowTargets
           display={session.display}
           windows={session.windows}
-          scale={session.display.scale_factor}
+          scale={session.window_coordinate_scale}
           hoveredWindow={hoveredWindow}
           onHover={setHoveredWindow}
           onSelect={(window) => {
-            void invoke("commit_window", { sessionId, windowId: window.id }).finally(() => void currentWindow?.close());
+            void invoke("commit_window", { sessionId, windowId: window.id });
           }}
         />
       )}
@@ -154,7 +176,7 @@ function WindowTargets({
 }) {
   return (
     <div className="window-targets">
-      {windows.map((window) => (
+      {windows.map((window, index) => (
         <button
           type="button"
           key={window.id}
@@ -164,6 +186,7 @@ function WindowTargets({
             top: (window.y - display.y) / scale,
             width: window.width / scale,
             height: window.height / scale,
+            zIndex: windows.length - index,
           }}
           title={window.title}
           onPointerEnter={() => onHover(window.id)}
@@ -178,37 +201,51 @@ function WindowTargets({
 }
 
 function Thumbnail() {
-  const [artifact, setArtifact] = useState<CaptureArtifact | null>(null);
-  const [paused, setPaused] = useState(false);
-  const [message, setMessage] = useState("");
-  const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-
-  const close = () => {
-    void invoke("close_thumbnail");
-  };
+  const [artifacts, setArtifacts] = useState<CaptureArtifact[]>([]);
+  const stackRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
-    void invoke<CaptureArtifact | null>("get_last_artifact").then(setArtifact);
-    const unlisten = listen<CaptureArtifact>("capture-completed", ({ payload }) => {
-      setArtifact(payload);
-      setPaused(false);
-      setMessage("");
-    });
+    let active = true;
+    let dispose: (() => void)[] = [];
+    void (async () => {
+      dispose = await Promise.all([
+        listen<CaptureArtifact>("capture-completed", ({ payload }) => {
+          setArtifacts((current) => current.some(({ id }) => id === payload.id)
+            ? current
+            : [...current, payload]);
+        }),
+        listen<CaptureArtifact>("artifact-updated", ({ payload }) => {
+          setArtifacts((current) => current.map((artifact) => artifact.id === payload.id ? payload : artifact));
+        }),
+        listen<string>("artifact-removed", ({ payload }) => {
+          setArtifacts((current) => current.filter(({ id }) => id !== payload));
+        }),
+      ]);
+      const initialArtifacts = await invoke<CaptureArtifact[]>("get_artifacts");
+      if (active) setArtifacts(initialArtifacts);
+    })();
     return () => {
-      void unlisten.then((dispose) => dispose());
+      active = false;
+      dispose.forEach((unlisten) => unlisten());
     };
   }, []);
 
   useEffect(() => {
-    if (!artifact || paused) return;
-    timerRef.current = setTimeout(close, 10_000);
-    return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    };
-  }, [artifact, paused]);
+    if (stackRef.current) stackRef.current.scrollTop = stackRef.current.scrollHeight;
+  }, [artifacts.length]);
 
+  if (artifacts.length === 0) return null;
+
+  return (
+    <main ref={stackRef} className="thumbnail-stack">
+      {artifacts.map((artifact) => <ThumbnailCard key={artifact.id} artifact={artifact} />)}
+    </main>
+  );
+}
+
+function ThumbnailCard({ artifact }: { artifact: CaptureArtifact }) {
+  const [message, setMessage] = useState("");
   const runAction = async (action: string, success: string) => {
-    if (!artifact) return;
     try {
       await invoke(action, { artifactId: artifact.id });
       setMessage(success);
@@ -217,28 +254,64 @@ function Thumbnail() {
     }
   };
 
-  if (!artifact) return null;
-
   return (
-    <main
-      className="thumbnail-card"
-      onPointerEnter={() => setPaused(true)}
-      onPointerLeave={() => setPaused(false)}
-    >
-      <img src={artifact.preview_url} alt="Latest capture" />
+    <article className="thumbnail-card">
+      <img src={artifact.preview_url} alt="Screenshot preview" />
+      <div className="thumbnail-actions">
+        <IconButton label="Copy" onClick={() => void runAction("copy_artifact", "Copied")}>
+          <CopyIcon />
+        </IconButton>
+        <IconButton label="Show in Folder" onClick={() => void runAction("reveal_artifact", "Shown in folder")}>
+          <FolderIcon />
+        </IconButton>
+        <IconButton className="delete" label="Delete" onClick={() => void runAction("trash_artifact", "Deleted")}>
+          <TrashIcon />
+        </IconButton>
+        <IconButton label="Dismiss" onClick={() => void runAction("dismiss_artifact", "Dismissed")}>
+          <CloseIcon />
+        </IconButton>
+      </div>
       <div className="thumbnail-meta">
         <span>{artifact.width} × {artifact.height}</span>
         {!artifact.clipboard_copied && <span className="warning">Clipboard unavailable</span>}
       </div>
-      <div className="thumbnail-actions">
-        <button type="button" onClick={() => void runAction("copy_artifact", "Copied")}>Copy</button>
-        <button type="button" onClick={() => void runAction("reveal_artifact", "Shown in folder")}>Show in Folder</button>
-        <button type="button" onClick={() => void runAction("trash_artifact", "Moved to Trash")}>Trash</button>
-        <button type="button" className="quiet" onClick={close}>Dismiss</button>
-      </div>
       {message && <p className="thumbnail-message">{message}</p>}
-    </main>
+    </article>
   );
+}
+
+function IconButton({
+  children,
+  className = "",
+  label,
+  onClick,
+}: {
+  children: React.ReactNode;
+  className?: string;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button type="button" className={className} aria-label={label} title={label} onClick={onClick}>
+      {children}
+    </button>
+  );
+}
+
+function CopyIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" /></svg>;
+}
+
+function FolderIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /><circle cx="16.5" cy="13.5" r="2.5" /><path d="m18.3 15.3 2.2 2.2" /></svg>;
+}
+
+function TrashIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5" /></svg>;
+}
+
+function CloseIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>;
 }
 
 function Preferences() {

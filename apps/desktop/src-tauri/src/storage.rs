@@ -68,6 +68,23 @@ pub fn encode_preview_png(image: &RgbaImage, scale_factor: f64) -> Result<Vec<u8
     encode_png_with_filter(image, FilterType::Sub)
 }
 
+pub fn encode_thumbnail_png(image: &RgbaImage) -> Result<Vec<u8>, AppError> {
+    const MAX_WIDTH: u32 = 568;
+    const MAX_HEIGHT: u32 = 320;
+
+    if image.width() > MAX_WIDTH || image.height() > MAX_HEIGHT {
+        let scale = (f64::from(MAX_WIDTH) / f64::from(image.width()))
+            .min(f64::from(MAX_HEIGHT) / f64::from(image.height()));
+        let width = (f64::from(image.width()) * scale).round().max(1.0) as u32;
+        let height = (f64::from(image.height()) * scale).round().max(1.0) as u32;
+        let thumbnail =
+            image::imageops::resize(image, width, height, image::imageops::FilterType::Triangle);
+        return encode_png_with_filter(&thumbnail, FilterType::Sub);
+    }
+
+    encode_png_with_filter(image, FilterType::Sub)
+}
+
 fn encode_png_with_filter(image: &RgbaImage, filter: FilterType) -> Result<Vec<u8>, AppError> {
     let mut bytes = Vec::new();
     PngEncoder::new_with_quality(&mut bytes, CompressionType::Fast, filter)
@@ -98,7 +115,7 @@ mod tests {
     use image::{Rgba, RgbaImage};
     use tempfile::tempdir;
 
-    use super::{encode_preview_png, save_capture, unique_path};
+    use super::{encode_preview_png, encode_thumbnail_png, save_capture, unique_path};
     use crate::models::AppSettings;
 
     #[test]
@@ -128,5 +145,14 @@ mod tests {
         let preview = image::load_from_memory(&bytes).expect("preview readable");
 
         assert_eq!((preview.width(), preview.height()), (2, 1));
+    }
+
+    #[test]
+    fn thumbnail_png_fits_the_preview_card() {
+        let image = RgbaImage::from_pixel(2_000, 1_000, Rgba([1, 2, 3, 255]));
+        let bytes = encode_thumbnail_png(&image).expect("thumbnail encoded");
+        let thumbnail = image::load_from_memory(&bytes).expect("thumbnail readable");
+
+        assert_eq!((thumbnail.width(), thumbnail.height()), (568, 284));
     }
 }

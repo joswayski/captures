@@ -37,6 +37,8 @@ pub struct CaptureArtifact {
     pub created_at: String,
     pub mode: CaptureMode,
     pub clipboard_copied: bool,
+    #[serde(skip)]
+    pub preview_png: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -44,6 +46,7 @@ pub struct ActiveSession {
     pub id: String,
     pub mode: CaptureMode,
     pub display: DisplayDescriptor,
+    pub window_coordinate_scale: f64,
     pub snapshot_url: String,
     pub windows: Vec<WindowDescriptor>,
 }

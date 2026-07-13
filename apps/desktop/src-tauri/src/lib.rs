@@ -8,7 +8,7 @@ use chrono::Utc;
 use image::RgbaImage;
 use mouse_position::mouse_position::Mouse;
 use tauri::{
-    AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
+    AppHandle, Emitter, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder,
     image::Image,
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
@@ -100,13 +100,15 @@ pub fn run() {
             commit_window,
             cancel_capture,
             get_active_session,
+            get_pending_session,
             get_settings,
             update_settings,
-            get_last_artifact,
+            get_artifacts,
             copy_artifact,
             reveal_artifact,
             trash_artifact,
-            close_thumbnail,
+            dismiss_artifact,
+            show_capture_overlay,
             open_captures_folder,
             open_preferences,
         ])
@@ -121,6 +123,9 @@ pub fn run() {
                 .map_err(|error| tauri::Error::Anyhow(anyhow::anyhow!(error.to_string())))?;
             if let Err(error) = create_thumbnail_window(&handle, false) {
                 eprintln!("failed to prepare capture thumbnail: {error}");
+            }
+            if let Err(error) = create_overlay_window(&handle) {
+                eprintln!("failed to prepare capture overlay: {error}");
             }
             Ok(())
         })
@@ -171,7 +176,13 @@ async fn start_capture_inner(
         state
             .windows()?
             .into_iter()
-            .filter(|window| window.display_id == display.id)
+            .filter(|window| {
+                window.display_id == display.id
+                    && window
+                        .app_name
+                        .as_deref()
+                        .is_none_or(|app_name| !app_name.eq_ignore_ascii_case("CES"))
+            })
             .collect()
     } else {
         Vec::new()
@@ -187,6 +198,7 @@ async fn start_capture_inner(
     let active = ActiveSession {
         id: id.to_string(),
         mode,
+        window_coordinate_scale: window_coordinate_scale(&session.display),
         display: session.display.clone(),
         snapshot_url: models::snapshot_url(&id.to_string()),
         windows: session.windows.clone(),
@@ -203,7 +215,7 @@ async fn commit_region(
     session_id: String,
     rect: LogicalRect,
 ) -> CommandResult<CaptureArtifact> {
-    close_window(&app, "overlay");
+    hide_window(&app, "overlay");
     let state = state.inner().clone();
     let id = Uuid::parse_str(&session_id).map_err(|error| error.to_string())?;
     let session = state
@@ -233,7 +245,7 @@ async fn commit_window(
     session_id: String,
     window_id: String,
 ) -> CommandResult<CaptureArtifact> {
-    close_window(&app, "overlay");
+    hide_window(&app, "overlay");
     let state = state.inner().clone();
     let id = Uuid::parse_str(&session_id).map_err(|error| error.to_string())?;
     state
@@ -257,7 +269,7 @@ fn cancel_capture(
     state: tauri::State<'_, Arc<AppState>>,
     session_id: String,
 ) -> CommandResult<()> {
-    close_window(&app, "overlay");
+    hide_window(&app, "overlay");
     let id = Uuid::parse_str(&session_id).map_err(|error| error.to_string())?;
     state.sessions.lock().remove(&id);
     Ok(())
@@ -272,10 +284,47 @@ fn get_active_session(
     Ok(state.sessions.lock().get(&id).map(|session| ActiveSession {
         id: session.id.to_string(),
         mode: session.mode,
+        window_coordinate_scale: window_coordinate_scale(&session.display),
         display: session.display.clone(),
         snapshot_url: models::snapshot_url(&session.id.to_string()),
         windows: session.windows.clone(),
     }))
+}
+
+#[tauri::command]
+fn get_pending_session(state: tauri::State<'_, Arc<AppState>>) -> Option<ActiveSession> {
+    state
+        .sessions
+        .lock()
+        .values()
+        .next()
+        .map(|session| ActiveSession {
+            id: session.id.to_string(),
+            mode: session.mode,
+            window_coordinate_scale: window_coordinate_scale(&session.display),
+            display: session.display.clone(),
+            snapshot_url: models::snapshot_url(&session.id.to_string()),
+            windows: session.windows.clone(),
+        })
+}
+
+#[tauri::command]
+fn show_capture_overlay(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    session_id: String,
+) -> CommandResult<()> {
+    let id = Uuid::parse_str(&session_id).map_err(|error| error.to_string())?;
+    if !state.sessions.lock().contains_key(&id) {
+        return Err(AppError::SessionUnavailable.to_string());
+    }
+    if let Some(window) = app.get_webview_window("overlay") {
+        window.show().map_err(|error| error.to_string())?;
+        window.set_focus().map_err(|error| error.to_string())?;
+        Ok(())
+    } else {
+        Err("capture overlay is unavailable".to_owned())
+    }
 }
 
 #[tauri::command]
@@ -323,8 +372,8 @@ fn update_settings(
 }
 
 #[tauri::command]
-fn get_last_artifact(state: tauri::State<'_, Arc<AppState>>) -> Option<CaptureArtifact> {
-    state.last_artifact.lock().clone()
+fn get_artifacts(state: tauri::State<'_, Arc<AppState>>) -> Vec<CaptureArtifact> {
+    state.artifacts.lock().clone()
 }
 
 #[tauri::command]
@@ -334,10 +383,11 @@ async fn copy_artifact(
     artifact_id: String,
 ) -> CommandResult<()> {
     let artifact = state
-        .last_artifact
+        .artifacts
         .lock()
-        .clone()
-        .filter(|artifact| artifact.id == artifact_id)
+        .iter()
+        .find(|artifact| artifact.id == artifact_id)
+        .cloned()
         .ok_or_else(|| "artifact is no longer available".to_owned())?;
     let image = image::open(&artifact.path)
         .map_err(|error| error.to_string())?
@@ -354,10 +404,11 @@ fn reveal_artifact(
     artifact_id: String,
 ) -> CommandResult<()> {
     let artifact = state
-        .last_artifact
+        .artifacts
         .lock()
-        .clone()
-        .filter(|artifact| artifact.id == artifact_id)
+        .iter()
+        .find(|artifact| artifact.id == artifact_id)
+        .cloned()
         .ok_or_else(|| "artifact is no longer available".to_owned())?;
     app.opener()
         .reveal_item_in_dir(PathBuf::from(artifact.path))
@@ -371,20 +422,40 @@ fn trash_artifact(
     artifact_id: String,
 ) -> CommandResult<()> {
     let artifact = state
-        .last_artifact
+        .artifacts
         .lock()
-        .clone()
-        .filter(|artifact| artifact.id == artifact_id)
+        .iter()
+        .find(|artifact| artifact.id == artifact_id)
+        .cloned()
         .ok_or_else(|| "artifact is no longer available".to_owned())?;
     trash::delete(&artifact.path).map_err(|error| error.to_string())?;
-    *state.last_artifact.lock() = None;
-    hide_window(&app, "thumbnail");
+    remove_artifact(&app, state.inner(), &artifact_id)?;
     Ok(())
 }
 
 #[tauri::command]
-fn close_thumbnail(app: AppHandle) {
-    hide_window(&app, "thumbnail");
+fn dismiss_artifact(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    artifact_id: String,
+) -> CommandResult<()> {
+    remove_artifact(&app, state.inner(), &artifact_id)
+}
+
+fn remove_artifact(app: &AppHandle, state: &Arc<AppState>, artifact_id: &str) -> CommandResult<()> {
+    let count = {
+        let mut artifacts = state.artifacts.lock();
+        let original_len = artifacts.len();
+        artifacts.retain(|artifact| artifact.id != artifact_id);
+        if artifacts.len() == original_len {
+            return Err("artifact is no longer available".to_owned());
+        }
+        artifacts.len()
+    };
+    app.emit("artifact-removed", artifact_id)
+        .map_err(|error| error.to_string())?;
+    update_thumbnail_stack(app, count);
+    Ok(())
 }
 
 #[tauri::command]
@@ -415,22 +486,20 @@ async fn finish_capture(
     let height = image.height();
     let settings = state.settings();
     let image_for_save = image.clone();
-    let save_task = tauri::async_runtime::spawn_blocking(move || {
-        storage::save_capture(&image_for_save, &settings)
+    let save_task = tauri::async_runtime::spawn_blocking(move || -> Result<_, AppError> {
+        let path = storage::save_capture(&image_for_save, &settings)?;
+        let preview_png = storage::encode_thumbnail_png(&image_for_save)?;
+        Ok((path, preview_png))
     });
     let clipboard_app = app.clone();
     let clipboard_task = tauri::async_runtime::spawn_blocking(move || {
         write_image_to_clipboard(&clipboard_app, image)
     });
-    let path = save_task
+    let (path, preview_png) = save_task
         .await
         .map_err(|error| AppError::Task(error.to_string()))??;
-    let copied = clipboard_task
-        .await
-        .map_err(|error| AppError::Task(error.to_string()))?
-        .is_ok();
     let artifact_id = Uuid::new_v4().to_string();
-    let artifact = CaptureArtifact {
+    let mut artifact = CaptureArtifact {
         id: artifact_id.clone(),
         preview_url: models::artifact_url(&artifact_id),
         path: path.to_string_lossy().into_owned(),
@@ -438,11 +507,29 @@ async fn finish_capture(
         height,
         created_at: Utc::now().to_rfc3339(),
         mode,
-        clipboard_copied: copied,
+        clipboard_copied: true,
+        preview_png,
     };
-    *state.last_artifact.lock() = Some(artifact.clone());
+    state.artifacts.lock().push(artifact.clone());
     app.emit("capture-completed", &artifact)?;
     show_thumbnail(app, &artifact);
+
+    let copied = clipboard_task
+        .await
+        .map_err(|error| AppError::Task(error.to_string()))?
+        .is_ok();
+    if !copied {
+        artifact.clipboard_copied = false;
+        if let Some(stored) = state
+            .artifacts
+            .lock()
+            .iter_mut()
+            .find(|stored| stored.id == artifact.id)
+        {
+            stored.clipboard_copied = false;
+        }
+        app.emit("artifact-updated", &artifact)?;
+    }
     Ok(artifact)
 }
 
@@ -481,6 +568,17 @@ fn display_under_pointer(state: &AppState) -> Result<ces_capture::DisplayDescrip
         .or_else(|| displays.iter().find(|display| display.is_primary).cloned())
         .or_else(|| displays.first().cloned())
         .ok_or(CaptureError::TargetUnavailable.into())
+}
+
+fn window_coordinate_scale(display: &ces_capture::DisplayDescriptor) -> f64 {
+    #[cfg(target_os = "windows")]
+    return display.scale_factor.max(1.0);
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = display;
+        1.0
+    }
 }
 
 fn register_shortcuts(app: &AppHandle) -> Result<(), AppError> {
@@ -596,14 +694,8 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn show_capture_window(app: &AppHandle, session: &ActiveSession) {
-    close_window(app, "overlay");
-    let label = "overlay";
-    let url = format!(
-        "index.html?view=overlay&session_id={}&mode={}",
-        session.id,
-        mode_query(session.mode)
-    );
     let display = session.display.clone();
+    let session = session.clone();
     let app = app.clone();
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
@@ -624,94 +716,155 @@ fn show_capture_window(app: &AppHandle, session: &ActiveSession) {
             f64::from(display.width),
             f64::from(display.height),
         );
-        let builder = WebviewWindowBuilder::new(&handle, label, WebviewUrl::App(url.into()))
-            .title("CES Capture")
-            .inner_size(width, height)
-            .position(x, y);
-        #[cfg(target_os = "linux")]
-        let builder = if wayland_session() {
-            builder.fullscreen(true)
-        } else {
-            builder
-        };
-        let result = builder
-            .decorations(false)
-            .always_on_top(true)
-            .visible_on_all_workspaces(true)
-            .skip_taskbar(true)
-            .shadow(false)
-            .resizable(false)
-            .focused(true)
-            .build();
-        if let Err(error) = result {
+        if handle.get_webview_window("overlay").is_none()
+            && let Err(error) = create_overlay_window(&handle)
+        {
             eprintln!("failed to create capture overlay: {error}");
+            return;
+        }
+        if let Some(window) = handle.get_webview_window("overlay") {
+            let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+            let _ = window.set_size(LogicalSize::new(width, height));
+            #[cfg(target_os = "linux")]
+            let _ = window.set_fullscreen(wayland_session());
+            if let Err(error) = handle.emit("capture-session-ready", &session) {
+                eprintln!("failed to prepare capture session: {error}");
+            }
         }
     });
+}
+
+fn create_overlay_window(app: &AppHandle) -> Result<(), tauri::Error> {
+    let builder = WebviewWindowBuilder::new(
+        app,
+        "overlay",
+        WebviewUrl::App("index.html?view=overlay".into()),
+    )
+    .title("CES Capture")
+    .inner_size(1.0, 1.0)
+    .position(-10_000.0, -10_000.0);
+    #[cfg(target_os = "linux")]
+    let builder = if wayland_session() {
+        builder.fullscreen(true)
+    } else {
+        builder
+    };
+    builder
+        .decorations(false)
+        .always_on_top(true)
+        .visible_on_all_workspaces(true)
+        .skip_taskbar(true)
+        .shadow(false)
+        .resizable(false)
+        .focused(false)
+        .visible(false)
+        .build()
+        .map(|_| ())
 }
 
 fn show_thumbnail(app: &AppHandle, artifact: &CaptureArtifact) {
-    let app = app.clone();
-    let handle = app.clone();
-    let artifact_path = artifact.path.clone();
-    let _ = app.run_on_main_thread(move || {
-        let (x, y) = thumbnail_window_position(&handle);
-        if let Some(window) = handle.get_webview_window("thumbnail") {
-            let _ = window.set_position(tauri::LogicalPosition::new(x, y));
-            let _ = window.show();
-        } else if let Err(error) = create_thumbnail_window(&handle, true) {
-            eprintln!(
-                "failed to create capture thumbnail for {}: {error}",
-                artifact_path
-            );
-        }
-    });
+    let count = app.state::<Arc<AppState>>().artifacts.lock().len();
+    update_thumbnail_stack(app, count);
+    if count == 0 {
+        eprintln!("capture thumbnail was not retained for {}", artifact.path);
+    }
 }
 
 fn create_thumbnail_window(app: &AppHandle, visible: bool) -> Result<(), tauri::Error> {
-    let (x, y) = thumbnail_window_position(app);
+    let (x, y, height) = thumbnail_window_geometry(app, 1);
     WebviewWindowBuilder::new(
         app,
         "thumbnail",
         WebviewUrl::App("index.html?view=thumbnail".into()),
     )
     .title("CES Capture")
-    .inner_size(380.0, 260.0)
+    .inner_size(THUMBNAIL_WIDTH, height)
     .position(x, y)
     .decorations(false)
     .always_on_top(true)
     .visible_on_all_workspaces(true)
     .skip_taskbar(true)
     .resizable(false)
-    .shadow(true)
+    .shadow(false)
     .focused(false)
     .visible(visible)
     .build()
     .map(|_| ())
 }
 
-fn thumbnail_window_position(app: &AppHandle) -> (f64, f64) {
+const THUMBNAIL_WIDTH: f64 = 300.0;
+const THUMBNAIL_CARD_HEIGHT: f64 = 160.0;
+const THUMBNAIL_GAP: f64 = 8.0;
+const THUMBNAIL_PADDING: f64 = 8.0;
+
+fn update_thumbnail_stack(app: &AppHandle, count: usize) {
+    let app = app.clone();
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let Some(window) = handle.get_webview_window("thumbnail") else {
+            if let Err(error) = create_thumbnail_window(&handle, count > 0) {
+                eprintln!("failed to create capture thumbnail stack: {error}");
+            }
+            return;
+        };
+        if count == 0 {
+            let _ = window.hide();
+            return;
+        }
+        let (x, y, height) = thumbnail_window_geometry(&handle, count);
+        let _ = window.set_size(LogicalSize::new(THUMBNAIL_WIDTH, height));
+        let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+        let _ = window.show();
+    });
+}
+
+fn thumbnail_window_geometry(app: &AppHandle, count: usize) -> (f64, f64, f64) {
     app.primary_monitor()
         .ok()
         .flatten()
         .map(|monitor| {
             let position = monitor.position();
             let size = monitor.size();
-            thumbnail_position(position.x, position.y, size.width, monitor.scale_factor())
+            thumbnail_geometry(
+                position.x,
+                position.y,
+                size.width,
+                size.height,
+                monitor.scale_factor(),
+                count,
+            )
         })
-        .unwrap_or((20.0, 20.0))
+        .unwrap_or((20.0, 20.0, thumbnail_stack_height(count)))
 }
 
-fn thumbnail_position(x: i32, y: i32, width: u32, scale_factor: f64) -> (f64, f64) {
-    const THUMBNAIL_WIDTH: f64 = 380.0;
+fn thumbnail_stack_height(count: usize) -> f64 {
+    let cards = count.max(1) as f64;
+    THUMBNAIL_PADDING * 2.0 + cards * THUMBNAIL_CARD_HEIGHT + (cards - 1.0) * THUMBNAIL_GAP
+}
+
+fn thumbnail_geometry(
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    scale_factor: f64,
+    count: usize,
+) -> (f64, f64, f64) {
     const EDGE_MARGIN: f64 = 24.0;
-    const TOP_MARGIN: f64 = 36.0;
 
     let scale = scale_factor.max(1.0);
     let left = f64::from(x) / scale;
     let top = f64::from(y) / scale;
     let width = f64::from(width) / scale;
+    let available_height = f64::from(height) / scale - EDGE_MARGIN * 2.0;
+    let stack_height = thumbnail_stack_height(count).min(available_height.max(1.0));
     let right_aligned = left + width - THUMBNAIL_WIDTH - EDGE_MARGIN;
-    (right_aligned.max(left + EDGE_MARGIN), top + TOP_MARGIN)
+    let bottom_aligned = top + f64::from(height) / scale - stack_height - EDGE_MARGIN;
+    (
+        right_aligned.max(left + EDGE_MARGIN),
+        bottom_aligned.max(top + EDGE_MARGIN),
+        stack_height,
+    )
 }
 
 fn report_capture_error(app: &AppHandle, error: &AppError) {
@@ -813,23 +966,9 @@ fn show_preferences(app: &AppHandle) {
     });
 }
 
-fn close_window(app: &AppHandle, label: &str) {
-    if let Some(window) = app.get_webview_window(label) {
-        let _ = window.close();
-    }
-}
-
 fn hide_window(app: &AppHandle, label: &str) {
     if let Some(window) = app.get_webview_window(label) {
         let _ = window.hide();
-    }
-}
-
-fn mode_query(mode: CaptureMode) -> &'static str {
-    match mode {
-        CaptureMode::Region => "region",
-        CaptureMode::Window => "window",
-        CaptureMode::Display => "display",
     }
 }
 
@@ -844,11 +983,11 @@ fn resolve_asset(state: &AppState, path: &str) -> Option<Vec<u8>> {
                 .map(|session| session.snapshot_png.clone())
         }),
         (Some("artifact"), Some(id)) => state
-            .last_artifact
+            .artifacts
             .lock()
-            .as_ref()
-            .filter(|artifact| artifact.id == id)
-            .and_then(|artifact| fs::read(&artifact.path).ok()),
+            .iter()
+            .find(|artifact| artifact.id == id)
+            .map(|artifact| artifact.preview_png.clone()),
         _ => None,
     }
 }
@@ -872,11 +1011,17 @@ impl CaptureSession {
 
 #[cfg(test)]
 mod tests {
-    use super::thumbnail_position;
+    use super::thumbnail_geometry;
 
     #[test]
-    fn positions_thumbnail_in_logical_pixels_on_retina_displays() {
-        assert_eq!(thumbnail_position(0, 0, 3_992, 2.0), (1_592.0, 36.0));
-        assert_eq!(thumbnail_position(-3_840, 0, 3_840, 2.0), (-404.0, 36.0));
+    fn stacks_thumbnails_upward_in_logical_pixels_on_retina_displays() {
+        assert_eq!(
+            thumbnail_geometry(0, 0, 3_992, 2_048, 2.0, 1),
+            (1_672.0, 824.0, 176.0)
+        );
+        assert_eq!(
+            thumbnail_geometry(-3_840, 0, 3_840, 2_048, 2.0, 2),
+            (-324.0, 656.0, 344.0)
+        );
     }
 }

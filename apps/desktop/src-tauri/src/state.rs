@@ -13,7 +13,7 @@ use crate::{
 pub struct AppState {
     pub settings: RwLock<AppSettings>,
     pub sessions: Mutex<HashMap<Uuid, CaptureSession>>,
-    pub last_artifact: Mutex<Option<CaptureArtifact>>,
+    pub artifacts: Mutex<Vec<CaptureArtifact>>,
     pub backend: XcapBackend,
 }
 
@@ -22,7 +22,7 @@ impl AppState {
         Arc::new(Self {
             settings: RwLock::new(storage::load_settings()),
             sessions: Mutex::new(HashMap::new()),
-            last_artifact: Mutex::new(None),
+            artifacts: Mutex::new(Vec::new()),
             backend: XcapBackend,
         })
     }
