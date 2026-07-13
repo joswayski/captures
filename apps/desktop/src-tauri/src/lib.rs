@@ -120,8 +120,16 @@ pub fn run() {
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running CES");
+        .build(tauri::generate_context!())
+        .expect("error while building CES")
+        .run(|_, event| {
+            if let tauri::RunEvent::ExitRequested {
+                code: None, api, ..
+            } = event
+            {
+                api.prevent_exit();
+            }
+        });
 }
 
 #[tauri::command]
@@ -584,11 +592,27 @@ fn show_capture_window(app: &AppHandle, session: &ActiveSession) {
     let app = app.clone();
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
-        let scale = display.scale_factor.max(1.0);
+        #[cfg(target_os = "windows")]
+        let (x, y, width, height) = {
+            let scale = display.scale_factor.max(1.0);
+            (
+                f64::from(display.x) / scale,
+                f64::from(display.y) / scale,
+                f64::from(display.width) / scale,
+                f64::from(display.height) / scale,
+            )
+        };
+        #[cfg(not(target_os = "windows"))]
+        let (x, y, width, height) = (
+            f64::from(display.x),
+            f64::from(display.y),
+            f64::from(display.width),
+            f64::from(display.height),
+        );
         let result = WebviewWindowBuilder::new(&handle, label, WebviewUrl::App(url.into()))
             .title("CES Capture")
-            .inner_size(display.width as f64 / scale, display.height as f64 / scale)
-            .position(display.x as f64 / scale, display.y as f64 / scale)
+            .inner_size(width, height)
+            .position(x, y)
             .decorations(false)
             .always_on_top(true)
             .visible_on_all_workspaces(true)
