@@ -20,6 +20,10 @@ function query(name: string): string | null {
   return new URLSearchParams(window.location.search).get(name);
 }
 
+function afterNextPaint(callback: () => void) {
+  requestAnimationFrame(() => requestAnimationFrame(callback));
+}
+
 export function App() {
   const view = query("view");
   if (view === "overlay") return <CaptureOverlay />;
@@ -92,6 +96,12 @@ function ArtifactViewer() {
     };
   }, [artifactId]);
 
+  const revealViewer = (loadedArtifactId: string) => {
+    afterNextPaint(() => {
+      void invoke("show_artifact_viewer", { artifactId: loadedArtifactId });
+    });
+  };
+
   if (!artifact) return <main className="viewer-loading">Capture unavailable</main>;
 
   return (
@@ -112,8 +122,8 @@ function ArtifactViewer() {
           src={artifact.full_url}
           alt="Full-size screenshot"
           draggable={false}
-          onLoad={() => void invoke("show_artifact_viewer", { artifactId: artifact.id })}
-          onError={() => void invoke("show_artifact_viewer", { artifactId: artifact.id })}
+          onLoad={() => revealViewer(artifact.id)}
+          onError={() => revealViewer(artifact.id)}
         />
       </div>
     </main>
@@ -122,10 +132,12 @@ function ArtifactViewer() {
 
 function CaptureOverlay() {
   const [session, setSession] = useState<ActiveSession | null>(null);
+  const [overlayVisible, setOverlayVisible] = useState(false);
   const [start, setStart] = useState<SelectionPoint | null>(null);
   const [current, setCurrent] = useState<SelectionPoint | null>(null);
   const [hoveredWindow, setHoveredWindow] = useState<string | null>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
+  const activeSessionIdRef = useRef<string | null>(null);
   const sessionId = session?.id ?? query("session_id");
   const mode = session?.mode ?? ((query("mode") ?? "region") as CaptureMode);
 
@@ -134,6 +146,8 @@ function CaptureOverlay() {
     let dispose: (() => void) | undefined;
     void (async () => {
       dispose = await listen<ActiveSession>("capture-session-ready", ({ payload }) => {
+        activeSessionIdRef.current = payload.id;
+        setOverlayVisible(false);
         setSession(payload);
         setStart(null);
         setCurrent(null);
@@ -142,7 +156,11 @@ function CaptureOverlay() {
       const initialSession = query("session_id")
         ? await invoke<ActiveSession | null>("get_active_session", { sessionId: query("session_id") })
         : await invoke<ActiveSession | null>("get_pending_session");
-      if (active && initialSession) setSession(initialSession);
+      if (active && initialSession) {
+        activeSessionIdRef.current = initialSession.id;
+        setOverlayVisible(false);
+        setSession(initialSession);
+      }
     })();
     return () => {
       active = false;
@@ -179,6 +197,13 @@ function CaptureOverlay() {
     void invoke("commit_region", { sessionId, rect });
   };
 
+  const revealOverlay = async () => {
+    await invoke("show_capture_overlay", { sessionId });
+    afterNextPaint(() => {
+      if (activeSessionIdRef.current === sessionId) setOverlayVisible(true);
+    });
+  };
+
   const onPointerDown = (event: React.PointerEvent) => {
     if (mode !== "region") return;
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -202,7 +227,7 @@ function CaptureOverlay() {
   return (
     <main
       ref={surfaceRef}
-      className={`capture-surface capture-${mode}`}
+      className={`capture-surface capture-${mode}${overlayVisible ? " capture-visible" : ""}`}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -212,7 +237,7 @@ function CaptureOverlay() {
         src={session.snapshot_url}
         alt=""
         draggable={false}
-        onLoad={() => void invoke("show_capture_overlay", { sessionId })}
+        onLoad={() => void revealOverlay()}
       />
       <div className="capture-shade" />
       <div className="capture-hint">
@@ -337,7 +362,9 @@ function Thumbnail() {
 
     const setPointingCursor = (pointing: boolean) => {
       document.documentElement.style.cursor = pointing ? "pointer" : "";
-      if (pointingCursor === pointing) return;
+      // AppKit/WebKit can restore the arrow while this non-activating window is
+      // inactive, so reassert the pointing hand throughout a button hover.
+      if (pointingCursor === pointing && !pointing) return;
       pointingCursor = pointing;
       void invoke("set_thumbnail_cursor", { pointing });
     };

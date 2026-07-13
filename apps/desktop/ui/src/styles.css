@@ -44,7 +44,8 @@ h1, h2, p { margin: 0; }
 .viewer-image-fit { display: block; width: 100%; height: 100%; object-fit: contain; cursor: zoom-in; }
 .viewer-image-actual { display: block; width: auto; max-width: none; height: auto; margin: 0 auto; cursor: zoom-out; }
 
-.capture-surface { position: relative; width: 100%; height: 100%; overflow: hidden; background: #0e0f15; user-select: none; }
+.capture-surface { position: relative; width: 100%; height: 100%; overflow: hidden; background: #0e0f15; opacity: 0; pointer-events: none; transition: opacity .3s ease-out; user-select: none; }
+.capture-surface.capture-visible { opacity: 1; pointer-events: auto; }
 .capture-snapshot { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; pointer-events: none; }
 .capture-region { cursor: crosshair; }
 .capture-window { cursor: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2232%22 height=%2232%22 viewBox=%220 0 32 32%22%3E%3Cpath d=%22M5 10a3 3 0 0 1 3-3h4l2-3h6l2 3h2a3 3 0 0 1 3 3v13a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3Z%22 fill=%22%2310151d%22 stroke=%22white%22 stroke-width=%222%22/%3E%3Ccircle cx=%2216%22 cy=%2216.5%22 r=%225%22 fill=%22%2349b6ff%22 stroke=%22white%22 stroke-width=%222%22/%3E%3C/svg%3E") 16 16, crosshair; }
@@ -93,6 +94,7 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-main-actio
 .thumbnail-main-actions button:hover, .thumbnail-main-actions button.native-pointer-hover { filter: brightness(1.15); transform: translateY(-1px); }
 .thumbnail-main-actions button:active { transform: translateY(1px) scale(.97); }
 .thumbnail-main-actions button:disabled { cursor: wait; opacity: .72; }
+html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !important; }
 .thumbnail-main-actions svg, .icon-button svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .thumbnail-main-actions svg { animation: thumbnail-action-pop .2s ease-out; }
 .thumbnail-exit-dismiss { overflow: hidden; animation: thumbnail-dismiss .6s cubic-bezier(.4,0,.2,1) forwards; pointer-events: none; }
@@ -111,7 +113,7 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-main-actio
 @keyframes thumbnail-particles { from { opacity: 1; transform: translate(-50%, -50%) scale(.3) rotate(0); } to { opacity: 0; transform: translate(-50%, -50%) scale(2.1) rotate(28deg); } }
 @keyframes thumbnail-action-pop { from { opacity: .25; transform: scale(.65); } to { opacity: 1; transform: scale(1); } }
 @media (prefers-reduced-motion: reduce) {
-  .thumbnail-card, .thumbnail-card img, .thumbnail-top-actions, .thumbnail-main-actions, .thumbnail-main-actions svg { animation-duration: .01ms; transition-duration: .01ms; }
+  .capture-surface, .thumbnail-card, .thumbnail-card img, .thumbnail-top-actions, .thumbnail-main-actions, .thumbnail-main-actions svg { animation-duration: .01ms; transition-duration: .01ms; }
 }
 .directory-input button, .primary, .quiet { border: 0; border-radius: 6px; padding: 7px 10px; color: #f8f8fb; background: #303140; font-size: 12px; }
 .directory-input button:hover { background: #414252; }
