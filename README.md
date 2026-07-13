@@ -39,6 +39,8 @@ Run the desktop app in development mode:
 npm run dev
 ```
 
+This runs the debug executable directly. Stop it with `Ctrl+C` in the terminal. On macOS, the debug executable and installed application have separate Screen Recording identities.
+
 ## Shortcuts
 
 | Shortcut | Action |
@@ -62,6 +64,21 @@ npm run build
 ```
 
 Installers and app bundles are written under `target/release/bundle`. On macOS, open the generated DMG and move CES to Applications. Launch CES once, grant Screen Recording access, then enable **Launch CES when I sign in** from Preferences if desired.
+
+For the current Apple Silicon build, the complete install-and-run flow is:
+
+```sh
+npm run build
+open target/release/bundle/dmg/CES_0.1.0_aarch64.dmg
+# Drag CES to Applications, then:
+open -a CES
+```
+
+CES runs as a menu-bar utility: it shows a camera at the top-right of macOS and intentionally does not keep a Dock icon. Use that camera to capture, open Preferences, or quit CES.
+
+After macOS grants Screen Recording access, quit CES from the menu-bar camera and open it again from Applications. macOS requires this restart before capture is enabled.
+
+Local debug and release builds are currently ad-hoc signed. macOS can therefore ask for Screen Recording permission again after the executable changes. Stable permissions across upgrades require an Apple Development or Developer ID signing certificate; Tauri accepts its name through `APPLE_SIGNING_IDENTITY` when building.
 
 For Ubuntu development, install Tauri's native dependencies first:
 

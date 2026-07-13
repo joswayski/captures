@@ -10,6 +10,7 @@ import type {
   AppSettings,
   CaptureArtifact,
   CaptureMode,
+  ThumbnailPointerPosition,
   WindowDescriptor,
 } from "./types";
 
@@ -25,6 +26,7 @@ export function App() {
   if (view === "thumbnail") return <Thumbnail />;
   if (view === "viewer") return <ArtifactViewer />;
   if (view === "preferences") return <Preferences />;
+  if (view === "startup") return <StartupNotice />;
   return <IdleView />;
 }
 
@@ -34,6 +36,23 @@ function IdleView() {
       <div className="brand-mark">CES</div>
       <h1>CES is running</h1>
       <p>Use the capture shortcut or the tray icon to take a screenshot.</p>
+    </main>
+  );
+}
+
+function StartupNotice() {
+  return (
+    <main className="startup-notice">
+      <div className="startup-camera" aria-hidden="true">
+        <svg viewBox="0 0 24 24">
+          <path d="M4 8a2 2 0 0 1 2-2h3l1.4-2h3.2L15 6h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z" />
+          <circle cx="12" cy="12.5" r="3.5" />
+        </svg>
+      </div>
+      <div>
+        <strong>CES is running</strong>
+        <p>Use the menu-bar camera or Ctrl+Shift+4 to capture.</p>
+      </div>
     </main>
   );
 }
@@ -292,6 +311,61 @@ function Thumbnail() {
 
   useEffect(() => {
     if (stackRef.current) stackRef.current.scrollTop = stackRef.current.scrollHeight;
+  }, [artifacts.length]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const clearNativeHover = () => {
+      document.querySelectorAll(".thumbnail-card-native-active, .native-pointer-hover")
+        .forEach((element) => {
+          element.classList.remove("thumbnail-card-native-active", "native-pointer-hover");
+        });
+      document.documentElement.style.cursor = "";
+    };
+
+    if (artifacts.length === 0) {
+      clearNativeHover();
+      return clearNativeHover;
+    }
+
+    const applyNativeHover = (position: ThumbnailPointerPosition) => {
+      clearNativeHover();
+      if (!position.inside) return;
+      const target = document.elementFromPoint(position.x, position.y);
+      target?.closest(".thumbnail-card")?.classList.add("thumbnail-card-native-active");
+      const interactiveTarget = document.elementFromPoint(position.x, position.y);
+      const button = interactiveTarget?.closest("button");
+      if (button) {
+        button.classList.add("native-pointer-hover");
+        document.documentElement.style.cursor = "pointer";
+      }
+    };
+
+    const poll = async () => {
+      try {
+        const position = await invoke<ThumbnailPointerPosition | null>(
+          "get_thumbnail_pointer_position",
+        );
+        if (cancelled) return;
+        if (!position) {
+          clearNativeHover();
+          return;
+        }
+        applyNativeHover(position);
+        timer = setTimeout(poll, 40);
+      } catch {
+        if (!cancelled) timer = setTimeout(poll, 250);
+      }
+    };
+
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      clearNativeHover();
+    };
   }, [artifacts.length]);
 
   if (artifacts.length === 0) return null;

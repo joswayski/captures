@@ -10,14 +10,23 @@ use crate::{
 pub struct XcapBackend;
 
 impl XcapBackend {
-    pub fn ensure_permission(&self) -> CaptureResult<()> {
+    pub fn ensure_permission(&self, request_access: bool) -> CaptureResult<()> {
         #[cfg(target_os = "macos")]
         {
             let access = core_graphics::access::ScreenCaptureAccess;
-            if !access.preflight() && !access.request() {
+            if !access.preflight() {
+                if request_access {
+                    if access.request() {
+                        return Ok(());
+                    }
+                    return Err(CaptureError::PermissionRequestStarted);
+                }
                 return Err(CaptureError::PermissionDenied);
             }
         }
+
+        #[cfg(not(target_os = "macos"))]
+        let _ = request_access;
 
         Ok(())
     }

@@ -4,6 +4,8 @@ pub type CaptureResult<T> = Result<T, CaptureError>;
 
 #[derive(Debug, Error)]
 pub enum CaptureError {
+    #[error("screen capture permission was requested")]
+    PermissionRequestStarted,
     #[error("screen capture permission was denied")]
     PermissionDenied,
     #[error("the requested capture target is not available")]

@@ -13,6 +13,8 @@ pub struct AppSettings {
     pub window_shortcut: String,
     pub display_shortcut: String,
     pub launch_at_login: bool,
+    #[serde(default)]
+    pub last_screen_permission_request_id: Option<String>,
 }
 
 impl Default for AppSettings {
@@ -23,6 +25,7 @@ impl Default for AppSettings {
             window_shortcut: "Ctrl+Shift+W".to_owned(),
             display_shortcut: "Ctrl+Shift+3".to_owned(),
             launch_at_login: false,
+            last_screen_permission_request_id: None,
         }
     }
 }
@@ -135,5 +138,21 @@ mod tests {
         settings.output_directory = "/Volumes/Captures".to_owned();
         migrate_output_directory(&mut settings, legacy, current);
         assert_eq!(settings.output_directory, "/Volumes/Captures");
+    }
+
+    #[test]
+    fn loads_settings_written_before_permission_tracking() {
+        let settings: AppSettings = serde_json::from_str(
+            r#"{
+                "output_directory": "/Users/example/CES",
+                "region_shortcut": "Ctrl+Shift+4",
+                "window_shortcut": "Ctrl+Shift+W",
+                "display_shortcut": "Ctrl+Shift+3",
+                "launch_at_login": false
+            }"#,
+        )
+        .expect("legacy settings should deserialize");
+
+        assert!(settings.last_screen_permission_request_id.is_none());
     }
 }

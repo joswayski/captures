@@ -37,6 +37,7 @@ export interface AppSettings {
   window_shortcut: string;
   display_shortcut: string;
   launch_at_login: boolean;
+  last_screen_permission_request_id: string | null;
 }
 
 export interface CaptureArtifact {
@@ -49,4 +50,10 @@ export interface CaptureArtifact {
   created_at: string;
   mode: CaptureMode;
   clipboard_copied: boolean;
+}
+
+export interface ThumbnailPointerPosition {
+  x: number;
+  y: number;
+  inside: boolean;
 }

@@ -113,6 +113,7 @@ pub fn run() {
             dismiss_artifact,
             open_artifact_viewer,
             show_capture_overlay,
+            get_thumbnail_pointer_position,
             open_captures_folder,
             open_preferences,
         ])
@@ -130,6 +131,9 @@ pub fn run() {
             }
             if let Err(error) = create_overlay_window(&handle) {
                 eprintln!("failed to prepare capture overlay: {error}");
+            }
+            if let Err(error) = show_startup_notice(&handle) {
+                eprintln!("failed to show startup notice: {error}");
             }
             Ok(())
         })
@@ -166,6 +170,7 @@ async fn start_capture_inner(
     }
 
     hide_window(&app, "thumbnail");
+    hide_window(&app, "startup");
     let result = prepare_capture(app.clone(), state.clone(), mode).await;
     if result.is_err() {
         restore_thumbnail_stack(&app, &state);
@@ -178,7 +183,8 @@ async fn prepare_capture(
     state: Arc<AppState>,
     mode: CaptureMode,
 ) -> Result<Option<ActiveSession>, AppError> {
-    state.backend.ensure_permission()?;
+    let request_permission = mark_screen_permission_request(&state)?;
+    state.backend.ensure_permission(request_permission)?;
     let display = display_under_pointer(&state)?;
     let frame = state.backend.capture_display(&display.id)?;
 
@@ -357,6 +363,64 @@ fn get_settings(state: tauri::State<'_, Arc<AppState>>) -> AppSettings {
     state.settings()
 }
 
+#[derive(Clone, serde::Serialize)]
+struct ThumbnailPointerPosition {
+    x: f64,
+    y: f64,
+    inside: bool,
+}
+
+#[tauri::command]
+fn get_thumbnail_pointer_position(app: AppHandle) -> Option<ThumbnailPointerPosition> {
+    #[cfg(target_os = "macos")]
+    {
+        let window = app.get_webview_window("thumbnail")?;
+        let position = window.outer_position().ok()?;
+        let size = window.inner_size().ok()?;
+        let scale = window.scale_factor().ok()?.max(1.0);
+        let (mouse_x, mouse_y) = match Mouse::get_mouse_position() {
+            Mouse::Position { x, y } => (f64::from(x), f64::from(y)),
+            Mouse::Error => return None,
+        };
+        Some(thumbnail_pointer_position(
+            mouse_x,
+            mouse_y,
+            position.x,
+            position.y,
+            size.width,
+            size.height,
+            scale,
+        ))
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        None
+    }
+}
+
+fn thumbnail_pointer_position(
+    mouse_x: f64,
+    mouse_y: f64,
+    window_x: i32,
+    window_y: i32,
+    window_width: u32,
+    window_height: u32,
+    scale: f64,
+) -> ThumbnailPointerPosition {
+    let scale = scale.max(1.0);
+    let x = mouse_x - f64::from(window_x) / scale;
+    let y = mouse_y - f64::from(window_y) / scale;
+    let width = f64::from(window_width) / scale;
+    let height = f64::from(window_height) / scale;
+    ThumbnailPointerPosition {
+        x,
+        y,
+        inside: x >= 0.0 && y >= 0.0 && x < width && y < height,
+    }
+}
+
 #[tauri::command]
 fn update_settings(
     app: AppHandle,
@@ -380,6 +444,13 @@ fn update_settings(
     {
         return Err("shortcuts must be unique".to_owned());
     }
+
+    // Permission bookkeeping is internal state, not a user-editable setting.
+    settings.last_screen_permission_request_id = state
+        .settings
+        .read()
+        .last_screen_permission_request_id
+        .clone();
 
     register_shortcuts_with(&app, &settings).map_err(|error| error.to_string())?;
     if settings.launch_at_login {
@@ -698,6 +769,37 @@ fn display_under_pointer(state: &AppState) -> Result<ces_capture::DisplayDescrip
         .ok_or(CaptureError::TargetUnavailable.into())
 }
 
+fn mark_screen_permission_request(state: &AppState) -> Result<bool, AppError> {
+    #[cfg(target_os = "macos")]
+    {
+        let executable = std::env::current_exe()?;
+        let metadata = executable.metadata()?;
+        let modified = metadata
+            .modified()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let request_id = format!(
+            "{}:{}:{modified}",
+            executable.to_string_lossy(),
+            metadata.len()
+        );
+        let mut settings = state.settings.write();
+        if settings.last_screen_permission_request_id.as_deref() == Some(&request_id) {
+            return Ok(false);
+        }
+        settings.last_screen_permission_request_id = Some(request_id);
+        storage::save_settings(&settings)?;
+        Ok(true)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = state;
+        Ok(false)
+    }
+}
+
 fn window_coordinate_scale(display: &ces_capture::DisplayDescriptor) -> f64 {
     #[cfg(target_os = "windows")]
     return display.scale_factor.max(1.0);
@@ -781,44 +883,74 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             &quit,
         ],
     )?;
-    TrayIconBuilder::with_id("main")
+    let mut tray = TrayIconBuilder::with_id("main")
         .menu(&menu)
-        .tooltip("CES")
-        .on_menu_event(|app, event| {
-            let mode = match event.id().as_ref() {
-                "capture-region" => Some(CaptureMode::Region),
-                "capture-window" => Some(CaptureMode::Window),
-                "capture-display" => Some(CaptureMode::Display),
-                "open-folder" => {
-                    if let Some(state) = app.try_state::<Arc<AppState>>() {
-                        let path = PathBuf::from(state.settings().output_directory);
-                        let _ = fs::create_dir_all(&path);
-                        let _ = app.opener().open_path(path.to_string_lossy(), None::<&str>);
-                    }
-                    None
+        .tooltip("CES — Screenshot utility");
+
+    #[cfg(target_os = "macos")]
+    if let Some(icon) = macos_tray_icon() {
+        tray = tray.icon(icon).icon_as_template(true);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    if let Some(icon) = app.default_window_icon() {
+        tray = tray.icon(icon.clone());
+    }
+
+    tray.on_menu_event(|app, event| {
+        let mode = match event.id().as_ref() {
+            "capture-region" => Some(CaptureMode::Region),
+            "capture-window" => Some(CaptureMode::Window),
+            "capture-display" => Some(CaptureMode::Display),
+            "open-folder" => {
+                if let Some(state) = app.try_state::<Arc<AppState>>() {
+                    let path = PathBuf::from(state.settings().output_directory);
+                    let _ = fs::create_dir_all(&path);
+                    let _ = app.opener().open_path(path.to_string_lossy(), None::<&str>);
                 }
-                "preferences" => {
-                    show_preferences(app);
-                    None
-                }
-                "quit" => {
-                    app.exit(0);
-                    None
-                }
-                _ => None,
-            };
-            if let Some(mode) = mode {
-                let state = app.state::<Arc<AppState>>().inner().clone();
-                let app = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    if let Err(error) = start_capture_inner(app.clone(), state, mode).await {
-                        report_capture_error(&app, &error);
-                    }
-                });
+                None
             }
-        })
-        .build(app)?;
+            "preferences" => {
+                show_preferences(app);
+                None
+            }
+            "quit" => {
+                app.exit(0);
+                None
+            }
+            _ => None,
+        };
+        if let Some(mode) = mode {
+            let state = app.state::<Arc<AppState>>().inner().clone();
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(error) = start_capture_inner(app.clone(), state, mode).await {
+                    report_capture_error(&app, &error);
+                }
+            });
+        }
+    })
+    .build(app)?;
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn macos_tray_icon() -> Option<Image<'static>> {
+    let source = image::load_from_memory(include_bytes!("../icons/icon.png"))
+        .ok()?
+        .to_rgba8();
+    let mut icon = image::imageops::resize(&source, 22, 22, image::imageops::FilterType::Lanczos3);
+    for pixel in icon.pixels_mut() {
+        let [red, green, blue, alpha] = pixel.0;
+        let minimum = red.min(green).min(blue);
+        let maximum = red.max(green).max(blue);
+        pixel.0 = if minimum >= 180 && maximum - minimum <= 55 {
+            [255, 255, 255, alpha]
+        } else {
+            [0, 0, 0, 0]
+        };
+    }
+    Some(Image::new_owned(icon.into_raw(), 22, 22))
 }
 
 fn show_capture_window(app: &AppHandle, session: &ActiveSession) {
@@ -888,6 +1020,68 @@ fn create_overlay_window(app: &AppHandle) -> Result<(), tauri::Error> {
         .visible(false)
         .build()
         .map(|_| ())
+}
+
+const STARTUP_NOTICE_WIDTH: f64 = 356.0;
+const STARTUP_NOTICE_HEIGHT: f64 = 112.0;
+
+fn show_startup_notice(app: &AppHandle) -> Result<(), tauri::Error> {
+    let (x, y) = startup_notice_position(app);
+    let window = WebviewWindowBuilder::new(
+        app,
+        "startup",
+        WebviewUrl::App("index.html?view=startup".into()),
+    )
+    .title("CES is running")
+    .inner_size(STARTUP_NOTICE_WIDTH, STARTUP_NOTICE_HEIGHT)
+    .position(x, y)
+    .decorations(false)
+    .always_on_top(true)
+    .visible_on_all_workspaces(true)
+    .skip_taskbar(true)
+    .resizable(false)
+    .shadow(false)
+    .transparent(true)
+    .background_color(Color(0, 0, 0, 0))
+    .focused(false)
+    .visible(false)
+    .build()?;
+    window.set_ignore_cursor_events(true)?;
+
+    #[cfg(target_os = "macos")]
+    ces_macos_window::show_without_activating(&window)
+        .map_err(|error| tauri::Error::Anyhow(anyhow::anyhow!(error)))?;
+
+    #[cfg(not(target_os = "macos"))]
+    window.show()?;
+
+    let timer_app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        let handle = timer_app.clone();
+        let _ = timer_app.run_on_main_thread(move || {
+            if let Some(window) = handle.get_webview_window("startup") {
+                let _ = window.hide();
+            }
+        });
+    });
+    Ok(())
+}
+
+fn startup_notice_position(app: &AppHandle) -> (f64, f64) {
+    app.primary_monitor()
+        .ok()
+        .flatten()
+        .map(|monitor| {
+            let scale = monitor.scale_factor().max(1.0);
+            let position = monitor.position();
+            let size = monitor.size();
+            let left = f64::from(position.x) / scale;
+            let top = f64::from(position.y) / scale;
+            let right = left + f64::from(size.width) / scale;
+            (right - STARTUP_NOTICE_WIDTH - 18.0, top + 30.0)
+        })
+        .unwrap_or((20.0, 30.0))
 }
 
 fn show_thumbnail(app: &AppHandle) {
@@ -1024,11 +1218,21 @@ fn report_capture_error(app: &AppHandle, error: &AppError) {
     eprintln!("capture failed: {error}");
 
     #[cfg(target_os = "macos")]
+    if matches!(
+        error,
+        AppError::Capture(CaptureError::PermissionRequestStarted)
+    ) {
+        // macOS is already presenting its own permission prompt. Showing a
+        // second CES dialog here obscures that prompt and confuses setup.
+        return;
+    }
+
+    #[cfg(target_os = "macos")]
     if matches!(error, AppError::Capture(CaptureError::PermissionDenied)) {
         let app = app.clone();
         app.dialog()
             .message(
-                "CES needs Screen Recording permission to capture your open windows. Click Open System Settings, turn on CES under Screen & System Audio Recording, then relaunch CES.",
+                "Enable the current CES entry under Screen & System Audio Recording. Then choose Quit CES from the menu-bar camera and open CES again from Applications. Local development builds can appear as a separate CES entry.",
             )
             .title("CES Setup")
             .buttons(MessageDialogButtons::OkCancelCustom(
@@ -1075,7 +1279,10 @@ fn capture_error_message(error: &AppError) -> String {
         return "CES could not capture this Wayland desktop. Make sure an xdg-desktop-portal screenshot backend is installed and running, then try Region or Display capture again.".to_owned();
     }
 
-    if matches!(error, AppError::Capture(CaptureError::PermissionDenied)) {
+    if matches!(
+        error,
+        AppError::Capture(CaptureError::PermissionDenied | CaptureError::PermissionRequestStarted)
+    ) {
         #[cfg(target_os = "windows")]
         {
             return "CES could not access the screen. Windows desktop capture does not use a separate Screen Recording permission; secure/UAC windows and protected content cannot be captured.".to_owned();
@@ -1170,7 +1377,7 @@ impl CaptureSession {
 
 #[cfg(test)]
 mod tests {
-    use super::thumbnail_geometry;
+    use super::{thumbnail_geometry, thumbnail_pointer_position};
 
     #[test]
     fn stacks_thumbnails_upward_in_logical_pixels_on_retina_displays() {
@@ -1182,5 +1389,16 @@ mod tests {
             thumbnail_geometry(-3_840, 0, 3_840, 2_048, 2.0, 2),
             (-1_896.0, 656.0, 344.0)
         );
+    }
+
+    #[test]
+    fn maps_global_pointer_into_retina_thumbnail_coordinates() {
+        let pointer = thumbnail_pointer_position(40.0, 80.0, 48, 120, 600, 352, 2.0);
+        assert_eq!(pointer.x, 16.0);
+        assert_eq!(pointer.y, 20.0);
+        assert!(pointer.inside);
+
+        let outside = thumbnail_pointer_position(10.0, 10.0, 48, 120, 600, 352, 2.0);
+        assert!(!outside.inside);
     }
 }
