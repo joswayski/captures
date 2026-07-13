@@ -86,7 +86,7 @@ For Ubuntu development, install Tauri's native dependencies first:
 
 ```sh
 sudo apt update
-sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libgbm-dev
 ```
 
 Ubuntu Desktop includes the screenshot portal used for Wayland region/display capture. Ubuntu 26.04 is Wayland-only; native Wayland window capture remains a separate follow-up.

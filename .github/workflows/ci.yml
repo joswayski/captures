@@ -39,6 +39,7 @@ jobs:
             libclang-dev \
             libdbus-1-dev \
             libegl-dev \
+            libgbm-dev \
             libpipewire-0.3-dev \
             librsvg2-dev \
             libssl-dev \
