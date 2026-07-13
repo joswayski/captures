@@ -15,6 +15,7 @@ use tauri::{
 };
 use tauri_plugin_autostart::ManagerExt as AutoStartExt;
 use tauri_plugin_clipboard_manager::ClipboardExt;
+use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_opener::OpenerExt;
 use thiserror::Error;
@@ -152,6 +153,7 @@ async fn start_capture_inner(
         return Err(AppError::CaptureInProgress);
     }
 
+    state.backend.ensure_permission()?;
     let display = display_under_pointer(&state)?;
     let frame = state.backend.capture_display(&display.id)?;
 
@@ -496,8 +498,8 @@ fn register_shortcut(app: &AppHandle, shortcut: &str, mode: CaptureMode) -> Resu
             let state = app.state::<Arc<AppState>>().inner().clone();
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(error) = start_capture_inner(app, state, mode).await {
-                    eprintln!("capture failed: {error}");
+                if let Err(error) = start_capture_inner(app.clone(), state, mode).await {
+                    report_capture_error(&app, &error);
                 }
             });
         })
@@ -570,8 +572,8 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 let state = app.state::<Arc<AppState>>().inner().clone();
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
-                    if let Err(error) = start_capture_inner(app, state, mode).await {
-                        eprintln!("capture failed: {error}");
+                    if let Err(error) = start_capture_inner(app.clone(), state, mode).await {
+                        report_capture_error(&app, &error);
                     }
                 });
             }
@@ -641,10 +643,7 @@ fn show_thumbnail(app: &AppHandle, artifact: &CaptureArtifact) {
             .map(|monitor| {
                 let position = monitor.position();
                 let size = monitor.size();
-                (
-                    position.x as f64 + size.width as f64 - 400.0,
-                    position.y as f64 + size.height as f64 - 300.0,
-                )
+                thumbnail_position(position.x, position.y, size.width, monitor.scale_factor())
             })
             .unwrap_or((20.0, 20.0));
         let result = WebviewWindowBuilder::new(&handle, "thumbnail", WebviewUrl::App(url.into()))
@@ -653,6 +652,7 @@ fn show_thumbnail(app: &AppHandle, artifact: &CaptureArtifact) {
             .position(x, y)
             .decorations(false)
             .always_on_top(true)
+            .visible_on_all_workspaces(true)
             .skip_taskbar(true)
             .resizable(false)
             .shadow(true)
@@ -665,6 +665,34 @@ fn show_thumbnail(app: &AppHandle, artifact: &CaptureArtifact) {
             );
         }
     });
+}
+
+fn thumbnail_position(x: i32, y: i32, width: u32, scale_factor: f64) -> (f64, f64) {
+    const THUMBNAIL_WIDTH: f64 = 380.0;
+    const EDGE_MARGIN: f64 = 24.0;
+    const TOP_MARGIN: f64 = 36.0;
+
+    let scale = scale_factor.max(1.0);
+    let left = f64::from(x) / scale;
+    let top = f64::from(y) / scale;
+    let width = f64::from(width) / scale;
+    let right_aligned = left + width - THUMBNAIL_WIDTH - EDGE_MARGIN;
+    (right_aligned.max(left + EDGE_MARGIN), top + TOP_MARGIN)
+}
+
+fn report_capture_error(app: &AppHandle, error: &AppError) {
+    eprintln!("capture failed: {error}");
+    let message = if matches!(error, AppError::Capture(CaptureError::PermissionDenied)) {
+        "CES needs Screen Recording permission to capture your open windows. Enable CES in System Settings > Privacy & Security > Screen & System Audio Recording, then restart CES."
+            .to_owned()
+    } else {
+        format!("CES could not start the capture: {error}")
+    };
+    app.dialog()
+        .message(message)
+        .title("CES Capture")
+        .kind(MessageDialogKind::Error)
+        .show(|_| {});
 }
 
 fn show_preferences(app: &AppHandle) {
@@ -740,5 +768,16 @@ impl CaptureSession {
             image::imageops::crop_imm(&self.image, rect.x, rect.y, rect.width, rect.height)
                 .to_image(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::thumbnail_position;
+
+    #[test]
+    fn positions_thumbnail_in_logical_pixels_on_retina_displays() {
+        assert_eq!(thumbnail_position(0, 0, 3_992, 2.0), (1_592.0, 36.0));
+        assert_eq!(thumbnail_position(-3_840, 0, 3_840, 2.0), (-404.0, 36.0));
     }
 }

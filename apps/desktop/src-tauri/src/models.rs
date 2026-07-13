@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use ces_capture::{CaptureMode, DisplayDescriptor, WindowDescriptor};
 use directories::{ProjectDirs, UserDirs};
@@ -60,13 +60,34 @@ pub struct CaptureSession {
 
 pub fn default_output_directory() -> PathBuf {
     UserDirs::new()
-        .and_then(|dirs| dirs.picture_dir().map(PathBuf::from))
+        .map(|dirs| dirs.home_dir().to_path_buf())
         .unwrap_or_else(|| {
             ProjectDirs::from("io", "github", "ces")
                 .map(|dirs| dirs.data_dir().to_path_buf())
                 .unwrap_or_else(|| PathBuf::from("."))
         })
         .join("CES")
+}
+
+pub fn migrate_legacy_output_directory(settings: &mut AppSettings) {
+    let Some(user_dirs) = UserDirs::new() else {
+        return;
+    };
+    let Some(pictures) = user_dirs.picture_dir() else {
+        return;
+    };
+
+    migrate_output_directory(
+        settings,
+        &pictures.join("CES"),
+        &user_dirs.home_dir().join("CES"),
+    );
+}
+
+fn migrate_output_directory(settings: &mut AppSettings, legacy: &Path, current: &Path) {
+    if Path::new(&settings.output_directory) == legacy {
+        settings.output_directory = current.to_string_lossy().into_owned();
+    }
 }
 
 pub fn settings_path() -> PathBuf {
@@ -81,4 +102,28 @@ pub fn snapshot_url(session_id: &str) -> String {
 
 pub fn artifact_url(artifact_id: &str) -> String {
     format!("ces-capture://localhost/artifact/{artifact_id}")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::{AppSettings, migrate_output_directory};
+
+    #[test]
+    fn migrates_only_the_legacy_default_output_directory() {
+        let legacy = Path::new("/Users/example/Pictures/CES");
+        let current = Path::new("/Users/example/CES");
+        let mut settings = AppSettings {
+            output_directory: legacy.to_string_lossy().into_owned(),
+            ..AppSettings::default()
+        };
+
+        migrate_output_directory(&mut settings, legacy, current);
+        assert_eq!(settings.output_directory, current.to_string_lossy());
+
+        settings.output_directory = "/Volumes/Captures".to_owned();
+        migrate_output_directory(&mut settings, legacy, current);
+        assert_eq!(settings.output_directory, "/Volumes/Captures");
+    }
 }

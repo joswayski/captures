@@ -2,7 +2,7 @@
 
 CES is a small, privacy-first screenshot utility for macOS, Windows, and Linux.
 
-The first milestone is a macOS developer alpha. It runs in the tray, captures a region, window, or display, copies the result to the image clipboard, and saves a PNG under `Pictures/CES`. CES does not upload screenshots or send telemetry.
+The first milestone is a macOS developer alpha. It runs in the tray, captures a region, window, or display, copies the result to the image clipboard, and saves a PNG under `~/CES`. CES does not upload screenshots or send telemetry.
 
 ## Current status
 
@@ -43,4 +43,3 @@ The tray shortcuts default to `Ctrl+Shift+4` for region, `Ctrl+Shift+W` for wind
 ## Privacy and future uploads
 
 CES saves locally by default and has no network permission in this milestone. The future upload service will receive an explicit Upload or Share action and will keep object storage private; the desktop app will never receive bucket credentials.
-

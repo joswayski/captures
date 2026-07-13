@@ -10,6 +10,18 @@ use crate::{
 pub struct XcapBackend;
 
 impl XcapBackend {
+    pub fn ensure_permission(&self) -> CaptureResult<()> {
+        #[cfg(target_os = "macos")]
+        {
+            let access = core_graphics::access::ScreenCaptureAccess;
+            if !access.preflight() && !access.request() {
+                return Err(CaptureError::PermissionDenied);
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn displays(&self) -> CaptureResult<Vec<DisplayDescriptor>> {
         Monitor::all()
             .map_err(|error| CaptureError::Backend(error.to_string()))?

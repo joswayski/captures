@@ -278,7 +278,7 @@ function Preferences() {
 
       <section className="settings-section">
         <h2>Captures</h2>
-        <label className="field-label" htmlFor="output-directory">Save screenshots to</label>
+        <label className="field-label" htmlFor="output-directory">Save captures to</label>
         <div className="directory-input">
           <input id="output-directory" value={settings.output_directory} onChange={(event) => update("output_directory", event.target.value)} />
           <button type="button" onClick={() => void chooseDirectory()}>Choose</button>

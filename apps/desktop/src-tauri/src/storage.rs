@@ -12,10 +12,12 @@ use crate::{AppError, models::AppSettings};
 
 pub fn load_settings() -> AppSettings {
     let path = crate::models::settings_path();
-    fs::read_to_string(path)
+    let mut settings = fs::read_to_string(path)
         .ok()
         .and_then(|contents| serde_json::from_str(&contents).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    crate::models::migrate_legacy_output_directory(&mut settings);
+    settings
 }
 
 pub fn save_settings(settings: &AppSettings) -> Result<(), AppError> {
