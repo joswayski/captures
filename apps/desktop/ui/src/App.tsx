@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -12,7 +12,7 @@ import type {
   WindowDescriptor,
 } from "./types";
 
-const currentWindow = getCurrentWindow();
+const currentWindow = isTauri() ? getCurrentWindow() : null;
 
 function query(name: string): string | null {
   return new URLSearchParams(window.location.search).get(name);
@@ -53,7 +53,7 @@ function CaptureOverlay() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || !sessionId) return;
-      void invoke("cancel_capture", { sessionId }).finally(() => void currentWindow.close());
+      void invoke("cancel_capture", { sessionId }).finally(() => void currentWindow?.close());
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -76,7 +76,7 @@ function CaptureOverlay() {
 
   const commitRegion = () => {
     if (!rect || rect.width < 2 || rect.height < 2) return;
-    void invoke("commit_region", { sessionId, rect }).finally(() => void currentWindow.close());
+    void invoke("commit_region", { sessionId, rect }).finally(() => void currentWindow?.close());
   };
 
   const onPointerDown = (event: React.PointerEvent) => {
@@ -128,7 +128,7 @@ function CaptureOverlay() {
           hoveredWindow={hoveredWindow}
           onHover={setHoveredWindow}
           onSelect={(window) => {
-            void invoke("commit_window", { sessionId, windowId: window.id }).finally(() => void currentWindow.close());
+            void invoke("commit_window", { sessionId, windowId: window.id }).finally(() => void currentWindow?.close());
           }}
         />
       )}
@@ -184,7 +184,7 @@ function Thumbnail() {
   const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const close = () => {
-    void invoke("close_thumbnail").finally(() => void currentWindow.close());
+    void invoke("close_thumbnail").finally(() => void currentWindow?.close());
   };
 
   useEffect(() => {
@@ -273,7 +273,7 @@ function Preferences() {
           <span className="eyebrow">CES</span>
           <h1>Preferences</h1>
         </div>
-        <button type="button" className="close-button" onClick={() => void currentWindow.close()}>×</button>
+        <button type="button" className="close-button" onClick={() => void currentWindow?.close()}>×</button>
       </header>
 
       <section className="settings-section">
@@ -301,7 +301,7 @@ function Preferences() {
       <footer className="preferences-footer">
         <span className="save-message">{message}</span>
         <div>
-          <button type="button" className="quiet" onClick={() => void currentWindow.close()}>Cancel</button>
+          <button type="button" className="quiet" onClick={() => void currentWindow?.close()}>Cancel</button>
           <button type="button" className="primary" disabled={saving} onClick={() => void save()}>{saving ? "Saving…" : "Save"}</button>
         </div>
       </footer>
