@@ -244,38 +244,76 @@ function Thumbnail() {
 }
 
 function ThumbnailCard({ artifact }: { artifact: CaptureArtifact }) {
-  const [message, setMessage] = useState("");
-  const runAction = async (action: string, success: string) => {
+  const [feedback, setFeedback] = useState<"copied" | "saved" | null>(null);
+  const [busy, setBusy] = useState<"copied" | "saved" | null>(null);
+  const [error, setError] = useState("");
+  const [exit, setExit] = useState<"dismiss" | "delete" | null>(null);
+  const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
+  }, []);
+
+  const showFeedback = (value: "copied" | "saved") => {
+    setFeedback(value);
+    if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
+    feedbackTimer.current = setTimeout(() => setFeedback(null), 2_000);
+  };
+
+  const runAction = async (action: string, success?: "copied" | "saved") => {
+    if (success && busy) return;
+    setError("");
+    if (success) setBusy(success);
     try {
       await invoke(action, { artifactId: artifact.id });
-      setMessage(success);
+      if (success) showFeedback(success);
     } catch (error) {
-      setMessage(String(error));
+      setError(String(error));
+    } finally {
+      if (success) setBusy(null);
     }
   };
 
+  const exitWith = (kind: "dismiss" | "delete", action: string) => {
+    if (exit) return;
+    setExit(kind);
+    setTimeout(() => {
+      void invoke(action, { artifactId: artifact.id }).catch((error) => {
+        setExit(null);
+        setError(String(error));
+      });
+    }, 320);
+  };
+
   return (
-    <article className="thumbnail-card">
+    <article className={`thumbnail-card ${exit ? `thumbnail-exit-${exit}` : ""}`}>
       <img src={artifact.preview_url} alt="Screenshot preview" />
-      <div className="thumbnail-actions">
-        <IconButton label="Copy" onClick={() => void runAction("copy_artifact", "Copied")}>
-          <CopyIcon />
-        </IconButton>
-        <IconButton label="Show in Folder" onClick={() => void runAction("reveal_artifact", "Shown in folder")}>
-          <FolderIcon />
-        </IconButton>
-        <IconButton className="delete" label="Delete" onClick={() => void runAction("trash_artifact", "Deleted")}>
+      <div className="thumbnail-top-actions">
+        <IconButton className="delete" label="Delete" onClick={() => exitWith("delete", "trash_artifact")}>
           <TrashIcon />
         </IconButton>
-        <IconButton label="Dismiss" onClick={() => void runAction("dismiss_artifact", "Dismissed")}>
-          <CloseIcon />
-        </IconButton>
+        <div className="thumbnail-top-right">
+          {artifact.path && (
+            <IconButton label="Show in Folder" onClick={() => void runAction("reveal_artifact")}>
+              <FolderIcon />
+            </IconButton>
+          )}
+          <button type="button" className="dismiss-button" onClick={() => exitWith("dismiss", "dismiss_artifact")}>Dismiss</button>
+        </div>
+      </div>
+      <div className="thumbnail-main-actions">
+        <button type="button" disabled={busy !== null} onClick={() => void runAction("copy_artifact", "copied")}>
+          {feedback === "copied" ? <><CheckIcon />Copied!</> : <><CopyIcon />Copy</>}
+        </button>
+        <button type="button" disabled={busy !== null} onClick={() => void runAction("save_artifact", "saved")}>
+          {feedback === "saved" ? <><CheckIcon />Saved!</> : <><SaveIcon />Save</>}
+        </button>
       </div>
       <div className="thumbnail-meta">
         <span>{artifact.width} × {artifact.height}</span>
         {!artifact.clipboard_copied && <span className="warning">Clipboard unavailable</span>}
       </div>
-      {message && <p className="thumbnail-message">{message}</p>}
+      {error && <p className="thumbnail-message">{error}</p>}
     </article>
   );
 }
@@ -292,7 +330,7 @@ function IconButton({
   onClick: () => void;
 }) {
   return (
-    <button type="button" className={className} aria-label={label} title={label} onClick={onClick}>
+    <button type="button" className={`icon-button ${className}`} aria-label={label} data-tooltip={label} onClick={onClick}>
       {children}
     </button>
   );
@@ -310,8 +348,12 @@ function TrashIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5" /></svg>;
 }
 
-function CloseIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>;
+function SaveIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h12l2 2v14H5Z" /><path d="M8 4v6h8V4M8 20v-6h8v6" /></svg>;
+}
+
+function CheckIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6" /></svg>;
 }
 
 function Preferences() {

@@ -14,7 +14,7 @@
     "security": {
       "csp": "default-src 'self'; img-src 'self' ces-capture: data:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost"
     },
-    "macOSPrivateApi": false
+    "macOSPrivateApi": true
   },
   "bundle": {
     "active": true,

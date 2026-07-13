@@ -2,7 +2,7 @@
 
 CES is a small, privacy-first screenshot utility for macOS, Windows, and Linux.
 
-The first milestone is a macOS developer alpha. It runs in the tray, captures a region, window, or display, copies the result to the image clipboard, and saves a PNG under `~/CES`. CES does not upload screenshots or send telemetry.
+The first milestone is a macOS developer alpha. It runs in the tray, captures a region, window, or display, copies the result to the image clipboard, and presents a preview. Choose Save to write a PNG under `~/CES`; Dismiss drops an unsaved preview without creating a file. CES does not upload screenshots or send telemetry.
 
 ## Current status
 
@@ -63,4 +63,4 @@ Ubuntu Desktop includes the screenshot portal used for Wayland region/display ca
 
 ## Privacy and future uploads
 
-CES saves locally by default and has no network permission in this milestone. The future upload service will receive an explicit Upload or Share action and will keep object storage private; the desktop app will never receive bucket credentials.
+CES holds pending captures locally in memory and has no network permission in this milestone. Saving is an explicit action. The future upload service will receive an explicit Upload or Share action and will keep object storage private; the desktop app will never receive bucket credentials.

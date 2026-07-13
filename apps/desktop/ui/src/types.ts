@@ -41,7 +41,7 @@ export interface AppSettings {
 
 export interface CaptureArtifact {
   id: string;
-  path: string;
+  path: string | null;
   preview_url: string;
   width: number;
   height: number;

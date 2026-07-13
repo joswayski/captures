@@ -29,7 +29,7 @@ tracing.workspace = true
 uuid.workspace = true
 directories = "6"
 mouse_position = "0.1.4"
-tauri = { version = "2", features = ["image-png", "tray-icon"] }
+tauri = { version = "2", features = ["image-png", "macos-private-api", "tray-icon"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "2"

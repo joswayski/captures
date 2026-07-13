@@ -105,6 +105,7 @@ pub fn run() {
             update_settings,
             get_artifacts,
             copy_artifact,
+            save_artifact,
             reveal_artifact,
             trash_artifact,
             dismiss_artifact,
@@ -161,6 +162,19 @@ async fn start_capture_inner(
         return Err(AppError::CaptureInProgress);
     }
 
+    hide_window(&app, "thumbnail");
+    let result = prepare_capture(app.clone(), state.clone(), mode).await;
+    if result.is_err() {
+        restore_thumbnail_stack(&app, &state);
+    }
+    result
+}
+
+async fn prepare_capture(
+    app: AppHandle,
+    state: Arc<AppState>,
+    mode: CaptureMode,
+) -> Result<Option<ActiveSession>, AppError> {
     state.backend.ensure_permission()?;
     let display = display_under_pointer(&state)?;
     let frame = state.backend.capture_display(&display.id)?;
@@ -228,14 +242,16 @@ async fn commit_region(
         session.image.width(),
         session.image.height(),
     );
-    let image = session
-        .view(physical)
-        .ok_or(AppError::InvalidSelection)
-        .map_err(|error| error.to_string())?;
+    let Some(image) = session.view(physical) else {
+        restore_thumbnail_stack(&app, &state);
+        return Err(AppError::InvalidSelection.to_string());
+    };
 
-    finish_capture(&app, &state, CaptureMode::Region, image)
-        .await
-        .map_err(|error| error.to_string())
+    let result = finish_capture(&app, &state, CaptureMode::Region, image).await;
+    if result.is_err() {
+        restore_thumbnail_stack(&app, &state);
+    }
+    result.map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -253,14 +269,19 @@ async fn commit_window(
         .lock()
         .remove(&id)
         .ok_or_else(|| AppError::SessionUnavailable.to_string())?;
-    let image = state
-        .backend
-        .capture_window(&window_id)
-        .map_err(|error| error.to_string())?;
+    let image = match state.backend.capture_window(&window_id) {
+        Ok(image) => image,
+        Err(error) => {
+            restore_thumbnail_stack(&app, &state);
+            return Err(error.to_string());
+        }
+    };
 
-    finish_capture(&app, &state, CaptureMode::Window, image)
-        .await
-        .map_err(|error| error.to_string())
+    let result = finish_capture(&app, &state, CaptureMode::Window, image).await;
+    if result.is_err() {
+        restore_thumbnail_stack(&app, &state);
+    }
+    result.map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -272,6 +293,7 @@ fn cancel_capture(
     hide_window(&app, "overlay");
     let id = Uuid::parse_str(&session_id).map_err(|error| error.to_string())?;
     state.sessions.lock().remove(&id);
+    restore_thumbnail_stack(&app, state.inner());
     Ok(())
 }
 
@@ -389,12 +411,58 @@ async fn copy_artifact(
         .find(|artifact| artifact.id == artifact_id)
         .cloned()
         .ok_or_else(|| "artifact is no longer available".to_owned())?;
-    let image = image::open(&artifact.path)
+    let image = image::load_from_memory(&artifact.image_png)
         .map_err(|error| error.to_string())?
         .into_rgba8();
     copy_to_clipboard(&app, image)
         .await
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn save_artifact(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    artifact_id: String,
+) -> CommandResult<CaptureArtifact> {
+    let (png, existing_path) = state
+        .artifacts
+        .lock()
+        .iter()
+        .find(|artifact| artifact.id == artifact_id)
+        .map(|artifact| (artifact.image_png.clone(), artifact.path.clone()))
+        .ok_or_else(|| "artifact is no longer available".to_owned())?;
+
+    if existing_path.is_none() {
+        let settings = state.settings();
+        let path = tauri::async_runtime::spawn_blocking(move || {
+            storage::save_encoded_capture(&png, &settings)
+        })
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?;
+        let path = path.to_string_lossy().into_owned();
+        let mut artifacts = state.artifacts.lock();
+        let Some(artifact) = artifacts
+            .iter_mut()
+            .find(|artifact| artifact.id == artifact_id)
+        else {
+            let _ = fs::remove_file(&path);
+            return Err("artifact is no longer available".to_owned());
+        };
+        artifact.path = Some(path);
+    }
+
+    let artifact = state
+        .artifacts
+        .lock()
+        .iter()
+        .find(|artifact| artifact.id == artifact_id)
+        .cloned()
+        .ok_or_else(|| "artifact is no longer available".to_owned())?;
+    app.emit("artifact-updated", &artifact)
+        .map_err(|error| error.to_string())?;
+    Ok(artifact)
 }
 
 #[tauri::command]
@@ -410,8 +478,11 @@ fn reveal_artifact(
         .find(|artifact| artifact.id == artifact_id)
         .cloned()
         .ok_or_else(|| "artifact is no longer available".to_owned())?;
+    let path = artifact
+        .path
+        .ok_or_else(|| "Save this capture before showing it in its folder".to_owned())?;
     app.opener()
-        .reveal_item_in_dir(PathBuf::from(artifact.path))
+        .reveal_item_in_dir(PathBuf::from(path))
         .map_err(|error| error.to_string())
 }
 
@@ -428,7 +499,9 @@ fn trash_artifact(
         .find(|artifact| artifact.id == artifact_id)
         .cloned()
         .ok_or_else(|| "artifact is no longer available".to_owned())?;
-    trash::delete(&artifact.path).map_err(|error| error.to_string())?;
+    if let Some(path) = artifact.path {
+        trash::delete(path).map_err(|error| error.to_string())?;
+    }
     remove_artifact(&app, state.inner(), &artifact_id)?;
     Ok(())
 }
@@ -484,35 +557,35 @@ async fn finish_capture(
 ) -> Result<CaptureArtifact, AppError> {
     let width = image.width();
     let height = image.height();
-    let settings = state.settings();
-    let image_for_save = image.clone();
-    let save_task = tauri::async_runtime::spawn_blocking(move || -> Result<_, AppError> {
-        let path = storage::save_capture(&image_for_save, &settings)?;
-        let preview_png = storage::encode_thumbnail_png(&image_for_save)?;
-        Ok((path, preview_png))
+    let image_for_encoding = image.clone();
+    let encode_task = tauri::async_runtime::spawn_blocking(move || -> Result<_, AppError> {
+        let image_png = storage::encode_png(&image_for_encoding)?;
+        let preview_png = storage::encode_thumbnail_png(&image_for_encoding)?;
+        Ok((image_png, preview_png))
     });
     let clipboard_app = app.clone();
     let clipboard_task = tauri::async_runtime::spawn_blocking(move || {
         write_image_to_clipboard(&clipboard_app, image)
     });
-    let (path, preview_png) = save_task
+    let (image_png, preview_png) = encode_task
         .await
         .map_err(|error| AppError::Task(error.to_string()))??;
     let artifact_id = Uuid::new_v4().to_string();
     let mut artifact = CaptureArtifact {
         id: artifact_id.clone(),
         preview_url: models::artifact_url(&artifact_id),
-        path: path.to_string_lossy().into_owned(),
+        path: None,
         width,
         height,
         created_at: Utc::now().to_rfc3339(),
         mode,
         clipboard_copied: true,
+        image_png,
         preview_png,
     };
     state.artifacts.lock().push(artifact.clone());
     app.emit("capture-completed", &artifact)?;
-    show_thumbnail(app, &artifact);
+    show_thumbnail(app);
 
     let copied = clipboard_task
         .await
@@ -762,12 +835,9 @@ fn create_overlay_window(app: &AppHandle) -> Result<(), tauri::Error> {
         .map(|_| ())
 }
 
-fn show_thumbnail(app: &AppHandle, artifact: &CaptureArtifact) {
+fn show_thumbnail(app: &AppHandle) {
     let count = app.state::<Arc<AppState>>().artifacts.lock().len();
     update_thumbnail_stack(app, count);
-    if count == 0 {
-        eprintln!("capture thumbnail was not retained for {}", artifact.path);
-    }
 }
 
 fn create_thumbnail_window(app: &AppHandle, visible: bool) -> Result<(), tauri::Error> {
@@ -786,6 +856,7 @@ fn create_thumbnail_window(app: &AppHandle, visible: bool) -> Result<(), tauri::
     .skip_taskbar(true)
     .resizable(false)
     .shadow(false)
+    .transparent(true)
     .focused(false)
     .visible(visible)
     .build()
@@ -816,6 +887,11 @@ fn update_thumbnail_stack(app: &AppHandle, count: usize) {
         let _ = window.set_position(tauri::LogicalPosition::new(x, y));
         let _ = window.show();
     });
+}
+
+fn restore_thumbnail_stack(app: &AppHandle, state: &Arc<AppState>) {
+    let count = state.artifacts.lock().len();
+    update_thumbnail_stack(app, count);
 }
 
 fn thumbnail_window_geometry(app: &AppHandle, count: usize) -> (f64, f64, f64) {
@@ -858,10 +934,12 @@ fn thumbnail_geometry(
     let width = f64::from(width) / scale;
     let available_height = f64::from(height) / scale - EDGE_MARGIN * 2.0;
     let stack_height = thumbnail_stack_height(count).min(available_height.max(1.0));
-    let right_aligned = left + width - THUMBNAIL_WIDTH - EDGE_MARGIN;
+    let left_aligned = left + EDGE_MARGIN;
     let bottom_aligned = top + f64::from(height) / scale - stack_height - EDGE_MARGIN;
     (
-        right_aligned.max(left + EDGE_MARGIN),
+        left_aligned
+            .min(left + width - THUMBNAIL_WIDTH - EDGE_MARGIN)
+            .max(left),
         bottom_aligned.max(top + EDGE_MARGIN),
         stack_height,
     )
@@ -1017,11 +1095,11 @@ mod tests {
     fn stacks_thumbnails_upward_in_logical_pixels_on_retina_displays() {
         assert_eq!(
             thumbnail_geometry(0, 0, 3_992, 2_048, 2.0, 1),
-            (1_672.0, 824.0, 176.0)
+            (24.0, 824.0, 176.0)
         );
         assert_eq!(
             thumbnail_geometry(-3_840, 0, 3_840, 2_048, 2.0, 2),
-            (-324.0, 656.0, 344.0)
+            (-1_896.0, 656.0, 344.0)
         );
     }
 }

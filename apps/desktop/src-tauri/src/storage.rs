@@ -36,16 +36,15 @@ pub fn save_settings(settings: &AppSettings) -> Result<(), AppError> {
     Ok(())
 }
 
-pub fn save_capture(image: &RgbaImage, settings: &AppSettings) -> Result<PathBuf, AppError> {
+pub fn save_encoded_capture(png: &[u8], settings: &AppSettings) -> Result<PathBuf, AppError> {
     let directory = PathBuf::from(&settings.output_directory);
     fs::create_dir_all(&directory)?;
-    let png = encode_png(image)?;
     let stem = format!("CES_{}", Local::now().format("%Y-%m-%d_%H-%M-%S_%3f"));
     let path = unique_path(&directory, &stem);
     let temporary = directory.join(format!(".ces-{}.tmp", Uuid::new_v4()));
 
     let mut file = File::create(&temporary)?;
-    file.write_all(&png)?;
+    file.write_all(png)?;
     drop(file);
     fs::rename(&temporary, &path)?;
     Ok(path)
@@ -115,7 +114,9 @@ mod tests {
     use image::{Rgba, RgbaImage};
     use tempfile::tempdir;
 
-    use super::{encode_preview_png, encode_thumbnail_png, save_capture, unique_path};
+    use super::{
+        encode_png, encode_preview_png, encode_thumbnail_png, save_encoded_capture, unique_path,
+    };
     use crate::models::AppSettings;
 
     #[test]
@@ -127,7 +128,8 @@ mod tests {
         };
         let image = RgbaImage::from_pixel(2, 3, Rgba([1, 2, 3, 255]));
 
-        let path = save_capture(&image, &settings).expect("capture saved");
+        let png = encode_png(&image).expect("capture encoded");
+        let path = save_encoded_capture(&png, &settings).expect("capture saved");
         let bytes = std::fs::read(&path).expect("saved capture readable");
         assert_eq!(
             image::ImageFormat::from_path(&path).unwrap(),

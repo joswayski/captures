@@ -30,13 +30,15 @@ impl Default for AppSettings {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CaptureArtifact {
     pub id: String,
-    pub path: String,
+    pub path: Option<String>,
     pub preview_url: String,
     pub width: u32,
     pub height: u32,
     pub created_at: String,
     pub mode: CaptureMode,
     pub clipboard_copied: bool,
+    #[serde(skip)]
+    pub image_png: Vec<u8>,
     #[serde(skip)]
     pub preview_png: Vec<u8>,
 }
