@@ -30,6 +30,7 @@ pub fn configure_inactive_hover(window: &WebviewWindow) -> Result<(), &'static s
             };
             let options = NSTrackingAreaOptions::MouseEnteredAndExited
                 | NSTrackingAreaOptions::MouseMoved
+                | NSTrackingAreaOptions::CursorUpdate
                 | NSTrackingAreaOptions::ActiveAlways
                 | NSTrackingAreaOptions::InVisibleRect;
             // SAFETY: `webview` is the live WKWebView supplied by Tauri, and

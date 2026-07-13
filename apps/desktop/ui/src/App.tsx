@@ -362,9 +362,7 @@ function Thumbnail() {
 
     const setPointingCursor = (pointing: boolean) => {
       document.documentElement.style.cursor = pointing ? "pointer" : "";
-      // AppKit/WebKit can restore the arrow while this non-activating window is
-      // inactive, so reassert the pointing hand throughout a button hover.
-      if (pointingCursor === pointing && !pointing) return;
+      if (pointingCursor === pointing) return;
       pointingCursor = pointing;
       void invoke("set_thumbnail_cursor", { pointing });
     };

@@ -6,6 +6,9 @@ use std::{fs, path::PathBuf, sync::Arc};
 #[cfg(target_os = "macos")]
 use std::process::Command;
 
+#[cfg(target_os = "macos")]
+use tauri::CursorIcon;
+
 use ces_capture::{CaptureError, CaptureMode, LogicalRect};
 use chrono::Utc;
 use image::RgbaImage;
@@ -419,9 +422,21 @@ fn get_thumbnail_pointer_position(
 #[tauri::command]
 fn set_thumbnail_cursor(app: AppHandle, pointing: bool) -> CommandResult<()> {
     #[cfg(target_os = "macos")]
-    return app
-        .run_on_main_thread(move || ces_macos_window::set_pointing_cursor(pointing))
-        .map_err(|error| error.to_string());
+    {
+        let window = app
+            .get_webview_window("thumbnail")
+            .ok_or_else(|| "capture thumbnail is unavailable".to_owned())?;
+        let icon = if pointing {
+            CursorIcon::Hand
+        } else {
+            CursorIcon::Default
+        };
+        window
+            .set_cursor_icon(icon)
+            .map_err(|error| error.to_string())?;
+        app.run_on_main_thread(move || ces_macos_window::set_pointing_cursor(pointing))
+            .map_err(|error| error.to_string())
+    }
 
     #[cfg(not(target_os = "macos"))]
     {
