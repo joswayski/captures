@@ -3,6 +3,9 @@
 
 use std::{fs, path::PathBuf, sync::Arc};
 
+#[cfg(target_os = "macos")]
+use std::process::Command;
+
 use ces_capture::{CaptureError, CaptureMode, LogicalRect};
 use chrono::Utc;
 use image::RgbaImage;
@@ -1232,24 +1235,27 @@ fn report_capture_error(app: &AppHandle, error: &AppError) {
         let app = app.clone();
         app.dialog()
             .message(
-                "Enable the current CES entry under Screen & System Audio Recording. Then choose Quit CES from the menu-bar camera and open CES again from Applications. Local development builds can appear as a separate CES entry.",
+                "macOS does not recognize this CES build, even if CES appears enabled under Screen & System Audio Recording. This commonly happens after replacing a locally built, ad-hoc-signed copy. Resetting removes only CES's stale permission records. Then use the macOS prompt to enable this build and restart CES.",
             )
             .title("CES Setup")
             .buttons(MessageDialogButtons::OkCancelCustom(
-                "Open System Settings".to_owned(),
+                "Reset CES Permission".to_owned(),
                 "Not Now".to_owned(),
             ))
             .kind(MessageDialogKind::Error)
-            .show(move |open_settings| {
-                if open_settings {
-                    const SCREEN_RECORDING_SETTINGS_URL: &str =
-                        "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
-                    if let Err(error) = app
-                        .opener()
-                        .open_url(SCREEN_RECORDING_SETTINGS_URL, None::<&str>)
-                    {
-                        eprintln!("failed to open Screen Recording settings: {error}");
-                    }
+            .show(move |reset_permission| {
+                if reset_permission
+                    && let Err(error) = reset_macos_screen_capture_permission(&app)
+                {
+                    eprintln!("failed to reset Screen Recording permission: {error}");
+                    app.dialog()
+                        .message(format!(
+                            "CES could not reset its Screen Recording permission: {error}"
+                        ))
+                        .title("CES Setup")
+                        .buttons(MessageDialogButtons::Ok)
+                        .kind(MessageDialogKind::Error)
+                        .show(|_| {});
                 }
             });
         return;
@@ -1292,6 +1298,31 @@ fn capture_error_message(error: &AppError) -> String {
     }
 
     format!("CES could not start the capture: {error}")
+}
+
+#[cfg(target_os = "macos")]
+fn reset_macos_screen_capture_permission(app: &AppHandle) -> Result<(), AppError> {
+    let status = Command::new("/usr/bin/tccutil")
+        .args(["reset", "ScreenCapture", app.config().identifier.as_str()])
+        .status()?;
+    if !status.success() {
+        return Err(AppError::Task(format!(
+            "tccutil exited with status {status}"
+        )));
+    }
+
+    let state = app.state::<Arc<AppState>>().inner().clone();
+    {
+        let mut settings = state.settings.write();
+        settings.last_screen_permission_request_id = None;
+        storage::save_settings(&settings)?;
+    }
+
+    let request_permission = mark_screen_permission_request(&state)?;
+    match state.backend.ensure_permission(request_permission) {
+        Ok(()) | Err(CaptureError::PermissionRequestStarted) => Ok(()),
+        Err(error) => Err(error.into()),
+    }
 }
 
 #[cfg(target_os = "linux")]

@@ -78,7 +78,9 @@ CES runs as a menu-bar utility: it shows a camera at the top-right of macOS and 
 
 After macOS grants Screen Recording access, quit CES from the menu-bar camera and open it again from Applications. macOS requires this restart before capture is enabled.
 
-Local debug and release builds are currently ad-hoc signed. macOS can therefore ask for Screen Recording permission again after the executable changes. Stable permissions across upgrades require an Apple Development or Developer ID signing certificate; Tauri accepts its name through `APPLE_SIGNING_IDENTITY` when building.
+`npm run build` seals local macOS bundles with a valid ad-hoc signature when no Apple identity is configured. Ad-hoc identity is still tied to the exact executable, so macOS can ask for Screen Recording permission again after the code changes. Stable permissions across upgrades require an Apple Development or Developer ID signing certificate; set its name through `APPLE_SIGNING_IDENTITY` and the build script uses it instead of the local fallback.
+
+If CES is enabled in Screen & System Audio Recording but still asks for permission, start a capture and choose **Reset CES Permission**. CES clears only its own stale macOS permission records and immediately requests access for the running build; other applications are not affected. Enable CES in the macOS prompt, then quit and reopen CES once.
 
 For Ubuntu development, install Tauri's native dependencies first:
 

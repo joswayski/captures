@@ -7,9 +7,8 @@
   ],
   "scripts": {
     "dev": "npm run tauri:dev --workspace @ces/desktop",
-    "build": "npm run tauri:build --workspace @ces/desktop",
+    "build": "node scripts/build.mjs",
     "check": "npm run check --workspace @ces/desktop",
     "test": "npm run test --workspace @ces/desktop"
   }
 }
-
