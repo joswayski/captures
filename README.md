@@ -9,9 +9,9 @@ The first milestone is a macOS developer alpha. It runs in the tray, captures a 
 | Platform | Status |
 | --- | --- |
 | macOS 13+ | Primary development target |
-| Windows 11 | Experimental build target |
-| Linux X11 | Experimental build target |
-| Linux Wayland | Planned portal-backed target |
+| Windows 11 | Experimental; current GDI capture has no macOS-style permission prompt |
+| Linux X11 | Experimental; region, window, and display capture |
+| Linux Wayland | Experimental; region/display use the desktop screenshot portal, window capture requires X11 |
 
 Region selection is limited to the display under the pointer. Annotations, post-capture editing, OCR, scrolling capture, video, upload, sharing, and a screenshot gallery are intentionally deferred.
 
@@ -22,6 +22,7 @@ Prerequisites:
 - Rust 1.94 with `rustfmt` and `clippy`
 - Node.js 24 and npm 11
 - macOS Screen Recording permission for live capture tests
+- Linux: an X11 display, or a Wayland desktop with an `xdg-desktop-portal` screenshot backend
 
 Install dependencies and run the checks:
 

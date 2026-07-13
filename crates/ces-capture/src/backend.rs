@@ -70,6 +70,11 @@ impl XcapBackend {
     }
 
     pub fn windows(&self) -> CaptureResult<Vec<WindowDescriptor>> {
+        #[cfg(target_os = "linux")]
+        if wayland_without_x11() {
+            return Err(CaptureError::Unsupported);
+        }
+
         Window::all()
             .map_err(|error| CaptureError::Backend(error.to_string()))?
             .into_iter()
@@ -104,6 +109,11 @@ impl XcapBackend {
     }
 
     pub fn capture_window(&self, id: &str) -> CaptureResult<RgbaImage> {
+        #[cfg(target_os = "linux")]
+        if wayland_without_x11() {
+            return Err(CaptureError::Unsupported);
+        }
+
         let window = Window::all()
             .map_err(|error| CaptureError::Backend(error.to_string()))?
             .into_iter()
@@ -132,6 +142,11 @@ impl XcapBackend {
             })
             .ok_or(CaptureError::TargetUnavailable)
     }
+}
+
+#[cfg(target_os = "linux")]
+fn wayland_without_x11() -> bool {
+    std::env::var_os("WAYLAND_DISPLAY").is_some() && std::env::var_os("DISPLAY").is_none()
 }
 
 fn descriptor_for_monitor(monitor: &Monitor) -> CaptureResult<DisplayDescriptor> {

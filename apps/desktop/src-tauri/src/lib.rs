@@ -611,10 +611,17 @@ fn show_capture_window(app: &AppHandle, session: &ActiveSession) {
             f64::from(display.width),
             f64::from(display.height),
         );
-        let result = WebviewWindowBuilder::new(&handle, label, WebviewUrl::App(url.into()))
+        let builder = WebviewWindowBuilder::new(&handle, label, WebviewUrl::App(url.into()))
             .title("CES Capture")
             .inner_size(width, height)
-            .position(x, y)
+            .position(x, y);
+        #[cfg(target_os = "linux")]
+        let builder = if wayland_session() {
+            builder.fullscreen(true)
+        } else {
+            builder
+        };
+        let result = builder
             .decorations(false)
             .always_on_top(true)
             .visible_on_all_workspaces(true)
@@ -711,18 +718,47 @@ fn report_capture_error(app: &AppHandle, error: &AppError) {
         return;
     }
 
-    let message = if matches!(error, AppError::Capture(CaptureError::PermissionDenied)) {
-        "CES needs Screen Recording permission to capture your open windows. Enable CES in System Settings > Privacy & Security > Screen & System Audio Recording, then restart CES."
-            .to_owned()
-    } else {
-        format!("CES could not start the capture: {error}")
-    };
+    let message = capture_error_message(error);
     app.dialog()
         .message(message)
         .title("CES Capture")
         .buttons(MessageDialogButtons::Ok)
         .kind(MessageDialogKind::Error)
         .show(|_| {});
+}
+
+fn capture_error_message(error: &AppError) -> String {
+    if matches!(error, AppError::Capture(CaptureError::Unsupported)) {
+        #[cfg(target_os = "linux")]
+        if wayland_session() {
+            return "Window capture is not available on a pure Wayland session yet. Use Region or Display capture, or log in to an X11 session for Window capture. Region and Display capture use your desktop screenshot portal.".to_owned();
+        }
+
+        return "This capture mode is not supported on the current desktop session. Try Region capture instead.".to_owned();
+    }
+
+    #[cfg(target_os = "linux")]
+    if wayland_session() && matches!(error, AppError::Capture(CaptureError::Backend(_))) {
+        return "CES could not capture this Wayland desktop. Make sure an xdg-desktop-portal screenshot backend is installed and running, then try Region or Display capture again.".to_owned();
+    }
+
+    if matches!(error, AppError::Capture(CaptureError::PermissionDenied)) {
+        #[cfg(target_os = "windows")]
+        {
+            return "CES could not access the screen. Windows desktop capture does not use a separate Screen Recording permission; secure/UAC windows and protected content cannot be captured.".to_owned();
+        }
+
+        return "CES needs Screen Recording permission to capture your open windows. Enable it in your operating system's privacy settings, then restart CES.".to_owned();
+    }
+
+    format!("CES could not start the capture: {error}")
+}
+
+#[cfg(target_os = "linux")]
+fn wayland_session() -> bool {
+    std::env::var_os("WAYLAND_DISPLAY").is_some()
+        || std::env::var_os("XDG_SESSION_TYPE")
+            .is_some_and(|session| session.to_string_lossy().eq_ignore_ascii_case("wayland"))
 }
 
 fn show_preferences(app: &AppHandle) {
