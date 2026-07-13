@@ -39,7 +39,16 @@ Run the desktop app in development mode:
 npm run dev
 ```
 
-The tray shortcuts default to `Ctrl+Shift+4` for region, `Ctrl+Shift+W` for window, and `Ctrl+Shift+3` for display. They can be changed from Preferences.
+## Shortcuts
+
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl+Shift+4` | Capture a selected region |
+| `Ctrl+Shift+W` | Capture a window |
+| `Ctrl+Shift+3` | Capture the current display |
+| `Esc` | Cancel an active region or window capture |
+
+The three global capture shortcuts can be changed from Preferences. `Esc` only applies while the capture overlay is open.
 
 Use **Open Preview** on a pending capture to inspect the full-resolution image in CES. This dedicated viewer is the future home for annotation and editing tools.
 
