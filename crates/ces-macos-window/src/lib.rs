@@ -4,7 +4,7 @@ use objc2::AllocAnyThread;
 use objc2_app_kit::{
     NSCursor, NSStatusWindowLevel, NSTrackingArea, NSTrackingAreaOptions, NSView, NSWindow,
 };
-use objc2_foundation::NSRect;
+use objc2_foundation::{NSRect, NSSize};
 use tauri::WebviewWindow;
 
 /// Configures the capture preview as an inactive-app HUD.
@@ -54,6 +54,48 @@ pub fn show_without_activating(window: &WebviewWindow) -> Result<(), &'static st
     let native_window = native_window(window)?;
     native_window.setLevel(NSStatusWindowLevel);
     native_window.orderFrontRegardless();
+    Ok(())
+}
+
+/// Makes a reused capture overlay transparent before bringing it onscreen.
+pub fn prepare_capture_overlay(
+    window: &WebviewWindow,
+    use_crosshair: bool,
+) -> Result<(), &'static str> {
+    native_window(window)?.setAlphaValue(0.0);
+    let cursor = if use_crosshair {
+        NSCursor::crosshairCursor()
+    } else {
+        NSCursor::arrowCursor()
+    };
+    cursor.set();
+    Ok(())
+}
+
+/// Reveals the overlay after WebKit has painted its reset state.
+pub fn reveal_capture_overlay(window: &WebviewWindow) -> Result<(), &'static str> {
+    native_window(window)?.setAlphaValue(1.0);
+    Ok(())
+}
+
+/// Restores native overlay state after a capture ends.
+pub fn reset_capture_overlay(window: &WebviewWindow) -> Result<(), &'static str> {
+    native_window(window)?.setAlphaValue(1.0);
+    NSCursor::arrowCursor().set();
+    Ok(())
+}
+
+/// Resizes a visible preview stack in one AppKit frame update while preserving
+/// its bottom edge.
+pub fn resize_from_bottom(
+    window: &WebviewWindow,
+    width: f64,
+    height: f64,
+) -> Result<(), &'static str> {
+    let native_window = native_window(window)?;
+    let current = native_window.frame();
+    let frame = NSRect::new(current.origin, NSSize::new(width, height));
+    native_window.setFrame_display(frame, true);
     Ok(())
 }
 

@@ -6,7 +6,6 @@ use std::{fs, path::PathBuf, sync::Arc};
 #[cfg(target_os = "macos")]
 use std::process::Command;
 
-#[cfg(target_os = "macos")]
 use tauri::CursorIcon;
 
 use ces_capture::{CaptureError, CaptureMode, LogicalRect};
@@ -119,7 +118,9 @@ pub fn run() {
             dismiss_artifact,
             open_artifact_viewer,
             show_capture_overlay,
+            reveal_capture_overlay,
             thumbnail_ready,
+            sync_thumbnail_stack,
             get_thumbnail_pointer_position,
             set_thumbnail_cursor,
             show_artifact_viewer,
@@ -248,7 +249,7 @@ async fn commit_region(
     session_id: String,
     rect: LogicalRect,
 ) -> CommandResult<CaptureArtifact> {
-    hide_window(&app, "overlay");
+    hide_capture_overlay(&app);
     let state = state.inner().clone();
     let id = Uuid::parse_str(&session_id).map_err(|error| error.to_string())?;
     let session = state
@@ -280,7 +281,7 @@ async fn commit_window(
     session_id: String,
     window_id: String,
 ) -> CommandResult<CaptureArtifact> {
-    hide_window(&app, "overlay");
+    hide_capture_overlay(&app);
     let state = state.inner().clone();
     let id = Uuid::parse_str(&session_id).map_err(|error| error.to_string())?;
     state
@@ -309,7 +310,7 @@ fn cancel_capture(
     state: tauri::State<'_, Arc<AppState>>,
     session_id: String,
 ) -> CommandResult<()> {
-    hide_window(&app, "overlay");
+    hide_capture_overlay(&app);
     let id = Uuid::parse_str(&session_id).map_err(|error| error.to_string())?;
     state.sessions.lock().remove(&id);
     restore_thumbnail_stack(&app, state.inner());
@@ -356,16 +357,50 @@ fn show_capture_overlay(
     session_id: String,
 ) -> CommandResult<()> {
     let id = Uuid::parse_str(&session_id).map_err(|error| error.to_string())?;
-    if !state.sessions.lock().contains_key(&id) {
-        return Err(AppError::SessionUnavailable.to_string());
-    }
+    let mode = state
+        .sessions
+        .lock()
+        .get(&id)
+        .map(|session| session.mode)
+        .ok_or_else(|| AppError::SessionUnavailable.to_string())?;
     if let Some(window) = app.get_webview_window("overlay") {
+        let cursor = if mode == CaptureMode::Region {
+            CursorIcon::Crosshair
+        } else {
+            CursorIcon::Default
+        };
+        window
+            .set_cursor_icon(cursor)
+            .map_err(|error| error.to_string())?;
+        #[cfg(target_os = "macos")]
+        ces_macos_window::prepare_capture_overlay(&window, mode == CaptureMode::Region)
+            .map_err(str::to_owned)?;
         window.show().map_err(|error| error.to_string())?;
         window.set_focus().map_err(|error| error.to_string())?;
         Ok(())
     } else {
         Err("capture overlay is unavailable".to_owned())
     }
+}
+
+#[tauri::command]
+fn reveal_capture_overlay(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    session_id: String,
+) -> CommandResult<()> {
+    let id = Uuid::parse_str(&session_id).map_err(|error| error.to_string())?;
+    if !state.sessions.lock().contains_key(&id) {
+        return Err(AppError::SessionUnavailable.to_string());
+    }
+    let window = app
+        .get_webview_window("overlay")
+        .ok_or_else(|| "capture overlay is unavailable".to_owned())?;
+    #[cfg(target_os = "macos")]
+    ces_macos_window::reveal_capture_overlay(&window).map_err(str::to_owned)?;
+    #[cfg(not(target_os = "macos"))]
+    let _ = window;
+    Ok(())
 }
 
 #[tauri::command]
@@ -718,7 +753,6 @@ fn remove_artifact(app: &AppHandle, state: &Arc<AppState>, artifact_id: &str) ->
     }
     app.emit("artifact-removed", artifact_id)
         .map_err(|error| error.to_string())?;
-    update_thumbnail_stack(app);
     Ok(())
 }
 
@@ -761,6 +795,7 @@ async fn finish_capture(
     let (image_png, preview_png) = encode_task
         .await
         .map_err(|error| AppError::Task(error.to_string()))??;
+    let size_bytes = u64::try_from(image_png.len()).unwrap_or(u64::MAX);
     let artifact_id = Uuid::new_v4().to_string();
     let mut artifact = CaptureArtifact {
         id: artifact_id.clone(),
@@ -769,6 +804,7 @@ async fn finish_capture(
         path: None,
         width,
         height,
+        size_bytes,
         created_at: Utc::now().to_rfc3339(),
         mode,
         clipboard_copied: true,
@@ -1211,9 +1247,27 @@ fn update_thumbnail_stack(app: &AppHandle) {
             return;
         }
         let (x, y, height) = thumbnail_window_geometry(&handle, count);
-        let _ = window.set_size(LogicalSize::new(THUMBNAIL_WIDTH, height));
-        let _ = window.set_position(tauri::LogicalPosition::new(x, y));
-        show_thumbnail_window(&window);
+        let visible = window.is_visible().unwrap_or(false);
+        if visible {
+            #[cfg(target_os = "macos")]
+            if let Err(error) =
+                ces_macos_window::resize_from_bottom(&window, THUMBNAIL_WIDTH, height)
+            {
+                eprintln!("failed to resize capture thumbnail stack: {error}");
+                let _ = window.set_size(LogicalSize::new(THUMBNAIL_WIDTH, height));
+                let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+            }
+
+            #[cfg(not(target_os = "macos"))]
+            {
+                let _ = window.set_size(LogicalSize::new(THUMBNAIL_WIDTH, height));
+                let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+            }
+        } else {
+            let _ = window.set_size(LogicalSize::new(THUMBNAIL_WIDTH, height));
+            let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+            show_thumbnail_window(&window);
+        }
     });
 }
 
@@ -1256,6 +1310,12 @@ fn thumbnail_ready(
             return Ok(());
         }
     }
+    update_thumbnail_stack(&app);
+    Ok(())
+}
+
+#[tauri::command]
+fn sync_thumbnail_stack(app: AppHandle) -> CommandResult<()> {
     update_thumbnail_stack(&app);
     Ok(())
 }
@@ -1455,6 +1515,17 @@ fn show_preferences(app: &AppHandle) {
 fn hide_window(app: &AppHandle, label: &str) {
     if let Some(window) = app.get_webview_window(label) {
         let _ = window.hide();
+    }
+}
+
+fn hide_capture_overlay(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("overlay") {
+        let _ = window.hide();
+        let _ = window.set_cursor_icon(CursorIcon::Default);
+        #[cfg(target_os = "macos")]
+        if let Err(error) = ces_macos_window::reset_capture_overlay(&window) {
+            eprintln!("failed to reset capture overlay: {error}");
+        }
     }
 }
 

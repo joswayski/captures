@@ -38,6 +38,7 @@ pub struct CaptureArtifact {
     pub full_url: String,
     pub width: u32,
     pub height: u32,
+    pub size_bytes: u64,
     pub created_at: String,
     pub mode: CaptureMode,
     pub clipboard_copied: bool,

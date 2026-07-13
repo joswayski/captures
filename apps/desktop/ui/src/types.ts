@@ -47,6 +47,7 @@ export interface CaptureArtifact {
   full_url: string;
   width: number;
   height: number;
+  size_bytes: number;
   created_at: string;
   mode: CaptureMode;
   clipboard_copied: boolean;

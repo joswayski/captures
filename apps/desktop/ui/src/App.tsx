@@ -4,6 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { formatFileSize } from "./lib/format";
 import { selectionRect, type SelectionPoint } from "./lib/selection";
 import type {
   ActiveSession,
@@ -132,12 +133,13 @@ function ArtifactViewer() {
 
 function CaptureOverlay() {
   const [session, setSession] = useState<ActiveSession | null>(null);
-  const [overlayVisible, setOverlayVisible] = useState(false);
+  const [visibleSessionId, setVisibleSessionId] = useState<string | null>(null);
   const [start, setStart] = useState<SelectionPoint | null>(null);
   const [current, setCurrent] = useState<SelectionPoint | null>(null);
   const [hoveredWindow, setHoveredWindow] = useState<string | null>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const activeSessionIdRef = useRef<string | null>(null);
+  const revealingSessionIdRef = useRef<string | null>(null);
   const sessionId = session?.id ?? query("session_id");
   const mode = session?.mode ?? ((query("mode") ?? "region") as CaptureMode);
 
@@ -147,7 +149,8 @@ function CaptureOverlay() {
     void (async () => {
       dispose = await listen<ActiveSession>("capture-session-ready", ({ payload }) => {
         activeSessionIdRef.current = payload.id;
-        setOverlayVisible(false);
+        revealingSessionIdRef.current = null;
+        setVisibleSessionId(null);
         setSession(payload);
         setStart(null);
         setCurrent(null);
@@ -158,7 +161,8 @@ function CaptureOverlay() {
         : await invoke<ActiveSession | null>("get_pending_session");
       if (active && initialSession) {
         activeSessionIdRef.current = initialSession.id;
-        setOverlayVisible(false);
+        revealingSessionIdRef.current = null;
+        setVisibleSessionId(null);
         setSession(initialSession);
       }
     })();
@@ -198,9 +202,23 @@ function CaptureOverlay() {
   };
 
   const revealOverlay = async () => {
-    await invoke("show_capture_overlay", { sessionId });
+    if (revealingSessionIdRef.current === sessionId) return;
+    revealingSessionIdRef.current = sessionId;
+    try {
+      await invoke("show_capture_overlay", { sessionId });
+    } catch {
+      if (revealingSessionIdRef.current === sessionId) revealingSessionIdRef.current = null;
+      return;
+    }
     afterNextPaint(() => {
-      if (activeSessionIdRef.current === sessionId) setOverlayVisible(true);
+      if (activeSessionIdRef.current !== sessionId) return;
+      void invoke("reveal_capture_overlay", { sessionId }).then(() => {
+        requestAnimationFrame(() => {
+          if (activeSessionIdRef.current === sessionId) setVisibleSessionId(sessionId);
+        });
+      }).catch(() => {
+        if (revealingSessionIdRef.current === sessionId) revealingSessionIdRef.current = null;
+      });
     });
   };
 
@@ -226,8 +244,9 @@ function CaptureOverlay() {
 
   return (
     <main
+      key={sessionId}
       ref={surfaceRef}
-      className={`capture-surface capture-${mode}${overlayVisible ? " capture-visible" : ""}`}
+      className={`capture-surface capture-${mode}${visibleSessionId === sessionId ? " capture-visible" : ""}`}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -353,16 +372,24 @@ function Thumbnail() {
 
   useEffect(() => {
     if (stackRef.current) stackRef.current.scrollTop = stackRef.current.scrollHeight;
+    let cancelled = false;
+    afterNextPaint(() => {
+      if (!cancelled) void invoke("sync_thumbnail_stack");
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [artifacts.length]);
 
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let polling = false;
     let pointingCursor = false;
 
     const setPointingCursor = (pointing: boolean) => {
       document.documentElement.style.cursor = pointing ? "pointer" : "";
-      if (pointingCursor === pointing) return;
+      if (pointingCursor === pointing && !pointing) return;
       pointingCursor = pointing;
       void invoke("set_thumbnail_cursor", { pointing });
     };
@@ -379,9 +406,14 @@ function Thumbnail() {
       setPointingCursor(false);
     };
 
-    if (artifacts.length === 0) {
+    const stopNativeTracking = () => {
+      document.documentElement.classList.remove("thumbnail-native-tracking");
       clearNativeHover();
-      return clearNativeHover;
+    };
+
+    if (artifacts.length === 0) {
+      stopNativeTracking();
+      return stopNativeTracking;
     }
 
     const applyNativeHover = (position: ThumbnailPointerPosition) => {
@@ -400,28 +432,57 @@ function Thumbnail() {
       setPointingCursor(Boolean(button));
     };
 
+    const schedulePoll = (delay: number) => {
+      if (cancelled) return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        void poll();
+      }, delay);
+    };
+
     const poll = async () => {
+      if (cancelled || polling) return;
+      polling = true;
+      let delay = 250;
       try {
         const position = await invoke<ThumbnailPointerPosition | null>(
           "get_thumbnail_pointer_position",
         );
         if (cancelled) return;
         if (!position) {
-          clearNativeHover();
-          return;
+          stopNativeTracking();
+        } else {
+          applyNativeHover(position);
+          delay = 40;
         }
-        applyNativeHover(position);
-        timer = setTimeout(poll, 40);
       } catch {
-        if (!cancelled) timer = setTimeout(poll, 250);
+        if (!cancelled) stopNativeTracking();
+      } finally {
+        polling = false;
+        schedulePoll(delay);
       }
     };
 
-    void poll();
+    const resumePolling = () => {
+      if (document.hidden) return;
+      stopNativeTracking();
+      schedulePoll(0);
+    };
+
+    document.addEventListener("visibilitychange", resumePolling);
+    window.addEventListener("focus", resumePolling);
+    window.addEventListener("pageshow", resumePolling);
+    window.addEventListener("ces-thumbnail-ready", resumePolling);
+    schedulePoll(0);
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
-      clearNativeHover();
+      document.removeEventListener("visibilitychange", resumePolling);
+      window.removeEventListener("focus", resumePolling);
+      window.removeEventListener("pageshow", resumePolling);
+      window.removeEventListener("ces-thumbnail-ready", resumePolling);
+      stopNativeTracking();
     };
   }, [artifacts.length]);
 
@@ -429,18 +490,40 @@ function Thumbnail() {
 
   return (
     <main ref={stackRef} className="thumbnail-stack">
-      {artifacts.map((artifact) => <ThumbnailCard key={artifact.id} artifact={artifact} />)}
+      {artifacts.map((artifact) => (
+        <ThumbnailCard
+          key={artifact.id}
+          artifact={artifact}
+          onRemoved={(artifactId) => {
+            setArtifacts((current) => current.filter(({ id }) => id !== artifactId));
+          }}
+        />
+      ))}
     </main>
   );
 }
 
-function ThumbnailCard({ artifact }: { artifact: CaptureArtifact }) {
+function ThumbnailCard({
+  artifact,
+  onRemoved,
+}: {
+  artifact: CaptureArtifact;
+  onRemoved: (artifactId: string) => void;
+}) {
   const [feedback, setFeedback] = useState<"copied" | "saved" | null>(null);
   const [busy, setBusy] = useState<"copied" | "saved" | null>(null);
   const [error, setError] = useState("");
   const [exit, setExit] = useState<"dismiss" | "delete" | null>(null);
   const exitAction = useRef<string | null>(null);
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const markThumbnailReady = () => {
+    void invoke("thumbnail_ready", { artifactId: artifact.id })
+      .catch(() => undefined)
+      .finally(() => {
+        window.dispatchEvent(new Event("ces-thumbnail-ready"));
+      });
+  };
 
   useEffect(() => {
     return () => {
@@ -478,10 +561,12 @@ function ThumbnailCard({ artifact }: { artifact: CaptureArtifact }) {
     if (!exit || event.animationName !== `thumbnail-${exit}` || !exitAction.current) return;
     const action = exitAction.current;
     exitAction.current = null;
-    void invoke(action, { artifactId: artifact.id }).catch((error) => {
-      setExit(null);
-      setError(String(error));
-    });
+    void invoke(action, { artifactId: artifact.id })
+      .then(() => onRemoved(artifact.id))
+      .catch((error) => {
+        setExit(null);
+        setError(String(error));
+      });
   };
 
   return (
@@ -492,8 +577,8 @@ function ThumbnailCard({ artifact }: { artifact: CaptureArtifact }) {
       <img
         src={artifact.preview_url}
         alt="Screenshot preview"
-        onLoad={() => void invoke("thumbnail_ready", { artifactId: artifact.id })}
-        onError={() => void invoke("thumbnail_ready", { artifactId: artifact.id })}
+        onLoad={markThumbnailReady}
+        onError={markThumbnailReady}
       />
       <div className="thumbnail-top-actions">
         <IconButton className="delete" label="Delete" onClick={() => exitWith("delete", "trash_artifact")}>
@@ -523,7 +608,7 @@ function ThumbnailCard({ artifact }: { artifact: CaptureArtifact }) {
         </button>
       </div>
       <div className="thumbnail-meta">
-        <span>{artifact.width} × {artifact.height}</span>
+        <span>{artifact.width} × {artifact.height} · {formatFileSize(artifact.size_bytes)}</span>
         {!artifact.clipboard_copied && <span className="warning">Clipboard unavailable</span>}
       </div>
       {error && <p className="thumbnail-message">{error}</p>}
