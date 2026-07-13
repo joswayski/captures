@@ -308,6 +308,7 @@ function ThumbnailCard({ artifact }: { artifact: CaptureArtifact }) {
   const [busy, setBusy] = useState<"copied" | "saved" | null>(null);
   const [error, setError] = useState("");
   const [exit, setExit] = useState<"dismiss" | "delete" | null>(null);
+  const exitAction = useRef<string | null>(null);
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => () => {
@@ -336,17 +337,25 @@ function ThumbnailCard({ artifact }: { artifact: CaptureArtifact }) {
 
   const exitWith = (kind: "dismiss" | "delete", action: string) => {
     if (exit) return;
+    exitAction.current = action;
     setExit(kind);
-    setTimeout(() => {
-      void invoke(action, { artifactId: artifact.id }).catch((error) => {
-        setExit(null);
-        setError(String(error));
-      });
-    }, 320);
+  };
+
+  const finishExit = (event: React.AnimationEvent<HTMLElement>) => {
+    if (!exit || event.animationName !== `thumbnail-${exit}` || !exitAction.current) return;
+    const action = exitAction.current;
+    exitAction.current = null;
+    void invoke(action, { artifactId: artifact.id }).catch((error) => {
+      setExit(null);
+      setError(String(error));
+    });
   };
 
   return (
-    <article className={`thumbnail-card ${exit ? `thumbnail-exit-${exit}` : ""}`}>
+    <article
+      className={`thumbnail-card ${exit ? `thumbnail-exit-${exit}` : ""}`}
+      onAnimationEnd={finishExit}
+    >
       <img src={artifact.preview_url} alt="Screenshot preview" />
       <div className="thumbnail-top-actions">
         <IconButton className="delete" label="Delete" onClick={() => exitWith("delete", "trash_artifact")}>
@@ -356,11 +365,6 @@ function ThumbnailCard({ artifact }: { artifact: CaptureArtifact }) {
           <IconButton label="Open Preview" onClick={() => void runAction("open_artifact_viewer")}>
             <ExpandIcon />
           </IconButton>
-          {artifact.path && (
-            <IconButton label="Show in Folder" onClick={() => void runAction("reveal_artifact")}>
-              <FolderIcon />
-            </IconButton>
-          )}
           <button type="button" className="dismiss-button" onClick={() => exitWith("dismiss", "dismiss_artifact")}>Dismiss</button>
         </div>
       </div>
@@ -368,8 +372,16 @@ function ThumbnailCard({ artifact }: { artifact: CaptureArtifact }) {
         <button type="button" disabled={busy !== null} onClick={() => void runAction("copy_artifact", "copied")}>
           {feedback === "copied" ? <><CheckIcon />Copied!</> : <><CopyIcon />Copy</>}
         </button>
-        <button type="button" disabled={busy !== null} onClick={() => void runAction("save_artifact", "saved")}>
-          {feedback === "saved" ? <><CheckIcon />Saved!</> : <><SaveIcon />Save</>}
+        <button
+          type="button"
+          disabled={busy !== null}
+          onClick={() => void runAction(artifact.path ? "reveal_artifact" : "save_artifact", artifact.path ? undefined : "saved")}
+        >
+          {feedback === "saved"
+            ? <><CheckIcon />Saved!</>
+            : artifact.path
+              ? <><FolderIcon />Show in Folder</>
+              : <><SaveIcon />Save</>}
         </button>
       </div>
       <div className="thumbnail-meta">
