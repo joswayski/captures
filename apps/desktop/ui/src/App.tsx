@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -177,18 +178,25 @@ function WindowTargets({
 }
 
 function Thumbnail() {
-  const artifactId = query("artifact_id");
   const [artifact, setArtifact] = useState<CaptureArtifact | null>(null);
   const [paused, setPaused] = useState(false);
   const [message, setMessage] = useState("");
   const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const close = () => {
-    void invoke("close_thumbnail").finally(() => void currentWindow?.close());
+    void invoke("close_thumbnail");
   };
 
   useEffect(() => {
     void invoke<CaptureArtifact | null>("get_last_artifact").then(setArtifact);
+    const unlisten = listen<CaptureArtifact>("capture-completed", ({ payload }) => {
+      setArtifact(payload);
+      setPaused(false);
+      setMessage("");
+    });
+    return () => {
+      void unlisten.then((dispose) => dispose());
+    };
   }, []);
 
   useEffect(() => {
@@ -200,9 +208,9 @@ function Thumbnail() {
   }, [artifact, paused]);
 
   const runAction = async (action: string, success: string) => {
-    if (!artifactId) return;
+    if (!artifact) return;
     try {
-      await invoke(action, { artifactId });
+      await invoke(action, { artifactId: artifact.id });
       setMessage(success);
     } catch (error) {
       setMessage(String(error));
@@ -224,7 +232,7 @@ function Thumbnail() {
       </div>
       <div className="thumbnail-actions">
         <button type="button" onClick={() => void runAction("copy_artifact", "Copied")}>Copy</button>
-        <button type="button" onClick={() => void runAction("reveal_artifact", "Revealed")}>Reveal</button>
+        <button type="button" onClick={() => void runAction("reveal_artifact", "Shown in folder")}>Show in Folder</button>
         <button type="button" onClick={() => void runAction("trash_artifact", "Moved to Trash")}>Trash</button>
         <button type="button" className="quiet" onClick={close}>Dismiss</button>
       </div>

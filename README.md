@@ -41,6 +41,26 @@ npm run dev
 
 The tray shortcuts default to `Ctrl+Shift+4` for region, `Ctrl+Shift+W` for window, and `Ctrl+Shift+3` for display. They can be changed from Preferences.
 
+## Build and install
+
+Build CES on the operating system where it will run:
+
+```sh
+npm install
+npm run build
+```
+
+Installers and app bundles are written under `target/release/bundle`. On macOS, open the generated DMG and move CES to Applications. Launch CES once, grant Screen Recording access, then enable **Launch CES when I sign in** from Preferences if desired.
+
+For Ubuntu development, install Tauri's native dependencies first:
+
+```sh
+sudo apt update
+sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+```
+
+Ubuntu Desktop includes the screenshot portal used for Wayland region/display capture. Ubuntu 26.04 is Wayland-only; native Wayland window capture remains a separate follow-up.
+
 ## Privacy and future uploads
 
 CES saves locally by default and has no network permission in this milestone. The future upload service will receive an explicit Upload or Share action and will keep object storage private; the desktop app will never receive bucket credentials.

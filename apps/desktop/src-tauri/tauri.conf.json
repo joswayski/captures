@@ -18,7 +18,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app"],
+    "targets": "all",
     "category": "Utility",
     "shortDescription": "A lightweight, private screenshot utility",
     "longDescription": "Capture regions, windows, and displays without uploading your screenshots.",

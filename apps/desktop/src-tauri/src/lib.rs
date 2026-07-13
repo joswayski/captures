@@ -111,13 +111,16 @@ pub fn run() {
             open_preferences,
         ])
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            {
+                app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            }
             setup_tray(app)?;
             let handle = app.handle().clone();
             register_shortcuts(&handle)
                 .map_err(|error| tauri::Error::Anyhow(anyhow::anyhow!(error.to_string())))?;
-            #[cfg(target_os = "macos")]
-            {
-                app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            if let Err(error) = create_thumbnail_window(&handle, false) {
+                eprintln!("failed to prepare capture thumbnail: {error}");
             }
             Ok(())
         })
@@ -163,7 +166,7 @@ async fn start_capture_inner(
     }
 
     let id = Uuid::new_v4();
-    let snapshot_png = storage::encode_png(&frame.image)?;
+    let snapshot_png = storage::encode_preview_png(&frame.image, frame.descriptor.scale_factor)?;
     let windows = if mode == CaptureMode::Window {
         state
             .windows()?
@@ -375,13 +378,13 @@ fn trash_artifact(
         .ok_or_else(|| "artifact is no longer available".to_owned())?;
     trash::delete(&artifact.path).map_err(|error| error.to_string())?;
     *state.last_artifact.lock() = None;
-    close_window(&app, "thumbnail");
+    hide_window(&app, "thumbnail");
     Ok(())
 }
 
 #[tauri::command]
 fn close_thumbnail(app: AppHandle) {
-    close_window(&app, "thumbnail");
+    hide_window(&app, "thumbnail");
 }
 
 #[tauri::command]
@@ -412,12 +415,20 @@ async fn finish_capture(
     let height = image.height();
     let settings = state.settings();
     let image_for_save = image.clone();
-    let (path, _) = tauri::async_runtime::spawn_blocking(move || {
+    let save_task = tauri::async_runtime::spawn_blocking(move || {
         storage::save_capture(&image_for_save, &settings)
-    })
-    .await
-    .map_err(|error| AppError::Task(error.to_string()))??;
-    let copied = copy_to_clipboard(app, image).await.is_ok();
+    });
+    let clipboard_app = app.clone();
+    let clipboard_task = tauri::async_runtime::spawn_blocking(move || {
+        write_image_to_clipboard(&clipboard_app, image)
+    });
+    let path = save_task
+        .await
+        .map_err(|error| AppError::Task(error.to_string()))??;
+    let copied = clipboard_task
+        .await
+        .map_err(|error| AppError::Task(error.to_string()))?
+        .is_ok();
     let artifact_id = Uuid::new_v4().to_string();
     let artifact = CaptureArtifact {
         id: artifact_id.clone(),
@@ -437,17 +448,19 @@ async fn finish_capture(
 
 async fn copy_to_clipboard(app: &AppHandle, image: RgbaImage) -> Result<(), AppError> {
     let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || write_image_to_clipboard(&app, image))
+        .await
+        .map_err(|error| AppError::Task(error.to_string()))?
+}
+
+fn write_image_to_clipboard(app: &AppHandle, image: RgbaImage) -> Result<(), AppError> {
     let width = image.width();
     let height = image.height();
     let rgba = image.into_raw();
-    tauri::async_runtime::spawn_blocking(move || {
-        let clipboard_image = Image::new_owned(rgba, width, height);
-        app.clipboard()
-            .write_image(&clipboard_image)
-            .map_err(|error| AppError::Clipboard(error.to_string()))
-    })
-    .await
-    .map_err(|error| AppError::Task(error.to_string()))?
+    let clipboard_image = Image::new_owned(rgba, width, height);
+    app.clipboard()
+        .write_image(&clipboard_image)
+        .map_err(|error| AppError::Clipboard(error.to_string()))
 }
 
 fn display_under_pointer(state: &AppState) -> Result<ces_capture::DisplayDescriptor, AppError> {
@@ -637,41 +650,55 @@ fn show_capture_window(app: &AppHandle, session: &ActiveSession) {
 }
 
 fn show_thumbnail(app: &AppHandle, artifact: &CaptureArtifact) {
-    close_window(app, "thumbnail");
-    let url = format!("index.html?view=thumbnail&artifact_id={}", artifact.id);
-    let artifact = artifact.clone();
     let app = app.clone();
     let handle = app.clone();
+    let artifact_path = artifact.path.clone();
     let _ = app.run_on_main_thread(move || {
-        let (x, y) = handle
-            .primary_monitor()
-            .ok()
-            .flatten()
-            .map(|monitor| {
-                let position = monitor.position();
-                let size = monitor.size();
-                thumbnail_position(position.x, position.y, size.width, monitor.scale_factor())
-            })
-            .unwrap_or((20.0, 20.0));
-        let result = WebviewWindowBuilder::new(&handle, "thumbnail", WebviewUrl::App(url.into()))
-            .title("CES Capture")
-            .inner_size(380.0, 260.0)
-            .position(x, y)
-            .decorations(false)
-            .always_on_top(true)
-            .visible_on_all_workspaces(true)
-            .skip_taskbar(true)
-            .resizable(false)
-            .shadow(true)
-            .focused(false)
-            .build();
-        if let Err(error) = result {
+        let (x, y) = thumbnail_window_position(&handle);
+        if let Some(window) = handle.get_webview_window("thumbnail") {
+            let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+            let _ = window.show();
+        } else if let Err(error) = create_thumbnail_window(&handle, true) {
             eprintln!(
                 "failed to create capture thumbnail for {}: {error}",
-                artifact.path
+                artifact_path
             );
         }
     });
+}
+
+fn create_thumbnail_window(app: &AppHandle, visible: bool) -> Result<(), tauri::Error> {
+    let (x, y) = thumbnail_window_position(app);
+    WebviewWindowBuilder::new(
+        app,
+        "thumbnail",
+        WebviewUrl::App("index.html?view=thumbnail".into()),
+    )
+    .title("CES Capture")
+    .inner_size(380.0, 260.0)
+    .position(x, y)
+    .decorations(false)
+    .always_on_top(true)
+    .visible_on_all_workspaces(true)
+    .skip_taskbar(true)
+    .resizable(false)
+    .shadow(true)
+    .focused(false)
+    .visible(visible)
+    .build()
+    .map(|_| ())
+}
+
+fn thumbnail_window_position(app: &AppHandle) -> (f64, f64) {
+    app.primary_monitor()
+        .ok()
+        .flatten()
+        .map(|monitor| {
+            let position = monitor.position();
+            let size = monitor.size();
+            thumbnail_position(position.x, position.y, size.width, monitor.scale_factor())
+        })
+        .unwrap_or((20.0, 20.0))
 }
 
 fn thumbnail_position(x: i32, y: i32, width: u32, scale_factor: f64) -> (f64, f64) {
@@ -789,6 +816,12 @@ fn show_preferences(app: &AppHandle) {
 fn close_window(app: &AppHandle, label: &str) {
     if let Some(window) = app.get_webview_window(label) {
         let _ = window.close();
+    }
+}
+
+fn hide_window(app: &AppHandle, label: &str) {
+    if let Some(window) = app.get_webview_window(label) {
+        let _ = window.hide();
     }
 }
 

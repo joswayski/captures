@@ -1,11 +1,14 @@
 use std::{
     fs::{self, File},
-    io::{self, Write},
+    io::Write,
     path::{Path, PathBuf},
 };
 
 use chrono::Local;
-use image::RgbaImage;
+use image::{
+    ExtendedColorType, ImageEncoder, RgbaImage,
+    codecs::png::{CompressionType, FilterType, PngEncoder},
+};
 use uuid::Uuid;
 
 use crate::{AppError, models::AppSettings};
@@ -33,10 +36,7 @@ pub fn save_settings(settings: &AppSettings) -> Result<(), AppError> {
     Ok(())
 }
 
-pub fn save_capture(
-    image: &RgbaImage,
-    settings: &AppSettings,
-) -> Result<(PathBuf, Vec<u8>), AppError> {
+pub fn save_capture(image: &RgbaImage, settings: &AppSettings) -> Result<PathBuf, AppError> {
     let directory = PathBuf::from(&settings.output_directory);
     fs::create_dir_all(&directory)?;
     let png = encode_png(image)?;
@@ -46,16 +46,37 @@ pub fn save_capture(
 
     let mut file = File::create(&temporary)?;
     file.write_all(&png)?;
-    file.sync_all()?;
     drop(file);
     fs::rename(&temporary, &path)?;
-    Ok((path, png))
+    Ok(path)
 }
 
 pub fn encode_png(image: &RgbaImage) -> Result<Vec<u8>, AppError> {
+    encode_png_with_filter(image, FilterType::Sub)
+}
+
+pub fn encode_preview_png(image: &RgbaImage, scale_factor: f64) -> Result<Vec<u8>, AppError> {
+    let scale = scale_factor.max(1.0);
+    let width = (f64::from(image.width()) / scale).round().max(1.0) as u32;
+    let height = (f64::from(image.height()) / scale).round().max(1.0) as u32;
+    if width < image.width() || height < image.height() {
+        let preview =
+            image::imageops::resize(image, width, height, image::imageops::FilterType::Triangle);
+        return encode_png_with_filter(&preview, FilterType::Sub);
+    }
+
+    encode_png_with_filter(image, FilterType::Sub)
+}
+
+fn encode_png_with_filter(image: &RgbaImage, filter: FilterType) -> Result<Vec<u8>, AppError> {
     let mut bytes = Vec::new();
-    image::DynamicImage::ImageRgba8(image.clone())
-        .write_to(&mut io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+    PngEncoder::new_with_quality(&mut bytes, CompressionType::Fast, filter)
+        .write_image(
+            image.as_raw(),
+            image.width(),
+            image.height(),
+            ExtendedColorType::Rgba8,
+        )
         .map_err(|error| AppError::Image(error.to_string()))?;
     Ok(bytes)
 }
@@ -77,7 +98,7 @@ mod tests {
     use image::{Rgba, RgbaImage};
     use tempfile::tempdir;
 
-    use super::{save_capture, unique_path};
+    use super::{encode_preview_png, save_capture, unique_path};
     use crate::models::AppSettings;
 
     #[test]
@@ -89,7 +110,8 @@ mod tests {
         };
         let image = RgbaImage::from_pixel(2, 3, Rgba([1, 2, 3, 255]));
 
-        let (path, bytes) = save_capture(&image, &settings).expect("capture saved");
+        let path = save_capture(&image, &settings).expect("capture saved");
+        let bytes = std::fs::read(&path).expect("saved capture readable");
         assert_eq!(
             image::ImageFormat::from_path(&path).unwrap(),
             image::ImageFormat::Png
@@ -97,5 +119,14 @@ mod tests {
         assert!(!bytes.is_empty());
         assert!(path.exists());
         assert!(!unique_path(directory.path(), "CES_test").exists());
+    }
+
+    #[test]
+    fn preview_png_uses_logical_display_dimensions() {
+        let image = RgbaImage::from_pixel(4, 2, Rgba([1, 2, 3, 255]));
+        let bytes = encode_preview_png(&image, 2.0).expect("preview encoded");
+        let preview = image::load_from_memory(&bytes).expect("preview readable");
+
+        assert_eq!((preview.width(), preview.height()), (2, 1));
     }
 }
