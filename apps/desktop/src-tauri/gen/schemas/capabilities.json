@@ -1,0 +1,1 @@
+{"desktop":{"identifier":"desktop","description":"Narrow capabilities for CES-created desktop windows","local":true,"windows":["overlay","thumbnail","viewer","preferences","startup"],"permissions":["core:default","dialog:allow-open"]}}
