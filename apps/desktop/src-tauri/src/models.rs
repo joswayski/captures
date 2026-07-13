@@ -32,6 +32,7 @@ pub struct CaptureArtifact {
     pub id: String,
     pub path: Option<String>,
     pub preview_url: String,
+    pub full_url: String,
     pub width: u32,
     pub height: u32,
     pub created_at: String,
@@ -107,6 +108,10 @@ pub fn snapshot_url(session_id: &str) -> String {
 
 pub fn artifact_url(artifact_id: &str) -> String {
     format!("ces-capture://localhost/artifact/{artifact_id}")
+}
+
+pub fn artifact_full_url(artifact_id: &str) -> String {
+    format!("ces-capture://localhost/artifact-full/{artifact_id}")
 }
 
 #[cfg(test)]

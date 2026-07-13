@@ -41,6 +41,8 @@ npm run dev
 
 The tray shortcuts default to `Ctrl+Shift+4` for region, `Ctrl+Shift+W` for window, and `Ctrl+Shift+3` for display. They can be changed from Preferences.
 
+Use **Open Preview** on a pending capture to inspect the full-resolution image in CES. This dedicated viewer is the future home for annotation and editing tools.
+
 ## Build and install
 
 Build CES on the operating system where it will run:

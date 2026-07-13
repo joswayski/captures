@@ -104,11 +104,13 @@ pub fn run() {
             get_settings,
             update_settings,
             get_artifacts,
+            get_artifact,
             copy_artifact,
             save_artifact,
             reveal_artifact,
             trash_artifact,
             dismiss_artifact,
+            open_artifact_viewer,
             show_capture_overlay,
             open_captures_folder,
             open_preferences,
@@ -399,6 +401,19 @@ fn get_artifacts(state: tauri::State<'_, Arc<AppState>>) -> Vec<CaptureArtifact>
 }
 
 #[tauri::command]
+fn get_artifact(
+    state: tauri::State<'_, Arc<AppState>>,
+    artifact_id: String,
+) -> Option<CaptureArtifact> {
+    state
+        .artifacts
+        .lock()
+        .iter()
+        .find(|artifact| artifact.id == artifact_id)
+        .cloned()
+}
+
+#[tauri::command]
 async fn copy_artifact(
     app: AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
@@ -515,6 +530,44 @@ fn dismiss_artifact(
     remove_artifact(&app, state.inner(), &artifact_id)
 }
 
+#[tauri::command]
+fn open_artifact_viewer(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    artifact_id: String,
+) -> CommandResult<()> {
+    let artifact = state
+        .artifacts
+        .lock()
+        .iter()
+        .find(|artifact| artifact.id == artifact_id)
+        .cloned()
+        .ok_or_else(|| "artifact is no longer available".to_owned())?;
+
+    if let Some(window) = app.get_webview_window("viewer") {
+        app.emit("viewer-artifact-changed", &artifact)
+            .map_err(|error| error.to_string())?;
+        window.show().map_err(|error| error.to_string())?;
+        window.set_focus().map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+
+    WebviewWindowBuilder::new(
+        &app,
+        "viewer",
+        WebviewUrl::App(format!("index.html?view=viewer&artifact_id={artifact_id}").into()),
+    )
+    .title("CES Preview")
+    .inner_size(1_000.0, 700.0)
+    .min_inner_size(560.0, 400.0)
+    .center()
+    .resizable(true)
+    .focused(true)
+    .build()
+    .map(|_| ())
+    .map_err(|error| error.to_string())
+}
+
 fn remove_artifact(app: &AppHandle, state: &Arc<AppState>, artifact_id: &str) -> CommandResult<()> {
     let count = {
         let mut artifacts = state.artifacts.lock();
@@ -574,6 +627,7 @@ async fn finish_capture(
     let mut artifact = CaptureArtifact {
         id: artifact_id.clone(),
         preview_url: models::artifact_url(&artifact_id),
+        full_url: models::artifact_full_url(&artifact_id),
         path: None,
         width,
         height,
@@ -857,6 +911,8 @@ fn create_thumbnail_window(app: &AppHandle, visible: bool) -> Result<(), tauri::
     .resizable(false)
     .shadow(false)
     .transparent(true)
+    .focusable(false)
+    .accept_first_mouse(true)
     .focused(false)
     .visible(visible)
     .build()
@@ -1066,6 +1122,12 @@ fn resolve_asset(state: &AppState, path: &str) -> Option<Vec<u8>> {
             .iter()
             .find(|artifact| artifact.id == id)
             .map(|artifact| artifact.preview_png.clone()),
+        (Some("artifact-full"), Some(id)) => state
+            .artifacts
+            .lock()
+            .iter()
+            .find(|artifact| artifact.id == id)
+            .map(|artifact| artifact.image_png.clone()),
         _ => None,
     }
 }

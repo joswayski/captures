@@ -23,6 +23,7 @@ export function App() {
   const view = query("view");
   if (view === "overlay") return <CaptureOverlay />;
   if (view === "thumbnail") return <Thumbnail />;
+  if (view === "viewer") return <ArtifactViewer />;
   if (view === "preferences") return <Preferences />;
   return <IdleView />;
 }
@@ -33,6 +34,65 @@ function IdleView() {
       <div className="brand-mark">CES</div>
       <h1>CES is running</h1>
       <p>Use the capture shortcut or the tray icon to take a screenshot.</p>
+    </main>
+  );
+}
+
+function ArtifactViewer() {
+  const artifactId = query("artifact_id");
+  const [artifact, setArtifact] = useState<CaptureArtifact | null>(null);
+  const [fit, setFit] = useState(true);
+  const displayedArtifactId = useRef<string | null>(artifactId);
+
+  useEffect(() => {
+    let active = true;
+    let dispose: (() => void)[] = [];
+    void (async () => {
+      dispose = await Promise.all([
+        listen<CaptureArtifact>("viewer-artifact-changed", ({ payload }) => {
+          displayedArtifactId.current = payload.id;
+          setArtifact(payload);
+          setFit(true);
+        }),
+        listen<string>("artifact-removed", ({ payload }) => {
+          if (displayedArtifactId.current === payload) void currentWindow?.close();
+        }),
+      ]);
+      if (!artifactId) return;
+      const initialArtifact = await invoke<CaptureArtifact | null>("get_artifact", { artifactId });
+      if (active) {
+        displayedArtifactId.current = initialArtifact?.id ?? null;
+        setArtifact(initialArtifact);
+      }
+    })();
+    return () => {
+      active = false;
+      dispose.forEach((unlisten) => unlisten());
+    };
+  }, [artifactId]);
+
+  if (!artifact) return <main className="viewer-loading">Capture unavailable</main>;
+
+  return (
+    <main className="artifact-viewer">
+      <header className="viewer-toolbar">
+        <div>
+          <strong>CES Preview</strong>
+          <span>{artifact.width} × {artifact.height}</span>
+        </div>
+        <button type="button" onClick={() => setFit((current) => !current)}>
+          {fit ? "Actual size" : "Fit to window"}
+        </button>
+      </header>
+      <div className="viewer-canvas" onDoubleClick={() => setFit((current) => !current)}>
+        <img
+          key={artifact.id}
+          className={fit ? "viewer-image viewer-image-fit" : "viewer-image viewer-image-actual"}
+          src={artifact.full_url}
+          alt="Full-size screenshot"
+          draggable={false}
+        />
+      </div>
     </main>
   );
 }
@@ -293,6 +353,9 @@ function ThumbnailCard({ artifact }: { artifact: CaptureArtifact }) {
           <TrashIcon />
         </IconButton>
         <div className="thumbnail-top-right">
+          <IconButton label="Open Preview" onClick={() => void runAction("open_artifact_viewer")}>
+            <ExpandIcon />
+          </IconButton>
           {artifact.path && (
             <IconButton label="Show in Folder" onClick={() => void runAction("reveal_artifact")}>
               <FolderIcon />
@@ -342,6 +405,10 @@ function CopyIcon() {
 
 function FolderIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /><circle cx="16.5" cy="13.5" r="2.5" /><path d="m18.3 15.3 2.2 2.2" /></svg>;
+}
+
+function ExpandIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M21 16v5h-5M3 16v5h5M9 9 3 3m12 6 6-6m-6 12 6 6M9 15l-6 6" /></svg>;
 }
 
 function TrashIcon() {

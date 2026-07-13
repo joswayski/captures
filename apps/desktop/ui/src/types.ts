@@ -43,6 +43,7 @@ export interface CaptureArtifact {
   id: string;
   path: string | null;
   preview_url: string;
+  full_url: string;
   width: number;
   height: number;
   created_at: string;
