@@ -15,7 +15,7 @@ use tauri::{
 };
 use tauri_plugin_autostart::ManagerExt as AutoStartExt;
 use tauri_plugin_clipboard_manager::ClipboardExt;
-use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_opener::OpenerExt;
 use thiserror::Error;
@@ -682,6 +682,35 @@ fn thumbnail_position(x: i32, y: i32, width: u32, scale_factor: f64) -> (f64, f6
 
 fn report_capture_error(app: &AppHandle, error: &AppError) {
     eprintln!("capture failed: {error}");
+
+    #[cfg(target_os = "macos")]
+    if matches!(error, AppError::Capture(CaptureError::PermissionDenied)) {
+        let app = app.clone();
+        app.dialog()
+            .message(
+                "CES needs Screen Recording permission to capture your open windows. Click Open System Settings, turn on CES under Screen & System Audio Recording, then relaunch CES.",
+            )
+            .title("CES Setup")
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "Open System Settings".to_owned(),
+                "Not Now".to_owned(),
+            ))
+            .kind(MessageDialogKind::Error)
+            .show(move |open_settings| {
+                if open_settings {
+                    const SCREEN_RECORDING_SETTINGS_URL: &str =
+                        "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
+                    if let Err(error) = app
+                        .opener()
+                        .open_url(SCREEN_RECORDING_SETTINGS_URL, None::<&str>)
+                    {
+                        eprintln!("failed to open Screen Recording settings: {error}");
+                    }
+                }
+            });
+        return;
+    }
+
     let message = if matches!(error, AppError::Capture(CaptureError::PermissionDenied)) {
         "CES needs Screen Recording permission to capture your open windows. Enable CES in System Settings > Privacy & Security > Screen & System Audio Recording, then restart CES."
             .to_owned()
@@ -691,6 +720,7 @@ fn report_capture_error(app: &AppHandle, error: &AppError) {
     app.dialog()
         .message(message)
         .title("CES Capture")
+        .buttons(MessageDialogButtons::Ok)
         .kind(MessageDialogKind::Error)
         .show(|_| {});
 }
