@@ -307,12 +307,18 @@ function ThumbnailCard({ artifact }: { artifact: CaptureArtifact }) {
   const [feedback, setFeedback] = useState<"copied" | "saved" | null>(null);
   const [busy, setBusy] = useState<"copied" | "saved" | null>(null);
   const [error, setError] = useState("");
+  const [hovered, setHovered] = useState(false);
   const [exit, setExit] = useState<"dismiss" | "delete" | null>(null);
   const exitAction = useRef<string | null>(null);
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => () => {
-    if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
+  useEffect(() => {
+    const clearHover = () => setHovered(false);
+    window.addEventListener("blur", clearHover);
+    return () => {
+      window.removeEventListener("blur", clearHover);
+      if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
+    };
   }, []);
 
   const showFeedback = (value: "copied" | "saved") => {
@@ -337,6 +343,7 @@ function ThumbnailCard({ artifact }: { artifact: CaptureArtifact }) {
 
   const exitWith = (kind: "dismiss" | "delete", action: string) => {
     if (exit) return;
+    setHovered(false);
     exitAction.current = action;
     setExit(kind);
   };
@@ -353,7 +360,9 @@ function ThumbnailCard({ artifact }: { artifact: CaptureArtifact }) {
 
   return (
     <article
-      className={`thumbnail-card ${exit ? `thumbnail-exit-${exit}` : ""}`}
+      className={`thumbnail-card ${hovered ? "thumbnail-card-active" : ""} ${exit ? `thumbnail-exit-${exit}` : ""}`}
+      onPointerEnter={() => setHovered(true)}
+      onPointerLeave={() => setHovered(false)}
       onAnimationEnd={finishExit}
     >
       <img src={artifact.preview_url} alt="Screenshot preview" />

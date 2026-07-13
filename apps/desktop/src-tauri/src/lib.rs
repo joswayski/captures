@@ -12,6 +12,7 @@ use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
+    window::Color,
 };
 use tauri_plugin_autostart::ManagerExt as AutoStartExt;
 use tauri_plugin_clipboard_manager::ClipboardExt;
@@ -911,7 +912,7 @@ fn create_thumbnail_window(app: &AppHandle, visible: bool) -> Result<(), tauri::
     .resizable(false)
     .shadow(false)
     .transparent(true)
-    .focusable(false)
+    .background_color(Color(0, 0, 0, 0))
     .accept_first_mouse(true)
     .focused(false)
     .visible(visible)
