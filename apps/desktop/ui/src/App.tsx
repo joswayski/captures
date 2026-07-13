@@ -61,6 +61,7 @@ function ArtifactViewer() {
   const artifactId = query("artifact_id");
   const [artifact, setArtifact] = useState<CaptureArtifact | null>(null);
   const [fit, setFit] = useState(true);
+  const [revision, setRevision] = useState(0);
   const displayedArtifactId = useRef<string | null>(artifactId);
 
   useEffect(() => {
@@ -71,6 +72,7 @@ function ArtifactViewer() {
         listen<CaptureArtifact>("viewer-artifact-changed", ({ payload }) => {
           displayedArtifactId.current = payload.id;
           setArtifact(payload);
+          setRevision((current) => current + 1);
           setFit(true);
         }),
         listen<string>("artifact-removed", ({ payload }) => {
@@ -105,11 +107,13 @@ function ArtifactViewer() {
       </header>
       <div className="viewer-canvas" onDoubleClick={() => setFit((current) => !current)}>
         <img
-          key={artifact.id}
+          key={`${artifact.id}-${revision}`}
           className={fit ? "viewer-image viewer-image-fit" : "viewer-image viewer-image-actual"}
           src={artifact.full_url}
           alt="Full-size screenshot"
           draggable={false}
+          onLoad={() => void invoke("show_artifact_viewer", { artifactId: artifact.id })}
+          onError={() => void invoke("show_artifact_viewer", { artifactId: artifact.id })}
         />
       </div>
     </main>
@@ -287,8 +291,10 @@ function Thumbnail() {
     let active = true;
     let dispose: (() => void)[] = [];
     void (async () => {
+      const removedArtifactIds = new Set<string>();
       dispose = await Promise.all([
         listen<CaptureArtifact>("capture-completed", ({ payload }) => {
+          removedArtifactIds.delete(payload.id);
           setArtifacts((current) => current.some(({ id }) => id === payload.id)
             ? current
             : [...current, payload]);
@@ -297,11 +303,22 @@ function Thumbnail() {
           setArtifacts((current) => current.map((artifact) => artifact.id === payload.id ? payload : artifact));
         }),
         listen<string>("artifact-removed", ({ payload }) => {
+          removedArtifactIds.add(payload);
           setArtifacts((current) => current.filter(({ id }) => id !== payload));
         }),
       ]);
       const initialArtifacts = await invoke<CaptureArtifact[]>("get_artifacts");
-      if (active) setArtifacts(initialArtifacts);
+      if (active) {
+        setArtifacts((current) => {
+          const merged = new Map(
+            initialArtifacts
+              .filter(({ id }) => !removedArtifactIds.has(id))
+              .map((artifact) => [artifact.id, artifact]),
+          );
+          current.forEach((artifact) => merged.set(artifact.id, artifact));
+          return [...merged.values()];
+        });
+      }
     })();
     return () => {
       active = false;
@@ -316,13 +333,25 @@ function Thumbnail() {
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let pointingCursor = false;
 
-    const clearNativeHover = () => {
+    const setPointingCursor = (pointing: boolean) => {
+      document.documentElement.style.cursor = pointing ? "pointer" : "";
+      if (pointingCursor === pointing) return;
+      pointingCursor = pointing;
+      void invoke("set_thumbnail_cursor", { pointing });
+    };
+
+    const clearNativeClasses = () => {
       document.querySelectorAll(".thumbnail-card-native-active, .native-pointer-hover")
         .forEach((element) => {
           element.classList.remove("thumbnail-card-native-active", "native-pointer-hover");
         });
-      document.documentElement.style.cursor = "";
+    };
+
+    const clearNativeHover = () => {
+      clearNativeClasses();
+      setPointingCursor(false);
     };
 
     if (artifacts.length === 0) {
@@ -331,16 +360,19 @@ function Thumbnail() {
     }
 
     const applyNativeHover = (position: ThumbnailPointerPosition) => {
-      clearNativeHover();
-      if (!position.inside) return;
+      document.documentElement.classList.add("thumbnail-native-tracking");
+      clearNativeClasses();
+      if (!position.inside) {
+        setPointingCursor(false);
+        return;
+      }
       const target = document.elementFromPoint(position.x, position.y);
       target?.closest(".thumbnail-card")?.classList.add("thumbnail-card-native-active");
-      const interactiveTarget = document.elementFromPoint(position.x, position.y);
-      const button = interactiveTarget?.closest("button");
+      const button = target?.closest("button");
       if (button) {
         button.classList.add("native-pointer-hover");
-        document.documentElement.style.cursor = "pointer";
       }
+      setPointingCursor(Boolean(button));
     };
 
     const poll = async () => {
@@ -381,16 +413,12 @@ function ThumbnailCard({ artifact }: { artifact: CaptureArtifact }) {
   const [feedback, setFeedback] = useState<"copied" | "saved" | null>(null);
   const [busy, setBusy] = useState<"copied" | "saved" | null>(null);
   const [error, setError] = useState("");
-  const [hovered, setHovered] = useState(false);
   const [exit, setExit] = useState<"dismiss" | "delete" | null>(null);
   const exitAction = useRef<string | null>(null);
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    const clearHover = () => setHovered(false);
-    window.addEventListener("blur", clearHover);
     return () => {
-      window.removeEventListener("blur", clearHover);
       if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
     };
   }, []);
@@ -417,7 +445,6 @@ function ThumbnailCard({ artifact }: { artifact: CaptureArtifact }) {
 
   const exitWith = (kind: "dismiss" | "delete", action: string) => {
     if (exit) return;
-    setHovered(false);
     exitAction.current = action;
     setExit(kind);
   };
@@ -434,12 +461,15 @@ function ThumbnailCard({ artifact }: { artifact: CaptureArtifact }) {
 
   return (
     <article
-      className={`thumbnail-card ${hovered ? "thumbnail-card-active" : ""} ${exit ? `thumbnail-exit-${exit}` : ""}`}
-      onPointerEnter={() => setHovered(true)}
-      onPointerLeave={() => setHovered(false)}
+      className={`thumbnail-card ${exit ? `thumbnail-exit-${exit}` : ""}`}
       onAnimationEnd={finishExit}
     >
-      <img src={artifact.preview_url} alt="Screenshot preview" />
+      <img
+        src={artifact.preview_url}
+        alt="Screenshot preview"
+        onLoad={() => void invoke("thumbnail_ready", { artifactId: artifact.id })}
+        onError={() => void invoke("thumbnail_ready", { artifactId: artifact.id })}
+      />
       <div className="thumbnail-top-actions">
         <IconButton className="delete" label="Delete" onClick={() => exitWith("delete", "trash_artifact")}>
           <TrashIcon />

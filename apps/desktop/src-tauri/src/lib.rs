@@ -116,7 +116,10 @@ pub fn run() {
             dismiss_artifact,
             open_artifact_viewer,
             show_capture_overlay,
+            thumbnail_ready,
             get_thumbnail_pointer_position,
+            set_thumbnail_cursor,
+            show_artifact_viewer,
             open_captures_folder,
             open_preferences,
         ])
@@ -172,6 +175,7 @@ async fn start_capture_inner(
         return Err(AppError::CaptureInProgress);
     }
 
+    begin_thumbnail_capture(&state)?;
     hide_window(&app, "thumbnail");
     hide_window(&app, "startup");
     let result = prepare_capture(app.clone(), state.clone(), mode).await;
@@ -374,10 +378,19 @@ struct ThumbnailPointerPosition {
 }
 
 #[tauri::command]
-fn get_thumbnail_pointer_position(app: AppHandle) -> Option<ThumbnailPointerPosition> {
+fn get_thumbnail_pointer_position(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Option<ThumbnailPointerPosition> {
     #[cfg(target_os = "macos")]
     {
+        if state.thumbnail_visibility.lock().is_suppressed() {
+            return None;
+        }
         let window = app.get_webview_window("thumbnail")?;
+        if !window.is_visible().ok()? {
+            return None;
+        }
         let position = window.outer_position().ok()?;
         let size = window.inner_size().ok()?;
         let scale = window.scale_factor().ok()?.max(1.0);
@@ -398,8 +411,22 @@ fn get_thumbnail_pointer_position(app: AppHandle) -> Option<ThumbnailPointerPosi
 
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = app;
+        let _ = (app, state);
         None
+    }
+}
+
+#[tauri::command]
+fn set_thumbnail_cursor(app: AppHandle, pointing: bool) -> CommandResult<()> {
+    #[cfg(target_os = "macos")]
+    return app
+        .run_on_main_thread(move || ces_macos_window::set_pointing_cursor(pointing))
+        .map_err(|error| error.to_string());
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, pointing);
+        Ok(())
     }
 }
 
@@ -620,10 +647,9 @@ fn open_artifact_viewer(
         .ok_or_else(|| "artifact is no longer available".to_owned())?;
 
     if let Some(window) = app.get_webview_window("viewer") {
+        window.hide().map_err(|error| error.to_string())?;
         app.emit("viewer-artifact-changed", &artifact)
             .map_err(|error| error.to_string())?;
-        window.show().map_err(|error| error.to_string())?;
-        window.set_focus().map_err(|error| error.to_string())?;
         return Ok(());
     }
 
@@ -637,25 +663,46 @@ fn open_artifact_viewer(
     .min_inner_size(560.0, 400.0)
     .center()
     .resizable(true)
-    .focused(true)
+    .focused(false)
+    .visible(false)
     .build()
     .map(|_| ())
     .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn show_artifact_viewer(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    artifact_id: String,
+) -> CommandResult<()> {
+    if !state
+        .artifacts
+        .lock()
+        .iter()
+        .any(|artifact| artifact.id == artifact_id)
+    {
+        return Err("artifact is no longer available".to_owned());
+    }
+    let window = app
+        .get_webview_window("viewer")
+        .ok_or_else(|| "capture viewer is unavailable".to_owned())?;
+    window.show().map_err(|error| error.to_string())?;
+    window.set_focus().map_err(|error| error.to_string())
+}
+
 fn remove_artifact(app: &AppHandle, state: &Arc<AppState>, artifact_id: &str) -> CommandResult<()> {
-    let count = {
+    {
         let mut artifacts = state.artifacts.lock();
         let original_len = artifacts.len();
         artifacts.retain(|artifact| artifact.id != artifact_id);
         if artifacts.len() == original_len {
             return Err("artifact is no longer available".to_owned());
         }
-        artifacts.len()
-    };
+    }
     app.emit("artifact-removed", artifact_id)
         .map_err(|error| error.to_string())?;
-    update_thumbnail_stack(app, count);
+    update_thumbnail_stack(app);
     Ok(())
 }
 
@@ -713,8 +760,11 @@ async fn finish_capture(
         preview_png,
     };
     state.artifacts.lock().push(artifact.clone());
+    {
+        let mut visibility = state.thumbnail_visibility.lock();
+        visibility.wait_for_artifact(artifact.id.clone());
+    }
     app.emit("capture-completed", &artifact)?;
-    show_thumbnail(app);
 
     let copied = clipboard_task
         .await
@@ -1087,11 +1137,6 @@ fn startup_notice_position(app: &AppHandle) -> (f64, f64) {
         .unwrap_or((20.0, 30.0))
 }
 
-fn show_thumbnail(app: &AppHandle) {
-    let count = app.state::<Arc<AppState>>().artifacts.lock().len();
-    update_thumbnail_stack(app, count);
-}
-
 fn create_thumbnail_window(app: &AppHandle, visible: bool) -> Result<(), tauri::Error> {
     let (x, y, height) = thumbnail_window_geometry(app, 1);
     let window = WebviewWindowBuilder::new(
@@ -1125,22 +1170,25 @@ fn create_thumbnail_window(app: &AppHandle, visible: bool) -> Result<(), tauri::
     Ok(())
 }
 
-const THUMBNAIL_WIDTH: f64 = 300.0;
+const THUMBNAIL_WIDTH: f64 = 340.0;
 const THUMBNAIL_CARD_HEIGHT: f64 = 160.0;
-const THUMBNAIL_GAP: f64 = 8.0;
-const THUMBNAIL_PADDING: f64 = 8.0;
+const THUMBNAIL_GAP: f64 = 24.0;
+const THUMBNAIL_PADDING: f64 = 28.0;
 
-fn update_thumbnail_stack(app: &AppHandle, count: usize) {
+fn update_thumbnail_stack(app: &AppHandle) {
     let app = app.clone();
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
+        let state = handle.state::<Arc<AppState>>().inner().clone();
+        let count = state.artifacts.lock().len();
+        let suppressed = state.thumbnail_visibility.lock().is_suppressed();
         let Some(window) = handle.get_webview_window("thumbnail") else {
-            if let Err(error) = create_thumbnail_window(&handle, count > 0) {
+            if let Err(error) = create_thumbnail_window(&handle, count > 0 && !suppressed) {
                 eprintln!("failed to create capture thumbnail stack: {error}");
             }
             return;
         };
-        if count == 0 {
+        if count == 0 || suppressed {
             let _ = window.hide();
             return;
         }
@@ -1162,8 +1210,36 @@ fn show_thumbnail_window(window: &tauri::WebviewWindow) {
 }
 
 fn restore_thumbnail_stack(app: &AppHandle, state: &Arc<AppState>) {
-    let count = state.artifacts.lock().len();
-    update_thumbnail_stack(app, count);
+    {
+        state.thumbnail_visibility.lock().restore();
+    }
+    update_thumbnail_stack(app);
+}
+
+fn begin_thumbnail_capture(state: &Arc<AppState>) -> Result<(), AppError> {
+    if !state.thumbnail_visibility.lock().begin_capture() {
+        return Err(AppError::CaptureInProgress);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn thumbnail_ready(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    artifact_id: String,
+) -> CommandResult<()> {
+    {
+        if !state
+            .thumbnail_visibility
+            .lock()
+            .mark_artifact_ready(&artifact_id)
+        {
+            return Ok(());
+        }
+    }
+    update_thumbnail_stack(&app);
+    Ok(())
 }
 
 fn thumbnail_window_geometry(app: &AppHandle, count: usize) -> (f64, f64, f64) {
@@ -1198,7 +1274,7 @@ fn thumbnail_geometry(
     scale_factor: f64,
     count: usize,
 ) -> (f64, f64, f64) {
-    const EDGE_MARGIN: f64 = 24.0;
+    const EDGE_MARGIN: f64 = THUMBNAIL_PADDING;
 
     let scale = scale_factor.max(1.0);
     let left = f64::from(x) / scale;
@@ -1206,11 +1282,12 @@ fn thumbnail_geometry(
     let width = f64::from(width) / scale;
     let available_height = f64::from(height) / scale - EDGE_MARGIN * 2.0;
     let stack_height = thumbnail_stack_height(count).min(available_height.max(1.0));
-    let left_aligned = left + EDGE_MARGIN;
-    let bottom_aligned = top + f64::from(height) / scale - stack_height - EDGE_MARGIN;
+    let left_aligned = left + EDGE_MARGIN - THUMBNAIL_PADDING;
+    let bottom_aligned =
+        top + f64::from(height) / scale - stack_height - EDGE_MARGIN + THUMBNAIL_PADDING;
     (
         left_aligned
-            .min(left + width - THUMBNAIL_WIDTH - EDGE_MARGIN)
+            .min(left + width - THUMBNAIL_WIDTH - EDGE_MARGIN + THUMBNAIL_PADDING)
             .max(left),
         bottom_aligned.max(top + EDGE_MARGIN),
         stack_height,
@@ -1414,11 +1491,11 @@ mod tests {
     fn stacks_thumbnails_upward_in_logical_pixels_on_retina_displays() {
         assert_eq!(
             thumbnail_geometry(0, 0, 3_992, 2_048, 2.0, 1),
-            (24.0, 824.0, 176.0)
+            (0.0, 808.0, 216.0)
         );
         assert_eq!(
             thumbnail_geometry(-3_840, 0, 3_840, 2_048, 2.0, 2),
-            (-1_896.0, 656.0, 344.0)
+            (-1_920.0, 624.0, 400.0)
         );
     }
 

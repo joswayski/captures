@@ -1,7 +1,9 @@
 #![cfg(target_os = "macos")]
 
 use objc2::AllocAnyThread;
-use objc2_app_kit::{NSStatusWindowLevel, NSTrackingArea, NSTrackingAreaOptions, NSView, NSWindow};
+use objc2_app_kit::{
+    NSCursor, NSStatusWindowLevel, NSTrackingArea, NSTrackingAreaOptions, NSView, NSWindow,
+};
 use objc2_foundation::NSRect;
 use tauri::WebviewWindow;
 
@@ -52,6 +54,16 @@ pub fn show_without_activating(window: &WebviewWindow) -> Result<(), &'static st
     native_window.setLevel(NSStatusWindowLevel);
     native_window.orderFrontRegardless();
     Ok(())
+}
+
+/// Updates the cursor even while another application remains frontmost.
+pub fn set_pointing_cursor(pointing: bool) {
+    let cursor = if pointing {
+        NSCursor::pointingHandCursor()
+    } else {
+        NSCursor::arrowCursor()
+    };
+    cursor.set();
 }
 
 fn native_window(window: &WebviewWindow) -> Result<&NSWindow, &'static str> {
