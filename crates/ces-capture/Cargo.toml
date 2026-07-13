@@ -1,0 +1,16 @@
+[package]
+name = "ces-capture"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+image.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+xcap = "0.9.6"
+
+[lints]
+workspace = true
+
