@@ -6,6 +6,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { formatFileSize } from "./lib/format";
 import { selectionRect, type SelectionPoint } from "./lib/selection";
+import {
+  applyThumbnailNativeHover,
+  clearThumbnailNativeHover,
+} from "./lib/thumbnailHover";
 import type {
   ActiveSession,
   AppSettings,
@@ -395,10 +399,7 @@ function Thumbnail() {
     };
 
     const clearNativeClasses = () => {
-      document.querySelectorAll(".thumbnail-card-native-active, .native-pointer-hover")
-        .forEach((element) => {
-          element.classList.remove("thumbnail-card-native-active", "native-pointer-hover");
-        });
+      clearThumbnailNativeHover();
     };
 
     const clearNativeHover = () => {
@@ -418,18 +419,7 @@ function Thumbnail() {
 
     const applyNativeHover = (position: ThumbnailPointerPosition) => {
       document.documentElement.classList.add("thumbnail-native-tracking");
-      clearNativeClasses();
-      if (!position.inside) {
-        setPointingCursor(false);
-        return;
-      }
-      const target = document.elementFromPoint(position.x, position.y);
-      target?.closest(".thumbnail-card")?.classList.add("thumbnail-card-native-active");
-      const button = target?.closest("button");
-      if (button) {
-        button.classList.add("native-pointer-hover");
-      }
-      setPointingCursor(Boolean(button));
+      setPointingCursor(applyThumbnailNativeHover(position));
     };
 
     const schedulePoll = (delay: number) => {
