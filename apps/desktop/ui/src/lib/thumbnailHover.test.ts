@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyThumbnailNativeHover,
   clearThumbnailNativeHover,
+  thumbnailCursorSyncAction,
+  THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS,
 } from "./thumbnailHover";
 
 afterEach(() => {
@@ -87,5 +89,29 @@ describe("clearThumbnailNativeHover", () => {
 
     expect(document.querySelector("article")).not.toHaveClass("thumbnail-card-native-active");
     expect(document.querySelector("button")).not.toHaveClass("native-pointer-hover");
+  });
+});
+
+describe("thumbnailCursorSyncAction", () => {
+  it("syncs cursor transitions immediately", () => {
+    expect(thumbnailCursorSyncAction(false, true, 0)).toBe("transition");
+    expect(thumbnailCursorSyncAction(true, false, 0)).toBe("transition");
+  });
+
+  it("periodically reasserts a pointing cursor that macOS may have reset", () => {
+    expect(
+      thumbnailCursorSyncAction(
+        true,
+        true,
+        THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS - 1,
+      ),
+    ).toBeNull();
+    expect(
+      thumbnailCursorSyncAction(true, true, THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS),
+    ).toBe("reassert");
+  });
+
+  it("does not reassert the default cursor", () => {
+    expect(thumbnailCursorSyncAction(false, false, Number.POSITIVE_INFINITY)).toBeNull();
   });
 });

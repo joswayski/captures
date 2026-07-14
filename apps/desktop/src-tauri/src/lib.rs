@@ -124,6 +124,7 @@ pub fn run() {
             sync_thumbnail_stack,
             get_thumbnail_pointer_position,
             set_thumbnail_cursor,
+            reassert_thumbnail_cursor,
             open_captures_folder,
             open_preferences,
         ])
@@ -540,6 +541,28 @@ fn set_thumbnail_cursor(app: AppHandle, pointing: bool) -> CommandResult<()> {
     #[cfg(not(target_os = "macos"))]
     {
         let _ = (app, pointing);
+        Ok(())
+    }
+}
+
+#[tauri::command]
+fn reassert_thumbnail_cursor(app: AppHandle) -> CommandResult<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let window = app
+            .get_webview_window("thumbnail")
+            .ok_or_else(|| "capture thumbnail is unavailable".to_owned())?;
+        app.run_on_main_thread(move || {
+            if let Err(error) = ces_macos_window::reassert_pointing_cursor(&window) {
+                eprintln!("failed to reassert capture thumbnail cursor: {error}");
+            }
+        })
+        .map_err(|error| error.to_string())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
         Ok(())
     }
 }

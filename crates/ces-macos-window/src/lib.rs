@@ -127,6 +127,19 @@ pub fn set_pointing_cursor(window: &WebviewWindow, pointing: bool) -> Result<(),
     Ok(())
 }
 
+/// Reapplies the pointing cursor without rebuilding WebKit cursor state.
+///
+/// macOS restores the frontmost application's arrow when CES becomes
+/// inactive, even though the preview can still be hovering the same button.
+/// Cursor rectangles remain disabled while a button is active, so setting the
+/// native cursor again is enough to restore the hand without cursor flicker.
+pub fn reassert_pointing_cursor(window: &WebviewWindow) -> Result<(), &'static str> {
+    let native_window = native_window(window)?;
+    set_cursor_rects_enabled(native_window, false);
+    NSCursor::pointingHandCursor().set();
+    Ok(())
+}
+
 fn set_cursor_rects_enabled(window: &NSWindow, enabled: bool) {
     if enabled && !window.areCursorRectsEnabled() {
         window.enableCursorRects();

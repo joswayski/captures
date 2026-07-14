@@ -1,5 +1,17 @@
 import type { ThumbnailPointerPosition } from "../types";
 
+export const THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS = 100;
+
+export function thumbnailCursorSyncAction(
+  current: boolean,
+  next: boolean,
+  elapsedMs: number,
+): "transition" | "reassert" | null {
+  if (current !== next) return "transition";
+  if (next && elapsedMs >= THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS) return "reassert";
+  return null;
+}
+
 export function clearThumbnailNativeHover(root: ParentNode = document) {
   root.querySelectorAll(".thumbnail-card-native-active, .native-pointer-hover")
     .forEach((element) => {

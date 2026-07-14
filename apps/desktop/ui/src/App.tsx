@@ -9,6 +9,7 @@ import { selectionRect, type SelectionPoint } from "./lib/selection";
 import {
   applyThumbnailNativeHover,
   clearThumbnailNativeHover,
+  thumbnailCursorSyncAction,
 } from "./lib/thumbnailHover";
 import type {
   ActiveSession,
@@ -399,12 +400,24 @@ function Thumbnail() {
     let timer: ReturnType<typeof setTimeout> | null = null;
     let polling = false;
     let pointingCursor = false;
+    let lastCursorSyncAt = 0;
 
     const setPointingCursor = (pointing: boolean) => {
       document.documentElement.style.cursor = pointing ? "pointer" : "";
-      if (pointingCursor === pointing) return;
+      const now = performance.now();
+      const action = thumbnailCursorSyncAction(
+        pointingCursor,
+        pointing,
+        now - lastCursorSyncAt,
+      );
+      if (!action) return;
       pointingCursor = pointing;
-      void invoke("set_thumbnail_cursor", { pointing });
+      lastCursorSyncAt = now;
+      if (action === "reassert") {
+        void invoke("reassert_thumbnail_cursor");
+      } else {
+        void invoke("set_thumbnail_cursor", { pointing });
+      }
     };
 
     const clearNativeClasses = () => {
