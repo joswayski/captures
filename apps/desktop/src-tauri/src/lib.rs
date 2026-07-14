@@ -372,8 +372,7 @@ fn show_capture_overlay(
             .set_cursor_icon(cursor)
             .map_err(|error| error.to_string())?;
         #[cfg(target_os = "macos")]
-        ces_macos_window::prepare_capture_overlay(&window, mode == CaptureMode::Region)
-            .map_err(str::to_owned)?;
+        ces_macos_window::prepare_capture_overlay(&window).map_err(str::to_owned)?;
         window.show().map_err(|error| error.to_string())?;
         window.set_focus().map_err(|error| error.to_string())?;
         #[cfg(target_os = "macos")]

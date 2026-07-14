@@ -57,13 +57,10 @@ pub fn show_without_activating(window: &WebviewWindow) -> Result<(), &'static st
 }
 
 /// Makes a reused capture overlay transparent before bringing it onscreen.
-pub fn prepare_capture_overlay(
-    window: &WebviewWindow,
-    use_crosshair: bool,
-) -> Result<(), &'static str> {
+pub fn prepare_capture_overlay(window: &WebviewWindow) -> Result<(), &'static str> {
     let native_window = native_window(window)?;
     native_window.setAlphaValue(0.0);
-    set_cursor_rects_enabled(native_window, !use_crosshair);
+    set_cursor_rects_enabled(native_window, true);
     Ok(())
 }
 
@@ -73,13 +70,18 @@ pub fn activate_capture_cursor(
     use_crosshair: bool,
 ) -> Result<(), &'static str> {
     let native_window = native_window(window)?;
-    set_cursor_rects_enabled(native_window, !use_crosshair);
-    let cursor = if use_crosshair {
-        NSCursor::crosshairCursor()
-    } else {
-        NSCursor::arrowCursor()
-    };
-    cursor.set();
+    // Keep WebKit cursor rectangles enabled so its CSS crosshair or camera
+    // cursor remains authoritative after the next mouse event. Reset them
+    // after the window becomes key so the camera cursor is refreshed without
+    // replacing it with an arrow at the end of the overlay fade.
+    set_cursor_rects_enabled(native_window, true);
+    native_window.resetCursorRects();
+    if use_crosshair {
+        // CSS cursor rectangles are only applied after AppKit processes a
+        // cursor update. Set the crosshair once as well so region mode changes
+        // immediately even when the mouse has not moved yet.
+        NSCursor::crosshairCursor().set();
+    }
     Ok(())
 }
 
