@@ -123,7 +123,6 @@ pub fn run() {
             sync_thumbnail_stack,
             get_thumbnail_pointer_position,
             set_thumbnail_cursor,
-            show_artifact_viewer,
             open_captures_folder,
             open_preferences,
         ])
@@ -377,6 +376,9 @@ fn show_capture_overlay(
             .map_err(str::to_owned)?;
         window.show().map_err(|error| error.to_string())?;
         window.set_focus().map_err(|error| error.to_string())?;
+        #[cfg(target_os = "macos")]
+        ces_macos_window::activate_capture_cursor(&window, mode == CaptureMode::Region)
+            .map_err(str::to_owned)?;
         Ok(())
     } else {
         Err("capture overlay is unavailable".to_owned())
@@ -390,16 +392,23 @@ fn reveal_capture_overlay(
     session_id: String,
 ) -> CommandResult<()> {
     let id = Uuid::parse_str(&session_id).map_err(|error| error.to_string())?;
-    if !state.sessions.lock().contains_key(&id) {
-        return Err(AppError::SessionUnavailable.to_string());
-    }
+    let mode = state
+        .sessions
+        .lock()
+        .get(&id)
+        .map(|session| session.mode)
+        .ok_or_else(|| AppError::SessionUnavailable.to_string())?;
     let window = app
         .get_webview_window("overlay")
         .ok_or_else(|| "capture overlay is unavailable".to_owned())?;
     #[cfg(target_os = "macos")]
-    ces_macos_window::reveal_capture_overlay(&window).map_err(str::to_owned)?;
+    {
+        ces_macos_window::reveal_capture_overlay(&window).map_err(str::to_owned)?;
+        ces_macos_window::activate_capture_cursor(&window, mode == CaptureMode::Region)
+            .map_err(str::to_owned)?;
+    }
     #[cfg(not(target_os = "macos"))]
-    let _ = window;
+    let _ = (window, mode);
     Ok(())
 }
 
@@ -469,8 +478,13 @@ fn set_thumbnail_cursor(app: AppHandle, pointing: bool) -> CommandResult<()> {
         window
             .set_cursor_icon(icon)
             .map_err(|error| error.to_string())?;
-        app.run_on_main_thread(move || ces_macos_window::set_pointing_cursor(pointing))
-            .map_err(|error| error.to_string())
+        let cursor_window = window.clone();
+        app.run_on_main_thread(move || {
+            if let Err(error) = ces_macos_window::set_pointing_cursor(&cursor_window, pointing) {
+                eprintln!("failed to update capture thumbnail cursor: {error}");
+            }
+        })
+        .map_err(|error| error.to_string())
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -698,13 +712,15 @@ fn open_artifact_viewer(
         .ok_or_else(|| "artifact is no longer available".to_owned())?;
 
     if let Some(window) = app.get_webview_window("viewer") {
-        window.hide().map_err(|error| error.to_string())?;
-        app.emit("viewer-artifact-changed", &artifact)
+        window
+            .emit("viewer-artifact-changed", &artifact)
             .map_err(|error| error.to_string())?;
+        window.show().map_err(|error| error.to_string())?;
+        window.set_focus().map_err(|error| error.to_string())?;
         return Ok(());
     }
 
-    WebviewWindowBuilder::new(
+    let window = WebviewWindowBuilder::new(
         &app,
         "viewer",
         WebviewUrl::App(format!("index.html?view=viewer&artifact_id={artifact_id}").into()),
@@ -718,27 +734,7 @@ fn open_artifact_viewer(
     .focused(false)
     .visible(false)
     .build()
-    .map(|_| ())
-    .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn show_artifact_viewer(
-    app: AppHandle,
-    state: tauri::State<'_, Arc<AppState>>,
-    artifact_id: String,
-) -> CommandResult<()> {
-    if !state
-        .artifacts
-        .lock()
-        .iter()
-        .any(|artifact| artifact.id == artifact_id)
-    {
-        return Err("artifact is no longer available".to_owned());
-    }
-    let window = app
-        .get_webview_window("viewer")
-        .ok_or_else(|| "capture viewer is unavailable".to_owned())?;
+    .map_err(|error| error.to_string())?;
     window.show().map_err(|error| error.to_string())?;
     window.set_focus().map_err(|error| error.to_string())
 }
@@ -961,7 +957,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let capture_display = MenuItem::with_id(
         app,
         "capture-display",
-        "Capture Display",
+        "Capture Full Screen",
         true,
         None::<&str>,
     )?;
@@ -1430,7 +1426,7 @@ fn capture_error_message(error: &AppError) -> String {
     if matches!(error, AppError::Capture(CaptureError::Unsupported)) {
         #[cfg(target_os = "linux")]
         if wayland_session() {
-            return "Window capture is not available on a pure Wayland session yet. Use Region or Display capture, or log in to an X11 session for Window capture. Region and Display capture use your desktop screenshot portal.".to_owned();
+            return "Window capture is not available on a pure Wayland session yet. Use Region or Full Screen capture, or log in to an X11 session for Window capture. Region and Full Screen capture use your desktop screenshot portal.".to_owned();
         }
 
         return "This capture mode is not supported on the current desktop session. Try Region capture instead.".to_owned();
@@ -1438,7 +1434,7 @@ fn capture_error_message(error: &AppError) -> String {
 
     #[cfg(target_os = "linux")]
     if wayland_session() && matches!(error, AppError::Capture(CaptureError::Backend(_))) {
-        return "CES could not capture this Wayland desktop. Make sure an xdg-desktop-portal screenshot backend is installed and running, then try Region or Display capture again.".to_owned();
+        return "CES could not capture this Wayland desktop. Make sure an xdg-desktop-portal screenshot backend is installed and running, then try Region or Full Screen capture again.".to_owned();
     }
 
     if matches!(

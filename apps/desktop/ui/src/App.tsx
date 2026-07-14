@@ -101,13 +101,7 @@ function ArtifactViewer() {
     };
   }, [artifactId]);
 
-  const revealViewer = (loadedArtifactId: string) => {
-    afterNextPaint(() => {
-      void invoke("show_artifact_viewer", { artifactId: loadedArtifactId });
-    });
-  };
-
-  if (!artifact) return <main className="viewer-loading">Capture unavailable</main>;
+  if (!artifact) return <main className="viewer-loading">Loading preview…</main>;
 
   return (
     <main className="artifact-viewer">
@@ -127,8 +121,6 @@ function ArtifactViewer() {
           src={artifact.full_url}
           alt="Full-size screenshot"
           draggable={false}
-          onLoad={() => revealViewer(artifact.id)}
-          onError={() => revealViewer(artifact.id)}
         />
       </div>
     </main>
@@ -393,7 +385,7 @@ function Thumbnail() {
 
     const setPointingCursor = (pointing: boolean) => {
       document.documentElement.style.cursor = pointing ? "pointer" : "";
-      if (pointingCursor === pointing && !pointing) return;
+      if (pointingCursor === pointing) return;
       pointingCursor = pointing;
       void invoke("set_thumbnail_cursor", { pointing });
     };
@@ -704,7 +696,7 @@ function Preferences() {
         <h2>Shortcuts</h2>
         <ShortcutInput label="Region" value={settings.region_shortcut} onChange={(value) => update("region_shortcut", value)} />
         <ShortcutInput label="Window" value={settings.window_shortcut} onChange={(value) => update("window_shortcut", value)} />
-        <ShortcutInput label="Display" value={settings.display_shortcut} onChange={(value) => update("display_shortcut", value)} />
+        <ShortcutInput label="Full Screen" value={settings.display_shortcut} onChange={(value) => update("display_shortcut", value)} />
         <p className="help-text">Use the format Ctrl+Shift+4. Changes apply immediately after saving.</p>
       </section>
 

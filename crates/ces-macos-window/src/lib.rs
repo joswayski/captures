@@ -30,7 +30,6 @@ pub fn configure_inactive_hover(window: &WebviewWindow) -> Result<(), &'static s
             };
             let options = NSTrackingAreaOptions::MouseEnteredAndExited
                 | NSTrackingAreaOptions::MouseMoved
-                | NSTrackingAreaOptions::CursorUpdate
                 | NSTrackingAreaOptions::ActiveAlways
                 | NSTrackingAreaOptions::InVisibleRect;
             // SAFETY: `webview` is the live WKWebView supplied by Tauri, and
@@ -62,7 +61,19 @@ pub fn prepare_capture_overlay(
     window: &WebviewWindow,
     use_crosshair: bool,
 ) -> Result<(), &'static str> {
-    native_window(window)?.setAlphaValue(0.0);
+    let native_window = native_window(window)?;
+    native_window.setAlphaValue(0.0);
+    set_cursor_rects_enabled(native_window, !use_crosshair);
+    Ok(())
+}
+
+/// Applies the capture cursor after the overlay becomes the key window.
+pub fn activate_capture_cursor(
+    window: &WebviewWindow,
+    use_crosshair: bool,
+) -> Result<(), &'static str> {
+    let native_window = native_window(window)?;
+    set_cursor_rects_enabled(native_window, !use_crosshair);
     let cursor = if use_crosshair {
         NSCursor::crosshairCursor()
     } else {
@@ -80,7 +91,9 @@ pub fn reveal_capture_overlay(window: &WebviewWindow) -> Result<(), &'static str
 
 /// Restores native overlay state after a capture ends.
 pub fn reset_capture_overlay(window: &WebviewWindow) -> Result<(), &'static str> {
-    native_window(window)?.setAlphaValue(1.0);
+    let native_window = native_window(window)?;
+    native_window.setAlphaValue(1.0);
+    set_cursor_rects_enabled(native_window, true);
     NSCursor::arrowCursor().set();
     Ok(())
 }
@@ -100,13 +113,24 @@ pub fn resize_from_bottom(
 }
 
 /// Updates the cursor even while another application remains frontmost.
-pub fn set_pointing_cursor(pointing: bool) {
+pub fn set_pointing_cursor(window: &WebviewWindow, pointing: bool) -> Result<(), &'static str> {
+    let native_window = native_window(window)?;
+    set_cursor_rects_enabled(native_window, !pointing);
     let cursor = if pointing {
         NSCursor::pointingHandCursor()
     } else {
         NSCursor::arrowCursor()
     };
     cursor.set();
+    Ok(())
+}
+
+fn set_cursor_rects_enabled(window: &NSWindow, enabled: bool) {
+    if enabled && !window.areCursorRectsEnabled() {
+        window.enableCursorRects();
+    } else if !enabled && window.areCursorRectsEnabled() {
+        window.disableCursorRects();
+    }
 }
 
 fn native_window(window: &WebviewWindow) -> Result<&NSWindow, &'static str> {

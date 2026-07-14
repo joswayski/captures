@@ -49,6 +49,30 @@ describe("applyThumbnailNativeHover", () => {
     );
     expect(document.querySelector("button")).not.toHaveClass("native-pointer-hover");
   });
+
+  it("keeps the active button interactive between polls", () => {
+    document.body.innerHTML = `
+      <article class="thumbnail-card thumbnail-card-native-active">
+        <img alt="Screenshot preview">
+        <button class="native-pointer-hover">Open Preview</button>
+      </article>
+    `;
+    const card = document.querySelector<HTMLElement>(".thumbnail-card")!;
+    const button = document.querySelector<HTMLButtonElement>("button")!;
+    let becameInactive = false;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => {
+        if (!card.classList.contains("thumbnail-card-native-active")) becameInactive = true;
+        return button;
+      }),
+    });
+
+    expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe(true);
+    expect(becameInactive).toBe(false);
+    expect(card).toHaveClass("thumbnail-card-native-active");
+    expect(button).toHaveClass("native-pointer-hover");
+  });
 });
 
 describe("clearThumbnailNativeHover", () => {
