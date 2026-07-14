@@ -70,17 +70,19 @@ pub fn activate_capture_cursor(
     use_crosshair: bool,
 ) -> Result<(), &'static str> {
     let native_window = native_window(window)?;
-    // Keep WebKit cursor rectangles enabled so its CSS crosshair or camera
-    // cursor remains authoritative after the next mouse event. Reset them
-    // after the window becomes key so the camera cursor is refreshed without
-    // replacing it with an arrow at the end of the overlay fade.
-    set_cursor_rects_enabled(native_window, true);
-    native_window.resetCursorRects();
     if use_crosshair {
-        // CSS cursor rectangles are only applied after AppKit processes a
-        // cursor update. Set the crosshair once as well so region mode changes
-        // immediately even when the mouse has not moved yet.
+        // A newly created, previously hidden WKWebView can still own a stale
+        // arrow cursor rectangle. Disable cursor rectangles for the duration
+        // of region capture so the first mouse movement cannot replace the
+        // native crosshair.
+        set_cursor_rects_enabled(native_window, false);
         NSCursor::crosshairCursor().set();
+    } else {
+        // Window capture uses a custom CSS camera cursor, so WebKit remains the
+        // cursor owner in this mode. Refresh its rectangles after the overlay
+        // becomes key and after its fade-in completes.
+        set_cursor_rects_enabled(native_window, true);
+        native_window.resetCursorRects();
     }
     Ok(())
 }
