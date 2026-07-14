@@ -177,6 +177,23 @@ function CaptureOverlay() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [sessionId]);
 
+  useEffect(() => {
+    const cursorClass = `capture-${mode}-cursor`;
+    document.documentElement.classList.add(cursorClass);
+    return () => document.documentElement.classList.remove(cursorClass);
+  }, [mode]);
+
+  useEffect(() => {
+    if (!sessionId || visibleSessionId !== sessionId) return;
+    let cancelled = false;
+    afterNextPaint(() => {
+      if (!cancelled) void invoke("sync_capture_cursor", { sessionId });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, visibleSessionId]);
+
   const rect = useMemo(
     () => (start && current ? selectionRect(start, current) : null),
     [current, start],

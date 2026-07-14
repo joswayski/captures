@@ -15,6 +15,8 @@ pub struct AppSettings {
     pub launch_at_login: bool,
     #[serde(default)]
     pub last_screen_permission_request_id: Option<String>,
+    #[serde(default)]
+    pub pending_capture_after_restart: Option<CaptureMode>,
 }
 
 impl Default for AppSettings {
@@ -26,6 +28,7 @@ impl Default for AppSettings {
             display_shortcut: "Ctrl+Shift+3".to_owned(),
             launch_at_login: false,
             last_screen_permission_request_id: None,
+            pending_capture_after_restart: None,
         }
     }
 }
@@ -120,6 +123,7 @@ pub fn artifact_full_url(artifact_id: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use ces_capture::CaptureMode;
     use std::path::Path;
 
     use super::{AppSettings, migrate_output_directory};
@@ -155,5 +159,23 @@ mod tests {
         .expect("legacy settings should deserialize");
 
         assert!(settings.last_screen_permission_request_id.is_none());
+        assert!(settings.pending_capture_after_restart.is_none());
+    }
+
+    #[test]
+    fn persists_a_capture_queued_for_permission_restart() {
+        let settings = AppSettings {
+            pending_capture_after_restart: Some(CaptureMode::Region),
+            ..AppSettings::default()
+        };
+
+        let json = serde_json::to_string(&settings).expect("settings should serialize");
+        let restored: AppSettings =
+            serde_json::from_str(&json).expect("settings should deserialize");
+
+        assert_eq!(
+            restored.pending_capture_after_restart,
+            Some(CaptureMode::Region)
+        );
     }
 }

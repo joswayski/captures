@@ -76,11 +76,11 @@ open -a CES
 
 CES runs as a menu-bar utility: it shows a camera at the top-right of macOS and intentionally does not keep a Dock icon. Use that camera to capture, open Preferences, or quit CES.
 
-After macOS grants Screen Recording access, quit CES from the menu-bar camera and open it again from Applications. macOS requires this restart before capture is enabled.
+After macOS grants Screen Recording access, retry your shortcut and let CES restart itself when prompted. macOS requires this restart before capture is enabled.
 
-`npm run build` seals local macOS bundles with a valid ad-hoc signature when no Apple identity is configured. Ad-hoc identity is still tied to the exact executable, so macOS can ask for Screen Recording permission again after the code changes. Stable permissions across upgrades require an Apple Development or Developer ID signing certificate; set its name through `APPLE_SIGNING_IDENTITY` and the build script uses it instead of the local fallback.
+`npm run build` automatically uses an installed Apple Development signing identity when one is available. Otherwise it warns and seals the bundle with an ad-hoc signature. Ad-hoc identity is tied to the exact executable, so macOS asks for Screen Recording permission again after code changes. Stable permissions across upgrades require an Apple Development or Developer ID certificate; the latter can be selected explicitly through `APPLE_SIGNING_IDENTITY`.
 
-If CES is enabled in Screen & System Audio Recording but still asks for permission, start a capture and choose **Reset CES Permission**. CES clears only its own stale macOS permission records and immediately requests access for the running build; other applications are not affected. Enable CES in the macOS prompt, then quit and reopen CES once.
+If CES is enabled in Screen & System Audio Recording but still asks for permission, start a capture and choose **Reset, Restart & Retry**. CES clears only its own stale record, restarts itself, and resumes the requested capture; other applications are not affected. After you approve CES in System Settings, retry the shortcut once and choose **Restart & Retry** so the newly granted access takes effect.
 
 For Ubuntu development, install Tauri's native dependencies first:
 

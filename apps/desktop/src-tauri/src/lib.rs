@@ -119,6 +119,7 @@ pub fn run() {
             open_artifact_viewer,
             show_capture_overlay,
             reveal_capture_overlay,
+            sync_capture_cursor,
             thumbnail_ready,
             sync_thumbnail_stack,
             get_thumbnail_pointer_position,
@@ -141,8 +142,29 @@ pub fn run() {
             if let Err(error) = create_overlay_window(&handle) {
                 eprintln!("failed to prepare capture overlay: {error}");
             }
-            if let Err(error) = show_startup_notice(&handle) {
+            let pending_capture = {
+                let state = app.state::<Arc<AppState>>().inner().clone();
+                match take_pending_capture_after_restart(&state) {
+                    Ok(pending) => pending,
+                    Err(error) => {
+                        eprintln!("failed to restore capture after restart: {error}");
+                        None
+                    }
+                }
+            };
+            if pending_capture.is_none()
+                && let Err(error) = show_startup_notice(&handle)
+            {
                 eprintln!("failed to show startup notice: {error}");
+            }
+            if let Some(mode) = pending_capture {
+                let state = app.state::<Arc<AppState>>().inner().clone();
+                let app = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = start_capture_inner(app.clone(), state, mode).await {
+                        report_capture_error(&app, &error, mode);
+                    }
+                });
             }
             Ok(())
         })
@@ -194,7 +216,12 @@ async fn prepare_capture(
     mode: CaptureMode,
 ) -> Result<Option<ActiveSession>, AppError> {
     let request_permission = mark_screen_permission_request(&state)?;
-    state.backend.ensure_permission(request_permission)?;
+    if let Err(error) = state.backend.ensure_permission(request_permission) {
+        if matches!(&error, CaptureError::PermissionRequestStarted) {
+            *state.screen_permission_requested_this_launch.lock() = true;
+        }
+        return Err(error.into());
+    }
     let display = display_under_pointer(&state)?;
     let frame = state.backend.capture_display(&display.id)?;
 
@@ -412,6 +439,30 @@ fn reveal_capture_overlay(
 }
 
 #[tauri::command]
+fn sync_capture_cursor(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    session_id: String,
+) -> CommandResult<()> {
+    let id = Uuid::parse_str(&session_id).map_err(|error| error.to_string())?;
+    let mode = state
+        .sessions
+        .lock()
+        .get(&id)
+        .map(|session| session.mode)
+        .ok_or_else(|| AppError::SessionUnavailable.to_string())?;
+    let window = app
+        .get_webview_window("overlay")
+        .ok_or_else(|| "capture overlay is unavailable".to_owned())?;
+    #[cfg(target_os = "macos")]
+    ces_macos_window::activate_capture_cursor(&window, mode == CaptureMode::Region)
+        .map_err(str::to_owned)?;
+    #[cfg(not(target_os = "macos"))]
+    let _ = (window, mode);
+    Ok(())
+}
+
+#[tauri::command]
 fn get_settings(state: tauri::State<'_, Arc<AppState>>) -> AppSettings {
     state.settings()
 }
@@ -545,6 +596,7 @@ fn update_settings(
         .read()
         .last_screen_permission_request_id
         .clone();
+    settings.pending_capture_after_restart = state.settings.read().pending_capture_after_restart;
 
     register_shortcuts_with(&app, &settings).map_err(|error| error.to_string())?;
     if settings.launch_at_login {
@@ -901,6 +953,27 @@ fn mark_screen_permission_request(state: &AppState) -> Result<bool, AppError> {
     }
 }
 
+fn take_pending_capture_after_restart(state: &AppState) -> Result<Option<CaptureMode>, AppError> {
+    let mut settings = state.settings.write();
+    let pending = settings.pending_capture_after_restart.take();
+    if pending.is_some() {
+        storage::save_settings(&settings)?;
+    }
+    Ok(pending)
+}
+
+#[cfg(target_os = "macos")]
+fn restart_and_retry_capture(app: &AppHandle, mode: CaptureMode) -> Result<(), AppError> {
+    let state = app.state::<Arc<AppState>>().inner().clone();
+    {
+        let mut settings = state.settings.write();
+        settings.pending_capture_after_restart = Some(mode);
+        storage::save_settings(&settings)?;
+    }
+    app.request_restart();
+    Ok(())
+}
+
 fn window_coordinate_scale(display: &ces_capture::DisplayDescriptor) -> f64 {
     #[cfg(target_os = "windows")]
     return display.scale_factor.max(1.0);
@@ -941,7 +1014,7 @@ fn register_shortcut(app: &AppHandle, shortcut: &str, mode: CaptureMode) -> Resu
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
                 if let Err(error) = start_capture_inner(app.clone(), state, mode).await {
-                    report_capture_error(&app, &error);
+                    report_capture_error(&app, &error, mode);
                 }
             });
         })
@@ -1026,7 +1099,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
                 if let Err(error) = start_capture_inner(app.clone(), state, mode).await {
-                    report_capture_error(&app, &error);
+                    report_capture_error(&app, &error, mode);
                 }
             });
         }
@@ -1368,8 +1441,10 @@ fn thumbnail_geometry(
     )
 }
 
-fn report_capture_error(app: &AppHandle, error: &AppError) {
+fn report_capture_error(app: &AppHandle, error: &AppError, mode: CaptureMode) {
     eprintln!("capture failed: {error}");
+    #[cfg(not(target_os = "macos"))]
+    let _ = mode;
 
     #[cfg(target_os = "macos")]
     if matches!(
@@ -1383,30 +1458,47 @@ fn report_capture_error(app: &AppHandle, error: &AppError) {
 
     #[cfg(target_os = "macos")]
     if matches!(error, AppError::Capture(CaptureError::PermissionDenied)) {
+        let state = app.state::<Arc<AppState>>().inner().clone();
+        if *state.screen_permission_requested_this_launch.lock() {
+            let app = app.clone();
+            app.dialog()
+                .message(
+                    "macOS requires CES to restart before newly granted Screen Recording access becomes available. CES can restart now and automatically retry this capture.",
+                )
+                .title("CES Setup")
+                .buttons(MessageDialogButtons::OkCancelCustom(
+                    "Restart & Retry".to_owned(),
+                    "Not Now".to_owned(),
+                ))
+                .kind(MessageDialogKind::Info)
+                .show(move |restart| {
+                    if restart
+                        && let Err(error) = restart_and_retry_capture(&app, mode)
+                    {
+                        show_macos_permission_recovery_error(&app, &error);
+                    }
+                });
+            return;
+        }
+
         let app = app.clone();
         app.dialog()
             .message(
-                "macOS does not recognize this CES build, even if CES appears enabled under Screen & System Audio Recording. This commonly happens after replacing a locally built, ad-hoc-signed copy. Resetting removes only CES's stale permission records. Then use the macOS prompt to enable this build and restart CES.",
+                "This locally built CES copy no longer matches macOS's saved Screen Recording record. CES can reset only its own record, restart, and retry this capture. You will still need to approve CES in System Settings; macOS does not allow apps to toggle this permission themselves.",
             )
             .title("CES Setup")
             .buttons(MessageDialogButtons::OkCancelCustom(
-                "Reset CES Permission".to_owned(),
+                "Reset, Restart & Retry".to_owned(),
                 "Not Now".to_owned(),
             ))
             .kind(MessageDialogKind::Error)
             .show(move |reset_permission| {
-                if reset_permission
-                    && let Err(error) = reset_macos_screen_capture_permission(&app)
-                {
-                    eprintln!("failed to reset Screen Recording permission: {error}");
-                    app.dialog()
-                        .message(format!(
-                            "CES could not reset its Screen Recording permission: {error}"
-                        ))
-                        .title("CES Setup")
-                        .buttons(MessageDialogButtons::Ok)
-                        .kind(MessageDialogKind::Error)
-                        .show(|_| {});
+                if reset_permission {
+                    let result = reset_macos_screen_capture_permission(&app)
+                        .and_then(|()| restart_and_retry_capture(&app, mode));
+                    if let Err(error) = result {
+                        show_macos_permission_recovery_error(&app, &error);
+                    }
                 }
             });
         return;
@@ -1467,12 +1559,21 @@ fn reset_macos_screen_capture_permission(app: &AppHandle) -> Result<(), AppError
         settings.last_screen_permission_request_id = None;
         storage::save_settings(&settings)?;
     }
+    *state.screen_permission_requested_this_launch.lock() = false;
+    Ok(())
+}
 
-    let request_permission = mark_screen_permission_request(&state)?;
-    match state.backend.ensure_permission(request_permission) {
-        Ok(()) | Err(CaptureError::PermissionRequestStarted) => Ok(()),
-        Err(error) => Err(error.into()),
-    }
+#[cfg(target_os = "macos")]
+fn show_macos_permission_recovery_error(app: &AppHandle, error: &AppError) {
+    eprintln!("failed to recover Screen Recording permission: {error}");
+    app.dialog()
+        .message(format!(
+            "CES could not reset or restart its Screen Recording setup: {error}"
+        ))
+        .title("CES Setup")
+        .buttons(MessageDialogButtons::Ok)
+        .kind(MessageDialogKind::Error)
+        .show(|_| {});
 }
 
 #[cfg(target_os = "linux")]
