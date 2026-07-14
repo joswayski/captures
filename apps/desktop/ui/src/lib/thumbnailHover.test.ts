@@ -75,6 +75,30 @@ describe("applyThumbnailNativeHover", () => {
     expect(card).toHaveClass("thumbnail-card-native-active");
     expect(button).toHaveClass("native-pointer-hover");
   });
+
+  it("moves hover directly to a remaining card after the stack changes", () => {
+    document.body.innerHTML = `
+      <article id="removed" class="thumbnail-card"><button>Delete</button></article>
+      <article id="remaining" class="thumbnail-card"><button>Open Preview</button></article>
+    `;
+    const removed = document.querySelector<HTMLElement>("#removed")!;
+    const removedButton = removed.querySelector<HTMLButtonElement>("button")!;
+    const remaining = document.querySelector<HTMLElement>("#remaining")!;
+    const remainingButton = remaining.querySelector<HTMLButtonElement>("button")!;
+    let target: Element = removedButton;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => target),
+    });
+
+    expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe(true);
+    removed.remove();
+    target = remainingButton;
+    expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe(true);
+
+    expect(remaining).toHaveClass("thumbnail-card-native-active");
+    expect(remainingButton).toHaveClass("native-pointer-hover");
+  });
 });
 
 describe("clearThumbnailNativeHover", () => {

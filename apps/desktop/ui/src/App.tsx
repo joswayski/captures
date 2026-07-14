@@ -444,7 +444,12 @@ function Thumbnail() {
     if (stackRef.current) stackRef.current.scrollTop = stackRef.current.scrollHeight;
     let cancelled = false;
     afterNextPaint(() => {
-      if (!cancelled) void invoke("sync_thumbnail_stack");
+      if (cancelled) return;
+      void invoke("sync_thumbnail_stack")
+        .catch(() => undefined)
+        .finally(() => {
+          if (!cancelled) window.dispatchEvent(new Event("ces-thumbnail-layout-changed"));
+        });
     });
     return () => {
       cancelled = true;
@@ -452,6 +457,9 @@ function Thumbnail() {
   }, [artifacts.length]);
 
   useEffect(() => {
+    // Keep one native hover tracker for the lifetime of the thumbnail window.
+    // Restarting it when a card is added or removed briefly clears the hover
+    // presentation and releases the native pointing cursor.
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let polling = false;
@@ -489,11 +497,6 @@ function Thumbnail() {
       document.documentElement.classList.remove("thumbnail-native-tracking");
       clearNativeHover();
     };
-
-    if (artifacts.length === 0) {
-      stopNativeTracking();
-      return stopNativeTracking;
-    }
 
     const applyNativeHover = (position: ThumbnailPointerPosition) => {
       document.documentElement.classList.add("thumbnail-native-tracking");
@@ -538,10 +541,15 @@ function Thumbnail() {
       schedulePoll(0);
     };
 
+    const pollImmediately = () => {
+      if (!document.hidden) schedulePoll(0);
+    };
+
     document.addEventListener("visibilitychange", resumePolling);
     window.addEventListener("focus", resumePolling);
     window.addEventListener("pageshow", resumePolling);
-    window.addEventListener("ces-thumbnail-ready", resumePolling);
+    window.addEventListener("ces-thumbnail-ready", pollImmediately);
+    window.addEventListener("ces-thumbnail-layout-changed", pollImmediately);
     schedulePoll(0);
     return () => {
       cancelled = true;
@@ -549,10 +557,11 @@ function Thumbnail() {
       document.removeEventListener("visibilitychange", resumePolling);
       window.removeEventListener("focus", resumePolling);
       window.removeEventListener("pageshow", resumePolling);
-      window.removeEventListener("ces-thumbnail-ready", resumePolling);
+      window.removeEventListener("ces-thumbnail-ready", pollImmediately);
+      window.removeEventListener("ces-thumbnail-layout-changed", pollImmediately);
       stopNativeTracking();
     };
-  }, [artifacts.length]);
+  }, []);
 
   if (artifacts.length === 0) return null;
 
