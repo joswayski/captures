@@ -1,7 +1,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![forbid(unsafe_code)]
 
-use std::{fs, path::PathBuf, sync::Arc};
+use std::{
+    fs,
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 #[cfg(target_os = "macos")]
 use std::process::Command;
@@ -202,9 +209,11 @@ async fn start_capture_inner(
     }
 
     begin_thumbnail_capture(&state)?;
+    set_capture_huds_protected(&app, true);
     hide_window(&app, "thumbnail");
     hide_window(&app, "startup");
     let result = prepare_capture(app.clone(), state.clone(), mode).await;
+    set_capture_huds_protected(&app, false);
     if result.is_err() {
         restore_thumbnail_stack(&app, &state);
     }
@@ -1028,20 +1037,33 @@ fn register_shortcut(app: &AppHandle, shortcut: &str, mode: CaptureMode) -> Resu
     let parsed = shortcut
         .parse::<tauri_plugin_global_shortcut::Shortcut>()
         .map_err(|error| AppError::Shortcut(error.to_string()))?;
+    let pressed = AtomicBool::new(false);
     app.global_shortcut()
         .on_shortcut(parsed, move |app, _shortcut, event| {
-            if event.state() != ShortcutState::Pressed {
+            if !is_initial_shortcut_press(&pressed, event.state()) {
                 return;
             }
             let state = app.state::<Arc<AppState>>().inner().clone();
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(error) = start_capture_inner(app.clone(), state, mode).await {
+                if let Err(error) = start_capture_inner(app.clone(), state, mode).await
+                    && !matches!(&error, AppError::CaptureInProgress)
+                {
                     report_capture_error(&app, &error, mode);
                 }
             });
         })
         .map_err(|error| AppError::Shortcut(error.to_string()))
+}
+
+fn is_initial_shortcut_press(pressed: &AtomicBool, state: ShortcutState) -> bool {
+    match state {
+        ShortcutState::Pressed => !pressed.swap(true, Ordering::AcqRel),
+        ShortcutState::Released => {
+            pressed.store(false, Ordering::Release);
+            false
+        }
+    }
 }
 
 fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
@@ -1637,6 +1659,19 @@ fn hide_window(app: &AppHandle, label: &str) {
     }
 }
 
+fn set_capture_huds_protected(app: &AppHandle, protected: bool) {
+    // The window server may still composite a just-hidden HUD into an
+    // immediate display capture. Exclude CES HUDs until the frozen background
+    // frame has been read so they cannot reappear as pixels during fade-in.
+    for label in ["thumbnail", "startup"] {
+        if let Some(window) = app.get_webview_window(label)
+            && let Err(error) = window.set_content_protected(protected)
+        {
+            eprintln!("failed to update {label} capture protection: {error}");
+        }
+    }
+}
+
 fn hide_capture_overlay(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("overlay") {
         let _ = window.hide();
@@ -1693,7 +1728,24 @@ impl CaptureSession {
 
 #[cfg(test)]
 mod tests {
-    use super::{thumbnail_geometry, thumbnail_pointer_position};
+    use std::sync::atomic::AtomicBool;
+
+    use tauri_plugin_global_shortcut::ShortcutState;
+
+    use super::{is_initial_shortcut_press, thumbnail_geometry, thumbnail_pointer_position};
+
+    #[test]
+    fn ignores_shortcut_repeats_until_the_key_is_released() {
+        let pressed = AtomicBool::new(false);
+
+        assert!(is_initial_shortcut_press(&pressed, ShortcutState::Pressed));
+        assert!(!is_initial_shortcut_press(&pressed, ShortcutState::Pressed));
+        assert!(!is_initial_shortcut_press(
+            &pressed,
+            ShortcutState::Released
+        ));
+        assert!(is_initial_shortcut_press(&pressed, ShortcutState::Pressed));
+    }
 
     #[test]
     fn stacks_thumbnails_upward_in_logical_pixels_on_retina_displays() {

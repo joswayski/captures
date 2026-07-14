@@ -19,3 +19,8 @@ export function selectionRect(start: SelectionPoint, end: SelectionPoint): Selec
   };
 }
 
+export function isCapturableSelection(
+  rect: SelectionRect | null,
+): rect is SelectionRect {
+  return rect !== null && rect.width >= 2 && rect.height >= 2;
+}

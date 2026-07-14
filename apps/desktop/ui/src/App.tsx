@@ -5,7 +5,11 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { formatFileSize } from "./lib/format";
-import { selectionRect, type SelectionPoint } from "./lib/selection";
+import {
+  isCapturableSelection,
+  selectionRect,
+  type SelectionPoint,
+} from "./lib/selection";
 import {
   applyThumbnailNativeHover,
   clearThumbnailNativeHover,
@@ -134,9 +138,12 @@ function CaptureOverlay() {
   const [start, setStart] = useState<SelectionPoint | null>(null);
   const [current, setCurrent] = useState<SelectionPoint | null>(null);
   const [hoveredWindow, setHoveredWindow] = useState<string | null>(null);
+  const [selectionFeedback, setSelectionFeedback] = useState(0);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const activeSessionIdRef = useRef<string | null>(null);
   const revealingSessionIdRef = useRef<string | null>(null);
+  const selectionFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastRegionCursorSyncAtRef = useRef(0);
   const sessionId = session?.id ?? query("session_id");
   const mode = session?.mode ?? ((query("mode") ?? "region") as CaptureMode);
 
@@ -152,6 +159,12 @@ function CaptureOverlay() {
         setStart(null);
         setCurrent(null);
         setHoveredWindow(null);
+        if (selectionFeedbackTimerRef.current) {
+          clearTimeout(selectionFeedbackTimerRef.current);
+          selectionFeedbackTimerRef.current = null;
+        }
+        setSelectionFeedback(0);
+        lastRegionCursorSyncAtRef.current = 0;
       });
       const initialSession = query("session_id")
         ? await invoke<ActiveSession | null>("get_active_session", { sessionId: query("session_id") })
@@ -167,6 +180,10 @@ function CaptureOverlay() {
       active = false;
       dispose?.();
     };
+  }, []);
+
+  useEffect(() => () => {
+    if (selectionFeedbackTimerRef.current) clearTimeout(selectionFeedbackTimerRef.current);
   }, []);
 
   useEffect(() => {
@@ -210,9 +227,35 @@ function CaptureOverlay() {
     return { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
   };
 
-  const commitRegion = () => {
-    if (!rect || rect.width < 2 || rect.height < 2) return;
+  const commitRegion = (): boolean => {
+    if (!isCapturableSelection(rect)) return false;
     void invoke("commit_region", { sessionId, rect });
+    return true;
+  };
+
+  const clearSelectionFeedback = () => {
+    if (selectionFeedbackTimerRef.current) {
+      clearTimeout(selectionFeedbackTimerRef.current);
+      selectionFeedbackTimerRef.current = null;
+    }
+    setSelectionFeedback(0);
+  };
+
+  const showSelectionFeedback = () => {
+    if (selectionFeedbackTimerRef.current) clearTimeout(selectionFeedbackTimerRef.current);
+    setSelectionFeedback((attempt) => attempt + 1);
+    selectionFeedbackTimerRef.current = setTimeout(() => {
+      selectionFeedbackTimerRef.current = null;
+      setSelectionFeedback(0);
+    }, 1800);
+  };
+
+  const reassertRegionCursor = () => {
+    const now = performance.now();
+    const lastSyncAt = lastRegionCursorSyncAtRef.current;
+    if (lastSyncAt !== 0 && now - lastSyncAt < 100) return;
+    lastRegionCursorSyncAtRef.current = now;
+    void invoke("sync_capture_cursor", { sessionId });
   };
 
   const revealOverlay = async () => {
@@ -238,6 +281,8 @@ function CaptureOverlay() {
 
   const onPointerDown = (event: React.PointerEvent) => {
     if (mode !== "region") return;
+    clearSelectionFeedback();
+    reassertRegionCursor();
     event.currentTarget.setPointerCapture(event.pointerId);
     const point = pointFromEvent(event);
     setStart(point);
@@ -245,13 +290,15 @@ function CaptureOverlay() {
   };
 
   const onPointerMove = (event: React.PointerEvent) => {
-    if (mode !== "region" || !start) return;
+    if (mode !== "region") return;
+    reassertRegionCursor();
+    if (!start) return;
     setCurrent(pointFromEvent(event));
   };
 
   const onPointerUp = () => {
     if (mode !== "region" || !start) return;
-    commitRegion();
+    if (!commitRegion()) showSelectionFeedback();
     setStart(null);
     setCurrent(null);
   };
@@ -273,8 +320,17 @@ function CaptureOverlay() {
         onLoad={() => void revealOverlay()}
       />
       <div className="capture-shade" />
-      <div className="capture-hint">
-        {mode === "region" ? "Drag to capture · Esc to cancel" : "Select a window · Esc to cancel"}
+      <div
+        key={`${sessionId}-${selectionFeedback}`}
+        className={`capture-hint${selectionFeedback > 0 ? " capture-hint-feedback" : ""}`}
+        role="status"
+        aria-live="polite"
+      >
+        {mode === "region"
+          ? selectionFeedback > 0
+            ? "Click and drag to select an area · Esc to cancel"
+            : "Drag to capture · Esc to cancel"
+          : "Select a window · Esc to cancel"}
       </div>
       {rect && rect.width > 0 && rect.height > 0 && (
         <div

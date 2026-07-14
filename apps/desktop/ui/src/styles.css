@@ -57,6 +57,8 @@ html.capture-window-cursor, html.capture-window-cursor * { cursor: var(--capture
 .capture-window .capture-shade { background: transparent; }
 .capture-hint { position: absolute; z-index: 10000; top: 22px; left: 50%; transform: translate(-50%, -6px); border: 1px solid rgba(255,255,255,.14); border-radius: 999px; padding: 9px 16px; color: #fff; background: rgba(17,18,26,.78); box-shadow: 0 8px 30px rgba(0,0,0,.25); opacity: 0; transition: opacity .3s ease-out, transform .3s ease-out; pointer-events: none; font-size: 13px; }
 .capture-visible .capture-hint { opacity: 1; transform: translate(-50%, 0); }
+.capture-hint-feedback { border-color: rgba(255,190,92,.72); color: #fff4d8; background: rgba(45,31,18,.9); animation: capture-hint-nudge .3s ease-out; }
+@keyframes capture-hint-nudge { 0%, 100% { margin-left: 0; } 25% { margin-left: -8px; } 75% { margin-left: 8px; } }
 .selection-box { position: absolute; z-index: 5; border: 2px solid #a997ff; background: rgba(169,151,255,.1); box-shadow: 0 0 0 9999px rgba(8,8,14,.35), 0 0 0 1px rgba(255,255,255,.45) inset; pointer-events: none; }
 .selection-box span { position: absolute; top: -30px; left: 0; padding: 5px 8px; border-radius: 5px; background: #a997ff; color: #161222; font-size: 12px; font-weight: 700; white-space: nowrap; }
 .window-targets { position: absolute; inset: 0; z-index: 5; opacity: 0; transition: opacity .3s ease-out; }
