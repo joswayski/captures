@@ -29,7 +29,7 @@ use tauri::{
 use tauri_plugin_autostart::ManagerExt as AutoStartExt;
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use tauri_plugin_opener::OpenerExt;
 use thiserror::Error;
 use uuid::Uuid;
@@ -73,7 +73,7 @@ pub fn run() {
     let state = AppState::new();
     let protocol_state = state.clone();
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("preferences") {
                 let _ = window.show();
@@ -88,7 +88,12 @@ pub fn run() {
             tauri_plugin_autostart::Builder::new()
                 .app_name("CES")
                 .build(),
-        )
+        );
+
+    #[cfg(target_os = "macos")]
+    let builder = builder.plugin(ces_macos_window::init_panel_plugin());
+
+    builder
         .manage(state)
         .register_uri_scheme_protocol("ces-capture", move |_context, request| {
             let path = request.uri().path().trim_matches('/');
@@ -615,22 +620,29 @@ fn update_settings(
     {
         return Err("all shortcuts must be set".to_owned());
     }
-    if settings.region_shortcut == settings.window_shortcut
-        || settings.region_shortcut == settings.display_shortcut
-        || settings.window_shortcut == settings.display_shortcut
+    let region_shortcut =
+        parse_shortcut(&settings.region_shortcut).map_err(|error| error.to_string())?;
+    let window_shortcut =
+        parse_shortcut(&settings.window_shortcut).map_err(|error| error.to_string())?;
+    let display_shortcut =
+        parse_shortcut(&settings.display_shortcut).map_err(|error| error.to_string())?;
+    if region_shortcut == window_shortcut
+        || region_shortcut == display_shortcut
+        || window_shortcut == display_shortcut
     {
         return Err("shortcuts must be unique".to_owned());
     }
 
     // Permission bookkeeping is internal state, not a user-editable setting.
-    settings.last_screen_permission_request_id = state
-        .settings
-        .read()
-        .last_screen_permission_request_id
-        .clone();
-    settings.pending_capture_after_restart = state.settings.read().pending_capture_after_restart;
+    let previous_settings = state.settings();
+    settings.last_screen_permission_request_id =
+        previous_settings.last_screen_permission_request_id.clone();
+    settings.pending_capture_after_restart = previous_settings.pending_capture_after_restart;
 
-    register_shortcuts_with(&app, &settings).map_err(|error| error.to_string())?;
+    if let Err(error) = register_shortcuts_with(&app, &settings) {
+        let _ = register_shortcuts_with(&app, &previous_settings);
+        return Err(error.to_string());
+    }
     if settings.launch_at_login {
         app.autolaunch()
             .enable()
@@ -1033,14 +1045,17 @@ fn register_shortcuts_with(app: &AppHandle, settings: &AppSettings) -> Result<()
 }
 
 fn register_shortcut(app: &AppHandle, shortcut: &str, mode: CaptureMode) -> Result<(), AppError> {
-    let shortcut = shortcut.to_owned();
-    let parsed = shortcut
-        .parse::<tauri_plugin_global_shortcut::Shortcut>()
-        .map_err(|error| AppError::Shortcut(error.to_string()))?;
-    let pressed = AtomicBool::new(false);
+    let parsed = parse_shortcut(shortcut)?;
+    let armed = AtomicBool::new(false);
     app.global_shortcut()
         .on_shortcut(parsed, move |app, _shortcut, event| {
-            if !is_initial_shortcut_press(&pressed, event.state()) {
+            if !should_trigger_shortcut(&armed, event.state()) {
+                return;
+            }
+            if app
+                .get_webview_window("preferences")
+                .is_some_and(|window| window.is_focused().unwrap_or(false))
+            {
                 return;
             }
             let state = app.state::<Arc<AppState>>().inner().clone();
@@ -1056,13 +1071,19 @@ fn register_shortcut(app: &AppHandle, shortcut: &str, mode: CaptureMode) -> Resu
         .map_err(|error| AppError::Shortcut(error.to_string()))
 }
 
-fn is_initial_shortcut_press(pressed: &AtomicBool, state: ShortcutState) -> bool {
+fn parse_shortcut(shortcut: &str) -> Result<Shortcut, AppError> {
+    shortcut
+        .parse::<Shortcut>()
+        .map_err(|error| AppError::Shortcut(error.to_string()))
+}
+
+fn should_trigger_shortcut(armed: &AtomicBool, state: ShortcutState) -> bool {
     match state {
-        ShortcutState::Pressed => !pressed.swap(true, Ordering::AcqRel),
-        ShortcutState::Released => {
-            pressed.store(false, Ordering::Release);
+        ShortcutState::Pressed => {
+            armed.store(true, Ordering::Release);
             false
         }
+        ShortcutState::Released => armed.swap(false, Ordering::AcqRel),
     }
 }
 
@@ -1732,19 +1753,28 @@ mod tests {
 
     use tauri_plugin_global_shortcut::ShortcutState;
 
-    use super::{is_initial_shortcut_press, thumbnail_geometry, thumbnail_pointer_position};
+    use super::{
+        parse_shortcut, should_trigger_shortcut, thumbnail_geometry, thumbnail_pointer_position,
+    };
 
     #[test]
-    fn ignores_shortcut_repeats_until_the_key_is_released() {
-        let pressed = AtomicBool::new(false);
+    fn treats_legacy_and_recorded_shortcut_formats_as_the_same_combination() {
+        assert_eq!(
+            parse_shortcut("Ctrl+Shift+4").expect("legacy shortcut should parse"),
+            parse_shortcut("Control+Shift+Digit4").expect("recorded shortcut should parse")
+        );
+    }
 
-        assert!(is_initial_shortcut_press(&pressed, ShortcutState::Pressed));
-        assert!(!is_initial_shortcut_press(&pressed, ShortcutState::Pressed));
-        assert!(!is_initial_shortcut_press(
-            &pressed,
-            ShortcutState::Released
-        ));
-        assert!(is_initial_shortcut_press(&pressed, ShortcutState::Pressed));
+    #[test]
+    fn triggers_shortcuts_once_after_the_keys_are_released() {
+        let armed = AtomicBool::new(false);
+
+        assert!(!should_trigger_shortcut(&armed, ShortcutState::Pressed));
+        assert!(!should_trigger_shortcut(&armed, ShortcutState::Pressed));
+        assert!(should_trigger_shortcut(&armed, ShortcutState::Released));
+        assert!(!should_trigger_shortcut(&armed, ShortcutState::Released));
+        assert!(!should_trigger_shortcut(&armed, ShortcutState::Pressed));
+        assert!(should_trigger_shortcut(&armed, ShortcutState::Released));
     }
 
     #[test]

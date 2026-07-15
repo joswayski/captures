@@ -11,6 +11,12 @@ import {
   type SelectionPoint,
 } from "./lib/selection";
 import {
+  isModifierCode,
+  modifierDisplayTokens,
+  recordShortcut,
+  shortcutDisplayTokens,
+} from "./lib/shortcut";
+import {
   applyThumbnailNativeHover,
   clearThumbnailNativeHover,
   thumbnailCursorSyncAction,
@@ -739,6 +745,7 @@ function Preferences() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
+  const [recordingShortcut, setRecordingShortcut] = useState<string | null>(null);
 
   useEffect(() => {
     void invoke<AppSettings>("get_settings").then(setSettings);
@@ -759,7 +766,8 @@ function Preferences() {
     setSaving(true);
     setMessage("");
     try {
-      await invoke("update_settings", { settings });
+      const saved = await invoke<AppSettings>("update_settings", { settings });
+      setSettings(saved);
       setMessage("Saved");
     } catch (error) {
       setMessage(String(error));
@@ -789,10 +797,31 @@ function Preferences() {
 
       <section className="settings-section">
         <h2>Shortcuts</h2>
-        <ShortcutInput label="Region" value={settings.region_shortcut} onChange={(value) => update("region_shortcut", value)} />
-        <ShortcutInput label="Window" value={settings.window_shortcut} onChange={(value) => update("window_shortcut", value)} />
-        <ShortcutInput label="Full Screen" value={settings.display_shortcut} onChange={(value) => update("display_shortcut", value)} />
-        <p className="help-text">Use the format Ctrl+Shift+4. Changes apply immediately after saving.</p>
+        <ShortcutInput
+          id="region-shortcut"
+          label="Region"
+          value={settings.region_shortcut}
+          recording={recordingShortcut === "region-shortcut"}
+          onRecordingChange={(recording) => setRecordingShortcut(recording ? "region-shortcut" : null)}
+          onChange={(value) => update("region_shortcut", value)}
+        />
+        <ShortcutInput
+          id="window-shortcut"
+          label="Window"
+          value={settings.window_shortcut}
+          recording={recordingShortcut === "window-shortcut"}
+          onRecordingChange={(recording) => setRecordingShortcut(recording ? "window-shortcut" : null)}
+          onChange={(value) => update("window_shortcut", value)}
+        />
+        <ShortcutInput
+          id="display-shortcut"
+          label="Full Screen"
+          value={settings.display_shortcut}
+          recording={recordingShortcut === "display-shortcut"}
+          onRecordingChange={(recording) => setRecordingShortcut(recording ? "display-shortcut" : null)}
+          onChange={(value) => update("display_shortcut", value)}
+        />
+        <p className="help-text">Select a shortcut, then press the key combination you want. Press Esc to cancel; save to apply.</p>
       </section>
 
       <label className="check-row">
@@ -811,11 +840,80 @@ function Preferences() {
   );
 }
 
-function ShortcutInput({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+export function ShortcutInput({
+  id,
+  label,
+  value,
+  recording,
+  onRecordingChange,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  recording: boolean;
+  onRecordingChange: (recording: boolean) => void;
+  onChange: (value: string) => void;
+}) {
+  const [previewKeys, setPreviewKeys] = useState<string[]>([]);
+  const [error, setError] = useState("");
+  const keys = recording ? previewKeys : shortcutDisplayTokens(value);
+
+  const stopRecording = () => {
+    setPreviewKeys([]);
+    setError("");
+    onRecordingChange(false);
+  };
+
+  const onKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (!recording) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const result = recordShortcut(event);
+    if (result.kind === "cancel") {
+      stopRecording();
+    } else if (result.kind === "complete") {
+      onChange(result.shortcut);
+      setPreviewKeys([]);
+      setError("");
+      onRecordingChange(false);
+    } else {
+      setPreviewKeys(result.keys);
+      setError(result.kind === "invalid" ? result.message : "");
+    }
+  };
+
+  const onKeyUp = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (!recording || !isModifierCode(event.code)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setPreviewKeys(modifierDisplayTokens(event));
+  };
+
   return (
-    <label className="shortcut-row">
-      <span>{label}</span>
-      <input value={value} onChange={(event) => onChange(event.target.value)} spellCheck={false} />
-    </label>
+    <div className="shortcut-row">
+      <span id={`${id}-label`}>{label}</span>
+      <div className="shortcut-control">
+        <button
+          type="button"
+          className={`shortcut-recorder${recording ? " shortcut-recording" : ""}`}
+          aria-labelledby={`${id}-label`}
+          aria-pressed={recording}
+          onClick={() => {
+            setPreviewKeys([]);
+            setError("");
+            onRecordingChange(true);
+          }}
+          onBlur={stopRecording}
+          onKeyDown={onKeyDown}
+          onKeyUp={onKeyUp}
+        >
+          {keys.length > 0
+            ? keys.map((key, index) => <kbd key={`${key}-${index}`}>{key}</kbd>)
+            : <span className="shortcut-prompt">Press shortcut…</span>}
+        </button>
+        {error && <span className="shortcut-error" role="status">{error}</span>}
+      </div>
+    </div>
   );
 }

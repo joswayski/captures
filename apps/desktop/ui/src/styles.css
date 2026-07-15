@@ -137,9 +137,17 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .settings-section h2 { margin-bottom: 12px; color: #f8f8fb; font-size: 14px; }
 .field-label, .help-text { color: #a7a7b6; font-size: 12px; }
 .directory-input { display: flex; gap: 8px; margin-top: 7px; }
-.directory-input input, .shortcut-row input { min-width: 0; width: 100%; border: 1px solid #363745; border-radius: 6px; padding: 8px 10px; color: #f8f8fb; background: #101119; outline: none; }
-.directory-input input:focus, .shortcut-row input:focus { border-color: #a997ff; }
+.directory-input input { min-width: 0; width: 100%; border: 1px solid #363745; border-radius: 6px; padding: 8px 10px; color: #f8f8fb; background: #101119; outline: none; }
+.directory-input input:focus { border-color: #a997ff; }
 .shortcut-row { display: grid; grid-template-columns: 1fr 2fr; align-items: center; gap: 16px; margin: 8px 0; color: #c7c7d1; font-size: 13px; }
+.shortcut-control { min-width: 0; }
+.shortcut-recorder { display: flex; width: 100%; min-height: 38px; align-items: center; justify-content: flex-start; gap: 6px; border: 1px solid #363745; border-radius: 7px; padding: 7px 10px; color: #f8f8fb; background: #101119; outline: none; text-align: left; }
+.shortcut-recorder:hover { border-color: #515365; background: #12131c; }
+.shortcut-recorder:focus-visible, .shortcut-recorder.shortcut-recording { border-color: #a997ff; box-shadow: 0 0 0 2px rgba(169,151,255,.16); }
+.shortcut-recorder.shortcut-recording { cursor: default; }
+.shortcut-recorder kbd { min-width: 24px; border: 1px solid #494b5b; border-bottom-color: #5e6072; border-radius: 5px; padding: 3px 6px; color: #f8f8fb; background: #292a36; box-shadow: 0 1px 0 rgba(255,255,255,.08) inset, 0 1px 0 #090a0f; font-family: inherit; font-size: 11px; font-weight: 700; line-height: 1.1; text-align: center; }
+.shortcut-prompt { color: #9293a3; font-size: 12px; }
+.shortcut-error { display: block; margin-top: 5px; color: #ff9da7; font-size: 11px; }
 .help-text { margin-top: 10px; }
 .check-row { display: flex; align-items: center; gap: 9px; color: #c7c7d1; font-size: 13px; }
 .check-row input { accent-color: #8e76f2; }
