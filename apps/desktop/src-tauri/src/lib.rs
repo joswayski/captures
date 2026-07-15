@@ -529,23 +529,36 @@ fn get_thumbnail_pointer_position(
 }
 
 #[tauri::command]
-fn set_thumbnail_cursor(app: AppHandle, pointing: bool) -> CommandResult<()> {
+fn set_thumbnail_cursor(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    pointing: bool,
+) -> CommandResult<()> {
     #[cfg(target_os = "macos")]
     {
         let window = app
             .get_webview_window("thumbnail")
             .ok_or_else(|| "capture thumbnail is unavailable".to_owned())?;
-        let icon = if pointing {
-            CursorIcon::Hand
-        } else {
-            CursorIcon::Default
-        };
-        window
-            .set_cursor_icon(icon)
-            .map_err(|error| error.to_string())?;
+        let state = state.inner().clone();
         let cursor_window = window.clone();
         app.run_on_main_thread(move || {
-            if let Err(error) = ces_macos_window::set_pointing_cursor(&cursor_window, pointing) {
+            let interactive = !state.thumbnail_visibility.lock().is_suppressed()
+                && cursor_window.is_visible().unwrap_or(false);
+            let effective_pointing = interactive && pointing;
+            let icon = if effective_pointing {
+                CursorIcon::Hand
+            } else {
+                CursorIcon::Default
+            };
+            if let Err(error) = cursor_window.set_cursor_icon(icon) {
+                eprintln!("failed to update capture thumbnail window cursor: {error}");
+            }
+            let result = if interactive {
+                ces_macos_window::set_pointing_cursor(&cursor_window, effective_pointing)
+            } else {
+                ces_macos_window::reset_pointing_cursor_state(&cursor_window)
+            };
+            if let Err(error) = result {
                 eprintln!("failed to update capture thumbnail cursor: {error}");
             }
         })
@@ -554,20 +567,32 @@ fn set_thumbnail_cursor(app: AppHandle, pointing: bool) -> CommandResult<()> {
 
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (app, pointing);
+        let _ = (app, state, pointing);
         Ok(())
     }
 }
 
 #[tauri::command]
-fn reassert_thumbnail_cursor(app: AppHandle) -> CommandResult<()> {
+fn reassert_thumbnail_cursor(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> CommandResult<()> {
     #[cfg(target_os = "macos")]
     {
         let window = app
             .get_webview_window("thumbnail")
             .ok_or_else(|| "capture thumbnail is unavailable".to_owned())?;
+        let state = state.inner().clone();
         app.run_on_main_thread(move || {
-            if let Err(error) = ces_macos_window::reassert_pointing_cursor(&window) {
+            let interactive = !state.thumbnail_visibility.lock().is_suppressed()
+                && window.is_visible().unwrap_or(false);
+            let result = if interactive {
+                ces_macos_window::reassert_pointing_cursor(&window)
+            } else {
+                let _ = window.set_cursor_icon(CursorIcon::Default);
+                ces_macos_window::reset_pointing_cursor_state(&window)
+            };
+            if let Err(error) = result {
                 eprintln!("failed to reassert capture thumbnail cursor: {error}");
             }
         })
@@ -576,7 +601,7 @@ fn reassert_thumbnail_cursor(app: AppHandle) -> CommandResult<()> {
 
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = app;
+        let _ = (app, state);
         Ok(())
     }
 }

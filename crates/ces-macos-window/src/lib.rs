@@ -1,6 +1,11 @@
 #![cfg(target_os = "macos")]
 
-use std::{cell::Cell, ffi::c_void, ptr};
+use std::{
+    cell::Cell,
+    ffi::c_void,
+    ptr,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 use objc2::{
     AllocAnyThread, DefinedClass, MainThreadMarker, define_class,
@@ -45,9 +50,15 @@ enum CursorMode {
     WebView,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CursorSurface {
+    CaptureOverlay,
+    Thumbnail,
+}
+
 struct CursorTrackingIvars {
     mode: Cell<CursorMode>,
-    activate_window_on_hover: bool,
+    surface: CursorSurface,
 }
 
 define_class!(
@@ -76,7 +87,12 @@ define_class!(
         #[unsafe(method(mouseExited:))]
         fn mouse_exited(&self, event: &NSEvent) {
             self.resign_window_if_needed(event);
-            NSCursor::arrowCursor().set();
+            if should_reset_cursor_on_exit(
+                self.ivars().surface,
+                capture_overlay_owns_cursor(),
+            ) {
+                NSCursor::arrowCursor().set();
+            }
         }
 
         #[unsafe(method(cursorUpdate:))]
@@ -88,10 +104,10 @@ define_class!(
 );
 
 impl CursorTrackingOwner {
-    fn new(mode: CursorMode, activate_window_on_hover: bool) -> Retained<Self> {
+    fn new(mode: CursorMode, surface: CursorSurface) -> Retained<Self> {
         let this = Self::alloc().set_ivars(CursorTrackingIvars {
             mode: Cell::new(mode),
-            activate_window_on_hover,
+            surface,
         });
         // SAFETY: `NSObject`'s `init` method has this signature.
         unsafe { msg_send![super(this), init] }
@@ -102,7 +118,9 @@ impl CursorTrackingOwner {
     }
 
     fn activate_window_if_needed(&self, event: &NSEvent) {
-        if !self.ivars().activate_window_on_hover {
+        if self.ivars().surface != CursorSurface::Thumbnail
+            || !cursor_surface_can_apply(self.ivars().surface, capture_overlay_owns_cursor())
+        {
             return;
         }
         let Some(main_thread) = MainThreadMarker::new() else {
@@ -116,7 +134,9 @@ impl CursorTrackingOwner {
     }
 
     fn resign_window_if_needed(&self, event: &NSEvent) {
-        if !self.ivars().activate_window_on_hover {
+        if self.ivars().surface != CursorSurface::Thumbnail
+            || !cursor_surface_can_apply(self.ivars().surface, capture_overlay_owns_cursor())
+        {
             return;
         }
         let Some(main_thread) = MainThreadMarker::new() else {
@@ -130,6 +150,9 @@ impl CursorTrackingOwner {
     }
 
     fn apply_cursor(&self) {
+        if !cursor_surface_can_apply(self.ivars().surface, capture_overlay_owns_cursor()) {
+            return;
+        }
         match self.ivars().mode.get() {
             CursorMode::Arrow => NSCursor::arrowCursor().set(),
             CursorMode::Crosshair => NSCursor::crosshairCursor().set(),
@@ -141,6 +164,9 @@ impl CursorTrackingOwner {
 
 // The address of this byte is used as the Objective-C association key.
 static CURSOR_TRACKER_ASSOCIATION_KEY: u8 = 0;
+// NSCursor is application-wide, so a hidden preview must not replace the
+// cursor selected by the active capture overlay.
+static CAPTURE_OVERLAY_OWNS_CURSOR: AtomicBool = AtomicBool::new(false);
 
 /// Registers the panel manager used by the capture thumbnail window.
 pub fn init_panel_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
@@ -195,7 +221,7 @@ pub fn configure_inactive_hover(window: &WebviewWindow) -> Result<(), &'static s
                 )
             };
             webview.addTrackingArea(&area);
-            install_cursor_tracker(webview, CursorMode::Arrow, true);
+            install_cursor_tracker(webview, CursorMode::Arrow, CursorSurface::Thumbnail);
         })
         .map_err(|_| "macOS webview handle is unavailable")
 }
@@ -213,7 +239,7 @@ pub fn prepare_capture_overlay(window: &WebviewWindow) -> Result<(), &'static st
     let native_window = native_window(window)?;
     native_window.setAlphaValue(0.0);
     set_cursor_rects_enabled(native_window, true);
-    set_tracked_cursor(window, CursorMode::WebView)?;
+    set_tracked_cursor(window, CursorMode::WebView, CursorSurface::CaptureOverlay)?;
     Ok(())
 }
 
@@ -229,14 +255,16 @@ pub fn activate_capture_cursor(
         // of region capture so the first mouse movement cannot replace the
         // native crosshair.
         set_cursor_rects_enabled(native_window, false);
-        set_tracked_cursor(window, CursorMode::Crosshair)?;
+        set_tracked_cursor(window, CursorMode::Crosshair, CursorSurface::CaptureOverlay)?;
+        CAPTURE_OVERLAY_OWNS_CURSOR.store(true, Ordering::Release);
         NSCursor::crosshairCursor().set();
     } else {
         // Window capture uses a custom CSS camera cursor, so WebKit remains the
         // cursor owner in this mode. Refresh its rectangles after the overlay
         // becomes key and after its fade-in completes.
         set_cursor_rects_enabled(native_window, true);
-        set_tracked_cursor(window, CursorMode::WebView)?;
+        set_tracked_cursor(window, CursorMode::WebView, CursorSurface::CaptureOverlay)?;
+        CAPTURE_OVERLAY_OWNS_CURSOR.store(true, Ordering::Release);
         native_window.resetCursorRects();
     }
     Ok(())
@@ -250,12 +278,15 @@ pub fn reveal_capture_overlay(window: &WebviewWindow) -> Result<(), &'static str
 
 /// Restores native overlay state after a capture ends.
 pub fn reset_capture_overlay(window: &WebviewWindow) -> Result<(), &'static str> {
-    let native_window = native_window(window)?;
-    native_window.setAlphaValue(1.0);
-    set_cursor_rects_enabled(native_window, true);
-    set_tracked_cursor(window, CursorMode::Arrow)?;
+    let result = (|| {
+        let native_window = native_window(window)?;
+        native_window.setAlphaValue(1.0);
+        set_cursor_rects_enabled(native_window, true);
+        set_tracked_cursor(window, CursorMode::Arrow, CursorSurface::CaptureOverlay)
+    })();
     NSCursor::arrowCursor().set();
-    Ok(())
+    CAPTURE_OVERLAY_OWNS_CURSOR.store(false, Ordering::Release);
+    result
 }
 
 /// Resizes a visible preview stack in one AppKit frame update while preserving
@@ -274,6 +305,9 @@ pub fn resize_from_bottom(
 
 /// Updates the cursor even while another application remains frontmost.
 pub fn set_pointing_cursor(window: &WebviewWindow, pointing: bool) -> Result<(), &'static str> {
+    if capture_overlay_owns_cursor() {
+        return reset_pointing_cursor_state(window);
+    }
     let native_window = native_window(window)?;
     set_cursor_rects_enabled(native_window, !pointing);
     let mode = if pointing {
@@ -281,7 +315,7 @@ pub fn set_pointing_cursor(window: &WebviewWindow, pointing: bool) -> Result<(),
     } else {
         CursorMode::Arrow
     };
-    set_tracked_cursor(window, mode)?;
+    set_tracked_cursor(window, mode, CursorSurface::Thumbnail)?;
     if pointing {
         NSCursor::pointingHandCursor().set();
     } else {
@@ -297,14 +331,29 @@ pub fn set_pointing_cursor(window: &WebviewWindow, pointing: bool) -> Result<(),
 /// Cursor rectangles remain disabled while a button is active, so setting the
 /// native cursor again is enough to restore the hand without cursor flicker.
 pub fn reassert_pointing_cursor(window: &WebviewWindow) -> Result<(), &'static str> {
+    if capture_overlay_owns_cursor() {
+        return reset_pointing_cursor_state(window);
+    }
     let native_window = native_window(window)?;
     set_cursor_rects_enabled(native_window, false);
-    set_tracked_cursor(window, CursorMode::PointingHand)?;
+    set_tracked_cursor(window, CursorMode::PointingHand, CursorSurface::Thumbnail)?;
     NSCursor::pointingHandCursor().set();
     Ok(())
 }
 
-fn set_tracked_cursor(window: &WebviewWindow, mode: CursorMode) -> Result<(), &'static str> {
+/// Clears the preview's stored pointing cursor without changing the cursor
+/// currently owned by another window.
+pub fn reset_pointing_cursor_state(window: &WebviewWindow) -> Result<(), &'static str> {
+    let native_window = native_window(window)?;
+    set_cursor_rects_enabled(native_window, true);
+    set_tracked_cursor(window, CursorMode::Arrow, CursorSurface::Thumbnail)
+}
+
+fn set_tracked_cursor(
+    window: &WebviewWindow,
+    mode: CursorMode,
+    surface: CursorSurface,
+) -> Result<(), &'static str> {
     window
         .as_ref()
         .with_webview(move |platform_webview| {
@@ -314,18 +363,18 @@ fn set_tracked_cursor(window: &WebviewWindow, mode: CursorMode) -> Result<(), &'
             let Some(webview) = (unsafe { pointer.cast::<NSView>().as_ref() }) else {
                 return;
             };
-            install_cursor_tracker(webview, mode, false);
+            install_cursor_tracker(webview, mode, surface);
         })
         .map_err(|_| "macOS webview handle is unavailable")
 }
 
-fn install_cursor_tracker(webview: &NSView, mode: CursorMode, activate_window_on_hover: bool) {
+fn install_cursor_tracker(webview: &NSView, mode: CursorMode, surface: CursorSurface) {
     if let Some(owner) = associated_cursor_tracker(webview) {
         owner.set_mode(mode);
         return;
     }
 
-    let owner = CursorTrackingOwner::new(mode, activate_window_on_hover);
+    let owner = CursorTrackingOwner::new(mode, surface);
     let options = NSTrackingAreaOptions::MouseEnteredAndExited
         | NSTrackingAreaOptions::MouseMoved
         | NSTrackingAreaOptions::ActiveAlways
@@ -395,6 +444,18 @@ fn set_cursor_rects_enabled(window: &NSWindow, enabled: bool) {
     }
 }
 
+fn capture_overlay_owns_cursor() -> bool {
+    CAPTURE_OVERLAY_OWNS_CURSOR.load(Ordering::Acquire)
+}
+
+fn cursor_surface_can_apply(surface: CursorSurface, capture_active: bool) -> bool {
+    surface == CursorSurface::CaptureOverlay || !capture_active
+}
+
+fn should_reset_cursor_on_exit(surface: CursorSurface, capture_active: bool) -> bool {
+    surface == CursorSurface::Thumbnail && !capture_active
+}
+
 fn native_window(window: &WebviewWindow) -> Result<&NSWindow, &'static str> {
     let pointer = window
         .ns_window()
@@ -402,4 +463,29 @@ fn native_window(window: &WebviewWindow) -> Result<&NSWindow, &'static str> {
     // SAFETY: Tauri returned the NSWindow belonging to the borrowed live
     // `WebviewWindow`; the reference cannot outlive that borrow.
     unsafe { pointer.cast::<NSWindow>().as_ref() }.ok_or("macOS window handle is null")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CursorSurface, cursor_surface_can_apply, should_reset_cursor_on_exit};
+
+    #[test]
+    fn active_capture_overlay_blocks_thumbnail_cursor_updates() {
+        assert!(cursor_surface_can_apply(
+            CursorSurface::CaptureOverlay,
+            true
+        ));
+        assert!(!cursor_surface_can_apply(CursorSurface::Thumbnail, true));
+        assert!(cursor_surface_can_apply(CursorSurface::Thumbnail, false));
+    }
+
+    #[test]
+    fn only_an_available_thumbnail_resets_the_cursor_on_exit() {
+        assert!(should_reset_cursor_on_exit(CursorSurface::Thumbnail, false));
+        assert!(!should_reset_cursor_on_exit(CursorSurface::Thumbnail, true));
+        assert!(!should_reset_cursor_on_exit(
+            CursorSurface::CaptureOverlay,
+            true
+        ));
+    }
 }
