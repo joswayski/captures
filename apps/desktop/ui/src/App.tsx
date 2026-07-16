@@ -4,7 +4,23 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { selectionRect, type SelectionPoint } from "./lib/selection";
+import { formatFileSize } from "./lib/format";
+import {
+  isCapturableSelection,
+  selectionRect,
+  type SelectionPoint,
+} from "./lib/selection";
+import {
+  isModifierCode,
+  modifierDisplayTokens,
+  recordShortcut,
+  shortcutDisplayTokens,
+} from "./lib/shortcut";
+import {
+  applyThumbnailNativeHover,
+  clearThumbnailNativeHover,
+  thumbnailCursorSyncAction,
+} from "./lib/thumbnailHover";
 import type {
   ActiveSession,
   AppSettings,
@@ -96,13 +112,7 @@ function ArtifactViewer() {
     };
   }, [artifactId]);
 
-  const revealViewer = (loadedArtifactId: string) => {
-    afterNextPaint(() => {
-      void invoke("show_artifact_viewer", { artifactId: loadedArtifactId });
-    });
-  };
-
-  if (!artifact) return <main className="viewer-loading">Capture unavailable</main>;
+  if (!artifact) return <main className="viewer-loading">Loading preview…</main>;
 
   return (
     <main className="artifact-viewer">
@@ -122,8 +132,6 @@ function ArtifactViewer() {
           src={artifact.full_url}
           alt="Full-size screenshot"
           draggable={false}
-          onLoad={() => revealViewer(artifact.id)}
-          onError={() => revealViewer(artifact.id)}
         />
       </div>
     </main>
@@ -132,12 +140,16 @@ function ArtifactViewer() {
 
 function CaptureOverlay() {
   const [session, setSession] = useState<ActiveSession | null>(null);
-  const [overlayVisible, setOverlayVisible] = useState(false);
+  const [visibleSessionId, setVisibleSessionId] = useState<string | null>(null);
   const [start, setStart] = useState<SelectionPoint | null>(null);
   const [current, setCurrent] = useState<SelectionPoint | null>(null);
   const [hoveredWindow, setHoveredWindow] = useState<string | null>(null);
+  const [selectionFeedback, setSelectionFeedback] = useState(0);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const activeSessionIdRef = useRef<string | null>(null);
+  const revealingSessionIdRef = useRef<string | null>(null);
+  const selectionFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastRegionCursorSyncAtRef = useRef(0);
   const sessionId = session?.id ?? query("session_id");
   const mode = session?.mode ?? ((query("mode") ?? "region") as CaptureMode);
 
@@ -147,18 +159,26 @@ function CaptureOverlay() {
     void (async () => {
       dispose = await listen<ActiveSession>("capture-session-ready", ({ payload }) => {
         activeSessionIdRef.current = payload.id;
-        setOverlayVisible(false);
+        revealingSessionIdRef.current = null;
+        setVisibleSessionId(null);
         setSession(payload);
         setStart(null);
         setCurrent(null);
         setHoveredWindow(null);
+        if (selectionFeedbackTimerRef.current) {
+          clearTimeout(selectionFeedbackTimerRef.current);
+          selectionFeedbackTimerRef.current = null;
+        }
+        setSelectionFeedback(0);
+        lastRegionCursorSyncAtRef.current = 0;
       });
       const initialSession = query("session_id")
         ? await invoke<ActiveSession | null>("get_active_session", { sessionId: query("session_id") })
         : await invoke<ActiveSession | null>("get_pending_session");
       if (active && initialSession) {
         activeSessionIdRef.current = initialSession.id;
-        setOverlayVisible(false);
+        revealingSessionIdRef.current = null;
+        setVisibleSessionId(null);
         setSession(initialSession);
       }
     })();
@@ -168,14 +188,46 @@ function CaptureOverlay() {
     };
   }, []);
 
+  useEffect(() => () => {
+    if (selectionFeedbackTimerRef.current) clearTimeout(selectionFeedbackTimerRef.current);
+  }, []);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || !sessionId) return;
       void invoke("cancel_capture", { sessionId });
     };
+    const onKeyUp = () => {
+      // A global shortcut can release its primary key before its modifier
+      // keys. AppKit may restore the arrow when those remaining keys are
+      // released after the overlay becomes visible.
+      if (mode !== "region" || !sessionId || visibleSessionId !== sessionId) return;
+      void invoke("sync_capture_cursor", { sessionId });
+    };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [sessionId]);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+  }, [mode, sessionId, visibleSessionId]);
+
+  useEffect(() => {
+    const cursorClass = `capture-${mode}-cursor`;
+    document.documentElement.classList.add(cursorClass);
+    return () => document.documentElement.classList.remove(cursorClass);
+  }, [mode]);
+
+  useEffect(() => {
+    if (!sessionId || visibleSessionId !== sessionId) return;
+    let cancelled = false;
+    afterNextPaint(() => {
+      if (!cancelled) void invoke("sync_capture_cursor", { sessionId });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, visibleSessionId]);
 
   const rect = useMemo(
     () => (start && current ? selectionRect(start, current) : null),
@@ -192,20 +244,62 @@ function CaptureOverlay() {
     return { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
   };
 
-  const commitRegion = () => {
-    if (!rect || rect.width < 2 || rect.height < 2) return;
+  const commitRegion = (): boolean => {
+    if (!isCapturableSelection(rect)) return false;
     void invoke("commit_region", { sessionId, rect });
+    return true;
+  };
+
+  const clearSelectionFeedback = () => {
+    if (selectionFeedbackTimerRef.current) {
+      clearTimeout(selectionFeedbackTimerRef.current);
+      selectionFeedbackTimerRef.current = null;
+    }
+    setSelectionFeedback(0);
+  };
+
+  const showSelectionFeedback = () => {
+    if (selectionFeedbackTimerRef.current) clearTimeout(selectionFeedbackTimerRef.current);
+    setSelectionFeedback((attempt) => attempt + 1);
+    selectionFeedbackTimerRef.current = setTimeout(() => {
+      selectionFeedbackTimerRef.current = null;
+      setSelectionFeedback(0);
+    }, 1800);
+  };
+
+  const reassertRegionCursor = () => {
+    const now = performance.now();
+    const lastSyncAt = lastRegionCursorSyncAtRef.current;
+    if (lastSyncAt !== 0 && now - lastSyncAt < 100) return;
+    lastRegionCursorSyncAtRef.current = now;
+    void invoke("sync_capture_cursor", { sessionId });
   };
 
   const revealOverlay = async () => {
-    await invoke("show_capture_overlay", { sessionId });
+    if (revealingSessionIdRef.current === sessionId) return;
+    revealingSessionIdRef.current = sessionId;
+    try {
+      await invoke("show_capture_overlay", { sessionId });
+    } catch {
+      if (revealingSessionIdRef.current === sessionId) revealingSessionIdRef.current = null;
+      return;
+    }
     afterNextPaint(() => {
-      if (activeSessionIdRef.current === sessionId) setOverlayVisible(true);
+      if (activeSessionIdRef.current !== sessionId) return;
+      void invoke("reveal_capture_overlay", { sessionId }).then(() => {
+        requestAnimationFrame(() => {
+          if (activeSessionIdRef.current === sessionId) setVisibleSessionId(sessionId);
+        });
+      }).catch(() => {
+        if (revealingSessionIdRef.current === sessionId) revealingSessionIdRef.current = null;
+      });
     });
   };
 
   const onPointerDown = (event: React.PointerEvent) => {
     if (mode !== "region") return;
+    clearSelectionFeedback();
+    reassertRegionCursor();
     event.currentTarget.setPointerCapture(event.pointerId);
     const point = pointFromEvent(event);
     setStart(point);
@@ -213,24 +307,34 @@ function CaptureOverlay() {
   };
 
   const onPointerMove = (event: React.PointerEvent) => {
-    if (mode !== "region" || !start) return;
+    if (mode !== "region") return;
+    reassertRegionCursor();
+    if (!start) return;
     setCurrent(pointFromEvent(event));
   };
 
   const onPointerUp = () => {
     if (mode !== "region" || !start) return;
-    commitRegion();
+    if (!commitRegion()) showSelectionFeedback();
     setStart(null);
     setCurrent(null);
   };
 
   return (
     <main
+      key={sessionId}
       ref={surfaceRef}
-      className={`capture-surface capture-${mode}${overlayVisible ? " capture-visible" : ""}`}
+      className={`capture-surface capture-${mode}${visibleSessionId === sessionId ? " capture-visible" : ""}`}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
+      onTransitionEnd={(event) => {
+        // The first WKWebView fade can rebuild its cursor rectangles after the
+        // initial paint. Reassert once that final layout transition completes.
+        if (event.target === event.currentTarget && event.propertyName === "opacity") {
+          reassertRegionCursor();
+        }
+      }}
     >
       <img
         className="capture-snapshot"
@@ -240,8 +344,17 @@ function CaptureOverlay() {
         onLoad={() => void revealOverlay()}
       />
       <div className="capture-shade" />
-      <div className="capture-hint">
-        {mode === "region" ? "Drag to capture · Esc to cancel" : "Select a window · Esc to cancel"}
+      <div
+        key={`${sessionId}-${selectionFeedback}`}
+        className={`capture-hint${selectionFeedback > 0 ? " capture-hint-feedback" : ""}`}
+        role="status"
+        aria-live="polite"
+      >
+        {mode === "region"
+          ? selectionFeedback > 0
+            ? "Click and drag to select an area · Esc to cancel"
+            : "Drag to capture · Esc to cancel"
+          : "Select a window · Esc to cancel"}
       </div>
       {rect && rect.width > 0 && rect.height > 0 && (
         <div
@@ -353,25 +466,50 @@ function Thumbnail() {
 
   useEffect(() => {
     if (stackRef.current) stackRef.current.scrollTop = stackRef.current.scrollHeight;
+    let cancelled = false;
+    afterNextPaint(() => {
+      if (cancelled) return;
+      void invoke("sync_thumbnail_stack")
+        .catch(() => undefined)
+        .finally(() => {
+          if (!cancelled) window.dispatchEvent(new Event("ces-thumbnail-layout-changed"));
+        });
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [artifacts.length]);
 
   useEffect(() => {
+    // Keep one native hover tracker for the lifetime of the thumbnail window.
+    // Restarting it when a card is added or removed briefly clears the hover
+    // presentation and releases the native pointing cursor.
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let polling = false;
     let pointingCursor = false;
+    let lastCursorSyncAt = 0;
 
     const setPointingCursor = (pointing: boolean) => {
       document.documentElement.style.cursor = pointing ? "pointer" : "";
-      if (pointingCursor === pointing) return;
+      const now = performance.now();
+      const action = thumbnailCursorSyncAction(
+        pointingCursor,
+        pointing,
+        now - lastCursorSyncAt,
+      );
+      if (!action) return;
       pointingCursor = pointing;
-      void invoke("set_thumbnail_cursor", { pointing });
+      lastCursorSyncAt = now;
+      if (action === "reassert") {
+        void invoke("reassert_thumbnail_cursor");
+      } else {
+        void invoke("set_thumbnail_cursor", { pointing });
+      }
     };
 
     const clearNativeClasses = () => {
-      document.querySelectorAll(".thumbnail-card-native-active, .native-pointer-hover")
-        .forEach((element) => {
-          element.classList.remove("thumbnail-card-native-active", "native-pointer-hover");
-        });
+      clearThumbnailNativeHover();
     };
 
     const clearNativeHover = () => {
@@ -379,68 +517,114 @@ function Thumbnail() {
       setPointingCursor(false);
     };
 
-    if (artifacts.length === 0) {
+    const stopNativeTracking = () => {
+      document.documentElement.classList.remove("thumbnail-native-tracking");
       clearNativeHover();
-      return clearNativeHover;
-    }
+    };
 
     const applyNativeHover = (position: ThumbnailPointerPosition) => {
       document.documentElement.classList.add("thumbnail-native-tracking");
-      clearNativeClasses();
-      if (!position.inside) {
-        setPointingCursor(false);
-        return;
-      }
-      const target = document.elementFromPoint(position.x, position.y);
-      target?.closest(".thumbnail-card")?.classList.add("thumbnail-card-native-active");
-      const button = target?.closest("button");
-      if (button) {
-        button.classList.add("native-pointer-hover");
-      }
-      setPointingCursor(Boolean(button));
+      setPointingCursor(applyThumbnailNativeHover(position));
+    };
+
+    const schedulePoll = (delay: number) => {
+      if (cancelled) return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        void poll();
+      }, delay);
     };
 
     const poll = async () => {
+      if (cancelled || polling) return;
+      polling = true;
+      let delay = 250;
       try {
         const position = await invoke<ThumbnailPointerPosition | null>(
           "get_thumbnail_pointer_position",
         );
         if (cancelled) return;
         if (!position) {
-          clearNativeHover();
-          return;
+          stopNativeTracking();
+        } else {
+          applyNativeHover(position);
+          delay = 40;
         }
-        applyNativeHover(position);
-        timer = setTimeout(poll, 40);
       } catch {
-        if (!cancelled) timer = setTimeout(poll, 250);
+        if (!cancelled) stopNativeTracking();
+      } finally {
+        polling = false;
+        schedulePoll(delay);
       }
     };
 
-    void poll();
+    const resumePolling = () => {
+      if (document.hidden) return;
+      stopNativeTracking();
+      schedulePoll(0);
+    };
+
+    const pollImmediately = () => {
+      if (!document.hidden) schedulePoll(0);
+    };
+
+    document.addEventListener("visibilitychange", resumePolling);
+    window.addEventListener("focus", resumePolling);
+    window.addEventListener("pageshow", resumePolling);
+    window.addEventListener("ces-thumbnail-ready", pollImmediately);
+    window.addEventListener("ces-thumbnail-layout-changed", pollImmediately);
+    schedulePoll(0);
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
-      clearNativeHover();
+      document.removeEventListener("visibilitychange", resumePolling);
+      window.removeEventListener("focus", resumePolling);
+      window.removeEventListener("pageshow", resumePolling);
+      window.removeEventListener("ces-thumbnail-ready", pollImmediately);
+      window.removeEventListener("ces-thumbnail-layout-changed", pollImmediately);
+      stopNativeTracking();
     };
-  }, [artifacts.length]);
+  }, []);
 
   if (artifacts.length === 0) return null;
 
   return (
     <main ref={stackRef} className="thumbnail-stack">
-      {artifacts.map((artifact) => <ThumbnailCard key={artifact.id} artifact={artifact} />)}
+      {artifacts.map((artifact) => (
+        <ThumbnailCard
+          key={artifact.id}
+          artifact={artifact}
+          onRemoved={(artifactId) => {
+            setArtifacts((current) => current.filter(({ id }) => id !== artifactId));
+          }}
+        />
+      ))}
     </main>
   );
 }
 
-function ThumbnailCard({ artifact }: { artifact: CaptureArtifact }) {
+function ThumbnailCard({
+  artifact,
+  onRemoved,
+}: {
+  artifact: CaptureArtifact;
+  onRemoved: (artifactId: string) => void;
+}) {
   const [feedback, setFeedback] = useState<"copied" | "saved" | null>(null);
   const [busy, setBusy] = useState<"copied" | "saved" | null>(null);
   const [error, setError] = useState("");
   const [exit, setExit] = useState<"dismiss" | "delete" | null>(null);
   const exitAction = useRef<string | null>(null);
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const markThumbnailReady = () => {
+    void invoke("thumbnail_ready", { artifactId: artifact.id })
+      .catch(() => undefined)
+      .finally(() => {
+        window.dispatchEvent(new Event("ces-thumbnail-ready"));
+      });
+  };
 
   useEffect(() => {
     return () => {
@@ -478,10 +662,12 @@ function ThumbnailCard({ artifact }: { artifact: CaptureArtifact }) {
     if (!exit || event.animationName !== `thumbnail-${exit}` || !exitAction.current) return;
     const action = exitAction.current;
     exitAction.current = null;
-    void invoke(action, { artifactId: artifact.id }).catch((error) => {
-      setExit(null);
-      setError(String(error));
-    });
+    void invoke(action, { artifactId: artifact.id })
+      .then(() => onRemoved(artifact.id))
+      .catch((error) => {
+        setExit(null);
+        setError(String(error));
+      });
   };
 
   return (
@@ -492,8 +678,8 @@ function ThumbnailCard({ artifact }: { artifact: CaptureArtifact }) {
       <img
         src={artifact.preview_url}
         alt="Screenshot preview"
-        onLoad={() => void invoke("thumbnail_ready", { artifactId: artifact.id })}
-        onError={() => void invoke("thumbnail_ready", { artifactId: artifact.id })}
+        onLoad={markThumbnailReady}
+        onError={markThumbnailReady}
       />
       <div className="thumbnail-top-actions">
         <IconButton className="delete" label="Delete" onClick={() => exitWith("delete", "trash_artifact")}>
@@ -523,7 +709,7 @@ function ThumbnailCard({ artifact }: { artifact: CaptureArtifact }) {
         </button>
       </div>
       <div className="thumbnail-meta">
-        <span>{artifact.width} × {artifact.height}</span>
+        <span>{artifact.width} × {artifact.height} · {formatFileSize(artifact.size_bytes)}</span>
         {!artifact.clipboard_copied && <span className="warning">Clipboard unavailable</span>}
       </div>
       {error && <p className="thumbnail-message">{error}</p>}
@@ -577,6 +763,7 @@ function Preferences() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
+  const [recordingShortcut, setRecordingShortcut] = useState<string | null>(null);
 
   useEffect(() => {
     void invoke<AppSettings>("get_settings").then(setSettings);
@@ -597,7 +784,8 @@ function Preferences() {
     setSaving(true);
     setMessage("");
     try {
-      await invoke("update_settings", { settings });
+      const saved = await invoke<AppSettings>("update_settings", { settings });
+      setSettings(saved);
       setMessage("Saved");
     } catch (error) {
       setMessage(String(error));
@@ -627,10 +815,31 @@ function Preferences() {
 
       <section className="settings-section">
         <h2>Shortcuts</h2>
-        <ShortcutInput label="Region" value={settings.region_shortcut} onChange={(value) => update("region_shortcut", value)} />
-        <ShortcutInput label="Window" value={settings.window_shortcut} onChange={(value) => update("window_shortcut", value)} />
-        <ShortcutInput label="Display" value={settings.display_shortcut} onChange={(value) => update("display_shortcut", value)} />
-        <p className="help-text">Use the format Ctrl+Shift+4. Changes apply immediately after saving.</p>
+        <ShortcutInput
+          id="region-shortcut"
+          label="Region"
+          value={settings.region_shortcut}
+          recording={recordingShortcut === "region-shortcut"}
+          onRecordingChange={(recording) => setRecordingShortcut(recording ? "region-shortcut" : null)}
+          onChange={(value) => update("region_shortcut", value)}
+        />
+        <ShortcutInput
+          id="window-shortcut"
+          label="Window"
+          value={settings.window_shortcut}
+          recording={recordingShortcut === "window-shortcut"}
+          onRecordingChange={(recording) => setRecordingShortcut(recording ? "window-shortcut" : null)}
+          onChange={(value) => update("window_shortcut", value)}
+        />
+        <ShortcutInput
+          id="display-shortcut"
+          label="Full Screen"
+          value={settings.display_shortcut}
+          recording={recordingShortcut === "display-shortcut"}
+          onRecordingChange={(recording) => setRecordingShortcut(recording ? "display-shortcut" : null)}
+          onChange={(value) => update("display_shortcut", value)}
+        />
+        <p className="help-text">Select a shortcut, then press the key combination you want. Press Esc to cancel; save to apply.</p>
       </section>
 
       <label className="check-row">
@@ -649,11 +858,80 @@ function Preferences() {
   );
 }
 
-function ShortcutInput({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+export function ShortcutInput({
+  id,
+  label,
+  value,
+  recording,
+  onRecordingChange,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  recording: boolean;
+  onRecordingChange: (recording: boolean) => void;
+  onChange: (value: string) => void;
+}) {
+  const [previewKeys, setPreviewKeys] = useState<string[]>([]);
+  const [error, setError] = useState("");
+  const keys = recording ? previewKeys : shortcutDisplayTokens(value);
+
+  const stopRecording = () => {
+    setPreviewKeys([]);
+    setError("");
+    onRecordingChange(false);
+  };
+
+  const onKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (!recording) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const result = recordShortcut(event);
+    if (result.kind === "cancel") {
+      stopRecording();
+    } else if (result.kind === "complete") {
+      onChange(result.shortcut);
+      setPreviewKeys([]);
+      setError("");
+      onRecordingChange(false);
+    } else {
+      setPreviewKeys(result.keys);
+      setError(result.kind === "invalid" ? result.message : "");
+    }
+  };
+
+  const onKeyUp = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (!recording || !isModifierCode(event.code)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setPreviewKeys(modifierDisplayTokens(event));
+  };
+
   return (
-    <label className="shortcut-row">
-      <span>{label}</span>
-      <input value={value} onChange={(event) => onChange(event.target.value)} spellCheck={false} />
-    </label>
+    <div className="shortcut-row">
+      <span id={`${id}-label`}>{label}</span>
+      <div className="shortcut-control">
+        <button
+          type="button"
+          className={`shortcut-recorder${recording ? " shortcut-recording" : ""}`}
+          aria-labelledby={`${id}-label`}
+          aria-pressed={recording}
+          onClick={() => {
+            setPreviewKeys([]);
+            setError("");
+            onRecordingChange(true);
+          }}
+          onBlur={stopRecording}
+          onKeyDown={onKeyDown}
+          onKeyUp={onKeyUp}
+        >
+          {keys.length > 0
+            ? keys.map((key, index) => <kbd key={`${key}-${index}`}>{key}</kbd>)
+            : <span className="shortcut-prompt">Press shortcut…</span>}
+        </button>
+        {error && <span className="shortcut-error" role="status">{error}</span>}
+      </div>
+    </div>
   );
 }

@@ -2,7 +2,7 @@
 
 CES is a small, privacy-first screenshot utility for macOS, Windows, and Linux.
 
-The first milestone is a macOS developer alpha. It runs in the tray, captures a region, window, or display, copies the result to the image clipboard, and presents a preview. Choose Save to write a PNG under `~/CES`; Dismiss drops an unsaved preview without creating a file. CES does not upload screenshots or send telemetry.
+The first milestone is a macOS developer alpha. It runs in the tray, captures a region, window, or full screen, copies the result to the image clipboard, and presents a preview. Choose Save to write a PNG under `~/CES`; Dismiss drops an unsaved preview without creating a file. CES does not upload screenshots or send telemetry.
 
 ## Current status
 
@@ -47,7 +47,7 @@ This runs the debug executable directly. Stop it with `Ctrl+C` in the terminal. 
 | --- | --- |
 | `Ctrl+Shift+4` | Capture a selected region |
 | `Ctrl+Shift+W` | Capture a window |
-| `Ctrl+Shift+3` | Capture the current display |
+| `Ctrl+Shift+3` | Capture the full screen under the pointer |
 | `Esc` | Cancel an active region or window capture |
 
 The three global capture shortcuts can be changed from Preferences. `Esc` only applies while the capture overlay is open.
@@ -76,17 +76,17 @@ open -a CES
 
 CES runs as a menu-bar utility: it shows a camera at the top-right of macOS and intentionally does not keep a Dock icon. Use that camera to capture, open Preferences, or quit CES.
 
-After macOS grants Screen Recording access, quit CES from the menu-bar camera and open it again from Applications. macOS requires this restart before capture is enabled.
+After macOS grants Screen Recording access, retry your shortcut and let CES restart itself when prompted. macOS requires this restart before capture is enabled.
 
-`npm run build` seals local macOS bundles with a valid ad-hoc signature when no Apple identity is configured. Ad-hoc identity is still tied to the exact executable, so macOS can ask for Screen Recording permission again after the code changes. Stable permissions across upgrades require an Apple Development or Developer ID signing certificate; set its name through `APPLE_SIGNING_IDENTITY` and the build script uses it instead of the local fallback.
+`npm run build` automatically uses an installed Apple Development signing identity when one is available. Otherwise it warns and seals the bundle with an ad-hoc signature. Ad-hoc identity is tied to the exact executable, so macOS asks for Screen Recording permission again after code changes. Stable permissions across upgrades require an Apple Development or Developer ID certificate; the latter can be selected explicitly through `APPLE_SIGNING_IDENTITY`.
 
-If CES is enabled in Screen & System Audio Recording but still asks for permission, start a capture and choose **Reset CES Permission**. CES clears only its own stale macOS permission records and immediately requests access for the running build; other applications are not affected. Enable CES in the macOS prompt, then quit and reopen CES once.
+If CES is enabled in Screen & System Audio Recording but still asks for permission, start a capture and choose **Reset, Restart & Retry**. CES clears only its own stale record, restarts itself, and resumes the requested capture; other applications are not affected. After you approve CES in System Settings, retry the shortcut once and choose **Restart & Retry** so the newly granted access takes effect.
 
 For Ubuntu development, install Tauri's native dependencies first:
 
 ```sh
 sudo apt update
-sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libgbm-dev
 ```
 
 Ubuntu Desktop includes the screenshot portal used for Wayland region/display capture. Ubuntu 26.04 is Wayland-only; native Wayland window capture remains a separate follow-up.

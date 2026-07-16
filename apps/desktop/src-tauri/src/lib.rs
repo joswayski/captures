@@ -1,12 +1,18 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![forbid(unsafe_code)]
 
-use std::{fs, path::PathBuf, sync::Arc};
+use std::{
+    fs,
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 #[cfg(target_os = "macos")]
 use std::process::Command;
 
-#[cfg(target_os = "macos")]
 use tauri::CursorIcon;
 
 use ces_capture::{CaptureError, CaptureMode, LogicalRect};
@@ -23,7 +29,7 @@ use tauri::{
 use tauri_plugin_autostart::ManagerExt as AutoStartExt;
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use tauri_plugin_opener::OpenerExt;
 use thiserror::Error;
 use uuid::Uuid;
@@ -67,7 +73,7 @@ pub fn run() {
     let state = AppState::new();
     let protocol_state = state.clone();
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("preferences") {
                 let _ = window.show();
@@ -82,7 +88,12 @@ pub fn run() {
             tauri_plugin_autostart::Builder::new()
                 .app_name("CES")
                 .build(),
-        )
+        );
+
+    #[cfg(target_os = "macos")]
+    let builder = builder.plugin(ces_macos_window::init_panel_plugin());
+
+    builder
         .manage(state)
         .register_uri_scheme_protocol("ces-capture", move |_context, request| {
             let path = request.uri().path().trim_matches('/');
@@ -119,10 +130,13 @@ pub fn run() {
             dismiss_artifact,
             open_artifact_viewer,
             show_capture_overlay,
+            reveal_capture_overlay,
+            sync_capture_cursor,
             thumbnail_ready,
+            sync_thumbnail_stack,
             get_thumbnail_pointer_position,
             set_thumbnail_cursor,
-            show_artifact_viewer,
+            reassert_thumbnail_cursor,
             open_captures_folder,
             open_preferences,
         ])
@@ -141,8 +155,29 @@ pub fn run() {
             if let Err(error) = create_overlay_window(&handle) {
                 eprintln!("failed to prepare capture overlay: {error}");
             }
-            if let Err(error) = show_startup_notice(&handle) {
+            let pending_capture = {
+                let state = app.state::<Arc<AppState>>().inner().clone();
+                match take_pending_capture_after_restart(&state) {
+                    Ok(pending) => pending,
+                    Err(error) => {
+                        eprintln!("failed to restore capture after restart: {error}");
+                        None
+                    }
+                }
+            };
+            if pending_capture.is_none()
+                && let Err(error) = show_startup_notice(&handle)
+            {
                 eprintln!("failed to show startup notice: {error}");
+            }
+            if let Some(mode) = pending_capture {
+                let state = app.state::<Arc<AppState>>().inner().clone();
+                let app = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = start_capture_inner(app.clone(), state, mode).await {
+                        report_capture_error(&app, &error, mode);
+                    }
+                });
             }
             Ok(())
         })
@@ -179,9 +214,11 @@ async fn start_capture_inner(
     }
 
     begin_thumbnail_capture(&state)?;
+    set_capture_huds_protected(&app, true);
     hide_window(&app, "thumbnail");
     hide_window(&app, "startup");
     let result = prepare_capture(app.clone(), state.clone(), mode).await;
+    set_capture_huds_protected(&app, false);
     if result.is_err() {
         restore_thumbnail_stack(&app, &state);
     }
@@ -194,7 +231,12 @@ async fn prepare_capture(
     mode: CaptureMode,
 ) -> Result<Option<ActiveSession>, AppError> {
     let request_permission = mark_screen_permission_request(&state)?;
-    state.backend.ensure_permission(request_permission)?;
+    if let Err(error) = state.backend.ensure_permission(request_permission) {
+        if matches!(&error, CaptureError::PermissionRequestStarted) {
+            *state.screen_permission_requested_this_launch.lock() = true;
+        }
+        return Err(error.into());
+    }
     let display = display_under_pointer(&state)?;
     let frame = state.backend.capture_display(&display.id)?;
 
@@ -248,7 +290,7 @@ async fn commit_region(
     session_id: String,
     rect: LogicalRect,
 ) -> CommandResult<CaptureArtifact> {
-    hide_window(&app, "overlay");
+    hide_capture_overlay(&app);
     let state = state.inner().clone();
     let id = Uuid::parse_str(&session_id).map_err(|error| error.to_string())?;
     let session = state
@@ -280,7 +322,7 @@ async fn commit_window(
     session_id: String,
     window_id: String,
 ) -> CommandResult<CaptureArtifact> {
-    hide_window(&app, "overlay");
+    hide_capture_overlay(&app);
     let state = state.inner().clone();
     let id = Uuid::parse_str(&session_id).map_err(|error| error.to_string())?;
     state
@@ -309,7 +351,7 @@ fn cancel_capture(
     state: tauri::State<'_, Arc<AppState>>,
     session_id: String,
 ) -> CommandResult<()> {
-    hide_window(&app, "overlay");
+    hide_capture_overlay(&app);
     let id = Uuid::parse_str(&session_id).map_err(|error| error.to_string())?;
     state.sessions.lock().remove(&id);
     restore_thumbnail_stack(&app, state.inner());
@@ -356,16 +398,83 @@ fn show_capture_overlay(
     session_id: String,
 ) -> CommandResult<()> {
     let id = Uuid::parse_str(&session_id).map_err(|error| error.to_string())?;
-    if !state.sessions.lock().contains_key(&id) {
-        return Err(AppError::SessionUnavailable.to_string());
-    }
+    let mode = state
+        .sessions
+        .lock()
+        .get(&id)
+        .map(|session| session.mode)
+        .ok_or_else(|| AppError::SessionUnavailable.to_string())?;
     if let Some(window) = app.get_webview_window("overlay") {
+        let cursor = if mode == CaptureMode::Region {
+            CursorIcon::Crosshair
+        } else {
+            CursorIcon::Default
+        };
+        window
+            .set_cursor_icon(cursor)
+            .map_err(|error| error.to_string())?;
+        #[cfg(target_os = "macos")]
+        ces_macos_window::prepare_capture_overlay(&window).map_err(str::to_owned)?;
         window.show().map_err(|error| error.to_string())?;
         window.set_focus().map_err(|error| error.to_string())?;
+        #[cfg(target_os = "macos")]
+        ces_macos_window::activate_capture_cursor(&window, mode == CaptureMode::Region)
+            .map_err(str::to_owned)?;
         Ok(())
     } else {
         Err("capture overlay is unavailable".to_owned())
     }
+}
+
+#[tauri::command]
+fn reveal_capture_overlay(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    session_id: String,
+) -> CommandResult<()> {
+    let id = Uuid::parse_str(&session_id).map_err(|error| error.to_string())?;
+    let mode = state
+        .sessions
+        .lock()
+        .get(&id)
+        .map(|session| session.mode)
+        .ok_or_else(|| AppError::SessionUnavailable.to_string())?;
+    let window = app
+        .get_webview_window("overlay")
+        .ok_or_else(|| "capture overlay is unavailable".to_owned())?;
+    #[cfg(target_os = "macos")]
+    {
+        ces_macos_window::reveal_capture_overlay(&window).map_err(str::to_owned)?;
+        ces_macos_window::activate_capture_cursor(&window, mode == CaptureMode::Region)
+            .map_err(str::to_owned)?;
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (window, mode);
+    Ok(())
+}
+
+#[tauri::command]
+fn sync_capture_cursor(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    session_id: String,
+) -> CommandResult<()> {
+    let id = Uuid::parse_str(&session_id).map_err(|error| error.to_string())?;
+    let mode = state
+        .sessions
+        .lock()
+        .get(&id)
+        .map(|session| session.mode)
+        .ok_or_else(|| AppError::SessionUnavailable.to_string())?;
+    let window = app
+        .get_webview_window("overlay")
+        .ok_or_else(|| "capture overlay is unavailable".to_owned())?;
+    #[cfg(target_os = "macos")]
+    ces_macos_window::activate_capture_cursor(&window, mode == CaptureMode::Region)
+        .map_err(str::to_owned)?;
+    #[cfg(not(target_os = "macos"))]
+    let _ = (window, mode);
+    Ok(())
 }
 
 #[tauri::command]
@@ -419,32 +528,118 @@ fn get_thumbnail_pointer_position(
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ThumbnailCursorAction {
+    Ignore,
+    Reset,
+    Apply(bool),
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn thumbnail_cursor_action(
+    suppressed: bool,
+    visible: bool,
+    pointing: bool,
+) -> ThumbnailCursorAction {
+    if suppressed {
+        ThumbnailCursorAction::Ignore
+    } else if visible {
+        ThumbnailCursorAction::Apply(pointing)
+    } else {
+        ThumbnailCursorAction::Reset
+    }
+}
+
 #[tauri::command]
-fn set_thumbnail_cursor(app: AppHandle, pointing: bool) -> CommandResult<()> {
+fn set_thumbnail_cursor(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    pointing: bool,
+) -> CommandResult<()> {
     #[cfg(target_os = "macos")]
     {
         let window = app
             .get_webview_window("thumbnail")
             .ok_or_else(|| "capture thumbnail is unavailable".to_owned())?;
-        let icon = if pointing {
-            CursorIcon::Hand
-        } else {
-            CursorIcon::Default
-        };
-        window
-            .set_cursor_icon(icon)
-            .map_err(|error| error.to_string())?;
-        app.run_on_main_thread(move || ces_macos_window::set_pointing_cursor(pointing))
-            .map_err(|error| error.to_string())
+        let state = state.inner().clone();
+        let cursor_window = window.clone();
+        app.run_on_main_thread(move || {
+            let suppressed = state.thumbnail_visibility.lock().is_suppressed();
+            let visible = cursor_window.is_visible().unwrap_or(false);
+            let result = match thumbnail_cursor_action(suppressed, visible, pointing) {
+                // NSCursor is application-wide. Do not even invalidate the
+                // hidden preview's cursor rectangles while capture owns it.
+                ThumbnailCursorAction::Ignore => return,
+                ThumbnailCursorAction::Reset => {
+                    let _ = cursor_window.set_cursor_icon(CursorIcon::Default);
+                    ces_macos_window::reset_pointing_cursor_state(&cursor_window)
+                }
+                ThumbnailCursorAction::Apply(effective_pointing) => {
+                    let icon = if effective_pointing {
+                        CursorIcon::Hand
+                    } else {
+                        CursorIcon::Default
+                    };
+                    if let Err(error) = cursor_window.set_cursor_icon(icon) {
+                        eprintln!("failed to update capture thumbnail window cursor: {error}");
+                    }
+                    ces_macos_window::set_pointing_cursor(&cursor_window, effective_pointing)
+                }
+            };
+            if let Err(error) = result {
+                eprintln!("failed to update capture thumbnail cursor: {error}");
+            }
+        })
+        .map_err(|error| error.to_string())
     }
 
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (app, pointing);
+        let _ = (app, state, pointing);
         Ok(())
     }
 }
 
+#[tauri::command]
+fn reassert_thumbnail_cursor(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> CommandResult<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let window = app
+            .get_webview_window("thumbnail")
+            .ok_or_else(|| "capture thumbnail is unavailable".to_owned())?;
+        let state = state.inner().clone();
+        app.run_on_main_thread(move || {
+            let suppressed = state.thumbnail_visibility.lock().is_suppressed();
+            let visible = window.is_visible().unwrap_or(false);
+            let result = match thumbnail_cursor_action(suppressed, visible, true) {
+                ThumbnailCursorAction::Ignore => return,
+                ThumbnailCursorAction::Reset => {
+                    let _ = window.set_cursor_icon(CursorIcon::Default);
+                    ces_macos_window::reset_pointing_cursor_state(&window)
+                }
+                ThumbnailCursorAction::Apply(_) => {
+                    ces_macos_window::reassert_pointing_cursor(&window)
+                }
+            };
+            if let Err(error) = result {
+                eprintln!("failed to reassert capture thumbnail cursor: {error}");
+            }
+        })
+        .map_err(|error| error.to_string())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, state);
+        Ok(())
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
 fn thumbnail_pointer_position(
     mouse_x: f64,
     mouse_y: f64,
@@ -483,21 +678,29 @@ fn update_settings(
     {
         return Err("all shortcuts must be set".to_owned());
     }
-    if settings.region_shortcut == settings.window_shortcut
-        || settings.region_shortcut == settings.display_shortcut
-        || settings.window_shortcut == settings.display_shortcut
+    let region_shortcut =
+        parse_shortcut(&settings.region_shortcut).map_err(|error| error.to_string())?;
+    let window_shortcut =
+        parse_shortcut(&settings.window_shortcut).map_err(|error| error.to_string())?;
+    let display_shortcut =
+        parse_shortcut(&settings.display_shortcut).map_err(|error| error.to_string())?;
+    if region_shortcut == window_shortcut
+        || region_shortcut == display_shortcut
+        || window_shortcut == display_shortcut
     {
         return Err("shortcuts must be unique".to_owned());
     }
 
     // Permission bookkeeping is internal state, not a user-editable setting.
-    settings.last_screen_permission_request_id = state
-        .settings
-        .read()
-        .last_screen_permission_request_id
-        .clone();
+    let previous_settings = state.settings();
+    settings.last_screen_permission_request_id =
+        previous_settings.last_screen_permission_request_id.clone();
+    settings.pending_capture_after_restart = previous_settings.pending_capture_after_restart;
 
-    register_shortcuts_with(&app, &settings).map_err(|error| error.to_string())?;
+    if let Err(error) = register_shortcuts_with(&app, &settings) {
+        let _ = register_shortcuts_with(&app, &previous_settings);
+        return Err(error.to_string());
+    }
     if settings.launch_at_login {
         app.autolaunch()
             .enable()
@@ -662,13 +865,15 @@ fn open_artifact_viewer(
         .ok_or_else(|| "artifact is no longer available".to_owned())?;
 
     if let Some(window) = app.get_webview_window("viewer") {
-        window.hide().map_err(|error| error.to_string())?;
-        app.emit("viewer-artifact-changed", &artifact)
+        window
+            .emit("viewer-artifact-changed", &artifact)
             .map_err(|error| error.to_string())?;
+        window.show().map_err(|error| error.to_string())?;
+        window.set_focus().map_err(|error| error.to_string())?;
         return Ok(());
     }
 
-    WebviewWindowBuilder::new(
+    let window = WebviewWindowBuilder::new(
         &app,
         "viewer",
         WebviewUrl::App(format!("index.html?view=viewer&artifact_id={artifact_id}").into()),
@@ -682,27 +887,7 @@ fn open_artifact_viewer(
     .focused(false)
     .visible(false)
     .build()
-    .map(|_| ())
-    .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn show_artifact_viewer(
-    app: AppHandle,
-    state: tauri::State<'_, Arc<AppState>>,
-    artifact_id: String,
-) -> CommandResult<()> {
-    if !state
-        .artifacts
-        .lock()
-        .iter()
-        .any(|artifact| artifact.id == artifact_id)
-    {
-        return Err("artifact is no longer available".to_owned());
-    }
-    let window = app
-        .get_webview_window("viewer")
-        .ok_or_else(|| "capture viewer is unavailable".to_owned())?;
+    .map_err(|error| error.to_string())?;
     window.show().map_err(|error| error.to_string())?;
     window.set_focus().map_err(|error| error.to_string())
 }
@@ -718,7 +903,6 @@ fn remove_artifact(app: &AppHandle, state: &Arc<AppState>, artifact_id: &str) ->
     }
     app.emit("artifact-removed", artifact_id)
         .map_err(|error| error.to_string())?;
-    update_thumbnail_stack(app);
     Ok(())
 }
 
@@ -761,6 +945,7 @@ async fn finish_capture(
     let (image_png, preview_png) = encode_task
         .await
         .map_err(|error| AppError::Task(error.to_string()))??;
+    let size_bytes = u64::try_from(image_png.len()).unwrap_or(u64::MAX);
     let artifact_id = Uuid::new_v4().to_string();
     let mut artifact = CaptureArtifact {
         id: artifact_id.clone(),
@@ -769,6 +954,7 @@ async fn finish_capture(
         path: None,
         width,
         height,
+        size_bytes,
         created_at: Utc::now().to_rfc3339(),
         mode,
         clipboard_copied: true,
@@ -869,6 +1055,27 @@ fn mark_screen_permission_request(state: &AppState) -> Result<bool, AppError> {
     }
 }
 
+fn take_pending_capture_after_restart(state: &AppState) -> Result<Option<CaptureMode>, AppError> {
+    let mut settings = state.settings.write();
+    let pending = settings.pending_capture_after_restart.take();
+    if pending.is_some() {
+        storage::save_settings(&settings)?;
+    }
+    Ok(pending)
+}
+
+#[cfg(target_os = "macos")]
+fn restart_and_retry_capture(app: &AppHandle, mode: CaptureMode) -> Result<(), AppError> {
+    let state = app.state::<Arc<AppState>>().inner().clone();
+    {
+        let mut settings = state.settings.write();
+        settings.pending_capture_after_restart = Some(mode);
+        storage::save_settings(&settings)?;
+    }
+    app.request_restart();
+    Ok(())
+}
+
 fn window_coordinate_scale(display: &ces_capture::DisplayDescriptor) -> f64 {
     #[cfg(target_os = "windows")]
     return display.scale_factor.max(1.0);
@@ -896,24 +1103,46 @@ fn register_shortcuts_with(app: &AppHandle, settings: &AppSettings) -> Result<()
 }
 
 fn register_shortcut(app: &AppHandle, shortcut: &str, mode: CaptureMode) -> Result<(), AppError> {
-    let shortcut = shortcut.to_owned();
-    let parsed = shortcut
-        .parse::<tauri_plugin_global_shortcut::Shortcut>()
-        .map_err(|error| AppError::Shortcut(error.to_string()))?;
+    let parsed = parse_shortcut(shortcut)?;
+    let armed = AtomicBool::new(false);
     app.global_shortcut()
         .on_shortcut(parsed, move |app, _shortcut, event| {
-            if event.state() != ShortcutState::Pressed {
+            if !should_trigger_shortcut(&armed, event.state()) {
+                return;
+            }
+            if app
+                .get_webview_window("preferences")
+                .is_some_and(|window| window.is_focused().unwrap_or(false))
+            {
                 return;
             }
             let state = app.state::<Arc<AppState>>().inner().clone();
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(error) = start_capture_inner(app.clone(), state, mode).await {
-                    report_capture_error(&app, &error);
+                if let Err(error) = start_capture_inner(app.clone(), state, mode).await
+                    && !matches!(&error, AppError::CaptureInProgress)
+                {
+                    report_capture_error(&app, &error, mode);
                 }
             });
         })
         .map_err(|error| AppError::Shortcut(error.to_string()))
+}
+
+fn parse_shortcut(shortcut: &str) -> Result<Shortcut, AppError> {
+    shortcut
+        .parse::<Shortcut>()
+        .map_err(|error| AppError::Shortcut(error.to_string()))
+}
+
+fn should_trigger_shortcut(armed: &AtomicBool, state: ShortcutState) -> bool {
+    match state {
+        ShortcutState::Pressed => {
+            armed.store(true, Ordering::Release);
+            false
+        }
+        ShortcutState::Released => armed.swap(false, Ordering::AcqRel),
+    }
 }
 
 fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
@@ -924,7 +1153,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let capture_display = MenuItem::with_id(
         app,
         "capture-display",
-        "Capture Display",
+        "Capture Full Screen",
         true,
         None::<&str>,
     )?;
@@ -994,7 +1223,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
                 if let Err(error) = start_capture_inner(app.clone(), state, mode).await {
-                    report_capture_error(&app, &error);
+                    report_capture_error(&app, &error, mode);
                 }
             });
         }
@@ -1078,7 +1307,7 @@ fn create_overlay_window(app: &AppHandle) -> Result<(), tauri::Error> {
     } else {
         builder
     };
-    builder
+    let window = builder
         .decorations(false)
         .always_on_top(true)
         .visible_on_all_workspaces(true)
@@ -1089,8 +1318,15 @@ fn create_overlay_window(app: &AppHandle) -> Result<(), tauri::Error> {
         .background_color(Color(0, 0, 0, 0))
         .focused(false)
         .visible(false)
-        .build()
-        .map(|_| ())
+        .build()?;
+
+    #[cfg(target_os = "macos")]
+    ces_macos_window::configure_capture_overlay(&window)
+        .map_err(|error| tauri::Error::Anyhow(anyhow::anyhow!(error)))?;
+    #[cfg(not(target_os = "macos"))]
+    let _ = window;
+
+    Ok(())
 }
 
 const STARTUP_NOTICE_WIDTH: f64 = 356.0;
@@ -1211,9 +1447,27 @@ fn update_thumbnail_stack(app: &AppHandle) {
             return;
         }
         let (x, y, height) = thumbnail_window_geometry(&handle, count);
-        let _ = window.set_size(LogicalSize::new(THUMBNAIL_WIDTH, height));
-        let _ = window.set_position(tauri::LogicalPosition::new(x, y));
-        show_thumbnail_window(&window);
+        let visible = window.is_visible().unwrap_or(false);
+        if visible {
+            #[cfg(target_os = "macos")]
+            if let Err(error) =
+                ces_macos_window::resize_from_bottom(&window, THUMBNAIL_WIDTH, height)
+            {
+                eprintln!("failed to resize capture thumbnail stack: {error}");
+                let _ = window.set_size(LogicalSize::new(THUMBNAIL_WIDTH, height));
+                let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+            }
+
+            #[cfg(not(target_os = "macos"))]
+            {
+                let _ = window.set_size(LogicalSize::new(THUMBNAIL_WIDTH, height));
+                let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+            }
+        } else {
+            let _ = window.set_size(LogicalSize::new(THUMBNAIL_WIDTH, height));
+            let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+            show_thumbnail_window(&window);
+        }
     });
 }
 
@@ -1256,6 +1510,12 @@ fn thumbnail_ready(
             return Ok(());
         }
     }
+    update_thumbnail_stack(&app);
+    Ok(())
+}
+
+#[tauri::command]
+fn sync_thumbnail_stack(app: AppHandle) -> CommandResult<()> {
     update_thumbnail_stack(&app);
     Ok(())
 }
@@ -1312,8 +1572,10 @@ fn thumbnail_geometry(
     )
 }
 
-fn report_capture_error(app: &AppHandle, error: &AppError) {
+fn report_capture_error(app: &AppHandle, error: &AppError, mode: CaptureMode) {
     eprintln!("capture failed: {error}");
+    #[cfg(not(target_os = "macos"))]
+    let _ = mode;
 
     #[cfg(target_os = "macos")]
     if matches!(
@@ -1327,30 +1589,47 @@ fn report_capture_error(app: &AppHandle, error: &AppError) {
 
     #[cfg(target_os = "macos")]
     if matches!(error, AppError::Capture(CaptureError::PermissionDenied)) {
+        let state = app.state::<Arc<AppState>>().inner().clone();
+        if *state.screen_permission_requested_this_launch.lock() {
+            let app = app.clone();
+            app.dialog()
+                .message(
+                    "macOS requires CES to restart before newly granted Screen Recording access becomes available. CES can restart now and automatically retry this capture.",
+                )
+                .title("CES Setup")
+                .buttons(MessageDialogButtons::OkCancelCustom(
+                    "Restart & Retry".to_owned(),
+                    "Not Now".to_owned(),
+                ))
+                .kind(MessageDialogKind::Info)
+                .show(move |restart| {
+                    if restart
+                        && let Err(error) = restart_and_retry_capture(&app, mode)
+                    {
+                        show_macos_permission_recovery_error(&app, &error);
+                    }
+                });
+            return;
+        }
+
         let app = app.clone();
         app.dialog()
             .message(
-                "macOS does not recognize this CES build, even if CES appears enabled under Screen & System Audio Recording. This commonly happens after replacing a locally built, ad-hoc-signed copy. Resetting removes only CES's stale permission records. Then use the macOS prompt to enable this build and restart CES.",
+                "This locally built CES copy no longer matches macOS's saved Screen Recording record. CES can reset only its own record, restart, and retry this capture. You will still need to approve CES in System Settings; macOS does not allow apps to toggle this permission themselves.",
             )
             .title("CES Setup")
             .buttons(MessageDialogButtons::OkCancelCustom(
-                "Reset CES Permission".to_owned(),
+                "Reset, Restart & Retry".to_owned(),
                 "Not Now".to_owned(),
             ))
             .kind(MessageDialogKind::Error)
             .show(move |reset_permission| {
-                if reset_permission
-                    && let Err(error) = reset_macos_screen_capture_permission(&app)
-                {
-                    eprintln!("failed to reset Screen Recording permission: {error}");
-                    app.dialog()
-                        .message(format!(
-                            "CES could not reset its Screen Recording permission: {error}"
-                        ))
-                        .title("CES Setup")
-                        .buttons(MessageDialogButtons::Ok)
-                        .kind(MessageDialogKind::Error)
-                        .show(|_| {});
+                if reset_permission {
+                    let result = reset_macos_screen_capture_permission(&app)
+                        .and_then(|()| restart_and_retry_capture(&app, mode));
+                    if let Err(error) = result {
+                        show_macos_permission_recovery_error(&app, &error);
+                    }
                 }
             });
         return;
@@ -1369,7 +1648,7 @@ fn capture_error_message(error: &AppError) -> String {
     if matches!(error, AppError::Capture(CaptureError::Unsupported)) {
         #[cfg(target_os = "linux")]
         if wayland_session() {
-            return "Window capture is not available on a pure Wayland session yet. Use Region or Display capture, or log in to an X11 session for Window capture. Region and Display capture use your desktop screenshot portal.".to_owned();
+            return "Window capture is not available on a pure Wayland session yet. Use Region or Full Screen capture, or log in to an X11 session for Window capture. Region and Full Screen capture use your desktop screenshot portal.".to_owned();
         }
 
         return "This capture mode is not supported on the current desktop session. Try Region capture instead.".to_owned();
@@ -1377,7 +1656,7 @@ fn capture_error_message(error: &AppError) -> String {
 
     #[cfg(target_os = "linux")]
     if wayland_session() && matches!(error, AppError::Capture(CaptureError::Backend(_))) {
-        return "CES could not capture this Wayland desktop. Make sure an xdg-desktop-portal screenshot backend is installed and running, then try Region or Display capture again.".to_owned();
+        return "CES could not capture this Wayland desktop. Make sure an xdg-desktop-portal screenshot backend is installed and running, then try Region or Full Screen capture again.".to_owned();
     }
 
     if matches!(
@@ -1385,10 +1664,9 @@ fn capture_error_message(error: &AppError) -> String {
         AppError::Capture(CaptureError::PermissionDenied | CaptureError::PermissionRequestStarted)
     ) {
         #[cfg(target_os = "windows")]
-        {
-            return "CES could not access the screen. Windows desktop capture does not use a separate Screen Recording permission; secure/UAC windows and protected content cannot be captured.".to_owned();
-        }
+        return "CES could not access the screen. Windows desktop capture does not use a separate Screen Recording permission; secure/UAC windows and protected content cannot be captured.".to_owned();
 
+        #[cfg(not(target_os = "windows"))]
         return "CES needs Screen Recording permission to capture your open windows. Enable it in your operating system's privacy settings, then restart CES.".to_owned();
     }
 
@@ -1412,12 +1690,21 @@ fn reset_macos_screen_capture_permission(app: &AppHandle) -> Result<(), AppError
         settings.last_screen_permission_request_id = None;
         storage::save_settings(&settings)?;
     }
+    *state.screen_permission_requested_this_launch.lock() = false;
+    Ok(())
+}
 
-    let request_permission = mark_screen_permission_request(&state)?;
-    match state.backend.ensure_permission(request_permission) {
-        Ok(()) | Err(CaptureError::PermissionRequestStarted) => Ok(()),
-        Err(error) => Err(error.into()),
-    }
+#[cfg(target_os = "macos")]
+fn show_macos_permission_recovery_error(app: &AppHandle, error: &AppError) {
+    eprintln!("failed to recover Screen Recording permission: {error}");
+    app.dialog()
+        .message(format!(
+            "CES could not reset or restart its Screen Recording setup: {error}"
+        ))
+        .title("CES Setup")
+        .buttons(MessageDialogButtons::Ok)
+        .kind(MessageDialogKind::Error)
+        .show(|_| {});
 }
 
 #[cfg(target_os = "linux")]
@@ -1455,6 +1742,30 @@ fn show_preferences(app: &AppHandle) {
 fn hide_window(app: &AppHandle, label: &str) {
     if let Some(window) = app.get_webview_window(label) {
         let _ = window.hide();
+    }
+}
+
+fn set_capture_huds_protected(app: &AppHandle, protected: bool) {
+    // The window server may still composite a just-hidden HUD into an
+    // immediate display capture. Exclude CES HUDs until the frozen background
+    // frame has been read so they cannot reappear as pixels during fade-in.
+    for label in ["thumbnail", "startup"] {
+        if let Some(window) = app.get_webview_window(label)
+            && let Err(error) = window.set_content_protected(protected)
+        {
+            eprintln!("failed to update {label} capture protection: {error}");
+        }
+    }
+}
+
+fn hide_capture_overlay(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("overlay") {
+        let _ = window.hide();
+        let _ = window.set_cursor_icon(CursorIcon::Default);
+        #[cfg(target_os = "macos")]
+        if let Err(error) = ces_macos_window::reset_capture_overlay(&window) {
+            eprintln!("failed to reset capture overlay: {error}");
+        }
     }
 }
 
@@ -1503,7 +1814,50 @@ impl CaptureSession {
 
 #[cfg(test)]
 mod tests {
-    use super::{thumbnail_geometry, thumbnail_pointer_position};
+    use std::sync::atomic::AtomicBool;
+
+    use tauri_plugin_global_shortcut::ShortcutState;
+
+    use super::{
+        ThumbnailCursorAction, parse_shortcut, should_trigger_shortcut, thumbnail_cursor_action,
+        thumbnail_geometry, thumbnail_pointer_position,
+    };
+
+    #[test]
+    fn ignores_preview_cursor_updates_while_capture_is_active() {
+        assert_eq!(
+            thumbnail_cursor_action(true, false, false),
+            ThumbnailCursorAction::Ignore
+        );
+        assert_eq!(
+            thumbnail_cursor_action(true, true, true),
+            ThumbnailCursorAction::Ignore
+        );
+        assert_eq!(
+            thumbnail_cursor_action(false, true, true),
+            ThumbnailCursorAction::Apply(true)
+        );
+    }
+
+    #[test]
+    fn treats_legacy_and_recorded_shortcut_formats_as_the_same_combination() {
+        assert_eq!(
+            parse_shortcut("Ctrl+Shift+4").expect("legacy shortcut should parse"),
+            parse_shortcut("Control+Shift+Digit4").expect("recorded shortcut should parse")
+        );
+    }
+
+    #[test]
+    fn triggers_shortcuts_once_after_the_keys_are_released() {
+        let armed = AtomicBool::new(false);
+
+        assert!(!should_trigger_shortcut(&armed, ShortcutState::Pressed));
+        assert!(!should_trigger_shortcut(&armed, ShortcutState::Pressed));
+        assert!(should_trigger_shortcut(&armed, ShortcutState::Released));
+        assert!(!should_trigger_shortcut(&armed, ShortcutState::Released));
+        assert!(!should_trigger_shortcut(&armed, ShortcutState::Pressed));
+        assert!(should_trigger_shortcut(&armed, ShortcutState::Released));
+    }
 
     #[test]
     fn stacks_thumbnails_upward_in_logical_pixels_on_retina_displays() {

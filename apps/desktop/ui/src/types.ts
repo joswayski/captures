@@ -38,6 +38,7 @@ export interface AppSettings {
   display_shortcut: string;
   launch_at_login: boolean;
   last_screen_permission_request_id: string | null;
+  pending_capture_after_restart: CaptureMode | null;
 }
 
 export interface CaptureArtifact {
@@ -47,6 +48,7 @@ export interface CaptureArtifact {
   full_url: string;
   width: number;
   height: number;
+  size_bytes: number;
   created_at: string;
   mode: CaptureMode;
   clipboard_copied: boolean;

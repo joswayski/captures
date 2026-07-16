@@ -55,6 +55,7 @@ pub struct AppState {
     pub sessions: Mutex<HashMap<Uuid, CaptureSession>>,
     pub artifacts: Mutex<Vec<CaptureArtifact>>,
     pub thumbnail_visibility: Mutex<ThumbnailVisibility>,
+    pub screen_permission_requested_this_launch: Mutex<bool>,
     pub backend: XcapBackend,
 }
 
@@ -65,6 +66,7 @@ impl AppState {
             sessions: Mutex::new(HashMap::new()),
             artifacts: Mutex::new(Vec::new()),
             thumbnail_visibility: Mutex::new(ThumbnailVisibility::default()),
+            screen_permission_requested_this_launch: Mutex::new(false),
             backend: XcapBackend,
         })
     }

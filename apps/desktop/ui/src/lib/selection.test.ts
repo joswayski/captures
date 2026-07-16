@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { selectionRect } from "./selection";
+import { isCapturableSelection, selectionRect } from "./selection";
 
 describe("selectionRect", () => {
   it("normalizes a reverse drag", () => {
@@ -22,3 +22,13 @@ describe("selectionRect", () => {
   });
 });
 
+describe("isCapturableSelection", () => {
+  it("rejects a click and one-dimensional drags", () => {
+    expect(isCapturableSelection({ x: 10, y: 10, width: 0, height: 0 })).toBe(false);
+    expect(isCapturableSelection({ x: 10, y: 10, width: 20, height: 1 })).toBe(false);
+  });
+
+  it("accepts a dragged region", () => {
+    expect(isCapturableSelection({ x: 10, y: 10, width: 20, height: 30 })).toBe(true);
+  });
+});

@@ -10,16 +10,19 @@ objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = [
     "std",
     "NSCursor",
+    "NSEvent",
     "NSResponder",
     "NSTrackingArea",
     "NSView",
     "NSWindow",
+    "objc2-core-foundation",
 ] }
 objc2-foundation = { version = "0.3", default-features = false, features = [
     "std",
     "NSGeometry",
 ] }
 tauri = { version = "2", default-features = false, features = ["wry"] }
+tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", rev = "a3122e894383aa068ec5365a42994e3ac94ba1b6" }
 
 [lints.clippy]
 all = { level = "deny", priority = -1 }
