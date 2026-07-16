@@ -197,9 +197,20 @@ function CaptureOverlay() {
       if (event.key !== "Escape" || !sessionId) return;
       void invoke("cancel_capture", { sessionId });
     };
+    const onKeyUp = () => {
+      // A global shortcut can release its primary key before its modifier
+      // keys. AppKit may restore the arrow when those remaining keys are
+      // released after the overlay becomes visible.
+      if (mode !== "region" || !sessionId || visibleSessionId !== sessionId) return;
+      void invoke("sync_capture_cursor", { sessionId });
+    };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [sessionId]);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+  }, [mode, sessionId, visibleSessionId]);
 
   useEffect(() => {
     const cursorClass = `capture-${mode}-cursor`;
@@ -317,6 +328,13 @@ function CaptureOverlay() {
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
+      onTransitionEnd={(event) => {
+        // The first WKWebView fade can rebuild its cursor rectangles after the
+        // initial paint. Reassert once that final layout transition completes.
+        if (event.target === event.currentTarget && event.propertyName === "opacity") {
+          reassertRegionCursor();
+        }
+      }}
     >
       <img
         className="capture-snapshot"

@@ -528,6 +528,29 @@ fn get_thumbnail_pointer_position(
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ThumbnailCursorAction {
+    Ignore,
+    Reset,
+    Apply(bool),
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn thumbnail_cursor_action(
+    suppressed: bool,
+    visible: bool,
+    pointing: bool,
+) -> ThumbnailCursorAction {
+    if suppressed {
+        ThumbnailCursorAction::Ignore
+    } else if visible {
+        ThumbnailCursorAction::Apply(pointing)
+    } else {
+        ThumbnailCursorAction::Reset
+    }
+}
+
 #[tauri::command]
 fn set_thumbnail_cursor(
     app: AppHandle,
@@ -542,21 +565,27 @@ fn set_thumbnail_cursor(
         let state = state.inner().clone();
         let cursor_window = window.clone();
         app.run_on_main_thread(move || {
-            let interactive = !state.thumbnail_visibility.lock().is_suppressed()
-                && cursor_window.is_visible().unwrap_or(false);
-            let effective_pointing = interactive && pointing;
-            let icon = if effective_pointing {
-                CursorIcon::Hand
-            } else {
-                CursorIcon::Default
-            };
-            if let Err(error) = cursor_window.set_cursor_icon(icon) {
-                eprintln!("failed to update capture thumbnail window cursor: {error}");
-            }
-            let result = if interactive {
-                ces_macos_window::set_pointing_cursor(&cursor_window, effective_pointing)
-            } else {
-                ces_macos_window::reset_pointing_cursor_state(&cursor_window)
+            let suppressed = state.thumbnail_visibility.lock().is_suppressed();
+            let visible = cursor_window.is_visible().unwrap_or(false);
+            let result = match thumbnail_cursor_action(suppressed, visible, pointing) {
+                // NSCursor is application-wide. Do not even invalidate the
+                // hidden preview's cursor rectangles while capture owns it.
+                ThumbnailCursorAction::Ignore => return,
+                ThumbnailCursorAction::Reset => {
+                    let _ = cursor_window.set_cursor_icon(CursorIcon::Default);
+                    ces_macos_window::reset_pointing_cursor_state(&cursor_window)
+                }
+                ThumbnailCursorAction::Apply(effective_pointing) => {
+                    let icon = if effective_pointing {
+                        CursorIcon::Hand
+                    } else {
+                        CursorIcon::Default
+                    };
+                    if let Err(error) = cursor_window.set_cursor_icon(icon) {
+                        eprintln!("failed to update capture thumbnail window cursor: {error}");
+                    }
+                    ces_macos_window::set_pointing_cursor(&cursor_window, effective_pointing)
+                }
             };
             if let Err(error) = result {
                 eprintln!("failed to update capture thumbnail cursor: {error}");
@@ -584,13 +613,17 @@ fn reassert_thumbnail_cursor(
             .ok_or_else(|| "capture thumbnail is unavailable".to_owned())?;
         let state = state.inner().clone();
         app.run_on_main_thread(move || {
-            let interactive = !state.thumbnail_visibility.lock().is_suppressed()
-                && window.is_visible().unwrap_or(false);
-            let result = if interactive {
-                ces_macos_window::reassert_pointing_cursor(&window)
-            } else {
-                let _ = window.set_cursor_icon(CursorIcon::Default);
-                ces_macos_window::reset_pointing_cursor_state(&window)
+            let suppressed = state.thumbnail_visibility.lock().is_suppressed();
+            let visible = window.is_visible().unwrap_or(false);
+            let result = match thumbnail_cursor_action(suppressed, visible, true) {
+                ThumbnailCursorAction::Ignore => return,
+                ThumbnailCursorAction::Reset => {
+                    let _ = window.set_cursor_icon(CursorIcon::Default);
+                    ces_macos_window::reset_pointing_cursor_state(&window)
+                }
+                ThumbnailCursorAction::Apply(_) => {
+                    ces_macos_window::reassert_pointing_cursor(&window)
+                }
             };
             if let Err(error) = result {
                 eprintln!("failed to reassert capture thumbnail cursor: {error}");
@@ -1274,7 +1307,7 @@ fn create_overlay_window(app: &AppHandle) -> Result<(), tauri::Error> {
     } else {
         builder
     };
-    builder
+    let window = builder
         .decorations(false)
         .always_on_top(true)
         .visible_on_all_workspaces(true)
@@ -1285,8 +1318,15 @@ fn create_overlay_window(app: &AppHandle) -> Result<(), tauri::Error> {
         .background_color(Color(0, 0, 0, 0))
         .focused(false)
         .visible(false)
-        .build()
-        .map(|_| ())
+        .build()?;
+
+    #[cfg(target_os = "macos")]
+    ces_macos_window::configure_capture_overlay(&window)
+        .map_err(|error| tauri::Error::Anyhow(anyhow::anyhow!(error)))?;
+    #[cfg(not(target_os = "macos"))]
+    let _ = window;
+
+    Ok(())
 }
 
 const STARTUP_NOTICE_WIDTH: f64 = 356.0;
@@ -1779,8 +1819,25 @@ mod tests {
     use tauri_plugin_global_shortcut::ShortcutState;
 
     use super::{
-        parse_shortcut, should_trigger_shortcut, thumbnail_geometry, thumbnail_pointer_position,
+        ThumbnailCursorAction, parse_shortcut, should_trigger_shortcut, thumbnail_cursor_action,
+        thumbnail_geometry, thumbnail_pointer_position,
     };
+
+    #[test]
+    fn ignores_preview_cursor_updates_while_capture_is_active() {
+        assert_eq!(
+            thumbnail_cursor_action(true, false, false),
+            ThumbnailCursorAction::Ignore
+        );
+        assert_eq!(
+            thumbnail_cursor_action(true, true, true),
+            ThumbnailCursorAction::Ignore
+        );
+        assert_eq!(
+            thumbnail_cursor_action(false, true, true),
+            ThumbnailCursorAction::Apply(true)
+        );
+    }
 
     #[test]
     fn treats_legacy_and_recorded_shortcut_formats_as_the_same_combination() {

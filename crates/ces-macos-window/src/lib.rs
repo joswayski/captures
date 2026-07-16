@@ -234,6 +234,16 @@ pub fn show_without_activating(window: &WebviewWindow) -> Result<(), &'static st
     Ok(())
 }
 
+/// Installs the capture overlay's native cursor tracker during app startup.
+///
+/// The overlay is created hidden and reused for every capture. Installing its
+/// tracking areas here keeps the first capture on the same path as later ones,
+/// instead of doing one-time AppKit setup while the overlay is being focused.
+pub fn configure_capture_overlay(window: &WebviewWindow) -> Result<(), &'static str> {
+    native_window(window)?.setAcceptsMouseMovedEvents(true);
+    set_tracked_cursor(window, CursorMode::Arrow, CursorSurface::CaptureOverlay)
+}
+
 /// Makes a reused capture overlay transparent before bringing it onscreen.
 pub fn prepare_capture_overlay(window: &WebviewWindow) -> Result<(), &'static str> {
     let native_window = native_window(window)?;
@@ -249,20 +259,20 @@ pub fn activate_capture_cursor(
     use_crosshair: bool,
 ) -> Result<(), &'static str> {
     let native_window = native_window(window)?;
+    // Keep cursor rectangles active so AppKit has a persistent cursor source
+    // when focus, modifier keys, or WebKit painting causes a cursor refresh.
+    // The overlay's native tracker now participates in cursorUpdate events, so
+    // stale WebKit rectangles can no longer leave region mode on the arrow.
+    set_cursor_rects_enabled(native_window, true);
     if use_crosshair {
-        // A newly created, previously hidden WKWebView can still own a stale
-        // arrow cursor rectangle. Disable cursor rectangles for the duration
-        // of region capture so the first mouse movement cannot replace the
-        // native crosshair.
-        set_cursor_rects_enabled(native_window, false);
         set_tracked_cursor(window, CursorMode::Crosshair, CursorSurface::CaptureOverlay)?;
         CAPTURE_OVERLAY_OWNS_CURSOR.store(true, Ordering::Release);
+        native_window.resetCursorRects();
         NSCursor::crosshairCursor().set();
     } else {
         // Window capture uses a custom CSS camera cursor, so WebKit remains the
         // cursor owner in this mode. Refresh its rectangles after the overlay
         // becomes key and after its fade-in completes.
-        set_cursor_rects_enabled(native_window, true);
         set_tracked_cursor(window, CursorMode::WebView, CursorSurface::CaptureOverlay)?;
         CAPTURE_OVERLAY_OWNS_CURSOR.store(true, Ordering::Release);
         native_window.resetCursorRects();
