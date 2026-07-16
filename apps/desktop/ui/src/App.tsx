@@ -873,9 +873,17 @@ export function ShortcutInput({
   onRecordingChange: (recording: boolean) => void;
   onChange: (value: string) => void;
 }) {
+  const recorderRef = useRef<HTMLButtonElement>(null);
   const [previewKeys, setPreviewKeys] = useState<string[]>([]);
   const [error, setError] = useState("");
   const keys = recording ? previewKeys : shortcutDisplayTokens(value);
+
+  useEffect(() => {
+    // WKWebView follows Safari's macOS behavior and does not reliably focus a
+    // button when it is clicked. The recorder only receives keyboard events
+    // while focused, so acquire focus explicitly when recording begins.
+    if (recording) recorderRef.current?.focus();
+  }, [recording]);
 
   const stopRecording = () => {
     setPreviewKeys([]);
@@ -913,6 +921,7 @@ export function ShortcutInput({
       <span id={`${id}-label`}>{label}</span>
       <div className="shortcut-control">
         <button
+          ref={recorderRef}
           type="button"
           className={`shortcut-recorder${recording ? " shortcut-recording" : ""}`}
           aria-labelledby={`${id}-label`}

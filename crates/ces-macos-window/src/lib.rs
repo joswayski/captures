@@ -259,20 +259,20 @@ pub fn activate_capture_cursor(
     use_crosshair: bool,
 ) -> Result<(), &'static str> {
     let native_window = native_window(window)?;
-    // Keep cursor rectangles active so AppKit has a persistent cursor source
-    // when focus, modifier keys, or WebKit painting causes a cursor refresh.
-    // The overlay's native tracker now participates in cursorUpdate events, so
-    // stale WebKit rectangles can no longer leave region mode on the arrow.
-    set_cursor_rects_enabled(native_window, true);
     if use_crosshair {
         set_tracked_cursor(window, CursorMode::Crosshair, CursorSurface::CaptureOverlay)?;
         CAPTURE_OVERLAY_OWNS_CURSOR.store(true, Ordering::Release);
-        native_window.resetCursorRects();
+        // WebKit and AppKit both rebuild cursor rectangles when focus or
+        // modifier-key state changes. Disabling those rectangles while region
+        // capture owns the cursor prevents the arrow from being installed for
+        // a frame between two crosshair updates.
+        set_cursor_rects_enabled(native_window, false);
         NSCursor::crosshairCursor().set();
     } else {
         // Window capture uses a custom CSS camera cursor, so WebKit remains the
         // cursor owner in this mode. Refresh its rectangles after the overlay
         // becomes key and after its fade-in completes.
+        set_cursor_rects_enabled(native_window, true);
         set_tracked_cursor(window, CursorMode::WebView, CursorSurface::CaptureOverlay)?;
         CAPTURE_OVERLAY_OWNS_CURSOR.store(true, Ordering::Release);
         native_window.resetCursorRects();

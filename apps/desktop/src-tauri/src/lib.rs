@@ -405,11 +405,13 @@ fn show_capture_overlay(
         .map(|session| session.mode)
         .ok_or_else(|| AppError::SessionUnavailable.to_string())?;
     if let Some(window) = app.get_webview_window("overlay") {
+        #[cfg(not(target_os = "macos"))]
         let cursor = if mode == CaptureMode::Region {
             CursorIcon::Crosshair
         } else {
             CursorIcon::Default
         };
+        #[cfg(not(target_os = "macos"))]
         window
             .set_cursor_icon(cursor)
             .map_err(|error| error.to_string())?;
@@ -1157,13 +1159,8 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         true,
         None::<&str>,
     )?;
-    let open_folder = MenuItem::with_id(
-        app,
-        "open-folder",
-        "Open Captures Folder",
-        true,
-        None::<&str>,
-    )?;
+    let open_folder =
+        MenuItem::with_id(app, "open-folder", "Open Save Location", true, None::<&str>)?;
     let preferences = MenuItem::with_id(app, "preferences", "Preferences", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit CES", true, None::<&str>)?;
     let separator_1 = MenuItem::with_id(app, "separator-1", "────────", false, None::<&str>)?;
@@ -1730,11 +1727,18 @@ fn show_preferences(app: &AppHandle) {
         )
         .title("CES Preferences")
         .inner_size(520.0, 480.0)
+        .min_inner_size(420.0, 360.0)
         .center()
-        .resizable(false)
-        .build();
+        .resizable(true)
+        .focused(false)
+        .visible(false)
+        .build()
+        .and_then(|window| {
+            window.show()?;
+            window.set_focus()
+        });
         if let Err(error) = result {
-            eprintln!("failed to create preferences window: {error}");
+            eprintln!("failed to show preferences window: {error}");
         }
     });
 }
