@@ -420,8 +420,9 @@ fn show_capture_overlay(
         window.show().map_err(|error| error.to_string())?;
         window.set_focus().map_err(|error| error.to_string())?;
         #[cfg(target_os = "macos")]
-        ces_macos_window::activate_capture_cursor(&window, mode == CaptureMode::Region)
-            .map_err(str::to_owned)?;
+        if should_activate_capture_cursor_before_reveal(mode) {
+            ces_macos_window::activate_capture_cursor(&window, false).map_err(str::to_owned)?;
+        }
         Ok(())
     } else {
         Err("capture overlay is unavailable".to_owned())
@@ -1166,6 +1167,10 @@ fn should_trigger_shortcut(armed: &AtomicBool, state: ShortcutState) -> bool {
     }
 }
 
+fn should_activate_capture_cursor_before_reveal(mode: CaptureMode) -> bool {
+    mode != CaptureMode::Region
+}
+
 fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let capture_region =
         MenuItem::with_id(app, "capture-region", "Capture Region", true, None::<&str>)?;
@@ -1842,9 +1847,20 @@ mod tests {
     use tauri_plugin_global_shortcut::ShortcutState;
 
     use super::{
-        ThumbnailCursorAction, parse_shortcut, should_trigger_shortcut, thumbnail_cursor_action,
-        thumbnail_geometry, thumbnail_pointer_position,
+        CaptureMode, ThumbnailCursorAction, parse_shortcut,
+        should_activate_capture_cursor_before_reveal, should_trigger_shortcut,
+        thumbnail_cursor_action, thumbnail_geometry, thumbnail_pointer_position,
     };
+
+    #[test]
+    fn region_cursor_waits_until_the_hidden_webview_is_primed() {
+        assert!(!should_activate_capture_cursor_before_reveal(
+            CaptureMode::Region
+        ));
+        assert!(should_activate_capture_cursor_before_reveal(
+            CaptureMode::Window
+        ));
+    }
 
     #[test]
     fn ignores_preview_cursor_updates_while_capture_is_active() {

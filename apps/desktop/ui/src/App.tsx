@@ -141,6 +141,7 @@ function ArtifactViewer() {
 function CaptureOverlay() {
   const [session, setSession] = useState<ActiveSession | null>(null);
   const [visibleSessionId, setVisibleSessionId] = useState<string | null>(null);
+  const [primingSessionId, setPrimingSessionId] = useState<string | null>(null);
   const [start, setStart] = useState<SelectionPoint | null>(null);
   const [current, setCurrent] = useState<SelectionPoint | null>(null);
   const [hoveredWindow, setHoveredWindow] = useState<string | null>(null);
@@ -148,6 +149,7 @@ function CaptureOverlay() {
   const surfaceRef = useRef<HTMLDivElement>(null);
   const activeSessionIdRef = useRef<string | null>(null);
   const revealingSessionIdRef = useRef<string | null>(null);
+  const regionOverlayWarmedRef = useRef(false);
   const selectionFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastRegionCursorSyncAtRef = useRef(0);
   const sessionId = session?.id ?? query("session_id");
@@ -161,6 +163,7 @@ function CaptureOverlay() {
         activeSessionIdRef.current = payload.id;
         revealingSessionIdRef.current = null;
         setVisibleSessionId(null);
+        setPrimingSessionId(null);
         setSession(payload);
         setStart(null);
         setCurrent(null);
@@ -179,6 +182,7 @@ function CaptureOverlay() {
         activeSessionIdRef.current = initialSession.id;
         revealingSessionIdRef.current = null;
         setVisibleSessionId(null);
+        setPrimingSessionId(null);
         setSession(initialSession);
       }
     })();
@@ -204,21 +208,13 @@ function CaptureOverlay() {
   }, [sessionId]);
 
   useEffect(() => {
+    if (mode === "region" && (!sessionId || visibleSessionId !== sessionId || primingSessionId === sessionId)) {
+      return;
+    }
     const cursorClass = `capture-${mode}-cursor`;
     document.documentElement.classList.add(cursorClass);
     return () => document.documentElement.classList.remove(cursorClass);
-  }, [mode]);
-
-  useEffect(() => {
-    if (!sessionId || visibleSessionId !== sessionId) return;
-    let cancelled = false;
-    afterNextPaint(() => {
-      if (!cancelled) void invoke("sync_capture_cursor", { sessionId });
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [sessionId, visibleSessionId]);
+  }, [mode, primingSessionId, sessionId, visibleSessionId]);
 
   const rect = useMemo(
     () => (start && current ? selectionRect(start, current) : null),
@@ -269,19 +265,32 @@ function CaptureOverlay() {
   const revealOverlay = async () => {
     if (revealingSessionIdRef.current === sessionId) return;
     revealingSessionIdRef.current = sessionId;
+    const shouldPrimeRegionOverlay = mode === "region" && !regionOverlayWarmedRef.current;
     try {
       await invoke("show_capture_overlay", { sessionId });
     } catch {
       if (revealingSessionIdRef.current === sessionId) revealingSessionIdRef.current = null;
       return;
     }
+    if (shouldPrimeRegionOverlay) {
+      // Render the first region surface in its final visual state while the
+      // native window is still transparent. WKWebView can initialize its
+      // one-time cursor state here without replacing a visible crosshair.
+      setPrimingSessionId(sessionId);
+      setVisibleSessionId(sessionId);
+    }
     afterNextPaint(() => {
       if (activeSessionIdRef.current !== sessionId) return;
       void invoke("reveal_capture_overlay", { sessionId }).then(() => {
+        if (shouldPrimeRegionOverlay) regionOverlayWarmedRef.current = true;
         requestAnimationFrame(() => {
-          if (activeSessionIdRef.current === sessionId) setVisibleSessionId(sessionId);
+          if (activeSessionIdRef.current !== sessionId) return;
+          setPrimingSessionId(null);
+          setVisibleSessionId(sessionId);
         });
       }).catch(() => {
+        setPrimingSessionId(null);
+        if (shouldPrimeRegionOverlay) setVisibleSessionId(null);
         if (revealingSessionIdRef.current === sessionId) revealingSessionIdRef.current = null;
       });
     });
@@ -315,13 +324,13 @@ function CaptureOverlay() {
     <main
       key={sessionId}
       ref={surfaceRef}
-      className={`capture-surface capture-${mode}${visibleSessionId === sessionId ? " capture-visible" : ""}`}
+      className={`capture-surface capture-${mode}${visibleSessionId === sessionId ? " capture-visible" : ""}${primingSessionId === sessionId ? " capture-priming" : ""}`}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onTransitionEnd={(event) => {
-        // The first WKWebView fade can rebuild its cursor rectangles after the
-        // initial paint. Reassert once that final layout transition completes.
+        // Later captures retain the fade. Reassert after it without exposing
+        // the first WebView paint, which is primed behind native transparency.
         if (event.target === event.currentTarget && event.propertyName === "opacity") {
           reassertRegionCursor();
         }
