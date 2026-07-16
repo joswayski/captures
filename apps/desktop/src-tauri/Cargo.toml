@@ -40,6 +40,7 @@ trash = "5"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 ces-macos-window = { path = "../../../crates/ces-macos-window" }
+tokio = { version = "1", features = ["time"] }
 
 [dev-dependencies]
 tempfile = "3"

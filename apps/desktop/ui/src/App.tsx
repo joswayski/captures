@@ -197,20 +197,11 @@ function CaptureOverlay() {
       if (event.key !== "Escape" || !sessionId) return;
       void invoke("cancel_capture", { sessionId });
     };
-    const onKeyUp = () => {
-      // A global shortcut can release its primary key before its modifier
-      // keys. AppKit may restore the arrow when those remaining keys are
-      // released after the overlay becomes visible.
-      if (mode !== "region" || !sessionId || visibleSessionId !== sessionId) return;
-      void invoke("sync_capture_cursor", { sessionId });
-    };
     window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
     return () => {
       window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("keyup", onKeyUp);
     };
-  }, [mode, sessionId, visibleSessionId]);
+  }, [sessionId]);
 
   useEffect(() => {
     const cursorClass = `capture-${mode}-cursor`;

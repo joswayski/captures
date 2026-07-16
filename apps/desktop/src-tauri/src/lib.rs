@@ -1121,6 +1121,7 @@ fn register_shortcut(app: &AppHandle, shortcut: &str, mode: CaptureMode) -> Resu
             let state = app.state::<Arc<AppState>>().inner().clone();
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
+                wait_for_capture_shortcut_release().await;
                 if let Err(error) = start_capture_inner(app.clone(), state, mode).await
                     && !matches!(&error, AppError::CaptureInProgress)
                 {
@@ -1129,6 +1130,24 @@ fn register_shortcut(app: &AppHandle, shortcut: &str, mode: CaptureMode) -> Resu
             });
         })
         .map_err(|error| AppError::Shortcut(error.to_string()))
+}
+
+async fn wait_for_capture_shortcut_release() {
+    #[cfg(target_os = "macos")]
+    {
+        use std::time::Duration;
+
+        const MODIFIER_POLL_INTERVAL: Duration = Duration::from_millis(5);
+        const APPKIT_RELEASE_SETTLE_TIME: Duration = Duration::from_millis(16);
+
+        while ces_macos_window::capture_shortcut_modifiers_pressed() {
+            tokio::time::sleep(MODIFIER_POLL_INTERVAL).await;
+        }
+        // `modifierFlags` becomes clear during the flags-changed event. Give
+        // AppKit one display beat to finish its arrow-cursor restoration before
+        // the capture overlay claims the cursor exactly once.
+        tokio::time::sleep(APPKIT_RELEASE_SETTLE_TIME).await;
+    }
 }
 
 fn parse_shortcut(shortcut: &str) -> Result<Shortcut, AppError> {
