@@ -38,7 +38,7 @@ mod models;
 mod state;
 mod storage;
 
-use models::{ActiveSession, AppSettings, CaptureArtifact, CaptureSession};
+use models::{ActiveSession, AppSettings, CaptureArtifact, CaptureSession, ClipboardCopyStatus};
 use state::AppState;
 
 #[derive(Debug, Error)]
@@ -700,18 +700,23 @@ fn update_settings(
         previous_settings.last_screen_permission_request_id.clone();
     settings.pending_capture_after_restart = previous_settings.pending_capture_after_restart;
 
-    if let Err(error) = register_shortcuts_with(&app, &settings) {
+    let shortcuts_changed = settings.region_shortcut != previous_settings.region_shortcut
+        || settings.window_shortcut != previous_settings.window_shortcut
+        || settings.display_shortcut != previous_settings.display_shortcut;
+    if shortcuts_changed && let Err(error) = register_shortcuts_with(&app, &settings) {
         let _ = register_shortcuts_with(&app, &previous_settings);
         return Err(error.to_string());
     }
-    if settings.launch_at_login {
-        app.autolaunch()
-            .enable()
-            .map_err(|error| error.to_string())?;
-    } else {
-        app.autolaunch()
-            .disable()
-            .map_err(|error| error.to_string())?;
+    if settings.launch_at_login != previous_settings.launch_at_login {
+        if settings.launch_at_login {
+            app.autolaunch()
+                .enable()
+                .map_err(|error| error.to_string())?;
+        } else {
+            app.autolaunch()
+                .disable()
+                .map_err(|error| error.to_string())?;
+        }
     }
     storage::save_settings(&settings).map_err(|error| error.to_string())?;
     *state.settings.write() = settings.clone();
@@ -941,9 +946,11 @@ async fn finish_capture(
         let preview_png = storage::encode_thumbnail_png(&image_for_encoding)?;
         Ok((image_png, preview_png))
     });
-    let clipboard_app = app.clone();
-    let clipboard_task = tauri::async_runtime::spawn_blocking(move || {
-        write_image_to_clipboard(&clipboard_app, image)
+    let clipboard_task = state.settings().auto_copy_to_clipboard.then(|| {
+        let clipboard_app = app.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            write_image_to_clipboard(&clipboard_app, image)
+        })
     });
     let (image_png, preview_png) = encode_task
         .await
@@ -960,7 +967,11 @@ async fn finish_capture(
         size_bytes,
         created_at: Utc::now().to_rfc3339(),
         mode,
-        clipboard_copied: true,
+        clipboard_copy_status: if clipboard_task.is_some() {
+            ClipboardCopyStatus::Pending
+        } else {
+            ClipboardCopyStatus::Skipped
+        },
         image_png,
         preview_png,
     };
@@ -971,19 +982,23 @@ async fn finish_capture(
     }
     app.emit("capture-completed", &artifact)?;
 
-    let copied = clipboard_task
-        .await
-        .map_err(|error| AppError::Task(error.to_string()))?
-        .is_ok();
-    if !copied {
-        artifact.clipboard_copied = false;
+    if let Some(clipboard_task) = clipboard_task {
+        let copied = clipboard_task
+            .await
+            .map_err(|error| AppError::Task(error.to_string()))?
+            .is_ok();
+        artifact.clipboard_copy_status = if copied {
+            ClipboardCopyStatus::Copied
+        } else {
+            ClipboardCopyStatus::Failed
+        };
         if let Some(stored) = state
             .artifacts
             .lock()
             .iter_mut()
             .find(|stored| stored.id == artifact.id)
         {
-            stored.clipboard_copied = false;
+            stored.clipboard_copy_status = artifact.clipboard_copy_status;
         }
         app.emit("artifact-updated", &artifact)?;
     }

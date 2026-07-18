@@ -2,7 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { formatFileSize } from "./lib/format";
 import {
@@ -669,6 +669,9 @@ export function ThumbnailCard({
         setError(String(error));
       });
   };
+  const closeLabel = artifact.path ? "Close Preview" : "Close Without Saving";
+  const showClipboardConfirmation = feedback === "copied"
+    || artifact.clipboard_copy_status === "copied";
 
   return (
     <article
@@ -681,17 +684,23 @@ export function ThumbnailCard({
         onLoad={markThumbnailReady}
         onError={markThumbnailReady}
       />
+      {showClipboardConfirmation && (
+        <div className="clipboard-confirmation" role="status">
+          <CheckIcon />
+          <span>Copied to clipboard</span>
+        </div>
+      )}
       <div className="thumbnail-top-actions">
         {artifact.path && (
-          <IconButton className="delete" label="Delete Saved Capture" onClick={() => exitWith("delete", "trash_artifact")}>
+          <IconButton className="delete" label="Move to Trash" onClick={() => exitWith("delete", "trash_artifact")}>
             <TrashIcon />
           </IconButton>
         )}
         <div className="thumbnail-top-right">
-          <IconButton label="Open Preview" onClick={() => void runAction("open_artifact_viewer")}>
+          <IconButton label="View Full Size" onClick={() => void runAction("open_artifact_viewer")}>
             <ExpandIcon />
           </IconButton>
-          <IconButton className="close" label="Close Preview" onClick={() => exitWith("dismiss", "dismiss_artifact")}>
+          <IconButton className="close" label={closeLabel} onClick={() => exitWith("dismiss", "dismiss_artifact")}>
             <CloseIcon />
           </IconButton>
         </div>
@@ -714,9 +723,7 @@ export function ThumbnailCard({
       </div>
       <div className="thumbnail-meta">
         <span>{artifact.width} × {artifact.height} · {formatFileSize(artifact.size_bytes)}</span>
-        {artifact.clipboard_copied
-          ? <span className="clipboard-status">Copied to clipboard</span>
-          : <span className="warning">Clipboard unavailable</span>}
+        {artifact.clipboard_copy_status === "failed" && <span className="warning">Clipboard unavailable</span>}
       </div>
       {error && <p className="thumbnail-message">{error}</p>}
     </article>
@@ -769,20 +776,112 @@ function CheckIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6" /></svg>;
 }
 
-function Preferences() {
+type PreferencesSaveStatus = {
+  kind: "idle" | "saving" | "saved" | "error";
+  message: string;
+};
+
+export function Preferences() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
-  const [message, setMessage] = useState("");
-  const [saving, setSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<PreferencesSaveStatus>({ kind: "idle", message: "" });
   const [recordingShortcut, setRecordingShortcut] = useState<string | null>(null);
+  const settingsRef = useRef<AppSettings | null>(null);
+  const pendingSettingsRef = useRef<AppSettings | null>(null);
+  const saveDelayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const savedStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveInFlightRef = useRef<Promise<void> | null>(null);
+  const activeRef = useRef(true);
+
+  const clearSavedStatusTimer = useCallback(() => {
+    if (!savedStatusTimerRef.current) return;
+    clearTimeout(savedStatusTimerRef.current);
+    savedStatusTimerRef.current = null;
+  }, []);
+
+  const updateSaveStatus = useCallback((status: PreferencesSaveStatus) => {
+    if (activeRef.current) setSaveStatus(status);
+  }, []);
+
+  const flushPendingSettings = useCallback(async (): Promise<void> => {
+    if (saveDelayTimerRef.current) {
+      clearTimeout(saveDelayTimerRef.current);
+      saveDelayTimerRef.current = null;
+    }
+    while (true) {
+      if (saveInFlightRef.current) await saveInFlightRef.current;
+      if (saveDelayTimerRef.current) return;
+      const pendingSettings = pendingSettingsRef.current;
+      if (!pendingSettings) return;
+      pendingSettingsRef.current = null;
+      updateSaveStatus({ kind: "saving", message: "Saving changes…" });
+
+      const request = (async () => {
+        try {
+          const saved = await invoke<AppSettings>("update_settings", { settings: pendingSettings });
+          if (!pendingSettingsRef.current) {
+            settingsRef.current = saved;
+            if (activeRef.current) {
+              setSettings(saved);
+              updateSaveStatus({ kind: "saved", message: "Changes saved" });
+              clearSavedStatusTimer();
+              savedStatusTimerRef.current = setTimeout(() => {
+                updateSaveStatus({ kind: "idle", message: "" });
+                savedStatusTimerRef.current = null;
+              }, 2_000);
+            }
+          }
+        } catch (error) {
+          if (!pendingSettingsRef.current) {
+            updateSaveStatus({ kind: "error", message: `Couldn’t save changes: ${String(error)}` });
+          }
+        }
+      })();
+      saveInFlightRef.current = request;
+      await request;
+      if (saveInFlightRef.current === request) saveInFlightRef.current = null;
+    }
+  }, [clearSavedStatusTimer, updateSaveStatus]);
+
+  const scheduleSettingsSave = (nextSettings: AppSettings) => {
+    pendingSettingsRef.current = nextSettings;
+    clearSavedStatusTimer();
+    updateSaveStatus({ kind: "saving", message: "Saving changes…" });
+    if (saveDelayTimerRef.current) clearTimeout(saveDelayTimerRef.current);
+    saveDelayTimerRef.current = setTimeout(() => {
+      saveDelayTimerRef.current = null;
+      void flushPendingSettings();
+    }, 250);
+  };
 
   useEffect(() => {
-    void invoke<AppSettings>("get_settings").then(setSettings);
-  }, []);
+    let active = true;
+    activeRef.current = true;
+    void invoke<AppSettings>("get_settings").then((loadedSettings) => {
+      if (!active) return;
+      settingsRef.current = loadedSettings;
+      setSettings(loadedSettings);
+    });
+    return () => {
+      active = false;
+      activeRef.current = false;
+      clearSavedStatusTimer();
+      if (saveDelayTimerRef.current) {
+        clearTimeout(saveDelayTimerRef.current);
+        saveDelayTimerRef.current = null;
+        void flushPendingSettings();
+      }
+    };
+  }, [clearSavedStatusTimer, flushPendingSettings]);
 
   if (!settings) return <main className="preferences loading">Loading preferences…</main>;
 
   const update = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
-    setSettings((current) => current ? { ...current, [key]: value } : current);
+    const current = settingsRef.current;
+    if (!current || Object.is(current[key], value)) return;
+    const next = { ...current, [key]: value };
+    settingsRef.current = next;
+    setSettings(next);
+    scheduleSettingsSave(next);
   };
 
   const chooseDirectory = async () => {
@@ -790,18 +889,9 @@ function Preferences() {
     if (typeof selected === "string") update("output_directory", selected);
   };
 
-  const save = async () => {
-    setSaving(true);
-    setMessage("");
-    try {
-      const saved = await invoke<AppSettings>("update_settings", { settings });
-      setSettings(saved);
-      setMessage("Saved");
-    } catch (error) {
-      setMessage(String(error));
-    } finally {
-      setSaving(false);
-    }
+  const closePreferences = async () => {
+    await flushPendingSettings();
+    await currentWindow?.close();
   };
 
   return (
@@ -811,7 +901,15 @@ function Preferences() {
           <span className="eyebrow">CES</span>
           <h1>Preferences</h1>
         </div>
-        <button type="button" className="close-button" onClick={() => void currentWindow?.close()}>×</button>
+        <div className="preferences-header-actions">
+          {saveStatus.kind !== "idle" && (
+            <div className={`preferences-save-status preferences-save-${saveStatus.kind}`} role="status">
+              <span aria-hidden="true">{saveStatus.kind === "saved" ? "✓" : saveStatus.kind === "error" ? "!" : ""}</span>
+              {saveStatus.message}
+            </div>
+          )}
+          <button type="button" className="close-button" aria-label="Close Preferences" onClick={() => void closePreferences()}>×</button>
+        </div>
       </header>
 
       <section className="settings-section">
@@ -821,6 +919,17 @@ function Preferences() {
           <input id="output-directory" value={settings.output_directory} onChange={(event) => update("output_directory", event.target.value)} />
           <button type="button" onClick={() => void chooseDirectory()}>Choose</button>
         </div>
+        <label className="check-row capture-option">
+          <input
+            type="checkbox"
+            checked={settings.auto_copy_to_clipboard}
+            onChange={(event) => update("auto_copy_to_clipboard", event.target.checked)}
+          />
+          <span>
+            Automatically copy captures to the clipboard
+            <small>Turn this off to preserve existing text or other clipboard contents.</small>
+          </span>
+        </label>
       </section>
 
       <section className="settings-section">
@@ -849,21 +958,13 @@ function Preferences() {
           onRecordingChange={(recording) => setRecordingShortcut(recording ? "display-shortcut" : null)}
           onChange={(value) => update("display_shortcut", value)}
         />
-        <p className="help-text">Select a shortcut, then press the key combination you want. Press Esc to cancel; save to apply.</p>
+        <p className="help-text">Select a shortcut, then press the key combination you want. Press Esc to cancel recording. Changes save automatically.</p>
       </section>
 
       <label className="check-row">
         <input type="checkbox" checked={settings.launch_at_login} onChange={(event) => update("launch_at_login", event.target.checked)} />
         <span>Launch CES when I sign in</span>
       </label>
-
-      <footer className="preferences-footer">
-        <span className="save-message">{message}</span>
-        <div>
-          <button type="button" className="quiet" onClick={() => void currentWindow?.close()}>Cancel</button>
-          <button type="button" className="primary" disabled={saving} onClick={() => void save()}>{saving ? "Saving…" : "Save"}</button>
-        </div>
-      </footer>
     </main>
   );
 }

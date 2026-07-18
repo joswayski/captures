@@ -12,6 +12,8 @@ pub struct AppSettings {
     pub region_shortcut: String,
     pub window_shortcut: String,
     pub display_shortcut: String,
+    #[serde(default = "default_auto_copy_to_clipboard")]
+    pub auto_copy_to_clipboard: bool,
     pub launch_at_login: bool,
     #[serde(default)]
     pub last_screen_permission_request_id: Option<String>,
@@ -26,6 +28,7 @@ impl Default for AppSettings {
             region_shortcut: "Ctrl+Shift+4".to_owned(),
             window_shortcut: "Ctrl+Shift+W".to_owned(),
             display_shortcut: "Ctrl+Shift+3".to_owned(),
+            auto_copy_to_clipboard: true,
             launch_at_login: false,
             last_screen_permission_request_id: None,
             pending_capture_after_restart: None,
@@ -44,11 +47,24 @@ pub struct CaptureArtifact {
     pub size_bytes: u64,
     pub created_at: String,
     pub mode: CaptureMode,
-    pub clipboard_copied: bool,
+    pub clipboard_copy_status: ClipboardCopyStatus,
     #[serde(skip)]
     pub image_png: Vec<u8>,
     #[serde(skip)]
     pub preview_png: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClipboardCopyStatus {
+    Skipped,
+    Pending,
+    Copied,
+    Failed,
+}
+
+const fn default_auto_copy_to_clipboard() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -160,6 +176,7 @@ mod tests {
 
         assert!(settings.last_screen_permission_request_id.is_none());
         assert!(settings.pending_capture_after_restart.is_none());
+        assert!(settings.auto_copy_to_clipboard);
     }
 
     #[test]
@@ -177,5 +194,19 @@ mod tests {
             restored.pending_capture_after_restart,
             Some(CaptureMode::Region)
         );
+    }
+
+    #[test]
+    fn persists_disabled_automatic_clipboard_copying() {
+        let settings = AppSettings {
+            auto_copy_to_clipboard: false,
+            ..AppSettings::default()
+        };
+
+        let json = serde_json::to_string(&settings).expect("settings should serialize");
+        let restored: AppSettings =
+            serde_json::from_str(&json).expect("settings should deserialize");
+
+        assert!(!restored.auto_copy_to_clipboard);
     }
 }

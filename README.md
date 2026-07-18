@@ -2,7 +2,7 @@
 
 CES is a small, privacy-first screenshot utility for macOS, Windows, and Linux.
 
-The first milestone is a macOS developer alpha. It runs in the tray, captures a region, window, or full screen, automatically copies the result to the image clipboard, and presents a preview. Choose Save to write a PNG under `~/CES`; closing an unsaved preview with × does not create a file. CES does not upload screenshots or send telemetry.
+The first milestone is a macOS developer alpha. It runs in the tray, captures a region, window, or full screen, copies the result to the image clipboard by default, and presents a preview. Automatic clipboard copying can be disabled in Preferences. Choose Save to write a PNG under `~/CES`; **Close Without Saving** removes an unsaved preview without creating a file. CES does not upload screenshots or send telemetry.
 
 ## Current status
 
@@ -52,7 +52,7 @@ This runs the debug executable directly. Stop it with `Ctrl+C` in the terminal. 
 
 The three global capture shortcuts can be changed from Preferences. `Esc` only applies while the capture overlay is open.
 
-Use **Open Preview** on a pending capture to inspect the full-resolution image in CES. This dedicated viewer is the future home for annotation and editing tools.
+Use **View Full Size** on a pending capture to inspect the full-resolution image in CES. This dedicated viewer is the future home for annotation and editing tools.
 
 ## Build and install
 

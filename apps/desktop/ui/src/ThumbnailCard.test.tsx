@@ -14,7 +14,7 @@ function artifact(path: string | null): CaptureArtifact {
     size_bytes: 250_000,
     created_at: "2026-07-18T22:00:00Z",
     mode: "region",
-    clipboard_copied: true,
+    clipboard_copy_status: "copied",
   };
 }
 
@@ -23,16 +23,33 @@ describe("ThumbnailCard", () => {
     render(<ThumbnailCard artifact={artifact(null)} onRemoved={() => undefined} />);
 
     expect(screen.getByText("Copied to clipboard")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Close Preview" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Delete Saved Capture" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "View Full Size" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Close Without Saving" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Move to Trash" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument();
   });
 
   it("offers deletion only after the capture has a saved file", () => {
     render(<ThumbnailCard artifact={artifact("/Users/josevalerio/CES/capture.png")} onRemoved={() => undefined} />);
 
-    expect(screen.getByRole("button", { name: "Delete Saved Capture" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Move to Trash" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Close Preview" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Show in Folder" })).toBeInTheDocument();
+  });
+
+  it("does not claim the clipboard changed when automatic copying is disabled", () => {
+    const notCopied = { ...artifact(null), clipboard_copy_status: "skipped" as const };
+    render(<ThumbnailCard artifact={notCopied} onRemoved={() => undefined} />);
+
+    expect(screen.queryByText("Copied to clipboard")).not.toBeInTheDocument();
+    expect(screen.queryByText("Clipboard unavailable")).not.toBeInTheDocument();
+  });
+
+  it("reports an automatic clipboard failure without showing a success confirmation", () => {
+    const failedCopy = { ...artifact(null), clipboard_copy_status: "failed" as const };
+    render(<ThumbnailCard artifact={failedCopy} onRemoved={() => undefined} />);
+
+    expect(screen.queryByText("Copied to clipboard")).not.toBeInTheDocument();
+    expect(screen.getByText("Clipboard unavailable")).toBeInTheDocument();
   });
 });
