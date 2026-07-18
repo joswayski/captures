@@ -2,7 +2,7 @@
 
 CES is a small, privacy-first screenshot utility for macOS, Windows, and Linux.
 
-The first milestone is a macOS developer alpha. It runs in the tray, captures a region, window, or full screen, copies the result to the image clipboard, and presents a preview. Choose Save to write a PNG under `~/CES`; Dismiss drops an unsaved preview without creating a file. CES does not upload screenshots or send telemetry.
+The first milestone is a macOS developer alpha. It runs in the tray, captures a region, window, or full screen, automatically copies the result to the image clipboard, and presents a preview. Choose Save to write a PNG under `~/CES`; closing an unsaved preview with × does not create a file. CES does not upload screenshots or send telemetry.
 
 ## Current status
 

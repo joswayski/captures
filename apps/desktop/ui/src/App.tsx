@@ -604,7 +604,7 @@ function Thumbnail() {
   );
 }
 
-function ThumbnailCard({
+export function ThumbnailCard({
   artifact,
   onRemoved,
 }: {
@@ -682,14 +682,18 @@ function ThumbnailCard({
         onError={markThumbnailReady}
       />
       <div className="thumbnail-top-actions">
-        <IconButton className="delete" label="Delete" onClick={() => exitWith("delete", "trash_artifact")}>
-          <TrashIcon />
-        </IconButton>
+        {artifact.path && (
+          <IconButton className="delete" label="Delete Saved Capture" onClick={() => exitWith("delete", "trash_artifact")}>
+            <TrashIcon />
+          </IconButton>
+        )}
         <div className="thumbnail-top-right">
           <IconButton label="Open Preview" onClick={() => void runAction("open_artifact_viewer")}>
             <ExpandIcon />
           </IconButton>
-          <button type="button" className="dismiss-button" onClick={() => exitWith("dismiss", "dismiss_artifact")}>Dismiss</button>
+          <IconButton className="close" label="Close Preview" onClick={() => exitWith("dismiss", "dismiss_artifact")}>
+            <CloseIcon />
+          </IconButton>
         </div>
       </div>
       <div className="thumbnail-main-actions">
@@ -710,7 +714,9 @@ function ThumbnailCard({
       </div>
       <div className="thumbnail-meta">
         <span>{artifact.width} × {artifact.height} · {formatFileSize(artifact.size_bytes)}</span>
-        {!artifact.clipboard_copied && <span className="warning">Clipboard unavailable</span>}
+        {artifact.clipboard_copied
+          ? <span className="clipboard-status">Copied to clipboard</span>
+          : <span className="warning">Clipboard unavailable</span>}
       </div>
       {error && <p className="thumbnail-message">{error}</p>}
     </article>
@@ -749,6 +755,10 @@ function ExpandIcon() {
 
 function TrashIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5" /></svg>;
+}
+
+function CloseIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>;
 }
 
 function SaveIcon() {
