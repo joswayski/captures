@@ -61,6 +61,11 @@ export interface ClipboardState {
   artifact_id: string | null;
 }
 
+export interface ViewerFocusState {
+  artifact_id: string;
+  focused: boolean;
+}
+
 export interface ThumbnailPointerPosition {
   x: number;
   y: number;

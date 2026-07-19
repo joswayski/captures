@@ -72,7 +72,8 @@ html.capture-window-cursor, html.capture-window-cursor * { cursor: var(--capture
 
 .thumbnail-stack { display: flex; flex-direction: column; gap: 24px; width: 100%; height: 100%; padding: 28px; overflow-y: auto; background: transparent; scrollbar-width: none; }
 .thumbnail-stack::-webkit-scrollbar { display: none; }
-.thumbnail-card { position: relative; isolation: isolate; flex: 0 0 160px; width: 100%; height: 160px; margin-bottom: 0; background: transparent; border-radius: 12px; box-shadow: 0 8px 16px rgba(0,0,0,.34), 0 2px 5px rgba(0,0,0,.22); transition: flex-basis .26s ease, height .26s ease, margin-bottom .26s ease, opacity .2s ease, transform .2s ease, filter .2s ease; will-change: flex-basis, height, opacity, transform; }
+.thumbnail-card { position: relative; isolation: isolate; flex: 0 0 160px; width: 100%; height: 160px; margin-bottom: 0; background: transparent; border-radius: 12px; box-shadow: 0 8px 16px rgba(0,0,0,.34), 0 2px 5px rgba(0,0,0,.22); transition: flex-basis .26s ease, height .26s ease, margin-bottom .26s ease, opacity .2s ease, transform .2s ease, filter .2s ease, box-shadow .22s ease; will-change: flex-basis, height, opacity, transform; }
+.thumbnail-card.thumbnail-viewer-focused { box-shadow: 0 8px 16px rgba(0,0,0,.34), 0 2px 5px rgba(0,0,0,.22), 0 0 0 1px rgba(169,151,255,.88), 0 0 17px rgba(137,116,255,.4); }
 .thumbnail-card:first-child { margin-top: auto; }
 .thumbnail-card img { display: block; width: 100%; height: 100%; object-fit: contain; border: 0; border-radius: 12px; background: #0e0f15; transition: filter .18s ease, transform .22s ease; }
 html:not(.thumbnail-native-tracking) .thumbnail-card:hover img, .thumbnail-card:focus-within img, .thumbnail-card-native-active img { filter: blur(2px) brightness(.56); transform: scale(1.015); }

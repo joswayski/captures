@@ -20,7 +20,7 @@ function artifact(path: string | null, id = "capture-1"): CaptureArtifact {
 
 describe("ThumbnailCard", () => {
   it("explains automatic clipboard copying and closes an unsaved preview without a trash action", () => {
-    render(<ThumbnailCard artifact={artifact(null)} clipboardCurrent onRemoved={() => undefined} />);
+    render(<ThumbnailCard artifact={artifact(null)} clipboardCurrent viewerFocused={false} onRemoved={() => undefined} />);
 
     expect(screen.getByText("Copied to clipboard")).toBeInTheDocument();
     const fullSize = screen.getByRole("button", { name: "View Full Size" });
@@ -33,7 +33,7 @@ describe("ThumbnailCard", () => {
   });
 
   it("offers deletion only after the capture has a saved file", () => {
-    render(<ThumbnailCard artifact={artifact("/Users/josevalerio/CES/capture.png")} clipboardCurrent onRemoved={() => undefined} />);
+    render(<ThumbnailCard artifact={artifact("/Users/josevalerio/CES/capture.png")} clipboardCurrent viewerFocused={false} onRemoved={() => undefined} />);
 
     const close = screen.getByRole("button", { name: "Close Preview" });
     const trash = screen.getByRole("button", { name: "Move to Trash" });
@@ -44,7 +44,7 @@ describe("ThumbnailCard", () => {
 
   it("does not claim the clipboard changed when automatic copying is disabled", () => {
     const notCopied = { ...artifact(null), clipboard_copy_status: "skipped" as const };
-    render(<ThumbnailCard artifact={notCopied} clipboardCurrent={false} onRemoved={() => undefined} />);
+    render(<ThumbnailCard artifact={notCopied} clipboardCurrent={false} viewerFocused={false} onRemoved={() => undefined} />);
 
     expect(screen.queryByText("Copied to clipboard")).not.toBeInTheDocument();
     expect(screen.queryByText("Clipboard unavailable")).not.toBeInTheDocument();
@@ -53,7 +53,7 @@ describe("ThumbnailCard", () => {
 
   it("reports an automatic clipboard failure without showing a success confirmation", () => {
     const failedCopy = { ...artifact(null), clipboard_copy_status: "failed" as const };
-    render(<ThumbnailCard artifact={failedCopy} clipboardCurrent={false} onRemoved={() => undefined} />);
+    render(<ThumbnailCard artifact={failedCopy} clipboardCurrent={false} viewerFocused={false} onRemoved={() => undefined} />);
 
     expect(screen.queryByText("Copied to clipboard")).not.toBeInTheDocument();
     expect(screen.getByText("Clipboard unavailable")).toBeInTheDocument();
@@ -62,8 +62,8 @@ describe("ThumbnailCard", () => {
   it("hides Copy only on the preview that currently owns the clipboard", () => {
     render(
       <>
-        <ThumbnailCard artifact={artifact(null, "older")} clipboardCurrent={false} onRemoved={() => undefined} />
-        <ThumbnailCard artifact={artifact(null, "current")} clipboardCurrent onRemoved={() => undefined} />
+        <ThumbnailCard artifact={artifact(null, "older")} clipboardCurrent={false} viewerFocused={false} onRemoved={() => undefined} />
+        <ThumbnailCard artifact={artifact(null, "current")} clipboardCurrent viewerFocused={false} onRemoved={() => undefined} />
       </>,
     );
 
@@ -72,5 +72,18 @@ describe("ThumbnailCard", () => {
     expect(within(older).queryByText("Copied to clipboard")).not.toBeInTheDocument();
     expect(within(current).queryByRole("button", { name: "Copy" })).not.toBeInTheDocument();
     expect(within(current).getByText("Copied to clipboard")).toBeInTheDocument();
+  });
+
+  it("marks the preview currently shown in the focused full-size viewer", () => {
+    render(
+      <ThumbnailCard
+        artifact={artifact(null)}
+        clipboardCurrent={false}
+        viewerFocused
+        onRemoved={() => undefined}
+      />,
+    );
+
+    expect(screen.getByRole("article")).toHaveClass("thumbnail-viewer-focused");
   });
 });

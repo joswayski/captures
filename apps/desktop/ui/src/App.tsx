@@ -1,5 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -22,6 +22,7 @@ import {
   clearThumbnailNativeHover,
   thumbnailCursorSyncAction,
 } from "./lib/thumbnailHover";
+import { reconcileFocusedViewer } from "./lib/viewerFocus";
 import type {
   ActiveSession,
   AppSettings,
@@ -29,6 +30,7 @@ import type {
   CaptureMode,
   ClipboardState,
   ThumbnailPointerPosition,
+  ViewerFocusState,
   WindowDescriptor,
 } from "./types";
 
@@ -40,6 +42,14 @@ function query(name: string): string | null {
 
 function afterNextPaint(callback: () => void) {
   requestAnimationFrame(() => requestAnimationFrame(callback));
+}
+
+function emitViewerFocus(artifactId: string | null, focused: boolean) {
+  if (!artifactId) return;
+  void emit<ViewerFocusState>("viewer-focus-changed", {
+    artifact_id: artifactId,
+    focused,
+  }).catch(() => undefined);
 }
 
 export function App() {
@@ -85,6 +95,7 @@ function ArtifactViewer() {
   const [fit, setFit] = useState(true);
   const [revision, setRevision] = useState(0);
   const displayedArtifactId = useRef<string | null>(artifactId);
+  const viewerFocused = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -92,10 +103,15 @@ function ArtifactViewer() {
     void (async () => {
       dispose = await Promise.all([
         listen<CaptureArtifact>("viewer-artifact-changed", ({ payload }) => {
+          const previousArtifactId = displayedArtifactId.current;
           displayedArtifactId.current = payload.id;
           setArtifact(payload);
           setRevision((current) => current + 1);
           setFit(true);
+          if (viewerFocused.current && previousArtifactId !== payload.id) {
+            emitViewerFocus(previousArtifactId, false);
+            emitViewerFocus(payload.id, true);
+          }
         }),
         listen<string>("artifact-removed", ({ payload }) => {
           if (displayedArtifactId.current === payload) void currentWindow?.close();
@@ -113,6 +129,38 @@ function ArtifactViewer() {
       dispose.forEach((unlisten) => unlisten());
     };
   }, [artifactId]);
+
+  useEffect(() => {
+    if (!currentWindow) return;
+    let active = true;
+    let unlisten: (() => void) | undefined;
+
+    void (async () => {
+      const stopListening = await currentWindow.onFocusChanged(({ payload }) => {
+        if (!active) return;
+        viewerFocused.current = payload;
+        emitViewerFocus(displayedArtifactId.current, payload);
+      });
+      if (!active) {
+        stopListening();
+        return;
+      }
+      unlisten = stopListening;
+      const focused = await currentWindow.isFocused();
+      if (!active) return;
+      viewerFocused.current = focused;
+      emitViewerFocus(displayedArtifactId.current, focused);
+    })();
+
+    return () => {
+      active = false;
+      unlisten?.();
+      if (viewerFocused.current) {
+        emitViewerFocus(displayedArtifactId.current, false);
+        viewerFocused.current = false;
+      }
+    };
+  }, []);
 
   if (!artifact) return <main className="viewer-loading">Loading preview…</main>;
 
@@ -429,6 +477,7 @@ function Thumbnail() {
     revision: -1,
     artifact_id: null,
   });
+  const [focusedViewerArtifactId, setFocusedViewerArtifactId] = useState<string | null>(null);
   const stackRef = useRef<HTMLElement>(null);
   const applyClipboardState = useCallback((next: ClipboardState) => {
     setClipboardState((current) => reconcileClipboardState(current, next));
@@ -452,9 +501,13 @@ function Thumbnail() {
         listen<string>("artifact-removed", ({ payload }) => {
           removedArtifactIds.add(payload);
           setArtifacts((current) => current.filter(({ id }) => id !== payload));
+          setFocusedViewerArtifactId((current) => current === payload ? null : current);
         }),
         listen<ClipboardState>("clipboard-owner-changed", ({ payload }) => {
           applyClipboardState(payload);
+        }),
+        listen<ViewerFocusState>("viewer-focus-changed", ({ payload }) => {
+          setFocusedViewerArtifactId((current) => reconcileFocusedViewer(current, payload));
         }),
       ]);
       const initialArtifacts = await invoke<CaptureArtifact[]>("get_artifacts");
@@ -648,6 +701,7 @@ function Thumbnail() {
           key={artifact.id}
           artifact={artifact}
           clipboardCurrent={clipboardState.artifact_id === artifact.id}
+          viewerFocused={focusedViewerArtifactId === artifact.id}
           onRemoved={(artifactId) => {
             setArtifacts((current) => current.filter(({ id }) => id !== artifactId));
           }}
@@ -660,10 +714,12 @@ function Thumbnail() {
 export function ThumbnailCard({
   artifact,
   clipboardCurrent,
+  viewerFocused,
   onRemoved,
 }: {
   artifact: CaptureArtifact;
   clipboardCurrent: boolean;
+  viewerFocused: boolean;
   onRemoved: (artifactId: string) => void;
 }) {
   const [feedback, setFeedback] = useState<"saved" | null>(null);
@@ -728,7 +784,7 @@ export function ThumbnailCard({
 
   return (
     <article
-      className={`thumbnail-card ${exit ? `thumbnail-exit-${exit}` : ""}`}
+      className={`thumbnail-card ${viewerFocused ? "thumbnail-viewer-focused" : ""} ${exit ? `thumbnail-exit-${exit}` : ""}`}
       onAnimationEnd={finishExit}
     >
       <img
