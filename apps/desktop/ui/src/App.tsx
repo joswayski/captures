@@ -457,7 +457,7 @@ function WindowTargets({
   );
 }
 
-function Thumbnail() {
+export function Thumbnail() {
   const [artifacts, setArtifacts] = useState<CaptureArtifact[]>([]);
   const [clipboardState, setClipboardState] = useState<ClipboardState>({
     revision: -1,
@@ -678,7 +678,11 @@ function Thumbnail() {
     };
 
     document.addEventListener("visibilitychange", resumePolling);
-    window.addEventListener("focus", resumePolling);
+    // Clicking an inactive thumbnail briefly makes its panel key before a
+    // full-size viewer takes focus. Keep the last native hover presentation
+    // during that transfer; the immediate poll will reconcile it without
+    // flashing the metadata and unblurred image in between.
+    window.addEventListener("focus", pollImmediately);
     window.addEventListener("pageshow", resumePolling);
     window.addEventListener("captures-thumbnail-ready", pollImmediately);
     window.addEventListener("captures-thumbnail-layout-changed", pollImmediately);
@@ -687,7 +691,7 @@ function Thumbnail() {
       cancelled = true;
       if (timer) clearTimeout(timer);
       document.removeEventListener("visibilitychange", resumePolling);
-      window.removeEventListener("focus", resumePolling);
+      window.removeEventListener("focus", pollImmediately);
       window.removeEventListener("pageshow", resumePolling);
       window.removeEventListener("captures-thumbnail-ready", pollImmediately);
       window.removeEventListener("captures-thumbnail-layout-changed", pollImmediately);
