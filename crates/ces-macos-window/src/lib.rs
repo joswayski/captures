@@ -328,8 +328,9 @@ pub fn reset_capture_overlay(window: &WebviewWindow) -> Result<(), &'static str>
     result
 }
 
-/// Resizes a visible preview stack in one AppKit frame update while preserving
-/// its bottom edge.
+/// Live-resizes a visible preview stack while preserving its bottom edge.
+/// Letting AppKit drive the intermediate frames keeps WKWebView's compositor
+/// attached instead of briefly blanking the surviving card after a removal.
 pub fn resize_from_bottom(
     window: &WebviewWindow,
     width: f64,
@@ -338,7 +339,7 @@ pub fn resize_from_bottom(
     let native_window = native_window(window)?;
     let current = native_window.frame();
     let frame = NSRect::new(current.origin, NSSize::new(width, height));
-    native_window.setFrame_display(frame, false);
+    native_window.setFrame_display_animate(frame, true, true);
     Ok(())
 }
 
