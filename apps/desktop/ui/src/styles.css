@@ -87,6 +87,7 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-meta, .thu
 html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-top-actions, html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-main-actions, .thumbnail-card:focus-within .thumbnail-top-actions, .thumbnail-card:focus-within .thumbnail-main-actions, .thumbnail-card-native-active .thumbnail-top-actions, .thumbnail-card-native-active .thumbnail-main-actions { opacity: 1; pointer-events: auto; }
 .thumbnail-top-actions { position: absolute; z-index: 4; top: 8px; right: 8px; left: 8px; display: flex; justify-content: space-between; align-items: start; transform: translateY(-3px); }
 html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-top-actions, .thumbnail-card:focus-within .thumbnail-top-actions, .thumbnail-card-native-active .thumbnail-top-actions { transform: translateY(0); }
+.thumbnail-top-left { display: flex; align-items: center; gap: 6px; }
 .thumbnail-top-right { display: flex; margin-left: auto; align-items: center; gap: 5px; }
 .icon-button { position: relative; display: grid; width: 29px; height: 29px; padding: 5px; place-items: center; border: 1px solid rgba(255,255,255,.14); border-radius: 7px; color: #f8f8fb; background: rgba(16,17,25,.8); box-shadow: 0 3px 12px rgba(0,0,0,.3); backdrop-filter: blur(12px); cursor: pointer; transition: color .14s ease, background .14s ease, transform .14s ease; }
 .icon-button:hover, .icon-button.native-pointer-hover { background: rgba(48,49,64,.96); }
@@ -97,7 +98,7 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-top-action
 .icon-button:hover::after, .icon-button.native-pointer-hover::after, .icon-button:focus-visible::after { opacity: 1; transform: translate(-50%, 0); }
 .icon-button.delete::after { left: 0; transform: translate(0, -2px); }
 .icon-button.delete:hover::after, .icon-button.delete.native-pointer-hover::after, .icon-button.delete:focus-visible::after { transform: translate(0, 0); }
-.icon-button.close::after { right: 0; left: auto; transform: translate(0, -2px); }
+.icon-button.close::after { left: 0; transform: translate(0, -2px); }
 .icon-button.close:hover::after, .icon-button.close.native-pointer-hover::after, .icon-button.close:focus-visible::after { transform: translate(0, 0); }
 .thumbnail-main-actions { position: absolute; z-index: 3; top: 50%; left: 50%; display: grid; gap: 7px; width: 132px; transform: translate(-50%, -47%); }
 html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-main-actions, .thumbnail-card:focus-within .thumbnail-main-actions, .thumbnail-card-native-active .thumbnail-main-actions { transform: translate(-50%, -50%); }

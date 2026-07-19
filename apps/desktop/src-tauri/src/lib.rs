@@ -12,6 +12,8 @@ use std::{
 
 #[cfg(target_os = "macos")]
 use std::process::Command;
+#[cfg(not(target_os = "macos"))]
+use std::sync::atomic::AtomicIsize;
 
 use tauri::CursorIcon;
 
@@ -38,7 +40,10 @@ mod models;
 mod state;
 mod storage;
 
-use models::{ActiveSession, AppSettings, CaptureArtifact, CaptureSession, ClipboardCopyStatus};
+use models::{
+    ActiveSession, AppSettings, CaptureArtifact, CaptureSession, ClipboardCopyStatus,
+    ClipboardState,
+};
 use state::AppState;
 
 #[derive(Debug, Error)]
@@ -123,6 +128,7 @@ pub fn run() {
             update_settings,
             get_artifacts,
             get_artifact,
+            get_clipboard_state,
             copy_artifact,
             save_artifact,
             reveal_artifact,
@@ -742,6 +748,23 @@ fn get_artifact(
 }
 
 #[tauri::command]
+fn get_clipboard_state(state: tauri::State<'_, Arc<AppState>>) -> ClipboardState {
+    let revision = current_clipboard_revision();
+    let artifact_id = state.clipboard_ownership.lock().current_artifact(revision);
+    let artifact_id = artifact_id.filter(|artifact_id| {
+        state
+            .artifacts
+            .lock()
+            .iter()
+            .any(|artifact| artifact.id == *artifact_id)
+    });
+    ClipboardState {
+        revision,
+        artifact_id,
+    }
+}
+
+#[tauri::command]
 async fn copy_artifact(
     app: AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
@@ -757,9 +780,33 @@ async fn copy_artifact(
     let image = image::load_from_memory(&artifact.image_png)
         .map_err(|error| error.to_string())?
         .into_rgba8();
-    copy_to_clipboard(&app, image)
+    let revision = copy_to_clipboard(&app, image)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    let artifact = {
+        let mut artifacts = state.artifacts.lock();
+        let artifact = artifacts
+            .iter_mut()
+            .find(|artifact| artifact.id == artifact_id)
+            .ok_or_else(|| "artifact is no longer available".to_owned())?;
+        artifact.clipboard_copy_status = ClipboardCopyStatus::Copied;
+        artifact.clone()
+    };
+    state
+        .clipboard_ownership
+        .lock()
+        .record(revision, artifact_id.clone());
+    app.emit("artifact-updated", &artifact)
+        .map_err(|error| error.to_string())?;
+    app.emit(
+        "clipboard-owner-changed",
+        &ClipboardState {
+            revision,
+            artifact_id: Some(artifact_id),
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -983,14 +1030,25 @@ async fn finish_capture(
     app.emit("capture-completed", &artifact)?;
 
     if let Some(clipboard_task) = clipboard_task {
-        let copied = clipboard_task
+        let clipboard_result = clipboard_task
             .await
-            .map_err(|error| AppError::Task(error.to_string()))?
-            .is_ok();
-        artifact.clipboard_copy_status = if copied {
-            ClipboardCopyStatus::Copied
-        } else {
-            ClipboardCopyStatus::Failed
+            .map_err(|error| AppError::Task(error.to_string()))?;
+        artifact.clipboard_copy_status = match clipboard_result {
+            Ok(revision) => {
+                state
+                    .clipboard_ownership
+                    .lock()
+                    .record(revision, artifact.id.clone());
+                app.emit(
+                    "clipboard-owner-changed",
+                    &ClipboardState {
+                        revision,
+                        artifact_id: Some(artifact.id.clone()),
+                    },
+                )?;
+                ClipboardCopyStatus::Copied
+            }
+            Err(_) => ClipboardCopyStatus::Failed,
         };
         if let Some(stored) = state
             .artifacts
@@ -1005,21 +1063,47 @@ async fn finish_capture(
     Ok(artifact)
 }
 
-async fn copy_to_clipboard(app: &AppHandle, image: RgbaImage) -> Result<(), AppError> {
+async fn copy_to_clipboard(app: &AppHandle, image: RgbaImage) -> Result<isize, AppError> {
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || write_image_to_clipboard(&app, image))
         .await
         .map_err(|error| AppError::Task(error.to_string()))?
 }
 
-fn write_image_to_clipboard(app: &AppHandle, image: RgbaImage) -> Result<(), AppError> {
+fn write_image_to_clipboard(app: &AppHandle, image: RgbaImage) -> Result<isize, AppError> {
     let width = image.width();
     let height = image.height();
     let rgba = image.into_raw();
     let clipboard_image = Image::new_owned(rgba, width, height);
     app.clipboard()
         .write_image(&clipboard_image)
-        .map_err(|error| AppError::Clipboard(error.to_string()))
+        .map_err(|error| AppError::Clipboard(error.to_string()))?;
+    Ok(record_clipboard_write())
+}
+
+#[cfg(target_os = "macos")]
+fn current_clipboard_revision() -> isize {
+    ces_macos_window::clipboard_change_count()
+}
+
+#[cfg(target_os = "macos")]
+fn record_clipboard_write() -> isize {
+    current_clipboard_revision()
+}
+
+#[cfg(not(target_os = "macos"))]
+static APPLICATION_CLIPBOARD_REVISION: AtomicIsize = AtomicIsize::new(0);
+
+#[cfg(not(target_os = "macos"))]
+fn current_clipboard_revision() -> isize {
+    APPLICATION_CLIPBOARD_REVISION.load(Ordering::Acquire)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn record_clipboard_write() -> isize {
+    APPLICATION_CLIPBOARD_REVISION
+        .fetch_add(1, Ordering::AcqRel)
+        .wrapping_add(1)
 }
 
 fn display_under_pointer(state: &AppState) -> Result<ces_capture::DisplayDescriptor, AppError> {

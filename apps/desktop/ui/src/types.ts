@@ -56,6 +56,11 @@ export interface CaptureArtifact {
   clipboard_copy_status: ClipboardCopyStatus;
 }
 
+export interface ClipboardState {
+  revision: number;
+  artifact_id: string | null;
+}
+
 export interface ThumbnailPointerPosition {
   x: number;
   y: number;

@@ -54,6 +54,8 @@ The three global capture shortcuts can be changed from Preferences. `Esc` only a
 
 Use **View Full Size** on a pending capture to inspect the full-resolution image in CES. This dedicated viewer is the future home for annotation and editing tools.
 
+The **Copied to clipboard** badge is live: it disappears and the **Copy** action returns when another app replaces the clipboard with text, an image, or any other content. With multiple capture previews open, only the preview currently owned by the clipboard hides its Copy action.
+
 ## Build and install
 
 Build CES on the operating system where it will run:

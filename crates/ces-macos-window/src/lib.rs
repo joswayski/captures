@@ -15,8 +15,8 @@ use objc2::{
     runtime::AnyObject,
 };
 use objc2_app_kit::{
-    NSCursor, NSEvent, NSStatusWindowLevel, NSTrackingArea, NSTrackingAreaOptions, NSView,
-    NSWindow, NSWindowStyleMask,
+    NSCursor, NSEvent, NSPasteboard, NSStatusWindowLevel, NSTrackingArea, NSTrackingAreaOptions,
+    NSView, NSWindow, NSWindowStyleMask,
 };
 use objc2_foundation::{NSObject, NSRect, NSSize};
 use tauri::WebviewWindow;
@@ -175,6 +175,15 @@ static CAPTURE_OVERLAY_OWNS_CURSOR: AtomicBool = AtomicBool::new(false);
 /// lets AppKit replace the crosshair with an arrow when the modifiers come up.
 pub fn capture_shortcut_modifiers_pressed() -> bool {
     shortcut_modifiers_pressed(NSEvent::modifierFlags_class())
+}
+
+/// Returns the system pasteboard revision without reading its contents.
+///
+/// AppKit increments this value whenever any application replaces the
+/// pasteboard, allowing CES to notice that its last copied capture is no
+/// longer current without inspecting the user's clipboard data.
+pub fn clipboard_change_count() -> isize {
+    NSPasteboard::generalPasteboard().changeCount()
 }
 
 fn shortcut_modifiers_pressed(flags: objc2_app_kit::NSEventModifierFlags) -> bool {

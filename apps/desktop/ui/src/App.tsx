@@ -5,6 +5,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { formatFileSize } from "./lib/format";
+import { reconcileClipboardState } from "./lib/clipboard";
 import {
   isCapturableSelection,
   selectionRect,
@@ -26,6 +27,7 @@ import type {
   AppSettings,
   CaptureArtifact,
   CaptureMode,
+  ClipboardState,
   ThumbnailPointerPosition,
   WindowDescriptor,
 } from "./types";
@@ -423,7 +425,14 @@ function WindowTargets({
 
 function Thumbnail() {
   const [artifacts, setArtifacts] = useState<CaptureArtifact[]>([]);
+  const [clipboardState, setClipboardState] = useState<ClipboardState>({
+    revision: -1,
+    artifact_id: null,
+  });
   const stackRef = useRef<HTMLElement>(null);
+  const applyClipboardState = useCallback((next: ClipboardState) => {
+    setClipboardState((current) => reconcileClipboardState(current, next));
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -444,6 +453,9 @@ function Thumbnail() {
           removedArtifactIds.add(payload);
           setArtifacts((current) => current.filter(({ id }) => id !== payload));
         }),
+        listen<ClipboardState>("clipboard-owner-changed", ({ payload }) => {
+          applyClipboardState(payload);
+        }),
       ]);
       const initialArtifacts = await invoke<CaptureArtifact[]>("get_artifacts");
       if (active) {
@@ -462,7 +474,47 @@ function Thumbnail() {
       active = false;
       dispose.forEach((unlisten) => unlisten());
     };
-  }, []);
+  }, [applyClipboardState]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let polling = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const schedulePoll = (delay: number) => {
+      if (cancelled) return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        void poll();
+      }, delay);
+    };
+
+    const poll = async () => {
+      if (cancelled || polling) return;
+      polling = true;
+      try {
+        const current = await invoke<ClipboardState>("get_clipboard_state");
+        if (!cancelled) applyClipboardState(current);
+      } catch {
+        // Preserve the last known state if the platform clipboard is briefly unavailable.
+      } finally {
+        polling = false;
+        schedulePoll(document.hidden ? 1_000 : 400);
+      }
+    };
+
+    const pollImmediately = () => schedulePoll(0);
+    document.addEventListener("visibilitychange", pollImmediately);
+    window.addEventListener("focus", pollImmediately);
+    schedulePoll(0);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      document.removeEventListener("visibilitychange", pollImmediately);
+      window.removeEventListener("focus", pollImmediately);
+    };
+  }, [applyClipboardState]);
 
   useEffect(() => {
     if (stackRef.current) stackRef.current.scrollTop = stackRef.current.scrollHeight;
@@ -595,6 +647,7 @@ function Thumbnail() {
         <ThumbnailCard
           key={artifact.id}
           artifact={artifact}
+          clipboardCurrent={clipboardState.artifact_id === artifact.id}
           onRemoved={(artifactId) => {
             setArtifacts((current) => current.filter(({ id }) => id !== artifactId));
           }}
@@ -606,12 +659,14 @@ function Thumbnail() {
 
 export function ThumbnailCard({
   artifact,
+  clipboardCurrent,
   onRemoved,
 }: {
   artifact: CaptureArtifact;
+  clipboardCurrent: boolean;
   onRemoved: (artifactId: string) => void;
 }) {
-  const [feedback, setFeedback] = useState<"copied" | "saved" | null>(null);
+  const [feedback, setFeedback] = useState<"saved" | null>(null);
   const [busy, setBusy] = useState<"copied" | "saved" | null>(null);
   const [error, setError] = useState("");
   const [exit, setExit] = useState<"dismiss" | "delete" | null>(null);
@@ -632,8 +687,8 @@ export function ThumbnailCard({
     };
   }, []);
 
-  const showFeedback = (value: "copied" | "saved") => {
-    setFeedback(value);
+  const showSavedFeedback = () => {
+    setFeedback("saved");
     if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
     feedbackTimer.current = setTimeout(() => setFeedback(null), 2_000);
   };
@@ -644,7 +699,7 @@ export function ThumbnailCard({
     if (success) setBusy(success);
     try {
       await invoke(action, { artifactId: artifact.id });
-      if (success) showFeedback(success);
+      if (success === "saved") showSavedFeedback();
     } catch (error) {
       setError(String(error));
     } finally {
@@ -670,8 +725,6 @@ export function ThumbnailCard({
       });
   };
   const closeLabel = artifact.path ? "Close Preview" : "Close Without Saving";
-  const showClipboardConfirmation = feedback === "copied"
-    || artifact.clipboard_copy_status === "copied";
 
   return (
     <article
@@ -684,31 +737,35 @@ export function ThumbnailCard({
         onLoad={markThumbnailReady}
         onError={markThumbnailReady}
       />
-      {showClipboardConfirmation && (
+      {clipboardCurrent && (
         <div className="clipboard-confirmation" role="status">
           <CheckIcon />
           <span>Copied to clipboard</span>
         </div>
       )}
       <div className="thumbnail-top-actions">
-        {artifact.path && (
-          <IconButton className="delete" label="Move to Trash" onClick={() => exitWith("delete", "trash_artifact")}>
-            <TrashIcon />
+        <div className="thumbnail-top-left">
+          <IconButton className="close" label={closeLabel} onClick={() => exitWith("dismiss", "dismiss_artifact")}>
+            <CloseIcon />
           </IconButton>
-        )}
+          {artifact.path && (
+            <IconButton className="delete" label="Move to Trash" onClick={() => exitWith("delete", "trash_artifact")}>
+              <TrashIcon />
+            </IconButton>
+          )}
+        </div>
         <div className="thumbnail-top-right">
           <IconButton label="View Full Size" onClick={() => void runAction("open_artifact_viewer")}>
             <ExpandIcon />
           </IconButton>
-          <IconButton className="close" label={closeLabel} onClick={() => exitWith("dismiss", "dismiss_artifact")}>
-            <CloseIcon />
-          </IconButton>
         </div>
       </div>
       <div className="thumbnail-main-actions">
-        <button type="button" disabled={busy !== null} onClick={() => void runAction("copy_artifact", "copied")}>
-          {feedback === "copied" ? <><CheckIcon />Copied!</> : <><CopyIcon />Copy</>}
-        </button>
+        {!clipboardCurrent && (
+          <button type="button" disabled={busy !== null} onClick={() => void runAction("copy_artifact", "copied")}>
+            <CopyIcon />Copy
+          </button>
+        )}
         <button
           type="button"
           disabled={busy !== null}
@@ -723,7 +780,8 @@ export function ThumbnailCard({
       </div>
       <div className="thumbnail-meta">
         <span>{artifact.width} × {artifact.height} · {formatFileSize(artifact.size_bytes)}</span>
-        {artifact.clipboard_copy_status === "failed" && <span className="warning">Clipboard unavailable</span>}
+        {artifact.clipboard_copy_status === "failed" && !clipboardCurrent
+          && <span className="warning">Clipboard unavailable</span>}
       </div>
       {error && <p className="thumbnail-message">{error}</p>}
     </article>

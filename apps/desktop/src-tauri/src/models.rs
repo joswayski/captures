@@ -54,13 +54,19 @@ pub struct CaptureArtifact {
     pub preview_png: Vec<u8>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClipboardCopyStatus {
     Skipped,
     Pending,
     Copied,
     Failed,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ClipboardState {
+    pub revision: isize,
+    pub artifact_id: Option<String>,
 }
 
 const fn default_auto_copy_to_clipboard() -> bool {
