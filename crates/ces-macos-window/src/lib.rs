@@ -16,7 +16,7 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSCursor, NSEvent, NSPasteboard, NSStatusWindowLevel, NSTrackingArea, NSTrackingAreaOptions,
-    NSView, NSWindow, NSWindowStyleMask,
+    NSView, NSViewLayerContentsPlacement, NSWindow, NSWindowStyleMask,
 };
 use objc2_foundation::{NSObject, NSRect, NSSize};
 use tauri::WebviewWindow;
@@ -234,6 +234,13 @@ pub fn configure_inactive_hover(window: &WebviewWindow) -> Result<(), &'static s
             let Some(webview) = (unsafe { pointer.cast::<NSView>().as_ref() }) else {
                 return;
             };
+            // The preview stack and its window are both anchored to the
+            // bottom of the screen. WKWebView can briefly reuse its cached
+            // surface while AppKit shrinks the window after a card exits. If
+            // that cache follows the moving top edge, the surviving card
+            // travels below the screen before WebKit's new frame replaces it.
+            // Keep the cached surface on the stable bottom edge as well.
+            webview.setLayerContentsPlacement(NSViewLayerContentsPlacement::Bottom);
             let options = NSTrackingAreaOptions::MouseEnteredAndExited
                 | NSTrackingAreaOptions::MouseMoved
                 | NSTrackingAreaOptions::ActiveAlways
