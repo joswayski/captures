@@ -96,3 +96,9 @@ Ubuntu Desktop includes the screenshot portal used for Wayland region/display ca
 ## Privacy and future uploads
 
 Captures holds pending captures locally in memory and has no network permission in this milestone. Saving is an explicit action. The future upload service will receive an explicit Upload or Share action and will keep object storage private; the desktop app will never receive bucket credentials.
+
+## License and trademarks
+
+The source code is licensed under the [Apache License 2.0](LICENSE).
+
+The Captures name and logo are governed by the [Captures Trademark Policy](TRADEMARKS.md) and are not licensed under the Apache License 2.0.
