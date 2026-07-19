@@ -15,8 +15,8 @@ use objc2::{
     runtime::AnyObject,
 };
 use objc2_app_kit::{
-    NSCursor, NSEvent, NSStatusWindowLevel, NSTrackingArea, NSTrackingAreaOptions, NSView,
-    NSWindow, NSWindowStyleMask,
+    NSCursor, NSEvent, NSPasteboard, NSStatusWindowLevel, NSTrackingArea, NSTrackingAreaOptions,
+    NSView, NSWindow, NSWindowStyleMask,
 };
 use objc2_foundation::{NSObject, NSRect, NSSize};
 use tauri::WebviewWindow;
@@ -168,6 +168,35 @@ static CURSOR_TRACKER_ASSOCIATION_KEY: u8 = 0;
 // cursor selected by the active capture overlay.
 static CAPTURE_OVERLAY_OWNS_CURSOR: AtomicBool = AtomicBool::new(false);
 
+/// Returns whether a standard shortcut modifier is still physically held.
+///
+/// A registered macOS hotkey reports its primary key release before users
+/// necessarily release its modifiers. Starting region capture during that gap
+/// lets AppKit replace the crosshair with an arrow when the modifiers come up.
+pub fn capture_shortcut_modifiers_pressed() -> bool {
+    shortcut_modifiers_pressed(NSEvent::modifierFlags_class())
+}
+
+/// Returns the system pasteboard revision without reading its contents.
+///
+/// AppKit increments this value whenever any application replaces the
+/// pasteboard, allowing CES to notice that its last copied capture is no
+/// longer current without inspecting the user's clipboard data.
+pub fn clipboard_change_count() -> isize {
+    NSPasteboard::generalPasteboard().changeCount()
+}
+
+fn shortcut_modifiers_pressed(flags: objc2_app_kit::NSEventModifierFlags) -> bool {
+    use objc2_app_kit::NSEventModifierFlags;
+
+    flags.intersects(
+        NSEventModifierFlags::Shift
+            | NSEventModifierFlags::Control
+            | NSEventModifierFlags::Option
+            | NSEventModifierFlags::Command,
+    )
+}
+
 /// Registers the panel manager used by the capture thumbnail window.
 pub fn init_panel_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
     tauri_nspanel::init()
@@ -259,20 +288,20 @@ pub fn activate_capture_cursor(
     use_crosshair: bool,
 ) -> Result<(), &'static str> {
     let native_window = native_window(window)?;
-    // Keep cursor rectangles active so AppKit has a persistent cursor source
-    // when focus, modifier keys, or WebKit painting causes a cursor refresh.
-    // The overlay's native tracker now participates in cursorUpdate events, so
-    // stale WebKit rectangles can no longer leave region mode on the arrow.
-    set_cursor_rects_enabled(native_window, true);
     if use_crosshair {
         set_tracked_cursor(window, CursorMode::Crosshair, CursorSurface::CaptureOverlay)?;
         CAPTURE_OVERLAY_OWNS_CURSOR.store(true, Ordering::Release);
-        native_window.resetCursorRects();
+        // WebKit and AppKit both rebuild cursor rectangles when focus or
+        // modifier-key state changes. Disabling those rectangles while region
+        // capture owns the cursor prevents the arrow from being installed for
+        // a frame between two crosshair updates.
+        set_cursor_rects_enabled(native_window, false);
         NSCursor::crosshairCursor().set();
     } else {
         // Window capture uses a custom CSS camera cursor, so WebKit remains the
         // cursor owner in this mode. Refresh its rectangles after the overlay
         // becomes key and after its fade-in completes.
+        set_cursor_rects_enabled(native_window, true);
         set_tracked_cursor(window, CursorMode::WebView, CursorSurface::CaptureOverlay)?;
         CAPTURE_OVERLAY_OWNS_CURSOR.store(true, Ordering::Release);
         native_window.resetCursorRects();
@@ -299,8 +328,9 @@ pub fn reset_capture_overlay(window: &WebviewWindow) -> Result<(), &'static str>
     result
 }
 
-/// Resizes a visible preview stack in one AppKit frame update while preserving
-/// its bottom edge.
+/// Resizes a visible preview stack in one AppKit update while preserving its
+/// bottom edge. React commits the surviving-card layout before this runs, so
+/// an immediate redraw avoids both a blank frame and a second slide animation.
 pub fn resize_from_bottom(
     window: &WebviewWindow,
     width: f64,
@@ -477,7 +507,24 @@ fn native_window(window: &WebviewWindow) -> Result<&NSWindow, &'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CursorSurface, cursor_surface_can_apply, should_reset_cursor_on_exit};
+    use objc2_app_kit::NSEventModifierFlags;
+
+    use super::{
+        CursorSurface, cursor_surface_can_apply, shortcut_modifiers_pressed,
+        should_reset_cursor_on_exit,
+    };
+
+    #[test]
+    fn waits_for_shortcut_modifiers_but_not_lock_keys() {
+        assert!(shortcut_modifiers_pressed(
+            NSEventModifierFlags::Control | NSEventModifierFlags::Shift
+        ));
+        assert!(shortcut_modifiers_pressed(
+            NSEventModifierFlags::Option | NSEventModifierFlags::Command
+        ));
+        assert!(!shortcut_modifiers_pressed(NSEventModifierFlags::CapsLock));
+        assert!(!shortcut_modifiers_pressed(NSEventModifierFlags::empty()));
+    }
 
     #[test]
     fn active_capture_overlay_blocks_thumbnail_cursor_updates() {

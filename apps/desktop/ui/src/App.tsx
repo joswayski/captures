@@ -1,10 +1,11 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { formatFileSize } from "./lib/format";
+import { reconcileClipboardState } from "./lib/clipboard";
 import {
   isCapturableSelection,
   selectionRect,
@@ -21,12 +22,16 @@ import {
   clearThumbnailNativeHover,
   thumbnailCursorSyncAction,
 } from "./lib/thumbnailHover";
+import { shouldScrollThumbnailStackToEnd } from "./lib/thumbnailLayout";
+import { reconcileActiveViewer } from "./lib/viewerActivation";
 import type {
   ActiveSession,
   AppSettings,
   CaptureArtifact,
   CaptureMode,
+  ClipboardState,
   ThumbnailPointerPosition,
+  ViewerActivationState,
   WindowDescriptor,
 } from "./types";
 
@@ -38,6 +43,14 @@ function query(name: string): string | null {
 
 function afterNextPaint(callback: () => void) {
   requestAnimationFrame(() => requestAnimationFrame(callback));
+}
+
+function emitViewerActivation(artifactId: string | null, active: boolean) {
+  if (!artifactId) return;
+  void emit<ViewerActivationState>("viewer-activation-changed", {
+    artifact_id: artifactId,
+    active,
+  }).catch(() => undefined);
 }
 
 export function App() {
@@ -81,31 +94,53 @@ function ArtifactViewer() {
   const artifactId = query("artifact_id");
   const [artifact, setArtifact] = useState<CaptureArtifact | null>(null);
   const [fit, setFit] = useState(true);
-  const [revision, setRevision] = useState(0);
-  const displayedArtifactId = useRef<string | null>(artifactId);
 
   useEffect(() => {
     let active = true;
     let dispose: (() => void)[] = [];
     void (async () => {
       dispose = await Promise.all([
-        listen<CaptureArtifact>("viewer-artifact-changed", ({ payload }) => {
-          displayedArtifactId.current = payload.id;
-          setArtifact(payload);
-          setRevision((current) => current + 1);
-          setFit(true);
-        }),
         listen<string>("artifact-removed", ({ payload }) => {
-          if (displayedArtifactId.current === payload) void currentWindow?.close();
+          if (artifactId !== payload) return;
+          emitViewerActivation(artifactId, false);
+          void currentWindow?.close();
         }),
       ]);
       if (!artifactId) return;
       const initialArtifact = await invoke<CaptureArtifact | null>("get_artifact", { artifactId });
       if (active) {
-        displayedArtifactId.current = initialArtifact?.id ?? null;
         setArtifact(initialArtifact);
       }
     })();
+    return () => {
+      active = false;
+      dispose.forEach((unlisten) => unlisten());
+    };
+  }, [artifactId]);
+
+  useEffect(() => {
+    if (!currentWindow) return;
+    let active = true;
+    let dispose: (() => void)[] = [];
+
+    void (async () => {
+      const stopListening = await Promise.all([
+        currentWindow.onFocusChanged(({ payload }) => {
+          if (active && payload) emitViewerActivation(artifactId, true);
+        }),
+        currentWindow.onCloseRequested(() => {
+          if (active) emitViewerActivation(artifactId, false);
+        }),
+      ]);
+      if (!active) {
+        stopListening.forEach((unlisten) => unlisten());
+        return;
+      }
+      dispose = stopListening;
+      const focused = await currentWindow.isFocused();
+      if (active && focused) emitViewerActivation(artifactId, true);
+    })();
+
     return () => {
       active = false;
       dispose.forEach((unlisten) => unlisten());
@@ -127,7 +162,7 @@ function ArtifactViewer() {
       </header>
       <div className="viewer-canvas" onDoubleClick={() => setFit((current) => !current)}>
         <img
-          key={`${artifact.id}-${revision}`}
+          key={artifact.id}
           className={fit ? "viewer-image viewer-image-fit" : "viewer-image viewer-image-actual"}
           src={artifact.full_url}
           alt="Full-size screenshot"
@@ -141,6 +176,7 @@ function ArtifactViewer() {
 function CaptureOverlay() {
   const [session, setSession] = useState<ActiveSession | null>(null);
   const [visibleSessionId, setVisibleSessionId] = useState<string | null>(null);
+  const [primingSessionId, setPrimingSessionId] = useState<string | null>(null);
   const [start, setStart] = useState<SelectionPoint | null>(null);
   const [current, setCurrent] = useState<SelectionPoint | null>(null);
   const [hoveredWindow, setHoveredWindow] = useState<string | null>(null);
@@ -148,6 +184,7 @@ function CaptureOverlay() {
   const surfaceRef = useRef<HTMLDivElement>(null);
   const activeSessionIdRef = useRef<string | null>(null);
   const revealingSessionIdRef = useRef<string | null>(null);
+  const regionOverlayWarmedRef = useRef(false);
   const selectionFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastRegionCursorSyncAtRef = useRef(0);
   const sessionId = session?.id ?? query("session_id");
@@ -161,6 +198,7 @@ function CaptureOverlay() {
         activeSessionIdRef.current = payload.id;
         revealingSessionIdRef.current = null;
         setVisibleSessionId(null);
+        setPrimingSessionId(null);
         setSession(payload);
         setStart(null);
         setCurrent(null);
@@ -179,6 +217,7 @@ function CaptureOverlay() {
         activeSessionIdRef.current = initialSession.id;
         revealingSessionIdRef.current = null;
         setVisibleSessionId(null);
+        setPrimingSessionId(null);
         setSession(initialSession);
       }
     })();
@@ -197,37 +236,20 @@ function CaptureOverlay() {
       if (event.key !== "Escape" || !sessionId) return;
       void invoke("cancel_capture", { sessionId });
     };
-    const onKeyUp = () => {
-      // A global shortcut can release its primary key before its modifier
-      // keys. AppKit may restore the arrow when those remaining keys are
-      // released after the overlay becomes visible.
-      if (mode !== "region" || !sessionId || visibleSessionId !== sessionId) return;
-      void invoke("sync_capture_cursor", { sessionId });
-    };
     window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
     return () => {
       window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("keyup", onKeyUp);
     };
-  }, [mode, sessionId, visibleSessionId]);
+  }, [sessionId]);
 
   useEffect(() => {
+    if (mode === "region" && (!sessionId || visibleSessionId !== sessionId || primingSessionId === sessionId)) {
+      return;
+    }
     const cursorClass = `capture-${mode}-cursor`;
     document.documentElement.classList.add(cursorClass);
     return () => document.documentElement.classList.remove(cursorClass);
-  }, [mode]);
-
-  useEffect(() => {
-    if (!sessionId || visibleSessionId !== sessionId) return;
-    let cancelled = false;
-    afterNextPaint(() => {
-      if (!cancelled) void invoke("sync_capture_cursor", { sessionId });
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [sessionId, visibleSessionId]);
+  }, [mode, primingSessionId, sessionId, visibleSessionId]);
 
   const rect = useMemo(
     () => (start && current ? selectionRect(start, current) : null),
@@ -278,19 +300,32 @@ function CaptureOverlay() {
   const revealOverlay = async () => {
     if (revealingSessionIdRef.current === sessionId) return;
     revealingSessionIdRef.current = sessionId;
+    const shouldPrimeRegionOverlay = mode === "region" && !regionOverlayWarmedRef.current;
     try {
       await invoke("show_capture_overlay", { sessionId });
     } catch {
       if (revealingSessionIdRef.current === sessionId) revealingSessionIdRef.current = null;
       return;
     }
+    if (shouldPrimeRegionOverlay) {
+      // Render the first region surface in its final visual state while the
+      // native window is still transparent. WKWebView can initialize its
+      // one-time cursor state here without replacing a visible crosshair.
+      setPrimingSessionId(sessionId);
+      setVisibleSessionId(sessionId);
+    }
     afterNextPaint(() => {
       if (activeSessionIdRef.current !== sessionId) return;
       void invoke("reveal_capture_overlay", { sessionId }).then(() => {
+        if (shouldPrimeRegionOverlay) regionOverlayWarmedRef.current = true;
         requestAnimationFrame(() => {
-          if (activeSessionIdRef.current === sessionId) setVisibleSessionId(sessionId);
+          if (activeSessionIdRef.current !== sessionId) return;
+          setPrimingSessionId(null);
+          setVisibleSessionId(sessionId);
         });
       }).catch(() => {
+        setPrimingSessionId(null);
+        if (shouldPrimeRegionOverlay) setVisibleSessionId(null);
         if (revealingSessionIdRef.current === sessionId) revealingSessionIdRef.current = null;
       });
     });
@@ -324,13 +359,13 @@ function CaptureOverlay() {
     <main
       key={sessionId}
       ref={surfaceRef}
-      className={`capture-surface capture-${mode}${visibleSessionId === sessionId ? " capture-visible" : ""}`}
+      className={`capture-surface capture-${mode}${visibleSessionId === sessionId ? " capture-visible" : ""}${primingSessionId === sessionId ? " capture-priming" : ""}`}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onTransitionEnd={(event) => {
-        // The first WKWebView fade can rebuild its cursor rectangles after the
-        // initial paint. Reassert once that final layout transition completes.
+        // Later captures retain the fade. Reassert after it without exposing
+        // the first WebView paint, which is primed behind native transparency.
         if (event.target === event.currentTarget && event.propertyName === "opacity") {
           reassertRegionCursor();
         }
@@ -423,7 +458,16 @@ function WindowTargets({
 
 function Thumbnail() {
   const [artifacts, setArtifacts] = useState<CaptureArtifact[]>([]);
+  const [clipboardState, setClipboardState] = useState<ClipboardState>({
+    revision: -1,
+    artifact_id: null,
+  });
+  const [activeViewerArtifactId, setActiveViewerArtifactId] = useState<string | null>(null);
   const stackRef = useRef<HTMLElement>(null);
+  const previousArtifactCount = useRef(0);
+  const applyClipboardState = useCallback((next: ClipboardState) => {
+    setClipboardState((current) => reconcileClipboardState(current, next));
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -443,6 +487,13 @@ function Thumbnail() {
         listen<string>("artifact-removed", ({ payload }) => {
           removedArtifactIds.add(payload);
           setArtifacts((current) => current.filter(({ id }) => id !== payload));
+          setActiveViewerArtifactId((current) => current === payload ? null : current);
+        }),
+        listen<ClipboardState>("clipboard-owner-changed", ({ payload }) => {
+          applyClipboardState(payload);
+        }),
+        listen<ViewerActivationState>("viewer-activation-changed", ({ payload }) => {
+          setActiveViewerArtifactId((current) => reconcileActiveViewer(current, payload));
         }),
       ]);
       const initialArtifacts = await invoke<CaptureArtifact[]>("get_artifacts");
@@ -462,19 +513,62 @@ function Thumbnail() {
       active = false;
       dispose.forEach((unlisten) => unlisten());
     };
-  }, []);
+  }, [applyClipboardState]);
 
   useEffect(() => {
-    if (stackRef.current) stackRef.current.scrollTop = stackRef.current.scrollHeight;
     let cancelled = false;
-    afterNextPaint(() => {
+    let polling = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const schedulePoll = (delay: number) => {
       if (cancelled) return;
-      void invoke("sync_thumbnail_stack")
-        .catch(() => undefined)
-        .finally(() => {
-          if (!cancelled) window.dispatchEvent(new Event("ces-thumbnail-layout-changed"));
-        });
-    });
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        void poll();
+      }, delay);
+    };
+
+    const poll = async () => {
+      if (cancelled || polling) return;
+      polling = true;
+      try {
+        const current = await invoke<ClipboardState>("get_clipboard_state");
+        if (!cancelled) applyClipboardState(current);
+      } catch {
+        // Preserve the last known state if the platform clipboard is briefly unavailable.
+      } finally {
+        polling = false;
+        schedulePoll(document.hidden ? 1_000 : 400);
+      }
+    };
+
+    const pollImmediately = () => schedulePoll(0);
+    document.addEventListener("visibilitychange", pollImmediately);
+    window.addEventListener("focus", pollImmediately);
+    schedulePoll(0);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      document.removeEventListener("visibilitychange", pollImmediately);
+      window.removeEventListener("focus", pollImmediately);
+    };
+  }, [applyClipboardState]);
+
+  useLayoutEffect(() => {
+    if (
+      stackRef.current
+      && shouldScrollThumbnailStackToEnd(previousArtifactCount.current, artifacts.length)
+    ) {
+      stackRef.current.scrollTop = stackRef.current.scrollHeight;
+    }
+    previousArtifactCount.current = artifacts.length;
+    let cancelled = false;
+    void invoke("sync_thumbnail_stack")
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) window.dispatchEvent(new Event("ces-thumbnail-layout-changed"));
+      });
     return () => {
       cancelled = true;
     };
@@ -595,6 +689,8 @@ function Thumbnail() {
         <ThumbnailCard
           key={artifact.id}
           artifact={artifact}
+          clipboardCurrent={clipboardState.artifact_id === artifact.id}
+          viewerActive={activeViewerArtifactId === artifact.id}
           onRemoved={(artifactId) => {
             setArtifacts((current) => current.filter(({ id }) => id !== artifactId));
           }}
@@ -604,14 +700,18 @@ function Thumbnail() {
   );
 }
 
-function ThumbnailCard({
+export function ThumbnailCard({
   artifact,
+  clipboardCurrent,
+  viewerActive,
   onRemoved,
 }: {
   artifact: CaptureArtifact;
+  clipboardCurrent: boolean;
+  viewerActive: boolean;
   onRemoved: (artifactId: string) => void;
 }) {
-  const [feedback, setFeedback] = useState<"copied" | "saved" | null>(null);
+  const [feedback, setFeedback] = useState<"saved" | null>(null);
   const [busy, setBusy] = useState<"copied" | "saved" | null>(null);
   const [error, setError] = useState("");
   const [exit, setExit] = useState<"dismiss" | "delete" | null>(null);
@@ -632,8 +732,8 @@ function ThumbnailCard({
     };
   }, []);
 
-  const showFeedback = (value: "copied" | "saved") => {
-    setFeedback(value);
+  const showSavedFeedback = () => {
+    setFeedback("saved");
     if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
     feedbackTimer.current = setTimeout(() => setFeedback(null), 2_000);
   };
@@ -644,7 +744,7 @@ function ThumbnailCard({
     if (success) setBusy(success);
     try {
       await invoke(action, { artifactId: artifact.id });
-      if (success) showFeedback(success);
+      if (success === "saved") showSavedFeedback();
     } catch (error) {
       setError(String(error));
     } finally {
@@ -669,10 +769,11 @@ function ThumbnailCard({
         setError(String(error));
       });
   };
+  const closeLabel = artifact.path ? "Close Preview" : "Close Without Saving";
 
   return (
     <article
-      className={`thumbnail-card ${exit ? `thumbnail-exit-${exit}` : ""}`}
+      className={`thumbnail-card ${viewerActive ? "thumbnail-viewer-active" : ""} ${exit ? `thumbnail-exit-${exit}` : ""}`}
       onAnimationEnd={finishExit}
     >
       <img
@@ -681,21 +782,35 @@ function ThumbnailCard({
         onLoad={markThumbnailReady}
         onError={markThumbnailReady}
       />
+      {clipboardCurrent && (
+        <div className="clipboard-confirmation" role="status">
+          <CheckIcon />
+          <span>Copied to clipboard</span>
+        </div>
+      )}
       <div className="thumbnail-top-actions">
-        <IconButton className="delete" label="Delete" onClick={() => exitWith("delete", "trash_artifact")}>
-          <TrashIcon />
-        </IconButton>
+        <div className="thumbnail-top-left">
+          <IconButton className="close" label={closeLabel} onClick={() => exitWith("dismiss", "dismiss_artifact")}>
+            <CloseIcon />
+          </IconButton>
+          {artifact.path && (
+            <IconButton className="delete" label="Move to Trash" onClick={() => exitWith("delete", "trash_artifact")}>
+              <TrashIcon />
+            </IconButton>
+          )}
+        </div>
         <div className="thumbnail-top-right">
-          <IconButton label="Open Preview" onClick={() => void runAction("open_artifact_viewer")}>
+          <IconButton label="View Full Size" onClick={() => void runAction("open_artifact_viewer")}>
             <ExpandIcon />
           </IconButton>
-          <button type="button" className="dismiss-button" onClick={() => exitWith("dismiss", "dismiss_artifact")}>Dismiss</button>
         </div>
       </div>
       <div className="thumbnail-main-actions">
-        <button type="button" disabled={busy !== null} onClick={() => void runAction("copy_artifact", "copied")}>
-          {feedback === "copied" ? <><CheckIcon />Copied!</> : <><CopyIcon />Copy</>}
-        </button>
+        {!clipboardCurrent && (
+          <button type="button" disabled={busy !== null} onClick={() => void runAction("copy_artifact", "copied")}>
+            <CopyIcon />Copy
+          </button>
+        )}
         <button
           type="button"
           disabled={busy !== null}
@@ -710,7 +825,8 @@ function ThumbnailCard({
       </div>
       <div className="thumbnail-meta">
         <span>{artifact.width} × {artifact.height} · {formatFileSize(artifact.size_bytes)}</span>
-        {!artifact.clipboard_copied && <span className="warning">Clipboard unavailable</span>}
+        {artifact.clipboard_copy_status === "failed" && !clipboardCurrent
+          && <span className="warning">Clipboard unavailable</span>}
       </div>
       {error && <p className="thumbnail-message">{error}</p>}
     </article>
@@ -751,6 +867,10 @@ function TrashIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5" /></svg>;
 }
 
+function CloseIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>;
+}
+
 function SaveIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h12l2 2v14H5Z" /><path d="M8 4v6h8V4M8 20v-6h8v6" /></svg>;
 }
@@ -759,20 +879,112 @@ function CheckIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6" /></svg>;
 }
 
-function Preferences() {
+type PreferencesSaveStatus = {
+  kind: "idle" | "saving" | "saved" | "error";
+  message: string;
+};
+
+export function Preferences() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
-  const [message, setMessage] = useState("");
-  const [saving, setSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<PreferencesSaveStatus>({ kind: "idle", message: "" });
   const [recordingShortcut, setRecordingShortcut] = useState<string | null>(null);
+  const settingsRef = useRef<AppSettings | null>(null);
+  const pendingSettingsRef = useRef<AppSettings | null>(null);
+  const saveDelayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const savedStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveInFlightRef = useRef<Promise<void> | null>(null);
+  const activeRef = useRef(true);
+
+  const clearSavedStatusTimer = useCallback(() => {
+    if (!savedStatusTimerRef.current) return;
+    clearTimeout(savedStatusTimerRef.current);
+    savedStatusTimerRef.current = null;
+  }, []);
+
+  const updateSaveStatus = useCallback((status: PreferencesSaveStatus) => {
+    if (activeRef.current) setSaveStatus(status);
+  }, []);
+
+  const flushPendingSettings = useCallback(async (): Promise<void> => {
+    if (saveDelayTimerRef.current) {
+      clearTimeout(saveDelayTimerRef.current);
+      saveDelayTimerRef.current = null;
+    }
+    while (true) {
+      if (saveInFlightRef.current) await saveInFlightRef.current;
+      if (saveDelayTimerRef.current) return;
+      const pendingSettings = pendingSettingsRef.current;
+      if (!pendingSettings) return;
+      pendingSettingsRef.current = null;
+      updateSaveStatus({ kind: "saving", message: "Saving changes…" });
+
+      const request = (async () => {
+        try {
+          const saved = await invoke<AppSettings>("update_settings", { settings: pendingSettings });
+          if (!pendingSettingsRef.current) {
+            settingsRef.current = saved;
+            if (activeRef.current) {
+              setSettings(saved);
+              updateSaveStatus({ kind: "saved", message: "Changes saved" });
+              clearSavedStatusTimer();
+              savedStatusTimerRef.current = setTimeout(() => {
+                updateSaveStatus({ kind: "idle", message: "" });
+                savedStatusTimerRef.current = null;
+              }, 2_000);
+            }
+          }
+        } catch (error) {
+          if (!pendingSettingsRef.current) {
+            updateSaveStatus({ kind: "error", message: `Couldn’t save changes: ${String(error)}` });
+          }
+        }
+      })();
+      saveInFlightRef.current = request;
+      await request;
+      if (saveInFlightRef.current === request) saveInFlightRef.current = null;
+    }
+  }, [clearSavedStatusTimer, updateSaveStatus]);
+
+  const scheduleSettingsSave = (nextSettings: AppSettings) => {
+    pendingSettingsRef.current = nextSettings;
+    clearSavedStatusTimer();
+    updateSaveStatus({ kind: "saving", message: "Saving changes…" });
+    if (saveDelayTimerRef.current) clearTimeout(saveDelayTimerRef.current);
+    saveDelayTimerRef.current = setTimeout(() => {
+      saveDelayTimerRef.current = null;
+      void flushPendingSettings();
+    }, 250);
+  };
 
   useEffect(() => {
-    void invoke<AppSettings>("get_settings").then(setSettings);
-  }, []);
+    let active = true;
+    activeRef.current = true;
+    void invoke<AppSettings>("get_settings").then((loadedSettings) => {
+      if (!active) return;
+      settingsRef.current = loadedSettings;
+      setSettings(loadedSettings);
+    });
+    return () => {
+      active = false;
+      activeRef.current = false;
+      clearSavedStatusTimer();
+      if (saveDelayTimerRef.current) {
+        clearTimeout(saveDelayTimerRef.current);
+        saveDelayTimerRef.current = null;
+        void flushPendingSettings();
+      }
+    };
+  }, [clearSavedStatusTimer, flushPendingSettings]);
 
   if (!settings) return <main className="preferences loading">Loading preferences…</main>;
 
   const update = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
-    setSettings((current) => current ? { ...current, [key]: value } : current);
+    const current = settingsRef.current;
+    if (!current || Object.is(current[key], value)) return;
+    const next = { ...current, [key]: value };
+    settingsRef.current = next;
+    setSettings(next);
+    scheduleSettingsSave(next);
   };
 
   const chooseDirectory = async () => {
@@ -780,18 +992,9 @@ function Preferences() {
     if (typeof selected === "string") update("output_directory", selected);
   };
 
-  const save = async () => {
-    setSaving(true);
-    setMessage("");
-    try {
-      const saved = await invoke<AppSettings>("update_settings", { settings });
-      setSettings(saved);
-      setMessage("Saved");
-    } catch (error) {
-      setMessage(String(error));
-    } finally {
-      setSaving(false);
-    }
+  const closePreferences = async () => {
+    await flushPendingSettings();
+    await currentWindow?.close();
   };
 
   return (
@@ -801,7 +1004,15 @@ function Preferences() {
           <span className="eyebrow">CES</span>
           <h1>Preferences</h1>
         </div>
-        <button type="button" className="close-button" onClick={() => void currentWindow?.close()}>×</button>
+        <div className="preferences-header-actions">
+          {saveStatus.kind !== "idle" && (
+            <div className={`preferences-save-status preferences-save-${saveStatus.kind}`} role="status">
+              <span aria-hidden="true">{saveStatus.kind === "saved" ? "✓" : saveStatus.kind === "error" ? "!" : ""}</span>
+              {saveStatus.message}
+            </div>
+          )}
+          <button type="button" className="close-button" aria-label="Close Preferences" onClick={() => void closePreferences()}>×</button>
+        </div>
       </header>
 
       <section className="settings-section">
@@ -811,6 +1022,17 @@ function Preferences() {
           <input id="output-directory" value={settings.output_directory} onChange={(event) => update("output_directory", event.target.value)} />
           <button type="button" onClick={() => void chooseDirectory()}>Choose</button>
         </div>
+        <label className="check-row capture-option">
+          <input
+            type="checkbox"
+            checked={settings.auto_copy_to_clipboard}
+            onChange={(event) => update("auto_copy_to_clipboard", event.target.checked)}
+          />
+          <span>
+            Automatically copy captures to the clipboard
+            <small>Turn this off to preserve existing text or other clipboard contents.</small>
+          </span>
+        </label>
       </section>
 
       <section className="settings-section">
@@ -839,21 +1061,13 @@ function Preferences() {
           onRecordingChange={(recording) => setRecordingShortcut(recording ? "display-shortcut" : null)}
           onChange={(value) => update("display_shortcut", value)}
         />
-        <p className="help-text">Select a shortcut, then press the key combination you want. Press Esc to cancel; save to apply.</p>
+        <p className="help-text">Select a shortcut, then press the key combination you want. Press Esc to cancel recording. Changes save automatically.</p>
       </section>
 
       <label className="check-row">
         <input type="checkbox" checked={settings.launch_at_login} onChange={(event) => update("launch_at_login", event.target.checked)} />
         <span>Launch CES when I sign in</span>
       </label>
-
-      <footer className="preferences-footer">
-        <span className="save-message">{message}</span>
-        <div>
-          <button type="button" className="quiet" onClick={() => void currentWindow?.close()}>Cancel</button>
-          <button type="button" className="primary" disabled={saving} onClick={() => void save()}>{saving ? "Saving…" : "Save"}</button>
-        </div>
-      </footer>
     </main>
   );
 }
@@ -873,9 +1087,17 @@ export function ShortcutInput({
   onRecordingChange: (recording: boolean) => void;
   onChange: (value: string) => void;
 }) {
+  const recorderRef = useRef<HTMLButtonElement>(null);
   const [previewKeys, setPreviewKeys] = useState<string[]>([]);
   const [error, setError] = useState("");
   const keys = recording ? previewKeys : shortcutDisplayTokens(value);
+
+  useEffect(() => {
+    // WKWebView follows Safari's macOS behavior and does not reliably focus a
+    // button when it is clicked. The recorder only receives keyboard events
+    // while focused, so acquire focus explicitly when recording begins.
+    if (recording) recorderRef.current?.focus();
+  }, [recording]);
 
   const stopRecording = () => {
     setPreviewKeys([]);
@@ -913,6 +1135,7 @@ export function ShortcutInput({
       <span id={`${id}-label`}>{label}</span>
       <div className="shortcut-control">
         <button
+          ref={recorderRef}
           type="button"
           className={`shortcut-recorder${recording ? " shortcut-recording" : ""}`}
           aria-labelledby={`${id}-label`}

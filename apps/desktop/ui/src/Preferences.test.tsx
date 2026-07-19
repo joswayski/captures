@@ -1,0 +1,75 @@
+import { invoke } from "@tauri-apps/api/core";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+
+import { Preferences } from "./App";
+import type { AppSettings } from "./types";
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(),
+  isTauri: () => false,
+}));
+
+const settings: AppSettings = {
+  output_directory: "/Users/josevalerio/CES",
+  region_shortcut: "Ctrl+Shift+4",
+  window_shortcut: "Ctrl+Shift+W",
+  display_shortcut: "Ctrl+Shift+3",
+  auto_copy_to_clipboard: true,
+  launch_at_login: false,
+  last_screen_permission_request_id: null,
+  pending_capture_after_restart: null,
+};
+
+describe("Preferences", () => {
+  beforeEach(() => {
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "get_settings") return settings;
+      if (command === "update_settings") return (args as { settings: AppSettings }).settings;
+      throw new Error(`unexpected command: ${command}`);
+    });
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("automatically persists changes and reports that they were saved", async () => {
+    render(<Preferences />);
+
+    const autoCopy = await screen.findByRole("checkbox", {
+      name: /Automatically copy captures to the clipboard/,
+    });
+    expect(autoCopy).toBeChecked();
+    expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+
+    fireEvent.click(autoCopy);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("update_settings", {
+        settings: expect.objectContaining({ auto_copy_to_clipboard: false }),
+      });
+    });
+    expect(await screen.findByText("Changes saved")).toBeInTheDocument();
+  });
+
+  it("automatically applies a newly recorded shortcut", async () => {
+    render(<Preferences />);
+
+    const recorder = await screen.findByRole("button", { name: "Window" });
+    fireEvent.click(recorder);
+    fireEvent.keyDown(recorder, {
+      code: "Digit0",
+      key: ")",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("update_settings", {
+        settings: expect.objectContaining({ window_shortcut: "Control+Shift+Digit0" }),
+      });
+    });
+    expect(await screen.findByText("Changes saved")).toBeInTheDocument();
+  });
+});

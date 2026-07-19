@@ -1,4 +1,5 @@
 export type CaptureMode = "region" | "window" | "display";
+export type ClipboardCopyStatus = "skipped" | "pending" | "copied" | "failed";
 
 export interface DisplayDescriptor {
   id: string;
@@ -36,6 +37,7 @@ export interface AppSettings {
   region_shortcut: string;
   window_shortcut: string;
   display_shortcut: string;
+  auto_copy_to_clipboard: boolean;
   launch_at_login: boolean;
   last_screen_permission_request_id: string | null;
   pending_capture_after_restart: CaptureMode | null;
@@ -51,7 +53,17 @@ export interface CaptureArtifact {
   size_bytes: number;
   created_at: string;
   mode: CaptureMode;
-  clipboard_copied: boolean;
+  clipboard_copy_status: ClipboardCopyStatus;
+}
+
+export interface ClipboardState {
+  revision: number;
+  artifact_id: string | null;
+}
+
+export interface ViewerActivationState {
+  artifact_id: string;
+  active: boolean;
 }
 
 export interface ThumbnailPointerPosition {

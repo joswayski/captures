@@ -26,8 +26,9 @@ describe("ShortcutInput", () => {
     const recorder = screen.getByRole("button", { name: "Region" });
     fireEvent.click(recorder);
     expect(screen.getByText("Press shortcut…")).toBeInTheDocument();
+    expect(recorder).toHaveFocus();
 
-    fireEvent.keyDown(recorder, {
+    fireEvent.keyDown(document.activeElement!, {
       code: "ShiftLeft",
       key: "Shift",
       ctrlKey: true,
@@ -36,7 +37,7 @@ describe("ShortcutInput", () => {
     expect(screen.getByText("Ctrl")).toBeInTheDocument();
     expect(screen.getByText("Shift")).toBeInTheDocument();
 
-    fireEvent.keyDown(recorder, {
+    fireEvent.keyDown(document.activeElement!, {
       code: "Digit3",
       key: "#",
       ctrlKey: true,

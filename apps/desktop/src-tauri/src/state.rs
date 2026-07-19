@@ -50,10 +50,32 @@ impl ThumbnailVisibility {
     }
 }
 
+#[derive(Default)]
+pub struct ClipboardOwnership {
+    revision: Option<isize>,
+    artifact_id: Option<String>,
+}
+
+impl ClipboardOwnership {
+    pub fn record(&mut self, revision: isize, artifact_id: String) {
+        self.revision = Some(revision);
+        self.artifact_id = Some(artifact_id);
+    }
+
+    pub fn current_artifact(&mut self, revision: isize) -> Option<String> {
+        if self.revision != Some(revision) {
+            self.revision = None;
+            self.artifact_id = None;
+        }
+        self.artifact_id.clone()
+    }
+}
+
 pub struct AppState {
     pub settings: RwLock<AppSettings>,
     pub sessions: Mutex<HashMap<Uuid, CaptureSession>>,
     pub artifacts: Mutex<Vec<CaptureArtifact>>,
+    pub clipboard_ownership: Mutex<ClipboardOwnership>,
     pub thumbnail_visibility: Mutex<ThumbnailVisibility>,
     pub screen_permission_requested_this_launch: Mutex<bool>,
     pub backend: XcapBackend,
@@ -65,6 +87,7 @@ impl AppState {
             settings: RwLock::new(storage::load_settings()),
             sessions: Mutex::new(HashMap::new()),
             artifacts: Mutex::new(Vec::new()),
+            clipboard_ownership: Mutex::new(ClipboardOwnership::default()),
             thumbnail_visibility: Mutex::new(ThumbnailVisibility::default()),
             screen_permission_requested_this_launch: Mutex::new(false),
             backend: XcapBackend,
@@ -86,7 +109,7 @@ impl AppState {
 
 #[cfg(test)]
 mod tests {
-    use super::ThumbnailVisibility;
+    use super::{ClipboardOwnership, ThumbnailVisibility};
 
     #[test]
     fn blocks_overlapping_capture_preparation() {
@@ -114,5 +137,18 @@ mod tests {
         assert!(visibility.is_suppressed());
         assert!(visibility.mark_artifact_ready("second"));
         assert!(!visibility.is_suppressed());
+    }
+
+    #[test]
+    fn clipboard_ownership_tracks_one_artifact_until_the_pasteboard_changes() {
+        let mut ownership = ClipboardOwnership::default();
+
+        ownership.record(41, "first".to_owned());
+        assert_eq!(ownership.current_artifact(41).as_deref(), Some("first"));
+
+        ownership.record(42, "second".to_owned());
+        assert_eq!(ownership.current_artifact(42).as_deref(), Some("second"));
+        assert!(ownership.current_artifact(43).is_none());
+        assert!(ownership.current_artifact(42).is_none());
     }
 }

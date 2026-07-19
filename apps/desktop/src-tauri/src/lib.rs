@@ -12,6 +12,8 @@ use std::{
 
 #[cfg(target_os = "macos")]
 use std::process::Command;
+#[cfg(not(target_os = "macos"))]
+use std::sync::atomic::AtomicIsize;
 
 use tauri::CursorIcon;
 
@@ -38,7 +40,10 @@ mod models;
 mod state;
 mod storage;
 
-use models::{ActiveSession, AppSettings, CaptureArtifact, CaptureSession};
+use models::{
+    ActiveSession, AppSettings, CaptureArtifact, CaptureSession, ClipboardCopyStatus,
+    ClipboardState,
+};
 use state::AppState;
 
 #[derive(Debug, Error)]
@@ -123,6 +128,7 @@ pub fn run() {
             update_settings,
             get_artifacts,
             get_artifact,
+            get_clipboard_state,
             copy_artifact,
             save_artifact,
             reveal_artifact,
@@ -405,11 +411,13 @@ fn show_capture_overlay(
         .map(|session| session.mode)
         .ok_or_else(|| AppError::SessionUnavailable.to_string())?;
     if let Some(window) = app.get_webview_window("overlay") {
+        #[cfg(not(target_os = "macos"))]
         let cursor = if mode == CaptureMode::Region {
             CursorIcon::Crosshair
         } else {
             CursorIcon::Default
         };
+        #[cfg(not(target_os = "macos"))]
         window
             .set_cursor_icon(cursor)
             .map_err(|error| error.to_string())?;
@@ -418,8 +426,9 @@ fn show_capture_overlay(
         window.show().map_err(|error| error.to_string())?;
         window.set_focus().map_err(|error| error.to_string())?;
         #[cfg(target_os = "macos")]
-        ces_macos_window::activate_capture_cursor(&window, mode == CaptureMode::Region)
-            .map_err(str::to_owned)?;
+        if should_activate_capture_cursor_before_reveal(mode) {
+            ces_macos_window::activate_capture_cursor(&window, false).map_err(str::to_owned)?;
+        }
         Ok(())
     } else {
         Err("capture overlay is unavailable".to_owned())
@@ -697,18 +706,23 @@ fn update_settings(
         previous_settings.last_screen_permission_request_id.clone();
     settings.pending_capture_after_restart = previous_settings.pending_capture_after_restart;
 
-    if let Err(error) = register_shortcuts_with(&app, &settings) {
+    let shortcuts_changed = settings.region_shortcut != previous_settings.region_shortcut
+        || settings.window_shortcut != previous_settings.window_shortcut
+        || settings.display_shortcut != previous_settings.display_shortcut;
+    if shortcuts_changed && let Err(error) = register_shortcuts_with(&app, &settings) {
         let _ = register_shortcuts_with(&app, &previous_settings);
         return Err(error.to_string());
     }
-    if settings.launch_at_login {
-        app.autolaunch()
-            .enable()
-            .map_err(|error| error.to_string())?;
-    } else {
-        app.autolaunch()
-            .disable()
-            .map_err(|error| error.to_string())?;
+    if settings.launch_at_login != previous_settings.launch_at_login {
+        if settings.launch_at_login {
+            app.autolaunch()
+                .enable()
+                .map_err(|error| error.to_string())?;
+        } else {
+            app.autolaunch()
+                .disable()
+                .map_err(|error| error.to_string())?;
+        }
     }
     storage::save_settings(&settings).map_err(|error| error.to_string())?;
     *state.settings.write() = settings.clone();
@@ -734,6 +748,23 @@ fn get_artifact(
 }
 
 #[tauri::command]
+fn get_clipboard_state(state: tauri::State<'_, Arc<AppState>>) -> ClipboardState {
+    let revision = current_clipboard_revision();
+    let artifact_id = state.clipboard_ownership.lock().current_artifact(revision);
+    let artifact_id = artifact_id.filter(|artifact_id| {
+        state
+            .artifacts
+            .lock()
+            .iter()
+            .any(|artifact| artifact.id == *artifact_id)
+    });
+    ClipboardState {
+        revision,
+        artifact_id,
+    }
+}
+
+#[tauri::command]
 async fn copy_artifact(
     app: AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
@@ -749,9 +780,33 @@ async fn copy_artifact(
     let image = image::load_from_memory(&artifact.image_png)
         .map_err(|error| error.to_string())?
         .into_rgba8();
-    copy_to_clipboard(&app, image)
+    let revision = copy_to_clipboard(&app, image)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    let artifact = {
+        let mut artifacts = state.artifacts.lock();
+        let artifact = artifacts
+            .iter_mut()
+            .find(|artifact| artifact.id == artifact_id)
+            .ok_or_else(|| "artifact is no longer available".to_owned())?;
+        artifact.clipboard_copy_status = ClipboardCopyStatus::Copied;
+        artifact.clone()
+    };
+    state
+        .clipboard_ownership
+        .lock()
+        .record(revision, artifact_id.clone());
+    app.emit("artifact-updated", &artifact)
+        .map_err(|error| error.to_string())?;
+    app.emit(
+        "clipboard-owner-changed",
+        &ClipboardState {
+            revision,
+            artifact_id: Some(artifact_id),
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -856,26 +911,30 @@ fn open_artifact_viewer(
     state: tauri::State<'_, Arc<AppState>>,
     artifact_id: String,
 ) -> CommandResult<()> {
-    let artifact = state
+    let artifact_available = state
         .artifacts
         .lock()
         .iter()
-        .find(|artifact| artifact.id == artifact_id)
-        .cloned()
-        .ok_or_else(|| "artifact is no longer available".to_owned())?;
+        .any(|artifact| artifact.id == artifact_id);
+    if !artifact_available {
+        return Err("artifact is no longer available".to_owned());
+    }
 
-    if let Some(window) = app.get_webview_window("viewer") {
-        window
-            .emit("viewer-artifact-changed", &artifact)
-            .map_err(|error| error.to_string())?;
+    let label = viewer_window_label(&artifact_id);
+    if let Some(window) = app.get_webview_window(&label) {
         window.show().map_err(|error| error.to_string())?;
         window.set_focus().map_err(|error| error.to_string())?;
         return Ok(());
     }
 
+    let viewer_count = app
+        .webview_windows()
+        .keys()
+        .filter(|label| label.starts_with(VIEWER_WINDOW_PREFIX))
+        .count();
     let window = WebviewWindowBuilder::new(
         &app,
-        "viewer",
+        label,
         WebviewUrl::App(format!("index.html?view=viewer&artifact_id={artifact_id}").into()),
     )
     .title("CES Preview")
@@ -888,8 +947,24 @@ fn open_artifact_viewer(
     .visible(false)
     .build()
     .map_err(|error| error.to_string())?;
+    if viewer_count > 0 {
+        let scale = window.scale_factor().unwrap_or(1.0);
+        let offset = ((viewer_count % 6) as f64 * 28.0 * scale).round() as i32;
+        if let Ok(position) = window.outer_position() {
+            let _ = window.set_position(tauri::PhysicalPosition::new(
+                position.x.saturating_add(offset),
+                position.y.saturating_add(offset),
+            ));
+        }
+    }
     window.show().map_err(|error| error.to_string())?;
     window.set_focus().map_err(|error| error.to_string())
+}
+
+const VIEWER_WINDOW_PREFIX: &str = "viewer-";
+
+fn viewer_window_label(artifact_id: &str) -> String {
+    format!("{VIEWER_WINDOW_PREFIX}{artifact_id}")
 }
 
 fn remove_artifact(app: &AppHandle, state: &Arc<AppState>, artifact_id: &str) -> CommandResult<()> {
@@ -938,9 +1013,11 @@ async fn finish_capture(
         let preview_png = storage::encode_thumbnail_png(&image_for_encoding)?;
         Ok((image_png, preview_png))
     });
-    let clipboard_app = app.clone();
-    let clipboard_task = tauri::async_runtime::spawn_blocking(move || {
-        write_image_to_clipboard(&clipboard_app, image)
+    let clipboard_task = state.settings().auto_copy_to_clipboard.then(|| {
+        let clipboard_app = app.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            write_image_to_clipboard(&clipboard_app, image)
+        })
     });
     let (image_png, preview_png) = encode_task
         .await
@@ -957,7 +1034,11 @@ async fn finish_capture(
         size_bytes,
         created_at: Utc::now().to_rfc3339(),
         mode,
-        clipboard_copied: true,
+        clipboard_copy_status: if clipboard_task.is_some() {
+            ClipboardCopyStatus::Pending
+        } else {
+            ClipboardCopyStatus::Skipped
+        },
         image_png,
         preview_png,
     };
@@ -968,40 +1049,81 @@ async fn finish_capture(
     }
     app.emit("capture-completed", &artifact)?;
 
-    let copied = clipboard_task
-        .await
-        .map_err(|error| AppError::Task(error.to_string()))?
-        .is_ok();
-    if !copied {
-        artifact.clipboard_copied = false;
+    if let Some(clipboard_task) = clipboard_task {
+        let clipboard_result = clipboard_task
+            .await
+            .map_err(|error| AppError::Task(error.to_string()))?;
+        artifact.clipboard_copy_status = match clipboard_result {
+            Ok(revision) => {
+                state
+                    .clipboard_ownership
+                    .lock()
+                    .record(revision, artifact.id.clone());
+                app.emit(
+                    "clipboard-owner-changed",
+                    &ClipboardState {
+                        revision,
+                        artifact_id: Some(artifact.id.clone()),
+                    },
+                )?;
+                ClipboardCopyStatus::Copied
+            }
+            Err(_) => ClipboardCopyStatus::Failed,
+        };
         if let Some(stored) = state
             .artifacts
             .lock()
             .iter_mut()
             .find(|stored| stored.id == artifact.id)
         {
-            stored.clipboard_copied = false;
+            stored.clipboard_copy_status = artifact.clipboard_copy_status;
         }
         app.emit("artifact-updated", &artifact)?;
     }
     Ok(artifact)
 }
 
-async fn copy_to_clipboard(app: &AppHandle, image: RgbaImage) -> Result<(), AppError> {
+async fn copy_to_clipboard(app: &AppHandle, image: RgbaImage) -> Result<isize, AppError> {
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || write_image_to_clipboard(&app, image))
         .await
         .map_err(|error| AppError::Task(error.to_string()))?
 }
 
-fn write_image_to_clipboard(app: &AppHandle, image: RgbaImage) -> Result<(), AppError> {
+fn write_image_to_clipboard(app: &AppHandle, image: RgbaImage) -> Result<isize, AppError> {
     let width = image.width();
     let height = image.height();
     let rgba = image.into_raw();
     let clipboard_image = Image::new_owned(rgba, width, height);
     app.clipboard()
         .write_image(&clipboard_image)
-        .map_err(|error| AppError::Clipboard(error.to_string()))
+        .map_err(|error| AppError::Clipboard(error.to_string()))?;
+    Ok(record_clipboard_write())
+}
+
+#[cfg(target_os = "macos")]
+fn current_clipboard_revision() -> isize {
+    ces_macos_window::clipboard_change_count()
+}
+
+#[cfg(target_os = "macos")]
+fn record_clipboard_write() -> isize {
+    current_clipboard_revision()
+}
+
+#[cfg(not(target_os = "macos"))]
+static APPLICATION_CLIPBOARD_REVISION: AtomicIsize = AtomicIsize::new(0);
+
+#[cfg(not(target_os = "macos"))]
+fn current_clipboard_revision() -> isize {
+    APPLICATION_CLIPBOARD_REVISION.load(Ordering::Acquire)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn record_clipboard_write() -> isize {
+    APPLICATION_CLIPBOARD_REVISION
+        .fetch_add(1, Ordering::AcqRel)
+        .wrapping_add(1)
 }
 
 fn display_under_pointer(state: &AppState) -> Result<ces_capture::DisplayDescriptor, AppError> {
@@ -1119,6 +1241,7 @@ fn register_shortcut(app: &AppHandle, shortcut: &str, mode: CaptureMode) -> Resu
             let state = app.state::<Arc<AppState>>().inner().clone();
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
+                wait_for_capture_shortcut_release().await;
                 if let Err(error) = start_capture_inner(app.clone(), state, mode).await
                     && !matches!(&error, AppError::CaptureInProgress)
                 {
@@ -1127,6 +1250,24 @@ fn register_shortcut(app: &AppHandle, shortcut: &str, mode: CaptureMode) -> Resu
             });
         })
         .map_err(|error| AppError::Shortcut(error.to_string()))
+}
+
+async fn wait_for_capture_shortcut_release() {
+    #[cfg(target_os = "macos")]
+    {
+        use std::time::Duration;
+
+        const MODIFIER_POLL_INTERVAL: Duration = Duration::from_millis(5);
+        const APPKIT_RELEASE_SETTLE_TIME: Duration = Duration::from_millis(16);
+
+        while ces_macos_window::capture_shortcut_modifiers_pressed() {
+            tokio::time::sleep(MODIFIER_POLL_INTERVAL).await;
+        }
+        // `modifierFlags` becomes clear during the flags-changed event. Give
+        // AppKit one display beat to finish its arrow-cursor restoration before
+        // the capture overlay claims the cursor exactly once.
+        tokio::time::sleep(APPKIT_RELEASE_SETTLE_TIME).await;
+    }
 }
 
 fn parse_shortcut(shortcut: &str) -> Result<Shortcut, AppError> {
@@ -1145,6 +1286,11 @@ fn should_trigger_shortcut(armed: &AtomicBool, state: ShortcutState) -> bool {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
+fn should_activate_capture_cursor_before_reveal(mode: CaptureMode) -> bool {
+    mode != CaptureMode::Region
+}
+
 fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let capture_region =
         MenuItem::with_id(app, "capture-region", "Capture Region", true, None::<&str>)?;
@@ -1157,13 +1303,8 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         true,
         None::<&str>,
     )?;
-    let open_folder = MenuItem::with_id(
-        app,
-        "open-folder",
-        "Open Captures Folder",
-        true,
-        None::<&str>,
-    )?;
+    let open_folder =
+        MenuItem::with_id(app, "open-folder", "Open Save Location", true, None::<&str>)?;
     let preferences = MenuItem::with_id(app, "preferences", "Preferences", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit CES", true, None::<&str>)?;
     let separator_1 = MenuItem::with_id(app, "separator-1", "────────", false, None::<&str>)?;
@@ -1730,11 +1871,18 @@ fn show_preferences(app: &AppHandle) {
         )
         .title("CES Preferences")
         .inner_size(520.0, 480.0)
+        .min_inner_size(420.0, 360.0)
         .center()
-        .resizable(false)
-        .build();
+        .resizable(true)
+        .focused(false)
+        .visible(false)
+        .build()
+        .and_then(|window| {
+            window.show()?;
+            window.set_focus()
+        });
         if let Err(error) = result {
-            eprintln!("failed to create preferences window: {error}");
+            eprintln!("failed to show preferences window: {error}");
         }
     });
 }
@@ -1819,9 +1967,28 @@ mod tests {
     use tauri_plugin_global_shortcut::ShortcutState;
 
     use super::{
-        ThumbnailCursorAction, parse_shortcut, should_trigger_shortcut, thumbnail_cursor_action,
-        thumbnail_geometry, thumbnail_pointer_position,
+        CaptureMode, ThumbnailCursorAction, parse_shortcut,
+        should_activate_capture_cursor_before_reveal, should_trigger_shortcut,
+        thumbnail_cursor_action, thumbnail_geometry, thumbnail_pointer_position,
+        viewer_window_label,
     };
+
+    #[test]
+    fn region_cursor_waits_until_the_hidden_webview_is_primed() {
+        assert!(!should_activate_capture_cursor_before_reveal(
+            CaptureMode::Region
+        ));
+        assert!(should_activate_capture_cursor_before_reveal(
+            CaptureMode::Window
+        ));
+    }
+
+    #[test]
+    fn gives_each_artifact_a_stable_viewer_window() {
+        assert_eq!(viewer_window_label("first"), "viewer-first");
+        assert_eq!(viewer_window_label("second"), "viewer-second");
+        assert_ne!(viewer_window_label("first"), viewer_window_label("second"));
+    }
 
     #[test]
     fn ignores_preview_cursor_updates_while_capture_is_active() {
