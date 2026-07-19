@@ -1266,6 +1266,7 @@ fn should_trigger_shortcut(armed: &AtomicBool, state: ShortcutState) -> bool {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn should_activate_capture_cursor_before_reveal(mode: CaptureMode) -> bool {
     mode != CaptureMode::Region
 }
