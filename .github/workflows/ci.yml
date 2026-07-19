@@ -91,7 +91,7 @@ jobs:
             artifact_name: captures-windows-installer
             artifact_path: target/release/bundle/nsis/*.exe
           - platform: Ubuntu
-            os: ubuntu-22.04
+            os: ubuntu-24.04
             bundle: deb
             artifact_name: captures-ubuntu-package
             artifact_path: target/release/bundle/deb/*.deb
