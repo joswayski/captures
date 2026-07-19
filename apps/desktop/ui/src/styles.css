@@ -70,11 +70,16 @@ html.capture-window-cursor, html.capture-window-cursor * { cursor: var(--capture
 .window-target span { display: inline-block; max-width: 100%; padding: 4px 7px; overflow: hidden; border-radius: 4px; background: transparent; opacity: 0; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .window-target:hover span, .window-target-hovered span { background: rgba(17,18,26,.88); opacity: 1; }
 
-.thumbnail-stack { display: flex; flex-direction: column; gap: 24px; width: 100%; height: 100%; padding: 28px; overflow-y: auto; overflow-anchor: none; background: transparent; scrollbar-width: none; }
+/* Bottom-anchor the stack with content height (not a full-window flex column).
+   A full-height column + margin-top:auto reflows the top card when the native
+   window shrinks after a dismiss, which makes that card flicker. Auto height
+   keeps surviving cards stable while only empty window space is cropped. */
+.thumbnail-stack { position: absolute; bottom: 0; left: 0; right: 0; display: flex; flex-direction: column; gap: 24px; width: 100%; height: auto; max-height: 100%; padding: 28px; overflow-y: auto; overflow-anchor: none; background: transparent; scrollbar-width: none; }
 .thumbnail-stack::-webkit-scrollbar { display: none; }
 .thumbnail-card { position: relative; isolation: isolate; flex: 0 0 160px; width: 100%; height: 160px; margin-bottom: 0; background: transparent; border-radius: 12px; box-shadow: 0 8px 16px rgba(0,0,0,.34), 0 2px 5px rgba(0,0,0,.22); transition: flex-basis .26s ease, height .26s ease, margin-bottom .26s ease, opacity .2s ease, transform .2s ease, filter .2s ease, box-shadow .22s ease; will-change: flex-basis, height, opacity, transform; }
 .thumbnail-card.thumbnail-viewer-active { box-shadow: 0 8px 16px rgba(0,0,0,.34), 0 2px 5px rgba(0,0,0,.22), 0 0 0 1px rgba(169,151,255,.88), 0 0 17px rgba(137,116,255,.4); }
-.thumbnail-card:first-child { margin-top: auto; }
+/* Isolate exit animations so surviving cards do not inherit transition flicker. */
+.thumbnail-card:not([class*="thumbnail-exit-"]) { transition: box-shadow .22s ease; will-change: auto; }
 .thumbnail-card img { display: block; width: 100%; height: 100%; object-fit: contain; border: 0; border-radius: 12px; background: #0e0f15; transition: filter .18s ease, transform .22s ease; }
 html:not(.thumbnail-native-tracking) .thumbnail-card:hover img, .thumbnail-card:focus-within img, .thumbnail-card-native-active img { filter: blur(2px) brightness(.56); transform: scale(1.015); }
 .thumbnail-meta { position: absolute; z-index: 2; right: 8px; bottom: 8px; left: 8px; display: flex; justify-content: space-between; pointer-events: none; color: white; font-size: 10px; text-shadow: 0 1px 3px rgba(0,0,0,.9); transition: opacity .15s ease; }

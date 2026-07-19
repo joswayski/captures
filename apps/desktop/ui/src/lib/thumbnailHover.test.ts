@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyThumbnailNativeHover,
   clearThumbnailNativeHover,
+  shouldIgnoreThumbnailCursorEvents,
   thumbnailCursorSyncAction,
   THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS,
 } from "./thumbnailHover";
@@ -113,6 +114,30 @@ describe("clearThumbnailNativeHover", () => {
 
     expect(document.querySelector("article")).not.toHaveClass("thumbnail-card-native-active");
     expect(document.querySelector("button")).not.toHaveClass("native-pointer-hover");
+  });
+});
+
+describe("shouldIgnoreThumbnailCursorEvents", () => {
+  it("keeps the stack interactive and passes through empty oversized regions", () => {
+    document.body.innerHTML = `
+      <main class="thumbnail-stack">
+        <article class="thumbnail-card"><button>Copy</button></article>
+      </main>
+    `;
+    const stack = document.querySelector(".thumbnail-stack")!;
+    const outside = document.body;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => stack),
+    });
+    expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: true })).toBe(false);
+
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => outside),
+    });
+    expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: true })).toBe(true);
+    expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: false })).toBe(false);
   });
 });
 

@@ -240,7 +240,7 @@ pub fn configure_inactive_hover(window: &WebviewWindow) -> Result<(), &'static s
             // that cache follows the moving top edge, the surviving card
             // travels below the screen before WebKit's new frame replaces it.
             // Keep the cached surface on the stable bottom edge as well.
-            webview.setLayerContentsPlacement(NSViewLayerContentsPlacement::Bottom);
+            anchor_layer_contents_to_bottom(webview);
             let options = NSTrackingAreaOptions::MouseEnteredAndExited
                 | NSTrackingAreaOptions::MouseMoved
                 | NSTrackingAreaOptions::ActiveAlways
@@ -260,6 +260,10 @@ pub fn configure_inactive_hover(window: &WebviewWindow) -> Result<(), &'static s
             install_cursor_tracker(webview, CursorMode::Arrow, CursorSurface::Thumbnail);
         })
         .map_err(|_| "macOS webview handle is unavailable")
+}
+
+fn anchor_layer_contents_to_bottom(view: &NSView) {
+    view.setLayerContentsPlacement(NSViewLayerContentsPlacement::Bottom);
 }
 
 /// Shows the preview without making CES the active application.
@@ -336,8 +340,9 @@ pub fn reset_capture_overlay(window: &WebviewWindow) -> Result<(), &'static str>
 }
 
 /// Resizes a visible preview stack in one AppKit update while preserving its
-/// bottom edge. React commits the surviving-card layout before this runs, so
-/// an immediate redraw avoids both a blank frame and a second slide animation.
+/// bottom edge. Callers should only grow a visible stack: shrinking WKWebView
+/// blanks surviving cards. Re-asserts bottom layer placement before growing so
+/// cached content stays anchored to the stable edge.
 pub fn resize_from_bottom(
     window: &WebviewWindow,
     width: f64,
@@ -345,6 +350,21 @@ pub fn resize_from_bottom(
 ) -> Result<(), &'static str> {
     let native_window = native_window(window)?;
     let current = native_window.frame();
+    // Avoid a no-op setFrame, which can still force WKWebView to recompose.
+    if (current.size.width - width).abs() < 0.5 && (current.size.height - height).abs() < 0.5 {
+        return Ok(());
+    }
+
+    // WKWebView can recreate its backing layer; re-apply bottom anchoring when
+    // the frame actually changes so growth does not shift painted cards.
+    let _ = window.as_ref().with_webview(|platform_webview| {
+        let pointer = platform_webview.inner();
+        // SAFETY: Tauri supplies the live WKWebView for the duration of this callback.
+        if let Some(webview) = unsafe { pointer.cast::<NSView>().as_ref() } {
+            anchor_layer_contents_to_bottom(webview);
+        }
+    });
+
     let frame = NSRect::new(current.origin, NSSize::new(width, height));
     native_window.setFrame_display(frame, true);
     Ok(())
