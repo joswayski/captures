@@ -1,8 +1,8 @@
 [workspace]
 members = [
     "apps/desktop/src-tauri",
-    "crates/ces-capture",
-    "crates/ces-macos-window",
+    "crates/captures-capture",
+    "crates/captures-macos-window",
 ]
 resolver = "2"
 

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use ces_capture::{DisplayDescriptor, WindowDescriptor, XcapBackend};
+use captures_capture::{DisplayDescriptor, WindowDescriptor, XcapBackend};
 use parking_lot::{Mutex, RwLock};
 use uuid::Uuid;
 

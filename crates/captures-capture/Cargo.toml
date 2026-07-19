@@ -1,5 +1,5 @@
 [package]
-name = "ces-capture"
+name = "captures-capture"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "desktop",
-  "description": "Narrow capabilities for CES-created desktop windows",
+  "description": "Narrow capabilities for Captures desktop windows",
   "windows": ["overlay", "thumbnail", "viewer", "viewer-*", "preferences", "startup"],
   "permissions": [
     "core:default",

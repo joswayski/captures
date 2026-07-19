@@ -10,7 +10,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 const settings: AppSettings = {
-  output_directory: "/Users/josevalerio/CES",
+  output_directory: "/Users/josevalerio/Captures",
   region_shortcut: "Ctrl+Shift+4",
   window_shortcut: "Ctrl+Shift+W",
   display_shortcut: "Ctrl+Shift+3",

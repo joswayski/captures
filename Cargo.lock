@@ -465,6 +465,58 @@ dependencies = [
 ]
 
 [[package]]
+name = "captures-capture"
+version = "0.1.0"
+dependencies = [
+ "core-graphics 0.25.0",
+ "image",
+ "serde",
+ "thiserror 2.0.18",
+ "xcap",
+]
+
+[[package]]
+name = "captures-desktop"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "captures-capture",
+ "captures-macos-window",
+ "chrono",
+ "directories",
+ "image",
+ "mouse_position",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-autostart",
+ "tauri-plugin-clipboard-manager",
+ "tauri-plugin-dialog",
+ "tauri-plugin-global-shortcut",
+ "tauri-plugin-opener",
+ "tauri-plugin-single-instance",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "trash",
+ "uuid",
+]
+
+[[package]]
+name = "captures-macos-window"
+version = "0.1.0"
+dependencies = [
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "tauri",
+ "tauri-nspanel",
+]
+
+[[package]]
 name = "cargo-platform"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -505,58 +557,6 @@ checksum = "e17dd265a7d0f31ef544e1b20e03add05d3b45b491b633b10d67145d2acc1a38"
 dependencies = [
  "find-msvc-tools",
  "shlex 2.0.1",
-]
-
-[[package]]
-name = "ces-capture"
-version = "0.1.0"
-dependencies = [
- "core-graphics 0.25.0",
- "image",
- "serde",
- "thiserror 2.0.18",
- "xcap",
-]
-
-[[package]]
-name = "ces-desktop"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "ces-capture",
- "ces-macos-window",
- "chrono",
- "directories",
- "image",
- "mouse_position",
- "parking_lot",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-autostart",
- "tauri-plugin-clipboard-manager",
- "tauri-plugin-dialog",
- "tauri-plugin-global-shortcut",
- "tauri-plugin-opener",
- "tauri-plugin-single-instance",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "trash",
- "uuid",
-]
-
-[[package]]
-name = "ces-macos-window"
-version = "0.1.0"
-dependencies = [
- "objc2",
- "objc2-app-kit",
- "objc2-foundation",
- "tauri",
- "tauri-nspanel",
 ]
 
 [[package]]

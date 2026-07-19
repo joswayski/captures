@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use ces_capture::{CaptureMode, DisplayDescriptor, WindowDescriptor};
+use captures_capture::{CaptureMode, DisplayDescriptor, WindowDescriptor};
 use directories::{ProjectDirs, UserDirs};
 use image::RgbaImage;
 use serde::{Deserialize, Serialize};
@@ -97,11 +97,11 @@ pub fn default_output_directory() -> PathBuf {
     UserDirs::new()
         .map(|dirs| dirs.home_dir().to_path_buf())
         .unwrap_or_else(|| {
-            ProjectDirs::from("io", "github", "ces")
+            ProjectDirs::from("io", "github", "captures")
                 .map(|dirs| dirs.data_dir().to_path_buf())
                 .unwrap_or_else(|| PathBuf::from("."))
         })
-        .join("CES")
+        .join("Captures")
 }
 
 pub fn migrate_legacy_output_directory(settings: &mut AppSettings) {
@@ -114,8 +114,8 @@ pub fn migrate_legacy_output_directory(settings: &mut AppSettings) {
 
     migrate_output_directory(
         settings,
-        &pictures.join("CES"),
-        &user_dirs.home_dir().join("CES"),
+        &pictures.join("Captures"),
+        &user_dirs.home_dir().join("Captures"),
     );
 }
 
@@ -126,34 +126,34 @@ fn migrate_output_directory(settings: &mut AppSettings, legacy: &Path, current: 
 }
 
 pub fn settings_path() -> PathBuf {
-    ProjectDirs::from("io", "github", "ces")
+    ProjectDirs::from("io", "github", "captures")
         .map(|dirs| dirs.config_dir().join("settings.json"))
         .unwrap_or_else(|| PathBuf::from("settings.json"))
 }
 
 pub fn snapshot_url(session_id: &str) -> String {
-    format!("ces-capture://localhost/session/{session_id}")
+    format!("captures-capture://localhost/session/{session_id}")
 }
 
 pub fn artifact_url(artifact_id: &str) -> String {
-    format!("ces-capture://localhost/artifact/{artifact_id}")
+    format!("captures-capture://localhost/artifact/{artifact_id}")
 }
 
 pub fn artifact_full_url(artifact_id: &str) -> String {
-    format!("ces-capture://localhost/artifact-full/{artifact_id}")
+    format!("captures-capture://localhost/artifact-full/{artifact_id}")
 }
 
 #[cfg(test)]
 mod tests {
-    use ces_capture::CaptureMode;
+    use captures_capture::CaptureMode;
     use std::path::Path;
 
     use super::{AppSettings, migrate_output_directory};
 
     #[test]
     fn migrates_only_the_legacy_default_output_directory() {
-        let legacy = Path::new("/Users/example/Pictures/CES");
-        let current = Path::new("/Users/example/CES");
+        let legacy = Path::new("/Users/example/Pictures/Captures");
+        let current = Path::new("/Users/example/Captures");
         let mut settings = AppSettings {
             output_directory: legacy.to_string_lossy().into_owned(),
             ..AppSettings::default()
@@ -171,7 +171,7 @@ mod tests {
     fn loads_settings_written_before_permission_tracking() {
         let settings: AppSettings = serde_json::from_str(
             r#"{
-                "output_directory": "/Users/example/CES",
+                "output_directory": "/Users/example/Captures",
                 "region_shortcut": "Ctrl+Shift+4",
                 "window_shortcut": "Ctrl+Shift+W",
                 "display_shortcut": "Ctrl+Shift+3",

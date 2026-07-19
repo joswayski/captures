@@ -7,8 +7,8 @@ function artifact(path: string | null, id = "capture-1"): CaptureArtifact {
   return {
     id,
     path,
-    preview_url: "ces-capture://artifact/capture-1",
-    full_url: "ces-capture://artifact-full/capture-1",
+    preview_url: "captures-capture://artifact/capture-1",
+    full_url: "captures-capture://artifact-full/capture-1",
     width: 1_440,
     height: 900,
     size_bytes: 250_000,
@@ -33,7 +33,7 @@ describe("ThumbnailCard", () => {
   });
 
   it("offers deletion only after the capture has a saved file", () => {
-    render(<ThumbnailCard artifact={artifact("/Users/josevalerio/CES/capture.png")} clipboardCurrent viewerActive={false} onRemoved={() => undefined} />);
+    render(<ThumbnailCard artifact={artifact("/Users/josevalerio/Captures/capture.png")} clipboardCurrent viewerActive={false} onRemoved={() => undefined} />);
 
     const close = screen.getByRole("button", { name: "Close Preview" });
     const trash = screen.getByRole("button", { name: "Move to Trash" });

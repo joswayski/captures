@@ -180,7 +180,7 @@ pub fn capture_shortcut_modifiers_pressed() -> bool {
 /// Returns the system pasteboard revision without reading its contents.
 ///
 /// AppKit increments this value whenever any application replaces the
-/// pasteboard, allowing CES to notice that its last copied capture is no
+/// pasteboard, allowing Captures to notice that its last copied capture is no
 /// longer current without inspecting the user's clipboard data.
 pub fn clipboard_change_count() -> isize {
     NSPasteboard::generalPasteboard().changeCount()
@@ -266,7 +266,7 @@ fn anchor_layer_contents_to_bottom(view: &NSView) {
     view.setLayerContentsPlacement(NSViewLayerContentsPlacement::Bottom);
 }
 
-/// Shows the preview without making CES the active application.
+/// Shows the preview without making Captures the active application.
 pub fn show_without_activating(window: &WebviewWindow) -> Result<(), &'static str> {
     let native_window = native_window(window)?;
     native_window.setLevel(NSStatusWindowLevel);
@@ -393,7 +393,7 @@ pub fn set_pointing_cursor(window: &WebviewWindow, pointing: bool) -> Result<(),
 
 /// Reapplies the pointing cursor without rebuilding WebKit cursor state.
 ///
-/// macOS restores the frontmost application's arrow when CES becomes
+/// macOS restores the frontmost application's arrow when Captures becomes
 /// inactive, even though the preview can still be hovering the same button.
 /// Cursor rectangles remain disabled while a button is active, so setting the
 /// native cursor again is enough to restore the hand without cursor flicker.
@@ -465,7 +465,7 @@ fn install_cursor_tracker(webview: &NSView, mode: CursorMode, surface: CursorSur
         | NSTrackingAreaOptions::InVisibleRect;
     // Cursor updates cannot share the `ActiveAlways` tracking area above.
     // Once the non-activating preview becomes key on hover, this second area
-    // gives AppKit a standard cursor-update callback without activating CES.
+    // gives AppKit a standard cursor-update callback without activating Captures.
     let cursor_area = unsafe {
         NSTrackingArea::initWithRect_options_owner_userInfo(
             NSTrackingArea::alloc(),

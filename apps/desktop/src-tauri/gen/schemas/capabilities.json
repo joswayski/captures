@@ -1,1 +1,1 @@
-{"desktop":{"identifier":"desktop","description":"Narrow capabilities for CES-created desktop windows","local":true,"windows":["overlay","thumbnail","viewer","viewer-*","preferences","startup"],"permissions":["core:default","dialog:allow-open"]}}
+{"desktop":{"identifier":"desktop","description":"Narrow capabilities for Captures desktop windows","local":true,"windows":["overlay","thumbnail","viewer","viewer-*","preferences","startup"],"permissions":["core:default","dialog:allow-open"]}}

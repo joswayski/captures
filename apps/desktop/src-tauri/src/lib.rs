@@ -17,7 +17,7 @@ use std::sync::atomic::AtomicIsize;
 
 use tauri::CursorIcon;
 
-use ces_capture::{CaptureError, CaptureMode, LogicalRect};
+use captures_capture::{CaptureError, CaptureMode, LogicalRect};
 use chrono::Utc;
 use image::RgbaImage;
 use mouse_position::mouse_position::Mouse;
@@ -91,16 +91,16 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(
             tauri_plugin_autostart::Builder::new()
-                .app_name("CES")
+                .app_name("Captures")
                 .build(),
         );
 
     #[cfg(target_os = "macos")]
-    let builder = builder.plugin(ces_macos_window::init_panel_plugin());
+    let builder = builder.plugin(captures_macos_window::init_panel_plugin());
 
     builder
         .manage(state)
-        .register_uri_scheme_protocol("ces-capture", move |_context, request| {
+        .register_uri_scheme_protocol("captures-capture", move |_context, request| {
             let path = request.uri().path().trim_matches('/');
             let body = resolve_asset(&protocol_state, path);
             match body {
@@ -189,7 +189,7 @@ pub fn run() {
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("error while building CES")
+        .expect("error while building Captures")
         .run(|_, event| {
             if let tauri::RunEvent::ExitRequested {
                 code: None, api, ..
@@ -263,7 +263,7 @@ async fn prepare_capture(
                     && window
                         .app_name
                         .as_deref()
-                        .is_none_or(|app_name| !app_name.eq_ignore_ascii_case("CES"))
+                        .is_none_or(|app_name| !app_name.eq_ignore_ascii_case("Captures"))
             })
             .collect()
     } else {
@@ -423,12 +423,13 @@ fn show_capture_overlay(
             .set_cursor_icon(cursor)
             .map_err(|error| error.to_string())?;
         #[cfg(target_os = "macos")]
-        ces_macos_window::prepare_capture_overlay(&window).map_err(str::to_owned)?;
+        captures_macos_window::prepare_capture_overlay(&window).map_err(str::to_owned)?;
         window.show().map_err(|error| error.to_string())?;
         window.set_focus().map_err(|error| error.to_string())?;
         #[cfg(target_os = "macos")]
         if should_activate_capture_cursor_before_reveal(mode) {
-            ces_macos_window::activate_capture_cursor(&window, false).map_err(str::to_owned)?;
+            captures_macos_window::activate_capture_cursor(&window, false)
+                .map_err(str::to_owned)?;
         }
         Ok(())
     } else {
@@ -454,8 +455,8 @@ fn reveal_capture_overlay(
         .ok_or_else(|| "capture overlay is unavailable".to_owned())?;
     #[cfg(target_os = "macos")]
     {
-        ces_macos_window::reveal_capture_overlay(&window).map_err(str::to_owned)?;
-        ces_macos_window::activate_capture_cursor(&window, mode == CaptureMode::Region)
+        captures_macos_window::reveal_capture_overlay(&window).map_err(str::to_owned)?;
+        captures_macos_window::activate_capture_cursor(&window, mode == CaptureMode::Region)
             .map_err(str::to_owned)?;
     }
     #[cfg(not(target_os = "macos"))]
@@ -480,7 +481,7 @@ fn sync_capture_cursor(
         .get_webview_window("overlay")
         .ok_or_else(|| "capture overlay is unavailable".to_owned())?;
     #[cfg(target_os = "macos")]
-    ces_macos_window::activate_capture_cursor(&window, mode == CaptureMode::Region)
+    captures_macos_window::activate_capture_cursor(&window, mode == CaptureMode::Region)
         .map_err(str::to_owned)?;
     #[cfg(not(target_os = "macos"))]
     let _ = (window, mode);
@@ -583,7 +584,7 @@ fn set_thumbnail_cursor(
                 ThumbnailCursorAction::Ignore => return,
                 ThumbnailCursorAction::Reset => {
                     let _ = cursor_window.set_cursor_icon(CursorIcon::Default);
-                    ces_macos_window::reset_pointing_cursor_state(&cursor_window)
+                    captures_macos_window::reset_pointing_cursor_state(&cursor_window)
                 }
                 ThumbnailCursorAction::Apply(effective_pointing) => {
                     let icon = if effective_pointing {
@@ -594,7 +595,7 @@ fn set_thumbnail_cursor(
                     if let Err(error) = cursor_window.set_cursor_icon(icon) {
                         eprintln!("failed to update capture thumbnail window cursor: {error}");
                     }
-                    ces_macos_window::set_pointing_cursor(&cursor_window, effective_pointing)
+                    captures_macos_window::set_pointing_cursor(&cursor_window, effective_pointing)
                 }
             };
             if let Err(error) = result {
@@ -629,10 +630,10 @@ fn reassert_thumbnail_cursor(
                 ThumbnailCursorAction::Ignore => return,
                 ThumbnailCursorAction::Reset => {
                     let _ = window.set_cursor_icon(CursorIcon::Default);
-                    ces_macos_window::reset_pointing_cursor_state(&window)
+                    captures_macos_window::reset_pointing_cursor_state(&window)
                 }
                 ThumbnailCursorAction::Apply(_) => {
-                    ces_macos_window::reassert_pointing_cursor(&window)
+                    captures_macos_window::reassert_pointing_cursor(&window)
                 }
             };
             if let Err(error) = result {
@@ -955,7 +956,7 @@ fn open_artifact_viewer(
         label,
         WebviewUrl::App(format!("index.html?view=viewer&artifact_id={artifact_id}").into()),
     )
-    .title("CES Preview")
+    .title("Captures Preview")
     .inner_size(1_000.0, 700.0)
     .min_inner_size(560.0, 400.0)
     .center()
@@ -1121,7 +1122,7 @@ fn write_image_to_clipboard(app: &AppHandle, image: RgbaImage) -> Result<isize, 
 
 #[cfg(target_os = "macos")]
 fn current_clipboard_revision() -> isize {
-    ces_macos_window::clipboard_change_count()
+    captures_macos_window::clipboard_change_count()
 }
 
 #[cfg(target_os = "macos")]
@@ -1144,7 +1145,9 @@ fn record_clipboard_write() -> isize {
         .wrapping_add(1)
 }
 
-fn display_under_pointer(state: &AppState) -> Result<ces_capture::DisplayDescriptor, AppError> {
+fn display_under_pointer(
+    state: &AppState,
+) -> Result<captures_capture::DisplayDescriptor, AppError> {
     let (x, y) = match Mouse::get_mouse_position() {
         Mouse::Position { x, y } => (x, y),
         Mouse::Error => (0, 0),
@@ -1216,7 +1219,7 @@ fn restart_and_retry_capture(app: &AppHandle, mode: CaptureMode) -> Result<(), A
     Ok(())
 }
 
-fn window_coordinate_scale(display: &ces_capture::DisplayDescriptor) -> f64 {
+fn window_coordinate_scale(display: &captures_capture::DisplayDescriptor) -> f64 {
     #[cfg(target_os = "windows")]
     return display.scale_factor.max(1.0);
 
@@ -1278,7 +1281,7 @@ async fn wait_for_capture_shortcut_release() {
         const MODIFIER_POLL_INTERVAL: Duration = Duration::from_millis(5);
         const APPKIT_RELEASE_SETTLE_TIME: Duration = Duration::from_millis(16);
 
-        while ces_macos_window::capture_shortcut_modifiers_pressed() {
+        while captures_macos_window::capture_shortcut_modifiers_pressed() {
             tokio::time::sleep(MODIFIER_POLL_INTERVAL).await;
         }
         // `modifierFlags` becomes clear during the flags-changed event. Give
@@ -1324,7 +1327,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let open_folder =
         MenuItem::with_id(app, "open-folder", "Open Save Location", true, None::<&str>)?;
     let preferences = MenuItem::with_id(app, "preferences", "Preferences", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit CES", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit Captures", true, None::<&str>)?;
     let separator_1 = MenuItem::with_id(app, "separator-1", "────────", false, None::<&str>)?;
     let separator_2 = MenuItem::with_id(app, "separator-2", "────────", false, None::<&str>)?;
     let menu = Menu::with_items(
@@ -1342,7 +1345,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let mut tray = TrayIconBuilder::with_id("main")
         .menu(&menu)
-        .tooltip("CES — Screenshot utility");
+        .tooltip("Captures — Screenshot utility");
 
     #[cfg(target_os = "macos")]
     if let Some(icon) = macos_tray_icon() {
@@ -1457,7 +1460,7 @@ fn create_overlay_window(app: &AppHandle) -> Result<(), tauri::Error> {
         "overlay",
         WebviewUrl::App("index.html?view=overlay".into()),
     )
-    .title("CES Capture")
+    .title("Captures")
     .inner_size(1.0, 1.0)
     .position(-10_000.0, -10_000.0);
     #[cfg(target_os = "linux")]
@@ -1480,7 +1483,7 @@ fn create_overlay_window(app: &AppHandle) -> Result<(), tauri::Error> {
         .build()?;
 
     #[cfg(target_os = "macos")]
-    ces_macos_window::configure_capture_overlay(&window)
+    captures_macos_window::configure_capture_overlay(&window)
         .map_err(|error| tauri::Error::Anyhow(anyhow::anyhow!(error)))?;
     #[cfg(not(target_os = "macos"))]
     let _ = window;
@@ -1498,7 +1501,7 @@ fn show_startup_notice(app: &AppHandle) -> Result<(), tauri::Error> {
         "startup",
         WebviewUrl::App("index.html?view=startup".into()),
     )
-    .title("CES is running")
+    .title("Captures is running")
     .inner_size(STARTUP_NOTICE_WIDTH, STARTUP_NOTICE_HEIGHT)
     .position(x, y)
     .decorations(false)
@@ -1515,7 +1518,7 @@ fn show_startup_notice(app: &AppHandle) -> Result<(), tauri::Error> {
     window.set_ignore_cursor_events(true)?;
 
     #[cfg(target_os = "macos")]
-    ces_macos_window::show_without_activating(&window)
+    captures_macos_window::show_without_activating(&window)
         .map_err(|error| tauri::Error::Anyhow(anyhow::anyhow!(error)))?;
 
     #[cfg(not(target_os = "macos"))]
@@ -1557,7 +1560,7 @@ fn create_thumbnail_window(app: &AppHandle, visible: bool) -> Result<(), tauri::
         "thumbnail",
         WebviewUrl::App("index.html?view=thumbnail".into()),
     )
-    .title("CES Capture")
+    .title("Captures")
     .inner_size(THUMBNAIL_WIDTH, height)
     .position(x, y)
     .decorations(false)
@@ -1574,7 +1577,7 @@ fn create_thumbnail_window(app: &AppHandle, visible: bool) -> Result<(), tauri::
     .build()?;
 
     #[cfg(target_os = "macos")]
-    ces_macos_window::configure_inactive_hover(&window)
+    captures_macos_window::configure_inactive_hover(&window)
         .map_err(|error| tauri::Error::Anyhow(anyhow::anyhow!(error)))?;
 
     if visible {
@@ -1620,7 +1623,7 @@ fn update_thumbnail_stack(app: &AppHandle) {
         if visible {
             #[cfg(target_os = "macos")]
             if let Err(error) =
-                ces_macos_window::resize_from_bottom(&window, THUMBNAIL_WIDTH, height)
+                captures_macos_window::resize_from_bottom(&window, THUMBNAIL_WIDTH, height)
             {
                 eprintln!("failed to resize capture thumbnail stack: {error}");
                 let _ = window.set_size(LogicalSize::new(THUMBNAIL_WIDTH, height));
@@ -1657,7 +1660,7 @@ fn thumbnail_visible_window_height(desired: f64, current: Option<f64>) -> f64 {
 
 fn show_thumbnail_window(window: &tauri::WebviewWindow) {
     #[cfg(target_os = "macos")]
-    if let Err(error) = ces_macos_window::show_without_activating(window) {
+    if let Err(error) = captures_macos_window::show_without_activating(window) {
         eprintln!("failed to raise capture thumbnail stack: {error}");
     }
 
@@ -1767,7 +1770,7 @@ fn report_capture_error(app: &AppHandle, error: &AppError, mode: CaptureMode) {
         AppError::Capture(CaptureError::PermissionRequestStarted)
     ) {
         // macOS is already presenting its own permission prompt. Showing a
-        // second CES dialog here obscures that prompt and confuses setup.
+        // second Captures dialog here obscures that prompt and confuses setup.
         return;
     }
 
@@ -1778,9 +1781,9 @@ fn report_capture_error(app: &AppHandle, error: &AppError, mode: CaptureMode) {
             let app = app.clone();
             app.dialog()
                 .message(
-                    "macOS requires CES to restart before newly granted Screen Recording access becomes available. CES can restart now and automatically retry this capture.",
+                    "macOS requires Captures to restart before newly granted Screen Recording access becomes available. Captures can restart now and automatically retry this capture.",
                 )
-                .title("CES Setup")
+                .title("Captures Setup")
                 .buttons(MessageDialogButtons::OkCancelCustom(
                     "Restart & Retry".to_owned(),
                     "Not Now".to_owned(),
@@ -1799,9 +1802,9 @@ fn report_capture_error(app: &AppHandle, error: &AppError, mode: CaptureMode) {
         let app = app.clone();
         app.dialog()
             .message(
-                "This locally built CES copy no longer matches macOS's saved Screen Recording record. CES can reset only its own record, restart, and retry this capture. You will still need to approve CES in System Settings; macOS does not allow apps to toggle this permission themselves.",
+                "This locally built Captures copy no longer matches macOS's saved Screen Recording record. Captures can reset only its own record, restart, and retry this capture. You will still need to approve Captures in System Settings; macOS does not allow apps to toggle this permission themselves.",
             )
-            .title("CES Setup")
+            .title("Captures Setup")
             .buttons(MessageDialogButtons::OkCancelCustom(
                 "Reset, Restart & Retry".to_owned(),
                 "Not Now".to_owned(),
@@ -1822,7 +1825,7 @@ fn report_capture_error(app: &AppHandle, error: &AppError, mode: CaptureMode) {
     let message = capture_error_message(error);
     app.dialog()
         .message(message)
-        .title("CES Capture")
+        .title("Captures")
         .buttons(MessageDialogButtons::Ok)
         .kind(MessageDialogKind::Error)
         .show(|_| {});
@@ -1840,7 +1843,7 @@ fn capture_error_message(error: &AppError) -> String {
 
     #[cfg(target_os = "linux")]
     if wayland_session() && matches!(error, AppError::Capture(CaptureError::Backend(_))) {
-        return "CES could not capture this Wayland desktop. Make sure an xdg-desktop-portal screenshot backend is installed and running, then try Region or Full Screen capture again.".to_owned();
+        return "Captures could not capture this Wayland desktop. Make sure an xdg-desktop-portal screenshot backend is installed and running, then try Region or Full Screen capture again.".to_owned();
     }
 
     if matches!(
@@ -1848,13 +1851,13 @@ fn capture_error_message(error: &AppError) -> String {
         AppError::Capture(CaptureError::PermissionDenied | CaptureError::PermissionRequestStarted)
     ) {
         #[cfg(target_os = "windows")]
-        return "CES could not access the screen. Windows desktop capture does not use a separate Screen Recording permission; secure/UAC windows and protected content cannot be captured.".to_owned();
+        return "Captures could not access the screen. Windows desktop capture does not use a separate Screen Recording permission; secure/UAC windows and protected content cannot be captured.".to_owned();
 
         #[cfg(not(target_os = "windows"))]
-        return "CES needs Screen Recording permission to capture your open windows. Enable it in your operating system's privacy settings, then restart CES.".to_owned();
+        return "Captures needs Screen Recording permission to capture your open windows. Enable it in your operating system's privacy settings, then restart Captures.".to_owned();
     }
 
-    format!("CES could not start the capture: {error}")
+    format!("Captures could not start the capture: {error}")
 }
 
 #[cfg(target_os = "macos")]
@@ -1883,9 +1886,9 @@ fn show_macos_permission_recovery_error(app: &AppHandle, error: &AppError) {
     eprintln!("failed to recover Screen Recording permission: {error}");
     app.dialog()
         .message(format!(
-            "CES could not reset or restart its Screen Recording setup: {error}"
+            "Captures could not reset or restart its Screen Recording setup: {error}"
         ))
-        .title("CES Setup")
+        .title("Captures Setup")
         .buttons(MessageDialogButtons::Ok)
         .kind(MessageDialogKind::Error)
         .show(|_| {});
@@ -1912,7 +1915,7 @@ fn show_preferences(app: &AppHandle) {
             "preferences",
             WebviewUrl::App("index.html?view=preferences".into()),
         )
-        .title("CES Preferences")
+        .title("Captures Preferences")
         .inner_size(520.0, 480.0)
         .min_inner_size(420.0, 360.0)
         .center()
@@ -1938,7 +1941,7 @@ fn hide_window(app: &AppHandle, label: &str) {
 
 fn set_capture_huds_protected(app: &AppHandle, protected: bool) {
     // The window server may still composite a just-hidden HUD into an
-    // immediate display capture. Exclude CES HUDs until the frozen background
+    // immediate display capture. Exclude Captures HUDs until the frozen background
     // frame has been read so they cannot reappear as pixels during fade-in.
     for label in ["thumbnail", "startup"] {
         if let Some(window) = app.get_webview_window(label)
@@ -1954,7 +1957,7 @@ fn hide_capture_overlay(app: &AppHandle) {
         let _ = window.hide();
         let _ = window.set_cursor_icon(CursorIcon::Default);
         #[cfg(target_os = "macos")]
-        if let Err(error) = ces_macos_window::reset_capture_overlay(&window) {
+        if let Err(error) = captures_macos_window::reset_capture_overlay(&window) {
             eprintln!("failed to reset capture overlay: {error}");
         }
     }
@@ -1987,7 +1990,7 @@ fn resolve_asset(state: &AppState, path: &str) -> Option<Vec<u8>> {
 }
 
 impl CaptureSession {
-    fn view(&self, rect: ces_capture::PhysicalRect) -> Option<RgbaImage> {
+    fn view(&self, rect: captures_capture::PhysicalRect) -> Option<RgbaImage> {
         if rect.width == 0 || rect.height == 0 {
             return None;
         }
