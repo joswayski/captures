@@ -2037,6 +2037,27 @@ mod tests {
     }
 
     #[test]
+    fn viewer_windows_can_complete_close_requests() {
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/viewer.json"))
+                .expect("viewer capability should be valid JSON");
+        let windows = capability["windows"]
+            .as_array()
+            .expect("viewer capability should target windows");
+        let permissions = capability["permissions"]
+            .as_array()
+            .expect("viewer capability should grant permissions");
+
+        assert!(windows.iter().any(|window| window == "viewer-*"));
+        for permission in ["core:window:allow-close", "core:window:allow-destroy"] {
+            assert!(
+                permissions.iter().any(|granted| granted == permission),
+                "viewer capability should grant {permission}"
+            );
+        }
+    }
+
+    #[test]
     fn ignores_preview_cursor_updates_while_capture_is_active() {
         assert_eq!(
             thumbnail_cursor_action(true, false, false),
