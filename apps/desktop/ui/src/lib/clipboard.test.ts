@@ -1,7 +1,7 @@
 import { reconcileClipboardState } from "./clipboard";
 
 describe("clipboard state reconciliation", () => {
-  it("clears the owner when a newer system clipboard revision has no CES capture", () => {
+  it("clears the owner when a newer system clipboard revision has no capture owned by Captures", () => {
     expect(reconcileClipboardState(
       { revision: 41, artifact_id: "capture-1" },
       { revision: 42, artifact_id: null },

@@ -39,9 +39,9 @@ pub fn save_settings(settings: &AppSettings) -> Result<(), AppError> {
 pub fn save_encoded_capture(png: &[u8], settings: &AppSettings) -> Result<PathBuf, AppError> {
     let directory = PathBuf::from(&settings.output_directory);
     fs::create_dir_all(&directory)?;
-    let stem = format!("CES_{}", Local::now().format("%Y-%m-%d_%H-%M-%S_%3f"));
+    let stem = format!("Captures_{}", Local::now().format("%Y-%m-%d_%H-%M-%S_%3f"));
     let path = unique_path(&directory, &stem);
-    let temporary = directory.join(format!(".ces-{}.tmp", Uuid::new_v4()));
+    let temporary = directory.join(format!(".captures-{}.tmp", Uuid::new_v4()));
 
     let mut file = File::create(&temporary)?;
     file.write_all(png)?;
@@ -137,7 +137,7 @@ mod tests {
         );
         assert!(!bytes.is_empty());
         assert!(path.exists());
-        assert!(!unique_path(directory.path(), "CES_test").exists());
+        assert!(!unique_path(directory.path(), "Captures_test").exists());
     }
 
     #[test]

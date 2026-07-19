@@ -33,7 +33,7 @@ if (process.platform === "darwin" && !environment.APPLE_SIGNING_IDENTITY) {
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const result = spawnSync(
   npm,
-  ["run", "tauri:build", "--workspace", "@ces/desktop"],
+  ["run", "tauri:build", "--workspace", "@captures/desktop"],
   {
     env: environment,
     stdio: "inherit",

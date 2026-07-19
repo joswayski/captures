@@ -1,8 +1,8 @@
-# CES
+# Captures
 
-CES is a small, privacy-first screenshot utility for macOS, Windows, and Linux.
+Captures is a small, privacy-first screenshot utility for macOS, Windows, and Linux. The planned sharing service will use compact [`captur.es/<id>`](https://captur.es) links.
 
-The first milestone is a macOS developer alpha. It runs in the tray, captures a region, window, or full screen, copies the result to the image clipboard by default, and presents a preview. Automatic clipboard copying can be disabled in Preferences. Choose Save to write a PNG under `~/CES`; **Close Without Saving** removes an unsaved preview without creating a file. CES does not upload screenshots or send telemetry.
+The first milestone is a macOS developer alpha. It runs in the tray, captures a region, window, or full screen, copies the result to the image clipboard by default, and presents a preview. Automatic clipboard copying can be disabled in Preferences. Choose Save to write a PNG under `~/Captures`; **Close Without Saving** removes an unsaved preview without creating a file. Captures does not upload screenshots or send telemetry.
 
 ## Current status
 
@@ -52,37 +52,37 @@ This runs the debug executable directly. Stop it with `Ctrl+C` in the terminal. 
 
 The three global capture shortcuts can be changed from Preferences. `Esc` only applies while the capture overlay is open.
 
-Use **View Full Size** on a pending capture to inspect the full-resolution image in CES. Each screenshot opens in its own dedicated viewer window; opening the same screenshot again focuses its existing viewer. A subtle purple glow follows the last active open viewer without flickering when the pointer crosses the thumbnail strip. The viewer is the future home for annotation and editing tools.
+Use **View Full Size** on a pending capture to inspect the full-resolution image in Captures. Each screenshot opens in its own dedicated viewer window; opening the same screenshot again focuses its existing viewer. A subtle purple glow follows the last active open viewer without flickering when the pointer crosses the thumbnail strip. The viewer is the future home for annotation and editing tools.
 
 The **Copied to clipboard** badge is live: it disappears and the **Copy** action returns when another app replaces the clipboard with text, an image, or any other content. With multiple capture previews open, only the preview currently owned by the clipboard hides its Copy action.
 
 ## Build and install
 
-Build CES on the operating system where it will run:
+Build Captures on the operating system where it will run:
 
 ```sh
 npm install
 npm run build
 ```
 
-Installers and app bundles are written under `target/release/bundle`. On macOS, open the generated DMG and move CES to Applications. Launch CES once, grant Screen Recording access, then enable **Launch CES when I sign in** from Preferences if desired.
+Installers and app bundles are written under `target/release/bundle`. On macOS, open the generated DMG and move Captures to Applications. Launch Captures once, grant Screen Recording access, then enable **Launch Captures when I sign in** from Preferences if desired.
 
 For the current Apple Silicon build, the complete install-and-run flow is:
 
 ```sh
 npm run build
-open target/release/bundle/dmg/CES_0.1.0_aarch64.dmg
-# Drag CES to Applications, then:
-open -a CES
+open target/release/bundle/dmg/Captures_0.1.0_aarch64.dmg
+# Drag Captures to Applications, then:
+open -a Captures
 ```
 
-CES runs as a menu-bar utility: it shows a camera at the top-right of macOS and intentionally does not keep a Dock icon. Use that camera to capture, open Preferences, or quit CES.
+Captures runs as a menu-bar utility: it shows a camera at the top-right of macOS and intentionally does not keep a Dock icon. Use that camera to capture, open Preferences, or quit Captures.
 
-After macOS grants Screen Recording access, retry your shortcut and let CES restart itself when prompted. macOS requires this restart before capture is enabled.
+After macOS grants Screen Recording access, retry your shortcut and let Captures restart itself when prompted. macOS requires this restart before capture is enabled.
 
 `npm run build` automatically uses an installed Apple Development signing identity when one is available. Otherwise it warns and seals the bundle with an ad-hoc signature. Ad-hoc identity is tied to the exact executable, so macOS asks for Screen Recording permission again after code changes. Stable permissions across upgrades require an Apple Development or Developer ID certificate; the latter can be selected explicitly through `APPLE_SIGNING_IDENTITY`.
 
-If CES is enabled in Screen & System Audio Recording but still asks for permission, start a capture and choose **Reset, Restart & Retry**. CES clears only its own stale record, restarts itself, and resumes the requested capture; other applications are not affected. After you approve CES in System Settings, retry the shortcut once and choose **Restart & Retry** so the newly granted access takes effect.
+If Captures is enabled in Screen & System Audio Recording but still asks for permission, start a capture and choose **Reset, Restart & Retry**. Captures clears only its own stale record, restarts itself, and resumes the requested capture; other applications are not affected. After you approve Captures in System Settings, retry the shortcut once and choose **Restart & Retry** so the newly granted access takes effect.
 
 For Ubuntu development, install Tauri's native dependencies first:
 
@@ -95,4 +95,4 @@ Ubuntu Desktop includes the screenshot portal used for Wayland region/display ca
 
 ## Privacy and future uploads
 
-CES holds pending captures locally in memory and has no network permission in this milestone. Saving is an explicit action. The future upload service will receive an explicit Upload or Share action and will keep object storage private; the desktop app will never receive bucket credentials.
+Captures holds pending captures locally in memory and has no network permission in this milestone. Saving is an explicit action. The future upload service will receive an explicit Upload or Share action and will keep object storage private; the desktop app will never receive bucket credentials.

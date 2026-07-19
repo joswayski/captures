@@ -1,3 +1,3 @@
 fn main() {
-    ces_desktop_lib::run();
+    captures_desktop_lib::run();
 }

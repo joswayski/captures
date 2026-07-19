@@ -1,14 +1,14 @@
 {
-  "name": "ces",
+  "name": "captures",
   "private": true,
   "version": "0.1.0",
   "workspaces": [
     "apps/desktop"
   ],
   "scripts": {
-    "dev": "npm run tauri:dev --workspace @ces/desktop",
+    "dev": "npm run tauri:dev --workspace @captures/desktop",
     "build": "node scripts/build.mjs",
-    "check": "npm run check --workspace @ces/desktop",
-    "test": "npm run test --workspace @ces/desktop"
+    "check": "npm run check --workspace @captures/desktop",
+    "test": "npm run test --workspace @captures/desktop"
   }
 }

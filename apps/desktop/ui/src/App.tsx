@@ -67,8 +67,8 @@ export function App() {
 function IdleView() {
   return (
     <main className="idle-view">
-      <div className="brand-mark">CES</div>
-      <h1>CES is running</h1>
+      <div className="brand-mark">Captures</div>
+      <h1>Captures is running</h1>
       <p>Use the capture shortcut or the tray icon to take a screenshot.</p>
     </main>
   );
@@ -84,7 +84,7 @@ function StartupNotice() {
         </svg>
       </div>
       <div>
-        <strong>CES is running</strong>
+        <strong>Captures is running</strong>
         <p>Use the menu-bar camera or Ctrl+Shift+4 to capture.</p>
       </div>
     </main>
@@ -154,7 +154,7 @@ function ArtifactViewer() {
     <main className="artifact-viewer">
       <header className="viewer-toolbar">
         <div>
-          <strong>CES Preview</strong>
+          <strong>Captures Preview</strong>
           <span>{artifact.width} × {artifact.height}</span>
         </div>
         <button type="button" onClick={() => setFit((current) => !current)}>
@@ -570,7 +570,7 @@ function Thumbnail() {
     void invoke("sync_thumbnail_stack")
       .catch(() => undefined)
       .finally(() => {
-        if (!cancelled) window.dispatchEvent(new Event("ces-thumbnail-layout-changed"));
+        if (!cancelled) window.dispatchEvent(new Event("captures-thumbnail-layout-changed"));
       });
     return () => {
       cancelled = true;
@@ -680,8 +680,8 @@ function Thumbnail() {
     document.addEventListener("visibilitychange", resumePolling);
     window.addEventListener("focus", resumePolling);
     window.addEventListener("pageshow", resumePolling);
-    window.addEventListener("ces-thumbnail-ready", pollImmediately);
-    window.addEventListener("ces-thumbnail-layout-changed", pollImmediately);
+    window.addEventListener("captures-thumbnail-ready", pollImmediately);
+    window.addEventListener("captures-thumbnail-layout-changed", pollImmediately);
     schedulePoll(0);
     return () => {
       cancelled = true;
@@ -689,8 +689,8 @@ function Thumbnail() {
       document.removeEventListener("visibilitychange", resumePolling);
       window.removeEventListener("focus", resumePolling);
       window.removeEventListener("pageshow", resumePolling);
-      window.removeEventListener("ces-thumbnail-ready", pollImmediately);
-      window.removeEventListener("ces-thumbnail-layout-changed", pollImmediately);
+      window.removeEventListener("captures-thumbnail-ready", pollImmediately);
+      window.removeEventListener("captures-thumbnail-layout-changed", pollImmediately);
       stopNativeTracking();
     };
   }, []);
@@ -736,7 +736,7 @@ export function ThumbnailCard({
     void invoke("thumbnail_ready", { artifactId: artifact.id })
       .catch(() => undefined)
       .finally(() => {
-        window.dispatchEvent(new Event("ces-thumbnail-ready"));
+        window.dispatchEvent(new Event("captures-thumbnail-ready"));
       });
   };
 
@@ -1015,7 +1015,7 @@ export function Preferences() {
     <main className="preferences">
       <header className="preferences-header">
         <div>
-          <span className="eyebrow">CES</span>
+          <span className="eyebrow">Captures</span>
           <h1>Preferences</h1>
         </div>
         <div className="preferences-header-actions">
@@ -1080,7 +1080,7 @@ export function Preferences() {
 
       <label className="check-row">
         <input type="checkbox" checked={settings.launch_at_login} onChange={(event) => update("launch_at_login", event.target.checked)} />
-        <span>Launch CES when I sign in</span>
+        <span>Launch Captures when I sign in</span>
       </label>
     </main>
   );

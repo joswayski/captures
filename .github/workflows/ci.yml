@@ -72,8 +72,8 @@ jobs:
         with:
           toolchain: 1.94.0
       - run: npm ci
-      - run: npm run tauri:build --workspace @ces/desktop
+      - run: npm run tauri:build --workspace @captures/desktop
       - uses: actions/upload-artifact@v4
         with:
-          name: ces-macos-app
-          path: target/release/bundle/macos/CES.app
+          name: captures-macos-app
+          path: target/release/bundle/macos/Captures.app
