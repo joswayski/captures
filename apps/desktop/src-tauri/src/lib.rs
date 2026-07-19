@@ -1054,6 +1054,15 @@ async fn finish_capture(
     mode: CaptureMode,
     image: RgbaImage,
 ) -> Result<CaptureArtifact, AppError> {
+    #[cfg(target_os = "macos")]
+    if let Err(error) = app.run_on_main_thread(|| {
+        if let Err(error) = captures_macos_window::play_capture_sound() {
+            eprintln!("failed to play capture sound: {error}");
+        }
+    }) {
+        eprintln!("failed to schedule capture sound: {error}");
+    }
+
     let width = image.width();
     let height = image.height();
     let image_for_encoding = image.clone();

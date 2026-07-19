@@ -15,10 +15,10 @@ use objc2::{
     runtime::AnyObject,
 };
 use objc2_app_kit::{
-    NSCursor, NSEvent, NSPasteboard, NSStatusWindowLevel, NSTrackingArea, NSTrackingAreaOptions,
-    NSView, NSViewLayerContentsPlacement, NSWindow, NSWindowStyleMask,
+    NSCursor, NSEvent, NSPasteboard, NSSound, NSStatusWindowLevel, NSTrackingArea,
+    NSTrackingAreaOptions, NSView, NSViewLayerContentsPlacement, NSWindow, NSWindowStyleMask,
 };
-use objc2_foundation::{NSObject, NSRect, NSSize};
+use objc2_foundation::{NSObject, NSRect, NSSize, NSString};
 use tauri::WebviewWindow;
 use tauri_nspanel::WebviewWindowExt;
 
@@ -184,6 +184,17 @@ pub fn capture_shortcut_modifiers_pressed() -> bool {
 /// longer current without inspecting the user's clipboard data.
 pub fn clipboard_change_count() -> isize {
     NSPasteboard::generalPasteboard().changeCount()
+}
+
+/// Plays a short, low-volume system sound after a capture is confirmed.
+pub fn play_capture_sound() -> Result<(), &'static str> {
+    let sound = NSSound::soundNamed(&NSString::from_str("Tink"))
+        .ok_or("macOS capture sound is unavailable")?;
+    sound.setVolume(0.18);
+    sound
+        .play()
+        .then_some(())
+        .ok_or("macOS capture sound could not be played")
 }
 
 fn shortcut_modifiers_pressed(flags: objc2_app_kit::NSEventModifierFlags) -> bool {
