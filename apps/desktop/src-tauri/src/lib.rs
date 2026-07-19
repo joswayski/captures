@@ -26,6 +26,7 @@ use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
+    webview::PageLoadEvent,
     window::Color,
 };
 use tauri_plugin_autostart::ManagerExt as AutoStartExt;
@@ -1920,13 +1921,17 @@ fn show_preferences(app: &AppHandle) {
         .min_inner_size(420.0, 360.0)
         .center()
         .resizable(true)
+        .background_color(Color(23, 24, 33, 255))
         .focused(false)
         .visible(false)
-        .build()
-        .and_then(|window| {
-            window.show()?;
-            window.set_focus()
-        });
+        .on_page_load(|window, payload| {
+            if payload.event() == PageLoadEvent::Finished
+                && let Err(error) = window.show().and_then(|_| window.set_focus())
+            {
+                eprintln!("failed to reveal preferences window: {error}");
+            }
+        })
+        .build();
         if let Err(error) = result {
             eprintln!("failed to show preferences window: {error}");
         }
