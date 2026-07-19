@@ -40,6 +40,7 @@ describe("Preferences", () => {
       name: /Automatically copy captures to the clipboard/,
     });
     expect(autoCopy).toBeChecked();
+    expect(screen.queryByRole("button", { name: "Close Preferences" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
 

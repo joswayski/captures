@@ -1006,11 +1006,6 @@ export function Preferences() {
     if (typeof selected === "string") update("output_directory", selected);
   };
 
-  const closePreferences = async () => {
-    await flushPendingSettings();
-    await currentWindow?.close();
-  };
-
   return (
     <main className="preferences">
       <header className="preferences-header">
@@ -1018,15 +1013,14 @@ export function Preferences() {
           <span className="eyebrow">Captures</span>
           <h1>Preferences</h1>
         </div>
-        <div className="preferences-header-actions">
-          {saveStatus.kind !== "idle" && (
+        {saveStatus.kind !== "idle" && (
+          <div className="preferences-header-actions">
             <div className={`preferences-save-status preferences-save-${saveStatus.kind}`} role="status">
               <span aria-hidden="true">{saveStatus.kind === "saved" ? "✓" : saveStatus.kind === "error" ? "!" : ""}</span>
               {saveStatus.message}
             </div>
-          )}
-          <button type="button" className="close-button" aria-label="Close Preferences" onClick={() => void closePreferences()}>×</button>
-        </div>
+          </div>
+        )}
       </header>
 
       <section className="settings-section">
