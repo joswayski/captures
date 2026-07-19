@@ -75,6 +75,26 @@ enum AppError {
 
 type CommandResult<T> = Result<T, String>;
 
+#[cfg(target_os = "macos")]
+struct CaptureTrayMenuItems {
+    region: MenuItem<tauri::Wry>,
+    window: MenuItem<tauri::Wry>,
+    display: MenuItem<tauri::Wry>,
+}
+
+#[cfg(target_os = "macos")]
+impl CaptureTrayMenuItems {
+    fn set_shortcuts(&self, settings: &AppSettings) -> Result<(), AppError> {
+        self.region
+            .set_accelerator(Some(menu_accelerator(&settings.region_shortcut)?))?;
+        self.window
+            .set_accelerator(Some(menu_accelerator(&settings.window_shortcut)?))?;
+        self.display
+            .set_accelerator(Some(menu_accelerator(&settings.display_shortcut)?))?;
+        Ok(())
+    }
+}
+
 pub fn run() {
     let state = AppState::new();
     let protocol_state = state.clone();
@@ -733,6 +753,15 @@ fn update_settings(
         let _ = register_shortcuts_with(&app, &previous_settings);
         return Err(error.to_string());
     }
+    #[cfg(target_os = "macos")]
+    if shortcuts_changed {
+        let tray_items = app.state::<CaptureTrayMenuItems>();
+        if let Err(error) = tray_items.set_shortcuts(&settings) {
+            let _ = register_shortcuts_with(&app, &previous_settings);
+            let _ = tray_items.set_shortcuts(&previous_settings);
+            return Err(error.to_string());
+        }
+    }
     if settings.launch_at_login != previous_settings.launch_at_login {
         if settings.launch_at_login {
             app.autolaunch()
@@ -1298,6 +1327,11 @@ fn parse_shortcut(shortcut: &str) -> Result<Shortcut, AppError> {
         .map_err(|error| AppError::Shortcut(error.to_string()))
 }
 
+#[cfg(any(target_os = "macos", test))]
+fn menu_accelerator(shortcut: &str) -> Result<String, AppError> {
+    parse_shortcut(shortcut).map(|shortcut| shortcut.to_string())
+}
+
 fn should_trigger_shortcut(armed: &AtomicBool, state: ShortcutState) -> bool {
     match state {
         ShortcutState::Pressed => {
@@ -1314,16 +1348,39 @@ fn should_activate_capture_cursor_before_reveal(mode: CaptureMode) -> bool {
 }
 
 fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let capture_region =
-        MenuItem::with_id(app, "capture-region", "Capture Region", true, None::<&str>)?;
-    let capture_window =
-        MenuItem::with_id(app, "capture-window", "Capture Window", true, None::<&str>)?;
+    #[cfg(target_os = "macos")]
+    let (region_accelerator, window_accelerator, display_accelerator) = {
+        let settings = app.state::<Arc<AppState>>().settings();
+        (
+            Some(menu_accelerator(&settings.region_shortcut)?),
+            Some(menu_accelerator(&settings.window_shortcut)?),
+            Some(menu_accelerator(&settings.display_shortcut)?),
+        )
+    };
+    #[cfg(not(target_os = "macos"))]
+    let (region_accelerator, window_accelerator, display_accelerator) =
+        (None::<String>, None::<String>, None::<String>);
+
+    let capture_region = MenuItem::with_id(
+        app,
+        "capture-region",
+        "Capture Region",
+        true,
+        region_accelerator.as_deref(),
+    )?;
+    let capture_window = MenuItem::with_id(
+        app,
+        "capture-window",
+        "Capture Window",
+        true,
+        window_accelerator.as_deref(),
+    )?;
     let capture_display = MenuItem::with_id(
         app,
         "capture-display",
         "Capture Full Screen",
         true,
-        None::<&str>,
+        display_accelerator.as_deref(),
     )?;
     let open_folder =
         MenuItem::with_id(app, "open-folder", "Open Save Location", true, None::<&str>)?;
@@ -1392,6 +1449,17 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         }
     })
     .build(app)?;
+
+    #[cfg(target_os = "macos")]
+    if !app.manage(CaptureTrayMenuItems {
+        region: capture_region,
+        window: capture_window,
+        display: capture_display,
+    }) {
+        return Err(Box::new(AppError::Task(
+            "capture tray menu shortcuts are already managed".to_owned(),
+        )));
+    }
     Ok(())
 }
 
@@ -2018,7 +2086,7 @@ mod tests {
     use tauri_plugin_global_shortcut::ShortcutState;
 
     use super::{
-        CaptureMode, ThumbnailCursorAction, parse_shortcut,
+        CaptureMode, ThumbnailCursorAction, menu_accelerator, parse_shortcut,
         should_activate_capture_cursor_before_reveal, should_trigger_shortcut,
         thumbnail_cursor_action, thumbnail_geometry, thumbnail_pointer_position,
         thumbnail_visible_window_height, viewer_window_label,
@@ -2062,6 +2130,14 @@ mod tests {
         assert_eq!(
             parse_shortcut("Ctrl+Shift+4").expect("legacy shortcut should parse"),
             parse_shortcut("Control+Shift+Digit4").expect("recorded shortcut should parse")
+        );
+    }
+
+    #[test]
+    fn normalizes_shortcuts_for_native_menu_accelerators() {
+        assert_eq!(
+            menu_accelerator("Ctrl+Shift+4").expect("legacy shortcut should normalize"),
+            menu_accelerator("Control+Shift+Digit4").expect("recorded shortcut should normalize")
         );
     }
 
