@@ -143,6 +143,7 @@ pub fn run() {
             get_thumbnail_pointer_position,
             set_thumbnail_cursor,
             reassert_thumbnail_cursor,
+            set_thumbnail_ignore_cursor_events,
             open_captures_folder,
             open_preferences,
         ])
@@ -646,6 +647,23 @@ fn reassert_thumbnail_cursor(
         let _ = (app, state);
         Ok(())
     }
+}
+
+#[tauri::command]
+fn set_thumbnail_ignore_cursor_events(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    ignore: bool,
+) -> CommandResult<()> {
+    if state.thumbnail_visibility.lock().is_suppressed() {
+        return Ok(());
+    }
+    let window = app
+        .get_webview_window("thumbnail")
+        .ok_or_else(|| "capture thumbnail is unavailable".to_owned())?;
+    window
+        .set_ignore_cursor_events(ignore)
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -1587,8 +1605,18 @@ fn update_thumbnail_stack(app: &AppHandle) {
             let _ = window.hide();
             return;
         }
-        let (x, y, height) = thumbnail_window_geometry(&handle, count);
+        let (x, y, desired_height) = thumbnail_window_geometry(&handle, count);
         let visible = window.is_visible().unwrap_or(false);
+        // WKWebView blanks every painted card when its NSWindow shrinks. Keep
+        // the taller frame after dismissals; the stack is bottom-anchored and
+        // empty top space is click-through. Exact height is restored the next
+        // time the window is shown from hidden.
+        let height = thumbnail_visible_window_height(
+            desired_height,
+            visible
+                .then(|| thumbnail_window_logical_height(&window))
+                .flatten(),
+        );
         if visible {
             #[cfg(target_os = "macos")]
             if let Err(error) =
@@ -1610,6 +1638,21 @@ fn update_thumbnail_stack(app: &AppHandle) {
             show_thumbnail_window(&window);
         }
     });
+}
+
+fn thumbnail_window_logical_height(window: &tauri::WebviewWindow) -> Option<f64> {
+    let scale = window.scale_factor().ok()?.max(1.0);
+    let size = window.inner_size().ok()?;
+    Some(f64::from(size.height) / scale)
+}
+
+/// While the stack is on-screen, only grow it. Shrinking after a card exits
+/// forces WKWebView to recompose and flickers every surviving preview.
+fn thumbnail_visible_window_height(desired: f64, current: Option<f64>) -> f64 {
+    match current {
+        Some(current) => desired.max(current),
+        None => desired,
+    }
 }
 
 fn show_thumbnail_window(window: &tauri::WebviewWindow) {
@@ -1970,7 +2013,7 @@ mod tests {
         CaptureMode, ThumbnailCursorAction, parse_shortcut,
         should_activate_capture_cursor_before_reveal, should_trigger_shortcut,
         thumbnail_cursor_action, thumbnail_geometry, thumbnail_pointer_position,
-        viewer_window_label,
+        thumbnail_visible_window_height, viewer_window_label,
     };
 
     #[test]
@@ -2036,6 +2079,13 @@ mod tests {
             thumbnail_geometry(-3_840, 0, 3_840, 2_048, 2.0, 2),
             (-1_920.0, 624.0, 400.0)
         );
+    }
+
+    #[test]
+    fn keeps_visible_thumbnail_window_from_shrinking_after_dismiss() {
+        assert_eq!(thumbnail_visible_window_height(400.0, Some(584.0)), 584.0);
+        assert_eq!(thumbnail_visible_window_height(584.0, Some(400.0)), 584.0);
+        assert_eq!(thumbnail_visible_window_height(216.0, None), 216.0);
     }
 
     #[test]

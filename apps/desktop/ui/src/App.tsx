@@ -20,6 +20,7 @@ import {
 import {
   applyThumbnailNativeHover,
   clearThumbnailNativeHover,
+  shouldIgnoreThumbnailCursorEvents,
   thumbnailCursorSyncAction,
 } from "./lib/thumbnailHover";
 import { shouldScrollThumbnailStackToEnd } from "./lib/thumbnailLayout";
@@ -564,6 +565,8 @@ function Thumbnail() {
     }
     previousArtifactCount.current = artifacts.length;
     let cancelled = false;
+    // Sync may grow the native window for new cards. It intentionally does not
+    // shrink after dismissals — that recomposes WKWebView and flickers survivors.
     void invoke("sync_thumbnail_stack")
       .catch(() => undefined)
       .finally(() => {
@@ -582,6 +585,7 @@ function Thumbnail() {
     let timer: ReturnType<typeof setTimeout> | null = null;
     let polling = false;
     let pointingCursor = false;
+    let ignoringCursorEvents = false;
     let lastCursorSyncAt = 0;
 
     const setPointingCursor = (pointing: boolean) => {
@@ -602,6 +606,14 @@ function Thumbnail() {
       }
     };
 
+    const setIgnoreCursorEvents = (ignore: boolean) => {
+      if (ignoringCursorEvents === ignore) return;
+      ignoringCursorEvents = ignore;
+      // After dismiss the window may stay tall; empty space above the stack
+      // must pass clicks through so it does not block the desktop.
+      void invoke("set_thumbnail_ignore_cursor_events", { ignore }).catch(() => undefined);
+    };
+
     const clearNativeClasses = () => {
       clearThumbnailNativeHover();
     };
@@ -614,10 +626,12 @@ function Thumbnail() {
     const stopNativeTracking = () => {
       document.documentElement.classList.remove("thumbnail-native-tracking");
       clearNativeHover();
+      setIgnoreCursorEvents(false);
     };
 
     const applyNativeHover = (position: ThumbnailPointerPosition) => {
       document.documentElement.classList.add("thumbnail-native-tracking");
+      setIgnoreCursorEvents(shouldIgnoreThumbnailCursorEvents(position));
       setPointingCursor(applyThumbnailNativeHover(position));
     };
 

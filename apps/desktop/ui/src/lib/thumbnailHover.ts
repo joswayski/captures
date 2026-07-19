@@ -12,6 +12,20 @@ export function thumbnailCursorSyncAction(
   return null;
 }
 
+/**
+ * After a dismiss the native window may stay tall (shrinking blanks WKWebView).
+ * Empty space above the bottom-anchored stack must not steal clicks.
+ */
+export function shouldIgnoreThumbnailCursorEvents(
+  position: ThumbnailPointerPosition,
+  root: Document = document,
+): boolean {
+  if (!position.inside) return false;
+  const target = root.elementFromPoint(position.x, position.y);
+  if (!target) return true;
+  return !target.closest(".thumbnail-stack");
+}
+
 export function clearThumbnailNativeHover(root: ParentNode = document) {
   root.querySelectorAll(".thumbnail-card-native-active, .native-pointer-hover")
     .forEach((element) => {
