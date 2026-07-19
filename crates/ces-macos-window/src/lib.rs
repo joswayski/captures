@@ -338,7 +338,7 @@ pub fn resize_from_bottom(
     let native_window = native_window(window)?;
     let current = native_window.frame();
     let frame = NSRect::new(current.origin, NSSize::new(width, height));
-    native_window.setFrame_display(frame, true);
+    native_window.setFrame_display(frame, false);
     Ok(())
 }
 

@@ -61,9 +61,9 @@ export interface ClipboardState {
   artifact_id: string | null;
 }
 
-export interface ViewerFocusState {
+export interface ViewerActivationState {
   artifact_id: string;
-  focused: boolean;
+  active: boolean;
 }
 
 export interface ThumbnailPointerPosition {

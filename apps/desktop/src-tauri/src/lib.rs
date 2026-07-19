@@ -911,26 +911,30 @@ fn open_artifact_viewer(
     state: tauri::State<'_, Arc<AppState>>,
     artifact_id: String,
 ) -> CommandResult<()> {
-    let artifact = state
+    let artifact_available = state
         .artifacts
         .lock()
         .iter()
-        .find(|artifact| artifact.id == artifact_id)
-        .cloned()
-        .ok_or_else(|| "artifact is no longer available".to_owned())?;
+        .any(|artifact| artifact.id == artifact_id);
+    if !artifact_available {
+        return Err("artifact is no longer available".to_owned());
+    }
 
-    if let Some(window) = app.get_webview_window("viewer") {
-        window
-            .emit("viewer-artifact-changed", &artifact)
-            .map_err(|error| error.to_string())?;
+    let label = viewer_window_label(&artifact_id);
+    if let Some(window) = app.get_webview_window(&label) {
         window.show().map_err(|error| error.to_string())?;
         window.set_focus().map_err(|error| error.to_string())?;
         return Ok(());
     }
 
+    let viewer_count = app
+        .webview_windows()
+        .keys()
+        .filter(|label| label.starts_with(VIEWER_WINDOW_PREFIX))
+        .count();
     let window = WebviewWindowBuilder::new(
         &app,
-        "viewer",
+        label,
         WebviewUrl::App(format!("index.html?view=viewer&artifact_id={artifact_id}").into()),
     )
     .title("CES Preview")
@@ -943,8 +947,24 @@ fn open_artifact_viewer(
     .visible(false)
     .build()
     .map_err(|error| error.to_string())?;
+    if viewer_count > 0 {
+        let scale = window.scale_factor().unwrap_or(1.0);
+        let offset = ((viewer_count % 6) as f64 * 28.0 * scale).round() as i32;
+        if let Ok(position) = window.outer_position() {
+            let _ = window.set_position(tauri::PhysicalPosition::new(
+                position.x.saturating_add(offset),
+                position.y.saturating_add(offset),
+            ));
+        }
+    }
     window.show().map_err(|error| error.to_string())?;
     window.set_focus().map_err(|error| error.to_string())
+}
+
+const VIEWER_WINDOW_PREFIX: &str = "viewer-";
+
+fn viewer_window_label(artifact_id: &str) -> String {
+    format!("{VIEWER_WINDOW_PREFIX}{artifact_id}")
 }
 
 fn remove_artifact(app: &AppHandle, state: &Arc<AppState>, artifact_id: &str) -> CommandResult<()> {
@@ -1950,6 +1970,7 @@ mod tests {
         CaptureMode, ThumbnailCursorAction, parse_shortcut,
         should_activate_capture_cursor_before_reveal, should_trigger_shortcut,
         thumbnail_cursor_action, thumbnail_geometry, thumbnail_pointer_position,
+        viewer_window_label,
     };
 
     #[test]
@@ -1960,6 +1981,13 @@ mod tests {
         assert!(should_activate_capture_cursor_before_reveal(
             CaptureMode::Window
         ));
+    }
+
+    #[test]
+    fn gives_each_artifact_a_stable_viewer_window() {
+        assert_eq!(viewer_window_label("first"), "viewer-first");
+        assert_eq!(viewer_window_label("second"), "viewer-second");
+        assert_ne!(viewer_window_label("first"), viewer_window_label("second"));
     }
 
     #[test]

@@ -52,7 +52,7 @@ This runs the debug executable directly. Stop it with `Ctrl+C` in the terminal. 
 
 The three global capture shortcuts can be changed from Preferences. `Esc` only applies while the capture overlay is open.
 
-Use **View Full Size** on a pending capture to inspect the full-resolution image in CES. CES reuses one dedicated viewer window, and the thumbnail for the screenshot currently displayed there gets a subtle purple glow while that window is focused. The viewer is the future home for annotation and editing tools.
+Use **View Full Size** on a pending capture to inspect the full-resolution image in CES. Each screenshot opens in its own dedicated viewer window; opening the same screenshot again focuses its existing viewer. A subtle purple glow follows the last active open viewer without flickering when the pointer crosses the thumbnail strip. The viewer is the future home for annotation and editing tools.
 
 The **Copied to clipboard** badge is live: it disappears and the **Copy** action returns when another app replaces the clipboard with text, an image, or any other content. With multiple capture previews open, only the preview currently owned by the clipboard hides its Copy action.
 
