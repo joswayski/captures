@@ -53,7 +53,19 @@ export interface CaptureArtifact {
   size_bytes: number;
   created_at: string;
   mode: CaptureMode;
+  history_saved: boolean;
   clipboard_copy_status: ClipboardCopyStatus;
+}
+
+export interface HistoryEntry {
+  id: string;
+  preview_url: string;
+  full_url: string;
+  width: number;
+  height: number;
+  size_bytes: number;
+  created_at: string;
+  mode: CaptureMode;
 }
 
 export interface ClipboardState {

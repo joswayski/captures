@@ -24,6 +24,7 @@ const artifact: CaptureArtifact = {
   size_bytes: 250_000,
   created_at: "2026-07-19T18:00:00Z",
   mode: "region",
+  history_saved: true,
   clipboard_copy_status: "copied",
 };
 

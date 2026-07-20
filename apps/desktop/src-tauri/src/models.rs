@@ -6,6 +6,8 @@ use image::RgbaImage;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub const HISTORY_RETENTION_DAYS: i64 = 30;
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AppSettings {
     pub output_directory: String,
@@ -47,11 +49,24 @@ pub struct CaptureArtifact {
     pub size_bytes: u64,
     pub created_at: String,
     pub mode: CaptureMode,
+    pub history_saved: bool,
     pub clipboard_copy_status: ClipboardCopyStatus,
     #[serde(skip)]
     pub image_png: Vec<u8>,
     #[serde(skip)]
     pub preview_png: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct HistoryEntry {
+    pub id: String,
+    pub preview_url: String,
+    pub full_url: String,
+    pub width: u32,
+    pub height: u32,
+    pub size_bytes: u64,
+    pub created_at: String,
+    pub mode: CaptureMode,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -131,6 +146,12 @@ pub fn settings_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("settings.json"))
 }
 
+pub fn history_directory() -> PathBuf {
+    ProjectDirs::from("io", "github", "captures")
+        .map(|dirs| dirs.data_local_dir().join("capture-history"))
+        .unwrap_or_else(|| PathBuf::from(".captures-history"))
+}
+
 pub fn snapshot_url(session_id: &str) -> String {
     format!("captures-capture://localhost/session/{session_id}")
 }
@@ -141,6 +162,14 @@ pub fn artifact_url(artifact_id: &str) -> String {
 
 pub fn artifact_full_url(artifact_id: &str) -> String {
     format!("captures-capture://localhost/artifact-full/{artifact_id}")
+}
+
+pub fn history_preview_url(artifact_id: &str) -> String {
+    format!("captures-capture://localhost/history-preview/{artifact_id}")
+}
+
+pub fn history_full_url(artifact_id: &str) -> String {
+    format!("captures-capture://localhost/history-full/{artifact_id}")
 }
 
 #[cfg(test)]

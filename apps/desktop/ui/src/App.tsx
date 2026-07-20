@@ -31,6 +31,7 @@ import type {
   CaptureArtifact,
   CaptureMode,
   ClipboardState,
+  HistoryEntry,
   ThumbnailPointerPosition,
   ViewerActivationState,
   WindowDescriptor,
@@ -59,6 +60,7 @@ export function App() {
   if (view === "overlay") return <CaptureOverlay />;
   if (view === "thumbnail") return <Thumbnail />;
   if (view === "viewer") return <ArtifactViewer />;
+  if (view === "history") return <CaptureHistory />;
   if (view === "preferences") return <Preferences />;
   if (view === "startup") return <StartupNotice />;
   return <IdleView />;
@@ -172,6 +174,198 @@ function ArtifactViewer() {
       </div>
     </main>
   );
+}
+
+export function CaptureHistory() {
+  const [entries, setEntries] = useState<HistoryEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    let dispose: (() => void) | undefined;
+
+    const refresh = async () => {
+      try {
+        const history = await invoke<HistoryEntry[]>("get_capture_history");
+        if (!active) return;
+        setEntries(history);
+        setError("");
+      } catch (error) {
+        if (active) setError(`Couldn’t load capture history: ${String(error)}`);
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+
+    void (async () => {
+      dispose = await listen("capture-history-changed", () => {
+        void refresh();
+      });
+      await refresh();
+    })();
+
+    return () => {
+      active = false;
+      dispose?.();
+    };
+  }, []);
+
+  return (
+    <main className="capture-history">
+      <header className="history-header">
+        <div>
+          <p className="eyebrow">LOCAL RECOVERY</p>
+          <h1>Capture History</h1>
+          <p>Recent captures stay private on this device for 30 days.</p>
+        </div>
+        {!loading && entries.length > 0 && (
+          <span className="history-count">
+            {entries.length} {entries.length === 1 ? "capture" : "captures"}
+          </span>
+        )}
+      </header>
+
+      {error && <p className="history-error" role="alert">{error}</p>}
+      {loading ? (
+        <section className="history-empty" aria-live="polite">
+          <span className="history-empty-icon" aria-hidden="true"><HistoryIcon /></span>
+          <h2>Loading history…</h2>
+        </section>
+      ) : entries.length === 0 ? (
+        <section className="history-empty">
+          <span className="history-empty-icon" aria-hidden="true"><HistoryIcon /></span>
+          <h2>No captures yet</h2>
+          <p>New screenshots will appear here automatically.</p>
+        </section>
+      ) : (
+        <section className="history-grid" aria-label="Recent captures">
+          {entries.map((entry) => (
+            <HistoryCard
+              key={entry.id}
+              entry={entry}
+              onDeleted={(artifactId) => {
+                setEntries((current) => current.filter(({ id }) => id !== artifactId));
+              }}
+            />
+          ))}
+        </section>
+      )}
+    </main>
+  );
+}
+
+export function HistoryCard({
+  entry,
+  onDeleted,
+}: {
+  entry: HistoryEntry;
+  onDeleted: (artifactId: string) => void;
+}) {
+  const [busy, setBusy] = useState<"restoring" | "deleting" | null>(null);
+  const [restored, setRestored] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [error, setError] = useState("");
+  const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const deleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
+    if (deleteTimer.current) clearTimeout(deleteTimer.current);
+  }, []);
+
+  const restore = async () => {
+    if (busy) return;
+    setBusy("restoring");
+    setError("");
+    try {
+      await invoke("restore_history_artifact", { artifactId: entry.id });
+      setRestored(true);
+      if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
+      feedbackTimer.current = setTimeout(() => setRestored(false), 2_500);
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const deleteFromHistory = async () => {
+    if (busy) return;
+    if (!confirmingDelete) {
+      setConfirmingDelete(true);
+      if (deleteTimer.current) clearTimeout(deleteTimer.current);
+      deleteTimer.current = setTimeout(() => setConfirmingDelete(false), 4_000);
+      return;
+    }
+
+    setBusy("deleting");
+    setError("");
+    try {
+      await invoke("delete_history_artifact", { artifactId: entry.id });
+      onDeleted(entry.id);
+    } catch (error) {
+      setError(String(error));
+      setBusy(null);
+      setConfirmingDelete(false);
+    }
+  };
+
+  return (
+    <article className="history-card">
+      <div className="history-image-wrap">
+        <img src={entry.preview_url} alt="Screenshot from capture history" loading="lazy" draggable={false} />
+        <span className="history-mode">{formatCaptureMode(entry.mode)}</span>
+      </div>
+      <div className="history-card-body">
+        <time dateTime={entry.created_at}>{formatHistoryDate(entry.created_at)}</time>
+        <p>{entry.width} × {entry.height} · {formatFileSize(entry.size_bytes)}</p>
+        <div className="history-actions">
+          <button
+            type="button"
+            className="history-restore"
+            disabled={busy !== null}
+            onClick={() => void restore()}
+          >
+            {restored ? <><CheckIcon />Restored</> : <><RestoreIcon />{busy === "restoring" ? "Restoring…" : "Restore"}</>}
+          </button>
+          <button
+            type="button"
+            className={confirmingDelete ? "history-delete history-delete-confirm" : "history-delete"}
+            aria-label={confirmingDelete ? "Confirm permanent deletion" : "Delete from History"}
+            disabled={busy !== null}
+            onClick={() => void deleteFromHistory()}
+          >
+            <TrashIcon />
+            {confirmingDelete ? "Delete forever" : "Delete"}
+          </button>
+        </div>
+        {error && <p className="history-card-error" role="alert">{error}</p>}
+      </div>
+    </article>
+  );
+}
+
+function formatHistoryDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Unknown date";
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
+}
+
+function formatCaptureMode(mode: CaptureMode): string {
+  if (mode === "display") return "Full screen";
+  return mode[0].toUpperCase() + mode.slice(1);
+}
+
+function HistoryIcon() {
+  return <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5M12 7v5l3 2" /></svg>;
+}
+
+function RestoreIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8" /><path d="M4 4v4h4" /></svg>;
 }
 
 function CaptureOverlay() {
@@ -787,7 +981,11 @@ export function ThumbnailCard({
         setError(String(error));
       });
   };
-  const closeLabel = artifact.path ? "Close Preview" : "Close Without Saving";
+  const closeLabel = artifact.history_saved
+    ? "Dismiss — available in History for 30 days"
+    : artifact.path
+      ? "Close Preview"
+      : "Close Without Saving";
 
   return (
     <article
@@ -843,8 +1041,11 @@ export function ThumbnailCard({
       </div>
       <div className="thumbnail-meta">
         <span>{artifact.width} × {artifact.height} · {formatFileSize(artifact.size_bytes)}</span>
-        {artifact.clipboard_copy_status === "failed" && !clipboardCurrent
-          && <span className="warning">Clipboard unavailable</span>}
+        {!artifact.history_saved
+          ? <span className="warning">History unavailable</span>
+          : artifact.clipboard_copy_status === "failed" && !clipboardCurrent
+            ? <span className="warning">Clipboard unavailable</span>
+            : null}
       </div>
       {error && <p className="thumbnail-message">{error}</p>}
     </article>
