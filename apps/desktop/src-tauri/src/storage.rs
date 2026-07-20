@@ -25,14 +25,27 @@ pub fn load_settings() -> AppSettings {
 
 pub fn save_settings(settings: &AppSettings) -> Result<(), AppError> {
     let path = crate::models::settings_path();
-    if let Some(parent) = path.parent() {
+    save_settings_to(&path, settings)
+}
+
+fn save_settings_to(path: &Path, settings: &AppSettings) -> Result<(), AppError> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty());
+    if let Some(parent) = parent {
         fs::create_dir_all(parent)?;
     }
 
     let contents = serde_json::to_vec_pretty(settings)?;
-    let temporary = path.with_extension("json.tmp");
-    fs::write(&temporary, contents)?;
-    fs::rename(temporary, path)?;
+    let mut temporary = match parent {
+        Some(parent) => tempfile::NamedTempFile::new_in(parent)?,
+        None => tempfile::NamedTempFile::new_in(".")?,
+    };
+    temporary.write_all(&contents)?;
+    temporary.as_file().sync_all()?;
+    temporary
+        .persist(path)
+        .map_err(|error| AppError::Io(error.error))?;
     Ok(())
 }
 
@@ -115,7 +128,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        encode_png, encode_preview_png, encode_thumbnail_png, save_encoded_capture, unique_path,
+        encode_png, encode_preview_png, encode_thumbnail_png, save_encoded_capture,
+        save_settings_to, unique_path,
     };
     use crate::models::AppSettings;
 
@@ -156,5 +170,25 @@ mod tests {
         let thumbnail = image::load_from_memory(&bytes).expect("thumbnail readable");
 
         assert_eq!((thumbnail.width(), thumbnail.height()), (568, 284));
+    }
+
+    #[test]
+    fn settings_can_replace_an_existing_file() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("settings.json");
+        let first = AppSettings::default();
+        let second = AppSettings {
+            auto_copy_to_clipboard: false,
+            ..AppSettings::default()
+        };
+
+        save_settings_to(&path, &first).expect("initial settings saved");
+        save_settings_to(&path, &second).expect("updated settings replaced the existing file");
+
+        let saved: AppSettings = serde_json::from_slice(
+            &std::fs::read(path).expect("updated settings file should be readable"),
+        )
+        .expect("updated settings should be valid JSON");
+        assert!(!saved.auto_copy_to_clipboard);
     }
 }
