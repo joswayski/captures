@@ -23,6 +23,13 @@ import {
   shouldIgnoreThumbnailCursorEvents,
   thumbnailCursorSyncAction,
 } from "./lib/thumbnailHover";
+import {
+  buildThumbnailDustParticles,
+  prefersReducedMotion,
+  THUMBNAIL_CARD_FALLBACK_HEIGHT,
+  THUMBNAIL_CARD_FALLBACK_WIDTH,
+  type ThumbnailDustParticle,
+} from "./lib/thumbnailExit";
 import { shouldScrollThumbnailStackToEnd } from "./lib/thumbnailLayout";
 import { reconcileActiveViewer } from "./lib/viewerActivation";
 import type {
@@ -703,6 +710,20 @@ export function Thumbnail() {
 
   return (
     <main ref={stackRef} className="thumbnail-stack">
+      {/* Horizontal-only Gaussian blur for dismiss motion streak (stdDeviation x 0). */}
+      <svg className="thumbnail-svg-defs" aria-hidden="true" focusable="false">
+        <defs>
+          <filter id="thumbnail-motion-blur-a" x="-50%" y="-20%" width="200%" height="140%" colorInterpolationFilters="sRGB">
+            <feGaussianBlur stdDeviation="3.5 0" />
+          </filter>
+          <filter id="thumbnail-motion-blur-b" x="-60%" y="-20%" width="220%" height="140%" colorInterpolationFilters="sRGB">
+            <feGaussianBlur stdDeviation="8 0" />
+          </filter>
+          <filter id="thumbnail-motion-blur-c" x="-70%" y="-20%" width="240%" height="140%" colorInterpolationFilters="sRGB">
+            <feGaussianBlur stdDeviation="14 0" />
+          </filter>
+        </defs>
+      </svg>
       {artifacts.map((artifact) => (
         <ThumbnailCard
           key={artifact.id}
@@ -733,6 +754,8 @@ export function ThumbnailCard({
   const [busy, setBusy] = useState<"copied" | "saved" | null>(null);
   const [error, setError] = useState("");
   const [exit, setExit] = useState<"dismiss" | "delete" | null>(null);
+  const [dustParticles, setDustParticles] = useState<ThumbnailDustParticle[] | null>(null);
+  const cardRef = useRef<HTMLElement>(null);
   const exitAction = useRef<string | null>(null);
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -773,25 +796,50 @@ export function ThumbnailCard({
   const exitWith = (kind: "dismiss" | "delete", action: string) => {
     if (exit) return;
     exitAction.current = action;
+    // Build dust in the same turn as setExit so the first painted frame uses
+    // the dissolve animation (not the scale/blur fallback).
+    if (kind === "delete" && !prefersReducedMotion()) {
+      const card = cardRef.current;
+      const width = card?.clientWidth || THUMBNAIL_CARD_FALLBACK_WIDTH;
+      const height = card?.clientHeight || THUMBNAIL_CARD_FALLBACK_HEIGHT;
+      setDustParticles(buildThumbnailDustParticles(width, height));
+    } else {
+      setDustParticles(null);
+    }
     setExit(kind);
   };
 
   const finishExit = (event: React.AnimationEvent<HTMLElement>) => {
-    if (!exit || event.animationName !== `thumbnail-${exit}` || !exitAction.current) return;
+    // Ignore bubbled animationend from image streak / dust chips / spark dots.
+    if (!exit || event.target !== event.currentTarget || !exitAction.current) return;
+    const expectedNames = exit === "delete"
+      ? dustParticles && dustParticles.length > 0
+        ? ["thumbnail-delete"]
+        : ["thumbnail-delete-fallback"]
+      : ["thumbnail-dismiss"];
+    if (!expectedNames.includes(event.animationName)) return;
     const action = exitAction.current;
     exitAction.current = null;
     void invoke(action, { artifactId: artifact.id })
       .then(() => onRemoved(artifact.id))
       .catch((error) => {
         setExit(null);
+        setDustParticles(null);
         setError(String(error));
       });
   };
   const closeLabel = artifact.path ? "Close Preview" : "Close Without Saving";
+  const usingDust = exit === "delete" && dustParticles !== null && dustParticles.length > 0;
 
   return (
     <article
-      className={`thumbnail-card ${viewerActive ? "thumbnail-viewer-active" : ""} ${exit ? `thumbnail-exit-${exit}` : ""}`}
+      ref={cardRef}
+      className={[
+        "thumbnail-card",
+        viewerActive ? "thumbnail-viewer-active" : "",
+        exit ? `thumbnail-exit-${exit}` : "",
+        usingDust ? "thumbnail-exit-dust" : "",
+      ].filter(Boolean).join(" ")}
       onAnimationEnd={finishExit}
     >
       <img
@@ -800,6 +848,30 @@ export function ThumbnailCard({
         onLoad={markThumbnailReady}
         onError={markThumbnailReady}
       />
+      {usingDust && (
+        <div className="thumbnail-dust-layer" aria-hidden="true">
+          {dustParticles.map((particle) => (
+            <span
+              key={particle.id}
+              className="thumbnail-dust"
+              style={{
+                left: particle.left,
+                top: particle.top,
+                width: particle.width,
+                height: particle.height,
+                backgroundImage: `url(${JSON.stringify(artifact.preview_url).slice(1, -1)})`,
+                backgroundSize: `${particle.surfaceWidth}px ${particle.surfaceHeight}px`,
+                backgroundPosition: `${particle.bgX}px ${particle.bgY}px`,
+                ["--dust-x" as string]: `${particle.dx}px`,
+                ["--dust-y" as string]: `${particle.dy}px`,
+                ["--dust-rotate" as string]: `${particle.rotate}deg`,
+                animationDelay: `${particle.delayMs}ms`,
+                animationDuration: `${particle.durationMs}ms`,
+              }}
+            />
+          ))}
+        </div>
+      )}
       {clipboardCurrent && (
         <div className="clipboard-confirmation" role="status">
           <CheckIcon />
