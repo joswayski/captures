@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 
 import { ThumbnailCard } from "./App";
 import type { CaptureArtifact } from "./types";
@@ -85,5 +85,40 @@ describe("ThumbnailCard", () => {
     );
 
     expect(screen.getByRole("article")).toHaveClass("thumbnail-viewer-active");
+  });
+
+  it("starts the dismiss exit animation when the close control is clicked", () => {
+    render(
+      <ThumbnailCard
+        artifact={artifact(null)}
+        clipboardCurrent={false}
+        viewerActive={false}
+        onRemoved={() => undefined}
+      />,
+    );
+
+    act(() => {
+      screen.getByRole("button", { name: "Close Without Saving" }).click();
+    });
+    expect(screen.getByRole("article")).toHaveClass("thumbnail-exit-dismiss");
+  });
+
+  it("starts the delete dissolve animation when Move to Trash is clicked", () => {
+    render(
+      <ThumbnailCard
+        artifact={artifact("/Users/josevalerio/Captures/capture.png")}
+        clipboardCurrent={false}
+        viewerActive={false}
+        onRemoved={() => undefined}
+      />,
+    );
+
+    act(() => {
+      screen.getByRole("button", { name: "Move to Trash" }).click();
+    });
+    const card = screen.getByRole("article");
+    expect(card).toHaveClass("thumbnail-exit-delete");
+    expect(card).toHaveClass("thumbnail-exit-dust");
+    expect(card.querySelectorAll(".thumbnail-dust").length).toBeGreaterThan(10);
   });
 });
