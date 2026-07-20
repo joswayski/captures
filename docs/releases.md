@@ -1,0 +1,41 @@
+# Captures releases
+
+Every successful push to `main` runs `.github/workflows/release.yml`. Release workflows wait in commit order without cancelling older pending pushes, run the frontend and Rust quality gates, and then build macOS Apple Silicon, Windows x64, and Linux x64 packages.
+
+The public version is CalVer in `YYYY.MM.DD.N` form, using the `America/New_York` date and a same-day revision from 1 through 99. A release named `Captures 2026.07.19.1` uses tag `v2026.07.19.1`. Tauri receives the SemVer-compatible internal version `2026.7.1901`; source manifests remain at the development version.
+
+The workflow creates a draft release at the exact tested commit. Each platform uploads its installer, updater archive, and updater signature. The final job requires a DMG, NSIS installer, AppImage, Debian package, complete `latest.json`, and `SHA256SUMS` before it publishes the release and marks it latest. A failed build removes its draft and tag, leaving the prior release and updater manifest untouched.
+
+## GitHub release environment
+
+Create a GitHub environment named `release`, restrict its deployment branches to `main`, and add these environment secrets:
+
+| Secret | Purpose |
+| --- | --- |
+| `TAURI_SIGNING_PRIVATE_KEY` | Dedicated Tauri updater private key |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Password for that updater key |
+| `APPLE_CERTIFICATE` | Base64-encoded Developer ID Application `.p12` |
+| `APPLE_CERTIFICATE_PASSWORD` | Export password for the `.p12` |
+| `KEYCHAIN_PASSWORD` | Temporary CI keychain password |
+| `APPLE_API_ISSUER` | App Store Connect API issuer ID |
+| `APPLE_API_KEY` | App Store Connect API key ID |
+| `APPLE_API_PRIVATE_KEY` | Contents of the App Store Connect `.p8` private key |
+
+Commit only the updater public key. Keep the updater private key, its password, and the App Store Connect private key in encrypted offline backups. Losing the updater private key means existing installations cannot verify a replacement key or receive another in-app update.
+
+The macOS build intentionally fails when any Apple credential is missing or the imported identity is not a Developer ID Application certificate. Do not merge the updater bootstrap PR until the paid Apple Developer account, certificate, and notarization credentials are ready.
+
+## Bootstrap and acceptance
+
+The first updater-enabled build must be downloaded and installed manually. Before relying on automatic releases, test this sequence on clean machines:
+
+1. Install one published release on macOS, Windows, and Ubuntu.
+2. Merge another PR on the same New York calendar day and confirm the revision increments.
+3. Confirm the release appears only after all platform assets and all three `latest.json` entries exist.
+4. Choose **Later**, then install from the tray and verify the displayed version after restart.
+5. On macOS, verify notarization, stapling, and Screen Recording permission survive the update.
+6. Verify Windows NSIS and Linux AppImage update in place; verify `.deb` directs the user to the release download.
+7. Tamper with an updater archive in a test release and confirm signature verification rejects it.
+8. Force one platform build to fail and confirm the failed draft/tag is deleted while the previous release remains latest.
+
+Windows packages are intentionally unsigned during the private alpha and may trigger SmartScreen. Add Authenticode signing before a public launch.

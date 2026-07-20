@@ -83,3 +83,27 @@ export interface ThumbnailPointerPosition {
   y: number;
   inside: boolean;
 }
+
+interface UpdateVersionInfo {
+  current_version: string;
+  current_display_version: string;
+}
+
+export type UpdateStatus =
+  | (UpdateVersionInfo & { state: "idle" | "checking" | "up_to_date" })
+  | (UpdateVersionInfo & {
+      state: "available";
+      version: string;
+      display_version: string;
+      notes: string | null;
+      installable: boolean;
+      manual_download_url: string | null;
+    })
+  | (UpdateVersionInfo & {
+      state: "downloading";
+      version: string;
+      display_version: string;
+      downloaded: number;
+      total: number | null;
+    })
+  | (UpdateVersionInfo & { state: "error"; message: string });

@@ -23,6 +23,13 @@ import {
   shouldIgnoreThumbnailCursorEvents,
   thumbnailCursorSyncAction,
 } from "./lib/thumbnailHover";
+import {
+  buildThumbnailDustParticles,
+  prefersReducedMotion,
+  THUMBNAIL_CARD_FALLBACK_HEIGHT,
+  THUMBNAIL_CARD_FALLBACK_WIDTH,
+  type ThumbnailDustParticle,
+} from "./lib/thumbnailExit";
 import { shouldScrollThumbnailStackToEnd } from "./lib/thumbnailLayout";
 import { reconcileActiveViewer } from "./lib/viewerActivation";
 import type {
@@ -33,6 +40,7 @@ import type {
   ClipboardState,
   HistoryEntry,
   ThumbnailPointerPosition,
+  UpdateStatus,
   ViewerActivationState,
   WindowDescriptor,
 } from "./types";
@@ -63,6 +71,7 @@ export function App() {
   if (view === "history") return <CaptureHistory />;
   if (view === "preferences") return <Preferences />;
   if (view === "startup") return <StartupNotice />;
+  if (view === "update") return <UpdateNotice />;
   return <IdleView />;
 }
 
@@ -90,6 +99,154 @@ function StartupNotice() {
         <p>Use the tray icon or Ctrl+Shift+4 to capture.</p>
       </div>
     </main>
+  );
+}
+
+function useUpdateStatus() {
+  const [status, setStatus] = useState<UpdateStatus | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | null = null;
+    void invoke<UpdateStatus>("get_update_status")
+      .then((loaded) => {
+        if (active) setStatus(loaded);
+      })
+      .catch(() => undefined);
+    void listen<UpdateStatus>("update-status-changed", ({ payload }) => {
+      if (active) setStatus(payload);
+    }).then((dispose) => {
+      if (active) unlisten = dispose;
+      else dispose();
+    }).catch(() => undefined);
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, []);
+
+  return status;
+}
+
+export function UpdateNotice() {
+  const status = useUpdateStatus();
+  const [actionError, setActionError] = useState("");
+
+  const close = () => {
+    setActionError("");
+    void currentWindow?.hide();
+  };
+  const run = async (command: "check_for_updates" | "install_update") => {
+    setActionError("");
+    try {
+      await invoke(command);
+    } catch (error) {
+      setActionError(String(error));
+    }
+  };
+
+  const available = status?.state === "available" ? status : null;
+  const downloading = status?.state === "downloading" ? status : null;
+  const error = actionError || (status?.state === "error" ? status.message : "");
+  const progress = downloading?.total
+    ? Math.min(100, Math.round((downloading.downloaded / downloading.total) * 100))
+    : null;
+
+  return (
+    <main className="update-notice">
+      <div className="update-notice-header">
+        <div className="update-icon" aria-hidden="true">↓</div>
+        <div>
+          <span className="eyebrow">Captures update</span>
+          <strong>
+            {available || downloading
+              ? `Version ${(available ?? downloading)!.display_version} is available`
+              : status?.state === "up_to_date"
+                ? "Captures is up to date"
+                : status?.state === "checking"
+                  ? "Checking for updates…"
+                  : error
+                    ? "The update could not be installed"
+                    : "Preparing update information…"}
+          </strong>
+        </div>
+      </div>
+
+      {available?.notes && <p className="update-notes">{available.notes}</p>}
+      {downloading && (
+        <div className="update-progress" role="progressbar" aria-valuenow={progress ?? undefined}>
+          <span style={{ width: `${progress ?? 15}%` }} />
+          <small>{progress === null ? "Downloading update…" : `Downloading… ${progress}%`}</small>
+        </div>
+      )}
+      {error && <p className="update-error" role="alert">{error}</p>}
+
+      <div className="update-actions">
+        {available && (
+          <button className="primary" type="button" onClick={() => void run("install_update")}>
+            {available.installable ? "Install & Restart" : "Download Release"}
+          </button>
+        )}
+        {error && (
+          <button className="primary" type="button" onClick={() => void run("check_for_updates")}>Try Again</button>
+        )}
+        {!available && !downloading && !error && status?.state !== "checking" && (
+          <button className="primary" type="button" onClick={() => void run("check_for_updates")}>Check Again</button>
+        )}
+        <button type="button" onClick={close} disabled={Boolean(downloading)}>Later</button>
+      </div>
+    </main>
+  );
+}
+
+function UpdatePreferences() {
+  const status = useUpdateStatus();
+  const [actionError, setActionError] = useState("");
+  const currentVersion = status?.current_display_version ?? "…";
+  const available = status?.state === "available" ? status : null;
+  const downloading = status?.state === "downloading";
+
+  const run = async (command: "check_for_updates" | "install_update") => {
+    setActionError("");
+    try {
+      await invoke(command);
+    } catch (error) {
+      setActionError(String(error));
+    }
+  };
+
+  return (
+    <section className="settings-section update-settings">
+      <h2>Updates</h2>
+      <div className="update-settings-row">
+        <div>
+          <strong>Version {currentVersion}</strong>
+          <small>
+            {available
+              ? `Version ${available.display_version} is available.`
+              : status?.state === "up_to_date"
+                ? "Captures is up to date."
+                : status?.state === "checking"
+                  ? "Checking GitHub Releases…"
+                  : status?.state === "error"
+                    ? status.message
+                    : "Captures checks GitHub Releases for signed updates."}
+          </small>
+        </div>
+        <button
+          type="button"
+          disabled={status?.state === "checking" || downloading}
+          onClick={() => void run(available ? "install_update" : "check_for_updates")}
+        >
+          {downloading
+            ? "Installing…"
+            : available
+              ? available.installable ? "Install & Restart" : "Download Release"
+              : status?.state === "checking" ? "Checking…" : "Check Now"}
+        </button>
+      </div>
+      {actionError && <p className="update-settings-error" role="alert">{actionError}</p>}
+    </section>
   );
 }
 
@@ -897,6 +1054,20 @@ export function Thumbnail() {
 
   return (
     <main ref={stackRef} className="thumbnail-stack">
+      {/* Horizontal-only Gaussian blur for dismiss motion streak (stdDeviation x 0). */}
+      <svg className="thumbnail-svg-defs" aria-hidden="true" focusable="false">
+        <defs>
+          <filter id="thumbnail-motion-blur-a" x="-50%" y="-20%" width="200%" height="140%" colorInterpolationFilters="sRGB">
+            <feGaussianBlur stdDeviation="3.5 0" />
+          </filter>
+          <filter id="thumbnail-motion-blur-b" x="-60%" y="-20%" width="220%" height="140%" colorInterpolationFilters="sRGB">
+            <feGaussianBlur stdDeviation="8 0" />
+          </filter>
+          <filter id="thumbnail-motion-blur-c" x="-70%" y="-20%" width="240%" height="140%" colorInterpolationFilters="sRGB">
+            <feGaussianBlur stdDeviation="14 0" />
+          </filter>
+        </defs>
+      </svg>
       {artifacts.map((artifact) => (
         <ThumbnailCard
           key={artifact.id}
@@ -927,6 +1098,8 @@ export function ThumbnailCard({
   const [busy, setBusy] = useState<"copied" | "saved" | null>(null);
   const [error, setError] = useState("");
   const [exit, setExit] = useState<"dismiss" | "delete" | null>(null);
+  const [dustParticles, setDustParticles] = useState<ThumbnailDustParticle[] | null>(null);
+  const cardRef = useRef<HTMLElement>(null);
   const exitAction = useRef<string | null>(null);
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -967,17 +1140,35 @@ export function ThumbnailCard({
   const exitWith = (kind: "dismiss" | "delete", action: string) => {
     if (exit) return;
     exitAction.current = action;
+    // Build dust in the same turn as setExit so the first painted frame uses
+    // the dissolve animation (not the scale/blur fallback).
+    if (kind === "delete" && !prefersReducedMotion()) {
+      const card = cardRef.current;
+      const width = card?.clientWidth || THUMBNAIL_CARD_FALLBACK_WIDTH;
+      const height = card?.clientHeight || THUMBNAIL_CARD_FALLBACK_HEIGHT;
+      setDustParticles(buildThumbnailDustParticles(width, height));
+    } else {
+      setDustParticles(null);
+    }
     setExit(kind);
   };
 
   const finishExit = (event: React.AnimationEvent<HTMLElement>) => {
-    if (!exit || event.animationName !== `thumbnail-${exit}` || !exitAction.current) return;
+    // Ignore bubbled animationend from image streak / dust chips / spark dots.
+    if (!exit || event.target !== event.currentTarget || !exitAction.current) return;
+    const expectedNames = exit === "delete"
+      ? dustParticles && dustParticles.length > 0
+        ? ["thumbnail-delete"]
+        : ["thumbnail-delete-fallback"]
+      : ["thumbnail-dismiss"];
+    if (!expectedNames.includes(event.animationName)) return;
     const action = exitAction.current;
     exitAction.current = null;
     void invoke(action, { artifactId: artifact.id })
       .then(() => onRemoved(artifact.id))
       .catch((error) => {
         setExit(null);
+        setDustParticles(null);
         setError(String(error));
       });
   };
@@ -986,10 +1177,17 @@ export function ThumbnailCard({
     : artifact.path
       ? "Close Preview"
       : "Close Without Saving";
+  const usingDust = exit === "delete" && dustParticles !== null && dustParticles.length > 0;
 
   return (
     <article
-      className={`thumbnail-card ${viewerActive ? "thumbnail-viewer-active" : ""} ${exit ? `thumbnail-exit-${exit}` : ""}`}
+      ref={cardRef}
+      className={[
+        "thumbnail-card",
+        viewerActive ? "thumbnail-viewer-active" : "",
+        exit ? `thumbnail-exit-${exit}` : "",
+        usingDust ? "thumbnail-exit-dust" : "",
+      ].filter(Boolean).join(" ")}
       onAnimationEnd={finishExit}
     >
       <img
@@ -998,6 +1196,30 @@ export function ThumbnailCard({
         onLoad={markThumbnailReady}
         onError={markThumbnailReady}
       />
+      {usingDust && (
+        <div className="thumbnail-dust-layer" aria-hidden="true">
+          {dustParticles.map((particle) => (
+            <span
+              key={particle.id}
+              className="thumbnail-dust"
+              style={{
+                left: particle.left,
+                top: particle.top,
+                width: particle.width,
+                height: particle.height,
+                backgroundImage: `url(${JSON.stringify(artifact.preview_url).slice(1, -1)})`,
+                backgroundSize: `${particle.surfaceWidth}px ${particle.surfaceHeight}px`,
+                backgroundPosition: `${particle.bgX}px ${particle.bgY}px`,
+                ["--dust-x" as string]: `${particle.dx}px`,
+                ["--dust-y" as string]: `${particle.dy}px`,
+                ["--dust-rotate" as string]: `${particle.rotate}deg`,
+                animationDelay: `${particle.delayMs}ms`,
+                animationDuration: `${particle.durationMs}ms`,
+              }}
+            />
+          ))}
+        </div>
+      )}
       {clipboardCurrent && (
         <div className="clipboard-confirmation" role="status">
           <CheckIcon />
@@ -1276,6 +1498,8 @@ export function Preferences() {
         />
         <p className="help-text">Select a shortcut, then press the key combination you want. Press Esc to cancel recording. Changes save automatically.</p>
       </section>
+
+      <UpdatePreferences />
 
       <label className="check-row">
         <input type="checkbox" checked={settings.launch_at_login} onChange={(event) => update("launch_at_login", event.target.checked)} />

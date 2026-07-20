@@ -65,6 +65,19 @@ Every completed screenshot is backed up at full resolution in Captures' private 
 
 ## Build and install
 
+Download the newest user-facing build from [GitHub Releases](https://github.com/joswayski/captures/releases/latest).
+
+| Platform | Architecture | Package | Updates |
+| --- | --- | --- | --- |
+| macOS 13+ | Apple Silicon | `.dmg` | Signed in-app install and restart |
+| Windows 11 | x64 | NSIS `.exe` | In-app install and restart |
+| Linux | x64 | `.AppImage` | In-app install and restart |
+| Debian/Ubuntu | x64 | `.deb` | Notification with a manual package download |
+
+The first release containing the updater must be installed manually. After that, release builds check 15 seconds after startup, every four hours, and whenever **Check for Updates…** is chosen from the tray or Preferences. An available update is never installed without confirmation, and Captures will not restart during a capture or while an unsaved capture is open.
+
+macOS releases are required to use a consistent Developer ID Application signature and Apple notarization so trust and Screen Recording permission can survive an update. Windows releases are not Authenticode-signed yet, so Windows may show a SmartScreen warning during this private alpha. Production Windows signing is required before public launch.
+
 Build Captures on the operating system where it will run:
 
 ```sh
@@ -87,7 +100,7 @@ Captures runs as a menu-bar utility: it shows the Captures icon at the top-right
 
 After macOS grants Screen Recording access, retry your shortcut and let Captures restart itself when prompted. macOS requires this restart before capture is enabled.
 
-`npm run build` automatically uses an installed Apple Development signing identity when one is available. Otherwise it warns and seals the bundle with an ad-hoc signature. Ad-hoc identity is tied to the exact executable, so macOS asks for Screen Recording permission again after code changes. Stable permissions across upgrades require an Apple Development or Developer ID certificate; the latter can be selected explicitly through `APPLE_SIGNING_IDENTITY`.
+`npm run build` automatically uses an installed Apple Development signing identity when one is available. Otherwise it warns and seals the bundle with an ad-hoc signature. Local builds omit updater artifacts unless `TAURI_SIGNING_PRIVATE_KEY` is explicitly provided; official release builds always create and sign them. Ad-hoc identity is tied to the exact executable, so macOS asks for Screen Recording permission again after code changes. Stable permissions across upgrades require an Apple Development or Developer ID certificate; the latter can be selected explicitly through `APPLE_SIGNING_IDENTITY`.
 
 If Captures is enabled in Screen & System Audio Recording but still asks for permission, start a capture and choose **Reset, Restart & Retry**. Captures clears only its own stale record, restarts itself, and resumes the requested capture; other applications are not affected. After you approve Captures in System Settings, retry the shortcut once and choose **Restart & Retry** so the newly granted access takes effect.
 
@@ -100,9 +113,13 @@ sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev
 
 Ubuntu Desktop includes the screenshot portal and XWayland support used by the current Wayland region/display path. Native Wayland monitor discovery and window capture remain separate follow-ups.
 
-## Privacy and future uploads
+## Privacy, updates, and future uploads
 
-Captures keeps pending previews in memory and a rolling 30-day capture history in the operating system's private local app-data directory. It has no network permission in this milestone. Saving an additional PNG to the configured output directory is an explicit action. The future upload service will receive an explicit Upload or Share action and will keep object storage private; the desktop app will never receive bucket credentials.
+Captures keeps pending previews in memory and a rolling 30-day capture history in the operating system's private local app-data directory. Saving an additional PNG to the configured output directory is an explicit action. Release builds contact only GitHub Releases to check for and download signed application updates; they do not upload screenshots, usage data, or telemetry. The future upload service will receive an explicit Upload or Share action and will keep object storage private; the desktop app will never receive bucket credentials.
+
+GitHub Releases is the distribution host for now. Object storage such as R2 becomes useful later if Captures needs branded URLs, staged update channels, private binaries, download controls, or a broader hosted backend. Any migration should dual-publish for at least one transition release so installed clients keep a working updater endpoint.
+
+Maintainer setup and release recovery are documented in [docs/releases.md](docs/releases.md).
 
 ## License and trademarks
 

@@ -9,6 +9,11 @@ vi.mock("@tauri-apps/api/core", () => ({
   isTauri: () => false,
 }));
 
+vi.mock("@tauri-apps/api/event", () => ({
+  emit: vi.fn(),
+  listen: vi.fn(async () => () => undefined),
+}));
+
 const settings: AppSettings = {
   output_directory: "/Users/josevalerio/Captures",
   region_shortcut: "Ctrl+Shift+4",
@@ -24,6 +29,9 @@ describe("Preferences", () => {
   beforeEach(() => {
     vi.mocked(invoke).mockImplementation(async (command, args) => {
       if (command === "get_settings") return settings;
+      if (command === "get_update_status") {
+        return { state: "idle", current_version: "0.1.0", current_display_version: "0.1.0" };
+      }
       if (command === "update_settings") return (args as { settings: AppSettings }).settings;
       throw new Error(`unexpected command: ${command}`);
     });
@@ -72,5 +80,14 @@ describe("Preferences", () => {
       });
     });
     expect(await screen.findByText("Changes saved")).toBeInTheDocument();
+  });
+
+  it("shows the installed version and offers a manual update check", async () => {
+    render(<Preferences />);
+
+    expect(await screen.findByText("Version 0.1.0")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Check Now" }));
+
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("check_for_updates"));
   });
 });

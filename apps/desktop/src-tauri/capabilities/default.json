@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "desktop",
   "description": "Narrow capabilities for Captures desktop windows",
-  "windows": ["overlay", "thumbnail", "viewer", "viewer-*", "history", "preferences", "startup"],
+  "windows": ["overlay", "thumbnail", "viewer", "viewer-*", "history", "preferences", "startup", "update"],
   "permissions": [
     "core:default",
     "dialog:allow-open"
