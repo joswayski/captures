@@ -4,7 +4,7 @@ Every successful push to `main` runs `.github/workflows/release.yml`. Release wo
 
 The public version is CalVer in `YYYY.MM.DD.N` form, using the `America/New_York` date and a same-day revision from 1 through 99. A release named `Captures 2026.07.19.1` uses tag `v2026.07.19.1`. Tauri receives the SemVer-compatible internal version `2026.7.1901`; source manifests remain at the development version.
 
-The workflow creates a draft release at the exact tested commit. Each platform uploads its installer, updater archive, and updater signature. The final job requires a DMG, NSIS installer, AppImage, Debian package, complete `latest.json`, and `SHA256SUMS` before it publishes the release and marks it latest. A failed build removes its draft and tag, leaving the prior release and updater manifest untouched.
+The workflow creates a draft release at the exact tested commit. Each platform uploads its installer, updater archive, and updater signature. The final job requires a DMG, NSIS installer, AppImage, Debian package, complete `latest.json`, and `SHA256SUMS` before it publishes the release and marks it latest. A failed build removes its draft and tag, leaving the prior release and updater manifest untouched. If draft creation itself is interrupted, the next run removes only stale drafts with its generated tag before retrying.
 
 ## GitHub release environment
 
