@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 use tauri::CursorIcon;
 
 use captures_capture::{CaptureError, CaptureMode, LogicalRect};
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use image::RgbaImage;
 use mouse_position::mouse_position::Mouse;
 use tauri::{
@@ -813,7 +813,7 @@ fn get_artifact(
 
 #[tauri::command]
 fn get_capture_history(state: tauri::State<'_, Arc<AppState>>) -> Vec<HistoryEntry> {
-    let cutoff = Utc::now() - Duration::days(HISTORY_RETENTION_DAYS);
+    let cutoff = Utc::now() - chrono::Duration::days(HISTORY_RETENTION_DAYS);
     let (history, expired_ids) = {
         let mut entries = state.history.lock();
         let mut expired_ids = Vec::new();
