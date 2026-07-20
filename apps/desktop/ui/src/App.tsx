@@ -85,7 +85,7 @@ function StartupNotice() {
       </div>
       <div>
         <strong>Captures is running</strong>
-        <p>Use the menu-bar camera or Ctrl+Shift+4 to capture.</p>
+        <p>Use the tray icon or Ctrl+Shift+4 to capture.</p>
       </div>
     </main>
   );
