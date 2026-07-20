@@ -79,7 +79,7 @@ open target/release/bundle/dmg/Captures_0.1.0_aarch64.dmg
 open -a Captures
 ```
 
-Captures runs as a menu-bar utility: it shows a camera at the top-right of macOS and intentionally does not keep a Dock icon. Use that camera to capture, open Preferences, or quit Captures.
+Captures runs as a menu-bar utility: it shows the Captures icon at the top-right of macOS and intentionally does not keep a Dock icon. Use that icon to capture, open Preferences, or quit Captures.
 
 After macOS grants Screen Recording access, retry your shortcut and let Captures restart itself when prompted. macOS requires this restart before capture is enabled.
 
