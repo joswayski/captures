@@ -19,6 +19,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -31,6 +32,17 @@
     "longDescription": "Capture regions, windows, and displays without uploading your screenshots.",
     "macOS": {
       "minimumSystemVersion": "13.0"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQwNjI5NTdGQTcwNjZDMkYKUldRdmJBYW5mNVZpUUVDR2NUWStpaWxOMDBWNjhBc1FxWmRXM2pyVGZvRFoxaVdPODZCWWdFYlUK",
+      "endpoints": [
+        "https://github.com/joswayski/captures/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

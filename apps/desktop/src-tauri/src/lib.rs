@@ -44,6 +44,7 @@ use uuid::Uuid;
 mod models;
 mod state;
 mod storage;
+mod updates;
 
 use models::{
     ActiveSession, AppSettings, CaptureArtifact, CaptureSession, ClipboardCopyStatus,
@@ -75,6 +76,8 @@ enum AppError {
     Shortcut(String),
     #[error("background task failed: {0}")]
     Task(String),
+    #[error("an update is being installed; Captures will restart when it finishes")]
+    UpdateInstalling,
 }
 
 type CommandResult<T> = Result<T, String>;
@@ -119,6 +122,7 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
             tauri_plugin_autostart::Builder::new()
                 .app_name("Captures")
@@ -130,6 +134,7 @@ pub fn run() {
 
     builder
         .manage(state)
+        .manage(updates::UpdateCoordinator::default())
         .register_uri_scheme_protocol("captures-capture", move |_context, request| {
             let path = request.uri().path().trim_matches('/');
             let body = resolve_asset(&protocol_state, path);
@@ -176,6 +181,9 @@ pub fn run() {
             set_thumbnail_ignore_cursor_events,
             open_captures_folder,
             open_preferences,
+            updates::get_update_status,
+            updates::check_for_updates,
+            updates::install_update,
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
@@ -184,6 +192,7 @@ pub fn run() {
             }
             setup_tray(app)?;
             let handle = app.handle().clone();
+            updates::initialize(&handle);
             register_shortcuts(&handle)
                 .map_err(|error| tauri::Error::Anyhow(anyhow::anyhow!(error.to_string())))?;
             if let Err(error) = create_thumbnail_window(&handle, false) {
@@ -246,6 +255,9 @@ async fn start_capture_inner(
     state: Arc<AppState>,
     mode: CaptureMode,
 ) -> Result<Option<ActiveSession>, AppError> {
+    if updates::install_is_active(&app) {
+        return Err(AppError::UpdateInstalling);
+    }
     if !state.sessions.lock().is_empty() {
         return Err(AppError::CaptureInProgress);
     }
@@ -254,6 +266,8 @@ async fn start_capture_inner(
     set_capture_huds_protected(&app, true);
     hide_window(&app, "thumbnail");
     hide_window(&app, "startup");
+    updates::defer_visible_notice(&app);
+    hide_window(&app, "update");
     let result = prepare_capture(app.clone(), state.clone(), mode).await;
     set_capture_huds_protected(&app, false);
     if result.is_err() {
@@ -1547,6 +1561,13 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let open_folder =
         MenuItem::with_id(app, "open-folder", "Open Save Location", true, None::<&str>)?;
     let preferences = MenuItem::with_id(app, "preferences", "Preferences", true, None::<&str>)?;
+    let update_item = MenuItem::with_id(
+        app,
+        "check-updates",
+        "Check for Updates…",
+        true,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, "quit", "Quit Captures", true, None::<&str>)?;
     let separator_1 = MenuItem::with_id(app, "separator-1", "────────", false, None::<&str>)?;
     let separator_2 = MenuItem::with_id(app, "separator-2", "────────", false, None::<&str>)?;
@@ -1559,6 +1580,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             &separator_1,
             &open_folder,
             &preferences,
+            &update_item,
             &separator_2,
             &quit,
         ],
@@ -1594,6 +1616,10 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 show_preferences(app);
                 None
             }
+            "check-updates" => {
+                updates::handle_tray_action(app);
+                None
+            }
             "quit" => {
                 app.exit(0);
                 None
@@ -1611,6 +1637,8 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         }
     })
     .build(app)?;
+
+    updates::register_menu_item(app.handle(), update_item);
 
     #[cfg(target_os = "macos")]
     if !app.manage(CaptureTrayMenuItems {
@@ -2191,7 +2219,7 @@ fn set_capture_huds_protected(app: &AppHandle, protected: bool) {
     // The window server may still composite a just-hidden HUD into an
     // immediate display capture. Exclude Captures HUDs until the frozen background
     // frame has been read so they cannot reappear as pixels during fade-in.
-    for label in ["thumbnail", "startup"] {
+    for label in ["thumbnail", "startup", "update"] {
         if let Some(window) = app.get_webview_window(label)
             && let Err(error) = window.set_content_protected(protected)
         {
