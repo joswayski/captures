@@ -31,9 +31,13 @@ if (process.platform === "darwin" && !environment.APPLE_SIGNING_IDENTITY) {
 }
 
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+const args = ["run", "tauri:build", "--workspace", "@captures/desktop"];
+if (!environment.TAURI_SIGNING_PRIVATE_KEY) {
+  args.push("--", "--config", "src-tauri/tauri.local.conf.json");
+}
 const result = spawnSync(
   npm,
-  ["run", "tauri:build", "--workspace", "@captures/desktop"],
+  args,
   {
     env: environment,
     stdio: "inherit",

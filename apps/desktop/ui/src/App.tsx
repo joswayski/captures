@@ -32,6 +32,7 @@ import type {
   CaptureMode,
   ClipboardState,
   ThumbnailPointerPosition,
+  UpdateStatus,
   ViewerActivationState,
   WindowDescriptor,
 } from "./types";
@@ -61,6 +62,7 @@ export function App() {
   if (view === "viewer") return <ArtifactViewer />;
   if (view === "preferences") return <Preferences />;
   if (view === "startup") return <StartupNotice />;
+  if (view === "update") return <UpdateNotice />;
   return <IdleView />;
 }
 
@@ -88,6 +90,154 @@ function StartupNotice() {
         <p>Use the tray icon or Ctrl+Shift+4 to capture.</p>
       </div>
     </main>
+  );
+}
+
+function useUpdateStatus() {
+  const [status, setStatus] = useState<UpdateStatus | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | null = null;
+    void invoke<UpdateStatus>("get_update_status")
+      .then((loaded) => {
+        if (active) setStatus(loaded);
+      })
+      .catch(() => undefined);
+    void listen<UpdateStatus>("update-status-changed", ({ payload }) => {
+      if (active) setStatus(payload);
+    }).then((dispose) => {
+      if (active) unlisten = dispose;
+      else dispose();
+    }).catch(() => undefined);
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, []);
+
+  return status;
+}
+
+export function UpdateNotice() {
+  const status = useUpdateStatus();
+  const [actionError, setActionError] = useState("");
+
+  const close = () => {
+    setActionError("");
+    void currentWindow?.hide();
+  };
+  const run = async (command: "check_for_updates" | "install_update") => {
+    setActionError("");
+    try {
+      await invoke(command);
+    } catch (error) {
+      setActionError(String(error));
+    }
+  };
+
+  const available = status?.state === "available" ? status : null;
+  const downloading = status?.state === "downloading" ? status : null;
+  const error = actionError || (status?.state === "error" ? status.message : "");
+  const progress = downloading?.total
+    ? Math.min(100, Math.round((downloading.downloaded / downloading.total) * 100))
+    : null;
+
+  return (
+    <main className="update-notice">
+      <div className="update-notice-header">
+        <div className="update-icon" aria-hidden="true">↓</div>
+        <div>
+          <span className="eyebrow">Captures update</span>
+          <strong>
+            {available || downloading
+              ? `Version ${(available ?? downloading)!.display_version} is available`
+              : status?.state === "up_to_date"
+                ? "Captures is up to date"
+                : status?.state === "checking"
+                  ? "Checking for updates…"
+                  : error
+                    ? "The update could not be installed"
+                    : "Preparing update information…"}
+          </strong>
+        </div>
+      </div>
+
+      {available?.notes && <p className="update-notes">{available.notes}</p>}
+      {downloading && (
+        <div className="update-progress" role="progressbar" aria-valuenow={progress ?? undefined}>
+          <span style={{ width: `${progress ?? 15}%` }} />
+          <small>{progress === null ? "Downloading update…" : `Downloading… ${progress}%`}</small>
+        </div>
+      )}
+      {error && <p className="update-error" role="alert">{error}</p>}
+
+      <div className="update-actions">
+        {available && (
+          <button className="primary" type="button" onClick={() => void run("install_update")}>
+            {available.installable ? "Install & Restart" : "Download Release"}
+          </button>
+        )}
+        {error && (
+          <button className="primary" type="button" onClick={() => void run("check_for_updates")}>Try Again</button>
+        )}
+        {!available && !downloading && !error && status?.state !== "checking" && (
+          <button className="primary" type="button" onClick={() => void run("check_for_updates")}>Check Again</button>
+        )}
+        <button type="button" onClick={close} disabled={Boolean(downloading)}>Later</button>
+      </div>
+    </main>
+  );
+}
+
+function UpdatePreferences() {
+  const status = useUpdateStatus();
+  const [actionError, setActionError] = useState("");
+  const currentVersion = status?.current_display_version ?? "…";
+  const available = status?.state === "available" ? status : null;
+  const downloading = status?.state === "downloading";
+
+  const run = async (command: "check_for_updates" | "install_update") => {
+    setActionError("");
+    try {
+      await invoke(command);
+    } catch (error) {
+      setActionError(String(error));
+    }
+  };
+
+  return (
+    <section className="settings-section update-settings">
+      <h2>Updates</h2>
+      <div className="update-settings-row">
+        <div>
+          <strong>Version {currentVersion}</strong>
+          <small>
+            {available
+              ? `Version ${available.display_version} is available.`
+              : status?.state === "up_to_date"
+                ? "Captures is up to date."
+                : status?.state === "checking"
+                  ? "Checking GitHub Releases…"
+                  : status?.state === "error"
+                    ? status.message
+                    : "Captures checks GitHub Releases for signed updates."}
+          </small>
+        </div>
+        <button
+          type="button"
+          disabled={status?.state === "checking" || downloading}
+          onClick={() => void run(available ? "install_update" : "check_for_updates")}
+        >
+          {downloading
+            ? "Installing…"
+            : available
+              ? available.installable ? "Install & Restart" : "Download Release"
+              : status?.state === "checking" ? "Checking…" : "Check Now"}
+        </button>
+      </div>
+      {actionError && <p className="update-settings-error" role="alert">{actionError}</p>}
+    </section>
   );
 }
 
@@ -1075,6 +1225,8 @@ export function Preferences() {
         />
         <p className="help-text">Select a shortcut, then press the key combination you want. Press Esc to cancel recording. Changes save automatically.</p>
       </section>
+
+      <UpdatePreferences />
 
       <label className="check-row">
         <input type="checkbox" checked={settings.launch_at_login} onChange={(event) => update("launch_at_login", event.target.checked)} />

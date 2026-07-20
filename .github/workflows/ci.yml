@@ -2,8 +2,6 @@ name: CI
 
 on:
   pull_request:
-  push:
-    branches: [main]
 
 jobs:
   frontend:
@@ -72,7 +70,7 @@ jobs:
         with:
           toolchain: 1.94.0
       - run: npm ci
-      - run: npm run tauri:build --workspace @captures/desktop
+      - run: npm run tauri:build --workspace @captures/desktop -- --config src-tauri/tauri.local.conf.json
       - uses: actions/upload-artifact@v4
         with:
           name: captures-macos-app
@@ -128,7 +126,7 @@ jobs:
         with:
           toolchain: 1.94.0
       - run: npm ci
-      - run: npm run tauri:build --workspace @captures/desktop -- --bundles ${{ matrix.bundle }}
+      - run: npm run tauri:build --workspace @captures/desktop -- --bundles ${{ matrix.bundle }} --config src-tauri/tauri.local.conf.json
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
