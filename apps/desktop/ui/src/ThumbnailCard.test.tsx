@@ -14,17 +14,18 @@ function artifact(path: string | null, id = "capture-1"): CaptureArtifact {
     size_bytes: 250_000,
     created_at: "2026-07-18T22:00:00Z",
     mode: "region",
+    history_saved: true,
     clipboard_copy_status: "copied",
   };
 }
 
 describe("ThumbnailCard", () => {
-  it("explains automatic clipboard copying and closes an unsaved preview without a trash action", () => {
+  it("explains automatic clipboard copying and keeps a dismissed preview in history", () => {
     render(<ThumbnailCard artifact={artifact(null)} clipboardCurrent viewerActive={false} onRemoved={() => undefined} />);
 
     expect(screen.getByText("Copied to clipboard")).toBeInTheDocument();
     const fullSize = screen.getByRole("button", { name: "View Full Size" });
-    const close = screen.getByRole("button", { name: "Close Without Saving" });
+    const close = screen.getByRole("button", { name: "Dismiss — available in History for 30 days" });
     expect(fullSize.parentElement).toHaveClass("thumbnail-top-right");
     expect(close.parentElement).toHaveClass("thumbnail-top-left");
     expect(screen.queryByRole("button", { name: "Move to Trash" })).not.toBeInTheDocument();
@@ -35,11 +36,25 @@ describe("ThumbnailCard", () => {
   it("offers deletion only after the capture has a saved file", () => {
     render(<ThumbnailCard artifact={artifact("/Users/josevalerio/Captures/capture.png")} clipboardCurrent viewerActive={false} onRemoved={() => undefined} />);
 
-    const close = screen.getByRole("button", { name: "Close Preview" });
+    const close = screen.getByRole("button", { name: "Dismiss — available in History for 30 days" });
     const trash = screen.getByRole("button", { name: "Move to Trash" });
     expect(close.parentElement).toBe(trash.parentElement);
     expect(close.parentElement).toHaveClass("thumbnail-top-left");
     expect(screen.getByRole("button", { name: "Show in Folder" })).toBeInTheDocument();
+  });
+
+  it("does not promise recovery when local history could not be written", () => {
+    render(
+      <ThumbnailCard
+        artifact={{ ...artifact(null), history_saved: false }}
+        clipboardCurrent={false}
+        viewerActive={false}
+        onRemoved={() => undefined}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Close Without Saving" })).toBeInTheDocument();
+    expect(screen.getByText("History unavailable")).toBeInTheDocument();
   });
 
   it("does not claim the clipboard changed when automatic copying is disabled", () => {
@@ -98,7 +113,7 @@ describe("ThumbnailCard", () => {
     );
 
     act(() => {
-      screen.getByRole("button", { name: "Close Without Saving" }).click();
+      screen.getByRole("button", { name: "Dismiss — available in History for 30 days" }).click();
     });
     expect(screen.getByRole("article")).toHaveClass("thumbnail-exit-dismiss");
   });

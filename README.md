@@ -2,7 +2,7 @@
 
 Captures is a small, privacy-first screenshot utility for macOS, Windows, and Linux. The planned sharing service will use compact [`captur.es/<id>`](https://captur.es) links.
 
-The first milestone is a macOS developer alpha. It runs in the tray, captures a region, window, or full screen, copies the result to the image clipboard by default, and presents a preview. Automatic clipboard copying can be disabled in Preferences. Choose Save to write a PNG under `~/Captures`; **Close Without Saving** removes an unsaved preview without creating a file. Captures does not upload screenshots or send telemetry.
+The first milestone is a macOS developer alpha. It runs in the tray, captures a region, window, or full screen, copies the result to the image clipboard by default, and presents a preview. Automatic clipboard copying can be disabled in Preferences. Choose Save to write a PNG under `~/Captures`; dismissing the preview leaves its private recovery copy in **Capture History** for 30 days. Captures does not upload screenshots or send telemetry.
 
 ## Current status
 
@@ -14,7 +14,7 @@ The first milestone is a macOS developer alpha. It runs in the tray, captures a 
 | Linux Wayland + XWayland | Experimental; region/display use the desktop screenshot portal, while window capture can see X11/XWayland windows only |
 | Linux without XWayland | Not supported yet; the pinned capture backend still needs X11 for monitor discovery |
 
-Region selection is limited to the display under the pointer. Annotations, post-capture editing, OCR, scrolling capture, video, upload, sharing, and a screenshot gallery are intentionally deferred.
+Region selection is limited to the display under the pointer. Annotations, post-capture editing, OCR, scrolling capture, video, upload, and sharing are intentionally deferred.
 
 ## Development
 
@@ -58,6 +58,10 @@ The three global capture shortcuts can be changed from Preferences. `Esc` only a
 Use **View Full Size** on a pending capture to inspect the full-resolution image in Captures. Each screenshot opens in its own dedicated viewer window; opening the same screenshot again focuses its existing viewer. A subtle purple glow follows the last active open viewer without flickering when the pointer crosses the thumbnail strip. The viewer is the future home for annotation and editing tools.
 
 The **Copied to clipboard** badge is live: it disappears and the **Copy** action returns when another app replaces the clipboard with text, an image, or any other content. With multiple capture previews open, only the preview currently owned by the clipboard hides its Copy action.
+
+## Capture history
+
+Every completed screenshot is backed up at full resolution in Captures' private local app-data directory. Open **Capture History…** from the tray menu to browse the last 30 days and restore a dismissed capture to the preview stack. Moving a separately saved PNG to Trash does not remove its recovery copy. History entries expire automatically after 30 days, and deleting one from the history window requires a second confirmation click.
 
 ## Build and install
 
@@ -111,7 +115,7 @@ Ubuntu Desktop includes the screenshot portal and XWayland support used by the c
 
 ## Privacy, updates, and future uploads
 
-Captures holds pending captures locally in memory. Saving is an explicit action. Release builds contact only GitHub Releases to check for and download signed application updates; they do not upload screenshots, usage data, or telemetry. The future upload service will receive an explicit Upload or Share action and will keep object storage private; the desktop app will never receive bucket credentials.
+Captures keeps pending previews in memory and a rolling 30-day capture history in the operating system's private local app-data directory. Saving an additional PNG to the configured output directory is an explicit action. Release builds contact only GitHub Releases to check for and download signed application updates; they do not upload screenshots, usage data, or telemetry. The future upload service will receive an explicit Upload or Share action and will keep object storage private; the desktop app will never receive bucket credentials.
 
 GitHub Releases is the distribution host for now. Object storage such as R2 becomes useful later if Captures needs branded URLs, staged update channels, private binaries, download controls, or a broader hosted backend. Any migration should dual-publish for at least one transition release so installed clients keep a working updater endpoint.
 

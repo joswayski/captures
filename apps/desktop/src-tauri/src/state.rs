@@ -8,7 +8,7 @@ use parking_lot::{Mutex, RwLock};
 use uuid::Uuid;
 
 use crate::{
-    models::{AppSettings, CaptureArtifact, CaptureSession},
+    models::{AppSettings, CaptureArtifact, CaptureSession, HistoryEntry},
     storage,
 };
 
@@ -142,6 +142,7 @@ pub struct AppState {
     pub settings: RwLock<AppSettings>,
     pub sessions: Mutex<HashMap<Uuid, CaptureSession>>,
     pub artifacts: Mutex<Vec<CaptureArtifact>>,
+    pub history: Mutex<Vec<HistoryEntry>>,
     pub clipboard_ownership: Mutex<ClipboardOwnership>,
     pub thumbnail_visibility: Mutex<ThumbnailVisibility>,
     pub screen_permission_requested_this_launch: Mutex<bool>,
@@ -150,10 +151,15 @@ pub struct AppState {
 
 impl AppState {
     pub fn new() -> Arc<Self> {
+        let history = storage::load_capture_history().unwrap_or_else(|error| {
+            eprintln!("failed to load capture history: {error}");
+            Vec::new()
+        });
         Arc::new(Self {
             settings: RwLock::new(storage::load_settings()),
             sessions: Mutex::new(HashMap::new()),
             artifacts: Mutex::new(Vec::new()),
+            history: Mutex::new(history),
             clipboard_ownership: Mutex::new(ClipboardOwnership::default()),
             thumbnail_visibility: Mutex::new(ThumbnailVisibility::default()),
             screen_permission_requested_this_launch: Mutex::new(false),

@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 use tauri::CursorIcon;
 
 use captures_capture::{CaptureError, CaptureMode, LogicalRect};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use image::RgbaImage;
 use mouse_position::mouse_position::Mouse;
 use tauri::{
@@ -48,7 +48,7 @@ mod updates;
 
 use models::{
     ActiveSession, AppSettings, CaptureArtifact, CaptureSession, ClipboardCopyStatus,
-    ClipboardState,
+    ClipboardState, HISTORY_RETENTION_DAYS, HistoryEntry,
 };
 use state::{AppState, ClipboardFingerprint};
 
@@ -70,6 +70,8 @@ enum AppError {
     CaptureInProgress,
     #[error("capture session is no longer available")]
     SessionUnavailable,
+    #[error("capture history entry is no longer available")]
+    HistoryUnavailable,
     #[error("the selection must be larger than zero pixels")]
     InvalidSelection,
     #[error("shortcut registration failed: {0}")]
@@ -163,6 +165,9 @@ pub fn run() {
             update_settings,
             get_artifacts,
             get_artifact,
+            get_capture_history,
+            restore_history_artifact,
+            delete_history_artifact,
             get_clipboard_state,
             copy_artifact,
             save_artifact,
@@ -180,6 +185,7 @@ pub fn run() {
             reassert_thumbnail_cursor,
             set_thumbnail_ignore_cursor_events,
             open_captures_folder,
+            open_capture_history,
             open_preferences,
             updates::get_update_status,
             updates::check_for_updates,
@@ -820,6 +826,120 @@ fn get_artifact(
 }
 
 #[tauri::command]
+fn get_capture_history(state: tauri::State<'_, Arc<AppState>>) -> Vec<HistoryEntry> {
+    let cutoff = Utc::now() - chrono::Duration::days(HISTORY_RETENTION_DAYS);
+    let (history, expired_ids) = {
+        let mut entries = state.history.lock();
+        let mut expired_ids = Vec::new();
+        entries.retain(|entry| {
+            let recent = DateTime::parse_from_rfc3339(&entry.created_at)
+                .map(|created_at| created_at.with_timezone(&Utc) >= cutoff)
+                .unwrap_or(false);
+            if !recent {
+                expired_ids.push(entry.id.clone());
+            }
+            recent
+        });
+        (entries.clone(), expired_ids)
+    };
+    if !expired_ids.is_empty() {
+        tauri::async_runtime::spawn_blocking(move || {
+            for entry_id in expired_ids {
+                if let Err(error) = storage::delete_history_capture(&entry_id) {
+                    eprintln!("failed to prune capture history entry {entry_id}: {error}");
+                }
+            }
+        });
+    }
+    history
+}
+
+#[tauri::command]
+async fn restore_history_artifact(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    artifact_id: String,
+) -> CommandResult<CaptureArtifact> {
+    let entry = state
+        .history
+        .lock()
+        .iter()
+        .find(|entry| entry.id == artifact_id)
+        .cloned()
+        .ok_or_else(|| AppError::HistoryUnavailable.to_string())?;
+
+    let existing_artifact = {
+        state
+            .artifacts
+            .lock()
+            .iter()
+            .find(|artifact| artifact.id == artifact_id)
+            .cloned()
+    };
+    let artifact = if let Some(artifact) = existing_artifact {
+        artifact
+    } else {
+        let history_artifact_id = artifact_id.clone();
+        let (image_png, preview_png) = tauri::async_runtime::spawn_blocking(move || {
+            storage::load_history_images(&history_artifact_id)
+        })
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?;
+        let artifact = CaptureArtifact {
+            id: entry.id,
+            path: None,
+            preview_url: models::artifact_url(&artifact_id),
+            full_url: models::artifact_full_url(&artifact_id),
+            width: entry.width,
+            height: entry.height,
+            size_bytes: entry.size_bytes,
+            created_at: entry.created_at,
+            mode: entry.mode,
+            history_saved: true,
+            clipboard_copy_status: ClipboardCopyStatus::Skipped,
+            image_png,
+            preview_png,
+        };
+        state.artifacts.lock().push(artifact.clone());
+        artifact
+    };
+
+    app.emit("capture-completed", &artifact)
+        .map_err(|error| error.to_string())?;
+    restore_thumbnail_stack(&app, state.inner());
+    Ok(artifact)
+}
+
+#[tauri::command]
+async fn delete_history_artifact(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    artifact_id: String,
+) -> CommandResult<()> {
+    let available = state
+        .history
+        .lock()
+        .iter()
+        .any(|entry| entry.id == artifact_id);
+    if !available {
+        return Err(AppError::HistoryUnavailable.to_string());
+    }
+
+    let history_artifact_id = artifact_id.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        storage::delete_history_capture(&history_artifact_id)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())?;
+    state.history.lock().retain(|entry| entry.id != artifact_id);
+    app.emit("capture-history-changed", ())
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 async fn get_clipboard_state(
     state: tauri::State<'_, Arc<AppState>>,
 ) -> CommandResult<ClipboardState> {
@@ -1073,6 +1193,12 @@ fn open_captures_folder(
 }
 
 #[tauri::command]
+fn open_capture_history(app: AppHandle) -> CommandResult<()> {
+    show_capture_history(&app);
+    Ok(())
+}
+
+#[tauri::command]
 fn open_preferences(app: AppHandle) -> CommandResult<()> {
     show_preferences(&app);
     Ok(())
@@ -1095,11 +1221,33 @@ async fn finish_capture(
 
     let width = image.width();
     let height = image.height();
+    let artifact_id = Uuid::new_v4().to_string();
+    let created_at = Utc::now().to_rfc3339();
+    let history_artifact_id = artifact_id.clone();
+    let history_created_at = created_at.clone();
     let image_for_encoding = image.clone();
     let encode_task = tauri::async_runtime::spawn_blocking(move || -> Result<_, AppError> {
         let image_png = storage::encode_png(&image_for_encoding)?;
         let preview_png = storage::encode_thumbnail_png(&image_for_encoding)?;
-        Ok((image_png, preview_png))
+        let history_entry = HistoryEntry {
+            id: history_artifact_id.clone(),
+            preview_url: models::history_preview_url(&history_artifact_id),
+            full_url: models::history_full_url(&history_artifact_id),
+            width,
+            height,
+            size_bytes: u64::try_from(image_png.len()).unwrap_or(u64::MAX),
+            created_at: history_created_at,
+            mode,
+        };
+        let history_saved =
+            match storage::save_history_capture(&history_entry, &image_png, &preview_png) {
+                Ok(()) => true,
+                Err(error) => {
+                    eprintln!("failed to save capture history: {error}");
+                    false
+                }
+            };
+        Ok((image_png, preview_png, history_entry, history_saved))
     });
     let clipboard_task = state.settings().auto_copy_to_clipboard.then(|| {
         let clipboard_app = app.clone();
@@ -1107,11 +1255,10 @@ async fn finish_capture(
             write_image_to_clipboard(&clipboard_app, image)
         })
     });
-    let (image_png, preview_png) = encode_task
+    let (image_png, preview_png, history_entry, history_saved) = encode_task
         .await
         .map_err(|error| AppError::Task(error.to_string()))??;
     let size_bytes = u64::try_from(image_png.len()).unwrap_or(u64::MAX);
-    let artifact_id = Uuid::new_v4().to_string();
     let mut artifact = CaptureArtifact {
         id: artifact_id.clone(),
         preview_url: models::artifact_url(&artifact_id),
@@ -1120,8 +1267,9 @@ async fn finish_capture(
         width,
         height,
         size_bytes,
-        created_at: Utc::now().to_rfc3339(),
+        created_at,
         mode,
+        history_saved,
         clipboard_copy_status: if clipboard_task.is_some() {
             ClipboardCopyStatus::Pending
         } else {
@@ -1130,12 +1278,18 @@ async fn finish_capture(
         image_png,
         preview_png,
     };
+    if history_saved {
+        state.history.lock().insert(0, history_entry);
+    }
     state.artifacts.lock().push(artifact.clone());
     {
         let mut visibility = state.thumbnail_visibility.lock();
         visibility.wait_for_artifact(artifact.id.clone());
     }
     app.emit("capture-completed", &artifact)?;
+    if history_saved {
+        app.emit("capture-history-changed", ())?;
+    }
 
     if let Some(clipboard_task) = clipboard_task {
         let clipboard_result = clipboard_task
@@ -1558,6 +1712,13 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         true,
         display_accelerator.as_deref(),
     )?;
+    let capture_history = MenuItem::with_id(
+        app,
+        "capture-history",
+        "Capture History…",
+        true,
+        None::<&str>,
+    )?;
     let open_folder =
         MenuItem::with_id(app, "open-folder", "Open Save Location", true, None::<&str>)?;
     let preferences = MenuItem::with_id(app, "preferences", "Preferences", true, None::<&str>)?;
@@ -1578,6 +1739,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             &capture_window,
             &capture_display,
             &separator_1,
+            &capture_history,
             &open_folder,
             &preferences,
             &update_item,
@@ -1604,6 +1766,10 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             "capture-region" => Some(CaptureMode::Region),
             "capture-window" => Some(CaptureMode::Window),
             "capture-display" => Some(CaptureMode::Display),
+            "capture-history" => {
+                show_capture_history(app);
+                None
+            }
             "open-folder" => {
                 if let Some(state) = app.try_state::<Arc<AppState>>() {
                     let path = PathBuf::from(state.settings().output_directory);
@@ -2168,6 +2334,42 @@ fn wayland_session() -> bool {
             .is_some_and(|session| session.to_string_lossy().eq_ignore_ascii_case("wayland"))
 }
 
+fn show_capture_history(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("history") {
+        let _ = window.show();
+        let _ = window.set_focus();
+        return;
+    }
+    let app = app.clone();
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let result = WebviewWindowBuilder::new(
+            &handle,
+            "history",
+            WebviewUrl::App("index.html?view=history".into()),
+        )
+        .title("Capture History")
+        .inner_size(960.0, 680.0)
+        .min_inner_size(640.0, 440.0)
+        .center()
+        .resizable(true)
+        .background_color(Color(17, 18, 26, 255))
+        .focused(false)
+        .visible(false)
+        .on_page_load(|window, payload| {
+            if payload.event() == PageLoadEvent::Finished
+                && let Err(error) = window.show().and_then(|_| window.set_focus())
+            {
+                eprintln!("failed to reveal capture history window: {error}");
+            }
+        })
+        .build();
+        if let Err(error) = result {
+            eprintln!("failed to show capture history window: {error}");
+        }
+    });
+}
+
 #[cfg(target_os = "linux")]
 fn x11_display_available() -> bool {
     std::env::var_os("DISPLAY").is_some()
@@ -2261,6 +2463,18 @@ fn resolve_asset(state: &AppState, path: &str) -> Option<Vec<u8>> {
             .iter()
             .find(|artifact| artifact.id == id)
             .map(|artifact| artifact.image_png.clone()),
+        (Some("history-preview"), Some(id)) => {
+            let available = state.history.lock().iter().any(|entry| entry.id == id);
+            available
+                .then(|| storage::load_history_image(id, true).ok())
+                .flatten()
+        }
+        (Some("history-full"), Some(id)) => {
+            let available = state.history.lock().iter().any(|entry| entry.id == id);
+            available
+                .then(|| storage::load_history_image(id, false).ok())
+                .flatten()
+        }
         _ => None,
     }
 }
