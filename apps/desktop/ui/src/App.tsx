@@ -79,15 +79,15 @@ function IdleView() {
 function StartupNotice() {
   return (
     <main className="startup-notice">
-      <div className="startup-camera" aria-hidden="true">
+      <div className="startup-icon" aria-hidden="true">
         <svg viewBox="0 0 24 24">
-          <path d="M4 8a2 2 0 0 1 2-2h3l1.4-2h3.2L15 6h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z" />
-          <circle cx="12" cy="12.5" r="3.5" />
+          <path d="M9 4H7a3 3 0 0 0-3 3v2M15 4h2a3 3 0 0 1 3 3v2M20 15v2a3 3 0 0 1-3 3h-2M9 20H7a3 3 0 0 1-3-3v-2" />
+          <path className="startup-icon-spark" d="M12 8.5c.4 1.8 1.7 3.1 3.5 3.5-1.8.4-3.1 1.7-3.5 3.5-.4-1.8-1.7-3.1-3.5-3.5 1.8-.4 3.1-1.7 3.5-3.5Z" />
         </svg>
       </div>
       <div>
         <strong>Captures is running</strong>
-        <p>Use the menu-bar camera or Ctrl+Shift+4 to capture.</p>
+        <p>Use the tray icon or Ctrl+Shift+4 to capture.</p>
       </div>
     </main>
   );

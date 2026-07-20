@@ -2,7 +2,9 @@
 #![forbid(unsafe_code)]
 
 use std::{
+    collections::hash_map::DefaultHasher,
     fs,
+    hash::{Hash, Hasher},
     path::PathBuf,
     sync::{
         Arc,
@@ -14,6 +16,8 @@ use std::{
 use std::process::Command;
 #[cfg(not(target_os = "macos"))]
 use std::sync::atomic::AtomicIsize;
+#[cfg(target_os = "linux")]
+use std::time::{Duration, Instant};
 
 use tauri::CursorIcon;
 
@@ -45,7 +49,7 @@ use models::{
     ActiveSession, AppSettings, CaptureArtifact, CaptureSession, ClipboardCopyStatus,
     ClipboardState, HISTORY_RETENTION_DAYS, HistoryEntry,
 };
-use state::AppState;
+use state::{AppState, ClipboardFingerprint};
 
 #[derive(Debug, Error)]
 enum AppError {
@@ -76,6 +80,11 @@ enum AppError {
 }
 
 type CommandResult<T> = Result<T, String>;
+
+struct ClipboardWrite {
+    revision: isize,
+    fingerprint: ClipboardFingerprint,
+}
 
 #[cfg(target_os = "macos")]
 struct CaptureTrayMenuItems {
@@ -917,7 +926,13 @@ async fn delete_history_artifact(
 }
 
 #[tauri::command]
-fn get_clipboard_state(state: tauri::State<'_, Arc<AppState>>) -> ClipboardState {
+async fn get_clipboard_state(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> CommandResult<ClipboardState> {
+    let state = state.inner().clone();
+    #[cfg(target_os = "linux")]
+    verify_linux_clipboard_ownership(&state).await;
+
     let revision = current_clipboard_revision();
     let artifact_id = state.clipboard_ownership.lock().current_artifact(revision);
     let artifact_id = artifact_id.filter(|artifact_id| {
@@ -927,10 +942,10 @@ fn get_clipboard_state(state: tauri::State<'_, Arc<AppState>>) -> ClipboardState
             .iter()
             .any(|artifact| artifact.id == *artifact_id)
     });
-    ClipboardState {
+    Ok(ClipboardState {
         revision,
         artifact_id,
-    }
+    })
 }
 
 #[tauri::command]
@@ -949,7 +964,7 @@ async fn copy_artifact(
     let image = image::load_from_memory(&artifact.image_png)
         .map_err(|error| error.to_string())?
         .into_rgba8();
-    let revision = copy_to_clipboard(&app, image)
+    let clipboard_write = copy_to_clipboard(&app, image)
         .await
         .map_err(|error| error.to_string())?;
     let artifact = {
@@ -961,16 +976,17 @@ async fn copy_artifact(
         artifact.clipboard_copy_status = ClipboardCopyStatus::Copied;
         artifact.clone()
     };
-    state
-        .clipboard_ownership
-        .lock()
-        .record(revision, artifact_id.clone());
+    state.clipboard_ownership.lock().record(
+        clipboard_write.revision,
+        artifact_id.clone(),
+        clipboard_write.fingerprint,
+    );
     app.emit("artifact-updated", &artifact)
         .map_err(|error| error.to_string())?;
     app.emit(
         "clipboard-owner-changed",
         &ClipboardState {
-            revision,
+            revision: clipboard_write.revision,
             artifact_id: Some(artifact_id),
         },
     )
@@ -1266,15 +1282,16 @@ async fn finish_capture(
             .await
             .map_err(|error| AppError::Task(error.to_string()))?;
         artifact.clipboard_copy_status = match clipboard_result {
-            Ok(revision) => {
-                state
-                    .clipboard_ownership
-                    .lock()
-                    .record(revision, artifact.id.clone());
+            Ok(clipboard_write) => {
+                state.clipboard_ownership.lock().record(
+                    clipboard_write.revision,
+                    artifact.id.clone(),
+                    clipboard_write.fingerprint,
+                );
                 app.emit(
                     "clipboard-owner-changed",
                     &ClipboardState {
-                        revision,
+                        revision: clipboard_write.revision,
                         artifact_id: Some(artifact.id.clone()),
                     },
                 )?;
@@ -1295,22 +1312,38 @@ async fn finish_capture(
     Ok(artifact)
 }
 
-async fn copy_to_clipboard(app: &AppHandle, image: RgbaImage) -> Result<isize, AppError> {
+async fn copy_to_clipboard(app: &AppHandle, image: RgbaImage) -> Result<ClipboardWrite, AppError> {
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || write_image_to_clipboard(&app, image))
         .await
         .map_err(|error| AppError::Task(error.to_string()))?
 }
 
-fn write_image_to_clipboard(app: &AppHandle, image: RgbaImage) -> Result<isize, AppError> {
+fn write_image_to_clipboard(app: &AppHandle, image: RgbaImage) -> Result<ClipboardWrite, AppError> {
     let width = image.width();
     let height = image.height();
     let rgba = image.into_raw();
+    let fingerprint = clipboard_fingerprint(width, height, &rgba);
     let clipboard_image = Image::new_owned(rgba, width, height);
     app.clipboard()
         .write_image(&clipboard_image)
         .map_err(|error| AppError::Clipboard(error.to_string()))?;
-    Ok(record_clipboard_write())
+    Ok(ClipboardWrite {
+        revision: record_clipboard_write(),
+        fingerprint,
+    })
+}
+
+fn clipboard_fingerprint(width: u32, height: u32, rgba: &[u8]) -> ClipboardFingerprint {
+    let mut hasher = DefaultHasher::new();
+    width.hash(&mut hasher);
+    height.hash(&mut hasher);
+    rgba.hash(&mut hasher);
+    ClipboardFingerprint {
+        width,
+        height,
+        checksum: hasher.finish(),
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -1323,41 +1356,161 @@ fn record_clipboard_write() -> isize {
     current_clipboard_revision()
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+static WINDOWS_CLIPBOARD_REVISION_FALLBACK: AtomicIsize = AtomicIsize::new(0);
+
+#[cfg(target_os = "windows")]
+fn windows_clipboard_revision() -> Option<isize> {
+    clipboard_win::seq_num().map(|revision| {
+        isize::try_from(revision.get()).unwrap_or_else(|_| {
+            // Captures currently ships 64-bit Windows bundles, but retain a
+            // monotonic fallback if a 32-bit target cannot represent u32.
+            WINDOWS_CLIPBOARD_REVISION_FALLBACK.load(Ordering::Acquire)
+        })
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn current_clipboard_revision() -> isize {
+    windows_clipboard_revision()
+        .unwrap_or_else(|| WINDOWS_CLIPBOARD_REVISION_FALLBACK.load(Ordering::Acquire))
+}
+
+#[cfg(target_os = "windows")]
+fn record_clipboard_write() -> isize {
+    if let Some(revision) = windows_clipboard_revision() {
+        WINDOWS_CLIPBOARD_REVISION_FALLBACK.store(revision, Ordering::Release);
+        revision
+    } else {
+        WINDOWS_CLIPBOARD_REVISION_FALLBACK
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1)
+    }
+}
+
+#[cfg(target_os = "linux")]
 static APPLICATION_CLIPBOARD_REVISION: AtomicIsize = AtomicIsize::new(0);
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
 fn current_clipboard_revision() -> isize {
     APPLICATION_CLIPBOARD_REVISION.load(Ordering::Acquire)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
 fn record_clipboard_write() -> isize {
     APPLICATION_CLIPBOARD_REVISION
         .fetch_add(1, Ordering::AcqRel)
         .wrapping_add(1)
 }
 
+#[cfg(target_os = "linux")]
+async fn verify_linux_clipboard_ownership(state: &Arc<AppState>) {
+    const MINIMUM_VERIFICATION_INTERVAL: Duration = Duration::from_secs(1);
+
+    let Some(verification) = state
+        .clipboard_ownership
+        .lock()
+        .verification(Instant::now(), MINIMUM_VERIFICATION_INTERVAL)
+    else {
+        return;
+    };
+    let expected = verification.fingerprint;
+    let result =
+        tauri::async_runtime::spawn_blocking(move || linux_clipboard_matches(expected)).await;
+    match result {
+        Ok(Ok(true)) => {}
+        Ok(Ok(false)) => {
+            if APPLICATION_CLIPBOARD_REVISION
+                .compare_exchange(
+                    verification.revision,
+                    verification.revision.wrapping_add(1),
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok()
+            {
+                state
+                    .clipboard_ownership
+                    .lock()
+                    .clear_if_revision(verification.revision);
+            }
+        }
+        Ok(Err(error)) => {
+            eprintln!("failed to verify the Linux clipboard owner: {error}");
+        }
+        Err(error) => {
+            eprintln!("Linux clipboard verification task failed: {error}");
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_clipboard_matches(expected: ClipboardFingerprint) -> Result<bool, AppError> {
+    let mut clipboard =
+        arboard::Clipboard::new().map_err(|error| AppError::Clipboard(error.to_string()))?;
+    match clipboard.get_image() {
+        Ok(image) => {
+            let width = u32::try_from(image.width).unwrap_or(u32::MAX);
+            let height = u32::try_from(image.height).unwrap_or(u32::MAX);
+            Ok(clipboard_fingerprint(width, height, &image.bytes) == expected)
+        }
+        Err(arboard::Error::ContentNotAvailable | arboard::Error::ConversionFailure) => Ok(false),
+        Err(error) => Err(AppError::Clipboard(error.to_string())),
+    }
+}
+
 fn display_under_pointer(
     state: &AppState,
 ) -> Result<captures_capture::DisplayDescriptor, AppError> {
-    let (x, y) = match Mouse::get_mouse_position() {
-        Mouse::Position { x, y } => (x, y),
-        Mouse::Error => (0, 0),
-    };
     let displays = state.monitors()?;
-    displays
-        .iter()
-        .find(|display| {
-            x >= display.x
-                && y >= display.y
-                && x < display.x + display.width as i32
-                && y < display.y + display.height as i32
+    pointer_position()
+        .and_then(|(x, y)| {
+            displays
+                .iter()
+                .find(|display| {
+                    let pointer_scale = if cfg!(target_os = "linux") {
+                        display.scale_factor
+                    } else {
+                        1.0
+                    };
+                    display_contains_pointer(display, x, y, pointer_scale)
+                })
+                .cloned()
         })
-        .cloned()
         .or_else(|| displays.iter().find(|display| display.is_primary).cloned())
         .or_else(|| displays.first().cloned())
         .ok_or(CaptureError::TargetUnavailable.into())
+}
+
+fn pointer_position() -> Option<(i32, i32)> {
+    #[cfg(target_os = "linux")]
+    if !x11_display_available() {
+        // mouse_position uses Xlib and dereferences a null display on a
+        // Wayland-only session. Fall back to the primary monitor instead.
+        return None;
+    }
+
+    match Mouse::get_mouse_position() {
+        Mouse::Position { x, y } => Some((x, y)),
+        Mouse::Error => None,
+    }
+}
+
+fn display_contains_pointer(
+    display: &captures_capture::DisplayDescriptor,
+    pointer_x: i32,
+    pointer_y: i32,
+    pointer_scale: f64,
+) -> bool {
+    let scale = pointer_scale.max(1.0);
+    let x = f64::from(pointer_x) / scale;
+    let y = f64::from(pointer_y) / scale;
+    let left = f64::from(display.x);
+    let top = f64::from(display.y);
+    x >= left
+        && y >= top
+        && x < left + f64::from(display.width)
+        && y < top + f64::from(display.height)
 }
 
 fn mark_screen_permission_request(state: &AppState) -> Result<bool, AppError> {
@@ -1855,14 +2008,15 @@ fn update_thumbnail_stack(app: &AppHandle) {
         let (x, y, desired_height) = thumbnail_window_geometry(&handle, count);
         let visible = window.is_visible().unwrap_or(false);
         // WKWebView blanks every painted card when its NSWindow shrinks. Keep
-        // the taller frame after dismissals; the stack is bottom-anchored and
-        // empty top space is click-through. Exact height is restored the next
-        // time the window is shown from hidden.
+        // the taller frame on macOS, where native hit testing makes the empty
+        // top space click-through. Other platforms shrink normally so an
+        // invisible window area cannot block desktop clicks.
         let height = thumbnail_visible_window_height(
             desired_height,
             visible
                 .then(|| thumbnail_window_logical_height(&window))
                 .flatten(),
+            cfg!(target_os = "macos"),
         );
         if visible {
             #[cfg(target_os = "macos")]
@@ -1893,12 +2047,16 @@ fn thumbnail_window_logical_height(window: &tauri::WebviewWindow) -> Option<f64>
     Some(f64::from(size.height) / scale)
 }
 
-/// While the stack is on-screen, only grow it. Shrinking after a card exits
-/// forces WKWebView to recompose and flickers every surviving preview.
-fn thumbnail_visible_window_height(desired: f64, current: Option<f64>) -> f64 {
-    match current {
-        Some(current) => desired.max(current),
-        None => desired,
+/// On macOS, keep a visible stack from shrinking because WKWebView blanks its
+/// surviving cards during NSWindow recomposition. Other platforms can shrink.
+fn thumbnail_visible_window_height(
+    desired: f64,
+    current: Option<f64>,
+    preserve_current: bool,
+) -> f64 {
+    match (preserve_current, current) {
+        (true, Some(current)) => desired.max(current),
+        _ => desired,
     }
 }
 
@@ -2087,6 +2245,9 @@ fn capture_error_message(error: &AppError) -> String {
 
     #[cfg(target_os = "linux")]
     if wayland_session() && matches!(error, AppError::Capture(CaptureError::Backend(_))) {
+        if !x11_display_available() {
+            return "Captures cannot discover monitors in a native Wayland-only session yet. Enable or install XWayland, then retry Region or Full Screen capture.".to_owned();
+        }
         return "Captures could not capture this Wayland desktop. Make sure an xdg-desktop-portal screenshot backend is installed and running, then try Region or Full Screen capture again.".to_owned();
     }
 
@@ -2179,6 +2340,11 @@ fn show_capture_history(app: &AppHandle) {
             eprintln!("failed to show capture history window: {error}");
         }
     });
+}
+
+#[cfg(target_os = "linux")]
+fn x11_display_available() -> bool {
+    std::env::var_os("DISPLAY").is_some()
 }
 
 fn show_preferences(app: &AppHandle) {
@@ -2309,11 +2475,13 @@ mod tests {
     use tauri_plugin_global_shortcut::ShortcutState;
 
     use super::{
-        CaptureMode, ThumbnailCursorAction, menu_accelerator, parse_shortcut,
-        should_activate_capture_cursor_before_reveal, should_trigger_shortcut,
-        thumbnail_cursor_action, thumbnail_geometry, thumbnail_pointer_position,
-        thumbnail_visible_window_height, viewer_window_label,
+        CaptureMode, ThumbnailCursorAction, clipboard_fingerprint, display_contains_pointer,
+        menu_accelerator, parse_shortcut, should_activate_capture_cursor_before_reveal,
+        should_trigger_shortcut, thumbnail_cursor_action, thumbnail_geometry,
+        thumbnail_pointer_position, thumbnail_visible_window_height, viewer_window_label,
     };
+
+    use captures_capture::DisplayDescriptor;
 
     #[test]
     fn region_cursor_waits_until_the_hidden_webview_is_primed() {
@@ -2411,9 +2579,23 @@ mod tests {
 
     #[test]
     fn keeps_visible_thumbnail_window_from_shrinking_after_dismiss() {
-        assert_eq!(thumbnail_visible_window_height(400.0, Some(584.0)), 584.0);
-        assert_eq!(thumbnail_visible_window_height(584.0, Some(400.0)), 584.0);
-        assert_eq!(thumbnail_visible_window_height(216.0, None), 216.0);
+        assert_eq!(
+            thumbnail_visible_window_height(400.0, Some(584.0), true),
+            584.0
+        );
+        assert_eq!(
+            thumbnail_visible_window_height(584.0, Some(400.0), true),
+            584.0
+        );
+        assert_eq!(thumbnail_visible_window_height(216.0, None, true), 216.0);
+    }
+
+    #[test]
+    fn shrinks_non_macos_thumbnail_windows_to_avoid_invisible_click_blockers() {
+        assert_eq!(
+            thumbnail_visible_window_height(400.0, Some(584.0), false),
+            400.0
+        );
     }
 
     #[test]
@@ -2425,5 +2607,30 @@ mod tests {
 
         let outside = thumbnail_pointer_position(10.0, 10.0, 48, 120, 600, 352, 2.0);
         assert!(!outside.inside);
+    }
+
+    #[test]
+    fn linux_pointer_coordinates_are_scaled_before_monitor_matching() {
+        let display = DisplayDescriptor {
+            id: "second".to_owned(),
+            name: "Second".to_owned(),
+            x: 1_920,
+            y: 0,
+            width: 1_920,
+            height: 1_080,
+            scale_factor: 2.0,
+            is_primary: false,
+        };
+
+        assert!(display_contains_pointer(&display, 4_400, 800, 2.0));
+        assert!(!display_contains_pointer(&display, 1_000, 800, 2.0));
+    }
+
+    #[test]
+    fn clipboard_fingerprints_include_dimensions_and_pixels() {
+        let original = clipboard_fingerprint(1, 1, &[1, 2, 3, 255]);
+        assert_eq!(original, clipboard_fingerprint(1, 1, &[1, 2, 3, 255]));
+        assert_ne!(original, clipboard_fingerprint(2, 1, &[1, 2, 3, 255]));
+        assert_ne!(original, clipboard_fingerprint(1, 1, &[1, 2, 4, 255]));
     }
 }

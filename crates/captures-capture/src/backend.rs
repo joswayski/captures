@@ -84,6 +84,9 @@ impl XcapBackend {
             return Err(CaptureError::Unsupported);
         }
 
+        #[cfg(target_os = "linux")]
+        let monitors = Monitor::all().map_err(|error| CaptureError::Backend(error.to_string()))?;
+
         Window::all()
             .map_err(|error| CaptureError::Backend(error.to_string()))?
             .into_iter()
@@ -101,6 +104,10 @@ impl XcapBackend {
                     return None;
                 }
 
+                #[cfg(target_os = "linux")]
+                let (x, y, width, height, display_id) =
+                    linux_window_geometry(&monitors, x, y, width, height)?;
+                #[cfg(not(target_os = "linux"))]
                 let display_id = Monitor::from_point(x, y).ok()?.id().ok()?;
 
                 Some(Ok(WindowDescriptor {
@@ -155,7 +162,74 @@ impl XcapBackend {
 
 #[cfg(target_os = "linux")]
 fn wayland_without_x11() -> bool {
-    std::env::var_os("WAYLAND_DISPLAY").is_some() && std::env::var_os("DISPLAY").is_none()
+    let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some()
+        || std::env::var_os("XDG_SESSION_TYPE")
+            .is_some_and(|session| session.to_string_lossy().eq_ignore_ascii_case("wayland"));
+    wayland && std::env::var_os("DISPLAY").is_none()
+}
+
+#[cfg(target_os = "linux")]
+fn linux_window_geometry(
+    monitors: &[Monitor],
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+) -> Option<(i32, i32, u32, u32, String)> {
+    let monitor = monitors.iter().max_by(|left, right| {
+        linux_window_monitor_overlap(left, x, y, width, height)
+            .partial_cmp(&linux_window_monitor_overlap(right, x, y, width, height))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    })?;
+    if linux_window_monitor_overlap(monitor, x, y, width, height) <= 0.0 {
+        return None;
+    }
+    let scale = f64::from(monitor.scale_factor().ok()?).max(1.0);
+    let display_id = monitor.id().ok()?.to_string();
+    let (x, y, width, height) = logical_window_rect(x, y, width, height, scale);
+    Some((x, y, width, height, display_id))
+}
+
+#[cfg(target_os = "linux")]
+fn linux_window_monitor_overlap(monitor: &Monitor, x: i32, y: i32, width: u32, height: u32) -> f64 {
+    let Ok(scale_factor) = monitor.scale_factor() else {
+        return 0.0;
+    };
+    let scale = f64::from(scale_factor).max(1.0);
+    let (Ok(monitor_x), Ok(monitor_y), Ok(monitor_width), Ok(monitor_height)) =
+        (monitor.x(), monitor.y(), monitor.width(), monitor.height())
+    else {
+        return 0.0;
+    };
+    let left = f64::from(x).max(f64::from(monitor_x) * scale);
+    let top = f64::from(y).max(f64::from(monitor_y) * scale);
+    let right = (f64::from(x) + f64::from(width))
+        .min((f64::from(monitor_x) + f64::from(monitor_width)) * scale);
+    let bottom = (f64::from(y) + f64::from(height))
+        .min((f64::from(monitor_y) + f64::from(monitor_height)) * scale);
+    (right - left).max(0.0) * (bottom - top).max(0.0)
+}
+
+#[cfg(any(target_os = "linux", test))]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
+fn logical_window_rect(
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    scale_factor: f64,
+) -> (i32, i32, u32, u32) {
+    let scale = scale_factor.max(1.0);
+    (
+        (f64::from(x) / scale).round() as i32,
+        (f64::from(y) / scale).round() as i32,
+        (f64::from(width) / scale).round().max(1.0) as u32,
+        (f64::from(height) / scale).round().max(1.0) as u32,
+    )
 }
 
 fn descriptor_for_monitor(monitor: &Monitor) -> CaptureResult<DisplayDescriptor> {
@@ -188,4 +262,21 @@ fn descriptor_for_monitor(monitor: &Monitor) -> CaptureResult<DisplayDescriptor>
             .is_primary()
             .map_err(|error| CaptureError::Backend(error.to_string()))?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::logical_window_rect;
+
+    #[test]
+    fn linux_hidpi_window_geometry_uses_logical_coordinates() {
+        assert_eq!(
+            logical_window_rect(4_320, 240, 1_600, 1_000, 2.0),
+            (2_160, 120, 800, 500)
+        );
+        assert_eq!(
+            logical_window_rect(-1_920, -120, 1_200, 900, 1.5),
+            (-1_280, -80, 800, 600)
+        );
+    }
 }

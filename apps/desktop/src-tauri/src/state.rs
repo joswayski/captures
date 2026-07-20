@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+#[cfg(any(target_os = "linux", test))]
+use std::time::{Duration, Instant};
 
 use captures_capture::{DisplayDescriptor, WindowDescriptor, XcapBackend};
 use parking_lot::{Mutex, RwLock};
@@ -50,24 +52,89 @@ impl ThumbnailVisibility {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ClipboardFingerprint {
+    pub width: u32,
+    pub height: u32,
+    pub checksum: u64,
+}
+
+#[cfg(any(target_os = "linux", test))]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClipboardVerification {
+    pub revision: isize,
+    pub fingerprint: ClipboardFingerprint,
+}
+
 #[derive(Default)]
 pub struct ClipboardOwnership {
     revision: Option<isize>,
     artifact_id: Option<String>,
+    fingerprint: Option<ClipboardFingerprint>,
+    #[cfg(any(target_os = "linux", test))]
+    last_verification: Option<Instant>,
 }
 
 impl ClipboardOwnership {
-    pub fn record(&mut self, revision: isize, artifact_id: String) {
+    pub fn record(
+        &mut self,
+        revision: isize,
+        artifact_id: String,
+        fingerprint: ClipboardFingerprint,
+    ) {
         self.revision = Some(revision);
         self.artifact_id = Some(artifact_id);
+        self.fingerprint = Some(fingerprint);
+        #[cfg(any(target_os = "linux", test))]
+        {
+            self.last_verification = None;
+        }
     }
 
     pub fn current_artifact(&mut self, revision: isize) -> Option<String> {
         if self.revision != Some(revision) {
-            self.revision = None;
-            self.artifact_id = None;
+            self.clear();
         }
         self.artifact_id.clone()
+    }
+
+    #[cfg(any(target_os = "linux", test))]
+    pub fn verification(
+        &mut self,
+        now: Instant,
+        minimum_interval: Duration,
+    ) -> Option<ClipboardVerification> {
+        if self
+            .last_verification
+            .is_some_and(|last| now.saturating_duration_since(last) < minimum_interval)
+        {
+            return None;
+        }
+        let verification = ClipboardVerification {
+            revision: self.revision?,
+            fingerprint: self.fingerprint?,
+        };
+        self.last_verification = Some(now);
+        Some(verification)
+    }
+
+    #[cfg(any(target_os = "linux", test))]
+    pub fn clear_if_revision(&mut self, revision: isize) -> bool {
+        if self.revision != Some(revision) {
+            return false;
+        }
+        self.clear();
+        true
+    }
+
+    fn clear(&mut self) {
+        self.revision = None;
+        self.artifact_id = None;
+        self.fingerprint = None;
+        #[cfg(any(target_os = "linux", test))]
+        {
+            self.last_verification = None;
+        }
     }
 }
 
@@ -115,7 +182,15 @@ impl AppState {
 
 #[cfg(test)]
 mod tests {
-    use super::{ClipboardOwnership, ThumbnailVisibility};
+    use std::time::{Duration, Instant};
+
+    use super::{ClipboardFingerprint, ClipboardOwnership, ThumbnailVisibility};
+
+    const FINGERPRINT: ClipboardFingerprint = ClipboardFingerprint {
+        width: 2,
+        height: 3,
+        checksum: 41,
+    };
 
     #[test]
     fn blocks_overlapping_capture_preparation() {
@@ -149,12 +224,38 @@ mod tests {
     fn clipboard_ownership_tracks_one_artifact_until_the_pasteboard_changes() {
         let mut ownership = ClipboardOwnership::default();
 
-        ownership.record(41, "first".to_owned());
+        ownership.record(41, "first".to_owned(), FINGERPRINT);
         assert_eq!(ownership.current_artifact(41).as_deref(), Some("first"));
 
-        ownership.record(42, "second".to_owned());
+        ownership.record(42, "second".to_owned(), FINGERPRINT);
         assert_eq!(ownership.current_artifact(42).as_deref(), Some("second"));
         assert!(ownership.current_artifact(43).is_none());
+        assert!(ownership.current_artifact(42).is_none());
+    }
+
+    #[test]
+    fn clipboard_verification_is_throttled_and_cannot_clear_a_newer_copy() {
+        let mut ownership = ClipboardOwnership::default();
+        let now = Instant::now();
+        ownership.record(41, "first".to_owned(), FINGERPRINT);
+
+        assert_eq!(
+            ownership.verification(now, Duration::from_secs(1)),
+            Some(super::ClipboardVerification {
+                revision: 41,
+                fingerprint: FINGERPRINT,
+            })
+        );
+        assert!(
+            ownership
+                .verification(now + Duration::from_millis(500), Duration::from_secs(1))
+                .is_none()
+        );
+
+        ownership.record(42, "second".to_owned(), FINGERPRINT);
+        assert!(!ownership.clear_if_revision(41));
+        assert_eq!(ownership.current_artifact(42).as_deref(), Some("second"));
+        assert!(ownership.clear_if_revision(42));
         assert!(ownership.current_artifact(42).is_none());
     }
 }

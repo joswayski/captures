@@ -26,8 +26,9 @@ h1, h2, p { margin: 0; }
 .idle-view p { color: #a7a7b6; }
 
 .startup-notice { display: flex; width: calc(100% - 16px); height: calc(100% - 16px); margin: 8px; padding: 12px; align-items: center; gap: 12px; border: 1px solid rgba(255,255,255,.15); border-radius: 14px; color: white; background: rgba(24,25,36,.94); box-shadow: 0 12px 36px rgba(0,0,0,.42); backdrop-filter: blur(18px); animation: startup-arrive .32s cubic-bezier(.2,.8,.2,1); }
-.startup-camera { display: grid; flex: 0 0 44px; width: 44px; height: 44px; place-items: center; border-radius: 12px; color: white; background: linear-gradient(145deg, #7b61ff, #4e3ce2); box-shadow: 0 7px 18px rgba(83,62,225,.38); }
-.startup-camera svg { width: 25px; height: 25px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.startup-icon { display: grid; flex: 0 0 44px; width: 44px; height: 44px; place-items: center; border-radius: 12px; color: white; background: linear-gradient(145deg, #9b7bff, #4137c9); box-shadow: 0 7px 18px rgba(83,62,225,.38); }
+.startup-icon svg { width: 25px; height: 25px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.startup-icon .startup-icon-spark { fill: currentColor; stroke: none; }
 .startup-notice strong { display: block; margin-bottom: 4px; font-size: 14px; }
 .startup-notice p { color: #b9bac7; font-size: 11px; line-height: 1.35; }
 @keyframes startup-arrive { from { opacity: 0; transform: translateY(-8px) scale(.97); } to { opacity: 1; transform: translateY(0) scale(1); } }

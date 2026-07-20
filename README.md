@@ -11,7 +11,8 @@ The first milestone is a macOS developer alpha. It runs in the tray, captures a 
 | macOS 13+ | Primary development target |
 | Windows 11 | Experimental; current GDI capture has no macOS-style permission prompt |
 | Linux X11 | Experimental; region, window, and display capture |
-| Linux Wayland | Experimental; region/display use the desktop screenshot portal, window capture requires X11 |
+| Linux Wayland + XWayland | Experimental; region/display use the desktop screenshot portal, while window capture can see X11/XWayland windows only |
+| Linux without XWayland | Not supported yet; the pinned capture backend still needs X11 for monitor discovery |
 
 Region selection is limited to the display under the pointer. Annotations, post-capture editing, OCR, scrolling capture, video, upload, and sharing are intentionally deferred.
 
@@ -22,7 +23,7 @@ Prerequisites:
 - Rust 1.94 with `rustfmt` and `clippy`
 - Node.js 24 and npm 11
 - macOS Screen Recording permission for live capture tests
-- Linux: an X11 display, or a Wayland desktop with an `xdg-desktop-portal` screenshot backend
+- Linux: an X11 display, or a Wayland desktop with XWayland and an `xdg-desktop-portal` screenshot backend
 
 Install dependencies and run the checks:
 
@@ -32,6 +33,8 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 npm run check
 ```
+
+CI runs the Rust checks on macOS, Windows, and Ubuntu, then produces a macOS app bundle, Windows NSIS installer, and Ubuntu DEB package. These jobs verify compilation, tests, and packaging; live capture, desktop-portal, tray, clipboard, and launch-at-login behavior still require a manual pass on each platform.
 
 Run the desktop app in development mode:
 
@@ -80,7 +83,7 @@ open target/release/bundle/dmg/Captures_0.1.0_aarch64.dmg
 open -a Captures
 ```
 
-Captures runs as a menu-bar utility: it shows a camera at the top-right of macOS and intentionally does not keep a Dock icon. Use that camera to capture, open Preferences, or quit Captures.
+Captures runs as a menu-bar utility: it shows the Captures icon at the top-right of macOS and intentionally does not keep a Dock icon. Use that icon to capture, open Preferences, or quit Captures.
 
 After macOS grants Screen Recording access, retry your shortcut and let Captures restart itself when prompted. macOS requires this restart before capture is enabled.
 
@@ -95,7 +98,7 @@ sudo apt update
 sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libgbm-dev
 ```
 
-Ubuntu Desktop includes the screenshot portal used for Wayland region/display capture. Ubuntu 26.04 is Wayland-only; native Wayland window capture remains a separate follow-up.
+Ubuntu Desktop includes the screenshot portal and XWayland support used by the current Wayland region/display path. Native Wayland monitor discovery and window capture remain separate follow-ups.
 
 ## Privacy and future uploads
 
