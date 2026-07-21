@@ -374,7 +374,10 @@ export function CaptureHistory() {
         <div>
           <p className="eyebrow">LOCAL RECOVERY</p>
           <h1>Capture History</h1>
-          <p>Recent captures stay private on this device for 30 days.</p>
+          <p>
+            Automatic recovery copies on this device for 30 days — separate from files you save to
+            your Captures folder.
+          </p>
         </div>
         {!loading && entries.length > 0 && (
           <span className="history-count">
@@ -392,8 +395,8 @@ export function CaptureHistory() {
       ) : entries.length === 0 ? (
         <section className="history-empty">
           <span className="history-empty-icon" aria-hidden="true"><HistoryIcon /></span>
-          <h2>No captures yet</h2>
-          <p>New screenshots will appear here automatically.</p>
+          <h2>No recovery copies yet</h2>
+          <p>New screenshots leave a recovery copy here automatically.</p>
         </section>
       ) : (
         <section className="history-grid" aria-label="Recent captures">
@@ -1101,8 +1104,8 @@ export function ThumbnailCard({
   const [dustParticles, setDustParticles] = useState<ThumbnailDustParticle[] | null>(null);
   /**
    * Snapshot of chrome labels taken the moment exit starts.
-   * While `isExiting`, UI is frozen on this snapshot — no Saved!→Show-in-Folder
-   * flips, clipboard badge changes, or other prop-driven transitions.
+   * While `isExiting`, UI is frozen on this snapshot — no “Saved to Folder!”→
+   * “Show in Folder” flips, clipboard badge changes, or other prop-driven transitions.
    */
   const [exitChrome, setExitChrome] = useState<{
     feedback: "saved" | null;
@@ -1175,7 +1178,7 @@ export function ThumbnailCard({
       clearTimeout(feedbackTimer.current);
       feedbackTimer.current = null;
     }
-    // Freeze chrome *as rendered now* — never clear "Saved!" into Show in Folder.
+    // Freeze chrome *as rendered now* — never flip “Saved to Folder!” into Show in Folder.
     setExitChrome({
       feedback,
       hasPath: Boolean(artifact.path),
@@ -1232,11 +1235,12 @@ export function ThumbnailCard({
     historySaved: artifact.history_saved,
     copyFailed: artifact.clipboard_copy_status === "failed",
   };
+  // Close only hides the preview. History recovery is separate from “Save to Folder”.
   const closeLabel = chrome.historySaved
-    ? "Dismiss — available in History for 30 days"
+    ? "Close preview — recovery copy in History for 30 days"
     : chrome.hasPath
-      ? "Close Preview"
-      : "Close Without Saving";
+      ? "Close preview"
+      : "Close preview — no History recovery copy";
   const usingDust = exit === "delete" && dustParticles !== null && dustParticles.length > 0;
 
   return (
@@ -1298,7 +1302,7 @@ export function ThumbnailCard({
           {chrome.hasPath && (
             <IconButton
               className="delete"
-              label="Move to Trash"
+              label="Move saved file to Trash"
               disabled={isExiting}
               onClick={() => exitWith("delete", "trash_artifact")}
             >
@@ -1332,17 +1336,17 @@ export function ThumbnailCard({
           onClick={() => void runAction(chrome.hasPath ? "reveal_artifact" : "save_artifact", chrome.hasPath ? undefined : "saved")}
         >
           {chrome.feedback === "saved"
-            ? <><CheckIcon />Saved!</>
+            ? <><CheckIcon />Saved to Folder</>
             : chrome.hasPath
               ? <><FolderIcon />Show in Folder</>
-              : <><SaveIcon />Save</>}
+              : <><SaveIcon />Save to Folder</>}
         </button>
       </div>
       <div className="thumbnail-bottom-bar">
         <div className="thumbnail-meta">
           <span>{artifact.width} × {artifact.height} · {formatFileSize(artifact.size_bytes)}</span>
           {!chrome.clipboardCurrent && !chrome.historySaved
-            ? <span className="warning">History unavailable</span>
+            ? <span className="warning">No History recovery copy</span>
             : !chrome.clipboardCurrent && chrome.copyFailed
               ? <span className="warning">Clipboard unavailable</span>
               : null}
