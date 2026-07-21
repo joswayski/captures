@@ -15,10 +15,13 @@ export const THUMBNAIL_DISSOLVE_WAVE_MS = 720;
 export const THUMBNAIL_CHROME_LEAD_MS = 0;
 
 /**
- * Approximate center of the trash control relative to the card origin.
- * Matches `.thumbnail-top-actions` padding + close button + gap + half delete.
+ * Center of the delete control relative to the card origin.
+ * top/left padding 8px + half of the 29px icon button.
+ * Before a folder save, delete is the first control; after save it sits next to Close.
  */
-export const THUMBNAIL_DELETE_ORIGIN_X = 57.5;
+export const THUMBNAIL_DELETE_ORIGIN_FIRST_X = 22.5;
+export const THUMBNAIL_DELETE_ORIGIN_AFTER_CLOSE_X = 57.5; // 8 + 29 + 6 + 14.5
+export const THUMBNAIL_DELETE_ORIGIN_X = THUMBNAIL_DELETE_ORIGIN_AFTER_CLOSE_X;
 export const THUMBNAIL_DELETE_ORIGIN_Y = 22.5;
 
 /**

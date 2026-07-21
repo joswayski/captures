@@ -125,7 +125,8 @@ html.capture-window-cursor, html.capture-window-cursor * { cursor: var(--capture
    keeps surviving cards stable while only empty window space is cropped. */
 .thumbnail-stack { position: absolute; bottom: 0; left: 0; right: 0; display: flex; flex-direction: column; gap: 24px; width: 100%; height: auto; max-height: 100%; padding: 28px; overflow-y: auto; overflow-anchor: none; background: transparent; scrollbar-width: none; }
 .thumbnail-stack::-webkit-scrollbar { display: none; }
-.thumbnail-card { position: relative; isolation: isolate; overflow: hidden; flex: 0 0 160px; width: 100%; height: 160px; margin-bottom: 0; background: transparent; border-radius: 12px; box-shadow: 0 8px 16px rgba(0,0,0,.34), 0 2px 5px rgba(0,0,0,.22); transition: flex-basis .26s ease, height .26s ease, margin-bottom .26s ease, opacity .2s ease, transform .2s ease, filter .2s ease, box-shadow .22s ease; will-change: flex-basis, height, opacity, transform; }
+/* overflow:visible so tooltips (Full size, etc.) are not clipped by the card edge. */
+.thumbnail-card { position: relative; isolation: isolate; overflow: visible; flex: 0 0 160px; width: 100%; height: 160px; margin-bottom: 0; background: transparent; border-radius: 12px; box-shadow: 0 8px 16px rgba(0,0,0,.34), 0 2px 5px rgba(0,0,0,.22); transition: flex-basis .26s ease, height .26s ease, margin-bottom .26s ease, opacity .2s ease, transform .2s ease, filter .2s ease, box-shadow .22s ease; will-change: flex-basis, height, opacity, transform; }
 .thumbnail-card.thumbnail-viewer-active { box-shadow: 0 8px 16px rgba(0,0,0,.34), 0 2px 5px rgba(0,0,0,.22), 0 0 0 1px rgba(169,151,255,.88), 0 0 17px rgba(137,116,255,.4); }
 /* Isolate exit animations so surviving cards do not inherit transition flicker. */
 .thumbnail-card:not([class*="thumbnail-exit-"]) { transition: box-shadow .22s ease; will-change: auto; }
@@ -159,12 +160,16 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-top-action
 .icon-button:hover, .icon-button.native-pointer-hover { transform: translateY(-1px) scale(1.04); }
 .icon-button.delete { color: #ff6673; }
 .icon-button.delete:hover, .icon-button.delete.native-pointer-hover { color: white; background: #e54857; }
-.icon-button::after { position: absolute; top: calc(100% + 6px); left: 50%; padding: 4px 7px; border-radius: 5px; content: attr(data-tooltip); color: white; background: rgba(10,11,16,.94); box-shadow: 0 3px 12px rgba(0,0,0,.3); opacity: 0; transform: translate(-50%, -2px); transition: opacity .12s ease, transform .12s ease; pointer-events: none; font-size: 10px; font-weight: 600; white-space: nowrap; }
+/* Tooltips sit above top-row icons so they stay inside the stack padding. */
+.icon-button::after { position: absolute; top: calc(100% + 6px); left: 50%; padding: 4px 7px; border-radius: 5px; content: attr(data-tooltip); color: white; background: rgba(10,11,16,.94); box-shadow: 0 3px 12px rgba(0,0,0,.3); opacity: 0; transform: translate(-50%, -2px); transition: opacity .12s ease, transform .12s ease; pointer-events: none; font-size: 10px; font-weight: 600; white-space: nowrap; z-index: 20; }
 .icon-button:hover::after, .icon-button.native-pointer-hover::after, .icon-button:focus-visible::after { opacity: 1; transform: translate(-50%, 0); }
-.icon-button.delete::after { left: 0; transform: translate(0, -2px); }
-.icon-button.delete:hover::after, .icon-button.delete.native-pointer-hover::after, .icon-button.delete:focus-visible::after { transform: translate(0, 0); }
-.icon-button.close::after { left: 0; transform: translate(0, -2px); }
-.icon-button.close:hover::after, .icon-button.close.native-pointer-hover::after, .icon-button.close:focus-visible::after { transform: translate(0, 0); }
+.thumbnail-top-actions .icon-button::after { top: auto; bottom: calc(100% + 6px); transform: translate(-50%, 2px); }
+.thumbnail-top-actions .icon-button:hover::after, .thumbnail-top-actions .icon-button.native-pointer-hover::after, .thumbnail-top-actions .icon-button:focus-visible::after { transform: translate(-50%, 0); }
+.thumbnail-top-left .icon-button::after { left: 0; transform: translate(0, 2px); }
+.thumbnail-top-left .icon-button:hover::after, .thumbnail-top-left .icon-button.native-pointer-hover::after, .thumbnail-top-left .icon-button:focus-visible::after { transform: translate(0, 0); }
+/* Full size sits on the right edge — anchor tooltip to the right so it isn't clipped. */
+.thumbnail-top-right .icon-button::after { left: auto; right: 0; transform: translate(0, 2px); }
+.thumbnail-top-right .icon-button:hover::after, .thumbnail-top-right .icon-button.native-pointer-hover::after, .thumbnail-top-right .icon-button:focus-visible::after { transform: translate(0, 0); }
 .thumbnail-main-actions { position: absolute; z-index: 3; top: 50%; left: 50%; display: grid; gap: 7px; width: 132px; transform: translate(-50%, -47%); }
 html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-main-actions, .thumbnail-card:focus-within .thumbnail-main-actions, .thumbnail-card-native-active .thumbnail-main-actions { transform: translate(-50%, -50%); }
 .thumbnail-main-actions button { display: flex; height: 32px; align-items: center; justify-content: center; gap: 7px; border: 1px solid rgba(255,255,255,.18); border-radius: 7px; color: white; background: rgba(25,27,38,.9); box-shadow: 0 4px 16px rgba(0,0,0,.3); backdrop-filter: blur(10px); cursor: pointer; font-size: 11px; font-weight: 700; transition: filter .14s ease, transform .14s ease; }

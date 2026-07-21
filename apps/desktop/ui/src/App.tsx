@@ -28,6 +28,9 @@ import {
   prefersReducedMotion,
   THUMBNAIL_CARD_FALLBACK_HEIGHT,
   THUMBNAIL_CARD_FALLBACK_WIDTH,
+  THUMBNAIL_DELETE_ORIGIN_AFTER_CLOSE_X,
+  THUMBNAIL_DELETE_ORIGIN_FIRST_X,
+  THUMBNAIL_DELETE_ORIGIN_Y,
   type ThumbnailDustParticle,
 } from "./lib/thumbnailExit";
 import { shouldScrollThumbnailStackToEnd } from "./lib/thumbnailLayout";
@@ -1191,10 +1194,14 @@ export function ThumbnailCard({
       const card = cardRef.current;
       const width = card?.clientWidth || THUMBNAIL_CARD_FALLBACK_WIDTH;
       const height = card?.clientHeight || THUMBNAIL_CARD_FALLBACK_HEIGHT;
+      // Before a folder save the delete control is the first top-left button;
+      // after save it sits next to Close — wave origin must match the real icon.
+      const hasFolderFile = Boolean(artifact.path);
       setDustParticles(buildThumbnailDustParticles(width, height, {
-        // Match object-fit: cover on the preview so dissolve chips share the same crop.
         imageWidth: artifact.width,
         imageHeight: artifact.height,
+        originX: hasFolderFile ? THUMBNAIL_DELETE_ORIGIN_AFTER_CLOSE_X : THUMBNAIL_DELETE_ORIGIN_FIRST_X,
+        originY: THUMBNAIL_DELETE_ORIGIN_Y,
       }));
     } else {
       setDustParticles(null);
@@ -1296,7 +1303,7 @@ export function ThumbnailCard({
               </IconButton>
               <IconButton
                 className="delete"
-                label="Trash file"
+                label="Delete"
                 disabled={isExiting}
                 onClick={() => exitWith("delete", "trash_artifact")}
               >
@@ -1306,7 +1313,7 @@ export function ThumbnailCard({
           ) : (
             <IconButton
               className="delete"
-              label="Discard"
+              label="Delete"
               disabled={isExiting}
               onClick={() => exitWith("delete", "dismiss_artifact")}
             >

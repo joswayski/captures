@@ -26,19 +26,18 @@ function artifact(path: string | null, id = "capture-1"): CaptureArtifact {
 }
 
 describe("ThumbnailCard", () => {
-  it("before a folder save: Discard only (no Close), Save file for a disk PNG", () => {
+  it("before a folder save: Delete only (no Close), Save file for a disk PNG", () => {
     render(<ThumbnailCard artifact={artifact(null)} clipboardCurrent viewerActive={false} onRemoved={() => undefined} />);
 
     expect(screen.getByText("Copied to clipboard")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Full size" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Discard" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Close" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Trash file" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Copy" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save file" })).toBeInTheDocument();
   });
 
-  it("after a folder save: Close keeps the file, Trash file removes it", () => {
+  it("after a folder save: Close keeps the file, Delete removes it", () => {
     render(
       <ThumbnailCard
         artifact={artifact("/Users/josevalerio/Captures/capture.png")}
@@ -49,7 +48,7 @@ describe("ThumbnailCard", () => {
     );
 
     const close = screen.getByRole("button", { name: "Close" });
-    const trash = screen.getByRole("button", { name: "Trash file" });
+    const trash = screen.getByRole("button", { name: "Delete" });
     expect(close.parentElement).toBe(trash.parentElement);
     expect(close.parentElement).toHaveClass("thumbnail-top-left");
     expect(screen.getByRole("button", { name: "Show in Folder" })).toBeInTheDocument();
@@ -65,7 +64,7 @@ describe("ThumbnailCard", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "Discard" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
     expect(screen.getByText("Not in History")).toBeInTheDocument();
   });
 
@@ -114,7 +113,7 @@ describe("ThumbnailCard", () => {
     expect(screen.getByRole("article")).toHaveClass("thumbnail-viewer-active");
   });
 
-  it("discards an unsaved preview with the delete dissolve animation", () => {
+  it("deletes an unsaved preview with the dissolve animation", () => {
     render(
       <ThumbnailCard
         artifact={artifact(null)}
@@ -125,14 +124,14 @@ describe("ThumbnailCard", () => {
     );
 
     act(() => {
-      screen.getByRole("button", { name: "Discard" }).click();
+      screen.getByRole("button", { name: "Delete" }).click();
     });
     const card = screen.getByRole("article");
     expect(card).toHaveClass("thumbnail-exit-delete");
     expect(card).toHaveClass("thumbnail-exit-dust");
   });
 
-  it("starts the delete disintegration animation when Trash file is clicked", () => {
+  it("starts the delete disintegration animation when Delete is clicked after save", () => {
     render(
       <ThumbnailCard
         artifact={artifact("/Users/josevalerio/Captures/capture.png")}
@@ -143,7 +142,7 @@ describe("ThumbnailCard", () => {
     );
 
     act(() => {
-      screen.getByRole("button", { name: "Trash file" }).click();
+      screen.getByRole("button", { name: "Delete" }).click();
     });
     const card = screen.getByRole("article");
     expect(card).toHaveClass("thumbnail-exit-delete");
@@ -184,7 +183,7 @@ describe("ThumbnailCard", () => {
     expect(screen.getByText("Saved")).toBeInTheDocument();
 
     act(() => {
-      screen.getByRole("button", { name: "Trash file" }).click();
+      screen.getByRole("button", { name: "Delete" }).click();
     });
     const card = screen.getByRole("article");
     expect(card).toHaveClass("thumbnail-exit-delete");
@@ -192,7 +191,7 @@ describe("ThumbnailCard", () => {
     expect(card).toHaveAttribute("data-exit-locked", "true");
     expect(screen.getByText("Saved")).toBeInTheDocument();
     expect(screen.queryByText("Show in Folder")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Trash file" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Full size" })).toBeDisabled();
   });
 });
