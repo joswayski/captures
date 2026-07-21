@@ -125,22 +125,29 @@ html.capture-window-cursor, html.capture-window-cursor * { cursor: var(--capture
    keeps surviving cards stable while only empty window space is cropped. */
 .thumbnail-stack { position: absolute; bottom: 0; left: 0; right: 0; display: flex; flex-direction: column; gap: 24px; width: 100%; height: auto; max-height: 100%; padding: 28px; overflow-y: auto; overflow-anchor: none; background: transparent; scrollbar-width: none; }
 .thumbnail-stack::-webkit-scrollbar { display: none; }
-.thumbnail-card { position: relative; isolation: isolate; flex: 0 0 160px; width: 100%; height: 160px; margin-bottom: 0; background: transparent; border-radius: 12px; box-shadow: 0 8px 16px rgba(0,0,0,.34), 0 2px 5px rgba(0,0,0,.22); transition: flex-basis .26s ease, height .26s ease, margin-bottom .26s ease, opacity .2s ease, transform .2s ease, filter .2s ease, box-shadow .22s ease; will-change: flex-basis, height, opacity, transform; }
+.thumbnail-card { position: relative; isolation: isolate; overflow: hidden; flex: 0 0 160px; width: 100%; height: 160px; margin-bottom: 0; background: transparent; border-radius: 12px; box-shadow: 0 8px 16px rgba(0,0,0,.34), 0 2px 5px rgba(0,0,0,.22); transition: flex-basis .26s ease, height .26s ease, margin-bottom .26s ease, opacity .2s ease, transform .2s ease, filter .2s ease, box-shadow .22s ease; will-change: flex-basis, height, opacity, transform; }
 .thumbnail-card.thumbnail-viewer-active { box-shadow: 0 8px 16px rgba(0,0,0,.34), 0 2px 5px rgba(0,0,0,.22), 0 0 0 1px rgba(169,151,255,.88), 0 0 17px rgba(137,116,255,.4); }
 /* Isolate exit animations so surviving cards do not inherit transition flicker. */
 .thumbnail-card:not([class*="thumbnail-exit-"]) { transition: box-shadow .22s ease; will-change: auto; }
 .thumbnail-svg-defs { position: absolute; width: 0; height: 0; overflow: hidden; pointer-events: none; }
-.thumbnail-card img { display: block; width: 100%; height: 100%; object-fit: contain; border: 0; border-radius: 12px; background: #0e0f15; transition: filter .18s ease, transform .22s ease; }
+/* Cover fills the card (no letterbox bars). Full-res fidelity lives in the viewer. */
+.thumbnail-card img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: center; border: 0; border-radius: 12px; background: transparent; transition: filter .18s ease, transform .22s ease; }
 html:not(.thumbnail-native-tracking) .thumbnail-card:hover img, .thumbnail-card:focus-within img, .thumbnail-card-native-active img { filter: blur(2px) brightness(.56); transform: scale(1.015); }
-/* Exit animations own the image filter/transform; disable hover transitions mid-exit. */
-.thumbnail-card[class*="thumbnail-exit-"] img { transition: none; }
-.thumbnail-meta { position: absolute; z-index: 2; right: 8px; bottom: 8px; left: 8px; display: flex; justify-content: space-between; pointer-events: none; color: white; font-size: 10px; text-shadow: 0 1px 3px rgba(0,0,0,.9); transition: opacity .15s ease; }
+/* Lock the hovered look on exit so clearing :hover / native-active never flashes a sharp preview. */
+.thumbnail-card[class*="thumbnail-exit-"] img {
+  transition: none;
+  filter: blur(2px) brightness(.56);
+  transform: scale(1.015);
+}
+/* Shared bottom row: dimensions + clipboard stay on one vertical centerline. */
+.thumbnail-bottom-bar { position: absolute; z-index: 5; right: 8px; bottom: 8px; left: 8px; display: flex; align-items: center; justify-content: space-between; gap: 8px; pointer-events: none; }
+.thumbnail-meta { display: flex; min-width: 0; align-items: center; gap: 6px; color: white; font-size: 10px; text-shadow: 0 1px 3px rgba(0,0,0,.9); transition: opacity .15s ease; }
 html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-meta, .thumbnail-card:focus-within .thumbnail-meta, .thumbnail-card-native-active .thumbnail-meta { opacity: 0; }
-.thumbnail-meta span { padding: 3px 6px; border-radius: 5px; background: rgba(12,13,18,.72); backdrop-filter: blur(8px); }
+.thumbnail-meta > span { padding: 3px 6px; border-radius: 5px; background: rgba(12,13,18,.72); backdrop-filter: blur(8px); line-height: 1.3; }
 .warning { color: #f8c66d; }
-.clipboard-confirmation { position: absolute; z-index: 5; right: 10px; bottom: 10px; display: flex; align-items: center; gap: 5px; padding: 5px 9px; border: 1px solid rgba(151,235,170,.68); border-radius: 999px; color: #effff2; background: rgba(10,17,14,.94); box-shadow: 0 7px 24px rgba(0,0,0,.72), 0 0 0 1px rgba(151,235,170,.14), 0 0 18px rgba(104,220,132,.2); text-shadow: 0 1px 3px rgba(0,0,0,.9); pointer-events: none; font-size: 10px; font-weight: 750; animation: clipboard-confirmation-arrive 1.15s cubic-bezier(.2,.8,.2,1) both; }
-.clipboard-confirmation svg { width: 13px; height: 13px; fill: none; stroke: #9aefad; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
-@keyframes clipboard-confirmation-arrive { 0% { opacity: 0; transform: translateY(8px) scale(.9); } 24% { opacity: 1; transform: translateY(0) scale(1.04); box-shadow: 0 9px 30px rgba(0,0,0,.82), 0 0 0 3px rgba(151,235,170,.2), 0 0 25px rgba(104,220,132,.34); } 52% { transform: scale(.98); } 100% { opacity: 1; transform: scale(1); } }
+.clipboard-confirmation { display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; margin-left: auto; padding: 3px 8px; border: 1px solid rgba(151,235,170,.68); border-radius: 999px; color: #effff2; background: rgba(10,17,14,.94); box-shadow: 0 4px 14px rgba(0,0,0,.55), 0 0 0 1px rgba(151,235,170,.14), 0 0 14px rgba(104,220,132,.18); text-shadow: 0 1px 3px rgba(0,0,0,.9); font-size: 10px; font-weight: 750; line-height: 1.3; animation: clipboard-confirmation-arrive 1.15s cubic-bezier(.2,.8,.2,1) both; }
+.clipboard-confirmation svg { width: 12px; height: 12px; flex-shrink: 0; fill: none; stroke: #9aefad; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+@keyframes clipboard-confirmation-arrive { 0% { opacity: 0; transform: translateY(4px) scale(.94); } 28% { opacity: 1; transform: translateY(0) scale(1.03); box-shadow: 0 6px 18px rgba(0,0,0,.7), 0 0 0 2px rgba(151,235,170,.18), 0 0 18px rgba(104,220,132,.28); } 55% { transform: scale(.99); } 100% { opacity: 1; transform: scale(1); } }
 .thumbnail-top-actions, .thumbnail-main-actions { opacity: 0; pointer-events: none; transition: opacity .16s ease, transform .18s ease; }
 html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-top-actions, html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-main-actions, .thumbnail-card:focus-within .thumbnail-top-actions, .thumbnail-card:focus-within .thumbnail-main-actions, .thumbnail-card-native-active .thumbnail-top-actions, .thumbnail-card-native-active .thumbnail-main-actions { opacity: 1; pointer-events: auto; }
 .thumbnail-top-actions { position: absolute; z-index: 4; top: 8px; right: 8px; left: 8px; display: flex; justify-content: space-between; align-items: start; transform: translateY(-3px); }
@@ -168,6 +175,16 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-main-actio
 html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !important; }
 .thumbnail-main-actions svg, .icon-button svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .thumbnail-main-actions svg { animation: thumbnail-action-pop .2s ease-out; }
+/* Exit lock: no clicks, hover, or focus while dismiss/delete animation plays. */
+.thumbnail-card.thumbnail-exiting,
+.thumbnail-card.thumbnail-exiting * {
+  pointer-events: none !important;
+  cursor: default !important;
+}
+.thumbnail-card.thumbnail-exiting .icon-button::after {
+  opacity: 0 !important;
+  transition: none !important;
+}
 .thumbnail-exit-dismiss { overflow: visible; animation: thumbnail-dismiss .62s cubic-bezier(.4,0,.2,1) forwards; pointer-events: none; }
 /* Horizontal-only SVG blur (stdDeviation x 0) streaks the preview left as it exits. */
 .thumbnail-card.thumbnail-exit-dismiss img {
@@ -175,53 +192,126 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
   transform-origin: center center;
   will-change: filter, transform;
 }
-.thumbnail-exit-delete { overflow: visible; animation: thumbnail-delete .82s cubic-bezier(.4,0,.2,1) forwards; pointer-events: none; box-shadow: none; }
-.thumbnail-exit-delete.thumbnail-exit-dust > :not(.thumbnail-dust-layer) { opacity: 0 !important; transition: none; pointer-events: none; }
-.thumbnail-dust-layer { position: absolute; z-index: 7; inset: 0; overflow: visible; pointer-events: none; border-radius: 12px; }
+.thumbnail-exit-delete {
+  overflow: visible;
+  animation: thumbnail-delete 1.85s cubic-bezier(.33,0,.2,1) forwards;
+  pointer-events: none;
+  box-shadow: none;
+  border-radius: 12px;
+}
+/*
+ * Visual baseline restored from 30aa257 (soft blur + long ease fades),
+ * plus layout freezes so hover chrome doesn't jump when exit starts.
+ */
+.thumbnail-exit-delete .thumbnail-meta {
+  opacity: 0 !important;
+  visibility: hidden !important;
+  transition: none !important;
+}
+.thumbnail-exit-delete .thumbnail-top-actions {
+  z-index: 8 !important;
+  pointer-events: none !important;
+  transition: none !important;
+  opacity: 1;
+  transform: translateY(0) !important;
+  animation: thumbnail-chrome-fade-top .85s cubic-bezier(.22, .1, .25, 1) both !important;
+}
+.thumbnail-exit-delete .thumbnail-main-actions {
+  z-index: 8 !important;
+  pointer-events: none !important;
+  transition: none !important;
+  opacity: 1;
+  animation: thumbnail-chrome-fade-main .85s cubic-bezier(.22, .1, .25, 1) both !important;
+}
+.thumbnail-exit-delete .clipboard-confirmation {
+  z-index: 8 !important;
+  pointer-events: none !important;
+  transition: none !important;
+  opacity: 1;
+  animation: thumbnail-chrome-fade-plain .85s cubic-bezier(.22, .1, .25, 1) both !important;
+}
+.thumbnail-exit-delete .thumbnail-bottom-bar {
+  transition: none !important;
+}
+.thumbnail-exit-delete .icon-button::after {
+  opacity: 0 !important;
+  transition: none !important;
+}
+.thumbnail-exit-delete.thumbnail-exit-dust > img {
+  /* Soft handoff — same hover blur/dim the whole time, only opacity eases out. */
+  animation: thumbnail-delete-img-fade .55s cubic-bezier(.22, .1, .25, 1) both !important;
+  pointer-events: none !important;
+}
+/* Long soft fades (from 30aa257); transforms preserve hover placement. */
+@keyframes thumbnail-chrome-fade-top {
+  0%, 16% { opacity: 1; filter: blur(0); transform: translateY(0); }
+  100% { opacity: 0; filter: blur(3px); transform: translateY(0); visibility: hidden; }
+}
+@keyframes thumbnail-chrome-fade-main {
+  0%, 16% { opacity: 1; filter: blur(0); transform: translate(-50%, -50%); }
+  100% { opacity: 0; filter: blur(3px); transform: translate(-50%, -50%); visibility: hidden; }
+}
+@keyframes thumbnail-chrome-fade-plain {
+  0%, 16% { opacity: 1; filter: blur(0); }
+  100% { opacity: 0; filter: blur(3px); visibility: hidden; }
+}
+@keyframes thumbnail-delete-img-fade {
+  0% { opacity: 1; filter: blur(2px) brightness(.56); transform: scale(1.015); }
+  100% { opacity: 0; filter: blur(2px) brightness(.56); transform: scale(1.015); }
+}
+/*
+ * Expanded layer bounds so hover-matched blur does not cage flying chips
+ * inside the card rectangle (filter creates a containing box).
+ * Particle left/top are offset by the same inset in JS.
+ */
+.thumbnail-dust-layer {
+  --dust-pad: 120px;
+  position: absolute;
+  z-index: 7;
+  top: calc(-1 * var(--dust-pad));
+  right: calc(-1 * var(--dust-pad));
+  bottom: calc(-1 * var(--dust-pad));
+  left: calc(-1 * var(--dust-pad));
+  pointer-events: none;
+  border-radius: 0;
+  overflow: visible;
+  /* 30aa257 look: same hover blur + dim for the whole dissolve. */
+  filter: blur(2px) brightness(.56);
+  /* Clip to the card (inset by pad) while intact, then open fully for fly-out. */
+  clip-path: inset(var(--dust-pad) round 12px);
+  animation: thumbnail-dust-clip 1.85s cubic-bezier(.33,0,.2,1) forwards;
+}
 .thumbnail-dust {
   position: absolute;
   display: block;
-  border-radius: 1px;
+  border-radius: 0;
   background-repeat: no-repeat;
-  box-shadow: 0 0 0 0.5px rgba(255,255,255,.04);
   opacity: 1;
   transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+  box-shadow: none;
   animation-name: thumbnail-dust-fly;
-  animation-timing-function: cubic-bezier(.2,.7,.2,1);
-  animation-fill-mode: forwards;
+  animation-timing-function: cubic-bezier(.28, 0, .12, 1);
+  animation-fill-mode: both;
   will-change: transform, opacity;
-}
-/* Soft accent sparks on top of the image dust. */
-.thumbnail-exit-delete::before {
-  position: absolute;
-  z-index: 8;
-  top: 48%;
-  left: 50%;
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  content: "";
-  background: #ff8a94;
-  box-shadow: -36px -18px #ff6673, -18px 24px #f8c66d, 10px -28px #ff8a94, 30px -10px #f8c66d, 40px 20px #ff6673, 2px 32px #ffb5bc;
-  animation: thumbnail-particles .72s ease-out forwards;
-  pointer-events: none;
+  backface-visibility: hidden;
 }
 @keyframes thumbnail-dismiss {
-  0% { flex-basis: 160px; height: 160px; margin-bottom: 0; opacity: 1; transform: translateX(0) scale(1); }
-  55% { flex-basis: 160px; height: 160px; margin-bottom: 0; opacity: .14; transform: translateX(-86px) scale(.97); }
-  100% { flex-basis: 0; height: 0; margin-bottom: -24px; opacity: 0; transform: translateX(-104px) scale(.94); }
+  /* Slide + fade fully while keeping card size; collapse stack space only once invisible. */
+  0% { flex-basis: 160px; height: 160px; margin-bottom: 0; opacity: 1; transform: translateX(0); }
+  72% { flex-basis: 160px; height: 160px; margin-bottom: 0; opacity: 0; transform: translateX(-118px); }
+  100% { flex-basis: 0; height: 0; margin-bottom: -24px; opacity: 0; transform: translateX(-118px); }
 }
-/* Stepped url() filters — SVG feGaussianBlur cannot be interpolated smoothly from CSS. */
+/* Stepped url() filters — SVG feGaussianBlur cannot be interpolated smoothly from CSS.
+   Start from the locked hover look so dismiss doesn't flash a sharp frame first. */
 @keyframes thumbnail-dismiss-streak {
-  0% { filter: none; transform: scaleX(1); }
-  22% { filter: url(#thumbnail-motion-blur-a); transform: scaleX(1.04); }
-  52% { filter: url(#thumbnail-motion-blur-b); transform: scaleX(1.09); }
+  0% { filter: blur(2px) brightness(.56); transform: scale(1.015); }
+  18% { filter: url(#thumbnail-motion-blur-a); transform: scaleX(1.04); }
+  48% { filter: url(#thumbnail-motion-blur-b); transform: scaleX(1.09); }
   100% { filter: url(#thumbnail-motion-blur-c); transform: scaleX(1.13); }
 }
 @keyframes thumbnail-delete {
-  0% { flex-basis: 160px; height: 160px; margin-bottom: 0; opacity: 1; transform: scale(1); }
-  68% { flex-basis: 160px; height: 160px; margin-bottom: 0; opacity: 1; transform: scale(1); }
-  100% { flex-basis: 0; height: 0; margin-bottom: -24px; opacity: 0; transform: scale(.96); }
+  0%, 86% { flex-basis: 160px; height: 160px; margin-bottom: 0; opacity: 1; }
+  100% { flex-basis: 0; height: 0; margin-bottom: -24px; opacity: 0; }
 }
 /* Fallback when dust is disabled (reduced motion or failed particle build). */
 .thumbnail-exit-delete:not(.thumbnail-exit-dust) {
@@ -229,24 +319,45 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
   animation: thumbnail-delete-fallback .68s cubic-bezier(.4,0,.2,1) forwards;
 }
 @keyframes thumbnail-delete-fallback {
-  0% { flex-basis: 160px; height: 160px; margin-bottom: 0; opacity: 1; transform: scale(1); filter: blur(0); }
-  62% { flex-basis: 160px; height: 160px; margin-bottom: 0; opacity: .12; transform: scale(.76); filter: blur(5px); }
-  100% { flex-basis: 0; height: 0; margin-bottom: -24px; opacity: 0; transform: scale(.68); filter: blur(7px); }
+  0% { flex-basis: 160px; height: 160px; margin-bottom: 0; opacity: 1; transform: scale(1.015); filter: blur(2px) brightness(.56); }
+  55% { flex-basis: 160px; height: 160px; margin-bottom: 0; opacity: .2; transform: scale(.9); filter: blur(3px) brightness(.56); }
+  100% { flex-basis: 0; height: 0; margin-bottom: -24px; opacity: 0; transform: scale(.8); filter: blur(5px) brightness(.56); }
 }
+/* Open clip from the padded card rect so ash can float outside freely. */
+@keyframes thumbnail-dust-clip {
+  0%, 8% { clip-path: inset(var(--dust-pad, 120px) round 12px); }
+  100% { clip-path: inset(0); }
+}
+/*
+ * Smooth 30aa257-style lift/fade. Rest has no shadow (no grid flash);
+ * soft edge appears only once a chip begins to fly.
+ */
 @keyframes thumbnail-dust-fly {
-  0% { opacity: 1; transform: translate3d(0, 0, 0) rotate(0deg) scale(1); filter: blur(0); }
-  55% { opacity: .85; filter: blur(0.2px); }
+  0% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+    box-shadow: none;
+  }
+  14% {
+    opacity: 1;
+    transform: translate3d(calc(var(--dust-x, 0px) * 0.06), calc(var(--dust-y, -40px) * 0.06), 0) rotate(calc(var(--dust-rotate, 12deg) * 0.08)) scale(0.98);
+    box-shadow:
+      0 0 0 0.5px rgba(0, 0, 0, .08),
+      0 1px 3px rgba(0, 0, 0, .14);
+  }
+  55% {
+    opacity: .78;
+  }
   100% {
     opacity: 0;
-    transform: translate3d(var(--dust-x, 0px), var(--dust-y, -40px), 0) rotate(var(--dust-rotate, 12deg)) scale(0.35);
-    filter: blur(0.8px);
+    transform: translate3d(var(--dust-x, 0px), var(--dust-y, -40px), 0) rotate(var(--dust-rotate, 12deg)) scale(0.18);
+    box-shadow: none;
   }
 }
-@keyframes thumbnail-particles { from { opacity: 1; transform: translate(-50%, -50%) scale(.3) rotate(0); } to { opacity: 0; transform: translate(-50%, -50%) scale(2.1) rotate(28deg); } }
 @keyframes thumbnail-action-pop { from { opacity: .25; transform: scale(.65); } to { opacity: 1; transform: scale(1); } }
 @media (prefers-reduced-motion: reduce) {
-  .capture-surface, .capture-shade, .capture-hint, .window-targets, .thumbnail-card, .thumbnail-card img, .clipboard-confirmation, .thumbnail-top-actions, .thumbnail-main-actions, .thumbnail-main-actions svg, .thumbnail-dust, .thumbnail-exit-delete::before { animation-duration: .01ms !important; transition-duration: .01ms; }
-  .thumbnail-card.thumbnail-exit-dismiss img { animation: none; filter: none; transform: none; }
+  .capture-surface, .capture-shade, .capture-hint, .window-targets, .thumbnail-card, .thumbnail-card img, .clipboard-confirmation, .thumbnail-top-actions, .thumbnail-main-actions, .thumbnail-main-actions svg, .thumbnail-dust, .thumbnail-dust-layer { animation-duration: .01ms !important; transition-duration: .01ms; }
+  .thumbnail-card.thumbnail-exit-dismiss img { animation: none; filter: blur(2px) brightness(.56); transform: scale(1.015); }
   .thumbnail-dust { opacity: 0; }
 }
 .directory-input button { border: 0; border-radius: 6px; padding: 7px 10px; color: #f8f8fb; background: #303140; font-size: 12px; }

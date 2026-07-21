@@ -1,7 +1,13 @@
+import { invoke } from "@tauri-apps/api/core";
 import { act, render, screen, within } from "@testing-library/react";
 
 import { ThumbnailCard } from "./App";
 import type { CaptureArtifact } from "./types";
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(async () => undefined),
+  isTauri: () => false,
+}));
 
 function artifact(path: string | null, id = "capture-1"): CaptureArtifact {
   return {
@@ -118,7 +124,7 @@ describe("ThumbnailCard", () => {
     expect(screen.getByRole("article")).toHaveClass("thumbnail-exit-dismiss");
   });
 
-  it("starts the delete dissolve animation when Move to Trash is clicked", () => {
+  it("starts the delete disintegration animation when Move to Trash is clicked", () => {
     render(
       <ThumbnailCard
         artifact={artifact("/Users/josevalerio/Captures/capture.png")}
@@ -134,6 +140,56 @@ describe("ThumbnailCard", () => {
     const card = screen.getByRole("article");
     expect(card).toHaveClass("thumbnail-exit-delete");
     expect(card).toHaveClass("thumbnail-exit-dust");
-    expect(card.querySelectorAll(".thumbnail-dust").length).toBeGreaterThan(10);
+    expect(card.querySelectorAll(".thumbnail-dust").length).toBeGreaterThan(100);
+    expect(card.querySelector(".thumbnail-dust-layer")).not.toBeNull();
+    expect(card.querySelector(".thumbnail-burn-front")).toBeNull();
+  });
+
+  it("freezes Saved! when exit starts instead of flipping to Show in Folder", async () => {
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === "save_artifact") return undefined;
+      return undefined;
+    });
+
+    const { rerender } = render(
+      <ThumbnailCard
+        artifact={artifact(null)}
+        clipboardCurrent={false}
+        viewerActive={false}
+        onRemoved={() => undefined}
+      />,
+    );
+
+    await act(async () => {
+      screen.getByRole("button", { name: "Save" }).click();
+      await Promise.resolve();
+    });
+    expect(screen.getByText("Saved!")).toBeInTheDocument();
+
+    // Path appears after save while "Saved!" is still showing (same as real flow).
+    rerender(
+      <ThumbnailCard
+        artifact={artifact("/Users/josevalerio/Captures/capture.png")}
+        clipboardCurrent={false}
+        viewerActive={false}
+        onRemoved={() => undefined}
+      />,
+    );
+    expect(screen.getByText("Saved!")).toBeInTheDocument();
+
+    act(() => {
+      screen.getByRole("button", { name: "Move to Trash" }).click();
+    });
+    const card = screen.getByRole("article");
+    expect(card).toHaveClass("thumbnail-exit-delete");
+    expect(card).toHaveClass("thumbnail-exiting");
+    expect(card).toHaveAttribute("data-exit-locked", "true");
+    expect(card).toHaveAttribute("aria-busy", "true");
+    // Must stay frozen on Saved! — not swap to Show in Folder.
+    expect(screen.getByText("Saved!")).toBeInTheDocument();
+    expect(screen.queryByText("Show in Folder")).not.toBeInTheDocument();
+    // Interactive controls are disabled for the whole exit animation.
+    expect(screen.getByRole("button", { name: "Move to Trash" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "View Full Size" })).toBeDisabled();
   });
 });
