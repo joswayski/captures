@@ -31,7 +31,7 @@ From the monorepo root:
 
 ```sh
 docker build -t captures-web .
-docker run --rm -p 8080:80 captures-web
+docker run --rm -p 8080:3000 captures-web
 ```
 
-The image is a static nginx build of this app. Map host port `8080` (or any port) to container port `80`.
+The image builds the static site and serves it with `serve` on port 3000 (override with `PORT`).

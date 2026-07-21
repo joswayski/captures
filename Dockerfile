@@ -1,7 +1,7 @@
 # Portable image for the Captures marketing site (apps/web).
 # Build from the monorepo root:
 #   docker build -t captures-web .
-#   docker run --rm -p 8080:80 captures-web
+#   docker run --rm -p 8080:3000 captures-web
 
 FROM node:24-alpine AS build
 
@@ -17,11 +17,18 @@ COPY apps/web apps/web
 
 RUN npm run build --workspace=@captures/web
 
-FROM nginx:1.27-alpine
+FROM node:24-alpine
 
-COPY apps/web/nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=build /app/apps/web/dist /usr/share/nginx/html
+WORKDIR /app
 
-EXPOSE 80
+ENV NODE_ENV=production
+ENV PORT=3000
 
-CMD ["nginx", "-g", "daemon off;"]
+COPY apps/web/package.json ./
+RUN npm install --omit=dev
+
+COPY --from=build /app/apps/web/dist ./dist
+
+EXPOSE 3000
+
+CMD ["npm", "start"]
