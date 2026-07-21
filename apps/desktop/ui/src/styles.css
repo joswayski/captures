@@ -155,9 +155,11 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-top-action
 html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-top-actions, .thumbnail-card:focus-within .thumbnail-top-actions, .thumbnail-card-native-active .thumbnail-top-actions { transform: translateY(0); }
 .thumbnail-top-left { display: flex; align-items: center; gap: 6px; }
 .thumbnail-top-right { display: flex; margin-left: auto; align-items: center; gap: 5px; }
-.icon-button { position: relative; display: grid; width: 29px; height: 29px; padding: 5px; place-items: center; border: 1px solid rgba(255,255,255,.14); border-radius: 7px; color: #f8f8fb; background: rgba(16,17,25,.8); box-shadow: 0 3px 12px rgba(0,0,0,.3); backdrop-filter: blur(12px); cursor: pointer; transition: color .14s ease, background .14s ease, transform .14s ease; }
+.icon-button { position: relative; display: grid; width: 29px; height: 29px; padding: 5px; place-items: center; border: 1px solid rgba(255,255,255,.14); border-radius: 7px; color: #f8f8fb; background: rgba(16,17,25,.8); box-shadow: 0 3px 12px rgba(0,0,0,.3); backdrop-filter: blur(12px); cursor: pointer; outline: none; transition: color .14s ease, background .14s ease, transform .14s ease, box-shadow .14s ease; }
 .icon-button:hover, .icon-button.native-pointer-hover { background: rgba(48,49,64,.96); }
 .icon-button:hover, .icon-button.native-pointer-hover { transform: translateY(-1px) scale(1.04); }
+.icon-button:focus { outline: none; }
+.icon-button:focus-visible { box-shadow: 0 3px 12px rgba(0,0,0,.3), 0 0 0 2px rgba(169,151,255,.55); }
 .icon-button.delete { color: #ff6673; }
 .icon-button.delete:hover, .icon-button.delete.native-pointer-hover { color: white; background: #e54857; }
 /* Tooltips sit above top-row icons so they stay inside the stack padding. */
@@ -172,11 +174,14 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-top-action
 .thumbnail-top-right .icon-button:hover::after, .thumbnail-top-right .icon-button.native-pointer-hover::after, .thumbnail-top-right .icon-button:focus-visible::after { transform: translate(0, 0); }
 .thumbnail-main-actions { position: absolute; z-index: 3; top: 50%; left: 50%; display: grid; gap: 7px; width: 132px; transform: translate(-50%, -47%); }
 html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-main-actions, .thumbnail-card:focus-within .thumbnail-main-actions, .thumbnail-card-native-active .thumbnail-main-actions { transform: translate(-50%, -50%); }
-.thumbnail-main-actions button { display: flex; height: 32px; align-items: center; justify-content: center; gap: 7px; border: 1px solid rgba(255,255,255,.18); border-radius: 7px; color: white; background: rgba(25,27,38,.9); box-shadow: 0 4px 16px rgba(0,0,0,.3); backdrop-filter: blur(10px); cursor: pointer; font-size: 11px; font-weight: 700; transition: filter .14s ease, transform .14s ease; }
+.thumbnail-main-actions button { display: flex; height: 32px; align-items: center; justify-content: center; gap: 7px; border: 1px solid rgba(255,255,255,.18); border-radius: 7px; color: white; background: rgba(25,27,38,.9); box-shadow: 0 4px 16px rgba(0,0,0,.3); backdrop-filter: blur(10px); cursor: pointer; font-size: 11px; font-weight: 700; transition: filter .14s ease, transform .14s ease, box-shadow .14s ease; outline: none; }
 .thumbnail-main-actions button:last-child { background: rgba(63,113,214,.94); }
 .thumbnail-main-actions button:hover, .thumbnail-main-actions button.native-pointer-hover { filter: brightness(1.15); transform: translateY(-1px); }
 .thumbnail-main-actions button:active { transform: translateY(1px) scale(.97); }
 .thumbnail-main-actions button:disabled { cursor: wait; opacity: .72; }
+/* Kill the default WKWebView focus ring (can look like a gray dashed box). */
+.thumbnail-main-actions button:focus { outline: none; }
+.thumbnail-main-actions button:focus-visible { box-shadow: 0 4px 16px rgba(0,0,0,.3), 0 0 0 2px rgba(169,151,255,.55); }
 html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !important; }
 .thumbnail-main-actions svg, .icon-button svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .thumbnail-main-actions svg { animation: thumbnail-action-pop .2s ease-out; }
