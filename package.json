@@ -11,8 +11,12 @@
     "dev:web": "npm run dev --workspace @captures/web",
     "build": "node scripts/build.mjs",
     "build:web": "npm run build --workspace @captures/web",
+    "start:web": "npm run start --workspace @captures/web",
     "check": "npm run test:release-version && npm run check --workspace @captures/desktop",
     "test:release-version": "node --test scripts/*.test.mjs",
     "test": "npm run test --workspace @captures/desktop"
+  },
+  "engines": {
+    "node": ">=24"
   }
 }

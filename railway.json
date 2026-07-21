@@ -1,0 +1,19 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "RAILPACK",
+    "buildCommand": "npm run build --workspace=@captures/web",
+    "watchPatterns": [
+      "apps/web/**",
+      "package.json",
+      "package-lock.json",
+      "railpack.json",
+      "railway.json"
+    ]
+  },
+  "deploy": {
+    "startCommand": "npm run start --workspace=@captures/web",
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 3
+  }
+}

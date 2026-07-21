@@ -1,0 +1,15 @@
+{
+  "$schema": "https://schema.railpack.com",
+  "provider": "node",
+  "packages": {
+    "node": "24"
+  },
+  "steps": {
+    "build": {
+      "commands": ["npm run build --workspace=@captures/web"]
+    }
+  },
+  "deploy": {
+    "startCommand": "npm run start --workspace=@captures/web"
+  }
+}
