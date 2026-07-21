@@ -204,7 +204,12 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 }
 .thumbnail-exit-delete {
   overflow: visible;
-  animation: thumbnail-delete 1.85s cubic-bezier(.33,0,.2,1) forwards;
+  /*
+   * Long enough that the slowest ash chip finishes rising + fading before
+   * layout collapses. Collapse must never start while chips are still visible
+   * or the height shrink yanks residual particles downward.
+   */
+  animation: thumbnail-delete 2.55s cubic-bezier(.33,0,.2,1) forwards;
   pointer-events: none;
   box-shadow: none;
   border-radius: 12px;
@@ -289,7 +294,7 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
   filter: blur(2px) brightness(.56);
   /* Clip to the card (inset by pad) while intact, then open fully for fly-out. */
   clip-path: inset(var(--dust-pad) round 12px);
-  animation: thumbnail-dust-clip 1.85s cubic-bezier(.33,0,.2,1) forwards;
+  animation: thumbnail-dust-clip 2.55s cubic-bezier(.33,0,.2,1) forwards;
 }
 .thumbnail-dust {
   position: absolute;
@@ -320,7 +325,13 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
   100% { filter: url(#thumbnail-motion-blur-c); transform: scaleX(1.13); }
 }
 @keyframes thumbnail-delete {
-  0%, 86% { flex-basis: 160px; height: 160px; margin-bottom: 0; opacity: 1; }
+  /*
+   * Hold full card size through the entire ash rise/fade.
+   * Max chip end ≈ delay(~0.96s) + duration(~1.18s) ≈ 2.15s;
+   * 95% of 2.55s ≈ 2.42s — collapse only after chips are gone.
+   * Never translate particles down: only flex/height collapse after fade.
+   */
+  0%, 95% { flex-basis: 160px; height: 160px; margin-bottom: 0; opacity: 1; }
   100% { flex-basis: 0; height: 0; margin-bottom: -24px; opacity: 0; }
 }
 /* Fallback when dust is disabled (reduced motion or failed particle build). */
@@ -335,12 +346,25 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 }
 /* Open clip from the padded card rect so ash can float outside freely. */
 @keyframes thumbnail-dust-clip {
-  0%, 8% { clip-path: inset(var(--dust-pad, 120px) round 12px); }
-  100% { clip-path: inset(0); }
+  0%, 6% {
+    clip-path: inset(var(--dust-pad, 120px) round 12px);
+    opacity: 1;
+  }
+  /* Fully open for fly-out; hide the layer before the card layout collapses. */
+  70% {
+    clip-path: inset(0);
+    opacity: 1;
+  }
+  90%, 100% {
+    clip-path: inset(0);
+    opacity: 0;
+  }
 }
 /*
  * Smooth 30aa257-style lift/fade. Rest has no shadow (no grid flash);
  * soft edge appears only once a chip begins to fly.
+ * Opacity hits 0 before flight ends so residual chips never sit visible
+ * when the parent card finally collapses stack space.
  */
 @keyframes thumbnail-dust-fly {
   0% {
@@ -355,8 +379,12 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
       0 0 0 0.5px rgba(0, 0, 0, .08),
       0 1px 3px rgba(0, 0, 0, .14);
   }
-  55% {
-    opacity: .78;
+  50% {
+    opacity: .72;
+  }
+  /* Fully transparent while still drifting up — never reverse into a drop. */
+  82% {
+    opacity: 0;
   }
   100% {
     opacity: 0;

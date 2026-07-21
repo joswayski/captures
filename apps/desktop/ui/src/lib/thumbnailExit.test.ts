@@ -173,7 +173,7 @@ describe("thumbnail exit effects", () => {
     expect(farthest.delayMs).toBeGreaterThan(THUMBNAIL_DISSOLVE_WAVE_MS * 0.7);
   });
 
-  it("drifts particles mostly upward for an ash-like dissolve", () => {
+  it("drifts particles only upward for an ash-like dissolve", () => {
     let i = 0;
     const sequence = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9];
     const particles = buildThumbnailDustParticles(
@@ -188,6 +188,10 @@ describe("thumbnail exit effects", () => {
 
     const averageDy = particles.reduce((sum, p) => sum + p.dy, 0) / particles.length;
     expect(averageDy).toBeLessThan(-10);
+    // Never positive Y — residual chips must not reverse into a drop.
+    for (const particle of particles) {
+      expect(particle.dy).toBeLessThan(0);
+    }
   });
 
   it("spans roughly the shared dissolve-wave duration across the card", () => {

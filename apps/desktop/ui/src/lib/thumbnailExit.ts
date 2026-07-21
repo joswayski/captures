@@ -180,7 +180,8 @@ export function buildThumbnailDustParticles(
       const delayNorm = Math.min(1.12, Math.max(0, wave + angularWobble + scatter));
       // Extra ms-jitter grows with distance so outer chips pop less in lockstep.
       const delayJitterMs = random() * (18 + wave * 140);
-      // Ash drifts upward/outward only — never downward.
+      // Ash drifts upward/outward only — never downward. Card layout stays
+      // full-size until chips finish (see thumbnail-delete hold in styles.css).
       const awayX = (cx - originX) / maxDist;
       const dx = awayX * (12 + random() * 26) + (random() - 0.5) * 22;
       const dy = -36 - random() * 58;
