@@ -28,6 +28,9 @@ import {
   prefersReducedMotion,
   THUMBNAIL_CARD_FALLBACK_HEIGHT,
   THUMBNAIL_CARD_FALLBACK_WIDTH,
+  THUMBNAIL_DELETE_ORIGIN_AFTER_CLOSE_X,
+  THUMBNAIL_DELETE_ORIGIN_FIRST_X,
+  THUMBNAIL_DELETE_ORIGIN_Y,
   type ThumbnailDustParticle,
 } from "./lib/thumbnailExit";
 import { shouldScrollThumbnailStackToEnd } from "./lib/thumbnailLayout";
@@ -374,7 +377,7 @@ export function CaptureHistory() {
         <div>
           <p className="eyebrow">LOCAL RECOVERY</p>
           <h1>Capture History</h1>
-          <p>Recent captures stay private on this device for 30 days.</p>
+          <p>Private recovery copies for 30 days. Not your Captures folder.</p>
         </div>
         {!loading && entries.length > 0 && (
           <span className="history-count">
@@ -392,8 +395,8 @@ export function CaptureHistory() {
       ) : entries.length === 0 ? (
         <section className="history-empty">
           <span className="history-empty-icon" aria-hidden="true"><HistoryIcon /></span>
-          <h2>No captures yet</h2>
-          <p>New screenshots will appear here automatically.</p>
+          <h2>No recovery copies yet</h2>
+          <p>New screenshots leave a recovery copy here automatically.</p>
         </section>
       ) : (
         <section className="history-grid" aria-label="Recent captures">
@@ -1099,9 +1102,31 @@ export function ThumbnailCard({
   const [error, setError] = useState("");
   const [exit, setExit] = useState<"dismiss" | "delete" | null>(null);
   const [dustParticles, setDustParticles] = useState<ThumbnailDustParticle[] | null>(null);
+  /**
+   * Snapshot of chrome labels taken the moment exit starts.
+   * While `isExiting`, UI is frozen on this snapshot — no “Saved to Folder!”→
+   * “Show in Folder” flips, clipboard badge changes, or other prop-driven transitions.
+   */
+  const [exitChrome, setExitChrome] = useState<{
+    feedback: "saved" | null;
+    hasPath: boolean;
+    clipboardCurrent: boolean;
+    historySaved: boolean;
+    copyFailed: boolean;
+  } | null>(null);
   const cardRef = useRef<HTMLElement>(null);
   const exitAction = useRef<string | null>(null);
+  /**
+   * Exit lock: once true, this card is frozen for the whole dismiss/delete
+   * animation. Blocks clicks, async action completions, timers, and any new
+   * chrome transitions. Prefer this over ad-hoc checks when adding features.
+   */
+  const exitingRef = useRef(false);
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /** Synchronous lock check for async/timer paths (state may lag a frame). */
+  const isExitLocked = () => exitingRef.current;
+  const isExiting = exit !== null;
 
   const markThumbnailReady = () => {
     void invoke("thumbnail_ready", { artifactId: artifact.id })
@@ -1118,35 +1143,66 @@ export function ThumbnailCard({
   }, []);
 
   const showSavedFeedback = () => {
+    if (isExitLocked()) return;
     setFeedback("saved");
     if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
-    feedbackTimer.current = setTimeout(() => setFeedback(null), 2_000);
+    feedbackTimer.current = setTimeout(() => {
+      if (isExitLocked()) return;
+      setFeedback(null);
+    }, 2_000);
   };
 
   const runAction = async (action: string, success?: "copied" | "saved") => {
+    if (isExitLocked() || isExiting) return;
     if (success && busy) return;
     setError("");
     if (success) setBusy(success);
     try {
       await invoke(action, { artifactId: artifact.id });
+      if (isExitLocked()) return;
       if (success === "saved") showSavedFeedback();
     } catch (error) {
+      if (isExitLocked()) return;
       setError(String(error));
     } finally {
-      if (success) setBusy(null);
+      if (success && !isExitLocked()) setBusy(null);
     }
   };
 
   const exitWith = (kind: "dismiss" | "delete", action: string) => {
-    if (exit) return;
+    if (isExitLocked() || isExiting) return;
+    // Acquire the exit lock first so any in-flight async work becomes a no-op.
+    exitingRef.current = true;
     exitAction.current = action;
+    if (feedbackTimer.current) {
+      clearTimeout(feedbackTimer.current);
+      feedbackTimer.current = null;
+    }
+    // Freeze chrome *as rendered now* — never flip “Saved to Folder!” into Show in Folder.
+    setExitChrome({
+      feedback,
+      hasPath: Boolean(artifact.path),
+      clipboardCurrent,
+      historySaved: artifact.history_saved,
+      copyFailed: artifact.clipboard_copy_status === "failed",
+    });
+    setBusy(null);
+    setError("");
     // Build dust in the same turn as setExit so the first painted frame uses
     // the dissolve animation (not the scale/blur fallback).
     if (kind === "delete" && !prefersReducedMotion()) {
       const card = cardRef.current;
       const width = card?.clientWidth || THUMBNAIL_CARD_FALLBACK_WIDTH;
       const height = card?.clientHeight || THUMBNAIL_CARD_FALLBACK_HEIGHT;
-      setDustParticles(buildThumbnailDustParticles(width, height));
+      // Before a folder save the delete control is the first top-left button;
+      // after save it sits next to Close — wave origin must match the real icon.
+      const hasFolderFile = Boolean(artifact.path);
+      setDustParticles(buildThumbnailDustParticles(width, height, {
+        imageWidth: artifact.width,
+        imageHeight: artifact.height,
+        originX: hasFolderFile ? THUMBNAIL_DELETE_ORIGIN_AFTER_CLOSE_X : THUMBNAIL_DELETE_ORIGIN_FIRST_X,
+        originY: THUMBNAIL_DELETE_ORIGIN_Y,
+      }));
     } else {
       setDustParticles(null);
     }
@@ -1154,7 +1210,7 @@ export function ThumbnailCard({
   };
 
   const finishExit = (event: React.AnimationEvent<HTMLElement>) => {
-    // Ignore bubbled animationend from image streak / dust chips / spark dots.
+    // Ignore bubbled animationend from image streak / dust chips / chrome wave / clip layer.
     if (!exit || event.target !== event.currentTarget || !exitAction.current) return;
     const expectedNames = exit === "delete"
       ? dustParticles && dustParticles.length > 0
@@ -1167,16 +1223,24 @@ export function ThumbnailCard({
     void invoke(action, { artifactId: artifact.id })
       .then(() => onRemoved(artifact.id))
       .catch((error) => {
+        // Only unlock if remove failed — otherwise the card is gone.
+        exitingRef.current = false;
         setExit(null);
+        setExitChrome(null);
         setDustParticles(null);
         setError(String(error));
       });
   };
-  const closeLabel = artifact.history_saved
-    ? "Dismiss — available in History for 30 days"
-    : artifact.path
-      ? "Close Preview"
-      : "Close Without Saving";
+  // While exiting, always render the frozen chrome snapshot.
+  const chrome = exitChrome ?? {
+    feedback,
+    hasPath: Boolean(artifact.path),
+    clipboardCurrent,
+    historySaved: artifact.history_saved,
+    copyFailed: artifact.clipboard_copy_status === "failed",
+  };
+  // Before a folder save: trash discards the preview (dissolve). After: trash deletes the file.
+  // Close only appears once a file exists so you can hide the preview without trashing it.
   const usingDust = exit === "delete" && dustParticles !== null && dustParticles.length > 0;
 
   return (
@@ -1184,10 +1248,15 @@ export function ThumbnailCard({
       ref={cardRef}
       className={[
         "thumbnail-card",
-        viewerActive ? "thumbnail-viewer-active" : "",
+        viewerActive && !isExiting ? "thumbnail-viewer-active" : "",
         exit ? `thumbnail-exit-${exit}` : "",
         usingDust ? "thumbnail-exit-dust" : "",
+        isExiting ? "thumbnail-exiting" : "",
       ].filter(Boolean).join(" ")}
+      // HTML inert disables all descendant input/focus for the whole exit animation.
+      inert={isExiting ? true : undefined}
+      aria-busy={isExiting}
+      data-exit-locked={isExiting ? "true" : undefined}
       onAnimationEnd={finishExit}
     >
       <img
@@ -1220,54 +1289,85 @@ export function ThumbnailCard({
           ))}
         </div>
       )}
-      {clipboardCurrent && (
-        <div className="clipboard-confirmation" role="status">
-          <CheckIcon />
-          <span>Copied to clipboard</span>
-        </div>
-      )}
       <div className="thumbnail-top-actions">
         <div className="thumbnail-top-left">
-          <IconButton className="close" label={closeLabel} onClick={() => exitWith("dismiss", "dismiss_artifact")}>
-            <CloseIcon />
-          </IconButton>
-          {artifact.path && (
-            <IconButton className="delete" label="Move to Trash" onClick={() => exitWith("delete", "trash_artifact")}>
+          {chrome.hasPath ? (
+            <>
+              <IconButton
+                className="close"
+                label="Close"
+                disabled={isExiting}
+                onClick={() => exitWith("dismiss", "dismiss_artifact")}
+              >
+                <CloseIcon />
+              </IconButton>
+              <IconButton
+                className="delete"
+                label="Delete"
+                disabled={isExiting}
+                onClick={() => exitWith("delete", "trash_artifact")}
+              >
+                <TrashIcon />
+              </IconButton>
+            </>
+          ) : (
+            <IconButton
+              className="delete"
+              label="Delete"
+              disabled={isExiting}
+              onClick={() => exitWith("delete", "dismiss_artifact")}
+            >
               <TrashIcon />
             </IconButton>
           )}
         </div>
         <div className="thumbnail-top-right">
-          <IconButton label="View Full Size" onClick={() => void runAction("open_artifact_viewer")}>
+          <IconButton
+            label="Full size"
+            disabled={isExiting}
+            onClick={() => void runAction("open_artifact_viewer")}
+          >
             <ExpandIcon />
           </IconButton>
         </div>
       </div>
       <div className="thumbnail-main-actions">
-        {!clipboardCurrent && (
-          <button type="button" disabled={busy !== null} onClick={() => void runAction("copy_artifact", "copied")}>
+        {!chrome.clipboardCurrent && (
+          <button
+            type="button"
+            disabled={busy !== null || isExiting}
+            onClick={() => void runAction("copy_artifact", "copied")}
+          >
             <CopyIcon />Copy
           </button>
         )}
         <button
           type="button"
-          disabled={busy !== null}
-          onClick={() => void runAction(artifact.path ? "reveal_artifact" : "save_artifact", artifact.path ? undefined : "saved")}
+          disabled={busy !== null || isExiting}
+          onClick={() => void runAction(chrome.hasPath ? "reveal_artifact" : "save_artifact", chrome.hasPath ? undefined : "saved")}
         >
-          {feedback === "saved"
-            ? <><CheckIcon />Saved!</>
-            : artifact.path
+          {chrome.feedback === "saved"
+            ? <><CheckIcon />Saved</>
+            : chrome.hasPath
               ? <><FolderIcon />Show in Folder</>
-              : <><SaveIcon />Save</>}
+              : <><SaveIcon />Save file</>}
         </button>
       </div>
-      <div className="thumbnail-meta">
-        <span>{artifact.width} × {artifact.height} · {formatFileSize(artifact.size_bytes)}</span>
-        {!artifact.history_saved
-          ? <span className="warning">History unavailable</span>
-          : artifact.clipboard_copy_status === "failed" && !clipboardCurrent
-            ? <span className="warning">Clipboard unavailable</span>
-            : null}
+      <div className="thumbnail-bottom-bar">
+        <div className="thumbnail-meta">
+          <span>{artifact.width} × {artifact.height} · {formatFileSize(artifact.size_bytes)}</span>
+          {!chrome.clipboardCurrent && !chrome.historySaved
+            ? <span className="warning">Not in History</span>
+            : !chrome.clipboardCurrent && chrome.copyFailed
+              ? <span className="warning">Clipboard unavailable</span>
+              : null}
+        </div>
+        {chrome.clipboardCurrent && (
+          <div className="clipboard-confirmation" role="status">
+            <CheckIcon />
+            <span>Copied to clipboard</span>
+          </div>
+        )}
       </div>
       {error && <p className="thumbnail-message">{error}</p>}
     </article>
@@ -1278,15 +1378,24 @@ function IconButton({
   children,
   className = "",
   label,
+  disabled = false,
   onClick,
 }: {
   children: React.ReactNode;
   className?: string;
   label: string;
+  disabled?: boolean;
   onClick: () => void;
 }) {
   return (
-    <button type="button" className={`icon-button ${className}`} aria-label={label} data-tooltip={label} onClick={onClick}>
+    <button
+      type="button"
+      className={`icon-button ${className}`}
+      aria-label={label}
+      data-tooltip={label}
+      disabled={disabled}
+      onClick={disabled ? undefined : onClick}
+    >
       {children}
     </button>
   );
