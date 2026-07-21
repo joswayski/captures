@@ -374,10 +374,7 @@ export function CaptureHistory() {
         <div>
           <p className="eyebrow">LOCAL RECOVERY</p>
           <h1>Capture History</h1>
-          <p>
-            Automatic recovery copies on this device for 30 days — separate from files you save to
-            your Captures folder.
-          </p>
+          <p>Private recovery copies for 30 days. Not your Captures folder.</p>
         </div>
         {!loading && entries.length > 0 && (
           <span className="history-count">
@@ -1235,12 +1232,8 @@ export function ThumbnailCard({
     historySaved: artifact.history_saved,
     copyFailed: artifact.clipboard_copy_status === "failed",
   };
-  // Close only hides the preview. History recovery is separate from “Save to Folder”.
-  const closeLabel = chrome.historySaved
-    ? "Close preview — recovery copy in History for 30 days"
-    : chrome.hasPath
-      ? "Close preview"
-      : "Close preview — no History recovery copy";
+  // Before a folder save: trash discards the preview (dissolve). After: trash deletes the file.
+  // Close only appears once a file exists so you can hide the preview without trashing it.
   const usingDust = exit === "delete" && dustParticles !== null && dustParticles.length > 0;
 
   return (
@@ -1291,20 +1284,31 @@ export function ThumbnailCard({
       )}
       <div className="thumbnail-top-actions">
         <div className="thumbnail-top-left">
-          <IconButton
-            className="close"
-            label={closeLabel}
-            disabled={isExiting}
-            onClick={() => exitWith("dismiss", "dismiss_artifact")}
-          >
-            <CloseIcon />
-          </IconButton>
-          {chrome.hasPath && (
+          {chrome.hasPath ? (
+            <>
+              <IconButton
+                className="close"
+                label="Close"
+                disabled={isExiting}
+                onClick={() => exitWith("dismiss", "dismiss_artifact")}
+              >
+                <CloseIcon />
+              </IconButton>
+              <IconButton
+                className="delete"
+                label="Trash file"
+                disabled={isExiting}
+                onClick={() => exitWith("delete", "trash_artifact")}
+              >
+                <TrashIcon />
+              </IconButton>
+            </>
+          ) : (
             <IconButton
               className="delete"
-              label="Move saved file to Trash"
+              label="Discard"
               disabled={isExiting}
-              onClick={() => exitWith("delete", "trash_artifact")}
+              onClick={() => exitWith("delete", "dismiss_artifact")}
             >
               <TrashIcon />
             </IconButton>
@@ -1312,7 +1316,7 @@ export function ThumbnailCard({
         </div>
         <div className="thumbnail-top-right">
           <IconButton
-            label="View Full Size"
+            label="Full size"
             disabled={isExiting}
             onClick={() => void runAction("open_artifact_viewer")}
           >
@@ -1336,17 +1340,17 @@ export function ThumbnailCard({
           onClick={() => void runAction(chrome.hasPath ? "reveal_artifact" : "save_artifact", chrome.hasPath ? undefined : "saved")}
         >
           {chrome.feedback === "saved"
-            ? <><CheckIcon />Saved to Folder</>
+            ? <><CheckIcon />Saved</>
             : chrome.hasPath
               ? <><FolderIcon />Show in Folder</>
-              : <><SaveIcon />Save to Folder</>}
+              : <><SaveIcon />Save file</>}
         </button>
       </div>
       <div className="thumbnail-bottom-bar">
         <div className="thumbnail-meta">
           <span>{artifact.width} × {artifact.height} · {formatFileSize(artifact.size_bytes)}</span>
           {!chrome.clipboardCurrent && !chrome.historySaved
-            ? <span className="warning">No History recovery copy</span>
+            ? <span className="warning">Not in History</span>
             : !chrome.clipboardCurrent && chrome.copyFailed
               ? <span className="warning">Clipboard unavailable</span>
               : null}

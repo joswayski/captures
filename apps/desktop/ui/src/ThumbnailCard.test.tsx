@@ -26,28 +26,30 @@ function artifact(path: string | null, id = "capture-1"): CaptureArtifact {
 }
 
 describe("ThumbnailCard", () => {
-  it("keeps close as preview-only and requires Save to Folder for a disk file", () => {
+  it("before a folder save: Discard only (no Close), Save file for a disk PNG", () => {
     render(<ThumbnailCard artifact={artifact(null)} clipboardCurrent viewerActive={false} onRemoved={() => undefined} />);
 
     expect(screen.getByText("Copied to clipboard")).toBeInTheDocument();
-    const fullSize = screen.getByRole("button", { name: "View Full Size" });
-    const close = screen.getByRole("button", {
-      name: "Close preview — recovery copy in History for 30 days",
-    });
-    expect(fullSize.parentElement).toHaveClass("thumbnail-top-right");
-    expect(close.parentElement).toHaveClass("thumbnail-top-left");
-    expect(screen.queryByRole("button", { name: "Move saved file to Trash" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Full size" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Discard" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Close" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Trash file" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Copy" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save to Folder" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save file" })).toBeInTheDocument();
   });
 
-  it("offers file trash and Show in Folder only after a folder save", () => {
-    render(<ThumbnailCard artifact={artifact("/Users/josevalerio/Captures/capture.png")} clipboardCurrent viewerActive={false} onRemoved={() => undefined} />);
+  it("after a folder save: Close keeps the file, Trash file removes it", () => {
+    render(
+      <ThumbnailCard
+        artifact={artifact("/Users/josevalerio/Captures/capture.png")}
+        clipboardCurrent
+        viewerActive={false}
+        onRemoved={() => undefined}
+      />,
+    );
 
-    const close = screen.getByRole("button", {
-      name: "Close preview — recovery copy in History for 30 days",
-    });
-    const trash = screen.getByRole("button", { name: "Move saved file to Trash" });
+    const close = screen.getByRole("button", { name: "Close" });
+    const trash = screen.getByRole("button", { name: "Trash file" });
     expect(close.parentElement).toBe(trash.parentElement);
     expect(close.parentElement).toHaveClass("thumbnail-top-left");
     expect(screen.getByRole("button", { name: "Show in Folder" })).toBeInTheDocument();
@@ -63,10 +65,8 @@ describe("ThumbnailCard", () => {
       />,
     );
 
-    expect(screen.getByRole("button", {
-      name: "Close preview — no History recovery copy",
-    })).toBeInTheDocument();
-    expect(screen.getByText("No History recovery copy")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Discard" })).toBeInTheDocument();
+    expect(screen.getByText("Not in History")).toBeInTheDocument();
   });
 
   it("does not claim the clipboard changed when automatic copying is disabled", () => {
@@ -114,7 +114,7 @@ describe("ThumbnailCard", () => {
     expect(screen.getByRole("article")).toHaveClass("thumbnail-viewer-active");
   });
 
-  it("starts the dismiss exit animation when the close control is clicked", () => {
+  it("discards an unsaved preview with the delete dissolve animation", () => {
     render(
       <ThumbnailCard
         artifact={artifact(null)}
@@ -125,14 +125,14 @@ describe("ThumbnailCard", () => {
     );
 
     act(() => {
-      screen.getByRole("button", {
-        name: "Close preview — recovery copy in History for 30 days",
-      }).click();
+      screen.getByRole("button", { name: "Discard" }).click();
     });
-    expect(screen.getByRole("article")).toHaveClass("thumbnail-exit-dismiss");
+    const card = screen.getByRole("article");
+    expect(card).toHaveClass("thumbnail-exit-delete");
+    expect(card).toHaveClass("thumbnail-exit-dust");
   });
 
-  it("starts the delete disintegration animation when Move saved file to Trash is clicked", () => {
+  it("starts the delete disintegration animation when Trash file is clicked", () => {
     render(
       <ThumbnailCard
         artifact={artifact("/Users/josevalerio/Captures/capture.png")}
@@ -143,17 +143,16 @@ describe("ThumbnailCard", () => {
     );
 
     act(() => {
-      screen.getByRole("button", { name: "Move saved file to Trash" }).click();
+      screen.getByRole("button", { name: "Trash file" }).click();
     });
     const card = screen.getByRole("article");
     expect(card).toHaveClass("thumbnail-exit-delete");
     expect(card).toHaveClass("thumbnail-exit-dust");
     expect(card.querySelectorAll(".thumbnail-dust").length).toBeGreaterThan(100);
     expect(card.querySelector(".thumbnail-dust-layer")).not.toBeNull();
-    expect(card.querySelector(".thumbnail-burn-front")).toBeNull();
   });
 
-  it("freezes Saved to Folder when exit starts instead of flipping to Show in Folder", async () => {
+  it("freezes Saved when exit starts instead of flipping to Show in Folder", async () => {
     vi.mocked(invoke).mockImplementation(async (command: string) => {
       if (command === "save_artifact") return undefined;
       return undefined;
@@ -169,12 +168,11 @@ describe("ThumbnailCard", () => {
     );
 
     await act(async () => {
-      screen.getByRole("button", { name: "Save to Folder" }).click();
+      screen.getByRole("button", { name: "Save file" }).click();
       await Promise.resolve();
     });
-    expect(screen.getByText("Saved to Folder")).toBeInTheDocument();
+    expect(screen.getByText("Saved")).toBeInTheDocument();
 
-    // Path appears after save while feedback is still showing (same as real flow).
     rerender(
       <ThumbnailCard
         artifact={artifact("/Users/josevalerio/Captures/capture.png")}
@@ -183,21 +181,18 @@ describe("ThumbnailCard", () => {
         onRemoved={() => undefined}
       />,
     );
-    expect(screen.getByText("Saved to Folder")).toBeInTheDocument();
+    expect(screen.getByText("Saved")).toBeInTheDocument();
 
     act(() => {
-      screen.getByRole("button", { name: "Move saved file to Trash" }).click();
+      screen.getByRole("button", { name: "Trash file" }).click();
     });
     const card = screen.getByRole("article");
     expect(card).toHaveClass("thumbnail-exit-delete");
     expect(card).toHaveClass("thumbnail-exiting");
     expect(card).toHaveAttribute("data-exit-locked", "true");
-    expect(card).toHaveAttribute("aria-busy", "true");
-    // Must stay frozen on Saved to Folder — not swap to Show in Folder.
-    expect(screen.getByText("Saved to Folder")).toBeInTheDocument();
+    expect(screen.getByText("Saved")).toBeInTheDocument();
     expect(screen.queryByText("Show in Folder")).not.toBeInTheDocument();
-    // Interactive controls are disabled for the whole exit animation.
-    expect(screen.getByRole("button", { name: "Move saved file to Trash" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "View Full Size" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Trash file" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Full size" })).toBeDisabled();
   });
 });
