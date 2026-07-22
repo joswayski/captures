@@ -138,9 +138,10 @@ html.capture-window-cursor, html.capture-window-cursor * { cursor: var(--capture
 .thumbnail-card { position: relative; isolation: isolate; overflow: visible; flex: 0 0 160px; width: 100%; height: 160px; margin-bottom: 0; background: transparent; border-radius: 12px; box-shadow: 0 8px 16px rgba(0,0,0,.34), 0 2px 5px rgba(0,0,0,.22); transition: flex-basis .26s ease, height .26s ease, margin-bottom .26s ease, opacity .2s ease, transform .2s ease, filter .2s ease, box-shadow .22s ease; will-change: flex-basis, height, opacity, transform; }
 .thumbnail-card.thumbnail-viewer-active { box-shadow: 0 8px 16px rgba(0,0,0,.34), 0 2px 5px rgba(0,0,0,.22), 0 0 0 1px rgba(169,151,255,.88), 0 0 17px rgba(137,116,255,.4); }
 .thumbnail-card::after { position: absolute; z-index: 8; inset: 0; border-radius: inherit; box-shadow: 0 0 0 1px rgba(169,151,255,.88), 0 0 17px rgba(137,116,255,.4); content: ""; opacity: 0; pointer-events: none; }
-.thumbnail-card.thumbnail-capture-highlight::after { animation: thumbnail-capture-highlight 4s linear; }
+.thumbnail-card.thumbnail-capture-highlight::after { animation: thumbnail-capture-highlight 4.5s linear; }
 @keyframes thumbnail-capture-highlight {
-  0%, 25% { opacity: 1; animation-timing-function: cubic-bezier(.22, 1, .36, 1); }
+  /* Hold for 1s, then use a gentle S-curve across the full 3.5s fade. */
+  0%, 22.222% { opacity: 1; animation-timing-function: cubic-bezier(.42, 0, .58, 1); }
   100% { opacity: 0; }
 }
 /* Isolate exit animations so surviving cards do not inherit transition flicker. */
@@ -224,7 +225,7 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
    * layout collapses. Collapse must never start while chips are still visible
    * or the height shrink yanks residual particles downward.
    */
-  animation: thumbnail-delete 2.55s cubic-bezier(.33,0,.2,1) forwards;
+  animation: thumbnail-delete 2.9s linear forwards;
   pointer-events: none;
   box-shadow: none;
   border-radius: 12px;
@@ -343,10 +344,12 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
   /*
    * Hold full card size through the entire ash rise/fade.
    * Max chip end ≈ delay(~0.96s) + duration(~1.18s) ≈ 2.15s;
-   * 95% of 2.55s ≈ 2.42s — collapse only after chips are gone.
+   * The dust layer is hidden by ≈2.30s; then collapse the stack over
+   * ≈0.58s with a smooth start and stop instead of snapping in ≈0.13s.
    * Never translate particles down: only flex/height collapse after fade.
    */
-  0%, 95% { flex-basis: 160px; height: 160px; margin-bottom: 0; opacity: 1; }
+  0% { flex-basis: 160px; height: 160px; margin-bottom: 0; opacity: 1; }
+  80% { flex-basis: 160px; height: 160px; margin-bottom: 0; opacity: 1; animation-timing-function: cubic-bezier(.4,0,.2,1); }
   100% { flex-basis: 0; height: 0; margin-bottom: -24px; opacity: 0; }
 }
 /* Fallback when dust is disabled (reduced motion or failed particle build). */
