@@ -24,3 +24,14 @@ npm run build:web
 ```
 
 Output lands in `apps/web/dist/` — deploy those static files as-is.
+
+## Docker
+
+From the monorepo root:
+
+```sh
+docker build -t captures-web .
+docker run --rm -p 8080:3000 captures-web
+```
+
+The image builds the static site and serves it with `serve` on port 3000 (override with `PORT`).

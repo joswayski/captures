@@ -1,0 +1,15 @@
+.git
+.github
+node_modules
+**/node_modules
+**/dist
+target
+apps/desktop/src-tauri
+apps/desktop/ui
+apps/desktop/assets
+docs
+scripts
+*.md
+.DS_Store
+.env
+.env.*
