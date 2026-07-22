@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -8,6 +8,7 @@ const APP_NAME = "Captures";
 const BINARY_NAME = "captures";
 const APP_BUNDLE = `${APP_NAME}.app`;
 const APPLICATIONS_APP = join("/Applications", APP_BUNDLE);
+const BUNDLE_ROOT = join(ROOT, "target/release/bundle");
 const BUILT_APP = join(ROOT, "target/release/bundle/macos", APP_BUNDLE);
 
 const environment = { ...process.env };
@@ -32,6 +33,55 @@ function log(message) {
   console.log(message);
 }
 
+function commandError(command, result) {
+  const detail = result.error?.message || result.stderr?.trim();
+  return new Error(detail ? `${command} failed: ${detail}` : `${command} failed with status ${result.status}`);
+}
+
+function runChecked(command, args, options = {}) {
+  const result = run(command, args, options);
+  if (result.error || result.status !== 0) {
+    throw commandError(command, result);
+  }
+  return result;
+}
+
+function processIsRunning(name) {
+  return run("/usr/bin/pgrep", ["-x", name]).status === 0;
+}
+
+function mountedBuildDevices(hdiutilOutput) {
+  const bundlePrefix = `${BUNDLE_ROOT}/`;
+  const devices = new Set();
+  for (const image of hdiutilOutput.split(/\n={10,}\n/u)) {
+    const imagePath = image.match(/^image-path\s+:\s+(.+)$/mu)?.[1];
+    const device = image.match(/^(\/dev\/disk\d+)\s/mu)?.[1];
+    if (imagePath?.startsWith(bundlePrefix) && device) devices.add(device);
+  }
+  return [...devices];
+}
+
+function detachMountedBuildImages() {
+  const info = run("/usr/bin/hdiutil", ["info"]);
+  if (info.error || info.status !== 0) {
+    console.warn("Could not inspect mounted disk images; continuing with the build.");
+    return;
+  }
+
+  const devices = mountedBuildDevices(info.stdout ?? "");
+  if (devices.length === 0) return;
+
+  log(`Unmounting ${devices.length} stale Captures build disk image${devices.length === 1 ? "" : "s"}…`);
+  for (const device of devices) {
+    const detached = run("/usr/bin/hdiutil", ["detach", device]);
+    if (detached.status === 0) continue;
+    const forced = run("/usr/bin/hdiutil", ["detach", "-force", device]);
+    if (forced.status !== 0) {
+      console.warn(`Could not unmount stale build disk image ${device}; continuing.`);
+    }
+  }
+}
+
 function findAppleDevelopmentIdentity() {
   const result = run("/usr/bin/security", ["find-identity", "-v", "-p", "codesigning"]);
   if (result.status !== 0) return null;
@@ -44,12 +94,24 @@ function findAppleDevelopmentIdentity() {
 }
 
 function quitRunningCaptures() {
+  const processNames = [APP_NAME, BINARY_NAME];
+  if (!processNames.some(processIsRunning)) return;
+
   log("Quitting any running Captures instance…");
   run("/usr/bin/osascript", ["-e", `tell application "${APP_NAME}" to quit`]);
-  for (const name of [APP_NAME, BINARY_NAME]) {
-    run("/usr/bin/killall", ["-9", name]);
-  }
   spawnSync("/bin/sleep", ["0.4"], { stdio: "ignore" });
+  for (const name of processNames) {
+    if (processIsRunning(name)) run("/usr/bin/killall", [name]);
+  }
+  spawnSync("/bin/sleep", ["0.2"], { stdio: "ignore" });
+  for (const name of processNames) {
+    if (processIsRunning(name)) run("/usr/bin/killall", ["-9", name]);
+  }
+  spawnSync("/bin/sleep", ["0.2"], { stdio: "ignore" });
+  const stillRunning = processNames.filter(processIsRunning);
+  if (stillRunning.length > 0) {
+    throw new Error(`Could not stop running Captures process: ${stillRunning.join(", ")}`);
+  }
 }
 
 function resetScreenRecordingPermission() {
@@ -72,12 +134,8 @@ function installToApplications() {
   }
 
   log(`Installing ${APP_BUNDLE} → ${APPLICATIONS_APP}…`);
-  run("/bin/rm", ["-rf", APPLICATIONS_APP]);
-  // ditto preserves code signature better than recursive copy in some cases.
-  const ditto = run("/usr/bin/ditto", [BUILT_APP, APPLICATIONS_APP]);
-  if (ditto.status !== 0) {
-    cpSync(BUILT_APP, APPLICATIONS_APP, { recursive: true });
-  }
+  runChecked("/bin/rm", ["-rf", APPLICATIONS_APP]);
+  runChecked("/usr/bin/ditto", [BUILT_APP, APPLICATIONS_APP]);
   run("/usr/bin/xattr", ["-dr", "com.apple.quarantine", APPLICATIONS_APP]);
   log(`Installed → ${APPLICATIONS_APP}`);
 }
@@ -95,14 +153,7 @@ if (isMac && !environment.APPLE_SIGNING_IDENTITY) {
   }
 }
 
-if (isMac) {
-  quitRunningCaptures();
-  if (resetPermissions) {
-    resetScreenRecordingPermission();
-  } else {
-    log("Keeping existing Screen Recording permission (set CAPTURES_RESET_PERMISSIONS=1 to wipe it).");
-  }
-}
+if (isMac) detachMountedBuildImages();
 
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const args = ["run", "tauri:build", "--workspace", "@captures/desktop"];
@@ -131,10 +182,15 @@ if ((result.status ?? 1) !== 0) {
 if (isMac && !skipInstall) {
   try {
     quitRunningCaptures();
+    if (resetPermissions) {
+      resetScreenRecordingPermission();
+    } else {
+      log("Keeping existing Screen Recording permission (set CAPTURES_RESET_PERMISSIONS=1 to wipe it).");
+    }
     installToApplications();
     if (openAfterInstall) {
       log(`Launching ${APP_NAME}…`);
-      run("/usr/bin/open", ["-a", APP_NAME], { stdio: "inherit" });
+      runChecked("/usr/bin/open", [APPLICATIONS_APP], { stdio: "inherit" });
       log("If Screen Recording was never granted for this build, approve it when prompted, then retry the shortcut once.");
     } else {
       log(`Launch with: open -a ${APP_NAME}`);
@@ -144,6 +200,9 @@ if (isMac && !skipInstall) {
     process.exit(1);
   }
 } else if (isMac && skipInstall) {
+  if (resetPermissions) {
+    console.warn("Ignoring CAPTURES_RESET_PERMISSIONS=1 because CAPTURES_SKIP_INSTALL=1.");
+  }
   log("Skipping Applications install (CAPTURES_SKIP_INSTALL=1).");
   log(`Bundle is at: ${BUILT_APP}`);
 }

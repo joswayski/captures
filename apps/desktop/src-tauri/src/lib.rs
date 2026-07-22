@@ -141,19 +141,12 @@ pub fn run() {
             let path = request.uri().path().trim_matches('/');
             let body = resolve_asset(&protocol_state, path);
             match body {
-                Some(bytes) => {
-                    let content_type = if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
-                        "image/jpeg"
-                    } else {
-                        "image/png"
-                    };
-                    tauri::http::Response::builder()
-                        .status(200)
-                        .header("Content-Type", content_type)
-                        .header("Cache-Control", "no-store")
-                        .body(bytes)
-                        .expect("valid image response")
-                }
+                Some(bytes) => tauri::http::Response::builder()
+                    .status(200)
+                    .header("Content-Type", "image/png")
+                    .header("Cache-Control", "no-store")
+                    .body(bytes)
+                    .expect("valid image response"),
                 None => tauri::http::Response::builder()
                     .status(404)
                     .header("Content-Type", "text/plain")
@@ -317,9 +310,9 @@ async fn prepare_capture(
     }
 
     let id = Uuid::new_v4();
-    // Full-res JPEG freeze frame: sharp on Retina, fast enough not to block the shortcut.
-    // Saved region/window crops still come from `frame.image` (lossless RGBA).
-    let snapshot_png = storage::encode_snapshot_jpeg(&frame.image, 92)?;
+    // Keep the selector background full-resolution and lossless. Region/window
+    // crops also come directly from `frame.image`, so no lossy stage is involved.
+    let snapshot_png = storage::encode_png(&frame.image)?;
     let windows = if mode == CaptureMode::Window {
         state
             .windows()?
@@ -405,7 +398,9 @@ async fn commit_window(
             Ok(image) if !image_is_effectively_blank(&image) => image,
             Ok(_) => {
                 restore_thumbnail_stack(&app, &state);
-                return Err("Could not capture that window (empty frame). Try Region capture.".to_owned());
+                return Err(
+                    "Could not capture that window (empty frame). Try Region capture.".to_owned(),
+                );
             }
             Err(error) => {
                 restore_thumbnail_stack(&app, &state);
@@ -2531,7 +2526,10 @@ fn capture_buffer_scale(display: &captures_capture::DisplayDescriptor, image: &R
 }
 
 fn crop_window_from_session(session: &CaptureSession, window_id: &str) -> Option<RgbaImage> {
-    let window = session.windows.iter().find(|window| window.id == window_id)?;
+    let window = session
+        .windows
+        .iter()
+        .find(|window| window.id == window_id)?;
     let scale = capture_buffer_scale(&session.display, &session.image);
     let rect = LogicalRect {
         x: f64::from(window.x - session.display.x),
@@ -2595,11 +2593,11 @@ fn window_is_capturable(
         "Wallpaper",
         "loginwindow",
     ];
-    if window
-        .app_name
-        .as_deref()
-        .is_some_and(|name| EXCLUDED_APPS.iter().any(|excluded| name.eq_ignore_ascii_case(excluded)))
-    {
+    if window.app_name.as_deref().is_some_and(|name| {
+        EXCLUDED_APPS
+            .iter()
+            .any(|excluded| name.eq_ignore_ascii_case(excluded))
+    }) {
         return false;
     }
     true

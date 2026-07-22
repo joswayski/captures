@@ -45,7 +45,6 @@ import type {
   ThumbnailPointerPosition,
   UpdateStatus,
   ViewerActivationState,
-  WindowDescriptor,
 } from "./types";
 
 const currentWindow = isTauri() ? getCurrentWindow() : null;
