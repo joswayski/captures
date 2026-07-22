@@ -471,6 +471,7 @@ pub fn snapshot_url(session_id: &str) -> String {
     capture_asset_url(&format!("session/{session_id}"))
 }
 
+#[cfg(target_os = "macos")]
 pub fn recording_selection_url(session_id: &str) -> String {
     capture_asset_url(&format!("recording-selection/{session_id}"))
 }

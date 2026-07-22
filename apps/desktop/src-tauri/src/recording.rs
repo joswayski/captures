@@ -28,11 +28,14 @@ use crate::{
     models::{
         HistoryEntry, RecordingArtifact, RecordingArtifactData, RecordingSelection,
         RecordingSelectionSession, recording_media_url, recording_poster_url,
-        recording_recovery_directory, recording_selection_url,
+        recording_recovery_directory,
     },
     state::AppState,
     storage,
 };
+
+#[cfg(target_os = "macos")]
+use crate::models::recording_selection_url;
 
 const RECORDING_STATE_EVENT: &str = "recording-state-changed";
 const RECORDING_COUNTDOWN_EVENT: &str = "recording-countdown";
@@ -2023,6 +2026,7 @@ fn media_toolchain(app: &AppHandle) -> MediaToolchain {
     MediaToolchain::new(find("ffmpeg"), find("ffprobe"))
 }
 
+#[cfg(target_os = "macos")]
 fn show_recording_selector(
     app: &AppHandle,
     selection: &RecordingSelectionSession,
