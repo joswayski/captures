@@ -1,5 +1,3 @@
-import latestChanges from "../latest-changes";
-
 const REPO_URL = "https://github.com/joswayski/captures";
 const X_URL = "https://x.com/josevalerio";
 
@@ -67,7 +65,7 @@ export default function Home() {
           </div>
 
           <ol className="ml-1.5 mt-7 border-l border-border">
-            {latestChanges.map((change) => (
+            {__LATEST_CHANGES__.map((change) => (
               <li key={change.sha} className="relative pb-7 pl-7 last:pb-0">
                 <span className="absolute -left-[5px] top-1.5 h-2.5 w-2.5 rounded-full border-2 border-canvas bg-accent ring-1 ring-accent/25" />
                 <a

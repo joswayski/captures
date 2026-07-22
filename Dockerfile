@@ -18,9 +18,7 @@ COPY apps/web apps/web
 # Railway provides a different commit SHA for every GitHub deployment. Referencing
 # it here invalidates this layer so the static site gets a fresh main-branch timeline.
 ARG RAILWAY_GIT_COMMIT_SHA=local
-RUN RAILWAY_GIT_COMMIT_SHA="$RAILWAY_GIT_COMMIT_SHA" node apps/web/fetch-latest-changes.mjs
-
-RUN npm run build --workspace=@captures/web
+RUN RAILWAY_GIT_COMMIT_SHA="$RAILWAY_GIT_COMMIT_SHA" npm run build --workspace=@captures/web
 
 FROM node:24-alpine
 

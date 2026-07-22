@@ -12,7 +12,7 @@
 - `apps/web` contains the static project website.
 - `crates` contains the shared Rust capture and platform-integration crates.
 - `docs/releases.md` contains maintainer release and recovery procedures.
-- `apps/web/src/latest-changes.ts` is a cached, generated snapshot. Change `apps/web/fetch-latest-changes.mjs` when altering its format, and use that script to refresh the snapshot.
+- `apps/web/vite.config.ts` fetches homepage history from the GitHub API at build time. Do not check in hardcoded or generated commit history.
 
 ## Working conventions
 
