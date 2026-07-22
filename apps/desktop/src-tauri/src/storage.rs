@@ -7,6 +7,7 @@ use std::{
 use chrono::{DateTime, Duration, Local, Utc};
 use image::{
     ExtendedColorType, ImageEncoder, RgbaImage,
+    codecs::jpeg::JpegEncoder,
     codecs::png::{CompressionType, FilterType, PngEncoder},
 };
 use uuid::Uuid;
@@ -208,13 +209,32 @@ pub fn encode_png(image: &RgbaImage) -> Result<Vec<u8>, AppError> {
     encode_png_with_filter(image, FilterType::Sub)
 }
 
+/// Full-resolution overlay freeze frame. JPEG is dramatically faster/smaller than
+/// PNG at retina sizes while staying sharp in the selection UI.
+pub fn encode_snapshot_jpeg(image: &RgbaImage, quality: u8) -> Result<Vec<u8>, AppError> {
+    let rgb = image::DynamicImage::ImageRgba8(image.clone()).to_rgb8();
+    let mut bytes = Vec::new();
+    let mut encoder = JpegEncoder::new_with_quality(&mut bytes, quality);
+    encoder
+        .encode(
+            rgb.as_raw(),
+            rgb.width(),
+            rgb.height(),
+            ExtendedColorType::Rgb8,
+        )
+        .map_err(|error| AppError::Image(error.to_string()))?;
+    Ok(bytes)
+}
+
+/// Downscale a full-resolution capture to logical display pixels (tests / legacy).
+#[allow(dead_code)]
 pub fn encode_preview_png(image: &RgbaImage, scale_factor: f64) -> Result<Vec<u8>, AppError> {
     let scale = scale_factor.max(1.0);
     let width = (f64::from(image.width()) / scale).round().max(1.0) as u32;
     let height = (f64::from(image.height()) / scale).round().max(1.0) as u32;
     if width < image.width() || height < image.height() {
         let preview =
-            image::imageops::resize(image, width, height, image::imageops::FilterType::Triangle);
+            image::imageops::resize(image, width, height, image::imageops::FilterType::CatmullRom);
         return encode_png_with_filter(&preview, FilterType::Sub);
     }
 

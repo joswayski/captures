@@ -72,11 +72,30 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Build an installer or app bundle on the operating system where it will run:
+Build an installer or app bundle on the operating system where it will run. On macOS, `npm run build` also:
+
+1. Quits any running Captures instance
+2. Builds the release bundle
+3. Installs `Captures.app` into `/Applications` (replacing any previous copy)
+4. Launches Captures
+
+Installers and app bundles are still written under `target/release/bundle` (including the DMG).
 
 ```sh
+# Build + install + launch (default)
 npm run build
+
+# Build only (no /Applications install)
+CAPTURES_SKIP_INSTALL=1 npm run build
+
+# Also wipe this app’s Screen Recording TCC record (opt-in; usually not needed)
+CAPTURES_RESET_PERMISSIONS=1 npm run build
+
+# Install without auto-launching
+CAPTURES_OPEN_AFTER_INSTALL=0 npm run build
 ```
+
+`npm run build` automatically uses an installed Apple Development signing identity when one is available. Otherwise it warns and seals the bundle with an ad-hoc signature. Local builds omit updater artifacts unless `TAURI_SIGNING_PRIVATE_KEY` is explicitly provided; official release builds always create and sign them. Ad-hoc identity is tied to the exact executable, so macOS asks for Screen Recording permission again after code changes. Stable permissions across upgrades require an Apple Development or Developer ID certificate; the latter can be selected explicitly through `APPLE_SIGNING_IDENTITY`.
 
 Build output is written under `target/release/bundle`. Maintainer release setup and recovery steps live in [docs/releases.md](docs/releases.md).
 

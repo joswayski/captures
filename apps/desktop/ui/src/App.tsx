@@ -611,6 +611,78 @@ function CaptureOverlay() {
     [current, start],
   );
 
+  const hoveredWindowLayout = useMemo(() => {
+    if (mode !== "window" || !hoveredWindow || !session) return null;
+    const match = session.windows.find((window) => window.id === hoveredWindow);
+    if (!match) return null;
+    const scale = session.window_coordinate_scale || 1;
+    return {
+      x: (match.x - session.display.x) / scale,
+      y: (match.y - session.display.y) / scale,
+      width: match.width / scale,
+      height: match.height / scale,
+    };
+  }, [hoveredWindow, mode, session]);
+
+  // ALL hooks must stay above any early return.
+  const windowLayouts = useMemo(() => {
+    if (mode !== "window" || !session) return [];
+    const scale = Math.max(session.window_coordinate_scale || 1, 1);
+    // CGWindowList is front-to-back; index 0 is topmost (highest z-index).
+    return session.windows
+      .filter((window) => window.width >= 48 && window.height >= 48)
+      .map((window, index, list) => ({
+        window,
+        left: (window.x - session.display.x) / scale,
+        top: (window.y - session.display.y) / scale,
+        width: window.width / scale,
+        height: window.height / scale,
+        zIndex: list.length - index,
+      }));
+  }, [mode, session]);
+
+  const revealOverlay = useCallback(async () => {
+    if (!sessionId) return;
+    if (revealingSessionIdRef.current === sessionId) return;
+    revealingSessionIdRef.current = sessionId;
+    const shouldPrimeRegionOverlay = mode === "region" && !regionOverlayWarmedRef.current;
+    try {
+      await invoke("show_capture_overlay", { sessionId });
+    } catch {
+      if (revealingSessionIdRef.current === sessionId) revealingSessionIdRef.current = null;
+      return;
+    }
+    if (shouldPrimeRegionOverlay) {
+      // Paint while native alpha is 0 so WKWebView can settle; keep CSS opacity 0
+      // so the normal .capture-visible fade still runs after reveal.
+      setPrimingSessionId(sessionId);
+    }
+    afterNextPaint(() => {
+      if (activeSessionIdRef.current !== sessionId) return;
+      void invoke("reveal_capture_overlay", { sessionId }).then(() => {
+        if (shouldPrimeRegionOverlay) regionOverlayWarmedRef.current = true;
+        requestAnimationFrame(() => {
+          if (activeSessionIdRef.current !== sessionId) return;
+          setPrimingSessionId(null);
+          setVisibleSessionId(sessionId);
+        });
+      }).catch(() => {
+        setPrimingSessionId(null);
+        setVisibleSessionId(null);
+        if (revealingSessionIdRef.current === sessionId) revealingSessionIdRef.current = null;
+      });
+    });
+  }, [mode, sessionId]);
+
+  // Safety: if snapshot onLoad never fires, still show the overlay.
+  useEffect(() => {
+    if (!session?.id) return;
+    const timer = window.setTimeout(() => {
+      void revealOverlay();
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [session?.id, revealOverlay]);
+
   if (!session || !sessionId) {
     return <main className="capture-loading">Preparing capture…</main>;
   }
@@ -652,40 +724,6 @@ function CaptureOverlay() {
     void invoke("sync_capture_cursor", { sessionId });
   };
 
-  const revealOverlay = async () => {
-    if (revealingSessionIdRef.current === sessionId) return;
-    revealingSessionIdRef.current = sessionId;
-    const shouldPrimeRegionOverlay = mode === "region" && !regionOverlayWarmedRef.current;
-    try {
-      await invoke("show_capture_overlay", { sessionId });
-    } catch {
-      if (revealingSessionIdRef.current === sessionId) revealingSessionIdRef.current = null;
-      return;
-    }
-    if (shouldPrimeRegionOverlay) {
-      // Render the first region surface in its final visual state while the
-      // native window is still transparent. WKWebView can initialize its
-      // one-time cursor state here without replacing a visible crosshair.
-      setPrimingSessionId(sessionId);
-      setVisibleSessionId(sessionId);
-    }
-    afterNextPaint(() => {
-      if (activeSessionIdRef.current !== sessionId) return;
-      void invoke("reveal_capture_overlay", { sessionId }).then(() => {
-        if (shouldPrimeRegionOverlay) regionOverlayWarmedRef.current = true;
-        requestAnimationFrame(() => {
-          if (activeSessionIdRef.current !== sessionId) return;
-          setPrimingSessionId(null);
-          setVisibleSessionId(sessionId);
-        });
-      }).catch(() => {
-        setPrimingSessionId(null);
-        if (shouldPrimeRegionOverlay) setVisibleSessionId(null);
-        if (revealingSessionIdRef.current === sessionId) revealingSessionIdRef.current = null;
-      });
-    });
-  };
-
   const onPointerDown = (event: React.PointerEvent) => {
     if (mode !== "region") return;
     clearSelectionFeedback();
@@ -710,6 +748,13 @@ function CaptureOverlay() {
     setCurrent(null);
   };
 
+  const hasSelection = Boolean(rect && rect.width > 0 && rect.height > 0);
+  const dimHole = mode === "region" && hasSelection && rect
+    ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+    : mode === "window"
+      ? hoveredWindowLayout
+      : null;
+
   return (
     <main
       key={sessionId}
@@ -719,8 +764,6 @@ function CaptureOverlay() {
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onTransitionEnd={(event) => {
-        // Later captures retain the fade. Reassert after it without exposing
-        // the first WebView paint, which is primed behind native transparency.
         if (event.target === event.currentTarget && event.propertyName === "opacity") {
           reassertRegionCursor();
         }
@@ -732,8 +775,9 @@ function CaptureOverlay() {
         alt=""
         draggable={false}
         onLoad={() => void revealOverlay()}
+        onError={() => void revealOverlay()}
       />
-      <div className="capture-shade" />
+      <CaptureDim mode={mode} hole={dimHole} />
       <div
         key={`${sessionId}-${selectionFeedback}`}
         className={`capture-hint${selectionFeedback > 0 ? " capture-hint-feedback" : ""}`}
@@ -746,7 +790,7 @@ function CaptureOverlay() {
             : "Drag to capture · Esc to cancel"
           : "Select a window · Esc to cancel"}
       </div>
-      {rect && rect.width > 0 && rect.height > 0 && (
+      {hasSelection && rect && (
         <div
           className="selection-box"
           style={{ left: rect.x, top: rect.y, width: rect.width, height: rect.height }}
@@ -755,58 +799,66 @@ function CaptureOverlay() {
         </div>
       )}
       {mode === "window" && (
-        <WindowTargets
-          display={session.display}
-          windows={session.windows}
-          scale={session.window_coordinate_scale}
-          hoveredWindow={hoveredWindow}
-          onHover={setHoveredWindow}
-          onSelect={(window) => {
-            void invoke("commit_window", { sessionId, windowId: window.id });
-          }}
-        />
+        <div className="window-targets">
+          {windowLayouts.map((item) => (
+            <button
+              type="button"
+              key={item.window.id}
+              className={`window-target${hoveredWindow === item.window.id ? " window-target-hovered" : ""}`}
+              style={{
+                left: item.left,
+                top: item.top,
+                width: item.width,
+                height: item.height,
+                zIndex: item.zIndex,
+              }}
+              title={item.window.title || item.window.app_name || "Window"}
+              onPointerEnter={() => setHoveredWindow(item.window.id)}
+              onPointerLeave={() =>
+                setHoveredWindow((current) => (current === item.window.id ? null : current))
+              }
+              onClick={() => {
+                void invoke("commit_window", { sessionId, windowId: item.window.id });
+              }}
+            >
+              <span>{item.window.title || item.window.app_name || "Window"}</span>
+            </button>
+          ))}
+        </div>
       )}
     </main>
   );
 }
 
-function WindowTargets({
-  display,
-  windows,
-  scale,
-  hoveredWindow,
-  onHover,
-  onSelect,
+/**
+ * Soft dim with an optional rectangular hole.
+ * Always fully opaque when mounted — the parent .capture-surface opacity fade
+ * handles the smooth region-mode entrance (separate shade fades stacked badly).
+ */
+function CaptureDim({
+  mode,
+  hole,
 }: {
-  display: ActiveSession["display"];
-  windows: WindowDescriptor[];
-  scale: number;
-  hoveredWindow: string | null;
-  onHover: (id: string | null) => void;
-  onSelect: (window: WindowDescriptor) => void;
+  mode: CaptureMode;
+  hole: { x: number; y: number; width: number; height: number } | null;
 }) {
+  // Window mode: only dim once a window is hovered so idle stays clear.
+  if (mode === "window" && !hole) return null;
+
+  if (!hole) {
+    return <div className="capture-shade capture-shade-full" />;
+  }
+
+  const { x, y, width, height } = hole;
   return (
-    <div className="window-targets">
-      {windows.map((window, index) => (
-        <button
-          type="button"
-          key={window.id}
-          className={`window-target ${hoveredWindow === window.id ? "window-target-hovered" : ""}`}
-          style={{
-            left: (window.x - display.x) / scale,
-            top: (window.y - display.y) / scale,
-            width: window.width / scale,
-            height: window.height / scale,
-            zIndex: windows.length - index,
-          }}
-          title={window.title}
-          onPointerEnter={() => onHover(window.id)}
-          onPointerLeave={() => onHover(null)}
-          onClick={() => onSelect(window)}
-        >
-          <span>{window.title || window.app_name || "Window"}</span>
-        </button>
-      ))}
+    <div className="capture-shade-cutout" aria-hidden>
+      <div className="capture-shade" style={{ top: 0, left: 0, right: 0, height: Math.max(0, y) }} />
+      <div className="capture-shade" style={{ top: y, left: 0, width: Math.max(0, x), height: Math.max(0, height) }} />
+      <div
+        className="capture-shade"
+        style={{ top: y, left: x + width, right: 0, height: Math.max(0, height) }}
+      />
+      <div className="capture-shade" style={{ top: y + height, left: 0, right: 0, bottom: 0 }} />
     </div>
   );
 }
