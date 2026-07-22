@@ -12,7 +12,7 @@
     "build": "node scripts/build.mjs",
     "build:web": "npm run build --workspace @captures/web",
     "start:web": "npm run start --workspace @captures/web",
-    "check": "npm run test:release-version && npm run check --workspace @captures/desktop",
+    "check": "npm run test:release-version && npm run check --workspace @captures/desktop && npm run build:web",
     "test:release-version": "node --test scripts/*.test.mjs",
     "test": "npm run test --workspace @captures/desktop"
   },
