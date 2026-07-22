@@ -653,8 +653,8 @@ function CaptureOverlay() {
       return;
     }
     if (shouldPrimeRegionOverlay) {
-      // Paint while native alpha is 0 so WKWebView can settle; keep CSS opacity 0
-      // so the normal .capture-visible fade still runs after reveal.
+      // Paint the stable snapshot and zero-opacity shade while native alpha is
+      // 0, so revealing the window can start the shade fade without a WebKit flash.
       setPrimingSessionId(sessionId);
     }
     afterNextPaint(() => {
@@ -764,7 +764,14 @@ function CaptureOverlay() {
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onTransitionEnd={(event) => {
-        if (event.target === event.currentTarget && event.propertyName === "opacity") {
+        const target = event.target;
+        const finishedSurfaceFade = target === event.currentTarget;
+        const finishedRegionShadeFade = target instanceof HTMLElement
+          && target.classList.contains("capture-shade-full");
+        if (
+          event.propertyName === "opacity"
+          && (finishedSurfaceFade || finishedRegionShadeFade)
+        ) {
           reassertRegionCursor();
         }
       }}
@@ -832,8 +839,8 @@ function CaptureOverlay() {
 
 /**
  * Soft dim with an optional rectangular hole.
- * Always fully opaque when mounted — the parent .capture-surface opacity fade
- * handles the smooth region-mode entrance (separate shade fades stacked badly).
+ * Region mode reveals the already-painted snapshot cleanly, then fades this
+ * shade on top. Window mode retains the parent surface entrance transition.
  */
 function CaptureDim({
   mode,
