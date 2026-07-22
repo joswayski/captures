@@ -11,7 +11,7 @@ macOS is the primary development target today. Windows and Linux builds are avai
 - Capture a region, window, or full display.
 - Start captures from the tray or customizable global shortcuts.
 - Copy captures to the clipboard automatically, save them as full-resolution lossless PNGs, or inspect them in a full-size viewer.
-- Keep multiple recent captures in a quick-access preview stack.
+- Keep multiple recent captures in a quick-access preview stack, and drag a preview directly into file-upload targets.
 - Restore captures from a private, rolling 30-day local history.
 - Launch at login and receive in-app update notifications.
 - Keep captures local today, with no uploads or analytics.

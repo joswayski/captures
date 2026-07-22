@@ -33,6 +33,7 @@ tauri = { version = "2", features = ["image-png", "macos-private-api", "tray-ico
 tauri-plugin-autostart = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "2"
+tauri-plugin-drag = "2.1.1"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"

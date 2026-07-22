@@ -57,6 +57,11 @@ export interface CaptureArtifact {
   clipboard_copy_status: ClipboardCopyStatus;
 }
 
+export interface ArtifactDragPayload {
+  path: string;
+  icon_path: string;
+}
+
 export interface HistoryEntry {
   id: string;
   preview_url: string;
