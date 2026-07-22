@@ -95,6 +95,7 @@ h1, h2, p { margin: 0; }
 @media (max-width: 700px) { .capture-history { padding: 24px 20px 32px; } .history-header { align-items: start; } .history-count { margin-top: 24px; } .history-grid { grid-template-columns: 1fr; } }
 
 .capture-surface { position: relative; width: 100%; height: 100%; overflow: hidden; background: #0e0f15; opacity: 0; pointer-events: none; transition: opacity .3s ease-out; user-select: none; }
+.capture-region { transition-duration: .15s; }
 .capture-surface.capture-visible { opacity: 1; pointer-events: auto; }
 .capture-surface.capture-priming { pointer-events: none; transition: none; }
 .capture-priming .capture-hint, .capture-priming .window-targets { transition: none; }
@@ -110,8 +111,8 @@ html.capture-window-cursor, html.capture-window-cursor * { cursor: var(--capture
  * Hole = four side panels (no clip-path spotlight / no overflow-clipped shadow).
  */
 .capture-shade-cutout { position: absolute; z-index: 1; inset: 0; pointer-events: none; }
-.capture-shade { position: absolute; background: rgba(8, 8, 14, .22); pointer-events: none; }
-.capture-shade-full { position: absolute; z-index: 1; inset: 0; background: rgba(8, 8, 14, .22); pointer-events: none; }
+.capture-shade { position: absolute; background: rgba(8, 8, 14, .16); pointer-events: none; }
+.capture-shade-full { position: absolute; z-index: 1; inset: 0; background: rgba(8, 8, 14, .16); pointer-events: none; }
 .capture-window .capture-shade { background: rgba(8, 12, 20, .4); }
 .capture-hint { position: absolute; z-index: 10000; top: 22px; left: 50%; transform: translate(-50%, -6px); border: 1px solid rgba(255,255,255,.14); border-radius: 999px; padding: 9px 16px; color: #fff; background: rgba(17,18,26,.78); box-shadow: 0 8px 30px rgba(0,0,0,.25); opacity: 0; transition: opacity .3s ease-out, transform .3s ease-out; pointer-events: none; font-size: 13px; }
 .capture-visible .capture-hint { opacity: 1; transform: translate(-50%, 0); }
