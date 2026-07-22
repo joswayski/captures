@@ -1,6 +1,8 @@
 import type { ThumbnailPointerPosition } from "../types";
 
 export const THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS = 100;
+const THUMBNAIL_NATIVE_ACTIVE_ATTRIBUTE = "data-thumbnail-native-active";
+const THUMBNAIL_NATIVE_ACTIVE_SELECTOR = `[${THUMBNAIL_NATIVE_ACTIVE_ATTRIBUTE}="true"]`;
 
 export function thumbnailCursorSyncAction(
   current: boolean,
@@ -27,10 +29,29 @@ export function shouldIgnoreThumbnailCursorEvents(
 }
 
 export function clearThumbnailNativeHover(root: ParentNode = document) {
-  root.querySelectorAll(".thumbnail-card-native-active, .native-pointer-hover")
+  root.querySelectorAll(`${THUMBNAIL_NATIVE_ACTIVE_SELECTOR}, .native-pointer-hover`)
     .forEach((element) => {
-      element.classList.remove("thumbnail-card-native-active", "native-pointer-hover");
+      element.removeAttribute(THUMBNAIL_NATIVE_ACTIVE_ATTRIBUTE);
+      element.classList.remove("native-pointer-hover");
     });
+}
+
+/**
+ * Native pointer tracking is intentionally stored outside React's `className`.
+ * Viewer activation rerenders the card and would otherwise overwrite an
+ * imperatively-added class for one frame before the next pointer poll.
+ */
+export function setThumbnailNativeActiveCard(
+  card: Element,
+  root: ParentNode = document,
+) {
+  root.querySelectorAll(THUMBNAIL_NATIVE_ACTIVE_SELECTOR)
+    .forEach((element) => {
+      if (element !== card) {
+        element.removeAttribute(THUMBNAIL_NATIVE_ACTIVE_ATTRIBUTE);
+      }
+    });
+  card.setAttribute(THUMBNAIL_NATIVE_ACTIVE_ATTRIBUTE, "true");
 }
 
 export function applyThumbnailNativeHover(
@@ -53,11 +74,7 @@ export function applyThumbnailNativeHover(
   // The action layers do not accept pointer events until their card is active.
   // Activate the card first, then hit-test again so buttons can be detected
   // while the preview window is not the active macOS window.
-  root.querySelectorAll(".thumbnail-card-native-active")
-    .forEach((element) => {
-      if (element !== card) element.classList.remove("thumbnail-card-native-active");
-    });
-  card.classList.add("thumbnail-card-native-active");
+  setThumbnailNativeActiveCard(card, root);
   const target = root
     .elementFromPoint(position.x, position.y)
     ?.closest("button");

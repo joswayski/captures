@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 
 import { Thumbnail } from "./App";
 import type { CaptureArtifact } from "./types";
@@ -52,11 +52,39 @@ describe("Thumbnail", () => {
 
     const card = await screen.findByRole("article");
     document.documentElement.classList.add("thumbnail-native-tracking");
-    card.classList.add("thumbnail-card-native-active");
+    card.setAttribute("data-thumbnail-native-active", "true");
 
     window.dispatchEvent(new Event("focus"));
 
     expect(document.documentElement).toHaveClass("thumbnail-native-tracking");
-    expect(card).toHaveClass("thumbnail-card-native-active");
+    expect(card).toHaveAttribute("data-thumbnail-native-active", "true");
+  });
+
+  it("preserves native hover when pointer polling is briefly unavailable", async () => {
+    let pointerPolls = 0;
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifacts") return [artifact];
+      if (command === "get_clipboard_state") {
+        return { revision: 0, artifact_id: artifact.id };
+      }
+      if (command === "get_thumbnail_pointer_position") {
+        pointerPolls += 1;
+        return null;
+      }
+      return undefined;
+    });
+
+    render(<Thumbnail />);
+
+    const card = await screen.findByRole("article");
+    document.documentElement.classList.add("thumbnail-native-tracking");
+    card.setAttribute("data-thumbnail-native-active", "true");
+    const pollsBeforeFocus = pointerPolls;
+
+    window.dispatchEvent(new Event("focus"));
+    await waitFor(() => expect(pointerPolls).toBeGreaterThan(pollsBeforeFocus));
+
+    expect(document.documentElement).toHaveClass("thumbnail-native-tracking");
+    expect(card).toHaveAttribute("data-thumbnail-native-active", "true");
   });
 });

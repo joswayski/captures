@@ -264,8 +264,13 @@ async fn start_capture_inner(
     if updates::install_is_active(&app) {
         return Err(AppError::UpdateInstalling);
     }
+    // A failed overlay (image never loaded, webview stuck, etc.) leaves a session
+    // behind. CaptureInProgress was silent on the shortcut path, so region mode
+    // appeared completely dead until restart. Drop the stale session and retry.
     if !state.sessions.lock().is_empty() {
-        return Err(AppError::CaptureInProgress);
+        eprintln!("clearing stuck capture session before starting {mode:?}");
+        state.sessions.lock().clear();
+        hide_capture_overlay(&app);
     }
 
     begin_thumbnail_capture(&state)?;
@@ -277,6 +282,8 @@ async fn start_capture_inner(
     let result = prepare_capture(app.clone(), state.clone(), mode).await;
     set_capture_huds_protected(&app, false);
     if result.is_err() {
+        state.sessions.lock().clear();
+        hide_capture_overlay(&app);
         restore_thumbnail_stack(&app, &state);
     }
     result
@@ -303,18 +310,14 @@ async fn prepare_capture(
     }
 
     let id = Uuid::new_v4();
-    let snapshot_png = storage::encode_preview_png(&frame.image, frame.descriptor.scale_factor)?;
+    // Keep the selector background full-resolution and lossless. Region/window
+    // crops also come directly from `frame.image`, so no lossy stage is involved.
+    let snapshot_png = storage::encode_png(&frame.image)?;
     let windows = if mode == CaptureMode::Window {
         state
             .windows()?
             .into_iter()
-            .filter(|window| {
-                window.display_id == display.id
-                    && window
-                        .app_name
-                        .as_deref()
-                        .is_none_or(|app_name| !app_name.eq_ignore_ascii_case("Captures"))
-            })
+            .filter(|window| window_is_capturable(window, &display))
             .collect()
     } else {
         Vec::new()
@@ -355,11 +358,10 @@ async fn commit_region(
         .lock()
         .remove(&id)
         .ok_or_else(|| AppError::SessionUnavailable.to_string())?;
-    let physical = rect.to_physical(
-        session.display.scale_factor,
-        session.image.width(),
-        session.image.height(),
-    );
+    // Prefer scale from actual buffer vs logical display size so Retina crops stay sharp
+    // even if the platform scale_factor is wrong.
+    let scale = capture_buffer_scale(&session.display, &session.image);
+    let physical = rect.to_physical(scale, session.image.width(), session.image.height());
     let Some(image) = session.view(physical) else {
         restore_thumbnail_stack(&app, &state);
         return Err(AppError::InvalidSelection.to_string());
@@ -382,17 +384,29 @@ async fn commit_window(
     hide_capture_overlay(&app);
     let state = state.inner().clone();
     let id = Uuid::parse_str(&session_id).map_err(|error| error.to_string())?;
-    state
+    let session = state
         .sessions
         .lock()
         .remove(&id)
         .ok_or_else(|| AppError::SessionUnavailable.to_string())?;
-    let image = match state.backend.capture_window(&window_id) {
-        Ok(image) => image,
-        Err(error) => {
-            restore_thumbnail_stack(&app, &state);
-            return Err(error.to_string());
-        }
+
+    // Prefer cropping the freeze-frame (sharp, matches what the user saw). Live
+    // CGWindow capture often returns black/empty frames for some windows on macOS.
+    let image = match crop_window_from_session(&session, &window_id) {
+        Some(image) if !image_is_effectively_blank(&image) => image,
+        _ => match state.backend.capture_window(&window_id) {
+            Ok(image) if !image_is_effectively_blank(&image) => image,
+            Ok(_) => {
+                restore_thumbnail_stack(&app, &state);
+                return Err(
+                    "Could not capture that window (empty frame). Try Region capture.".to_owned(),
+                );
+            }
+            Err(error) => {
+                restore_thumbnail_stack(&app, &state);
+                return Err(error.to_string());
+            }
+        },
     };
 
     let result = finish_capture(&app, &state, CaptureMode::Window, image).await;
@@ -2494,6 +2508,99 @@ impl CaptureSession {
                 .to_image(),
         )
     }
+}
+
+/// Map overlay/CSS logical coordinates onto the capture buffer. Prefer the ratio of
+/// actual buffer pixels to logical display size over the platform scale alone.
+fn capture_buffer_scale(display: &captures_capture::DisplayDescriptor, image: &RgbaImage) -> f64 {
+    let logical_w = f64::from(display.width.max(1));
+    let logical_h = f64::from(display.height.max(1));
+    let scale_x = f64::from(image.width()) / logical_w;
+    let scale_y = f64::from(image.height()) / logical_h;
+    let derived = ((scale_x + scale_y) * 0.5).max(1.0);
+    // If the platform scale disagrees badly, trust the buffer dimensions.
+    if (derived - display.scale_factor.max(1.0)).abs() > 0.25 {
+        return derived;
+    }
+    display.scale_factor.max(1.0).max(derived)
+}
+
+fn crop_window_from_session(session: &CaptureSession, window_id: &str) -> Option<RgbaImage> {
+    let window = session
+        .windows
+        .iter()
+        .find(|window| window.id == window_id)?;
+    let scale = capture_buffer_scale(&session.display, &session.image);
+    let rect = LogicalRect {
+        x: f64::from(window.x - session.display.x),
+        y: f64::from(window.y - session.display.y),
+        width: f64::from(window.width),
+        height: f64::from(window.height),
+    };
+    let physical = rect.to_physical(scale, session.image.width(), session.image.height());
+    session.view(physical)
+}
+
+fn image_is_effectively_blank(image: &RgbaImage) -> bool {
+    // Solid / near-solid frames from failed CGWindow captures (common black full-screen).
+    let mut samples = 0u32;
+    let mut matching = 0u32;
+    let first = image.get_pixel(0, 0).0;
+    let step_x = (image.width() / 16).max(1);
+    let step_y = (image.height() / 16).max(1);
+    for y in (0..image.height()).step_by(step_y as usize) {
+        for x in (0..image.width()).step_by(step_x as usize) {
+            samples += 1;
+            let pixel = image.get_pixel(x, y).0;
+            let close = pixel
+                .iter()
+                .zip(first.iter())
+                .all(|(a, b)| a.abs_diff(*b) <= 2);
+            if close {
+                matching += 1;
+            }
+        }
+    }
+    samples > 0 && matching * 100 / samples >= 98
+}
+
+fn window_is_capturable(
+    window: &captures_capture::WindowDescriptor,
+    display: &captures_capture::DisplayDescriptor,
+) -> bool {
+    if window.display_id != display.id {
+        return false;
+    }
+    if window.width < 48 || window.height < 48 {
+        return false;
+    }
+    if window
+        .app_name
+        .as_deref()
+        .is_some_and(|name| name.eq_ignore_ascii_case("Captures"))
+    {
+        return false;
+    }
+    // Skip system chrome that is listed as full-screen "windows" and breaks selection.
+    const EXCLUDED_APPS: &[&str] = &[
+        "Dock",
+        "Control Center",
+        "Notification Centre",
+        "Notification Center",
+        "SystemUIServer",
+        "Window Server",
+        "Spotlight",
+        "Wallpaper",
+        "loginwindow",
+    ];
+    if window.app_name.as_deref().is_some_and(|name| {
+        EXCLUDED_APPS
+            .iter()
+            .any(|excluded| name.eq_ignore_ascii_case(excluded))
+    }) {
+        return false;
+    }
+    true
 }
 
 #[cfg(test)]

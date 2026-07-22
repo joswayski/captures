@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { act, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 
 import { ThumbnailCard } from "./App";
 import type { CaptureArtifact } from "./types";
@@ -26,6 +26,63 @@ function artifact(path: string | null, id = "capture-1"): CaptureArtifact {
 }
 
 describe("ThumbnailCard", () => {
+  it("renders the quick preview from the full-resolution image and highlights it once ready", async () => {
+    render(<ThumbnailCard artifact={artifact(null)} clipboardCurrent viewerActive={false} onRemoved={() => undefined} />);
+
+    const image = screen.getByRole("img", { name: "Screenshot preview" });
+    expect(image)
+      .toHaveAttribute("src", "captures-capture://artifact-full/capture-1");
+    expect(screen.getByRole("article")).not.toHaveClass("thumbnail-capture-highlight");
+
+    await act(async () => {
+      fireEvent.load(image);
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole("article")).toHaveClass("thumbnail-capture-highlight");
+  });
+
+  it("preserves hover presentation while switching full-size viewers", () => {
+    const cards = (activeId: string | null) => (
+      <>
+        <ThumbnailCard
+          artifact={artifact(null, "capture-1")}
+          clipboardCurrent={false}
+          viewerActive={activeId === "capture-1"}
+          onRemoved={() => undefined}
+        />
+        <ThumbnailCard
+          artifact={artifact(null, "capture-2")}
+          clipboardCurrent
+          viewerActive={activeId === "capture-2"}
+          onRemoved={() => undefined}
+        />
+      </>
+    );
+    const { rerender } = render(cards(null));
+
+    const [firstCard, secondCard] = screen.getAllByRole("article");
+    act(() => {
+      within(firstCard).getByRole("button", { name: "Full size" }).click();
+    });
+
+    expect(firstCard).toHaveAttribute("data-thumbnail-native-active", "true");
+    rerender(cards("capture-1"));
+    expect(firstCard).toHaveAttribute("data-thumbnail-native-active", "true");
+
+    act(() => {
+      within(secondCard).getByRole("button", { name: "Full size" }).click();
+    });
+
+    expect(firstCard).not.toHaveAttribute("data-thumbnail-native-active");
+    expect(secondCard).toHaveAttribute("data-thumbnail-native-active", "true");
+    rerender(cards("capture-2"));
+    expect(secondCard).toHaveAttribute("data-thumbnail-native-active", "true");
+
+    expect(invoke).toHaveBeenCalledWith("open_artifact_viewer", { artifactId: "capture-1" });
+    expect(invoke).toHaveBeenCalledWith("open_artifact_viewer", { artifactId: "capture-2" });
+  });
+
   it("before a folder save: Delete only (no Close), Save file for a disk PNG", () => {
     render(<ThumbnailCard artifact={artifact(null)} clipboardCurrent viewerActive={false} onRemoved={() => undefined} />);
 
