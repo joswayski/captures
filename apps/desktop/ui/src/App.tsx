@@ -2,6 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
+import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { formatFileSize } from "./lib/format";
@@ -39,6 +40,7 @@ import { reconcileActiveViewer } from "./lib/viewerActivation";
 import type {
   ActiveSession,
   AppSettings,
+  ArtifactDragPayload,
   CaptureArtifact,
   CaptureMode,
   ClipboardState,
@@ -1164,6 +1166,7 @@ export function ThumbnailCard({
   const [busy, setBusy] = useState<"copied" | "saved" | null>(null);
   const [error, setError] = useState("");
   const [thumbnailReady, setThumbnailReady] = useState(false);
+  const [fileDragging, setFileDragging] = useState(false);
   const [exit, setExit] = useState<"dismiss" | "delete" | null>(null);
   const [dustParticles, setDustParticles] = useState<ThumbnailDustParticle[] | null>(null);
   /**
@@ -1179,6 +1182,8 @@ export function ThumbnailCard({
     copyFailed: boolean;
   } | null>(null);
   const cardRef = useRef<HTMLElement>(null);
+  const dragBlockedRef = useRef(false);
+  const fileDraggingRef = useRef(false);
   const exitAction = useRef<string | null>(null);
   /**
    * Exit lock: once true, this card is frozen for the whole dismiss/delete
@@ -1243,6 +1248,36 @@ export function ThumbnailCard({
     // so that render cannot flash the bright image and metadata between polls.
     if (cardRef.current) setThumbnailNativeActiveCard(cardRef.current);
     void runAction("open_artifact_viewer");
+  };
+
+  const beginFileDrag = async (event: React.DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    if (dragBlockedRef.current || fileDraggingRef.current || isExitLocked() || isExiting) {
+      return;
+    }
+    fileDraggingRef.current = true;
+    setFileDragging(true);
+    setError("");
+    try {
+      const payload = await invoke<ArtifactDragPayload>("prepare_artifact_drag", {
+        artifactId: artifact.id,
+      });
+      await startDrag(
+        {
+          item: [payload.path],
+          icon: payload.icon_path,
+          mode: "copy",
+        },
+        () => {
+          fileDraggingRef.current = false;
+          setFileDragging(false);
+        },
+      );
+    } catch (error) {
+      fileDraggingRef.current = false;
+      setFileDragging(false);
+      setError(String(error));
+    }
   };
 
   const exitWith = (kind: "dismiss" | "delete", action: string) => {
@@ -1326,19 +1361,28 @@ export function ThumbnailCard({
         "thumbnail-card",
         thumbnailReady ? "thumbnail-capture-highlight" : "",
         viewerActive && !isExiting ? "thumbnail-viewer-active" : "",
+        fileDragging ? "thumbnail-file-dragging" : "",
         exit ? `thumbnail-exit-${exit}` : "",
         usingDust ? "thumbnail-exit-dust" : "",
         isExiting ? "thumbnail-exiting" : "",
       ].filter(Boolean).join(" ")}
       // HTML inert disables all descendant input/focus for the whole exit animation.
       inert={isExiting ? true : undefined}
-      aria-busy={isExiting}
+      aria-busy={isExiting || fileDragging}
+      draggable={!isExiting}
       data-exit-locked={isExiting ? "true" : undefined}
+      data-file-dragging={fileDragging ? "true" : undefined}
+      onPointerDownCapture={(event) => {
+        dragBlockedRef.current = event.target instanceof Element
+          && event.target.closest("button") !== null;
+      }}
+      onDragStart={(event) => void beginFileDrag(event)}
       onAnimationEnd={finishExit}
     >
       <img
         src={artifact.full_url}
         alt="Screenshot preview"
+        draggable={false}
         onLoad={markThumbnailReady}
         onError={markThumbnailReady}
       />

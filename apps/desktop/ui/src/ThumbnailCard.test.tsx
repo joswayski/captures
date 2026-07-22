@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 
 import { ThumbnailCard } from "./App";
@@ -7,6 +8,12 @@ import type { CaptureArtifact } from "./types";
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async () => undefined),
   isTauri: () => false,
+}));
+
+vi.mock("@crabnebula/tauri-plugin-drag", () => ({
+  startDrag: vi.fn(async (_options, onEvent) => {
+    onEvent?.({ result: "Dropped", cursorPos: { x: 0, y: 0 } });
+  }),
 }));
 
 function artifact(path: string | null, id = "capture-1"): CaptureArtifact {
@@ -26,6 +33,14 @@ function artifact(path: string | null, id = "capture-1"): CaptureArtifact {
 }
 
 describe("ThumbnailCard", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(invoke).mockImplementation(async () => undefined);
+    vi.mocked(startDrag).mockImplementation(async (_options, onEvent) => {
+      onEvent?.({ result: "Dropped", cursorPos: { x: 0, y: 0 } });
+    });
+  });
+
   it("renders the quick preview from the full-resolution image and highlights it once ready", async () => {
     render(<ThumbnailCard artifact={artifact(null)} clipboardCurrent viewerActive={false} onRemoved={() => undefined} />);
 
@@ -109,6 +124,69 @@ describe("ThumbnailCard", () => {
     expect(close.parentElement).toBe(trash.parentElement);
     expect(close.parentElement).toHaveClass("thumbnail-top-left");
     expect(screen.getByRole("button", { name: "Show in Folder" })).toBeInTheDocument();
+  });
+
+  it("starts a native copy drag with a real full-resolution PNG", async () => {
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === "prepare_artifact_drag") {
+        return {
+          path: "/tmp/Captures_2026-07-18_18-00-00_000.png",
+          icon_path: "/tmp/Captures-preview.png",
+        };
+      }
+      return undefined;
+    });
+    render(
+      <ThumbnailCard
+        artifact={artifact(null)}
+        clipboardCurrent
+        viewerActive={false}
+        onRemoved={() => undefined}
+      />,
+    );
+    const card = screen.getByRole("article");
+
+    await act(async () => {
+      fireEvent.dragStart(card);
+      await Promise.resolve();
+    });
+
+    expect(card).toHaveAttribute("draggable", "true");
+    expect(screen.getByRole("img", { name: "Screenshot preview" }))
+      .toHaveAttribute("draggable", "false");
+    expect(invoke).toHaveBeenCalledWith("prepare_artifact_drag", {
+      artifactId: "capture-1",
+    });
+    expect(startDrag).toHaveBeenCalledWith(
+      {
+        item: ["/tmp/Captures_2026-07-18_18-00-00_000.png"],
+        icon: "/tmp/Captures-preview.png",
+        mode: "copy",
+      },
+      expect.any(Function),
+    );
+    expect(card).not.toHaveClass("thumbnail-file-dragging");
+  });
+
+  it("keeps action buttons clickable instead of turning their gestures into file drags", async () => {
+    render(
+      <ThumbnailCard
+        artifact={artifact(null)}
+        clipboardCurrent
+        viewerActive={false}
+        onRemoved={() => undefined}
+      />,
+    );
+    const card = screen.getByRole("article");
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Save file" }));
+    await act(async () => {
+      fireEvent.dragStart(card);
+      await Promise.resolve();
+    });
+
+    expect(invoke).not.toHaveBeenCalledWith("prepare_artifact_drag", expect.anything());
+    expect(startDrag).not.toHaveBeenCalled();
   });
 
   it("does not promise recovery when local history could not be written", () => {

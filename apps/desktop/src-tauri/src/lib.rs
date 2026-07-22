@@ -123,6 +123,7 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_drag::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
@@ -165,6 +166,7 @@ pub fn run() {
             update_settings,
             get_artifacts,
             get_artifact,
+            prepare_artifact_drag,
             get_capture_history,
             restore_history_artifact,
             delete_history_artifact,
@@ -837,6 +839,35 @@ fn get_artifact(
         .iter()
         .find(|artifact| artifact.id == artifact_id)
         .cloned()
+}
+
+#[derive(serde::Serialize)]
+struct ArtifactDragPayload {
+    path: String,
+    icon_path: String,
+}
+
+#[tauri::command]
+async fn prepare_artifact_drag(
+    state: tauri::State<'_, Arc<AppState>>,
+    artifact_id: String,
+) -> CommandResult<ArtifactDragPayload> {
+    let artifact = state
+        .artifacts
+        .lock()
+        .iter()
+        .find(|artifact| artifact.id == artifact_id)
+        .cloned()
+        .ok_or_else(|| "artifact is no longer available".to_owned())?;
+    let files =
+        tauri::async_runtime::spawn_blocking(move || storage::prepare_artifact_drag(&artifact))
+            .await
+            .map_err(|error| error.to_string())?
+            .map_err(|error| error.to_string())?;
+    Ok(ArtifactDragPayload {
+        path: files.path.to_string_lossy().into_owned(),
+        icon_path: files.icon_path.to_string_lossy().into_owned(),
+    })
 }
 
 #[tauri::command]
@@ -2011,6 +2042,7 @@ fn create_thumbnail_window(app: &AppHandle, visible: bool) -> Result<(), tauri::
     .transparent(true)
     .background_color(Color(0, 0, 0, 0))
     .accept_first_mouse(true)
+    .disable_drag_drop_handler()
     .focused(false)
     .visible(false)
     .build()?;

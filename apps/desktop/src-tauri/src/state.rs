@@ -151,6 +151,9 @@ pub struct AppState {
 
 impl AppState {
     pub fn new() -> Arc<Self> {
+        if let Err(error) = storage::clear_drag_exports() {
+            eprintln!("failed to clear temporary drag exports: {error}");
+        }
         let history = storage::load_capture_history().unwrap_or_else(|error| {
             eprintln!("failed to load capture history: {error}");
             Vec::new()

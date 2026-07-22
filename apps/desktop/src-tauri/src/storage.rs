@@ -13,12 +13,18 @@ use uuid::Uuid;
 
 use crate::{
     AppError,
-    models::{AppSettings, HISTORY_RETENTION_DAYS, HistoryEntry},
+    models::{AppSettings, CaptureArtifact, HISTORY_RETENTION_DAYS, HistoryEntry},
 };
 
 const HISTORY_IMAGE_FILE: &str = "capture.png";
 const HISTORY_PREVIEW_FILE: &str = "preview.png";
 const HISTORY_METADATA_FILE: &str = "metadata.json";
+const DRAG_EXPORT_DIRECTORY: &str = ".drag-exports";
+
+pub struct ArtifactDragFiles {
+    pub path: PathBuf,
+    pub icon_path: PathBuf,
+}
 
 pub fn load_settings() -> AppSettings {
     let path = crate::models::settings_path();
@@ -68,6 +74,107 @@ pub fn save_encoded_capture(png: &[u8], settings: &AppSettings) -> Result<PathBu
     drop(file);
     fs::rename(&temporary, &path)?;
     Ok(path)
+}
+
+pub fn prepare_artifact_drag(artifact: &CaptureArtifact) -> Result<ArtifactDragFiles, AppError> {
+    prepare_artifact_drag_in(&crate::models::history_directory(), artifact)
+}
+
+pub fn clear_drag_exports() -> Result<(), AppError> {
+    clear_drag_exports_in(&crate::models::history_directory())
+}
+
+fn prepare_artifact_drag_in(
+    history_root: &Path,
+    artifact: &CaptureArtifact,
+) -> Result<ArtifactDragFiles, AppError> {
+    let artifact_id = Uuid::parse_str(&artifact.id).map_err(|_| AppError::HistoryUnavailable)?;
+    let history_entry = history_root.join(artifact_id.to_string());
+    let history_image = history_entry.join(HISTORY_IMAGE_FILE);
+    let history_preview = history_entry.join(HISTORY_PREVIEW_FILE);
+    let history_available = history_image.is_file() && history_preview.is_file();
+    let fallback_directory = history_root
+        .join(DRAG_EXPORT_DIRECTORY)
+        .join(artifact_id.to_string());
+    let drag_directory = if history_available {
+        &history_entry
+    } else {
+        &fallback_directory
+    };
+    fs::create_dir_all(drag_directory)?;
+
+    let path = artifact
+        .path
+        .as_ref()
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+        .map(fs::canonicalize)
+        .transpose()?
+        .unwrap_or_else(|| drag_directory.join(drag_file_name(&artifact.created_at)));
+    if !path.is_file() {
+        let linked = history_available && fs::hard_link(&history_image, &path).is_ok();
+        if !linked {
+            write_drag_file(&path, &artifact.image_png)?;
+        }
+    }
+
+    let icon_path = if history_available {
+        history_preview
+    } else {
+        let path = fallback_directory.join(HISTORY_PREVIEW_FILE);
+        write_drag_file(&path, &artifact.preview_png)?;
+        path
+    };
+
+    Ok(ArtifactDragFiles {
+        path: fs::canonicalize(path)?,
+        icon_path: fs::canonicalize(icon_path)?,
+    })
+}
+
+fn drag_file_name(created_at: &str) -> String {
+    let created_at = DateTime::parse_from_rfc3339(created_at)
+        .map(|created_at| created_at.with_timezone(&Local))
+        .unwrap_or_else(|_| Local::now());
+    format!(
+        "Captures_{}.png",
+        created_at.format("%Y-%m-%d_%H-%M-%S_%3f")
+    )
+}
+
+fn write_drag_file(path: &Path, bytes: &[u8]) -> Result<(), AppError> {
+    if path.metadata().is_ok_and(|metadata| {
+        metadata.is_file() && metadata.len() == u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+    }) {
+        return Ok(());
+    }
+    let parent = path.parent().ok_or_else(|| {
+        AppError::Io(std::io::Error::other(
+            "drag file path has no parent directory",
+        ))
+    })?;
+    fs::create_dir_all(parent)?;
+    let temporary = parent.join(format!(".captures-drag-{}.tmp", Uuid::new_v4()));
+    let result = (|| {
+        fs::write(&temporary, bytes)?;
+        if path.exists() {
+            fs::remove_file(path)?;
+        }
+        fs::rename(&temporary, path)?;
+        Ok::<(), AppError>(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(temporary);
+    }
+    result
+}
+
+fn clear_drag_exports_in(history_root: &Path) -> Result<(), AppError> {
+    match fs::remove_dir_all(history_root.join(DRAG_EXPORT_DIRECTORY)) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
 }
 
 pub fn load_capture_history() -> Result<Vec<HistoryEntry>, AppError> {
@@ -277,11 +384,15 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        HISTORY_IMAGE_FILE, HISTORY_PREVIEW_FILE, encode_png, encode_preview_png,
-        encode_thumbnail_png, load_capture_history_from, save_encoded_capture,
-        save_history_capture_in, save_settings_to, unique_path,
+        DRAG_EXPORT_DIRECTORY, HISTORY_IMAGE_FILE, HISTORY_PREVIEW_FILE, clear_drag_exports_in,
+        encode_png, encode_preview_png, encode_thumbnail_png, load_capture_history_from,
+        prepare_artifact_drag_in, save_encoded_capture, save_history_capture_in, save_settings_to,
+        unique_path,
     };
-    use crate::models::{AppSettings, HistoryEntry, history_full_url, history_preview_url};
+    use crate::models::{
+        AppSettings, CaptureArtifact, ClipboardCopyStatus, HistoryEntry, history_full_url,
+        history_preview_url,
+    };
 
     #[test]
     fn save_capture_writes_a_png_and_avoids_collisions() {
@@ -377,6 +488,62 @@ mod tests {
         );
     }
 
+    #[test]
+    fn prepares_a_named_full_resolution_file_drag_from_private_history() {
+        let directory = tempdir().expect("temporary directory");
+        let id = uuid::Uuid::new_v4().to_string();
+        let artifact = capture_artifact(&id, None, true);
+        let entry = history_entry(&id, artifact.created_at.clone());
+        save_history_capture_in(
+            directory.path(),
+            &entry,
+            &artifact.image_png,
+            &artifact.preview_png,
+        )
+        .expect("capture history saved");
+
+        let drag =
+            prepare_artifact_drag_in(directory.path(), &artifact).expect("artifact drag prepared");
+
+        assert_eq!(std::fs::read(&drag.path).unwrap(), artifact.image_png);
+        assert_eq!(
+            std::fs::read(&drag.icon_path).unwrap(),
+            artifact.preview_png
+        );
+        let history_entry = std::fs::canonicalize(directory.path().join(&id)).unwrap();
+        assert_eq!(drag.path.parent(), Some(history_entry.as_path()));
+        assert!(
+            drag.path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("Captures_")
+        );
+    }
+
+    #[test]
+    fn falls_back_to_a_launch_scoped_drag_export_when_history_is_unavailable() {
+        let directory = tempdir().expect("temporary directory");
+        let id = uuid::Uuid::new_v4().to_string();
+        let artifact = capture_artifact(&id, None, false);
+
+        let drag =
+            prepare_artifact_drag_in(directory.path(), &artifact).expect("artifact drag prepared");
+        let export_root = directory.path().join(DRAG_EXPORT_DIRECTORY);
+        let canonical_export_root = std::fs::canonicalize(&export_root).unwrap();
+
+        assert!(drag.path.starts_with(&canonical_export_root));
+        assert!(drag.icon_path.starts_with(&canonical_export_root));
+        assert_eq!(std::fs::read(&drag.path).unwrap(), artifact.image_png);
+        assert_eq!(
+            std::fs::read(&drag.icon_path).unwrap(),
+            artifact.preview_png
+        );
+
+        clear_drag_exports_in(directory.path()).expect("drag exports cleared");
+        assert!(!export_root.exists());
+    }
+
     fn history_entry(id: &str, created_at: String) -> HistoryEntry {
         HistoryEntry {
             id: id.to_owned(),
@@ -387,6 +554,24 @@ mod tests {
             size_bytes: 42,
             created_at,
             mode: CaptureMode::Region,
+        }
+    }
+
+    fn capture_artifact(id: &str, path: Option<String>, history_saved: bool) -> CaptureArtifact {
+        CaptureArtifact {
+            id: id.to_owned(),
+            path,
+            preview_url: format!("captures-capture://localhost/artifact/{id}"),
+            full_url: format!("captures-capture://localhost/artifact-full/{id}"),
+            width: 1_440,
+            height: 900,
+            size_bytes: 12,
+            created_at: "2026-07-22T12:34:56.789Z".to_owned(),
+            mode: CaptureMode::Region,
+            history_saved,
+            clipboard_copy_status: ClipboardCopyStatus::Copied,
+            image_png: b"full-capture".to_vec(),
+            preview_png: b"preview".to_vec(),
         }
     }
 
