@@ -2,6 +2,8 @@
 
 Captures is a work-in-progress, cross-platform screen capture utility. It is built for quick captures, a lightweight workflow, and privacy by default.
 
+[Visit captur.es](https://captur.es) for the project website and latest development updates.
+
 macOS is the primary development target today. Windows and Linux builds are available, but some behavior is still experimental.
 
 ## Features
