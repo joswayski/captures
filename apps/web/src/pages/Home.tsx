@@ -1,13 +1,20 @@
+import { useEffect, useState } from "react";
+
 const REPO_URL = "https://github.com/joswayski/captures";
 const X_URL = "https://x.com/josevalerio";
 
-const dateFormatter = new Intl.DateTimeFormat("en", {
-  month: "short",
-  day: "numeric",
-  year: "numeric",
+const relativeTimeFormatter = new Intl.RelativeTimeFormat("en", {
+  numeric: "always",
 });
 
 export default function Home() {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(interval);
+  }, []);
+
   return (
     <div className="flex min-h-dvh flex-col">
       <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-6 py-20 sm:py-24">
@@ -25,7 +32,7 @@ export default function Home() {
               href={X_URL}
               target="_blank"
               rel="noreferrer"
-              className="font-medium text-ink no-underline underline-offset-2 transition hover:text-accent hover:underline"
+              className="font-medium text-ink no-underline underline-offset-2 transition-colors duration-300 ease-out hover:text-accent hover:underline"
             >
               Jose Valerio
             </a>
@@ -36,7 +43,7 @@ export default function Home() {
               href={REPO_URL}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center gap-2 rounded-md bg-ink px-4 py-2.5 text-sm font-medium text-white no-underline transition hover:bg-zinc-800"
+              className="inline-flex items-center gap-2 rounded-md bg-ink px-4 py-2.5 text-sm font-medium text-white no-underline transition-colors duration-300 ease-out hover:bg-accent"
             >
               <GitHubIcon className="h-4 w-4" />
               View on GitHub
@@ -45,24 +52,9 @@ export default function Home() {
         </section>
 
         <section aria-labelledby="latest-changes-heading" className="mt-8 border-t border-border pt-10">
-          <div className="flex items-end justify-between gap-6">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-accent">
-                Building in public
-              </p>
-              <h2 id="latest-changes-heading" className="mt-2 text-2xl font-semibold tracking-tight text-ink">
-                Latest changes
-              </h2>
-            </div>
-            <a
-              href={`${REPO_URL}/commits/main`}
-              target="_blank"
-              rel="noreferrer"
-              className="shrink-0 text-sm font-medium text-ink-soft no-underline underline-offset-4 transition hover:text-accent hover:underline"
-            >
-              View history
-            </a>
-          </div>
+          <h2 id="latest-changes-heading" className="text-2xl font-semibold tracking-tight text-ink">
+            Latest changes
+          </h2>
 
           <ol className="ml-1.5 mt-7 border-l border-border">
             {__LATEST_CHANGES__.map((change) => (
@@ -72,12 +64,12 @@ export default function Home() {
                   href={change.url}
                   target="_blank"
                   rel="noreferrer"
-                  className="font-medium leading-snug text-ink no-underline underline-offset-4 transition hover:text-accent hover:underline"
+                  className="font-medium leading-snug text-ink no-underline underline-offset-4 transition-colors duration-300 ease-out hover:text-accent hover:underline"
                 >
                   {change.title}
                 </a>
                 <p className="mt-1.5 text-xs text-ink-soft">
-                  {dateFormatter.format(new Date(change.committedAt))}
+                  <time dateTime={change.committedAt}>{formatRelativeTime(change.committedAt, now)}</time>
                   <span aria-hidden="true"> · </span>
                   {change.pullRequest ? `PR #${change.pullRequest}` : change.sha}
                 </p>
@@ -88,6 +80,29 @@ export default function Home() {
       </main>
     </div>
   );
+}
+
+function formatRelativeTime(date: string, now: number) {
+  const secondsFromNow = (new Date(date).getTime() - now) / 1_000;
+  const divisions = [
+    { amount: 60, unit: "second" },
+    { amount: 60, unit: "minute" },
+    { amount: 24, unit: "hour" },
+    { amount: 7, unit: "day" },
+    { amount: 4.345, unit: "week" },
+    { amount: 12, unit: "month" },
+    { amount: Number.POSITIVE_INFINITY, unit: "year" },
+  ] as const;
+
+  let duration = secondsFromNow;
+  for (const division of divisions) {
+    if (Math.abs(duration) < division.amount) {
+      return relativeTimeFormatter.format(Math.round(duration), division.unit);
+    }
+    duration /= division.amount;
+  }
+
+  return relativeTimeFormatter.format(0, "second");
 }
 
 function GitHubIcon({ className }: { className?: string }) {
