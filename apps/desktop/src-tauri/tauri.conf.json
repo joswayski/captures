@@ -12,7 +12,7 @@
   "app": {
     "windows": [],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' captures-capture: http://captures-capture.localhost data:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost"
+      "csp": "default-src 'self'; img-src 'self' captures-capture: http://captures-capture.localhost data:; media-src 'self' captures-capture: http://captures-capture.localhost; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost"
     },
     "macOSPrivateApi": true
   },
@@ -28,8 +28,8 @@
       "icons/icon.ico"
     ],
     "category": "Utility",
-    "shortDescription": "A lightweight, private screenshot utility",
-    "longDescription": "Capture regions, windows, and displays without uploading your screenshots.",
+    "shortDescription": "A lightweight, private screen capture utility",
+    "longDescription": "Capture screenshots, videos, and GIFs locally without automatic uploads.",
     "macOS": {
       "minimumSystemVersion": "13.0"
     }

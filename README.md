@@ -9,6 +9,9 @@ macOS is the primary development target today. Windows and Linux builds are avai
 ## Features
 
 - Capture a region, window, or full display.
+- On macOS 13+, record a region, window, or display as H.264/AAC video or an optimized GIF.
+- Record desktop audio and a selected microphone independently, with pause, resume, restart, mute, and interruption recovery.
+- Trim, crop, resize, remix audio, or export against a strict maximum file size in the non-destructive recording editor.
 - Start captures from the tray or customizable global shortcuts.
 - Copy captures to the clipboard automatically, save them as full-resolution lossless PNGs, or inspect them in a full-size viewer.
 - Keep multiple recent captures in a quick-access preview stack, and drag a preview directly into file-upload targets.
@@ -20,8 +23,9 @@ macOS is the primary development target today. Windows and Linux builds are avai
 
 The roadmap is still taking shape. Likely additions include:
 
-- GIF and video recording, with microphone/system audio and cursor controls.
-- Screenshot markup and editing, plus trimming for recordings.
+- Windows and Linux recording backends, followed by recording feature parity across platforms.
+- Editable click highlights and keystroke overlays for recordings.
+- Screenshot markup and editing.
 - Optional compressed export formats and quality controls; lossless PNG remains the default.
 - Full feature parity across macOS, Windows, and Linux.
 - Optional cloud hosting for images and recordings with shareable `captur.es/<id>` links.
@@ -36,10 +40,10 @@ These are directions, not promised release dates or a fixed order.
 
 | Platform | Status |
 | --- | --- |
-| macOS 13+ | Primary development target |
-| Windows 11 | Experimental |
-| Linux X11 | Experimental |
-| Linux Wayland | Partial support through the desktop screenshot portal and XWayland |
+| macOS 13+ | Screenshots, video, and GIF recording; primary development target |
+| Windows 11 | Experimental screenshots; recording is planned |
+| Linux X11 | Experimental screenshots; recording is planned |
+| Linux Wayland | Partial screenshot support through the desktop portal and XWayland; recording is planned |
 
 ## Download
 
@@ -52,17 +56,21 @@ Download the latest builds from [GitHub Releases](https://github.com/joswayski/c
 | `Ctrl+Shift+4` | Capture a region |
 | `Ctrl+Shift+W` | Capture a window |
 | `Ctrl+Shift+3` | Capture the display under the pointer |
+| `Ctrl+Shift+5` | Record video |
+| `Ctrl+Shift+6` | Record GIF |
 | `Esc` | Cancel an active region or window capture |
 
-The three global capture shortcuts can be changed in Preferences.
+All five global capture shortcuts can be changed in Preferences.
 
 ## Development
 
 You will need Rust 1.94 with `rustfmt` and `clippy`, Node.js 24, and npm 11.
+macOS builds currently require the macOS 26 SDK for the pinned ScreenCaptureKit bindings; the app's deployment target remains macOS 13.
 Windows development also requires the Visual Studio C++ build tools and a Windows 11 SDK.
 
 ```sh
 npm install
+npm run prepare:media # macOS: first run only, unless the pinned build changes
 npm run dev
 ```
 
@@ -77,10 +85,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 Build an installer or app bundle on the operating system where it will run. On macOS, `npm run build` also:
 
 1. Unmounts stale disk images left by earlier builds in this checkout
-2. Builds the release bundle
-3. Quits any running Captures instance only after the build succeeds
-4. Installs `Captures.app` into `/Applications` (replacing any previous copy)
-5. Launches Captures
+2. Builds and validates the pinned LGPL-only FFmpeg and ffprobe sidecars
+3. Builds the release bundle
+4. Quits any running Captures instance only after the build succeeds
+5. Installs `Captures.app` into `/Applications` (replacing any previous copy)
+6. Launches Captures
 
 Installers and app bundles are still written under `target/release/bundle` (including the DMG).
 
@@ -108,9 +117,11 @@ an NSIS installer `.exe` under `target/release/bundle/nsis`, an `.msi` under
 Before compiling, the build stops a running copy at that exact unpackaged path so Windows
 can replace it; an installed copy elsewhere is not stopped.
 
+Recording capture uses ScreenCaptureKit and Apple media APIs. Editing and GIF conversion use separately bundled FFmpeg command-line sidecars built without GPL, nonfree, or libx264 components. Build, source-distribution, and license details live in [docs/media-sidecars.md](docs/media-sidecars.md).
+
 ## Privacy
 
-Captures stores pending previews and its 30-day recovery history locally. It does not upload captures or send telemetry. Official release builds contact GitHub Releases only to check for and download application updates; locally built copies do not perform background update checks.
+Captures stores pending previews and its 30-day screenshot recovery history locally. Finished recordings are written directly to the local Captures folder; recording history stores only metadata and posters that reference those files. Interrupted-session bundles remain local for explicit recovery, and GIF source masters are pruned after seven days. Captures does not upload captures or send telemetry. Official release builds contact GitHub Releases only to check for and download application updates; locally built copies do not perform background update checks.
 
 Future cloud sharing will be optional and explicit.
 

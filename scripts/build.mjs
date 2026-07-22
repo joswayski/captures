@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -54,6 +54,29 @@ function npmCliPath() {
     join(dirname(process.execPath), "node_modules/npm/bin/npm-cli.js"),
   ];
   return candidates.find((candidate) => candidate && existsSync(candidate));
+}
+
+function configureMacBuildEnvironment() {
+  if (!isMac) return;
+
+  if (!environment.SDKROOT) {
+    const sdk = run("/usr/bin/xcrun", ["--sdk", "macosx", "--show-sdk-path"], {
+      env: environment,
+    });
+    const defaultSdk = sdk.status === 0 ? sdk.stdout?.trim() : null;
+    if (defaultSdk) {
+      environment.SDKROOT = defaultSdk;
+      log(`Using the active macOS SDK at ${defaultSdk}.`);
+    }
+  }
+
+  const moduleCacheRoot = join(ROOT, "target", "module-cache");
+  const clangModuleCache = join(moduleCacheRoot, "clang");
+  const swiftModuleCache = join(moduleCacheRoot, "swift");
+  mkdirSync(clangModuleCache, { recursive: true });
+  mkdirSync(swiftModuleCache, { recursive: true });
+  environment.CLANG_MODULE_CACHE_PATH ??= clangModuleCache;
+  environment.SWIFTPM_MODULECACHE_OVERRIDE ??= swiftModuleCache;
 }
 
 function processIsRunning(name) {
@@ -184,6 +207,8 @@ function installToApplications() {
   log(`Installed → ${APPLICATIONS_APP}`);
 }
 
+configureMacBuildEnvironment();
+
 if (isMac && !environment.APPLE_SIGNING_IDENTITY) {
   const identity = findAppleDevelopmentIdentity();
   if (identity) {
@@ -206,6 +231,10 @@ if (isWindows) {
     process.exit(1);
   }
 }
+if (isMac) {
+  log("Preparing the pinned LGPL FFmpeg sidecars…");
+  runChecked("/bin/bash", ["scripts/build-ffmpeg-sidecars.sh"], { cwd: ROOT, stdio: "inherit" });
+}
 
 const npmCli = npmCliPath();
 if (!npmCli) {
@@ -216,8 +245,15 @@ if (!npmCli) {
 }
 const args = ["run", "tauri:build", "--workspace", "@captures/desktop"];
 const tauriArgs = [];
-if (!environment.TAURI_SIGNING_PRIVATE_KEY) {
-  tauriArgs.push("--config", "src-tauri/tauri.local.conf.json");
+const buildConfig = isMac
+  ? environment.TAURI_SIGNING_PRIVATE_KEY
+    ? "src-tauri/tauri.recording.conf.json"
+    : "src-tauri/tauri.recording.local.conf.json"
+  : !environment.TAURI_SIGNING_PRIVATE_KEY
+     ? "src-tauri/tauri.local.conf.json"
+     : null;
+if (buildConfig) {
+  tauriArgs.push("--config", buildConfig);
 }
 tauriArgs.push(...process.argv.slice(2));
 if (tauriArgs.length > 0) {

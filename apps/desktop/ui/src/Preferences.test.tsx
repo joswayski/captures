@@ -23,6 +23,23 @@ const settings: AppSettings = {
   launch_at_login: false,
   last_screen_permission_request_id: null,
   pending_capture_after_restart: null,
+  recording: {
+    video_shortcut: "Ctrl+Shift+5",
+    gif_shortcut: "Ctrl+Shift+6",
+    video_fps: 30,
+    video_max_resolution: "p1080",
+    gif_fps: 15,
+    gif_max_width: 800,
+    gif_max_colors: 256,
+    countdown_seconds: 3,
+    show_cursor: true,
+    capture_system_audio: false,
+    microphone_device_id: null,
+    mono_audio: false,
+    highlight_clicks: false,
+    show_keystrokes: false,
+    open_editor_after_recording: true,
+  },
 };
 
 describe("Preferences", () => {

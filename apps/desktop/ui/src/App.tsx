@@ -8,8 +8,10 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { formatFileSize } from "./lib/format";
 import { reconcileClipboardState } from "./lib/clipboard";
 import {
+  dragSelectionRect,
   isCapturableSelection,
   selectionRect,
+  type SelectionDragMode,
   type SelectionPoint,
 } from "./lib/selection";
 import {
@@ -39,12 +41,24 @@ import { shouldScrollThumbnailStackToEnd } from "./lib/thumbnailLayout";
 import { reconcileActiveViewer } from "./lib/viewerActivation";
 import type {
   ActiveSession,
+  AudioDevice,
   AppSettings,
   ArtifactDragPayload,
+  ArtifactSummary,
   CaptureArtifact,
   CaptureMode,
   ClipboardState,
-  HistoryEntry,
+  EditSpec,
+  ExportProgress,
+  ExportSpec,
+  MaxResolution,
+  RecordingArtifact,
+  RecordingDraftManifest,
+  RecordingKind,
+  RecordingOptions,
+  RecordingSelectionSession,
+  RecordingSessionSnapshot,
+  RecordingTarget,
   ThumbnailPointerPosition,
   UpdateStatus,
   ViewerActivationState,
@@ -73,6 +87,9 @@ function emitViewerActivation(artifactId: string | null, active: boolean) {
 export function App() {
   const view = query("view");
   if (view === "overlay") return <CaptureOverlay />;
+  if (view === "recording-selector") return <RecordingSelector />;
+  if (view === "recording-hud") return <RecordingHud />;
+  if (view === "recording-editor") return <RecordingEditor />;
   if (view === "thumbnail") return <Thumbnail />;
   if (view === "viewer") return <ArtifactViewer />;
   if (view === "history") return <CaptureHistory />;
@@ -341,7 +358,7 @@ function ArtifactViewer() {
 }
 
 export function CaptureHistory() {
-  const [entries, setEntries] = useState<HistoryEntry[]>([]);
+  const [entries, setEntries] = useState<ArtifactSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -351,7 +368,7 @@ export function CaptureHistory() {
 
     const refresh = async () => {
       try {
-        const history = await invoke<HistoryEntry[]>("get_capture_history");
+        const history = await invoke<ArtifactSummary[]>("get_capture_history");
         if (!active) return;
         setEntries(history);
         setError("");
@@ -381,7 +398,7 @@ export function CaptureHistory() {
         <div>
           <p className="eyebrow">LOCAL RECOVERY</p>
           <h1>Capture History</h1>
-          <p>Private recovery copies for 30 days. Not your Captures folder.</p>
+          <p>Screenshots keep private recovery copies for 30 days. Recordings stay in your Captures folder.</p>
         </div>
         {!loading && entries.length > 0 && (
           <span className="history-count">
@@ -400,7 +417,7 @@ export function CaptureHistory() {
         <section className="history-empty">
           <span className="history-empty-icon" aria-hidden="true"><HistoryIcon /></span>
           <h2>No recovery copies yet</h2>
-          <p>New screenshots leave a recovery copy here automatically.</p>
+          <p>New screenshots, videos, and GIFs appear here automatically.</p>
         </section>
       ) : (
         <section className="history-grid" aria-label="Recent captures">
@@ -423,10 +440,10 @@ export function HistoryCard({
   entry,
   onDeleted,
 }: {
-  entry: HistoryEntry;
+  entry: ArtifactSummary;
   onDeleted: (artifactId: string) => void;
 }) {
-  const [busy, setBusy] = useState<"restoring" | "deleting" | null>(null);
+  const [busy, setBusy] = useState<"restoring" | "opening" | "revealing" | "deleting" | null>(null);
   const [restored, setRestored] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [error, setError] = useState("");
@@ -439,7 +456,7 @@ export function HistoryCard({
   }, []);
 
   const restore = async () => {
-    if (busy) return;
+    if (busy || entry.kind !== "screenshot") return;
     setBusy("restoring");
     setError("");
     try {
@@ -447,6 +464,32 @@ export function HistoryCard({
       setRestored(true);
       if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
       feedbackTimer.current = setTimeout(() => setRestored(false), 2_500);
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const openRecording = async () => {
+    if (busy || entry.kind === "screenshot" || entry.missing) return;
+    setBusy("opening");
+    setError("");
+    try {
+      await invoke("open_recording_editor", { artifactId: entry.id });
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const revealRecording = async () => {
+    if (busy || entry.kind === "screenshot" || entry.missing) return;
+    setBusy("revealing");
+    setError("");
+    try {
+      await invoke("reveal_recording_artifact", { artifactId: entry.id });
     } catch (error) {
       setError(String(error));
     } finally {
@@ -477,31 +520,64 @@ export function HistoryCard({
 
   return (
     <article className="history-card">
-      <div className="history-image-wrap">
-        <img src={entry.preview_url} alt="Screenshot from capture history" loading="lazy" draggable={false} />
-        <span className="history-mode">{formatCaptureMode(entry.mode)}</span>
+      <div className={`history-image-wrap${entry.kind !== "screenshot" && entry.missing ? " history-image-missing" : ""}`}>
+        <img
+          src={entry.kind === "screenshot" ? entry.preview_url : entry.poster_url}
+          alt={entry.kind === "screenshot" ? "Screenshot from capture history" : `${entry.kind === "gif" ? "GIF" : "Video"} recording poster`}
+          loading="lazy"
+          draggable={false}
+        />
+        <span className="history-mode">{entry.kind === "screenshot" ? formatCaptureMode(entry.mode) : entry.kind.toUpperCase()}</span>
+        {entry.kind !== "screenshot" && entry.missing && <span className="history-missing-label">File missing</span>}
       </div>
       <div className="history-card-body">
         <time dateTime={entry.created_at}>{formatHistoryDate(entry.created_at)}</time>
-        <p>{entry.width} × {entry.height} · {formatFileSize(entry.size_bytes)}</p>
-        <div className="history-actions">
-          <button
-            type="button"
-            className="history-restore"
-            disabled={busy !== null}
-            onClick={() => void restore()}
-          >
-            {restored ? <><CheckIcon />Restored</> : <><RestoreIcon />{busy === "restoring" ? "Restoring…" : "Restore"}</>}
-          </button>
+        <p>
+          {entry.width} × {entry.height} · {formatFileSize(entry.size_bytes)}
+          {entry.kind !== "screenshot" && <> · {formatRecordingTime(entry.duration_ms)}</>}
+        </p>
+        {entry.kind !== "screenshot" && entry.dropped_frames > 0 && <p className="history-recording-warning">{entry.dropped_frames.toLocaleString()} frame{entry.dropped_frames === 1 ? "" : "s"} dropped while recording</p>}
+        <div className={`history-actions${entry.kind === "screenshot" ? "" : " history-recording-actions"}`}>
+          {entry.kind === "screenshot" ? (
+            <button
+              type="button"
+              className="history-restore"
+              disabled={busy !== null}
+              onClick={() => void restore()}
+            >
+              {restored ? <><CheckIcon />Restored</> : <><RestoreIcon />{busy === "restoring" ? "Restoring…" : "Restore"}</>}
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="history-restore"
+                disabled={busy !== null || entry.missing}
+                onClick={() => void openRecording()}
+              >
+                {busy === "opening" ? "Opening…" : entry.missing ? "File missing" : "Edit"}
+              </button>
+              <button
+                type="button"
+                className="history-reveal"
+                disabled={busy !== null || entry.missing}
+                onClick={() => void revealRecording()}
+              >
+                {busy === "revealing" ? "Revealing…" : "Reveal"}
+              </button>
+            </>
+          )}
           <button
             type="button"
             className={confirmingDelete ? "history-delete history-delete-confirm" : "history-delete"}
-            aria-label={confirmingDelete ? "Confirm permanent deletion" : "Delete from History"}
+            aria-label={confirmingDelete
+              ? entry.kind === "screenshot" ? "Confirm permanent deletion" : "Confirm removal from History"
+              : entry.kind === "screenshot" ? "Delete from History" : "Remove from History"}
             disabled={busy !== null}
             onClick={() => void deleteFromHistory()}
           >
             <TrashIcon />
-            {confirmingDelete ? "Delete forever" : "Delete"}
+            {confirmingDelete ? (entry.kind === "screenshot" ? "Delete forever" : "Remove entry") : (entry.kind === "screenshot" ? "Delete" : "Remove")}
           </button>
         </div>
         {error && <p className="history-card-error" role="alert">{error}</p>}
@@ -530,6 +606,793 @@ function HistoryIcon() {
 
 function RestoreIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8" /><path d="M4 4v4h4" /></svg>;
+}
+
+type RecordingTargetMode = "region" | "window" | "display";
+type RecordingRect = { x: number; y: number; width: number; height: number };
+type RecordingRegionDrag = {
+  mode: SelectionDragMode;
+  origin: SelectionPoint;
+  initial: RecordingRect;
+};
+
+function RecordingSelector() {
+  const [session, setSession] = useState<RecordingSelectionSession | null>(null);
+  const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [devices, setDevices] = useState<AudioDevice[]>([]);
+  const [kind, setKind] = useState<RecordingKind>("video");
+  const [targetMode, setTargetMode] = useState<RecordingTargetMode>("region");
+  const [region, setRegion] = useState<RecordingRect | null>(null);
+  const [regionDrag, setRegionDrag] = useState<RecordingRegionDrag | null>(null);
+  const [selectedWindow, setSelectedWindow] = useState<string | null>(null);
+  const [hoveredWindow, setHoveredWindow] = useState<string | null>(null);
+  const [fps, setFps] = useState(30);
+  const [maxResolution, setMaxResolution] = useState<MaxResolution>("p1080");
+  const [gifWidth, setGifWidth] = useState(800);
+  const [showCursor, setShowCursor] = useState(true);
+  const [systemAudio, setSystemAudio] = useState(false);
+  const [microphoneId, setMicrophoneId] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [error, setError] = useState("");
+  const surfaceRef = useRef<HTMLElement>(null);
+  const settingsRef = useRef<AppSettings | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    let dispose: (() => void) | undefined;
+    const applySelection = (selection: RecordingSelectionSession, currentSettings: AppSettings) => {
+      setSession(selection);
+      setKind(selection.kind);
+      setFps(selection.kind === "gif"
+        ? currentSettings.recording.gif_fps
+        : currentSettings.recording.video_fps);
+      setMaxResolution(currentSettings.recording.video_max_resolution);
+      setGifWidth(currentSettings.recording.gif_max_width);
+      setShowCursor(currentSettings.recording.show_cursor);
+      setSystemAudio(selection.kind === "video" && currentSettings.recording.capture_system_audio);
+      setMicrophoneId(selection.kind === "video" ? currentSettings.recording.microphone_device_id : null);
+      setTargetMode("region");
+      setSelectedWindow(null);
+      setHoveredWindow(null);
+      setRegion(defaultRecordingRegion(selection.display.width, selection.display.height));
+      setRegionDrag(null);
+      setStarting(false);
+      setError("");
+    };
+    void (async () => {
+      dispose = await listen<RecordingSelectionSession>("recording-selection-ready", ({ payload }) => {
+        if (!active) return;
+        const currentSettings = settingsRef.current;
+        if (currentSettings) applySelection(payload, currentSettings);
+        void Promise.all([
+          invoke<AppSettings>("get_settings"),
+          invoke<AudioDevice[]>("list_recording_audio_devices"),
+        ]).then(([latestSettings, latestDevices]) => {
+          if (!active) return;
+          settingsRef.current = latestSettings;
+          setSettings(latestSettings);
+          setDevices(latestDevices);
+          applySelection(payload, latestSettings);
+        }).catch((error) => {
+          if (active) setError(String(error));
+        });
+      });
+      const [pending, loadedSettings, audioDevices] = await Promise.all([
+        invoke<RecordingSelectionSession | null>("get_recording_selection"),
+        invoke<AppSettings>("get_settings"),
+        invoke<AudioDevice[]>("list_recording_audio_devices"),
+      ]);
+      if (!active) return;
+      settingsRef.current = loadedSettings;
+      setSettings(loadedSettings);
+      setDevices(audioDevices);
+      if (pending) {
+        applySelection(pending, loadedSettings);
+      }
+    })().catch((error) => {
+      if (active) setError(String(error));
+    });
+    return () => {
+      active = false;
+      dispose?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || !session) return;
+      void invoke("cancel_recording_selection", { selectionId: session.id });
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [session]);
+
+  if (!session || !settings) {
+    return <main className="recording-selector-loading">Preparing recorder…</main>;
+  }
+
+  const point = (event: React.PointerEvent): SelectionPoint => {
+    const bounds = surfaceRef.current?.getBoundingClientRect();
+    return {
+      x: Math.max(0, Math.min(bounds?.width ?? 0, event.clientX - (bounds?.left ?? 0))),
+      y: Math.max(0, Math.min(bounds?.height ?? 0, event.clientY - (bounds?.top ?? 0))),
+    };
+  };
+  const onPointerDown = (event: React.PointerEvent) => {
+    if (targetMode !== "region" || (event.target as Element).closest(".recording-selector-panel")) return;
+    const start = point(event);
+    const target = event.target as Element;
+    const handle = target.closest<HTMLElement>("[data-selection-handle]")?.dataset.selectionHandle as SelectionDragMode | undefined;
+    const mode: SelectionDragMode = handle
+      ?? (target.closest(".recording-selection-frame") ? "move" : "create");
+    if (mode !== "create" && !region) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setRegionDrag({
+      mode,
+      origin: start,
+      initial: region ?? { x: start.x, y: start.y, width: 0, height: 0 },
+    });
+    if (mode === "create") setRegion({ x: start.x, y: start.y, width: 0, height: 0 });
+  };
+  const onPointerMove = (event: React.PointerEvent) => {
+    if (!regionDrag || targetMode !== "region") return;
+    const current = point(event);
+    setRegion(dragSelectionRect(
+      regionDrag.mode,
+      regionDrag.origin,
+      current,
+      regionDrag.initial,
+      { width: session.display.width, height: session.display.height },
+    ));
+  };
+  const onPointerUp = () => setRegionDrag(null);
+
+  const windowLayouts = session.windows.map((window, index) => {
+    const scale = Math.max(session.window_coordinate_scale || 1, 1);
+    return {
+      window,
+      left: (window.x - session.display.x) / scale,
+      top: (window.y - session.display.y) / scale,
+      width: window.width / scale,
+      height: window.height / scale,
+      zIndex: session.windows.length - index,
+    };
+  });
+  const activeWindow = selectedWindow ?? hoveredWindow;
+  const activeWindowLayout = windowLayouts.find(({ window }) => window.id === activeWindow);
+  const selectedRect = targetMode === "display"
+    ? { x: 0, y: 0, width: session.display.width, height: session.display.height }
+    : targetMode === "window"
+      ? activeWindowLayout && {
+          x: activeWindowLayout.left,
+          y: activeWindowLayout.top,
+          width: activeWindowLayout.width,
+          height: activeWindowLayout.height,
+        }
+      : region;
+  const canStart = targetMode === "display"
+    || (targetMode === "window" && Boolean(selectedWindow))
+    || (targetMode === "region" && Boolean(region && region.width >= 16 && region.height >= 16));
+
+  const selectKind = (nextKind: RecordingKind) => {
+    setKind(nextKind);
+    setFps(nextKind === "gif" ? settings.recording.gif_fps : settings.recording.video_fps);
+    if (nextKind === "gif") {
+      setSystemAudio(false);
+      setMicrophoneId(null);
+    }
+  };
+
+  const start = async () => {
+    if (!canStart || starting) return;
+    let target: RecordingTarget;
+    if (targetMode === "display") {
+      target = { type: "display", display_id: session.display.id };
+    } else if (targetMode === "window" && selectedWindow) {
+      target = { type: "window", window_id: selectedWindow };
+    } else if (region) {
+      target = {
+        type: "region",
+        display_id: session.display.id,
+        rect: roundRecordingRect(region, session.display.width, session.display.height),
+      };
+    } else {
+      return;
+    }
+    const options: RecordingOptions = {
+      kind,
+      target,
+      frames_per_second: fps,
+      max_resolution: kind === "video" ? maxResolution : "original",
+      countdown_seconds: settings.recording.countdown_seconds,
+      show_cursor: showCursor,
+      highlight_clicks: settings.recording.highlight_clicks,
+      show_keystrokes: settings.recording.show_keystrokes,
+      audio: {
+        capture_system_audio: kind === "video" && systemAudio,
+        microphone_device_id: kind === "video" ? microphoneId : null,
+        mono_output: settings.recording.mono_audio,
+        system_volume_percent: 100,
+        microphone_volume_percent: 100,
+        microphone_muted: false,
+      },
+      gif: {
+        max_width: gifWidth,
+        max_colors: settings.recording.gif_max_colors,
+        optimize: true,
+      },
+    };
+    setStarting(true);
+    setError("");
+    try {
+      await invoke("start_recording", {
+        request: { selection_id: session.id, options },
+      });
+    } catch (error) {
+      setError(String(error));
+      setStarting(false);
+    }
+  };
+
+  return (
+    <main
+      ref={surfaceRef}
+      className={`recording-selector recording-target-${targetMode}`}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+    >
+      <img className="recording-selector-snapshot" src={session.snapshot_url} alt="" draggable={false} />
+      <div className="recording-selector-shade" />
+      {selectedRect && selectedRect.width > 0 && selectedRect.height > 0 && (
+        <div
+          className={`recording-selection-frame${targetMode === "region" ? " movable" : ""}`}
+          style={{
+            left: selectedRect.x,
+            top: selectedRect.y,
+            width: selectedRect.width,
+            height: selectedRect.height,
+          }}
+        >
+          <span>{Math.round(selectedRect.width)} × {Math.round(selectedRect.height)}</span>
+          {targetMode === "region" && <>
+            <i className="handle nw" data-selection-handle="nw" />
+            <i className="handle ne" data-selection-handle="ne" />
+            <i className="handle sw" data-selection-handle="sw" />
+            <i className="handle se" data-selection-handle="se" />
+          </>}
+        </div>
+      )}
+      {targetMode === "window" && windowLayouts.map(({ window, ...layout }) => (
+        <button
+          key={window.id}
+          type="button"
+          className={`recording-window-target${selectedWindow === window.id ? " selected" : ""}`}
+          style={layout}
+          aria-label={`Select ${window.title || "window"}`}
+          onPointerDown={(event) => event.stopPropagation()}
+          onMouseEnter={() => setHoveredWindow(window.id)}
+          onMouseLeave={() => setHoveredWindow(null)}
+          onClick={() => setSelectedWindow(window.id)}
+        />
+      ))}
+
+      <section className="recording-selector-panel" onPointerDown={(event) => event.stopPropagation()}>
+        <div className="recording-panel-top">
+          <div className="recording-kind-switch" role="group" aria-label="Recording format">
+            <button type="button" className={kind === "video" ? "active" : ""} onClick={() => selectKind("video")}>Video</button>
+            <button type="button" className={kind === "gif" ? "active" : ""} onClick={() => selectKind("gif")}>GIF</button>
+          </div>
+          <div className="recording-target-switch" role="group" aria-label="Capture target">
+            {(["region", "window", "display"] as const).map((mode) => (
+              <button key={mode} type="button" className={targetMode === mode ? "active" : ""} onClick={() => setTargetMode(mode)}>
+                {mode === "display" ? "Full screen" : mode[0].toUpperCase() + mode.slice(1)}
+              </button>
+            ))}
+          </div>
+          <button className="recording-cancel" type="button" onClick={() => void invoke("cancel_recording_selection", { selectionId: session.id })}>Cancel</button>
+        </div>
+        <div className="recording-options-row">
+          <label>FPS
+            <select value={fps} onChange={(event) => setFps(Number(event.target.value))}>
+              {(kind === "video" ? [15, 30, 60] : [8, 10, 12, 15, 20, 24, 30]).map((value) => <option key={value} value={value}>{value}</option>)}
+            </select>
+          </label>
+          {kind === "video" ? (
+            <label>Maximum size
+              <select value={maxResolution} onChange={(event) => setMaxResolution(event.target.value as MaxResolution)}>
+                <option value="original">Original</option><option value="p1080">1080p</option><option value="p720">720p</option>
+              </select>
+            </label>
+          ) : (
+            <label>GIF width
+              <select value={gifWidth} onChange={(event) => setGifWidth(Number(event.target.value))}>
+                {[320, 480, 640, 800, 1200].map((value) => <option key={value} value={value}>{value}px max</option>)}
+              </select>
+            </label>
+          )}
+          <label className="recording-toggle"><input type="checkbox" checked={showCursor} onChange={(event) => setShowCursor(event.target.checked)} />Cursor</label>
+          {kind === "video" && <>
+            <label className="recording-toggle"><input type="checkbox" checked={systemAudio} onChange={(event) => setSystemAudio(event.target.checked)} />Desktop audio</label>
+            <label>Microphone
+              <select value={microphoneId ?? "off"} onChange={(event) => setMicrophoneId(event.target.value === "off" ? null : event.target.value)}>
+                <option value="off">Off</option>
+                {devices.map((device) => <option key={device.id} value={device.id}>{device.name}</option>)}
+              </select>
+            </label>
+          </>}
+          <button className="recording-start" type="button" disabled={!canStart || starting} onClick={() => void start()}>
+            <span aria-hidden="true" />{starting ? "Starting…" : `Record ${kind === "gif" ? "GIF" : "Video"}`}
+          </button>
+        </div>
+        {error && <p className="recording-selector-error" role="alert">{error}</p>}
+      </section>
+    </main>
+  );
+}
+
+function defaultRecordingRegion(width: number, height: number): RecordingRect {
+  const regionWidth = Math.max(320, Math.round(width * 0.66));
+  const regionHeight = Math.max(240, Math.round(height * 0.62));
+  return {
+    x: Math.round((width - regionWidth) / 2),
+    y: Math.round((height - regionHeight) / 2),
+    width: Math.min(width, regionWidth),
+    height: Math.min(height, regionHeight),
+  };
+}
+
+function roundRecordingRect(rect: RecordingRect, maxWidth: number, maxHeight: number): RecordingRect {
+  const x = Math.max(0, Math.round(rect.x));
+  const y = Math.max(0, Math.round(rect.y));
+  return {
+    x,
+    y,
+    width: Math.max(1, Math.min(maxWidth - x, Math.round(rect.width))),
+    height: Math.max(1, Math.min(maxHeight - y, Math.round(rect.height))),
+  };
+}
+
+function RecordingHud() {
+  const [snapshot, setSnapshot] = useState<RecordingSessionSnapshot | null>(null);
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [microphonePeak, setMicrophonePeak] = useState(0);
+  const [error, setError] = useState("");
+  const sessionIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    let dispose: (() => void)[] = [];
+    void (async () => {
+      dispose = await Promise.all([
+        listen<RecordingSessionSnapshot>("recording-state-changed", ({ payload }) => {
+          if (!active) return;
+          if (sessionIdRef.current !== payload.id) {
+            sessionIdRef.current = payload.id;
+            setCountdown(null);
+            setConfirmDiscard(false);
+            setMicrophonePeak(0);
+            setError("");
+          }
+          setSnapshot(payload);
+          if (payload.state !== "countdown") setCountdown(null);
+        }),
+        listen<{ session_id: string; remaining_seconds: number }>("recording-countdown", ({ payload }) => {
+          if (active && payload.session_id === sessionIdRef.current) setCountdown(payload.remaining_seconds);
+        }),
+        listen<{ session_id: string; message: string }>("recording-warning", ({ payload }) => {
+          if (active && payload.session_id === sessionIdRef.current) setError(payload.message);
+        }),
+        listen<{ session_id: string; microphone_peak: number }>("recording-audio-level", ({ payload }) => {
+          if (active && payload.session_id === sessionIdRef.current) {
+            setMicrophonePeak(Math.max(0, Math.min(1, payload.microphone_peak)));
+          }
+        }),
+      ]);
+      const current = await invoke<RecordingSessionSnapshot | null>("get_recording_snapshot");
+      if (active) {
+        sessionIdRef.current = current?.id ?? null;
+        setSnapshot(current);
+      }
+    })();
+    const timer = window.setInterval(() => {
+      void invoke<RecordingSessionSnapshot | null>("get_recording_snapshot").then((current) => {
+        if (active && current) setSnapshot(current);
+      });
+    }, 250);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      dispose.forEach((unlisten) => unlisten());
+    };
+  }, []);
+
+  if (!snapshot) return <main className="recording-hud recording-hud-loading">Preparing…</main>;
+  const invokeAction = async (command: string, extra: Record<string, unknown> = {}) => {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await invoke<RecordingSessionSnapshot | RecordingArtifact>(command, {
+        sessionId: snapshot.id,
+        ...extra,
+      });
+      if ("state" in result) setSnapshot(result);
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const canControl = snapshot.state === "recording" || snapshot.state === "paused";
+  const hasMicrophone = Boolean(snapshot.options.audio.microphone_device_id);
+
+  return (
+    <main className={`recording-hud recording-hud-${snapshot.state}`}>
+      <div className="recording-hud-status">
+        <span className="recording-dot" aria-hidden="true" />
+        <strong>{snapshot.state === "countdown" ? (countdown ?? snapshot.options.countdown_seconds) : formatRecordingTime(snapshot.elapsed_ms)}</strong>
+        <small>{snapshot.state === "paused" ? "Paused" : snapshot.state === "finalizing" ? "Saving…" : snapshot.options.kind.toUpperCase()}</small>
+      </div>
+      <div className="recording-hud-actions">
+        <button type="button" className="recording-stop" disabled={!canControl || busy} aria-label="Stop recording" onClick={() => void invokeAction("stop_recording")}><span /></button>
+        <button type="button" disabled={!canControl || busy} onClick={() => void invokeAction(snapshot.state === "paused" ? "resume_recording" : "pause_recording")}>{snapshot.state === "paused" ? "Resume" : "Pause"}</button>
+        <button type="button" disabled={!canControl || busy} onClick={() => void invokeAction("restart_recording")}>Restart</button>
+        {hasMicrophone && (
+          <span className="recording-microphone-level" aria-label={`Microphone level ${Math.round(microphonePeak * 100)}%`}>
+            <i style={{ width: `${Math.round(microphonePeak * 100)}%` }} />
+          </span>
+        )}
+        <button
+          type="button"
+          disabled={!hasMicrophone || !canControl || busy}
+          className={snapshot.options.audio.microphone_muted ? "active" : ""}
+          onClick={() => void invokeAction("set_recording_microphone_muted", { muted: !snapshot.options.audio.microphone_muted })}
+        >{snapshot.options.audio.microphone_muted ? "Unmute mic" : "Mute mic"}</button>
+        <button
+          type="button"
+          className={confirmDiscard ? "recording-discard confirm" : "recording-discard"}
+          disabled={busy || snapshot.state === "finalizing"}
+          onClick={() => {
+            if (!confirmDiscard) {
+              setConfirmDiscard(true);
+              window.setTimeout(() => setConfirmDiscard(false), 3_000);
+            } else {
+              void invokeAction("discard_recording");
+            }
+          }}
+        >{confirmDiscard ? "Discard?" : "Discard"}</button>
+      </div>
+      {(error || snapshot.error) && <p className="recording-hud-error" role="alert">{error || snapshot.error}</p>}
+    </main>
+  );
+}
+
+function formatRecordingTime(milliseconds: number): string {
+  const totalSeconds = Math.floor(milliseconds / 1_000);
+  const hours = Math.floor(totalSeconds / 3_600);
+  const minutes = Math.floor((totalSeconds % 3_600) / 60);
+  const seconds = totalSeconds % 60;
+  return hours > 0
+    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
+    : `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function RecordingEditor() {
+  const artifactId = query("artifact_id");
+  const [artifact, setArtifact] = useState<RecordingArtifact | null>(null);
+  const [trimStart, setTrimStart] = useState(0);
+  const [trimEnd, setTrimEnd] = useState(0);
+  const [cropEnabled, setCropEnabled] = useState(false);
+  const [crop, setCrop] = useState({ x: 0, y: 0, width: 1, height: 1 });
+  const [aspectLocked, setAspectLocked] = useState(true);
+  const [resolution, setResolution] = useState<"original" | "1080" | "720" | "custom">("original");
+  const [customWidth, setCustomWidth] = useState(1920);
+  const [customHeight, setCustomHeight] = useState(1080);
+  const [quality, setQuality] = useState<ExportSpec["quality"]>("standard");
+  const [sizeMode, setSizeMode] = useState<"quality" | "maximum">("quality");
+  const [maximumMb, setMaximumMb] = useState("10");
+  const [systemVolume, setSystemVolume] = useState(100);
+  const [microphoneVolume, setMicrophoneVolume] = useState(100);
+  const [muteSystem, setMuteSystem] = useState(false);
+  const [muteMicrophone, setMuteMicrophone] = useState(false);
+  const [mono, setMono] = useState(false);
+  const [exportId, setExportId] = useState<string | null>(null);
+  const exportIdRef = useRef<string | null>(null);
+  const [progress, setProgress] = useState<ExportProgress | null>(null);
+  const [exported, setExported] = useState<RecordingArtifact | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    let dispose: (() => void)[] = [];
+    void (async () => {
+      dispose = await Promise.all([
+        listen<{ export_id: string; progress: ExportProgress }>("recording-export-progress", ({ payload }) => {
+          if (active && payload.export_id === exportIdRef.current) setProgress(payload.progress);
+        }),
+        listen<{ export_id: string; artifact: RecordingArtifact }>("recording-export-complete", ({ payload }) => {
+          if (!active || payload.export_id !== exportIdRef.current) return;
+          setExported(payload.artifact);
+          setProgress({ stage: "complete", completed_per_mille: 1000, attempt: 1, message: null });
+          setExportId(null);
+          exportIdRef.current = null;
+        }),
+        listen<{ export_id: string; message: string }>("recording-export-failed", ({ payload }) => {
+          if (!active || payload.export_id !== exportIdRef.current) return;
+          setError(payload.message);
+          setExportId(null);
+          exportIdRef.current = null;
+        }),
+      ]);
+      if (!artifactId) return;
+      const loaded = await invoke<RecordingArtifact | null>("get_recording_artifact", { artifactId });
+      if (!active || !loaded) return;
+      setArtifact(loaded);
+      setTrimEnd(loaded.duration_ms);
+      setCrop({ x: 0, y: 0, width: loaded.width, height: loaded.height });
+      setCustomWidth(loaded.width);
+      setCustomHeight(loaded.height);
+    })().catch((error) => {
+      if (active) setError(String(error));
+    });
+    return () => {
+      active = false;
+      dispose.forEach((unlisten) => unlisten());
+    };
+  }, [artifactId]);
+
+  if (!artifact) {
+    return <main className="recording-editor recording-editor-loading">{error || "Loading recording…"}</main>;
+  }
+
+  const duration = Math.max(1, artifact.duration_ms);
+  const trimmedDuration = Math.max(1, trimEnd - trimStart);
+  const outputDimensions = editorOutputDimensions(
+    cropEnabled ? crop.width : artifact.width,
+    cropEnabled ? crop.height : artifact.height,
+    resolution,
+    customWidth,
+    customHeight,
+  );
+  const estimatedBytes = estimateEditedSize(
+    artifact,
+    trimmedDuration,
+    outputDimensions.width,
+    outputDimensions.height,
+    quality,
+    sizeMode === "maximum" ? Number(maximumMb) * 1_000_000 : null,
+  );
+
+  const updateCropDimension = (key: "width" | "height", value: number) => {
+    setCrop((current) => {
+      const maximumWidth = Math.max(2, artifact.width - current.x);
+      const maximumHeight = Math.max(2, artifact.height - current.y);
+      const ratio = current.width / Math.max(1, current.height);
+      if (!aspectLocked) {
+        return key === "width"
+          ? { ...current, width: clampNumber(Math.round(value), 2, maximumWidth) }
+          : { ...current, height: clampNumber(Math.round(value), 2, maximumHeight) };
+      }
+      if (key === "width") {
+        let width = clampNumber(Math.round(value), 2, maximumWidth);
+        let height = Math.max(2, Math.round(width / ratio));
+        if (height > maximumHeight) {
+          height = maximumHeight;
+          width = Math.max(2, Math.round(height * ratio));
+        }
+        return { ...current, width, height };
+      }
+      let height = clampNumber(Math.round(value), 2, maximumHeight);
+      let width = Math.max(2, Math.round(height * ratio));
+      if (width > maximumWidth) {
+        width = maximumWidth;
+        height = Math.max(2, Math.round(width / ratio));
+      }
+      return { ...current, width, height };
+    });
+  };
+
+  const updateCropOrigin = (key: "x" | "y", value: number) => {
+    setCrop((current) => {
+      if (key === "x") {
+        const x = clampNumber(Math.round(value), 0, Math.max(0, artifact.width - 2));
+        return { ...current, x, width: Math.min(current.width, artifact.width - x) };
+      }
+      const y = clampNumber(Math.round(value), 0, Math.max(0, artifact.height - 2));
+      return { ...current, y, height: Math.min(current.height, artifact.height - y) };
+    });
+  };
+
+  const startExport = async () => {
+    if (exportId) return;
+    const maximumBytes = sizeMode === "maximum" ? Math.floor(Number(maximumMb) * 1_000_000) : null;
+    if (
+      sizeMode === "maximum"
+      && (maximumBytes === null || !Number.isFinite(maximumBytes) || maximumBytes < 100_000)
+    ) {
+      setError("Enter a maximum size of at least 0.1 MB.");
+      return;
+    }
+    const edit: EditSpec = {
+      trim_start_ms: Math.round(trimStart),
+      trim_end_ms: Math.round(trimEnd),
+      crop: cropEnabled ? boundedCrop(crop, artifact.width, artifact.height) : null,
+      output_width: resolution === "original" ? null : outputDimensions.width,
+      output_height: resolution === "original" ? null : outputDimensions.height,
+      audio: {
+        system_volume: systemVolume / 100,
+        microphone_volume: microphoneVolume / 100,
+        mute_system_audio: muteSystem,
+        mute_microphone: muteMicrophone,
+        mono_output: mono,
+        source_has_system_audio: artifact.has_system_audio,
+        source_has_microphone_audio: artifact.has_microphone_audio,
+      },
+    };
+    const exportSpec: ExportSpec = {
+      format: artifact.kind === "gif" ? "gif" : "mp4",
+      quality,
+      max_size_bytes: maximumBytes,
+      frames_per_second: artifact.kind === "gif" ? 15 : null,
+      gif_max_colors: artifact.kind === "gif" ? 256 : null,
+    };
+    setError("");
+    setExported(null);
+    setProgress({ stage: "preparing", completed_per_mille: 0, attempt: 0, message: null });
+    try {
+      const id = await invoke<string>("start_recording_export", {
+        request: { artifact_id: artifact.id, edit, export: exportSpec },
+      });
+      exportIdRef.current = id;
+      setExportId(id);
+    } catch (error) {
+      setError(String(error));
+      setProgress(null);
+    }
+  };
+
+  return (
+    <main className="recording-editor">
+      <header className="recording-editor-header">
+        <div><span className="eyebrow">NON-DESTRUCTIVE EDITOR</span><h1>{artifact.kind === "gif" ? "Edit GIF" : "Edit recording"}</h1></div>
+        <div className="recording-editor-header-actions">
+          <button type="button" onClick={() => void invoke("reveal_recording_artifact", { artifactId: (exported ?? artifact).id })}>Reveal in Folder</button>
+          <button className="primary" type="button" disabled={Boolean(exportId)} onClick={() => void startExport()}>{exportId ? "Exporting…" : "Export Copy"}</button>
+        </div>
+      </header>
+      {artifact.dropped_frames > 0 && <p className="recording-editor-warning" role="status">This source dropped {artifact.dropped_frames.toLocaleString()} frame{artifact.dropped_frames === 1 ? "" : "s"} during capture. The original timing is preserved.</p>}
+
+      <section className="recording-editor-preview">
+        {artifact.kind === "video" ? (
+          <video src={artifact.media_url} controls preload="metadata" />
+        ) : (
+          <img src={artifact.media_url} alt="Animated GIF preview" />
+        )}
+      </section>
+
+      <section className="recording-timeline">
+        <div className="timeline-summary"><strong>{formatRecordingTime(trimStart)} – {formatRecordingTime(trimEnd)}</strong><span>{formatRecordingTime(trimmedDuration)} selected</span></div>
+        <div className="timeline-ranges">
+          <input aria-label="Trim start" type="range" min={0} max={duration} step={10} value={trimStart} onChange={(event) => setTrimStart(Math.min(Number(event.target.value), trimEnd - 10))} />
+          <input aria-label="Trim end" type="range" min={0} max={duration} step={10} value={trimEnd} onChange={(event) => setTrimEnd(Math.max(Number(event.target.value), trimStart + 10))} />
+        </div>
+      </section>
+
+      <div className="recording-editor-grid">
+        <section className="editor-card">
+          <h2>Crop & size</h2>
+          <label className="check-row"><input type="checkbox" checked={cropEnabled} onChange={(event) => setCropEnabled(event.target.checked)} /><span>Crop recording</span></label>
+          <div className="editor-number-grid">
+            <label>X<input type="number" min={0} max={Math.max(0, artifact.width - 2)} value={crop.x} disabled={!cropEnabled} onChange={(event) => updateCropOrigin("x", Number(event.target.value))} /></label>
+            <label>Y<input type="number" min={0} max={Math.max(0, artifact.height - 2)} value={crop.y} disabled={!cropEnabled} onChange={(event) => updateCropOrigin("y", Number(event.target.value))} /></label>
+            <label>Width<input type="number" min={2} max={Math.max(2, artifact.width - crop.x)} value={crop.width} disabled={!cropEnabled} onChange={(event) => updateCropDimension("width", Number(event.target.value))} /></label>
+            <label>Height<input type="number" min={2} max={Math.max(2, artifact.height - crop.y)} value={crop.height} disabled={!cropEnabled} onChange={(event) => updateCropDimension("height", Number(event.target.value))} /></label>
+          </div>
+          <label className="check-row compact"><input type="checkbox" checked={aspectLocked} onChange={(event) => setAspectLocked(event.target.checked)} /><span>Lock aspect ratio</span></label>
+          <label>Output resolution
+            <select value={resolution} onChange={(event) => setResolution(event.target.value as typeof resolution)}>
+              <option value="original">Original</option><option value="1080">1080p maximum</option><option value="720">720p maximum</option><option value="custom">Custom</option>
+            </select>
+          </label>
+          {resolution === "custom" && <div className="editor-number-grid dimensions"><label>Width<input type="number" min={2} value={customWidth} onChange={(event) => setCustomWidth(Number(event.target.value))} /></label><label>Height<input type="number" min={2} value={customHeight} onChange={(event) => setCustomHeight(Number(event.target.value))} /></label></div>}
+          <small>Output: {outputDimensions.width} × {outputDimensions.height}. Captures never upscales presets.</small>
+        </section>
+
+        <section className="editor-card">
+          <h2>Compression</h2>
+          <div className="editor-segmented"><button type="button" className={sizeMode === "quality" ? "active" : ""} onClick={() => setSizeMode("quality")}>Quality</button><button type="button" className={sizeMode === "maximum" ? "active" : ""} onClick={() => setSizeMode("maximum")}>Maximum file size</button></div>
+          {sizeMode === "quality" ? (
+            <label>Quality preset<select value={quality} onChange={(event) => setQuality(event.target.value as ExportSpec["quality"])}><option value="high">High</option><option value="standard">Standard</option><option value="small">Small</option></select></label>
+          ) : (
+            <label>Maximum size (decimal MB)<input type="number" min="0.1" step="0.1" value={maximumMb} onChange={(event) => setMaximumMb(event.target.value)} /></label>
+          )}
+          <div className="editor-estimate"><span>Estimated file size</span><strong>{estimatedBytes ? `~${formatFileSize(estimatedBytes)}` : "Calculated during export"}</strong></div>
+          {sizeMode === "maximum" && <small>Captures reserves 5%, verifies the actual file, and never silently exceeds your limit.</small>}
+        </section>
+
+        {artifact.kind === "video" && <section className="editor-card editor-audio-card">
+          <h2>Audio</h2>
+          <label className="editor-volume"><span><input type="checkbox" checked={artifact.has_system_audio && !muteSystem} disabled={!artifact.has_system_audio} onChange={(event) => setMuteSystem(!event.target.checked)} />System audio{!artifact.has_system_audio && " (not recorded)"}</span><input type="range" min={0} max={200} value={systemVolume} disabled={!artifact.has_system_audio || muteSystem} onChange={(event) => setSystemVolume(Number(event.target.value))} /><output>{artifact.has_system_audio ? `${systemVolume}%` : "—"}</output></label>
+          <label className="editor-volume"><span><input type="checkbox" checked={artifact.has_microphone_audio && !muteMicrophone} disabled={!artifact.has_microphone_audio} onChange={(event) => setMuteMicrophone(!event.target.checked)} />Microphone{!artifact.has_microphone_audio && " (not recorded)"}</span><input type="range" min={0} max={200} value={microphoneVolume} disabled={!artifact.has_microphone_audio || muteMicrophone} onChange={(event) => setMicrophoneVolume(Number(event.target.value))} /><output>{artifact.has_microphone_audio ? `${microphoneVolume}%` : "—"}</output></label>
+          <label className="check-row compact"><input type="checkbox" checked={mono} disabled={!artifact.has_system_audio && !artifact.has_microphone_audio} onChange={(event) => setMono(event.target.checked)} /><span>Convert export to mono</span></label>
+        </section>}
+      </div>
+
+      {(progress || error || exported) && <footer className="recording-export-status">
+        {progress && <div className="recording-export-progress"><span style={{ width: `${progress.completed_per_mille / 10}%` }} /></div>}
+        <p>{error || (exported ? `Exported ${formatFileSize(exported.size_bytes)} copy.` : progress?.message || exportStageLabel(progress?.stage))}</p>
+        {exportId && <button type="button" onClick={() => void invoke("cancel_recording_export", { exportId })}>Cancel Export</button>}
+        {exported && <button type="button" onClick={() => void invoke("reveal_recording_artifact", { artifactId: exported.id })}>Reveal Export</button>}
+      </footer>}
+    </main>
+  );
+}
+
+function editorOutputDimensions(
+  width: number,
+  height: number,
+  preset: "original" | "1080" | "720" | "custom",
+  customWidth: number,
+  customHeight: number,
+): { width: number; height: number } {
+  if (preset === "custom") return { width: evenDimension(customWidth), height: evenDimension(customHeight) };
+  const maximum = preset === "1080" ? 1080 : preset === "720" ? 720 : height;
+  const scale = height > maximum ? maximum / height : 1;
+  return { width: evenDimension(width * scale), height: evenDimension(height * scale) };
+}
+
+function boundedCrop(
+  crop: { x: number; y: number; width: number; height: number },
+  sourceWidth: number,
+  sourceHeight: number,
+): { x: number; y: number; width: number; height: number } {
+  const x = clampNumber(Math.round(crop.x), 0, Math.max(0, sourceWidth - 2));
+  const y = clampNumber(Math.round(crop.y), 0, Math.max(0, sourceHeight - 2));
+  return {
+    x,
+    y,
+    width: clampNumber(Math.round(crop.width), 2, Math.max(2, sourceWidth - x)),
+    height: clampNumber(Math.round(crop.height), 2, Math.max(2, sourceHeight - y)),
+  };
+}
+
+function clampNumber(value: number, minimum: number, maximum: number): number {
+  if (!Number.isFinite(value)) return minimum;
+  return Math.min(Math.max(value, minimum), Math.max(minimum, maximum));
+}
+
+function evenDimension(value: number): number {
+  const rounded = Math.max(2, Math.round(value));
+  return rounded % 2 === 0 ? rounded : rounded - 1;
+}
+
+function estimateEditedSize(
+  artifact: RecordingArtifact,
+  durationMs: number,
+  width: number,
+  height: number,
+  quality: ExportSpec["quality"],
+  strictMaximum: number | null,
+): number | null {
+  if (strictMaximum && Number.isFinite(strictMaximum)) return strictMaximum;
+  if (!artifact.duration_ms || !artifact.width || !artifact.height) return null;
+  const durationRatio = durationMs / artifact.duration_ms;
+  const pixelRatio = (width * height) / (artifact.width * artifact.height);
+  const qualityFactor = quality === "high" ? 1.15 : quality === "small" ? 0.55 : 0.8;
+  return Math.max(1, Math.round(artifact.size_bytes * durationRatio * Math.min(1, pixelRatio) * qualityFactor));
+}
+
+function exportStageLabel(stage: ExportProgress["stage"] | undefined): string {
+  if (stage === "preparing") return "Preparing export…";
+  if (stage === "encoding") return "Encoding export…";
+  if (stage === "verifying") return "Verifying file size…";
+  if (stage === "cancelled") return "Export cancelled.";
+  if (stage === "failed") return "Export failed.";
+  return "Export complete.";
 }
 
 function CaptureOverlay() {
@@ -1584,6 +2447,88 @@ function CheckIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6" /></svg>;
 }
 
+function RecordingRecovery() {
+  const [drafts, setDrafts] = useState<RecordingDraftManifest[]>([]);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [confirmDiscardId, setConfirmDiscardId] = useState<string | null>(null);
+  const [error, setError] = useState("");
+
+  const refresh = useCallback(async () => {
+    const loaded = await invoke<RecordingDraftManifest[]>("get_recording_drafts");
+    setDrafts(loaded);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void invoke<RecordingDraftManifest[]>("get_recording_drafts")
+      .then((loaded) => {
+        if (active) setDrafts(loaded);
+      })
+      .catch((error) => {
+        if (active) setError(String(error));
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  if (drafts.length === 0 && !error) return null;
+
+  const run = async (command: "recover_recording_draft" | "discard_recording_draft", sessionId: string) => {
+    if (busyId) return;
+    setBusyId(sessionId);
+    setError("");
+    try {
+      await invoke(command, { sessionId });
+      setConfirmDiscardId(null);
+      await refresh();
+    } catch (error) {
+      setError(String(error));
+      await refresh().catch(() => undefined);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <section className="settings-section recording-recovery-section">
+      <h2>Recording recovery</h2>
+      <p className="help-text">Captures found recording data left by an interruption. Recovery uses every complete, playable segment and keeps the source bundle until the result is safely saved.</p>
+      {drafts.map((draft) => {
+        const duration = draft.segments
+          .filter((segment) => segment.complete)
+          .reduce((total, segment) => total + segment.duration_ms, 0);
+        const isBusy = busyId === draft.session_id;
+        return (
+          <div className="recording-recovery-row" key={draft.session_id}>
+            <div>
+              <strong>{draft.options.kind === "gif" ? "GIF" : "Video"} recording</strong>
+              <small>{new Date(draft.created_at_ms).toLocaleString()} · {formatRecordingTime(duration)} recovered so far</small>
+              {draft.last_error && <small className="warning">{draft.last_error}</small>}
+            </div>
+            <div>
+              <button type="button" disabled={Boolean(busyId)} onClick={() => void run("recover_recording_draft", draft.session_id)}>{isBusy ? "Recovering…" : "Recover"}</button>
+              <button
+                type="button"
+                className={confirmDiscardId === draft.session_id ? "danger" : ""}
+                disabled={Boolean(busyId)}
+                onClick={() => {
+                  if (confirmDiscardId === draft.session_id) {
+                    void run("discard_recording_draft", draft.session_id);
+                  } else {
+                    setConfirmDiscardId(draft.session_id);
+                  }
+                }}
+              >{confirmDiscardId === draft.session_id ? "Discard permanently?" : "Discard"}</button>
+            </div>
+          </div>
+        );
+      })}
+      {error && <p className="settings-error" role="alert">{error}</p>}
+    </section>
+  );
+}
+
 type PreferencesSaveStatus = {
   kind: "idle" | "saving" | "saved" | "error";
   message: string;
@@ -1591,6 +2536,7 @@ type PreferencesSaveStatus = {
 
 export function Preferences() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [recordingDevices, setRecordingDevices] = useState<AudioDevice[]>([]);
   const [saveStatus, setSaveStatus] = useState<PreferencesSaveStatus>({ kind: "idle", message: "" });
   const [recordingShortcut, setRecordingShortcut] = useState<string | null>(null);
   const settingsRef = useRef<AppSettings | null>(null);
@@ -1681,12 +2627,36 @@ export function Preferences() {
     };
   }, [clearSavedStatusTimer, flushPendingSettings]);
 
+  useEffect(() => {
+    let active = true;
+    void invoke<AudioDevice[]>("list_recording_audio_devices")
+      .then((devices) => {
+        if (active) setRecordingDevices(devices);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, []);
+
   if (!settings) return <main className="preferences loading">Loading preferences…</main>;
 
   const update = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
     const current = settingsRef.current;
     if (!current || Object.is(current[key], value)) return;
     const next = { ...current, [key]: value };
+    settingsRef.current = next;
+    setSettings(next);
+    scheduleSettingsSave(next);
+  };
+
+  const updateRecording = <K extends keyof AppSettings["recording"]>(
+    key: K,
+    value: AppSettings["recording"][K],
+  ) => {
+    const current = settingsRef.current;
+    if (!current || Object.is(current.recording[key], value)) return;
+    const next = { ...current, recording: { ...current.recording, [key]: value } };
     settingsRef.current = next;
     setSettings(next);
     scheduleSettingsSave(next);
@@ -1760,8 +2730,82 @@ export function Preferences() {
           onRecordingChange={(recording) => setRecordingShortcut(recording ? "display-shortcut" : null)}
           onChange={(value) => update("display_shortcut", value)}
         />
+        <ShortcutInput
+          id="video-shortcut"
+          label="Record Video"
+          value={settings.recording.video_shortcut}
+          recording={recordingShortcut === "video-shortcut"}
+          onRecordingChange={(recording) => setRecordingShortcut(recording ? "video-shortcut" : null)}
+          onChange={(value) => updateRecording("video_shortcut", value)}
+        />
+        <ShortcutInput
+          id="gif-shortcut"
+          label="Record GIF"
+          value={settings.recording.gif_shortcut}
+          recording={recordingShortcut === "gif-shortcut"}
+          onRecordingChange={(recording) => setRecordingShortcut(recording ? "gif-shortcut" : null)}
+          onChange={(value) => updateRecording("gif_shortcut", value)}
+        />
         <p className="help-text">Select a shortcut, then press the key combination you want. Press Esc to cancel recording. Changes save automatically.</p>
       </section>
+
+      <section className="settings-section recording-settings-section">
+        <h2>Video recording</h2>
+        <div className="settings-inline-grid">
+          <label>Frames per second
+            <select value={settings.recording.video_fps} onChange={(event) => updateRecording("video_fps", Number(event.target.value))}>
+              <option value={15}>15 FPS</option><option value={30}>30 FPS</option><option value={60}>60 FPS</option>
+            </select>
+          </label>
+          <label>Maximum resolution
+            <select value={settings.recording.video_max_resolution} onChange={(event) => updateRecording("video_max_resolution", event.target.value as MaxResolution)}>
+              <option value="original">Original</option><option value="p1080">1080p</option><option value="p720">720p</option>
+            </select>
+          </label>
+        </div>
+        <label className="check-row capture-option"><input type="checkbox" checked={settings.recording.capture_system_audio} onChange={(event) => updateRecording("capture_system_audio", event.target.checked)} /><span>Record desktop audio<small>Captures excludes its own sounds and asks for access only when enabled.</small></span></label>
+        <label className="field-label">Default microphone
+          <select value={settings.recording.microphone_device_id ?? "off"} onChange={(event) => updateRecording("microphone_device_id", event.target.value === "off" ? null : event.target.value)}>
+            <option value="off">Off</option>
+            {recordingDevices.map((device) => <option key={device.id} value={device.id}>{device.name}</option>)}
+          </select>
+        </label>
+        <label className="check-row"><input type="checkbox" checked={settings.recording.mono_audio} onChange={(event) => updateRecording("mono_audio", event.target.checked)} /><span>Export recording audio in mono</span></label>
+      </section>
+
+      <section className="settings-section recording-settings-section">
+        <h2>GIF recording</h2>
+        <div className="settings-inline-grid">
+          <label>Frames per second
+            <select value={settings.recording.gif_fps} onChange={(event) => updateRecording("gif_fps", Number(event.target.value))}>
+              {[8, 10, 12, 15, 20, 24, 30].map((value) => <option key={value} value={value}>{value} FPS</option>)}
+            </select>
+          </label>
+          <label>Maximum width
+            <select value={settings.recording.gif_max_width} onChange={(event) => updateRecording("gif_max_width", Number(event.target.value))}>
+              {[320, 480, 640, 800, 1200].map((value) => <option key={value} value={value}>{value} px</option>)}
+            </select>
+          </label>
+          <label>Palette colors
+            <select value={settings.recording.gif_max_colors} onChange={(event) => updateRecording("gif_max_colors", Number(event.target.value))}>
+              {[64, 96, 128, 256].map((value) => <option key={value} value={value}>{value}</option>)}
+            </select>
+          </label>
+        </div>
+      </section>
+
+      <section className="settings-section recording-settings-section">
+        <h2>Recording behavior</h2>
+        <label className="field-label">Countdown
+          <select value={settings.recording.countdown_seconds} onChange={(event) => updateRecording("countdown_seconds", Number(event.target.value))}>
+            {[0, 1, 2, 3, 5, 10].map((value) => <option key={value} value={value}>{value === 0 ? "Off" : `${value} seconds`}</option>)}
+          </select>
+        </label>
+        <label className="check-row"><input type="checkbox" checked={settings.recording.show_cursor} onChange={(event) => updateRecording("show_cursor", event.target.checked)} /><span>Show cursor in recordings</span></label>
+        <label className="check-row capture-option"><input type="checkbox" checked={settings.recording.open_editor_after_recording} onChange={(event) => updateRecording("open_editor_after_recording", event.target.checked)} /><span>Open the editor after recording<small>The original is saved first, so closing the editor never loses a recording.</small></span></label>
+      </section>
+
+      <RecordingRecovery />
 
       <UpdatePreferences />
 

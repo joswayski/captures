@@ -18,6 +18,9 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 captures-capture = { path = "../../../crates/captures-capture" }
+captures-media = { path = "../../../crates/captures-media" }
+captures-recording = { path = "../../../crates/captures-recording" }
+captures-recording-macos = { path = "../../../crates/captures-recording-macos" }
 anyhow = "1"
 chrono.workspace = true
 image.workspace = true

@@ -8,7 +8,11 @@ use parking_lot::{Mutex, RwLock};
 use uuid::Uuid;
 
 use crate::{
-    models::{AppSettings, CaptureArtifact, CaptureSession, HistoryEntry},
+    models::{
+        AppSettings, CaptureArtifact, CaptureSession, HistoryEntry, RecordingArtifactData,
+        RecordingSelection,
+    },
+    recording::RecordingRuntime,
     storage,
 };
 
@@ -142,6 +146,9 @@ pub struct AppState {
     pub settings: RwLock<AppSettings>,
     pub sessions: Mutex<HashMap<Uuid, CaptureSession>>,
     pub artifacts: Mutex<Vec<CaptureArtifact>>,
+    pub recording_artifacts: Mutex<Vec<RecordingArtifactData>>,
+    pub recording_selection: Mutex<Option<RecordingSelection>>,
+    pub recording: Mutex<RecordingRuntime>,
     pub history: Mutex<Vec<HistoryEntry>>,
     pub clipboard_ownership: Mutex<ClipboardOwnership>,
     pub thumbnail_visibility: Mutex<ThumbnailVisibility>,
@@ -158,10 +165,17 @@ impl AppState {
             eprintln!("failed to load capture history: {error}");
             Vec::new()
         });
+        let recording_artifacts = history
+            .iter()
+            .filter_map(storage::load_recording_artifact)
+            .collect();
         Arc::new(Self {
             settings: RwLock::new(storage::load_settings()),
             sessions: Mutex::new(HashMap::new()),
             artifacts: Mutex::new(Vec::new()),
+            recording_artifacts: Mutex::new(recording_artifacts),
+            recording_selection: Mutex::new(None),
+            recording: Mutex::new(RecordingRuntime::default()),
             history: Mutex::new(history),
             clipboard_ownership: Mutex::new(ClipboardOwnership::default()),
             thumbnail_visibility: Mutex::new(ThumbnailVisibility::default()),

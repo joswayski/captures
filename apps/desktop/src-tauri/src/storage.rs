@@ -13,7 +13,10 @@ use uuid::Uuid;
 
 use crate::{
     AppError,
-    models::{AppSettings, CaptureArtifact, HISTORY_RETENTION_DAYS, HistoryEntry},
+    models::{
+        AppSettings, ArtifactKind, CaptureArtifact, HISTORY_RETENTION_DAYS, HistoryEntry,
+        RecordingArtifactData,
+    },
 };
 
 const HISTORY_IMAGE_FILE: &str = "capture.png";
@@ -176,6 +179,38 @@ fn clear_drag_exports_in(history_root: &Path) -> Result<(), AppError> {
     }
 }
 
+pub fn unique_media_path(directory: &Path, extension: &str) -> Result<PathBuf, AppError> {
+    fs::create_dir_all(directory)?;
+    let stem = format!("Captures_{}", Local::now().format("%Y-%m-%d_%H-%M-%S_%3f"));
+    let initial = directory.join(format!("{stem}.{extension}"));
+    if !initial.exists() {
+        return Ok(initial);
+    }
+    Ok((1_u32..)
+        .map(|suffix| directory.join(format!("{stem}-{suffix}.{extension}")))
+        .find(|candidate| !candidate.exists())
+        .unwrap_or_else(|| directory.join(format!("{stem}-{}.{}", Uuid::new_v4(), extension))))
+}
+
+pub fn unique_edited_media_path(source: &Path, extension: &str) -> Result<PathBuf, AppError> {
+    let directory = source.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(directory)?;
+    let source_stem = source
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or("Captures_recording");
+    let stem = format!("{source_stem}-edited");
+    let initial = directory.join(format!("{stem}.{extension}"));
+    if !initial.exists() {
+        return Ok(initial);
+    }
+    Ok((1_u32..)
+        .map(|suffix| directory.join(format!("{stem}-{suffix}.{extension}")))
+        .find(|candidate| !candidate.exists())
+        .unwrap_or_else(|| directory.join(format!("{stem}-{}.{}", Uuid::new_v4(), extension))))
+}
+
 pub fn load_capture_history() -> Result<Vec<HistoryEntry>, AppError> {
     load_capture_history_from(&crate::models::history_directory(), Utc::now())
 }
@@ -189,6 +224,27 @@ pub fn save_history_capture(
     save_history_capture_in(&directory, entry, image_png, preview_png)?;
     let _ = load_capture_history_from(&directory, Utc::now())?;
     Ok(())
+}
+
+pub fn save_history_recording(entry: &HistoryEntry, poster_png: &[u8]) -> Result<(), AppError> {
+    if entry.kind == ArtifactKind::Screenshot || entry.recording_artifact().is_none() {
+        return Err(AppError::Task(
+            "recording history metadata is incomplete".to_owned(),
+        ));
+    }
+    let directory = crate::models::history_directory();
+    save_history_entry_in(&directory, entry, None, poster_png)?;
+    let _ = load_capture_history_from(&directory, Utc::now())?;
+    Ok(())
+}
+
+pub fn load_recording_artifact(entry: &HistoryEntry) -> Option<RecordingArtifactData> {
+    let summary = entry.recording_artifact()?;
+    let poster_png = load_history_image(&entry.id, true).ok()?;
+    Some(RecordingArtifactData {
+        summary,
+        poster_png,
+    })
 }
 
 pub fn load_history_images(entry_id: &str) -> Result<(Vec<u8>, Vec<u8>), AppError> {
@@ -224,13 +280,24 @@ fn save_history_capture_in(
     image_png: &[u8],
     preview_png: &[u8],
 ) -> Result<(), AppError> {
+    save_history_entry_in(root, entry, Some(image_png), preview_png)
+}
+
+fn save_history_entry_in(
+    root: &Path,
+    entry: &HistoryEntry,
+    image_png: Option<&[u8]>,
+    preview_png: &[u8],
+) -> Result<(), AppError> {
     fs::create_dir_all(root)?;
     let destination = history_entry_directory(root, &entry.id)?;
     let temporary = root.join(format!(".{}.{}.tmp", entry.id, Uuid::new_v4()));
     fs::create_dir(&temporary)?;
 
     let result = (|| {
-        fs::write(temporary.join(HISTORY_IMAGE_FILE), image_png)?;
+        if let Some(image_png) = image_png {
+            fs::write(temporary.join(HISTORY_IMAGE_FILE), image_png)?;
+        }
         fs::write(temporary.join(HISTORY_PREVIEW_FILE), preview_png)?;
         fs::write(
             temporary.join(HISTORY_METADATA_FILE),
@@ -290,11 +357,20 @@ fn load_capture_history_from(
             }
         };
         let created_at = created_at.with_timezone(&Utc);
-        if created_at < cutoff {
+        if history_entry.kind == ArtifactKind::Screenshot && created_at < cutoff {
             let _ = fs::remove_dir_all(path);
             continue;
         }
-        if !path.join(HISTORY_IMAGE_FILE).is_file() || !path.join(HISTORY_PREVIEW_FILE).is_file() {
+        let files_are_valid = path.join(HISTORY_PREVIEW_FILE).is_file()
+            && match history_entry.kind {
+                ArtifactKind::Screenshot => {
+                    history_entry.mode.is_some() && path.join(HISTORY_IMAGE_FILE).is_file()
+                }
+                ArtifactKind::Video | ArtifactKind::Gif => {
+                    history_entry.recording_artifact().is_some()
+                }
+            };
+        if !files_are_valid {
             let _ = fs::remove_dir_all(path);
             continue;
         }
@@ -391,6 +467,7 @@ fn unique_path(directory: &Path, stem: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use captures_capture::CaptureMode;
+    use captures_recording::{RecordingKind, RecordingTarget};
     use chrono::{Duration, TimeZone, Utc};
     use image::{Rgba, RgbaImage};
     use tempfile::tempdir;
@@ -399,12 +476,12 @@ mod tests {
         DRAG_EXPORT_DIRECTORY, DRAG_ICON_FILE, DRAG_ICON_HEIGHT, DRAG_ICON_WIDTH,
         HISTORY_IMAGE_FILE, HISTORY_PREVIEW_FILE, clear_drag_exports_in, encode_drag_icon_png,
         encode_png, encode_preview_png, encode_thumbnail_png, load_capture_history_from,
-        prepare_artifact_drag_in, save_encoded_capture, save_history_capture_in, save_settings_to,
-        unique_path,
+        prepare_artifact_drag_in, save_encoded_capture, save_history_capture_in,
+        save_history_entry_in, save_settings_to, unique_path,
     };
     use crate::models::{
-        AppSettings, CaptureArtifact, ClipboardCopyStatus, HistoryEntry, history_full_url,
-        history_preview_url,
+        AppSettings, ArtifactKind, CaptureArtifact, ClipboardCopyStatus, HistoryEntry,
+        RecordingArtifact, history_full_url, history_preview_url,
     };
 
     #[test]
@@ -574,16 +651,70 @@ mod tests {
         assert!(!export_root.exists());
     }
 
+    #[test]
+    fn recording_history_keeps_metadata_and_poster_without_copying_media() {
+        let directory = tempdir().expect("temporary directory");
+        let now = Utc.with_ymd_and_hms(2026, 7, 19, 12, 0, 0).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let media_path = directory.path().join("externally-managed.mp4");
+        let artifact = RecordingArtifact {
+            id: id.clone(),
+            kind: RecordingKind::Video,
+            path: media_path.to_string_lossy().into_owned(),
+            media_url: format!("captures-capture://localhost/media/{id}"),
+            poster_url: format!("captures-capture://localhost/poster/{id}"),
+            mime_type: "video/mp4".to_owned(),
+            duration_ms: 4_200,
+            width: 1_920,
+            height: 1_080,
+            size_bytes: 123_456,
+            dropped_frames: 0,
+            has_system_audio: true,
+            has_microphone_audio: false,
+            created_at: (now - Duration::days(90)).to_rfc3339(),
+            target: RecordingTarget::Display {
+                display_id: "1".to_owned(),
+            },
+            missing: true,
+        };
+        let entry = HistoryEntry::from_recording(&artifact);
+
+        save_history_entry_in(directory.path(), &entry, None, b"poster")
+            .expect("recording history saved");
+        let loaded = load_capture_history_from(directory.path(), now).expect("history loaded");
+
+        assert_eq!(
+            loaded.len(),
+            1,
+            "recording metadata does not expire with screenshot recovery"
+        );
+        assert_eq!(loaded[0].kind, ArtifactKind::Video);
+        assert!(loaded[0].recording_artifact().unwrap().missing);
+        assert!(!directory.path().join(&id).join(HISTORY_IMAGE_FILE).exists());
+        assert_eq!(
+            std::fs::read(directory.path().join(&id).join(HISTORY_PREVIEW_FILE)).unwrap(),
+            b"poster",
+        );
+    }
+
     fn history_entry(id: &str, created_at: String) -> HistoryEntry {
         HistoryEntry {
             id: id.to_owned(),
+            kind: ArtifactKind::Screenshot,
             preview_url: history_preview_url(id),
             full_url: history_full_url(id),
             width: 1_440,
             height: 900,
             size_bytes: 42,
             created_at,
-            mode: CaptureMode::Region,
+            mode: Some(CaptureMode::Region),
+            saved_path: None,
+            mime_type: None,
+            duration_ms: None,
+            target: None,
+            has_system_audio: false,
+            has_microphone_audio: false,
+            dropped_frames: 0,
         }
     }
 

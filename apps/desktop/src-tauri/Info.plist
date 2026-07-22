@@ -4,5 +4,11 @@
 <dict>
   <key>LSUIElement</key>
   <true/>
+  <key>NSScreenCaptureUsageDescription</key>
+  <string>Captures needs screen access only when you choose to capture or record part of your screen.</string>
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>Captures needs system audio access only when you enable desktop audio for a recording.</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Captures needs microphone access only when you select a microphone for a recording.</string>
 </dict>
 </plist>

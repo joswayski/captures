@@ -23,6 +23,27 @@ export function validateAndWriteChecksums(directory, appVersion) {
     if (!names.some(predicate)) throw new Error(`release is missing its ${label}`);
   }
 
+  const ffmpegSource = names.find((name) => /^ffmpeg-[\d.]+\.tar\.xz$/u.test(name));
+  if (!ffmpegSource) throw new Error("release is missing its FFmpeg source archive");
+  const ffmpegPrefix = ffmpegSource.slice(0, -".tar.xz".length);
+  for (const [label, suffix] of [
+    ["FFmpeg source signature", ".tar.xz.asc"],
+    ["FFmpeg build configuration", "-BUILD_CONFIG.txt"],
+    ["FFmpeg LGPL license", "-COPYING.LGPLv2.1"],
+    ["FFmpeg notice", "-NOTICE.md"],
+  ]) {
+    if (!names.includes(`${ffmpegPrefix}${suffix}`)) throw new Error(`release is missing its ${label}`);
+  }
+  const ffmpegConfiguration = readFileSync(join(root, `${ffmpegPrefix}-BUILD_CONFIG.txt`), "utf8");
+  for (const flag of ["--disable-gpl", "--disable-nonfree", "--disable-version3"]) {
+    if (!ffmpegConfiguration.includes(flag)) throw new Error(`FFmpeg build configuration is missing ${flag}`);
+  }
+  for (const flag of ["--enable-gpl", "--enable-nonfree", "--enable-version3", "--enable-libx264"]) {
+    if (ffmpegConfiguration.includes(flag)) {
+      throw new Error(`FFmpeg build configuration contains forbidden flag ${flag}`);
+    }
+  }
+
   const latest = JSON.parse(readFileSync(join(root, "latest.json"), "utf8"));
   if (latest.version !== appVersion) {
     throw new Error(`latest.json version ${latest.version} does not match ${appVersion}`);
