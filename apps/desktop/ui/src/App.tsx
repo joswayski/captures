@@ -1059,13 +1059,18 @@ export function Thumbnail() {
         );
         if (cancelled) return;
         if (!position) {
-          stopNativeTracking();
+          // A focus handoff can briefly make the native pointer query
+          // unavailable. Preserve the last presentation until a real sample
+          // confirms that the pointer moved away so the card cannot flash.
+          delay = 40;
         } else {
           applyNativeHover(position);
           delay = 40;
         }
       } catch {
-        if (!cancelled) stopNativeTracking();
+        // Treat a transient native query failure as indeterminate too. A valid
+        // outside sample still clears hover immediately through applyNativeHover.
+        delay = 40;
       } finally {
         polling = false;
         schedulePoll(delay);
@@ -1074,7 +1079,6 @@ export function Thumbnail() {
 
     const resumePolling = () => {
       if (document.hidden) return;
-      stopNativeTracking();
       schedulePoll(0);
     };
 
@@ -1151,6 +1155,7 @@ export function ThumbnailCard({
   const [feedback, setFeedback] = useState<"saved" | null>(null);
   const [busy, setBusy] = useState<"copied" | "saved" | null>(null);
   const [error, setError] = useState("");
+  const [thumbnailReady, setThumbnailReady] = useState(false);
   const [exit, setExit] = useState<"dismiss" | "delete" | null>(null);
   const [dustParticles, setDustParticles] = useState<ThumbnailDustParticle[] | null>(null);
   /**
@@ -1183,6 +1188,9 @@ export function ThumbnailCard({
     void invoke("thumbnail_ready", { artifactId: artifact.id })
       .catch(() => undefined)
       .finally(() => {
+        // Start the arrival glow only after the native thumbnail window is
+        // ready to show, so none of its 2.5 seconds elapse while hidden.
+        setThumbnailReady(true);
         window.dispatchEvent(new Event("captures-thumbnail-ready"));
       });
   };
@@ -1218,6 +1226,14 @@ export function ThumbnailCard({
     } finally {
       if (success && !isExitLocked()) setBusy(null);
     }
+  };
+
+  const openViewer = () => {
+    if (isExitLocked() || isExiting) return;
+    // The first viewer can take focus before native hover polling completes.
+    // Latch the current card first so its image and chrome never flash bright.
+    cardRef.current?.classList.add("thumbnail-card-native-active");
+    void runAction("open_artifact_viewer");
   };
 
   const exitWith = (kind: "dismiss" | "delete", action: string) => {
@@ -1299,6 +1315,7 @@ export function ThumbnailCard({
       ref={cardRef}
       className={[
         "thumbnail-card",
+        thumbnailReady ? "thumbnail-capture-highlight" : "",
         viewerActive && !isExiting ? "thumbnail-viewer-active" : "",
         exit ? `thumbnail-exit-${exit}` : "",
         usingDust ? "thumbnail-exit-dust" : "",
@@ -1311,7 +1328,7 @@ export function ThumbnailCard({
       onAnimationEnd={finishExit}
     >
       <img
-        src={artifact.preview_url}
+        src={artifact.full_url}
         alt="Screenshot preview"
         onLoad={markThumbnailReady}
         onError={markThumbnailReady}
@@ -1376,7 +1393,7 @@ export function ThumbnailCard({
           <IconButton
             label="Full size"
             disabled={isExiting}
-            onClick={() => void runAction("open_artifact_viewer")}
+            onClick={openViewer}
           >
             <ExpandIcon />
           </IconButton>

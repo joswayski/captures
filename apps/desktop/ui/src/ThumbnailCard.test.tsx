@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { act, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 
 import { ThumbnailCard } from "./App";
 import type { CaptureArtifact } from "./types";
@@ -26,6 +26,34 @@ function artifact(path: string | null, id = "capture-1"): CaptureArtifact {
 }
 
 describe("ThumbnailCard", () => {
+  it("renders the quick preview from the full-resolution image and highlights it once ready", async () => {
+    render(<ThumbnailCard artifact={artifact(null)} clipboardCurrent viewerActive={false} onRemoved={() => undefined} />);
+
+    const image = screen.getByRole("img", { name: "Screenshot preview" });
+    expect(image)
+      .toHaveAttribute("src", "captures-capture://artifact-full/capture-1");
+    expect(screen.getByRole("article")).not.toHaveClass("thumbnail-capture-highlight");
+
+    await act(async () => {
+      fireEvent.load(image);
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole("article")).toHaveClass("thumbnail-capture-highlight");
+  });
+
+  it("latches the hover presentation before the full-size viewer takes focus", () => {
+    render(<ThumbnailCard artifact={artifact(null)} clipboardCurrent viewerActive={false} onRemoved={() => undefined} />);
+
+    const card = screen.getByRole("article");
+    act(() => {
+      screen.getByRole("button", { name: "Full size" }).click();
+    });
+
+    expect(card).toHaveClass("thumbnail-card-native-active");
+    expect(invoke).toHaveBeenCalledWith("open_artifact_viewer", { artifactId: "capture-1" });
+  });
+
   it("before a folder save: Delete only (no Close), Save file for a disk PNG", () => {
     render(<ThumbnailCard artifact={artifact(null)} clipboardCurrent viewerActive={false} onRemoved={() => undefined} />);
 

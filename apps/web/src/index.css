@@ -10,8 +10,8 @@
   --color-ink: #101828;
   --color-ink-muted: #475467;
   --color-ink-soft: #667085;
-  --color-accent: #2563eb;
-  --color-accent-soft: #eff4ff;
+  --color-accent: #6c56dd;
+  --color-accent-soft: #f2efff;
 }
 
 @layer base {
@@ -21,11 +21,11 @@
 
   body {
     @apply m-0 min-h-dvh bg-canvas font-sans text-ink antialiased;
-    background-image: radial-gradient(ellipse 90% 50% at 50% -20%, rgba(37, 99, 235, 0.07), transparent 55%);
+    background-image: radial-gradient(ellipse 90% 50% at 50% -20%, rgba(169, 151, 255, 0.14), transparent 55%);
   }
 
   ::selection {
-    background: rgba(37, 99, 235, 0.16);
+    background: rgba(169, 151, 255, 0.32);
     color: #101828;
   }
 }
