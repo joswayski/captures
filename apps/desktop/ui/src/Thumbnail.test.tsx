@@ -52,12 +52,12 @@ describe("Thumbnail", () => {
 
     const card = await screen.findByRole("article");
     document.documentElement.classList.add("thumbnail-native-tracking");
-    card.classList.add("thumbnail-card-native-active");
+    card.setAttribute("data-thumbnail-native-active", "true");
 
     window.dispatchEvent(new Event("focus"));
 
     expect(document.documentElement).toHaveClass("thumbnail-native-tracking");
-    expect(card).toHaveClass("thumbnail-card-native-active");
+    expect(card).toHaveAttribute("data-thumbnail-native-active", "true");
   });
 
   it("preserves native hover when pointer polling is briefly unavailable", async () => {
@@ -78,13 +78,13 @@ describe("Thumbnail", () => {
 
     const card = await screen.findByRole("article");
     document.documentElement.classList.add("thumbnail-native-tracking");
-    card.classList.add("thumbnail-card-native-active");
+    card.setAttribute("data-thumbnail-native-active", "true");
     const pollsBeforeFocus = pointerPolls;
 
     window.dispatchEvent(new Event("focus"));
     await waitFor(() => expect(pointerPolls).toBeGreaterThan(pollsBeforeFocus));
 
     expect(document.documentElement).toHaveClass("thumbnail-native-tracking");
-    expect(card).toHaveClass("thumbnail-card-native-active");
+    expect(card).toHaveAttribute("data-thumbnail-native-active", "true");
   });
 });

@@ -42,16 +42,45 @@ describe("ThumbnailCard", () => {
     expect(screen.getByRole("article")).toHaveClass("thumbnail-capture-highlight");
   });
 
-  it("latches the hover presentation before the full-size viewer takes focus", () => {
-    render(<ThumbnailCard artifact={artifact(null)} clipboardCurrent viewerActive={false} onRemoved={() => undefined} />);
+  it("preserves hover presentation while switching full-size viewers", () => {
+    const cards = (activeId: string | null) => (
+      <>
+        <ThumbnailCard
+          artifact={artifact(null, "capture-1")}
+          clipboardCurrent={false}
+          viewerActive={activeId === "capture-1"}
+          onRemoved={() => undefined}
+        />
+        <ThumbnailCard
+          artifact={artifact(null, "capture-2")}
+          clipboardCurrent
+          viewerActive={activeId === "capture-2"}
+          onRemoved={() => undefined}
+        />
+      </>
+    );
+    const { rerender } = render(cards(null));
 
-    const card = screen.getByRole("article");
+    const [firstCard, secondCard] = screen.getAllByRole("article");
     act(() => {
-      screen.getByRole("button", { name: "Full size" }).click();
+      within(firstCard).getByRole("button", { name: "Full size" }).click();
     });
 
-    expect(card).toHaveClass("thumbnail-card-native-active");
+    expect(firstCard).toHaveAttribute("data-thumbnail-native-active", "true");
+    rerender(cards("capture-1"));
+    expect(firstCard).toHaveAttribute("data-thumbnail-native-active", "true");
+
+    act(() => {
+      within(secondCard).getByRole("button", { name: "Full size" }).click();
+    });
+
+    expect(firstCard).not.toHaveAttribute("data-thumbnail-native-active");
+    expect(secondCard).toHaveAttribute("data-thumbnail-native-active", "true");
+    rerender(cards("capture-2"));
+    expect(secondCard).toHaveAttribute("data-thumbnail-native-active", "true");
+
     expect(invoke).toHaveBeenCalledWith("open_artifact_viewer", { artifactId: "capture-1" });
+    expect(invoke).toHaveBeenCalledWith("open_artifact_viewer", { artifactId: "capture-2" });
   });
 
   it("before a folder save: Delete only (no Close), Save file for a disk PNG", () => {

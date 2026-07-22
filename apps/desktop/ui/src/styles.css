@@ -148,7 +148,7 @@ html.capture-window-cursor, html.capture-window-cursor * { cursor: var(--capture
 .thumbnail-svg-defs { position: absolute; width: 0; height: 0; overflow: hidden; pointer-events: none; }
 /* Cover fills the card (no letterbox bars). Full-res fidelity lives in the viewer. */
 .thumbnail-card img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: center; border: 0; border-radius: 12px; background: transparent; transition: filter .18s ease, transform .22s ease; }
-html:not(.thumbnail-native-tracking) .thumbnail-card:hover img, .thumbnail-card:focus-within img, .thumbnail-card-native-active img { filter: blur(2px) brightness(.56); transform: scale(1.015); }
+html:not(.thumbnail-native-tracking) .thumbnail-card:hover img, .thumbnail-card:focus-within img, .thumbnail-card[data-thumbnail-native-active="true"] img { filter: blur(2px) brightness(.56); transform: scale(1.015); }
 /* Lock the hovered look on exit so clearing :hover / native-active never flashes a sharp preview. */
 .thumbnail-card[class*="thumbnail-exit-"] img {
   transition: none;
@@ -158,16 +158,16 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover img, .thumbnail-card:
 /* Shared bottom row: dimensions + clipboard stay on one vertical centerline. */
 .thumbnail-bottom-bar { position: absolute; z-index: 5; right: 8px; bottom: 8px; left: 8px; display: flex; align-items: center; justify-content: space-between; gap: 8px; pointer-events: none; }
 .thumbnail-meta { display: flex; min-width: 0; align-items: center; gap: 6px; color: white; font-size: 10px; text-shadow: 0 1px 3px rgba(0,0,0,.9); transition: opacity .15s ease; }
-html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-meta, .thumbnail-card:focus-within .thumbnail-meta, .thumbnail-card-native-active .thumbnail-meta { opacity: 0; }
+html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-meta, .thumbnail-card:focus-within .thumbnail-meta, .thumbnail-card[data-thumbnail-native-active="true"] .thumbnail-meta { opacity: 0; }
 .thumbnail-meta > span { padding: 3px 6px; border-radius: 5px; background: rgba(12,13,18,.72); backdrop-filter: blur(8px); line-height: 1.3; }
 .warning { color: #f8c66d; }
 .clipboard-confirmation { display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; margin-left: auto; padding: 3px 8px; border: 1px solid rgba(151,235,170,.68); border-radius: 999px; color: #effff2; background: rgba(10,17,14,.94); box-shadow: 0 4px 14px rgba(0,0,0,.55), 0 0 0 1px rgba(151,235,170,.14), 0 0 14px rgba(104,220,132,.18); text-shadow: 0 1px 3px rgba(0,0,0,.9); font-size: 10px; font-weight: 750; line-height: 1.3; animation: clipboard-confirmation-arrive 1.15s cubic-bezier(.2,.8,.2,1) both; }
 .clipboard-confirmation svg { width: 12px; height: 12px; flex-shrink: 0; fill: none; stroke: #9aefad; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
 @keyframes clipboard-confirmation-arrive { 0% { opacity: 0; transform: translateY(4px) scale(.94); } 28% { opacity: 1; transform: translateY(0) scale(1.03); box-shadow: 0 6px 18px rgba(0,0,0,.7), 0 0 0 2px rgba(151,235,170,.18), 0 0 18px rgba(104,220,132,.28); } 55% { transform: scale(.99); } 100% { opacity: 1; transform: scale(1); } }
 .thumbnail-top-actions, .thumbnail-main-actions { opacity: 0; pointer-events: none; transition: opacity .16s ease, transform .18s ease; }
-html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-top-actions, html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-main-actions, .thumbnail-card:focus-within .thumbnail-top-actions, .thumbnail-card:focus-within .thumbnail-main-actions, .thumbnail-card-native-active .thumbnail-top-actions, .thumbnail-card-native-active .thumbnail-main-actions { opacity: 1; pointer-events: auto; }
+html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-top-actions, html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-main-actions, .thumbnail-card:focus-within .thumbnail-top-actions, .thumbnail-card:focus-within .thumbnail-main-actions, .thumbnail-card[data-thumbnail-native-active="true"] .thumbnail-top-actions, .thumbnail-card[data-thumbnail-native-active="true"] .thumbnail-main-actions { opacity: 1; pointer-events: auto; }
 .thumbnail-top-actions { position: absolute; z-index: 4; top: 8px; right: 8px; left: 8px; display: flex; justify-content: space-between; align-items: start; transform: translateY(-3px); }
-html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-top-actions, .thumbnail-card:focus-within .thumbnail-top-actions, .thumbnail-card-native-active .thumbnail-top-actions { transform: translateY(0); }
+html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-top-actions, .thumbnail-card:focus-within .thumbnail-top-actions, .thumbnail-card[data-thumbnail-native-active="true"] .thumbnail-top-actions { transform: translateY(0); }
 .thumbnail-top-left { display: flex; align-items: center; gap: 6px; }
 .thumbnail-top-right { display: flex; margin-left: auto; align-items: center; gap: 5px; }
 .icon-button { position: relative; display: grid; width: 29px; height: 29px; padding: 5px; place-items: center; border: 1px solid rgba(255,255,255,.14); border-radius: 7px; color: #f8f8fb; background: rgba(16,17,25,.8); box-shadow: 0 3px 12px rgba(0,0,0,.3); backdrop-filter: blur(12px); cursor: pointer; outline: none; transition: color .14s ease, background .14s ease, transform .14s ease, box-shadow .14s ease; }
@@ -188,7 +188,7 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-top-action
 .thumbnail-top-right .icon-button::after { left: auto; right: 0; transform: translate(0, 2px); }
 .thumbnail-top-right .icon-button:hover::after, .thumbnail-top-right .icon-button.native-pointer-hover::after, .thumbnail-top-right .icon-button:focus-visible::after { transform: translate(0, 0); }
 .thumbnail-main-actions { position: absolute; z-index: 3; top: 50%; left: 50%; display: grid; gap: 7px; width: 132px; transform: translate(-50%, -47%); }
-html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-main-actions, .thumbnail-card:focus-within .thumbnail-main-actions, .thumbnail-card-native-active .thumbnail-main-actions { transform: translate(-50%, -50%); }
+html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-main-actions, .thumbnail-card:focus-within .thumbnail-main-actions, .thumbnail-card[data-thumbnail-native-active="true"] .thumbnail-main-actions { transform: translate(-50%, -50%); }
 .thumbnail-main-actions button { display: flex; height: 32px; align-items: center; justify-content: center; gap: 7px; border: 1px solid rgba(255,255,255,.18); border-radius: 7px; color: white; background: rgba(25,27,38,.9); box-shadow: 0 4px 16px rgba(0,0,0,.3); backdrop-filter: blur(10px); cursor: pointer; font-size: 11px; font-weight: 700; transition: filter .14s ease, transform .14s ease, box-shadow .14s ease; outline: none; }
 .thumbnail-main-actions button:last-child { background: rgba(63,113,214,.94); }
 .thumbnail-main-actions button:hover, .thumbnail-main-actions button.native-pointer-hover { filter: brightness(1.15); transform: translateY(-1px); }

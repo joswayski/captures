@@ -20,6 +20,7 @@ import {
 import {
   applyThumbnailNativeHover,
   clearThumbnailNativeHover,
+  setThumbnailNativeActiveCard,
   shouldIgnoreThumbnailCursorEvents,
   thumbnailCursorSyncAction,
 } from "./lib/thumbnailHover";
@@ -1230,9 +1231,10 @@ export function ThumbnailCard({
 
   const openViewer = () => {
     if (isExitLocked() || isExiting) return;
-    // The first viewer can take focus before native hover polling completes.
-    // Latch the current card first so its image and chrome never flash bright.
-    cardRef.current?.classList.add("thumbnail-card-native-active");
+    // Viewer activation rerenders both the old and new active cards. Keep the
+    // actual pointer presentation in a DOM attribute React does not reconcile,
+    // so that render cannot flash the bright image and metadata between polls.
+    if (cardRef.current) setThumbnailNativeActiveCard(cardRef.current);
     void runAction("open_artifact_viewer");
   };
 

@@ -25,7 +25,7 @@ describe("applyThumbnailNativeHover", () => {
     const card = document.querySelector<HTMLElement>(".thumbnail-card")!;
     const image = document.querySelector<HTMLImageElement>("img")!;
     const button = document.querySelector<HTMLButtonElement>("button")!;
-    const elementFromPoint = vi.fn(() => card.classList.contains("thumbnail-card-native-active")
+    const elementFromPoint = vi.fn(() => card.hasAttribute("data-thumbnail-native-active")
         ? button
         : image);
     Object.defineProperty(document, "elementFromPoint", {
@@ -34,28 +34,27 @@ describe("applyThumbnailNativeHover", () => {
     });
 
     expect(applyThumbnailNativeHover({ x: 40, y: 80, inside: true })).toBe(true);
-    expect(card).toHaveClass("thumbnail-card-native-active");
+    expect(card).toHaveAttribute("data-thumbnail-native-active", "true");
     expect(button).toHaveClass("native-pointer-hover");
     expect(elementFromPoint).toHaveBeenCalledTimes(2);
   });
 
   it("clears native hover when the pointer leaves the preview", () => {
     document.body.innerHTML = `
-      <article class="thumbnail-card thumbnail-card-native-active">
+      <article class="thumbnail-card" data-thumbnail-native-active="true">
         <button class="native-pointer-hover">Copy</button>
       </article>
     `;
 
     expect(applyThumbnailNativeHover({ x: 0, y: 0, inside: false })).toBe(false);
-    expect(document.querySelector(".thumbnail-card")).not.toHaveClass(
-      "thumbnail-card-native-active",
-    );
+    expect(document.querySelector(".thumbnail-card"))
+      .not.toHaveAttribute("data-thumbnail-native-active");
     expect(document.querySelector("button")).not.toHaveClass("native-pointer-hover");
   });
 
   it("keeps the active button interactive between polls", () => {
     document.body.innerHTML = `
-      <article class="thumbnail-card thumbnail-card-native-active">
+      <article class="thumbnail-card" data-thumbnail-native-active="true">
         <img alt="Screenshot preview">
         <button class="native-pointer-hover">Open Preview</button>
       </article>
@@ -66,14 +65,14 @@ describe("applyThumbnailNativeHover", () => {
     Object.defineProperty(document, "elementFromPoint", {
       configurable: true,
       value: vi.fn(() => {
-        if (!card.classList.contains("thumbnail-card-native-active")) becameInactive = true;
+        if (!card.hasAttribute("data-thumbnail-native-active")) becameInactive = true;
         return button;
       }),
     });
 
     expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe(true);
     expect(becameInactive).toBe(false);
-    expect(card).toHaveClass("thumbnail-card-native-active");
+    expect(card).toHaveAttribute("data-thumbnail-native-active", "true");
     expect(button).toHaveClass("native-pointer-hover");
   });
 
@@ -97,22 +96,23 @@ describe("applyThumbnailNativeHover", () => {
     target = remainingButton;
     expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe(true);
 
-    expect(remaining).toHaveClass("thumbnail-card-native-active");
+    expect(remaining).toHaveAttribute("data-thumbnail-native-active", "true");
     expect(remainingButton).toHaveClass("native-pointer-hover");
   });
 });
 
 describe("clearThumbnailNativeHover", () => {
-  it("clears both native hover classes", () => {
+  it("clears the native card marker and button class", () => {
     document.body.innerHTML = `
-      <article class="thumbnail-card-native-active">
+      <article data-thumbnail-native-active="true">
         <button class="native-pointer-hover">Copy</button>
       </article>
     `;
 
     clearThumbnailNativeHover();
 
-    expect(document.querySelector("article")).not.toHaveClass("thumbnail-card-native-active");
+    expect(document.querySelector("article"))
+      .not.toHaveAttribute("data-thumbnail-native-active");
     expect(document.querySelector("button")).not.toHaveClass("native-pointer-hover");
   });
 });
