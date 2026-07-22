@@ -1,5 +1,5 @@
 :root {
-  --capture-camera-cursor: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2232%22 height=%2232%22 viewBox=%220 0 32 32%22%3E%3Cpath d=%22M5 10a3 3 0 0 1 3-3h4l2-3h6l2 3h2a3 3 0 0 1 3 3v13a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3Z%22 fill=%22%2310151d%22 stroke=%22white%22 stroke-width=%222%22/%3E%3Ccircle cx=%2216%22 cy=%2216.5%22 r=%225%22 fill=%22%23a997ff%22 stroke=%22white%22 stroke-width=%222%22/%3E%3C/svg%3E") 16 16, crosshair;
+  --capture-camera-cursor: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2232%22 height=%2232%22 viewBox=%220 0 32 32%22%3E%3Cpath d=%22M5 10a3 3 0 0 1 3-3h4l2-3h6l2 3h2a3 3 0 0 1 3 3v13a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3Z%22 fill=%22%2310151d%22 stroke=%22white%22 stroke-width=%222%22/%3E%3Ccircle cx=%2216%22 cy=%2216.5%22 r=%225%22 fill=%22%2349b6ff%22 stroke=%22white%22 stroke-width=%222%22/%3E%3C/svg%3E") 16 16, crosshair;
   color: #f8f8fb;
   background: transparent;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif;
@@ -124,7 +124,7 @@ html.capture-window-cursor, html.capture-window-cursor * { cursor: var(--capture
 .window-targets { position: absolute; inset: 0; z-index: 5; opacity: 0; transition: opacity .3s ease-out; }
 .capture-visible .window-targets { opacity: 1; }
 .window-target { position: absolute; overflow: hidden; border: 2px solid transparent; border-radius: 10px; background: transparent; color: transparent; text-align: left; cursor: inherit; padding: 0; appearance: none; }
-.window-target-hovered, .window-target:hover { border-color: #a997ff; background: rgba(137,116,255,.2); color: white; box-shadow: 0 0 0 1px rgba(255,255,255,.7) inset; }
+.window-target-hovered, .window-target:hover { border-color: #6fc5ff; background: rgba(73,182,255,.2); color: white; box-shadow: 0 0 0 1px rgba(255,255,255,.7) inset; }
 .window-target span { display: inline-block; max-width: 100%; padding: 4px 7px; overflow: hidden; border-radius: 4px; background: transparent; opacity: 0; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .window-target-hovered span, .window-target:hover span { background: rgba(17,18,26,.88); opacity: 1; }
 
@@ -187,7 +187,7 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-top-action
 .thumbnail-main-actions { position: absolute; z-index: 3; top: 50%; left: 50%; display: grid; gap: 7px; width: 132px; transform: translate(-50%, -47%); }
 html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-main-actions, .thumbnail-card:focus-within .thumbnail-main-actions, .thumbnail-card-native-active .thumbnail-main-actions { transform: translate(-50%, -50%); }
 .thumbnail-main-actions button { display: flex; height: 32px; align-items: center; justify-content: center; gap: 7px; border: 1px solid rgba(255,255,255,.18); border-radius: 7px; color: white; background: rgba(25,27,38,.9); box-shadow: 0 4px 16px rgba(0,0,0,.3); backdrop-filter: blur(10px); cursor: pointer; font-size: 11px; font-weight: 700; transition: filter .14s ease, transform .14s ease, box-shadow .14s ease; outline: none; }
-.thumbnail-main-actions button:last-child { background: rgba(108,86,221,.94); }
+.thumbnail-main-actions button:last-child { background: rgba(63,113,214,.94); }
 .thumbnail-main-actions button:hover, .thumbnail-main-actions button.native-pointer-hover { filter: brightness(1.15); transform: translateY(-1px); }
 .thumbnail-main-actions button:active { transform: translateY(1px) scale(.97); }
 .thumbnail-main-actions button:disabled { cursor: wait; opacity: .72; }

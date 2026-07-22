@@ -21,6 +21,13 @@
 - Reuse established patterns in the repository before introducing a new abstraction or dependency.
 - Keep this file concise and update it when a recurring repository convention or correction should persist across future work.
 
+## Visual design
+
+- Build from neutral foundations: off-white or white and charcoal or near-black surfaces, high-contrast typography, subtle borders, and restrained shadows and corner radii.
+- Do not force one accent color across the product. Use a small multi-accent palette selectively and consistently for actions, selection and focus, status, diagrams, and occasional feature moments while keeping most interface chrome neutral.
+- Establish hierarchy with typography, spacing, and modular layout before color. Prefer generous whitespace, clear grids or cards, and concise copy. Keep default page and application chrome neutral; reserve gradients or large color fields for contained feature moments.
+- Product imagery and illustrations may carry more color than their surrounding interface. Preserve accessible contrast and give recurring accent colors stable meanings.
+
 ## Documentation
 
 - Every pull request must leave the root `README.md` accurate. Update it when a change affects features, platform support, shortcuts, setup, build commands, privacy, networking, releases, or deployment.
