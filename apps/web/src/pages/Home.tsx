@@ -1,40 +1,92 @@
+import latestChanges from "../latest-changes";
+
 const REPO_URL = "https://github.com/joswayski/captures";
 const X_URL = "https://x.com/josevalerio";
+
+const dateFormatter = new Intl.DateTimeFormat("en", {
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+});
 
 export default function Home() {
   return (
     <div className="flex min-h-dvh flex-col">
-      <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col justify-center px-6 py-24">
-        <p className="inline-flex w-fit items-center gap-2 rounded-full border border-accent/15 bg-accent-soft px-2.5 py-1 text-xs font-medium text-accent">
-          <span className="h-1.5 w-1.5 rounded-full bg-accent" />
-          Coming soon
-        </p>
-        <h1 className="mt-4 text-4xl font-semibold tracking-tight text-ink sm:text-5xl">
-          Captures
-        </h1>
-        <p className="mt-4 max-w-lg text-base leading-relaxed text-ink-muted">
-          A cross-platform screen capture utility by{" "}
-          <a
-            href={X_URL}
-            target="_blank"
-            rel="noreferrer"
-            className="font-medium text-ink no-underline underline-offset-2 transition hover:text-accent hover:underline"
-          >
-            Jose Valerio
-          </a>
-          .
-        </p>
-        <div className="mt-8">
-          <a
-            href={REPO_URL}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-2 rounded-md bg-ink px-4 py-2.5 text-sm font-medium text-white no-underline transition hover:bg-zinc-800"
-          >
-            <GitHubIcon className="h-4 w-4" />
-            View on GitHub
-          </a>
-        </div>
+      <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-6 py-20 sm:py-24">
+        <section className="py-8 sm:py-12">
+          <p className="inline-flex w-fit items-center gap-2 rounded-full border border-accent/15 bg-accent-soft px-2.5 py-1 text-xs font-medium text-accent">
+            <span className="h-1.5 w-1.5 rounded-full bg-accent" />
+            Work in progress
+          </p>
+          <h1 className="mt-4 text-4xl font-semibold tracking-tight text-ink sm:text-5xl">
+            Captures
+          </h1>
+          <p className="mt-4 max-w-lg text-base leading-relaxed text-ink-muted">
+            A cross-platform screen capture utility by{" "}
+            <a
+              href={X_URL}
+              target="_blank"
+              rel="noreferrer"
+              className="font-medium text-ink no-underline underline-offset-2 transition hover:text-accent hover:underline"
+            >
+              Jose Valerio
+            </a>
+            .
+          </p>
+          <div className="mt-8">
+            <a
+              href={REPO_URL}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-2 rounded-md bg-ink px-4 py-2.5 text-sm font-medium text-white no-underline transition hover:bg-zinc-800"
+            >
+              <GitHubIcon className="h-4 w-4" />
+              View on GitHub
+            </a>
+          </div>
+        </section>
+
+        <section aria-labelledby="latest-changes-heading" className="mt-8 border-t border-border pt-10">
+          <div className="flex items-end justify-between gap-6">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-accent">
+                Building in public
+              </p>
+              <h2 id="latest-changes-heading" className="mt-2 text-2xl font-semibold tracking-tight text-ink">
+                Latest changes
+              </h2>
+            </div>
+            <a
+              href={`${REPO_URL}/commits/main`}
+              target="_blank"
+              rel="noreferrer"
+              className="shrink-0 text-sm font-medium text-ink-soft no-underline underline-offset-4 transition hover:text-accent hover:underline"
+            >
+              View history
+            </a>
+          </div>
+
+          <ol className="ml-1.5 mt-7 border-l border-border">
+            {latestChanges.map((change) => (
+              <li key={change.sha} className="relative pb-7 pl-7 last:pb-0">
+                <span className="absolute -left-[5px] top-1.5 h-2.5 w-2.5 rounded-full border-2 border-canvas bg-accent ring-1 ring-accent/25" />
+                <a
+                  href={change.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-medium leading-snug text-ink no-underline underline-offset-4 transition hover:text-accent hover:underline"
+                >
+                  {change.title}
+                </a>
+                <p className="mt-1.5 text-xs text-ink-soft">
+                  {dateFormatter.format(new Date(change.committedAt))}
+                  <span aria-hidden="true"> · </span>
+                  {change.pullRequest ? `PR #${change.pullRequest}` : change.sha}
+                </p>
+              </li>
+            ))}
+          </ol>
+        </section>
       </main>
     </div>
   );

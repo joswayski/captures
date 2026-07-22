@@ -1,6 +1,6 @@
 # Captures website
 
-Minimal static coming-soon page that points to [the repo](https://github.com/joswayski/captures).
+Minimal static work-in-progress page that points to [the repo](https://github.com/joswayski/captures) and shows recent changes from `main`.
 
 ## Stack
 
@@ -23,7 +23,7 @@ Site runs at [http://localhost:5174](http://localhost:5174).
 npm run build:web
 ```
 
-Output lands in `apps/web/dist/` — deploy those static files as-is.
+Output lands in `apps/web/dist/` — deploy those static files as-is. Normal local builds use the checked-in history snapshot so they remain deterministic.
 
 ## Docker
 
@@ -34,4 +34,6 @@ docker build -t captures-web .
 docker run --rm -p 8080:3000 captures-web
 ```
 
-The image builds the static site and serves it with `serve` on port 3000 (override with `PORT`).
+The Docker build refreshes the latest six `main` commits from GitHub before Vite creates the static site. Squash-merged commits link back to their pull requests. If GitHub is temporarily unavailable, the checked-in snapshot is used instead.
+
+Railway supplies `RAILWAY_GIT_COMMIT_SHA` to the Docker build, so the history-fetch layer is invalidated on each GitHub deployment. The image serves the result with `serve` on port 3000 (override with `PORT`).
