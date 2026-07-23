@@ -2060,9 +2060,6 @@ pub fn create_recording_selector_window(app: &AppHandle) -> Result<(), AppError>
     .visible(false)
     .build()?;
     window.set_content_protected(true)?;
-    captures_macos_window::prepare_window_reveal(&window).map_err(|error| {
-        AppError::Task(format!("recording selector could not be prepared: {error}"))
-    })?;
     Ok(())
 }
 
@@ -2099,6 +2096,16 @@ async fn prepare_recording_selector(
             window
                 .set_content_protected(true)
                 .map_err(|error| error.to_string())?;
+            // A hidden or zero-alpha WKWebView can be suspended before React
+            // installs its recording-selection listener. The frontend idle
+            // surface is transparent, so put the native window onscreen at full
+            // alpha while pointer events still pass through. React will wake,
+            // load the pending selection, and enable interaction when ready.
+            window
+                .set_ignore_cursor_events(true)
+                .map_err(|error| error.to_string())?;
+            captures_macos_window::reveal_window(&window).map_err(str::to_owned)?;
+            window.show().map_err(|error| error.to_string())?;
             handle
                 .emit("recording-selection-ready", &selection)
                 .map_err(|error| error.to_string())?;
@@ -2129,10 +2136,17 @@ pub fn show_recording_selector(
     let window = app
         .get_webview_window("recording-selector")
         .ok_or_else(|| "recording selector is unavailable".to_owned())?;
-    #[cfg(target_os = "macos")]
-    captures_macos_window::prepare_window_reveal(&window).map_err(str::to_owned)?;
+    window
+        .set_ignore_cursor_events(false)
+        .map_err(|error| error.to_string())?;
     window.show().map_err(|error| error.to_string())?;
-    window.set_focus().map_err(|error| error.to_string())?;
+    // The selector is already visible and interactive at this point. Focus is
+    // helpful for Escape-key handling, but macOS can temporarily reject it for
+    // an accessory app. Do not turn that harmless focus failure into a hidden
+    // selector by reporting the entire reveal as failed.
+    if let Err(error) = window.set_focus() {
+        eprintln!("failed to focus recording selector: {error}");
+    }
     Ok(())
 }
 

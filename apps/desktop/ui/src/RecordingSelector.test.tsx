@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 import { RecordingSelector } from "./App";
 import type { AppSettings, RecordingSelectionSession } from "./types";
@@ -61,18 +62,23 @@ const session: RecordingSelectionSession = {
 };
 
 describe("RecordingSelector", () => {
+  let selectorShowError: Error | null;
+
   beforeEach(() => {
+    selectorShowError = null;
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "get_recording_selection") return session;
       if (command === "get_settings") return settings;
       if (command === "list_recording_audio_devices") {
         return [{ id: "microphone-1", name: "Studio Microphone", is_default: true }];
       }
-      if (
-        command === "show_recording_selector"
-        || command === "reveal_recording_selector"
-        || command === "start_recording"
-      ) return undefined;
+      if (command === "show_recording_selector") {
+        if (selectorShowError) throw selectorShowError;
+        return undefined;
+      }
+      if (command === "reveal_recording_selector" || command === "start_recording") {
+        return undefined;
+      }
       throw new Error(`unexpected command: ${command}`);
     });
   });
@@ -116,5 +122,40 @@ describe("RecordingSelector", () => {
         }),
       });
     });
+  });
+
+  it("reveals through the safety path when a hidden WebView defers image loading", async () => {
+    render(<RecordingSelector />);
+
+    expect(await screen.findByRole("button", { name: "Record" })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("show_recording_selector", {
+        selectionId: session.id,
+      });
+    });
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("reveal_recording_selector", {
+        selectionId: session.id,
+      });
+    });
+  });
+
+  it("loads the prepared selection while event registration is still pending", async () => {
+    vi.mocked(listen).mockImplementationOnce(() => new Promise(() => undefined));
+
+    render(<RecordingSelector />);
+
+    expect(await screen.findByRole("button", { name: "Record" })).toBeInTheDocument();
+    expect(invoke).toHaveBeenCalledWith("get_recording_selection");
+    expect(invoke).toHaveBeenCalledWith("get_settings");
+  });
+
+  it("does not discard a prepared selection after a transient reveal failure", async () => {
+    selectorShowError = new Error("macOS could not focus the selector");
+
+    render(<RecordingSelector />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("macOS could not focus the selector");
+    expect(invoke).not.toHaveBeenCalledWith("cancel_recording_selection", expect.anything());
   });
 });

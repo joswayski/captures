@@ -120,7 +120,7 @@ Recording capture uses ScreenCaptureKit and Apple media APIs. Editing and GIF co
 
 ## Privacy
 
-Captures stores pending previews and its 30-day screenshot recovery history locally. Finished recordings are written directly to the local Captures folder; recording history stores only metadata and posters that reference those files. Interrupted-session bundles remain local for explicit recovery, and GIF source masters are pruned after seven days. Captures does not upload captures or send telemetry. Official release builds contact GitHub Releases only to check for and download application updates; locally built copies do not perform background update checks.
+Captures stores pending previews and its 30-day screenshot recovery history locally. Finished recordings are written directly to the local Captures folder; recording history stores only metadata and posters that reference those files. Interrupted-session bundles remain local and appear in Capture History for recovery, and GIF source masters are pruned after seven days. Captures does not upload captures or send telemetry. Official release builds contact GitHub Releases only to check for and download application updates; locally built copies do not perform background update checks.
 
 Future cloud sharing will be optional and explicit.
 

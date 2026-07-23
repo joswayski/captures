@@ -358,25 +358,31 @@ function ArtifactViewer() {
 
 export function CaptureHistory() {
   const [entries, setEntries] = useState<ArtifactSummary[]>([]);
+  const [drafts, setDrafts] = useState<RecordingDraftManifest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const activeRef = useRef(true);
+
+  const refresh = useCallback(async () => {
+    try {
+      const [history, interrupted] = await Promise.all([
+        invoke<ArtifactSummary[]>("get_capture_history"),
+        invoke<RecordingDraftManifest[]>("get_recording_drafts"),
+      ]);
+      if (!activeRef.current) return;
+      setEntries(history);
+      setDrafts(interrupted);
+      setError("");
+    } catch (error) {
+      if (activeRef.current) setError(`Couldn’t load capture history: ${String(error)}`);
+    } finally {
+      if (activeRef.current) setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    let active = true;
     let dispose: (() => void) | undefined;
-
-    const refresh = async () => {
-      try {
-        const history = await invoke<ArtifactSummary[]>("get_capture_history");
-        if (!active) return;
-        setEntries(history);
-        setError("");
-      } catch (error) {
-        if (active) setError(`Couldn’t load capture history: ${String(error)}`);
-      } finally {
-        if (active) setLoading(false);
-      }
-    };
+    activeRef.current = true;
 
     void (async () => {
       dispose = await listen("capture-history-changed", () => {
@@ -386,18 +392,18 @@ export function CaptureHistory() {
     })();
 
     return () => {
-      active = false;
+      activeRef.current = false;
       dispose?.();
     };
-  }, []);
+  }, [refresh]);
 
   return (
     <main className="capture-history">
       <header className="history-header">
         <div>
-          <p className="eyebrow">LOCAL RECOVERY</p>
+          <p className="eyebrow">ON THIS MAC</p>
           <h1>Capture History</h1>
-          <p>Screenshots keep private recovery copies for 30 days. Recordings stay in your Captures folder.</p>
+          <p>Screenshots, videos, GIFs, and interrupted recordings you can recover all appear here.</p>
         </div>
         {!loading && entries.length > 0 && (
           <span className="history-count">
@@ -407,18 +413,19 @@ export function CaptureHistory() {
       </header>
 
       {error && <p className="history-error" role="alert">{error}</p>}
+      <RecordingRecovery drafts={drafts} onChanged={refresh} />
       {loading ? (
         <section className="history-empty" aria-live="polite">
           <span className="history-empty-icon" aria-hidden="true"><HistoryIcon /></span>
           <h2>Loading history…</h2>
         </section>
-      ) : entries.length === 0 ? (
+      ) : entries.length === 0 && drafts.length === 0 ? (
         <section className="history-empty">
           <span className="history-empty-icon" aria-hidden="true"><HistoryIcon /></span>
-          <h2>No recovery copies yet</h2>
+          <h2>No captures yet</h2>
           <p>New screenshots, videos, and GIFs appear here automatically.</p>
         </section>
-      ) : (
+      ) : entries.length > 0 ? (
         <section className="history-grid" aria-label="Recent captures">
           {entries.map((entry) => (
             <HistoryCard
@@ -430,7 +437,7 @@ export function CaptureHistory() {
             />
           ))}
         </section>
-      )}
+      ) : null}
     </main>
   );
 }
@@ -663,7 +670,6 @@ export function RecordingSelector() {
           if (revealingSessionIdRef.current === selectionId) {
             revealingSessionIdRef.current = null;
             setError(String(error));
-            void invoke("cancel_recording_selection", { selectionId });
           }
         });
       });
@@ -671,7 +677,6 @@ export function RecordingSelector() {
       if (revealingSessionIdRef.current === selectionId) {
         revealingSessionIdRef.current = null;
         setError(String(error));
-        void invoke("cancel_recording_selection", { selectionId });
       }
     });
   }, []);
@@ -696,37 +701,55 @@ export function RecordingSelector() {
       setStarting(false);
       setError("");
     };
-    void (async () => {
-      dispose = await listen<RecordingSelectionSession>("recording-selection-ready", ({ payload }) => {
-        if (!active) return;
-        const currentSettings = settingsRef.current;
-        void invoke<AppSettings>("get_settings").then((latestSettings) => {
-          if (!active) return;
-          settingsRef.current = latestSettings;
-          setSettings(latestSettings);
-          applySelection(payload, latestSettings);
-        }).catch(() => {
-          if (!active) return;
-          if (currentSettings) {
-            applySelection(payload, currentSettings);
-          } else {
-            void invoke("cancel_recording_selection", { selectionId: payload.id });
-          }
-        });
-      });
-      const [pending, loadedSettings] = await Promise.all([
-        invoke<RecordingSelectionSession | null>("get_recording_selection"),
-        invoke<AppSettings>("get_settings"),
-      ]);
+    const onSelectionReady = ({ payload }: { payload: RecordingSelectionSession }) => {
       if (!active) return;
-      settingsRef.current = loadedSettings;
-      setSettings(loadedSettings);
-      if (pending) {
-        applySelection(pending, loadedSettings);
-      }
-    })().catch((error) => {
-      if (active) setError(String(error));
-    });
+      const currentSettings = settingsRef.current;
+      void invoke<AppSettings>("get_settings").then((latestSettings) => {
+        if (!active) return;
+        settingsRef.current = latestSettings;
+        setSettings(latestSettings);
+        applySelection(payload, latestSettings);
+      }).catch(() => {
+        if (!active) return;
+        if (currentSettings) {
+          applySelection(payload, currentSettings);
+        } else {
+          void invoke("cancel_recording_selection", { selectionId: payload.id });
+        }
+      });
+    };
+
+    // Register for future selections, but do not wait for the Tauri event
+    // bridge before loading the selection already prepared by the backend.
+    // A newly-created macOS WebView can otherwise sit on a blank, click-through
+    // surface while event registration is still pending.
+    void listen<RecordingSelectionSession>("recording-selection-ready", onSelectionReady)
+      .then((unlisten) => {
+        if (active) {
+          dispose = unlisten;
+        } else {
+          unlisten();
+        }
+      })
+      .catch((error) => {
+        if (active) setError(String(error));
+      });
+
+    void Promise.all([
+      invoke<RecordingSelectionSession | null>("get_recording_selection"),
+      invoke<AppSettings>("get_settings"),
+    ])
+      .then(([pending, loadedSettings]) => {
+        if (!active) return;
+        settingsRef.current = loadedSettings;
+        setSettings(loadedSettings);
+        if (pending) {
+          applySelection(pending, loadedSettings);
+        }
+      })
+      .catch((error) => {
+        if (active) setError(String(error));
+      });
     return () => {
       active = false;
       activeSessionIdRef.current = null;
@@ -742,6 +765,18 @@ export function RecordingSelector() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [session]);
+
+  // A hidden WKWebView can defer image loading until its native window is
+  // onscreen. Do not make the selector depend exclusively on the snapshot's
+  // onLoad event or the window can remain hidden forever. The native surface is
+  // transparent and click-through while this safety path waits for paint.
+  useEffect(() => {
+    if (!session?.id) return;
+    const timer = window.setTimeout(() => {
+      revealSelector(session.id);
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [session?.id, revealSelector]);
 
   if (!session || !settings) {
     return <main className="recording-selector-idle" aria-hidden="true" />;
@@ -877,7 +912,8 @@ export function RecordingSelector() {
         draggable={false}
         onLoad={() => revealSelector(session.id)}
         onError={() => {
-          void invoke("cancel_recording_selection", { selectionId: session.id });
+          setError("The frozen preview could not load. You can still select from the live desktop.");
+          revealSelector(session.id);
         }}
       />
       <div className="recording-selector-shade" />
@@ -2532,30 +2568,16 @@ function CheckIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6" /></svg>;
 }
 
-function RecordingRecovery() {
-  const [drafts, setDrafts] = useState<RecordingDraftManifest[]>([]);
+function RecordingRecovery({
+  drafts,
+  onChanged,
+}: {
+  drafts: RecordingDraftManifest[];
+  onChanged: () => Promise<void>;
+}) {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [confirmDiscardId, setConfirmDiscardId] = useState<string | null>(null);
   const [error, setError] = useState("");
-
-  const refresh = useCallback(async () => {
-    const loaded = await invoke<RecordingDraftManifest[]>("get_recording_drafts");
-    setDrafts(loaded);
-  }, []);
-
-  useEffect(() => {
-    let active = true;
-    void invoke<RecordingDraftManifest[]>("get_recording_drafts")
-      .then((loaded) => {
-        if (active) setDrafts(loaded);
-      })
-      .catch((error) => {
-        if (active) setError(String(error));
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
 
   if (drafts.length === 0 && !error) return null;
 
@@ -2566,19 +2588,19 @@ function RecordingRecovery() {
     try {
       await invoke(command, { sessionId });
       setConfirmDiscardId(null);
-      await refresh();
+      await onChanged();
     } catch (error) {
       setError(String(error));
-      await refresh().catch(() => undefined);
+      await onChanged().catch(() => undefined);
     } finally {
       setBusyId(null);
     }
   };
 
   return (
-    <section className="settings-section recording-recovery-section">
-      <h2>Recording recovery</h2>
-      <p className="help-text">Captures found recording data left by an interruption. Recovery uses every complete, playable segment and keeps the source bundle until the result is safely saved.</p>
+    <section className="recording-recovery-section">
+      <h2>Interrupted recordings</h2>
+      <p className="help-text">These recordings stopped before Captures could finish saving them. Recover one to add its playable segments to Capture History, or discard it.</p>
       {drafts.map((draft) => {
         const duration = draft.segments
           .filter((segment) => segment.complete)
@@ -2881,8 +2903,6 @@ export function Preferences() {
         <label className="check-row"><input type="checkbox" checked={settings.recording.show_cursor} onChange={(event) => updateRecording("show_cursor", event.target.checked)} /><span>Show cursor in recordings</span></label>
         <label className="check-row capture-option"><input type="checkbox" checked={settings.recording.open_editor_after_recording} onChange={(event) => updateRecording("open_editor_after_recording", event.target.checked)} /><span>Open the editor after recording<small>The original is saved first, so closing the editor never loses a recording.</small></span></label>
       </section>
-
-      <RecordingRecovery />
 
       <UpdatePreferences />
 

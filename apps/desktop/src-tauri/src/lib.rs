@@ -259,10 +259,6 @@ pub fn run() {
             if let Err(error) = create_overlay_window(&handle) {
                 eprintln!("failed to prepare capture overlay: {error}");
             }
-            #[cfg(target_os = "macos")]
-            if let Err(error) = recording::create_recording_selector_window(&handle) {
-                eprintln!("failed to prepare recording selector: {error}");
-            }
             let pending_capture = {
                 let state = app.state::<Arc<AppState>>().inner().clone();
                 match take_pending_capture_after_restart(&state) {
@@ -1903,13 +1899,6 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         true,
         None::<&str>,
     )?;
-    let recover_recordings = MenuItem::with_id(
-        app,
-        "recover-recordings",
-        "Recover Recordings…",
-        !recording::get_recording_drafts().is_empty(),
-        None::<&str>,
-    )?;
     let open_folder =
         MenuItem::with_id(app, "open-folder", "Open Save Location", true, None::<&str>)?;
     let preferences = MenuItem::with_id(app, "preferences", "Preferences", true, None::<&str>)?;
@@ -1932,7 +1921,6 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             &record_screen,
             &separator_1,
             &capture_history,
-            &recover_recordings,
             &open_folder,
             &preferences,
             &update_item,
@@ -1972,10 +1960,6 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             }
             "capture-history" => {
                 show_capture_history(app);
-                None
-            }
-            "recover-recordings" => {
-                show_preferences(app);
                 None
             }
             "open-folder" => {
