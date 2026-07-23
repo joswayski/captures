@@ -124,9 +124,8 @@ pub struct RecordingExportFailed {
 pub async fn prepare_recording(
     app: AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
-    kind: RecordingKind,
 ) -> Result<RecordingSelectionSession, String> {
-    prepare_recording_inner(app, state.inner().clone(), kind)
+    prepare_recording_inner(app, state.inner().clone())
         .await
         .map_err(|error| error.to_string())
 }
@@ -135,10 +134,9 @@ pub async fn prepare_recording(
 pub async fn prepare_recording_inner(
     _app: AppHandle,
     _state: Arc<AppState>,
-    _kind: RecordingKind,
 ) -> Result<RecordingSelectionSession, AppError> {
     Err(AppError::Task(
-        "video and GIF recording are currently available on macOS only".to_owned(),
+        "screen recording is currently available on macOS only".to_owned(),
     ))
 }
 
@@ -146,7 +144,6 @@ pub async fn prepare_recording_inner(
 pub async fn prepare_recording_inner(
     app: AppHandle,
     state: Arc<AppState>,
-    kind: RecordingKind,
 ) -> Result<RecordingSelectionSession, AppError> {
     if crate::updates::install_is_active(&app) {
         return Err(AppError::UpdateInstalling);
@@ -182,7 +179,9 @@ pub async fn prepare_recording_inner(
         let id = Uuid::new_v4().to_string();
         let summary = RecordingSelectionSession {
             id: id.clone(),
-            kind,
+            // Every capture starts from a high-quality video master. The editor
+            // decides whether the final copy is video or GIF.
+            kind: RecordingKind::Video,
             window_coordinate_scale: crate::window_coordinate_scale(&frame.descriptor),
             display: frame.descriptor,
             snapshot_url: recording_selection_url(&id),
@@ -193,14 +192,23 @@ pub async fn prepare_recording_inner(
             image: frame.image,
             snapshot_png,
         });
-        show_recording_selector(&app, &summary)?;
         Ok::<_, AppError>(summary)
     })();
-    if prepared.is_err() {
-        *state.recording_selection.lock() = None;
-        restore_recording_ui(&app, &state);
+    match prepared {
+        Ok(summary) => {
+            if let Err(error) = prepare_recording_selector(&app, &summary).await {
+                *state.recording_selection.lock() = None;
+                restore_recording_ui(&app, &state);
+                return Err(error);
+            }
+            Ok(summary)
+        }
+        Err(error) => {
+            *state.recording_selection.lock() = None;
+            restore_recording_ui(&app, &state);
+            Err(error)
+        }
     }
-    prepared
 }
 
 #[tauri::command]
@@ -2028,46 +2036,127 @@ fn media_toolchain(app: &AppHandle) -> MediaToolchain {
 }
 
 #[cfg(target_os = "macos")]
-fn show_recording_selector(
+pub fn create_recording_selector_window(app: &AppHandle) -> Result<(), AppError> {
+    if app.get_webview_window("recording-selector").is_some() {
+        return Ok(());
+    }
+    let window = WebviewWindowBuilder::new(
+        app,
+        "recording-selector",
+        WebviewUrl::App("index.html?view=recording-selector".into()),
+    )
+    .title("Captures Recorder")
+    .inner_size(1.0, 1.0)
+    .position(-10_000.0, -10_000.0)
+    .decorations(false)
+    .always_on_top(true)
+    .visible_on_all_workspaces(true)
+    .skip_taskbar(true)
+    .shadow(false)
+    .resizable(false)
+    .transparent(true)
+    .background_color(Color(0, 0, 0, 0))
+    .focused(false)
+    .visible(false)
+    .build()?;
+    window.set_content_protected(true)?;
+    captures_macos_window::prepare_window_reveal(&window).map_err(|error| {
+        AppError::Task(format!("recording selector could not be prepared: {error}"))
+    })?;
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+async fn prepare_recording_selector(
     app: &AppHandle,
     selection: &RecordingSelectionSession,
 ) -> Result<(), AppError> {
-    let display = &selection.display;
-    if app.get_webview_window("recording-selector").is_none() {
-        WebviewWindowBuilder::new(
-            app,
-            "recording-selector",
-            WebviewUrl::App("index.html?view=recording-selector".into()),
-        )
-        .title("Captures Recorder")
-        .inner_size(f64::from(display.width), f64::from(display.height))
-        .position(f64::from(display.x), f64::from(display.y))
-        .decorations(false)
-        .always_on_top(true)
-        .visible_on_all_workspaces(true)
-        .skip_taskbar(true)
-        .shadow(false)
-        .resizable(false)
-        .transparent(true)
-        .background_color(Color(0, 0, 0, 0))
-        .visible(false)
-        .build()?;
+    create_recording_selector_window(app)?;
+    let handle = app.clone();
+    let selection = selection.clone();
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || {
+        let result = (|| -> Result<(), String> {
+            let display = &selection.display;
+            let window = handle
+                .get_webview_window("recording-selector")
+                .ok_or_else(|| "recording selector is unavailable".to_owned())?;
+            window
+                .set_size(LogicalSize::new(
+                    f64::from(display.width),
+                    f64::from(display.height),
+                ))
+                .map_err(|error| error.to_string())?;
+            // A hidden borderless NSWindow grows from its bottom-left anchor.
+            // Position it after resizing so the final top-left edge matches the
+            // selected display instead of landing one full screen above it.
+            window
+                .set_position(tauri::LogicalPosition::new(
+                    f64::from(display.x),
+                    f64::from(display.y),
+                ))
+                .map_err(|error| error.to_string())?;
+            window
+                .set_content_protected(true)
+                .map_err(|error| error.to_string())?;
+            handle
+                .emit("recording-selection-ready", &selection)
+                .map_err(|error| error.to_string())?;
+            Ok(())
+        })();
+        let _ = sender.send(result);
+    })?;
+    receiver
+        .await
+        .map_err(|_| AppError::Task("recording selector setup was interrupted".to_owned()))?
+        .map_err(AppError::Task)
+}
+
+#[tauri::command]
+pub fn show_recording_selector(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    selection_id: String,
+) -> Result<(), String> {
+    let available = state
+        .recording_selection
+        .lock()
+        .as_ref()
+        .is_some_and(|selection| selection.summary.id == selection_id);
+    if !available {
+        return Err(AppError::SessionUnavailable.to_string());
     }
     let window = app
         .get_webview_window("recording-selector")
-        .ok_or_else(|| AppError::Task("recording selector is unavailable".to_owned()))?;
-    window.set_position(tauri::LogicalPosition::new(
-        f64::from(display.x),
-        f64::from(display.y),
-    ))?;
-    window.set_size(LogicalSize::new(
-        f64::from(display.width),
-        f64::from(display.height),
-    ))?;
-    window.set_content_protected(true)?;
-    window.show()?;
-    window.set_focus()?;
-    app.emit("recording-selection-ready", selection)?;
+        .ok_or_else(|| "recording selector is unavailable".to_owned())?;
+    #[cfg(target_os = "macos")]
+    captures_macos_window::prepare_window_reveal(&window).map_err(str::to_owned)?;
+    window.show().map_err(|error| error.to_string())?;
+    window.set_focus().map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn reveal_recording_selector(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    selection_id: String,
+) -> Result<(), String> {
+    let available = state
+        .recording_selection
+        .lock()
+        .as_ref()
+        .is_some_and(|selection| selection.summary.id == selection_id);
+    if !available {
+        return Err(AppError::SessionUnavailable.to_string());
+    }
+    let window = app
+        .get_webview_window("recording-selector")
+        .ok_or_else(|| "recording selector is unavailable".to_owned())?;
+    #[cfg(target_os = "macos")]
+    captures_macos_window::reveal_window(&window).map_err(str::to_owned)?;
+    #[cfg(not(target_os = "macos"))]
+    let _ = window;
     Ok(())
 }
 

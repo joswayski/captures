@@ -54,7 +54,6 @@ import type {
   MaxResolution,
   RecordingArtifact,
   RecordingDraftManifest,
-  RecordingKind,
   RecordingOptions,
   RecordingSelectionSession,
   RecordingSessionSnapshot,
@@ -616,11 +615,12 @@ type RecordingRegionDrag = {
   initial: RecordingRect;
 };
 
-function RecordingSelector() {
+export function RecordingSelector() {
   const [session, setSession] = useState<RecordingSelectionSession | null>(null);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [devices, setDevices] = useState<AudioDevice[]>([]);
-  const [kind, setKind] = useState<RecordingKind>("video");
+  const [devicesLoading, setDevicesLoading] = useState(false);
+  const [devicesLoaded, setDevicesLoaded] = useState(false);
   const [targetMode, setTargetMode] = useState<RecordingTargetMode>("region");
   const [region, setRegion] = useState<RecordingRect | null>(null);
   const [regionDrag, setRegionDrag] = useState<RecordingRegionDrag | null>(null);
@@ -628,7 +628,6 @@ function RecordingSelector() {
   const [hoveredWindow, setHoveredWindow] = useState<string | null>(null);
   const [fps, setFps] = useState(30);
   const [maxResolution, setMaxResolution] = useState<MaxResolution>("p1080");
-  const [gifWidth, setGifWidth] = useState(800);
   const [showCursor, setShowCursor] = useState(true);
   const [systemAudio, setSystemAudio] = useState(false);
   const [microphoneId, setMicrophoneId] = useState<string | null>(null);
@@ -636,21 +635,59 @@ function RecordingSelector() {
   const [error, setError] = useState("");
   const surfaceRef = useRef<HTMLElement>(null);
   const settingsRef = useRef<AppSettings | null>(null);
+  const activeSessionIdRef = useRef<string | null>(null);
+  const revealingSessionIdRef = useRef<string | null>(null);
+
+  const loadAudioDevices = useCallback(() => {
+    if (devicesLoading || devicesLoaded) return;
+    setDevicesLoading(true);
+    void invoke<AudioDevice[]>("list_recording_audio_devices")
+      .then((audioDevices) => {
+        setDevices(audioDevices);
+        setDevicesLoaded(true);
+      })
+      .catch(() => {
+        setDevices([]);
+      })
+      .finally(() => setDevicesLoading(false));
+  }, [devicesLoaded, devicesLoading]);
+
+  const revealSelector = useCallback((selectionId: string) => {
+    if (activeSessionIdRef.current !== selectionId) return;
+    if (revealingSessionIdRef.current === selectionId) return;
+    revealingSessionIdRef.current = selectionId;
+    void invoke("show_recording_selector", { selectionId }).then(() => {
+      afterNextPaint(() => {
+        if (activeSessionIdRef.current !== selectionId) return;
+        void invoke("reveal_recording_selector", { selectionId }).catch((error) => {
+          if (revealingSessionIdRef.current === selectionId) {
+            revealingSessionIdRef.current = null;
+            setError(String(error));
+            void invoke("cancel_recording_selection", { selectionId });
+          }
+        });
+      });
+    }).catch((error) => {
+      if (revealingSessionIdRef.current === selectionId) {
+        revealingSessionIdRef.current = null;
+        setError(String(error));
+        void invoke("cancel_recording_selection", { selectionId });
+      }
+    });
+  }, []);
 
   useEffect(() => {
     let active = true;
     let dispose: (() => void) | undefined;
     const applySelection = (selection: RecordingSelectionSession, currentSettings: AppSettings) => {
+      activeSessionIdRef.current = selection.id;
+      revealingSessionIdRef.current = null;
       setSession(selection);
-      setKind(selection.kind);
-      setFps(selection.kind === "gif"
-        ? currentSettings.recording.gif_fps
-        : currentSettings.recording.video_fps);
+      setFps(currentSettings.recording.video_fps);
       setMaxResolution(currentSettings.recording.video_max_resolution);
-      setGifWidth(currentSettings.recording.gif_max_width);
       setShowCursor(currentSettings.recording.show_cursor);
-      setSystemAudio(selection.kind === "video" && currentSettings.recording.capture_system_audio);
-      setMicrophoneId(selection.kind === "video" ? currentSettings.recording.microphone_device_id : null);
+      setSystemAudio(currentSettings.recording.capture_system_audio);
+      setMicrophoneId(currentSettings.recording.microphone_device_id);
       setTargetMode("region");
       setSelectedWindow(null);
       setHoveredWindow(null);
@@ -663,29 +700,27 @@ function RecordingSelector() {
       dispose = await listen<RecordingSelectionSession>("recording-selection-ready", ({ payload }) => {
         if (!active) return;
         const currentSettings = settingsRef.current;
-        if (currentSettings) applySelection(payload, currentSettings);
-        void Promise.all([
-          invoke<AppSettings>("get_settings"),
-          invoke<AudioDevice[]>("list_recording_audio_devices"),
-        ]).then(([latestSettings, latestDevices]) => {
+        void invoke<AppSettings>("get_settings").then((latestSettings) => {
           if (!active) return;
           settingsRef.current = latestSettings;
           setSettings(latestSettings);
-          setDevices(latestDevices);
           applySelection(payload, latestSettings);
-        }).catch((error) => {
-          if (active) setError(String(error));
+        }).catch(() => {
+          if (!active) return;
+          if (currentSettings) {
+            applySelection(payload, currentSettings);
+          } else {
+            void invoke("cancel_recording_selection", { selectionId: payload.id });
+          }
         });
       });
-      const [pending, loadedSettings, audioDevices] = await Promise.all([
+      const [pending, loadedSettings] = await Promise.all([
         invoke<RecordingSelectionSession | null>("get_recording_selection"),
         invoke<AppSettings>("get_settings"),
-        invoke<AudioDevice[]>("list_recording_audio_devices"),
       ]);
       if (!active) return;
       settingsRef.current = loadedSettings;
       setSettings(loadedSettings);
-      setDevices(audioDevices);
       if (pending) {
         applySelection(pending, loadedSettings);
       }
@@ -694,6 +729,7 @@ function RecordingSelector() {
     });
     return () => {
       active = false;
+      activeSessionIdRef.current = null;
       dispose?.();
     };
   }, []);
@@ -708,7 +744,7 @@ function RecordingSelector() {
   }, [session]);
 
   if (!session || !settings) {
-    return <main className="recording-selector-loading">Preparing recorder…</main>;
+    return <main className="recording-selector-idle" aria-hidden="true" />;
   }
 
   const point = (event: React.PointerEvent): SelectionPoint => {
@@ -774,15 +810,6 @@ function RecordingSelector() {
     || (targetMode === "window" && Boolean(selectedWindow))
     || (targetMode === "region" && Boolean(region && region.width >= 16 && region.height >= 16));
 
-  const selectKind = (nextKind: RecordingKind) => {
-    setKind(nextKind);
-    setFps(nextKind === "gif" ? settings.recording.gif_fps : settings.recording.video_fps);
-    if (nextKind === "gif") {
-      setSystemAudio(false);
-      setMicrophoneId(null);
-    }
-  };
-
   const start = async () => {
     if (!canStart || starting) return;
     let target: RecordingTarget;
@@ -800,24 +827,24 @@ function RecordingSelector() {
       return;
     }
     const options: RecordingOptions = {
-      kind,
+      kind: "video",
       target,
       frames_per_second: fps,
-      max_resolution: kind === "video" ? maxResolution : "original",
+      max_resolution: maxResolution,
       countdown_seconds: settings.recording.countdown_seconds,
       show_cursor: showCursor,
       highlight_clicks: settings.recording.highlight_clicks,
       show_keystrokes: settings.recording.show_keystrokes,
       audio: {
-        capture_system_audio: kind === "video" && systemAudio,
-        microphone_device_id: kind === "video" ? microphoneId : null,
+        capture_system_audio: systemAudio,
+        microphone_device_id: microphoneId,
         mono_output: settings.recording.mono_audio,
         system_volume_percent: 100,
         microphone_volume_percent: 100,
         microphone_muted: false,
       },
       gif: {
-        max_width: gifWidth,
+        max_width: settings.recording.gif_max_width,
         max_colors: settings.recording.gif_max_colors,
         optimize: true,
       },
@@ -843,7 +870,16 @@ function RecordingSelector() {
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
     >
-      <img className="recording-selector-snapshot" src={session.snapshot_url} alt="" draggable={false} />
+      <img
+        className="recording-selector-snapshot"
+        src={session.snapshot_url}
+        alt=""
+        draggable={false}
+        onLoad={() => revealSelector(session.id)}
+        onError={() => {
+          void invoke("cancel_recording_selection", { selectionId: session.id });
+        }}
+      />
       <div className="recording-selector-shade" />
       {selectedRect && selectedRect.width > 0 && selectedRect.height > 0 && (
         <div
@@ -880,10 +916,6 @@ function RecordingSelector() {
 
       <section className="recording-selector-panel" onPointerDown={(event) => event.stopPropagation()}>
         <div className="recording-panel-top">
-          <div className="recording-kind-switch" role="group" aria-label="Recording format">
-            <button type="button" className={kind === "video" ? "active" : ""} onClick={() => selectKind("video")}>Video</button>
-            <button type="button" className={kind === "gif" ? "active" : ""} onClick={() => selectKind("gif")}>GIF</button>
-          </div>
           <div className="recording-target-switch" role="group" aria-label="Capture target">
             {(["region", "window", "display"] as const).map((mode) => (
               <button key={mode} type="button" className={targetMode === mode ? "active" : ""} onClick={() => setTargetMode(mode)}>
@@ -896,34 +928,31 @@ function RecordingSelector() {
         <div className="recording-options-row">
           <label>FPS
             <select value={fps} onChange={(event) => setFps(Number(event.target.value))}>
-              {(kind === "video" ? [15, 30, 60] : [8, 10, 12, 15, 20, 24, 30]).map((value) => <option key={value} value={value}>{value}</option>)}
+              {[15, 30, 60].map((value) => <option key={value} value={value}>{value}</option>)}
             </select>
           </label>
-          {kind === "video" ? (
-            <label>Maximum size
-              <select value={maxResolution} onChange={(event) => setMaxResolution(event.target.value as MaxResolution)}>
-                <option value="original">Original</option><option value="p1080">1080p</option><option value="p720">720p</option>
-              </select>
-            </label>
-          ) : (
-            <label>GIF width
-              <select value={gifWidth} onChange={(event) => setGifWidth(Number(event.target.value))}>
-                {[320, 480, 640, 800, 1200].map((value) => <option key={value} value={value}>{value}px max</option>)}
-              </select>
-            </label>
-          )}
+          <label>Max resolution
+            <select value={maxResolution} onChange={(event) => setMaxResolution(event.target.value as MaxResolution)}>
+              <option value="original">Original</option><option value="p1080">1080p</option><option value="p720">720p</option>
+            </select>
+          </label>
           <label className="recording-toggle"><input type="checkbox" checked={showCursor} onChange={(event) => setShowCursor(event.target.checked)} />Cursor</label>
-          {kind === "video" && <>
-            <label className="recording-toggle"><input type="checkbox" checked={systemAudio} onChange={(event) => setSystemAudio(event.target.checked)} />Desktop audio</label>
-            <label>Microphone
-              <select value={microphoneId ?? "off"} onChange={(event) => setMicrophoneId(event.target.value === "off" ? null : event.target.value)}>
-                <option value="off">Off</option>
-                {devices.map((device) => <option key={device.id} value={device.id}>{device.name}</option>)}
-              </select>
-            </label>
-          </>}
+          <label className="recording-toggle"><input type="checkbox" checked={systemAudio} onChange={(event) => setSystemAudio(event.target.checked)} />Desktop audio</label>
+          <label>Microphone
+            <select
+              value={microphoneId ?? "off"}
+              onFocus={loadAudioDevices}
+              onChange={(event) => setMicrophoneId(event.target.value === "off" ? null : event.target.value)}
+            >
+              <option value="off">Off</option>
+              {microphoneId && !devices.some((device) => device.id === microphoneId) && (
+                <option value={microphoneId}>{devicesLoading ? "Loading microphone…" : "Selected microphone"}</option>
+              )}
+              {devices.map((device) => <option key={device.id} value={device.id}>{device.name}</option>)}
+            </select>
+          </label>
           <button className="recording-start" type="button" disabled={!canStart || starting} onClick={() => void start()}>
-            <span aria-hidden="true" />{starting ? "Starting…" : `Record ${kind === "gif" ? "GIF" : "Video"}`}
+            <span aria-hidden="true" />{starting ? "Starting…" : "Record"}
           </button>
         </div>
         {error && <p className="recording-selector-error" role="alert">{error}</p>}
@@ -1092,6 +1121,10 @@ function RecordingEditor() {
   const [resolution, setResolution] = useState<"original" | "1080" | "720" | "custom">("original");
   const [customWidth, setCustomWidth] = useState(1920);
   const [customHeight, setCustomHeight] = useState(1080);
+  const [outputFormat, setOutputFormat] = useState<"mp4" | "gif">("mp4");
+  const [gifFps, setGifFps] = useState(15);
+  const [gifMaxWidth, setGifMaxWidth] = useState(800);
+  const [gifColors, setGifColors] = useState(256);
   const [quality, setQuality] = useState<ExportSpec["quality"]>("standard");
   const [sizeMode, setSizeMode] = useState<"quality" | "maximum">("quality");
   const [maximumMb, setMaximumMb] = useState("10");
@@ -1129,13 +1162,22 @@ function RecordingEditor() {
         }),
       ]);
       if (!artifactId) return;
-      const loaded = await invoke<RecordingArtifact | null>("get_recording_artifact", { artifactId });
+      const [loaded, loadedSettings] = await Promise.all([
+        invoke<RecordingArtifact | null>("get_recording_artifact", { artifactId }),
+        invoke<AppSettings>("get_settings").catch(() => null),
+      ]);
       if (!active || !loaded) return;
       setArtifact(loaded);
       setTrimEnd(loaded.duration_ms);
       setCrop({ x: 0, y: 0, width: loaded.width, height: loaded.height });
       setCustomWidth(loaded.width);
       setCustomHeight(loaded.height);
+      setOutputFormat(loaded.kind === "gif" ? "gif" : "mp4");
+      if (loadedSettings) {
+        setGifFps(loadedSettings.recording.gif_fps);
+        setGifMaxWidth(loadedSettings.recording.gif_max_width);
+        setGifColors(loadedSettings.recording.gif_max_colors);
+      }
     })().catch((error) => {
       if (active) setError(String(error));
     });
@@ -1151,21 +1193,26 @@ function RecordingEditor() {
 
   const duration = Math.max(1, artifact.duration_ms);
   const trimmedDuration = Math.max(1, trimEnd - trimStart);
-  const outputDimensions = editorOutputDimensions(
+  const baseOutputDimensions = editorOutputDimensions(
     cropEnabled ? crop.width : artifact.width,
     cropEnabled ? crop.height : artifact.height,
     resolution,
     customWidth,
     customHeight,
   );
-  const estimatedBytes = estimateEditedSize(
-    artifact,
-    trimmedDuration,
-    outputDimensions.width,
-    outputDimensions.height,
-    quality,
-    sizeMode === "maximum" ? Number(maximumMb) * 1_000_000 : null,
-  );
+  const outputDimensions = outputFormat === "gif"
+    ? dimensionsAtMaximumWidth(baseOutputDimensions.width, baseOutputDimensions.height, gifMaxWidth)
+    : baseOutputDimensions;
+  const estimatedBytes = outputFormat === "gif" && sizeMode === "quality"
+    ? null
+    : estimateEditedSize(
+        artifact,
+        trimmedDuration,
+        outputDimensions.width,
+        outputDimensions.height,
+        quality,
+        sizeMode === "maximum" ? Number(maximumMb) * 1_000_000 : null,
+      );
 
   const updateCropDimension = (key: "width" | "height", value: number) => {
     setCrop((current) => {
@@ -1221,24 +1268,24 @@ function RecordingEditor() {
       trim_start_ms: Math.round(trimStart),
       trim_end_ms: Math.round(trimEnd),
       crop: cropEnabled ? boundedCrop(crop, artifact.width, artifact.height) : null,
-      output_width: resolution === "original" ? null : outputDimensions.width,
-      output_height: resolution === "original" ? null : outputDimensions.height,
+      output_width: resolution === "original" && outputFormat !== "gif" ? null : outputDimensions.width,
+      output_height: resolution === "original" && outputFormat !== "gif" ? null : outputDimensions.height,
       audio: {
         system_volume: systemVolume / 100,
         microphone_volume: microphoneVolume / 100,
-        mute_system_audio: muteSystem,
-        mute_microphone: muteMicrophone,
+        mute_system_audio: outputFormat === "gif" || muteSystem,
+        mute_microphone: outputFormat === "gif" || muteMicrophone,
         mono_output: mono,
         source_has_system_audio: artifact.has_system_audio,
         source_has_microphone_audio: artifact.has_microphone_audio,
       },
     };
     const exportSpec: ExportSpec = {
-      format: artifact.kind === "gif" ? "gif" : "mp4",
+      format: outputFormat,
       quality,
       max_size_bytes: maximumBytes,
-      frames_per_second: artifact.kind === "gif" ? 15 : null,
-      gif_max_colors: artifact.kind === "gif" ? 256 : null,
+      frames_per_second: outputFormat === "gif" ? gifFps : null,
+      gif_max_colors: outputFormat === "gif" ? gifColors : null,
     };
     setError("");
     setExported(null);
@@ -1261,7 +1308,7 @@ function RecordingEditor() {
         <div><span className="eyebrow">NON-DESTRUCTIVE EDITOR</span><h1>{artifact.kind === "gif" ? "Edit GIF" : "Edit recording"}</h1></div>
         <div className="recording-editor-header-actions">
           <button type="button" onClick={() => void invoke("reveal_recording_artifact", { artifactId: (exported ?? artifact).id })}>Reveal in Folder</button>
-          <button className="primary" type="button" disabled={Boolean(exportId)} onClick={() => void startExport()}>{exportId ? "Exporting…" : "Export Copy"}</button>
+          <button className="primary" type="button" disabled={Boolean(exportId)} onClick={() => void startExport()}>{exportId ? "Exporting…" : `Export ${outputFormat === "gif" ? "GIF" : "Video"}`}</button>
         </div>
       </header>
       {artifact.dropped_frames > 0 && <p className="recording-editor-warning" role="status">This source dropped {artifact.dropped_frames.toLocaleString()} frame{artifact.dropped_frames === 1 ? "" : "s"} during capture. The original timing is preserved.</p>}
@@ -1283,6 +1330,34 @@ function RecordingEditor() {
       </section>
 
       <div className="recording-editor-grid">
+        <section className="editor-card editor-output-card">
+          <h2>Output format</h2>
+          <div className="editor-segmented">
+            <button type="button" className={outputFormat === "mp4" ? "active" : ""} onClick={() => setOutputFormat("mp4")}>Video (MP4)</button>
+            <button type="button" className={outputFormat === "gif" ? "active" : ""} onClick={() => setOutputFormat("gif")}>Animated GIF</button>
+          </div>
+          {outputFormat === "gif" && (
+            <div className="editor-number-grid dimensions">
+              <label>Frame rate
+                <select value={gifFps} onChange={(event) => setGifFps(Number(event.target.value))}>
+                  {[8, 10, 12, 15, 20, 24, 30].map((value) => <option key={value} value={value}>{value} FPS</option>)}
+                </select>
+              </label>
+              <label>Maximum width
+                <select value={gifMaxWidth} onChange={(event) => setGifMaxWidth(Number(event.target.value))}>
+                  {[320, 480, 640, 800, 1200].map((value) => <option key={value} value={value}>{value} px</option>)}
+                </select>
+              </label>
+              <label>Palette
+                <select value={gifColors} onChange={(event) => setGifColors(Number(event.target.value))}>
+                  {[64, 96, 128, 192, 256].map((value) => <option key={value} value={value}>{value} colors</option>)}
+                </select>
+              </label>
+            </div>
+          )}
+          <small>The original video master stays untouched. GIF exports do not include audio.</small>
+        </section>
+
         <section className="editor-card">
           <h2>Crop & size</h2>
           <label className="check-row"><input type="checkbox" checked={cropEnabled} onChange={(event) => setCropEnabled(event.target.checked)} /><span>Crop recording</span></label>
@@ -1314,7 +1389,7 @@ function RecordingEditor() {
           {sizeMode === "maximum" && <small>Captures reserves 5%, verifies the actual file, and never silently exceeds your limit.</small>}
         </section>
 
-        {artifact.kind === "video" && <section className="editor-card editor-audio-card">
+        {artifact.kind === "video" && outputFormat === "mp4" && <section className="editor-card editor-audio-card">
           <h2>Audio</h2>
           <label className="editor-volume"><span><input type="checkbox" checked={artifact.has_system_audio && !muteSystem} disabled={!artifact.has_system_audio} onChange={(event) => setMuteSystem(!event.target.checked)} />System audio{!artifact.has_system_audio && " (not recorded)"}</span><input type="range" min={0} max={200} value={systemVolume} disabled={!artifact.has_system_audio || muteSystem} onChange={(event) => setSystemVolume(Number(event.target.value))} /><output>{artifact.has_system_audio ? `${systemVolume}%` : "—"}</output></label>
           <label className="editor-volume"><span><input type="checkbox" checked={artifact.has_microphone_audio && !muteMicrophone} disabled={!artifact.has_microphone_audio} onChange={(event) => setMuteMicrophone(!event.target.checked)} />Microphone{!artifact.has_microphone_audio && " (not recorded)"}</span><input type="range" min={0} max={200} value={microphoneVolume} disabled={!artifact.has_microphone_audio || muteMicrophone} onChange={(event) => setMicrophoneVolume(Number(event.target.value))} /><output>{artifact.has_microphone_audio ? `${microphoneVolume}%` : "—"}</output></label>
@@ -1343,6 +1418,16 @@ function editorOutputDimensions(
   const maximum = preset === "1080" ? 1080 : preset === "720" ? 720 : height;
   const scale = height > maximum ? maximum / height : 1;
   return { width: evenDimension(width * scale), height: evenDimension(height * scale) };
+}
+
+function dimensionsAtMaximumWidth(
+  width: number,
+  height: number,
+  maximumWidth: number,
+): { width: number; height: number } {
+  if (width <= maximumWidth) return { width, height };
+  const scale = maximumWidth / width;
+  return { width: evenDimension(maximumWidth), height: evenDimension(height * scale) };
 }
 
 function boundedCrop(
@@ -2732,19 +2817,11 @@ export function Preferences() {
         />
         <ShortcutInput
           id="video-shortcut"
-          label="Record Video"
+          label="Record Screen"
           value={settings.recording.video_shortcut}
           recording={recordingShortcut === "video-shortcut"}
           onRecordingChange={(recording) => setRecordingShortcut(recording ? "video-shortcut" : null)}
           onChange={(value) => updateRecording("video_shortcut", value)}
-        />
-        <ShortcutInput
-          id="gif-shortcut"
-          label="Record GIF"
-          value={settings.recording.gif_shortcut}
-          recording={recordingShortcut === "gif-shortcut"}
-          onRecordingChange={(recording) => setRecordingShortcut(recording ? "gif-shortcut" : null)}
-          onChange={(value) => updateRecording("gif_shortcut", value)}
         />
         <p className="help-text">Select a shortcut, then press the key combination you want. Press Esc to cancel recording. Changes save automatically.</p>
       </section>
@@ -2774,7 +2851,7 @@ export function Preferences() {
       </section>
 
       <section className="settings-section recording-settings-section">
-        <h2>GIF recording</h2>
+        <h2>GIF export defaults</h2>
         <div className="settings-inline-grid">
           <label>Frames per second
             <select value={settings.recording.gif_fps} onChange={(event) => updateRecording("gif_fps", Number(event.target.value))}>

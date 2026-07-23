@@ -9,7 +9,7 @@ macOS is the primary development target today. Windows and Linux builds are avai
 ## Features
 
 - Capture a region, window, or full display.
-- On macOS 13+, record a region, window, or display as H.264/AAC video or an optimized GIF.
+- On macOS 13+, record a region, window, or display once, then trim, resize, compress, and export it as H.264/AAC video or an optimized GIF.
 - Record desktop audio and a selected microphone independently, with pause, resume, restart, mute, and interruption recovery.
 - Trim, crop, resize, remix audio, or export against a strict maximum file size in the non-destructive recording editor.
 - Start captures from the tray or customizable global shortcuts.
@@ -56,11 +56,10 @@ Download the latest builds from [GitHub Releases](https://github.com/joswayski/c
 | `Ctrl+Shift+4` | Capture a region |
 | `Ctrl+Shift+W` | Capture a window |
 | `Ctrl+Shift+3` | Capture the display under the pointer |
-| `Ctrl+Shift+5` | Record video |
-| `Ctrl+Shift+6` | Record GIF |
+| `Ctrl+Shift+5` | Record the screen, then export video or GIF |
 | `Esc` | Cancel an active region or window capture |
 
-All five global capture shortcuts can be changed in Preferences.
+All four global capture shortcuts can be changed in Preferences.
 
 ## Development
 

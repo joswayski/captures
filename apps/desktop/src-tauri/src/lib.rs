@@ -94,8 +94,7 @@ struct CaptureTrayMenuItems {
     region: MenuItem<tauri::Wry>,
     window: MenuItem<tauri::Wry>,
     display: MenuItem<tauri::Wry>,
-    video: MenuItem<tauri::Wry>,
-    gif: MenuItem<tauri::Wry>,
+    recording: MenuItem<tauri::Wry>,
 }
 
 #[cfg(target_os = "macos")]
@@ -107,10 +106,8 @@ impl CaptureTrayMenuItems {
             .set_accelerator(Some(menu_accelerator(&settings.window_shortcut)?))?;
         self.display
             .set_accelerator(Some(menu_accelerator(&settings.display_shortcut)?))?;
-        self.video
+        self.recording
             .set_accelerator(Some(menu_accelerator(&settings.recording.video_shortcut)?))?;
-        self.gif
-            .set_accelerator(Some(menu_accelerator(&settings.recording.gif_shortcut)?))?;
         Ok(())
     }
 }
@@ -222,6 +219,8 @@ pub fn run() {
             updates::install_update,
             recording::prepare_recording,
             recording::get_recording_selection,
+            recording::show_recording_selector,
+            recording::reveal_recording_selector,
             recording::cancel_recording_selection,
             recording::list_recording_audio_devices,
             recording::get_recording_snapshot,
@@ -259,6 +258,10 @@ pub fn run() {
             }
             if let Err(error) = create_overlay_window(&handle) {
                 eprintln!("failed to prepare capture overlay: {error}");
+            }
+            #[cfg(target_os = "macos")]
+            if let Err(error) = recording::create_recording_selector_window(&handle) {
+                eprintln!("failed to prepare recording selector: {error}");
             }
             let pending_capture = {
                 let state = app.state::<Arc<AppState>>().inner().clone();
@@ -824,7 +827,6 @@ fn update_settings(
         || settings.window_shortcut.trim().is_empty()
         || settings.display_shortcut.trim().is_empty()
         || settings.recording.video_shortcut.trim().is_empty()
-        || settings.recording.gif_shortcut.trim().is_empty()
     {
         return Err("all shortcuts must be set".to_owned());
     }
@@ -836,14 +838,11 @@ fn update_settings(
         parse_shortcut(&settings.display_shortcut).map_err(|error| error.to_string())?;
     let video_shortcut =
         parse_shortcut(&settings.recording.video_shortcut).map_err(|error| error.to_string())?;
-    let gif_shortcut =
-        parse_shortcut(&settings.recording.gif_shortcut).map_err(|error| error.to_string())?;
     let shortcuts = [
         region_shortcut,
         window_shortcut,
         display_shortcut,
         video_shortcut,
-        gif_shortcut,
     ];
     if shortcuts
         .iter()
@@ -870,8 +869,7 @@ fn update_settings(
     let shortcuts_changed = settings.region_shortcut != previous_settings.region_shortcut
         || settings.window_shortcut != previous_settings.window_shortcut
         || settings.display_shortcut != previous_settings.display_shortcut
-        || settings.recording.video_shortcut != previous_settings.recording.video_shortcut
-        || settings.recording.gif_shortcut != previous_settings.recording.gif_shortcut;
+        || settings.recording.video_shortcut != previous_settings.recording.video_shortcut;
     if shortcuts_changed && let Err(error) = register_shortcuts_with(&app, &settings) {
         let _ = register_shortcuts_with(&app, &previous_settings);
         return Err(error.to_string());
@@ -1747,16 +1745,7 @@ fn register_shortcuts_with(app: &AppHandle, settings: &AppSettings) -> Result<()
     register_shortcut(app, &settings.region_shortcut, CaptureMode::Region)?;
     register_shortcut(app, &settings.window_shortcut, CaptureMode::Window)?;
     register_shortcut(app, &settings.display_shortcut, CaptureMode::Display)?;
-    register_recording_shortcut(
-        app,
-        &settings.recording.video_shortcut,
-        captures_recording::RecordingKind::Video,
-    )?;
-    register_recording_shortcut(
-        app,
-        &settings.recording.gif_shortcut,
-        captures_recording::RecordingKind::Gif,
-    )?;
+    register_recording_shortcut(app, &settings.recording.video_shortcut)?;
     Ok(())
 }
 
@@ -1788,11 +1777,7 @@ fn register_shortcut(app: &AppHandle, shortcut: &str, mode: CaptureMode) -> Resu
         .map_err(|error| AppError::Shortcut(error.to_string()))
 }
 
-fn register_recording_shortcut(
-    app: &AppHandle,
-    shortcut: &str,
-    kind: captures_recording::RecordingKind,
-) -> Result<(), AppError> {
+fn register_recording_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), AppError> {
     let parsed = parse_shortcut(shortcut)?;
     let armed = AtomicBool::new(false);
     app.global_shortcut()
@@ -1810,8 +1795,7 @@ fn register_recording_shortcut(
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
                 wait_for_capture_shortcut_release().await;
-                if let Err(error) =
-                    recording::prepare_recording_inner(app.clone(), state, kind).await
+                if let Err(error) = recording::prepare_recording_inner(app.clone(), state).await
                     && !matches!(&error, AppError::CaptureInProgress)
                 {
                     report_recording_error(&app, &error);
@@ -1867,31 +1851,17 @@ fn should_activate_capture_cursor_before_reveal(mode: CaptureMode) -> bool {
 
 fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_os = "macos")]
-    let (
-        region_accelerator,
-        window_accelerator,
-        display_accelerator,
-        video_accelerator,
-        gif_accelerator,
-    ) = {
+    let (region_accelerator, window_accelerator, display_accelerator, recording_accelerator) = {
         let settings = app.state::<Arc<AppState>>().settings();
         (
             Some(menu_accelerator(&settings.region_shortcut)?),
             Some(menu_accelerator(&settings.window_shortcut)?),
             Some(menu_accelerator(&settings.display_shortcut)?),
             Some(menu_accelerator(&settings.recording.video_shortcut)?),
-            Some(menu_accelerator(&settings.recording.gif_shortcut)?),
         )
     };
     #[cfg(not(target_os = "macos"))]
-    let (
-        region_accelerator,
-        window_accelerator,
-        display_accelerator,
-        video_accelerator,
-        gif_accelerator,
-    ) = (
-        None::<String>,
+    let (region_accelerator, window_accelerator, display_accelerator, recording_accelerator) = (
         None::<String>,
         None::<String>,
         None::<String>,
@@ -1919,19 +1889,12 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         true,
         display_accelerator.as_deref(),
     )?;
-    let record_video = MenuItem::with_id(
+    let record_screen = MenuItem::with_id(
         app,
-        "record-video",
-        "Record Video…",
+        "record-screen",
+        "Record Screen…",
         cfg!(target_os = "macos"),
-        video_accelerator.as_deref(),
-    )?;
-    let record_gif = MenuItem::with_id(
-        app,
-        "record-gif",
-        "Record GIF…",
-        cfg!(target_os = "macos"),
-        gif_accelerator.as_deref(),
+        recording_accelerator.as_deref(),
     )?;
     let capture_history = MenuItem::with_id(
         app,
@@ -1966,8 +1929,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             &capture_region,
             &capture_window,
             &capture_display,
-            &record_video,
-            &record_gif,
+            &record_screen,
             &separator_1,
             &capture_history,
             &recover_recordings,
@@ -1997,32 +1959,11 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             "capture-region" => Some(CaptureMode::Region),
             "capture-window" => Some(CaptureMode::Window),
             "capture-display" => Some(CaptureMode::Display),
-            "record-video" => {
+            "record-screen" => {
                 let state = app.state::<Arc<AppState>>().inner().clone();
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
-                    if let Err(error) = recording::prepare_recording_inner(
-                        app.clone(),
-                        state,
-                        captures_recording::RecordingKind::Video,
-                    )
-                    .await
-                    {
-                        report_recording_error(&app, &error);
-                    }
-                });
-                None
-            }
-            "record-gif" => {
-                let state = app.state::<Arc<AppState>>().inner().clone();
-                let app = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    if let Err(error) = recording::prepare_recording_inner(
-                        app.clone(),
-                        state,
-                        captures_recording::RecordingKind::Gif,
-                    )
-                    .await
+                    if let Err(error) = recording::prepare_recording_inner(app.clone(), state).await
                     {
                         report_recording_error(&app, &error);
                     }
@@ -2078,8 +2019,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         region: capture_region,
         window: capture_window,
         display: capture_display,
-        video: record_video,
-        gif: record_gif,
+        recording: record_screen,
     }) {
         return Err(Box::new(AppError::Task(
             "capture tray menu shortcuts are already managed".to_owned(),
