@@ -20,6 +20,9 @@ const HISTORY_IMAGE_FILE: &str = "capture.png";
 const HISTORY_PREVIEW_FILE: &str = "preview.png";
 const HISTORY_METADATA_FILE: &str = "metadata.json";
 const DRAG_EXPORT_DIRECTORY: &str = ".drag-exports";
+const DRAG_ICON_FILE: &str = "drag-preview.png";
+const DRAG_ICON_WIDTH: u32 = 284;
+const DRAG_ICON_HEIGHT: u32 = 160;
 
 pub struct ArtifactDragFiles {
     pub path: PathBuf,
@@ -118,13 +121,9 @@ fn prepare_artifact_drag_in(
         }
     }
 
-    let icon_path = if history_available {
-        history_preview
-    } else {
-        let path = fallback_directory.join(HISTORY_PREVIEW_FILE);
-        write_drag_file(&path, &artifact.preview_png)?;
-        path
-    };
+    let icon_path = drag_directory.join(DRAG_ICON_FILE);
+    let icon_png = encode_drag_icon_png(&artifact.preview_png)?;
+    write_drag_file(&icon_path, &icon_png)?;
 
     Ok(ArtifactDragFiles {
         path: fs::canonicalize(path)?,
@@ -351,6 +350,19 @@ pub fn encode_thumbnail_png(image: &RgbaImage) -> Result<Vec<u8>, AppError> {
     encode_png_with_filter(image, FilterType::Sub)
 }
 
+fn encode_drag_icon_png(preview_png: &[u8]) -> Result<Vec<u8>, AppError> {
+    let preview =
+        image::load_from_memory(preview_png).map_err(|error| AppError::Image(error.to_string()))?;
+    let icon = preview
+        .resize_to_fill(
+            DRAG_ICON_WIDTH,
+            DRAG_ICON_HEIGHT,
+            image::imageops::FilterType::Triangle,
+        )
+        .to_rgba8();
+    encode_png_with_filter(&icon, FilterType::Sub)
+}
+
 fn encode_png_with_filter(image: &RgbaImage, filter: FilterType) -> Result<Vec<u8>, AppError> {
     let mut bytes = Vec::new();
     PngEncoder::new_with_quality(&mut bytes, CompressionType::Fast, filter)
@@ -384,7 +396,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        DRAG_EXPORT_DIRECTORY, HISTORY_IMAGE_FILE, HISTORY_PREVIEW_FILE, clear_drag_exports_in,
+        DRAG_EXPORT_DIRECTORY, DRAG_ICON_FILE, DRAG_ICON_HEIGHT, DRAG_ICON_WIDTH,
+        HISTORY_IMAGE_FILE, HISTORY_PREVIEW_FILE, clear_drag_exports_in, encode_drag_icon_png,
         encode_png, encode_preview_png, encode_thumbnail_png, load_capture_history_from,
         prepare_artifact_drag_in, save_encoded_capture, save_history_capture_in, save_settings_to,
         unique_path,
@@ -454,6 +467,19 @@ mod tests {
     }
 
     #[test]
+    fn drag_icon_matches_the_logical_preview_card_size() {
+        let image = RgbaImage::from_pixel(568, 284, Rgba([1, 2, 3, 255]));
+        let preview_png = encode_png(&image).expect("preview encoded");
+        let bytes = encode_drag_icon_png(&preview_png).expect("drag icon encoded");
+        let icon = image::load_from_memory(&bytes).expect("drag icon readable");
+
+        assert_eq!(
+            (icon.width(), icon.height()),
+            (DRAG_ICON_WIDTH, DRAG_ICON_HEIGHT)
+        );
+    }
+
+    #[test]
     fn history_round_trips_and_prunes_captures_older_than_thirty_days() {
         let directory = tempdir().expect("temporary directory");
         let now = Utc.with_ymd_and_hms(2026, 7, 19, 12, 0, 0).unwrap();
@@ -506,9 +532,11 @@ mod tests {
             prepare_artifact_drag_in(directory.path(), &artifact).expect("artifact drag prepared");
 
         assert_eq!(std::fs::read(&drag.path).unwrap(), artifact.image_png);
+        assert_eq!(drag.icon_path.file_name().unwrap(), DRAG_ICON_FILE);
+        let icon = image::open(&drag.icon_path).expect("drag icon readable");
         assert_eq!(
-            std::fs::read(&drag.icon_path).unwrap(),
-            artifact.preview_png
+            (icon.width(), icon.height()),
+            (DRAG_ICON_WIDTH, DRAG_ICON_HEIGHT)
         );
         let history_entry = std::fs::canonicalize(directory.path().join(&id)).unwrap();
         assert_eq!(drag.path.parent(), Some(history_entry.as_path()));
@@ -535,9 +563,11 @@ mod tests {
         assert!(drag.path.starts_with(&canonical_export_root));
         assert!(drag.icon_path.starts_with(&canonical_export_root));
         assert_eq!(std::fs::read(&drag.path).unwrap(), artifact.image_png);
+        assert_eq!(drag.icon_path.file_name().unwrap(), DRAG_ICON_FILE);
+        let icon = image::open(&drag.icon_path).expect("drag icon readable");
         assert_eq!(
-            std::fs::read(&drag.icon_path).unwrap(),
-            artifact.preview_png
+            (icon.width(), icon.height()),
+            (DRAG_ICON_WIDTH, DRAG_ICON_HEIGHT)
         );
 
         clear_drag_exports_in(directory.path()).expect("drag exports cleared");
@@ -558,6 +588,7 @@ mod tests {
     }
 
     fn capture_artifact(id: &str, path: Option<String>, history_saved: bool) -> CaptureArtifact {
+        let image = RgbaImage::from_pixel(568, 320, Rgba([16, 32, 48, 255]));
         CaptureArtifact {
             id: id.to_owned(),
             path,
@@ -570,8 +601,8 @@ mod tests {
             mode: CaptureMode::Region,
             history_saved,
             clipboard_copy_status: ClipboardCopyStatus::Copied,
-            image_png: b"full-capture".to_vec(),
-            preview_png: b"preview".to_vec(),
+            image_png: encode_png(&image).expect("capture encoded"),
+            preview_png: encode_thumbnail_png(&image).expect("preview encoded"),
         }
     }
 

@@ -932,6 +932,26 @@ export function Thumbnail() {
   }, [applyClipboardState]);
 
   useEffect(() => {
+    // The thumbnail window is a drag source, never a file-drop destination.
+    // Reject inbound drags explicitly so WebKit cannot navigate to a dropped
+    // screenshot and replace the preview UI.
+    const rejectInboundDrag = (event: DragEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "none";
+    };
+
+    document.addEventListener("dragenter", rejectInboundDrag, true);
+    document.addEventListener("dragover", rejectInboundDrag, true);
+    document.addEventListener("drop", rejectInboundDrag, true);
+    return () => {
+      document.removeEventListener("dragenter", rejectInboundDrag, true);
+      document.removeEventListener("dragover", rejectInboundDrag, true);
+      document.removeEventListener("drop", rejectInboundDrag, true);
+    };
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     let polling = false;
     let timer: ReturnType<typeof setTimeout> | null = null;

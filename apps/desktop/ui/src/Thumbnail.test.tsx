@@ -87,4 +87,20 @@ describe("Thumbnail", () => {
     expect(document.documentElement).toHaveClass("thumbnail-native-tracking");
     expect(card).toHaveAttribute("data-thumbnail-native-active", "true");
   });
+
+  it("rejects inbound drags so a dropped screenshot cannot replace the preview UI", async () => {
+    render(<Thumbnail />);
+    await screen.findByRole("article");
+
+    for (const type of ["dragover", "drop"]) {
+      const dataTransfer = { dropEffect: "copy" } as DataTransfer;
+      const event = new Event(type, { bubbles: true, cancelable: true }) as DragEvent;
+      Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
+
+      document.body.dispatchEvent(event);
+
+      expect(event).toHaveProperty("defaultPrevented", true);
+      expect(dataTransfer.dropEffect).toBe("none");
+    }
+  });
 });
