@@ -140,8 +140,8 @@ html.capture-window-cursor, html.capture-window-cursor * { cursor: var(--capture
 .thumbnail-stack { position: absolute; bottom: 0; left: 0; right: 0; display: flex; flex-direction: column; gap: 24px; width: 100%; height: auto; max-height: 100%; padding: 28px; overflow-y: auto; overflow-anchor: none; background: transparent; scrollbar-width: none; }
 .thumbnail-stack::-webkit-scrollbar { display: none; }
 /* overflow:visible so tooltips (Full size, etc.) are not clipped by the card edge. */
-.thumbnail-card { position: relative; isolation: isolate; overflow: visible; flex: 0 0 160px; width: 100%; height: 160px; margin-bottom: 0; background: transparent; border-radius: 12px; box-shadow: 0 8px 16px rgba(0,0,0,.34), 0 2px 5px rgba(0,0,0,.22); cursor: grab; transition: flex-basis .26s ease, height .26s ease, margin-bottom .26s ease, opacity .2s ease, transform .2s ease, filter .2s ease, box-shadow .22s ease; will-change: flex-basis, height, opacity, transform; }
-.thumbnail-card:active, .thumbnail-card.thumbnail-file-dragging { cursor: grabbing; }
+.thumbnail-card { position: relative; isolation: isolate; overflow: visible; flex: 0 0 160px; width: 100%; height: 160px; margin-bottom: 0; background: transparent; border-radius: 12px; box-shadow: 0 8px 16px rgba(0,0,0,.34), 0 2px 5px rgba(0,0,0,.22); cursor: default; transition: flex-basis .26s ease, height .26s ease, margin-bottom .26s ease, opacity .2s ease, transform .2s ease, filter .2s ease, box-shadow .22s ease; will-change: flex-basis, height, opacity, transform; }
+.thumbnail-card.thumbnail-file-dragging { cursor: grabbing; }
 .thumbnail-card.thumbnail-viewer-active { box-shadow: 0 8px 16px rgba(0,0,0,.34), 0 2px 5px rgba(0,0,0,.22), 0 0 0 1px rgba(169,151,255,.88), 0 0 17px rgba(137,116,255,.4); }
 .thumbnail-card::after { position: absolute; z-index: 8; inset: 0; border-radius: inherit; box-shadow: 0 0 0 1px rgba(169,151,255,.88), 0 0 17px rgba(137,116,255,.4); content: ""; opacity: 0; pointer-events: none; }
 .thumbnail-card.thumbnail-capture-highlight::after { animation: thumbnail-capture-highlight 4.5s linear; }
