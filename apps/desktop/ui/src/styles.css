@@ -227,21 +227,21 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .thumbnail-exit-delete {
   overflow: visible;
   /*
-   * Long enough that the slowest ash chip finishes rising + fading before
-   * layout collapses. Collapse must never start while chips are still visible
-   * or the height shrink yanks residual particles downward.
+   * Keep the outgoing slot at full size for the entire dissolve so its particle
+   * layer never shifts. Cards above it animate into place independently, then
+   * removing this card swaps their translated pose for the real layout position.
    */
   animation: thumbnail-delete 2.9s linear forwards;
   pointer-events: none;
   box-shadow: none;
   border-radius: 12px;
 }
-/* Only cards above the deleted slot move in the bottom-anchored stack. Add a
-   small blur pulse around peak velocity, fading cleanly in and out while the
-   empty slot eases closed. */
+/* Only cards above the deleted slot move in the bottom-anchored stack. Move
+   them independently of the outgoing slot so they can start settling while
+   the last dust fades without pulling the particle layer down with them. */
 .thumbnail-card:has(~ .thumbnail-exit-delete.thumbnail-exit-dust) {
   animation: thumbnail-stack-motion-blur 2.9s linear both;
-  will-change: filter;
+  will-change: filter, transform;
 }
 /*
  * Visual baseline restored from 30aa257 (soft blur + long ease fades),
@@ -355,20 +355,16 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 }
 @keyframes thumbnail-delete {
   /*
-   * Hold full card size through the entire ash rise/fade.
-   * Max chip end ≈ delay(~0.96s) + duration(~1.18s) ≈ 2.15s;
-   * The dust layer is hidden by ≈2.30s; then collapse the stack over
-   * ≈0.58s with a smooth start and stop instead of snapping in ≈0.13s.
-   * Never translate particles down: only flex/height collapse after fade.
+   * This animation owns the exit duration and completion event. Geometry stays
+   * fixed so the ash remains anchored; the card is removed after animationend.
    */
-  0% { flex-basis: 160px; height: 160px; margin-bottom: 0; opacity: 1; }
-  80% { flex-basis: 160px; height: 160px; margin-bottom: 0; opacity: 1; animation-timing-function: cubic-bezier(.4,0,.2,1); }
-  100% { flex-basis: 0; height: 0; margin-bottom: -24px; opacity: 0; }
+  0%, 100% { flex-basis: 160px; height: 160px; margin-bottom: 0; opacity: 1; }
 }
 @keyframes thumbnail-stack-motion-blur {
-  0%, 80% { filter: blur(0); }
-  90% { filter: blur(.8px); }
-  100% { filter: blur(0); }
+  /* Start at 1.80s instead of waiting until 2.32s for the dust layer to hide. */
+  0%, 62% { filter: blur(0); transform: translateY(0); animation-timing-function: cubic-bezier(.4,0,.2,1); }
+  72% { filter: blur(.8px); }
+  82%, 100% { filter: blur(0); transform: translateY(184px); }
 }
 /* Fallback when dust is disabled (reduced motion or failed particle build). */
 .thumbnail-exit-delete:not(.thumbnail-exit-dust) {
