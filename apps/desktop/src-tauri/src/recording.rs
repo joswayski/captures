@@ -17,9 +17,7 @@ use captures_recording::{
 };
 use captures_recording_macos::{MacRecordingSegment, SegmentInfo};
 use serde::{Deserialize, Serialize};
-use tauri::{
-    AppHandle, Emitter, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder, window::Color,
-};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, window::Color};
 use tauri_plugin_opener::OpenerExt;
 use uuid::Uuid;
 
@@ -36,6 +34,8 @@ use crate::{
 
 #[cfg(target_os = "macos")]
 use crate::models::recording_selection_url;
+#[cfg(target_os = "macos")]
+use tauri::LogicalSize;
 
 const RECORDING_STATE_EVENT: &str = "recording-state-changed";
 const RECORDING_COUNTDOWN_EVENT: &str = "recording-countdown";
