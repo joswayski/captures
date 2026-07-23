@@ -131,75 +131,76 @@ pub async fn prepare_recording(
         .map_err(|error| error.to_string())
 }
 
+#[cfg(not(target_os = "macos"))]
+pub async fn prepare_recording_inner(
+    _app: AppHandle,
+    _state: Arc<AppState>,
+    _kind: RecordingKind,
+) -> Result<RecordingSelectionSession, AppError> {
+    Err(AppError::Task(
+        "video and GIF recording are currently available on macOS only".to_owned(),
+    ))
+}
+
+#[cfg(target_os = "macos")]
 pub async fn prepare_recording_inner(
     app: AppHandle,
     state: Arc<AppState>,
     kind: RecordingKind,
 ) -> Result<RecordingSelectionSession, AppError> {
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = (app, state, kind);
-        return Err(AppError::Task(
-            "video and GIF recording are currently available on macOS only".to_owned(),
-        ));
+    if crate::updates::install_is_active(&app) {
+        return Err(AppError::UpdateInstalling);
+    }
+    if !state.sessions.lock().is_empty() || operation_is_active(&state) {
+        return Err(AppError::CaptureInProgress);
     }
 
-    #[cfg(target_os = "macos")]
-    {
-        if crate::updates::install_is_active(&app) {
-            return Err(AppError::UpdateInstalling);
+    let request_permission = crate::mark_screen_permission_request(&state)?;
+    if let Err(error) = state.backend.ensure_permission(request_permission) {
+        if matches!(
+            &error,
+            captures_capture::CaptureError::PermissionRequestStarted
+        ) {
+            *state.screen_permission_requested_this_launch.lock() = true;
         }
-        if !state.sessions.lock().is_empty() || operation_is_active(&state) {
-            return Err(AppError::CaptureInProgress);
-        }
-
-        let request_permission = crate::mark_screen_permission_request(&state)?;
-        if let Err(error) = state.backend.ensure_permission(request_permission) {
-            if matches!(
-                &error,
-                captures_capture::CaptureError::PermissionRequestStarted
-            ) {
-                *state.screen_permission_requested_this_launch.lock() = true;
-            }
-            return Err(error.into());
-        }
-
-        crate::set_capture_huds_protected(&app, true);
-        crate::hide_window(&app, "thumbnail");
-        crate::hide_window(&app, "startup");
-        crate::hide_window(&app, "update");
-        let prepared = (|| {
-            let display = crate::display_under_pointer(&state)?;
-            let frame = state.backend.capture_display(&display.id)?;
-            let snapshot_png = storage::encode_png(&frame.image)?;
-            let windows = state
-                .windows()?
-                .into_iter()
-                .filter(|window| crate::window_is_capturable(window, &display))
-                .collect::<Vec<_>>();
-            let id = Uuid::new_v4().to_string();
-            let summary = RecordingSelectionSession {
-                id: id.clone(),
-                kind,
-                window_coordinate_scale: crate::window_coordinate_scale(&frame.descriptor),
-                display: frame.descriptor,
-                snapshot_url: recording_selection_url(&id),
-                windows,
-            };
-            *state.recording_selection.lock() = Some(RecordingSelection {
-                summary: summary.clone(),
-                image: frame.image,
-                snapshot_png,
-            });
-            show_recording_selector(&app, &summary)?;
-            Ok::<_, AppError>(summary)
-        })();
-        if prepared.is_err() {
-            *state.recording_selection.lock() = None;
-            restore_recording_ui(&app, &state);
-        }
-        prepared
+        return Err(error.into());
     }
+
+    crate::set_capture_huds_protected(&app, true);
+    crate::hide_window(&app, "thumbnail");
+    crate::hide_window(&app, "startup");
+    crate::hide_window(&app, "update");
+    let prepared = (|| {
+        let display = crate::display_under_pointer(&state)?;
+        let frame = state.backend.capture_display(&display.id)?;
+        let snapshot_png = storage::encode_png(&frame.image)?;
+        let windows = state
+            .windows()?
+            .into_iter()
+            .filter(|window| crate::window_is_capturable(window, &display))
+            .collect::<Vec<_>>();
+        let id = Uuid::new_v4().to_string();
+        let summary = RecordingSelectionSession {
+            id: id.clone(),
+            kind,
+            window_coordinate_scale: crate::window_coordinate_scale(&frame.descriptor),
+            display: frame.descriptor,
+            snapshot_url: recording_selection_url(&id),
+            windows,
+        };
+        *state.recording_selection.lock() = Some(RecordingSelection {
+            summary: summary.clone(),
+            image: frame.image,
+            snapshot_png,
+        });
+        show_recording_selector(&app, &summary)?;
+        Ok::<_, AppError>(summary)
+    })();
+    if prepared.is_err() {
+        *state.recording_selection.lock() = None;
+        restore_recording_ui(&app, &state);
+    }
+    prepared
 }
 
 #[tauri::command]
