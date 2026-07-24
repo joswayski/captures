@@ -46,6 +46,14 @@ function runChecked(command, args, options = {}) {
   return result;
 }
 
+function npmCliPath() {
+  const candidates = [
+    environment.npm_execpath,
+    join(dirname(process.execPath), "node_modules/npm/bin/npm-cli.js"),
+  ];
+  return candidates.find((candidate) => candidate && existsSync(candidate));
+}
+
 function processIsRunning(name) {
   return run("/usr/bin/pgrep", ["-x", name]).status === 0;
 }
@@ -155,14 +163,25 @@ if (isMac && !environment.APPLE_SIGNING_IDENTITY) {
 
 if (isMac) detachMountedBuildImages();
 
-const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+const npmCli = npmCliPath();
+if (!npmCli) {
+  console.error(
+    "Could not locate npm's CLI. Run this build through `npm run build`, or reinstall Node.js with npm included.",
+  );
+  process.exit(1);
+}
 const args = ["run", "tauri:build", "--workspace", "@captures/desktop"];
+const tauriArgs = [];
 if (!environment.TAURI_SIGNING_PRIVATE_KEY) {
-  args.push("--", "--config", "src-tauri/tauri.local.conf.json");
+  tauriArgs.push("--config", "src-tauri/tauri.local.conf.json");
+}
+tauriArgs.push(...process.argv.slice(2));
+if (tauriArgs.length > 0) {
+  args.push("--", ...tauriArgs);
 }
 const result = spawnSync(
-  npm,
-  args,
+  process.execPath,
+  [npmCli, ...args],
   {
     env: environment,
     stdio: "inherit",
@@ -171,7 +190,7 @@ const result = spawnSync(
 );
 
 if (result.error) {
-  console.error(`Failed to start the desktop build: ${result.error.message}`);
+  console.error(`Failed to start the desktop build through npm: ${result.error.message}`);
   process.exit(1);
 }
 

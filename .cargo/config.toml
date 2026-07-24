@@ -1,0 +1,4 @@
+[target.x86_64-pc-windows-msvc]
+# Use Rust's bundled linker on Windows. This avoids MSVC linker regressions while
+# still using the installed Windows SDK and C++ build tools.
+linker = "rust-lld"

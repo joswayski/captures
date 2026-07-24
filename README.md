@@ -59,6 +59,7 @@ The three global capture shortcuts can be changed in Preferences.
 ## Development
 
 You will need Rust 1.94 with `rustfmt` and `clippy`, Node.js 24, and npm 11.
+Windows development also requires the Visual Studio C++ build tools and a Windows 11 SDK.
 
 ```sh
 npm install
@@ -100,6 +101,10 @@ CAPTURES_OPEN_AFTER_INSTALL=0 npm run build
 `npm run build` automatically uses an installed Apple Development signing identity when one is available. Otherwise it warns and seals the bundle with an ad-hoc signature. Local builds omit updater artifacts unless `TAURI_SIGNING_PRIVATE_KEY` is explicitly provided; official release builds always create and sign them. Ad-hoc identity is tied to the exact executable, so macOS asks for Screen Recording permission again after code changes. Stable permissions across upgrades require an Apple Development or Developer ID certificate; the latter can be selected explicitly through `APPLE_SIGNING_IDENTITY`.
 
 Build output is written under `target/release/bundle`. Maintainer release setup and recovery steps live in [docs/releases.md](docs/releases.md).
+
+On Windows, use `npm run dev` to run Captures from the checkout. `npm run build` creates
+an NSIS installer `.exe` under `target/release/bundle/nsis`, an `.msi` under
+`target/release/bundle/msi`, and the unpackaged executable at `target/release/captures.exe`.
 
 ## Privacy
 
