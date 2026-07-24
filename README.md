@@ -108,7 +108,7 @@ an NSIS installer `.exe` under `target/release/bundle/nsis`, an `.msi` under
 
 ## Privacy
 
-Captures stores pending previews and its 30-day recovery history locally. It does not upload captures or send telemetry. Release builds contact GitHub Releases only to check for and download application updates.
+Captures stores pending previews and its 30-day recovery history locally. It does not upload captures or send telemetry. Official release builds contact GitHub Releases only to check for and download application updates; locally built copies do not perform background update checks.
 
 Future cloud sharing will be optional and explicit.
 

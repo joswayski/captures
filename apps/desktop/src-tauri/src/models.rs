@@ -153,23 +153,34 @@ pub fn history_directory() -> PathBuf {
 }
 
 pub fn snapshot_url(session_id: &str) -> String {
-    format!("captures-capture://localhost/session/{session_id}")
+    capture_asset_url(&format!("session/{session_id}"))
 }
 
 pub fn artifact_url(artifact_id: &str) -> String {
-    format!("captures-capture://localhost/artifact/{artifact_id}")
+    capture_asset_url(&format!("artifact/{artifact_id}"))
 }
 
 pub fn artifact_full_url(artifact_id: &str) -> String {
-    format!("captures-capture://localhost/artifact-full/{artifact_id}")
+    capture_asset_url(&format!("artifact-full/{artifact_id}"))
 }
 
 pub fn history_preview_url(artifact_id: &str) -> String {
-    format!("captures-capture://localhost/history-preview/{artifact_id}")
+    capture_asset_url(&format!("history-preview/{artifact_id}"))
 }
 
 pub fn history_full_url(artifact_id: &str) -> String {
-    format!("captures-capture://localhost/history-full/{artifact_id}")
+    capture_asset_url(&format!("history-full/{artifact_id}"))
+}
+
+fn capture_asset_url(path: &str) -> String {
+    #[cfg(target_os = "windows")]
+    {
+        format!("http://captures-capture.localhost/{path}")
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        format!("captures-capture://localhost/{path}")
+    }
 }
 
 #[cfg(test)]
@@ -177,7 +188,22 @@ mod tests {
     use captures_capture::CaptureMode;
     use std::path::Path;
 
-    use super::{AppSettings, migrate_output_directory};
+    use super::{AppSettings, migrate_output_directory, snapshot_url};
+
+    #[test]
+    fn uses_the_platform_custom_protocol_origin_for_capture_images() {
+        #[cfg(target_os = "windows")]
+        assert_eq!(
+            snapshot_url("session-id"),
+            "http://captures-capture.localhost/session/session-id"
+        );
+
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(
+            snapshot_url("session-id"),
+            "captures-capture://localhost/session/session-id"
+        );
+    }
 
     #[test]
     fn migrates_only_the_legacy_default_output_directory() {

@@ -119,7 +119,7 @@ pub fn initialize(app: &AppHandle) {
         },
     );
 
-    if cfg!(debug_assertions) {
+    if cfg!(debug_assertions) || !official_release_build() {
         return;
     }
 
@@ -300,6 +300,20 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
 }
 
 async fn check_for_updates_inner(app: &AppHandle, manual: bool) -> Result<UpdateStatus, String> {
+    if !official_release_build() {
+        let message = "Update checks are available only in official Captures releases.".to_owned();
+        let (current_version, current_display_version) = current_versions(app);
+        if let Some(status) = check_error_status(
+            manual,
+            current_version,
+            current_display_version,
+            message.clone(),
+        ) {
+            set_status(app, status);
+        }
+        return Err(message);
+    }
+
     let coordinator = app.state::<UpdateCoordinator>();
     if coordinator.installing.load(Ordering::Acquire) {
         return Ok(coordinator.status.lock().clone());
@@ -517,6 +531,14 @@ fn current_versions(app: &AppHandle) -> (String, String) {
     (current_version, current_display_version)
 }
 
+fn official_release_build() -> bool {
+    release_channel_enabled(option_env!("CAPTURES_OFFICIAL_RELEASE"))
+}
+
+fn release_channel_enabled(value: Option<&str>) -> bool {
+    value == Some("1")
+}
+
 fn check_error_status(
     manual: bool,
     current_version: String,
@@ -614,8 +636,16 @@ mod tests {
 
     use super::{
         AtomicFlagGuard, NoticeDisposition, UpdateStatus, check_error_status, display_version,
-        notice_disposition, restart_blocker,
+        notice_disposition, release_channel_enabled, restart_blocker,
     };
+
+    #[test]
+    fn enables_automatic_updates_only_for_official_release_builds() {
+        assert!(release_channel_enabled(Some("1")));
+        assert!(!release_channel_enabled(None));
+        assert!(!release_channel_enabled(Some("0")));
+        assert!(!release_channel_enabled(Some("true")));
+    }
 
     #[test]
     fn formats_encoded_calver_for_people() {

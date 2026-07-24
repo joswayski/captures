@@ -1,4 +1,3 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![forbid(unsafe_code)]
 
 use std::{
@@ -2613,6 +2612,10 @@ fn window_is_capturable(
     {
         return false;
     }
+    #[cfg(target_os = "windows")]
+    if windows_window_is_capture_overlay(window) {
+        return false;
+    }
     // Skip system chrome that is listed as full-screen "windows" and breaks selection.
     const EXCLUDED_APPS: &[&str] = &[
         "Dock",
@@ -2635,6 +2638,18 @@ fn window_is_capturable(
     true
 }
 
+#[cfg(any(target_os = "windows", test))]
+fn windows_window_is_capture_overlay(window: &captures_capture::WindowDescriptor) -> bool {
+    window
+        .app_name
+        .as_deref()
+        .is_some_and(|name| name.eq_ignore_ascii_case("NVIDIA App"))
+        && window
+            .title
+            .to_ascii_lowercase()
+            .starts_with("nvidia geforce overlay")
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::AtomicBool;
@@ -2646,9 +2661,10 @@ mod tests {
         menu_accelerator, parse_shortcut, should_activate_capture_cursor_before_reveal,
         should_trigger_shortcut, thumbnail_cursor_action, thumbnail_geometry,
         thumbnail_pointer_position, thumbnail_visible_window_height, viewer_window_label,
+        windows_window_is_capture_overlay,
     };
 
-    use captures_capture::DisplayDescriptor;
+    use captures_capture::{DisplayDescriptor, WindowDescriptor};
 
     #[test]
     fn region_cursor_waits_until_the_hidden_webview_is_primed() {
@@ -2658,6 +2674,25 @@ mod tests {
         assert!(should_activate_capture_cursor_before_reveal(
             CaptureMode::Window
         ));
+    }
+
+    #[test]
+    fn excludes_nvidia_capture_overlays_from_window_selection() {
+        let overlay = WindowDescriptor {
+            id: "overlay".to_owned(),
+            title: "NVIDIA GeForce Overlay DT".to_owned(),
+            app_name: Some("NVIDIA App".to_owned()),
+            x: 0,
+            y: 0,
+            width: 3_840,
+            height: 2_160,
+            display_id: "display".to_owned(),
+        };
+        assert!(windows_window_is_capture_overlay(&overlay));
+
+        let mut app = overlay.clone();
+        app.title = "NVIDIA App".to_owned();
+        assert!(!windows_window_is_capture_overlay(&app));
     }
 
     #[test]
