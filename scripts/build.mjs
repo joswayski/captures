@@ -10,9 +10,11 @@ const APP_BUNDLE = `${APP_NAME}.app`;
 const APPLICATIONS_APP = join("/Applications", APP_BUNDLE);
 const BUNDLE_ROOT = join(ROOT, "target/release/bundle");
 const BUILT_APP = join(ROOT, "target/release/bundle/macos", APP_BUNDLE);
+const BUILT_WINDOWS_EXE = join(ROOT, "target/release", `${BINARY_NAME}.exe`);
 
 const environment = { ...process.env };
 const isMac = process.platform === "darwin";
+const isWindows = process.platform === "win32";
 const skipInstall = process.env.CAPTURES_SKIP_INSTALL === "1";
 // Permission reset is OPT-IN. Default used to wipe Screen Recording on every
 // build (via tccutil), which with ad-hoc signing left captures completely dead
@@ -122,6 +124,40 @@ function quitRunningCaptures() {
   }
 }
 
+function stopRunningWindowsBuild() {
+  const powershell = environment.SystemRoot
+    ? join(environment.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+    : "powershell.exe";
+  const script = `
+$target = [System.IO.Path]::GetFullPath($env:CAPTURES_BUILD_TARGET_EXE)
+$matching = @(Get-Process -Name captures -ErrorAction SilentlyContinue | Where-Object {
+  $_.Path -and [System.IO.Path]::GetFullPath($_.Path) -eq $target
+})
+foreach ($process in $matching) {
+  Stop-Process -Id $process.Id -Force -ErrorAction Stop
+  Wait-Process -Id $process.Id -Timeout 5 -ErrorAction SilentlyContinue
+}
+[Console]::Out.Write($matching.Count)
+`;
+  const result = runChecked(
+    powershell,
+    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+    {
+      env: {
+        ...environment,
+        CAPTURES_BUILD_TARGET_EXE: BUILT_WINDOWS_EXE,
+      },
+    },
+  );
+  const stopped = Number.parseInt(result.stdout.trim(), 10);
+  if (!Number.isInteger(stopped) || stopped < 0) {
+    throw new Error("PowerShell returned an invalid process count.");
+  }
+  if (stopped > 0) {
+    log(`Stopped ${stopped} running checkout cop${stopped === 1 ? "y" : "ies"} of Captures.`);
+  }
+}
+
 function resetScreenRecordingPermission() {
   const bundleId = "io.github.joswayski.captures";
   log(`Resetting Screen Recording permission for ${bundleId}…`);
@@ -162,6 +198,14 @@ if (isMac && !environment.APPLE_SIGNING_IDENTITY) {
 }
 
 if (isMac) detachMountedBuildImages();
+if (isWindows) {
+  try {
+    stopRunningWindowsBuild();
+  } catch (error) {
+    console.error(`Could not stop the running Windows build: ${error.message}`);
+    process.exit(1);
+  }
+}
 
 const npmCli = npmCliPath();
 if (!npmCli) {

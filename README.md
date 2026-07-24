@@ -105,6 +105,8 @@ Build output is written under `target/release/bundle`. Maintainer release setup 
 On Windows, use `npm run dev` to run Captures from the checkout. `npm run build` creates
 an NSIS installer `.exe` under `target/release/bundle/nsis`, an `.msi` under
 `target/release/bundle/msi`, and the unpackaged executable at `target/release/captures.exe`.
+Before compiling, the build stops a running copy at that exact unpackaged path so Windows
+can replace it; an installed copy elsewhere is not stopped.
 
 ## Privacy
 
