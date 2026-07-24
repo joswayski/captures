@@ -1148,7 +1148,10 @@ fn dismiss_artifact(
     remove_artifact(&app, state.inner(), &artifact_id)
 }
 
-#[tauri::command]
+// WebView2 can stall a newly constructed webview at about:blank when window
+// creation runs inside its synchronous IPC callback. Force these commands
+// onto Tauri's async executor before they dispatch window work.
+#[tauri::command(async)]
 fn open_artifact_viewer(
     app: AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
@@ -1236,13 +1239,13 @@ fn open_captures_folder(
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn open_capture_history(app: AppHandle) -> CommandResult<()> {
     show_capture_history(&app);
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn open_preferences(app: AppHandle) -> CommandResult<()> {
     show_preferences(&app);
     Ok(())
@@ -2187,8 +2190,12 @@ fn thumbnail_window_geometry(app: &AppHandle, count: usize) -> (f64, f64, f64) {
         .ok()
         .flatten()
         .map(|monitor| {
-            let position = monitor.position();
-            let size = monitor.size();
+            // Keep the preview inside the usable desktop. The monitor's full
+            // bounds include reserved UI such as the Windows taskbar, macOS
+            // Dock, and Linux panels.
+            let work_area = monitor.work_area();
+            let position = work_area.position;
+            let size = work_area.size;
             thumbnail_geometry(
                 position.x,
                 position.y,
@@ -2777,6 +2784,13 @@ mod tests {
             thumbnail_geometry(-3_840, 0, 3_840, 2_048, 2.0, 2),
             (-1_920.0, 624.0, 400.0)
         );
+    }
+
+    #[test]
+    fn keeps_the_thumbnail_stack_inside_the_monitor_work_area() {
+        let (_, top, height) = thumbnail_geometry(0, 0, 1_920, 1_040, 1.0, 1);
+
+        assert_eq!(top + height, 1_040.0);
     }
 
     #[test]

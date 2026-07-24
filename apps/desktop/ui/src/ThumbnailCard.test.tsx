@@ -41,6 +41,10 @@ describe("ThumbnailCard", () => {
     });
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("renders the quick preview from the full-resolution image and highlights it once ready", async () => {
     render(<ThumbnailCard artifact={artifact(null)} clipboardCurrent viewerActive={false} onRemoved={() => undefined} />);
 
@@ -145,15 +149,15 @@ describe("ThumbnailCard", () => {
       />,
     );
     const card = screen.getByRole("article");
+    const image = screen.getByRole("img", { name: "Screenshot preview" });
 
     await act(async () => {
-      fireEvent.dragStart(card);
+      fireEvent.dragStart(image);
       await Promise.resolve();
     });
 
-    expect(card).toHaveAttribute("draggable", "true");
-    expect(screen.getByRole("img", { name: "Screenshot preview" }))
-      .toHaveAttribute("draggable", "false");
+    expect(card).not.toHaveAttribute("draggable");
+    expect(image).toHaveAttribute("draggable", "true");
     expect(invoke).toHaveBeenCalledWith("prepare_artifact_drag", {
       artifactId: "capture-1",
     });
@@ -168,7 +172,7 @@ describe("ThumbnailCard", () => {
     expect(card).not.toHaveClass("thumbnail-file-dragging");
   });
 
-  it("keeps action buttons clickable instead of turning their gestures into file drags", async () => {
+  it("keeps action buttons outside the native file drag source", async () => {
     render(
       <ThumbnailCard
         artifact={artifact(null)}
@@ -177,16 +181,19 @@ describe("ThumbnailCard", () => {
         onRemoved={() => undefined}
       />,
     );
-    const card = screen.getByRole("article");
+    const save = screen.getByRole("button", { name: "Save file" });
 
-    fireEvent.pointerDown(screen.getByRole("button", { name: "Save file" }));
     await act(async () => {
-      fireEvent.dragStart(card);
+      fireEvent.dragStart(save);
+      save.click();
       await Promise.resolve();
     });
 
     expect(invoke).not.toHaveBeenCalledWith("prepare_artifact_drag", expect.anything());
     expect(startDrag).not.toHaveBeenCalled();
+    expect(invoke).toHaveBeenCalledWith("save_artifact", {
+      artifactId: "capture-1",
+    });
   });
 
   it("does not promise recovery when local history could not be written", () => {
@@ -284,6 +291,32 @@ describe("ThumbnailCard", () => {
     expect(card).toHaveClass("thumbnail-exit-dust");
     expect(card.querySelectorAll(".thumbnail-dust").length).toBeGreaterThan(100);
     expect(card.querySelector(".thumbnail-dust-layer")).not.toBeNull();
+  });
+
+  it("finishes deletion if the webview never dispatches animationend", async () => {
+    vi.useFakeTimers();
+    const onRemoved = vi.fn();
+    render(
+      <ThumbnailCard
+        artifact={artifact(null)}
+        clipboardCurrent={false}
+        viewerActive={false}
+        onRemoved={onRemoved}
+      />,
+    );
+
+    act(() => {
+      screen.getByRole("button", { name: "Delete" }).click();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(3_200);
+      await Promise.resolve();
+    });
+
+    expect(invoke).toHaveBeenCalledWith("dismiss_artifact", {
+      artifactId: "capture-1",
+    });
+    expect(onRemoved).toHaveBeenCalledWith("capture-1");
   });
 
   it("freezes Saved when exit starts instead of flipping to Show in Folder", async () => {
