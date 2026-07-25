@@ -250,8 +250,8 @@ const buildConfig = isMac
     ? "src-tauri/tauri.recording.conf.json"
     : "src-tauri/tauri.recording.local.conf.json"
   : !environment.TAURI_SIGNING_PRIVATE_KEY
-     ? "src-tauri/tauri.local.conf.json"
-     : null;
+    ? "src-tauri/tauri.local.conf.json"
+    : null;
 if (buildConfig) {
   tauriArgs.push("--config", buildConfig);
 }

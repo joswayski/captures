@@ -517,29 +517,37 @@ mod tests {
     use captures_recording::{RecordingKind, RecordingTarget};
     use std::path::Path;
 
+    #[cfg(target_os = "macos")]
+    use super::recording_selection_url;
     use super::{
         AppSettings, HistoryEntry, RecordingArtifact, migrate_output_directory,
-        recording_media_url, recording_poster_url, recording_selection_url, snapshot_url,
+        recording_media_url, recording_poster_url, snapshot_url,
     };
 
     #[test]
     fn uses_the_platform_custom_protocol_origin_for_capture_assets() {
         let urls = [
             snapshot_url("session-id"),
-            recording_selection_url("selection-id"),
             recording_media_url("artifact-id"),
             recording_poster_url("artifact-id"),
         ];
 
         #[cfg(target_os = "windows")]
-        assert!(urls
-            .iter()
-            .all(|url| url.starts_with("http://captures-capture.localhost/")));
+        assert!(
+            urls.iter()
+                .all(|url| url.starts_with("http://captures-capture.localhost/"))
+        );
 
         #[cfg(not(target_os = "windows"))]
-        assert!(urls
-            .iter()
-            .all(|url| url.starts_with("captures-capture://localhost/")));
+        assert!(
+            urls.iter()
+                .all(|url| url.starts_with("captures-capture://localhost/"))
+        );
+
+        #[cfg(target_os = "macos")]
+        assert!(
+            recording_selection_url("selection-id").starts_with("captures-capture://localhost/")
+        );
     }
 
     #[test]
