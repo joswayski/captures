@@ -12,7 +12,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 vi.mock("@crabnebula/tauri-plugin-drag", () => ({
   startDrag: vi.fn(async (_options, onEvent) => {
-    onEvent?.({ result: "Dropped", cursorPos: { x: 0, y: 0 } });
+    onEvent?.({ result: "Cancelled", cursorPos: { x: 0, y: 0 } });
   }),
 }));
 
@@ -37,7 +37,7 @@ describe("ThumbnailCard", () => {
     vi.clearAllMocks();
     vi.mocked(invoke).mockImplementation(async () => undefined);
     vi.mocked(startDrag).mockImplementation(async (_options, onEvent) => {
-      onEvent?.({ result: "Dropped", cursorPos: { x: 0, y: 0 } });
+      onEvent?.({ result: "Cancelled", cursorPos: { x: 0, y: 0 } });
     });
   });
 
@@ -170,6 +170,83 @@ describe("ThumbnailCard", () => {
       expect.any(Function),
     );
     expect(card).not.toHaveClass("thumbnail-file-dragging");
+  });
+
+  it("dismisses the preview without deleting it after a successful file drop", async () => {
+    vi.useFakeTimers();
+    const onRemoved = vi.fn();
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === "prepare_artifact_drag") {
+        return {
+          path: "/tmp/Captures_2026-07-18_18-00-00_000.png",
+          icon_path: "/tmp/Captures-preview.png",
+        };
+      }
+      return undefined;
+    });
+    vi.mocked(startDrag).mockImplementation(async (_options, onEvent) => {
+      onEvent?.({ result: "Dropped", cursorPos: { x: 400, y: 300 } });
+    });
+    render(
+      <ThumbnailCard
+        artifact={artifact(null)}
+        clipboardCurrent
+        viewerActive={false}
+        onRemoved={onRemoved}
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.dragStart(screen.getByRole("img", { name: "Screenshot preview" }));
+      await Promise.resolve();
+    });
+
+    const card = screen.getByRole("article");
+    expect(card).toHaveClass("thumbnail-exit-dismiss");
+    expect(card).not.toHaveClass("thumbnail-exit-delete");
+    expect(invoke).not.toHaveBeenCalledWith("trash_artifact", expect.anything());
+
+    await act(async () => {
+      vi.advanceTimersByTime(900);
+      await Promise.resolve();
+    });
+
+    expect(invoke).toHaveBeenCalledWith("dismiss_artifact", {
+      artifactId: "capture-1",
+    });
+    expect(invoke).not.toHaveBeenCalledWith("trash_artifact", expect.anything());
+    expect(onRemoved).toHaveBeenCalledWith("capture-1");
+  });
+
+  it("keeps the preview when the native file drag is cancelled", async () => {
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === "prepare_artifact_drag") {
+        return {
+          path: "/tmp/Captures_2026-07-18_18-00-00_000.png",
+          icon_path: "/tmp/Captures-preview.png",
+        };
+      }
+      return undefined;
+    });
+    render(
+      <ThumbnailCard
+        artifact={artifact(null)}
+        clipboardCurrent
+        viewerActive={false}
+        onRemoved={() => undefined}
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.dragStart(screen.getByRole("img", { name: "Screenshot preview" }));
+      await Promise.resolve();
+    });
+
+    const card = screen.getByRole("article");
+    expect(card).not.toHaveClass("thumbnail-file-dragging");
+    expect(card).not.toHaveClass("thumbnail-exiting");
+    expect(invoke).not.toHaveBeenCalledWith("dismiss_artifact", expect.anything());
+    expect(invoke).not.toHaveBeenCalledWith("trash_artifact", expect.anything());
   });
 
   it("keeps action buttons outside the native file drag source", async () => {

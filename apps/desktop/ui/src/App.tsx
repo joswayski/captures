@@ -2307,9 +2307,12 @@ export function ThumbnailCard({
           icon: payload.icon_path,
           mode: "copy",
         },
-        () => {
+        ({ result }) => {
           fileDraggingRef.current = false;
           setFileDragging(false);
+          if (result === "Dropped") {
+            exitWith("dismiss", "dismiss_artifact");
+          }
         },
       );
     } catch (error) {
