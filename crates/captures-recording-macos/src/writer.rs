@@ -19,6 +19,7 @@ unsafe extern "C" {
         kind: i32,
     ) -> bool;
     fn captures_media_writer_finish(handle: *mut std::ffi::c_void) -> bool;
+    fn captures_media_writer_has_video_frame(handle: *mut std::ffi::c_void) -> bool;
     fn captures_media_writer_duration_ms(handle: *mut std::ffi::c_void) -> u64;
     fn captures_media_writer_dropped_frames(handle: *mut std::ffi::c_void) -> u64;
     fn captures_media_writer_error(
@@ -91,6 +92,11 @@ impl MediaWriter {
         } else {
             Err(MacRecordingError::RecordingFailed(self.error_message()))
         }
+    }
+
+    pub fn has_video_frame(&self) -> bool {
+        // SAFETY: the handle remains retained by self for the whole call.
+        unsafe { captures_media_writer_has_video_frame(self.handle()) }
     }
 
     pub fn duration_ms(&self) -> u64 {

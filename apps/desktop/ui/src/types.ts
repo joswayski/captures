@@ -45,6 +45,7 @@ export interface ActiveSession {
 }
 
 export interface AppSettings {
+  settings_schema_version?: number;
   output_directory: string;
   region_shortcut: string;
   window_shortcut: string;
@@ -117,6 +118,7 @@ export interface RecordingSessionSnapshot {
   state: RecordingState;
   options: RecordingOptions;
   elapsed_ms: number;
+  countdown_remaining_seconds: number | null;
   warning: string | null;
   error: string | null;
 }

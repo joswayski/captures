@@ -59,8 +59,8 @@ pub enum RecordingTarget {
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MaxResolution {
-    Original,
     #[default]
+    Original,
     P1080,
     P720,
 }
@@ -214,6 +214,7 @@ pub struct RecordingSessionSnapshot {
     pub state: RecordingState,
     pub options: RecordingOptions,
     pub elapsed_ms: u64,
+    pub countdown_remaining_seconds: Option<u8>,
     pub warning: Option<String>,
     pub error: Option<String>,
 }

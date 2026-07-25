@@ -1,8 +1,11 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
-    time::Instant,
+    sync::{
+        Arc, Condvar, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
 };
 
 use captures_recording::{AudioDevice, AudioDeviceKind, RecordingOptions, RecordingTarget};
@@ -11,7 +14,7 @@ use screencapturekit::{
     cg::CGRect,
     cm::{CMSampleBuffer, CMSampleBufferSCExt, SCFrameStatus},
     dispatch_queue::{DispatchQoS, DispatchQueue},
-    shareable_content::{SCDisplay, SCShareableContent, SCWindow},
+    shareable_content::{SCDisplay, SCRunningApplication, SCShareableContent, SCWindow},
     stream::{
         SCStream, configuration::SCStreamConfiguration, content_filter::SCContentFilter,
         delegate_trait::StreamCallbacks, output_type::SCStreamOutputType,
@@ -22,6 +25,7 @@ use crate::{MacRecordingError, MacRecordingResult, SegmentInfo, writer::MediaWri
 
 pub struct NativeRecordingSegment {
     stream: SCStream,
+    _output_queue: DispatchQueue,
     writer: MediaWriter,
     video_output_id: usize,
     audio_output_id: Option<usize>,
@@ -94,18 +98,29 @@ impl NativeRecordingSegment {
             "io.github.joswayski.captures.recording",
             DispatchQoS::UserInteractive,
         );
+        let first_video_frame = Arc::new((AtomicBool::new(false), Mutex::new(()), Condvar::new()));
         let video_writer = writer.clone();
         let video_failure = failure.clone();
+        let video_ready = first_video_frame.clone();
         let video_output_id = stream
             .add_output_handler_with_queue(
                 move |sample: CMSampleBuffer, _output_type: SCStreamOutputType| {
-                    if sample
-                        .frame_status()
-                        .is_some_and(SCFrameStatus::has_content)
-                        && !video_writer.append_video(&sample)
-                        && let Ok(mut current) = video_failure.lock()
+                    if !sample_contains_video_frame(&sample) {
+                        return;
+                    }
+                    if !video_writer.append_video(&sample) {
+                        if let Ok(mut current) = video_failure.lock() {
+                            *current = Some(video_writer.error_message());
+                        }
+                    } else if !video_ready.0.load(Ordering::Acquire)
+                        && video_writer.has_video_frame()
                     {
-                        *current = Some(video_writer.error_message());
+                        let (ready, gate, wake) = &*video_ready;
+                        let _gate = gate
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        ready.store(true, Ordering::Release);
+                        wake.notify_all();
                     }
                 },
                 SCStreamOutputType::Screen,
@@ -151,8 +166,39 @@ impl NativeRecordingSegment {
             return Err(MacRecordingError::ScreenCaptureKit(error.to_string()));
         }
 
+        let (ready, gate, wake) = &*first_video_frame;
+        let gate = gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (gate, _) = wake
+            .wait_timeout_while(gate, Duration::from_secs(2), |_| {
+                !ready.load(Ordering::Acquire)
+            })
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let received_first_frame = ready.load(Ordering::Acquire);
+        drop(gate);
+        if !received_first_frame {
+            let stream_error = failure
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            let _ = stream.stop_capture();
+            let _ = stream.remove_output_handler(video_output_id, SCStreamOutputType::Screen);
+            if let Some(audio_output_id) = audio_output_id {
+                let _ = stream.remove_output_handler(audio_output_id, SCStreamOutputType::Audio);
+            }
+            let _ = writer.finish();
+            let _ = fs::remove_file(output_path);
+            return Err(MacRecordingError::RecordingFailed(
+                stream_error.unwrap_or_else(|| {
+                    "ScreenCaptureKit did not deliver a usable video frame".to_owned()
+                }),
+            ));
+        }
+
         Ok(Self {
             stream,
+            _output_queue: output_queue,
             writer,
             video_output_id,
             audio_output_id,
@@ -237,6 +283,33 @@ impl NativeRecordingSegment {
     }
 }
 
+fn sample_contains_video_frame(sample: &CMSampleBuffer) -> bool {
+    video_frame_is_usable(
+        sample.frame_status(),
+        sample.is_valid(),
+        sample.data_is_ready(),
+        !sample.image_buffer_ptr().is_null(),
+    )
+}
+
+const fn video_frame_is_usable(
+    status: Option<SCFrameStatus>,
+    is_valid: bool,
+    data_is_ready: bool,
+    has_image_buffer: bool,
+) -> bool {
+    is_valid
+        && data_is_ready
+        && has_image_buffer
+        && match status {
+            Some(status) => status.has_content(),
+            // Some ScreenCaptureKit runtimes expose the status attachment as
+            // an integer that the binding cannot currently decode. A valid,
+            // ready video sample with an image buffer is still safe to append.
+            None => true,
+        }
+}
+
 pub fn microphone_devices() -> Vec<AudioDevice> {
     let mut devices = vec![AudioDevice {
         id: "default".to_owned(),
@@ -271,11 +344,11 @@ fn filter_for_target(
     match target {
         RecordingTarget::Display { display_id } => {
             let display = find_display(content, display_id)?;
-            let windows = current_process_windows(content);
-            let window_refs = windows.iter().collect::<Vec<_>>();
+            let applications = current_process_applications(content);
+            let application_refs = applications.iter().collect::<Vec<_>>();
             let filter = SCContentFilter::create()
                 .with_display(&display)
-                .with_excluding_windows(&window_refs)
+                .with_excluding_applications(&application_refs, &[])
                 .build();
             Ok((
                 filter,
@@ -288,11 +361,11 @@ fn filter_for_target(
         } => {
             let display = find_display(content, display_id)?;
             let scale = display_pixel_scale(&display);
-            let windows = current_process_windows(content);
-            let window_refs = windows.iter().collect::<Vec<_>>();
+            let applications = current_process_applications(content);
+            let application_refs = applications.iter().collect::<Vec<_>>();
             let filter = SCContentFilter::create()
                 .with_display(&display)
-                .with_excluding_windows(&window_refs)
+                .with_excluding_applications(&application_refs, &[])
                 .build();
             Ok((
                 filter,
@@ -357,22 +430,19 @@ fn find_window(content: &SCShareableContent, id: &str) -> MacRecordingResult<SCW
         .ok_or(MacRecordingError::TargetUnavailable)
 }
 
-fn current_process_windows(content: &SCShareableContent) -> Vec<SCWindow> {
+fn current_process_applications(content: &SCShareableContent) -> Vec<SCRunningApplication> {
     let process_id = i32::try_from(std::process::id()).unwrap_or_default();
     content
-        .windows()
+        .applications()
         .into_iter()
-        .filter(|window| {
-            window
-                .owning_application()
-                .is_some_and(|application| application.process_id() == process_id)
-        })
+        .filter(|application| application.process_id() == process_id)
         .collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::intersection_area;
+    use super::{intersection_area, video_frame_is_usable};
+    use screencapturekit::cm::SCFrameStatus;
     use screencapturekit::prelude::CGRect;
 
     fn rect(x: f64, y: f64, width: f64, height: f64) -> CGRect {
@@ -389,5 +459,25 @@ mod tests {
             intersection_area(rect(0.0, 0.0, 10.0, 10.0), rect(20.0, 20.0, 5.0, 5.0)),
             0.0
         );
+    }
+
+    #[test]
+    fn accepts_ready_video_samples_when_frame_status_is_unavailable() {
+        assert!(video_frame_is_usable(None, true, true, true));
+        assert!(video_frame_is_usable(
+            Some(SCFrameStatus::Complete),
+            true,
+            true,
+            true
+        ));
+        assert!(!video_frame_is_usable(
+            Some(SCFrameStatus::Idle),
+            true,
+            true,
+            true
+        ));
+        assert!(!video_frame_is_usable(None, false, true, true));
+        assert!(!video_frame_is_usable(None, true, false, true));
+        assert!(!video_frame_is_usable(None, true, true, false));
     }
 }

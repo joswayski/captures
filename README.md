@@ -11,6 +11,7 @@ macOS is the primary development target today. Windows and Linux builds are avai
 - Capture a region, window, or full display.
 - On macOS 13+, record a region, window, or display once, then trim, resize, compress, and export it as H.264/AAC video or an optimized GIF.
 - Record desktop audio and a selected microphone independently, with pause, resume, restart, mute, and interruption recovery.
+- Take a lossless region, window, or display screenshot while a recording continues.
 - Trim, crop, resize, remix audio, or export against a strict maximum file size in the non-destructive recording editor.
 - Start captures from the tray or customizable global shortcuts.
 - Copy captures to the clipboard automatically, save them as full-resolution lossless PNGs, or inspect them in a full-size viewer.

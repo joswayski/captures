@@ -27,8 +27,8 @@ const settings: AppSettings = {
   recording: {
     video_shortcut: "Ctrl+Shift+5",
     gif_shortcut: "Ctrl+Shift+6",
-    video_fps: 30,
-    video_max_resolution: "p1080",
+    video_fps: 60,
+    video_max_resolution: "original",
     gif_fps: 15,
     gif_max_width: 800,
     gif_max_colors: 256,
@@ -104,7 +104,7 @@ describe("RecordingSelector", () => {
     vi.clearAllMocks();
   });
 
-  it("reveals only after the snapshot paints and never blocks on audio discovery", async () => {
+  it("reveals after the snapshot paints and preloads microphones before first use", async () => {
     const { container } = render(<RecordingSelector />);
 
     expect(screen.queryByText("Preparing recorder…")).not.toBeInTheDocument();
@@ -113,7 +113,8 @@ describe("RecordingSelector", () => {
       expect(image).not.toBeNull();
       return image!;
     });
-    expect(invoke).not.toHaveBeenCalledWith("list_recording_audio_devices");
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("list_recording_audio_devices"));
+    expect(await screen.findByRole("option", { name: "Studio Microphone" })).toBeInTheDocument();
 
     fireEvent.load(snapshot);
     await waitFor(() => {
@@ -127,9 +128,6 @@ describe("RecordingSelector", () => {
       });
     });
 
-    fireEvent.focus(screen.getByLabelText("Microphone"));
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("list_recording_audio_devices"));
-
     const cursorToggle = screen.getByRole("checkbox", { name: "Cursor" });
     expect(cursorToggle.nextElementSibling).toHaveClass("recording-switch");
 
@@ -138,7 +136,11 @@ describe("RecordingSelector", () => {
       expect(invoke).toHaveBeenCalledWith("start_recording", {
         request: expect.objectContaining({
           selection_id: session.id,
-          options: expect.objectContaining({ kind: "video" }),
+          options: expect.objectContaining({
+            kind: "video",
+            frames_per_second: 60,
+            max_resolution: "original",
+          }),
         }),
       });
     });
