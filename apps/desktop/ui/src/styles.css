@@ -476,7 +476,14 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .help-text { margin-top: 10px; }
 .check-row { display: flex; align-items: center; gap: 9px; color: #c7c7d1; font-size: 13px; }
 .check-row.capture-option { margin-top: 14px; align-items: start; }
-.check-row input { accent-color: #8e76f2; }
+.check-row input[type="checkbox"], .editor-volume input[type="checkbox"] { display: grid; flex: 0 0 auto; width: 17px; height: 17px; margin: 0; place-content: center; border: 1px solid #555765; border-radius: 5px; appearance: none; background: #111219; box-shadow: 0 1px 2px rgba(0,0,0,.26) inset; cursor: pointer; outline: none; transition: border-color .15s ease, background .15s ease, box-shadow .15s ease, transform .15s ease; }
+.check-row input[type="checkbox"]::before, .editor-volume input[type="checkbox"]::before { width: 8px; height: 4px; border-bottom: 2px solid #171820; border-left: 2px solid #171820; content: ""; opacity: 0; transform: translateY(-1px) rotate(-45deg) scale(.55); transition: opacity .12s ease, transform .16s cubic-bezier(.2,.8,.2,1); }
+.check-row input[type="checkbox"]:hover:not(:disabled), .editor-volume input[type="checkbox"]:hover:not(:disabled) { border-color: #777989; background: #191a23; }
+.check-row input[type="checkbox"]:checked, .editor-volume input[type="checkbox"]:checked { border-color: #a997ff; background: #a997ff; box-shadow: 0 0 0 1px rgba(169,151,255,.15), 0 3px 10px rgba(104,82,220,.28); }
+.check-row input[type="checkbox"]:checked::before, .editor-volume input[type="checkbox"]:checked::before { opacity: 1; transform: translateY(-1px) rotate(-45deg) scale(1); }
+.check-row input[type="checkbox"]:focus-visible, .editor-volume input[type="checkbox"]:focus-visible { box-shadow: 0 0 0 3px rgba(169,151,255,.22); }
+.check-row input[type="checkbox"]:active:not(:disabled), .editor-volume input[type="checkbox"]:active:not(:disabled) { transform: scale(.92); }
+.check-row input[type="checkbox"]:disabled, .editor-volume input[type="checkbox"]:disabled { cursor: default; opacity: .38; }
 
 /* Recording selector */
 .recording-selector-idle { width: 100%; height: 100%; background: transparent; }
@@ -503,10 +510,16 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .recording-cancel:hover { background: #333439; }
 .recording-options-row { min-height: 69px; padding: 11px 12px; }
 .recording-options-row label { display: flex; min-width: 104px; flex-direction: column; gap: 5px; color: #999a9f; font-size: 9px; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; }
-.recording-options-row label.recording-toggle { min-width: auto; flex-direction: row; align-items: center; gap: 6px; color: #d5d5d8; font-size: 11px; letter-spacing: 0; text-transform: none; }
+.recording-options-row label.recording-toggle { position: relative; min-width: auto; min-height: 32px; padding: 0 2px; flex-direction: row; align-items: center; gap: 7px; color: #d5d5d8; cursor: pointer; font-size: 11px; letter-spacing: 0; text-transform: none; }
+.recording-toggle input { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
+.recording-switch { position: relative; display: block; flex: 0 0 auto; width: 30px; height: 18px; border: 1px solid #4a4b51; border-radius: 999px; background: #24252a; box-shadow: 0 1px 3px rgba(0,0,0,.28) inset; transition: border-color .17s ease, background .17s ease, box-shadow .17s ease; }
+.recording-switch::after { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #b9bac0; box-shadow: 0 1px 3px rgba(0,0,0,.35); content: ""; transition: background .17s ease, transform .2s cubic-bezier(.2,.8,.2,1); }
+.recording-toggle:hover .recording-switch { border-color: #696a70; background: #2c2d32; }
+.recording-toggle input:checked + .recording-switch { border-color: #ffca28; background: #ffca28; box-shadow: 0 3px 12px rgba(255,190,20,.24); }
+.recording-toggle input:checked + .recording-switch::after { background: #18191c; transform: translateX(12px); }
+.recording-toggle input:focus-visible + .recording-switch { box-shadow: 0 0 0 3px rgba(255,202,40,.2); }
 .recording-options-row select, .recording-settings-section select, .recording-editor select, .recording-editor input[type="number"] { min-height: 32px; border: 1px solid #3d3e43; border-radius: 6px; padding: 5px 8px; color: #f3f3f4; background: #111216; outline: none; }
 .recording-options-row select:focus, .recording-settings-section select:focus, .recording-editor select:focus, .recording-editor input:focus { border-color: #f0b91a; box-shadow: 0 0 0 2px rgba(240,185,26,.12); }
-.recording-options-row input { accent-color: #ffca28; }
 .recording-start { display: flex; min-height: 40px; margin-left: auto; padding: 9px 15px; align-items: center; gap: 8px; border: 0; border-radius: 8px; color: #18191c; background: #ffca28; box-shadow: 0 5px 16px rgba(255,190,20,.2); font-size: 12px; font-weight: 850; }
 .recording-start span { display: block; width: 10px; height: 10px; border-radius: 50%; background: #e73842; }
 .recording-start:disabled { cursor: not-allowed; opacity: .45; }

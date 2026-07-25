@@ -342,6 +342,16 @@ pub fn prepare_window_reveal(window: &WebviewWindow) -> Result<(), &'static str>
     Ok(())
 }
 
+/// Keeps a hidden WebView awake without visibly exposing its cached surface.
+///
+/// AppKit can suspend a fully transparent WKWebView. A tiny non-zero alpha is
+/// enough to let it paint the next frame while remaining imperceptible until
+/// `reveal_window` makes the finished surface visible.
+pub fn prime_window_reveal(window: &WebviewWindow) -> Result<(), &'static str> {
+    native_window(window)?.setAlphaValue(0.01);
+    Ok(())
+}
+
 /// Reveals a window after its WebKit surface has painted.
 pub fn reveal_window(window: &WebviewWindow) -> Result<(), &'static str> {
     native_window(window)?.setAlphaValue(1.0);

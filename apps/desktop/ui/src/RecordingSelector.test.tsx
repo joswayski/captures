@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
@@ -63,9 +63,21 @@ const session: RecordingSelectionSession = {
 
 describe("RecordingSelector", () => {
   let selectorShowError: Error | null;
+  let recordingSelectionReady:
+    | ((event: { payload: RecordingSelectionSession }) => void)
+    | null;
 
   beforeEach(() => {
     selectorShowError = null;
+    recordingSelectionReady = null;
+    vi.mocked(listen).mockImplementation(async (event, handler) => {
+      if (event === "recording-selection-ready") {
+        recordingSelectionReady = handler as (
+          event: { payload: RecordingSelectionSession },
+        ) => void;
+      }
+      return () => undefined;
+    });
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "get_recording_selection") return session;
       if (command === "get_settings") return settings;
@@ -76,7 +88,11 @@ describe("RecordingSelector", () => {
         if (selectorShowError) throw selectorShowError;
         return undefined;
       }
-      if (command === "reveal_recording_selector" || command === "start_recording") {
+      if (
+        command === "reveal_recording_selector"
+        || command === "start_recording"
+        || command === "cancel_recording_selection"
+      ) {
         return undefined;
       }
       throw new Error(`unexpected command: ${command}`);
@@ -113,6 +129,9 @@ describe("RecordingSelector", () => {
     fireEvent.focus(screen.getByLabelText("Microphone"));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("list_recording_audio_devices"));
 
+    const cursorToggle = screen.getByRole("checkbox", { name: "Cursor" });
+    expect(cursorToggle.nextElementSibling).toHaveClass("recording-switch");
+
     fireEvent.click(screen.getByRole("button", { name: "Record" }));
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("start_recording", {
@@ -148,6 +167,58 @@ describe("RecordingSelector", () => {
     expect(await screen.findByRole("button", { name: "Record" })).toBeInTheDocument();
     expect(invoke).toHaveBeenCalledWith("get_recording_selection");
     expect(invoke).toHaveBeenCalledWith("get_settings");
+  });
+
+  it("clears an escaped selector and makes the next region session interactive", async () => {
+    const nextSession: RecordingSelectionSession = {
+      ...session,
+      id: "selection-2",
+      snapshot_url: "capture://recording-selection/selection-2",
+    };
+    const { container } = render(<RecordingSelector />);
+
+    expect(await screen.findByRole("button", { name: "Record" })).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(screen.queryByRole("button", { name: "Record" })).not.toBeInTheDocument();
+    expect(container.querySelector(".recording-selector-idle")).toBeInTheDocument();
+    expect(invoke).toHaveBeenCalledWith("cancel_recording_selection", {
+      selectionId: session.id,
+    });
+
+    await act(async () => {
+      recordingSelectionReady?.({ payload: nextSession });
+    });
+
+    expect(await screen.findByRole("button", { name: "Record" })).toBeInTheDocument();
+    const surface = container.querySelector<HTMLElement>(".recording-selector");
+    expect(surface).not.toBeNull();
+    surface!.setPointerCapture = vi.fn();
+    vi.spyOn(surface!, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 1440,
+      bottom: 900,
+      width: 1440,
+      height: 900,
+      toJSON: () => undefined,
+    });
+
+    fireEvent.pointerDown(surface!, { pointerId: 1, clientX: 100, clientY: 120 });
+    fireEvent.pointerMove(surface!, { pointerId: 1, clientX: 400, clientY: 340 });
+    fireEvent.pointerUp(surface!, { pointerId: 1 });
+
+    await waitFor(() => {
+      expect(container.querySelector(".recording-selection-frame")).toHaveStyle({
+        left: "100px",
+        top: "120px",
+        width: "300px",
+        height: "220px",
+      });
+    });
   });
 
   it("does not discard a prepared selection after a transient reveal failure", async () => {

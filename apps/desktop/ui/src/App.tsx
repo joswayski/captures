@@ -681,6 +681,25 @@ export function RecordingSelector() {
     });
   }, []);
 
+  const cancelSelection = useCallback((selection: RecordingSelectionSession) => {
+    if (activeSessionIdRef.current !== selection.id) return;
+    activeSessionIdRef.current = null;
+    revealingSessionIdRef.current = null;
+    setSession(null);
+    setRegionDrag(null);
+    setStarting(false);
+    setError("");
+    void invoke("cancel_recording_selection", { selectionId: selection.id }).catch((error) => {
+      // A new selector may already be active by the time a stale cancellation
+      // fails. Never replace that newer session with the one being dismissed.
+      if (activeSessionIdRef.current !== null) return;
+      activeSessionIdRef.current = selection.id;
+      setSession(selection);
+      setError(String(error));
+      revealSelector(selection.id);
+    });
+  }, [revealSelector]);
+
   useEffect(() => {
     let active = true;
     let dispose: (() => void) | undefined;
@@ -760,11 +779,12 @@ export function RecordingSelector() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || !session) return;
-      void invoke("cancel_recording_selection", { selectionId: session.id });
+      event.preventDefault();
+      cancelSelection(session);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [session]);
+  }, [cancelSelection, session]);
 
   // A hidden WKWebView can defer image loading until its native window is
   // onscreen. Do not make the selector depend exclusively on the snapshot's
@@ -890,6 +910,10 @@ export function RecordingSelector() {
       await invoke("start_recording", {
         request: { selection_id: session.id, options },
       });
+      activeSessionIdRef.current = null;
+      revealingSessionIdRef.current = null;
+      setSession(null);
+      setRegionDrag(null);
     } catch (error) {
       setError(String(error));
       setStarting(false);
@@ -959,7 +983,7 @@ export function RecordingSelector() {
               </button>
             ))}
           </div>
-          <button className="recording-cancel" type="button" onClick={() => void invoke("cancel_recording_selection", { selectionId: session.id })}>Cancel</button>
+          <button className="recording-cancel" type="button" onClick={() => cancelSelection(session)}>Cancel</button>
         </div>
         <div className="recording-options-row">
           <label>FPS
@@ -972,8 +996,16 @@ export function RecordingSelector() {
               <option value="original">Original</option><option value="p1080">1080p</option><option value="p720">720p</option>
             </select>
           </label>
-          <label className="recording-toggle"><input type="checkbox" checked={showCursor} onChange={(event) => setShowCursor(event.target.checked)} />Cursor</label>
-          <label className="recording-toggle"><input type="checkbox" checked={systemAudio} onChange={(event) => setSystemAudio(event.target.checked)} />Desktop audio</label>
+          <label className="recording-toggle">
+            <input type="checkbox" checked={showCursor} onChange={(event) => setShowCursor(event.target.checked)} />
+            <span className="recording-switch" aria-hidden="true" />
+            <span>Cursor</span>
+          </label>
+          <label className="recording-toggle">
+            <input type="checkbox" checked={systemAudio} onChange={(event) => setSystemAudio(event.target.checked)} />
+            <span className="recording-switch" aria-hidden="true" />
+            <span>Desktop audio</span>
+          </label>
           <label>Microphone
             <select
               value={microphoneId ?? "off"}

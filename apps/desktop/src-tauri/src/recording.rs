@@ -237,7 +237,7 @@ pub fn cancel_recording_selection(
     }
     *selection = None;
     drop(selection);
-    crate::hide_window(&app, "recording-selector");
+    hide_recording_selector(&app);
     crate::set_capture_huds_protected(&app, false);
     crate::restore_thumbnail_stack(&app, state.inner());
     Ok(())
@@ -285,7 +285,7 @@ async fn start_recording_inner(
         }
         selected.take().ok_or(AppError::SessionUnavailable)?
     };
-    crate::hide_window(&app, "recording-selector");
+    hide_recording_selector(&app);
     crate::set_capture_huds_protected(&app, false);
 
     let initialized = (|| {
@@ -1927,10 +1927,26 @@ fn fail_session(app: &AppHandle, state: &AppState, session_id: &str, message: St
 }
 
 fn restore_recording_ui(app: &AppHandle, state: &Arc<AppState>) {
-    crate::hide_window(app, "recording-selector");
+    hide_recording_selector(app);
     crate::hide_window(app, "recording-hud");
     crate::set_capture_huds_protected(app, false);
     crate::restore_thumbnail_stack(app, state);
+}
+
+fn hide_recording_selector(app: &AppHandle) {
+    let Some(window) = app.get_webview_window("recording-selector") else {
+        return;
+    };
+    if let Err(error) = window.set_ignore_cursor_events(true) {
+        eprintln!("failed to disable recording selector pointer events: {error}");
+    }
+    #[cfg(target_os = "macos")]
+    if let Err(error) = captures_macos_window::prepare_window_reveal(&window) {
+        eprintln!("failed to reset recording selector opacity: {error}");
+    }
+    if let Err(error) = window.hide() {
+        eprintln!("failed to hide recording selector: {error}");
+    }
 }
 
 fn register_recording_artifact(
@@ -2060,6 +2076,9 @@ pub fn create_recording_selector_window(app: &AppHandle) -> Result<(), AppError>
     .visible(false)
     .build()?;
     window.set_content_protected(true)?;
+    captures_macos_window::prepare_window_reveal(&window).map_err(|error| {
+        AppError::Task(format!("recording selector could not be prepared: {error}"))
+    })?;
     Ok(())
 }
 
@@ -2097,14 +2116,14 @@ async fn prepare_recording_selector(
                 .set_content_protected(true)
                 .map_err(|error| error.to_string())?;
             // A hidden or zero-alpha WKWebView can be suspended before React
-            // installs its recording-selection listener. The frontend idle
-            // surface is transparent, so put the native window onscreen at full
-            // alpha while pointer events still pass through. React will wake,
-            // load the pending selection, and enable interaction when ready.
+            // installs its recording-selection listener. Wake it at a tiny,
+            // imperceptible alpha while pointer events still pass through.
+            // React reveals the window only after the new snapshot has painted,
+            // so a cached region or window highlight can never flash onscreen.
             window
                 .set_ignore_cursor_events(true)
                 .map_err(|error| error.to_string())?;
-            captures_macos_window::reveal_window(&window).map_err(str::to_owned)?;
+            captures_macos_window::prime_window_reveal(&window).map_err(str::to_owned)?;
             window.show().map_err(|error| error.to_string())?;
             handle
                 .emit("recording-selection-ready", &selection)
