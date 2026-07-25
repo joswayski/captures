@@ -1,4 +1,4 @@
-import { appendFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const [appVersion] = process.argv.slice(2);
@@ -22,9 +22,15 @@ if (missing.length > 0) {
   throw new Error(`missing release environment secrets: ${missing.join(", ")}`);
 }
 
+const releaseConfiguration = process.platform === "darwin"
+  ? {
+      ...JSON.parse(readFileSync(resolve("apps/desktop/src-tauri/tauri.recording.conf.json"), "utf8")),
+      version: appVersion,
+    }
+  : { version: appVersion };
 writeFileSync(
   resolve("apps/desktop/src-tauri/tauri.release.conf.json"),
-  `${JSON.stringify({ version: appVersion }, null, 2)}\n`,
+  `${JSON.stringify(releaseConfiguration, null, 2)}\n`,
 );
 
 if (process.platform === "darwin") {

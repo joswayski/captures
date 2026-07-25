@@ -62,7 +62,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, windows-2025, ubuntu-24.04]
+        os: [macos-26, windows-2025, ubuntu-24.04]
     steps:
       - uses: actions/checkout@v4
       - name: Install Linux build dependencies
@@ -190,7 +190,7 @@ jobs:
       matrix:
         include:
           - name: macOS Apple Silicon
-            os: macos-14
+            os: macos-26
             target: aarch64-apple-darwin
             bundles: app,dmg
           - name: Windows x64
@@ -246,6 +246,9 @@ jobs:
         with:
           toolchain: 1.94.0
       - run: npm ci
+      - name: Build and validate the pinned LGPL media sidecars
+        if: runner.os == 'macOS'
+        run: npm run prepare:media
       - name: Prepare the release-only version and credentials
         run: node scripts/prepare-release-build.mjs "${{ needs.prepare.outputs.app_version }}"
       - name: Import and verify the Developer ID certificate
@@ -288,6 +291,29 @@ jobs:
           tagName: ${{ needs.prepare.outputs.tag }}
           uploadUpdaterJson: true
           updaterJsonPreferNsis: true
+      - name: Validate the packaged media sidecars and notices
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          app="target/${{ matrix.target }}/release/bundle/macos/Captures.app"
+          ffmpeg="$(find "$app/Contents/MacOS" -maxdepth 1 -type f -name 'ffmpeg*' -print -quit)"
+          ffprobe="$(find "$app/Contents/MacOS" -maxdepth 1 -type f -name 'ffprobe*' -print -quit)"
+          test -n "$ffmpeg"
+          test -n "$ffprobe"
+          test -f "$app/Contents/Resources/notices/ffmpeg/BUILD_CONFIG.txt"
+          test -f "$app/Contents/Resources/notices/ffmpeg/COPYING.LGPLv2.1"
+          test -f "$app/Contents/Resources/notices/ffmpeg/NOTICE.md"
+          node scripts/validate-ffmpeg-sidecars.mjs \
+            "$ffmpeg" \
+            "$ffprobe" \
+            "$app/Contents/Resources/notices/ffmpeg/BUILD_CONFIG.txt"
+      - name: Attach FFmpeg source and compliance files
+        if: runner.os == 'macOS'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        shell: bash
+        run: gh release upload "$TAG" target/ffmpeg-dist/* --clobber
 
   publish:
     name: Validate and publish release

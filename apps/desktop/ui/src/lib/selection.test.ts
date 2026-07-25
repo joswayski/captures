@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isCapturableSelection, selectionRect } from "./selection";
+import { dragSelectionRect, isCapturableSelection, selectionRect } from "./selection";
 
 describe("selectionRect", () => {
   it("normalizes a reverse drag", () => {
@@ -30,5 +30,34 @@ describe("isCapturableSelection", () => {
 
   it("accepts a dragged region", () => {
     expect(isCapturableSelection({ x: 10, y: 10, width: 20, height: 30 })).toBe(true);
+  });
+});
+
+describe("dragSelectionRect", () => {
+  const initial = { x: 100, y: 80, width: 400, height: 240 };
+  const bounds = { width: 800, height: 600 };
+
+  it("moves a region without allowing it outside the display", () => {
+    expect(dragSelectionRect("move", { x: 120, y: 100 }, { x: 900, y: 700 }, initial, bounds)).toEqual({
+      x: 400,
+      y: 360,
+      width: 400,
+      height: 240,
+    });
+  });
+
+  it("resizes from each corner with a usable minimum size", () => {
+    expect(dragSelectionRect("nw", { x: 100, y: 80 }, { x: 490, y: 310 }, initial, bounds)).toEqual({
+      x: 484,
+      y: 304,
+      width: 16,
+      height: 16,
+    });
+    expect(dragSelectionRect("se", { x: 500, y: 320 }, { x: 900, y: 700 }, initial, bounds)).toEqual({
+      x: 100,
+      y: 80,
+      width: 700,
+      height: 520,
+    });
   });
 });

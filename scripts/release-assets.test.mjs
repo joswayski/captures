@@ -17,9 +17,17 @@ function fixture(platforms = ["darwin-aarch64", "windows-x86_64", "linux-x86_64"
     "Captures.AppImage",
     "Captures.AppImage.sig",
     "Captures.deb",
+    "ffmpeg-8.1.2.tar.xz",
+    "ffmpeg-8.1.2.tar.xz.asc",
+    "ffmpeg-8.1.2-COPYING.LGPLv2.1",
+    "ffmpeg-8.1.2-NOTICE.md",
   ]) {
     writeFileSync(join(directory, name), name);
   }
+  writeFileSync(
+    join(directory, "ffmpeg-8.1.2-BUILD_CONFIG.txt"),
+    "--disable-gpl\n--disable-nonfree\n--disable-version3\n",
+  );
   writeFileSync(
     join(directory, "latest.json"),
     JSON.stringify({
@@ -36,8 +44,17 @@ function fixture(platforms = ["darwin-aarch64", "windows-x86_64", "linux-x86_64"
 test("validates complete updater metadata and writes deterministic checksums", () => {
   const directory = fixture();
   const result = validateAndWriteChecksums(directory, "2026.7.1901");
-  assert.equal(result.checksums.length, 9);
+  assert.equal(result.checksums.length, 14);
   assert.match(readFileSync(join(directory, "SHA256SUMS"), "utf8"), /Captures\.dmg/u);
+});
+
+test("rejects a release without matching FFmpeg compliance assets", () => {
+  const directory = fixture();
+  writeFileSync(join(directory, "ffmpeg-8.1.2-BUILD_CONFIG.txt"), "--enable-gpl\n--enable-libx264\n");
+  assert.throws(
+    () => validateAndWriteChecksums(directory, "2026.7.1901"),
+    /missing --disable-gpl/u,
+  );
 });
 
 test("rejects an incomplete platform manifest", () => {

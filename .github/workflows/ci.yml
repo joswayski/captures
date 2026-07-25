@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, windows-2025, ubuntu-24.04]
+        os: [macos-26, windows-2025, ubuntu-24.04]
     steps:
       - uses: actions/checkout@v4
       - name: Install Linux build dependencies
@@ -59,7 +59,7 @@ jobs:
 
   macos-app:
     name: macOS app bundle
-    runs-on: macos-14
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -70,7 +70,23 @@ jobs:
         with:
           toolchain: 1.94.0
       - run: npm ci
-      - run: npm run tauri:build --workspace @captures/desktop -- --config src-tauri/tauri.local.conf.json
+      - run: npm run prepare:media
+      - run: npm run tauri:build --workspace @captures/desktop -- --config src-tauri/tauri.recording.local.conf.json
+      - name: Validate bundled media sidecars and notices
+        shell: bash
+        run: |
+          app="target/release/bundle/macos/Captures.app"
+          ffmpeg="$(find "$app/Contents/MacOS" -maxdepth 1 -type f -name 'ffmpeg*' -print -quit)"
+          ffprobe="$(find "$app/Contents/MacOS" -maxdepth 1 -type f -name 'ffprobe*' -print -quit)"
+          test -n "$ffmpeg"
+          test -n "$ffprobe"
+          test -f "$app/Contents/Resources/notices/ffmpeg/BUILD_CONFIG.txt"
+          test -f "$app/Contents/Resources/notices/ffmpeg/COPYING.LGPLv2.1"
+          test -f "$app/Contents/Resources/notices/ffmpeg/NOTICE.md"
+          node scripts/validate-ffmpeg-sidecars.mjs \
+            "$ffmpeg" \
+            "$ffprobe" \
+            "$app/Contents/Resources/notices/ffmpeg/BUILD_CONFIG.txt"
       - uses: actions/upload-artifact@v4
         with:
           name: captures-macos-app

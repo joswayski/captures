@@ -1,4 +1,6 @@
 /target/
+apps/desktop/src-tauri/binaries/
+apps/desktop/src-tauri/ffmpeg/COPYING.LGPLv2.1
 /node_modules/
 **/node_modules/
 **/dist/

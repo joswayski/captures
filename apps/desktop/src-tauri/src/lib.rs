@@ -41,13 +41,14 @@ use thiserror::Error;
 use uuid::Uuid;
 
 mod models;
+mod recording;
 mod state;
 mod storage;
 mod updates;
 
 use models::{
-    ActiveSession, AppSettings, CaptureArtifact, CaptureSession, ClipboardCopyStatus,
-    ClipboardState, HISTORY_RETENTION_DAYS, HistoryEntry,
+    ActiveSession, AppSettings, ArtifactKind, ArtifactSummary, CaptureArtifact, CaptureSession,
+    ClipboardCopyStatus, ClipboardState, HISTORY_RETENTION_DAYS, HistoryEntry,
 };
 use state::{AppState, ClipboardFingerprint};
 
@@ -93,6 +94,7 @@ struct CaptureTrayMenuItems {
     region: MenuItem<tauri::Wry>,
     window: MenuItem<tauri::Wry>,
     display: MenuItem<tauri::Wry>,
+    recording: MenuItem<tauri::Wry>,
 }
 
 #[cfg(target_os = "macos")]
@@ -104,6 +106,8 @@ impl CaptureTrayMenuItems {
             .set_accelerator(Some(menu_accelerator(&settings.window_shortcut)?))?;
         self.display
             .set_accelerator(Some(menu_accelerator(&settings.display_shortcut)?))?;
+        self.recording
+            .set_accelerator(Some(menu_accelerator(&settings.recording.video_shortcut)?))?;
         Ok(())
     }
 }
@@ -139,8 +143,30 @@ pub fn run() {
         .manage(updates::UpdateCoordinator::default())
         .register_uri_scheme_protocol("captures-capture", move |_context, request| {
             let path = request.uri().path().trim_matches('/');
-            let body = resolve_asset(&protocol_state, path);
-            match body {
+            let mut segments = path.split('/');
+            let category = segments.next().unwrap_or_default();
+            let id = segments.next().unwrap_or_default();
+            let range = request
+                .headers()
+                .get("range")
+                .and_then(|value| value.to_str().ok());
+            if let Some(asset) =
+                recording::resolve_recording_asset(&protocol_state, category, id, range)
+            {
+                let mut response = tauri::http::Response::builder()
+                    .status(asset.status)
+                    .header("Content-Type", asset.mime_type)
+                    .header("Content-Length", asset.bytes.len().to_string())
+                    .header("Cache-Control", "no-store");
+                if asset.total_length.is_some() {
+                    response = response.header("Accept-Ranges", "bytes");
+                }
+                if let Some(content_range) = asset.content_range {
+                    response = response.header("Content-Range", content_range);
+                }
+                return response.body(asset.bytes).expect("valid media response");
+            }
+            match resolve_asset(&protocol_state, path) {
                 Some(bytes) => tauri::http::Response::builder()
                     .status(200)
                     .header("Content-Type", "image/png")
@@ -191,6 +217,30 @@ pub fn run() {
             updates::get_update_status,
             updates::check_for_updates,
             updates::install_update,
+            recording::prepare_recording,
+            recording::get_recording_selection,
+            recording::show_recording_selector,
+            recording::reveal_recording_selector,
+            recording::cancel_recording_selection,
+            recording::list_recording_audio_devices,
+            recording::get_recording_snapshot,
+            recording::start_recording,
+            recording::pause_recording,
+            recording::resume_recording,
+            recording::restart_recording,
+            recording::stop_recording,
+            recording::discard_recording,
+            recording::set_recording_microphone_muted,
+            recording::get_recording_artifacts,
+            recording::get_recording_artifact,
+            recording::start_recording_export,
+            recording::cancel_recording_export,
+            recording::reveal_recording_artifact,
+            recording::open_recording_editor,
+            recording::trash_recording_artifact,
+            recording::get_recording_drafts,
+            recording::recover_recording_draft,
+            recording::discard_recording_draft,
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
@@ -198,6 +248,7 @@ pub fn run() {
                 app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             }
             setup_tray(app)?;
+            recording::prune_expired_gif_sources();
             let handle = app.handle().clone();
             updates::initialize(&handle);
             register_shortcuts(&handle)
@@ -264,6 +315,9 @@ async fn start_capture_inner(
 ) -> Result<Option<ActiveSession>, AppError> {
     if updates::install_is_active(&app) {
         return Err(AppError::UpdateInstalling);
+    }
+    if recording::operation_is_active(&state) {
+        return Err(AppError::CaptureInProgress);
     }
     // A failed overlay (image never loaded, webview stuck, etc.) leaves a session
     // behind. CaptureInProgress was silent on the shortcut path, so region mode
@@ -768,6 +822,7 @@ fn update_settings(
     if settings.region_shortcut.trim().is_empty()
         || settings.window_shortcut.trim().is_empty()
         || settings.display_shortcut.trim().is_empty()
+        || settings.recording.video_shortcut.trim().is_empty()
     {
         return Err("all shortcuts must be set".to_owned());
     }
@@ -777,11 +832,28 @@ fn update_settings(
         parse_shortcut(&settings.window_shortcut).map_err(|error| error.to_string())?;
     let display_shortcut =
         parse_shortcut(&settings.display_shortcut).map_err(|error| error.to_string())?;
-    if region_shortcut == window_shortcut
-        || region_shortcut == display_shortcut
-        || window_shortcut == display_shortcut
+    let video_shortcut =
+        parse_shortcut(&settings.recording.video_shortcut).map_err(|error| error.to_string())?;
+    let shortcuts = [
+        region_shortcut,
+        window_shortcut,
+        display_shortcut,
+        video_shortcut,
+    ];
+    if shortcuts
+        .iter()
+        .enumerate()
+        .any(|(index, shortcut)| shortcuts[index + 1..].contains(shortcut))
     {
         return Err("shortcuts must be unique".to_owned());
+    }
+    if !matches!(settings.recording.video_fps, 15 | 30 | 60)
+        || !matches!(settings.recording.gif_fps, 8..=30)
+        || settings.recording.gif_max_width < 320
+        || !(64..=256).contains(&settings.recording.gif_max_colors)
+        || settings.recording.countdown_seconds > 10
+    {
+        return Err("recording settings are outside their supported range".to_owned());
     }
 
     // Permission bookkeeping is internal state, not a user-editable setting.
@@ -792,7 +864,8 @@ fn update_settings(
 
     let shortcuts_changed = settings.region_shortcut != previous_settings.region_shortcut
         || settings.window_shortcut != previous_settings.window_shortcut
-        || settings.display_shortcut != previous_settings.display_shortcut;
+        || settings.display_shortcut != previous_settings.display_shortcut
+        || settings.recording.video_shortcut != previous_settings.recording.video_shortcut;
     if shortcuts_changed && let Err(error) = register_shortcuts_with(&app, &settings) {
         let _ = register_shortcuts_with(&app, &previous_settings);
         return Err(error.to_string());
@@ -870,15 +943,16 @@ async fn prepare_artifact_drag(
 }
 
 #[tauri::command]
-fn get_capture_history(state: tauri::State<'_, Arc<AppState>>) -> Vec<HistoryEntry> {
+fn get_capture_history(state: tauri::State<'_, Arc<AppState>>) -> Vec<ArtifactSummary> {
     let cutoff = Utc::now() - chrono::Duration::days(HISTORY_RETENTION_DAYS);
     let (history, expired_ids) = {
         let mut entries = state.history.lock();
         let mut expired_ids = Vec::new();
         entries.retain(|entry| {
-            let recent = DateTime::parse_from_rfc3339(&entry.created_at)
-                .map(|created_at| created_at.with_timezone(&Utc) >= cutoff)
-                .unwrap_or(false);
+            let recent = entry.kind != ArtifactKind::Screenshot
+                || DateTime::parse_from_rfc3339(&entry.created_at)
+                    .map(|created_at| created_at.with_timezone(&Utc) >= cutoff)
+                    .unwrap_or(false);
             if !recent {
                 expired_ids.push(entry.id.clone());
             }
@@ -895,7 +969,7 @@ fn get_capture_history(state: tauri::State<'_, Arc<AppState>>) -> Vec<HistoryEnt
             }
         });
     }
-    history
+    history.iter().filter_map(HistoryEntry::summary).collect()
 }
 
 #[tauri::command]
@@ -910,6 +984,12 @@ async fn restore_history_artifact(
         .iter()
         .find(|entry| entry.id == artifact_id)
         .cloned()
+        .ok_or_else(|| AppError::HistoryUnavailable.to_string())?;
+    if entry.kind != ArtifactKind::Screenshot {
+        return Err("recordings can be opened directly from Capture History".to_owned());
+    }
+    let mode = entry
+        .mode
         .ok_or_else(|| AppError::HistoryUnavailable.to_string())?;
 
     let existing_artifact = {
@@ -939,7 +1019,7 @@ async fn restore_history_artifact(
             height: entry.height,
             size_bytes: entry.size_bytes,
             created_at: entry.created_at,
-            mode: entry.mode,
+            mode,
             history_saved: true,
             clipboard_copy_status: ClipboardCopyStatus::Skipped,
             image_png,
@@ -978,6 +1058,10 @@ async fn delete_history_artifact(
     .map_err(|error| error.to_string())?
     .map_err(|error| error.to_string())?;
     state.history.lock().retain(|entry| entry.id != artifact_id);
+    state
+        .recording_artifacts
+        .lock()
+        .retain(|artifact| artifact.summary.id != artifact_id);
     app.emit("capture-history-changed", ())
         .map_err(|error| error.to_string())?;
     Ok(())
@@ -1278,13 +1362,21 @@ async fn finish_capture(
         let preview_png = storage::encode_thumbnail_png(&image_for_encoding)?;
         let history_entry = HistoryEntry {
             id: history_artifact_id.clone(),
+            kind: ArtifactKind::Screenshot,
             preview_url: models::history_preview_url(&history_artifact_id),
             full_url: models::history_full_url(&history_artifact_id),
             width,
             height,
             size_bytes: u64::try_from(image_png.len()).unwrap_or(u64::MAX),
             created_at: history_created_at,
-            mode,
+            mode: Some(mode),
+            saved_path: None,
+            mime_type: None,
+            duration_ms: None,
+            target: None,
+            has_system_audio: false,
+            has_microphone_audio: false,
+            dropped_frames: 0,
         };
         let history_saved =
             match storage::save_history_capture(&history_entry, &image_png, &preview_png) {
@@ -1649,6 +1741,7 @@ fn register_shortcuts_with(app: &AppHandle, settings: &AppSettings) -> Result<()
     register_shortcut(app, &settings.region_shortcut, CaptureMode::Region)?;
     register_shortcut(app, &settings.window_shortcut, CaptureMode::Window)?;
     register_shortcut(app, &settings.display_shortcut, CaptureMode::Display)?;
+    register_recording_shortcut(app, &settings.recording.video_shortcut)?;
     Ok(())
 }
 
@@ -1674,6 +1767,34 @@ fn register_shortcut(app: &AppHandle, shortcut: &str, mode: CaptureMode) -> Resu
                     && !matches!(&error, AppError::CaptureInProgress)
                 {
                     report_capture_error(&app, &error, mode);
+                }
+            });
+        })
+        .map_err(|error| AppError::Shortcut(error.to_string()))
+}
+
+fn register_recording_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), AppError> {
+    let parsed = parse_shortcut(shortcut)?;
+    let armed = AtomicBool::new(false);
+    app.global_shortcut()
+        .on_shortcut(parsed, move |app, _shortcut, event| {
+            if !should_trigger_shortcut(&armed, event.state()) {
+                return;
+            }
+            if app
+                .get_webview_window("preferences")
+                .is_some_and(|window| window.is_focused().unwrap_or(false))
+            {
+                return;
+            }
+            let state = app.state::<Arc<AppState>>().inner().clone();
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                wait_for_capture_shortcut_release().await;
+                if let Err(error) = recording::prepare_recording_inner(app.clone(), state).await
+                    && !matches!(&error, AppError::CaptureInProgress)
+                {
+                    report_recording_error(&app, &error);
                 }
             });
         })
@@ -1726,17 +1847,22 @@ fn should_activate_capture_cursor_before_reveal(mode: CaptureMode) -> bool {
 
 fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_os = "macos")]
-    let (region_accelerator, window_accelerator, display_accelerator) = {
+    let (region_accelerator, window_accelerator, display_accelerator, recording_accelerator) = {
         let settings = app.state::<Arc<AppState>>().settings();
         (
             Some(menu_accelerator(&settings.region_shortcut)?),
             Some(menu_accelerator(&settings.window_shortcut)?),
             Some(menu_accelerator(&settings.display_shortcut)?),
+            Some(menu_accelerator(&settings.recording.video_shortcut)?),
         )
     };
     #[cfg(not(target_os = "macos"))]
-    let (region_accelerator, window_accelerator, display_accelerator) =
-        (None::<String>, None::<String>, None::<String>);
+    let (region_accelerator, window_accelerator, display_accelerator, recording_accelerator) = (
+        None::<String>,
+        None::<String>,
+        None::<String>,
+        None::<String>,
+    );
 
     let capture_region = MenuItem::with_id(
         app,
@@ -1758,6 +1884,13 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         "Capture Full Screen",
         true,
         display_accelerator.as_deref(),
+    )?;
+    let record_screen = MenuItem::with_id(
+        app,
+        "record-screen",
+        "Record Screen…",
+        cfg!(target_os = "macos"),
+        recording_accelerator.as_deref(),
     )?;
     let capture_history = MenuItem::with_id(
         app,
@@ -1785,6 +1918,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             &capture_region,
             &capture_window,
             &capture_display,
+            &record_screen,
             &separator_1,
             &capture_history,
             &open_folder,
@@ -1796,7 +1930,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let mut tray = TrayIconBuilder::with_id("main")
         .menu(&menu)
-        .tooltip("Captures — Screenshot utility");
+        .tooltip("Captures — Screen capture utility");
 
     #[cfg(target_os = "macos")]
     if let Some(icon) = macos_tray_icon() {
@@ -1813,6 +1947,17 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             "capture-region" => Some(CaptureMode::Region),
             "capture-window" => Some(CaptureMode::Window),
             "capture-display" => Some(CaptureMode::Display),
+            "record-screen" => {
+                let state = app.state::<Arc<AppState>>().inner().clone();
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = recording::prepare_recording_inner(app.clone(), state).await
+                    {
+                        report_recording_error(&app, &error);
+                    }
+                });
+                None
+            }
             "capture-history" => {
                 show_capture_history(app);
                 None
@@ -1858,6 +2003,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         region: capture_region,
         window: capture_window,
         display: capture_display,
+        recording: record_screen,
     }) {
         return Err(Box::new(AppError::Task(
             "capture tray menu shortcuts are already managed".to_owned(),
@@ -2308,6 +2454,20 @@ fn report_capture_error(app: &AppHandle, error: &AppError, mode: CaptureMode) {
     app.dialog()
         .message(message)
         .title("Captures")
+        .buttons(MessageDialogButtons::Ok)
+        .kind(MessageDialogKind::Error)
+        .show(|_| {});
+}
+
+fn report_recording_error(app: &AppHandle, error: &AppError) {
+    if matches!(error, AppError::Capture(_)) {
+        report_capture_error(app, error, CaptureMode::Region);
+        return;
+    }
+    eprintln!("recording failed: {error}");
+    app.dialog()
+        .message(error.to_string())
+        .title("Captures Recording")
         .buttons(MessageDialogButtons::Ok)
         .kind(MessageDialogKind::Error)
         .show(|_| {});

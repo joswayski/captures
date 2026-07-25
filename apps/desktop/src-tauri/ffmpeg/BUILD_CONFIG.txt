@@ -1,0 +1,27 @@
+FFmpeg version: 8.1.2
+Source: https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz
+SHA-256: 464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c
+
+Configuration flags:
+--disable-autodetect
+--disable-debug
+--disable-doc
+--disable-ffplay
+--disable-gpl
+--disable-network
+--disable-nonfree
+--disable-programs
+--disable-shared
+--disable-version3
+--enable-audiotoolbox
+--enable-ffmpeg
+--enable-ffprobe
+--enable-small
+--enable-static
+--enable-videotoolbox
+--enable-zlib
+
+The build script enables only FFmpeg's LGPL configuration. Its only explicitly
+enabled external library is the system zlib needed for PNG posters. It does not
+enable GPL or nonfree components and does not include libx264. H.264 export
+uses Apple VideoToolbox.

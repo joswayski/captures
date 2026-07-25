@@ -4,7 +4,7 @@ Every successful push to `main` runs `.github/workflows/release.yml`. Release wo
 
 The public version is CalVer in `YYYY.MM.DD.N` form, using the `America/New_York` date and a same-day revision from 1 through 99. A release named `Captures 2026.07.19.1` uses tag `v2026.07.19.1`. Tauri receives the SemVer-compatible internal version `2026.7.1901`; source manifests remain at the development version.
 
-The workflow creates a draft release at the exact tested commit. Each platform uploads its installer, updater archive, and updater signature. The final job requires a DMG, NSIS installer, AppImage, Debian package, complete `latest.json`, and `SHA256SUMS` before it publishes the release and marks it latest. A failed build removes its draft and tag, leaving the prior release and updater manifest untouched. If draft creation itself is interrupted, the next run removes only stale drafts with its generated tag before retrying.
+The workflow creates a draft release at the exact tested commit. Each platform uploads its installer, updater archive, and updater signature. The macOS job also builds and inspects the pinned LGPL FFmpeg sidecars, verifies their copies inside `Captures.app`, and uploads the matching FFmpeg source archive, detached signature, build configuration, LGPL license, and notice. The final job requires those files plus a DMG, NSIS installer, AppImage, Debian package, complete `latest.json`, and `SHA256SUMS` before it publishes the release and marks it latest. A failed build removes its draft and tag, leaving the prior release and updater manifest untouched. If draft creation itself is interrupted, the next run removes only stale drafts with its generated tag before retrying.
 
 ## GitHub release environment
 
@@ -37,5 +37,7 @@ The first updater-enabled build must be downloaded and installed manually. Befor
 6. Verify Windows NSIS and Linux AppImage update in place; verify `.deb` directs the user to the release download.
 7. Tamper with an updater archive in a test release and confirm signature verification rejects it.
 8. Force one platform build to fail and confirm the failed draft/tag is deleted while the previous release remains latest.
+9. Record a short video with desktop and microphone audio on macOS, edit it, seek in the preview, and verify a maximum-size export stays at or below its requested byte limit.
+10. Confirm the packaged FFmpeg/ffprobe sidecars run on a clean Mac and the release includes every source and compliance asset listed in `docs/media-sidecars.md`.
 
 Windows packages are intentionally unsigned during the private alpha and may trigger SmartScreen. Add Authenticode signing before a public launch.

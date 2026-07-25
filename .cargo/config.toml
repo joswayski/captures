@@ -1,3 +1,6 @@
+[env]
+MACOSX_DEPLOYMENT_TARGET = { value = "13.0", force = true }
+
 [target.x86_64-pc-windows-msvc]
 # Use Rust's bundled linker on Windows. This avoids MSVC linker regressions while
 # still using the installed Windows SDK and C++ build tools.

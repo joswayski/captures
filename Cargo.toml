@@ -2,7 +2,10 @@
 members = [
     "apps/desktop/src-tauri",
     "crates/captures-capture",
+    "crates/captures-media",
     "crates/captures-macos-window",
+    "crates/captures-recording",
+    "crates/captures-recording-macos",
 ]
 resolver = "2"
 

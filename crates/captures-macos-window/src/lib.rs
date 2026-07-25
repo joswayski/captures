@@ -298,7 +298,7 @@ pub fn configure_capture_overlay(window: &WebviewWindow) -> Result<(), &'static 
 /// Makes a reused capture overlay transparent before bringing it onscreen.
 pub fn prepare_capture_overlay(window: &WebviewWindow) -> Result<(), &'static str> {
     let native_window = native_window(window)?;
-    native_window.setAlphaValue(0.0);
+    prepare_window_reveal(window)?;
     set_cursor_rects_enabled(native_window, true);
     set_tracked_cursor(window, CursorMode::WebView, CursorSurface::CaptureOverlay)?;
     Ok(())
@@ -333,6 +333,27 @@ pub fn activate_capture_cursor(
 
 /// Reveals the overlay after WebKit has painted its reset state.
 pub fn reveal_capture_overlay(window: &WebviewWindow) -> Result<(), &'static str> {
+    reveal_window(window)
+}
+
+/// Makes a window transparent while keeping it onscreen so WebKit can paint.
+pub fn prepare_window_reveal(window: &WebviewWindow) -> Result<(), &'static str> {
+    native_window(window)?.setAlphaValue(0.0);
+    Ok(())
+}
+
+/// Keeps a hidden WebView awake without visibly exposing its cached surface.
+///
+/// AppKit can suspend a fully transparent WKWebView. A tiny non-zero alpha is
+/// enough to let it paint the next frame while remaining imperceptible until
+/// `reveal_window` makes the finished surface visible.
+pub fn prime_window_reveal(window: &WebviewWindow) -> Result<(), &'static str> {
+    native_window(window)?.setAlphaValue(0.01);
+    Ok(())
+}
+
+/// Reveals a window after its WebKit surface has painted.
+pub fn reveal_window(window: &WebviewWindow) -> Result<(), &'static str> {
     native_window(window)?.setAlphaValue(1.0);
     Ok(())
 }
