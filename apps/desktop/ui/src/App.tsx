@@ -51,6 +51,8 @@ import type {
 } from "./types";
 
 const currentWindow = isTauri() ? getCurrentWindow() : null;
+const THUMBNAIL_DISMISS_FALLBACK_MS = 900;
+const THUMBNAIL_DELETE_FALLBACK_MS = 3_200;
 
 function query(name: string): string | null {
   return new URLSearchParams(window.location.search).get(name);
@@ -1202,7 +1204,6 @@ export function ThumbnailCard({
     copyFailed: boolean;
   } | null>(null);
   const cardRef = useRef<HTMLElement>(null);
-  const dragBlockedRef = useRef(false);
   const fileDraggingRef = useRef(false);
   const exitAction = useRef<string | null>(null);
   /**
@@ -1212,6 +1213,7 @@ export function ThumbnailCard({
    */
   const exitingRef = useRef(false);
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const exitFallbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   /** Synchronous lock check for async/timer paths (state may lag a frame). */
   const isExitLocked = () => exitingRef.current;
@@ -1231,6 +1233,7 @@ export function ThumbnailCard({
   useEffect(() => {
     return () => {
       if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
+      if (exitFallbackTimer.current) clearTimeout(exitFallbackTimer.current);
     };
   }, []);
 
@@ -1270,9 +1273,9 @@ export function ThumbnailCard({
     void runAction("open_artifact_viewer");
   };
 
-  const beginFileDrag = async (event: React.DragEvent<HTMLElement>) => {
+  const beginFileDrag = async (event: React.DragEvent<HTMLImageElement>) => {
     event.preventDefault();
-    if (dragBlockedRef.current || fileDraggingRef.current || isExitLocked() || isExiting) {
+    if (fileDraggingRef.current || isExitLocked() || isExiting) {
       return;
     }
     fileDraggingRef.current = true;
@@ -1298,6 +1301,26 @@ export function ThumbnailCard({
       setFileDragging(false);
       setError(String(error));
     }
+  };
+
+  const completeExit = () => {
+    const action = exitAction.current;
+    if (!action) return;
+    exitAction.current = null;
+    if (exitFallbackTimer.current) {
+      clearTimeout(exitFallbackTimer.current);
+      exitFallbackTimer.current = null;
+    }
+    void invoke(action, { artifactId: artifact.id })
+      .then(() => onRemoved(artifact.id))
+      .catch((error) => {
+        // Only unlock if remove failed — otherwise the card is gone.
+        exitingRef.current = false;
+        setExit(null);
+        setExitChrome(null);
+        setDustParticles(null);
+        setError(String(error));
+      });
   };
 
   const exitWith = (kind: "dismiss" | "delete", action: string) => {
@@ -1338,6 +1361,13 @@ export function ThumbnailCard({
       setDustParticles(null);
     }
     setExit(kind);
+    // WebView animation events can be skipped when Windows hides or occludes
+    // this always-on-top window. Never leave a deleted card and its backend
+    // artifact waiting forever for animationend.
+    exitFallbackTimer.current = setTimeout(
+      completeExit,
+      kind === "delete" ? THUMBNAIL_DELETE_FALLBACK_MS : THUMBNAIL_DISMISS_FALLBACK_MS,
+    );
   };
 
   const finishExit = (event: React.AnimationEvent<HTMLElement>) => {
@@ -1349,18 +1379,7 @@ export function ThumbnailCard({
         : ["thumbnail-delete-fallback"]
       : ["thumbnail-dismiss"];
     if (!expectedNames.includes(event.animationName)) return;
-    const action = exitAction.current;
-    exitAction.current = null;
-    void invoke(action, { artifactId: artifact.id })
-      .then(() => onRemoved(artifact.id))
-      .catch((error) => {
-        // Only unlock if remove failed — otherwise the card is gone.
-        exitingRef.current = false;
-        setExit(null);
-        setExitChrome(null);
-        setDustParticles(null);
-        setError(String(error));
-      });
+    completeExit();
   };
   // While exiting, always render the frozen chrome snapshot.
   const chrome = exitChrome ?? {
@@ -1389,20 +1408,15 @@ export function ThumbnailCard({
       // HTML inert disables all descendant input/focus for the whole exit animation.
       inert={isExiting ? true : undefined}
       aria-busy={isExiting || fileDragging}
-      draggable={!isExiting}
       data-exit-locked={isExiting ? "true" : undefined}
       data-file-dragging={fileDragging ? "true" : undefined}
-      onPointerDownCapture={(event) => {
-        dragBlockedRef.current = event.target instanceof Element
-          && event.target.closest("button") !== null;
-      }}
-      onDragStart={(event) => void beginFileDrag(event)}
       onAnimationEnd={finishExit}
     >
       <img
         src={artifact.full_url}
         alt="Screenshot preview"
-        draggable={false}
+        draggable={!isExiting}
+        onDragStart={(event) => void beginFileDrag(event)}
         onLoad={markThumbnailReady}
         onError={markThumbnailReady}
       />

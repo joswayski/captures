@@ -12,7 +12,7 @@
   "app": {
     "windows": [],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' captures-capture: data:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost"
+      "csp": "default-src 'self'; img-src 'self' captures-capture: http://captures-capture.localhost data:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost"
     },
     "macOSPrivateApi": true
   },

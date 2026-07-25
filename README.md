@@ -59,6 +59,7 @@ The three global capture shortcuts can be changed in Preferences.
 ## Development
 
 You will need Rust 1.94 with `rustfmt` and `clippy`, Node.js 24, and npm 11.
+Windows development also requires the Visual Studio C++ build tools and a Windows 11 SDK.
 
 ```sh
 npm install
@@ -101,9 +102,15 @@ CAPTURES_OPEN_AFTER_INSTALL=0 npm run build
 
 Build output is written under `target/release/bundle`. Maintainer release setup and recovery steps live in [docs/releases.md](docs/releases.md).
 
+On Windows, use `npm run dev` to run Captures from the checkout. `npm run build` creates
+an NSIS installer `.exe` under `target/release/bundle/nsis`, an `.msi` under
+`target/release/bundle/msi`, and the unpackaged executable at `target/release/captures.exe`.
+Before compiling, the build stops a running copy at that exact unpackaged path so Windows
+can replace it; an installed copy elsewhere is not stopped.
+
 ## Privacy
 
-Captures stores pending previews and its 30-day recovery history locally. It does not upload captures or send telemetry. Release builds contact GitHub Releases only to check for and download application updates.
+Captures stores pending previews and its 30-day recovery history locally. It does not upload captures or send telemetry. Official release builds contact GitHub Releases only to check for and download application updates; locally built copies do not perform background update checks.
 
 Future cloud sharing will be optional and explicit.
 
