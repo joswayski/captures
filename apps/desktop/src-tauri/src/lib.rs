@@ -259,10 +259,6 @@ pub fn run() {
             if let Err(error) = create_overlay_window(&handle) {
                 eprintln!("failed to prepare capture overlay: {error}");
             }
-            #[cfg(target_os = "macos")]
-            if let Err(error) = recording::create_recording_selector_window(&handle) {
-                eprintln!("failed to prepare recording selector: {error}");
-            }
             let pending_capture = {
                 let state = app.state::<Arc<AppState>>().inner().clone();
                 match take_pending_capture_after_restart(&state) {

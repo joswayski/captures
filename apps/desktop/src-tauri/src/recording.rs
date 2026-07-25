@@ -248,18 +248,27 @@ pub fn cancel_recording_selection(
     state: tauri::State<'_, Arc<AppState>>,
     selection_id: String,
 ) -> Result<(), String> {
+    cancel_recording_selection_inner(&app, state.inner(), &selection_id)
+        .map_err(|error| error.to_string())
+}
+
+fn cancel_recording_selection_inner(
+    app: &AppHandle,
+    state: &Arc<AppState>,
+    selection_id: &str,
+) -> Result<(), AppError> {
     let mut selection = state.recording_selection.lock();
     let matches = selection
         .as_ref()
         .is_some_and(|selection| selection.summary.id == selection_id);
     if !matches {
-        return Err(AppError::SessionUnavailable.to_string());
+        return Err(AppError::SessionUnavailable);
     }
     *selection = None;
     drop(selection);
-    hide_recording_selector(&app);
-    crate::set_capture_huds_protected(&app, false);
-    crate::restore_thumbnail_stack(&app, state.inner());
+    destroy_recording_selector(app);
+    crate::set_capture_huds_protected(app, false);
+    crate::restore_thumbnail_stack(app, state);
     Ok(())
 }
 
@@ -305,7 +314,7 @@ async fn start_recording_inner(
         }
         selected.take().ok_or(AppError::SessionUnavailable)?
     };
-    hide_recording_selector(&app);
+    destroy_recording_selector(&app);
     crate::set_capture_huds_protected(&app, false);
 
     let initialized = (|| {
@@ -1947,25 +1956,24 @@ fn fail_session(app: &AppHandle, state: &AppState, session_id: &str, message: St
 }
 
 fn restore_recording_ui(app: &AppHandle, state: &Arc<AppState>) {
-    hide_recording_selector(app);
+    destroy_recording_selector(app);
     crate::hide_window(app, "recording-hud");
     crate::set_capture_huds_protected(app, false);
     crate::restore_thumbnail_stack(app, state);
 }
 
-fn hide_recording_selector(app: &AppHandle) {
+fn destroy_recording_selector(app: &AppHandle) {
     let Some(window) = app.get_webview_window("recording-selector") else {
         return;
     };
     if let Err(error) = window.set_ignore_cursor_events(true) {
         eprintln!("failed to disable recording selector pointer events: {error}");
     }
-    #[cfg(target_os = "macos")]
-    if let Err(error) = captures_macos_window::prepare_window_reveal(&window) {
-        eprintln!("failed to reset recording selector opacity: {error}");
-    }
-    if let Err(error) = window.hide() {
-        eprintln!("failed to hide recording selector: {error}");
+    // Hidden WKWebViews can suspend before processing the next selection.
+    // Recreate this short-lived surface so every selection gets a live event
+    // bridge and cannot inherit stale region or window state.
+    if let Err(error) = window.destroy() {
+        eprintln!("failed to destroy recording selector: {error}");
     }
 }
 
@@ -2072,7 +2080,7 @@ fn media_toolchain(app: &AppHandle) -> MediaToolchain {
 }
 
 #[cfg(target_os = "macos")]
-pub fn create_recording_selector_window(app: &AppHandle) -> Result<(), AppError> {
+fn create_recording_selector_window(app: &AppHandle) -> Result<(), AppError> {
     if app.get_webview_window("recording-selector").is_some() {
         return Ok(());
     }
@@ -2093,12 +2101,9 @@ pub fn create_recording_selector_window(app: &AppHandle) -> Result<(), AppError>
     .transparent(true)
     .background_color(Color(0, 0, 0, 0))
     .focused(false)
-    .visible(false)
+    .visible(true)
     .build()?;
     window.set_content_protected(true)?;
-    captures_macos_window::prepare_window_reveal(&window).map_err(|error| {
-        AppError::Task(format!("recording selector could not be prepared: {error}"))
-    })?;
     Ok(())
 }
 
@@ -2110,6 +2115,7 @@ async fn prepare_recording_selector(
     create_recording_selector_window(app)?;
     let handle = app.clone();
     let selection = selection.clone();
+    let wake_selection = selection.clone();
     let (sender, receiver) = tokio::sync::oneshot::channel();
     app.run_on_main_thread(move || {
         let result = (|| -> Result<(), String> {
@@ -2155,7 +2161,59 @@ async fn prepare_recording_selector(
     receiver
         .await
         .map_err(|_| AppError::Task("recording selector setup was interrupted".to_owned()))?
-        .map_err(AppError::Task)
+        .map_err(AppError::Task)?;
+    schedule_recording_selector_webview_wake(app, wake_selection);
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn schedule_recording_selector_webview_wake(app: &AppHandle, selection: RecordingSelectionSession) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        // A hidden or near-transparent WKWebView can suspend JavaScript,
+        // including the frontend's animation-frame and timer fallbacks. Wake
+        // the native window independently while it is still click-through.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let selection_id = selection.id.clone();
+        let still_pending = app
+            .state::<Arc<AppState>>()
+            .recording_selection
+            .lock()
+            .as_ref()
+            .is_some_and(|selection| selection.summary.id == selection_id);
+        if !still_pending {
+            return;
+        }
+        let handle = app.clone();
+        if let Err(error) = app.run_on_main_thread(move || {
+            let Some(window) = handle.get_webview_window("recording-selector") else {
+                return;
+            };
+            if let Err(error) = captures_macos_window::reveal_window(&window) {
+                eprintln!("failed to wake recording selector WebView: {error}");
+            }
+            if let Err(error) = window.show() {
+                eprintln!("failed to show recording selector while waking: {error}");
+            }
+        }) {
+            eprintln!("failed to schedule recording selector WebView wake: {error}");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let still_pending = app
+            .state::<Arc<AppState>>()
+            .recording_selection
+            .lock()
+            .as_ref()
+            .is_some_and(|pending| pending.summary.id == selection.id);
+        if !still_pending {
+            return;
+        }
+        if let Some(window) = app.get_webview_window("recording-selector")
+            && let Err(error) = window.emit("recording-selection-ready", &selection)
+        {
+            eprintln!("failed to redeliver recording selector state after wake: {error}");
+        }
+    });
 }
 
 #[tauri::command]
