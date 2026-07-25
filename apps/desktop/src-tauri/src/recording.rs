@@ -62,13 +62,16 @@ struct RuntimeSession {
 }
 
 pub fn operation_is_active(state: &AppState) -> bool {
-    state.recording_selection.lock().is_some()
-        || state
-            .recording
-            .lock()
-            .coordinator
-            .snapshot(now_ms())
-            .is_some_and(|snapshot| !snapshot.state.is_terminal())
+    state.recording_selection.lock().is_some() || recording_session_is_active(state)
+}
+
+fn recording_session_is_active(state: &AppState) -> bool {
+    state
+        .recording
+        .lock()
+        .coordinator
+        .snapshot(now_ms())
+        .is_some_and(|snapshot| !snapshot.state.is_terminal())
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -148,8 +151,25 @@ pub async fn prepare_recording_inner(
     if crate::updates::install_is_active(&app) {
         return Err(AppError::UpdateInstalling);
     }
-    if !state.sessions.lock().is_empty() || operation_is_active(&state) {
+    if !state.sessions.lock().is_empty() || recording_session_is_active(&state) {
         return Err(AppError::CaptureInProgress);
+    }
+    let pending_selection = state
+        .recording_selection
+        .lock()
+        .as_ref()
+        .map(|selection| selection.summary.clone());
+    if let Some(summary) = pending_selection {
+        crate::set_capture_huds_protected(&app, true);
+        crate::hide_window(&app, "thumbnail");
+        crate::hide_window(&app, "startup");
+        crate::hide_window(&app, "update");
+        if let Err(error) = prepare_recording_selector(&app, &summary).await {
+            *state.recording_selection.lock() = None;
+            restore_recording_ui(&app, &state);
+            return Err(error);
+        }
+        return Ok(summary);
     }
 
     let request_permission = crate::mark_screen_permission_request(&state)?;
@@ -2156,16 +2176,9 @@ pub fn show_recording_selector(
         .get_webview_window("recording-selector")
         .ok_or_else(|| "recording selector is unavailable".to_owned())?;
     window
-        .set_ignore_cursor_events(false)
+        .set_ignore_cursor_events(true)
         .map_err(|error| error.to_string())?;
     window.show().map_err(|error| error.to_string())?;
-    // The selector is already visible and interactive at this point. Focus is
-    // helpful for Escape-key handling, but macOS can temporarily reject it for
-    // an accessory app. Do not turn that harmless focus failure into a hidden
-    // selector by reporting the entire reveal as failed.
-    if let Err(error) = window.set_focus() {
-        eprintln!("failed to focus recording selector: {error}");
-    }
     Ok(())
 }
 
@@ -2188,8 +2201,16 @@ pub fn reveal_recording_selector(
         .ok_or_else(|| "recording selector is unavailable".to_owned())?;
     #[cfg(target_os = "macos")]
     captures_macos_window::reveal_window(&window).map_err(str::to_owned)?;
-    #[cfg(not(target_os = "macos"))]
-    let _ = window;
+    window
+        .set_ignore_cursor_events(false)
+        .map_err(|error| error.to_string())?;
+    window.show().map_err(|error| error.to_string())?;
+    // Focus is helpful for Escape-key handling, but macOS can temporarily
+    // reject it for an accessory app. The selector is already visible and
+    // interactive, so do not turn that harmless failure into a hidden window.
+    if let Err(error) = window.set_focus() {
+        eprintln!("failed to focus recording selector: {error}");
+    }
     Ok(())
 }
 

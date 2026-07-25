@@ -100,6 +100,7 @@ describe("RecordingSelector", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.clearAllMocks();
   });
 
@@ -157,6 +158,41 @@ describe("RecordingSelector", () => {
         selectionId: session.id,
       });
     });
+  });
+
+  it("reveals through a deadline when WebKit suspends animation frames", async () => {
+    vi.useFakeTimers();
+    const animationFrame = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation(() => 1);
+    const { container } = render(<RecordingSelector />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const snapshot = container.querySelector<HTMLImageElement>(".recording-selector-snapshot");
+    expect(snapshot).not.toBeNull();
+
+    await act(async () => {
+      fireEvent.load(snapshot!);
+      await Promise.resolve();
+    });
+
+    expect(invoke).toHaveBeenCalledWith("show_recording_selector", {
+      selectionId: session.id,
+    });
+    expect(invoke).not.toHaveBeenCalledWith("reveal_recording_selector", expect.anything());
+
+    await act(async () => {
+      vi.advanceTimersByTime(200);
+      await Promise.resolve();
+    });
+
+    expect(invoke).toHaveBeenCalledWith("reveal_recording_selector", {
+      selectionId: session.id,
+    });
+    animationFrame.mockRestore();
   });
 
   it("loads the prepared selection while event registration is still pending", async () => {

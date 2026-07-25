@@ -33,6 +33,9 @@ The roadmap is still taking shape. Likely additions include:
 - On-device text recognition (OCR).
 - Timed captures and an easy way to repeat the previous capture area.
 - Pinned captures that stay visible above other windows.
+- Optional, privacy-preserving product health metrics for active installations, app and OS versions, feature success rates, crashes, unclean exits, and detected hangs. Diagnostics will be off until the user explicitly opts in and will never include capture contents.
+- A **Send Feedback to Developer…** action that lets the user review and submit a short description with a redacted diagnostic summary, including the Captures version, operating system, device architecture, recent in-app action breadcrumbs, and any related crash identifier.
+- AI-assisted issue triage that groups incoming reports, proposes root causes and fixes, and can open draft pull requests for human review. Automated reports will never be merged or released without maintainer approval.
 
 These are directions, not promised release dates or a fixed order.
 
@@ -122,7 +125,7 @@ Recording capture uses ScreenCaptureKit and Apple media APIs. Editing and GIF co
 
 Captures stores pending previews and its 30-day screenshot recovery history locally. Finished recordings are written directly to the local Captures folder; recording history stores only metadata and posters that reference those files. Interrupted-session bundles remain local and appear in Capture History for recovery, and GIF source masters are pruned after seven days. Captures does not upload captures or send telemetry. Official release builds contact GitHub Releases only to check for and download application updates; locally built copies do not perform background update checks.
 
-Future cloud sharing will be optional and explicit.
+Future cloud sharing, product-health diagnostics, and feedback submission will be optional and explicit. Before sending a diagnostic report, Captures will show what is included and omit capture contents, filenames, clipboard data, and typed text by default.
 
 ## License and trademarks
 

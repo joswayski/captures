@@ -66,6 +66,7 @@ import type {
 const currentWindow = isTauri() ? getCurrentWindow() : null;
 const THUMBNAIL_DISMISS_FALLBACK_MS = 900;
 const THUMBNAIL_DELETE_FALLBACK_MS = 3_200;
+const RECORDING_SELECTOR_REVEAL_FALLBACK_MS = 200;
 
 function query(name: string): string | null {
   return new URLSearchParams(window.location.search).get(name);
@@ -664,15 +665,26 @@ export function RecordingSelector() {
     if (revealingSessionIdRef.current === selectionId) return;
     revealingSessionIdRef.current = selectionId;
     void invoke("show_recording_selector", { selectionId }).then(() => {
-      afterNextPaint(() => {
-        if (activeSessionIdRef.current !== selectionId) return;
+      let revealStarted = false;
+      const finishReveal = () => {
+        if (revealStarted || activeSessionIdRef.current !== selectionId) return;
+        revealStarted = true;
+        window.clearTimeout(fallbackTimer);
         void invoke("reveal_recording_selector", { selectionId }).catch((error) => {
           if (revealingSessionIdRef.current === selectionId) {
             revealingSessionIdRef.current = null;
             setError(String(error));
           }
         });
-      });
+      };
+      afterNextPaint(finishReveal);
+      // WebKit can suspend requestAnimationFrame while this preloaded window
+      // is at near-zero opacity. Always reveal after a short deadline so the
+      // backend cannot retain an invisible "capture in progress" selection.
+      const fallbackTimer = window.setTimeout(
+        finishReveal,
+        RECORDING_SELECTOR_REVEAL_FALLBACK_MS,
+      );
     }).catch((error) => {
       if (revealingSessionIdRef.current === selectionId) {
         revealingSessionIdRef.current = null;
