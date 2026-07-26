@@ -88,6 +88,7 @@ const fn screenshot_capture_is_blocked_for(
         )
 }
 
+#[cfg(target_os = "macos")]
 fn recording_session_is_active(state: &AppState) -> bool {
     state
         .recording
