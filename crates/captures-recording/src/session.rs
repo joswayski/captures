@@ -27,6 +27,7 @@ struct RecordingSession {
     state: RecordingState,
     accumulated_ms: u64,
     active_started_at_ms: Option<u64>,
+    countdown_ends_at_ms: Option<u64>,
     warning: Option<String>,
     error: Option<String>,
 }
@@ -42,6 +43,7 @@ impl RecordingSession {
             state: RecordingState::Selecting,
             accumulated_ms: 0,
             active_started_at_ms: None,
+            countdown_ends_at_ms: None,
             warning: None,
             error: None,
         })
@@ -80,6 +82,8 @@ impl RecordingSession {
         if next == RecordingState::Recording {
             self.active_started_at_ms = Some(now_ms);
         }
+        self.countdown_ends_at_ms = (next == RecordingState::Countdown)
+            .then(|| now_ms.saturating_add(u64::from(self.options.countdown_seconds) * 1_000));
         if matches!(next, RecordingState::Countdown)
             && matches!(
                 self.state,
@@ -102,6 +106,7 @@ impl RecordingSession {
                 .saturating_add(now_ms.saturating_sub(self.active_started_at_ms.unwrap_or(now_ms)));
         }
         self.active_started_at_ms = None;
+        self.countdown_ends_at_ms = None;
         self.state = RecordingState::Failed;
         self.error = Some(message);
     }
@@ -113,6 +118,7 @@ impl RecordingSession {
                 .saturating_add(now_ms.saturating_sub(self.active_started_at_ms.unwrap_or(now_ms)));
         }
         self.active_started_at_ms = None;
+        self.countdown_ends_at_ms = None;
         self.state = RecordingState::Discarded;
     }
 
@@ -123,11 +129,16 @@ impl RecordingSession {
         } else {
             self.accumulated_ms
         };
+        let countdown_remaining_seconds = self.countdown_ends_at_ms.map(|ends_at_ms| {
+            let remaining_ms = ends_at_ms.saturating_sub(now_ms);
+            u8::try_from(remaining_ms.saturating_add(999) / 1_000).unwrap_or(u8::MAX)
+        });
         RecordingSessionSnapshot {
             id: self.id.to_string(),
             state: self.state,
             options: self.options.clone(),
             elapsed_ms,
+            countdown_remaining_seconds,
             warning: self.warning.clone(),
             error: self.error.clone(),
         }
@@ -267,9 +278,23 @@ mod tests {
         coordinator
             .transition(&id, RecordingState::Countdown, 10)
             .expect("countdown starts");
+        assert_eq!(
+            coordinator
+                .snapshot(1_010)
+                .expect("countdown snapshot")
+                .countdown_remaining_seconds,
+            Some(2)
+        );
         coordinator
             .transition(&id, RecordingState::Recording, 3_010)
             .expect("recording starts");
+        assert_eq!(
+            coordinator
+                .snapshot(3_010)
+                .expect("recording snapshot")
+                .countdown_remaining_seconds,
+            None
+        );
         assert_eq!(
             coordinator.snapshot(4_010).expect("snapshot").elapsed_ms,
             1_000

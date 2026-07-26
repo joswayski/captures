@@ -61,10 +61,34 @@ struct RuntimeSession {
     poster_png: Vec<u8>,
 }
 
-pub fn operation_is_active(state: &AppState) -> bool {
-    state.recording_selection.lock().is_some() || recording_session_is_active(state)
+pub fn screenshot_capture_is_blocked(state: &AppState) -> bool {
+    let selection_is_active = state.recording_selection.lock().is_some();
+    let recording_state = state
+        .recording
+        .lock()
+        .coordinator
+        .snapshot(now_ms())
+        .map(|snapshot| snapshot.state);
+    screenshot_capture_is_blocked_for(selection_is_active, recording_state)
 }
 
+const fn screenshot_capture_is_blocked_for(
+    selection_is_active: bool,
+    recording_state: Option<RecordingState>,
+) -> bool {
+    selection_is_active
+        || matches!(
+            recording_state,
+            Some(
+                RecordingState::Selecting
+                    | RecordingState::Countdown
+                    | RecordingState::Finalizing
+                    | RecordingState::Editor
+            )
+        )
+}
+
+#[cfg(target_os = "macos")]
 fn recording_session_is_active(state: &AppState) -> bool {
     state
         .recording
@@ -2337,4 +2361,40 @@ fn show_recording_editor(app: &AppHandle, artifact_id: &str) -> Result<(), AppEr
     .background_color(Color(24, 25, 29, 255))
     .build()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use captures_recording::RecordingState;
+
+    use super::screenshot_capture_is_blocked_for;
+
+    #[test]
+    fn permits_screenshots_while_recording_or_paused() {
+        assert!(!screenshot_capture_is_blocked_for(
+            false,
+            Some(RecordingState::Recording)
+        ));
+        assert!(!screenshot_capture_is_blocked_for(
+            false,
+            Some(RecordingState::Paused)
+        ));
+        assert!(!screenshot_capture_is_blocked_for(
+            false,
+            Some(RecordingState::Failed)
+        ));
+    }
+
+    #[test]
+    fn blocks_screenshots_during_recording_setup_and_finalization() {
+        assert!(screenshot_capture_is_blocked_for(true, None));
+        assert!(screenshot_capture_is_blocked_for(
+            false,
+            Some(RecordingState::Countdown)
+        ));
+        assert!(screenshot_capture_is_blocked_for(
+            false,
+            Some(RecordingState::Finalizing)
+        ));
+    }
 }

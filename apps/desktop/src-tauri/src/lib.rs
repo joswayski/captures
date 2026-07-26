@@ -316,7 +316,7 @@ async fn start_capture_inner(
     if updates::install_is_active(&app) {
         return Err(AppError::UpdateInstalling);
     }
-    if recording::operation_is_active(&state) {
+    if recording::screenshot_capture_is_blocked(&state) {
         return Err(AppError::CaptureInProgress);
     }
     // A failed overlay (image never loaded, webview stuck, etc.) leaves a session
@@ -856,8 +856,10 @@ fn update_settings(
         return Err("recording settings are outside their supported range".to_owned());
     }
 
-    // Permission bookkeeping is internal state, not a user-editable setting.
+    // Migration and permission bookkeeping are internal state, not
+    // user-editable settings.
     let previous_settings = state.settings();
+    settings.settings_schema_version = previous_settings.settings_schema_version;
     settings.last_screen_permission_request_id =
         previous_settings.last_screen_permission_request_id.clone();
     settings.pending_capture_after_restart = previous_settings.pending_capture_after_restart;

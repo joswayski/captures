@@ -11,6 +11,7 @@ private final class CapturesMediaWriter {
     private var finished = false
     private var firstTimestamp = CMTime.invalid
     private var lastTimestamp = CMTime.invalid
+    private var videoFramesWritten: UInt64 = 0
     private let activity: NSObjectProtocol
     private(set) var droppedFrames: UInt64 = 0
     private(set) var failure: String?
@@ -96,7 +97,10 @@ private final class CapturesMediaWriter {
             failure = writer.error?.localizedDescription ?? "AVAssetWriter rejected a media sample"
             return false
         }
-        if kind == 0 { lastTimestamp = timestamp }
+        if kind == 0 {
+            lastTimestamp = timestamp
+            videoFramesWritten += 1
+        }
         return true
     }
 
@@ -139,6 +143,12 @@ private final class CapturesMediaWriter {
         let seconds = CMTimeGetSeconds(duration)
         guard seconds.isFinite, seconds > 0 else { return 0 }
         return UInt64((seconds * 1_000).rounded())
+    }
+
+    var hasVideoFrame: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return videoFramesWritten > 0
     }
 
     func copyFailure(into buffer: UnsafeMutablePointer<CChar>?, capacity: Int) -> Int {
@@ -186,6 +196,11 @@ public func capturesMediaWriterAppend(
 @_cdecl("captures_media_writer_finish")
 public func capturesMediaWriterFinish(_ handle: UnsafeMutableRawPointer) -> Bool {
     Unmanaged<CapturesMediaWriter>.fromOpaque(handle).takeUnretainedValue().finish()
+}
+
+@_cdecl("captures_media_writer_has_video_frame")
+public func capturesMediaWriterHasVideoFrame(_ handle: UnsafeMutableRawPointer) -> Bool {
+    Unmanaged<CapturesMediaWriter>.fromOpaque(handle).takeUnretainedValue().hasVideoFrame
 }
 
 @_cdecl("captures_media_writer_duration_ms")

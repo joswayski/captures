@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "recording-hud",
+  "description": "Allow the recording controls to move their own window",
+  "windows": ["recording-hud"],
+  "permissions": [
+    "core:window:allow-start-dragging"
+  ]
+}

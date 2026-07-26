@@ -8,9 +8,12 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub const HISTORY_RETENTION_DAYS: i64 = 30;
+const CURRENT_SETTINGS_SCHEMA_VERSION: u8 = 1;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AppSettings {
+    #[serde(default)]
+    pub settings_schema_version: u8,
     pub output_directory: String,
     pub region_shortcut: String,
     pub window_shortcut: String,
@@ -66,7 +69,7 @@ impl Default for RecordingSettings {
             video_shortcut: default_video_shortcut(),
             gif_shortcut: default_gif_shortcut(),
             video_fps: default_video_fps(),
-            video_max_resolution: MaxResolution::P1080,
+            video_max_resolution: MaxResolution::Original,
             gif_fps: default_gif_fps(),
             gif_max_width: default_gif_max_width(),
             gif_max_colors: default_gif_max_colors(),
@@ -85,6 +88,7 @@ impl Default for RecordingSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            settings_schema_version: CURRENT_SETTINGS_SCHEMA_VERSION,
             output_directory: default_output_directory().to_string_lossy().into_owned(),
             region_shortcut: "Ctrl+Shift+4".to_owned(),
             window_shortcut: "Ctrl+Shift+W".to_owned(),
@@ -374,7 +378,7 @@ fn default_gif_shortcut() -> String {
 }
 
 const fn default_video_fps() -> u16 {
-    30
+    60
 }
 
 const fn default_gif_fps() -> u16 {
@@ -441,6 +445,24 @@ pub fn migrate_legacy_output_directory(settings: &mut AppSettings) {
         &pictures.join("Captures"),
         &user_dirs.home_dir().join("Captures"),
     );
+}
+
+pub fn migrate_settings(settings: &mut AppSettings) -> bool {
+    if settings.settings_schema_version >= CURRENT_SETTINGS_SCHEMA_VERSION {
+        return false;
+    }
+
+    // Recording originally shipped with 30 FPS / 1080p defaults. Upgrade only
+    // values that still match those defaults so an existing custom downgrade
+    // remains user-owned.
+    if settings.recording.video_fps == 30 {
+        settings.recording.video_fps = 60;
+    }
+    if settings.recording.video_max_resolution == MaxResolution::P1080 {
+        settings.recording.video_max_resolution = MaxResolution::Original;
+    }
+    settings.settings_schema_version = CURRENT_SETTINGS_SCHEMA_VERSION;
+    true
 }
 
 fn migrate_output_directory(settings: &mut AppSettings, legacy: &Path, current: &Path) {
@@ -520,7 +542,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     use super::recording_selection_url;
     use super::{
-        AppSettings, HistoryEntry, RecordingArtifact, migrate_output_directory,
+        AppSettings, HistoryEntry, RecordingArtifact, migrate_output_directory, migrate_settings,
         recording_media_url, recording_poster_url, snapshot_url,
     };
 
@@ -583,10 +605,57 @@ mod tests {
         assert!(settings.last_screen_permission_request_id.is_none());
         assert!(settings.pending_capture_after_restart.is_none());
         assert!(settings.auto_copy_to_clipboard);
-        assert_eq!(settings.recording.video_fps, 30);
+        assert_eq!(settings.recording.video_fps, 60);
+        assert_eq!(
+            settings.recording.video_max_resolution,
+            captures_recording::MaxResolution::Original
+        );
         assert_eq!(settings.recording.gif_fps, 15);
         assert_eq!(settings.recording.gif_max_width, 800);
         assert!(settings.recording.open_editor_after_recording);
+    }
+
+    #[test]
+    fn upgrades_legacy_recording_quality_defaults_once() {
+        let mut settings = AppSettings {
+            settings_schema_version: 0,
+            ..AppSettings::default()
+        };
+        settings.recording.video_fps = 30;
+        settings.recording.video_max_resolution = captures_recording::MaxResolution::P1080;
+
+        assert!(migrate_settings(&mut settings));
+        assert_eq!(settings.recording.video_fps, 60);
+        assert_eq!(
+            settings.recording.video_max_resolution,
+            captures_recording::MaxResolution::Original
+        );
+
+        settings.recording.video_fps = 30;
+        settings.recording.video_max_resolution = captures_recording::MaxResolution::P1080;
+        assert!(!migrate_settings(&mut settings));
+        assert_eq!(settings.recording.video_fps, 30);
+        assert_eq!(
+            settings.recording.video_max_resolution,
+            captures_recording::MaxResolution::P1080
+        );
+    }
+
+    #[test]
+    fn preserves_existing_recording_quality_downgrades_during_migration() {
+        let mut settings = AppSettings {
+            settings_schema_version: 0,
+            ..AppSettings::default()
+        };
+        settings.recording.video_fps = 15;
+        settings.recording.video_max_resolution = captures_recording::MaxResolution::P720;
+
+        assert!(migrate_settings(&mut settings));
+        assert_eq!(settings.recording.video_fps, 15);
+        assert_eq!(
+            settings.recording.video_max_resolution,
+            captures_recording::MaxResolution::P720
+        );
     }
 
     #[test]

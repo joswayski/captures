@@ -34,11 +34,16 @@ pub struct ArtifactDragFiles {
 
 pub fn load_settings() -> AppSettings {
     let path = crate::models::settings_path();
-    let mut settings = fs::read_to_string(path)
+    let mut settings = fs::read_to_string(&path)
         .ok()
         .and_then(|contents| serde_json::from_str(&contents).ok())
         .unwrap_or_default();
     crate::models::migrate_legacy_output_directory(&mut settings);
+    if crate::models::migrate_settings(&mut settings)
+        && let Err(error) = save_settings_to(&path, &settings)
+    {
+        eprintln!("failed to persist migrated settings: {error}");
+    }
     settings
 }
 

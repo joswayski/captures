@@ -615,6 +615,32 @@ function RestoreIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8" /><path d="M4 4v4h4" /></svg>;
 }
 
+function PauseResumeIcon({ paused }: { paused: boolean }) {
+  return paused
+    ? <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7Z" /></svg>
+    : <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14M16 5v14" /></svg>;
+}
+
+function RestartRecordingIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11a8 8 0 1 1 2 5.3" /><path d="M4 5v6h6" /></svg>;
+}
+
+function CameraIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3v11H4Z" /><circle cx="12" cy="13.5" r="3.5" /></svg>;
+}
+
+function MicrophoneIcon({ muted }: { muted: boolean }) {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M6 11a6 6 0 0 0 11.4 2.6M12 18v3M9 21h6" />{muted && <path d="m4 4 16 16" />}</svg>;
+}
+
+function HiddenFromCaptureIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12s3.5-5 9-5 9 5 9 5-3.5 5-9 5-9-5-9-5Z" /><path d="m4 4 16 16" /></svg>;
+}
+
+function DragGripIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7h8M8 12h8M8 17h8" /></svg>;
+}
+
 type RecordingTargetMode = "region" | "window" | "display";
 type RecordingRect = { x: number; y: number; width: number; height: number };
 type RecordingRegionDrag = {
@@ -634,8 +660,8 @@ export function RecordingSelector() {
   const [regionDrag, setRegionDrag] = useState<RecordingRegionDrag | null>(null);
   const [selectedWindow, setSelectedWindow] = useState<string | null>(null);
   const [hoveredWindow, setHoveredWindow] = useState<string | null>(null);
-  const [fps, setFps] = useState(30);
-  const [maxResolution, setMaxResolution] = useState<MaxResolution>("p1080");
+  const [fps, setFps] = useState(60);
+  const [maxResolution, setMaxResolution] = useState<MaxResolution>("original");
   const [showCursor, setShowCursor] = useState(true);
   const [systemAudio, setSystemAudio] = useState(false);
   const [microphoneId, setMicrophoneId] = useState<string | null>(null);
@@ -656,6 +682,7 @@ export function RecordingSelector() {
       })
       .catch(() => {
         setDevices([]);
+        setDevicesLoaded(true);
       })
       .finally(() => setDevicesLoading(false));
   }, [devicesLoaded, devicesLoading]);
@@ -809,6 +836,12 @@ export function RecordingSelector() {
     }, 120);
     return () => window.clearTimeout(timer);
   }, [session?.id, revealSelector]);
+
+  useEffect(() => {
+    if (!session?.id) return;
+    const timer = window.setTimeout(loadAudioDevices, 0);
+    return () => window.clearTimeout(timer);
+  }, [loadAudioDevices, session?.id]);
 
   if (!session || !settings) {
     return <main className="recording-selector-idle" aria-hidden="true" />;
@@ -972,19 +1005,23 @@ export function RecordingSelector() {
           </>}
         </div>
       )}
-      {targetMode === "window" && windowLayouts.map(({ window, ...layout }) => (
-        <button
-          key={window.id}
-          type="button"
-          className={`recording-window-target${selectedWindow === window.id ? " selected" : ""}`}
-          style={layout}
-          aria-label={`Select ${window.title || "window"}`}
-          onPointerDown={(event) => event.stopPropagation()}
-          onMouseEnter={() => setHoveredWindow(window.id)}
-          onMouseLeave={() => setHoveredWindow(null)}
-          onClick={() => setSelectedWindow(window.id)}
-        />
-      ))}
+      {targetMode === "window" && (
+        <div className="recording-window-targets">
+          {windowLayouts.map(({ window, ...layout }) => (
+            <button
+              key={window.id}
+              type="button"
+              className={`recording-window-target${selectedWindow === window.id ? " selected" : ""}`}
+              style={layout}
+              aria-label={`Select ${window.title || "window"}`}
+              onPointerDown={(event) => event.stopPropagation()}
+              onMouseEnter={() => setHoveredWindow(window.id)}
+              onMouseLeave={() => setHoveredWindow(null)}
+              onClick={() => setSelectedWindow(window.id)}
+            />
+          ))}
+        </div>
+      )}
 
       <section className="recording-selector-panel" onPointerDown={(event) => event.stopPropagation()}>
         <div className="recording-panel-top">
@@ -1000,7 +1037,7 @@ export function RecordingSelector() {
         <div className="recording-options-row">
           <label>FPS
             <select value={fps} onChange={(event) => setFps(Number(event.target.value))}>
-              {[15, 30, 60].map((value) => <option key={value} value={value}>{value}</option>)}
+              {[60, 30, 15].map((value) => <option key={value} value={value}>{value}</option>)}
             </select>
           </label>
           <label>Max resolution
@@ -1021,10 +1058,13 @@ export function RecordingSelector() {
           <label>Microphone
             <select
               value={microphoneId ?? "off"}
+              disabled={devicesLoading}
+              aria-busy={devicesLoading}
               onFocus={loadAudioDevices}
               onChange={(event) => setMicrophoneId(event.target.value === "off" ? null : event.target.value)}
             >
               <option value="off">Off</option>
+              {devicesLoading && <option disabled>Loading microphones…</option>}
               {microphoneId && !devices.some((device) => device.id === microphoneId) && (
                 <option value={microphoneId}>{devicesLoading ? "Loading microphone…" : "Selected microphone"}</option>
               )}
@@ -1063,7 +1103,7 @@ function roundRecordingRect(rect: RecordingRect, maxWidth: number, maxHeight: nu
   };
 }
 
-function RecordingHud() {
+export function RecordingHud() {
   const [snapshot, setSnapshot] = useState<RecordingSessionSnapshot | null>(null);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1074,20 +1114,23 @@ function RecordingHud() {
 
   useEffect(() => {
     let active = true;
-    let dispose: (() => void)[] = [];
+    const dispose: (() => void)[] = [];
+    const applySnapshot = (next: RecordingSessionSnapshot) => {
+      if (!active) return;
+      if (sessionIdRef.current !== next.id) {
+        sessionIdRef.current = next.id;
+        setCountdown(null);
+        setConfirmDiscard(false);
+        setMicrophonePeak(0);
+        setError("");
+      }
+      setSnapshot(next);
+      if (next.state !== "countdown") setCountdown(null);
+    };
     void (async () => {
-      dispose = await Promise.all([
+      const listeners = Promise.allSettled([
         listen<RecordingSessionSnapshot>("recording-state-changed", ({ payload }) => {
-          if (!active) return;
-          if (sessionIdRef.current !== payload.id) {
-            sessionIdRef.current = payload.id;
-            setCountdown(null);
-            setConfirmDiscard(false);
-            setMicrophonePeak(0);
-            setError("");
-          }
-          setSnapshot(payload);
-          if (payload.state !== "countdown") setCountdown(null);
+          applySnapshot(payload);
         }),
         listen<{ session_id: string; remaining_seconds: number }>("recording-countdown", ({ payload }) => {
           if (active && payload.session_id === sessionIdRef.current) setCountdown(payload.remaining_seconds);
@@ -1101,15 +1144,20 @@ function RecordingHud() {
           }
         }),
       ]);
+      void listeners.then((results) => {
+        const unlisteners = results.flatMap((listener) => listener.status === "fulfilled" ? [listener.value] : []);
+        if (active) {
+          dispose.push(...unlisteners);
+        } else {
+          unlisteners.forEach((unlisten) => unlisten());
+        }
+      });
       const current = await invoke<RecordingSessionSnapshot | null>("get_recording_snapshot");
-      if (active) {
-        sessionIdRef.current = current?.id ?? null;
-        setSnapshot(current);
-      }
+      if (current) applySnapshot(current);
     })();
     const timer = window.setInterval(() => {
       void invoke<RecordingSessionSnapshot | null>("get_recording_snapshot").then((current) => {
-        if (active && current) setSnapshot(current);
+        if (current) applySnapshot(current);
       });
     }, 250);
     return () => {
@@ -1136,6 +1184,23 @@ function RecordingHud() {
       setBusy(false);
     }
   };
+  const takeScreenshot = async () => {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await invoke("start_capture", { mode: "region" });
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const startHudDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0 || !currentWindow) return;
+    event.preventDefault();
+    void currentWindow.startDragging().catch((error) => setError(String(error)));
+  };
   const canControl = snapshot.state === "recording" || snapshot.state === "paused";
   const hasMicrophone = Boolean(snapshot.options.audio.microphone_device_id);
 
@@ -1143,13 +1208,21 @@ function RecordingHud() {
     <main className={`recording-hud recording-hud-${snapshot.state}`}>
       <div className="recording-hud-status">
         <span className="recording-dot" aria-hidden="true" />
-        <strong>{snapshot.state === "countdown" ? (countdown ?? snapshot.options.countdown_seconds) : formatRecordingTime(snapshot.elapsed_ms)}</strong>
-        <small>{snapshot.state === "paused" ? "Paused" : snapshot.state === "finalizing" ? "Saving…" : snapshot.options.kind.toUpperCase()}</small>
+        <strong>{snapshot.state === "countdown" ? (countdown ?? snapshot.countdown_remaining_seconds ?? snapshot.options.countdown_seconds) : formatRecordingTime(snapshot.elapsed_ms)}</strong>
+        <small>{recordingStatusLabel(snapshot)}</small>
       </div>
       <div className="recording-hud-actions">
         <button type="button" className="recording-stop" disabled={!canControl || busy} aria-label="Stop recording" onClick={() => void invokeAction("stop_recording")}><span /></button>
-        <button type="button" disabled={!canControl || busy} onClick={() => void invokeAction(snapshot.state === "paused" ? "resume_recording" : "pause_recording")}>{snapshot.state === "paused" ? "Resume" : "Pause"}</button>
-        <button type="button" disabled={!canControl || busy} onClick={() => void invokeAction("restart_recording")}>Restart</button>
+        <button
+          type="button"
+          className="recording-icon-button"
+          disabled={!canControl || busy}
+          aria-label={snapshot.state === "paused" ? "Resume recording" : "Pause recording"}
+          title={snapshot.state === "paused" ? "Resume" : "Pause"}
+          onClick={() => void invokeAction(snapshot.state === "paused" ? "resume_recording" : "pause_recording")}
+        ><PauseResumeIcon paused={snapshot.state === "paused"} /></button>
+        <button type="button" className="recording-icon-button" disabled={!canControl || busy} aria-label="Restart recording" title="Restart" onClick={() => void invokeAction("restart_recording")}><RestartRecordingIcon /></button>
+        <button type="button" className="recording-icon-button" disabled={!canControl || busy} aria-label="Take a region screenshot" title="Take screenshot" onClick={() => void takeScreenshot()}><CameraIcon /></button>
         {hasMicrophone && (
           <span className="recording-microphone-level" aria-label={`Microphone level ${Math.round(microphonePeak * 100)}%`}>
             <i style={{ width: `${Math.round(microphonePeak * 100)}%` }} />
@@ -1158,13 +1231,17 @@ function RecordingHud() {
         <button
           type="button"
           disabled={!hasMicrophone || !canControl || busy}
-          className={snapshot.options.audio.microphone_muted ? "active" : ""}
+          className={`recording-icon-button${snapshot.options.audio.microphone_muted ? " active" : ""}`}
+          aria-label={snapshot.options.audio.microphone_muted ? "Unmute microphone" : "Mute microphone"}
+          title={snapshot.options.audio.microphone_muted ? "Unmute microphone" : "Mute microphone"}
           onClick={() => void invokeAction("set_recording_microphone_muted", { muted: !snapshot.options.audio.microphone_muted })}
-        >{snapshot.options.audio.microphone_muted ? "Unmute mic" : "Mute mic"}</button>
+        ><MicrophoneIcon muted={snapshot.options.audio.microphone_muted} /></button>
         <button
           type="button"
-          className={confirmDiscard ? "recording-discard confirm" : "recording-discard"}
+          className={`recording-icon-button recording-discard${confirmDiscard ? " confirm" : ""}`}
           disabled={busy || snapshot.state === "finalizing"}
+          aria-label={confirmDiscard ? "Confirm discard recording" : "Discard recording"}
+          title={confirmDiscard ? "Click again to discard" : "Discard"}
           onClick={() => {
             if (!confirmDiscard) {
               setConfirmDiscard(true);
@@ -1173,11 +1250,23 @@ function RecordingHud() {
               void invokeAction("discard_recording");
             }
           }}
-        >{confirmDiscard ? "Discard?" : "Discard"}</button>
+        ><TrashIcon /></button>
+        <span className="recording-hud-privacy" aria-label="Controls are hidden from captures" title="These controls are excluded from recordings and screenshots">
+          <HiddenFromCaptureIcon /><span>Hidden</span>
+        </span>
+        <button type="button" className="recording-icon-button recording-drag" aria-label="Move recording controls" title="Drag to move" onPointerDown={startHudDrag}><DragGripIcon /></button>
       </div>
       {(error || snapshot.error) && <p className="recording-hud-error" role="alert">{error || snapshot.error}</p>}
     </main>
   );
+}
+
+function recordingStatusLabel(snapshot: RecordingSessionSnapshot): string {
+  if (snapshot.state === "countdown") return "Starting…";
+  if (snapshot.state === "paused") return "Paused";
+  if (snapshot.state === "finalizing") return "Saving…";
+  if (snapshot.state === "failed") return "Failed";
+  return snapshot.options.kind.toUpperCase();
 }
 
 function formatRecordingTime(milliseconds: number): string {
@@ -2900,7 +2989,7 @@ export function Preferences() {
         <div className="settings-inline-grid">
           <label>Frames per second
             <select value={settings.recording.video_fps} onChange={(event) => updateRecording("video_fps", Number(event.target.value))}>
-              <option value={15}>15 FPS</option><option value={30}>30 FPS</option><option value={60}>60 FPS</option>
+              <option value={60}>60 FPS</option><option value={30}>30 FPS</option><option value={15}>15 FPS</option>
             </select>
           </label>
           <label>Maximum resolution
