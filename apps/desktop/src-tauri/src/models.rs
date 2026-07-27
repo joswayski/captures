@@ -506,6 +506,10 @@ pub fn recording_poster_url(artifact_id: &str) -> String {
     capture_asset_url(&format!("poster/{artifact_id}"))
 }
 
+pub fn recording_timeline_url(artifact_id: &str) -> String {
+    capture_asset_url(&format!("timeline/{artifact_id}"))
+}
+
 pub fn artifact_url(artifact_id: &str) -> String {
     capture_asset_url(&format!("artifact/{artifact_id}"))
 }

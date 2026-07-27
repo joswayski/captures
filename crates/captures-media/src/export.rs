@@ -80,8 +80,9 @@ pub enum ExportFormat {
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum QualityPreset {
-    High,
     #[default]
+    Preserve,
+    High,
     Standard,
     Small,
 }
@@ -194,7 +195,15 @@ pub fn gif_export_attempts(
 
 #[cfg(test)]
 mod tests {
-    use super::{GifExportAttempt, SizeBudgetError, calculate_size_budget, gif_export_attempts};
+    use super::{
+        GifExportAttempt, QualityPreset, SizeBudgetError, calculate_size_budget,
+        gif_export_attempts,
+    };
+
+    #[test]
+    fn preserve_quality_is_the_default() {
+        assert_eq!(QualityPreset::default(), QualityPreset::Preserve);
+    }
 
     #[test]
     fn reserves_headroom_and_accounts_for_audio() {

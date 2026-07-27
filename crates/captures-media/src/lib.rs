@@ -12,5 +12,5 @@ pub use export::{
 pub use range::{ByteRange, ByteRangeError};
 pub use toolchain::{
     CancelToken, ExportOutcome, MediaToolError, MediaToolchain, ProbeResult, RecordingAudioLayout,
-    RecordingSegmentInput,
+    RecordingSegmentInput, TimelineSpriteSpec,
 };

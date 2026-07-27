@@ -311,20 +311,35 @@ const fn video_frame_is_usable(
 }
 
 pub fn microphone_devices() -> Vec<AudioDevice> {
+    microphone_choices(
+        AudioInputDevice::list()
+            .into_iter()
+            .map(|device| (device.id, device.name, device.is_default))
+            .collect(),
+    )
+}
+
+fn microphone_choices(physical_devices: Vec<(String, String, bool)>) -> Vec<AudioDevice> {
+    let default_name = physical_devices
+        .iter()
+        .find(|(_, _, is_default)| *is_default)
+        .map(|(_, name, _)| name.as_str())
+        .unwrap_or("System default");
     let mut devices = vec![AudioDevice {
         id: "default".to_owned(),
-        name: "Default microphone".to_owned(),
+        name: format!("Default — {default_name}"),
         kind: AudioDeviceKind::Default,
         is_default: true,
     }];
     devices.extend(
-        AudioInputDevice::list()
+        physical_devices
             .into_iter()
-            .map(|device| AudioDevice {
-                id: device.id,
-                name: device.name,
+            .filter(|(_, _, is_default)| !is_default)
+            .map(|(id, name, is_default)| AudioDevice {
+                id,
+                name,
                 kind: AudioDeviceKind::Microphone,
-                is_default: device.is_default,
+                is_default,
             }),
     );
     devices
@@ -441,7 +456,7 @@ fn current_process_applications(content: &SCShareableContent) -> Vec<SCRunningAp
 
 #[cfg(test)]
 mod tests {
-    use super::{intersection_area, video_frame_is_usable};
+    use super::{intersection_area, microphone_choices, video_frame_is_usable};
     use screencapturekit::cm::SCFrameStatus;
     use screencapturekit::prelude::CGRect;
 
@@ -479,5 +494,19 @@ mod tests {
         assert!(!video_frame_is_usable(None, false, true, true));
         assert!(!video_frame_is_usable(None, true, false, true));
         assert!(!video_frame_is_usable(None, true, true, false));
+    }
+
+    #[test]
+    fn labels_the_default_microphone_and_omits_its_duplicate() {
+        let devices = microphone_choices(vec![
+            ("built-in".to_owned(), "MacBook Microphone".to_owned(), true),
+            ("usb".to_owned(), "USB Microphone".to_owned(), false),
+        ]);
+
+        assert_eq!(devices.len(), 2);
+        assert_eq!(devices[0].id, "default");
+        assert_eq!(devices[0].name, "Default — MacBook Microphone");
+        assert_eq!(devices[1].id, "usb");
+        assert!(!devices.iter().any(|device| device.id == "built-in"));
     }
 }

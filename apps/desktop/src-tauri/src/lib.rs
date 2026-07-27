@@ -233,6 +233,7 @@ pub fn run() {
             recording::set_recording_microphone_muted,
             recording::get_recording_artifacts,
             recording::get_recording_artifact,
+            recording::prepare_recording_timeline_preview,
             recording::start_recording_export,
             recording::cancel_recording_export,
             recording::reveal_recording_artifact,
@@ -2635,7 +2636,7 @@ fn set_capture_huds_protected(app: &AppHandle, protected: bool) {
     // The window server may still composite a just-hidden HUD into an
     // immediate display capture. Exclude Captures HUDs until the frozen background
     // frame has been read so they cannot reappear as pixels during fade-in.
-    for label in ["thumbnail", "startup", "update"] {
+    for label in ["thumbnail", "startup", "update", "recording-hud"] {
         if let Some(window) = app.get_webview_window(label)
             && let Err(error) = window.set_content_protected(protected)
         {

@@ -8,6 +8,9 @@ import type { RecordingSessionSnapshot } from "./types";
 const { startDragging } = vi.hoisted(() => ({
   startDragging: vi.fn(async () => undefined),
 }));
+const { nativeMessage } = vi.hoisted(() => ({
+  nativeMessage: vi.fn(async () => "Cancel"),
+}));
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -21,6 +24,11 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ startDragging }),
+}));
+
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: vi.fn(),
+  message: nativeMessage,
 }));
 
 const baseSnapshot: RecordingSessionSnapshot = {
@@ -76,11 +84,11 @@ describe("RecordingHud", () => {
     vi.clearAllMocks();
   });
 
-  it("keeps countdown state current even when transient event listeners stall", async () => {
+  it("keeps status state current even when transient event listeners stall", async () => {
     vi.mocked(listen).mockImplementation(() => new Promise(() => undefined));
     render(<RecordingHud />);
 
-    expect(await screen.findByText("2")).toBeInTheDocument();
+    expect(await screen.findByText("0:00")).toBeInTheDocument();
     expect(screen.getByText("Starting…")).toBeInTheDocument();
     expect(invoke).toHaveBeenCalledWith("get_recording_snapshot");
   });
@@ -100,11 +108,49 @@ describe("RecordingHud", () => {
       expect(invoke).toHaveBeenCalledWith("start_capture", { mode: "region" });
     });
 
-    expect(screen.getByLabelText("Controls are hidden from captures")).toBeInTheDocument();
+    expect(screen.getByLabelText("Not included in this recording")).toHaveTextContent("Not in recording");
+    expect(screen.getAllByRole("tooltip").map((tooltip) => tooltip.textContent)).toEqual(expect.arrayContaining([
+      "Stop and save",
+      "Pause recording",
+      "Restart recording",
+      "Take a region screenshot",
+      "Delete recording",
+      "Drag to move controls",
+    ]));
     fireEvent.pointerDown(screen.getByRole("button", { name: "Move recording controls" }), {
       button: 0,
     });
     expect(startDragging).toHaveBeenCalledOnce();
+  });
+
+  it("uses a native Delete recording dialog before discarding", async () => {
+    snapshot = {
+      ...baseSnapshot,
+      state: "recording",
+      countdown_remaining_seconds: null,
+    };
+    nativeMessage.mockResolvedValueOnce("Delete");
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_recording_snapshot") return snapshot;
+      if (command === "discard_recording") return { ...snapshot, state: "discarded" };
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<RecordingHud />);
+    fireEvent.click(await screen.findByRole("button", { name: "Delete recording" }));
+
+    await waitFor(() => {
+      expect(nativeMessage).toHaveBeenCalledWith(
+        "This recording will be deleted permanently.",
+        expect.objectContaining({
+          title: "Delete recording?",
+          buttons: { ok: "Delete", cancel: "Cancel" },
+        }),
+      );
+      expect(invoke).toHaveBeenCalledWith("discard_recording", {
+        sessionId: snapshot.id,
+      });
+    });
   });
 
   it("does not present a failed recording as actively recording", async () => {

@@ -91,6 +91,9 @@ impl XcapBackend {
             .map_err(|error| CaptureError::Backend(error.to_string()))?
             .into_iter()
             .filter_map(|window| {
+                if window_is_owned_by_process(window.pid().ok(), std::process::id()) {
+                    return None;
+                }
                 let is_minimized = window.is_minimized().ok()?;
                 if is_minimized {
                     return None;
@@ -158,6 +161,10 @@ impl XcapBackend {
             })
             .ok_or(CaptureError::TargetUnavailable)
     }
+}
+
+fn window_is_owned_by_process(window_pid: Option<u32>, current_pid: u32) -> bool {
+    window_pid.is_some_and(|window_pid| window_pid == current_pid)
 }
 
 #[cfg(target_os = "linux")]
@@ -266,7 +273,14 @@ fn descriptor_for_monitor(monitor: &Monitor) -> CaptureResult<DisplayDescriptor>
 
 #[cfg(test)]
 mod tests {
-    use super::logical_window_rect;
+    use super::{logical_window_rect, window_is_owned_by_process};
+
+    #[test]
+    fn excludes_windows_owned_by_the_capture_process() {
+        assert!(window_is_owned_by_process(Some(42), 42));
+        assert!(!window_is_owned_by_process(Some(41), 42));
+        assert!(!window_is_owned_by_process(None, 42));
+    }
 
     #[test]
     fn linux_hidpi_window_geometry_uses_logical_coordinates() {

@@ -135,7 +135,7 @@ describe("CaptureHistory", () => {
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("open_recording_editor", { artifactId: recordingEntry.id });
     });
-    fireEvent.click(screen.getByRole("button", { name: "Reveal" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show in Folder" }));
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("reveal_recording_artifact", { artifactId: recordingEntry.id });
     });

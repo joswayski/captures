@@ -9,10 +9,10 @@ macOS is the primary development target today. Windows and Linux builds are avai
 ## Features
 
 - Capture a region, window, or full display.
-- On macOS 13+, record a region, window, or display once, then trim, resize, compress, and export it as H.264/AAC video or an optimized GIF.
+- On macOS 13+, record a region, window, or display, then trim, crop, resize, and save it as H.264/AAC video or an optimized GIF.
 - Record desktop audio and a selected microphone independently, with pause, resume, restart, mute, and interruption recovery.
 - Take a lossless region, window, or display screenshot while a recording continues.
-- Trim, crop, resize, remix audio, or export against a strict maximum file size in the non-destructive recording editor.
+- Review recordings on an aspect-correct filmstrip timeline, adjust crop and audio, and save with preserved quality, optional compression, or an exact maximum file size.
 - Start captures from the tray or customizable global shortcuts.
 - Copy captures to the clipboard automatically, save them as full-resolution lossless PNGs, or inspect them in a full-size viewer.
 - Keep multiple recent captures in a quick-access preview stack, and drag a preview directly into file-upload targets.
@@ -27,7 +27,7 @@ The roadmap is still taking shape. Likely additions include:
 - Windows and Linux recording backends, followed by recording feature parity across platforms.
 - Editable click highlights and keystroke overlays for recordings.
 - Screenshot markup and editing.
-- Optional compressed export formats and quality controls; lossless PNG remains the default.
+- Optional compressed screenshot formats and quality controls; lossless PNG remains the default.
 - Full feature parity across macOS, Windows, and Linux.
 - Optional cloud hosting for images and recordings with shareable `captur.es/<id>` links.
 - Scrolling capture for content larger than the screen.
@@ -60,8 +60,8 @@ Download the latest builds from [GitHub Releases](https://github.com/joswayski/c
 | `Ctrl+Shift+4` | Capture a region |
 | `Ctrl+Shift+W` | Capture a window |
 | `Ctrl+Shift+3` | Capture the display under the pointer |
-| `Ctrl+Shift+5` | Record the screen, then export video or GIF |
-| `Esc` | Cancel an active region or window capture |
+| `Ctrl+Shift+5` | Record the screen, then save video or GIF |
+| `Esc` | Cancel an active capture or recording countdown |
 
 All four global capture shortcuts can be changed in Preferences.
 

@@ -37,7 +37,10 @@ The first updater-enabled build must be downloaded and installed manually. Befor
 6. Verify Windows NSIS and Linux AppImage update in place; verify `.deb` directs the user to the release download.
 7. Tamper with an updater archive in a test release and confirm signature verification rejects it.
 8. Force one platform build to fail and confirm the failed draft/tag is deleted while the previous release remains latest.
-9. Record a short video with desktop and microphone audio on macOS, edit it, seek in the preview, and verify a maximum-size export stays at or below its requested byte limit.
-10. Confirm the packaged FFmpeg/ffprobe sidecars run on a clean Mac and the release includes every source and compliance asset listed in `docs/media-sidecars.md`.
+9. On macOS, rapidly resize a recording region, confirm window highlights use rounded corners and select the frontmost window, and verify the selector, countdown, and HUD can be captured by another app while Captures excludes them from its own output.
+10. Record for at least 10 seconds on a secondary display. Confirm the full-display countdown appears there, Escape cancels it, the start chime plays only when recording begins and is absent from recorded audio, and finalized duration is within 250 ms or 5% of wall-clock time, whichever is larger.
+11. Open a 1140×692 source in the editor and verify Fit and 100% previews, the 12-frame filmstrip, playhead, trim handles, crop overlay, conditional audio controls, and millisecond labels stay synchronized.
+12. Save an untouched MP4 with **Preserve quality** and verify it is byte-identical. Verify audio-only changes preserve the video stream, visual edits use the high-quality H.264 path, existing filenames are rejected, strict maximum-size output does not exceed its decimal-MB ceiling, and a successful save opens Finder with the exact final size shown.
+13. Confirm the packaged FFmpeg/ffprobe sidecars run on a clean Mac and the release includes every source and compliance asset listed in `docs/media-sidecars.md`.
 
 Windows packages are intentionally unsigned during the private alpha and may trigger SmartScreen. Add Authenticode signing before a public launch.
