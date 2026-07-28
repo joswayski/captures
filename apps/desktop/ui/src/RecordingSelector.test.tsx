@@ -209,7 +209,7 @@ describe("RecordingSelector", () => {
       ...session,
       initial_mode: "screenshot",
     };
-    render(<RecordingSelector />);
+    const { container } = render(<RecordingSelector />);
 
     const screenshotMode = await screen.findByRole("button", {
       name: "Screenshot",
@@ -223,8 +223,11 @@ describe("RecordingSelector", () => {
     expect(screenshotMode.querySelector(".capture-icon-spark")).not.toBeNull();
     expect(targetSwitch).toHaveAttribute("data-active", "region");
     expect(targetSwitch?.querySelector(".capture-segmented-indicator")).not.toBeNull();
-    expect(screen.getByText("These controls won’t appear in your screenshot")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Take screenshot" })).toBeEnabled();
+    expect(container.querySelector(".capture-selector-note")).toHaveTextContent(
+      "Controls won’t appear in the output · Press Enter to confirm",
+    );
+    expect(screen.getByRole("button", { name: "Take screenshot" }))
+      .toHaveAttribute("aria-keyshortcuts", "Enter");
     expect(screen.queryByRole("combobox", { name: "Frames per second" })).not.toBeInTheDocument();
     expect(invoke).not.toHaveBeenCalledWith("list_recording_audio_devices");
 
@@ -235,7 +238,6 @@ describe("RecordingSelector", () => {
     fireEvent.click(screen.getByRole("button", { name: "Record", pressed: false }));
     expect(actionSwitch).toHaveAttribute("data-active", "recording");
     expect(screen.getByRole("button", { name: "Record", pressed: true })).toBeInTheDocument();
-    expect(screen.getByText("These controls won’t appear in your recording")).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Frames per second" })).toBeInTheDocument();
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("list_recording_audio_devices");
@@ -255,6 +257,36 @@ describe("RecordingSelector", () => {
     });
   });
 
+  it("confirms the default region with Enter without overriding focused controls", async () => {
+    preparedSession = {
+      ...session,
+      initial_mode: "screenshot",
+    };
+    render(<RecordingSelector />);
+
+    const screenshotMode = await screen.findByRole("button", {
+      name: "Screenshot",
+      pressed: true,
+    });
+    fireEvent.keyDown(screenshotMode, { key: "Enter" });
+    expect(invoke).not.toHaveBeenCalledWith("capture_selection_screenshot", expect.anything());
+
+    fireEvent.keyDown(window, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("capture_selection_screenshot", {
+        request: {
+          selection_id: preparedSession.id,
+          target: {
+            type: "region",
+            display_id: "display-1",
+            rect: { x: 245, y: 171, width: 950, height: 558 },
+          },
+        },
+      });
+    });
+  });
+
   it("animates the controls panel to its recording dimensions", async () => {
     preparedSession = {
       ...session,
@@ -266,11 +298,11 @@ describe("RecordingSelector", () => {
     const panel = container.querySelector<HTMLElement>(".recording-selector-panel");
     expect(panel).not.toBeNull();
     const bounds = [
-      { width: 742, height: 60 },
-      { width: 790, height: 136 },
+      { width: 590, height: 85 },
+      { width: 790, height: 161 },
     ];
     vi.spyOn(panel!, "getBoundingClientRect").mockImplementation(() => {
-      const { width, height } = bounds.shift() ?? { width: 790, height: 136 };
+      const { width, height } = bounds.shift() ?? { width: 790, height: 161 };
       return {
         x: 0,
         y: 0,
@@ -296,8 +328,8 @@ describe("RecordingSelector", () => {
     fireEvent.click(screen.getByRole("button", { name: "Record", pressed: false }));
 
     expect(animate).toHaveBeenCalledWith([
-      { width: "742px", height: "60px" },
-      { width: "790px", height: "136px" },
+      { width: "590px", height: "85px" },
+      { width: "790px", height: "161px" },
     ], {
       duration: 280,
       easing: "cubic-bezier(.2,.8,.2,1)",
@@ -311,8 +343,8 @@ describe("RecordingSelector", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Window" }));
 
     expect(screen.queryByText(/Window selected/)).not.toBeInTheDocument();
-    expect(screen.getByText("Select a window")).toBeInTheDocument();
-    expect(screen.getByText("Click any window to enable Record")).toBeInTheDocument();
+    expect(screen.getByText("Select a window to continue")).toBeInTheDocument();
+    expect(screen.queryByText(/enable (Capture|Record)/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Select Captures window" })).not.toBeInTheDocument();
     const frontWindow = screen.getByRole("button", { name: "Select Front eligible window" });
     expect(frontWindow).not.toHaveClass("selected");
@@ -326,6 +358,8 @@ describe("RecordingSelector", () => {
     expect(container.querySelector(".recording-selection-window")).not.toBeInTheDocument();
     expect(container.querySelector(".capture-shade-path")).not.toBeInTheDocument();
     expect(container.querySelector(".capture-shade-full")).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Enter" });
+    expect(invoke).not.toHaveBeenCalledWith("start_recording", expect.anything());
 
     const rearWindow = screen.getByRole("button", { name: "Select Rear window" });
     fireEvent.mouseEnter(rearWindow);

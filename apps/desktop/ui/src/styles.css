@@ -524,7 +524,6 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .recording-window-target:hover span, .recording-window-target.hovered span, .recording-window-target.selected span { background: rgba(17,18,26,.88); opacity: 1; }
 .recording-window-guidance { position: absolute; z-index: 10; top: 18%; left: 50%; display: grid; min-width: 220px; padding: 11px 15px; justify-items: center; gap: 3px; border: 1px solid rgba(169,151,255,.42); border-radius: 10px; color: #f7f4ff; background: rgba(25,22,38,.9); box-shadow: 0 12px 34px rgba(0,0,0,.34), 0 0 0 1px rgba(169,151,255,.08) inset; backdrop-filter: blur(18px); pointer-events: none; text-align: center; transform: translateX(-50%); animation: recording-window-guidance-in .2s ease-out both; }
 .recording-window-guidance strong { font-size: 13px; font-weight: 800; }
-.recording-window-guidance span { color: #c9c1f5; font-size: 10px; font-weight: 650; }
 @keyframes recording-window-guidance-in { from { opacity: 0; transform: translate(-50%, -5px); } to { opacity: 1; transform: translate(-50%, 0); } }
 .recording-selector-panel { position: absolute; z-index: 20; bottom: 22px; left: 50%; width: max-content; max-width: calc(100% - 32px); overflow: visible; border: 1px solid rgba(255,255,255,.14); border-radius: 15px; background: rgba(26,27,30,.97); box-shadow: 0 18px 55px rgba(0,0,0,.48); backdrop-filter: blur(24px); cursor: grab; touch-action: none; transform: translateX(-50%); }
 .recording-selector-panel[data-resizing="true"] { overflow: hidden; }
@@ -554,8 +553,6 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .recording-target-switch .capture-segmented-indicator { border-radius: 6px; }
 .recording-cancel { margin-left: auto; color: #d3d3d7; }
 .recording-cancel:hover { background: #333439; }
-.capture-selector-privacy { display: flex; max-width: 155px; margin: 0 3px; align-items: center; gap: 6px; color: #8d8e93; font-size: 9px; font-weight: 650; line-height: 1.25; }
-.capture-selector-privacy svg { width: 15px; height: 15px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .recording-options-row { min-height: 69px; padding: 11px 12px; animation: recording-options-arrive .24s .04s cubic-bezier(.2,.8,.2,1) both; }
 .recording-options-row label { display: flex; min-width: 104px; flex-direction: column; gap: 5px; color: #999a9f; font-size: 9px; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; }
 .recording-options-row label.recording-toggle { position: relative; min-width: auto; min-height: 32px; padding: 0 2px; flex-direction: row; align-items: center; gap: 7px; color: #d5d5d8; cursor: pointer; font-size: 11px; letter-spacing: 0; text-transform: none; }
@@ -574,6 +571,8 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .capture-selector-primary-recording > .capture-record-dot { position: relative; width: 10px; height: 10px; }
 .capture-selector-primary-recording:not(:disabled) > .capture-record-dot::after { position: absolute; inset: 0; border-radius: inherit; background: inherit; opacity: .75; content: ""; animation: recording-ready-ping 1s cubic-bezier(0,0,.2,1) infinite; }
 .recording-start:disabled { cursor: not-allowed; opacity: .45; }
+.capture-selector-note { display: flex; min-height: 25px; padding: 0 12px 8px; align-items: center; justify-content: center; gap: 5px; color: #85868b; font-size: 9px; font-weight: 650; line-height: 1; white-space: nowrap; }
+.capture-selector-note kbd { border: 1px solid #44454b; border-bottom-color: #57585f; border-radius: 4px; padding: 2px 5px; color: #c8c9cd; background: #24252a; box-shadow: 0 1px 0 rgba(255,255,255,.05) inset, 0 1px 0 rgba(0,0,0,.42); font-family: inherit; font-size: 8px; font-weight: 800; }
 .recording-selector-error { padding: 8px 12px; border-top: 1px solid rgba(238,65,77,.25); color: #ffb3b8; background: rgba(87,23,29,.4); font-size: 11px; }
 
 /* Recording HUD */

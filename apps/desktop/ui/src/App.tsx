@@ -1231,9 +1231,37 @@ export function RecordingSelector() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const currentSession = sessionRef.current;
-      if (event.key !== "Escape" || !currentSession) return;
+      if (!currentSession) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        cancelSelection(currentSession);
+        return;
+      }
+      if (
+        event.key !== "Enter"
+        || event.defaultPrevented
+        || event.repeat
+        || event.isComposing
+        || event.altKey
+        || event.ctrlKey
+        || event.metaKey
+        || event.shiftKey
+      ) {
+        return;
+      }
+      const target = event.target;
+      if (
+        target instanceof Element
+        && target.closest("button, input, select, textarea, a, [contenteditable], [role=\"combobox\"], [role=\"listbox\"]")
+      ) {
+        return;
+      }
+      const primaryAction = panelRef.current?.querySelector<HTMLButtonElement>(
+        ".capture-selector-primary:not(:disabled)",
+      );
+      if (!primaryAction) return;
       event.preventDefault();
-      cancelSelection(currentSession);
+      primaryAction.click();
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
@@ -1552,8 +1580,7 @@ export function RecordingSelector() {
       />
       {targetMode === "window" && !selectedWindow && (
         <div className="recording-window-guidance" role="status">
-          <strong>Select a window</strong>
-          <span>Click any window to enable {actionMode === "screenshot" ? "Capture" : "Record"}</span>
+          <strong>Select a window to continue</strong>
         </div>
       )}
       {targetMode !== "window" && selectedRect && selectedRect.width > 0 && selectedRect.height > 0 && (
@@ -1668,14 +1695,11 @@ export function RecordingSelector() {
               </button>
             ))}
           </div>
-          <p className="capture-selector-privacy">
-            <PrivacyIcon />
-            These controls won’t appear in your {actionMode === "screenshot" ? "screenshot" : "recording"}
-          </p>
           <button
             className={`recording-start capture-selector-primary capture-selector-primary-${actionMode}`}
             type="button"
             aria-label={actionMode === "screenshot" ? "Take screenshot" : "Start recording"}
+            aria-keyshortcuts="Enter"
             disabled={!canStart || starting}
             onClick={() => void start()}
           >
@@ -1765,6 +1789,9 @@ export function RecordingSelector() {
             </div>
           </div>
         )}
+        <p className="capture-selector-note">
+          Controls won’t appear in the output <span aria-hidden="true">·</span> Press <kbd>Enter</kbd> to confirm
+        </p>
         {error && <p className="recording-selector-error" role="alert">{error}</p>}
       </section>
     </main>
@@ -1779,10 +1806,6 @@ function CaptureTargetIcon({ mode }: { mode: RecordingTargetMode }) {
     return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="6" width="16" height="13" rx="2.5" /><path d="M4 10h16M7 8h.01M10 8h.01" /></svg>;
   }
   return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="14" rx="2.5" /><path d="M9 21h6M12 18v3" /></svg>;
-}
-
-function PrivacyIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12s3.2-5 9-5 9 5 9 5-3.2 5-9 5-9-5-9-5Z" /><circle cx="12" cy="12" r="2.5" /><path d="m4 4 16 16" /></svg>;
 }
 
 function isCapturesOwnedWindow(window: RecordingSelectionSession["windows"][number]): boolean {
