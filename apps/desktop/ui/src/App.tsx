@@ -1850,7 +1850,7 @@ export function RecordingEditor() {
   const [savedFingerprint, setSavedFingerprint] = useState<string | null>(null);
   const [filenameStem, setFilenameStem] = useState("");
   const [destinationDirectory, setDestinationDirectory] = useState("");
-  const [keepOriginal, setKeepOriginal] = useState(false);
+  const [makeCopy, setMakeCopy] = useState(true);
   const [previewPlaying, setPreviewPlaying] = useState(false);
   const [toast, setToast] = useState("");
   const [error, setError] = useState("");
@@ -1913,9 +1913,9 @@ export function RecordingEditor() {
       setCustomHeight(loaded.height);
       setOutputFormat(loaded.kind === "gif" ? "gif" : "mp4");
       setSizeMode(loaded.kind === "gif" ? "compress" : "preserve");
-      setFilenameStem(recordingFileStem(loaded.path));
+      setFilenameStem(`${recordingFileStem(loaded.path)}-copy`);
       setDestinationDirectory(recordingParentDirectory(loaded.path));
-      setKeepOriginal(false);
+      setMakeCopy(true);
       setPreviewPlaying(false);
       setSavedFingerprint(null);
       void invoke<RecordingTimelinePreview>("prepare_recording_timeline_preview", {
@@ -1968,7 +1968,7 @@ export function RecordingEditor() {
   const formatRequiresCopy = outputFormat !== sourceFormat;
   const exportFingerprint = JSON.stringify({
     artifact: artifact.id,
-    keepOriginal,
+    makeCopy,
     filenameStem,
     destinationDirectory,
     trimStart: Math.round(trimStart),
@@ -1992,9 +1992,14 @@ export function RecordingEditor() {
     mono,
   });
   const alreadySaved = Boolean(exported && savedFingerprint === exportFingerprint);
-  const updateKeepOriginal = (enabled: boolean) => {
+  const saveStatus = error
+    || toast
+    || (exportId
+      ? progress?.message || exportStageLabel(progress?.stage || "preparing")
+      : "");
+  const updateMakeCopy = (enabled: boolean) => {
     if (!enabled && formatRequiresCopy) return;
-    setKeepOriginal(enabled);
+    setMakeCopy(enabled);
     if (enabled && filenameStem === sourceStem && destinationDirectory === sourceDirectory) {
       setFilenameStem(`${sourceStem}-copy`);
     } else if (!enabled && filenameStem === `${sourceStem}-copy`) {
@@ -2007,8 +2012,8 @@ export function RecordingEditor() {
   };
   const updateOutputFormat = (format: "mp4" | "gif") => {
     setOutputFormat(format);
-    if (format !== sourceFormat && !keepOriginal) {
-      setKeepOriginal(true);
+    if (format !== sourceFormat && !makeCopy) {
+      setMakeCopy(true);
       setFilenameStem(`${sourceStem}-copy`);
       setDestinationDirectory(sourceDirectory);
     }
@@ -2219,7 +2224,7 @@ export function RecordingEditor() {
           artifact_id: artifact.id,
           file_stem: filenameStem,
           destination_directory: destinationDirectory,
-          overwrite_source: !keepOriginal && !formatRequiresCopy,
+          overwrite_source: !makeCopy && !formatRequiresCopy,
           edit,
           export: exportSpec,
         },
@@ -2617,33 +2622,20 @@ export function RecordingEditor() {
       </div>
 
       <footer className={`recording-save-footer${error ? " has-error" : ""}`}>
-        {progress && <div className="recording-export-progress"><span style={{ width: `${progress.completed_per_mille / 10}%` }} /></div>}
-        {(error || toast || (progress && exportId)) && (
-          <div
-            className={`recording-save-toast${error ? " error" : toast ? " success" : ""}`}
-            aria-live={error ? "assertive" : "polite"}
-          >
-            {error
-              ? <p role="alert">{error}</p>
-              : toast
-                ? <p role="status">{toast}</p>
-                : <p>{progress?.message || exportStageLabel(progress?.stage || "preparing")}</p>}
-          </div>
-        )}
+        {progress && exportId && <div className="recording-export-progress"><span style={{ width: `${progress.completed_per_mille / 10}%` }} /></div>}
         <div className="recording-filename">
           <div className="recording-filename-heading">
             <label htmlFor="recording-save-filename">Filename</label>
-            <label className="recording-toggle recording-keep-original">
-              <input
-                aria-label="Keep original"
-                type="checkbox"
-                checked={keepOriginal}
-                disabled={Boolean(exportId) || formatRequiresCopy}
-                onChange={(event) => updateKeepOriginal(event.target.checked)}
-              />
-              <span className="recording-switch" aria-hidden="true" />
-              <span>Keep original</span>
-            </label>
+            <div className="recording-destination">
+              <span>Saving to</span>
+              <output aria-label="Save location" title={destinationDirectory}>{destinationDirectory}</output>
+              <button
+                type="button"
+                aria-label="Change save location"
+                disabled={Boolean(exportId)}
+                onClick={() => void chooseDestinationDirectory()}
+              >Change…</button>
+            </div>
           </div>
           <span className="recording-filename-input">
             <input
@@ -2659,23 +2651,58 @@ export function RecordingEditor() {
             />
             <strong>.{outputFormat}</strong>
           </span>
-          <div className="recording-destination">
-            <span>Save to</span>
-            <output aria-label="Save location" title={destinationDirectory}>{destinationDirectory}</output>
+        </div>
+        <label
+          className="recording-toggle recording-make-copy"
+          title={formatRequiresCopy
+            ? "Changing formats always creates a copy"
+            : "Save as a new file and leave the original untouched"}
+        >
+          <input
+            aria-label="Make a copy"
+            type="checkbox"
+            checked={makeCopy}
+            disabled={Boolean(exportId) || formatRequiresCopy}
+            onChange={(event) => updateMakeCopy(event.target.checked)}
+          />
+          <span className="recording-switch" aria-hidden="true" />
+          <span>Make a copy</span>
+        </label>
+        <div className="recording-save-action-area">
+          <div
+            className={`recording-save-toast${error ? " error" : toast ? " success" : ""}${saveStatus ? "" : " empty"}`}
+            aria-live={error ? "assertive" : "polite"}
+          >
+            {error
+              ? <p role="alert">{error}</p>
+              : saveStatus
+                ? <p role={toast ? "status" : undefined}>{saveStatus}</p>
+                : <span aria-hidden="true" />}
+          </div>
+          <div className="recording-save-actions">
+            <button
+              className={`recording-save-cancel${exportId ? "" : " is-placeholder"}`}
+              type="button"
+              disabled={!exportId}
+              aria-hidden={!exportId}
+              tabIndex={exportId ? 0 : -1}
+              onClick={() => {
+                if (exportId) void invoke("cancel_recording_export", { exportId });
+              }}
+            >Cancel</button>
             <button
               type="button"
-              aria-label="Change save location"
-              disabled={Boolean(exportId)}
-              onClick={() => void chooseDestinationDirectory()}
-            >Change…</button>
+              disabled={!exported || Boolean(exportId)}
+              onClick={() => void revealSavedRecording()}
+            ><FolderIcon />Show in Folder</button>
+            <button
+              className="primary"
+              type="button"
+              aria-busy={Boolean(exportId)}
+              disabled={Boolean(exportId) || alreadySaved}
+              onClick={() => void startExport()}
+            ><SaveIcon />Save</button>
           </div>
-        </div>
-        <div className="recording-save-actions">
-          {exportId && <button type="button" onClick={() => void invoke("cancel_recording_export", { exportId })}>Cancel</button>}
-          {exported && <button type="button" onClick={() => void revealSavedRecording()}>Show in Folder</button>}
-          <button className="primary" type="button" disabled={Boolean(exportId) || alreadySaved} onClick={() => void startExport()}>
-            {exportId ? "Saving…" : "Save"}
-          </button>
         </div>
       </footer>
     </main>

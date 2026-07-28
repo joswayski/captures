@@ -467,7 +467,8 @@ public func capturesMediaWriterAppend(
     _ kind: Int32
 ) -> Bool {
     let writer = Unmanaged<CapturesMediaWriter>.fromOpaque(handle).takeUnretainedValue()
-    return writer.append(unsafeBitCast(sample, to: CMSampleBuffer.self), kind: kind)
+    let sampleBuffer = Unmanaged<CMSampleBuffer>.fromOpaque(sample).takeUnretainedValue()
+    return writer.append(sampleBuffer, kind: kind)
 }
 
 @_cdecl("captures_media_writer_finish")

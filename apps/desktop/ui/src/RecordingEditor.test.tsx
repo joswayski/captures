@@ -164,13 +164,13 @@ describe("RecordingEditor", () => {
     expect(play).toHaveBeenCalledOnce();
   });
 
-  it("defaults to updating the source and offers saving a copy as one optional setting", async () => {
+  it("defaults to saving a copy and can explicitly update the source", async () => {
     render(<RecordingEditor />);
 
     const filename = await screen.findByRole("textbox", { name: "Saved filename" });
-    expect(filename).toHaveValue("Captures_1140x692");
+    expect(filename).toHaveValue("Captures_1140x692-copy");
     expect(filename).toBeEnabled();
-    expect(screen.getByRole("checkbox", { name: "Keep original" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Make a copy" })).toBeChecked();
     expect(screen.queryByRole("radio")).not.toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Save quality" })).toHaveTextContent(
       "Preserve quality",
@@ -178,8 +178,10 @@ describe("RecordingEditor", () => {
     expect(screen.getByLabelText("Save location")).toHaveTextContent(
       "/Users/josevalerio/Captures",
     );
+    expect(screen.getByText("Saving to")).toBeInTheDocument();
     expect(screen.queryByText("Ready to save.")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Change save location" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show in Folder" })).toBeDisabled();
 
     fireEvent.change(filename, { target: { value: "Renamed recording" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -189,7 +191,7 @@ describe("RecordingEditor", () => {
           artifact_id: artifact.id,
           file_stem: "Renamed recording",
           destination_directory: "/Users/josevalerio/Captures",
-          overwrite_source: true,
+          overwrite_source: false,
         }),
       });
     });
@@ -212,8 +214,9 @@ describe("RecordingEditor", () => {
       artifactId: artifact.id,
     });
 
-    fireEvent.click(screen.getByRole("checkbox", { name: "Keep original" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Make a copy" }));
     expect(filename).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Show in Folder" })).toBeDisabled();
     fireEvent.change(filename, { target: { value: "Demo recording" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
@@ -223,7 +226,7 @@ describe("RecordingEditor", () => {
           artifact_id: artifact.id,
           file_stem: "Demo recording",
           destination_directory: "/Users/josevalerio/Captures",
-          overwrite_source: false,
+          overwrite_source: true,
           edit: expect.objectContaining({ trim_start_ms: 0, trim_end_ms: null }),
           export: expect.objectContaining({ format: "mp4", quality: "preserve" }),
         }),
@@ -262,7 +265,7 @@ describe("RecordingEditor", () => {
         request: expect.objectContaining({
           destination_directory: "/Users/josevalerio/Desktop/Exports",
           file_stem: "Moved recording",
-          overwrite_source: true,
+          overwrite_source: false,
           export: expect.objectContaining({ max_size_bytes: 10_000_000 }),
         }),
       });
@@ -288,8 +291,12 @@ describe("RecordingEditor", () => {
   it("treats an explicit save cancellation as status rather than an error", async () => {
     render(<RecordingEditor />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Save" }));
+    const save = await screen.findByRole("button", { name: "Save" });
+    const showInFolder = screen.getByRole("button", { name: "Show in Folder" });
+    fireEvent.click(save);
     await waitFor(() => expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument());
+    expect(save).toHaveTextContent("Save");
+    expect(showInFolder).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(invoke).toHaveBeenCalledWith("cancel_recording_export", { exportId: "export-1" });
 
@@ -303,6 +310,8 @@ describe("RecordingEditor", () => {
       });
     });
     expect(screen.getByText("Save cancelled.")).not.toHaveClass("recording-save-success");
+    expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show in Folder" })).toBeDisabled();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

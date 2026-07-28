@@ -13,7 +13,7 @@ use core_graphics::display::CGDisplay as CoreGraphicsDisplay;
 use screencapturekit::{
     audio_devices::AudioInputDevice,
     cg::CGRect,
-    cm::{CMSampleBuffer, CMSampleBufferSCExt, SCFrameStatus},
+    cm::{CMSampleBuffer, CMSampleBufferExt, CMSampleBufferSCExt, SCFrameStatus},
     dispatch_queue::{DispatchQoS, DispatchQueue},
     shareable_content::{SCDisplay, SCRunningApplication, SCShareableContent, SCWindow},
     stream::{
@@ -307,7 +307,9 @@ fn sample_video_frame_kind(sample: &CMSampleBuffer) -> Option<VideoFrameKind> {
         sample.frame_status(),
         sample.is_valid(),
         sample.data_is_ready(),
-        !sample.image_buffer_ptr().is_null(),
+        // The raw pointer accessor returns a retained surface in the current
+        // bridge. Adopt it so this temporary validation retain is released.
+        sample.image_buffer().is_some(),
     )
 }
 
