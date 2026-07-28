@@ -1410,9 +1410,7 @@ export function RecordingSelector() {
     clearRegionDrag();
   };
 
-  const selectableWindows = frontToBackWindows(
-    session.windows.filter((window) => !isCapturesOwnedWindow(window)),
-  );
+  const selectableWindows = frontToBackWindows(session.windows);
   const windowLayouts = selectableWindows.map((window, index) => {
     const scale = Math.max(session.window_coordinate_scale || 1, 1);
     return {
@@ -1822,11 +1820,6 @@ function CaptureTargetIcon({ mode }: { mode: RecordingTargetMode }) {
     return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="6" width="16" height="13" rx="2.5" /><path d="M4 10h16M7 8h.01M10 8h.01" /></svg>;
   }
   return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="14" rx="2.5" /><path d="M9 21h6M12 18v3" /></svg>;
-}
-
-function isCapturesOwnedWindow(window: RecordingSelectionSession["windows"][number]): boolean {
-  const owner = window.app_name?.trim().replace(/\.app$/i, "").toLowerCase();
-  return owner === "captures";
 }
 
 function defaultRecordingRegion(width: number, height: number): RecordingRect {
@@ -4364,6 +4357,19 @@ export function Preferences() {
   const saveInFlightRef = useRef<Promise<void> | null>(null);
   const activeRef = useRef(true);
 
+  const setShortcutRecording = useCallback((id: string, recording: boolean) => {
+    setRecordingShortcut(recording ? id : null);
+    void invoke("set_shortcut_capture_suppressed", {
+      suppressed: recording,
+    }).catch(() => undefined);
+  }, []);
+
+  useEffect(() => () => {
+    void invoke("set_shortcut_capture_suppressed", {
+      suppressed: false,
+    }).catch(() => undefined);
+  }, []);
+
   const clearSavedStatusTimer = useCallback(() => {
     if (!savedStatusTimerRef.current) return;
     clearTimeout(savedStatusTimerRef.current);
@@ -4537,7 +4543,7 @@ export function Preferences() {
           label="Region"
           value={settings.region_shortcut}
           recording={recordingShortcut === "region-shortcut"}
-          onRecordingChange={(recording) => setRecordingShortcut(recording ? "region-shortcut" : null)}
+          onRecordingChange={(recording) => setShortcutRecording("region-shortcut", recording)}
           onChange={(value) => update("region_shortcut", value)}
         />
         <ShortcutInput
@@ -4545,7 +4551,7 @@ export function Preferences() {
           label="Window"
           value={settings.window_shortcut}
           recording={recordingShortcut === "window-shortcut"}
-          onRecordingChange={(recording) => setRecordingShortcut(recording ? "window-shortcut" : null)}
+          onRecordingChange={(recording) => setShortcutRecording("window-shortcut", recording)}
           onChange={(value) => update("window_shortcut", value)}
         />
         <ShortcutInput
@@ -4553,7 +4559,7 @@ export function Preferences() {
           label="Full Screen"
           value={settings.display_shortcut}
           recording={recordingShortcut === "display-shortcut"}
-          onRecordingChange={(recording) => setRecordingShortcut(recording ? "display-shortcut" : null)}
+          onRecordingChange={(recording) => setShortcutRecording("display-shortcut", recording)}
           onChange={(value) => update("display_shortcut", value)}
         />
         <ShortcutInput
@@ -4561,7 +4567,7 @@ export function Preferences() {
           label="Record Screen"
           value={settings.recording.video_shortcut}
           recording={recordingShortcut === "video-shortcut"}
-          onRecordingChange={(recording) => setRecordingShortcut(recording ? "video-shortcut" : null)}
+          onRecordingChange={(recording) => setShortcutRecording("video-shortcut", recording)}
           onChange={(value) => updateRecording("video_shortcut", value)}
         />
         <p className="help-text">Select a shortcut, then press the key combination you want. Press Esc to cancel recording. Changes save automatically.</p>
@@ -4603,7 +4609,7 @@ export function Preferences() {
             onChange={(value) => updateRecording("microphone_device_id", value === "off" ? null : value)}
           />
         </div>
-        <label className="check-row"><input type="checkbox" checked={settings.recording.mono_audio} onChange={(event) => updateRecording("mono_audio", event.target.checked)} /><span>Export recording audio in mono</span></label>
+        <label className="check-row recording-setting-after-select"><input type="checkbox" checked={settings.recording.mono_audio} onChange={(event) => updateRecording("mono_audio", event.target.checked)} /><span>Export recording audio in mono</span></label>
       </section>
 
       <section className="settings-section recording-settings-section">
@@ -4631,8 +4637,8 @@ export function Preferences() {
             onChange={(value) => updateRecording("countdown_seconds", Number(value))}
           />
         </div>
-        <label className="check-row"><input type="checkbox" checked={settings.recording.show_cursor} onChange={(event) => updateRecording("show_cursor", event.target.checked)} /><span>Show cursor in recordings</span></label>
-        <label className="check-row"><input type="checkbox" checked={settings.recording.highlight_clicks} onChange={(event) => updateRecording("highlight_clicks", event.target.checked)} /><span>Show clicks in recordings</span></label>
+        <label className="check-row recording-setting-after-select recording-behavior-toggle"><input type="checkbox" checked={settings.recording.show_cursor} onChange={(event) => updateRecording("show_cursor", event.target.checked)} /><span>Show cursor in recordings</span></label>
+        <label className="check-row recording-behavior-toggle"><input type="checkbox" checked={settings.recording.highlight_clicks} onChange={(event) => updateRecording("highlight_clicks", event.target.checked)} /><span>Show clicks in recordings</span></label>
         <label className="check-row capture-option"><input type="checkbox" checked={settings.recording.open_editor_after_recording} onChange={(event) => updateRecording("open_editor_after_recording", event.target.checked)} /><span>Open the editor after recording<small>The original is saved first, so closing the editor never loses a recording.</small></span></label>
       </section>
 
