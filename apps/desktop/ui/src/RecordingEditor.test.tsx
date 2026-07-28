@@ -164,6 +164,66 @@ describe("RecordingEditor", () => {
     expect(play).toHaveBeenCalledOnce();
   });
 
+  it("plays only the selected trim range and seeks to trim handles on pointer down", async () => {
+    const { container } = render(<RecordingEditor />);
+
+    expect(await screen.findByRole("heading", { name: "Edit recording" })).toBeInTheDocument();
+    const video = container.querySelector<HTMLVideoElement>("video");
+    expect(video).not.toBeNull();
+    let paused = true;
+    Object.defineProperty(video!, "paused", {
+      configurable: true,
+      get: () => paused,
+    });
+    const play = vi.spyOn(video!, "play").mockImplementation(async () => {
+      paused = false;
+    });
+    const pause = vi.spyOn(video!, "pause").mockImplementation(() => {
+      paused = true;
+    });
+    const trimStart = screen.getByRole("slider", { name: "Trim start" });
+    const trimEnd = screen.getByRole("slider", { name: "Trim end" });
+    trimStart.setPointerCapture = vi.fn();
+    trimEnd.setPointerCapture = vi.fn();
+
+    fireEvent.keyDown(trimStart, { key: "PageUp" });
+    fireEvent.keyDown(trimStart, { key: "PageUp" });
+    fireEvent.keyDown(trimEnd, { key: "PageDown" });
+    fireEvent.keyDown(trimEnd, { key: "PageDown" });
+    expect(trimStart).toHaveAttribute("aria-valuetext", "0:02.000");
+    expect(trimEnd).toHaveAttribute("aria-valuetext", "0:06.750");
+
+    video!.currentTime = 4;
+    fireEvent.seeked(video!);
+    fireEvent.pointerDown(trimStart, { pointerId: 1 });
+    expect(video!.currentTime).toBe(2);
+    expect(container.querySelector(".timeline-playhead")).toHaveStyle({
+      left: `${2_000 / artifact.duration_ms * 100}%`,
+    });
+    fireEvent.pointerUp(trimStart, { pointerId: 1 });
+
+    fireEvent.pointerDown(trimEnd, { pointerId: 2 });
+    expect(video!.currentTime).toBe(6.75);
+    expect(container.querySelector(".timeline-playhead")).toHaveStyle({
+      left: `${6_750 / artifact.duration_ms * 100}%`,
+    });
+    fireEvent.pointerUp(trimEnd, { pointerId: 2 });
+
+    fireEvent.click(screen.getByRole("button", { name: "Play preview" }));
+    await waitFor(() => expect(play).toHaveBeenCalledOnce());
+    expect(video!.currentTime).toBe(2);
+    fireEvent.play(video!);
+
+    video!.currentTime = 7;
+    fireEvent.timeUpdate(video!);
+    expect(pause).toHaveBeenCalledOnce();
+    expect(video!.currentTime).toBe(6.75);
+    expect(screen.getByRole("button", { name: "Play preview" })).toBeInTheDocument();
+    expect(container.querySelector(".timeline-playhead")).toHaveStyle({
+      left: `${6_750 / artifact.duration_ms * 100}%`,
+    });
+  });
+
   it("updates the source by default and can explicitly save a copy", async () => {
     render(<RecordingEditor />);
 

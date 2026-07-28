@@ -2345,9 +2345,15 @@ export function RecordingEditor() {
     setError("");
     try {
       if (video.paused) {
+        const selectedStart = trimStart / 1_000;
         const selectedEnd = trimEnd / 1_000;
-        if (video.ended || video.currentTime >= selectedEnd - 0.01) {
-          video.currentTime = trimStart / 1_000;
+        if (
+          video.ended
+          || video.currentTime < selectedStart - 0.01
+          || video.currentTime >= selectedEnd - 0.01
+        ) {
+          video.currentTime = selectedStart;
+          setPlayheadMs(trimStart);
         }
         await video.play();
       } else {
@@ -2357,6 +2363,17 @@ export function RecordingEditor() {
       setPreviewPlaying(false);
       setError(`Preview could not play: ${String(error)}`);
     }
+  };
+  const updatePreviewPlaybackTime = (video: HTMLVideoElement) => {
+    const currentMs = video.currentTime * 1_000;
+    if (!video.paused && currentMs >= trimEnd) {
+      video.pause();
+      video.currentTime = trimEnd / 1_000;
+      setPlayheadMs(trimEnd);
+      setPreviewPlaying(false);
+      return;
+    }
+    setPlayheadMs(currentMs);
   };
 
   const chooseDestinationDirectory = async () => {
@@ -2500,7 +2517,7 @@ export function RecordingEditor() {
                 onLoadedMetadata={(event) => {
                   event.currentTarget.currentTime = playheadMs / 1_000;
                 }}
-                onTimeUpdate={(event) => setPlayheadMs(event.currentTarget.currentTime * 1_000)}
+                onTimeUpdate={(event) => updatePreviewPlaybackTime(event.currentTarget)}
                 onSeeked={(event) => setPlayheadMs(event.currentTarget.currentTime * 1_000)}
               />
             ) : (
@@ -2599,6 +2616,7 @@ export function RecordingEditor() {
             aria-valuetext={formatEditorTime(trimStart, duration)}
             onPointerDown={(event) => {
               trimDragRef.current = "start";
+              seekTo(trimStart);
               event.currentTarget.setPointerCapture(event.pointerId);
               event.preventDefault();
               event.stopPropagation();
@@ -2630,6 +2648,7 @@ export function RecordingEditor() {
             aria-valuetext={formatEditorTime(trimEnd, duration)}
             onPointerDown={(event) => {
               trimDragRef.current = "end";
+              seekTo(trimEnd);
               event.currentTarget.setPointerCapture(event.pointerId);
               event.preventDefault();
               event.stopPropagation();
