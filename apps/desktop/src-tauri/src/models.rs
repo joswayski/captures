@@ -102,10 +102,19 @@ impl Default for AppSettings {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptureSelectorMode {
+    Screenshot,
+    Recording,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RecordingSelectionSession {
     pub id: String,
     pub kind: RecordingKind,
+    pub initial_mode: CaptureSelectorMode,
+    pub recording_available: bool,
     pub display: DisplayDescriptor,
     pub window_coordinate_scale: f64,
     pub snapshot_url: String,

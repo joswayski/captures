@@ -147,6 +147,31 @@ describe("CaptureHistory", () => {
     });
   });
 
+  it("offers one direct removal action when a recording file is already missing", async () => {
+    const missingRecording = { ...recordingEntry, missing: true };
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_capture_history") return [missingRecording];
+      if (command === "get_recording_drafts") return [];
+      if (command === "delete_history_artifact") return undefined;
+      throw new Error(`unexpected command: ${command}`);
+    });
+    const { container } = render(<CaptureHistory />);
+
+    expect(await screen.findByText("File missing")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Show in Folder" })).not.toBeInTheDocument();
+    expect(container.querySelector(".history-missing-actions")?.childElementCount).toBe(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove missing entry" }));
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("delete_history_artifact", {
+        artifactId: missingRecording.id,
+      });
+    });
+    expect(screen.queryByRole("button", { name: "Confirm removal from History" }))
+      .not.toBeInTheDocument();
+  });
+
   it("shows interrupted recordings inside Capture History", async () => {
     let drafts = [interruptedRecording];
     vi.mocked(invoke).mockImplementation(async (command) => {

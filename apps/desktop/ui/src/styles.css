@@ -33,6 +33,19 @@ h1, h2, p { margin: 0; }
 .startup-notice p { color: #b9bac7; font-size: 11px; line-height: 1.35; }
 @keyframes startup-arrive { from { opacity: 0; transform: translateY(-8px) scale(.97); } to { opacity: 1; transform: translateY(0) scale(1); } }
 
+.recording-saved-notice { position: relative; display: grid; width: calc(100% - 16px); height: calc(100% - 16px); margin: 8px; padding: 13px 38px 13px 13px; grid-template-columns: 40px minmax(0,1fr) auto; align-items: center; gap: 11px; border: 1px solid rgba(108,213,137,.32); border-radius: 14px; color: white; background: rgba(24,29,29,.96); box-shadow: 0 14px 40px rgba(0,0,0,.44); backdrop-filter: blur(20px); animation: startup-arrive .25s cubic-bezier(.2,.8,.2,1); }
+.recording-saved-icon { display: grid; width: 40px; height: 40px; place-items: center; border: 1px solid rgba(108,213,137,.32); border-radius: 11px; color: #a9edb9; background: rgba(50,139,76,.16); }
+.recording-saved-icon svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.recording-saved-copy { min-width: 0; }
+.recording-saved-copy strong { display: block; font-size: 13px; }
+.recording-saved-copy p { margin-top: 3px; overflow: hidden; color: #aebbb1; font-size: 10px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.recording-saved-reveal { display: inline-flex; min-height: 32px; border: 1px solid rgba(255,255,255,.12); border-radius: 7px; padding: 6px 9px; align-items: center; gap: 6px; color: #ebeeec; background: rgba(255,255,255,.07); font-size: 10px; font-weight: 750; white-space: nowrap; }
+.recording-saved-reveal:hover:not(:disabled) { border-color: rgba(108,213,137,.32); background: rgba(108,213,137,.12); }
+.recording-saved-reveal:disabled { cursor: wait; opacity: .55; }
+.recording-saved-reveal svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.recording-saved-dismiss { position: absolute; top: 9px; right: 10px; width: 24px; height: 24px; border: 0; border-radius: 6px; padding: 0; color: #8f9991; background: transparent; font-size: 18px; line-height: 1; }
+.recording-saved-dismiss:hover { color: white; background: rgba(255,255,255,.08); }
+
 .update-notice { display: flex; width: calc(100% - 16px); height: calc(100% - 16px); margin: 8px; padding: 16px; flex-direction: column; gap: 12px; border: 1px solid rgba(255,255,255,.15); border-radius: 14px; color: white; background: rgba(24,25,36,.97); box-shadow: 0 12px 36px rgba(0,0,0,.42); backdrop-filter: blur(18px); animation: startup-arrive .32s cubic-bezier(.2,.8,.2,1); }
 .update-notice-header { display: flex; align-items: center; gap: 11px; }
 .update-notice-header strong { display: block; margin-top: 3px; font-size: 14px; }
@@ -80,8 +93,10 @@ h1, h2, p { margin: 0; }
 .history-card-body time { display: block; overflow: hidden; color: #e7e7ee; font-size: 12px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 .history-card-body > p { margin-top: 4px; color: #8f90a0; font-size: 10px; }
 .history-actions { display: grid; margin-top: 12px; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
-.history-recording-actions { grid-template-columns: minmax(0, 1fr) auto auto; }
-.history-actions button { display: flex; min-height: 34px; padding: 7px 10px; align-items: center; justify-content: center; gap: 6px; border-radius: 7px; cursor: pointer; font-size: 11px; font-weight: 750; transition: filter .14s ease, transform .14s ease, background .14s ease; }
+.history-recording-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.history-recording-actions .history-delete { grid-column: 1 / -1; }
+.history-missing-actions { grid-template-columns: 1fr; }
+.history-actions button { display: flex; min-width: 0; min-height: 34px; padding: 7px 10px; align-items: center; justify-content: center; gap: 6px; border-radius: 7px; cursor: pointer; font-size: 11px; font-weight: 750; white-space: nowrap; transition: filter .14s ease, transform .14s ease, background .14s ease; }
 .history-actions button:hover:not(:disabled) { filter: brightness(1.13); transform: translateY(-1px); }
 .history-actions button:active:not(:disabled) { transform: translateY(1px); }
 .history-actions button:disabled { cursor: wait; opacity: .68; }
@@ -501,9 +516,11 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .recording-selection-frame .ne, .recording-selection-frame .sw { cursor: nesw-resize; }
 .recording-selection-frame .nw { top: -6px; left: -6px; }.recording-selection-frame .ne { top: -6px; right: -6px; }.recording-selection-frame .sw { bottom: -6px; left: -6px; }.recording-selection-frame .se { right: -6px; bottom: -6px; }
 .recording-window-targets { position: absolute; z-index: 4; inset: 0; pointer-events: none; }
-.recording-window-target { position: absolute; overflow: hidden; border: 2px solid transparent; border-radius: 12px; padding: 0; color: transparent; background: transparent; outline: none; appearance: none; cursor: pointer; pointer-events: auto; text-align: left; }
-.recording-window-target:hover, .recording-window-target.hovered, .recording-window-target.selected { border-color: #6fc5ff; color: white; background: rgba(73,182,255,.2); box-shadow: 0 0 0 1px rgba(255,255,255,.7) inset; }
-.recording-window-target span { display: inline-block; max-width: 100%; padding: 4px 7px; overflow: hidden; border-radius: 4px; background: transparent; opacity: 0; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.recording-window-target { position: absolute; overflow: visible; border: 0; border-radius: 12px; padding: 0; color: transparent; background: transparent; outline: none; appearance: none; cursor: pointer; pointer-events: auto; text-align: left; }
+.recording-window-target::before { position: absolute; inset: 1px; border: 1px solid transparent; border-radius: 11px; background: transparent; content: ""; pointer-events: none; transition: border-color .12s ease, background .12s ease, box-shadow .12s ease; }
+.recording-window-target:hover, .recording-window-target.hovered, .recording-window-target.selected { color: white; }
+.recording-window-target:hover::before, .recording-window-target.hovered::before, .recording-window-target.selected::before { border-color: #79caff; background: rgba(73,182,255,.17); box-shadow: 0 0 0 1px rgba(73,182,255,.28); }
+.recording-window-target span { position: relative; z-index: 1; display: inline-block; max-width: calc(100% - 6px); margin: 4px; padding: 4px 7px; overflow: hidden; border-radius: 4px; background: transparent; opacity: 0; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .recording-window-target:hover span, .recording-window-target.hovered span, .recording-window-target.selected span { background: rgba(17,18,26,.88); opacity: 1; }
 .recording-window-guidance { position: absolute; z-index: 10; top: 18%; left: 50%; display: grid; min-width: 220px; padding: 11px 15px; justify-items: center; gap: 3px; border: 1px solid rgba(169,151,255,.42); border-radius: 10px; color: #f7f4ff; background: rgba(25,22,38,.9); box-shadow: 0 12px 34px rgba(0,0,0,.34), 0 0 0 1px rgba(169,151,255,.08) inset; backdrop-filter: blur(18px); pointer-events: none; text-align: center; transform: translateX(-50%); animation: recording-window-guidance-in .2s ease-out both; }
 .recording-window-guidance strong { font-size: 13px; font-weight: 800; }
@@ -513,12 +530,28 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .recording-selector-panel.dragging { cursor: grabbing; }
 .recording-selector-panel button, .recording-selector-panel label, .recording-selector-panel input { cursor: pointer; }
 .recording-panel-top, .recording-options-row { display: flex; align-items: center; gap: 9px; }
-.recording-panel-top { padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,.09); }
+.recording-panel-top { min-height: 58px; padding: 8px; gap: 8px; }
+.recording-options-row { border-top: 1px solid rgba(255,255,255,.09); }
+.capture-selector-close { display: grid; width: 34px; height: 34px; flex: 0 0 auto; place-items: center; border: 0; border-radius: 8px; padding: 0; color: #9b9ca1; background: transparent; }
+.capture-selector-close:hover { color: white; background: #35363b; }
+.capture-selector-close svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.capture-action-switch { display: flex; padding: 2px; border-radius: 9px; background: #101114; }
+.capture-action-switch button { display: flex; min-height: 34px; border: 0; border-radius: 7px; padding: 7px 10px; align-items: center; gap: 6px; color: #a9aaae; background: transparent; font-size: 11px; font-weight: 750; }
+.capture-action-switch button.active { color: white; background: #3c3d42; box-shadow: 0 1px 3px rgba(0,0,0,.24); }
+.capture-action-switch button:disabled { cursor: not-allowed; opacity: .35; }
+.capture-selector-close:focus-visible, .capture-action-switch button:focus-visible, .recording-target-switch button:focus-visible, .capture-selector-primary:focus-visible { outline: 2px solid #a997ff; outline-offset: 2px; }
+.capture-action-switch svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.capture-record-dot { display: block; width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; background: #ef4650; }
+.capture-selector-divider { width: 1px; height: 30px; flex: 0 0 auto; background: rgba(255,255,255,.1); }
 .recording-target-switch { display: flex; padding: 2px; border-radius: 8px; background: #101114; }
-.recording-target-switch button, .recording-cancel { border: 0; border-radius: 6px; padding: 7px 11px; color: #a9aaae; background: transparent; font-size: 11px; font-weight: 700; }
+.recording-target-switch button, .recording-cancel { border: 0; border-radius: 6px; padding: 6px 9px; color: #a9aaae; background: transparent; font-size: 10px; font-weight: 700; }
+.recording-target-switch button { display: flex; min-height: 34px; align-items: center; gap: 6px; }
+.recording-target-switch button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .recording-target-switch button.active { color: white; background: #3c3d42; }
 .recording-cancel { margin-left: auto; color: #d3d3d7; }
 .recording-cancel:hover { background: #333439; }
+.capture-selector-privacy { display: flex; max-width: 155px; margin: 0 3px; align-items: center; gap: 6px; color: #8d8e93; font-size: 9px; font-weight: 650; line-height: 1.25; }
+.capture-selector-privacy svg { width: 15px; height: 15px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .recording-options-row { min-height: 69px; padding: 11px 12px; }
 .recording-options-row label { display: flex; min-width: 104px; flex-direction: column; gap: 5px; color: #999a9f; font-size: 9px; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; }
 .recording-options-row label.recording-toggle { position: relative; min-width: auto; min-height: 32px; padding: 0 2px; flex-direction: row; align-items: center; gap: 7px; color: #d5d5d8; cursor: pointer; font-size: 11px; letter-spacing: 0; text-transform: none; }
@@ -531,9 +564,11 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .recording-toggle input:focus-visible + .recording-switch { box-shadow: 0 0 0 3px rgba(255,202,40,.2); }
 .recording-options-row select, .recording-settings-section select, .recording-editor select, .recording-editor input[type="number"] { min-height: 32px; border: 1px solid #3d3e43; border-radius: 6px; padding: 5px 8px; color: #f3f3f4; background: #111216; outline: none; }
 .recording-options-row select:focus, .recording-settings-section select:focus, .recording-editor select:focus, .recording-editor input:focus { border-color: #f0b91a; box-shadow: 0 0 0 2px rgba(240,185,26,.12); }
-.recording-start { display: flex; min-height: 40px; margin-left: auto; padding: 9px 15px; align-items: center; gap: 8px; border: 0; border-radius: 8px; color: #18191c; background: #ffca28; box-shadow: 0 5px 16px rgba(255,190,20,.2); font-size: 12px; font-weight: 850; }
-.recording-start > span { position: relative; display: block; width: 10px; height: 10px; border-radius: 50%; background: #e73842; }
-.recording-start:not(:disabled) > span::after { position: absolute; inset: 0; border-radius: inherit; background: inherit; opacity: .75; content: ""; animation: recording-ready-ping 1s cubic-bezier(0,0,.2,1) infinite; }
+.recording-start { display: flex; min-width: 98px; min-height: 40px; margin-left: auto; padding: 9px 14px; align-items: center; justify-content: center; gap: 7px; border: 0; border-radius: 8px; color: #18191c; background: #ffca28; box-shadow: 0 5px 16px rgba(255,190,20,.2); font-size: 11px; font-weight: 850; }
+.capture-selector-primary svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.capture-selector-primary-screenshot { color: #16131f; background: #a997ff; box-shadow: 0 5px 16px rgba(114,89,231,.24); }
+.capture-selector-primary-recording > .capture-record-dot { position: relative; width: 10px; height: 10px; }
+.capture-selector-primary-recording:not(:disabled) > .capture-record-dot::after { position: absolute; inset: 0; border-radius: inherit; background: inherit; opacity: .75; content: ""; animation: recording-ready-ping 1s cubic-bezier(0,0,.2,1) infinite; }
 .recording-start:disabled { cursor: not-allowed; opacity: .45; }
 .recording-selector-error { padding: 8px 12px; border-top: 1px solid rgba(238,65,77,.25); color: #ffb3b8; background: rgba(87,23,29,.4); font-size: 11px; }
 
@@ -614,13 +649,13 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .recording-selector.recording-focus-visible .capture-shade { opacity: 1; }
 .recording-target-window.recording-focus-visible .capture-shade-full { animation: recording-focus-shade-in .24s ease-out both; }
 @keyframes recording-focus-shade-in { from { opacity: 0; } to { opacity: 1; } }
-.recording-options-row { display: grid; min-height: 76px; grid-template-columns: 68px 126px 86px 96px 108px minmax(180px, 240px) 88px; align-items: stretch; gap: 8px; }
+.recording-options-row { display: grid; min-height: 76px; grid-template-columns: 68px 126px 86px 96px 108px minmax(180px, 240px); align-items: stretch; gap: 8px; }
 .recording-field { display: flex; min-width: 0; flex-direction: column; gap: 6px; color: #999a9f; font-size: 9px; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; }
 .recording-field .recording-toggle { display: flex; min-height: 34px; padding: 0 2px; align-items: center; gap: 7px; border: 0; color: #d3d4d8; background: transparent; cursor: pointer; font-size: 10px; letter-spacing: 0; text-transform: none; transition: color .15s ease; }
 .recording-field .recording-toggle:hover { color: white; }
-.recording-action-field .recording-start { width: 100%; min-height: 34px; margin: 0; justify-content: center; padding: 6px 10px; }
 .recording-start { transition: background .16s ease, box-shadow .16s ease, filter .16s ease, transform .16s ease; }
-.recording-start:hover:not(:disabled) { background: #ffd451; box-shadow: 0 7px 20px rgba(255,190,20,.3); filter: brightness(1.03); transform: translateY(-1px); }
+.capture-selector-primary-recording:hover:not(:disabled) { background: #ffd451; box-shadow: 0 7px 20px rgba(255,190,20,.3); filter: brightness(1.03); transform: translateY(-1px); }
+.capture-selector-primary-screenshot:hover:not(:disabled) { background: #b9aaff; box-shadow: 0 7px 20px rgba(114,89,231,.34); filter: brightness(1.03); transform: translateY(-1px); }
 .recording-start:active:not(:disabled) { transform: translateY(0) scale(.98); }
 .recording-selector-error { border-radius: 0 0 15px 15px; }
 
@@ -735,7 +770,7 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .recording-save-actions .recording-save-cancel.is-placeholder { visibility: hidden; }
 .recording-save-actions .recording-show-in-folder.is-placeholder { visibility: hidden; }
 .recording-save-actions button:not(.primary):has(svg) { width: 132px; min-width: 132px; }
-.recording-save-actions button.primary { width: 124px; min-width: 124px; border-color: #e2ad17; color: #18191b; background: #ffca28; }
+.recording-save-actions button.primary { width: 96px; min-width: 96px; border-color: #e2ad17; color: #18191b; background: #ffca28; }
 .recording-save-actions button.primary:hover:not(:disabled) { border-color: #f1bd2b; background: #ffd451; filter: brightness(1.03); }
 .recording-save-actions button:disabled { cursor: default; opacity: .5; }
 .recording-save-footer .recording-export-progress { right: 0; left: 0; }

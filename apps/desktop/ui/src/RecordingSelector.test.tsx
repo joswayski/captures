@@ -46,6 +46,8 @@ const settings: AppSettings = {
 const session: RecordingSelectionSession = {
   id: "selection-1",
   kind: "video",
+  initial_mode: "recording",
+  recording_available: true,
   display: {
     id: "display-1",
     name: "Display",
@@ -94,12 +96,14 @@ const session: RecordingSelectionSession = {
 
 describe("RecordingSelector", () => {
   let selectorShowError: Error | null;
+  let preparedSession: RecordingSelectionSession;
   let recordingSelectionReady:
     | ((event: { payload: RecordingSelectionSession }) => void)
     | null;
 
   beforeEach(() => {
     selectorShowError = null;
+    preparedSession = session;
     recordingSelectionReady = null;
     vi.mocked(listen).mockImplementation(async (event, handler) => {
       if (event === "recording-selection-ready") {
@@ -110,7 +114,7 @@ describe("RecordingSelector", () => {
       return () => undefined;
     });
     vi.mocked(invoke).mockImplementation(async (command) => {
-      if (command === "get_recording_selection") return session;
+      if (command === "get_recording_selection") return preparedSession;
       if (command === "get_settings") return settings;
       if (command === "list_recording_audio_devices") {
         return [
@@ -124,6 +128,7 @@ describe("RecordingSelector", () => {
       }
       if (
         command === "reveal_recording_selector"
+        || command === "capture_selection_screenshot"
         || command === "start_recording"
         || command === "cancel_recording_selection"
       ) {
@@ -174,7 +179,7 @@ describe("RecordingSelector", () => {
     const cursorToggle = screen.getByRole("checkbox", { name: "Show cursor" });
     const clicksToggle = screen.getByRole("checkbox", { name: "Show clicks" });
     expect(cursorToggle.nextElementSibling).toHaveClass("recording-switch");
-    expect(container.querySelectorAll(".recording-options-row > .recording-field")).toHaveLength(7);
+    expect(container.querySelectorAll(".recording-options-row > .recording-field")).toHaveLength(6);
     fireEvent.click(cursorToggle);
     expect(cursorToggle).not.toBeChecked();
     expect(clicksToggle).not.toBeChecked();
@@ -182,7 +187,7 @@ describe("RecordingSelector", () => {
     expect(clicksToggle).toBeChecked();
     expect(cursorToggle).toBeChecked();
 
-    fireEvent.click(screen.getByRole("button", { name: "Record" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start recording" }));
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("start_recording", {
         request: expect.objectContaining({
@@ -195,6 +200,47 @@ describe("RecordingSelector", () => {
             highlight_clicks: true,
           }),
         }),
+      });
+    });
+  });
+
+  it("switches between screenshot and recording in one selector and captures the chosen target", async () => {
+    preparedSession = {
+      ...session,
+      initial_mode: "screenshot",
+    };
+    render(<RecordingSelector />);
+
+    const screenshotMode = await screen.findByRole("button", {
+      name: "Screenshot",
+      pressed: true,
+    });
+    expect(screen.getByText("These controls won’t appear in your screenshot")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Take screenshot" })).toBeEnabled();
+    expect(screen.queryByRole("combobox", { name: "Frames per second" })).not.toBeInTheDocument();
+    expect(invoke).not.toHaveBeenCalledWith("list_recording_audio_devices");
+
+    fireEvent.click(screen.getByRole("button", { name: "Window" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select Front eligible window" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Record", pressed: false }));
+    expect(screen.getByRole("button", { name: "Record", pressed: true })).toBeInTheDocument();
+    expect(screen.getByText("These controls won’t appear in your recording")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Frames per second" })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("list_recording_audio_devices");
+    });
+
+    fireEvent.click(screenshotMode);
+    expect(screen.getByRole("button", { name: "Take screenshot" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Take screenshot" }));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("capture_selection_screenshot", {
+        request: {
+          selection_id: preparedSession.id,
+          target: { type: "window", window_id: "back-window" },
+        },
       });
     });
   });
@@ -216,7 +262,7 @@ describe("RecordingSelector", () => {
       width: "900px",
       height: "640px",
     });
-    expect(screen.getByRole("button", { name: "Record" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Start recording" })).toBeDisabled();
     expect(container.querySelector(".recording-selection-window")).not.toBeInTheDocument();
     expect(container.querySelector(".capture-shade-path")).not.toBeInTheDocument();
     expect(container.querySelector(".capture-shade-full")).toBeInTheDocument();
@@ -235,7 +281,7 @@ describe("RecordingSelector", () => {
     fireEvent.click(frontWindow);
     expect(frontWindow).toHaveClass("selected");
     expect(screen.queryByText("Select a window")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Record" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Start recording" })).toBeEnabled();
     expect(container.querySelector(".capture-shade-path")).toHaveAttribute(
       "d",
       expect.stringContaining("M300 160H1200V800H300Z"),
@@ -244,7 +290,7 @@ describe("RecordingSelector", () => {
 
   it("keeps the selector surface fixed while the controls are dragged within the display", async () => {
     const { container } = render(<RecordingSelector />);
-    await screen.findByRole("button", { name: "Record" });
+    await screen.findByRole("button", { name: "Start recording" });
     const panel = container.querySelector<HTMLElement>(".recording-selector-panel");
     expect(panel).not.toBeNull();
     expect(screen.queryByRole("button", { name: "Move recording controls" })).not.toBeInTheDocument();
@@ -284,7 +330,7 @@ describe("RecordingSelector", () => {
 
   it("enables recording for any region large enough to encode", async () => {
     const { container } = render(<RecordingSelector />);
-    await screen.findByRole("button", { name: "Record" });
+    await screen.findByRole("button", { name: "Start recording" });
     const surface = container.querySelector<HTMLElement>(".recording-selector");
     expect(surface).not.toBeNull();
     surface!.setPointerCapture = vi.fn();
@@ -305,12 +351,12 @@ describe("RecordingSelector", () => {
     fireEvent.pointerDown(surface!, { pointerId: 7, clientX: 100, clientY: 100 });
     fireEvent.pointerMove(surface!, { pointerId: 7, clientX: 101, clientY: 101 });
     fireEvent.pointerUp(surface!, { pointerId: 7, clientX: 101, clientY: 101 });
-    expect(screen.getByRole("button", { name: "Record" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Start recording" })).toBeDisabled();
 
     fireEvent.pointerDown(surface!, { pointerId: 8, clientX: 100, clientY: 100 });
     fireEvent.pointerMove(surface!, { pointerId: 8, clientX: 102, clientY: 102 });
     fireEvent.pointerUp(surface!, { pointerId: 8, clientX: 102, clientY: 102 });
-    expect(screen.getByRole("button", { name: "Record" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Start recording" })).toBeEnabled();
   });
 
   it("lets one Escape close an open control and cancel the selector exactly once", async () => {
@@ -323,7 +369,7 @@ describe("RecordingSelector", () => {
     fireEvent.keyDown(window, { key: "Escape" });
     fireEvent.keyDown(window, { key: "Escape" });
 
-    expect(screen.queryByRole("button", { name: "Record" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Start recording" })).not.toBeInTheDocument();
     expect(vi.mocked(invoke).mock.calls.filter(([command]) => (
       command === "cancel_recording_selection"
     ))).toHaveLength(1);
@@ -332,7 +378,7 @@ describe("RecordingSelector", () => {
   it("reveals through the safety path when a hidden WebView defers image loading", async () => {
     render(<RecordingSelector />);
 
-    expect(await screen.findByRole("button", { name: "Record" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Start recording" })).toBeInTheDocument();
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("show_recording_selector", {
         selectionId: session.id,
@@ -385,7 +431,7 @@ describe("RecordingSelector", () => {
 
     render(<RecordingSelector />);
 
-    expect(await screen.findByRole("button", { name: "Record" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Start recording" })).toBeInTheDocument();
     expect(invoke).toHaveBeenCalledWith("get_recording_selection");
     expect(invoke).toHaveBeenCalledWith("get_settings");
   });
@@ -398,11 +444,11 @@ describe("RecordingSelector", () => {
     };
     const { container } = render(<RecordingSelector />);
 
-    expect(await screen.findByRole("button", { name: "Record" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Start recording" })).toBeInTheDocument();
 
     fireEvent.keyDown(window, { key: "Escape" });
 
-    expect(screen.queryByRole("button", { name: "Record" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Start recording" })).not.toBeInTheDocument();
     expect(container.querySelector(".recording-selector-idle")).toBeInTheDocument();
     expect(invoke).toHaveBeenCalledWith("cancel_recording_selection", {
       selectionId: session.id,
@@ -412,7 +458,7 @@ describe("RecordingSelector", () => {
       recordingSelectionReady?.({ payload: nextSession });
     });
 
-    expect(await screen.findByRole("button", { name: "Record" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Start recording" })).toBeInTheDocument();
     const surface = container.querySelector<HTMLElement>(".recording-selector");
     expect(surface).not.toBeNull();
     surface!.setPointerCapture = vi.fn();

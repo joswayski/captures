@@ -7,7 +7,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use captures_capture::DisplayDescriptor;
+use captures_capture::{CaptureMode, DisplayDescriptor};
 use captures_media::{
     ByteRange, CancelToken, EditSpec, ExportFormat, ExportProgress, ExportSpec, MediaToolchain,
     RecordingAudioLayout, RecordingSegmentInput, TimelineSpriteSpec,
@@ -18,25 +18,23 @@ use captures_recording::{
 };
 use captures_recording_macos::{MacRecordingSegment, SegmentInfo};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, window::Color};
+use tauri::{
+    AppHandle, Emitter, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder, window::Color,
+};
 use tauri_plugin_opener::OpenerExt;
 use uuid::Uuid;
 
 use crate::{
     AppError,
     models::{
-        HistoryEntry, RecordingArtifact, RecordingArtifactData, RecordingSelection,
-        RecordingSelectionSession, recording_media_url, recording_poster_url,
-        recording_recovery_directory, recording_timeline_url,
+        CaptureArtifact, CaptureSelectorMode, HistoryEntry, RecordingArtifact,
+        RecordingArtifactData, RecordingSelection, RecordingSelectionSession, recording_media_url,
+        recording_poster_url, recording_recovery_directory, recording_selection_url,
+        recording_timeline_url,
     },
     state::AppState,
     storage,
 };
-
-#[cfg(target_os = "macos")]
-use crate::models::recording_selection_url;
-#[cfg(target_os = "macos")]
-use tauri::LogicalSize;
 
 const RECORDING_STATE_EVENT: &str = "recording-state-changed";
 const RECORDING_COUNTDOWN_EVENT: &str = "recording-countdown";
@@ -94,7 +92,6 @@ const fn screenshot_capture_is_blocked_for(
         )
 }
 
-#[cfg(target_os = "macos")]
 fn recording_session_is_active(state: &AppState) -> bool {
     state
         .recording
@@ -123,6 +120,12 @@ pub(crate) fn recording_controls_are_available(state: &AppState) -> bool {
 pub struct StartRecordingRequest {
     pub selection_id: String,
     pub options: RecordingOptions,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct CaptureSelectionScreenshotRequest {
+    pub selection_id: String,
+    pub target: RecordingTarget,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -195,20 +198,22 @@ pub async fn prepare_recording(
         .map_err(|error| error.to_string())
 }
 
-#[cfg(not(target_os = "macos"))]
-pub async fn prepare_recording_inner(
-    _app: AppHandle,
-    _state: Arc<AppState>,
-) -> Result<RecordingSelectionSession, AppError> {
-    Err(AppError::Task(
-        "screen recording is currently available on macOS only".to_owned(),
-    ))
-}
-
-#[cfg(target_os = "macos")]
 pub async fn prepare_recording_inner(
     app: AppHandle,
     state: Arc<AppState>,
+) -> Result<RecordingSelectionSession, AppError> {
+    if !cfg!(target_os = "macos") {
+        return Err(AppError::Task(
+            "screen recording is currently available on macOS only".to_owned(),
+        ));
+    }
+    prepare_capture_selector_inner(app, state, CaptureSelectorMode::Recording).await
+}
+
+pub(crate) async fn prepare_capture_selector_inner(
+    app: AppHandle,
+    state: Arc<AppState>,
+    initial_mode: CaptureSelectorMode,
 ) -> Result<RecordingSelectionSession, AppError> {
     if crate::updates::install_is_active(&app) {
         return Err(AppError::UpdateInstalling);
@@ -216,15 +221,18 @@ pub async fn prepare_recording_inner(
     if !state.sessions.lock().is_empty() || recording_session_is_active(&state) {
         return Err(AppError::CaptureInProgress);
     }
-    let pending_selection = state
-        .recording_selection
-        .lock()
-        .as_ref()
-        .map(|selection| selection.summary.clone());
+    let pending_selection = {
+        let mut pending = state.recording_selection.lock();
+        pending.as_mut().map(|selection| {
+            selection.summary.initial_mode = initial_mode;
+            selection.summary.clone()
+        })
+    };
     if let Some(summary) = pending_selection {
         crate::set_capture_huds_protected(&app, true);
         crate::hide_window(&app, "thumbnail");
         crate::hide_window(&app, "startup");
+        crate::hide_recording_saved_notices(&app);
         crate::hide_window(&app, "update");
         if let Err(error) = prepare_recording_selector(&app, &summary).await {
             *state.recording_selection.lock() = None;
@@ -248,6 +256,7 @@ pub async fn prepare_recording_inner(
     crate::set_capture_huds_protected(&app, true);
     crate::hide_window(&app, "thumbnail");
     crate::hide_window(&app, "startup");
+    crate::hide_recording_saved_notices(&app);
     crate::hide_window(&app, "update");
     let prepared = (|| {
         let display = crate::display_under_pointer(&state)?;
@@ -264,6 +273,8 @@ pub async fn prepare_recording_inner(
             // Every capture starts from a high-quality video master. The editor
             // decides whether the final copy is video or GIF.
             kind: RecordingKind::Video,
+            initial_mode,
+            recording_available: cfg!(target_os = "macos"),
             window_coordinate_scale: crate::window_coordinate_scale(&frame.descriptor),
             display: frame.descriptor,
             snapshot_url: recording_selection_url(&id),
@@ -332,6 +343,72 @@ fn cancel_recording_selection_inner(
     crate::set_capture_huds_protected(app, false);
     crate::restore_thumbnail_stack(app, state);
     Ok(())
+}
+
+#[tauri::command]
+pub async fn capture_selection_screenshot(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    request: CaptureSelectionScreenshotRequest,
+) -> Result<CaptureArtifact, String> {
+    capture_selection_screenshot_inner(app, state.inner().clone(), request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+async fn capture_selection_screenshot_inner(
+    app: AppHandle,
+    state: Arc<AppState>,
+    request: CaptureSelectionScreenshotRequest,
+) -> Result<CaptureArtifact, AppError> {
+    let available = state
+        .recording_selection
+        .lock()
+        .as_ref()
+        .is_some_and(|selection| selection.summary.id == request.selection_id);
+    if !available {
+        return Err(AppError::SessionUnavailable);
+    }
+    crate::begin_thumbnail_capture(&state)?;
+    let selection = {
+        let mut pending = state.recording_selection.lock();
+        match pending.take() {
+            Some(selection) if selection.summary.id == request.selection_id => selection,
+            Some(selection) => {
+                *pending = Some(selection);
+                drop(pending);
+                crate::restore_thumbnail_stack(&app, &state);
+                return Err(AppError::SessionUnavailable);
+            }
+            None => {
+                drop(pending);
+                crate::restore_thumbnail_stack(&app, &state);
+                return Err(AppError::SessionUnavailable);
+            }
+        }
+    };
+    destroy_recording_selector(&app);
+    crate::set_capture_huds_protected(&app, false);
+
+    let prepared = (|| {
+        validate_target(&selection.summary, &request.target)?;
+        let mode = capture_mode_for_target(&request.target);
+        let image = image_for_selection(&selection, &request.target)?;
+        Ok::<_, AppError>((mode, image))
+    })();
+    let (mode, image) = match prepared {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            crate::restore_thumbnail_stack(&app, &state);
+            return Err(error);
+        }
+    };
+
+    let result = crate::finish_capture(&app, &state, mode, image).await;
+    if result.is_err() {
+        crate::restore_thumbnail_stack(&app, &state);
+    }
+    result
 }
 
 #[tauri::command]
@@ -2011,6 +2088,14 @@ pub struct ResolvedRecordingAsset {
     pub content_range: Option<String>,
 }
 
+fn capture_mode_for_target(target: &RecordingTarget) -> CaptureMode {
+    match target {
+        RecordingTarget::Display { .. } => CaptureMode::Display,
+        RecordingTarget::Region { .. } => CaptureMode::Region,
+        RecordingTarget::Window { .. } => CaptureMode::Window,
+    }
+}
+
 fn validate_target(
     selection: &RecordingSelectionSession,
     target: &RecordingTarget,
@@ -2045,10 +2130,10 @@ fn validate_target(
     }
 }
 
-fn poster_for_selection(
+fn image_for_selection(
     selection: &RecordingSelection,
     target: &RecordingTarget,
-) -> Result<Vec<u8>, AppError> {
+) -> Result<image::RgbaImage, AppError> {
     let image = match target {
         RecordingTarget::Display { .. } => selection.image.clone(),
         RecordingTarget::Region { rect, .. } => {
@@ -2093,6 +2178,14 @@ fn poster_for_selection(
             .to_image()
         }
     };
+    Ok(image)
+}
+
+fn poster_for_selection(
+    selection: &RecordingSelection,
+    target: &RecordingTarget,
+) -> Result<Vec<u8>, AppError> {
+    let image = image_for_selection(selection, target)?;
     storage::encode_thumbnail_png(&image)
 }
 
@@ -2443,7 +2536,6 @@ fn media_toolchain(app: &AppHandle) -> MediaToolchain {
     MediaToolchain::new(find("ffmpeg"), find("ffprobe"))
 }
 
-#[cfg(target_os = "macos")]
 fn create_recording_selector_window(app: &AppHandle) -> Result<(), AppError> {
     if app.get_webview_window("recording-selector").is_some() {
         return Ok(());
@@ -2453,7 +2545,7 @@ fn create_recording_selector_window(app: &AppHandle) -> Result<(), AppError> {
         "recording-selector",
         WebviewUrl::App("index.html?view=recording-selector".into()),
     )
-    .title("Captures Recorder")
+    .title("Captures")
     .inner_size(1.0, 1.0)
     .position(-10_000.0, -10_000.0)
     .decorations(false)
@@ -2471,7 +2563,6 @@ fn create_recording_selector_window(app: &AppHandle) -> Result<(), AppError> {
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
 async fn prepare_recording_selector(
     app: &AppHandle,
     selection: &RecordingSelectionSession,
@@ -2513,6 +2604,7 @@ async fn prepare_recording_selector(
             window
                 .set_ignore_cursor_events(true)
                 .map_err(|error| error.to_string())?;
+            #[cfg(target_os = "macos")]
             captures_macos_window::prime_window_reveal(&window).map_err(str::to_owned)?;
             window.show().map_err(|error| error.to_string())?;
             handle
@@ -2530,7 +2622,6 @@ async fn prepare_recording_selector(
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
 fn schedule_recording_selector_webview_wake(app: &AppHandle, selection: RecordingSelectionSession) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -2553,6 +2644,7 @@ fn schedule_recording_selector_webview_wake(app: &AppHandle, selection: Recordin
             let Some(window) = handle.get_webview_window("recording-selector") else {
                 return;
             };
+            #[cfg(target_os = "macos")]
             if let Err(error) = captures_macos_window::reveal_window(&window) {
                 eprintln!("failed to wake recording selector WebView: {error}");
             }

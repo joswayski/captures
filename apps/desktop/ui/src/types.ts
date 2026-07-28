@@ -107,6 +107,8 @@ export interface RecordingOptions {
 export interface RecordingSelectionSession {
   id: string;
   kind: RecordingKind;
+  initial_mode: "screenshot" | "recording";
+  recording_available: boolean;
   display: DisplayDescriptor;
   window_coordinate_scale: number;
   snapshot_url: string;

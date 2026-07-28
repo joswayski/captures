@@ -272,6 +272,7 @@ export function App() {
   if (view === "recording-countdown") return <RecordingCountdown />;
   if (view === "recording-hud") return <RecordingHud />;
   if (view === "recording-editor") return <RecordingEditor />;
+  if (view === "recording-saved") return <RecordingSavedNotice />;
   if (view === "thumbnail") return <Thumbnail />;
   if (view === "viewer") return <ArtifactViewer />;
   if (view === "history") return <CaptureHistory />;
@@ -304,6 +305,53 @@ function StartupNotice() {
         <strong>Captures is running</strong>
         <p>Use the tray icon or Ctrl+Shift+4 to capture.</p>
       </div>
+    </main>
+  );
+}
+
+export function RecordingSavedNotice() {
+  const artifactId = query("artifact_id");
+  const noticeId = query("notice_id");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const dismiss = () => {
+    if (!noticeId) return;
+    void invoke("dismiss_recording_saved_notice", { noticeId });
+  };
+
+  const reveal = async () => {
+    if (!artifactId || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await invoke("reveal_recording_artifact", { artifactId });
+      dismiss();
+    } catch (error) {
+      setError(`Finder could not open: ${String(error)}`);
+      setBusy(false);
+    }
+  };
+
+  return (
+    <main className="recording-saved-notice">
+      <span className="recording-saved-icon" aria-hidden="true"><CheckIcon /></span>
+      <div className="recording-saved-copy">
+        <strong>Recording saved</strong>
+        <p>{error || "Saved to your Captures folder."}</p>
+      </div>
+      <button
+        type="button"
+        className="recording-saved-reveal"
+        disabled={busy || !artifactId}
+        onClick={() => void reveal()}
+      ><FolderIcon />{busy ? "Opening…" : "Show in Finder"}</button>
+      <button
+        type="button"
+        className="recording-saved-dismiss"
+        aria-label="Dismiss"
+        onClick={dismiss}
+      >×</button>
     </main>
   );
 }
@@ -688,7 +736,8 @@ export function HistoryCard({
 
   const deleteFromHistory = async () => {
     if (busy) return;
-    if (!confirmingDelete) {
+    const requiresConfirmation = entry.kind === "screenshot" || !entry.missing;
+    if (requiresConfirmation && !confirmingDelete) {
       setConfirmingDelete(true);
       if (deleteTimer.current) clearTimeout(deleteTimer.current);
       deleteTimer.current = setTimeout(() => setConfirmingDelete(false), 4_000);
@@ -726,7 +775,11 @@ export function HistoryCard({
           {entry.kind !== "screenshot" && <> · {formatRecordingTime(entry.duration_ms)}</>}
         </p>
         {entry.kind !== "screenshot" && entry.dropped_frames > 0 && <p className="history-recording-warning">{entry.dropped_frames.toLocaleString()} frame{entry.dropped_frames === 1 ? "" : "s"} dropped while recording</p>}
-        <div className={`history-actions${entry.kind === "screenshot" ? "" : " history-recording-actions"}`}>
+        <div className={[
+          "history-actions",
+          entry.kind === "screenshot" ? "" : "history-recording-actions",
+          entry.kind !== "screenshot" && entry.missing ? "history-missing-actions" : "",
+        ].filter(Boolean).join(" ")}>
           {entry.kind === "screenshot" ? (
             <button
               type="button"
@@ -736,37 +789,43 @@ export function HistoryCard({
             >
               {restored ? <><CheckIcon />Restored</> : <><RestoreIcon />{busy === "restoring" ? "Restoring…" : "Restore"}</>}
             </button>
-          ) : (
+          ) : !entry.missing ? (
             <>
               <button
                 type="button"
                 className="history-restore"
-                disabled={busy !== null || entry.missing}
+                disabled={busy !== null}
                 onClick={() => void openRecording()}
               >
-                {busy === "opening" ? "Opening…" : entry.missing ? "File missing" : "Edit"}
+                {busy === "opening" ? "Opening…" : "Edit"}
               </button>
               <button
                 type="button"
                 className="history-reveal"
-                disabled={busy !== null || entry.missing}
+                disabled={busy !== null}
                 onClick={() => void revealRecording()}
               >
                 {busy === "revealing" ? "Showing…" : "Show in Folder"}
               </button>
             </>
-          )}
+          ) : null}
           <button
             type="button"
             className={confirmingDelete ? "history-delete history-delete-confirm" : "history-delete"}
-            aria-label={confirmingDelete
+            aria-label={entry.kind !== "screenshot" && entry.missing
+              ? "Remove missing entry"
+              : confirmingDelete
               ? entry.kind === "screenshot" ? "Confirm permanent deletion" : "Confirm removal from History"
               : entry.kind === "screenshot" ? "Delete from History" : "Remove from History"}
             disabled={busy !== null}
             onClick={() => void deleteFromHistory()}
           >
             <TrashIcon />
-            {confirmingDelete ? (entry.kind === "screenshot" ? "Delete forever" : "Remove entry") : (entry.kind === "screenshot" ? "Delete" : "Remove")}
+            {entry.kind !== "screenshot" && entry.missing
+              ? busy === "deleting" ? "Removing…" : "Remove entry"
+              : confirmingDelete
+                ? entry.kind === "screenshot" ? "Delete forever" : "Remove entry"
+                : entry.kind === "screenshot" ? "Delete" : "Remove"}
           </button>
         </div>
         {error && <p className="history-card-error" role="alert">{error}</p>}
@@ -927,6 +986,7 @@ export function RecordingCountdown() {
 export function RecordingSelector() {
   const [session, setSession] = useState<RecordingSelectionSession | null>(null);
   const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [actionMode, setActionMode] = useState<"screenshot" | "recording">("screenshot");
   const [devices, setDevices] = useState<AudioDevice[]>([]);
   const [devicesLoading, setDevicesLoading] = useState(false);
   const [devicesLoaded, setDevicesLoaded] = useState(false);
@@ -1054,6 +1114,9 @@ export function RecordingSelector() {
         activeSessionIdRef.current === selection.id
         && sessionRef.current?.id === selection.id
       ) {
+        sessionRef.current = selection;
+        setSession(selection);
+        setActionMode(selection.initial_mode);
         return;
       }
       activeSessionIdRef.current = selection.id;
@@ -1061,6 +1124,7 @@ export function RecordingSelector() {
       revealingSessionIdRef.current = null;
       setFocusVisibleSessionId(null);
       setSession(selection);
+      setActionMode(selection.initial_mode);
       setFps(currentSettings.recording.video_fps);
       setMaxResolution(currentSettings.recording.video_max_resolution);
       setShowCursor(currentSettings.recording.show_cursor);
@@ -1160,10 +1224,10 @@ export function RecordingSelector() {
   }, [session?.id, revealSelector]);
 
   useEffect(() => {
-    if (!session?.id) return;
+    if (!session?.id || actionMode !== "recording") return;
     const timer = window.setTimeout(loadAudioDevices, 0);
     return () => window.clearTimeout(timer);
-  }, [loadAudioDevices, session?.id]);
+  }, [actionMode, loadAudioDevices, session?.id]);
 
   if (!session || !settings) {
     return <main className="recording-selector-idle" aria-hidden="true" />;
@@ -1262,8 +1326,7 @@ export function RecordingSelector() {
     || (targetMode === "window" && Boolean(selectedWindow))
     || (targetMode === "region" && Boolean(region && region.width >= 2 && region.height >= 2));
 
-  const start = async () => {
-    if (!canStart || starting) return;
+  const selectedTarget = (): RecordingTarget | null => {
     let target: RecordingTarget;
     if (targetMode === "display") {
       target = { type: "display", display_id: session.display.id };
@@ -1276,6 +1339,30 @@ export function RecordingSelector() {
         rect: roundRecordingRect(region, session.display.width, session.display.height),
       };
     } else {
+      return null;
+    }
+    return target;
+  };
+
+  const start = async () => {
+    if (!canStart || starting) return;
+    const target = selectedTarget();
+    if (!target) return;
+    setStarting(true);
+    setError("");
+    if (actionMode === "screenshot") {
+      try {
+        await invoke("capture_selection_screenshot", {
+          request: { selection_id: session.id, target },
+        });
+        activeSessionIdRef.current = null;
+        revealingSessionIdRef.current = null;
+        setSession(null);
+        clearRegionDrag();
+      } catch (error) {
+        setError(String(error));
+        setStarting(false);
+      }
       return;
     }
     const options: RecordingOptions = {
@@ -1301,8 +1388,6 @@ export function RecordingSelector() {
         optimize: true,
       },
     };
-    setStarting(true);
-    setError("");
     try {
       await invoke("start_recording", {
         request: { selection_id: session.id, options },
@@ -1389,7 +1474,7 @@ export function RecordingSelector() {
       {targetMode === "window" && !selectedWindow && (
         <div className="recording-window-guidance" role="status">
           <strong>Select a window</strong>
-          <span>Click any window to enable Record</span>
+          <span>Click any window to enable {actionMode === "screenshot" ? "Capture" : "Record"}</span>
         </div>
       )}
       {targetMode !== "window" && selectedRect && selectedRect.width > 0 && selectedRect.height > 0 && (
@@ -1452,108 +1537,161 @@ export function RecordingSelector() {
         onPointerCancel={endPanelDrag}
       >
         <div className="recording-panel-top">
+          <button
+            className="capture-selector-close"
+            type="button"
+            aria-label="Close capture controls"
+            onClick={() => cancelSelection(session)}
+          ><CloseIcon /></button>
+          <div className="capture-action-switch" role="group" aria-label="Capture type">
+            <button
+              type="button"
+              className={actionMode === "screenshot" ? "active" : ""}
+              aria-pressed={actionMode === "screenshot"}
+              onClick={() => setActionMode("screenshot")}
+            ><CameraIcon />Screenshot</button>
+            <button
+              type="button"
+              className={actionMode === "recording" ? "active" : ""}
+              aria-pressed={actionMode === "recording"}
+              disabled={!session.recording_available}
+              title={session.recording_available ? undefined : "Screen recording is currently available on macOS only"}
+              onClick={() => setActionMode("recording")}
+            ><span className="capture-record-dot" aria-hidden="true" />Record</button>
+          </div>
+          <span className="capture-selector-divider" aria-hidden="true" />
           <div className="recording-target-switch" role="group" aria-label="Capture target">
             {(["region", "window", "display"] as const).map((mode) => (
               <button
                 key={mode}
                 type="button"
                 className={targetMode === mode ? "active" : ""}
+                aria-pressed={targetMode === mode}
                 onClick={() => {
                   setTargetMode(mode);
                   setHoveredWindow(null);
                 }}
               >
-                {mode === "display" ? "Full screen" : mode[0].toUpperCase() + mode.slice(1)}
+                <CaptureTargetIcon mode={mode} />
+                <span>{mode === "display" ? "Full screen" : mode[0].toUpperCase() + mode.slice(1)}</span>
               </button>
             ))}
           </div>
-          <button className="recording-cancel" type="button" onClick={() => cancelSelection(session)}>Cancel</button>
+          <p className="capture-selector-privacy">
+            <PrivacyIcon />
+            These controls won’t appear in your {actionMode === "screenshot" ? "screenshot" : "recording"}
+          </p>
+          <button
+            className={`recording-start capture-selector-primary capture-selector-primary-${actionMode}`}
+            type="button"
+            aria-label={actionMode === "screenshot" ? "Take screenshot" : "Start recording"}
+            disabled={!canStart || starting}
+            onClick={() => void start()}
+          >
+            {actionMode === "screenshot"
+              ? <CameraIcon />
+              : <span className="capture-record-dot" aria-hidden="true" />}
+            {starting
+              ? actionMode === "screenshot" ? "Capturing…" : "Starting…"
+              : actionMode === "screenshot" ? "Capture" : "Record"}
+          </button>
         </div>
-        <div className="recording-options-row">
-          <div className="recording-field"><span>FPS</span>
-            <CustomSelect
-              value={String(fps)}
-              ariaLabel="Frames per second"
-              options={[60, 30, 15].map((value) => ({ value: String(value), label: String(value) }))}
-              onChange={(value) => setFps(Number(value))}
-            />
-          </div>
-          <div className="recording-field"><span>Max resolution</span>
-            <CustomSelect
-              value={maxResolution}
-              ariaLabel="Maximum resolution"
-              options={[
-                { value: "original", label: "Original" },
-                { value: "p1080", label: "1080p" },
-                { value: "p720", label: "720p" },
-              ]}
-              onChange={(value) => setMaxResolution(value as MaxResolution)}
-            />
-          </div>
-          <div className="recording-field"><span>Show cursor</span>
-            <label className="recording-toggle">
-              <input
-                aria-label="Show cursor"
-                type="checkbox"
-                checked={showCursor}
-                onChange={(event) => {
-                  setShowCursor(event.target.checked);
-                  if (!event.target.checked) setShowClicks(false);
-                }}
+        {actionMode === "recording" && (
+          <div className="recording-options-row">
+            <div className="recording-field"><span>FPS</span>
+              <CustomSelect
+                value={String(fps)}
+                ariaLabel="Frames per second"
+                options={[60, 30, 15].map((value) => ({ value: String(value), label: String(value) }))}
+                onChange={(value) => setFps(Number(value))}
               />
-              <span className="recording-switch" aria-hidden="true" />
-              <span>{showCursor ? "On" : "Off"}</span>
-            </label>
-          </div>
-          <div className="recording-field"><span>Show clicks</span>
-            <label className="recording-toggle">
-              <input
-                aria-label="Show clicks"
-                type="checkbox"
-                checked={showClicks}
-                onChange={(event) => {
-                  setShowClicks(event.target.checked);
-                  if (event.target.checked) setShowCursor(true);
-                }}
+            </div>
+            <div className="recording-field"><span>Max resolution</span>
+              <CustomSelect
+                value={maxResolution}
+                ariaLabel="Maximum resolution"
+                options={[
+                  { value: "original", label: "Original" },
+                  { value: "p1080", label: "1080p" },
+                  { value: "p720", label: "720p" },
+                ]}
+                onChange={(value) => setMaxResolution(value as MaxResolution)}
               />
-              <span className="recording-switch" aria-hidden="true" />
-              <span>{showClicks ? "On" : "Off"}</span>
-            </label>
+            </div>
+            <div className="recording-field"><span>Show cursor</span>
+              <label className="recording-toggle">
+                <input
+                  aria-label="Show cursor"
+                  type="checkbox"
+                  checked={showCursor}
+                  onChange={(event) => {
+                    setShowCursor(event.target.checked);
+                    if (!event.target.checked) setShowClicks(false);
+                  }}
+                />
+                <span className="recording-switch" aria-hidden="true" />
+                <span>{showCursor ? "On" : "Off"}</span>
+              </label>
+            </div>
+            <div className="recording-field"><span>Show clicks</span>
+              <label className="recording-toggle">
+                <input
+                  aria-label="Show clicks"
+                  type="checkbox"
+                  checked={showClicks}
+                  onChange={(event) => {
+                    setShowClicks(event.target.checked);
+                    if (event.target.checked) setShowCursor(true);
+                  }}
+                />
+                <span className="recording-switch" aria-hidden="true" />
+                <span>{showClicks ? "On" : "Off"}</span>
+              </label>
+            </div>
+            <div className="recording-field"><span>Desktop audio</span>
+              <label className="recording-toggle">
+                <input aria-label="Record desktop audio" type="checkbox" checked={systemAudio} onChange={(event) => setSystemAudio(event.target.checked)} />
+                <span className="recording-switch" aria-hidden="true" />
+                <span>{systemAudio ? "On" : "Off"}</span>
+              </label>
+            </div>
+            <div className="recording-field recording-microphone-field"><span>Microphone</span>
+              <CustomSelect
+                value={microphoneId ?? "off"}
+                disabled={devicesLoading}
+                onOpen={loadAudioDevices}
+                ariaLabel="Microphone"
+                options={[
+                  { value: "off", label: "Off" },
+                  ...(devicesLoading ? [{ value: "__loading", label: "Loading microphones…", disabled: true }] : []),
+                  ...(microphoneId && !devices.some((device) => device.id === microphoneId)
+                    ? [{ value: microphoneId, label: devicesLoading ? "Loading microphone…" : "Selected microphone" }]
+                    : []),
+                  ...devices.map((device) => ({ value: device.id, label: device.name })),
+                ]}
+                onChange={(value) => setMicrophoneId(value === "off" ? null : value)}
+              />
+            </div>
           </div>
-          <div className="recording-field"><span>Desktop audio</span>
-            <label className="recording-toggle">
-              <input aria-label="Record desktop audio" type="checkbox" checked={systemAudio} onChange={(event) => setSystemAudio(event.target.checked)} />
-              <span className="recording-switch" aria-hidden="true" />
-              <span>{systemAudio ? "On" : "Off"}</span>
-            </label>
-          </div>
-          <div className="recording-field recording-microphone-field"><span>Microphone</span>
-            <CustomSelect
-              value={microphoneId ?? "off"}
-              disabled={devicesLoading}
-              onOpen={loadAudioDevices}
-              ariaLabel="Microphone"
-              options={[
-                { value: "off", label: "Off" },
-                ...(devicesLoading ? [{ value: "__loading", label: "Loading microphones…", disabled: true }] : []),
-                ...(microphoneId && !devices.some((device) => device.id === microphoneId)
-                  ? [{ value: microphoneId, label: devicesLoading ? "Loading microphone…" : "Selected microphone" }]
-                  : []),
-                ...devices.map((device) => ({ value: device.id, label: device.name })),
-              ]}
-              onChange={(value) => setMicrophoneId(value === "off" ? null : value)}
-            />
-          </div>
-          <div className="recording-field recording-action-field"><span>Ready</span>
-            <button className="recording-start" type="button" disabled={!canStart || starting} onClick={() => void start()}>
-              <span aria-hidden="true" />{starting ? "Starting…" : "Record"}
-            </button>
-          </div>
-        </div>
+        )}
         {error && <p className="recording-selector-error" role="alert">{error}</p>}
       </section>
     </main>
   );
+}
+
+function CaptureTargetIcon({ mode }: { mode: RecordingTargetMode }) {
+  if (mode === "region") {
+    return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9V6a1 1 0 0 1 1-1h3M15 5h3a1 1 0 0 1 1 1v3M19 15v3a1 1 0 0 1-1 1h-3M9 19H6a1 1 0 0 1-1-1v-3" /><rect x="9" y="9" width="6" height="6" rx="1" /></svg>;
+  }
+  if (mode === "window") {
+    return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="6" width="16" height="13" rx="2.5" /><path d="M4 10h16M7 8h.01M10 8h.01" /></svg>;
+  }
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="14" rx="2.5" /><path d="M9 21h6M12 18v3" /></svg>;
+}
+
+function PrivacyIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12s3.2-5 9-5 9 5 9 5-3.2 5-9 5-9-5-9-5Z" /><circle cx="12" cy="12" r="2.5" /><path d="m4 4 16 16" /></svg>;
 }
 
 function isCapturesOwnedWindow(window: RecordingSelectionSession["windows"][number]): boolean {
@@ -1909,10 +2047,6 @@ export function RecordingEditor() {
   const [progress, setProgress] = useState<ExportProgress | null>(null);
   const [exported, setExported] = useState<RecordingArtifact | null>(null);
   const [savedFingerprint, setSavedFingerprint] = useState<string | null>(null);
-  const [baseline, setBaseline] = useState<{
-    artifactId: string;
-    fingerprint: string;
-  } | null>(null);
   const [filenameStem, setFilenameStem] = useState("");
   const [destinationDirectory, setDestinationDirectory] = useState("");
   const [makeCopy, setMakeCopy] = useState(false);
@@ -1942,12 +2076,6 @@ export function RecordingEditor() {
           }
           setExported(payload.artifact);
           setSavedFingerprint(pendingExportFingerprintRef.current);
-          if (artifactId) {
-            setBaseline({
-              artifactId,
-              fingerprint: pendingExportFingerprintRef.current,
-            });
-          }
           setToast(
             `${payload.artifact.kind === "gif" ? "GIF" : "Video"} saved — ${formatFileSize(payload.artifact.size_bytes)}.`,
           );
@@ -2011,34 +2139,6 @@ export function RecordingEditor() {
       setPreviewPlaying(false);
       setExported(null);
       setSavedFingerprint(null);
-      setBaseline({
-        artifactId: loaded.id,
-        fingerprint: recordingEditorFingerprint({
-          artifact: loaded.id,
-          makeCopy: false,
-          filenameStem: initialFilenameStem,
-          destinationDirectory: initialDestinationDirectory,
-          trimStart: 0,
-          trimEnd: Math.round(loaded.duration_ms),
-          crop: null,
-          resolution: "original",
-          customWidth: loaded.width,
-          customHeight: loaded.height,
-          outputFormat: initialOutputFormat,
-          gifFps: initialGifFps,
-          gifMaxWidth: initialGifMaxWidth,
-          gifColors: initialGifColors,
-          quality: "high",
-          sizeMode: initialSizeMode,
-          maximumSize: "10",
-          maximumUnit: "mb",
-          systemVolume: 100,
-          microphoneVolume: 100,
-          muteSystem: false,
-          muteMicrophone: false,
-          mono: false,
-        }),
-      });
       void invoke<RecordingTimelinePreview>("prepare_recording_timeline_preview", {
         artifactId: loaded.id,
       }).then((preview) => {
@@ -2108,18 +2208,10 @@ export function RecordingEditor() {
   const sourceStem = recordingFileStem(artifact.path);
   const sourceFormat = artifact.kind === "gif" ? "gif" : "mp4";
   const formatRequiresCopy = outputFormat !== sourceFormat;
-  const hasChanges = baseline?.artifactId === artifact.id
-    && baseline.fingerprint !== exportFingerprint;
   const alreadySaved = Boolean(exported && savedFingerprint === exportFingerprint);
   const saveStatus = error
     || toast
-    || (exportId
-      ? progress?.message || exportStageLabel(progress?.stage || "preparing")
-      : alreadySaved
-        ? "All changes are saved."
-        : hasChanges
-          ? "Unsaved changes."
-          : `This ${artifact.kind === "gif" ? "GIF" : "recording"} is already saved — closing won’t delete it.`);
+    || (exportId ? progress?.message || exportStageLabel(progress?.stage || "preparing") : "");
   const updateMakeCopy = (enabled: boolean) => {
     if (!enabled && formatRequiresCopy) return;
     setMakeCopy(enabled);
@@ -2825,9 +2917,9 @@ export function RecordingEditor() {
               className="primary"
               type="button"
               aria-busy={Boolean(exportId)}
-              disabled={Boolean(exportId) || !hasChanges || alreadySaved}
+              disabled={Boolean(exportId) || alreadySaved}
               onClick={() => void startExport()}
-            ><SaveIcon />Save changes</button>
+            ><SaveIcon />Save</button>
           </div>
         </div>
       </footer>

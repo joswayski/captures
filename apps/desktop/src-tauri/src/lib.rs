@@ -47,8 +47,9 @@ mod storage;
 mod updates;
 
 use models::{
-    ActiveSession, AppSettings, ArtifactKind, ArtifactSummary, CaptureArtifact, CaptureSession,
-    ClipboardCopyStatus, ClipboardState, HISTORY_RETENTION_DAYS, HistoryEntry,
+    ActiveSession, AppSettings, ArtifactKind, ArtifactSummary, CaptureArtifact,
+    CaptureSelectorMode, CaptureSession, ClipboardCopyStatus, ClipboardState,
+    HISTORY_RETENTION_DAYS, HistoryEntry,
 };
 use state::{AppState, ClipboardFingerprint};
 
@@ -83,33 +84,13 @@ enum AppError {
 }
 
 type CommandResult<T> = Result<T, String>;
+const AUTOSTART_ARG: &str = "--captures-autostart";
+const RECORDING_EDITOR_WINDOW_PREFIX: &str = "recording-editor-";
+const RECORDING_SAVED_NOTICE_PREFIX: &str = "recording-saved-";
 
 struct ClipboardWrite {
     revision: isize,
     fingerprint: ClipboardFingerprint,
-}
-
-#[cfg(target_os = "macos")]
-struct CaptureTrayMenuItems {
-    region: MenuItem<tauri::Wry>,
-    window: MenuItem<tauri::Wry>,
-    display: MenuItem<tauri::Wry>,
-    recording: MenuItem<tauri::Wry>,
-}
-
-#[cfg(target_os = "macos")]
-impl CaptureTrayMenuItems {
-    fn set_shortcuts(&self, settings: &AppSettings) -> Result<(), AppError> {
-        self.region
-            .set_accelerator(Some(menu_accelerator(&settings.region_shortcut)?))?;
-        self.window
-            .set_accelerator(Some(menu_accelerator(&settings.window_shortcut)?))?;
-        self.display
-            .set_accelerator(Some(menu_accelerator(&settings.display_shortcut)?))?;
-        self.recording
-            .set_accelerator(Some(menu_accelerator(&settings.recording.video_shortcut)?))?;
-        Ok(())
-    }
 }
 
 pub fn run() {
@@ -118,10 +99,7 @@ pub fn run() {
 
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(window) = app.get_webview_window("preferences") {
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
+            focus_or_show_primary_app_window(app);
         }))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -132,6 +110,7 @@ pub fn run() {
         .plugin(
             tauri_plugin_autostart::Builder::new()
                 .app_name("Captures")
+                .arg(AUTOSTART_ARG)
                 .build(),
         );
 
@@ -139,6 +118,18 @@ pub fn run() {
     let builder = builder.plugin(captures_macos_window::init_panel_plugin());
 
     builder
+        .on_window_event(|window, event| {
+            if !matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                return;
+            }
+            let Some(artifact_id) = window.label().strip_prefix(RECORDING_EDITOR_WINDOW_PREFIX)
+            else {
+                return;
+            };
+            if let Err(error) = show_recording_saved_notice(window.app_handle(), artifact_id) {
+                eprintln!("failed to show recording saved notice: {error}");
+            }
+        })
         .manage(state)
         .manage(updates::UpdateCoordinator::default())
         .register_uri_scheme_protocol("captures-capture", move |_context, request| {
@@ -214,6 +205,7 @@ pub fn run() {
             open_captures_folder,
             open_capture_history,
             open_preferences,
+            dismiss_recording_saved_notice,
             updates::get_update_status,
             updates::check_for_updates,
             updates::install_update,
@@ -222,6 +214,7 @@ pub fn run() {
             recording::show_recording_selector,
             recording::reveal_recording_selector,
             recording::cancel_recording_selection,
+            recording::capture_selection_screenshot,
             recording::list_recording_audio_devices,
             recording::get_recording_snapshot,
             recording::start_recording,
@@ -271,10 +264,15 @@ pub fn run() {
                     }
                 }
             };
-            if pending_capture.is_none()
-                && let Err(error) = show_startup_notice(&handle)
-            {
-                eprintln!("failed to show startup notice: {error}");
+            refresh_autostart_registration(app);
+            if pending_capture.is_none() {
+                if launched_from_autostart() {
+                    if let Err(error) = show_startup_notice(&handle) {
+                        eprintln!("failed to show Captures launch notice: {error}");
+                    }
+                } else {
+                    open_capture_controls(&handle, CaptureSelectorMode::Screenshot);
+                }
             }
             if let Some(mode) = pending_capture {
                 let state = app.state::<Arc<AppState>>().inner().clone();
@@ -294,9 +292,46 @@ pub fn run() {
                 code: None, api, ..
             } => api.prevent_exit(),
             #[cfg(target_os = "macos")]
-            tauri::RunEvent::Reopen { .. } => focus_primary_app_window(_app),
+            tauri::RunEvent::Reopen { .. } => focus_or_show_primary_app_window(_app),
             _ => {}
         });
+}
+
+fn launched_from_autostart() -> bool {
+    std::env::args_os().any(|argument| argument == std::ffi::OsStr::new(AUTOSTART_ARG))
+}
+
+fn refresh_autostart_registration(app: &tauri::App) {
+    #[cfg(not(debug_assertions))]
+    {
+        let settings = app.state::<Arc<AppState>>().settings();
+        if settings.launch_at_login
+            && app.autolaunch().is_enabled().unwrap_or(false)
+            && let Err(error) = app.autolaunch().enable()
+        {
+            eprintln!("failed to refresh launch-at-login registration: {error}");
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    let _ = app;
+}
+
+fn open_capture_controls(app: &AppHandle, initial_mode: CaptureSelectorMode) {
+    let state = app.state::<Arc<AppState>>().inner().clone();
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) =
+            recording::prepare_capture_selector_inner(app.clone(), state, initial_mode).await
+        {
+            match initial_mode {
+                CaptureSelectorMode::Screenshot => {
+                    report_capture_error(&app, &error, CaptureMode::Region);
+                }
+                CaptureSelectorMode::Recording => report_recording_error(&app, &error),
+            }
+        }
+    });
 }
 
 #[tauri::command]
@@ -334,6 +369,7 @@ async fn start_capture_inner(
     set_capture_huds_protected(&app, true);
     hide_window(&app, "thumbnail");
     hide_window(&app, "startup");
+    hide_recording_saved_notices(&app);
     updates::defer_visible_notice(&app);
     hide_window(&app, "update");
     let result = prepare_capture(app.clone(), state.clone(), mode).await;
@@ -874,15 +910,6 @@ fn update_settings(
         let _ = register_shortcuts_with(&app, &previous_settings);
         return Err(error.to_string());
     }
-    #[cfg(target_os = "macos")]
-    if shortcuts_changed {
-        let tray_items = app.state::<CaptureTrayMenuItems>();
-        if let Err(error) = tray_items.set_shortcuts(&settings) {
-            let _ = register_shortcuts_with(&app, &previous_settings);
-            let _ = tray_items.set_shortcuts(&previous_settings);
-            return Err(error.to_string());
-        }
-    }
     if settings.launch_at_login != previous_settings.launch_at_login {
         if settings.launch_at_login {
             app.autolaunch()
@@ -1336,6 +1363,16 @@ fn open_capture_history(app: AppHandle) -> CommandResult<()> {
 #[tauri::command(async)]
 fn open_preferences(app: AppHandle) -> CommandResult<()> {
     show_preferences(&app);
+    Ok(())
+}
+
+#[tauri::command]
+fn dismiss_recording_saved_notice(app: AppHandle, notice_id: String) -> CommandResult<()> {
+    let label = recording_saved_notice_label(&notice_id)
+        .ok_or_else(|| "recording saved notice is unavailable".to_owned())?;
+    if let Some(window) = app.get_webview_window(&label) {
+        window.destroy().map_err(|error| error.to_string())?;
+    }
     Ok(())
 }
 
@@ -1829,11 +1866,6 @@ fn parse_shortcut(shortcut: &str) -> Result<Shortcut, AppError> {
         .map_err(|error| AppError::Shortcut(error.to_string()))
 }
 
-#[cfg(any(target_os = "macos", test))]
-fn menu_accelerator(shortcut: &str) -> Result<String, AppError> {
-    parse_shortcut(shortcut).map(|shortcut| shortcut.to_string())
-}
-
 fn should_trigger_shortcut(armed: &AtomicBool, state: ShortcutState) -> bool {
     match state {
         ShortcutState::Pressed => {
@@ -1850,52 +1882,7 @@ fn should_activate_capture_cursor_before_reveal(mode: CaptureMode) -> bool {
 }
 
 fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    #[cfg(target_os = "macos")]
-    let (region_accelerator, window_accelerator, display_accelerator, recording_accelerator) = {
-        let settings = app.state::<Arc<AppState>>().settings();
-        (
-            Some(menu_accelerator(&settings.region_shortcut)?),
-            Some(menu_accelerator(&settings.window_shortcut)?),
-            Some(menu_accelerator(&settings.display_shortcut)?),
-            Some(menu_accelerator(&settings.recording.video_shortcut)?),
-        )
-    };
-    #[cfg(not(target_os = "macos"))]
-    let (region_accelerator, window_accelerator, display_accelerator, recording_accelerator) = (
-        None::<String>,
-        None::<String>,
-        None::<String>,
-        None::<String>,
-    );
-
-    let capture_region = MenuItem::with_id(
-        app,
-        "capture-region",
-        "Capture Region",
-        true,
-        region_accelerator.as_deref(),
-    )?;
-    let capture_window = MenuItem::with_id(
-        app,
-        "capture-window",
-        "Capture Window",
-        true,
-        window_accelerator.as_deref(),
-    )?;
-    let capture_display = MenuItem::with_id(
-        app,
-        "capture-display",
-        "Capture Full Screen",
-        true,
-        display_accelerator.as_deref(),
-    )?;
-    let record_screen = MenuItem::with_id(
-        app,
-        "record-screen",
-        "Record Screen…",
-        cfg!(target_os = "macos"),
-        recording_accelerator.as_deref(),
-    )?;
+    let new_capture = MenuItem::with_id(app, "new-capture", "New Capture…", true, None::<&str>)?;
     let capture_history = MenuItem::with_id(
         app,
         "capture-history",
@@ -1919,10 +1906,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let menu = Menu::with_items(
         app,
         &[
-            &capture_region,
-            &capture_window,
-            &capture_display,
-            &record_screen,
+            &new_capture,
             &separator_1,
             &capture_history,
             &open_folder,
@@ -1946,73 +1930,34 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         tray = tray.icon(icon.clone());
     }
 
-    tray.on_menu_event(|app, event| {
-        let mode = match event.id().as_ref() {
-            "capture-region" => Some(CaptureMode::Region),
-            "capture-window" => Some(CaptureMode::Window),
-            "capture-display" => Some(CaptureMode::Display),
-            "record-screen" => {
-                let state = app.state::<Arc<AppState>>().inner().clone();
-                let app = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    if let Err(error) = recording::prepare_recording_inner(app.clone(), state).await
-                    {
-                        report_recording_error(&app, &error);
-                    }
-                });
-                None
-            }
-            "capture-history" => {
-                show_capture_history(app);
-                None
-            }
-            "open-folder" => {
-                if let Some(state) = app.try_state::<Arc<AppState>>() {
-                    let path = PathBuf::from(state.settings().output_directory);
-                    let _ = fs::create_dir_all(&path);
-                    let _ = app.opener().open_path(path.to_string_lossy(), None::<&str>);
-                }
-                None
-            }
-            "preferences" => {
-                show_preferences(app);
-                None
-            }
-            "check-updates" => {
-                updates::handle_tray_action(app);
-                None
-            }
-            "quit" => {
-                app.exit(0);
-                None
-            }
-            _ => None,
-        };
-        if let Some(mode) = mode {
-            let state = app.state::<Arc<AppState>>().inner().clone();
-            let app = app.clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(error) = start_capture_inner(app.clone(), state, mode).await {
-                    report_capture_error(&app, &error, mode);
-                }
-            });
+    tray.on_menu_event(|app, event| match event.id().as_ref() {
+        "new-capture" => {
+            open_capture_controls(app, CaptureSelectorMode::Screenshot);
         }
+        "capture-history" => {
+            show_capture_history(app);
+        }
+        "open-folder" => {
+            if let Some(state) = app.try_state::<Arc<AppState>>() {
+                let path = PathBuf::from(state.settings().output_directory);
+                let _ = fs::create_dir_all(&path);
+                let _ = app.opener().open_path(path.to_string_lossy(), None::<&str>);
+            }
+        }
+        "preferences" => {
+            show_preferences(app);
+        }
+        "check-updates" => {
+            updates::handle_tray_action(app);
+        }
+        "quit" => {
+            app.exit(0);
+        }
+        _ => {}
     })
     .build(app)?;
 
     updates::register_menu_item(app.handle(), update_item);
-
-    #[cfg(target_os = "macos")]
-    if !app.manage(CaptureTrayMenuItems {
-        region: capture_region,
-        window: capture_window,
-        display: capture_display,
-        recording: record_screen,
-    }) {
-        return Err(Box::new(AppError::Task(
-            "capture tray menu shortcuts are already managed".to_owned(),
-        )));
-    }
     Ok(())
 }
 
@@ -2171,6 +2116,102 @@ fn startup_notice_position(app: &AppHandle) -> (f64, f64) {
             let top = f64::from(position.y) / scale;
             let right = left + f64::from(size.width) / scale;
             (right - STARTUP_NOTICE_WIDTH - 18.0, top + 30.0)
+        })
+        .unwrap_or((20.0, 30.0))
+}
+
+const RECORDING_SAVED_NOTICE_WIDTH: f64 = 440.0;
+const RECORDING_SAVED_NOTICE_HEIGHT: f64 = 116.0;
+
+fn show_recording_saved_notice(app: &AppHandle, artifact_id: &str) -> Result<(), tauri::Error> {
+    let available = app
+        .state::<Arc<AppState>>()
+        .recording_artifacts
+        .lock()
+        .iter()
+        .any(|artifact| {
+            artifact.summary.id == artifact_id && PathBuf::from(&artifact.summary.path).is_file()
+        });
+    if !available {
+        return Ok(());
+    }
+
+    let notice_id = Uuid::new_v4().to_string();
+    let label = format!("{RECORDING_SAVED_NOTICE_PREFIX}{notice_id}");
+    let (x, y) = top_right_notice_position(
+        app,
+        RECORDING_SAVED_NOTICE_WIDTH,
+        RECORDING_SAVED_NOTICE_HEIGHT,
+    );
+    let window = WebviewWindowBuilder::new(
+        app,
+        &label,
+        WebviewUrl::App(
+            format!(
+                "index.html?view=recording-saved&artifact_id={artifact_id}&notice_id={notice_id}"
+            )
+            .into(),
+        ),
+    )
+    .title("Recording saved")
+    .inner_size(RECORDING_SAVED_NOTICE_WIDTH, RECORDING_SAVED_NOTICE_HEIGHT)
+    .position(x, y)
+    .decorations(false)
+    .always_on_top(true)
+    .visible_on_all_workspaces(true)
+    .skip_taskbar(true)
+    .resizable(false)
+    .shadow(false)
+    .transparent(true)
+    .background_color(Color(0, 0, 0, 0))
+    .accept_first_mouse(true)
+    .focused(false)
+    .visible(false)
+    .build()?;
+    let _ = window.set_content_protected(true);
+
+    #[cfg(target_os = "macos")]
+    {
+        captures_macos_window::configure_inactive_hover(&window)
+            .map_err(|error| tauri::Error::Anyhow(anyhow::anyhow!(error)))?;
+        captures_macos_window::show_without_activating(&window)
+            .map_err(|error| tauri::Error::Anyhow(anyhow::anyhow!(error)))?;
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    window.show()?;
+
+    let timer_app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(9));
+        let handle = timer_app.clone();
+        let _ = timer_app.run_on_main_thread(move || {
+            if let Some(window) = handle.get_webview_window(&label) {
+                let _ = window.destroy();
+            }
+        });
+    });
+    Ok(())
+}
+
+fn recording_saved_notice_label(notice_id: &str) -> Option<String> {
+    Uuid::parse_str(notice_id)
+        .ok()
+        .map(|_| format!("{RECORDING_SAVED_NOTICE_PREFIX}{notice_id}"))
+}
+
+fn top_right_notice_position(app: &AppHandle, width: f64, _height: f64) -> (f64, f64) {
+    app.primary_monitor()
+        .ok()
+        .flatten()
+        .map(|monitor| {
+            let scale = monitor.scale_factor().max(1.0);
+            let position = monitor.position();
+            let size = monitor.size();
+            let left = f64::from(position.x) / scale;
+            let top = f64::from(position.y) / scale;
+            let right = left + f64::from(size.width) / scale;
+            (right - width - 18.0, top + 30.0)
         })
         .unwrap_or((20.0, 30.0))
 }
@@ -2591,7 +2632,7 @@ fn primary_app_window_priority(label: &str) -> Option<u8> {
     if matches!(label, "recording-selector" | "recording-countdown") {
         return Some(0);
     }
-    if label.starts_with("recording-editor-") {
+    if label.starts_with(RECORDING_EDITOR_WINDOW_PREFIX) {
         return Some(1);
     }
     if label == "history" {
@@ -2601,6 +2642,16 @@ fn primary_app_window_priority(label: &str) -> Option<u8> {
         return Some(3);
     }
     (label == "recording-hud").then_some(4)
+}
+
+fn focus_or_show_primary_app_window(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    {
+        focus_primary_app_window(app);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    open_capture_controls(app, CaptureSelectorMode::Screenshot);
 }
 
 #[cfg(target_os = "macos")]
@@ -2631,7 +2682,7 @@ fn focus_primary_app_window(app: &AppHandle) {
         let _ = window.unminimize();
         let _ = window.set_focus();
     } else {
-        show_capture_history(app);
+        open_capture_controls(app, CaptureSelectorMode::Screenshot);
     }
 }
 
@@ -2682,12 +2733,23 @@ fn hide_window(app: &AppHandle, label: &str) {
     }
 }
 
+fn hide_recording_saved_notices(app: &AppHandle) {
+    for (label, window) in app.webview_windows() {
+        if label.starts_with(RECORDING_SAVED_NOTICE_PREFIX) {
+            let _ = window.hide();
+        }
+    }
+}
+
 fn set_capture_huds_protected(app: &AppHandle, protected: bool) {
     // The window server may still composite a just-hidden HUD into an
     // immediate display capture. Exclude Captures HUDs until the frozen background
     // frame has been read so they cannot reappear as pixels during fade-in.
-    for label in ["thumbnail", "startup", "update", "recording-hud"] {
-        if let Some(window) = app.get_webview_window(label)
+    for (label, window) in app.webview_windows() {
+        if (matches!(
+            label.as_str(),
+            "thumbnail" | "startup" | "update" | "recording-hud"
+        ) || label.starts_with(RECORDING_SAVED_NOTICE_PREFIX))
             && let Err(error) = window.set_content_protected(protected)
         {
             eprintln!("failed to update {label} capture protection: {error}");
@@ -2880,7 +2942,7 @@ mod tests {
     use super::primary_app_window_priority;
     use super::{
         AppError, CaptureMode, ThumbnailCursorAction, clipboard_fingerprint,
-        display_contains_pointer, menu_accelerator, parse_shortcut,
+        display_contains_pointer, parse_shortcut, recording_saved_notice_label,
         should_activate_capture_cursor_before_reveal, should_trigger_shortcut,
         thumbnail_cursor_action, thumbnail_geometry, thumbnail_pointer_position,
         thumbnail_visible_window_height, viewer_window_label, windows_window_is_capture_overlay,
@@ -2966,14 +3028,6 @@ mod tests {
         assert_eq!(
             parse_shortcut("Ctrl+Shift+4").expect("legacy shortcut should parse"),
             parse_shortcut("Control+Shift+Digit4").expect("recorded shortcut should parse")
-        );
-    }
-
-    #[test]
-    fn normalizes_shortcuts_for_native_menu_accelerators() {
-        assert_eq!(
-            menu_accelerator("Ctrl+Shift+4").expect("legacy shortcut should normalize"),
-            menu_accelerator("Control+Shift+Digit4").expect("recorded shortcut should normalize")
         );
     }
 
@@ -3080,5 +3134,14 @@ mod tests {
         assert_eq!(primary_app_window_priority("history"), Some(2));
         assert_eq!(primary_app_window_priority("recording-hud"), Some(4));
         assert_eq!(primary_app_window_priority("thumbnail"), None);
+    }
+
+    #[test]
+    fn recording_saved_notice_labels_only_accept_uuid_tokens() {
+        assert_eq!(
+            recording_saved_notice_label("7e3191ca-8596-4d22-a6e1-4b57a64f00cb"),
+            Some("recording-saved-7e3191ca-8596-4d22-a6e1-4b57a64f00cb".to_owned())
+        );
+        assert_eq!(recording_saved_notice_label("../history"), None);
     }
 }
