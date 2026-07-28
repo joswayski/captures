@@ -141,9 +141,10 @@ describe("RecordingCountdown", () => {
   });
 
   it("updates the full-screen countdown and lets Escape cancel the session", async () => {
-    render(<RecordingCountdown />);
+    const { container } = render(<RecordingCountdown />);
 
     expect(await screen.findByText("3", { selector: "strong" })).toBeInTheDocument();
+    expect(container.querySelector(".recording-countdown-steps")).not.toBeInTheDocument();
     await act(async () => {
       handlers.get("recording-countdown")?.({
         payload: { session_id: countdownSnapshot.id, remaining_seconds: 2 },
@@ -162,5 +163,22 @@ describe("RecordingCountdown", () => {
         command === "discard_recording"
       ))).toHaveLength(1);
     });
+  });
+
+  it("fades the full-display countdown when recording starts", async () => {
+    const { container } = render(<RecordingCountdown />);
+    await screen.findByText("3", { selector: "strong" });
+
+    await act(async () => {
+      handlers.get("recording-state-changed")?.({
+        payload: {
+          ...countdownSnapshot,
+          state: "recording",
+          countdown_remaining_seconds: null,
+        },
+      });
+    });
+
+    expect(container.querySelector(".recording-countdown")).toHaveClass("exiting");
   });
 });

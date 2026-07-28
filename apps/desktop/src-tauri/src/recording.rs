@@ -42,6 +42,11 @@ const RECORDING_STATE_EVENT: &str = "recording-state-changed";
 const RECORDING_COUNTDOWN_EVENT: &str = "recording-countdown";
 const RECORDING_WARNING_EVENT: &str = "recording-warning";
 const RECORDING_ARTIFACT_EVENT: &str = "recording-artifact-ready";
+const RECORDING_COUNTDOWN_FADE_OUT_MS: u64 = 180;
+const RECORDING_HUD_FULL_WIDTH: f64 = 570.0;
+const RECORDING_HUD_COLLAPSED_WIDTH: f64 = 176.0;
+const RECORDING_HUD_HEIGHT: f64 = 96.0;
+const RECORDING_HUD_BOTTOM_MARGIN: f64 = 20.0;
 const GIF_SOURCE_RETENTION_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
 
 #[derive(Default)]
@@ -503,6 +508,19 @@ fn countdown_is_current(state: &AppState, session_id: &str, generation: u64) -> 
             .is_some_and(|snapshot| snapshot.state == RecordingState::Countdown)
 }
 
+fn recording_segment_is_current(state: &AppState, session_id: &str, generation: u64) -> bool {
+    let runtime = state.recording.lock();
+    runtime.generation == generation
+        && runtime
+            .session
+            .as_ref()
+            .is_some_and(|session| session.id == session_id)
+        && runtime
+            .coordinator
+            .snapshot(now_ms())
+            .is_some_and(|snapshot| snapshot.state == RecordingState::Recording)
+}
+
 async fn start_segment(
     app: AppHandle,
     state: Arc<AppState>,
@@ -634,12 +652,17 @@ async fn start_segment(
         }
         return Ok(());
     };
-    destroy_recording_countdown(&app);
     emit_snapshot(&app, &snapshot);
-    show_recording_hud(&app)?;
     if started_from_countdown {
         captures_recording_macos::play_start_chime();
+        tokio::time::sleep(Duration::from_millis(RECORDING_COUNTDOWN_FADE_OUT_MS)).await;
+        if !recording_segment_is_current(&state, session_id, generation) {
+            destroy_recording_countdown(&app);
+            return Ok(());
+        }
     }
+    destroy_recording_countdown(&app);
+    show_recording_hud(&app)?;
     schedule_segment_monitor(app, state, session_id.to_owned(), generation);
     Ok(())
 }
@@ -2469,8 +2492,10 @@ pub fn reveal_recording_selector(
 }
 
 fn prepare_recording_hud(app: &AppHandle, display: &DisplayDescriptor) -> Result<(), AppError> {
-    let x = f64::from(display.x) + f64::from(display.width) / 2.0 - 320.0;
-    let y = f64::from(display.y) + f64::from(display.height) - 116.0;
+    let x = f64::from(display.x) + (f64::from(display.width) - RECORDING_HUD_FULL_WIDTH) / 2.0;
+    let y = f64::from(display.y) + f64::from(display.height)
+        - RECORDING_HUD_HEIGHT
+        - RECORDING_HUD_BOTTOM_MARGIN;
     if app.get_webview_window("recording-hud").is_none() {
         WebviewWindowBuilder::new(
             app,
@@ -2478,7 +2503,7 @@ fn prepare_recording_hud(app: &AppHandle, display: &DisplayDescriptor) -> Result
             WebviewUrl::App("index.html?view=recording-hud".into()),
         )
         .title("Captures Recording Controls")
-        .inner_size(640.0, 88.0)
+        .inner_size(RECORDING_HUD_FULL_WIDTH, RECORDING_HUD_HEIGHT)
         .position(x, y)
         .decorations(false)
         .always_on_top(true)
@@ -2494,10 +2519,56 @@ fn prepare_recording_hud(app: &AppHandle, display: &DisplayDescriptor) -> Result
     let window = app
         .get_webview_window("recording-hud")
         .ok_or_else(|| AppError::Task("recording controls are unavailable".to_owned()))?;
+    window.set_size(tauri::LogicalSize::new(
+        RECORDING_HUD_FULL_WIDTH,
+        RECORDING_HUD_HEIGHT,
+    ))?;
     window.set_position(tauri::LogicalPosition::new(x, y))?;
     window.set_content_protected(false)?;
     window.hide()?;
     Ok(())
+}
+
+#[tauri::command]
+pub fn set_recording_hud_collapsed(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    session_id: String,
+    collapsed: bool,
+) -> Result<(), String> {
+    let available = state
+        .recording
+        .lock()
+        .coordinator
+        .snapshot(now_ms())
+        .is_some_and(|snapshot| snapshot.id == session_id && !snapshot.state.is_terminal());
+    if !available {
+        return Err(AppError::SessionUnavailable.to_string());
+    }
+    let window = app.get_webview_window("recording-hud").ok_or_else(|| {
+        AppError::Task("recording controls are unavailable".to_owned()).to_string()
+    })?;
+    let scale_factor = window.scale_factor().map_err(|error| error.to_string())?;
+    let current_position = window
+        .outer_position()
+        .map_err(|error| error.to_string())?
+        .to_logical::<f64>(scale_factor);
+    let current_size = window
+        .outer_size()
+        .map_err(|error| error.to_string())?
+        .to_logical::<f64>(scale_factor);
+    let width = if collapsed {
+        RECORDING_HUD_COLLAPSED_WIDTH
+    } else {
+        RECORDING_HUD_FULL_WIDTH
+    };
+    let x = current_position.x + (current_size.width - width) / 2.0;
+    window
+        .set_size(tauri::LogicalSize::new(width, RECORDING_HUD_HEIGHT))
+        .map_err(|error| error.to_string())?;
+    window
+        .set_position(tauri::LogicalPosition::new(x, current_position.y))
+        .map_err(|error| error.to_string())
 }
 
 fn show_recording_hud(app: &AppHandle) -> Result<(), AppError> {

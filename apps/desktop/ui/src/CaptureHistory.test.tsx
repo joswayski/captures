@@ -77,7 +77,7 @@ const interruptedRecording: RecordingDraftManifest = {
     complete: true,
   }],
   final_path: null,
-  last_error: "Captures closed before finalization",
+  last_error: "background task failed: recording failed: the recording did not contain a complete video frame",
 };
 
 describe("CaptureHistory", () => {
@@ -163,6 +163,8 @@ describe("CaptureHistory", () => {
 
     expect(await screen.findByRole("heading", { name: "Interrupted recordings" })).toBeInTheDocument();
     expect(screen.getByText(/0:04 recovered so far/)).toBeInTheDocument();
+    expect(screen.getByText("The recording did not contain a complete video frame")).toBeInTheDocument();
+    expect(screen.queryByText(/background task failed/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Recover" }));
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("recover_recording_draft", {

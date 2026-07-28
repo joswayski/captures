@@ -76,6 +76,7 @@ describe("RecordingHud", () => {
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "get_recording_snapshot") return snapshot;
       if (command === "start_capture") return undefined;
+      if (command === "set_recording_hud_collapsed") return undefined;
       throw new Error(`unexpected command: ${command}`);
     });
   });
@@ -93,7 +94,7 @@ describe("RecordingHud", () => {
     expect(invoke).toHaveBeenCalledWith("get_recording_snapshot");
   });
 
-  it("offers a screenshot action, a capture-visibility explanation, and a drag handle", async () => {
+  it("offers a screenshot action, a compact capture-visibility tooltip, and a drag handle", async () => {
     snapshot = {
       ...baseSnapshot,
       state: "recording",
@@ -108,19 +109,53 @@ describe("RecordingHud", () => {
       expect(invoke).toHaveBeenCalledWith("start_capture", { mode: "region" });
     });
 
-    expect(screen.getByLabelText("Not included in this recording")).toHaveTextContent("Not in recording");
+    expect(screen.getByText("Recording")).toBeInTheDocument();
+    expect(screen.queryByText("Not in recording")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Controls are not included in the recording")).toBeInTheDocument();
     expect(screen.getAllByRole("tooltip").map((tooltip) => tooltip.textContent)).toEqual(expect.arrayContaining([
       "Stop and save",
       "Pause recording",
       "Restart recording",
       "Take a region screenshot",
       "Delete recording",
+      "Controls are not included in the recording",
       "Drag to move controls",
+      "Minimize controls",
     ]));
     fireEvent.pointerDown(screen.getByRole("button", { name: "Move recording controls" }), {
       button: 0,
     });
     expect(startDragging).toHaveBeenCalledOnce();
+  });
+
+  it("collapses to the recording status and can expand again", async () => {
+    snapshot = {
+      ...baseSnapshot,
+      state: "recording",
+      elapsed_ms: 4_000,
+      countdown_remaining_seconds: null,
+    };
+    const { container } = render(<RecordingHud />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Minimize recording controls" }));
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("set_recording_hud_collapsed", {
+        sessionId: snapshot.id,
+        collapsed: true,
+      });
+      expect(container.querySelector(".recording-hud-collapsed")).toBeInTheDocument();
+    });
+    expect(screen.queryByRole("button", { name: "Stop recording" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Move recording controls" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand recording controls" }));
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("set_recording_hud_collapsed", {
+        sessionId: snapshot.id,
+        collapsed: false,
+      });
+      expect(screen.getByRole("button", { name: "Stop recording" })).toBeInTheDocument();
+    });
   });
 
   it("uses a native Delete recording dialog before discarding", async () => {

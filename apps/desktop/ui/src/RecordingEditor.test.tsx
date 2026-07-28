@@ -145,6 +145,8 @@ describe("RecordingEditor", () => {
       "0:00.001",
     );
     expect(screen.queryByRole("heading", { name: "Audio" })).not.toBeInTheDocument();
+    expect(screen.getByText("Final video size")).toBeInTheDocument();
+    expect(screen.getByText("1140 × 692 px")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("checkbox", { name: "Crop recording" }));
     expect(screen.getAllByRole("button", { name: /Resize crop/ })).toHaveLength(8);
@@ -169,7 +171,7 @@ describe("RecordingEditor", () => {
     expect(screen.getByLabelText("Save location")).toHaveTextContent(
       "/Users/josevalerio/Captures",
     );
-    expect(screen.getByText("Ready to save beside the source recording.")).toBeInTheDocument();
+    expect(screen.getByText("Ready to save.")).toBeInTheDocument();
 
     fireEvent.change(filename, { target: { value: "Demo recording" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -195,7 +197,7 @@ describe("RecordingEditor", () => {
         },
       });
     });
-    expect(screen.getByText("Saved 40.7 KB (40,700 bytes).")).toHaveClass("recording-save-success");
+    expect(screen.getByText("Video saved — 40.7 KB.")).toHaveClass("recording-save-success");
     expect(screen.queryByText(/Reveal Export/)).not.toBeInTheDocument();
   });
 
@@ -209,7 +211,7 @@ describe("RecordingEditor", () => {
         "/Users/josevalerio/Desktop/Exports",
       );
     });
-    expect(screen.getByText("Ready to save in the selected folder.")).toBeInTheDocument();
+    expect(screen.getByText("Ready to save.")).toBeInTheDocument();
 
     const qualityMode = screen.getByRole("combobox", { name: "Save quality" });
     fireEvent.click(qualityMode);

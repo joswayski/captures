@@ -38,7 +38,7 @@ pub enum MacRecordingError {
     InvalidOptions(String),
     #[error("ScreenCaptureKit failed: {0}")]
     ScreenCaptureKit(String),
-    #[error("recording failed: {0}")]
+    #[error("{0}")]
     RecordingFailed(String),
     #[error("microphone capture failed: {0}")]
     Microphone(String),
@@ -219,4 +219,20 @@ fn microphone_path(output_path: &Path) -> PathBuf {
         .and_then(|stem| stem.to_str())
         .unwrap_or("segment");
     output_path.with_file_name(format!("{stem}.mic.wav"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MacRecordingError;
+
+    #[test]
+    fn recording_failures_only_show_the_actionable_message() {
+        assert_eq!(
+            MacRecordingError::RecordingFailed(
+                "the recording did not contain a complete video frame".to_owned()
+            )
+            .to_string(),
+            "the recording did not contain a complete video frame"
+        );
+    }
 }

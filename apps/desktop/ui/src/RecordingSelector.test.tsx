@@ -183,26 +183,25 @@ describe("RecordingSelector", () => {
     });
   });
 
-  it("selects the frontmost eligible window and previews hovered windows with rounded geometry", async () => {
+  it("starts Window mode unselected and previews hovered windows with rounded geometry", async () => {
     const { container } = render(<RecordingSelector />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Window" }));
 
-    expect(screen.getByText(/Window selected/)).toBeInTheDocument();
+    expect(screen.queryByText(/Window selected/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Select a window to get started/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Select Captures window" })).not.toBeInTheDocument();
-    const selected = screen.getByRole("button", { name: "Select Front eligible window" });
-    expect(selected).toHaveClass("selected");
-    expect(selected).toHaveStyle({
+    const frontWindow = screen.getByRole("button", { name: "Select Front eligible window" });
+    expect(frontWindow).not.toHaveClass("selected");
+    expect(frontWindow).toHaveStyle({
       left: "300px",
       top: "160px",
       width: "900px",
       height: "640px",
     });
+    expect(screen.getByRole("button", { name: "Record" })).toBeDisabled();
     expect(container.querySelector(".recording-selection-window")).not.toBeInTheDocument();
-    expect(container.querySelector(".capture-shade-path")).toHaveAttribute(
-      "d",
-      expect.stringContaining("M300 160H1200V800H300Z"),
-    );
+    expect(container.querySelector(".capture-shade-path")).not.toBeInTheDocument();
 
     fireEvent.mouseEnter(screen.getByRole("button", { name: "Select Rear window" }));
     await waitFor(() => {
@@ -212,6 +211,10 @@ describe("RecordingSelector", () => {
         expect.stringContaining("M420 220H1140V740H420Z"),
       );
     });
+
+    fireEvent.click(frontWindow);
+    expect(frontWindow).toHaveClass("selected");
+    expect(screen.getByRole("button", { name: "Record" })).toBeEnabled();
   });
 
   it("keeps the selector surface fixed while the controls are dragged within the display", async () => {

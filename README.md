@@ -10,10 +10,10 @@ macOS is the primary development target today. Windows and Linux builds are avai
 
 - Capture a region, window, or full display.
 - On macOS 13+, record a region, window, or display, then trim, crop, resize, and save it as H.264/AAC video or an optimized GIF.
-- Record desktop audio and a selected microphone independently, with pause, resume, restart, mute, and interruption recovery.
+- Record desktop audio and a selected microphone independently, with pause, resume, restart, mute, interruption recovery, and collapsible recording controls.
 - Take a lossless region, window, or display screenshot while a recording continues.
 - Review recordings on an aspect-correct filmstrip timeline, adjust crop and audio, and save to a chosen local folder with preserved quality, optional compression, or an exact maximum file size.
-- Start captures from the tray or customizable global shortcuts.
+- Start captures from the menu bar or customizable global shortcuts, and return to Captures from its macOS Dock icon.
 - Copy captures to the clipboard automatically, save them as full-resolution lossless PNGs, or inspect them in a full-size viewer.
 - Keep multiple recent captures in a quick-access preview stack, and drag a preview directly into file-upload targets.
 - Restore captures from a private, rolling 30-day local history.

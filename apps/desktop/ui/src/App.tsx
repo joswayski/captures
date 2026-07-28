@@ -75,7 +75,9 @@ import type {
 const currentWindow = isTauri() ? getCurrentWindow() : null;
 const THUMBNAIL_DISMISS_FALLBACK_MS = 900;
 const THUMBNAIL_DELETE_FALLBACK_MS = 3_200;
+const THUMBNAIL_EXIT_POINTER_PASSTHROUGH_EVENT = "captures-thumbnail-exit-pointer-passthrough";
 const RECORDING_SELECTOR_REVEAL_FALLBACK_MS = 200;
+const RECORDING_COUNTDOWN_FADE_OUT_MS = 180;
 
 function query(name: string): string | null {
   return new URLSearchParams(window.location.search).get(name);
@@ -821,6 +823,12 @@ function DragGripIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7h8M8 12h8M8 17h8" /></svg>;
 }
 
+function CollapseControlsIcon({ collapsed }: { collapsed: boolean }) {
+  return collapsed
+    ? <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5-5 5 5 5M4 10h9a7 7 0 0 1 7 7v2" /></svg>
+    : <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5 5 5-5 5M20 10h-9a7 7 0 0 0-7 7v2" /></svg>;
+}
+
 function HudTooltip({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <span className="recording-tooltip">
@@ -844,6 +852,7 @@ export function RecordingCountdown() {
   const [snapshot, setSnapshot] = useState<RecordingSessionSnapshot | null>(null);
   const [remaining, setRemaining] = useState<number | null>(null);
   const [cancelling, setCancelling] = useState(false);
+  const [exiting, setExiting] = useState(false);
   const cancellingRef = useRef(false);
 
   useEffect(() => {
@@ -853,7 +862,10 @@ export function RecordingCountdown() {
       listen<RecordingSessionSnapshot>("recording-state-changed", ({ payload }) => {
         if (!active) return;
         setSnapshot(payload);
-        if (payload.state !== "countdown") setRemaining(null);
+        if (payload.state !== "countdown") {
+          setRemaining(null);
+          setExiting(true);
+        }
       }),
       listen<{ session_id: string; remaining_seconds: number }>("recording-countdown", ({ payload }) => {
         if (!active) return;
@@ -864,7 +876,10 @@ export function RecordingCountdown() {
       else listeners.forEach((unlisten) => unlisten());
     }).catch(() => undefined);
     void invoke<RecordingSessionSnapshot | null>("get_recording_snapshot").then((current) => {
-      if (active && current) setSnapshot(current);
+      if (active && current) {
+        setSnapshot(current);
+        if (current.state !== "countdown") setExiting(true);
+      }
     });
     return () => {
       active = false;
@@ -876,7 +891,11 @@ export function RecordingCountdown() {
     if (!snapshot || cancellingRef.current) return;
     cancellingRef.current = true;
     setCancelling(true);
+    setExiting(true);
     try {
+      if (!prefersReducedMotion()) {
+        await new Promise((resolve) => setTimeout(resolve, RECORDING_COUNTDOWN_FADE_OUT_MS));
+      }
       await invoke("discard_recording", { sessionId: snapshot.id });
     } finally {
       cancellingRef.current = false;
@@ -896,13 +915,13 @@ export function RecordingCountdown() {
 
   const count = remaining ?? snapshot?.countdown_remaining_seconds ?? snapshot?.options.countdown_seconds ?? 3;
   return (
-    <main className="recording-countdown" aria-live="assertive">
+    <main
+      className={`recording-countdown${exiting ? " exiting" : ""}`}
+      aria-live="assertive"
+    >
       <div className="recording-countdown-content">
         <span>Recording starts in</span>
         <strong>{count}</strong>
-        <div className="recording-countdown-steps" aria-hidden="true">
-          {[3, 2, 1].map((step) => <i key={step} className={step === count ? "active" : ""}>{step}</i>)}
-        </div>
         <small>{cancelling ? "Cancelling…" : "Press Esc to cancel"}</small>
       </div>
     </main>
@@ -935,6 +954,7 @@ export function RecordingSelector() {
   const pendingRegionPointRef = useRef<SelectionPoint | null>(null);
   const regionFrameRef = useRef<number | null>(null);
   const settingsRef = useRef<AppSettings | null>(null);
+  const sessionRef = useRef<RecordingSelectionSession | null>(null);
   const activeSessionIdRef = useRef<string | null>(null);
   const revealingSessionIdRef = useRef<string | null>(null);
 
@@ -998,6 +1018,7 @@ export function RecordingSelector() {
   const cancelSelection = useCallback((selection: RecordingSelectionSession) => {
     if (activeSessionIdRef.current !== selection.id) return;
     activeSessionIdRef.current = null;
+    sessionRef.current = null;
     revealingSessionIdRef.current = null;
     setSession(null);
     clearRegionDrag();
@@ -1010,6 +1031,7 @@ export function RecordingSelector() {
       // fails. Never replace that newer session with the one being dismissed.
       if (activeSessionIdRef.current !== null) return;
       activeSessionIdRef.current = selection.id;
+      sessionRef.current = selection;
       setSession(selection);
       setError(String(error));
       revealSelector(selection.id);
@@ -1021,6 +1043,7 @@ export function RecordingSelector() {
     let dispose: (() => void) | undefined;
     const applySelection = (selection: RecordingSelectionSession, currentSettings: AppSettings) => {
       activeSessionIdRef.current = selection.id;
+      sessionRef.current = selection;
       revealingSessionIdRef.current = null;
       setSession(selection);
       setFps(currentSettings.recording.video_fps);
@@ -1091,6 +1114,7 @@ export function RecordingSelector() {
     return () => {
       active = false;
       activeSessionIdRef.current = null;
+      sessionRef.current = null;
       clearRegionDrag();
       dispose?.();
     };
@@ -1098,13 +1122,14 @@ export function RecordingSelector() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || !session) return;
+      const currentSession = sessionRef.current;
+      if (event.key !== "Escape" || !currentSession) return;
       event.preventDefault();
-      cancelSelection(session);
+      cancelSelection(currentSession);
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [cancelSelection, session]);
+  }, [cancelSelection]);
 
   // A hidden WKWebView can defer image loading until its native window is
   // onscreen. Do not make the selector depend exclusively on the snapshot's
@@ -1407,13 +1432,6 @@ export function RecordingSelector() {
                 onClick={() => {
                   setTargetMode(mode);
                   setHoveredWindow(null);
-                  if (mode === "window") {
-                    setSelectedWindow((current) => (
-                      current && selectableWindows.some((window) => window.id === current)
-                        ? current
-                        : selectableWindows[0]?.id ?? null
-                    ));
-                  }
                 }}
               >
                 {mode === "display" ? "Full screen" : mode[0].toUpperCase() + mode.slice(1)}
@@ -1422,13 +1440,6 @@ export function RecordingSelector() {
           </div>
           <button className="recording-cancel" type="button" onClick={() => cancelSelection(session)}>Cancel</button>
         </div>
-        {targetMode === "window" && (
-          <p className="recording-selection-guidance">
-            {selectedWindow
-              ? "Window selected. Hover another window to preview it, then click to choose."
-              : "Select a window to get started."}
-          </p>
-        )}
         <div className="recording-options-row">
           <div className="recording-field"><span>FPS</span>
             <CustomSelect
@@ -1523,6 +1534,8 @@ function roundRecordingRect(rect: RecordingRect, maxWidth: number, maxHeight: nu
 export function RecordingHud() {
   const [snapshot, setSnapshot] = useState<RecordingSessionSnapshot | null>(null);
   const [busy, setBusy] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+  const [resizing, setResizing] = useState(false);
   const [microphonePeak, setMicrophonePeak] = useState(0);
   const [error, setError] = useState("");
   const sessionIdRef = useRef<string | null>(null);
@@ -1535,6 +1548,7 @@ export function RecordingHud() {
       if (sessionIdRef.current !== next.id) {
         sessionIdRef.current = next.id;
         setMicrophonePeak(0);
+        setCollapsed(false);
         setError("");
       }
       setSnapshot(next);
@@ -1545,7 +1559,9 @@ export function RecordingHud() {
           applySnapshot(payload);
         }),
         listen<{ session_id: string; message: string }>("recording-warning", ({ payload }) => {
-          if (active && payload.session_id === sessionIdRef.current) setError(payload.message);
+          if (active && payload.session_id === sessionIdRef.current) {
+            setError(recordingErrorMessage(payload.message));
+          }
         }),
         listen<{ session_id: string; microphone_peak: number }>("recording-audio-level", ({ payload }) => {
           if (active && payload.session_id === sessionIdRef.current) {
@@ -1588,7 +1604,7 @@ export function RecordingHud() {
       });
       if ("state" in result) setSnapshot(result);
     } catch (error) {
-      setError(String(error));
+      setError(recordingErrorMessage(error));
     } finally {
       setBusy(false);
     }
@@ -1600,9 +1616,26 @@ export function RecordingHud() {
     try {
       await invoke("start_capture", { mode: "region" });
     } catch (error) {
-      setError(String(error));
+      setError(recordingErrorMessage(error));
     } finally {
       setBusy(false);
+    }
+  };
+  const toggleCollapsed = async () => {
+    if (resizing) return;
+    const next = !collapsed;
+    setResizing(true);
+    setError("");
+    try {
+      await invoke("set_recording_hud_collapsed", {
+        sessionId: snapshot.id,
+        collapsed: next,
+      });
+      setCollapsed(next);
+    } catch (error) {
+      setError(recordingErrorMessage(error));
+    } finally {
+      setResizing(false);
     }
   };
   const startHudDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
@@ -1632,62 +1665,81 @@ export function RecordingHud() {
   };
 
   return (
-    <main className={`recording-hud recording-hud-${snapshot.state}`}>
+    <main className={`recording-hud recording-hud-${snapshot.state}${collapsed ? " recording-hud-collapsed" : ""}`}>
       <div className="recording-hud-status">
         <span className="recording-dot" aria-hidden="true" />
         <strong>{formatRecordingTime(snapshot.elapsed_ms)}</strong>
         <small>{recordingStatusLabel(snapshot)}</small>
       </div>
       <div className="recording-hud-actions">
-        <HudTooltip label="Stop and save">
-          <button type="button" className="recording-stop" disabled={!canControl || busy} aria-label="Stop recording" onClick={() => void invokeAction("stop_recording")}><span /></button>
-        </HudTooltip>
-        <HudTooltip label={snapshot.state === "paused" ? "Resume recording" : "Pause recording"}>
-          <button
-            type="button"
-            className="recording-icon-button"
-            disabled={!canControl || busy}
-            aria-label={snapshot.state === "paused" ? "Resume recording" : "Pause recording"}
-            onClick={() => void invokeAction(snapshot.state === "paused" ? "resume_recording" : "pause_recording")}
-          ><PauseResumeIcon paused={snapshot.state === "paused"} /></button>
-        </HudTooltip>
-        <HudTooltip label="Restart recording">
-          <button type="button" className="recording-icon-button" disabled={!canControl || busy} aria-label="Restart recording" onClick={() => void invokeAction("restart_recording")}><RestartRecordingIcon /></button>
-        </HudTooltip>
-        <HudTooltip label="Take a region screenshot">
-          <button type="button" className="recording-icon-button" disabled={!canControl || busy} aria-label="Take a region screenshot" onClick={() => void takeScreenshot()}><CameraIcon /></button>
-        </HudTooltip>
-        {hasMicrophone && (
-          <span className="recording-microphone-level" aria-label={`Microphone level ${Math.round(microphonePeak * 100)}%`}>
-            <i style={{ width: `${Math.round(microphonePeak * 100)}%` }} />
-          </span>
+        {!collapsed && <>
+          <HudTooltip label="Stop and save">
+            <button type="button" className="recording-stop" disabled={!canControl || busy} aria-label="Stop recording" onClick={() => void invokeAction("stop_recording")}><span /></button>
+          </HudTooltip>
+          <HudTooltip label={snapshot.state === "paused" ? "Resume recording" : "Pause recording"}>
+            <button
+              type="button"
+              className="recording-icon-button"
+              disabled={!canControl || busy}
+              aria-label={snapshot.state === "paused" ? "Resume recording" : "Pause recording"}
+              onClick={() => void invokeAction(snapshot.state === "paused" ? "resume_recording" : "pause_recording")}
+            ><PauseResumeIcon paused={snapshot.state === "paused"} /></button>
+          </HudTooltip>
+          <HudTooltip label="Restart recording">
+            <button type="button" className="recording-icon-button" disabled={!canControl || busy} aria-label="Restart recording" onClick={() => void invokeAction("restart_recording")}><RestartRecordingIcon /></button>
+          </HudTooltip>
+          <HudTooltip label="Take a region screenshot">
+            <button type="button" className="recording-icon-button" disabled={!canControl || busy} aria-label="Take a region screenshot" onClick={() => void takeScreenshot()}><CameraIcon /></button>
+          </HudTooltip>
+          {hasMicrophone && (
+            <span className="recording-microphone-level" aria-label={`Microphone level ${Math.round(microphonePeak * 100)}%`}>
+              <i style={{ width: `${Math.round(microphonePeak * 100)}%` }} />
+            </span>
+          )}
+          <HudTooltip label={snapshot.options.audio.microphone_muted ? "Unmute microphone" : "Mute microphone"}>
+            <button
+              type="button"
+              disabled={!hasMicrophone || !canControl || busy}
+              className={`recording-icon-button${snapshot.options.audio.microphone_muted ? " active" : ""}`}
+              aria-label={snapshot.options.audio.microphone_muted ? "Unmute microphone" : "Mute microphone"}
+              onClick={() => void invokeAction("set_recording_microphone_muted", { muted: !snapshot.options.audio.microphone_muted })}
+            ><MicrophoneIcon muted={snapshot.options.audio.microphone_muted} /></button>
+          </HudTooltip>
+          <HudTooltip label="Delete recording">
+            <button
+              type="button"
+              className="recording-icon-button recording-discard"
+              disabled={busy || snapshot.state === "finalizing"}
+              aria-label="Delete recording"
+              onClick={() => void deleteRecording()}
+            ><TrashIcon /></button>
+          </HudTooltip>
+          <HudTooltip label="Controls are not included in the recording">
+            <span className="recording-hud-privacy" aria-label="Controls are not included in the recording">
+              <HiddenFromCaptureIcon />
+            </span>
+          </HudTooltip>
+        </>}
+        {!collapsed && (
+          <HudTooltip label="Drag to move controls">
+            <button type="button" className="recording-icon-button recording-drag" aria-label="Move recording controls" onPointerDown={startHudDrag}><DragGripIcon /></button>
+          </HudTooltip>
         )}
-        <HudTooltip label={snapshot.options.audio.microphone_muted ? "Unmute microphone" : "Mute microphone"}>
+        <HudTooltip label={collapsed ? "Expand controls" : "Minimize controls"}>
           <button
             type="button"
-            disabled={!hasMicrophone || !canControl || busy}
-            className={`recording-icon-button${snapshot.options.audio.microphone_muted ? " active" : ""}`}
-            aria-label={snapshot.options.audio.microphone_muted ? "Unmute microphone" : "Mute microphone"}
-            onClick={() => void invokeAction("set_recording_microphone_muted", { muted: !snapshot.options.audio.microphone_muted })}
-          ><MicrophoneIcon muted={snapshot.options.audio.microphone_muted} /></button>
-        </HudTooltip>
-        <HudTooltip label="Delete recording">
-          <button
-            type="button"
-            className="recording-icon-button recording-discard"
-            disabled={busy || snapshot.state === "finalizing"}
-            aria-label="Delete recording"
-            onClick={() => void deleteRecording()}
-          ><TrashIcon /></button>
-        </HudTooltip>
-        <span className="recording-hud-privacy" aria-label="Not included in this recording">
-          <HiddenFromCaptureIcon /><span>Not in recording</span>
-        </span>
-        <HudTooltip label="Drag to move controls">
-          <button type="button" className="recording-icon-button recording-drag" aria-label="Move recording controls" onPointerDown={startHudDrag}><DragGripIcon /></button>
+            className="recording-icon-button recording-collapse"
+            disabled={resizing}
+            aria-label={collapsed ? "Expand recording controls" : "Minimize recording controls"}
+            onClick={() => void toggleCollapsed()}
+          ><CollapseControlsIcon collapsed={collapsed} /></button>
         </HudTooltip>
       </div>
-      {(error || snapshot.error) && <p className="recording-hud-error" role="alert">{error || snapshot.error}</p>}
+      {(error || snapshot.error) && (
+        <p className="recording-hud-error" role="alert">
+          {recordingErrorMessage(error || snapshot.error)}
+        </p>
+      )}
     </main>
   );
 }
@@ -1697,7 +1749,7 @@ function recordingStatusLabel(snapshot: RecordingSessionSnapshot): string {
   if (snapshot.state === "paused") return "Paused";
   if (snapshot.state === "finalizing") return "Saving…";
   if (snapshot.state === "failed") return "Failed";
-  return snapshot.options.kind.toUpperCase();
+  return "Recording";
 }
 
 function formatRecordingTime(milliseconds: number): string {
@@ -1708,6 +1760,16 @@ function formatRecordingTime(milliseconds: number): string {
   return hours > 0
     ? `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
     : `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function recordingErrorMessage(value: unknown): string {
+  let message = String(value).trim();
+  const prefix = /^(?:error|background task failed|recording failed):\s*/i;
+  while (prefix.test(message)) message = message.replace(prefix, "");
+  if (/^(?:the|a|an)\s/.test(message)) {
+    message = message[0].toUpperCase() + message.slice(1);
+  }
+  return message || "The recording could not be completed.";
 }
 
 type EditorCropDrag = {
@@ -1779,7 +1841,7 @@ export function RecordingEditor() {
           if (!active || payload.export_id !== exportIdRef.current) return;
           setExported(payload.artifact);
           setToast(
-            `Saved ${formatFileSize(payload.artifact.size_bytes)} (${payload.artifact.size_bytes.toLocaleString()} bytes).`,
+            `${payload.artifact.kind === "gif" ? "GIF" : "Video"} saved — ${formatFileSize(payload.artifact.size_bytes)}.`,
           );
           if (payload.finder_error) {
             setError(`The recording was saved, but Finder could not open: ${payload.finder_error}`);
@@ -1794,7 +1856,7 @@ export function RecordingEditor() {
             setToast("");
             setProgress({ stage: "cancelled", completed_per_mille: 0, attempt: 0, message: null });
           } else {
-            setError(payload.message);
+            setError(recordingErrorMessage(payload.message));
           }
           setExportId(null);
           exportIdRef.current = null;
@@ -1830,7 +1892,7 @@ export function RecordingEditor() {
         setGifColors(loadedSettings.recording.gif_max_colors);
       }
     })().catch((error) => {
-      if (active) setError(String(error));
+      if (active) setError(recordingErrorMessage(error));
     });
     return () => {
       active = false;
@@ -2053,7 +2115,7 @@ export function RecordingEditor() {
       exportIdRef.current = id;
       setExportId(id);
     } catch (error) {
-      setError(String(error));
+      setError(recordingErrorMessage(error));
       setProgress(null);
     }
   };
@@ -2334,7 +2396,10 @@ export function RecordingEditor() {
             />
           </div>
           {resolution === "custom" && <div className="editor-number-grid dimensions"><label>Width<input type="number" min={2} value={customWidth} onChange={(event) => setCustomWidth(Number(event.target.value))} /></label><label>Height<input type="number" min={2} value={customHeight} onChange={(event) => setCustomHeight(Number(event.target.value))} /></label></div>}
-          <output className="editor-output-dimensions">{outputDimensions.width} × {outputDimensions.height}</output>
+          <output className="editor-output-dimensions">
+            <span>Final video size</span>
+            <strong>{outputDimensions.width} × {outputDimensions.height} px</strong>
+          </output>
         </section>
 
         <section className="editor-card editor-quality-card">
@@ -2486,9 +2551,7 @@ export function RecordingEditor() {
               ? <p className="recording-save-success" role="status">{toast}</p>
               : progress
                 ? <p>{progress.message || exportStageLabel(progress.stage)}</p>
-                : <p>{destinationDirectory === sourceDirectory
-                  ? "Ready to save beside the source recording."
-                  : "Ready to save in the selected folder."}</p>}
+                : <p>Ready to save.</p>}
         </div>
         <div className="recording-save-actions">
           {exportId && <button type="button" onClick={() => void invoke("cancel_recording_export", { exportId })}>Cancel</button>}
@@ -3073,6 +3136,7 @@ export function Thumbnail() {
     let pointingCursor = false;
     let ignoringCursorEvents = false;
     let lastCursorSyncAt = 0;
+    const clickThroughExits = new Set<string>();
 
     const setPointingCursor = (pointing: boolean) => {
       document.documentElement.style.cursor = pointing ? "pointer" : "";
@@ -3117,7 +3181,9 @@ export function Thumbnail() {
 
     const applyNativeHover = (position: ThumbnailPointerPosition) => {
       document.documentElement.classList.add("thumbnail-native-tracking");
-      setIgnoreCursorEvents(shouldIgnoreThumbnailCursorEvents(position));
+      setIgnoreCursorEvents(
+        clickThroughExits.size > 0 || shouldIgnoreThumbnailCursorEvents(position),
+      );
       setPointingCursor(applyThumbnailNativeHover(position));
     };
 
@@ -3167,6 +3233,20 @@ export function Thumbnail() {
       if (!document.hidden) schedulePoll(0);
     };
 
+    const updateExitPointerPassthrough = (event: Event) => {
+      const { artifactId, active } = (
+        event as CustomEvent<{ artifactId: string; active: boolean }>
+      ).detail;
+      if (active) {
+        clickThroughExits.add(artifactId);
+        clearNativeHover();
+        setIgnoreCursorEvents(true);
+        return;
+      }
+      clickThroughExits.delete(artifactId);
+      if (clickThroughExits.size === 0) pollImmediately();
+    };
+
     document.addEventListener("visibilitychange", resumePolling);
     // Clicking an inactive thumbnail briefly makes its panel key before a
     // full-size viewer takes focus. Keep the last native hover presentation
@@ -3176,6 +3256,10 @@ export function Thumbnail() {
     window.addEventListener("pageshow", resumePolling);
     window.addEventListener("captures-thumbnail-ready", pollImmediately);
     window.addEventListener("captures-thumbnail-layout-changed", pollImmediately);
+    window.addEventListener(
+      THUMBNAIL_EXIT_POINTER_PASSTHROUGH_EVENT,
+      updateExitPointerPassthrough,
+    );
     schedulePoll(0);
     return () => {
       cancelled = true;
@@ -3185,6 +3269,10 @@ export function Thumbnail() {
       window.removeEventListener("pageshow", resumePolling);
       window.removeEventListener("captures-thumbnail-ready", pollImmediately);
       window.removeEventListener("captures-thumbnail-layout-changed", pollImmediately);
+      window.removeEventListener(
+        THUMBNAIL_EXIT_POINTER_PASSTHROUGH_EVENT,
+        updateExitPointerPassthrough,
+      );
       stopNativeTracking();
     };
   }, []);
@@ -3263,6 +3351,7 @@ export function ThumbnailCard({
   const exitingRef = useRef(false);
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const exitFallbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const exitPointerPassthrough = useRef(false);
 
   /** Synchronous lock check for async/timer paths (state may lag a frame). */
   const isExitLocked = () => exitingRef.current;
@@ -3283,8 +3372,13 @@ export function ThumbnailCard({
     return () => {
       if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
       if (exitFallbackTimer.current) clearTimeout(exitFallbackTimer.current);
+      if (exitPointerPassthrough.current) {
+        window.dispatchEvent(new CustomEvent(THUMBNAIL_EXIT_POINTER_PASSTHROUGH_EVENT, {
+          detail: { artifactId: artifact.id, active: false },
+        }));
+      }
     };
-  }, []);
+  }, [artifact.id]);
 
   const showSavedFeedback = () => {
     if (isExitLocked()) return;
@@ -3364,9 +3458,23 @@ export function ThumbnailCard({
       exitFallbackTimer.current = null;
     }
     void invoke(action, { artifactId: artifact.id })
-      .then(() => onRemoved(artifact.id))
+      .then(() => {
+        if (exitPointerPassthrough.current) {
+          exitPointerPassthrough.current = false;
+          window.dispatchEvent(new CustomEvent(THUMBNAIL_EXIT_POINTER_PASSTHROUGH_EVENT, {
+            detail: { artifactId: artifact.id, active: false },
+          }));
+        }
+        onRemoved(artifact.id);
+      })
       .catch((error) => {
         // Only unlock if remove failed — otherwise the card is gone.
+        if (exitPointerPassthrough.current) {
+          exitPointerPassthrough.current = false;
+          window.dispatchEvent(new CustomEvent(THUMBNAIL_EXIT_POINTER_PASSTHROUGH_EVENT, {
+            detail: { artifactId: artifact.id, active: false },
+          }));
+        }
         exitingRef.current = false;
         setExit(null);
         setExitChrome(null);
@@ -3380,6 +3488,12 @@ export function ThumbnailCard({
     // Acquire the exit lock first so any in-flight async work becomes a no-op.
     exitingRef.current = true;
     exitAction.current = action;
+    if (kind === "delete") {
+      exitPointerPassthrough.current = true;
+      window.dispatchEvent(new CustomEvent(THUMBNAIL_EXIT_POINTER_PASSTHROUGH_EVENT, {
+        detail: { artifactId: artifact.id, active: true },
+      }));
+    }
     if (feedbackTimer.current) {
       clearTimeout(feedbackTimer.current);
       feedbackTimer.current = null;
@@ -3658,7 +3772,7 @@ function RecordingRecovery({
       setConfirmDiscardId(null);
       await onChanged();
     } catch (error) {
-      setError(String(error));
+      setError(recordingErrorMessage(error));
       await onChanged().catch(() => undefined);
     } finally {
       setBusyId(null);
@@ -3679,7 +3793,9 @@ function RecordingRecovery({
             <div>
               <strong>{draft.options.kind === "gif" ? "GIF" : "Video"} recording</strong>
               <small>{new Date(draft.created_at_ms).toLocaleString()} · {formatRecordingTime(duration)} recovered so far</small>
-              {draft.last_error && <small className="warning">{draft.last_error}</small>}
+              {draft.last_error && (
+                <small className="warning">{recordingErrorMessage(draft.last_error)}</small>
+              )}
             </div>
             <div>
               <button type="button" disabled={Boolean(busyId)} onClick={() => void run("recover_recording_draft", draft.session_id)}>{isBusy ? "Recovering…" : "Recover"}</button>
