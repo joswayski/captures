@@ -164,13 +164,13 @@ describe("RecordingEditor", () => {
     expect(play).toHaveBeenCalledOnce();
   });
 
-  it("defaults to updating the source and offers saving a copy as one optional setting", async () => {
+  it("updates the source by default and can explicitly save a copy", async () => {
     render(<RecordingEditor />);
 
     const filename = await screen.findByRole("textbox", { name: "Saved filename" });
     expect(filename).toHaveValue("Captures_1140x692");
     expect(filename).toBeEnabled();
-    expect(screen.getByRole("checkbox", { name: "Keep original" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Make a copy" })).not.toBeChecked();
     expect(screen.queryByRole("radio")).not.toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Save quality" })).toHaveTextContent(
       "Preserve quality",
@@ -178,11 +178,20 @@ describe("RecordingEditor", () => {
     expect(screen.getByLabelText("Save location")).toHaveTextContent(
       "/Users/josevalerio/Captures",
     );
+    expect(screen.getByText("Saving to")).toBeInTheDocument();
     expect(screen.queryByText("Ready to save.")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Change save location" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Show in Folder" })).not.toBeInTheDocument();
+    const save = screen.getByRole("button", { name: "Save changes" });
+    await waitFor(() => expect(save).toBeDisabled());
+    expect(screen.getByText(
+      "This recording is already saved — closing won’t delete it.",
+    )).toBeInTheDocument();
 
     fireEvent.change(filename, { target: { value: "Renamed recording" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(save).toBeEnabled();
+    expect(screen.getByText("Unsaved changes.")).toBeInTheDocument();
+    fireEvent.click(save);
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("start_recording_export", {
         request: expect.objectContaining({
@@ -205,17 +214,18 @@ describe("RecordingEditor", () => {
     });
     expect(screen.getByText("Video saved — 40.7 KB.").closest(".recording-save-toast"))
       .toHaveClass("success");
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
     expect(screen.queryByRole("button", { name: "Saved" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Show in Folder" }));
     expect(invoke).toHaveBeenCalledWith("reveal_recording_artifact", {
       artifactId: artifact.id,
     });
 
-    fireEvent.click(screen.getByRole("checkbox", { name: "Keep original" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Make a copy" }));
     expect(filename).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Show in Folder" })).not.toBeInTheDocument();
     fireEvent.change(filename, { target: { value: "Demo recording" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("start_recording_export", {
@@ -256,7 +266,7 @@ describe("RecordingEditor", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "Saved filename" }), {
       target: { value: "Moved recording" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("start_recording_export", {
         request: expect.objectContaining({
@@ -288,8 +298,15 @@ describe("RecordingEditor", () => {
   it("treats an explicit save cancellation as status rather than an error", async () => {
     render(<RecordingEditor />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Save" }));
+    const filename = await screen.findByRole("textbox", { name: "Saved filename" });
+    const save = screen.getByRole("button", { name: "Save changes" });
+    const showInFolder = screen.queryByRole("button", { name: "Show in Folder" });
+    expect(showInFolder).not.toBeInTheDocument();
+    fireEvent.change(filename, { target: { value: "Changed recording" } });
+    fireEvent.click(save);
     await waitFor(() => expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument());
+    expect(save).toHaveTextContent("Save changes");
+    expect(screen.queryByRole("button", { name: "Show in Folder" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(invoke).toHaveBeenCalledWith("cancel_recording_export", { exportId: "export-1" });
 
@@ -303,6 +320,8 @@ describe("RecordingEditor", () => {
       });
     });
     expect(screen.getByText("Save cancelled.")).not.toHaveClass("recording-save-success");
+    expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Show in Folder" })).not.toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

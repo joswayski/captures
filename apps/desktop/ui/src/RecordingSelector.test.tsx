@@ -163,6 +163,13 @@ describe("RecordingSelector", () => {
         selectionId: session.id,
       });
     });
+    const surface = container.querySelector(".recording-selector");
+    await waitFor(() => expect(surface).toHaveClass("recording-focus-visible"));
+
+    await act(async () => {
+      recordingSelectionReady?.({ payload: session });
+    });
+    await waitFor(() => expect(surface).toHaveClass("recording-focus-visible"));
 
     const cursorToggle = screen.getByRole("checkbox", { name: "Show cursor" });
     const clicksToggle = screen.getByRole("checkbox", { name: "Show clicks" });
@@ -198,7 +205,8 @@ describe("RecordingSelector", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Window" }));
 
     expect(screen.queryByText(/Window selected/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Select a window to get started/)).not.toBeInTheDocument();
+    expect(screen.getByText("Select a window")).toBeInTheDocument();
+    expect(screen.getByText("Click any window to enable Record")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Select Captures window" })).not.toBeInTheDocument();
     const frontWindow = screen.getByRole("button", { name: "Select Front eligible window" });
     expect(frontWindow).not.toHaveClass("selected");
@@ -211,19 +219,27 @@ describe("RecordingSelector", () => {
     expect(screen.getByRole("button", { name: "Record" })).toBeDisabled();
     expect(container.querySelector(".recording-selection-window")).not.toBeInTheDocument();
     expect(container.querySelector(".capture-shade-path")).not.toBeInTheDocument();
+    expect(container.querySelector(".capture-shade-full")).toBeInTheDocument();
 
-    fireEvent.mouseEnter(screen.getByRole("button", { name: "Select Rear window" }));
+    const rearWindow = screen.getByRole("button", { name: "Select Rear window" });
+    fireEvent.mouseEnter(rearWindow);
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Select Rear window" })).toHaveClass("hovered");
+      expect(rearWindow).toHaveClass("hovered");
       expect(container.querySelector(".capture-shade-path")).toHaveAttribute(
         "d",
         expect.stringContaining("M420 220H1140V740H420Z"),
       );
     });
+    fireEvent.mouseLeave(rearWindow);
 
     fireEvent.click(frontWindow);
     expect(frontWindow).toHaveClass("selected");
+    expect(screen.queryByText("Select a window")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Record" })).toBeEnabled();
+    expect(container.querySelector(".capture-shade-path")).toHaveAttribute(
+      "d",
+      expect.stringContaining("M300 160H1200V800H300Z"),
+    );
   });
 
   it("keeps the selector surface fixed while the controls are dragged within the display", async () => {

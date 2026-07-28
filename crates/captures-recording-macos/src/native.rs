@@ -13,7 +13,7 @@ use core_graphics::display::CGDisplay as CoreGraphicsDisplay;
 use screencapturekit::{
     audio_devices::AudioInputDevice,
     cg::CGRect,
-    cm::{CMSampleBuffer, CMSampleBufferSCExt, SCFrameStatus},
+    cm::{CMSampleBuffer, CMSampleBufferExt, CMSampleBufferSCExt, SCFrameStatus},
     dispatch_queue::{DispatchQoS, DispatchQueue},
     shareable_content::{SCDisplay, SCRunningApplication, SCShareableContent, SCWindow},
     stream::{
@@ -25,7 +25,10 @@ use screencapturekit::{
     },
 };
 
-use crate::{MacRecordingError, MacRecordingResult, SegmentInfo, writer::MediaWriter};
+use crate::{
+    MacRecordingError, MacRecordingResult, SegmentInfo,
+    writer::{ClickHighlightSource, MediaWriter},
+};
 
 pub struct NativeRecordingSegment {
     stream: SCStream,
@@ -38,6 +41,13 @@ pub struct NativeRecordingSegment {
     height: u32,
     failure: Arc<Mutex<Option<String>>>,
     started_at: Instant,
+}
+
+struct CaptureSource {
+    filter: SCContentFilter,
+    pixel_width: f64,
+    pixel_height: f64,
+    frame: CGRect,
 }
 
 impl NativeRecordingSegment {
@@ -54,13 +64,13 @@ impl NativeRecordingSegment {
 
         let content = SCShareableContent::get()
             .map_err(|error| MacRecordingError::ScreenCaptureKit(error.to_string()))?;
-        let (filter, source_width, source_height) = filter_for_target(&content, &options.target)?;
-        let source_width_pixels = source_width.round().max(2.0) as u32;
-        let source_height_pixels = source_height.round().max(2.0) as u32;
+        let source = filter_for_target(&content, &options.target)?;
+        let source_width_pixels = source.pixel_width.round().max(2.0) as u32;
+        let source_height_pixels = source.pixel_height.round().max(2.0) as u32;
         let (width, height) = options
             .max_resolution
             .constrain(source_width_pixels, source_height_pixels);
-        let (shows_cursor, shows_mouse_clicks) =
+        let (shows_cursor, shows_native_mouse_clicks) =
             capture_pointer_options(options.show_cursor, options.highlight_clicks);
 
         let mut configuration = SCStreamConfiguration::new()
@@ -72,7 +82,7 @@ impl NativeRecordingSegment {
             .with_fps(u32::from(options.frames_per_second))
             .with_queue_depth(8)
             .with_shows_cursor(shows_cursor)
-            .with_shows_mouse_clicks(shows_mouse_clicks)
+            .with_shows_mouse_clicks(shows_native_mouse_clicks)
             .with_captures_audio(options.audio.capture_system_audio)
             .with_sample_rate(48_000)
             .with_channel_count(if options.audio.mono_output { 1 } else { 2 })
@@ -94,7 +104,14 @@ impl NativeRecordingSegment {
                 *current = Some(error.to_string());
             }
         });
-        let mut stream = SCStream::new_with_delegate(&filter, &configuration, stream_delegate);
+        let mut stream =
+            SCStream::new_with_delegate(&source.filter, &configuration, stream_delegate);
+        let click_highlight_source = options.highlight_clicks.then_some(ClickHighlightSource {
+            x: source.frame.origin.x,
+            y: source.frame.origin.y,
+            width: source.frame.size.width,
+            height: source.frame.size.height,
+        });
         let writer = MediaWriter::new(
             output_path,
             width,
@@ -102,6 +119,7 @@ impl NativeRecordingSegment {
             u32::from(options.frames_per_second),
             options.audio.capture_system_audio,
             options.audio.mono_output,
+            click_highlight_source,
         )?;
         let output_queue = DispatchQueue::new(
             "io.github.joswayski.captures.recording",
@@ -307,7 +325,9 @@ fn sample_video_frame_kind(sample: &CMSampleBuffer) -> Option<VideoFrameKind> {
         sample.frame_status(),
         sample.is_valid(),
         sample.data_is_ready(),
-        !sample.image_buffer_ptr().is_null(),
+        // The raw pointer accessor returns a retained surface in the current
+        // bridge. Adopt it so this temporary validation retain is released.
+        sample.image_buffer().is_some(),
     )
 }
 
@@ -322,9 +342,9 @@ const fn video_frame_kind(
     }
     match status {
         Some(SCFrameStatus::Complete | SCFrameStatus::Started) => Some(VideoFrameKind::Content),
-        // Cursor movement and ScreenCaptureKit's click overlay may arrive on an
-        // idle surface. The writer accepts these only when no real content
-        // frame is waiting, so pointer updates cannot displace screen motion.
+        // Cursor movement and Captures' click ripple may arrive on an idle
+        // surface. The writer accepts these only when no real content frame is
+        // waiting, so pointer updates cannot displace screen motion.
         Some(SCFrameStatus::Idle) => Some(VideoFrameKind::Idle),
         Some(_) => None,
         // Some ScreenCaptureKit runtimes expose the status attachment as an
@@ -379,46 +399,60 @@ pub fn microphone_name_for_id(device_id: &str) -> Option<String> {
 fn filter_for_target(
     content: &SCShareableContent,
     target: &RecordingTarget,
-) -> MacRecordingResult<(SCContentFilter, f64, f64)> {
+) -> MacRecordingResult<CaptureSource> {
     match target {
         RecordingTarget::Display { display_id } => {
             let display = find_display(content, display_id)?;
             let scale = display_pixel_scale(&display);
+            let frame = display.frame();
             let applications = current_process_applications(content);
             let application_refs = applications.iter().collect::<Vec<_>>();
             let filter = SCContentFilter::create()
                 .with_display(&display)
                 .with_excluding_applications(&application_refs, &[])
                 .build();
-            Ok((
+            Ok(CaptureSource {
                 filter,
-                f64::from(display.width()) * scale,
-                f64::from(display.height()) * scale,
-            ))
+                pixel_width: f64::from(display.width()) * scale,
+                pixel_height: f64::from(display.height()) * scale,
+                frame,
+            })
         }
         RecordingTarget::Region {
             display_id, rect, ..
         } => {
             let display = find_display(content, display_id)?;
             let scale = display_pixel_scale(&display);
+            let display_frame = display.frame();
             let applications = current_process_applications(content);
             let application_refs = applications.iter().collect::<Vec<_>>();
             let filter = SCContentFilter::create()
                 .with_display(&display)
                 .with_excluding_applications(&application_refs, &[])
                 .build();
-            Ok((
+            Ok(CaptureSource {
                 filter,
-                f64::from(rect.width) * scale,
-                f64::from(rect.height) * scale,
-            ))
+                pixel_width: f64::from(rect.width) * scale,
+                pixel_height: f64::from(rect.height) * scale,
+                frame: CGRect::new(
+                    display_frame.origin.x + f64::from(rect.x),
+                    display_frame.origin.y + f64::from(rect.y),
+                    f64::from(rect.width),
+                    f64::from(rect.height),
+                ),
+            })
         }
         RecordingTarget::Window { window_id } => {
             let window = find_window(content, window_id)?;
             let frame = window.frame();
             let scale = window_pixel_scale(content, frame);
             let filter = SCContentFilter::create().with_window(&window).build();
-            Ok((filter, frame.size.width * scale, frame.size.height * scale))
+            Ok(CaptureSource {
+                filter,
+                pixel_width: frame.size.width * scale,
+                pixel_height: frame.size.height * scale,
+                frame,
+            })
         }
     }
 }
@@ -441,8 +475,11 @@ fn pixel_scale_from_dimensions(logical_width: u64, pixel_width: u64) -> f64 {
     (pixel_width as f64 / logical_width as f64).max(1.0)
 }
 
+// Captures draws its own lavender ripple into the writer's copied frame. Keep
+// ScreenCaptureKit's fixed system circle disabled while still forcing the
+// cursor on whenever a ripple is requested.
 const fn capture_pointer_options(show_cursor: bool, highlight_clicks: bool) -> (bool, bool) {
-    (show_cursor || highlight_clicks, highlight_clicks)
+    (show_cursor || highlight_clicks, false)
 }
 
 fn window_pixel_scale(content: &SCShareableContent, window_frame: CGRect) -> f64 {
@@ -563,13 +600,13 @@ mod tests {
     fn click_highlights_always_include_the_cursor_they_surround() {
         assert_eq!(capture_pointer_options(false, false), (false, false));
         assert_eq!(capture_pointer_options(true, false), (true, false));
-        assert_eq!(capture_pointer_options(false, true), (true, true));
+        assert_eq!(capture_pointer_options(false, true), (true, false));
 
         let configuration = SCStreamConfiguration::new()
             .with_shows_cursor(true)
-            .with_shows_mouse_clicks(true);
+            .with_shows_mouse_clicks(false);
         assert!(configuration.shows_cursor());
-        assert!(configuration.shows_mouse_clicks());
+        assert!(!configuration.shows_mouse_clicks());
     }
 
     #[test]

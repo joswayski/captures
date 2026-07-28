@@ -1,7 +1,14 @@
+import AppKit
 import AVFoundation
+import CoreGraphics
 import CoreMedia
 import CoreVideo
 import Foundation
+
+private struct CapturesClickRipple {
+    let point: CGPoint
+    let startedAt: TimeInterval
+}
 
 private final class CapturesMediaWriter {
     private let writer: AVAssetWriter
@@ -10,7 +17,11 @@ private final class CapturesMediaWriter {
     private let audioInput: AVAssetWriterInput?
     private let outputWidth: Int
     private let outputHeight: Int
+    private let sourceFrame: CGRect
+    private let highlightClicks: Bool
+    private let videoFrameIntervalSeconds: TimeInterval
     private let lock = NSLock()
+    private let clickLock = NSLock()
     private var started = false
     private var finished = false
     private var firstTimestamp = CMTime.invalid
@@ -23,13 +34,37 @@ private final class CapturesMediaWriter {
     private var videoFramesWritten: UInt64 = 0
     private var videoDrainTimer: DispatchSourceTimer?
     private let videoDrainInterval: DispatchTimeInterval
+    private var clickMonitor: Any?
+    private var clickRipples: [CapturesClickRipple] = []
     private let activity: NSObjectProtocol
     private(set) var droppedFrames: UInt64 = 0
     private(set) var failure: String?
 
-    init?(path: String, width: Int, height: Int, framesPerSecond: Int, capturesAudio: Bool, mono: Bool) {
+    private static let clickRippleDuration: TimeInterval = 0.62
+
+    init?(
+        path: String,
+        width: Int,
+        height: Int,
+        framesPerSecond: Int,
+        capturesAudio: Bool,
+        mono: Bool,
+        highlightClicks: Bool,
+        sourceX: Double,
+        sourceY: Double,
+        sourceWidth: Double,
+        sourceHeight: Double
+    ) {
         outputWidth = width
         outputHeight = height
+        sourceFrame = CGRect(
+            x: sourceX,
+            y: sourceY,
+            width: sourceWidth,
+            height: sourceHeight
+        )
+        self.highlightClicks = highlightClicks
+        videoFrameIntervalSeconds = 1.0 / Double(max(1, framesPerSecond))
         do {
             writer = try AVAssetWriter(outputURL: URL(fileURLWithPath: path), fileType: .mp4)
         } catch {
@@ -92,11 +127,63 @@ private final class CapturesMediaWriter {
             options: [.userInitiated, .idleSystemSleepDisabled],
             reason: "Captures is recording the screen"
         )
+        installClickMonitorIfNeeded()
     }
 
     deinit {
         videoDrainTimer?.cancel()
+        if let clickMonitor {
+            if Thread.isMainThread {
+                NSEvent.removeMonitor(clickMonitor)
+            } else {
+                DispatchQueue.main.sync {
+                    NSEvent.removeMonitor(clickMonitor)
+                }
+            }
+        }
         ProcessInfo.processInfo.endActivity(activity)
+    }
+
+    private func installClickMonitorIfNeeded() {
+        guard highlightClicks else { return }
+        let install = { [weak self] in
+            guard let self else { return }
+            self.clickMonitor = NSEvent.addGlobalMonitorForEvents(
+                matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+            ) { [weak self] event in
+                guard
+                    let self,
+                    let point = event.cgEvent?.location,
+                    self.sourceFrame.contains(point)
+                else { return }
+                self.clickLock.lock()
+                self.clickRipples.removeAll {
+                    event.timestamp - $0.startedAt >= Self.clickRippleDuration
+                }
+                self.clickRipples.append(CapturesClickRipple(
+                    point: point,
+                    startedAt: event.timestamp
+                ))
+                self.clickLock.unlock()
+            }
+        }
+        if Thread.isMainThread {
+            install()
+        } else {
+            DispatchQueue.main.sync(execute: install)
+        }
+    }
+
+    private func activeClickRipples(at uptime: TimeInterval) -> [CapturesClickRipple] {
+        guard highlightClicks else { return [] }
+        clickLock.lock()
+        clickRipples.removeAll {
+            uptime - $0.startedAt >= Self.clickRippleDuration
+                || uptime + 0.05 < $0.startedAt
+        }
+        let active = clickRipples
+        clickLock.unlock()
+        return active
     }
 
     private func startVideoDrainIfNeeded() {
@@ -165,10 +252,18 @@ private final class CapturesMediaWriter {
     private func shouldAppendHeartbeat(at timestamp: CMTime) -> Bool {
         guard lastTimestamp.isValid else { return false }
         let elapsed = CMTimeGetSeconds(CMTimeSubtract(timestamp, lastTimestamp))
-        return elapsed.isFinite && elapsed >= 0.25
+        guard elapsed.isFinite else { return false }
+        let hasActiveRipple = !activeClickRipples(
+            at: ProcessInfo.processInfo.systemUptime
+        ).isEmpty
+        return elapsed >= (hasActiveRipple ? videoFrameIntervalSeconds : 0.25)
     }
 
-    private func copyVideoBuffer(_ source: CVPixelBuffer) -> CVPixelBuffer? {
+    private func copyVideoBuffer(
+        _ source: CVPixelBuffer,
+        ripples: [CapturesClickRipple] = [],
+        uptime: TimeInterval = 0
+    ) -> CVPixelBuffer? {
         guard
             CVPixelBufferGetPixelFormatType(source) == kCVPixelFormatType_32BGRA,
             CVPixelBufferGetWidth(source) == outputWidth,
@@ -234,7 +329,94 @@ private final class CapturesMediaWriter {
                 bytesPerRow
             )
         }
+        if !ripples.isEmpty {
+            drawClickRipples(
+                ripples,
+                into: destinationBase,
+                bytesPerRow: destinationBytesPerRow,
+                uptime: uptime
+            )
+        }
         return destination
+    }
+
+    private func drawClickRipples(
+        _ ripples: [CapturesClickRipple],
+        into baseAddress: UnsafeMutableRawPointer,
+        bytesPerRow: Int,
+        uptime: TimeInterval
+    ) {
+        guard sourceFrame.width > 0, sourceFrame.height > 0 else { return }
+        let scaleX = Double(outputWidth) / sourceFrame.width
+        let scaleY = Double(outputHeight) / sourceFrame.height
+        let visualScale = max(0.5, sqrt(scaleX * scaleY))
+
+        for ripple in ripples {
+            let elapsed = uptime - ripple.startedAt
+            guard elapsed >= 0, elapsed < Self.clickRippleDuration else { continue }
+            let progress = min(1, max(0, elapsed / Self.clickRippleDuration))
+            let eased = 1 - pow(1 - progress, 3)
+            let centerX = (ripple.point.x - sourceFrame.minX) * scaleX
+            let centerY = (ripple.point.y - sourceFrame.minY) * scaleY
+            guard
+                centerX >= 0,
+                centerY >= 0,
+                centerX < Double(outputWidth),
+                centerY < Double(outputHeight)
+            else { continue }
+
+            let radius = (8 + 31 * eased) * visualScale
+            let thickness = (3.8 - 1.3 * progress) * visualScale
+            let haloWidth = 5.5 * visualScale
+            let extent = radius + thickness + haloWidth
+            let minimumX = max(0, Int(floor(centerX - extent)))
+            let maximumX = min(outputWidth - 1, Int(ceil(centerX + extent)))
+            let minimumY = max(0, Int(floor(centerY - extent)))
+            let maximumY = min(outputHeight - 1, Int(ceil(centerY + extent)))
+            let fade = pow(1 - progress, 0.62)
+            let centerFade = max(0, 1 - progress / 0.24)
+            let antialiasWidth = max(1, 0.8 * visualScale)
+
+            for y in minimumY...maximumY {
+                let deltaY = (Double(y) + 0.5) - centerY
+                let row = baseAddress
+                    .advanced(by: y * bytesPerRow)
+                    .assumingMemoryBound(to: UInt8.self)
+                for x in minimumX...maximumX {
+                    let deltaX = (Double(x) + 0.5) - centerX
+                    let distance = hypot(deltaX, deltaY)
+                    let distanceFromRing = abs(distance - radius)
+                    let ringCoverage = min(
+                        1,
+                        max(0, (thickness / 2 + antialiasWidth - distanceFromRing)
+                            / antialiasWidth)
+                    )
+                    let haloCoverage = max(
+                        0,
+                        1 - distanceFromRing / (thickness / 2 + haloWidth)
+                    )
+                    let centerRadius = 9 * visualScale
+                    let centerCoverage = centerFade * max(
+                        0,
+                        1 - distance / max(1, centerRadius)
+                    )
+                    let alpha = min(
+                        0.96,
+                        ringCoverage * 0.92 * fade
+                            + haloCoverage * 0.24 * fade
+                            + centerCoverage * 0.28
+                    )
+                    guard alpha > 0.002 else { continue }
+
+                    let pixel = row.advanced(by: x * 4)
+                    let inverse = 1 - alpha
+                    // kCVPixelFormatType_32BGRA: lavender #A997FF.
+                    pixel[0] = UInt8(min(255, Double(pixel[0]) * inverse + 255 * alpha))
+                    pixel[1] = UInt8(min(255, Double(pixel[1]) * inverse + 151 * alpha))
+                    pixel[2] = UInt8(min(255, Double(pixel[2]) * inverse + 169 * alpha))
+                }
+            }
+        }
     }
 
     func append(_ sample: CMSampleBuffer, kind: Int32) -> Bool {
@@ -341,7 +523,21 @@ private final class CapturesMediaWriter {
             presentationTimestamp = preferredTimestamp
         }
 
-        guard videoAdaptor.append(imageBuffer, withPresentationTime: presentationTimestamp) else {
+        let uptime = ProcessInfo.processInfo.systemUptime
+        let ripples = activeClickRipples(at: uptime)
+        let outputBuffer: CVPixelBuffer
+        if ripples.isEmpty {
+            outputBuffer = imageBuffer
+        } else {
+            guard let rendered = copyVideoBuffer(
+                imageBuffer,
+                ripples: ripples,
+                uptime: uptime
+            ) else { return false }
+            outputBuffer = rendered
+        }
+
+        guard videoAdaptor.append(outputBuffer, withPresentationTime: presentationTimestamp) else {
             return false
         }
 
@@ -447,7 +643,12 @@ public func capturesMediaWriterCreate(
     _ height: UInt32,
     _ framesPerSecond: UInt32,
     _ capturesAudio: Bool,
-    _ mono: Bool
+    _ mono: Bool,
+    _ highlightClicks: Bool,
+    _ sourceX: Double,
+    _ sourceY: Double,
+    _ sourceWidth: Double,
+    _ sourceHeight: Double
 ) -> UnsafeMutableRawPointer? {
     guard let writer = CapturesMediaWriter(
         path: String(cString: path),
@@ -455,7 +656,12 @@ public func capturesMediaWriterCreate(
         height: Int(height),
         framesPerSecond: Int(framesPerSecond),
         capturesAudio: capturesAudio,
-        mono: mono
+        mono: mono,
+        highlightClicks: highlightClicks,
+        sourceX: sourceX,
+        sourceY: sourceY,
+        sourceWidth: sourceWidth,
+        sourceHeight: sourceHeight
     ) else { return nil }
     return Unmanaged.passRetained(writer).toOpaque()
 }
@@ -467,7 +673,8 @@ public func capturesMediaWriterAppend(
     _ kind: Int32
 ) -> Bool {
     let writer = Unmanaged<CapturesMediaWriter>.fromOpaque(handle).takeUnretainedValue()
-    return writer.append(unsafeBitCast(sample, to: CMSampleBuffer.self), kind: kind)
+    let sampleBuffer = Unmanaged<CMSampleBuffer>.fromOpaque(sample).takeUnretainedValue()
+    return writer.append(sampleBuffer, kind: kind)
 }
 
 @_cdecl("captures_media_writer_finish")

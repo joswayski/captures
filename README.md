@@ -12,7 +12,7 @@ macOS is the primary development target today. Windows and Linux builds are avai
 - On macOS 13+, record a region, window, or display at up to its native pixel resolution, then trim, crop, resize, and save it as H.264/AAC video or an optimized GIF.
 - Record desktop audio and a selected microphone independently, with pause, resume, restart, mute, interruption recovery, and hideable recording controls. macOS 15+ can also show click highlights.
 - Take a lossless region, window, or display screenshot while a recording continues.
-- Review recordings on an aspect-correct filmstrip timeline, adjust crop and audio, then update the original or save a named copy with preserved quality, optional compression, or an exact maximum file size.
+- Review recordings on an aspect-correct filmstrip timeline, adjust crop and audio, then save changes to the original or make a named copy, with preserved quality, optional compression, or an exact maximum file size.
 - Start captures from the menu bar or customizable global shortcuts, and return to Captures from its macOS Dock icon.
 - Copy captures to the clipboard automatically, save them as full-resolution lossless PNGs, or inspect them in a full-size viewer.
 - Keep multiple recent captures in a quick-access preview stack, and drag a preview directly into file-upload targets.
@@ -124,7 +124,7 @@ Recording capture uses ScreenCaptureKit and Apple media APIs. Editing and GIF co
 
 ## Privacy
 
-Captures stores pending previews and its 30-day screenshot recovery history locally. Finished recording masters are written directly to the local Captures folder. Editor **Save** updates that file by default and can rename or move it, while the optional **Keep original** setting saves a copy; recording history stores only metadata and posters that reference those files. Interrupted-session bundles remain local and appear in Capture History for recovery, and GIF source masters are pruned after seven days. Captures does not upload captures or send telemetry. Official release builds contact GitHub Releases only to check for and download application updates; locally built copies do not perform background update checks.
+Captures stores pending previews and its 30-day screenshot recovery history locally. Finished recording masters are written directly to the local Captures folder before the editor opens, so closing the editor does not discard the recording. **Save changes** becomes available after an edit and updates the original by default; **Make a copy** saves a named copy and leaves the original untouched. Recording history stores only metadata and posters that reference those files. Interrupted-session bundles remain local and appear in Capture History for recovery, and GIF source masters are pruned after seven days. Captures does not upload captures or send telemetry. Official release builds contact GitHub Releases only to check for and download application updates; locally built copies do not perform background update checks.
 
 Future cloud sharing, product-health diagnostics, and feedback submission will be optional and explicit. Before sending a diagnostic report, Captures will show what is included and omit capture contents, filenames, clipboard data, and typed text by default.
 
