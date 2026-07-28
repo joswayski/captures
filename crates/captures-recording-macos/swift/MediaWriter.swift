@@ -175,7 +175,7 @@ private final class CapturesMediaWriter {
             started = true
         }
 
-        if kind == 0 {
+        if kind == 0 || kind == 2 {
             guard
                 let imageBuffer = CMSampleBufferGetImageBuffer(sample)
             else {
@@ -183,17 +183,25 @@ private final class CapturesMediaWriter {
                 return false
             }
 
-            if latestVideoGeneration > appendedVideoGeneration {
-                droppedFrames += 1
+            let isIdleFrame = kind == 2
+            if isIdleFrame && latestVideoGeneration > appendedVideoGeneration {
+                // Never let a cursor-only/idle surface replace pending screen
+                // content while the high-resolution encoder is catching up.
+                return true
+            }
+            if !isIdleFrame {
+                if latestVideoGeneration > appendedVideoGeneration {
+                    droppedFrames += 1
+                }
+                latestVideoGeneration &+= 1
             }
             latestVideoBuffer = imageBuffer
             latestVideoTimestamp = timestamp
-            latestVideoGeneration &+= 1
             startVideoDrainIfNeeded()
 
             guard appendLatestVideoFrame(
                 preferredTimestamp: timestamp,
-                generation: latestVideoGeneration,
+                generation: isIdleFrame ? nil : latestVideoGeneration,
                 waitUntilReady: videoFramesWritten == 0
             ) else {
                 failure = writer.error?.localizedDescription

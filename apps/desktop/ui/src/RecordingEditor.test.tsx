@@ -164,16 +164,14 @@ describe("RecordingEditor", () => {
     expect(play).toHaveBeenCalledOnce();
   });
 
-  it("defaults to replacing the source and can switch to a named copy", async () => {
+  it("defaults to updating the source and offers saving a copy as one optional setting", async () => {
     render(<RecordingEditor />);
 
     const filename = await screen.findByRole("textbox", { name: "Saved filename" });
     expect(filename).toHaveValue("Captures_1140x692");
-    expect(filename).toBeDisabled();
-    expect(screen.getByRole("radio", { name: "Save" })).toBeChecked();
-    expect(screen.getByRole("radio", { name: "Save as copy" })).not.toBeChecked();
-    expect(screen.getByText("Update original")).toBeInTheDocument();
-    expect(screen.getByText("Keep original")).toBeInTheDocument();
+    expect(filename).toBeEnabled();
+    expect(screen.getByRole("checkbox", { name: "Save as a copy" })).not.toBeChecked();
+    expect(screen.queryByRole("radio")).not.toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Save quality" })).toHaveTextContent(
       "Preserve quality",
     );
@@ -181,13 +179,15 @@ describe("RecordingEditor", () => {
       "/Users/josevalerio/Captures",
     );
     expect(screen.queryByText("Ready to save.")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Change save location" })).toBeInTheDocument();
 
+    fireEvent.change(filename, { target: { value: "Renamed recording" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("start_recording_export", {
         request: expect.objectContaining({
           artifact_id: artifact.id,
-          file_stem: "Captures_1140x692",
+          file_stem: "Renamed recording",
           destination_directory: "/Users/josevalerio/Captures",
           overwrite_source: true,
         }),
@@ -203,18 +203,19 @@ describe("RecordingEditor", () => {
         },
       });
     });
-    expect(screen.getByText("Video saved — 40.7 KB.")).toHaveClass("recording-save-success");
-    expect(screen.getByRole("button", { name: "Saved" })).toBeDisabled();
+    expect(screen.getByText("Video saved — 40.7 KB.").closest(".recording-save-toast"))
+      .toHaveClass("success");
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Saved" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Show in Folder" }));
     expect(invoke).toHaveBeenCalledWith("reveal_recording_artifact", {
       artifactId: artifact.id,
     });
 
-    fireEvent.click(screen.getByRole("radio", { name: "Save as copy" }));
-    expect(filename).toHaveValue("Captures_1140x692-copy");
+    fireEvent.click(screen.getByRole("checkbox", { name: "Save as a copy" }));
     expect(filename).toBeEnabled();
     fireEvent.change(filename, { target: { value: "Demo recording" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save as copy" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("start_recording_export", {
@@ -234,7 +235,6 @@ describe("RecordingEditor", () => {
     vi.mocked(open).mockResolvedValue("/Users/josevalerio/Desktop/Exports");
     render(<RecordingEditor />);
 
-    fireEvent.click(await screen.findByRole("radio", { name: "Save as copy" }));
     fireEvent.click(await screen.findByRole("button", { name: "Change save location" }));
     await waitFor(() => {
       expect(screen.getByLabelText("Save location")).toHaveTextContent(
@@ -253,11 +253,16 @@ describe("RecordingEditor", () => {
     fireEvent.click(screen.getByRole("option", { name: "GB" }));
     expect(maximum).toHaveValue(0.01);
 
-    fireEvent.click(screen.getByRole("button", { name: "Save as copy" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Saved filename" }), {
+      target: { value: "Moved recording" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("start_recording_export", {
         request: expect.objectContaining({
           destination_directory: "/Users/josevalerio/Desktop/Exports",
+          file_stem: "Moved recording",
+          overwrite_source: true,
           export: expect.objectContaining({ max_size_bytes: 10_000_000 }),
         }),
       });

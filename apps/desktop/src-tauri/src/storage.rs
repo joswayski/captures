@@ -211,6 +211,25 @@ pub fn recording_destination_path_in(
     file_stem: &str,
     extension: &str,
 ) -> Result<PathBuf, AppError> {
+    recording_destination_path_in_mode(source, selected_directory, file_stem, extension, false)
+}
+
+pub fn recording_replacement_destination_path_in(
+    source: &Path,
+    selected_directory: Option<&Path>,
+    file_stem: &str,
+    extension: &str,
+) -> Result<PathBuf, AppError> {
+    recording_destination_path_in_mode(source, selected_directory, file_stem, extension, true)
+}
+
+fn recording_destination_path_in_mode(
+    source: &Path,
+    selected_directory: Option<&Path>,
+    file_stem: &str,
+    extension: &str,
+    allow_source: bool,
+) -> Result<PathBuf, AppError> {
     let stem = file_stem.trim();
     let reserved = [
         "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
@@ -254,7 +273,7 @@ pub fn recording_destination_path_in(
         ));
     }
     let destination = directory.join(format!("{stem}.{extension}"));
-    if destination == source || destination.exists() {
+    if destination.exists() && !(allow_source && destination == source) {
         return Err(AppError::Task(format!(
             "“{stem}.{extension}” already exists; choose another filename"
         )));
@@ -528,8 +547,8 @@ mod tests {
         HISTORY_IMAGE_FILE, HISTORY_PREVIEW_FILE, clear_drag_exports_in, encode_drag_icon_png,
         encode_png, encode_preview_png, encode_thumbnail_png, load_capture_history_from,
         prepare_artifact_drag_in, recording_destination_path, recording_destination_path_in,
-        save_encoded_capture, save_history_capture_in, save_history_entry_in, save_settings_to,
-        unique_path,
+        recording_replacement_destination_path_in, save_encoded_capture, save_history_capture_in,
+        save_history_entry_in, save_settings_to, unique_path,
     };
     use crate::models::{
         AppSettings, ArtifactKind, CaptureArtifact, ClipboardCopyStatus, HistoryEntry,
@@ -611,6 +630,47 @@ mod tests {
                 &source,
                 Some(&selected_directory.path().join("missing")),
                 "saved",
+                "mp4",
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn recording_replacement_can_keep_or_change_the_source_path_without_overwriting_another_file() {
+        let source_directory = tempdir().expect("source directory");
+        let selected_directory = tempdir().expect("selected directory");
+        let source = source_directory.path().join("source.mp4");
+        std::fs::write(&source, b"master").expect("source written");
+
+        assert_eq!(
+            recording_replacement_destination_path_in(
+                &source,
+                Some(source_directory.path()),
+                "source",
+                "mp4",
+            )
+            .expect("same source path"),
+            source
+        );
+        assert_eq!(
+            recording_replacement_destination_path_in(
+                &source,
+                Some(selected_directory.path()),
+                "renamed",
+                "mp4",
+            )
+            .expect("renamed destination"),
+            selected_directory.path().join("renamed.mp4")
+        );
+
+        std::fs::write(selected_directory.path().join("existing.mp4"), b"existing")
+            .expect("collision written");
+        assert!(
+            recording_replacement_destination_path_in(
+                &source,
+                Some(selected_directory.path()),
+                "existing",
                 "mp4",
             )
             .is_err()

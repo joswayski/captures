@@ -1376,24 +1376,27 @@ pub fn start_recording_export(
         .as_deref()
         .filter(|directory| !directory.is_empty())
         .map(Path::new);
-    let final_destination = if request.overwrite_source {
-        source_path.clone()
-    } else {
-        match selected_directory {
-            Some(directory) => storage::recording_destination_path_in(
-                &source_path,
-                Some(directory),
-                &request.file_stem,
-                extension,
-            ),
-            None => {
-                storage::recording_destination_path(&source_path, &request.file_stem, extension)
-            }
+    let final_destination = match (request.overwrite_source, selected_directory) {
+        (true, directory) => storage::recording_replacement_destination_path_in(
+            &source_path,
+            directory,
+            &request.file_stem,
+            extension,
+        ),
+        (false, Some(directory)) => storage::recording_destination_path_in(
+            &source_path,
+            Some(directory),
+            &request.file_stem,
+            extension,
+        ),
+        (false, None) => {
+            storage::recording_destination_path(&source_path, &request.file_stem, extension)
         }
-        .map_err(|error| error.to_string())?
-    };
+    }
+    .map_err(|error| error.to_string())?;
     let working_destination = if request.overwrite_source {
-        replacement_working_path(&source_path, extension).map_err(|error| error.to_string())?
+        replacement_working_path(&final_destination, extension)
+            .map_err(|error| error.to_string())?
     } else {
         final_destination.clone()
     };
@@ -1415,6 +1418,7 @@ pub fn start_recording_export(
         let edit = request.edit.clone();
         let export = request.export.clone();
         let overwrite_source = request.overwrite_source;
+        let replacement_destination = final_destination.clone();
         let cleanup_destination = working_destination.clone();
         let result = tauri::async_runtime::spawn_blocking(move || {
             let mut outcome = toolchain.export(
@@ -1443,8 +1447,8 @@ pub fn start_recording_export(
                 .and_then(|()| fs::read(&generated_poster_path).ok());
             let _ = fs::remove_file(generated_poster_path);
             if overwrite_source {
-                replace_recording_source(&input, &outcome.path)?;
-                outcome.path = input;
+                replace_recording_source_at(&input, &outcome.path, &replacement_destination)?;
+                outcome.path = replacement_destination;
                 outcome.size_bytes = fs::metadata(&outcome.path)?.len();
             }
             Ok::<_, captures_media::MediaToolError>((outcome, probe, generated_poster))
@@ -2293,6 +2297,36 @@ fn replace_recording_source(source: &Path, replacement: &Path) -> io::Result<()>
     }
 }
 
+fn replace_recording_source_at(
+    source: &Path,
+    replacement: &Path,
+    destination: &Path,
+) -> io::Result<()> {
+    if source == destination {
+        return replace_recording_source(source, replacement);
+    }
+    if destination.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "a file with that name already exists",
+        ));
+    }
+
+    fs::rename(replacement, destination)?;
+    match fs::remove_file(source) {
+        Ok(()) => Ok(()),
+        Err(remove_error) => match fs::remove_file(destination) {
+            Ok(()) => Err(remove_error),
+            Err(rollback_error) => Err(io::Error::new(
+                remove_error.kind(),
+                format!(
+                    "the original recording could not be removed ({remove_error}), and the new destination could not be rolled back automatically ({rollback_error})"
+                ),
+            )),
+        },
+    }
+}
+
 fn upsert_recording_artifact(
     app: &AppHandle,
     state: &AppState,
@@ -2753,7 +2787,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        replace_recording_source, replacement_working_path, screenshot_capture_is_blocked_for,
+        replace_recording_source, replace_recording_source_at, replacement_working_path,
+        screenshot_capture_is_blocked_for,
     };
 
     #[test]
@@ -2810,6 +2845,49 @@ mod tests {
         assert_eq!(
             std::fs::read(&source).expect("restored source"),
             b"original"
+        );
+    }
+
+    #[test]
+    fn replacing_a_recording_can_rename_or_move_the_original() {
+        let source_directory = tempdir().expect("source directory");
+        let destination_directory = tempdir().expect("destination directory");
+        let source = source_directory.path().join("recording.mp4");
+        let replacement = destination_directory.path().join(".replacement.mp4");
+        let destination = destination_directory.path().join("renamed.mp4");
+        std::fs::write(&source, b"original").expect("source");
+        std::fs::write(&replacement, b"edited").expect("replacement");
+
+        replace_recording_source_at(&source, &replacement, &destination).expect("source moved");
+
+        assert!(!source.exists());
+        assert!(!replacement.exists());
+        assert_eq!(
+            std::fs::read(&destination).expect("renamed recording"),
+            b"edited"
+        );
+    }
+
+    #[test]
+    fn replacing_a_recording_never_overwrites_an_existing_destination() {
+        let source_directory = tempdir().expect("source directory");
+        let destination_directory = tempdir().expect("destination directory");
+        let source = source_directory.path().join("recording.mp4");
+        let replacement = destination_directory.path().join(".replacement.mp4");
+        let destination = destination_directory.path().join("existing.mp4");
+        std::fs::write(&source, b"original").expect("source");
+        std::fs::write(&replacement, b"edited").expect("replacement");
+        std::fs::write(&destination, b"keep").expect("destination");
+
+        assert!(replace_recording_source_at(&source, &replacement, &destination).is_err());
+        assert_eq!(std::fs::read(&source).expect("source kept"), b"original");
+        assert_eq!(
+            std::fs::read(&replacement).expect("replacement kept"),
+            b"edited"
+        );
+        assert_eq!(
+            std::fs::read(&destination).expect("destination kept"),
+            b"keep"
         );
     }
 }

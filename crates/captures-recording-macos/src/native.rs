@@ -113,10 +113,14 @@ impl NativeRecordingSegment {
         let video_output_id = stream
             .add_output_handler_with_queue(
                 move |sample: CMSampleBuffer, _output_type: SCStreamOutputType| {
-                    if !sample_contains_video_frame(&sample) {
+                    let Some(frame_kind) = sample_video_frame_kind(&sample) else {
                         return;
-                    }
-                    if !video_writer.append_video(&sample) {
+                    };
+                    let appended = match frame_kind {
+                        VideoFrameKind::Content => video_writer.append_video(&sample),
+                        VideoFrameKind::Idle => video_writer.append_idle_video(&sample),
+                    };
+                    if !appended {
                         if let Ok(mut current) = video_failure.lock() {
                             *current = Some(video_writer.error_message());
                         }
@@ -291,8 +295,14 @@ impl NativeRecordingSegment {
     }
 }
 
-fn sample_contains_video_frame(sample: &CMSampleBuffer) -> bool {
-    video_frame_is_usable(
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VideoFrameKind {
+    Content,
+    Idle,
+}
+
+fn sample_video_frame_kind(sample: &CMSampleBuffer) -> Option<VideoFrameKind> {
+    video_frame_kind(
         sample.frame_status(),
         sample.is_valid(),
         sample.data_is_ready(),
@@ -300,29 +310,27 @@ fn sample_contains_video_frame(sample: &CMSampleBuffer) -> bool {
     )
 }
 
-const fn video_frame_is_usable(
+const fn video_frame_kind(
     status: Option<SCFrameStatus>,
     is_valid: bool,
     data_is_ready: bool,
     has_image_buffer: bool,
-) -> bool {
-    is_valid
-        && data_is_ready
-        && has_image_buffer
-        && match status {
-            // Cursor movement and ScreenCaptureKit's click overlay can arrive
-            // without a new desktop IOSurface. Forward idle samples so those
-            // pointer-only updates are not discarded; the media writer keeps
-            // only the newest pending buffer under encoder backpressure.
-            Some(status) => matches!(
-                status,
-                SCFrameStatus::Complete | SCFrameStatus::Started | SCFrameStatus::Idle
-            ),
-            // Some ScreenCaptureKit runtimes expose the status attachment as
-            // an integer that the binding cannot currently decode. A valid,
-            // ready video sample with an image buffer is still safe to append.
-            None => true,
-        }
+) -> Option<VideoFrameKind> {
+    if !is_valid || !data_is_ready || !has_image_buffer {
+        return None;
+    }
+    match status {
+        Some(SCFrameStatus::Complete | SCFrameStatus::Started) => Some(VideoFrameKind::Content),
+        // Cursor movement and ScreenCaptureKit's click overlay may arrive on an
+        // idle surface. The writer accepts these only when no real content
+        // frame is waiting, so pointer updates cannot displace screen motion.
+        Some(SCFrameStatus::Idle) => Some(VideoFrameKind::Idle),
+        Some(_) => None,
+        // Some ScreenCaptureKit runtimes expose the status attachment as an
+        // integer that the binding cannot currently decode. A valid, ready
+        // video sample with an image buffer is still safe to append.
+        None => Some(VideoFrameKind::Content),
+    }
 }
 
 pub fn microphone_devices() -> Vec<AudioDevice> {
@@ -490,8 +498,8 @@ fn current_process_applications(content: &SCShareableContent) -> Vec<SCRunningAp
 #[cfg(test)]
 mod tests {
     use super::{
-        capture_pointer_options, intersection_area, microphone_choices,
-        pixel_scale_from_dimensions, video_frame_is_usable,
+        VideoFrameKind, capture_pointer_options, intersection_area, microphone_choices,
+        pixel_scale_from_dimensions, video_frame_kind,
     };
     use screencapturekit::cm::SCFrameStatus;
     use screencapturekit::prelude::CGRect;
@@ -515,28 +523,25 @@ mod tests {
 
     #[test]
     fn accepts_ready_video_samples_when_frame_status_is_unavailable() {
-        assert!(video_frame_is_usable(None, true, true, true));
-        assert!(video_frame_is_usable(
-            Some(SCFrameStatus::Complete),
-            true,
-            true,
-            true
-        ));
-        assert!(video_frame_is_usable(
-            Some(SCFrameStatus::Started),
-            true,
-            true,
-            true
-        ));
-        assert!(video_frame_is_usable(
-            Some(SCFrameStatus::Idle),
-            true,
-            true,
-            true
-        ));
-        assert!(!video_frame_is_usable(None, false, true, true));
-        assert!(!video_frame_is_usable(None, true, false, true));
-        assert!(!video_frame_is_usable(None, true, true, false));
+        assert_eq!(
+            video_frame_kind(None, true, true, true),
+            Some(VideoFrameKind::Content)
+        );
+        assert_eq!(
+            video_frame_kind(Some(SCFrameStatus::Complete), true, true, true,),
+            Some(VideoFrameKind::Content)
+        );
+        assert_eq!(
+            video_frame_kind(Some(SCFrameStatus::Started), true, true, true,),
+            Some(VideoFrameKind::Content)
+        );
+        assert_eq!(
+            video_frame_kind(Some(SCFrameStatus::Idle), true, true, true,),
+            Some(VideoFrameKind::Idle)
+        );
+        assert_eq!(video_frame_kind(None, false, true, true), None);
+        assert_eq!(video_frame_kind(None, true, false, true), None);
+        assert_eq!(video_frame_kind(None, true, true, false), None);
     }
 
     #[test]

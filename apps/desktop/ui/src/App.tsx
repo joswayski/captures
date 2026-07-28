@@ -1709,6 +1709,7 @@ export function RecordingHud() {
       className={`recording-hud recording-hud-${snapshot.state}${capturingScreenshot ? " recording-hud-capturing" : ""}`}
       onPointerDown={startHudDrag}
     >
+      <span className="recording-hud-privacy">These controls won’t show in the recording</span>
       <div className="recording-hud-main">
         <div className="recording-hud-status">
           <span className="recording-dot" aria-hidden="true" />
@@ -1763,13 +1764,11 @@ export function RecordingHud() {
               className="recording-icon-button recording-hide"
               disabled={busy}
               aria-label="Hide recording controls"
-              title="Open Captures from the Dock to show the controls again"
               onClick={() => void hideControls()}
             ><HideControlsIcon /></button>
           </HudTooltip>
         </div>
       </div>
-      <span className="recording-hud-privacy">These controls won’t show in the recording</span>
       {(error || snapshot.error) && (
         <p className="recording-hud-error" role="alert">
           {recordingErrorMessage(error || snapshot.error)}
@@ -1877,6 +1876,9 @@ export function RecordingEditor() {
         }),
         listen<{ export_id: string; artifact: RecordingArtifact; finder_error: string | null }>("recording-export-complete", ({ payload }) => {
           if (!active || payload.export_id !== exportIdRef.current) return;
+          if (payload.artifact.id === artifactId) {
+            setArtifact(payload.artifact);
+          }
           setExported(payload.artifact);
           setSavedFingerprint(pendingExportFingerprintRef.current);
           setToast(
@@ -1892,7 +1894,7 @@ export function RecordingEditor() {
         listen<{ export_id: string; message: string; cancelled: boolean }>("recording-export-failed", ({ payload }) => {
           if (!active || payload.export_id !== exportIdRef.current) return;
           if (payload.cancelled) {
-            setToast("");
+            setToast("Save cancelled.");
             setProgress({ stage: "cancelled", completed_per_mille: 0, attempt: 0, message: null });
           } else {
             setError(recordingErrorMessage(payload.message));
@@ -1940,6 +1942,12 @@ export function RecordingEditor() {
       dispose.forEach((unlisten) => unlisten());
     };
   }, [artifactId]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(""), 4_000);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
 
   if (!artifact) {
     return <main className="recording-editor recording-editor-loading">{error || "Loading recording…"}</main>;
@@ -1991,8 +1999,11 @@ export function RecordingEditor() {
   const updateSaveCopy = (enabled: boolean) => {
     if (!enabled && formatRequiresCopy) return;
     setSaveCopy(enabled);
-    setFilenameStem(enabled ? `${sourceStem}-copy` : sourceStem);
-    setDestinationDirectory(sourceDirectory);
+    if (enabled && filenameStem === sourceStem && destinationDirectory === sourceDirectory) {
+      setFilenameStem(`${sourceStem}-copy`);
+    } else if (!enabled && filenameStem === `${sourceStem}-copy`) {
+      setFilenameStem(sourceStem);
+    }
     setSavedFingerprint(null);
     setExported(null);
     setToast("");
@@ -2133,7 +2144,7 @@ export function RecordingEditor() {
   };
 
   const chooseDestinationDirectory = async () => {
-    if (exportId || !saveCopy) return;
+    if (exportId) return;
     setError("");
     try {
       const selected = await open({
@@ -2163,7 +2174,7 @@ export function RecordingEditor() {
 
   const startExport = async () => {
     if (exportId) return;
-    const invalidFilename = saveCopy ? recordingFilenameError(filenameStem) : "";
+    const invalidFilename = recordingFilenameError(filenameStem);
     if (invalidFilename) {
       setError(invalidFilename);
       return;
@@ -2611,9 +2622,31 @@ export function RecordingEditor() {
 
       <footer className={`recording-save-footer${error ? " has-error" : ""}`}>
         {progress && <div className="recording-export-progress"><span style={{ width: `${progress.completed_per_mille / 10}%` }} /></div>}
+        {(error || toast || (progress && exportId)) && (
+          <div
+            className={`recording-save-toast${error ? " error" : toast ? " success" : ""}`}
+            aria-live={error ? "assertive" : "polite"}
+          >
+            {error
+              ? <p role="alert">{error}</p>
+              : toast
+                ? <p role="status">{toast}</p>
+                : <p>{progress?.message || exportStageLabel(progress?.stage || "preparing")}</p>}
+          </div>
+        )}
         <div className="recording-filename">
           <div className="recording-filename-heading">
             <label htmlFor="recording-save-filename">Filename</label>
+            <label className="recording-save-copy">
+              <input
+                aria-label="Save as a copy"
+                type="checkbox"
+                checked={saveCopy}
+                disabled={Boolean(exportId) || formatRequiresCopy}
+                onChange={(event) => updateSaveCopy(event.target.checked)}
+              />
+              <span>Save as a copy</span>
+            </label>
           </div>
           <span className="recording-filename-input">
             <input
@@ -2621,7 +2654,7 @@ export function RecordingEditor() {
               value={filenameStem}
               aria-label="Saved filename"
               spellCheck={false}
-              disabled={Boolean(exportId) || !saveCopy}
+              disabled={Boolean(exportId)}
               onChange={(event) => {
                 setFilenameStem(event.target.value);
                 setError("");
@@ -2632,54 +2665,19 @@ export function RecordingEditor() {
           <div className="recording-destination">
             <span>Save to</span>
             <output aria-label="Save location" title={destinationDirectory}>{destinationDirectory}</output>
-            {saveCopy && <button
-                type="button"
-                aria-label="Change save location"
-                disabled={Boolean(exportId)}
-                onClick={() => void chooseDestinationDirectory()}
-              >Change…</button>}
-          </div>
-        </div>
-        <div className="recording-save-middle">
-          <fieldset className="recording-save-mode" aria-label="Save behavior">
-            <label className={!saveCopy ? "active" : ""}>
-              <input
-                aria-label="Save"
-                type="radio"
-                name="recording-save-behavior"
-                checked={!saveCopy}
-                disabled={Boolean(exportId) || formatRequiresCopy}
-                onChange={() => updateSaveCopy(false)}
-              />
-              <span><strong>Save</strong><small>Update original</small></span>
-            </label>
-            <label className={saveCopy ? "active" : ""}>
-              <input
-                aria-label="Save as copy"
-                type="radio"
-                name="recording-save-behavior"
-                checked={saveCopy}
-                disabled={Boolean(exportId)}
-                onChange={() => updateSaveCopy(true)}
-              />
-              <span><strong>Save as copy</strong><small>Keep original</small></span>
-            </label>
-          </fieldset>
-          <div className="recording-save-feedback" aria-live="polite">
-            {error
-              ? <p className="recording-save-error" role="alert">{error}</p>
-              : toast
-                ? <p className="recording-save-success" role="status">{toast}</p>
-                : progress
-                  ? <p>{progress.message || exportStageLabel(progress.stage)}</p>
-                  : null}
+            <button
+              type="button"
+              aria-label="Change save location"
+              disabled={Boolean(exportId)}
+              onClick={() => void chooseDestinationDirectory()}
+            >Change…</button>
           </div>
         </div>
         <div className="recording-save-actions">
           {exportId && <button type="button" onClick={() => void invoke("cancel_recording_export", { exportId })}>Cancel</button>}
           {exported && <button type="button" onClick={() => void revealSavedRecording()}>Show in Folder</button>}
           <button className="primary" type="button" disabled={Boolean(exportId) || alreadySaved} onClick={() => void startExport()}>
-            {exportId ? "Saving…" : alreadySaved ? "Saved" : saveCopy ? "Save as copy" : "Save"}
+            {exportId ? "Saving…" : "Save"}
           </button>
         </div>
       </footer>
