@@ -47,8 +47,9 @@ mod storage;
 mod updates;
 
 use models::{
-    ActiveSession, AppSettings, ArtifactKind, ArtifactSummary, CaptureArtifact, CaptureSession,
-    ClipboardCopyStatus, ClipboardState, HISTORY_RETENTION_DAYS, HistoryEntry,
+    ActiveSession, AppSettings, ArtifactKind, ArtifactSummary, CaptureArtifact,
+    CaptureSelectorMode, CaptureSession, ClipboardCopyStatus, ClipboardState,
+    HISTORY_RETENTION_DAYS, HistoryEntry,
 };
 use state::{AppState, ClipboardFingerprint};
 
@@ -202,11 +203,8 @@ pub fn run() {
             reassert_thumbnail_cursor,
             set_thumbnail_ignore_cursor_events,
             open_captures_folder,
-            open_capture_launcher,
             open_capture_history,
             open_preferences,
-            start_capture_from_launcher,
-            start_recording_from_launcher,
             dismiss_recording_saved_notice,
             updates::get_update_status,
             updates::check_for_updates,
@@ -216,6 +214,7 @@ pub fn run() {
             recording::show_recording_selector,
             recording::reveal_recording_selector,
             recording::cancel_recording_selection,
+            recording::capture_selection_screenshot,
             recording::list_recording_audio_devices,
             recording::get_recording_snapshot,
             recording::start_recording,
@@ -267,13 +266,12 @@ pub fn run() {
             };
             refresh_autostart_registration(app);
             if pending_capture.is_none() {
-                let notice_result = if launched_from_autostart() {
-                    show_startup_notice(&handle)
+                if launched_from_autostart() {
+                    if let Err(error) = show_startup_notice(&handle) {
+                        eprintln!("failed to show Captures launch notice: {error}");
+                    }
                 } else {
-                    show_capture_launcher(&handle)
-                };
-                if let Err(error) = notice_result {
-                    eprintln!("failed to show Captures launch UI: {error}");
+                    open_capture_controls(&handle, CaptureSelectorMode::Screenshot);
                 }
             }
             if let Some(mode) = pending_capture {
@@ -319,6 +317,23 @@ fn refresh_autostart_registration(app: &tauri::App) {
     let _ = app;
 }
 
+fn open_capture_controls(app: &AppHandle, initial_mode: CaptureSelectorMode) {
+    let state = app.state::<Arc<AppState>>().inner().clone();
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) =
+            recording::prepare_capture_selector_inner(app.clone(), state, initial_mode).await
+        {
+            match initial_mode {
+                CaptureSelectorMode::Screenshot => {
+                    report_capture_error(&app, &error, CaptureMode::Region);
+                }
+                CaptureSelectorMode::Recording => report_recording_error(&app, &error),
+            }
+        }
+    });
+}
+
 #[tauri::command]
 async fn start_capture(
     app: AppHandle,
@@ -328,41 +343,6 @@ async fn start_capture(
     start_capture_inner(app, state.inner().clone(), mode)
         .await
         .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-async fn start_capture_from_launcher(
-    app: AppHandle,
-    state: tauri::State<'_, Arc<AppState>>,
-    mode: CaptureMode,
-) -> CommandResult<()> {
-    hide_window(&app, "launcher");
-    match start_capture_inner(app.clone(), state.inner().clone(), mode).await {
-        Ok(_) => Ok(()),
-        Err(error) => {
-            if let Err(show_error) = show_capture_launcher(&app) {
-                eprintln!("failed to restore capture launcher after an error: {show_error}");
-            }
-            Err(error.to_string())
-        }
-    }
-}
-
-#[tauri::command]
-async fn start_recording_from_launcher(
-    app: AppHandle,
-    state: tauri::State<'_, Arc<AppState>>,
-) -> CommandResult<()> {
-    hide_window(&app, "launcher");
-    match recording::prepare_recording_inner(app.clone(), state.inner().clone()).await {
-        Ok(_) => Ok(()),
-        Err(error) => {
-            if let Err(show_error) = show_capture_launcher(&app) {
-                eprintln!("failed to restore capture launcher after an error: {show_error}");
-            }
-            Err(error.to_string())
-        }
-    }
 }
 
 async fn start_capture_inner(
@@ -387,7 +367,6 @@ async fn start_capture_inner(
 
     begin_thumbnail_capture(&state)?;
     set_capture_huds_protected(&app, true);
-    hide_window(&app, "launcher");
     hide_window(&app, "thumbnail");
     hide_window(&app, "startup");
     hide_recording_saved_notices(&app);
@@ -1368,7 +1347,6 @@ fn open_captures_folder(
     app: AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> CommandResult<()> {
-    hide_window(&app, "launcher");
     let path = PathBuf::from(state.settings().output_directory);
     fs::create_dir_all(&path).map_err(|error| error.to_string())?;
     app.opener()
@@ -1377,20 +1355,13 @@ fn open_captures_folder(
 }
 
 #[tauri::command(async)]
-fn open_capture_launcher(app: AppHandle) -> CommandResult<()> {
-    show_capture_launcher(&app).map_err(|error| error.to_string())
-}
-
-#[tauri::command(async)]
 fn open_capture_history(app: AppHandle) -> CommandResult<()> {
-    hide_window(&app, "launcher");
     show_capture_history(&app);
     Ok(())
 }
 
 #[tauri::command(async)]
 fn open_preferences(app: AppHandle) -> CommandResult<()> {
-    hide_window(&app, "launcher");
     show_preferences(&app);
     Ok(())
 }
@@ -1961,9 +1932,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
     tray.on_menu_event(|app, event| match event.id().as_ref() {
         "new-capture" => {
-            if let Err(error) = show_capture_launcher(app) {
-                eprintln!("failed to show capture launcher: {error}");
-            }
+            open_capture_controls(app, CaptureSelectorMode::Screenshot);
         }
         "capture-history" => {
             show_capture_history(app);
@@ -2086,40 +2055,6 @@ fn create_overlay_window(app: &AppHandle) -> Result<(), tauri::Error> {
     #[cfg(not(target_os = "macos"))]
     let _ = window;
 
-    Ok(())
-}
-
-const CAPTURE_LAUNCHER_WIDTH: f64 = 660.0;
-const CAPTURE_LAUNCHER_HEIGHT: f64 = 440.0;
-
-fn show_capture_launcher(app: &AppHandle) -> Result<(), tauri::Error> {
-    hide_window(app, "startup");
-    if let Some(window) = app.get_webview_window("launcher") {
-        window.show()?;
-        window.unminimize()?;
-        window.set_focus()?;
-        return Ok(());
-    }
-    WebviewWindowBuilder::new(
-        app,
-        "launcher",
-        WebviewUrl::App("index.html?view=launcher".into()),
-    )
-    .title("Captures")
-    .inner_size(CAPTURE_LAUNCHER_WIDTH, CAPTURE_LAUNCHER_HEIGHT)
-    .center()
-    .resizable(false)
-    .background_color(Color(17, 18, 26, 255))
-    .focused(false)
-    .visible(false)
-    .on_page_load(|window, payload| {
-        if payload.event() == PageLoadEvent::Finished
-            && let Err(error) = window.show().and_then(|_| window.set_focus())
-        {
-            eprintln!("failed to reveal capture launcher: {error}");
-        }
-    })
-    .build()?;
     Ok(())
 }
 
@@ -2700,16 +2635,13 @@ fn primary_app_window_priority(label: &str) -> Option<u8> {
     if label.starts_with(RECORDING_EDITOR_WINDOW_PREFIX) {
         return Some(1);
     }
-    if label == "launcher" {
+    if label == "history" {
         return Some(2);
     }
-    if label == "history" {
+    if label == "preferences" || label.starts_with(VIEWER_WINDOW_PREFIX) {
         return Some(3);
     }
-    if label == "preferences" || label.starts_with(VIEWER_WINDOW_PREFIX) {
-        return Some(4);
-    }
-    (label == "recording-hud").then_some(5)
+    (label == "recording-hud").then_some(4)
 }
 
 fn focus_or_show_primary_app_window(app: &AppHandle) {
@@ -2719,9 +2651,7 @@ fn focus_or_show_primary_app_window(app: &AppHandle) {
     }
 
     #[cfg(not(target_os = "macos"))]
-    if let Err(error) = show_capture_launcher(app) {
-        eprintln!("failed to show capture launcher: {error}");
-    }
+    open_capture_controls(app, CaptureSelectorMode::Screenshot);
 }
 
 #[cfg(target_os = "macos")]
@@ -2751,8 +2681,8 @@ fn focus_primary_app_window(app: &AppHandle) {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
-    } else if let Err(error) = show_capture_launcher(app) {
-        eprintln!("failed to show capture launcher: {error}");
+    } else {
+        open_capture_controls(app, CaptureSelectorMode::Screenshot);
     }
 }
 
@@ -2818,7 +2748,7 @@ fn set_capture_huds_protected(app: &AppHandle, protected: bool) {
     for (label, window) in app.webview_windows() {
         if (matches!(
             label.as_str(),
-            "launcher" | "thumbnail" | "startup" | "update" | "recording-hud"
+            "thumbnail" | "startup" | "update" | "recording-hud"
         ) || label.starts_with(RECORDING_SAVED_NOTICE_PREFIX))
             && let Err(error) = window.set_content_protected(protected)
         {
@@ -3201,9 +3131,8 @@ mod tests {
     #[test]
     fn dock_reopen_prefers_editors_over_utility_windows() {
         assert_eq!(primary_app_window_priority("recording-editor-abc"), Some(1));
-        assert_eq!(primary_app_window_priority("launcher"), Some(2));
-        assert_eq!(primary_app_window_priority("history"), Some(3));
-        assert_eq!(primary_app_window_priority("recording-hud"), Some(5));
+        assert_eq!(primary_app_window_priority("history"), Some(2));
+        assert_eq!(primary_app_window_priority("recording-hud"), Some(4));
         assert_eq!(primary_app_window_priority("thumbnail"), None);
     }
 

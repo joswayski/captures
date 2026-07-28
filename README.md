@@ -13,7 +13,7 @@ macOS is the primary development target today. Windows and Linux builds are avai
 - Record desktop audio and a selected microphone independently, with pause, resume, restart, mute, interruption recovery, and hideable recording controls. macOS 15+ can also show click highlights.
 - Take a lossless region, window, or display screenshot while a recording continues.
 - Review recordings on an aspect-correct filmstrip timeline, adjust crop and audio, then save changes to the original or make a named copy, with preserved quality, optional compression, or an exact maximum file size.
-- Open one Capture and Record launcher from the menu bar, Spotlight, or the macOS Dock, or start immediately with customizable global shortcuts.
+- Open one desktop Capture and Record overlay from the menu bar, Spotlight, or the macOS Dock, switch between screenshot and recording targets in place, or start immediately with customizable global shortcuts.
 - Copy captures to the clipboard automatically, save them as full-resolution lossless PNGs, or inspect them in a full-size viewer.
 - Keep multiple recent captures in a quick-access preview stack, and drag a preview directly into file-upload targets.
 - Restore captures from a private, rolling 30-day local history.
