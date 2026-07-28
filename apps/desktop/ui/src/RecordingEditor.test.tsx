@@ -170,7 +170,7 @@ describe("RecordingEditor", () => {
     const filename = await screen.findByRole("textbox", { name: "Saved filename" });
     expect(filename).toHaveValue("Captures_1140x692");
     expect(filename).toBeEnabled();
-    expect(screen.getByRole("checkbox", { name: "Save as a copy" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Keep original" })).not.toBeChecked();
     expect(screen.queryByRole("radio")).not.toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Save quality" })).toHaveTextContent(
       "Preserve quality",
@@ -212,7 +212,7 @@ describe("RecordingEditor", () => {
       artifactId: artifact.id,
     });
 
-    fireEvent.click(screen.getByRole("checkbox", { name: "Save as a copy" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Keep original" }));
     expect(filename).toBeEnabled();
     fireEvent.change(filename, { target: { value: "Demo recording" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));

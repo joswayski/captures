@@ -8,6 +8,8 @@ private final class CapturesMediaWriter {
     private let videoInput: AVAssetWriterInput
     private let videoAdaptor: AVAssetWriterInputPixelBufferAdaptor
     private let audioInput: AVAssetWriterInput?
+    private let outputWidth: Int
+    private let outputHeight: Int
     private let lock = NSLock()
     private var started = false
     private var finished = false
@@ -26,6 +28,8 @@ private final class CapturesMediaWriter {
     private(set) var failure: String?
 
     init?(path: String, width: Int, height: Int, framesPerSecond: Int, capturesAudio: Bool, mono: Bool) {
+        outputWidth = width
+        outputHeight = height
         do {
             writer = try AVAssetWriter(outputURL: URL(fileURLWithPath: path), fileType: .mp4)
         } catch {
@@ -56,9 +60,15 @@ private final class CapturesMediaWriter {
         videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
         videoInput.expectsMediaDataInRealTime = true
         videoDrainInterval = .milliseconds(max(8, 1_000 / max(1, framesPerSecond)))
+        let pixelBufferAttributes: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferWidthKey as String: width,
+            kCVPixelBufferHeightKey as String: height,
+            kCVPixelBufferIOSurfacePropertiesKey as String: [:] as [String: Any],
+        ]
         videoAdaptor = AVAssetWriterInputPixelBufferAdaptor(
             assetWriterInput: videoInput,
-            sourcePixelBufferAttributes: nil
+            sourcePixelBufferAttributes: pixelBufferAttributes
         )
         guard writer.canAdd(videoInput) else { return nil }
         writer.add(videoInput)
@@ -158,6 +168,75 @@ private final class CapturesMediaWriter {
         return elapsed.isFinite && elapsed >= 0.25
     }
 
+    private func copyVideoBuffer(_ source: CVPixelBuffer) -> CVPixelBuffer? {
+        guard
+            CVPixelBufferGetPixelFormatType(source) == kCVPixelFormatType_32BGRA,
+            CVPixelBufferGetWidth(source) == outputWidth,
+            CVPixelBufferGetHeight(source) == outputHeight
+        else {
+            failure = "ScreenCaptureKit delivered an unexpected video frame format"
+            return nil
+        }
+
+        var destination: CVPixelBuffer?
+        if let pool = videoAdaptor.pixelBufferPool {
+            guard
+                CVPixelBufferPoolCreatePixelBuffer(nil, pool, &destination) == kCVReturnSuccess
+            else {
+                failure = "Apple's H.264 writer could not allocate a video frame"
+                return nil
+            }
+        } else {
+            let attributes: [String: Any] = [
+                kCVPixelBufferIOSurfacePropertiesKey as String: [:] as [String: Any],
+            ]
+            guard
+                CVPixelBufferCreate(
+                    nil,
+                    outputWidth,
+                    outputHeight,
+                    kCVPixelFormatType_32BGRA,
+                    attributes as CFDictionary,
+                    &destination
+                ) == kCVReturnSuccess
+            else {
+                failure = "Apple's H.264 writer could not allocate a video frame"
+                return nil
+            }
+        }
+        guard let destination else { return nil }
+
+        guard CVPixelBufferLockBaseAddress(source, .readOnly) == kCVReturnSuccess else {
+            failure = "ScreenCaptureKit's video frame could not be read"
+            return nil
+        }
+        defer { CVPixelBufferUnlockBaseAddress(source, .readOnly) }
+        guard CVPixelBufferLockBaseAddress(destination, []) == kCVReturnSuccess else {
+            failure = "Apple's H.264 video frame could not be written"
+            return nil
+        }
+        defer { CVPixelBufferUnlockBaseAddress(destination, []) }
+        guard
+            let sourceBase = CVPixelBufferGetBaseAddress(source),
+            let destinationBase = CVPixelBufferGetBaseAddress(destination)
+        else {
+            failure = "A recording video frame did not expose pixel data"
+            return nil
+        }
+
+        let sourceBytesPerRow = CVPixelBufferGetBytesPerRow(source)
+        let destinationBytesPerRow = CVPixelBufferGetBytesPerRow(destination)
+        let bytesPerRow = min(outputWidth * 4, sourceBytesPerRow, destinationBytesPerRow)
+        for row in 0..<outputHeight {
+            memcpy(
+                destinationBase.advanced(by: row * destinationBytesPerRow),
+                sourceBase.advanced(by: row * sourceBytesPerRow),
+                bytesPerRow
+            )
+        }
+        return destination
+    }
+
     func append(_ sample: CMSampleBuffer, kind: Int32) -> Bool {
         lock.lock()
         defer { lock.unlock() }
@@ -195,7 +274,15 @@ private final class CapturesMediaWriter {
                 }
                 latestVideoGeneration &+= 1
             }
-            latestVideoBuffer = imageBuffer
+            // ScreenCaptureKit owns a small pool of IOSurfaces. Passing those
+            // surfaces directly to AVAssetWriter lets the encoder retain the
+            // entire capture pool, after which ScreenCaptureKit can no longer
+            // deliver changing frames. Copy into the writer's pool immediately
+            // so the capture surface is released when this callback returns.
+            guard let copiedBuffer = copyVideoBuffer(imageBuffer) else {
+                return false
+            }
+            latestVideoBuffer = copiedBuffer
             latestVideoTimestamp = timestamp
             startVideoDrainIfNeeded()
 

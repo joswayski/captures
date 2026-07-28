@@ -1242,7 +1242,7 @@ export function RecordingSelector() {
       : region;
   const canStart = targetMode === "display"
     || (targetMode === "window" && Boolean(selectedWindow))
-    || (targetMode === "region" && Boolean(region && region.width >= 16 && region.height >= 16));
+    || (targetMode === "region" && Boolean(region && region.width >= 2 && region.height >= 2));
 
   const start = async () => {
     if (!canStart || starting) return;
@@ -1459,7 +1459,7 @@ export function RecordingSelector() {
               onChange={(value) => setMaxResolution(value as MaxResolution)}
             />
           </div>
-          <div className="recording-field"><span>Cursor</span>
+          <div className="recording-field"><span>Show cursor</span>
             <label className="recording-toggle">
               <input
                 aria-label="Show cursor"
@@ -1555,7 +1555,6 @@ function roundRecordingRect(rect: RecordingRect, maxWidth: number, maxHeight: nu
 export function RecordingHud() {
   const [snapshot, setSnapshot] = useState<RecordingSessionSnapshot | null>(null);
   const [busy, setBusy] = useState(false);
-  const [capturingScreenshot, setCapturingScreenshot] = useState(false);
   const [microphonePeak, setMicrophonePeak] = useState(0);
   const [error, setError] = useState("");
   const sessionIdRef = useRef<string | null>(null);
@@ -1631,17 +1630,14 @@ export function RecordingHud() {
   const takeScreenshot = async () => {
     if (busy) return;
     setBusy(true);
-    setCapturingScreenshot(true);
     setError("");
     try {
-      // Yield at least one frame so the HUD is actually hidden before the
-      // native selector changes this window's capture protection.
-      await new Promise((resolve) => setTimeout(resolve, prefersReducedMotion() ? 16 : 140));
+      // The native capture path temporarily content-protects this HUD while
+      // taking its background snapshot, so it can stay visually stable here.
       await invoke("start_capture", { mode: "region" });
     } catch (error) {
       setError(recordingErrorMessage(error));
     } finally {
-      setCapturingScreenshot(false);
       setBusy(false);
     }
   };
@@ -1706,7 +1702,7 @@ export function RecordingHud() {
 
   return (
     <main
-      className={`recording-hud recording-hud-${snapshot.state}${capturingScreenshot ? " recording-hud-capturing" : ""}`}
+      className={`recording-hud recording-hud-${snapshot.state}`}
       onPointerDown={startHudDrag}
     >
       <span className="recording-hud-privacy">These controls won’t show in the recording</span>
@@ -1854,7 +1850,7 @@ export function RecordingEditor() {
   const [savedFingerprint, setSavedFingerprint] = useState<string | null>(null);
   const [filenameStem, setFilenameStem] = useState("");
   const [destinationDirectory, setDestinationDirectory] = useState("");
-  const [saveCopy, setSaveCopy] = useState(false);
+  const [keepOriginal, setKeepOriginal] = useState(false);
   const [previewPlaying, setPreviewPlaying] = useState(false);
   const [toast, setToast] = useState("");
   const [error, setError] = useState("");
@@ -1919,7 +1915,7 @@ export function RecordingEditor() {
       setSizeMode(loaded.kind === "gif" ? "compress" : "preserve");
       setFilenameStem(recordingFileStem(loaded.path));
       setDestinationDirectory(recordingParentDirectory(loaded.path));
-      setSaveCopy(false);
+      setKeepOriginal(false);
       setPreviewPlaying(false);
       setSavedFingerprint(null);
       void invoke<RecordingTimelinePreview>("prepare_recording_timeline_preview", {
@@ -1972,7 +1968,7 @@ export function RecordingEditor() {
   const formatRequiresCopy = outputFormat !== sourceFormat;
   const exportFingerprint = JSON.stringify({
     artifact: artifact.id,
-    saveCopy,
+    keepOriginal,
     filenameStem,
     destinationDirectory,
     trimStart: Math.round(trimStart),
@@ -1996,9 +1992,9 @@ export function RecordingEditor() {
     mono,
   });
   const alreadySaved = Boolean(exported && savedFingerprint === exportFingerprint);
-  const updateSaveCopy = (enabled: boolean) => {
+  const updateKeepOriginal = (enabled: boolean) => {
     if (!enabled && formatRequiresCopy) return;
-    setSaveCopy(enabled);
+    setKeepOriginal(enabled);
     if (enabled && filenameStem === sourceStem && destinationDirectory === sourceDirectory) {
       setFilenameStem(`${sourceStem}-copy`);
     } else if (!enabled && filenameStem === `${sourceStem}-copy`) {
@@ -2011,8 +2007,8 @@ export function RecordingEditor() {
   };
   const updateOutputFormat = (format: "mp4" | "gif") => {
     setOutputFormat(format);
-    if (format !== sourceFormat && !saveCopy) {
-      setSaveCopy(true);
+    if (format !== sourceFormat && !keepOriginal) {
+      setKeepOriginal(true);
       setFilenameStem(`${sourceStem}-copy`);
       setDestinationDirectory(sourceDirectory);
     }
@@ -2223,7 +2219,7 @@ export function RecordingEditor() {
           artifact_id: artifact.id,
           file_stem: filenameStem,
           destination_directory: destinationDirectory,
-          overwrite_source: !saveCopy && !formatRequiresCopy,
+          overwrite_source: !keepOriginal && !formatRequiresCopy,
           edit,
           export: exportSpec,
         },
@@ -2637,15 +2633,16 @@ export function RecordingEditor() {
         <div className="recording-filename">
           <div className="recording-filename-heading">
             <label htmlFor="recording-save-filename">Filename</label>
-            <label className="recording-save-copy">
+            <label className="recording-toggle recording-keep-original">
               <input
-                aria-label="Save as a copy"
+                aria-label="Keep original"
                 type="checkbox"
-                checked={saveCopy}
+                checked={keepOriginal}
                 disabled={Boolean(exportId) || formatRequiresCopy}
-                onChange={(event) => updateSaveCopy(event.target.checked)}
+                onChange={(event) => updateKeepOriginal(event.target.checked)}
               />
-              <span>Save as a copy</span>
+              <span className="recording-switch" aria-hidden="true" />
+              <span>Keep original</span>
             </label>
           </div>
           <span className="recording-filename-input">

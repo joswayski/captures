@@ -105,11 +105,10 @@ describe("RecordingHud", () => {
 
     const screenshot = await screen.findByRole("button", { name: "Take a region screenshot" });
     fireEvent.click(screenshot);
-    expect(container.querySelector(".recording-hud")).toHaveClass("recording-hud-capturing");
+    expect(container.querySelector(".recording-hud")).not.toHaveClass("recording-hud-capturing");
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("start_capture", { mode: "region" });
     });
-    expect(container.querySelector(".recording-hud")).not.toHaveClass("recording-hud-capturing");
 
     expect(screen.getByText("Recording")).toBeInTheDocument();
     expect(screen.queryByText("Not in recording")).not.toBeInTheDocument();

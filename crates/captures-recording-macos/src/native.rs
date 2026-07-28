@@ -18,7 +18,7 @@ use screencapturekit::{
     shareable_content::{SCDisplay, SCRunningApplication, SCShareableContent, SCWindow},
     stream::{
         SCStream,
-        configuration::{SCCaptureResolutionType, SCStreamConfiguration},
+        configuration::{PixelFormat, SCCaptureResolutionType, SCStreamConfiguration},
         content_filter::SCContentFilter,
         delegate_trait::StreamCallbacks,
         output_type::SCStreamOutputType,
@@ -68,6 +68,7 @@ impl NativeRecordingSegment {
             .with_height(height)
             .with_scales_to_fit(true)
             .with_capture_resolution_type(SCCaptureResolutionType::Best)
+            .with_pixel_format(PixelFormat::BGRA)
             .with_fps(u32::from(options.frames_per_second))
             .with_queue_depth(8)
             .with_shows_cursor(shows_cursor)

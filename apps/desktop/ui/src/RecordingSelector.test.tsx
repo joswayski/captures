@@ -266,6 +266,37 @@ describe("RecordingSelector", () => {
     expect(container.querySelector(".recording-selector")).not.toHaveAttribute("style");
   });
 
+  it("enables recording for any region large enough to encode", async () => {
+    const { container } = render(<RecordingSelector />);
+    await screen.findByRole("button", { name: "Record" });
+    const surface = container.querySelector<HTMLElement>(".recording-selector");
+    expect(surface).not.toBeNull();
+    surface!.setPointerCapture = vi.fn();
+    surface!.hasPointerCapture = vi.fn(() => true);
+    surface!.releasePointerCapture = vi.fn();
+    vi.spyOn(surface!, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 1440,
+      bottom: 900,
+      width: 1440,
+      height: 900,
+      toJSON: () => undefined,
+    });
+
+    fireEvent.pointerDown(surface!, { pointerId: 7, clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(surface!, { pointerId: 7, clientX: 101, clientY: 101 });
+    fireEvent.pointerUp(surface!, { pointerId: 7, clientX: 101, clientY: 101 });
+    expect(screen.getByRole("button", { name: "Record" })).toBeDisabled();
+
+    fireEvent.pointerDown(surface!, { pointerId: 8, clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(surface!, { pointerId: 8, clientX: 102, clientY: 102 });
+    fireEvent.pointerUp(surface!, { pointerId: 8, clientX: 102, clientY: 102 });
+    expect(screen.getByRole("button", { name: "Record" })).toBeEnabled();
+  });
+
   it("lets one Escape close an open control and cancel the selector exactly once", async () => {
     render(<RecordingSelector />);
     const microphone = await screen.findByRole("combobox", { name: "Microphone" });
