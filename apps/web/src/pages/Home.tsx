@@ -43,7 +43,7 @@ export default function Home() {
               href={REPO_URL}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center gap-2 rounded-md bg-ink px-4 py-2.5 text-sm font-medium text-white no-underline transition-colors duration-300 ease-out hover:bg-accent"
+              className="inline-flex cursor-pointer items-center gap-2 rounded-md bg-ink px-4 py-2.5 text-sm font-medium text-white no-underline transition-colors duration-300 ease-out hover:bg-accent"
             >
               <GitHubIcon className="h-4 w-4" />
               View on GitHub

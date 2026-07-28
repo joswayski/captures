@@ -819,14 +819,8 @@ function HiddenFromCaptureIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12s3.5-5 9-5 9 5 9 5-3.5 5-9 5-9-5-9-5Z" /><path d="m4 4 16 16" /></svg>;
 }
 
-function DragGripIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7h8M8 12h8M8 17h8" /></svg>;
-}
-
-function CollapseControlsIcon({ collapsed }: { collapsed: boolean }) {
-  return collapsed
-    ? <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5-5 5 5 5M4 10h9a7 7 0 0 1 7 7v2" /></svg>
-    : <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5 5 5-5 5M20 10h-9a7 7 0 0 0-7 7v2" /></svg>;
+function HideControlsIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 17h12" /></svg>;
 }
 
 function HudTooltip({ label, children }: { label: string; children: React.ReactNode }) {
@@ -943,6 +937,7 @@ export function RecordingSelector() {
   const [fps, setFps] = useState(60);
   const [maxResolution, setMaxResolution] = useState<MaxResolution>("original");
   const [showCursor, setShowCursor] = useState(true);
+  const [showClicks, setShowClicks] = useState(false);
   const [systemAudio, setSystemAudio] = useState(false);
   const [microphoneId, setMicrophoneId] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
@@ -1049,6 +1044,7 @@ export function RecordingSelector() {
       setFps(currentSettings.recording.video_fps);
       setMaxResolution(currentSettings.recording.video_max_resolution);
       setShowCursor(currentSettings.recording.show_cursor);
+      setShowClicks(currentSettings.recording.highlight_clicks);
       setSystemAudio(currentSettings.recording.capture_system_audio);
       setMicrophoneId(currentSettings.recording.microphone_device_id);
       setTargetMode("region");
@@ -1269,7 +1265,7 @@ export function RecordingSelector() {
       max_resolution: maxResolution,
       countdown_seconds: settings.recording.countdown_seconds,
       show_cursor: showCursor,
-      highlight_clicks: settings.recording.highlight_clicks,
+      highlight_clicks: showClicks,
       show_keystrokes: settings.recording.show_keystrokes,
       audio: {
         capture_system_audio: systemAudio,
@@ -1468,6 +1464,13 @@ export function RecordingSelector() {
               <span>{showCursor ? "On" : "Off"}</span>
             </label>
           </div>
+          <div className="recording-field"><span>Show clicks</span>
+            <label className="recording-toggle">
+              <input aria-label="Show clicks" type="checkbox" checked={showClicks} onChange={(event) => setShowClicks(event.target.checked)} />
+              <span className="recording-switch" aria-hidden="true" />
+              <span>{showClicks ? "On" : "Off"}</span>
+            </label>
+          </div>
           <div className="recording-field"><span>Desktop audio</span>
             <label className="recording-toggle">
               <input aria-label="Record desktop audio" type="checkbox" checked={systemAudio} onChange={(event) => setSystemAudio(event.target.checked)} />
@@ -1534,8 +1537,6 @@ function roundRecordingRect(rect: RecordingRect, maxWidth: number, maxHeight: nu
 export function RecordingHud() {
   const [snapshot, setSnapshot] = useState<RecordingSessionSnapshot | null>(null);
   const [busy, setBusy] = useState(false);
-  const [collapsed, setCollapsed] = useState(false);
-  const [resizing, setResizing] = useState(false);
   const [microphonePeak, setMicrophonePeak] = useState(0);
   const [error, setError] = useState("");
   const sessionIdRef = useRef<string | null>(null);
@@ -1548,7 +1549,6 @@ export function RecordingHud() {
       if (sessionIdRef.current !== next.id) {
         sessionIdRef.current = next.id;
         setMicrophonePeak(0);
-        setCollapsed(false);
         setError("");
       }
       setSnapshot(next);
@@ -1621,25 +1621,23 @@ export function RecordingHud() {
       setBusy(false);
     }
   };
-  const toggleCollapsed = async () => {
-    if (resizing) return;
-    const next = !collapsed;
-    setResizing(true);
+  const hideControls = async () => {
+    if (busy) return;
+    setBusy(true);
     setError("");
     try {
-      await invoke("set_recording_hud_collapsed", {
+      await invoke("hide_recording_hud", {
         sessionId: snapshot.id,
-        collapsed: next,
       });
-      setCollapsed(next);
     } catch (error) {
       setError(recordingErrorMessage(error));
     } finally {
-      setResizing(false);
+      setBusy(false);
     }
   };
-  const startHudDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
+  const startHudDrag = (event: React.PointerEvent<HTMLElement>) => {
     if (event.button !== 0 || !currentWindow) return;
+    if ((event.target as Element).closest("button, input, a, [role='button'], [role='slider']")) return;
     event.preventDefault();
     void currentWindow.startDragging().catch((error) => setError(String(error)));
   };
@@ -1665,14 +1663,14 @@ export function RecordingHud() {
   };
 
   return (
-    <main className={`recording-hud recording-hud-${snapshot.state}${collapsed ? " recording-hud-collapsed" : ""}`}>
+    <main className={`recording-hud recording-hud-${snapshot.state}`} onPointerDown={startHudDrag}>
       <div className="recording-hud-status">
         <span className="recording-dot" aria-hidden="true" />
         <strong>{formatRecordingTime(snapshot.elapsed_ms)}</strong>
         <small>{recordingStatusLabel(snapshot)}</small>
       </div>
       <div className="recording-hud-actions">
-        {!collapsed && <>
+        <>
           <HudTooltip label="Stop and save">
             <button type="button" className="recording-stop" disabled={!canControl || busy} aria-label="Stop recording" onClick={() => void invokeAction("stop_recording")}><span /></button>
           </HudTooltip>
@@ -1719,20 +1717,16 @@ export function RecordingHud() {
               <HiddenFromCaptureIcon />
             </span>
           </HudTooltip>
-        </>}
-        {!collapsed && (
-          <HudTooltip label="Drag to move controls">
-            <button type="button" className="recording-icon-button recording-drag" aria-label="Move recording controls" onPointerDown={startHudDrag}><DragGripIcon /></button>
-          </HudTooltip>
-        )}
-        <HudTooltip label={collapsed ? "Expand controls" : "Minimize controls"}>
+        </>
+        <HudTooltip label="Hide controls">
           <button
             type="button"
-            className="recording-icon-button recording-collapse"
-            disabled={resizing}
-            aria-label={collapsed ? "Expand recording controls" : "Minimize recording controls"}
-            onClick={() => void toggleCollapsed()}
-          ><CollapseControlsIcon collapsed={collapsed} /></button>
+            className="recording-icon-button recording-hide"
+            disabled={busy}
+            aria-label="Hide recording controls"
+            title="Open Captures from the Dock to show the controls again"
+            onClick={() => void hideControls()}
+          ><HideControlsIcon /></button>
         </HudTooltip>
       </div>
       {(error || snapshot.error) && (
@@ -1817,6 +1811,7 @@ export function RecordingEditor() {
   const exportIdRef = useRef<string | null>(null);
   const [progress, setProgress] = useState<ExportProgress | null>(null);
   const [exported, setExported] = useState<RecordingArtifact | null>(null);
+  const [savedFingerprint, setSavedFingerprint] = useState<string | null>(null);
   const [filenameStem, setFilenameStem] = useState("");
   const [destinationDirectory, setDestinationDirectory] = useState("");
   const [previewPlaying, setPreviewPlaying] = useState(false);
@@ -1828,6 +1823,7 @@ export function RecordingEditor() {
   const timelineScrubbingRef = useRef(false);
   const trimDragRef = useRef<"start" | "end" | null>(null);
   const cropDragRef = useRef<EditorCropDrag | null>(null);
+  const pendingExportFingerprintRef = useRef("");
 
   useEffect(() => {
     let active = true;
@@ -1840,6 +1836,7 @@ export function RecordingEditor() {
         listen<{ export_id: string; artifact: RecordingArtifact; finder_error: string | null }>("recording-export-complete", ({ payload }) => {
           if (!active || payload.export_id !== exportIdRef.current) return;
           setExported(payload.artifact);
+          setSavedFingerprint(pendingExportFingerprintRef.current);
           setToast(
             `${payload.artifact.kind === "gif" ? "GIF" : "Video"} saved — ${formatFileSize(payload.artifact.size_bytes)}.`,
           );
@@ -1879,6 +1876,7 @@ export function RecordingEditor() {
       setFilenameStem(`${recordingFileStem(loaded.path)}-edited`);
       setDestinationDirectory(recordingParentDirectory(loaded.path));
       setPreviewPlaying(false);
+      setSavedFingerprint(null);
       void invoke<RecordingTimelinePreview>("prepare_recording_timeline_preview", {
         artifactId: loaded.id,
       }).then((preview) => {
@@ -1918,6 +1916,31 @@ export function RecordingEditor() {
     : baseOutputDimensions;
   const hasRecordedAudio = artifact.has_system_audio || artifact.has_microphone_audio;
   const sourceDirectory = recordingParentDirectory(artifact.path);
+  const exportFingerprint = JSON.stringify({
+    artifact: artifact.id,
+    filenameStem,
+    destinationDirectory,
+    trimStart: Math.round(trimStart),
+    trimEnd: Math.round(trimEnd),
+    crop: cropEnabled ? boundedCrop(crop, artifact.width, artifact.height) : null,
+    resolution,
+    customWidth,
+    customHeight,
+    outputFormat,
+    gifFps,
+    gifMaxWidth,
+    gifColors,
+    quality,
+    sizeMode,
+    maximumSize,
+    maximumUnit,
+    systemVolume,
+    microphoneVolume,
+    muteSystem,
+    muteMicrophone,
+    mono,
+  });
+  const alreadySaved = Boolean(exported && savedFingerprint === exportFingerprint);
 
   const updateCropDimension = (key: "width" | "height", value: number) => {
     setCrop((current) => {
@@ -2029,6 +2052,10 @@ export function RecordingEditor() {
     setError("");
     try {
       if (video.paused) {
+        const selectedEnd = trimEnd / 1_000;
+        if (video.ended || video.currentTime >= selectedEnd - 0.01) {
+          video.currentTime = trimStart / 1_000;
+        }
         await video.play();
       } else {
         video.pause();
@@ -2055,6 +2082,16 @@ export function RecordingEditor() {
       }
     } catch (error) {
       setError(`Save location could not be changed: ${String(error)}`);
+    }
+  };
+
+  const revealSavedRecording = async () => {
+    if (!exported) return;
+    setError("");
+    try {
+      await invoke("reveal_recording_artifact", { artifactId: exported.id });
+    } catch (error) {
+      setError(`Finder could not open: ${recordingErrorMessage(error)}`);
     }
   };
 
@@ -2102,6 +2139,7 @@ export function RecordingEditor() {
     setToast("");
     setExported(null);
     setProgress({ stage: "preparing", completed_per_mille: 0, attempt: 0, message: null });
+    pendingExportFingerprintRef.current = exportFingerprint;
     try {
       const id = await invoke<string>("start_recording_export", {
         request: {
@@ -2124,13 +2162,6 @@ export function RecordingEditor() {
     <main className="recording-editor">
       <header className="recording-editor-header">
         <div><h1>{artifact.kind === "gif" ? "Edit GIF" : "Edit recording"}</h1></div>
-        <div className="recording-editor-header-actions">
-          <button type="button" onClick={() => {
-            setError("");
-            void invoke("reveal_recording_artifact", { artifactId: (exported ?? artifact).id })
-              .catch((error) => setError(`Finder could not open: ${String(error)}`));
-          }}>Show in Folder</button>
-        </div>
       </header>
       {artifact.dropped_frames > 0 && <p className="recording-editor-warning" role="status">This source dropped {artifact.dropped_frames.toLocaleString()} frame{artifact.dropped_frames === 1 ? "" : "s"} during capture. The original timing is preserved.</p>}
 
@@ -2138,18 +2169,7 @@ export function RecordingEditor() {
         <div className="recording-preview-toolbar">
           <strong>Preview</strong>
           <div className="recording-preview-toolbar-actions">
-            {artifact.kind === "video" && (
-              <button
-                type="button"
-                className="recording-preview-play"
-                aria-label={previewPlaying ? "Pause preview" : "Play preview"}
-                onClick={() => void togglePreviewPlayback()}
-              >
-                <span aria-hidden="true">{previewPlaying ? "Ⅱ" : "▶"}</span>
-                {previewPlaying ? "Pause" : "Play"}
-              </button>
-            )}
-            <div className="editor-segmented" aria-label="Preview size">
+            <div className="editor-segmented preview-size-segmented" aria-label="Preview size">
               <button type="button" className={previewMode === "fit" ? "active" : ""} onClick={() => setPreviewMode("fit")}>Fit</button>
               <button type="button" className={previewMode === "actual" ? "active" : ""} onClick={() => setPreviewMode("actual")}>100%</button>
             </div>
@@ -2179,6 +2199,7 @@ export function RecordingEditor() {
                 src={artifact.media_url}
                 playsInline
                 preload="auto"
+                onClick={() => void togglePreviewPlayback()}
                 onPlay={() => setPreviewPlaying(true)}
                 onPause={() => setPreviewPlaying(false)}
                 onEnded={() => setPreviewPlaying(false)}
@@ -2190,6 +2211,16 @@ export function RecordingEditor() {
               />
             ) : (
               <img src={artifact.media_url} alt="Animated GIF preview" />
+            )}
+            {artifact.kind === "video" && (
+              <button
+                type="button"
+                className={`recording-preview-overlay-play${previewPlaying ? " playing" : ""}`}
+                aria-label={previewPlaying ? "Pause preview" : "Play preview"}
+                onClick={() => void togglePreviewPlayback()}
+              >
+                <span aria-hidden="true">{previewPlaying ? "Ⅱ" : "▶"}</span>
+              </button>
             )}
             {cropEnabled && (
               <div className="editor-crop-layer" aria-label="Crop recording">
@@ -2387,7 +2418,10 @@ export function RecordingEditor() {
               value={resolution}
               ariaLabel="Output resolution"
               options={[
-                { value: "original", label: "Original" },
+                {
+                  value: "original",
+                  label: `Original — ${baseOutputDimensions.width} × ${baseOutputDimensions.height}`,
+                },
                 { value: "1080", label: "1080p maximum" },
                 { value: "720", label: "720p maximum" },
                 { value: "custom", label: "Custom" },
@@ -2396,10 +2430,6 @@ export function RecordingEditor() {
             />
           </div>
           {resolution === "custom" && <div className="editor-number-grid dimensions"><label>Width<input type="number" min={2} value={customWidth} onChange={(event) => setCustomWidth(Number(event.target.value))} /></label><label>Height<input type="number" min={2} value={customHeight} onChange={(event) => setCustomHeight(Number(event.target.value))} /></label></div>}
-          <output className="editor-output-dimensions">
-            <span>Final video size</span>
-            <strong>{outputDimensions.width} × {outputDimensions.height} px</strong>
-          </output>
         </section>
 
         <section className="editor-card editor-quality-card">
@@ -2551,11 +2581,14 @@ export function RecordingEditor() {
               ? <p className="recording-save-success" role="status">{toast}</p>
               : progress
                 ? <p>{progress.message || exportStageLabel(progress.stage)}</p>
-                : <p>Ready to save.</p>}
+                : null}
         </div>
         <div className="recording-save-actions">
           {exportId && <button type="button" onClick={() => void invoke("cancel_recording_export", { exportId })}>Cancel</button>}
-          <button className="primary" type="button" disabled={Boolean(exportId)} onClick={() => void startExport()}>{exportId ? "Saving…" : "Save"}</button>
+          {exported && <button type="button" onClick={() => void revealSavedRecording()}>Show in Folder</button>}
+          <button className="primary" type="button" disabled={Boolean(exportId) || alreadySaved} onClick={() => void startExport()}>
+            {exportId ? "Saving…" : alreadySaved ? "Saved" : "Save"}
+          </button>
         </div>
       </footer>
     </main>
@@ -4097,6 +4130,7 @@ export function Preferences() {
           />
         </div>
         <label className="check-row"><input type="checkbox" checked={settings.recording.show_cursor} onChange={(event) => updateRecording("show_cursor", event.target.checked)} /><span>Show cursor in recordings</span></label>
+        <label className="check-row"><input type="checkbox" checked={settings.recording.highlight_clicks} onChange={(event) => updateRecording("highlight_clicks", event.target.checked)} /><span>Show clicks in recordings</span></label>
         <label className="check-row capture-option"><input type="checkbox" checked={settings.recording.open_editor_after_recording} onChange={(event) => updateRecording("open_editor_after_recording", event.target.checked)} /><span>Open the editor after recording<small>The original is saved first, so closing the editor never loses a recording.</small></span></label>
       </section>
 

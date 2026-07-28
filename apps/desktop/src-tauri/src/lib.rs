@@ -231,7 +231,7 @@ pub fn run() {
             recording::stop_recording,
             recording::discard_recording,
             recording::set_recording_microphone_muted,
-            recording::set_recording_hud_collapsed,
+            recording::hide_recording_hud,
             recording::get_recording_artifacts,
             recording::get_recording_artifact,
             recording::prepare_recording_timeline_preview,
@@ -2605,6 +2605,19 @@ fn primary_app_window_priority(label: &str) -> Option<u8> {
 
 #[cfg(target_os = "macos")]
 fn focus_primary_app_window(app: &AppHandle) {
+    let recording_is_active = {
+        let state = app.state::<Arc<AppState>>();
+        recording::recording_controls_are_available(state.inner())
+    };
+    if recording_is_active
+        && let Some(window) = app.get_webview_window("recording-hud")
+        && !window.is_visible().unwrap_or(false)
+    {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        return;
+    }
     let primary = app
         .webview_windows()
         .into_iter()

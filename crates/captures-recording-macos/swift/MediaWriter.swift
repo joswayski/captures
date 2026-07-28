@@ -5,13 +5,17 @@ import Foundation
 private final class CapturesMediaWriter {
     private let writer: AVAssetWriter
     private let videoInput: AVAssetWriterInput
+    private let videoAdaptor: AVAssetWriterInputPixelBufferAdaptor
     private let audioInput: AVAssetWriterInput?
     private let lock = NSLock()
     private var started = false
     private var finished = false
     private var firstTimestamp = CMTime.invalid
     private var lastTimestamp = CMTime.invalid
+    private var firstFrameUptime: TimeInterval?
+    private var lastVideoSample: CMSampleBuffer?
     private var videoFramesWritten: UInt64 = 0
+    private var heartbeatTimer: DispatchSourceTimer?
     private let activity: NSObjectProtocol
     private(set) var droppedFrames: UInt64 = 0
     private(set) var failure: String?
@@ -22,14 +26,16 @@ private final class CapturesMediaWriter {
         } catch {
             return nil
         }
-
         // Fragmented MP4 writes playable indexing data throughout the segment.
         // If Captures is interrupted, recovery can salvage the latest fragment
         // instead of requiring AVAssetWriter to close the whole file cleanly.
         writer.movieFragmentInterval = CMTime(seconds: 1, preferredTimescale: 600)
 
         let pixelsPerSecond = Double(max(2, width)) * Double(max(2, height)) * Double(max(1, framesPerSecond))
-        let averageBitRate = Int(min(24_000_000, max(1_500_000, pixelsPerSecond * 0.075)))
+        // Screen recordings contain sharp text and UI edges that degrade much
+        // sooner than camera footage. Keep the H.264 master comfortably above
+        // a delivery encode so Preserve quality has a strong source to copy.
+        let averageBitRate = Int(min(60_000_000, max(4_000_000, pixelsPerSecond * 0.20)))
         let videoSettings: [String: Any] = [
             AVVideoCodecKey: AVVideoCodecType.h264,
             AVVideoWidthKey: width,
@@ -39,11 +45,15 @@ private final class CapturesMediaWriter {
                 AVVideoExpectedSourceFrameRateKey: framesPerSecond,
                 AVVideoMaxKeyFrameIntervalKey: max(1, framesPerSecond * 2),
                 AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
-                AVVideoAllowFrameReorderingKey: true,
+                AVVideoAllowFrameReorderingKey: false,
             ],
         ]
         videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
         videoInput.expectsMediaDataInRealTime = true
+        videoAdaptor = AVAssetWriterInputPixelBufferAdaptor(
+            assetWriterInput: videoInput,
+            sourcePixelBufferAttributes: nil
+        )
         guard writer.canAdd(videoInput) else { return nil }
         writer.add(videoInput)
 
@@ -69,7 +79,53 @@ private final class CapturesMediaWriter {
     }
 
     deinit {
+        heartbeatTimer?.cancel()
         ProcessInfo.processInfo.endActivity(activity)
+    }
+
+    private func startHeartbeatIfNeeded() {
+        guard heartbeatTimer == nil else { return }
+        // ScreenCaptureKit may stop emitting frames when nothing on screen
+        // changes. Periodically repeat the latest pixel buffer so the encoded
+        // timeline and fragmented recovery data continue advancing.
+        let timer = DispatchSource.makeTimerSource(
+            queue: DispatchQueue.global(qos: .userInitiated)
+        )
+        timer.schedule(
+            deadline: .now() + .milliseconds(250),
+            repeating: .milliseconds(250),
+            leeway: .milliseconds(20)
+        )
+        timer.setEventHandler { [weak self] in
+            self?.appendHeartbeat()
+        }
+        heartbeatTimer = timer
+        timer.resume()
+    }
+
+    private func currentPresentationTimestamp() -> CMTime? {
+        guard let firstFrameUptime, firstTimestamp.isValid else { return nil }
+        return CMTimeAdd(
+            firstTimestamp,
+            CMTime(
+                seconds: max(0, ProcessInfo.processInfo.systemUptime - firstFrameUptime),
+                preferredTimescale: 600_000
+            )
+        )
+    }
+
+    private func appendHeartbeat() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard
+            !finished,
+            failure == nil,
+            let timestamp = currentPresentationTimestamp()
+        else { return }
+        if !appendHeartbeatVideoFrame(at: timestamp, waitUntilReady: false) {
+            failure = writer.error?.localizedDescription
+                ?? "AVAssetWriter could not maintain the recording timeline"
+        }
     }
 
     func append(_ sample: CMSampleBuffer, kind: Int32) -> Bool {
@@ -85,7 +141,15 @@ private final class CapturesMediaWriter {
             }
             writer.startSession(atSourceTime: timestamp)
             firstTimestamp = timestamp
+            firstFrameUptime = ProcessInfo.processInfo.systemUptime
             started = true
+        }
+        if
+            kind == 0,
+            lastTimestamp.isValid,
+            CMTimeCompare(timestamp, lastTimestamp) <= 0
+        {
+            return true
         }
         let input = kind == 0 ? videoInput : audioInput
         guard let input else { return true }
@@ -93,14 +157,53 @@ private final class CapturesMediaWriter {
             if kind == 0 { droppedFrames += 1 }
             return true
         }
-        guard input.append(sample) else {
-            failure = writer.error?.localizedDescription ?? "AVAssetWriter rejected a media sample"
+        if kind == 0 {
+            guard
+                let imageBuffer = CMSampleBufferGetImageBuffer(sample),
+                videoAdaptor.append(imageBuffer, withPresentationTime: timestamp)
+            else {
+                failure = writer.error?.localizedDescription
+                    ?? "AVAssetWriter rejected a video frame"
+                return false
+            }
+        } else if !input.append(sample) {
+            failure = writer.error?.localizedDescription ?? "AVAssetWriter rejected an audio sample"
             return false
         }
         if kind == 0 {
             lastTimestamp = timestamp
+            lastVideoSample = sample
             videoFramesWritten += 1
+            startHeartbeatIfNeeded()
         }
+        return true
+    }
+
+    private func appendHeartbeatVideoFrame(
+        at presentationTimestamp: CMTime,
+        waitUntilReady: Bool
+    ) -> Bool {
+        guard
+            let lastVideoSample,
+            lastTimestamp.isValid,
+            CMTimeCompare(presentationTimestamp, lastTimestamp) > 0,
+            let imageBuffer = CMSampleBufferGetImageBuffer(lastVideoSample)
+        else { return true }
+        if waitUntilReady {
+            for _ in 0..<100 where !videoInput.isReadyForMoreMediaData {
+                Thread.sleep(forTimeInterval: 0.002)
+            }
+        }
+        guard videoInput.isReadyForMoreMediaData else {
+            return !waitUntilReady
+        }
+
+        guard videoAdaptor.append(imageBuffer, withPresentationTime: presentationTimestamp) else {
+            return false
+        }
+
+        lastTimestamp = presentationTimestamp
+        videoFramesWritten += 1
         return true
     }
 
@@ -112,11 +215,22 @@ private final class CapturesMediaWriter {
             return successful
         }
         finished = true
+        heartbeatTimer?.cancel()
+        heartbeatTimer = nil
         guard started, failure == nil else {
             if failure == nil { failure = "the recording did not contain a complete video frame" }
             writer.cancelWriting()
             lock.unlock()
             return false
+        }
+        if let endTimestamp = currentPresentationTimestamp() {
+            guard appendHeartbeatVideoFrame(at: endTimestamp, waitUntilReady: true) else {
+                failure = writer.error?.localizedDescription
+                    ?? "AVAssetWriter could not append the recording's final frame"
+                writer.cancelWriting()
+                lock.unlock()
+                return false
+            }
         }
         videoInput.markAsFinished()
         audioInput?.markAsFinished()

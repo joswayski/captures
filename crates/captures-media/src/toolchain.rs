@@ -585,9 +585,9 @@ impl MediaToolchain {
             ]);
         } else {
             let quality = match spec.quality {
-                QualityPreset::Preserve | QualityPreset::High => "60",
-                QualityPreset::Standard => "50",
-                QualityPreset::Small => "38",
+                QualityPreset::Preserve | QualityPreset::High => "90",
+                QualityPreset::Standard => "70",
+                QualityPreset::Small => "50",
             };
             command.args(["-q:v", quality]);
         }

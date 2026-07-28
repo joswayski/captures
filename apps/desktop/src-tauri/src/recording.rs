@@ -44,7 +44,6 @@ const RECORDING_WARNING_EVENT: &str = "recording-warning";
 const RECORDING_ARTIFACT_EVENT: &str = "recording-artifact-ready";
 const RECORDING_COUNTDOWN_FADE_OUT_MS: u64 = 180;
 const RECORDING_HUD_FULL_WIDTH: f64 = 570.0;
-const RECORDING_HUD_COLLAPSED_WIDTH: f64 = 176.0;
 const RECORDING_HUD_HEIGHT: f64 = 96.0;
 const RECORDING_HUD_BOTTOM_MARGIN: f64 = 20.0;
 const GIF_SOURCE_RETENTION_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
@@ -103,6 +102,21 @@ fn recording_session_is_active(state: &AppState) -> bool {
         .coordinator
         .snapshot(now_ms())
         .is_some_and(|snapshot| !snapshot.state.is_terminal())
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn recording_controls_are_available(state: &AppState) -> bool {
+    state
+        .recording
+        .lock()
+        .coordinator
+        .snapshot(now_ms())
+        .is_some_and(|snapshot| {
+            matches!(
+                snapshot.state,
+                RecordingState::Recording | RecordingState::Paused
+            )
+        })
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -2530,11 +2544,10 @@ fn prepare_recording_hud(app: &AppHandle, display: &DisplayDescriptor) -> Result
 }
 
 #[tauri::command]
-pub fn set_recording_hud_collapsed(
+pub fn hide_recording_hud(
     app: AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
     session_id: String,
-    collapsed: bool,
 ) -> Result<(), String> {
     let available = state
         .recording
@@ -2548,27 +2561,7 @@ pub fn set_recording_hud_collapsed(
     let window = app.get_webview_window("recording-hud").ok_or_else(|| {
         AppError::Task("recording controls are unavailable".to_owned()).to_string()
     })?;
-    let scale_factor = window.scale_factor().map_err(|error| error.to_string())?;
-    let current_position = window
-        .outer_position()
-        .map_err(|error| error.to_string())?
-        .to_logical::<f64>(scale_factor);
-    let current_size = window
-        .outer_size()
-        .map_err(|error| error.to_string())?
-        .to_logical::<f64>(scale_factor);
-    let width = if collapsed {
-        RECORDING_HUD_COLLAPSED_WIDTH
-    } else {
-        RECORDING_HUD_FULL_WIDTH
-    };
-    let x = current_position.x + (current_size.width - width) / 2.0;
-    window
-        .set_size(tauri::LogicalSize::new(width, RECORDING_HUD_HEIGHT))
-        .map_err(|error| error.to_string())?;
-    window
-        .set_position(tauri::LogicalPosition::new(x, current_position.y))
-        .map_err(|error| error.to_string())
+    window.hide().map_err(|error| error.to_string())
 }
 
 fn show_recording_hud(app: &AppHandle) -> Result<(), AppError> {

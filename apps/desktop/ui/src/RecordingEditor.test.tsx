@@ -145,8 +145,10 @@ describe("RecordingEditor", () => {
       "0:00.001",
     );
     expect(screen.queryByRole("heading", { name: "Audio" })).not.toBeInTheDocument();
-    expect(screen.getByText("Final video size")).toBeInTheDocument();
-    expect(screen.getByText("1140 × 692 px")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Output resolution" })).toHaveTextContent(
+      "Original — 1140 × 692",
+    );
+    expect(screen.queryByText("Final video size")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("checkbox", { name: "Crop recording" }));
     expect(screen.getAllByRole("button", { name: /Resize crop/ })).toHaveLength(8);
@@ -155,6 +157,8 @@ describe("RecordingEditor", () => {
 
     const video = container.querySelector<HTMLVideoElement>("video");
     expect(video).not.toBeNull();
+    expect(preview?.querySelector(".recording-preview-overlay-play")).toBeInTheDocument();
+    expect(container.querySelector(".recording-preview-toolbar .recording-preview-overlay-play")).not.toBeInTheDocument();
     const play = vi.spyOn(video!, "play").mockResolvedValue();
     fireEvent.click(screen.getByRole("button", { name: "Play preview" }));
     expect(play).toHaveBeenCalledOnce();
@@ -171,7 +175,7 @@ describe("RecordingEditor", () => {
     expect(screen.getByLabelText("Save location")).toHaveTextContent(
       "/Users/josevalerio/Captures",
     );
-    expect(screen.getByText("Ready to save.")).toBeInTheDocument();
+    expect(screen.queryByText("Ready to save.")).not.toBeInTheDocument();
 
     fireEvent.change(filename, { target: { value: "Demo recording" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -198,6 +202,11 @@ describe("RecordingEditor", () => {
       });
     });
     expect(screen.getByText("Video saved — 40.7 KB.")).toHaveClass("recording-save-success");
+    expect(screen.getByRole("button", { name: "Saved" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Show in Folder" }));
+    expect(invoke).toHaveBeenCalledWith("reveal_recording_artifact", {
+      artifactId: "saved-1",
+    });
     expect(screen.queryByText(/Reveal Export/)).not.toBeInTheDocument();
   });
 
@@ -211,7 +220,7 @@ describe("RecordingEditor", () => {
         "/Users/josevalerio/Desktop/Exports",
       );
     });
-    expect(screen.getByText("Ready to save.")).toBeInTheDocument();
+    expect(screen.queryByText("Ready to save.")).not.toBeInTheDocument();
 
     const qualityMode = screen.getByRole("combobox", { name: "Save quality" });
     fireEvent.click(qualityMode);

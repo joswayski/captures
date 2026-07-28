@@ -166,7 +166,8 @@ describe("RecordingSelector", () => {
 
     const cursorToggle = screen.getByRole("checkbox", { name: "Show cursor" });
     expect(cursorToggle.nextElementSibling).toHaveClass("recording-switch");
-    expect(container.querySelectorAll(".recording-options-row > .recording-field")).toHaveLength(6);
+    expect(container.querySelectorAll(".recording-options-row > .recording-field")).toHaveLength(7);
+    fireEvent.click(screen.getByRole("checkbox", { name: "Show clicks" }));
 
     fireEvent.click(screen.getByRole("button", { name: "Record" }));
     await waitFor(() => {
@@ -177,6 +178,7 @@ describe("RecordingSelector", () => {
             kind: "video",
             frames_per_second: 60,
             max_resolution: "original",
+            highlight_clicks: true,
           }),
         }),
       });

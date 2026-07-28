@@ -10,7 +10,7 @@ macOS is the primary development target today. Windows and Linux builds are avai
 
 - Capture a region, window, or full display.
 - On macOS 13+, record a region, window, or display, then trim, crop, resize, and save it as H.264/AAC video or an optimized GIF.
-- Record desktop audio and a selected microphone independently, with pause, resume, restart, mute, interruption recovery, and collapsible recording controls.
+- Record desktop audio and a selected microphone independently, with pause, resume, restart, mute, interruption recovery, and hideable recording controls. macOS 15+ can also show click highlights.
 - Take a lossless region, window, or display screenshot while a recording continues.
 - Review recordings on an aspect-correct filmstrip timeline, adjust crop and audio, and save to a chosen local folder with preserved quality, optional compression, or an exact maximum file size.
 - Start captures from the menu bar or customizable global shortcuts, and return to Captures from its macOS Dock icon.
@@ -25,7 +25,7 @@ macOS is the primary development target today. Windows and Linux builds are avai
 The roadmap is still taking shape. Likely additions include:
 
 - Windows and Linux recording backends, followed by recording feature parity across platforms.
-- Editable click highlights and keystroke overlays for recordings.
+- Editable click highlights and keystroke overlays after recording.
 - Screenshot markup and editing.
 - Optional compressed screenshot formats and quality controls; lossless PNG remains the default.
 - Full feature parity across macOS, Windows, and Linux.

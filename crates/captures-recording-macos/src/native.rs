@@ -64,6 +64,7 @@ impl NativeRecordingSegment {
             .with_fps(u32::from(options.frames_per_second))
             .with_queue_depth(8)
             .with_shows_cursor(options.show_cursor)
+            .with_shows_mouse_clicks(options.highlight_clicks)
             .with_captures_audio(options.audio.capture_system_audio)
             .with_sample_rate(48_000)
             .with_channel_count(if options.audio.mono_output { 1 } else { 2 })
@@ -226,10 +227,11 @@ impl NativeRecordingSegment {
     }
 
     pub fn stop(mut self) -> MacRecordingResult<SegmentInfo> {
-        let stop_result = self
-            .stream
-            .stop_capture()
-            .map_err(|error| MacRecordingError::ScreenCaptureKit(error.to_string()));
+        // ScreenCaptureKit can report a generic stop error after it has already
+        // stopped delivering samples. The media collected up to that point is
+        // still valid, so always detach the outputs and finalize the writer.
+        // A writer or stream-delegate failure remains fatal below.
+        let _ = self.stream.stop_capture();
         let _ = self
             .stream
             .remove_output_handler(self.video_output_id, SCStreamOutputType::Screen);
@@ -238,7 +240,6 @@ impl NativeRecordingSegment {
                 .stream
                 .remove_output_handler(audio_output_id, SCStreamOutputType::Audio);
         }
-        stop_result?;
         self.writer.finish()?;
         if let Some(error) = self
             .failure
@@ -302,7 +303,10 @@ const fn video_frame_is_usable(
         && data_is_ready
         && has_image_buffer
         && match status {
-            Some(status) => status.has_content(),
+            Some(status) => matches!(
+                status,
+                SCFrameStatus::Complete | SCFrameStatus::Started | SCFrameStatus::Idle
+            ),
             // Some ScreenCaptureKit runtimes expose the status attachment as
             // an integer that the binding cannot currently decode. A valid,
             // ready video sample with an image buffer is still safe to append.
@@ -485,7 +489,7 @@ mod tests {
             true,
             true
         ));
-        assert!(!video_frame_is_usable(
+        assert!(video_frame_is_usable(
             Some(SCFrameStatus::Idle),
             true,
             true,
