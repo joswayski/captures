@@ -12,6 +12,11 @@ unsafe extern "C" {
         frames_per_second: u32,
         captures_audio: bool,
         mono: bool,
+        highlights_clicks: bool,
+        source_x: f64,
+        source_y: f64,
+        source_width: f64,
+        source_height: f64,
     ) -> *mut std::ffi::c_void;
     fn captures_media_writer_append(
         handle: *mut std::ffi::c_void,
@@ -33,6 +38,14 @@ unsafe extern "C" {
 #[derive(Clone)]
 pub struct MediaWriter(Arc<MediaWriterInner>);
 
+#[derive(Clone, Copy)]
+pub(crate) struct ClickHighlightSource {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
 struct MediaWriterInner {
     handle: usize,
 }
@@ -45,9 +58,14 @@ impl MediaWriter {
         frames_per_second: u32,
         captures_audio: bool,
         mono: bool,
+        click_highlight_source: Option<ClickHighlightSource>,
     ) -> MacRecordingResult<Self> {
         let path = path.to_str().ok_or(MacRecordingError::InvalidOutputPath)?;
         let path = CString::new(path).map_err(|_| MacRecordingError::InvalidOutputPath)?;
+        let (highlights_clicks, source_x, source_y, source_width, source_height) =
+            click_highlight_source.map_or((false, 0.0, 0.0, 0.0, 0.0), |source| {
+                (true, source.x, source.y, source.width, source.height)
+            });
         // SAFETY: the path is a live NUL-terminated C string for the duration
         // of the call. The Swift bridge either returns a retained writer or
         // null; the retained writer is released exactly once by Drop.
@@ -59,6 +77,11 @@ impl MediaWriter {
                 frames_per_second,
                 captures_audio,
                 mono,
+                highlights_clicks,
+                source_x,
+                source_y,
+                source_width,
+                source_height,
             )
         };
         if handle.is_null() {

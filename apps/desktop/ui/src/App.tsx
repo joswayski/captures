@@ -842,6 +842,7 @@ type RecordingRegionDrag = {
 };
 type RecordingPanelPosition = { left: number; top: number };
 type RecordingPanelDrag = { pointerId: number; offsetX: number; offsetY: number };
+const RECORDING_WINDOW_OUTLINE_WIDTH = 2;
 
 export function RecordingCountdown() {
   const [snapshot, setSnapshot] = useState<RecordingSessionSnapshot | null>(null);
@@ -944,6 +945,7 @@ export function RecordingSelector() {
   const [microphoneId, setMicrophoneId] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState("");
+  const [focusVisibleSessionId, setFocusVisibleSessionId] = useState<string | null>(null);
   const surfaceRef = useRef<HTMLElement>(null);
   const panelRef = useRef<HTMLElement>(null);
   const panelDragRef = useRef<RecordingPanelDrag | null>(null);
@@ -989,12 +991,18 @@ export function RecordingSelector() {
         if (revealStarted || activeSessionIdRef.current !== selectionId) return;
         revealStarted = true;
         window.clearTimeout(fallbackTimer);
-        void invoke("reveal_recording_selector", { selectionId }).catch((error) => {
-          if (revealingSessionIdRef.current === selectionId) {
-            revealingSessionIdRef.current = null;
-            setError(String(error));
-          }
-        });
+        void invoke("reveal_recording_selector", { selectionId })
+          .then(() => {
+            if (activeSessionIdRef.current === selectionId) {
+              setFocusVisibleSessionId(selectionId);
+            }
+          })
+          .catch((error) => {
+            if (revealingSessionIdRef.current === selectionId) {
+              revealingSessionIdRef.current = null;
+              setError(String(error));
+            }
+          });
       };
       afterNextPaint(finishReveal);
       // WebKit can suspend requestAnimationFrame while this preloaded window
@@ -1017,6 +1025,7 @@ export function RecordingSelector() {
     activeSessionIdRef.current = null;
     sessionRef.current = null;
     revealingSessionIdRef.current = null;
+    setFocusVisibleSessionId(null);
     setSession(null);
     clearRegionDrag();
     panelDragRef.current = null;
@@ -1042,6 +1051,7 @@ export function RecordingSelector() {
       activeSessionIdRef.current = selection.id;
       sessionRef.current = selection;
       revealingSessionIdRef.current = null;
+      setFocusVisibleSessionId(null);
       setSession(selection);
       setFps(currentSettings.recording.video_fps);
       setMaxResolution(currentSettings.recording.video_max_resolution);
@@ -1344,7 +1354,7 @@ export function RecordingSelector() {
   return (
     <main
       ref={surfaceRef}
-      className={`recording-selector recording-target-${targetMode}`}
+      className={`recording-selector recording-target-${targetMode}${focusVisibleSessionId === session.id ? " recording-focus-visible" : ""}`}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -1388,12 +1398,18 @@ export function RecordingSelector() {
       )}
       {targetMode === "window" && (
         <div className="recording-window-targets">
-          {windowLayouts.map(({ window, ...layout }) => (
+          {windowLayouts.map(({ window, left, top, width, height, zIndex }) => (
             <button
               key={window.id}
               type="button"
               className={`recording-window-target${selectedWindow === window.id ? " selected" : ""}${hoveredWindow === window.id ? " hovered" : ""}`}
-              style={layout}
+              style={{
+                left: left - RECORDING_WINDOW_OUTLINE_WIDTH,
+                top: top - RECORDING_WINDOW_OUTLINE_WIDTH,
+                width: width + RECORDING_WINDOW_OUTLINE_WIDTH * 2,
+                height: height + RECORDING_WINDOW_OUTLINE_WIDTH * 2,
+                zIndex,
+              }}
               aria-label={`Select ${window.title || "window"}`}
               onPointerDown={(event) => event.stopPropagation()}
               onMouseEnter={() => setHoveredWindow(window.id)}
@@ -1850,7 +1866,7 @@ export function RecordingEditor() {
   const [savedFingerprint, setSavedFingerprint] = useState<string | null>(null);
   const [filenameStem, setFilenameStem] = useState("");
   const [destinationDirectory, setDestinationDirectory] = useState("");
-  const [makeCopy, setMakeCopy] = useState(true);
+  const [makeCopy, setMakeCopy] = useState(false);
   const [previewPlaying, setPreviewPlaying] = useState(false);
   const [toast, setToast] = useState("");
   const [error, setError] = useState("");
@@ -1913,9 +1929,9 @@ export function RecordingEditor() {
       setCustomHeight(loaded.height);
       setOutputFormat(loaded.kind === "gif" ? "gif" : "mp4");
       setSizeMode(loaded.kind === "gif" ? "compress" : "preserve");
-      setFilenameStem(`${recordingFileStem(loaded.path)}-copy`);
+      setFilenameStem(recordingFileStem(loaded.path));
       setDestinationDirectory(recordingParentDirectory(loaded.path));
-      setMakeCopy(true);
+      setMakeCopy(false);
       setPreviewPlaying(false);
       setSavedFingerprint(null);
       void invoke<RecordingTimelinePreview>("prepare_recording_timeline_preview", {
@@ -2691,8 +2707,11 @@ export function RecordingEditor() {
               }}
             >Cancel</button>
             <button
+              className={`recording-show-in-folder${exported && !exportId ? "" : " is-placeholder"}`}
               type="button"
               disabled={!exported || Boolean(exportId)}
+              aria-hidden={!exported || Boolean(exportId)}
+              tabIndex={exported && !exportId ? 0 : -1}
               onClick={() => void revealSavedRecording()}
             ><FolderIcon />Show in Folder</button>
             <button

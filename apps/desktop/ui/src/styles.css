@@ -501,7 +501,7 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .recording-selection-frame .ne, .recording-selection-frame .sw { cursor: nesw-resize; }
 .recording-selection-frame .nw { top: -6px; left: -6px; }.recording-selection-frame .ne { top: -6px; right: -6px; }.recording-selection-frame .sw { bottom: -6px; left: -6px; }.recording-selection-frame .se { right: -6px; bottom: -6px; }
 .recording-window-targets { position: absolute; z-index: 4; inset: 0; pointer-events: none; }
-.recording-window-target { position: absolute; overflow: hidden; border: 2px solid transparent; border-radius: 10px; padding: 0; color: transparent; background: transparent; outline: none; appearance: none; cursor: pointer; pointer-events: auto; text-align: left; }
+.recording-window-target { position: absolute; overflow: hidden; border: 2px solid transparent; border-radius: 12px; padding: 0; color: transparent; background: transparent; outline: none; appearance: none; cursor: pointer; pointer-events: auto; text-align: left; }
 .recording-window-target:hover, .recording-window-target.hovered, .recording-window-target.selected { border-color: #6fc5ff; color: white; background: rgba(73,182,255,.2); box-shadow: 0 0 0 1px rgba(255,255,255,.7) inset; }
 .recording-window-target span { display: inline-block; max-width: 100%; padding: 4px 7px; overflow: hidden; border-radius: 4px; background: transparent; opacity: 0; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .recording-window-target:hover span, .recording-window-target.hovered span, .recording-window-target.selected span { background: rgba(17,18,26,.88); opacity: 1; }
@@ -605,6 +605,11 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .recording-selector .capture-shade { fill: rgba(5,6,8,.34); background: rgba(5,6,8,.34); }
 .recording-selector .capture-shade-cutout { z-index: 1; }
 .recording-target-window .capture-shade { fill: rgba(5,6,8,.27); background: rgba(5,6,8,.27); }
+.recording-target-region .capture-shade,
+.recording-target-window .capture-shade { opacity: 0; transition: opacity .32s cubic-bezier(.42,0,.58,1); }
+.recording-selector.recording-focus-visible .capture-shade { opacity: 1; }
+.recording-target-window.recording-focus-visible .capture-shade { animation: recording-focus-shade-in .24s ease-out both; }
+@keyframes recording-focus-shade-in { from { opacity: 0; } to { opacity: 1; } }
 .recording-options-row { display: grid; min-height: 76px; grid-template-columns: 68px 126px 86px 96px 108px minmax(180px, 240px) 88px; align-items: stretch; gap: 8px; }
 .recording-field { display: flex; min-width: 0; flex-direction: column; gap: 6px; color: #999a9f; font-size: 9px; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; }
 .recording-field .recording-toggle { display: flex; min-height: 34px; padding: 0 2px; align-items: center; gap: 7px; border: 0; color: #d3d4d8; background: transparent; cursor: pointer; font-size: 10px; letter-spacing: 0; text-transform: none; transition: color .15s ease; }
@@ -710,7 +715,7 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .recording-destination button { border: 0; padding: 2px 3px; color: #c7c8cc; background: transparent; font-size: 9px; font-weight: 700; }
 .recording-destination button:hover:not(:disabled) { color: white; text-decoration: underline; }
 .recording-destination button:disabled { opacity: .45; }
-.recording-make-copy { display: inline-flex; min-height: 34px; align-items: center; gap: 7px; color: #d6d7da; font-size: 10px; font-weight: 700; white-space: nowrap; cursor: pointer; }
+.recording-make-copy { display: inline-flex; min-height: 34px; margin-top: 19px; align-items: center; gap: 7px; color: #d6d7da; font-size: 10px; font-weight: 700; white-space: nowrap; cursor: pointer; }
 .recording-make-copy:has(input:disabled) { cursor: default; opacity: .55; }
 .recording-save-action-area { display: grid; min-width: 332px; grid-template-rows: 16px 34px; gap: 3px; }
 .recording-save-toast { display: flex; min-width: 0; min-height: 16px; padding: 0 2px; align-items: center; justify-content: flex-end; overflow: hidden; color: #bfc0c4; }
@@ -724,6 +729,7 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .recording-save-actions button:hover:not(:disabled) { border-color: #5c5d64; background: #38393f; transform: translateY(-1px); }
 .recording-save-actions .recording-save-cancel { width: 67px; min-width: 67px; }
 .recording-save-actions .recording-save-cancel.is-placeholder { visibility: hidden; }
+.recording-save-actions .recording-show-in-folder.is-placeholder { visibility: hidden; }
 .recording-save-actions button:not(.primary):has(svg) { width: 132px; min-width: 132px; }
 .recording-save-actions button.primary { width: 86px; min-width: 86px; border-color: #e2ad17; color: #18191b; background: #ffca28; }
 .recording-save-actions button.primary:hover:not(:disabled) { border-color: #f1bd2b; background: #ffd451; filter: brightness(1.03); }
@@ -734,5 +740,5 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .recording-settings-section { padding: 14px; border: 1px solid #30313d; border-radius: 9px; background: #1d1e27; }.settings-inline-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }.settings-inline-grid label, .recording-settings-section > .field-label { display: flex; flex-direction: column; gap: 6px; }.recording-settings-section .custom-select { width: 100%; }.recording-settings-section .check-row + .field-label, .recording-settings-section > .settings-select-field.field-label { margin-top: 12px; }
 .history-recording-warning { color: #d5ae48 !important; font-size: 9px !important; }
 .recording-recovery-section { max-width: 1180px; margin: 0 auto 22px; padding: 16px; border: 1px solid rgba(255,202,40,.24); border-radius: 10px; background: #222117; }.recording-recovery-section > .help-text { margin: 4px 0 12px; color: #aaa998; font-size: 11px; line-height: 1.45; }.recording-recovery-row { display: flex; padding: 11px 0; align-items: center; justify-content: space-between; gap: 16px; border-top: 1px solid rgba(255,255,255,.08); }.recording-recovery-row strong, .recording-recovery-row small { display: block; }.recording-recovery-row strong { color: #f5f5f5; font-size: 12px; }.recording-recovery-row small { margin-top: 3px; color: #9a9a9f; font-size: 10px; }.recording-recovery-row small.warning, .recording-recovery-section .settings-error { color: #ff9da7; }.recording-recovery-row > div:last-child { display: flex; flex: 0 0 auto; gap: 6px; }.recording-recovery-row button { border: 1px solid #45453d; border-radius: 6px; padding: 7px 9px; color: #ecece8; background: #34342d; font-size: 10px; font-weight: 750; }.recording-recovery-row button.danger { border-color: #8f3842; background: #7b2933; }.recording-recovery-row button:disabled { opacity: .45; }.recording-recovery-section .settings-error { margin-top: 9px; font-size: 10px; }
-@media (max-width: 820px) { .recording-selector-panel { width: calc(100% - 32px); }.recording-options-row { grid-template-columns: repeat(2,minmax(0,1fr)); }.recording-start { margin-left: 0; }.recording-editor { padding-bottom: 142px; }.recording-editor-grid { grid-template-columns: 1fr; }.editor-output-card, .editor-audio-card { grid-column: auto; }.recording-save-footer { min-height: 116px; padding: 8px 16px; grid-template-columns: minmax(0,1fr) max-content; justify-content: stretch; gap: 7px 14px; }.recording-filename { grid-column: 1; }.recording-make-copy { grid-column: 2; }.recording-save-action-area { min-width: 0; grid-column: 1 / -1; }.recording-save-toast, .recording-save-actions { justify-content: flex-end; } }
+@media (max-width: 820px) { .recording-selector-panel { width: calc(100% - 32px); }.recording-options-row { grid-template-columns: repeat(2,minmax(0,1fr)); }.recording-start { margin-left: 0; }.recording-editor { padding-bottom: 142px; }.recording-editor-grid { grid-template-columns: 1fr; }.editor-output-card, .editor-audio-card { grid-column: auto; }.recording-save-footer { min-height: 116px; padding: 8px 16px; grid-template-columns: minmax(0,1fr) max-content; justify-content: stretch; gap: 7px 14px; }.recording-filename { grid-column: 1; }.recording-make-copy { grid-column: 2; margin-top: 19px; }.recording-save-action-area { min-width: 0; grid-column: 1 / -1; }.recording-save-toast, .recording-save-actions { justify-content: flex-end; } }
 @media (prefers-reduced-motion: reduce) { .recording-start:not(:disabled) > span::after { animation: none; } }

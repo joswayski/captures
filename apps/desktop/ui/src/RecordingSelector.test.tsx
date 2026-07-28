@@ -203,10 +203,10 @@ describe("RecordingSelector", () => {
     const frontWindow = screen.getByRole("button", { name: "Select Front eligible window" });
     expect(frontWindow).not.toHaveClass("selected");
     expect(frontWindow).toHaveStyle({
-      left: "300px",
-      top: "160px",
-      width: "900px",
-      height: "640px",
+      left: "298px",
+      top: "158px",
+      width: "904px",
+      height: "644px",
     });
     expect(screen.getByRole("button", { name: "Record" })).toBeDisabled();
     expect(container.querySelector(".recording-selection-window")).not.toBeInTheDocument();

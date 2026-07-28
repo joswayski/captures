@@ -101,7 +101,9 @@ fn main() {
     // macOS 13 deployment target instead of an @rpath toolchain dependency.
     println!("cargo:rustc-link-lib=dylib=swift_Concurrency");
     println!("cargo:rustc-link-lib=static=captures_media_writer");
+    println!("cargo:rustc-link-lib=framework=AppKit");
     println!("cargo:rustc-link-lib=framework=AVFoundation");
+    println!("cargo:rustc-link-lib=framework=CoreGraphics");
     println!("cargo:rustc-link-lib=framework=CoreMedia");
     println!("cargo:rustc-link-lib=framework=Foundation");
     println!("cargo:rustc-link-lib=framework=VideoToolbox");
