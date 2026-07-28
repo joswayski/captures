@@ -75,7 +75,7 @@ import type {
 const currentWindow = isTauri() ? getCurrentWindow() : null;
 const THUMBNAIL_DISMISS_FALLBACK_MS = 900;
 const THUMBNAIL_DELETE_FALLBACK_MS = 3_200;
-const THUMBNAIL_EXIT_POINTER_PASSTHROUGH_EVENT = "captures-thumbnail-exit-pointer-passthrough";
+const THUMBNAIL_HIT_TEST_CHANGED_EVENT = "captures-thumbnail-hit-test-changed";
 const RECORDING_SELECTOR_REVEAL_FALLBACK_MS = 200;
 const RECORDING_COUNTDOWN_FADE_OUT_MS = 180;
 
@@ -3505,7 +3505,6 @@ export function Thumbnail() {
     let pointingCursor = false;
     let ignoringCursorEvents = false;
     let lastCursorSyncAt = 0;
-    const clickThroughExits = new Set<string>();
 
     const setPointingCursor = (pointing: boolean) => {
       document.documentElement.style.cursor = pointing ? "pointer" : "";
@@ -3550,9 +3549,7 @@ export function Thumbnail() {
 
     const applyNativeHover = (position: ThumbnailPointerPosition) => {
       document.documentElement.classList.add("thumbnail-native-tracking");
-      setIgnoreCursorEvents(
-        clickThroughExits.size > 0 || shouldIgnoreThumbnailCursorEvents(position),
-      );
+      setIgnoreCursorEvents(shouldIgnoreThumbnailCursorEvents(position));
       setPointingCursor(applyThumbnailNativeHover(position));
     };
 
@@ -3602,18 +3599,9 @@ export function Thumbnail() {
       if (!document.hidden) schedulePoll(0);
     };
 
-    const updateExitPointerPassthrough = (event: Event) => {
-      const { artifactId, active } = (
-        event as CustomEvent<{ artifactId: string; active: boolean }>
-      ).detail;
-      if (active) {
-        clickThroughExits.add(artifactId);
-        clearNativeHover();
-        setIgnoreCursorEvents(true);
-        return;
-      }
-      clickThroughExits.delete(artifactId);
-      if (clickThroughExits.size === 0) pollImmediately();
+    const updateThumbnailHitTest = () => {
+      clearNativeHover();
+      pollImmediately();
     };
 
     document.addEventListener("visibilitychange", resumePolling);
@@ -3626,8 +3614,8 @@ export function Thumbnail() {
     window.addEventListener("captures-thumbnail-ready", pollImmediately);
     window.addEventListener("captures-thumbnail-layout-changed", pollImmediately);
     window.addEventListener(
-      THUMBNAIL_EXIT_POINTER_PASSTHROUGH_EVENT,
-      updateExitPointerPassthrough,
+      THUMBNAIL_HIT_TEST_CHANGED_EVENT,
+      updateThumbnailHitTest,
     );
     schedulePoll(0);
     return () => {
@@ -3639,8 +3627,8 @@ export function Thumbnail() {
       window.removeEventListener("captures-thumbnail-ready", pollImmediately);
       window.removeEventListener("captures-thumbnail-layout-changed", pollImmediately);
       window.removeEventListener(
-        THUMBNAIL_EXIT_POINTER_PASSTHROUGH_EVENT,
-        updateExitPointerPassthrough,
+        THUMBNAIL_HIT_TEST_CHANGED_EVENT,
+        updateThumbnailHitTest,
       );
       stopNativeTracking();
     };
@@ -3720,7 +3708,6 @@ export function ThumbnailCard({
   const exitingRef = useRef(false);
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const exitFallbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const exitPointerPassthrough = useRef(false);
 
   /** Synchronous lock check for async/timer paths (state may lag a frame). */
   const isExitLocked = () => exitingRef.current;
@@ -3741,13 +3728,8 @@ export function ThumbnailCard({
     return () => {
       if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
       if (exitFallbackTimer.current) clearTimeout(exitFallbackTimer.current);
-      if (exitPointerPassthrough.current) {
-        window.dispatchEvent(new CustomEvent(THUMBNAIL_EXIT_POINTER_PASSTHROUGH_EVENT, {
-          detail: { artifactId: artifact.id, active: false },
-        }));
-      }
     };
-  }, [artifact.id]);
+  }, []);
 
   const showSavedFeedback = () => {
     if (isExitLocked()) return;
@@ -3827,28 +3809,15 @@ export function ThumbnailCard({
       exitFallbackTimer.current = null;
     }
     void invoke(action, { artifactId: artifact.id })
-      .then(() => {
-        if (exitPointerPassthrough.current) {
-          exitPointerPassthrough.current = false;
-          window.dispatchEvent(new CustomEvent(THUMBNAIL_EXIT_POINTER_PASSTHROUGH_EVENT, {
-            detail: { artifactId: artifact.id, active: false },
-          }));
-        }
-        onRemoved(artifact.id);
-      })
+      .then(() => onRemoved(artifact.id))
       .catch((error) => {
         // Only unlock if remove failed — otherwise the card is gone.
-        if (exitPointerPassthrough.current) {
-          exitPointerPassthrough.current = false;
-          window.dispatchEvent(new CustomEvent(THUMBNAIL_EXIT_POINTER_PASSTHROUGH_EVENT, {
-            detail: { artifactId: artifact.id, active: false },
-          }));
-        }
         exitingRef.current = false;
         setExit(null);
         setExitChrome(null);
         setDustParticles(null);
         setError(String(error));
+        window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
       });
   };
 
@@ -3857,12 +3826,6 @@ export function ThumbnailCard({
     // Acquire the exit lock first so any in-flight async work becomes a no-op.
     exitingRef.current = true;
     exitAction.current = action;
-    if (kind === "delete") {
-      exitPointerPassthrough.current = true;
-      window.dispatchEvent(new CustomEvent(THUMBNAIL_EXIT_POINTER_PASSTHROUGH_EVENT, {
-        detail: { artifactId: artifact.id, active: true },
-      }));
-    }
     if (feedbackTimer.current) {
       clearTimeout(feedbackTimer.current);
       feedbackTimer.current = null;
@@ -3896,6 +3859,9 @@ export function ThumbnailCard({
       setDustParticles(null);
     }
     setExit(kind);
+    // Re-run the native hit test after React marks this card non-interactive.
+    // Only the outgoing slot should pass clicks through; sibling cards remain usable.
+    window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
     // WebView animation events can be skipped when Windows hides or occludes
     // this always-on-top window. Never leave a deleted card and its backend
     // artifact waiting forever for animationend.
