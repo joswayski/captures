@@ -170,6 +170,9 @@ describe("RecordingCountdown", () => {
     await screen.findByText("3", { selector: "strong" });
 
     await act(async () => {
+      handlers.get("recording-countdown")?.({
+        payload: { session_id: countdownSnapshot.id, remaining_seconds: 1 },
+      });
       handlers.get("recording-state-changed")?.({
         payload: {
           ...countdownSnapshot,
@@ -180,5 +183,7 @@ describe("RecordingCountdown", () => {
     });
 
     expect(container.querySelector(".recording-countdown")).toHaveClass("exiting");
+    expect(screen.getByText("1", { selector: "strong" })).toBeInTheDocument();
+    expect(screen.queryByText("3", { selector: "strong" })).not.toBeInTheDocument();
   });
 });

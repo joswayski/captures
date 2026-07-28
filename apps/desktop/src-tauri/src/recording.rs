@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     fs,
-    io::{Read, Seek, SeekFrom},
+    io::{self, Read, Seek, SeekFrom},
     path::{Component, Path, PathBuf},
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -43,8 +43,8 @@ const RECORDING_COUNTDOWN_EVENT: &str = "recording-countdown";
 const RECORDING_WARNING_EVENT: &str = "recording-warning";
 const RECORDING_ARTIFACT_EVENT: &str = "recording-artifact-ready";
 const RECORDING_COUNTDOWN_FADE_OUT_MS: u64 = 180;
-const RECORDING_HUD_FULL_WIDTH: f64 = 570.0;
-const RECORDING_HUD_HEIGHT: f64 = 96.0;
+const RECORDING_HUD_FULL_WIDTH: f64 = 430.0;
+const RECORDING_HUD_HEIGHT: f64 = 126.0;
 const RECORDING_HUD_BOTTOM_MARGIN: f64 = 20.0;
 const GIF_SOURCE_RETENTION_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
 
@@ -149,6 +149,8 @@ pub struct StartExportRequest {
     pub file_stem: String,
     #[serde(default)]
     pub destination_directory: Option<String>,
+    #[serde(default)]
+    pub overwrite_source: bool,
     pub edit: EditSpec,
     pub export: ExportSpec,
 }
@@ -1094,7 +1096,7 @@ async fn stop_recording_inner(
         target: options.target.clone(),
         missing: false,
     };
-    register_recording_artifact(&app, &state, artifact.clone(), poster_png.clone());
+    upsert_recording_artifact(&app, &state, artifact.clone(), poster_png.clone());
     let _ = fs::write(directory.join("poster.png"), poster_png);
 
     let now = now_ms();
@@ -1361,25 +1363,40 @@ pub fn start_recording_export(
         ExportFormat::Gif => "gif",
         ExportFormat::WebM => "webm",
     };
+    let source_path = PathBuf::from(&source.path);
+    let source_extension = source_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    if request.overwrite_source && !source_extension.eq_ignore_ascii_case(extension) {
+        return Err("changing the file format requires saving a copy".to_owned());
+    }
     let selected_directory = request
         .destination_directory
         .as_deref()
         .filter(|directory| !directory.is_empty())
         .map(Path::new);
-    let destination = match selected_directory {
-        Some(directory) => storage::recording_destination_path_in(
-            Path::new(&source.path),
-            Some(directory),
-            &request.file_stem,
-            extension,
-        ),
-        None => storage::recording_destination_path(
-            Path::new(&source.path),
-            &request.file_stem,
-            extension,
-        ),
-    }
-    .map_err(|error| error.to_string())?;
+    let final_destination = if request.overwrite_source {
+        source_path.clone()
+    } else {
+        match selected_directory {
+            Some(directory) => storage::recording_destination_path_in(
+                &source_path,
+                Some(directory),
+                &request.file_stem,
+                extension,
+            ),
+            None => {
+                storage::recording_destination_path(&source_path, &request.file_stem, extension)
+            }
+        }
+        .map_err(|error| error.to_string())?
+    };
+    let working_destination = if request.overwrite_source {
+        replacement_working_path(&source_path, extension).map_err(|error| error.to_string())?
+    } else {
+        final_destination.clone()
+    };
     let export_id = Uuid::new_v4().to_string();
     let cancel = CancelToken::default();
     state
@@ -1397,9 +1414,16 @@ pub fn start_recording_export(
         let progress_export_id = task_export_id.clone();
         let edit = request.edit.clone();
         let export = request.export.clone();
+        let overwrite_source = request.overwrite_source;
+        let cleanup_destination = working_destination.clone();
         let result = tauri::async_runtime::spawn_blocking(move || {
-            let outcome =
-                toolchain.export(&input, &destination, &edit, &export, &cancel, |progress| {
+            let mut outcome = toolchain.export(
+                &input,
+                &working_destination,
+                &edit,
+                &export,
+                &cancel,
+                |progress| {
                     let _ = task_app.emit(
                         "recording-export-progress",
                         RecordingExportProgress {
@@ -1407,7 +1431,8 @@ pub fn start_recording_export(
                             progress,
                         },
                     );
-                })?;
+                },
+            )?;
             let probe = toolchain.probe(&outcome.path)?;
             let generated_poster_path = outcome
                 .path
@@ -1417,13 +1442,22 @@ pub fn start_recording_export(
                 .ok()
                 .and_then(|()| fs::read(&generated_poster_path).ok());
             let _ = fs::remove_file(generated_poster_path);
+            if overwrite_source {
+                replace_recording_source(&input, &outcome.path)?;
+                outcome.path = input;
+                outcome.size_bytes = fs::metadata(&outcome.path)?.len();
+            }
             Ok::<_, captures_media::MediaToolError>((outcome, probe, generated_poster))
         })
         .await;
         state.recording.lock().exports.remove(&task_export_id);
         match result {
             Ok(Ok((outcome, probe, generated_poster))) => {
-                let artifact_id = Uuid::new_v4().to_string();
+                let artifact_id = if request.overwrite_source {
+                    source.id.clone()
+                } else {
+                    Uuid::new_v4().to_string()
+                };
                 let keeps_system_audio = extension != "gif"
                     && source.has_system_audio
                     && !request.edit.audio.mute_system_audio;
@@ -1461,11 +1495,15 @@ pub fn start_recording_export(
                     dropped_frames: source.dropped_frames,
                     has_system_audio,
                     has_microphone_audio,
-                    created_at: chrono::Utc::now().to_rfc3339(),
+                    created_at: if request.overwrite_source {
+                        source.created_at
+                    } else {
+                        chrono::Utc::now().to_rfc3339()
+                    },
                     target: source.target,
                     missing: false,
                 };
-                register_recording_artifact(
+                upsert_recording_artifact(
                     &app,
                     &state,
                     artifact.clone(),
@@ -1486,6 +1524,9 @@ pub fn start_recording_export(
                 );
             }
             Ok(Err(error)) => {
+                if request.overwrite_source {
+                    let _ = fs::remove_file(&cleanup_destination);
+                }
                 let cancelled = matches!(error, captures_media::MediaToolError::Cancelled);
                 let _ = app.emit(
                     "recording-export-failed",
@@ -1497,6 +1538,9 @@ pub fn start_recording_export(
                 );
             }
             Err(error) => {
+                if request.overwrite_source {
+                    let _ = fs::remove_file(&cleanup_destination);
+                }
                 let _ = app.emit(
                     "recording-export-failed",
                     RecordingExportFailed {
@@ -1817,7 +1861,7 @@ async fn recover_recording_draft_inner(
         target: manifest.options.target.clone(),
         missing: false,
     };
-    register_recording_artifact(&app, &state, artifact.clone(), poster_png);
+    upsert_recording_artifact(&app, &state, artifact.clone(), poster_png);
 
     let mut recovered_manifest = recovered_manifest;
     recovered_manifest.state = RecordingState::Ready;
@@ -2208,7 +2252,48 @@ fn destroy_recording_selector(app: &AppHandle) {
     }
 }
 
-fn register_recording_artifact(
+fn replacement_working_path(source: &Path, extension: &str) -> io::Result<PathBuf> {
+    let directory = source
+        .parent()
+        .filter(|directory| directory.is_dir())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "save folder is unavailable"))?;
+    Ok(directory.join(format!(".captures-save-{}.{}", Uuid::new_v4(), extension)))
+}
+
+fn replace_recording_source(source: &Path, replacement: &Path) -> io::Result<()> {
+    let directory = source
+        .parent()
+        .filter(|directory| directory.is_dir())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "save folder is unavailable"))?;
+    let source_extension = source
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or("media");
+    let backup = directory.join(format!(
+        ".captures-backup-{}.{}",
+        Uuid::new_v4(),
+        source_extension
+    ));
+
+    fs::rename(source, &backup)?;
+    match fs::rename(replacement, source) {
+        Ok(()) => {
+            let _ = fs::remove_file(backup);
+            Ok(())
+        }
+        Err(replace_error) => match fs::rename(&backup, source) {
+            Ok(()) => Err(replace_error),
+            Err(restore_error) => Err(io::Error::new(
+                replace_error.kind(),
+                format!(
+                    "the edited recording could not replace the original ({replace_error}), and the backup could not be restored automatically ({restore_error})"
+                ),
+            )),
+        },
+    }
+}
+
+fn upsert_recording_artifact(
     app: &AppHandle,
     state: &AppState,
     artifact: RecordingArtifact,
@@ -2222,15 +2307,29 @@ fn register_recording_artifact(
             false
         }
     };
-    state
-        .recording_artifacts
-        .lock()
-        .push(RecordingArtifactData {
-            summary: artifact,
-            poster_png,
-        });
+    let artifact_id = artifact.id.clone();
+    let artifact_data = RecordingArtifactData {
+        summary: artifact,
+        poster_png,
+    };
+    let mut recording_artifacts = state.recording_artifacts.lock();
+    if let Some(existing) = recording_artifacts
+        .iter_mut()
+        .find(|existing| existing.summary.id == artifact_id)
+    {
+        *existing = artifact_data;
+    } else {
+        recording_artifacts.push(artifact_data);
+    }
+    drop(recording_artifacts);
+    state.recording_timeline_sprites.lock().remove(&artifact_id);
     if history_saved {
-        state.history.lock().insert(0, history_entry);
+        let mut history = state.history.lock();
+        if let Some(existing) = history.iter_mut().find(|entry| entry.id == artifact_id) {
+            *existing = history_entry;
+        } else {
+            history.insert(0, history_entry);
+        }
         let _ = app.emit("capture-history-changed", ());
     }
 }
@@ -2651,8 +2750,11 @@ fn show_recording_editor(app: &AppHandle, artifact_id: &str) -> Result<(), AppEr
 #[cfg(test)]
 mod tests {
     use captures_recording::RecordingState;
+    use tempfile::tempdir;
 
-    use super::screenshot_capture_is_blocked_for;
+    use super::{
+        replace_recording_source, replacement_working_path, screenshot_capture_is_blocked_for,
+    };
 
     #[test]
     fn permits_screenshots_while_recording_or_paused() {
@@ -2681,5 +2783,33 @@ mod tests {
             false,
             Some(RecordingState::Finalizing)
         ));
+    }
+
+    #[test]
+    fn replaces_a_recording_only_after_the_new_file_exists() {
+        let directory = tempdir().expect("temporary directory");
+        let source = directory.path().join("recording.mp4");
+        let replacement = replacement_working_path(&source, "mp4").expect("working path");
+        std::fs::write(&source, b"original").expect("source");
+        std::fs::write(&replacement, b"edited").expect("replacement");
+
+        replace_recording_source(&source, &replacement).expect("source replaced");
+
+        assert_eq!(std::fs::read(&source).expect("saved source"), b"edited");
+        assert!(!replacement.exists());
+    }
+
+    #[test]
+    fn restores_the_original_when_replacement_fails() {
+        let directory = tempdir().expect("temporary directory");
+        let source = directory.path().join("recording.mp4");
+        let missing_replacement = directory.path().join("missing.mp4");
+        std::fs::write(&source, b"original").expect("source");
+
+        assert!(replace_recording_source(&source, &missing_replacement).is_err());
+        assert_eq!(
+            std::fs::read(&source).expect("restored source"),
+            b"original"
+        );
     }
 }

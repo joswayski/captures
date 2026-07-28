@@ -303,10 +303,10 @@ const fn video_frame_is_usable(
         && data_is_ready
         && has_image_buffer
         && match status {
-            Some(status) => matches!(
-                status,
-                SCFrameStatus::Complete | SCFrameStatus::Started | SCFrameStatus::Idle
-            ),
+            // Idle frames repeat the previous surface. The media writer
+            // advances static timelines itself, so forwarding them can occupy
+            // the encoder precisely when a real content update arrives.
+            Some(status) => matches!(status, SCFrameStatus::Complete | SCFrameStatus::Started),
             // Some ScreenCaptureKit runtimes expose the status attachment as
             // an integer that the binding cannot currently decode. A valid,
             // ready video sample with an image buffer is still safe to append.
@@ -490,6 +490,12 @@ mod tests {
             true
         ));
         assert!(video_frame_is_usable(
+            Some(SCFrameStatus::Started),
+            true,
+            true,
+            true
+        ));
+        assert!(!video_frame_is_usable(
             Some(SCFrameStatus::Idle),
             true,
             true,

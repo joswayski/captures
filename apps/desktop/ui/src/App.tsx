@@ -815,10 +815,6 @@ function MicrophoneIcon({ muted }: { muted: boolean }) {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M6 11a6 6 0 0 0 11.4 2.6M12 18v3M9 21h6" />{muted && <path d="m4 4 16 16" />}</svg>;
 }
 
-function HiddenFromCaptureIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12s3.5-5 9-5 9 5 9 5-3.5 5-9 5-9-5-9-5Z" /><path d="m4 4 16 16" /></svg>;
-}
-
 function HideControlsIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 17h12" /></svg>;
 }
@@ -857,7 +853,6 @@ export function RecordingCountdown() {
         if (!active) return;
         setSnapshot(payload);
         if (payload.state !== "countdown") {
-          setRemaining(null);
           setExiting(true);
         }
       }),
@@ -907,7 +902,9 @@ export function RecordingCountdown() {
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [cancel]);
 
-  const count = remaining ?? snapshot?.countdown_remaining_seconds ?? snapshot?.options.countdown_seconds ?? 3;
+  const count = snapshot?.state === "countdown"
+    ? remaining ?? snapshot.countdown_remaining_seconds ?? snapshot.options.countdown_seconds
+    : remaining ?? 1;
   return (
     <main
       className={`recording-countdown${exiting ? " exiting" : ""}`}
@@ -1537,6 +1534,7 @@ function roundRecordingRect(rect: RecordingRect, maxWidth: number, maxHeight: nu
 export function RecordingHud() {
   const [snapshot, setSnapshot] = useState<RecordingSessionSnapshot | null>(null);
   const [busy, setBusy] = useState(false);
+  const [capturingScreenshot, setCapturingScreenshot] = useState(false);
   const [microphonePeak, setMicrophonePeak] = useState(0);
   const [error, setError] = useState("");
   const sessionIdRef = useRef<string | null>(null);
@@ -1612,12 +1610,17 @@ export function RecordingHud() {
   const takeScreenshot = async () => {
     if (busy) return;
     setBusy(true);
+    setCapturingScreenshot(true);
     setError("");
     try {
+      // Yield at least one frame so the HUD is actually hidden before the
+      // native selector changes this window's capture protection.
+      await new Promise((resolve) => setTimeout(resolve, prefersReducedMotion() ? 16 : 140));
       await invoke("start_capture", { mode: "region" });
     } catch (error) {
       setError(recordingErrorMessage(error));
     } finally {
+      setCapturingScreenshot(false);
       setBusy(false);
     }
   };
@@ -1661,13 +1664,47 @@ export function RecordingHud() {
       setError(String(error));
     }
   };
+  const restartRecording = async () => {
+    if (busy) return;
+    try {
+      const choice = await message(
+        "The current recording will be deleted and a new countdown will begin.",
+        {
+          title: "Restart recording?",
+          kind: "warning",
+          buttons: { ok: "Restart", cancel: "Cancel" },
+        },
+      );
+      if (choice === "Restart") {
+        await invokeAction("restart_recording");
+      }
+    } catch (error) {
+      setError(String(error));
+    }
+  };
 
   return (
-    <main className={`recording-hud recording-hud-${snapshot.state}`} onPointerDown={startHudDrag}>
-      <div className="recording-hud-status">
-        <span className="recording-dot" aria-hidden="true" />
-        <strong>{formatRecordingTime(snapshot.elapsed_ms)}</strong>
-        <small>{recordingStatusLabel(snapshot)}</small>
+    <main
+      className={`recording-hud recording-hud-${snapshot.state}${capturingScreenshot ? " recording-hud-capturing" : ""}`}
+      onPointerDown={startHudDrag}
+    >
+      <div className="recording-hud-top">
+        <div className="recording-hud-status">
+          <span className="recording-dot" aria-hidden="true" />
+          <strong>{formatRecordingTime(snapshot.elapsed_ms)}</strong>
+          <small>{recordingStatusLabel(snapshot)}</small>
+        </div>
+        <span className="recording-hud-privacy">Controls aren’t recorded</span>
+        <HudTooltip label="Hide controls">
+          <button
+            type="button"
+            className="recording-icon-button recording-hide"
+            disabled={busy}
+            aria-label="Hide recording controls"
+            title="Open Captures from the Dock to show the controls again"
+            onClick={() => void hideControls()}
+          ><HideControlsIcon /></button>
+        </HudTooltip>
       </div>
       <div className="recording-hud-actions">
         <>
@@ -1684,7 +1721,7 @@ export function RecordingHud() {
             ><PauseResumeIcon paused={snapshot.state === "paused"} /></button>
           </HudTooltip>
           <HudTooltip label="Restart recording">
-            <button type="button" className="recording-icon-button" disabled={!canControl || busy} aria-label="Restart recording" onClick={() => void invokeAction("restart_recording")}><RestartRecordingIcon /></button>
+            <button type="button" className="recording-icon-button" disabled={!canControl || busy} aria-label="Restart recording" onClick={() => void restartRecording()}><RestartRecordingIcon /></button>
           </HudTooltip>
           <HudTooltip label="Take a region screenshot">
             <button type="button" className="recording-icon-button" disabled={!canControl || busy} aria-label="Take a region screenshot" onClick={() => void takeScreenshot()}><CameraIcon /></button>
@@ -1712,22 +1749,7 @@ export function RecordingHud() {
               onClick={() => void deleteRecording()}
             ><TrashIcon /></button>
           </HudTooltip>
-          <HudTooltip label="Controls are not included in the recording">
-            <span className="recording-hud-privacy" aria-label="Controls are not included in the recording">
-              <HiddenFromCaptureIcon />
-            </span>
-          </HudTooltip>
         </>
-        <HudTooltip label="Hide controls">
-          <button
-            type="button"
-            className="recording-icon-button recording-hide"
-            disabled={busy}
-            aria-label="Hide recording controls"
-            title="Open Captures from the Dock to show the controls again"
-            onClick={() => void hideControls()}
-          ><HideControlsIcon /></button>
-        </HudTooltip>
       </div>
       {(error || snapshot.error) && (
         <p className="recording-hud-error" role="alert">
@@ -1814,6 +1836,7 @@ export function RecordingEditor() {
   const [savedFingerprint, setSavedFingerprint] = useState<string | null>(null);
   const [filenameStem, setFilenameStem] = useState("");
   const [destinationDirectory, setDestinationDirectory] = useState("");
+  const [saveCopy, setSaveCopy] = useState(false);
   const [previewPlaying, setPreviewPlaying] = useState(false);
   const [toast, setToast] = useState("");
   const [error, setError] = useState("");
@@ -1873,8 +1896,9 @@ export function RecordingEditor() {
       setCustomHeight(loaded.height);
       setOutputFormat(loaded.kind === "gif" ? "gif" : "mp4");
       setSizeMode(loaded.kind === "gif" ? "compress" : "preserve");
-      setFilenameStem(`${recordingFileStem(loaded.path)}-edited`);
+      setFilenameStem(recordingFileStem(loaded.path));
       setDestinationDirectory(recordingParentDirectory(loaded.path));
+      setSaveCopy(false);
       setPreviewPlaying(false);
       setSavedFingerprint(null);
       void invoke<RecordingTimelinePreview>("prepare_recording_timeline_preview", {
@@ -1916,8 +1940,12 @@ export function RecordingEditor() {
     : baseOutputDimensions;
   const hasRecordedAudio = artifact.has_system_audio || artifact.has_microphone_audio;
   const sourceDirectory = recordingParentDirectory(artifact.path);
+  const sourceStem = recordingFileStem(artifact.path);
+  const sourceFormat = artifact.kind === "gif" ? "gif" : "mp4";
+  const formatRequiresCopy = outputFormat !== sourceFormat;
   const exportFingerprint = JSON.stringify({
     artifact: artifact.id,
+    saveCopy,
     filenameStem,
     destinationDirectory,
     trimStart: Math.round(trimStart),
@@ -1941,6 +1969,25 @@ export function RecordingEditor() {
     mono,
   });
   const alreadySaved = Boolean(exported && savedFingerprint === exportFingerprint);
+  const updateSaveCopy = (enabled: boolean) => {
+    if (!enabled && formatRequiresCopy) return;
+    setSaveCopy(enabled);
+    setFilenameStem(enabled ? `${sourceStem}-copy` : sourceStem);
+    setDestinationDirectory(sourceDirectory);
+    setSavedFingerprint(null);
+    setExported(null);
+    setToast("");
+    setError("");
+  };
+  const updateOutputFormat = (format: "mp4" | "gif") => {
+    setOutputFormat(format);
+    if (format !== sourceFormat && !saveCopy) {
+      setSaveCopy(true);
+      setFilenameStem(`${sourceStem}-copy`);
+      setDestinationDirectory(sourceDirectory);
+    }
+    if (format === "gif" && sizeMode === "preserve") setSizeMode("compress");
+  };
 
   const updateCropDimension = (key: "width" | "height", value: number) => {
     setCrop((current) => {
@@ -2067,7 +2114,7 @@ export function RecordingEditor() {
   };
 
   const chooseDestinationDirectory = async () => {
-    if (exportId) return;
+    if (exportId || !saveCopy) return;
     setError("");
     try {
       const selected = await open({
@@ -2097,7 +2144,7 @@ export function RecordingEditor() {
 
   const startExport = async () => {
     if (exportId) return;
-    const invalidFilename = recordingFilenameError(filenameStem);
+    const invalidFilename = saveCopy ? recordingFilenameError(filenameStem) : "";
     if (invalidFilename) {
       setError(invalidFilename);
       return;
@@ -2146,6 +2193,7 @@ export function RecordingEditor() {
           artifact_id: artifact.id,
           file_stem: filenameStem,
           destination_directory: destinationDirectory,
+          overwrite_source: !saveCopy && !formatRequiresCopy,
           edit,
           export: exportSpec,
         },
@@ -2363,14 +2411,11 @@ export function RecordingEditor() {
         <section className="editor-card editor-output-card">
           <h2>Output format</h2>
           <div className="editor-segmented">
-            <button type="button" className={outputFormat === "mp4" ? "active" : ""} onClick={() => setOutputFormat("mp4")}>Video (MP4)</button>
+            <button type="button" className={outputFormat === "mp4" ? "active" : ""} onClick={() => updateOutputFormat("mp4")}>Video (MP4)</button>
             <button
               type="button"
               className={outputFormat === "gif" ? "active" : ""}
-              onClick={() => {
-                setOutputFormat("gif");
-                if (sizeMode === "preserve") setSizeMode("compress");
-              }}
+              onClick={() => updateOutputFormat("gif")}
             >Animated GIF</button>
           </div>
           {outputFormat === "gif" && (
@@ -2548,14 +2593,25 @@ export function RecordingEditor() {
       <footer className={`recording-save-footer${error ? " has-error" : ""}`}>
         {progress && <div className="recording-export-progress"><span style={{ width: `${progress.completed_per_mille / 10}%` }} /></div>}
         <div className="recording-filename">
-          <label htmlFor="recording-save-filename">Filename</label>
+          <div className="recording-filename-heading">
+            <label htmlFor="recording-save-filename">Filename</label>
+            <label className="recording-save-copy">
+              <input
+                type="checkbox"
+                checked={saveCopy}
+                disabled={Boolean(exportId) || formatRequiresCopy}
+                onChange={(event) => updateSaveCopy(event.target.checked)}
+              />
+              <span>Save a copy</span>
+            </label>
+          </div>
           <span className="recording-filename-input">
             <input
               id="recording-save-filename"
               value={filenameStem}
               aria-label="Saved filename"
               spellCheck={false}
-              disabled={Boolean(exportId)}
+              disabled={Boolean(exportId) || !saveCopy}
               onChange={(event) => {
                 setFilenameStem(event.target.value);
                 setError("");
@@ -2566,12 +2622,12 @@ export function RecordingEditor() {
           <div className="recording-destination">
             <span>Save to</span>
             <output aria-label="Save location" title={destinationDirectory}>{destinationDirectory}</output>
-            <button
-              type="button"
-              aria-label="Change save location"
-              disabled={Boolean(exportId)}
-              onClick={() => void chooseDestinationDirectory()}
-            >Change…</button>
+            {saveCopy && <button
+                type="button"
+                aria-label="Change save location"
+                disabled={Boolean(exportId)}
+                onClick={() => void chooseDestinationDirectory()}
+              >Change…</button>}
           </div>
         </div>
         <div className="recording-save-feedback" aria-live="polite">

@@ -105,20 +105,21 @@ describe("RecordingHud", () => {
 
     const screenshot = await screen.findByRole("button", { name: "Take a region screenshot" });
     fireEvent.click(screenshot);
+    expect(container.querySelector(".recording-hud")).toHaveClass("recording-hud-capturing");
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("start_capture", { mode: "region" });
     });
+    expect(container.querySelector(".recording-hud")).not.toHaveClass("recording-hud-capturing");
 
     expect(screen.getByText("Recording")).toBeInTheDocument();
     expect(screen.queryByText("Not in recording")).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Controls are not included in the recording")).toBeInTheDocument();
+    expect(screen.getByText("Controls aren’t recorded")).toBeInTheDocument();
     expect(screen.getAllByRole("tooltip").map((tooltip) => tooltip.textContent)).toEqual(expect.arrayContaining([
       "Stop and save",
       "Pause recording",
       "Restart recording",
       "Take a region screenshot",
       "Delete recording",
-      "Controls are not included in the recording",
       "Hide controls",
     ]));
     expect(screen.queryByRole("button", { name: "Move recording controls" })).not.toBeInTheDocument();
@@ -172,6 +173,36 @@ describe("RecordingHud", () => {
         }),
       );
       expect(invoke).toHaveBeenCalledWith("discard_recording", {
+        sessionId: snapshot.id,
+      });
+    });
+  });
+
+  it("uses a native confirmation before restarting and deleting the current take", async () => {
+    snapshot = {
+      ...baseSnapshot,
+      state: "recording",
+      countdown_remaining_seconds: null,
+    };
+    nativeMessage.mockResolvedValueOnce("Restart");
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_recording_snapshot") return snapshot;
+      if (command === "restart_recording") return { ...snapshot, state: "countdown" };
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<RecordingHud />);
+    fireEvent.click(await screen.findByRole("button", { name: "Restart recording" }));
+
+    await waitFor(() => {
+      expect(nativeMessage).toHaveBeenCalledWith(
+        "The current recording will be deleted and a new countdown will begin.",
+        expect.objectContaining({
+          title: "Restart recording?",
+          buttons: { ok: "Restart", cancel: "Cancel" },
+        }),
+      );
+      expect(invoke).toHaveBeenCalledWith("restart_recording", {
         sessionId: snapshot.id,
       });
     });

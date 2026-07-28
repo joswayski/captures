@@ -164,11 +164,13 @@ describe("RecordingEditor", () => {
     expect(play).toHaveBeenCalledOnce();
   });
 
-  it("defaults to preserve quality and saves a safe editable filename from the sticky footer", async () => {
+  it("defaults to replacing the source and can switch to a named copy", async () => {
     render(<RecordingEditor />);
 
     const filename = await screen.findByRole("textbox", { name: "Saved filename" });
-    expect(filename).toHaveValue("Captures_1140x692-edited");
+    expect(filename).toHaveValue("Captures_1140x692");
+    expect(filename).toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: "Save a copy" })).not.toBeChecked();
     expect(screen.getByRole("combobox", { name: "Save quality" })).toHaveTextContent(
       "Preserve quality",
     );
@@ -177,6 +179,37 @@ describe("RecordingEditor", () => {
     );
     expect(screen.queryByText("Ready to save.")).not.toBeInTheDocument();
 
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("start_recording_export", {
+        request: expect.objectContaining({
+          artifact_id: artifact.id,
+          file_stem: "Captures_1140x692",
+          destination_directory: "/Users/josevalerio/Captures",
+          overwrite_source: true,
+        }),
+      });
+    });
+
+    await act(async () => {
+      eventHandlers.get("recording-export-complete")?.({
+        payload: {
+          export_id: "export-1",
+          artifact: { ...artifact, size_bytes: 40_700 },
+          finder_error: null,
+        },
+      });
+    });
+    expect(screen.getByText("Video saved — 40.7 KB.")).toHaveClass("recording-save-success");
+    expect(screen.getByRole("button", { name: "Saved" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Show in Folder" }));
+    expect(invoke).toHaveBeenCalledWith("reveal_recording_artifact", {
+      artifactId: artifact.id,
+    });
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Save a copy" }));
+    expect(filename).toHaveValue("Captures_1140x692-copy");
+    expect(filename).toBeEnabled();
     fireEvent.change(filename, { target: { value: "Demo recording" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
@@ -186,34 +219,19 @@ describe("RecordingEditor", () => {
           artifact_id: artifact.id,
           file_stem: "Demo recording",
           destination_directory: "/Users/josevalerio/Captures",
+          overwrite_source: false,
           edit: expect.objectContaining({ trim_start_ms: 0, trim_end_ms: null }),
           export: expect.objectContaining({ format: "mp4", quality: "preserve" }),
         }),
       });
     });
-
-    await act(async () => {
-      eventHandlers.get("recording-export-complete")?.({
-        payload: {
-          export_id: "export-1",
-          artifact: { ...artifact, id: "saved-1", size_bytes: 40_700 },
-          finder_error: null,
-        },
-      });
-    });
-    expect(screen.getByText("Video saved — 40.7 KB.")).toHaveClass("recording-save-success");
-    expect(screen.getByRole("button", { name: "Saved" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "Show in Folder" }));
-    expect(invoke).toHaveBeenCalledWith("reveal_recording_artifact", {
-      artifactId: "saved-1",
-    });
-    expect(screen.queryByText(/Reveal Export/)).not.toBeInTheDocument();
   });
 
   it("changes the local destination and accepts KB, MB, or GB maximum-size units", async () => {
     vi.mocked(open).mockResolvedValue("/Users/josevalerio/Desktop/Exports");
     render(<RecordingEditor />);
 
+    fireEvent.click(await screen.findByRole("checkbox", { name: "Save a copy" }));
     fireEvent.click(await screen.findByRole("button", { name: "Change save location" }));
     await waitFor(() => {
       expect(screen.getByLabelText("Save location")).toHaveTextContent(

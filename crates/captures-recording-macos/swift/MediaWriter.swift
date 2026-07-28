@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreMedia
+import CoreVideo
 import Foundation
 
 private final class CapturesMediaWriter {
@@ -13,9 +14,13 @@ private final class CapturesMediaWriter {
     private var firstTimestamp = CMTime.invalid
     private var lastTimestamp = CMTime.invalid
     private var firstFrameUptime: TimeInterval?
-    private var lastVideoSample: CMSampleBuffer?
+    private var latestVideoBuffer: CVPixelBuffer?
+    private var latestVideoTimestamp = CMTime.invalid
+    private var latestVideoGeneration: UInt64 = 0
+    private var appendedVideoGeneration: UInt64 = 0
     private var videoFramesWritten: UInt64 = 0
-    private var heartbeatTimer: DispatchSourceTimer?
+    private var videoDrainTimer: DispatchSourceTimer?
+    private let videoDrainInterval: DispatchTimeInterval
     private let activity: NSObjectProtocol
     private(set) var droppedFrames: UInt64 = 0
     private(set) var failure: String?
@@ -50,6 +55,7 @@ private final class CapturesMediaWriter {
         ]
         videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
         videoInput.expectsMediaDataInRealTime = true
+        videoDrainInterval = .milliseconds(max(8, 1_000 / max(1, framesPerSecond)))
         videoAdaptor = AVAssetWriterInputPixelBufferAdaptor(
             assetWriterInput: videoInput,
             sourcePixelBufferAttributes: nil
@@ -79,27 +85,28 @@ private final class CapturesMediaWriter {
     }
 
     deinit {
-        heartbeatTimer?.cancel()
+        videoDrainTimer?.cancel()
         ProcessInfo.processInfo.endActivity(activity)
     }
 
-    private func startHeartbeatIfNeeded() {
-        guard heartbeatTimer == nil else { return }
-        // ScreenCaptureKit may stop emitting frames when nothing on screen
-        // changes. Periodically repeat the latest pixel buffer so the encoded
-        // timeline and fragmented recovery data continue advancing.
+    private func startVideoDrainIfNeeded() {
+        guard videoDrainTimer == nil else { return }
+        // AVAssetWriter can briefly apply backpressure while ScreenCaptureKit
+        // continues delivering frames. Drain the newest pending real frame as
+        // soon as the encoder is ready. Only repeat a frame when there has
+        // genuinely been no newer content for 250 ms.
         let timer = DispatchSource.makeTimerSource(
             queue: DispatchQueue.global(qos: .userInitiated)
         )
         timer.schedule(
-            deadline: .now() + .milliseconds(250),
-            repeating: .milliseconds(250),
-            leeway: .milliseconds(20)
+            deadline: .now() + videoDrainInterval,
+            repeating: videoDrainInterval,
+            leeway: .milliseconds(2)
         )
         timer.setEventHandler { [weak self] in
-            self?.appendHeartbeat()
+            self?.drainVideoFrame()
         }
-        heartbeatTimer = timer
+        videoDrainTimer = timer
         timer.resume()
     }
 
@@ -114,7 +121,7 @@ private final class CapturesMediaWriter {
         )
     }
 
-    private func appendHeartbeat() {
+    private func drainVideoFrame() {
         lock.lock()
         defer { lock.unlock() }
         guard
@@ -122,10 +129,33 @@ private final class CapturesMediaWriter {
             failure == nil,
             let timestamp = currentPresentationTimestamp()
         else { return }
-        if !appendHeartbeatVideoFrame(at: timestamp, waitUntilReady: false) {
-            failure = writer.error?.localizedDescription
-                ?? "AVAssetWriter could not maintain the recording timeline"
+
+        let appended: Bool
+        if latestVideoGeneration > appendedVideoGeneration {
+            appended = appendLatestVideoFrame(
+                preferredTimestamp: latestVideoTimestamp,
+                generation: latestVideoGeneration,
+                waitUntilReady: false
+            )
+        } else if shouldAppendHeartbeat(at: timestamp) {
+            appended = appendLatestVideoFrame(
+                preferredTimestamp: timestamp,
+                generation: nil,
+                waitUntilReady: false
+            )
+        } else {
+            return
         }
+        if !appended {
+            failure = writer.error?.localizedDescription
+                ?? "AVAssetWriter could not append a recording frame"
+        }
+    }
+
+    private func shouldAppendHeartbeat(at timestamp: CMTime) -> Bool {
+        guard lastTimestamp.isValid else { return false }
+        let elapsed = CMTimeGetSeconds(CMTimeSubtract(timestamp, lastTimestamp))
+        return elapsed.isFinite && elapsed >= 0.25
     }
 
     func append(_ sample: CMSampleBuffer, kind: Int32) -> Bool {
@@ -144,50 +174,52 @@ private final class CapturesMediaWriter {
             firstFrameUptime = ProcessInfo.processInfo.systemUptime
             started = true
         }
-        if
-            kind == 0,
-            lastTimestamp.isValid,
-            CMTimeCompare(timestamp, lastTimestamp) <= 0
-        {
-            return true
-        }
-        let input = kind == 0 ? videoInput : audioInput
-        guard let input else { return true }
-        guard input.isReadyForMoreMediaData else {
-            if kind == 0 { droppedFrames += 1 }
-            return true
-        }
+
         if kind == 0 {
             guard
-                let imageBuffer = CMSampleBufferGetImageBuffer(sample),
-                videoAdaptor.append(imageBuffer, withPresentationTime: timestamp)
+                let imageBuffer = CMSampleBufferGetImageBuffer(sample)
             else {
+                failure = "ScreenCaptureKit delivered a video frame without pixels"
+                return false
+            }
+
+            if latestVideoGeneration > appendedVideoGeneration {
+                droppedFrames += 1
+            }
+            latestVideoBuffer = imageBuffer
+            latestVideoTimestamp = timestamp
+            latestVideoGeneration &+= 1
+            startVideoDrainIfNeeded()
+
+            guard appendLatestVideoFrame(
+                preferredTimestamp: timestamp,
+                generation: latestVideoGeneration,
+                waitUntilReady: videoFramesWritten == 0
+            ) else {
                 failure = writer.error?.localizedDescription
                     ?? "AVAssetWriter rejected a video frame"
                 return false
             }
-        } else if !input.append(sample) {
+            return true
+        }
+
+        guard let audioInput else { return true }
+        guard audioInput.isReadyForMoreMediaData else { return true }
+        if !audioInput.append(sample) {
             failure = writer.error?.localizedDescription ?? "AVAssetWriter rejected an audio sample"
             return false
-        }
-        if kind == 0 {
-            lastTimestamp = timestamp
-            lastVideoSample = sample
-            videoFramesWritten += 1
-            startHeartbeatIfNeeded()
         }
         return true
     }
 
-    private func appendHeartbeatVideoFrame(
-        at presentationTimestamp: CMTime,
+    private func appendLatestVideoFrame(
+        preferredTimestamp: CMTime,
+        generation: UInt64?,
         waitUntilReady: Bool
     ) -> Bool {
         guard
-            let lastVideoSample,
-            lastTimestamp.isValid,
-            CMTimeCompare(presentationTimestamp, lastTimestamp) > 0,
-            let imageBuffer = CMSampleBufferGetImageBuffer(lastVideoSample)
+            let imageBuffer = latestVideoBuffer,
+            preferredTimestamp.isValid
         else { return true }
         if waitUntilReady {
             for _ in 0..<100 where !videoInput.isReadyForMoreMediaData {
@@ -198,11 +230,30 @@ private final class CapturesMediaWriter {
             return !waitUntilReady
         }
 
+        let presentationTimestamp: CMTime
+        if lastTimestamp.isValid && CMTimeCompare(preferredTimestamp, lastTimestamp) <= 0 {
+            let minimumTimestamp = CMTimeAdd(
+                lastTimestamp,
+                CMTime(value: 1, timescale: 600_000)
+            )
+            if let currentTimestamp = currentPresentationTimestamp(),
+               CMTimeCompare(currentTimestamp, minimumTimestamp) > 0 {
+                presentationTimestamp = currentTimestamp
+            } else {
+                presentationTimestamp = minimumTimestamp
+            }
+        } else {
+            presentationTimestamp = preferredTimestamp
+        }
+
         guard videoAdaptor.append(imageBuffer, withPresentationTime: presentationTimestamp) else {
             return false
         }
 
         lastTimestamp = presentationTimestamp
+        if let generation {
+            appendedVideoGeneration = max(appendedVideoGeneration, generation)
+        }
         videoFramesWritten += 1
         return true
     }
@@ -215,16 +266,33 @@ private final class CapturesMediaWriter {
             return successful
         }
         finished = true
-        heartbeatTimer?.cancel()
-        heartbeatTimer = nil
+        videoDrainTimer?.cancel()
+        videoDrainTimer = nil
         guard started, failure == nil else {
             if failure == nil { failure = "the recording did not contain a complete video frame" }
             writer.cancelWriting()
             lock.unlock()
             return false
         }
+        if latestVideoGeneration > appendedVideoGeneration {
+            guard appendLatestVideoFrame(
+                preferredTimestamp: latestVideoTimestamp,
+                generation: latestVideoGeneration,
+                waitUntilReady: true
+            ) else {
+                failure = writer.error?.localizedDescription
+                    ?? "AVAssetWriter could not append the recording's latest frame"
+                writer.cancelWriting()
+                lock.unlock()
+                return false
+            }
+        }
         if let endTimestamp = currentPresentationTimestamp() {
-            guard appendHeartbeatVideoFrame(at: endTimestamp, waitUntilReady: true) else {
+            guard appendLatestVideoFrame(
+                preferredTimestamp: endTimestamp,
+                generation: nil,
+                waitUntilReady: true
+            ) else {
                 failure = writer.error?.localizedDescription
                     ?? "AVAssetWriter could not append the recording's final frame"
                 writer.cancelWriting()
