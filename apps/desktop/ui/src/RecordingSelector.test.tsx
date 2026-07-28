@@ -215,15 +215,25 @@ describe("RecordingSelector", () => {
       name: "Screenshot",
       pressed: true,
     });
+    const actionSwitch = screenshotMode.closest(".capture-action-switch");
+    const targetSwitch = screen.getByRole("button", { name: "Region" })
+      .closest(".recording-target-switch");
+    expect(actionSwitch).toHaveAttribute("data-active", "screenshot");
+    expect(actionSwitch?.querySelector(".capture-segmented-indicator")).not.toBeNull();
+    expect(screenshotMode.querySelector(".capture-icon-spark")).not.toBeNull();
+    expect(targetSwitch).toHaveAttribute("data-active", "region");
+    expect(targetSwitch?.querySelector(".capture-segmented-indicator")).not.toBeNull();
     expect(screen.getByText("These controls won’t appear in your screenshot")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Take screenshot" })).toBeEnabled();
     expect(screen.queryByRole("combobox", { name: "Frames per second" })).not.toBeInTheDocument();
     expect(invoke).not.toHaveBeenCalledWith("list_recording_audio_devices");
 
     fireEvent.click(screen.getByRole("button", { name: "Window" }));
+    expect(targetSwitch).toHaveAttribute("data-active", "window");
     fireEvent.click(screen.getByRole("button", { name: "Select Front eligible window" }));
 
     fireEvent.click(screen.getByRole("button", { name: "Record", pressed: false }));
+    expect(actionSwitch).toHaveAttribute("data-active", "recording");
     expect(screen.getByRole("button", { name: "Record", pressed: true })).toBeInTheDocument();
     expect(screen.getByText("These controls won’t appear in your recording")).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Frames per second" })).toBeInTheDocument();
@@ -243,6 +253,56 @@ describe("RecordingSelector", () => {
         },
       });
     });
+  });
+
+  it("animates the controls panel to its recording dimensions", async () => {
+    preparedSession = {
+      ...session,
+      initial_mode: "screenshot",
+    };
+    const { container } = render(<RecordingSelector />);
+    await screen.findByRole("button", { name: "Screenshot", pressed: true });
+
+    const panel = container.querySelector<HTMLElement>(".recording-selector-panel");
+    expect(panel).not.toBeNull();
+    const bounds = [
+      { width: 742, height: 60 },
+      { width: 790, height: 136 },
+    ];
+    vi.spyOn(panel!, "getBoundingClientRect").mockImplementation(() => {
+      const { width, height } = bounds.shift() ?? { width: 790, height: 136 };
+      return {
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        right: width,
+        bottom: height,
+        width,
+        height,
+        toJSON: () => undefined,
+      };
+    });
+    const animation = {
+      addEventListener: vi.fn(),
+      cancel: vi.fn(),
+    } as unknown as Animation;
+    const animate = vi.fn(() => animation);
+    Object.defineProperty(panel, "animate", {
+      configurable: true,
+      value: animate,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Record", pressed: false }));
+
+    expect(animate).toHaveBeenCalledWith([
+      { width: "742px", height: "60px" },
+      { width: "790px", height: "136px" },
+    ], {
+      duration: 280,
+      easing: "cubic-bezier(.2,.8,.2,1)",
+    });
+    expect(panel).toHaveAttribute("data-resizing", "true");
   });
 
   it("starts Window mode unselected and previews hovered windows with rounded geometry", async () => {
