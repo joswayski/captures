@@ -842,7 +842,6 @@ type RecordingRegionDrag = {
 };
 type RecordingPanelPosition = { left: number; top: number };
 type RecordingPanelDrag = { pointerId: number; offsetX: number; offsetY: number };
-const RECORDING_WINDOW_OUTLINE_WIDTH = 2;
 
 export function RecordingCountdown() {
   const [snapshot, setSnapshot] = useState<RecordingSessionSnapshot | null>(null);
@@ -1048,6 +1047,15 @@ export function RecordingSelector() {
     let active = true;
     let dispose: (() => void) | undefined;
     const applySelection = (selection: RecordingSelectionSession, currentSettings: AppSettings) => {
+      // A newly-created selector asks for the pending session while also
+      // subscribing to the ready event. Both can resolve with the same
+      // selection; re-applying it would clear the fade after reveal.
+      if (
+        activeSessionIdRef.current === selection.id
+        && sessionRef.current?.id === selection.id
+      ) {
+        return;
+      }
       activeSessionIdRef.current = selection.id;
       sessionRef.current = selection;
       revealingSessionIdRef.current = null;
@@ -1376,7 +1384,14 @@ export function RecordingSelector() {
         mode={targetMode}
         hole={selectedRect}
         bounds={{ width: session.display.width, height: session.display.height }}
+        dimWithoutHole={targetMode === "window"}
       />
+      {targetMode === "window" && !selectedWindow && (
+        <div className="recording-window-guidance" role="status">
+          <strong>Select a window</strong>
+          <span>Click any window to enable Record</span>
+        </div>
+      )}
       {targetMode !== "window" && selectedRect && selectedRect.width > 0 && selectedRect.height > 0 && (
         <div
           className={`recording-selection-frame recording-selection-${targetMode}${targetMode === "region" ? " movable" : ""}`}
@@ -1404,10 +1419,10 @@ export function RecordingSelector() {
               type="button"
               className={`recording-window-target${selectedWindow === window.id ? " selected" : ""}${hoveredWindow === window.id ? " hovered" : ""}`}
               style={{
-                left: left - RECORDING_WINDOW_OUTLINE_WIDTH,
-                top: top - RECORDING_WINDOW_OUTLINE_WIDTH,
-                width: width + RECORDING_WINDOW_OUTLINE_WIDTH * 2,
-                height: height + RECORDING_WINDOW_OUTLINE_WIDTH * 2,
+                left,
+                top,
+                width,
+                height,
                 zIndex,
               }}
               aria-label={`Select ${window.title || "window"}`}
@@ -1826,6 +1841,36 @@ type EditorCropDrag = {
 
 type FileSizeUnit = "kb" | "mb" | "gb";
 
+type RecordingEditorFingerprint = {
+  artifact: string;
+  makeCopy: boolean;
+  filenameStem: string;
+  destinationDirectory: string;
+  trimStart: number;
+  trimEnd: number;
+  crop: RecordingRect | null;
+  resolution: "original" | "1080" | "720" | "custom";
+  customWidth: number;
+  customHeight: number;
+  outputFormat: "mp4" | "gif";
+  gifFps: number;
+  gifMaxWidth: number;
+  gifColors: number;
+  quality: "high" | "standard" | "small";
+  sizeMode: "preserve" | "compress" | "maximum";
+  maximumSize: string;
+  maximumUnit: FileSizeUnit;
+  systemVolume: number;
+  microphoneVolume: number;
+  muteSystem: boolean;
+  muteMicrophone: boolean;
+  mono: boolean;
+};
+
+function recordingEditorFingerprint(value: RecordingEditorFingerprint): string {
+  return JSON.stringify(value);
+}
+
 const FILE_SIZE_UNIT_BYTES: Record<FileSizeUnit, number> = {
   kb: 1_000,
   mb: 1_000_000,
@@ -1864,6 +1909,10 @@ export function RecordingEditor() {
   const [progress, setProgress] = useState<ExportProgress | null>(null);
   const [exported, setExported] = useState<RecordingArtifact | null>(null);
   const [savedFingerprint, setSavedFingerprint] = useState<string | null>(null);
+  const [baseline, setBaseline] = useState<{
+    artifactId: string;
+    fingerprint: string;
+  } | null>(null);
   const [filenameStem, setFilenameStem] = useState("");
   const [destinationDirectory, setDestinationDirectory] = useState("");
   const [makeCopy, setMakeCopy] = useState(false);
@@ -1893,6 +1942,12 @@ export function RecordingEditor() {
           }
           setExported(payload.artifact);
           setSavedFingerprint(pendingExportFingerprintRef.current);
+          if (artifactId) {
+            setBaseline({
+              artifactId,
+              fingerprint: pendingExportFingerprintRef.current,
+            });
+          }
           setToast(
             `${payload.artifact.kind === "gif" ? "GIF" : "Video"} saved — ${formatFileSize(payload.artifact.size_bytes)}.`,
           );
@@ -1921,19 +1976,69 @@ export function RecordingEditor() {
         invoke<AppSettings>("get_settings").catch(() => null),
       ]);
       if (!active || !loaded) return;
+      const initialFilenameStem = recordingFileStem(loaded.path);
+      const initialDestinationDirectory = recordingParentDirectory(loaded.path);
+      const initialOutputFormat = loaded.kind === "gif" ? "gif" : "mp4";
+      const initialSizeMode = loaded.kind === "gif" ? "compress" : "preserve";
+      const initialGifFps = loadedSettings?.recording.gif_fps ?? 15;
+      const initialGifMaxWidth = loadedSettings?.recording.gif_max_width ?? 800;
+      const initialGifColors = loadedSettings?.recording.gif_max_colors ?? 256;
       setArtifact(loaded);
+      setTrimStart(0);
       setTrimEnd(loaded.duration_ms);
       setPlayheadMs(0);
+      setCropEnabled(false);
       setCrop({ x: 0, y: 0, width: loaded.width, height: loaded.height });
+      setResolution("original");
       setCustomWidth(loaded.width);
       setCustomHeight(loaded.height);
-      setOutputFormat(loaded.kind === "gif" ? "gif" : "mp4");
-      setSizeMode(loaded.kind === "gif" ? "compress" : "preserve");
-      setFilenameStem(recordingFileStem(loaded.path));
-      setDestinationDirectory(recordingParentDirectory(loaded.path));
+      setOutputFormat(initialOutputFormat);
+      setGifFps(initialGifFps);
+      setGifMaxWidth(initialGifMaxWidth);
+      setGifColors(initialGifColors);
+      setQuality("high");
+      setSizeMode(initialSizeMode);
+      setMaximumSize("10");
+      setMaximumUnit("mb");
+      setSystemVolume(100);
+      setMicrophoneVolume(100);
+      setMuteSystem(false);
+      setMuteMicrophone(false);
+      setMono(false);
+      setFilenameStem(initialFilenameStem);
+      setDestinationDirectory(initialDestinationDirectory);
       setMakeCopy(false);
       setPreviewPlaying(false);
+      setExported(null);
       setSavedFingerprint(null);
+      setBaseline({
+        artifactId: loaded.id,
+        fingerprint: recordingEditorFingerprint({
+          artifact: loaded.id,
+          makeCopy: false,
+          filenameStem: initialFilenameStem,
+          destinationDirectory: initialDestinationDirectory,
+          trimStart: 0,
+          trimEnd: Math.round(loaded.duration_ms),
+          crop: null,
+          resolution: "original",
+          customWidth: loaded.width,
+          customHeight: loaded.height,
+          outputFormat: initialOutputFormat,
+          gifFps: initialGifFps,
+          gifMaxWidth: initialGifMaxWidth,
+          gifColors: initialGifColors,
+          quality: "high",
+          sizeMode: initialSizeMode,
+          maximumSize: "10",
+          maximumUnit: "mb",
+          systemVolume: 100,
+          microphoneVolume: 100,
+          muteSystem: false,
+          muteMicrophone: false,
+          mono: false,
+        }),
+      });
       void invoke<RecordingTimelinePreview>("prepare_recording_timeline_preview", {
         artifactId: loaded.id,
       }).then((preview) => {
@@ -1941,11 +2046,6 @@ export function RecordingEditor() {
       }).catch(() => {
         if (active) setTimeline(null);
       });
-      if (loadedSettings) {
-        setGifFps(loadedSettings.recording.gif_fps);
-        setGifMaxWidth(loadedSettings.recording.gif_max_width);
-        setGifColors(loadedSettings.recording.gif_max_colors);
-      }
     })().catch((error) => {
       if (active) setError(recordingErrorMessage(error));
     });
@@ -1961,28 +2061,7 @@ export function RecordingEditor() {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
-  if (!artifact) {
-    return <main className="recording-editor recording-editor-loading">{error || "Loading recording…"}</main>;
-  }
-
-  const duration = Math.max(1, artifact.duration_ms);
-  const trimmedDuration = Math.max(1, trimEnd - trimStart);
-  const baseOutputDimensions = editorOutputDimensions(
-    cropEnabled ? crop.width : artifact.width,
-    cropEnabled ? crop.height : artifact.height,
-    resolution,
-    customWidth,
-    customHeight,
-  );
-  const outputDimensions = outputFormat === "gif"
-    ? dimensionsAtMaximumWidth(baseOutputDimensions.width, baseOutputDimensions.height, gifMaxWidth)
-    : baseOutputDimensions;
-  const hasRecordedAudio = artifact.has_system_audio || artifact.has_microphone_audio;
-  const sourceDirectory = recordingParentDirectory(artifact.path);
-  const sourceStem = recordingFileStem(artifact.path);
-  const sourceFormat = artifact.kind === "gif" ? "gif" : "mp4";
-  const formatRequiresCopy = outputFormat !== sourceFormat;
-  const exportFingerprint = JSON.stringify({
+  const exportFingerprint = artifact ? recordingEditorFingerprint({
     artifact: artifact.id,
     makeCopy,
     filenameStem,
@@ -2006,13 +2085,41 @@ export function RecordingEditor() {
     muteSystem,
     muteMicrophone,
     mono,
-  });
+  }) : null;
+
+  if (!artifact || !exportFingerprint) {
+    return <main className="recording-editor recording-editor-loading">{error || "Loading recording…"}</main>;
+  }
+
+  const duration = Math.max(1, artifact.duration_ms);
+  const trimmedDuration = Math.max(1, trimEnd - trimStart);
+  const baseOutputDimensions = editorOutputDimensions(
+    cropEnabled ? crop.width : artifact.width,
+    cropEnabled ? crop.height : artifact.height,
+    resolution,
+    customWidth,
+    customHeight,
+  );
+  const outputDimensions = outputFormat === "gif"
+    ? dimensionsAtMaximumWidth(baseOutputDimensions.width, baseOutputDimensions.height, gifMaxWidth)
+    : baseOutputDimensions;
+  const hasRecordedAudio = artifact.has_system_audio || artifact.has_microphone_audio;
+  const sourceDirectory = recordingParentDirectory(artifact.path);
+  const sourceStem = recordingFileStem(artifact.path);
+  const sourceFormat = artifact.kind === "gif" ? "gif" : "mp4";
+  const formatRequiresCopy = outputFormat !== sourceFormat;
+  const hasChanges = baseline?.artifactId === artifact.id
+    && baseline.fingerprint !== exportFingerprint;
   const alreadySaved = Boolean(exported && savedFingerprint === exportFingerprint);
   const saveStatus = error
     || toast
     || (exportId
       ? progress?.message || exportStageLabel(progress?.stage || "preparing")
-      : "");
+      : alreadySaved
+        ? "All changes are saved."
+        : hasChanges
+          ? "Unsaved changes."
+          : `This ${artifact.kind === "gif" ? "GIF" : "recording"} is already saved — closing won’t delete it.`);
   const updateMakeCopy = (enabled: boolean) => {
     if (!enabled && formatRequiresCopy) return;
     setMakeCopy(enabled);
@@ -2718,9 +2825,9 @@ export function RecordingEditor() {
               className="primary"
               type="button"
               aria-busy={Boolean(exportId)}
-              disabled={Boolean(exportId) || alreadySaved}
+              disabled={Boolean(exportId) || !hasChanges || alreadySaved}
               onClick={() => void startExport()}
-            ><SaveIcon />Save</button>
+            ><SaveIcon />Save changes</button>
           </div>
         </div>
       </footer>
@@ -3113,19 +3220,23 @@ function CaptureOverlay() {
 /**
  * Soft dim with an optional rectangular hole.
  * Region mode reveals the already-painted snapshot cleanly, then fades this
- * shade on top. Window mode retains the parent surface entrance transition.
+ * shade on top. Window mode can stay clear until hover for screenshot capture,
+ * or dim immediately while the recording selector waits for a window choice.
  */
 function CaptureDim({
   mode,
   hole,
   bounds,
+  dimWithoutHole = false,
 }: {
   mode: CaptureMode;
   hole: { x: number; y: number; width: number; height: number } | null;
   bounds: { width: number; height: number };
+  dimWithoutHole?: boolean;
 }) {
-  // Window mode: only dim once a window is hovered so idle stays clear.
-  if (mode === "window" && !hole) return null;
+  // Screenshot window capture stays clear until hover. Recording selection can
+  // opt into a full shade while it waits for the user to choose a window.
+  if (mode === "window" && !hole && !dimWithoutHole) return null;
 
   if (!hole) {
     return <div className="capture-shade capture-shade-full" />;
