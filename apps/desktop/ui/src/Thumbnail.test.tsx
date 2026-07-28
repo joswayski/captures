@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { Thumbnail } from "./App";
 import type { CaptureArtifact } from "./types";
@@ -102,5 +102,18 @@ describe("Thumbnail", () => {
       expect(event).toHaveProperty("defaultPrevented", true);
       expect(dataTransfer.dropEffect).toBe("none");
     }
+  });
+
+  it("makes the native preview window click-through as soon as deletion begins", async () => {
+    render(<Thumbnail />);
+    await screen.findByRole("article");
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("set_thumbnail_ignore_cursor_events", {
+        ignore: true,
+      });
+    });
   });
 });

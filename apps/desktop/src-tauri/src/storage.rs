@@ -1,7 +1,7 @@
 use std::{
     fs::{self, File},
     io::Write,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 use chrono::{DateTime, Duration, Local, Utc};
@@ -197,23 +197,88 @@ pub fn unique_media_path(directory: &Path, extension: &str) -> Result<PathBuf, A
         .unwrap_or_else(|| directory.join(format!("{stem}-{}.{}", Uuid::new_v4(), extension))))
 }
 
-pub fn unique_edited_media_path(source: &Path, extension: &str) -> Result<PathBuf, AppError> {
-    let directory = source.parent().unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(directory)?;
-    let source_stem = source
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .filter(|stem| !stem.is_empty())
-        .unwrap_or("Captures_recording");
-    let stem = format!("{source_stem}-edited");
-    let initial = directory.join(format!("{stem}.{extension}"));
-    if !initial.exists() {
-        return Ok(initial);
+pub fn recording_destination_path(
+    source: &Path,
+    file_stem: &str,
+    extension: &str,
+) -> Result<PathBuf, AppError> {
+    recording_destination_path_in(source, None, file_stem, extension)
+}
+
+pub fn recording_destination_path_in(
+    source: &Path,
+    selected_directory: Option<&Path>,
+    file_stem: &str,
+    extension: &str,
+) -> Result<PathBuf, AppError> {
+    recording_destination_path_in_mode(source, selected_directory, file_stem, extension, false)
+}
+
+pub fn recording_replacement_destination_path_in(
+    source: &Path,
+    selected_directory: Option<&Path>,
+    file_stem: &str,
+    extension: &str,
+) -> Result<PathBuf, AppError> {
+    recording_destination_path_in_mode(source, selected_directory, file_stem, extension, true)
+}
+
+fn recording_destination_path_in_mode(
+    source: &Path,
+    selected_directory: Option<&Path>,
+    file_stem: &str,
+    extension: &str,
+    allow_source: bool,
+) -> Result<PathBuf, AppError> {
+    let stem = file_stem.trim();
+    let reserved = [
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    let portable_name = !stem.is_empty()
+        && stem != "."
+        && stem != ".."
+        && stem == file_stem
+        && !stem.ends_with('.')
+        && !stem.ends_with(' ')
+        && !stem
+            .chars()
+            .any(|character| character.is_control() || r#"<>:"/\|?*"#.contains(character))
+        && !reserved.iter().any(|name| {
+            stem.split('.')
+                .next()
+                .is_some_and(|base| base.eq_ignore_ascii_case(name))
+        });
+    let single_component = {
+        let mut components = Path::new(stem).components();
+        matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
+    };
+    if !portable_name || !single_component {
+        return Err(AppError::Task(
+            "enter a filename without folders or reserved characters".to_owned(),
+        ));
     }
-    Ok((1_u32..)
-        .map(|suffix| directory.join(format!("{stem}-{suffix}.{extension}")))
-        .find(|candidate| !candidate.exists())
-        .unwrap_or_else(|| directory.join(format!("{stem}-{}.{}", Uuid::new_v4(), extension))))
+    if extension.is_empty()
+        || extension
+            .chars()
+            .any(|character| !character.is_ascii_alphanumeric())
+    {
+        return Err(AppError::Task("the selected format is invalid".to_owned()));
+    }
+    let directory =
+        selected_directory.unwrap_or_else(|| source.parent().unwrap_or_else(|| Path::new(".")));
+    if !directory.is_dir() {
+        return Err(AppError::Task(
+            "the selected save folder is unavailable".to_owned(),
+        ));
+    }
+    let destination = directory.join(format!("{stem}.{extension}"));
+    if destination.exists() && !(allow_source && destination == source) {
+        return Err(AppError::Task(format!(
+            "“{stem}.{extension}” already exists; choose another filename"
+        )));
+    }
+    Ok(destination)
 }
 
 pub fn load_capture_history() -> Result<Vec<HistoryEntry>, AppError> {
@@ -481,7 +546,8 @@ mod tests {
         DRAG_EXPORT_DIRECTORY, DRAG_ICON_FILE, DRAG_ICON_HEIGHT, DRAG_ICON_WIDTH,
         HISTORY_IMAGE_FILE, HISTORY_PREVIEW_FILE, clear_drag_exports_in, encode_drag_icon_png,
         encode_png, encode_preview_png, encode_thumbnail_png, load_capture_history_from,
-        prepare_artifact_drag_in, save_encoded_capture, save_history_capture_in,
+        prepare_artifact_drag_in, recording_destination_path, recording_destination_path_in,
+        recording_replacement_destination_path_in, save_encoded_capture, save_history_capture_in,
         save_history_entry_in, save_settings_to, unique_path,
     };
     use crate::models::{
@@ -508,6 +574,107 @@ mod tests {
         assert!(!bytes.is_empty());
         assert!(path.exists());
         assert!(!unique_path(directory.path(), "Captures_test").exists());
+    }
+
+    #[test]
+    fn recording_destination_requires_a_safe_single_basename() {
+        let directory = tempdir().expect("temporary directory");
+        let source = directory.path().join("source.mp4");
+
+        let destination =
+            recording_destination_path(&source, "Demo recording", "mp4").expect("safe destination");
+        assert_eq!(destination, directory.path().join("Demo recording.mp4"));
+        for unsafe_stem in [
+            "",
+            " ",
+            ".",
+            "..",
+            "../escape",
+            "nested/name",
+            r"nested\name",
+            "bad:name",
+            "trailing.",
+            "CON",
+        ] {
+            assert!(
+                recording_destination_path(&source, unsafe_stem, "mp4").is_err(),
+                "{unsafe_stem:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn recording_destination_refuses_to_overwrite() {
+        let directory = tempdir().expect("temporary directory");
+        let source = directory.path().join("source.mp4");
+        std::fs::write(&source, b"master").expect("source written");
+        std::fs::write(directory.path().join("saved.mp4"), b"existing").expect("collision written");
+
+        assert!(recording_destination_path(&source, "source", "mp4").is_err());
+        assert!(recording_destination_path(&source, "saved", "mp4").is_err());
+    }
+
+    #[test]
+    fn recording_destination_can_use_an_existing_selected_folder() {
+        let source_directory = tempdir().expect("source directory");
+        let selected_directory = tempdir().expect("selected directory");
+        let source = source_directory.path().join("source.mp4");
+
+        let destination =
+            recording_destination_path_in(&source, Some(selected_directory.path()), "saved", "mp4")
+                .expect("destination in selected folder");
+
+        assert_eq!(destination, selected_directory.path().join("saved.mp4"));
+        assert!(
+            recording_destination_path_in(
+                &source,
+                Some(&selected_directory.path().join("missing")),
+                "saved",
+                "mp4",
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn recording_replacement_can_keep_or_change_the_source_path_without_overwriting_another_file() {
+        let source_directory = tempdir().expect("source directory");
+        let selected_directory = tempdir().expect("selected directory");
+        let source = source_directory.path().join("source.mp4");
+        std::fs::write(&source, b"master").expect("source written");
+
+        assert_eq!(
+            recording_replacement_destination_path_in(
+                &source,
+                Some(source_directory.path()),
+                "source",
+                "mp4",
+            )
+            .expect("same source path"),
+            source
+        );
+        assert_eq!(
+            recording_replacement_destination_path_in(
+                &source,
+                Some(selected_directory.path()),
+                "renamed",
+                "mp4",
+            )
+            .expect("renamed destination"),
+            selected_directory.path().join("renamed.mp4")
+        );
+
+        std::fs::write(selected_directory.path().join("existing.mp4"), b"existing")
+            .expect("collision written");
+        assert!(
+            recording_replacement_destination_path_in(
+                &source,
+                Some(selected_directory.path()),
+                "existing",
+                "mp4",
+            )
+            .is_err()
+        );
     }
 
     #[test]

@@ -38,7 +38,7 @@ pub enum MacRecordingError {
     InvalidOptions(String),
     #[error("ScreenCaptureKit failed: {0}")]
     ScreenCaptureKit(String),
-    #[error("recording failed: {0}")]
+    #[error("{0}")]
     RecordingFailed(String),
     #[error("microphone capture failed: {0}")]
     Microphone(String),
@@ -196,6 +196,22 @@ pub fn microphone_devices() -> Vec<AudioDevice> {
     }
 }
 
+pub fn play_start_chime() {
+    #[cfg(target_os = "macos")]
+    // AudioServices plays from this process, so ScreenCaptureKit's
+    // excludesCurrentProcessAudio setting also excludes the cue.
+    unsafe {
+        audio_services_play_system_sound(1113);
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "AudioToolbox", kind = "framework")]
+unsafe extern "C" {
+    #[link_name = "AudioServicesPlaySystemSound"]
+    fn audio_services_play_system_sound(sound_id: u32);
+}
+
 #[cfg(target_os = "macos")]
 fn microphone_path(output_path: &Path) -> PathBuf {
     let stem = output_path
@@ -203,4 +219,20 @@ fn microphone_path(output_path: &Path) -> PathBuf {
         .and_then(|stem| stem.to_str())
         .unwrap_or("segment");
     output_path.with_file_name(format!("{stem}.mic.wav"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MacRecordingError;
+
+    #[test]
+    fn recording_failures_only_show_the_actionable_message() {
+        assert_eq!(
+            MacRecordingError::RecordingFailed(
+                "the recording did not contain a complete video frame".to_owned()
+            )
+            .to_string(),
+            "the recording did not contain a complete video frame"
+        );
+    }
 }

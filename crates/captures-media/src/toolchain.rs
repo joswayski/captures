@@ -55,6 +55,14 @@ pub struct RecordingSegmentInput {
     pub duration_ms: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TimelineSpriteSpec {
+    pub duration_ms: u64,
+    pub frame_count: u16,
+    pub frame_width: u32,
+    pub frame_height: u32,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct RecordingAudioLayout {
     pub system_audio: bool,
@@ -354,6 +362,46 @@ impl MediaToolchain {
         result
     }
 
+    pub fn create_timeline_sprite(
+        &self,
+        input: &Path,
+        destination: &Path,
+        spec: TimelineSpriteSpec,
+        cancel: &CancelToken,
+    ) -> Result<(), MediaToolError> {
+        if spec.duration_ms == 0
+            || spec.frame_count == 0
+            || spec.frame_width < 2
+            || spec.frame_height < 2
+        {
+            return Err(MediaToolError::InvalidEdit(
+                "timeline preview dimensions and duration must be greater than zero".to_owned(),
+            ));
+        }
+        let temporary = temporary_output_path(destination, "timeline");
+        let frames_per_second = f64::from(spec.frame_count) * 1_000.0 / spec.duration_ms as f64;
+        let filter = format!(
+            "fps={frames_per_second:.6},scale={}:{}:force_original_aspect_ratio=increase,crop={}:{},tile={}x1",
+            spec.frame_width,
+            spec.frame_height,
+            spec.frame_width,
+            spec.frame_height,
+            spec.frame_count,
+        );
+        let mut command = Command::new(&self.ffmpeg);
+        command
+            .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
+            .arg(input)
+            .args(["-frames:v", "1", "-vf", &filter])
+            .arg(&temporary);
+        let result = run_command(&mut command, cancel, "FFmpeg")
+            .and_then(|()| commit_temporary(&temporary, destination));
+        if result.is_err() {
+            let _ = fs::remove_file(temporary);
+        }
+        result
+    }
+
     pub fn create_gif(
         &self,
         input: &Path,
@@ -395,6 +443,46 @@ impl MediaToolchain {
         let probe = self.probe(input)?;
         validate_edit_spec(&probe, edit)?;
         let attempts = export_attempts(&probe, edit, spec)?;
+        if spec.format == ExportFormat::Mp4
+            && spec.quality == QualityPreset::Preserve
+            && visual_edit_is_identity(&probe, edit)
+            && spec
+                .max_size_bytes
+                .is_none_or(|maximum| probe.metadata.size_bytes <= maximum)
+        {
+            if cancel.is_cancelled() {
+                on_progress(progress(ExportStage::Cancelled, 0, 0, None));
+                return Err(MediaToolError::Cancelled);
+            }
+            on_progress(progress(
+                ExportStage::Encoding,
+                100,
+                1,
+                Some(if audio_edit_is_identity(edit) {
+                    "Copying original recording".to_owned()
+                } else {
+                    "Saving audio changes".to_owned()
+                }),
+            ));
+            if audio_edit_is_identity(edit) {
+                atomic_copy(input, destination)?;
+            } else {
+                self.run_audio_only_export(
+                    input,
+                    destination,
+                    edit,
+                    attempts.first().ok_or(MediaToolError::IncompleteMetadata)?,
+                    cancel,
+                )?;
+            }
+            let size_bytes = fs::metadata(destination)?.len();
+            on_progress(progress(ExportStage::Complete, 1_000, 1, None));
+            return Ok(ExportOutcome {
+                path: destination.to_path_buf(),
+                size_bytes,
+                attempts: 1,
+            });
+        }
         let max_attempts = if spec.max_size_bytes.is_some() { 4 } else { 1 };
 
         for (index, attempt) in attempts.into_iter().take(max_attempts).enumerate() {
@@ -497,9 +585,9 @@ impl MediaToolchain {
             ]);
         } else {
             let quality = match spec.quality {
-                QualityPreset::High => "60",
-                QualityPreset::Standard => "50",
-                QualityPreset::Small => "38",
+                QualityPreset::Preserve | QualityPreset::High => "90",
+                QualityPreset::Standard => "70",
+                QualityPreset::Small => "50",
             };
             command.args(["-q:v", quality]);
         }
@@ -515,6 +603,40 @@ impl MediaToolchain {
         }
         command.args(["-movflags", "+faststart"]).arg(output);
         run_command(&mut command, cancel, "FFmpeg")
+    }
+
+    fn run_audio_only_export(
+        &self,
+        input: &Path,
+        destination: &Path,
+        edit: &EditSpec,
+        attempt: &VideoAttempt,
+        cancel: &CancelToken,
+    ) -> Result<(), MediaToolError> {
+        let temporary = temporary_output_path(destination, "audio-edit");
+        let mut command = Command::new(&self.ffmpeg);
+        command
+            .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
+            .arg(input)
+            .args(["-map", "0:v:0", "-c:v", "copy"]);
+        if attempt.has_audio {
+            let audio_filter = audio_filter(edit, attempt)?;
+            command
+                .args(["-filter_complex", &audio_filter, "-map", "[audio_out]"])
+                .args(["-c:a", "aac", "-b:a", &attempt.audio_bitrate.to_string()]);
+            if edit.audio.mono_output || attempt.force_mono {
+                command.args(["-ac", "1"]);
+            }
+        } else {
+            command.arg("-an");
+        }
+        command.args(["-movflags", "+faststart"]).arg(&temporary);
+        let result = run_command(&mut command, cancel, "FFmpeg")
+            .and_then(|()| commit_temporary(&temporary, destination));
+        if result.is_err() {
+            let _ = fs::remove_file(temporary);
+        }
+        result
     }
 
     fn run_gif_export(
@@ -752,6 +874,24 @@ fn validate_edit_spec(probe: &ProbeResult, edit: &EditSpec) -> Result<(), MediaT
         }
     }
     Ok(())
+}
+
+fn visual_edit_is_identity(probe: &ProbeResult, edit: &EditSpec) -> bool {
+    edit.trim_start_ms == 0
+        && edit
+            .trim_end_ms
+            .is_none_or(|end| Some(end) == probe.metadata.duration_ms)
+        && edit.crop.is_none()
+        && edit.output_width.is_none()
+        && edit.output_height.is_none()
+}
+
+fn audio_edit_is_identity(edit: &EditSpec) -> bool {
+    !edit.audio.mute_system_audio
+        && !edit.audio.mute_microphone
+        && !edit.audio.mono_output
+        && (edit.audio.system_volume - 1.0).abs() < f32::EPSILON
+        && (edit.audio.microphone_volume - 1.0).abs() < f32::EPSILON
 }
 
 fn fit_even(width: u32, height: u32, maximum_height: u32) -> (u32, u32) {
@@ -1022,8 +1162,9 @@ struct FfprobeFormat {
 #[cfg(test)]
 mod tests {
     use super::{
-        VideoAttempt, audio_filter, escape_concat_path, export_attempts, fit_even,
-        gif_export_filter, gif_filter, seconds, validate_edit_spec,
+        CancelToken, MediaToolchain, TimelineSpriteSpec, VideoAttempt, audio_edit_is_identity,
+        audio_filter, escape_concat_path, export_attempts, fit_even, gif_export_filter, gif_filter,
+        seconds, validate_edit_spec, visual_edit_is_identity,
     };
     use crate::{
         AudioEdit, CropRect, EditSpec, ExportFormat, ExportSpec, MediaKind, MediaMetadata,
@@ -1224,5 +1365,298 @@ mod tests {
             ..EditSpec::default()
         };
         assert!(validate_edit_spec(&probe(), &incomplete_dimensions).is_err());
+    }
+
+    #[test]
+    fn preserve_identity_requires_no_visual_or_audio_changes() {
+        let untouched = EditSpec::default();
+        assert!(visual_edit_is_identity(&probe(), &untouched));
+        assert!(audio_edit_is_identity(&untouched));
+
+        let audio_edit = EditSpec {
+            audio: AudioEdit {
+                system_volume: 0.75,
+                ..AudioEdit::default()
+            },
+            ..EditSpec::default()
+        };
+        assert!(visual_edit_is_identity(&probe(), &audio_edit));
+        assert!(!audio_edit_is_identity(&audio_edit));
+
+        let crop = EditSpec {
+            crop: Some(CropRect {
+                x: 0,
+                y: 0,
+                width: 1_280,
+                height: 720,
+            }),
+            ..EditSpec::default()
+        };
+        assert!(!visual_edit_is_identity(&probe(), &crop));
+    }
+
+    #[cfg(target_os = "macos")]
+    fn bundled_toolchain() -> (MediaToolchain, std::path::PathBuf) {
+        let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .expect("repository root");
+        let ffmpeg = repository.join("apps/desktop/src-tauri/binaries/ffmpeg-aarch64-apple-darwin");
+        let ffprobe =
+            repository.join("apps/desktop/src-tauri/binaries/ffprobe-aarch64-apple-darwin");
+        (MediaToolchain::new(ffmpeg.clone(), ffprobe), ffmpeg)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn media_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .expect("media test lock")
+    }
+
+    #[cfg(target_os = "macos")]
+    fn video_toolbox_available() -> bool {
+        let (_, ffmpeg) = bundled_toolchain();
+        std::process::Command::new(ffmpeg)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=size=64x64:rate=1",
+                "-frames:v",
+                "1",
+                "-c:v",
+                "h264_videotoolbox",
+                "-allow_sw",
+                "1",
+                "-f",
+                "null",
+                "-",
+            ])
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+
+    #[cfg(target_os = "macos")]
+    fn create_test_recording(path: &std::path::Path, with_audio: bool) {
+        let (_, ffmpeg) = bundled_toolchain();
+        let mut command = std::process::Command::new(ffmpeg);
+        command.args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=320x180:rate=30",
+        ]);
+        if with_audio {
+            command.args(["-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000"]);
+        }
+        command.args(["-t", "2", "-c:v", "mpeg4", "-q:v", "2"]);
+        if with_audio {
+            command.args(["-c:a", "aac", "-b:a", "128k", "-shortest"]);
+        } else {
+            command.arg("-an");
+        }
+        let status = command.arg(path).status().expect("bundled FFmpeg starts");
+        assert!(status.success(), "test recording generated");
+    }
+
+    #[cfg(target_os = "macos")]
+    fn preserve_spec(max_size_bytes: Option<u64>) -> ExportSpec {
+        ExportSpec {
+            format: ExportFormat::Mp4,
+            quality: QualityPreset::Preserve,
+            max_size_bytes,
+            frames_per_second: None,
+            gif_max_colors: None,
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn video_stream_hash(path: &std::path::Path) -> Vec<u8> {
+        let (_, ffmpeg) = bundled_toolchain();
+        let output = std::process::Command::new(ffmpeg)
+            .args(["-hide_banner", "-loglevel", "error", "-i"])
+            .arg(path)
+            .args(["-map", "0:v:0", "-c", "copy", "-f", "md5", "-"])
+            .output()
+            .expect("video stream hash");
+        assert!(output.status.success());
+        output.stdout
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn preserve_export_is_byte_identical_when_untouched() {
+        let _guard = media_test_guard();
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let source = directory.path().join("source.mp4");
+        let destination = directory.path().join("copy.mp4");
+        create_test_recording(&source, false);
+        let toolchain = bundled_toolchain().0;
+
+        toolchain
+            .export(
+                &source,
+                &destination,
+                &EditSpec::default(),
+                &preserve_spec(None),
+                &CancelToken::default(),
+                |_| {},
+            )
+            .expect("preserve export");
+
+        assert_eq!(
+            std::fs::read(source).expect("source bytes"),
+            std::fs::read(destination).expect("copy bytes")
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn audio_only_edits_copy_the_video_stream() {
+        let _guard = media_test_guard();
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let source = directory.path().join("source.mp4");
+        let destination = directory.path().join("audio-edit.mp4");
+        create_test_recording(&source, true);
+        let toolchain = bundled_toolchain().0;
+        let edit = EditSpec {
+            audio: AudioEdit {
+                system_volume: 0.5,
+                source_has_system_audio: true,
+                ..AudioEdit::default()
+            },
+            ..EditSpec::default()
+        };
+
+        toolchain
+            .export(
+                &source,
+                &destination,
+                &edit,
+                &preserve_spec(None),
+                &CancelToken::default(),
+                |_| {},
+            )
+            .expect("audio-only export");
+
+        assert_eq!(video_stream_hash(&source), video_stream_hash(&destination));
+        assert!(
+            toolchain
+                .probe(&destination)
+                .expect("edited probe")
+                .has_audio
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn visual_edits_use_the_high_quality_h264_path() {
+        let _guard = media_test_guard();
+        if !video_toolbox_available() {
+            eprintln!("VideoToolbox is unavailable in this execution context");
+            return;
+        }
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let source = directory.path().join("source.mp4");
+        let destination = directory.path().join("crop.mp4");
+        create_test_recording(&source, false);
+        let toolchain = bundled_toolchain().0;
+        let edit = EditSpec {
+            crop: Some(CropRect {
+                x: 10,
+                y: 10,
+                width: 300,
+                height: 160,
+            }),
+            ..EditSpec::default()
+        };
+
+        toolchain
+            .export(
+                &source,
+                &destination,
+                &edit,
+                &preserve_spec(None),
+                &CancelToken::default(),
+                |_| {},
+            )
+            .expect("high-quality crop");
+
+        let metadata = toolchain
+            .probe(&destination)
+            .expect("cropped probe")
+            .metadata;
+        assert_eq!((metadata.width, metadata.height), (300, 160));
+        assert_ne!(video_stream_hash(&source), video_stream_hash(&destination));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn timeline_sprite_contains_twelve_sampled_frames() {
+        let _guard = media_test_guard();
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let source = directory.path().join("source.mp4");
+        let destination = directory.path().join("timeline.png");
+        create_test_recording(&source, false);
+        let toolchain = bundled_toolchain().0;
+
+        toolchain
+            .create_timeline_sprite(
+                &source,
+                &destination,
+                TimelineSpriteSpec {
+                    duration_ms: 2_000,
+                    frame_count: 12,
+                    frame_width: 160,
+                    frame_height: 90,
+                },
+                &CancelToken::default(),
+            )
+            .expect("timeline sprite");
+        let png = std::fs::read(destination).expect("timeline bytes");
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+        assert_eq!(u32::from_be_bytes(png[16..20].try_into().unwrap()), 1_920);
+        assert_eq!(u32::from_be_bytes(png[20..24].try_into().unwrap()), 90);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn maximum_size_export_never_exceeds_the_exact_ceiling() {
+        let _guard = media_test_guard();
+        if !video_toolbox_available() {
+            eprintln!("VideoToolbox is unavailable in this execution context");
+            return;
+        }
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let source = directory.path().join("source.mp4");
+        let destination = directory.path().join("limited.mp4");
+        create_test_recording(&source, true);
+        let toolchain = bundled_toolchain().0;
+        let mut edit = EditSpec::default();
+        edit.audio.source_has_system_audio = true;
+        let maximum = 200_000;
+
+        let outcome = toolchain
+            .export(
+                &source,
+                &destination,
+                &edit,
+                &preserve_spec(Some(maximum)),
+                &CancelToken::default(),
+                |_| {},
+            )
+            .expect("size-limited export");
+
+        assert!(outcome.size_bytes <= maximum);
+        assert!(std::fs::metadata(destination).unwrap().len() <= maximum);
     }
 }

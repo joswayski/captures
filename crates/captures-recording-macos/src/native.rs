@@ -9,6 +9,7 @@ use std::{
 };
 
 use captures_recording::{AudioDevice, AudioDeviceKind, RecordingOptions, RecordingTarget};
+use core_graphics::display::CGDisplay as CoreGraphicsDisplay;
 use screencapturekit::{
     audio_devices::AudioInputDevice,
     cg::CGRect,
@@ -16,8 +17,11 @@ use screencapturekit::{
     dispatch_queue::{DispatchQoS, DispatchQueue},
     shareable_content::{SCDisplay, SCRunningApplication, SCShareableContent, SCWindow},
     stream::{
-        SCStream, configuration::SCStreamConfiguration, content_filter::SCContentFilter,
-        delegate_trait::StreamCallbacks, output_type::SCStreamOutputType,
+        SCStream,
+        configuration::{PixelFormat, SCCaptureResolutionType, SCStreamConfiguration},
+        content_filter::SCContentFilter,
+        delegate_trait::StreamCallbacks,
+        output_type::SCStreamOutputType,
     },
 };
 
@@ -56,14 +60,19 @@ impl NativeRecordingSegment {
         let (width, height) = options
             .max_resolution
             .constrain(source_width_pixels, source_height_pixels);
+        let (shows_cursor, shows_mouse_clicks) =
+            capture_pointer_options(options.show_cursor, options.highlight_clicks);
 
         let mut configuration = SCStreamConfiguration::new()
             .with_width(width)
             .with_height(height)
             .with_scales_to_fit(true)
+            .with_capture_resolution_type(SCCaptureResolutionType::Best)
+            .with_pixel_format(PixelFormat::BGRA)
             .with_fps(u32::from(options.frames_per_second))
             .with_queue_depth(8)
-            .with_shows_cursor(options.show_cursor)
+            .with_shows_cursor(shows_cursor)
+            .with_shows_mouse_clicks(shows_mouse_clicks)
             .with_captures_audio(options.audio.capture_system_audio)
             .with_sample_rate(48_000)
             .with_channel_count(if options.audio.mono_output { 1 } else { 2 })
@@ -105,10 +114,14 @@ impl NativeRecordingSegment {
         let video_output_id = stream
             .add_output_handler_with_queue(
                 move |sample: CMSampleBuffer, _output_type: SCStreamOutputType| {
-                    if !sample_contains_video_frame(&sample) {
+                    let Some(frame_kind) = sample_video_frame_kind(&sample) else {
                         return;
-                    }
-                    if !video_writer.append_video(&sample) {
+                    };
+                    let appended = match frame_kind {
+                        VideoFrameKind::Content => video_writer.append_video(&sample),
+                        VideoFrameKind::Idle => video_writer.append_idle_video(&sample),
+                    };
+                    if !appended {
                         if let Ok(mut current) = video_failure.lock() {
                             *current = Some(video_writer.error_message());
                         }
@@ -226,10 +239,11 @@ impl NativeRecordingSegment {
     }
 
     pub fn stop(mut self) -> MacRecordingResult<SegmentInfo> {
-        let stop_result = self
-            .stream
-            .stop_capture()
-            .map_err(|error| MacRecordingError::ScreenCaptureKit(error.to_string()));
+        // ScreenCaptureKit can report a generic stop error after it has already
+        // stopped delivering samples. The media collected up to that point is
+        // still valid, so always detach the outputs and finalize the writer.
+        // A writer or stream-delegate failure remains fatal below.
+        let _ = self.stream.stop_capture();
         let _ = self
             .stream
             .remove_output_handler(self.video_output_id, SCStreamOutputType::Screen);
@@ -238,7 +252,6 @@ impl NativeRecordingSegment {
                 .stream
                 .remove_output_handler(audio_output_id, SCStreamOutputType::Audio);
         }
-        stop_result?;
         self.writer.finish()?;
         if let Some(error) = self
             .failure
@@ -283,8 +296,14 @@ impl NativeRecordingSegment {
     }
 }
 
-fn sample_contains_video_frame(sample: &CMSampleBuffer) -> bool {
-    video_frame_is_usable(
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VideoFrameKind {
+    Content,
+    Idle,
+}
+
+fn sample_video_frame_kind(sample: &CMSampleBuffer) -> Option<VideoFrameKind> {
+    video_frame_kind(
         sample.frame_status(),
         sample.is_valid(),
         sample.data_is_ready(),
@@ -292,39 +311,59 @@ fn sample_contains_video_frame(sample: &CMSampleBuffer) -> bool {
     )
 }
 
-const fn video_frame_is_usable(
+const fn video_frame_kind(
     status: Option<SCFrameStatus>,
     is_valid: bool,
     data_is_ready: bool,
     has_image_buffer: bool,
-) -> bool {
-    is_valid
-        && data_is_ready
-        && has_image_buffer
-        && match status {
-            Some(status) => status.has_content(),
-            // Some ScreenCaptureKit runtimes expose the status attachment as
-            // an integer that the binding cannot currently decode. A valid,
-            // ready video sample with an image buffer is still safe to append.
-            None => true,
-        }
+) -> Option<VideoFrameKind> {
+    if !is_valid || !data_is_ready || !has_image_buffer {
+        return None;
+    }
+    match status {
+        Some(SCFrameStatus::Complete | SCFrameStatus::Started) => Some(VideoFrameKind::Content),
+        // Cursor movement and ScreenCaptureKit's click overlay may arrive on an
+        // idle surface. The writer accepts these only when no real content
+        // frame is waiting, so pointer updates cannot displace screen motion.
+        Some(SCFrameStatus::Idle) => Some(VideoFrameKind::Idle),
+        Some(_) => None,
+        // Some ScreenCaptureKit runtimes expose the status attachment as an
+        // integer that the binding cannot currently decode. A valid, ready
+        // video sample with an image buffer is still safe to append.
+        None => Some(VideoFrameKind::Content),
+    }
 }
 
 pub fn microphone_devices() -> Vec<AudioDevice> {
+    microphone_choices(
+        AudioInputDevice::list()
+            .into_iter()
+            .map(|device| (device.id, device.name, device.is_default))
+            .collect(),
+    )
+}
+
+fn microphone_choices(physical_devices: Vec<(String, String, bool)>) -> Vec<AudioDevice> {
+    let default_name = physical_devices
+        .iter()
+        .find(|(_, _, is_default)| *is_default)
+        .map(|(_, name, _)| name.as_str())
+        .unwrap_or("System default");
     let mut devices = vec![AudioDevice {
         id: "default".to_owned(),
-        name: "Default microphone".to_owned(),
+        name: format!("Default — {default_name}"),
         kind: AudioDeviceKind::Default,
         is_default: true,
     }];
     devices.extend(
-        AudioInputDevice::list()
+        physical_devices
             .into_iter()
-            .map(|device| AudioDevice {
-                id: device.id,
-                name: device.name,
+            .filter(|(_, _, is_default)| !is_default)
+            .map(|(id, name, is_default)| AudioDevice {
+                id,
+                name,
                 kind: AudioDeviceKind::Microphone,
-                is_default: device.is_default,
+                is_default,
             }),
     );
     devices
@@ -344,6 +383,7 @@ fn filter_for_target(
     match target {
         RecordingTarget::Display { display_id } => {
             let display = find_display(content, display_id)?;
+            let scale = display_pixel_scale(&display);
             let applications = current_process_applications(content);
             let application_refs = applications.iter().collect::<Vec<_>>();
             let filter = SCContentFilter::create()
@@ -352,8 +392,8 @@ fn filter_for_target(
                 .build();
             Ok((
                 filter,
-                f64::from(display.width()),
-                f64::from(display.height()),
+                f64::from(display.width()) * scale,
+                f64::from(display.height()) * scale,
             ))
         }
         RecordingTarget::Region {
@@ -384,8 +424,25 @@ fn filter_for_target(
 }
 
 fn display_pixel_scale(display: &SCDisplay) -> f64 {
-    let logical_width = display.frame().size.width.max(1.0);
-    (f64::from(display.width()) / logical_width).max(1.0)
+    let core_graphics_display = CoreGraphicsDisplay::new(display.display_id());
+    core_graphics_display.display_mode().map_or_else(
+        || {
+            let logical_width = display.frame().size.width.max(1.0);
+            (f64::from(display.width()) / logical_width).max(1.0)
+        },
+        |mode| pixel_scale_from_dimensions(mode.width(), mode.pixel_width()),
+    )
+}
+
+fn pixel_scale_from_dimensions(logical_width: u64, pixel_width: u64) -> f64 {
+    if logical_width == 0 || pixel_width == 0 {
+        return 1.0;
+    }
+    (pixel_width as f64 / logical_width as f64).max(1.0)
+}
+
+const fn capture_pointer_options(show_cursor: bool, highlight_clicks: bool) -> (bool, bool) {
+    (show_cursor || highlight_clicks, highlight_clicks)
 }
 
 fn window_pixel_scale(content: &SCShareableContent, window_frame: CGRect) -> f64 {
@@ -441,9 +498,13 @@ fn current_process_applications(content: &SCShareableContent) -> Vec<SCRunningAp
 
 #[cfg(test)]
 mod tests {
-    use super::{intersection_area, video_frame_is_usable};
+    use super::{
+        VideoFrameKind, capture_pointer_options, intersection_area, microphone_choices,
+        pixel_scale_from_dimensions, video_frame_kind,
+    };
     use screencapturekit::cm::SCFrameStatus;
     use screencapturekit::prelude::CGRect;
+    use screencapturekit::stream::configuration::{SCCaptureResolutionType, SCStreamConfiguration};
 
     fn rect(x: f64, y: f64, width: f64, height: f64) -> CGRect {
         CGRect::new(x, y, width, height)
@@ -463,21 +524,65 @@ mod tests {
 
     #[test]
     fn accepts_ready_video_samples_when_frame_status_is_unavailable() {
-        assert!(video_frame_is_usable(None, true, true, true));
-        assert!(video_frame_is_usable(
-            Some(SCFrameStatus::Complete),
-            true,
-            true,
-            true
-        ));
-        assert!(!video_frame_is_usable(
-            Some(SCFrameStatus::Idle),
-            true,
-            true,
-            true
-        ));
-        assert!(!video_frame_is_usable(None, false, true, true));
-        assert!(!video_frame_is_usable(None, true, false, true));
-        assert!(!video_frame_is_usable(None, true, true, false));
+        assert_eq!(
+            video_frame_kind(None, true, true, true),
+            Some(VideoFrameKind::Content)
+        );
+        assert_eq!(
+            video_frame_kind(Some(SCFrameStatus::Complete), true, true, true,),
+            Some(VideoFrameKind::Content)
+        );
+        assert_eq!(
+            video_frame_kind(Some(SCFrameStatus::Started), true, true, true,),
+            Some(VideoFrameKind::Content)
+        );
+        assert_eq!(
+            video_frame_kind(Some(SCFrameStatus::Idle), true, true, true,),
+            Some(VideoFrameKind::Idle)
+        );
+        assert_eq!(video_frame_kind(None, false, true, true), None);
+        assert_eq!(video_frame_kind(None, true, false, true), None);
+        assert_eq!(video_frame_kind(None, true, true, false), None);
+    }
+
+    #[test]
+    fn records_retina_sources_at_their_physical_pixel_scale() {
+        assert_eq!(pixel_scale_from_dimensions(1_728, 3_456), 2.0);
+        assert_eq!(pixel_scale_from_dimensions(1_920, 1_920), 1.0);
+        assert_eq!(pixel_scale_from_dimensions(0, 3_456), 1.0);
+
+        let configuration = SCStreamConfiguration::new()
+            .with_capture_resolution_type(SCCaptureResolutionType::Best);
+        assert_eq!(
+            configuration.capture_resolution_type(),
+            SCCaptureResolutionType::Best
+        );
+    }
+
+    #[test]
+    fn click_highlights_always_include_the_cursor_they_surround() {
+        assert_eq!(capture_pointer_options(false, false), (false, false));
+        assert_eq!(capture_pointer_options(true, false), (true, false));
+        assert_eq!(capture_pointer_options(false, true), (true, true));
+
+        let configuration = SCStreamConfiguration::new()
+            .with_shows_cursor(true)
+            .with_shows_mouse_clicks(true);
+        assert!(configuration.shows_cursor());
+        assert!(configuration.shows_mouse_clicks());
+    }
+
+    #[test]
+    fn labels_the_default_microphone_and_omits_its_duplicate() {
+        let devices = microphone_choices(vec![
+            ("built-in".to_owned(), "MacBook Microphone".to_owned(), true),
+            ("usb".to_owned(), "USB Microphone".to_owned(), false),
+        ]);
+
+        assert_eq!(devices.len(), 2);
+        assert_eq!(devices[0].id, "default");
+        assert_eq!(devices[0].name, "Default — MacBook Microphone");
+        assert_eq!(devices[1].id, "usb");
+        assert!(!devices.iter().any(|device| device.id == "built-in"));
     }
 }

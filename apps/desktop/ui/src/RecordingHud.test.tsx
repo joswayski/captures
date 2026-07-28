@@ -8,6 +8,9 @@ import type { RecordingSessionSnapshot } from "./types";
 const { startDragging } = vi.hoisted(() => ({
   startDragging: vi.fn(async () => undefined),
 }));
+const { nativeMessage } = vi.hoisted(() => ({
+  nativeMessage: vi.fn(async () => "Cancel"),
+}));
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -21,6 +24,11 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ startDragging }),
+}));
+
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: vi.fn(),
+  message: nativeMessage,
 }));
 
 const baseSnapshot: RecordingSessionSnapshot = {
@@ -68,6 +76,7 @@ describe("RecordingHud", () => {
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "get_recording_snapshot") return snapshot;
       if (command === "start_capture") return undefined;
+      if (command === "hide_recording_hud") return undefined;
       throw new Error(`unexpected command: ${command}`);
     });
   });
@@ -76,16 +85,57 @@ describe("RecordingHud", () => {
     vi.clearAllMocks();
   });
 
-  it("keeps countdown state current even when transient event listeners stall", async () => {
+  it("keeps status state current even when transient event listeners stall", async () => {
     vi.mocked(listen).mockImplementation(() => new Promise(() => undefined));
     render(<RecordingHud />);
 
-    expect(await screen.findByText("2")).toBeInTheDocument();
+    expect(await screen.findByText("0:00")).toBeInTheDocument();
     expect(screen.getByText("Starting…")).toBeInTheDocument();
     expect(invoke).toHaveBeenCalledWith("get_recording_snapshot");
   });
 
-  it("offers a screenshot action, a capture-visibility explanation, and a drag handle", async () => {
+  it("offers a screenshot action, compact tooltips, and background dragging", async () => {
+    snapshot = {
+      ...baseSnapshot,
+      state: "recording",
+      elapsed_ms: 4_000,
+      countdown_remaining_seconds: null,
+    };
+    const { container } = render(<RecordingHud />);
+
+    const screenshot = await screen.findByRole("button", { name: "Take a region screenshot" });
+    fireEvent.click(screenshot);
+    expect(container.querySelector(".recording-hud")).not.toHaveClass("recording-hud-capturing");
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("start_capture", { mode: "region" });
+    });
+
+    expect(screen.getByText("Recording")).toBeInTheDocument();
+    expect(screen.queryByText("Not in recording")).not.toBeInTheDocument();
+    const privacy = screen.getByText("These controls won’t show in the recording");
+    expect(privacy).toBeInTheDocument();
+    expect(container.querySelector(".recording-hud")?.firstElementChild).toBe(privacy);
+    expect(container.querySelector(".recording-hud-main")).toContainElement(
+      screen.getByRole("button", { name: "Hide recording controls" }),
+    );
+    expect(screen.getByRole("button", { name: "Hide recording controls" }))
+      .not.toHaveAttribute("title");
+    expect(screen.getAllByRole("tooltip").map((tooltip) => tooltip.textContent)).toEqual(expect.arrayContaining([
+      "Stop and save",
+      "Pause recording",
+      "Restart recording",
+      "Take a region screenshot",
+      "Delete recording",
+      "Hide controls",
+    ]));
+    expect(screen.queryByRole("button", { name: "Move recording controls" })).not.toBeInTheDocument();
+    fireEvent.pointerDown(container.querySelector(".recording-hud")!, {
+      button: 0,
+    });
+    expect(startDragging).toHaveBeenCalledOnce();
+  });
+
+  it("hides the controls without replacing them with a collapsed strip", async () => {
     snapshot = {
       ...baseSnapshot,
       state: "recording",
@@ -94,17 +144,74 @@ describe("RecordingHud", () => {
     };
     render(<RecordingHud />);
 
-    const screenshot = await screen.findByRole("button", { name: "Take a region screenshot" });
-    fireEvent.click(screenshot);
+    fireEvent.click(await screen.findByRole("button", { name: "Hide recording controls" }));
     await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith("start_capture", { mode: "region" });
+      expect(invoke).toHaveBeenCalledWith("hide_recording_hud", {
+        sessionId: snapshot.id,
+      });
+    });
+    expect(screen.getByRole("button", { name: "Stop recording" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Move recording controls" })).not.toBeInTheDocument();
+  });
+
+  it("uses a native Delete recording dialog before discarding", async () => {
+    snapshot = {
+      ...baseSnapshot,
+      state: "recording",
+      countdown_remaining_seconds: null,
+    };
+    nativeMessage.mockResolvedValueOnce("Delete");
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_recording_snapshot") return snapshot;
+      if (command === "discard_recording") return { ...snapshot, state: "discarded" };
+      throw new Error(`unexpected command: ${command}`);
     });
 
-    expect(screen.getByLabelText("Controls are hidden from captures")).toBeInTheDocument();
-    fireEvent.pointerDown(screen.getByRole("button", { name: "Move recording controls" }), {
-      button: 0,
+    render(<RecordingHud />);
+    fireEvent.click(await screen.findByRole("button", { name: "Delete recording" }));
+
+    await waitFor(() => {
+      expect(nativeMessage).toHaveBeenCalledWith(
+        "This recording will be deleted permanently.",
+        expect.objectContaining({
+          title: "Delete recording?",
+          buttons: { ok: "Delete", cancel: "Cancel" },
+        }),
+      );
+      expect(invoke).toHaveBeenCalledWith("discard_recording", {
+        sessionId: snapshot.id,
+      });
     });
-    expect(startDragging).toHaveBeenCalledOnce();
+  });
+
+  it("uses a native confirmation before restarting and deleting the current take", async () => {
+    snapshot = {
+      ...baseSnapshot,
+      state: "recording",
+      countdown_remaining_seconds: null,
+    };
+    nativeMessage.mockResolvedValueOnce("Restart");
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_recording_snapshot") return snapshot;
+      if (command === "restart_recording") return { ...snapshot, state: "countdown" };
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<RecordingHud />);
+    fireEvent.click(await screen.findByRole("button", { name: "Restart recording" }));
+
+    await waitFor(() => {
+      expect(nativeMessage).toHaveBeenCalledWith(
+        "The current recording will be deleted and a new countdown will begin.",
+        expect.objectContaining({
+          title: "Restart recording?",
+          buttons: { ok: "Restart", cancel: "Cancel" },
+        }),
+      );
+      expect(invoke).toHaveBeenCalledWith("restart_recording", {
+        sessionId: snapshot.id,
+      });
+    });
   });
 
   it("does not present a failed recording as actively recording", async () => {

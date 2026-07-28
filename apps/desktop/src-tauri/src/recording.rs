@@ -1,15 +1,16 @@
 use std::{
     collections::HashMap,
     fs,
-    io::{Read, Seek, SeekFrom},
+    io::{self, Read, Seek, SeekFrom},
     path::{Component, Path, PathBuf},
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use captures_capture::DisplayDescriptor;
 use captures_media::{
     ByteRange, CancelToken, EditSpec, ExportFormat, ExportProgress, ExportSpec, MediaToolchain,
-    RecordingAudioLayout, RecordingSegmentInput,
+    RecordingAudioLayout, RecordingSegmentInput, TimelineSpriteSpec,
 };
 use captures_recording::{
     DraftStore, RecordingCoordinator, RecordingDraftManifest, RecordingKind, RecordingOptions,
@@ -26,7 +27,7 @@ use crate::{
     models::{
         HistoryEntry, RecordingArtifact, RecordingArtifactData, RecordingSelection,
         RecordingSelectionSession, recording_media_url, recording_poster_url,
-        recording_recovery_directory,
+        recording_recovery_directory, recording_timeline_url,
     },
     state::AppState,
     storage,
@@ -41,6 +42,10 @@ const RECORDING_STATE_EVENT: &str = "recording-state-changed";
 const RECORDING_COUNTDOWN_EVENT: &str = "recording-countdown";
 const RECORDING_WARNING_EVENT: &str = "recording-warning";
 const RECORDING_ARTIFACT_EVENT: &str = "recording-artifact-ready";
+const RECORDING_COUNTDOWN_FADE_OUT_MS: u64 = 180;
+const RECORDING_HUD_FULL_WIDTH: f64 = 430.0;
+const RECORDING_HUD_HEIGHT: f64 = 102.0;
+const RECORDING_HUD_BOTTOM_MARGIN: f64 = 20.0;
 const GIF_SOURCE_RETENTION_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
 
 #[derive(Default)]
@@ -59,6 +64,7 @@ struct RuntimeSession {
     active_segment: Option<MacRecordingSegment>,
     active_segment_started_at_ms: Option<u64>,
     poster_png: Vec<u8>,
+    display: DisplayDescriptor,
 }
 
 pub fn screenshot_capture_is_blocked(state: &AppState) -> bool {
@@ -98,6 +104,21 @@ fn recording_session_is_active(state: &AppState) -> bool {
         .is_some_and(|snapshot| !snapshot.state.is_terminal())
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) fn recording_controls_are_available(state: &AppState) -> bool {
+    state
+        .recording
+        .lock()
+        .coordinator
+        .snapshot(now_ms())
+        .is_some_and(|snapshot| {
+            matches!(
+                snapshot.state,
+                RecordingState::Recording | RecordingState::Paused
+            )
+        })
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct StartRecordingRequest {
     pub selection_id: String,
@@ -125,6 +146,11 @@ pub struct RecordingAudioLevel {
 #[derive(Clone, Debug, Deserialize)]
 pub struct StartExportRequest {
     pub artifact_id: String,
+    pub file_stem: String,
+    #[serde(default)]
+    pub destination_directory: Option<String>,
+    #[serde(default)]
+    pub overwrite_source: bool,
     pub edit: EditSpec,
     pub export: ExportSpec,
 }
@@ -139,12 +165,24 @@ pub struct RecordingExportProgress {
 pub struct RecordingExportComplete {
     pub export_id: String,
     pub artifact: RecordingArtifact,
+    pub finder_error: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct RecordingExportFailed {
     pub export_id: String,
     pub message: String,
+    pub cancelled: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct RecordingTimelinePreview {
+    pub url: String,
+    pub frame_count: u16,
+    pub frame_width: u32,
+    pub frame_height: u32,
+    pub sprite_width: u32,
+    pub sprite_height: u32,
 }
 
 #[tauri::command]
@@ -341,10 +379,16 @@ async fn start_recording_inner(
     destroy_recording_selector(&app);
     crate::set_capture_huds_protected(&app, false);
 
+    let selected_display = selection.summary.display.clone();
     let initialized = (|| {
         validate_target(&selection.summary, &request.options.target)?;
         let poster_png = poster_for_selection(&selection, &request.options.target)?;
-        initialize_recording_session(&state, request.options, poster_png)
+        initialize_recording_session(
+            &state,
+            request.options,
+            poster_png,
+            selected_display.clone(),
+        )
     })();
     let (snapshot, generation) = match initialized {
         Ok(initialized) => initialized,
@@ -354,7 +398,13 @@ async fn start_recording_inner(
         }
     };
     emit_snapshot(&app, &snapshot);
-    if let Err(error) = show_recording_hud(&app) {
+    if let Err(error) = prepare_recording_hud(&app, &selected_display).and_then(|()| {
+        if snapshot.options.countdown_seconds > 0 {
+            show_recording_countdown(&app, &selected_display)
+        } else {
+            Ok(())
+        }
+    }) {
         fail_session(&app, &state, &snapshot.id, error.to_string());
         restore_recording_ui(&app, &state);
         return Err(error);
@@ -373,6 +423,7 @@ fn initialize_recording_session(
     state: &AppState,
     options: RecordingOptions,
     poster_png: Vec<u8>,
+    display: DisplayDescriptor,
 ) -> Result<(RecordingSessionSnapshot, u64), AppError> {
     let now = now_ms();
     let mut runtime = state.recording.lock();
@@ -427,6 +478,7 @@ fn initialize_recording_session(
         active_segment: None,
         active_segment_started_at_ms: None,
         poster_png,
+        display,
     });
     Ok((snapshot, generation))
 }
@@ -470,6 +522,19 @@ fn countdown_is_current(state: &AppState, session_id: &str, generation: u64) -> 
             .coordinator
             .snapshot(now_ms())
             .is_some_and(|snapshot| snapshot.state == RecordingState::Countdown)
+}
+
+fn recording_segment_is_current(state: &AppState, session_id: &str, generation: u64) -> bool {
+    let runtime = state.recording.lock();
+    runtime.generation == generation
+        && runtime
+            .session
+            .as_ref()
+            .is_some_and(|session| session.id == session_id)
+        && runtime
+            .coordinator
+            .snapshot(now_ms())
+            .is_some_and(|snapshot| snapshot.state == RecordingState::Recording)
 }
 
 async fn start_segment(
@@ -534,6 +599,10 @@ async fn start_segment(
         if !still_current {
             None
         } else {
+            let started_from_countdown = runtime
+                .coordinator
+                .snapshot(now)
+                .is_some_and(|snapshot| snapshot.state == RecordingState::Countdown);
             let dimensions = segment.as_ref().map(MacRecordingSegment::dimensions);
             let microphone_draft = segment
                 .as_ref()
@@ -590,16 +659,26 @@ async fn start_segment(
             session.manifest.state = RecordingState::Recording;
             session.manifest.updated_at_ms = now;
             save_manifest(&session.manifest)?;
-            Some(snapshot)
+            Some((snapshot, started_from_countdown))
         }
     };
-    let Some(snapshot) = snapshot else {
+    let Some((snapshot, started_from_countdown)) = snapshot else {
         if let Some(segment) = segment {
             let _ = tauri::async_runtime::spawn_blocking(move || segment.discard()).await;
         }
         return Ok(());
     };
     emit_snapshot(&app, &snapshot);
+    if started_from_countdown {
+        captures_recording_macos::play_start_chime();
+        tokio::time::sleep(Duration::from_millis(RECORDING_COUNTDOWN_FADE_OUT_MS)).await;
+        if !recording_segment_is_current(&state, session_id, generation) {
+            destroy_recording_countdown(&app);
+            return Ok(());
+        }
+    }
+    destroy_recording_countdown(&app);
+    show_recording_hud(&app)?;
     schedule_segment_monitor(app, state, session_id.to_owned(), generation);
     Ok(())
 }
@@ -762,7 +841,7 @@ async fn restart_recording_inner(
     state: Arc<AppState>,
     session_id: &str,
 ) -> Result<RecordingSessionSnapshot, AppError> {
-    let (active, old_segments, countdown, generation, snapshot) = {
+    let (active, old_segments, countdown, generation, display, snapshot) = {
         let mut runtime = state.recording.lock();
         let now = now_ms();
         let snapshot = runtime
@@ -799,6 +878,7 @@ async fn restart_recording_inner(
             old_segments,
             session.options.countdown_seconds,
             generation,
+            session.display.clone(),
             snapshot,
         )
     };
@@ -809,6 +889,10 @@ async fn restart_recording_inner(
         let _ = fs::remove_file(path);
     }
     emit_snapshot(&app, &snapshot);
+    crate::hide_window(&app, "recording-hud");
+    if countdown > 0 {
+        show_recording_countdown(&app, &display)?;
+    }
     schedule_countdown(app, state, session_id.to_owned(), generation, countdown);
     Ok(snapshot)
 }
@@ -1012,7 +1096,7 @@ async fn stop_recording_inner(
         target: options.target.clone(),
         missing: false,
     };
-    register_recording_artifact(&app, &state, artifact.clone(), poster_png.clone());
+    upsert_recording_artifact(&app, &state, artifact.clone(), poster_png.clone());
     let _ = fs::write(directory.join("poster.png"), poster_png);
 
     let now = now_ms();
@@ -1035,6 +1119,7 @@ async fn stop_recording_inner(
     };
     emit_snapshot(&app, &ready);
     let _ = app.emit(RECORDING_ARTIFACT_EVENT, &artifact);
+    destroy_recording_countdown(&app);
     crate::hide_window(&app, "recording-hud");
     crate::restore_thumbnail_stack(&app, &state);
 
@@ -1087,6 +1172,7 @@ async fn discard_recording_inner(
         .remove(session_id)
         .map_err(|error| AppError::Task(error.to_string()))?;
     emit_snapshot(&app, &snapshot);
+    destroy_recording_countdown(&app);
     crate::hide_window(&app, "recording-hud");
     crate::restore_thumbnail_stack(&app, &state);
     Ok(snapshot)
@@ -1187,6 +1273,74 @@ pub fn get_recording_artifact(
 }
 
 #[tauri::command]
+pub async fn prepare_recording_timeline_preview(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    artifact_id: String,
+) -> Result<RecordingTimelinePreview, String> {
+    const FRAME_COUNT: u16 = 12;
+    const FRAME_WIDTH: u32 = 160;
+    const FRAME_HEIGHT: u32 = 90;
+    let preview = || RecordingTimelinePreview {
+        url: recording_timeline_url(&artifact_id),
+        frame_count: FRAME_COUNT,
+        frame_width: FRAME_WIDTH,
+        frame_height: FRAME_HEIGHT,
+        sprite_width: FRAME_WIDTH * u32::from(FRAME_COUNT),
+        sprite_height: FRAME_HEIGHT,
+    };
+    if state
+        .recording_timeline_sprites
+        .lock()
+        .contains_key(&artifact_id)
+    {
+        return Ok(preview());
+    }
+    let source = state
+        .recording_artifacts
+        .lock()
+        .iter()
+        .find(|artifact| artifact.summary.id == artifact_id)
+        .map(|artifact| artifact.summary.clone())
+        .ok_or_else(|| "recording is no longer available".to_owned())?;
+    if !Path::new(&source.path).is_file() {
+        return Err("the recording file is missing".to_owned());
+    }
+    let app_state = state.inner().clone();
+    let cache_key = artifact_id.clone();
+    let output = std::env::temp_dir().join(format!("captures-timeline-{}.png", Uuid::new_v4()));
+    let output_for_task = output.clone();
+    let input = PathBuf::from(source.path);
+    let toolchain = media_toolchain(&app);
+    let bytes = tauri::async_runtime::spawn_blocking(move || {
+        let cancel = CancelToken::default();
+        toolchain.create_timeline_sprite(
+            &input,
+            &output_for_task,
+            TimelineSpriteSpec {
+                duration_ms: source.duration_ms.max(1),
+                frame_count: FRAME_COUNT,
+                frame_width: FRAME_WIDTH,
+                frame_height: FRAME_HEIGHT,
+            },
+            &cancel,
+        )?;
+        let bytes = fs::read(&output_for_task)?;
+        let _ = fs::remove_file(&output_for_task);
+        Ok::<_, captures_media::MediaToolError>(bytes)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())?;
+    let _ = fs::remove_file(output);
+    app_state
+        .recording_timeline_sprites
+        .lock()
+        .insert(cache_key, bytes);
+    Ok(preview())
+}
+
+#[tauri::command]
 pub fn start_recording_export(
     app: AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
@@ -1209,8 +1363,43 @@ pub fn start_recording_export(
         ExportFormat::Gif => "gif",
         ExportFormat::WebM => "webm",
     };
-    let destination = storage::unique_edited_media_path(Path::new(&source.path), extension)
-        .map_err(|error| error.to_string())?;
+    let source_path = PathBuf::from(&source.path);
+    let source_extension = source_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    if request.overwrite_source && !source_extension.eq_ignore_ascii_case(extension) {
+        return Err("changing the file format requires saving a copy".to_owned());
+    }
+    let selected_directory = request
+        .destination_directory
+        .as_deref()
+        .filter(|directory| !directory.is_empty())
+        .map(Path::new);
+    let final_destination = match (request.overwrite_source, selected_directory) {
+        (true, directory) => storage::recording_replacement_destination_path_in(
+            &source_path,
+            directory,
+            &request.file_stem,
+            extension,
+        ),
+        (false, Some(directory)) => storage::recording_destination_path_in(
+            &source_path,
+            Some(directory),
+            &request.file_stem,
+            extension,
+        ),
+        (false, None) => {
+            storage::recording_destination_path(&source_path, &request.file_stem, extension)
+        }
+    }
+    .map_err(|error| error.to_string())?;
+    let working_destination = if request.overwrite_source {
+        replacement_working_path(&final_destination, extension)
+            .map_err(|error| error.to_string())?
+    } else {
+        final_destination.clone()
+    };
     let export_id = Uuid::new_v4().to_string();
     let cancel = CancelToken::default();
     state
@@ -1228,9 +1417,17 @@ pub fn start_recording_export(
         let progress_export_id = task_export_id.clone();
         let edit = request.edit.clone();
         let export = request.export.clone();
+        let overwrite_source = request.overwrite_source;
+        let replacement_destination = final_destination.clone();
+        let cleanup_destination = working_destination.clone();
         let result = tauri::async_runtime::spawn_blocking(move || {
-            let outcome =
-                toolchain.export(&input, &destination, &edit, &export, &cancel, |progress| {
+            let mut outcome = toolchain.export(
+                &input,
+                &working_destination,
+                &edit,
+                &export,
+                &cancel,
+                |progress| {
                     let _ = task_app.emit(
                         "recording-export-progress",
                         RecordingExportProgress {
@@ -1238,7 +1435,8 @@ pub fn start_recording_export(
                             progress,
                         },
                     );
-                })?;
+                },
+            )?;
             let probe = toolchain.probe(&outcome.path)?;
             let generated_poster_path = outcome
                 .path
@@ -1248,13 +1446,22 @@ pub fn start_recording_export(
                 .ok()
                 .and_then(|()| fs::read(&generated_poster_path).ok());
             let _ = fs::remove_file(generated_poster_path);
+            if overwrite_source {
+                replace_recording_source_at(&input, &outcome.path, &replacement_destination)?;
+                outcome.path = replacement_destination;
+                outcome.size_bytes = fs::metadata(&outcome.path)?.len();
+            }
             Ok::<_, captures_media::MediaToolError>((outcome, probe, generated_poster))
         })
         .await;
         state.recording.lock().exports.remove(&task_export_id);
         match result {
             Ok(Ok((outcome, probe, generated_poster))) => {
-                let artifact_id = Uuid::new_v4().to_string();
+                let artifact_id = if request.overwrite_source {
+                    source.id.clone()
+                } else {
+                    Uuid::new_v4().to_string()
+                };
                 let keeps_system_audio = extension != "gif"
                     && source.has_system_audio
                     && !request.edit.audio.mute_system_audio;
@@ -1292,39 +1499,58 @@ pub fn start_recording_export(
                     dropped_frames: source.dropped_frames,
                     has_system_audio,
                     has_microphone_audio,
-                    created_at: chrono::Utc::now().to_rfc3339(),
+                    created_at: if request.overwrite_source {
+                        source.created_at
+                    } else {
+                        chrono::Utc::now().to_rfc3339()
+                    },
                     target: source.target,
                     missing: false,
                 };
-                register_recording_artifact(
+                upsert_recording_artifact(
                     &app,
                     &state,
                     artifact.clone(),
                     generated_poster.unwrap_or(poster_png),
                 );
+                let finder_error = app
+                    .opener()
+                    .reveal_item_in_dir(PathBuf::from(&artifact.path))
+                    .err()
+                    .map(|error| error.to_string());
                 let _ = app.emit(
                     "recording-export-complete",
                     RecordingExportComplete {
                         export_id: task_export_id,
                         artifact,
+                        finder_error,
                     },
                 );
             }
             Ok(Err(error)) => {
+                if request.overwrite_source {
+                    let _ = fs::remove_file(&cleanup_destination);
+                }
+                let cancelled = matches!(error, captures_media::MediaToolError::Cancelled);
                 let _ = app.emit(
                     "recording-export-failed",
                     RecordingExportFailed {
                         export_id: task_export_id,
                         message: error.to_string(),
+                        cancelled,
                     },
                 );
             }
             Err(error) => {
+                if request.overwrite_source {
+                    let _ = fs::remove_file(&cleanup_destination);
+                }
                 let _ = app.emit(
                     "recording-export-failed",
                     RecordingExportFailed {
                         export_id: task_export_id,
                         message: error.to_string(),
+                        cancelled: false,
                     },
                 );
             }
@@ -1402,6 +1628,7 @@ pub fn trash_recording_artifact(
         .recording_artifacts
         .lock()
         .retain(|artifact| artifact.summary.id != artifact_id);
+    state.recording_timeline_sprites.lock().remove(&artifact_id);
     let _ = storage::delete_history_capture(&artifact_id);
     state.history.lock().retain(|entry| entry.id != artifact_id);
     let _ = app.emit("capture-history-changed", ());
@@ -1638,7 +1865,7 @@ async fn recover_recording_draft_inner(
         target: manifest.options.target.clone(),
         missing: false,
     };
-    register_recording_artifact(&app, &state, artifact.clone(), poster_png);
+    upsert_recording_artifact(&app, &state, artifact.clone(), poster_png);
 
     let mut recovered_manifest = recovered_manifest;
     recovered_manifest.state = RecordingState::Ready;
@@ -1714,6 +1941,17 @@ pub fn resolve_recording_asset(
             .map(|artifact| ResolvedRecordingAsset {
                 mime_type: "image/png".to_owned(),
                 bytes: artifact.poster_png.clone(),
+                status: 200,
+                total_length: None,
+                content_range: None,
+            }),
+        "timeline" => state
+            .recording_timeline_sprites
+            .lock()
+            .get(id)
+            .map(|bytes| ResolvedRecordingAsset {
+                mime_type: "image/png".to_owned(),
+                bytes: bytes.clone(),
                 status: 200,
                 total_length: None,
                 content_range: None,
@@ -1977,13 +2215,30 @@ fn fail_session(app: &AppHandle, state: &AppState, session_id: &str, message: St
             message,
         },
     );
+    destroy_recording_countdown(app);
 }
 
 fn restore_recording_ui(app: &AppHandle, state: &Arc<AppState>) {
     destroy_recording_selector(app);
+    destroy_recording_countdown(app);
     crate::hide_window(app, "recording-hud");
     crate::set_capture_huds_protected(app, false);
     crate::restore_thumbnail_stack(app, state);
+}
+
+#[cfg(target_os = "macos")]
+fn focus_recording_window(app: &AppHandle, label: &'static str) {
+    let handle = app.clone();
+    if let Err(error) = app.run_on_main_thread(move || {
+        let Some(window) = handle.get_webview_window(label) else {
+            return;
+        };
+        if let Err(error) = captures_macos_window::focus_window(&window) {
+            eprintln!("failed to activate {label}: {error}");
+        }
+    }) {
+        eprintln!("failed to schedule {label} activation: {error}");
+    }
 }
 
 fn destroy_recording_selector(app: &AppHandle) {
@@ -2001,7 +2256,78 @@ fn destroy_recording_selector(app: &AppHandle) {
     }
 }
 
-fn register_recording_artifact(
+fn replacement_working_path(source: &Path, extension: &str) -> io::Result<PathBuf> {
+    let directory = source
+        .parent()
+        .filter(|directory| directory.is_dir())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "save folder is unavailable"))?;
+    Ok(directory.join(format!(".captures-save-{}.{}", Uuid::new_v4(), extension)))
+}
+
+fn replace_recording_source(source: &Path, replacement: &Path) -> io::Result<()> {
+    let directory = source
+        .parent()
+        .filter(|directory| directory.is_dir())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "save folder is unavailable"))?;
+    let source_extension = source
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or("media");
+    let backup = directory.join(format!(
+        ".captures-backup-{}.{}",
+        Uuid::new_v4(),
+        source_extension
+    ));
+
+    fs::rename(source, &backup)?;
+    match fs::rename(replacement, source) {
+        Ok(()) => {
+            let _ = fs::remove_file(backup);
+            Ok(())
+        }
+        Err(replace_error) => match fs::rename(&backup, source) {
+            Ok(()) => Err(replace_error),
+            Err(restore_error) => Err(io::Error::new(
+                replace_error.kind(),
+                format!(
+                    "the edited recording could not replace the original ({replace_error}), and the backup could not be restored automatically ({restore_error})"
+                ),
+            )),
+        },
+    }
+}
+
+fn replace_recording_source_at(
+    source: &Path,
+    replacement: &Path,
+    destination: &Path,
+) -> io::Result<()> {
+    if source == destination {
+        return replace_recording_source(source, replacement);
+    }
+    if destination.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "a file with that name already exists",
+        ));
+    }
+
+    fs::rename(replacement, destination)?;
+    match fs::remove_file(source) {
+        Ok(()) => Ok(()),
+        Err(remove_error) => match fs::remove_file(destination) {
+            Ok(()) => Err(remove_error),
+            Err(rollback_error) => Err(io::Error::new(
+                remove_error.kind(),
+                format!(
+                    "the original recording could not be removed ({remove_error}), and the new destination could not be rolled back automatically ({rollback_error})"
+                ),
+            )),
+        },
+    }
+}
+
+fn upsert_recording_artifact(
     app: &AppHandle,
     state: &AppState,
     artifact: RecordingArtifact,
@@ -2015,15 +2341,29 @@ fn register_recording_artifact(
             false
         }
     };
-    state
-        .recording_artifacts
-        .lock()
-        .push(RecordingArtifactData {
-            summary: artifact,
-            poster_png,
-        });
+    let artifact_id = artifact.id.clone();
+    let artifact_data = RecordingArtifactData {
+        summary: artifact,
+        poster_png,
+    };
+    let mut recording_artifacts = state.recording_artifacts.lock();
+    if let Some(existing) = recording_artifacts
+        .iter_mut()
+        .find(|existing| existing.summary.id == artifact_id)
+    {
+        *existing = artifact_data;
+    } else {
+        recording_artifacts.push(artifact_data);
+    }
+    drop(recording_artifacts);
+    state.recording_timeline_sprites.lock().remove(&artifact_id);
     if history_saved {
-        state.history.lock().insert(0, history_entry);
+        let mut history = state.history.lock();
+        if let Some(existing) = history.iter_mut().find(|entry| entry.id == artifact_id) {
+            *existing = history_entry;
+        } else {
+            history.insert(0, history_entry);
+        }
         let _ = app.emit("capture-history-changed", ());
     }
 }
@@ -2127,7 +2467,7 @@ fn create_recording_selector_window(app: &AppHandle) -> Result<(), AppError> {
     .focused(false)
     .visible(true)
     .build()?;
-    window.set_content_protected(true)?;
+    window.set_content_protected(false)?;
     Ok(())
 }
 
@@ -2163,7 +2503,7 @@ async fn prepare_recording_selector(
                 ))
                 .map_err(|error| error.to_string())?;
             window
-                .set_content_protected(true)
+                .set_content_protected(false)
                 .map_err(|error| error.to_string())?;
             // A hidden or zero-alpha WKWebView can be suspended before React
             // installs its recording-selection listener. Wake it at a tiny,
@@ -2287,6 +2627,8 @@ pub fn reveal_recording_selector(
         .set_ignore_cursor_events(false)
         .map_err(|error| error.to_string())?;
     window.show().map_err(|error| error.to_string())?;
+    #[cfg(target_os = "macos")]
+    focus_recording_window(&app, "recording-selector");
     // Focus is helpful for Escape-key handling, but macOS can temporarily
     // reject it for an accessory app. The selector is already visible and
     // interactive, so do not turn that harmless failure into a hidden window.
@@ -2296,29 +2638,19 @@ pub fn reveal_recording_selector(
     Ok(())
 }
 
-fn show_recording_hud(app: &AppHandle) -> Result<(), AppError> {
+fn prepare_recording_hud(app: &AppHandle, display: &DisplayDescriptor) -> Result<(), AppError> {
+    let x = f64::from(display.x) + (f64::from(display.width) - RECORDING_HUD_FULL_WIDTH) / 2.0;
+    let y = f64::from(display.y) + f64::from(display.height)
+        - RECORDING_HUD_HEIGHT
+        - RECORDING_HUD_BOTTOM_MARGIN;
     if app.get_webview_window("recording-hud").is_none() {
-        let (x, y) = app
-            .primary_monitor()
-            .ok()
-            .flatten()
-            .map(|monitor| {
-                let scale = monitor.scale_factor().max(1.0);
-                let position = monitor.position();
-                let size = monitor.size();
-                (
-                    f64::from(position.x) / scale + f64::from(size.width) / scale / 2.0 - 250.0,
-                    f64::from(position.y) / scale + f64::from(size.height) / scale - 116.0,
-                )
-            })
-            .unwrap_or((40.0, 40.0));
         WebviewWindowBuilder::new(
             app,
             "recording-hud",
             WebviewUrl::App("index.html?view=recording-hud".into()),
         )
         .title("Captures Recording Controls")
-        .inner_size(500.0, 88.0)
+        .inner_size(RECORDING_HUD_FULL_WIDTH, RECORDING_HUD_HEIGHT)
         .position(x, y)
         .decorations(false)
         .always_on_top(true)
@@ -2334,9 +2666,95 @@ fn show_recording_hud(app: &AppHandle) -> Result<(), AppError> {
     let window = app
         .get_webview_window("recording-hud")
         .ok_or_else(|| AppError::Task("recording controls are unavailable".to_owned()))?;
-    window.set_content_protected(true)?;
+    window.set_size(tauri::LogicalSize::new(
+        RECORDING_HUD_FULL_WIDTH,
+        RECORDING_HUD_HEIGHT,
+    ))?;
+    window.set_position(tauri::LogicalPosition::new(x, y))?;
+    window.set_content_protected(false)?;
+    window.hide()?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn hide_recording_hud(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<(), String> {
+    let available = state
+        .recording
+        .lock()
+        .coordinator
+        .snapshot(now_ms())
+        .is_some_and(|snapshot| snapshot.id == session_id && !snapshot.state.is_terminal());
+    if !available {
+        return Err(AppError::SessionUnavailable.to_string());
+    }
+    let window = app.get_webview_window("recording-hud").ok_or_else(|| {
+        AppError::Task("recording controls are unavailable".to_owned()).to_string()
+    })?;
+    window.hide().map_err(|error| error.to_string())
+}
+
+fn show_recording_hud(app: &AppHandle) -> Result<(), AppError> {
+    let window = app
+        .get_webview_window("recording-hud")
+        .ok_or_else(|| AppError::Task("recording controls are unavailable".to_owned()))?;
+    window.set_content_protected(false)?;
     window.show()?;
     Ok(())
+}
+
+fn show_recording_countdown(app: &AppHandle, display: &DisplayDescriptor) -> Result<(), AppError> {
+    if app.get_webview_window("recording-countdown").is_none() {
+        WebviewWindowBuilder::new(
+            app,
+            "recording-countdown",
+            WebviewUrl::App("index.html?view=recording-countdown".into()),
+        )
+        .title("Captures Recording Countdown")
+        .inner_size(f64::from(display.width), f64::from(display.height))
+        .position(f64::from(display.x), f64::from(display.y))
+        .decorations(false)
+        .always_on_top(true)
+        .visible_on_all_workspaces(true)
+        .skip_taskbar(true)
+        .shadow(false)
+        .resizable(false)
+        .transparent(true)
+        .background_color(Color(0, 0, 0, 0))
+        .focused(true)
+        .visible(false)
+        .build()?;
+    }
+    let window = app
+        .get_webview_window("recording-countdown")
+        .ok_or_else(|| AppError::Task("recording countdown is unavailable".to_owned()))?;
+    window.set_size(tauri::LogicalSize::new(
+        f64::from(display.width),
+        f64::from(display.height),
+    ))?;
+    window.set_position(tauri::LogicalPosition::new(
+        f64::from(display.x),
+        f64::from(display.y),
+    ))?;
+    window.set_content_protected(false)?;
+    window.show()?;
+    #[cfg(target_os = "macos")]
+    focus_recording_window(app, "recording-countdown");
+    if let Err(error) = window.set_focus() {
+        eprintln!("failed to focus recording countdown: {error}");
+    }
+    Ok(())
+}
+
+fn destroy_recording_countdown(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("recording-countdown")
+        && let Err(error) = window.destroy()
+    {
+        eprintln!("failed to close recording countdown: {error}");
+    }
 }
 
 fn show_recording_editor(app: &AppHandle, artifact_id: &str) -> Result<(), AppError> {
@@ -2366,8 +2784,12 @@ fn show_recording_editor(app: &AppHandle, artifact_id: &str) -> Result<(), AppEr
 #[cfg(test)]
 mod tests {
     use captures_recording::RecordingState;
+    use tempfile::tempdir;
 
-    use super::screenshot_capture_is_blocked_for;
+    use super::{
+        replace_recording_source, replace_recording_source_at, replacement_working_path,
+        screenshot_capture_is_blocked_for,
+    };
 
     #[test]
     fn permits_screenshots_while_recording_or_paused() {
@@ -2396,5 +2818,76 @@ mod tests {
             false,
             Some(RecordingState::Finalizing)
         ));
+    }
+
+    #[test]
+    fn replaces_a_recording_only_after_the_new_file_exists() {
+        let directory = tempdir().expect("temporary directory");
+        let source = directory.path().join("recording.mp4");
+        let replacement = replacement_working_path(&source, "mp4").expect("working path");
+        std::fs::write(&source, b"original").expect("source");
+        std::fs::write(&replacement, b"edited").expect("replacement");
+
+        replace_recording_source(&source, &replacement).expect("source replaced");
+
+        assert_eq!(std::fs::read(&source).expect("saved source"), b"edited");
+        assert!(!replacement.exists());
+    }
+
+    #[test]
+    fn restores_the_original_when_replacement_fails() {
+        let directory = tempdir().expect("temporary directory");
+        let source = directory.path().join("recording.mp4");
+        let missing_replacement = directory.path().join("missing.mp4");
+        std::fs::write(&source, b"original").expect("source");
+
+        assert!(replace_recording_source(&source, &missing_replacement).is_err());
+        assert_eq!(
+            std::fs::read(&source).expect("restored source"),
+            b"original"
+        );
+    }
+
+    #[test]
+    fn replacing_a_recording_can_rename_or_move_the_original() {
+        let source_directory = tempdir().expect("source directory");
+        let destination_directory = tempdir().expect("destination directory");
+        let source = source_directory.path().join("recording.mp4");
+        let replacement = destination_directory.path().join(".replacement.mp4");
+        let destination = destination_directory.path().join("renamed.mp4");
+        std::fs::write(&source, b"original").expect("source");
+        std::fs::write(&replacement, b"edited").expect("replacement");
+
+        replace_recording_source_at(&source, &replacement, &destination).expect("source moved");
+
+        assert!(!source.exists());
+        assert!(!replacement.exists());
+        assert_eq!(
+            std::fs::read(&destination).expect("renamed recording"),
+            b"edited"
+        );
+    }
+
+    #[test]
+    fn replacing_a_recording_never_overwrites_an_existing_destination() {
+        let source_directory = tempdir().expect("source directory");
+        let destination_directory = tempdir().expect("destination directory");
+        let source = source_directory.path().join("recording.mp4");
+        let replacement = destination_directory.path().join(".replacement.mp4");
+        let destination = destination_directory.path().join("existing.mp4");
+        std::fs::write(&source, b"original").expect("source");
+        std::fs::write(&replacement, b"edited").expect("replacement");
+        std::fs::write(&destination, b"keep").expect("destination");
+
+        assert!(replace_recording_source_at(&source, &replacement, &destination).is_err());
+        assert_eq!(std::fs::read(&source).expect("source kept"), b"original");
+        assert_eq!(
+            std::fs::read(&replacement).expect("replacement kept"),
+            b"edited"
+        );
+        assert_eq!(
+            std::fs::read(&destination).expect("destination kept"),
+            b"keep"
+        );
     }
 }

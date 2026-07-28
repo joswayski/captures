@@ -185,10 +185,19 @@ export interface EditSpec {
 
 export interface ExportSpec {
   format: "mp4" | "gif" | "web_m";
-  quality: "high" | "standard" | "small";
+  quality: "preserve" | "high" | "standard" | "small";
   max_size_bytes: number | null;
   frames_per_second: number | null;
   gif_max_colors: number | null;
+}
+
+export interface RecordingTimelinePreview {
+  url: string;
+  frame_count: number;
+  frame_width: number;
+  frame_height: number;
+  sprite_width: number;
+  sprite_height: number;
 }
 
 export interface ExportProgress {

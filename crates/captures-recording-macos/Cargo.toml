@@ -10,9 +10,10 @@ captures-recording = { path = "../captures-recording" }
 thiserror.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
+core-graphics.workspace = true
 cpal = "0.16"
 hound = "3.5"
-screencapturekit = { version = "=8.0.1", features = ["macos_13_0"] }
+screencapturekit = { version = "=8.0.1", features = ["macos_15_0"] }
 
 [lints.rust]
 unsafe_code = "allow"

@@ -75,6 +75,10 @@ impl MediaWriter {
         self.append(sample, 0)
     }
 
+    pub fn append_idle_video(&self, sample: &CMSampleBuffer) -> bool {
+        self.append(sample, 2)
+    }
+
     pub fn append_audio(&self, sample: &CMSampleBuffer) -> bool {
         self.append(sample, 1)
     }

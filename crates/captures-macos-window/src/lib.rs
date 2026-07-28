@@ -15,7 +15,7 @@ use objc2::{
     runtime::AnyObject,
 };
 use objc2_app_kit::{
-    NSCursor, NSEvent, NSPasteboard, NSSound, NSStatusWindowLevel, NSTrackingArea,
+    NSApplication, NSCursor, NSEvent, NSPasteboard, NSSound, NSStatusWindowLevel, NSTrackingArea,
     NSTrackingAreaOptions, NSView, NSViewLayerContentsPlacement, NSWindow, NSWindowStyleMask,
 };
 use objc2_foundation::{NSObject, NSRect, NSSize, NSString};
@@ -355,6 +355,16 @@ pub fn prime_window_reveal(window: &WebviewWindow) -> Result<(), &'static str> {
 /// Reveals a window after its WebKit surface has painted.
 pub fn reveal_window(window: &WebviewWindow) -> Result<(), &'static str> {
     native_window(window)?.setAlphaValue(1.0);
+    Ok(())
+}
+
+/// Activates an accessory app window and makes it key so keyboard cancellation
+/// works even when the selector was launched while another app was frontmost.
+pub fn focus_window(window: &WebviewWindow) -> Result<(), &'static str> {
+    let main_thread = MainThreadMarker::new().ok_or("window focus must run on the main thread")?;
+    let app = NSApplication::sharedApplication(main_thread);
+    app.activate();
+    native_window(window)?.makeKeyAndOrderFront(None);
     Ok(())
 }
 

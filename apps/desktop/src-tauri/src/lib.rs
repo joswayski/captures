@@ -76,7 +76,7 @@ enum AppError {
     InvalidSelection,
     #[error("shortcut registration failed: {0}")]
     Shortcut(String),
-    #[error("background task failed: {0}")]
+    #[error("{0}")]
     Task(String),
     #[error("an update is being installed; Captures will restart when it finishes")]
     UpdateInstalling,
@@ -231,8 +231,10 @@ pub fn run() {
             recording::stop_recording,
             recording::discard_recording,
             recording::set_recording_microphone_muted,
+            recording::hide_recording_hud,
             recording::get_recording_artifacts,
             recording::get_recording_artifact,
+            recording::prepare_recording_timeline_preview,
             recording::start_recording_export,
             recording::cancel_recording_export,
             recording::reveal_recording_artifact,
@@ -245,7 +247,7 @@ pub fn run() {
         .setup(|app| {
             #[cfg(target_os = "macos")]
             {
-                app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+                app.set_activation_policy(tauri::ActivationPolicy::Regular);
             }
             setup_tray(app)?;
             recording::prune_expired_gif_sources();
@@ -287,13 +289,13 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building Captures")
-        .run(|_, event| {
-            if let tauri::RunEvent::ExitRequested {
+        .run(|_app, event| match event {
+            tauri::RunEvent::ExitRequested {
                 code: None, api, ..
-            } = event
-            {
-                api.prevent_exit();
-            }
+            } => api.prevent_exit(),
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { .. } => focus_primary_app_window(_app),
+            _ => {}
         });
 }
 
@@ -2584,6 +2586,55 @@ fn show_capture_history(app: &AppHandle) {
     });
 }
 
+#[cfg(target_os = "macos")]
+fn primary_app_window_priority(label: &str) -> Option<u8> {
+    if matches!(label, "recording-selector" | "recording-countdown") {
+        return Some(0);
+    }
+    if label.starts_with("recording-editor-") {
+        return Some(1);
+    }
+    if label == "history" {
+        return Some(2);
+    }
+    if label == "preferences" || label.starts_with(VIEWER_WINDOW_PREFIX) {
+        return Some(3);
+    }
+    (label == "recording-hud").then_some(4)
+}
+
+#[cfg(target_os = "macos")]
+fn focus_primary_app_window(app: &AppHandle) {
+    let recording_is_active = {
+        let state = app.state::<Arc<AppState>>();
+        recording::recording_controls_are_available(state.inner())
+    };
+    if recording_is_active
+        && let Some(window) = app.get_webview_window("recording-hud")
+        && !window.is_visible().unwrap_or(false)
+    {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        return;
+    }
+    let primary = app
+        .webview_windows()
+        .into_iter()
+        .filter(|(_, window)| window.is_visible().unwrap_or(false))
+        .filter_map(|(label, window)| {
+            primary_app_window_priority(&label).map(|priority| (priority, window))
+        })
+        .min_by_key(|(priority, _)| *priority);
+    if let Some((_, window)) = primary {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    } else {
+        show_capture_history(app);
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn x11_display_available() -> bool {
     std::env::var_os("DISPLAY").is_some()
@@ -2635,7 +2686,7 @@ fn set_capture_huds_protected(app: &AppHandle, protected: bool) {
     // The window server may still composite a just-hidden HUD into an
     // immediate display capture. Exclude Captures HUDs until the frozen background
     // frame has been read so they cannot reappear as pixels during fade-in.
-    for label in ["thumbnail", "startup", "update"] {
+    for label in ["thumbnail", "startup", "update", "recording-hud"] {
         if let Some(window) = app.get_webview_window(label)
             && let Err(error) = window.set_content_protected(protected)
         {
@@ -2825,12 +2876,14 @@ mod tests {
 
     use tauri_plugin_global_shortcut::ShortcutState;
 
+    #[cfg(target_os = "macos")]
+    use super::primary_app_window_priority;
     use super::{
-        CaptureMode, ThumbnailCursorAction, clipboard_fingerprint, display_contains_pointer,
-        menu_accelerator, parse_shortcut, should_activate_capture_cursor_before_reveal,
-        should_trigger_shortcut, thumbnail_cursor_action, thumbnail_geometry,
-        thumbnail_pointer_position, thumbnail_visible_window_height, viewer_window_label,
-        windows_window_is_capture_overlay,
+        AppError, CaptureMode, ThumbnailCursorAction, clipboard_fingerprint,
+        display_contains_pointer, menu_accelerator, parse_shortcut,
+        should_activate_capture_cursor_before_reveal, should_trigger_shortcut,
+        thumbnail_cursor_action, thumbnail_geometry, thumbnail_pointer_position,
+        thumbnail_visible_window_height, viewer_window_label, windows_window_is_capture_overlay,
     };
 
     use captures_capture::{DisplayDescriptor, WindowDescriptor};
@@ -3010,5 +3063,22 @@ mod tests {
         assert_eq!(original, clipboard_fingerprint(1, 1, &[1, 2, 3, 255]));
         assert_ne!(original, clipboard_fingerprint(2, 1, &[1, 2, 3, 255]));
         assert_ne!(original, clipboard_fingerprint(1, 1, &[1, 2, 4, 255]));
+    }
+
+    #[test]
+    fn background_task_errors_only_show_the_actionable_message() {
+        assert_eq!(
+            AppError::Task("the encoder stopped unexpectedly".to_owned()).to_string(),
+            "the encoder stopped unexpectedly"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn dock_reopen_prefers_editors_over_utility_windows() {
+        assert_eq!(primary_app_window_priority("recording-editor-abc"), Some(1));
+        assert_eq!(primary_app_window_priority("history"), Some(2));
+        assert_eq!(primary_app_window_priority("recording-hud"), Some(4));
+        assert_eq!(primary_app_window_priority("thumbnail"), None);
     }
 }
