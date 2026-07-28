@@ -67,7 +67,12 @@ const countdownSnapshot: RecordingSessionSnapshot = {
 
 describe("CustomSelect", () => {
   it("supports arrow navigation, selection, Escape, and outside-click dismissal", () => {
-    render(<><DropdownHarness /><button type="button">Outside</button></>);
+    render(
+      <div onPointerDown={(event) => event.stopPropagation()}>
+        <DropdownHarness />
+        <button type="button">Outside</button>
+      </div>,
+    );
     const trigger = screen.getByRole("combobox", { name: "Quality" });
 
     fireEvent.keyDown(trigger, { key: "ArrowDown" });

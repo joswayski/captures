@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
 
 import { RecordingEditor } from "./App";
 import { editorCropAfterDrag, recordingFilenameError } from "./lib/recordingEditor";
@@ -149,6 +150,12 @@ describe("RecordingEditor", () => {
     expect(screen.getAllByRole("button", { name: /Resize crop/ })).toHaveLength(8);
     fireEvent.click(screen.getByRole("button", { name: "100%" }));
     expect(preview).toHaveStyle({ width: "1140px", height: "692px" });
+
+    const video = container.querySelector<HTMLVideoElement>("video");
+    expect(video).not.toBeNull();
+    const play = vi.spyOn(video!, "play").mockResolvedValue();
+    fireEvent.click(screen.getByRole("button", { name: "Play preview" }));
+    expect(play).toHaveBeenCalledOnce();
   });
 
   it("defaults to preserve quality and saves a safe editable filename from the sticky footer", async () => {
@@ -156,7 +163,13 @@ describe("RecordingEditor", () => {
 
     const filename = await screen.findByRole("textbox", { name: "Saved filename" });
     expect(filename).toHaveValue("Captures_1140x692-edited");
-    expect(screen.getByRole("button", { name: "Preserve quality" })).toHaveClass("active");
+    expect(screen.getByRole("combobox", { name: "Save quality" })).toHaveTextContent(
+      "Preserve quality",
+    );
+    expect(screen.getByLabelText("Save location")).toHaveTextContent(
+      "/Users/josevalerio/Captures",
+    );
+    expect(screen.getByText("Ready to save beside the source recording.")).toBeInTheDocument();
 
     fireEvent.change(filename, { target: { value: "Demo recording" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -166,6 +179,7 @@ describe("RecordingEditor", () => {
         request: expect.objectContaining({
           artifact_id: artifact.id,
           file_stem: "Demo recording",
+          destination_directory: "/Users/josevalerio/Captures",
           edit: expect.objectContaining({ trim_start_ms: 0, trim_end_ms: null }),
           export: expect.objectContaining({ format: "mp4", quality: "preserve" }),
         }),
@@ -183,6 +197,39 @@ describe("RecordingEditor", () => {
     });
     expect(screen.getByText("Saved 40.7 KB (40,700 bytes).")).toHaveClass("recording-save-success");
     expect(screen.queryByText(/Reveal Export/)).not.toBeInTheDocument();
+  });
+
+  it("changes the local destination and accepts KB, MB, or GB maximum-size units", async () => {
+    vi.mocked(open).mockResolvedValue("/Users/josevalerio/Desktop/Exports");
+    render(<RecordingEditor />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Change save location" }));
+    await waitFor(() => {
+      expect(screen.getByLabelText("Save location")).toHaveTextContent(
+        "/Users/josevalerio/Desktop/Exports",
+      );
+    });
+    expect(screen.getByText("Ready to save in the selected folder.")).toBeInTheDocument();
+
+    const qualityMode = screen.getByRole("combobox", { name: "Save quality" });
+    fireEvent.click(qualityMode);
+    fireEvent.click(screen.getByRole("option", { name: /Maximum file size/ }));
+    const maximum = screen.getByRole("spinbutton", { name: "Maximum file size" });
+    fireEvent.change(maximum, { target: { value: "10" } });
+    const unit = screen.getByRole("combobox", { name: "File size unit" });
+    fireEvent.click(unit);
+    fireEvent.click(screen.getByRole("option", { name: "GB" }));
+    expect(maximum).toHaveValue(0.01);
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("start_recording_export", {
+        request: expect.objectContaining({
+          destination_directory: "/Users/josevalerio/Desktop/Exports",
+          export: expect.objectContaining({ max_size_bytes: 10_000_000 }),
+        }),
+      });
+    });
   });
 
   it("shows a GIF audio warning only when the source actually recorded audio", async () => {

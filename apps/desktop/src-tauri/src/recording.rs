@@ -128,6 +128,8 @@ pub struct RecordingAudioLevel {
 pub struct StartExportRequest {
     pub artifact_id: String,
     pub file_stem: String,
+    #[serde(default)]
+    pub destination_directory: Option<String>,
     pub edit: EditSpec,
     pub export: ExportSpec,
 }
@@ -1322,9 +1324,25 @@ pub fn start_recording_export(
         ExportFormat::Gif => "gif",
         ExportFormat::WebM => "webm",
     };
-    let destination =
-        storage::recording_destination_path(Path::new(&source.path), &request.file_stem, extension)
-            .map_err(|error| error.to_string())?;
+    let selected_directory = request
+        .destination_directory
+        .as_deref()
+        .filter(|directory| !directory.is_empty())
+        .map(Path::new);
+    let destination = match selected_directory {
+        Some(directory) => storage::recording_destination_path_in(
+            Path::new(&source.path),
+            Some(directory),
+            &request.file_stem,
+            extension,
+        ),
+        None => storage::recording_destination_path(
+            Path::new(&source.path),
+            &request.file_stem,
+            extension,
+        ),
+    }
+    .map_err(|error| error.to_string())?;
     let export_id = Uuid::new_v4().to_string();
     let cancel = CancelToken::default();
     state

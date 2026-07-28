@@ -202,6 +202,15 @@ pub fn recording_destination_path(
     file_stem: &str,
     extension: &str,
 ) -> Result<PathBuf, AppError> {
+    recording_destination_path_in(source, None, file_stem, extension)
+}
+
+pub fn recording_destination_path_in(
+    source: &Path,
+    selected_directory: Option<&Path>,
+    file_stem: &str,
+    extension: &str,
+) -> Result<PathBuf, AppError> {
     let stem = file_stem.trim();
     let reserved = [
         "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
@@ -237,7 +246,13 @@ pub fn recording_destination_path(
     {
         return Err(AppError::Task("the selected format is invalid".to_owned()));
     }
-    let directory = source.parent().unwrap_or_else(|| Path::new("."));
+    let directory =
+        selected_directory.unwrap_or_else(|| source.parent().unwrap_or_else(|| Path::new(".")));
+    if !directory.is_dir() {
+        return Err(AppError::Task(
+            "the selected save folder is unavailable".to_owned(),
+        ));
+    }
     let destination = directory.join(format!("{stem}.{extension}"));
     if destination == source || destination.exists() {
         return Err(AppError::Task(format!(
@@ -512,8 +527,9 @@ mod tests {
         DRAG_EXPORT_DIRECTORY, DRAG_ICON_FILE, DRAG_ICON_HEIGHT, DRAG_ICON_WIDTH,
         HISTORY_IMAGE_FILE, HISTORY_PREVIEW_FILE, clear_drag_exports_in, encode_drag_icon_png,
         encode_png, encode_preview_png, encode_thumbnail_png, load_capture_history_from,
-        prepare_artifact_drag_in, recording_destination_path, save_encoded_capture,
-        save_history_capture_in, save_history_entry_in, save_settings_to, unique_path,
+        prepare_artifact_drag_in, recording_destination_path, recording_destination_path_in,
+        save_encoded_capture, save_history_capture_in, save_history_entry_in, save_settings_to,
+        unique_path,
     };
     use crate::models::{
         AppSettings, ArtifactKind, CaptureArtifact, ClipboardCopyStatus, HistoryEntry,
@@ -577,6 +593,28 @@ mod tests {
 
         assert!(recording_destination_path(&source, "source", "mp4").is_err());
         assert!(recording_destination_path(&source, "saved", "mp4").is_err());
+    }
+
+    #[test]
+    fn recording_destination_can_use_an_existing_selected_folder() {
+        let source_directory = tempdir().expect("source directory");
+        let selected_directory = tempdir().expect("selected directory");
+        let source = source_directory.path().join("source.mp4");
+
+        let destination =
+            recording_destination_path_in(&source, Some(selected_directory.path()), "saved", "mp4")
+                .expect("destination in selected folder");
+
+        assert_eq!(destination, selected_directory.path().join("saved.mp4"));
+        assert!(
+            recording_destination_path_in(
+                &source,
+                Some(&selected_directory.path().join("missing")),
+                "saved",
+                "mp4",
+            )
+            .is_err()
+        );
     }
 
     #[test]

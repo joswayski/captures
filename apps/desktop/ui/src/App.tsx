@@ -88,6 +88,7 @@ function afterNextPaint(callback: () => void) {
 type SelectOption = {
   value: string;
   label: string;
+  description?: string;
   disabled?: boolean;
 };
 
@@ -149,8 +150,8 @@ export function CustomSelect({
     const onPointerDown = (event: PointerEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) closeMenu();
     };
-    window.addEventListener("pointerdown", onPointerDown);
-    return () => window.removeEventListener("pointerdown", onPointerDown);
+    window.addEventListener("pointerdown", onPointerDown, true);
+    return () => window.removeEventListener("pointerdown", onPointerDown, true);
   }, [open]);
 
   useLayoutEffect(() => {
@@ -241,7 +242,10 @@ export function CustomSelect({
               }}
               onClick={() => choose(index)}
             >
-              <span>{option.label}</span>
+              <span className="custom-select-option-copy">
+                <span>{option.label}</span>
+                {option.description && <small>{option.description}</small>}
+              </span>
               {option.value === value && <span aria-hidden="true">✓</span>}
             </button>
           ))}
@@ -914,6 +918,7 @@ export function RecordingSelector() {
   const [targetMode, setTargetMode] = useState<RecordingTargetMode>("region");
   const [region, setRegion] = useState<RecordingRect | null>(null);
   const [panelPosition, setPanelPosition] = useState<RecordingPanelPosition | null>(null);
+  const [panelDragging, setPanelDragging] = useState(false);
   const [selectedWindow, setSelectedWindow] = useState<string | null>(null);
   const [hoveredWindow, setHoveredWindow] = useState<string | null>(null);
   const [fps, setFps] = useState(60);
@@ -997,6 +1002,7 @@ export function RecordingSelector() {
     setSession(null);
     clearRegionDrag();
     panelDragRef.current = null;
+    setPanelDragging(false);
     setStarting(false);
     setError("");
     void invoke("cancel_recording_selection", { selectionId: selection.id }).catch((error) => {
@@ -1028,6 +1034,7 @@ export function RecordingSelector() {
       setRegion(defaultRecordingRegion(selection.display.width, selection.display.height));
       clearRegionDrag();
       panelDragRef.current = null;
+      setPanelDragging(false);
       setPanelPosition(null);
       setStarting(false);
       setError("");
@@ -1269,11 +1276,12 @@ export function RecordingSelector() {
     }
   };
 
-  const beginPanelDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
+  const beginPanelDrag = (event: React.PointerEvent<HTMLElement>) => {
+    event.stopPropagation();
+    if ((event.target as Element).closest("button, input, label, a, .custom-select")) return;
     const panel = panelRef.current;
     if (!panel) return;
     event.preventDefault();
-    event.stopPropagation();
     const bounds = panel.getBoundingClientRect();
     panelDragRef.current = {
       pointerId: event.pointerId,
@@ -1281,9 +1289,10 @@ export function RecordingSelector() {
       offsetY: event.clientY - bounds.top,
     };
     setPanelPosition({ left: bounds.left, top: bounds.top });
+    setPanelDragging(true);
     event.currentTarget.setPointerCapture(event.pointerId);
   };
-  const movePanel = (event: React.PointerEvent<HTMLButtonElement>) => {
+  const movePanel = (event: React.PointerEvent<HTMLElement>) => {
     const drag = panelDragRef.current;
     const panel = panelRef.current;
     if (!drag || !panel || drag.pointerId !== event.pointerId) return;
@@ -1297,9 +1306,10 @@ export function RecordingSelector() {
       top: Math.min(maxTop, Math.max(margin, event.clientY - drag.offsetY)),
     });
   };
-  const endPanelDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
+  const endPanelDrag = (event: React.PointerEvent<HTMLElement>) => {
     if (panelDragRef.current?.pointerId !== event.pointerId) return;
     panelDragRef.current = null;
+    setPanelDragging(false);
     if (
       typeof event.currentTarget.hasPointerCapture === "function"
       && event.currentTarget.hasPointerCapture(event.pointerId)
@@ -1375,14 +1385,17 @@ export function RecordingSelector() {
 
       <section
         ref={panelRef}
-        className="recording-selector-panel"
+        className={`recording-selector-panel${panelDragging ? " dragging" : ""}`}
         style={panelPosition ? {
           left: panelPosition.left,
           top: panelPosition.top,
           bottom: "auto",
           transform: "none",
         } : undefined}
-        onPointerDown={(event) => event.stopPropagation()}
+        onPointerDown={beginPanelDrag}
+        onPointerMove={movePanel}
+        onPointerUp={endPanelDrag}
+        onPointerCancel={endPanelDrag}
       >
         <div className="recording-panel-top">
           <div className="recording-target-switch" role="group" aria-label="Capture target">
@@ -1407,19 +1420,6 @@ export function RecordingSelector() {
               </button>
             ))}
           </div>
-          <button
-            className="recording-panel-drag"
-            type="button"
-            aria-label="Move recording controls"
-            onPointerDown={beginPanelDrag}
-            onPointerMove={movePanel}
-            onPointerUp={endPanelDrag}
-            onPointerCancel={endPanelDrag}
-          >
-            <svg viewBox="0 0 18 18" aria-hidden="true">
-              <path d="M5 6h8M5 9h8M5 12h8" />
-            </svg>
-          </button>
           <button className="recording-cancel" type="button" onClick={() => cancelSelection(session)}>Cancel</button>
         </div>
         {targetMode === "window" && (
@@ -1716,6 +1716,14 @@ type EditorCropDrag = {
   initial: RecordingRect;
 };
 
+type FileSizeUnit = "kb" | "mb" | "gb";
+
+const FILE_SIZE_UNIT_BYTES: Record<FileSizeUnit, number> = {
+  kb: 1_000,
+  mb: 1_000_000,
+  gb: 1_000_000_000,
+};
+
 export function RecordingEditor() {
   const artifactId = query("artifact_id");
   const [artifact, setArtifact] = useState<RecordingArtifact | null>(null);
@@ -1736,7 +1744,8 @@ export function RecordingEditor() {
   const [gifColors, setGifColors] = useState(256);
   const [quality, setQuality] = useState<"high" | "standard" | "small">("high");
   const [sizeMode, setSizeMode] = useState<"preserve" | "compress" | "maximum">("preserve");
-  const [maximumMb, setMaximumMb] = useState("10");
+  const [maximumSize, setMaximumSize] = useState("10");
+  const [maximumUnit, setMaximumUnit] = useState<FileSizeUnit>("mb");
   const [systemVolume, setSystemVolume] = useState(100);
   const [microphoneVolume, setMicrophoneVolume] = useState(100);
   const [muteSystem, setMuteSystem] = useState(false);
@@ -1747,6 +1756,8 @@ export function RecordingEditor() {
   const [progress, setProgress] = useState<ExportProgress | null>(null);
   const [exported, setExported] = useState<RecordingArtifact | null>(null);
   const [filenameStem, setFilenameStem] = useState("");
+  const [destinationDirectory, setDestinationDirectory] = useState("");
+  const [previewPlaying, setPreviewPlaying] = useState(false);
   const [toast, setToast] = useState("");
   const [error, setError] = useState("");
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -1804,6 +1815,8 @@ export function RecordingEditor() {
       setOutputFormat(loaded.kind === "gif" ? "gif" : "mp4");
       setSizeMode(loaded.kind === "gif" ? "compress" : "preserve");
       setFilenameStem(`${recordingFileStem(loaded.path)}-edited`);
+      setDestinationDirectory(recordingParentDirectory(loaded.path));
+      setPreviewPlaying(false);
       void invoke<RecordingTimelinePreview>("prepare_recording_timeline_preview", {
         artifactId: loaded.id,
       }).then((preview) => {
@@ -1842,6 +1855,7 @@ export function RecordingEditor() {
     ? dimensionsAtMaximumWidth(baseOutputDimensions.width, baseOutputDimensions.height, gifMaxWidth)
     : baseOutputDimensions;
   const hasRecordedAudio = artifact.has_system_audio || artifact.has_microphone_audio;
+  const sourceDirectory = recordingParentDirectory(artifact.path);
 
   const updateCropDimension = (key: "width" | "height", value: number) => {
     setCrop((current) => {
@@ -1947,6 +1961,41 @@ export function RecordingEditor() {
     ));
   };
 
+  const togglePreviewPlayback = async () => {
+    const video = videoRef.current;
+    if (!video) return;
+    setError("");
+    try {
+      if (video.paused) {
+        await video.play();
+      } else {
+        video.pause();
+      }
+    } catch (error) {
+      setPreviewPlaying(false);
+      setError(`Preview could not play: ${String(error)}`);
+    }
+  };
+
+  const chooseDestinationDirectory = async () => {
+    if (exportId) return;
+    setError("");
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: "Choose save location",
+        defaultPath: destinationDirectory || sourceDirectory,
+      });
+      if (typeof selected === "string") {
+        setDestinationDirectory(selected);
+        setToast("");
+      }
+    } catch (error) {
+      setError(`Save location could not be changed: ${String(error)}`);
+    }
+  };
+
   const startExport = async () => {
     if (exportId) return;
     const invalidFilename = recordingFilenameError(filenameStem);
@@ -1954,12 +2003,14 @@ export function RecordingEditor() {
       setError(invalidFilename);
       return;
     }
-    const maximumBytes = sizeMode === "maximum" ? Math.floor(Number(maximumMb) * 1_000_000) : null;
+    const maximumBytes = sizeMode === "maximum"
+      ? Math.floor(Number(maximumSize) * FILE_SIZE_UNIT_BYTES[maximumUnit])
+      : null;
     if (
       sizeMode === "maximum"
       && (maximumBytes === null || !Number.isFinite(maximumBytes) || maximumBytes < 100_000)
     ) {
-      setError("Enter a maximum size of at least 0.1 MB.");
+      setError("Enter a maximum file size of at least 100 KB.");
       return;
     }
     const edit: EditSpec = {
@@ -1991,7 +2042,13 @@ export function RecordingEditor() {
     setProgress({ stage: "preparing", completed_per_mille: 0, attempt: 0, message: null });
     try {
       const id = await invoke<string>("start_recording_export", {
-        request: { artifact_id: artifact.id, file_stem: filenameStem, edit, export: exportSpec },
+        request: {
+          artifact_id: artifact.id,
+          file_stem: filenameStem,
+          destination_directory: destinationDirectory,
+          edit,
+          export: exportSpec,
+        },
       });
       exportIdRef.current = id;
       setExportId(id);
@@ -2018,9 +2075,22 @@ export function RecordingEditor() {
       <section className="recording-editor-preview">
         <div className="recording-preview-toolbar">
           <strong>Preview</strong>
-          <div className="editor-segmented" aria-label="Preview size">
-            <button type="button" className={previewMode === "fit" ? "active" : ""} onClick={() => setPreviewMode("fit")}>Fit</button>
-            <button type="button" className={previewMode === "actual" ? "active" : ""} onClick={() => setPreviewMode("actual")}>100%</button>
+          <div className="recording-preview-toolbar-actions">
+            {artifact.kind === "video" && (
+              <button
+                type="button"
+                className="recording-preview-play"
+                aria-label={previewPlaying ? "Pause preview" : "Play preview"}
+                onClick={() => void togglePreviewPlayback()}
+              >
+                <span aria-hidden="true">{previewPlaying ? "Ⅱ" : "▶"}</span>
+                {previewPlaying ? "Pause" : "Play"}
+              </button>
+            )}
+            <div className="editor-segmented" aria-label="Preview size">
+              <button type="button" className={previewMode === "fit" ? "active" : ""} onClick={() => setPreviewMode("fit")}>Fit</button>
+              <button type="button" className={previewMode === "actual" ? "active" : ""} onClick={() => setPreviewMode("actual")}>100%</button>
+            </div>
           </div>
         </div>
         <div className={`recording-preview-viewport preview-${previewMode}`}>
@@ -2045,8 +2115,11 @@ export function RecordingEditor() {
               <video
                 ref={videoRef}
                 src={artifact.media_url}
-                controls
+                playsInline
                 preload="auto"
+                onPlay={() => setPreviewPlaying(true)}
+                onPause={() => setPreviewPlaying(false)}
+                onEnded={() => setPreviewPlaying(false)}
                 onLoadedMetadata={(event) => {
                   event.currentTarget.currentTime = playheadMs / 1_000;
                 }}
@@ -2246,8 +2319,8 @@ export function RecordingEditor() {
             <label>Width<input type="number" min={2} max={Math.max(2, artifact.width - crop.x)} value={crop.width} disabled={!cropEnabled} onChange={(event) => updateCropDimension("width", Number(event.target.value))} /></label>
             <label>Height<input type="number" min={2} max={Math.max(2, artifact.height - crop.y)} value={crop.height} disabled={!cropEnabled} onChange={(event) => updateCropDimension("height", Number(event.target.value))} /></label>
           </div>
-          <label className="check-row compact"><input type="checkbox" checked={aspectLocked} onChange={(event) => setAspectLocked(event.target.checked)} /><span>Lock aspect ratio</span></label>
-          <div className="editor-field"><span>Output resolution</span>
+          <label className="check-row compact editor-aspect-lock"><input type="checkbox" checked={aspectLocked} onChange={(event) => setAspectLocked(event.target.checked)} /><span>Lock aspect ratio</span></label>
+          <div className="editor-field editor-resolution-field"><span>Output resolution</span>
             <CustomSelect
               value={resolution}
               ariaLabel="Output resolution"
@@ -2264,29 +2337,104 @@ export function RecordingEditor() {
           <output className="editor-output-dimensions">{outputDimensions.width} × {outputDimensions.height}</output>
         </section>
 
-        <section className="editor-card">
+        <section className="editor-card editor-quality-card">
           <h2>Save quality</h2>
-          <div className="editor-segmented editor-quality-modes">
-            {outputFormat === "mp4" && <button type="button" className={sizeMode === "preserve" ? "active" : ""} onClick={() => setSizeMode("preserve")}>Preserve quality</button>}
-            <button type="button" className={sizeMode === "compress" ? "active" : ""} onClick={() => setSizeMode("compress")}>Compress</button>
-            <button type="button" className={sizeMode === "maximum" ? "active" : ""} onClick={() => setSizeMode("maximum")}>Maximum file size</button>
+          <div className="editor-field editor-quality-mode-field"><span>Quality mode</span>
+            <CustomSelect
+              value={sizeMode}
+              ariaLabel="Save quality"
+              options={[
+                ...(outputFormat === "mp4" ? [{
+                  value: "preserve",
+                  label: "Preserve quality",
+                  description: "Keeps the recording at its best available quality.",
+                }] : []),
+                {
+                  value: "compress",
+                  label: "Compress",
+                  description: "Choose a smaller file with a quality preset.",
+                },
+                {
+                  value: "maximum",
+                  label: "Maximum file size",
+                  description: "Set a hard size limit for the saved file.",
+                },
+              ]}
+              onChange={(value) => setSizeMode(value as typeof sizeMode)}
+            />
           </div>
+          <p className="editor-field-help">
+            {sizeMode === "preserve"
+              ? "Keeps the recording at its best available quality."
+              : sizeMode === "compress"
+                ? "Choose a smaller file with a quality preset."
+                : "Set a hard size limit for the saved file."}
+          </p>
           {sizeMode === "compress" && (
-            <div className="editor-field"><span>Compression preset</span>
-              <CustomSelect
-                value={quality}
-                ariaLabel="Compression preset"
-                options={[
-                  { value: "high", label: "High quality" },
-                  { value: "standard", label: "Balanced" },
-                  { value: "small", label: "Smaller file" },
-                ]}
-                onChange={(value) => setQuality(value as typeof quality)}
-              />
-            </div>
+            <>
+              <div className="editor-field"><span>Compression preset</span>
+                <CustomSelect
+                  value={quality}
+                  ariaLabel="Compression preset"
+                  options={[
+                    {
+                      value: "high",
+                      label: "High quality",
+                      description: "Larger file with the least quality loss.",
+                    },
+                    {
+                      value: "standard",
+                      label: "Balanced",
+                      description: "Good quality with a smaller file.",
+                    },
+                    {
+                      value: "small",
+                      label: "Smaller file",
+                      description: "Smallest file with more quality loss.",
+                    },
+                  ]}
+                  onChange={(value) => setQuality(value as typeof quality)}
+                />
+              </div>
+              <p className="editor-field-help">
+                {quality === "high"
+                  ? "Larger file with the least quality loss."
+                  : quality === "standard"
+                    ? "Good quality with a smaller file."
+                    : "Smallest file with more quality loss."}
+              </p>
+            </>
           )}
           {sizeMode === "maximum" && (
-            <label>Maximum file size (decimal MB)<input type="number" min="0.1" step="0.1" value={maximumMb} onChange={(event) => setMaximumMb(event.target.value)} /></label>
+            <div className="editor-field"><span>Maximum file size</span>
+              <div className="editor-size-limit">
+                <input
+                  type="number"
+                  min={maximumUnit === "kb" ? 100 : maximumUnit === "mb" ? 0.1 : 0.0001}
+                  step={maximumUnit === "kb" ? 1 : maximumUnit === "mb" ? 0.1 : 0.0001}
+                  value={maximumSize}
+                  aria-label="Maximum file size"
+                  onChange={(event) => setMaximumSize(event.target.value)}
+                />
+                <CustomSelect
+                  value={maximumUnit}
+                  ariaLabel="File size unit"
+                  options={[
+                    { value: "kb", label: "KB" },
+                    { value: "mb", label: "MB" },
+                    { value: "gb", label: "GB" },
+                  ]}
+                  onChange={(value) => {
+                    const nextUnit = value as FileSizeUnit;
+                    const bytes = Number(maximumSize) * FILE_SIZE_UNIT_BYTES[maximumUnit];
+                    setMaximumUnit(nextUnit);
+                    if (Number.isFinite(bytes)) {
+                      setMaximumSize(formatMaximumFileSizeInput(bytes, nextUnit));
+                    }
+                  }}
+                />
+              </div>
+            </div>
           )}
         </section>
 
@@ -2304,10 +2452,11 @@ export function RecordingEditor() {
 
       <footer className={`recording-save-footer${error ? " has-error" : ""}`}>
         {progress && <div className="recording-export-progress"><span style={{ width: `${progress.completed_per_mille / 10}%` }} /></div>}
-        <label className="recording-filename">
-          <span>Filename</span>
+        <div className="recording-filename">
+          <label htmlFor="recording-save-filename">Filename</label>
           <span className="recording-filename-input">
             <input
+              id="recording-save-filename"
               value={filenameStem}
               aria-label="Saved filename"
               spellCheck={false}
@@ -2319,7 +2468,17 @@ export function RecordingEditor() {
             />
             <strong>.{outputFormat}</strong>
           </span>
-        </label>
+          <div className="recording-destination">
+            <span>Save to</span>
+            <output aria-label="Save location" title={destinationDirectory}>{destinationDirectory}</output>
+            <button
+              type="button"
+              aria-label="Change save location"
+              disabled={Boolean(exportId)}
+              onClick={() => void chooseDestinationDirectory()}
+            >Change…</button>
+          </div>
+        </div>
         <div className="recording-save-feedback" aria-live="polite">
           {error
             ? <p className="recording-save-error" role="alert">{error}</p>
@@ -2327,7 +2486,9 @@ export function RecordingEditor() {
               ? <p className="recording-save-success" role="status">{toast}</p>
               : progress
                 ? <p>{progress.message || exportStageLabel(progress.stage)}</p>
-                : <p>Ready to save beside the source recording.</p>}
+                : <p>{destinationDirectory === sourceDirectory
+                  ? "Ready to save beside the source recording."
+                  : "Ready to save in the selected folder."}</p>}
         </div>
         <div className="recording-save-actions">
           {exportId && <button type="button" onClick={() => void invoke("cancel_recording_export", { exportId })}>Cancel</button>}
@@ -2349,6 +2510,18 @@ function editorOutputDimensions(
   const maximum = preset === "1080" ? 1080 : preset === "720" ? 720 : height;
   const scale = height > maximum ? maximum / height : 1;
   return { width: evenDimension(width * scale), height: evenDimension(height * scale) };
+}
+
+function recordingParentDirectory(path: string): string {
+  const separator = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  if (separator < 0) return ".";
+  if (separator === 0) return path.slice(0, 1);
+  return path.slice(0, separator);
+}
+
+function formatMaximumFileSizeInput(bytes: number, unit: FileSizeUnit): string {
+  const value = bytes / FILE_SIZE_UNIT_BYTES[unit];
+  return Number(value.toPrecision(8)).toString();
 }
 
 function dimensionsAtMaximumWidth(

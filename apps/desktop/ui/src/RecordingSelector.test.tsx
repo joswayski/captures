@@ -218,8 +218,8 @@ describe("RecordingSelector", () => {
     const { container } = render(<RecordingSelector />);
     await screen.findByRole("button", { name: "Record" });
     const panel = container.querySelector<HTMLElement>(".recording-selector-panel");
-    const drag = screen.getByRole("button", { name: "Move recording controls" });
     expect(panel).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Move recording controls" })).not.toBeInTheDocument();
     vi.spyOn(panel!, "getBoundingClientRect").mockReturnValue({
       x: 200,
       y: 700,
@@ -235,13 +235,14 @@ describe("RecordingSelector", () => {
       offsetWidth: { configurable: true, value: 1_000 },
       offsetHeight: { configurable: true, value: 150 },
     });
-    drag.setPointerCapture = vi.fn();
-    drag.hasPointerCapture = vi.fn(() => true);
-    drag.releasePointerCapture = vi.fn();
+    panel!.setPointerCapture = vi.fn();
+    panel!.hasPointerCapture = vi.fn(() => true);
+    panel!.releasePointerCapture = vi.fn();
 
-    fireEvent.pointerDown(drag, { pointerId: 4, clientX: 620, clientY: 760 });
-    fireEvent.pointerMove(drag, { pointerId: 4, clientX: 100, clientY: 300 });
-    fireEvent.pointerUp(drag, { pointerId: 4 });
+    fireEvent.pointerDown(panel!, { pointerId: 4, clientX: 620, clientY: 760 });
+    expect(panel).toHaveClass("dragging");
+    fireEvent.pointerMove(panel!, { pointerId: 4, clientX: 100, clientY: 300 });
+    fireEvent.pointerUp(panel!, { pointerId: 4 });
 
     expect(panel).toHaveStyle({
       left: "8px",
@@ -249,6 +250,7 @@ describe("RecordingSelector", () => {
       bottom: "auto",
       transform: "none",
     });
+    expect(panel).not.toHaveClass("dragging");
     expect(container.querySelector(".recording-selector")).not.toHaveAttribute("style");
   });
 
