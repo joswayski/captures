@@ -223,8 +223,10 @@ pub async fn prepare_recording_inner(
         .map(|selection| selection.summary.clone());
     if let Some(summary) = pending_selection {
         crate::set_capture_huds_protected(&app, true);
+        crate::hide_window(&app, "launcher");
         crate::hide_window(&app, "thumbnail");
         crate::hide_window(&app, "startup");
+        crate::hide_recording_saved_notices(&app);
         crate::hide_window(&app, "update");
         if let Err(error) = prepare_recording_selector(&app, &summary).await {
             *state.recording_selection.lock() = None;
@@ -246,8 +248,10 @@ pub async fn prepare_recording_inner(
     }
 
     crate::set_capture_huds_protected(&app, true);
+    crate::hide_window(&app, "launcher");
     crate::hide_window(&app, "thumbnail");
     crate::hide_window(&app, "startup");
+    crate::hide_recording_saved_notices(&app);
     crate::hide_window(&app, "update");
     let prepared = (|| {
         let display = crate::display_under_pointer(&state)?;

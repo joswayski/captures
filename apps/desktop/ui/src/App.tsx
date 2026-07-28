@@ -3,7 +3,7 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { message, open } from "@tauri-apps/plugin-dialog";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { formatFileSize } from "./lib/format";
 import { reconcileClipboardState } from "./lib/clipboard";
@@ -267,11 +267,13 @@ function emitViewerActivation(artifactId: string | null, active: boolean) {
 
 export function App() {
   const view = query("view");
+  if (view === "launcher") return <CaptureLauncher />;
   if (view === "overlay") return <CaptureOverlay />;
   if (view === "recording-selector") return <RecordingSelector />;
   if (view === "recording-countdown") return <RecordingCountdown />;
   if (view === "recording-hud") return <RecordingHud />;
   if (view === "recording-editor") return <RecordingEditor />;
+  if (view === "recording-saved") return <RecordingSavedNotice />;
   if (view === "thumbnail") return <Thumbnail />;
   if (view === "viewer") return <ArtifactViewer />;
   if (view === "history") return <CaptureHistory />;
@@ -291,6 +293,236 @@ function IdleView() {
   );
 }
 
+type LauncherAction = CaptureMode | "recording";
+type LauncherShortcuts = {
+  region: string;
+  window: string;
+  display: string;
+  recording: string;
+};
+
+const DEFAULT_LAUNCHER_SHORTCUTS: LauncherShortcuts = {
+  region: "Ctrl+Shift+4",
+  window: "Ctrl+Shift+W",
+  display: "Ctrl+Shift+3",
+  recording: "Ctrl+Shift+5",
+};
+
+export function CaptureLauncher() {
+  const [shortcuts, setShortcuts] = useState<LauncherShortcuts | null>(
+    isTauri() ? null : DEFAULT_LAUNCHER_SHORTCUTS,
+  );
+  const [busy, setBusy] = useState<LauncherAction | "history" | "folder" | "preferences" | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    let active = true;
+    void invoke<AppSettings>("get_settings")
+      .then((loaded) => {
+        if (active) {
+          setShortcuts({
+            region: loaded.region_shortcut,
+            window: loaded.window_shortcut,
+            display: loaded.display_shortcut,
+            recording: loaded.recording.video_shortcut,
+          });
+        }
+      })
+      .catch((error) => {
+        if (active) setError(`Shortcuts could not be loaded: ${String(error)}`);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const launch = async (action: LauncherAction) => {
+    if (busy) return;
+    setBusy(action);
+    setError("");
+    try {
+      if (action === "recording") {
+        await invoke("start_recording_from_launcher");
+      } else {
+        await invoke("start_capture_from_launcher", { mode: action });
+      }
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const openUtility = async (
+    action: "history" | "folder" | "preferences",
+    command: "open_capture_history" | "open_captures_folder" | "open_preferences",
+  ) => {
+    if (busy) return;
+    setBusy(action);
+    setError("");
+    try {
+      await invoke(command);
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <main className="capture-launcher">
+      <header className="launcher-header">
+        <div className="launcher-brand" aria-hidden="true">
+          <LauncherModeIcon mode="brand" />
+        </div>
+        <div>
+          <p className="eyebrow">CAPTURES</p>
+          <h1>What would you like to capture?</h1>
+          <p>Choose an action now, or use its shortcut from anywhere.</p>
+        </div>
+      </header>
+
+      <section className="launcher-section" aria-labelledby="launcher-capture-heading">
+        <div className="launcher-section-heading">
+          <h2 id="launcher-capture-heading">Capture</h2>
+          <span>Lossless PNG</span>
+        </div>
+        <div className="launcher-capture-grid">
+          <LauncherActionButton
+            title="Region"
+            description="Select part of the screen"
+            shortcut={shortcuts?.region}
+            icon={<LauncherModeIcon mode="region" />}
+            busy={busy === "region"}
+            disabled={busy !== null}
+            onClick={() => void launch("region")}
+          />
+          <LauncherActionButton
+            title="Window"
+            description="Choose an open window"
+            shortcut={shortcuts?.window}
+            icon={<LauncherModeIcon mode="window" />}
+            busy={busy === "window"}
+            disabled={busy !== null}
+            onClick={() => void launch("window")}
+          />
+          <LauncherActionButton
+            title="Full screen"
+            description="Capture the current display"
+            shortcut={shortcuts?.display}
+            icon={<LauncherModeIcon mode="display" />}
+            busy={busy === "display"}
+            disabled={busy !== null}
+            onClick={() => void launch("display")}
+          />
+        </div>
+      </section>
+
+      <section className="launcher-section" aria-labelledby="launcher-record-heading">
+        <div className="launcher-section-heading">
+          <h2 id="launcher-record-heading">Record</h2>
+          <span>Video or GIF</span>
+        </div>
+        <LauncherActionButton
+          wide
+          title="Screen recording"
+          description="Record a region, window, or full screen, then edit and save as video or GIF"
+          shortcut={shortcuts?.recording}
+          icon={<LauncherModeIcon mode="recording" />}
+          busy={busy === "recording"}
+          disabled={busy !== null}
+          onClick={() => void launch("recording")}
+        />
+      </section>
+
+      {error && <p className="launcher-error" role="alert">{error}</p>}
+
+      <footer className="launcher-footer" aria-label="Captures destinations">
+        <button
+          type="button"
+          disabled={busy !== null}
+          onClick={() => void openUtility("history", "open_capture_history")}
+        ><HistoryIcon />History</button>
+        <button
+          type="button"
+          disabled={busy !== null}
+          onClick={() => void openUtility("folder", "open_captures_folder")}
+        ><FolderIcon />Save folder</button>
+        <button
+          type="button"
+          disabled={busy !== null}
+          onClick={() => void openUtility("preferences", "open_preferences")}
+        ><SettingsIcon />Preferences</button>
+      </footer>
+    </main>
+  );
+}
+
+function LauncherActionButton({
+  title,
+  description,
+  shortcut,
+  icon,
+  busy,
+  disabled,
+  wide = false,
+  onClick,
+}: {
+  title: string;
+  description: string;
+  shortcut?: string;
+  icon: ReactNode;
+  busy: boolean;
+  disabled: boolean;
+  wide?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={`launcher-action${wide ? " launcher-action-wide" : ""}`}
+      disabled={disabled}
+      aria-busy={busy}
+      onClick={onClick}
+    >
+      <span className="launcher-action-icon" aria-hidden="true">{icon}</span>
+      <span className="launcher-action-copy">
+        <strong>{busy ? "Opening…" : title}</strong>
+        <small>{description}</small>
+      </span>
+      {shortcut && (
+        <span className="launcher-shortcut" aria-label={`Shortcut ${shortcut}`}>
+          {shortcutDisplayTokens(shortcut).map((key, index) => (
+            <kbd key={`${key}-${index}`}>{key}</kbd>
+          ))}
+        </span>
+      )}
+      <span className="launcher-action-arrow" aria-hidden="true">›</span>
+    </button>
+  );
+}
+
+function LauncherModeIcon({
+  mode,
+}: {
+  mode: CaptureMode | "recording" | "brand";
+}) {
+  if (mode === "region") {
+    return <svg viewBox="0 0 24 24"><path d="M5 9V6a1 1 0 0 1 1-1h3M15 5h3a1 1 0 0 1 1 1v3M19 15v3a1 1 0 0 1-1 1h-3M9 19H6a1 1 0 0 1-1-1v-3" /><rect x="9" y="9" width="6" height="6" rx="1" /></svg>;
+  }
+  if (mode === "window") {
+    return <svg viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="13" rx="2.5" /><path d="M4 10h16M7 8h.01M10 8h.01" /></svg>;
+  }
+  if (mode === "display") {
+    return <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2.5" /><path d="M9 21h6M12 18v3" /></svg>;
+  }
+  if (mode === "recording") {
+    return <svg viewBox="0 0 24 24"><rect x="3" y="5" width="14" height="14" rx="3" /><path d="m17 10 4-2v8l-4-2Z" /><circle cx="10" cy="12" r="3" /></svg>;
+  }
+  return <svg viewBox="0 0 24 24"><path d="M8 4H6a2 2 0 0 0-2 2v2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2" /><path d="M12 8.5c.4 1.8 1.7 3.1 3.5 3.5-1.8.4-3.1 1.7-3.5 3.5-.4-1.8-1.7-3.1-3.5-3.5 1.8-.4 3.1-1.7 3.5-3.5Z" /></svg>;
+}
+
 function StartupNotice() {
   return (
     <main className="startup-notice">
@@ -304,6 +536,53 @@ function StartupNotice() {
         <strong>Captures is running</strong>
         <p>Use the tray icon or Ctrl+Shift+4 to capture.</p>
       </div>
+    </main>
+  );
+}
+
+export function RecordingSavedNotice() {
+  const artifactId = query("artifact_id");
+  const noticeId = query("notice_id");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const dismiss = () => {
+    if (!noticeId) return;
+    void invoke("dismiss_recording_saved_notice", { noticeId });
+  };
+
+  const reveal = async () => {
+    if (!artifactId || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await invoke("reveal_recording_artifact", { artifactId });
+      dismiss();
+    } catch (error) {
+      setError(`Finder could not open: ${String(error)}`);
+      setBusy(false);
+    }
+  };
+
+  return (
+    <main className="recording-saved-notice">
+      <span className="recording-saved-icon" aria-hidden="true"><CheckIcon /></span>
+      <div className="recording-saved-copy">
+        <strong>Recording saved</strong>
+        <p>{error || "Saved to your Captures folder."}</p>
+      </div>
+      <button
+        type="button"
+        className="recording-saved-reveal"
+        disabled={busy || !artifactId}
+        onClick={() => void reveal()}
+      ><FolderIcon />{busy ? "Opening…" : "Show in Finder"}</button>
+      <button
+        type="button"
+        className="recording-saved-dismiss"
+        aria-label="Dismiss"
+        onClick={dismiss}
+      >×</button>
     </main>
   );
 }
@@ -688,7 +967,8 @@ export function HistoryCard({
 
   const deleteFromHistory = async () => {
     if (busy) return;
-    if (!confirmingDelete) {
+    const requiresConfirmation = entry.kind === "screenshot" || !entry.missing;
+    if (requiresConfirmation && !confirmingDelete) {
       setConfirmingDelete(true);
       if (deleteTimer.current) clearTimeout(deleteTimer.current);
       deleteTimer.current = setTimeout(() => setConfirmingDelete(false), 4_000);
@@ -726,7 +1006,11 @@ export function HistoryCard({
           {entry.kind !== "screenshot" && <> · {formatRecordingTime(entry.duration_ms)}</>}
         </p>
         {entry.kind !== "screenshot" && entry.dropped_frames > 0 && <p className="history-recording-warning">{entry.dropped_frames.toLocaleString()} frame{entry.dropped_frames === 1 ? "" : "s"} dropped while recording</p>}
-        <div className={`history-actions${entry.kind === "screenshot" ? "" : " history-recording-actions"}`}>
+        <div className={[
+          "history-actions",
+          entry.kind === "screenshot" ? "" : "history-recording-actions",
+          entry.kind !== "screenshot" && entry.missing ? "history-missing-actions" : "",
+        ].filter(Boolean).join(" ")}>
           {entry.kind === "screenshot" ? (
             <button
               type="button"
@@ -736,37 +1020,43 @@ export function HistoryCard({
             >
               {restored ? <><CheckIcon />Restored</> : <><RestoreIcon />{busy === "restoring" ? "Restoring…" : "Restore"}</>}
             </button>
-          ) : (
+          ) : !entry.missing ? (
             <>
               <button
                 type="button"
                 className="history-restore"
-                disabled={busy !== null || entry.missing}
+                disabled={busy !== null}
                 onClick={() => void openRecording()}
               >
-                {busy === "opening" ? "Opening…" : entry.missing ? "File missing" : "Edit"}
+                {busy === "opening" ? "Opening…" : "Edit"}
               </button>
               <button
                 type="button"
                 className="history-reveal"
-                disabled={busy !== null || entry.missing}
+                disabled={busy !== null}
                 onClick={() => void revealRecording()}
               >
                 {busy === "revealing" ? "Showing…" : "Show in Folder"}
               </button>
             </>
-          )}
+          ) : null}
           <button
             type="button"
             className={confirmingDelete ? "history-delete history-delete-confirm" : "history-delete"}
-            aria-label={confirmingDelete
+            aria-label={entry.kind !== "screenshot" && entry.missing
+              ? "Remove missing entry"
+              : confirmingDelete
               ? entry.kind === "screenshot" ? "Confirm permanent deletion" : "Confirm removal from History"
               : entry.kind === "screenshot" ? "Delete from History" : "Remove from History"}
             disabled={busy !== null}
             onClick={() => void deleteFromHistory()}
           >
             <TrashIcon />
-            {confirmingDelete ? (entry.kind === "screenshot" ? "Delete forever" : "Remove entry") : (entry.kind === "screenshot" ? "Delete" : "Remove")}
+            {entry.kind !== "screenshot" && entry.missing
+              ? busy === "deleting" ? "Removing…" : "Remove entry"
+              : confirmingDelete
+                ? entry.kind === "screenshot" ? "Delete forever" : "Remove entry"
+                : entry.kind === "screenshot" ? "Delete" : "Remove"}
           </button>
         </div>
         {error && <p className="history-card-error" role="alert">{error}</p>}
@@ -1909,10 +2199,6 @@ export function RecordingEditor() {
   const [progress, setProgress] = useState<ExportProgress | null>(null);
   const [exported, setExported] = useState<RecordingArtifact | null>(null);
   const [savedFingerprint, setSavedFingerprint] = useState<string | null>(null);
-  const [baseline, setBaseline] = useState<{
-    artifactId: string;
-    fingerprint: string;
-  } | null>(null);
   const [filenameStem, setFilenameStem] = useState("");
   const [destinationDirectory, setDestinationDirectory] = useState("");
   const [makeCopy, setMakeCopy] = useState(false);
@@ -1942,12 +2228,6 @@ export function RecordingEditor() {
           }
           setExported(payload.artifact);
           setSavedFingerprint(pendingExportFingerprintRef.current);
-          if (artifactId) {
-            setBaseline({
-              artifactId,
-              fingerprint: pendingExportFingerprintRef.current,
-            });
-          }
           setToast(
             `${payload.artifact.kind === "gif" ? "GIF" : "Video"} saved — ${formatFileSize(payload.artifact.size_bytes)}.`,
           );
@@ -2011,34 +2291,6 @@ export function RecordingEditor() {
       setPreviewPlaying(false);
       setExported(null);
       setSavedFingerprint(null);
-      setBaseline({
-        artifactId: loaded.id,
-        fingerprint: recordingEditorFingerprint({
-          artifact: loaded.id,
-          makeCopy: false,
-          filenameStem: initialFilenameStem,
-          destinationDirectory: initialDestinationDirectory,
-          trimStart: 0,
-          trimEnd: Math.round(loaded.duration_ms),
-          crop: null,
-          resolution: "original",
-          customWidth: loaded.width,
-          customHeight: loaded.height,
-          outputFormat: initialOutputFormat,
-          gifFps: initialGifFps,
-          gifMaxWidth: initialGifMaxWidth,
-          gifColors: initialGifColors,
-          quality: "high",
-          sizeMode: initialSizeMode,
-          maximumSize: "10",
-          maximumUnit: "mb",
-          systemVolume: 100,
-          microphoneVolume: 100,
-          muteSystem: false,
-          muteMicrophone: false,
-          mono: false,
-        }),
-      });
       void invoke<RecordingTimelinePreview>("prepare_recording_timeline_preview", {
         artifactId: loaded.id,
       }).then((preview) => {
@@ -2108,18 +2360,10 @@ export function RecordingEditor() {
   const sourceStem = recordingFileStem(artifact.path);
   const sourceFormat = artifact.kind === "gif" ? "gif" : "mp4";
   const formatRequiresCopy = outputFormat !== sourceFormat;
-  const hasChanges = baseline?.artifactId === artifact.id
-    && baseline.fingerprint !== exportFingerprint;
   const alreadySaved = Boolean(exported && savedFingerprint === exportFingerprint);
   const saveStatus = error
     || toast
-    || (exportId
-      ? progress?.message || exportStageLabel(progress?.stage || "preparing")
-      : alreadySaved
-        ? "All changes are saved."
-        : hasChanges
-          ? "Unsaved changes."
-          : `This ${artifact.kind === "gif" ? "GIF" : "recording"} is already saved — closing won’t delete it.`);
+    || (exportId ? progress?.message || exportStageLabel(progress?.stage || "preparing") : "");
   const updateMakeCopy = (enabled: boolean) => {
     if (!enabled && formatRequiresCopy) return;
     setMakeCopy(enabled);
@@ -2825,9 +3069,9 @@ export function RecordingEditor() {
               className="primary"
               type="button"
               aria-busy={Boolean(exportId)}
-              disabled={Boolean(exportId) || !hasChanges || alreadySaved}
+              disabled={Boolean(exportId) || alreadySaved}
               onClick={() => void startExport()}
-            ><SaveIcon />Save changes</button>
+            ><SaveIcon />Save</button>
           </div>
         </div>
       </footer>
@@ -4005,6 +4249,10 @@ function CopyIcon() {
 
 function FolderIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /><circle cx="16.5" cy="13.5" r="2.5" /><path d="m18.3 15.3 2.2 2.2" /></svg>;
+}
+
+function SettingsIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z" /></svg>;
 }
 
 function ExpandIcon() {
