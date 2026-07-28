@@ -296,10 +296,7 @@ function StartupNotice() {
   return (
     <main className="startup-notice">
       <div className="startup-icon" aria-hidden="true">
-        <svg viewBox="0 0 24 24">
-          <path d="M9 4H7a3 3 0 0 0-3 3v2M15 4h2a3 3 0 0 1 3 3v2M20 15v2a3 3 0 0 1-3 3h-2M9 20H7a3 3 0 0 1-3-3v-2" />
-          <path className="startup-icon-spark" d="M12 8.5c.4 1.8 1.7 3.1 3.5 3.5-1.8.4-3.1 1.7-3.5 3.5-.4-1.8-1.7-3.1-3.5-3.5 1.8-.4 3.1-1.7 3.5-3.5Z" />
-        </svg>
+        <CaptureIcon />
       </div>
       <div>
         <strong>Captures is running</strong>
@@ -866,8 +863,37 @@ function RestartRecordingIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11a8 8 0 1 1 2 5.3" /><path d="M4 5v6h6" /></svg>;
 }
 
-function CameraIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3v11H4Z" /><circle cx="12" cy="13.5" r="3.5" /></svg>;
+function CaptureIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M9 4H7a3 3 0 0 0-3 3v2M15 4h2a3 3 0 0 1 3 3v2M20 15v2a3 3 0 0 1-3 3h-2M9 20H7a3 3 0 0 1-3-3v-2" />
+    <path className="capture-icon-spark" d="M12 8.5c.4 1.8 1.7 3.1 3.5 3.5-1.8.4-3.1 1.7-3.5 3.5-.4-1.8-1.7-3.1-3.5-3.5 1.8-.4 3.1-1.7 3.5-3.5Z" />
+  </svg>;
+}
+
+function SegmentedControlIndicator({ value }: { value: string }) {
+  const indicatorRef = useRef<HTMLSpanElement>(null);
+
+  useLayoutEffect(() => {
+    const indicator = indicatorRef.current;
+    const control = indicator?.parentElement;
+    if (!indicator || !control) return;
+
+    const update = () => {
+      const activeButton = control.querySelector<HTMLElement>('button[aria-pressed="true"]');
+      if (!activeButton) return;
+      indicator.style.width = `${activeButton.offsetWidth}px`;
+      indicator.style.transform = `translate3d(${activeButton.offsetLeft}px, 0, 0)`;
+      indicator.classList.add("ready");
+    };
+
+    update();
+    if (typeof ResizeObserver !== "function") return;
+    const observer = new ResizeObserver(update);
+    observer.observe(control);
+    return () => observer.disconnect();
+  }, [value]);
+
+  return <span ref={indicatorRef} className="capture-segmented-indicator" aria-hidden="true" />;
 }
 
 function MicrophoneIcon({ muted }: { muted: boolean }) {
@@ -1008,6 +1034,8 @@ export function RecordingSelector() {
   const surfaceRef = useRef<HTMLElement>(null);
   const panelRef = useRef<HTMLElement>(null);
   const panelDragRef = useRef<RecordingPanelDrag | null>(null);
+  const panelResizeFromRef = useRef<{ width: number; height: number } | null>(null);
+  const panelResizeAnimationRef = useRef<Animation | null>(null);
   const regionDragRef = useRef<RecordingRegionDrag | null>(null);
   const pendingRegionPointRef = useRef<SelectionPoint | null>(null);
   const regionFrameRef = useRef<number | null>(null);
@@ -1203,9 +1231,37 @@ export function RecordingSelector() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const currentSession = sessionRef.current;
-      if (event.key !== "Escape" || !currentSession) return;
+      if (!currentSession) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        cancelSelection(currentSession);
+        return;
+      }
+      if (
+        event.key !== "Enter"
+        || event.defaultPrevented
+        || event.repeat
+        || event.isComposing
+        || event.altKey
+        || event.ctrlKey
+        || event.metaKey
+        || event.shiftKey
+      ) {
+        return;
+      }
+      const target = event.target;
+      if (
+        target instanceof Element
+        && target.closest("button, input, select, textarea, a, [contenteditable], [role=\"combobox\"], [role=\"listbox\"]")
+      ) {
+        return;
+      }
+      const primaryAction = panelRef.current?.querySelector<HTMLButtonElement>(
+        ".capture-selector-primary:not(:disabled)",
+      );
+      if (!primaryAction) return;
       event.preventDefault();
-      cancelSelection(currentSession);
+      primaryAction.click();
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
@@ -1228,6 +1284,48 @@ export function RecordingSelector() {
     const timer = window.setTimeout(loadAudioDevices, 0);
     return () => window.clearTimeout(timer);
   }, [actionMode, loadAudioDevices, session?.id]);
+
+  useLayoutEffect(() => {
+    const from = panelResizeFromRef.current;
+    panelResizeFromRef.current = null;
+    const panel = panelRef.current;
+    if (!from || !panel) return;
+
+    panelResizeAnimationRef.current?.cancel();
+    panelResizeAnimationRef.current = null;
+    panel.removeAttribute("data-resizing");
+
+    const to = panel.getBoundingClientRect();
+    if (
+      prefersReducedMotion()
+      || typeof panel.animate !== "function"
+      || (Math.abs(from.width - to.width) < 0.5 && Math.abs(from.height - to.height) < 0.5)
+    ) {
+      return;
+    }
+
+    panel.dataset.resizing = "true";
+    const animation = panel.animate([
+      { width: `${from.width}px`, height: `${from.height}px` },
+      { width: `${to.width}px`, height: `${to.height}px` },
+    ], {
+      duration: 280,
+      easing: "cubic-bezier(.2,.8,.2,1)",
+    });
+    panelResizeAnimationRef.current = animation;
+
+    const settle = () => {
+      if (panelResizeAnimationRef.current !== animation) return;
+      panelResizeAnimationRef.current = null;
+      panel.removeAttribute("data-resizing");
+    };
+    animation.addEventListener("finish", settle, { once: true });
+    animation.addEventListener("cancel", settle, { once: true });
+  }, [actionMode]);
+
+  useEffect(() => () => {
+    panelResizeAnimationRef.current?.cancel();
+  }, []);
 
   if (!session || !settings) {
     return <main className="recording-selector-idle" aria-hidden="true" />;
@@ -1443,6 +1541,15 @@ export function RecordingSelector() {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
   };
+  const switchActionMode = (mode: "screenshot" | "recording") => {
+    if (mode === actionMode) return;
+    const panel = panelRef.current;
+    if (panel) {
+      const bounds = panel.getBoundingClientRect();
+      panelResizeFromRef.current = { width: bounds.width, height: bounds.height };
+    }
+    setActionMode(mode);
+  };
 
   return (
     <main
@@ -1473,8 +1580,7 @@ export function RecordingSelector() {
       />
       {targetMode === "window" && !selectedWindow && (
         <div className="recording-window-guidance" role="status">
-          <strong>Select a window</strong>
-          <span>Click any window to enable {actionMode === "screenshot" ? "Capture" : "Record"}</span>
+          <strong>Select a window to continue</strong>
         </div>
       )}
       {targetMode !== "window" && selectedRect && selectedRect.width > 0 && selectedRect.height > 0 && (
@@ -1543,24 +1649,36 @@ export function RecordingSelector() {
             aria-label="Close capture controls"
             onClick={() => cancelSelection(session)}
           ><CloseIcon /></button>
-          <div className="capture-action-switch" role="group" aria-label="Capture type">
+          <div
+            className="capture-action-switch"
+            role="group"
+            aria-label="Capture type"
+            data-active={actionMode}
+          >
+            <SegmentedControlIndicator value={actionMode} />
             <button
               type="button"
               className={actionMode === "screenshot" ? "active" : ""}
               aria-pressed={actionMode === "screenshot"}
-              onClick={() => setActionMode("screenshot")}
-            ><CameraIcon />Screenshot</button>
+              onClick={() => switchActionMode("screenshot")}
+            ><CaptureIcon />Screenshot</button>
             <button
               type="button"
               className={actionMode === "recording" ? "active" : ""}
               aria-pressed={actionMode === "recording"}
               disabled={!session.recording_available}
               title={session.recording_available ? undefined : "Screen recording is currently available on macOS only"}
-              onClick={() => setActionMode("recording")}
+              onClick={() => switchActionMode("recording")}
             ><span className="capture-record-dot" aria-hidden="true" />Record</button>
           </div>
           <span className="capture-selector-divider" aria-hidden="true" />
-          <div className="recording-target-switch" role="group" aria-label="Capture target">
+          <div
+            className="recording-target-switch"
+            role="group"
+            aria-label="Capture target"
+            data-active={targetMode}
+          >
+            <SegmentedControlIndicator value={targetMode} />
             {(["region", "window", "display"] as const).map((mode) => (
               <button
                 key={mode}
@@ -1577,19 +1695,16 @@ export function RecordingSelector() {
               </button>
             ))}
           </div>
-          <p className="capture-selector-privacy">
-            <PrivacyIcon />
-            These controls won’t appear in your {actionMode === "screenshot" ? "screenshot" : "recording"}
-          </p>
           <button
             className={`recording-start capture-selector-primary capture-selector-primary-${actionMode}`}
             type="button"
             aria-label={actionMode === "screenshot" ? "Take screenshot" : "Start recording"}
+            aria-keyshortcuts="Enter"
             disabled={!canStart || starting}
             onClick={() => void start()}
           >
             {actionMode === "screenshot"
-              ? <CameraIcon />
+              ? <CaptureIcon />
               : <span className="capture-record-dot" aria-hidden="true" />}
             {starting
               ? actionMode === "screenshot" ? "Capturing…" : "Starting…"
@@ -1674,6 +1789,9 @@ export function RecordingSelector() {
             </div>
           </div>
         )}
+        <p className="capture-selector-note">
+          Controls won’t appear in the output <span aria-hidden="true">·</span> Press <kbd>Enter</kbd> to confirm
+        </p>
         {error && <p className="recording-selector-error" role="alert">{error}</p>}
       </section>
     </main>
@@ -1688,10 +1806,6 @@ function CaptureTargetIcon({ mode }: { mode: RecordingTargetMode }) {
     return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="6" width="16" height="13" rx="2.5" /><path d="M4 10h16M7 8h.01M10 8h.01" /></svg>;
   }
   return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="14" rx="2.5" /><path d="M9 21h6M12 18v3" /></svg>;
-}
-
-function PrivacyIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12s3.2-5 9-5 9 5 9 5-3.2 5-9 5-9-5-9-5Z" /><circle cx="12" cy="12" r="2.5" /><path d="m4 4 16 16" /></svg>;
 }
 
 function isCapturesOwnedWindow(window: RecordingSelectionSession["windows"][number]): boolean {
@@ -1898,7 +2012,7 @@ export function RecordingHud() {
             <button type="button" className="recording-icon-button" disabled={!canControl || busy} aria-label="Restart recording" onClick={() => void restartRecording()}><RestartRecordingIcon /></button>
           </HudTooltip>
           <HudTooltip label="Take a region screenshot">
-            <button type="button" className="recording-icon-button" disabled={!canControl || busy} aria-label="Take a region screenshot" onClick={() => void takeScreenshot()}><CameraIcon /></button>
+            <button type="button" className="recording-icon-button" disabled={!canControl || busy} aria-label="Take a region screenshot" onClick={() => void takeScreenshot()}><CaptureIcon /></button>
           </HudTooltip>
           {hasMicrophone && (
             <span className="recording-microphone-level" aria-label={`Microphone level ${Math.round(microphonePeak * 100)}%`}>
