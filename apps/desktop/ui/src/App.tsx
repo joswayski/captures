@@ -816,7 +816,12 @@ function MicrophoneIcon({ muted }: { muted: boolean }) {
 }
 
 function HideControlsIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 17h12" /></svg>;
+  return <svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="m2 2 20 20" />
+    <path d="M6.7 6.7C4.9 8 3.7 9.7 3 12c1.7 4.1 5 7 9 7 1.8 0 3.5-.6 4.9-1.6" />
+    <path d="M10.7 5.1A10.9 10.9 0 0 1 12 5c4 0 7.3 2.9 9 7-.3.8-.7 1.5-1.2 2.2" />
+    <path d="M14.1 14.1a3 3 0 0 1-4.2-4.2" />
+  </svg>;
 }
 
 function HudTooltip({ label, children }: { label: string; children: React.ReactNode }) {
@@ -1456,14 +1461,30 @@ export function RecordingSelector() {
           </div>
           <div className="recording-field"><span>Cursor</span>
             <label className="recording-toggle">
-              <input aria-label="Show cursor" type="checkbox" checked={showCursor} onChange={(event) => setShowCursor(event.target.checked)} />
+              <input
+                aria-label="Show cursor"
+                type="checkbox"
+                checked={showCursor}
+                onChange={(event) => {
+                  setShowCursor(event.target.checked);
+                  if (!event.target.checked) setShowClicks(false);
+                }}
+              />
               <span className="recording-switch" aria-hidden="true" />
               <span>{showCursor ? "On" : "Off"}</span>
             </label>
           </div>
           <div className="recording-field"><span>Show clicks</span>
             <label className="recording-toggle">
-              <input aria-label="Show clicks" type="checkbox" checked={showClicks} onChange={(event) => setShowClicks(event.target.checked)} />
+              <input
+                aria-label="Show clicks"
+                type="checkbox"
+                checked={showClicks}
+                onChange={(event) => {
+                  setShowClicks(event.target.checked);
+                  if (event.target.checked) setShowCursor(true);
+                }}
+              />
               <span className="recording-switch" aria-hidden="true" />
               <span>{showClicks ? "On" : "Off"}</span>
             </label>
@@ -1688,26 +1709,13 @@ export function RecordingHud() {
       className={`recording-hud recording-hud-${snapshot.state}${capturingScreenshot ? " recording-hud-capturing" : ""}`}
       onPointerDown={startHudDrag}
     >
-      <div className="recording-hud-top">
+      <div className="recording-hud-main">
         <div className="recording-hud-status">
           <span className="recording-dot" aria-hidden="true" />
           <strong>{formatRecordingTime(snapshot.elapsed_ms)}</strong>
           <small>{recordingStatusLabel(snapshot)}</small>
         </div>
-        <span className="recording-hud-privacy">Controls aren’t recorded</span>
-        <HudTooltip label="Hide controls">
-          <button
-            type="button"
-            className="recording-icon-button recording-hide"
-            disabled={busy}
-            aria-label="Hide recording controls"
-            title="Open Captures from the Dock to show the controls again"
-            onClick={() => void hideControls()}
-          ><HideControlsIcon /></button>
-        </HudTooltip>
-      </div>
-      <div className="recording-hud-actions">
-        <>
+        <div className="recording-hud-actions">
           <HudTooltip label="Stop and save">
             <button type="button" className="recording-stop" disabled={!canControl || busy} aria-label="Stop recording" onClick={() => void invokeAction("stop_recording")}><span /></button>
           </HudTooltip>
@@ -1749,8 +1757,19 @@ export function RecordingHud() {
               onClick={() => void deleteRecording()}
             ><TrashIcon /></button>
           </HudTooltip>
-        </>
+          <HudTooltip label="Hide controls">
+            <button
+              type="button"
+              className="recording-icon-button recording-hide"
+              disabled={busy}
+              aria-label="Hide recording controls"
+              title="Open Captures from the Dock to show the controls again"
+              onClick={() => void hideControls()}
+            ><HideControlsIcon /></button>
+          </HudTooltip>
+        </div>
       </div>
+      <span className="recording-hud-privacy">These controls won’t show in the recording</span>
       {(error || snapshot.error) && (
         <p className="recording-hud-error" role="alert">
           {recordingErrorMessage(error || snapshot.error)}
@@ -2487,7 +2506,7 @@ export function RecordingEditor() {
                 ...(outputFormat === "mp4" ? [{
                   value: "preserve",
                   label: "Preserve quality",
-                  description: "Keeps the recording at its best available quality.",
+                  description: "Original quality with no extra compression unless an edit requires it.",
                 }] : []),
                 {
                   value: "compress",
@@ -2505,7 +2524,7 @@ export function RecordingEditor() {
           </div>
           <p className="editor-field-help">
             {sizeMode === "preserve"
-              ? "Keeps the recording at its best available quality."
+              ? "Original quality with no extra compression unless an edit requires it."
               : sizeMode === "compress"
                 ? "Choose a smaller file with a quality preset."
                 : "Set a hard size limit for the saved file."}
@@ -2595,15 +2614,6 @@ export function RecordingEditor() {
         <div className="recording-filename">
           <div className="recording-filename-heading">
             <label htmlFor="recording-save-filename">Filename</label>
-            <label className="recording-save-copy">
-              <input
-                type="checkbox"
-                checked={saveCopy}
-                disabled={Boolean(exportId) || formatRequiresCopy}
-                onChange={(event) => updateSaveCopy(event.target.checked)}
-              />
-              <span>Save a copy</span>
-            </label>
           </div>
           <span className="recording-filename-input">
             <input
@@ -2630,20 +2640,46 @@ export function RecordingEditor() {
               >Change…</button>}
           </div>
         </div>
-        <div className="recording-save-feedback" aria-live="polite">
-          {error
-            ? <p className="recording-save-error" role="alert">{error}</p>
-            : toast
-              ? <p className="recording-save-success" role="status">{toast}</p>
-              : progress
-                ? <p>{progress.message || exportStageLabel(progress.stage)}</p>
-                : null}
+        <div className="recording-save-middle">
+          <fieldset className="recording-save-mode" aria-label="Save behavior">
+            <label className={!saveCopy ? "active" : ""}>
+              <input
+                aria-label="Save"
+                type="radio"
+                name="recording-save-behavior"
+                checked={!saveCopy}
+                disabled={Boolean(exportId) || formatRequiresCopy}
+                onChange={() => updateSaveCopy(false)}
+              />
+              <span><strong>Save</strong><small>Update original</small></span>
+            </label>
+            <label className={saveCopy ? "active" : ""}>
+              <input
+                aria-label="Save as copy"
+                type="radio"
+                name="recording-save-behavior"
+                checked={saveCopy}
+                disabled={Boolean(exportId)}
+                onChange={() => updateSaveCopy(true)}
+              />
+              <span><strong>Save as copy</strong><small>Keep original</small></span>
+            </label>
+          </fieldset>
+          <div className="recording-save-feedback" aria-live="polite">
+            {error
+              ? <p className="recording-save-error" role="alert">{error}</p>
+              : toast
+                ? <p className="recording-save-success" role="status">{toast}</p>
+                : progress
+                  ? <p>{progress.message || exportStageLabel(progress.stage)}</p>
+                  : null}
+          </div>
         </div>
         <div className="recording-save-actions">
           {exportId && <button type="button" onClick={() => void invoke("cancel_recording_export", { exportId })}>Cancel</button>}
           {exported && <button type="button" onClick={() => void revealSavedRecording()}>Show in Folder</button>}
           <button className="primary" type="button" disabled={Boolean(exportId) || alreadySaved} onClick={() => void startExport()}>
-            {exportId ? "Saving…" : alreadySaved ? "Saved" : "Save"}
+            {exportId ? "Saving…" : alreadySaved ? "Saved" : saveCopy ? "Save as copy" : "Save"}
           </button>
         </div>
       </footer>

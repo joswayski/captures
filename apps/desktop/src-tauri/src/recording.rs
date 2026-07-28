@@ -44,7 +44,7 @@ const RECORDING_WARNING_EVENT: &str = "recording-warning";
 const RECORDING_ARTIFACT_EVENT: &str = "recording-artifact-ready";
 const RECORDING_COUNTDOWN_FADE_OUT_MS: u64 = 180;
 const RECORDING_HUD_FULL_WIDTH: f64 = 430.0;
-const RECORDING_HUD_HEIGHT: f64 = 126.0;
+const RECORDING_HUD_HEIGHT: f64 = 102.0;
 const RECORDING_HUD_BOTTOM_MARGIN: f64 = 20.0;
 const GIF_SOURCE_RETENTION_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
 

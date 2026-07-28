@@ -170,7 +170,10 @@ describe("RecordingEditor", () => {
     const filename = await screen.findByRole("textbox", { name: "Saved filename" });
     expect(filename).toHaveValue("Captures_1140x692");
     expect(filename).toBeDisabled();
-    expect(screen.getByRole("checkbox", { name: "Save a copy" })).not.toBeChecked();
+    expect(screen.getByRole("radio", { name: "Save" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "Save as copy" })).not.toBeChecked();
+    expect(screen.getByText("Update original")).toBeInTheDocument();
+    expect(screen.getByText("Keep original")).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Save quality" })).toHaveTextContent(
       "Preserve quality",
     );
@@ -207,11 +210,11 @@ describe("RecordingEditor", () => {
       artifactId: artifact.id,
     });
 
-    fireEvent.click(screen.getByRole("checkbox", { name: "Save a copy" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Save as copy" }));
     expect(filename).toHaveValue("Captures_1140x692-copy");
     expect(filename).toBeEnabled();
     fireEvent.change(filename, { target: { value: "Demo recording" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save as copy" }));
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("start_recording_export", {
@@ -231,7 +234,7 @@ describe("RecordingEditor", () => {
     vi.mocked(open).mockResolvedValue("/Users/josevalerio/Desktop/Exports");
     render(<RecordingEditor />);
 
-    fireEvent.click(await screen.findByRole("checkbox", { name: "Save a copy" }));
+    fireEvent.click(await screen.findByRole("radio", { name: "Save as copy" }));
     fireEvent.click(await screen.findByRole("button", { name: "Change save location" }));
     await waitFor(() => {
       expect(screen.getByLabelText("Save location")).toHaveTextContent(
@@ -250,7 +253,7 @@ describe("RecordingEditor", () => {
     fireEvent.click(screen.getByRole("option", { name: "GB" }));
     expect(maximum).toHaveValue(0.01);
 
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save as copy" }));
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("start_recording_export", {
         request: expect.objectContaining({

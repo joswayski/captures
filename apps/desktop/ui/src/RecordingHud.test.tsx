@@ -113,7 +113,10 @@ describe("RecordingHud", () => {
 
     expect(screen.getByText("Recording")).toBeInTheDocument();
     expect(screen.queryByText("Not in recording")).not.toBeInTheDocument();
-    expect(screen.getByText("Controls aren’t recorded")).toBeInTheDocument();
+    expect(screen.getByText("These controls won’t show in the recording")).toBeInTheDocument();
+    expect(container.querySelector(".recording-hud-main")).toContainElement(
+      screen.getByRole("button", { name: "Hide recording controls" }),
+    );
     expect(screen.getAllByRole("tooltip").map((tooltip) => tooltip.textContent)).toEqual(expect.arrayContaining([
       "Stop and save",
       "Pause recording",

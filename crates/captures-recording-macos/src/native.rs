@@ -9,6 +9,7 @@ use std::{
 };
 
 use captures_recording::{AudioDevice, AudioDeviceKind, RecordingOptions, RecordingTarget};
+use core_graphics::display::CGDisplay as CoreGraphicsDisplay;
 use screencapturekit::{
     audio_devices::AudioInputDevice,
     cg::CGRect,
@@ -16,8 +17,11 @@ use screencapturekit::{
     dispatch_queue::{DispatchQoS, DispatchQueue},
     shareable_content::{SCDisplay, SCRunningApplication, SCShareableContent, SCWindow},
     stream::{
-        SCStream, configuration::SCStreamConfiguration, content_filter::SCContentFilter,
-        delegate_trait::StreamCallbacks, output_type::SCStreamOutputType,
+        SCStream,
+        configuration::{SCCaptureResolutionType, SCStreamConfiguration},
+        content_filter::SCContentFilter,
+        delegate_trait::StreamCallbacks,
+        output_type::SCStreamOutputType,
     },
 };
 
@@ -56,15 +60,18 @@ impl NativeRecordingSegment {
         let (width, height) = options
             .max_resolution
             .constrain(source_width_pixels, source_height_pixels);
+        let (shows_cursor, shows_mouse_clicks) =
+            capture_pointer_options(options.show_cursor, options.highlight_clicks);
 
         let mut configuration = SCStreamConfiguration::new()
             .with_width(width)
             .with_height(height)
             .with_scales_to_fit(true)
+            .with_capture_resolution_type(SCCaptureResolutionType::Best)
             .with_fps(u32::from(options.frames_per_second))
             .with_queue_depth(8)
-            .with_shows_cursor(options.show_cursor)
-            .with_shows_mouse_clicks(options.highlight_clicks)
+            .with_shows_cursor(shows_cursor)
+            .with_shows_mouse_clicks(shows_mouse_clicks)
             .with_captures_audio(options.audio.capture_system_audio)
             .with_sample_rate(48_000)
             .with_channel_count(if options.audio.mono_output { 1 } else { 2 })
@@ -303,10 +310,14 @@ const fn video_frame_is_usable(
         && data_is_ready
         && has_image_buffer
         && match status {
-            // Idle frames repeat the previous surface. The media writer
-            // advances static timelines itself, so forwarding them can occupy
-            // the encoder precisely when a real content update arrives.
-            Some(status) => matches!(status, SCFrameStatus::Complete | SCFrameStatus::Started),
+            // Cursor movement and ScreenCaptureKit's click overlay can arrive
+            // without a new desktop IOSurface. Forward idle samples so those
+            // pointer-only updates are not discarded; the media writer keeps
+            // only the newest pending buffer under encoder backpressure.
+            Some(status) => matches!(
+                status,
+                SCFrameStatus::Complete | SCFrameStatus::Started | SCFrameStatus::Idle
+            ),
             // Some ScreenCaptureKit runtimes expose the status attachment as
             // an integer that the binding cannot currently decode. A valid,
             // ready video sample with an image buffer is still safe to append.
@@ -363,6 +374,7 @@ fn filter_for_target(
     match target {
         RecordingTarget::Display { display_id } => {
             let display = find_display(content, display_id)?;
+            let scale = display_pixel_scale(&display);
             let applications = current_process_applications(content);
             let application_refs = applications.iter().collect::<Vec<_>>();
             let filter = SCContentFilter::create()
@@ -371,8 +383,8 @@ fn filter_for_target(
                 .build();
             Ok((
                 filter,
-                f64::from(display.width()),
-                f64::from(display.height()),
+                f64::from(display.width()) * scale,
+                f64::from(display.height()) * scale,
             ))
         }
         RecordingTarget::Region {
@@ -403,8 +415,25 @@ fn filter_for_target(
 }
 
 fn display_pixel_scale(display: &SCDisplay) -> f64 {
-    let logical_width = display.frame().size.width.max(1.0);
-    (f64::from(display.width()) / logical_width).max(1.0)
+    let core_graphics_display = CoreGraphicsDisplay::new(display.display_id());
+    core_graphics_display.display_mode().map_or_else(
+        || {
+            let logical_width = display.frame().size.width.max(1.0);
+            (f64::from(display.width()) / logical_width).max(1.0)
+        },
+        |mode| pixel_scale_from_dimensions(mode.width(), mode.pixel_width()),
+    )
+}
+
+fn pixel_scale_from_dimensions(logical_width: u64, pixel_width: u64) -> f64 {
+    if logical_width == 0 || pixel_width == 0 {
+        return 1.0;
+    }
+    (pixel_width as f64 / logical_width as f64).max(1.0)
+}
+
+const fn capture_pointer_options(show_cursor: bool, highlight_clicks: bool) -> (bool, bool) {
+    (show_cursor || highlight_clicks, highlight_clicks)
 }
 
 fn window_pixel_scale(content: &SCShareableContent, window_frame: CGRect) -> f64 {
@@ -460,9 +489,13 @@ fn current_process_applications(content: &SCShareableContent) -> Vec<SCRunningAp
 
 #[cfg(test)]
 mod tests {
-    use super::{intersection_area, microphone_choices, video_frame_is_usable};
+    use super::{
+        capture_pointer_options, intersection_area, microphone_choices,
+        pixel_scale_from_dimensions, video_frame_is_usable,
+    };
     use screencapturekit::cm::SCFrameStatus;
     use screencapturekit::prelude::CGRect;
+    use screencapturekit::stream::configuration::{SCCaptureResolutionType, SCStreamConfiguration};
 
     fn rect(x: f64, y: f64, width: f64, height: f64) -> CGRect {
         CGRect::new(x, y, width, height)
@@ -495,7 +528,7 @@ mod tests {
             true,
             true
         ));
-        assert!(!video_frame_is_usable(
+        assert!(video_frame_is_usable(
             Some(SCFrameStatus::Idle),
             true,
             true,
@@ -504,6 +537,33 @@ mod tests {
         assert!(!video_frame_is_usable(None, false, true, true));
         assert!(!video_frame_is_usable(None, true, false, true));
         assert!(!video_frame_is_usable(None, true, true, false));
+    }
+
+    #[test]
+    fn records_retina_sources_at_their_physical_pixel_scale() {
+        assert_eq!(pixel_scale_from_dimensions(1_728, 3_456), 2.0);
+        assert_eq!(pixel_scale_from_dimensions(1_920, 1_920), 1.0);
+        assert_eq!(pixel_scale_from_dimensions(0, 3_456), 1.0);
+
+        let configuration = SCStreamConfiguration::new()
+            .with_capture_resolution_type(SCCaptureResolutionType::Best);
+        assert_eq!(
+            configuration.capture_resolution_type(),
+            SCCaptureResolutionType::Best
+        );
+    }
+
+    #[test]
+    fn click_highlights_always_include_the_cursor_they_surround() {
+        assert_eq!(capture_pointer_options(false, false), (false, false));
+        assert_eq!(capture_pointer_options(true, false), (true, false));
+        assert_eq!(capture_pointer_options(false, true), (true, true));
+
+        let configuration = SCStreamConfiguration::new()
+            .with_shows_cursor(true)
+            .with_shows_mouse_clicks(true);
+        assert!(configuration.shows_cursor());
+        assert!(configuration.shows_mouse_clicks());
     }
 
     #[test]
