@@ -66,6 +66,16 @@ needs, so cursor control and click highlights are disabled there.
 
 Captures is not publicly distributed yet. Automated builds remain as draft
 GitHub Releases for maintainer testing until the launch checklist is complete.
+Maintainers signed in with the GitHub CLI can replace the installed app with the
+newest fully validated draft for their current system:
+
+```sh
+npm run install:latest
+```
+
+The command waits for an in-progress draft to finish, verifies its published
+checksum, quits and replaces Captures while preserving local app data, then
+launches the installed build.
 
 ## Shortcuts
 

@@ -16,6 +16,40 @@ and tag, leaving earlier drafts and any intentionally published release
 untouched. If draft creation itself is interrupted, the next run removes only
 stale drafts with its generated tag before retrying.
 
+## Install the latest draft
+
+Use the CI-produced draft rather than a local build when testing the exact
+installer, signing, notarization, and packaging path intended for users:
+
+```sh
+npm run install:latest
+```
+
+The command requires Node.js 24 and an authenticated GitHub CLI because draft
+releases are not public. It always selects the newest draft, then waits up to one
+hour for both the current system's installer and `SHA256SUMS`. The checksum file
+is the completion marker uploaded only after the entire draft passes release
+validation, so the command never silently falls back to an older build.
+
+After downloading and verifying the installer, the command quits Captures,
+removes the installed app package, installs the macOS Apple Silicon DMG, Windows
+x64 NSIS installer, Debian/Ubuntu x64 package, or Linux x64 AppImage, and launches
+Captures again. User data, capture history, settings, and operating-system
+permissions are not removed.
+
+Useful options:
+
+```sh
+# Show whether the newest draft is ready without changing the installed app
+npm run install:latest -- --dry-run
+
+# Fail instead of waiting when the newest draft is still building
+npm run install:latest -- --no-wait
+
+# Install without launching Captures afterward
+npm run install:latest -- --no-launch
+```
+
 ## Public-release gates
 
 Creating an installer and signing a Tauri updater archive do not by themselves make a production public release. Do not treat a release as production-ready until every gate below is enforced by the workflow and passes:
