@@ -3152,6 +3152,10 @@ fn window_is_capturable(
     if captures_window_is_internal(window) {
         return false;
     }
+    #[cfg(target_os = "macos")]
+    if macos_window_is_capture_overlay(window) {
+        return false;
+    }
     #[cfg(target_os = "windows")]
     if windows_window_is_capture_overlay(window) {
         return false;
@@ -3176,6 +3180,14 @@ fn window_is_capturable(
         return false;
     }
     true
+}
+
+#[cfg(target_os = "macos")]
+fn macos_window_is_capture_overlay(window: &captures_capture::WindowDescriptor) -> bool {
+    window.app_name.as_deref().is_some_and(|name| {
+        let name = name.trim();
+        name.eq_ignore_ascii_case("Screenshot") || name.eq_ignore_ascii_case("screencaptureui")
+    })
 }
 
 fn captures_window_is_internal(window: &captures_capture::WindowDescriptor) -> bool {
@@ -3222,6 +3234,8 @@ mod tests {
     use image::{Rgba, RgbaImage};
     use tauri_plugin_global_shortcut::ShortcutState;
 
+    #[cfg(target_os = "macos")]
+    use super::macos_window_is_capture_overlay;
     use super::{
         AppError, CaptureMode, ThumbnailCursorAction, clipboard_fingerprint,
         display_contains_pointer, mask_macos_window_corners, parse_shortcut,
@@ -3345,6 +3359,39 @@ mod tests {
         let mut app = overlay.clone();
         app.title = "NVIDIA App".to_owned();
         assert!(!windows_window_is_capture_overlay(&app));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn excludes_macos_screenshot_overlay_from_window_selection() {
+        let display = DisplayDescriptor {
+            id: "display".to_owned(),
+            name: "Display".to_owned(),
+            x: 0,
+            y: 0,
+            width: 1_728,
+            height: 1_117,
+            scale_factor: 2.0,
+            is_primary: true,
+        };
+        let overlay = WindowDescriptor {
+            id: "overlay".to_owned(),
+            title: String::new(),
+            app_name: Some("Screenshot".to_owned()),
+            z_order: 1,
+            x: 0,
+            y: 0,
+            width: 1_728,
+            height: 1_117,
+            display_id: "display".to_owned(),
+        };
+        assert!(macos_window_is_capture_overlay(&overlay));
+        assert!(!window_is_capturable(&overlay, &display));
+
+        let mut normal_window = overlay;
+        normal_window.app_name = Some("Preview".to_owned());
+        assert!(!macos_window_is_capture_overlay(&normal_window));
+        assert!(window_is_capturable(&normal_window, &display));
     }
 
     #[test]
