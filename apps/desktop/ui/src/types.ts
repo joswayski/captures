@@ -28,6 +28,7 @@ export interface WindowDescriptor {
   id: string;
   title: string;
   app_name: string | null;
+  z_order: number;
   x: number;
   y: number;
   width: number;
@@ -47,6 +48,7 @@ export interface ActiveSession {
 export interface AppSettings {
   settings_schema_version?: number;
   output_directory: string;
+  new_capture_shortcut: string;
   region_shortcut: string;
   window_shortcut: string;
   display_shortcut: string;

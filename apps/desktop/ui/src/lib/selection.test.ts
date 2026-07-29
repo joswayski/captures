@@ -1,6 +1,28 @@
 import { describe, expect, it } from "vitest";
 
-import { dragSelectionRect, isCapturableSelection, selectionRect } from "./selection";
+import {
+  dragSelectionRect,
+  frontToBackWindows,
+  isCapturableSelection,
+  selectionRect,
+} from "./selection";
+
+describe("frontToBackWindows", () => {
+  it("uses native z-order instead of the incoming array order", () => {
+    expect(frontToBackWindows([
+      { id: "rear", z_order: 2 },
+      { id: "front", z_order: 20 },
+      { id: "middle", z_order: 10 },
+    ]).map(({ id }) => id)).toEqual(["front", "middle", "rear"]);
+  });
+
+  it("keeps native list order when two windows share a level", () => {
+    expect(frontToBackWindows([
+      { id: "first", z_order: 4 },
+      { id: "second", z_order: 4 },
+    ]).map(({ id }) => id)).toEqual(["first", "second"]);
+  });
+});
 
 describe("selectionRect", () => {
   it("normalizes a reverse drag", () => {

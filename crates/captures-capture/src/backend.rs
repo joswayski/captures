@@ -87,10 +87,13 @@ impl XcapBackend {
         #[cfg(target_os = "linux")]
         let monitors = Monitor::all().map_err(|error| CaptureError::Backend(error.to_string()))?;
 
-        Window::all()
-            .map_err(|error| CaptureError::Backend(error.to_string()))?
+        let native_windows =
+            Window::all().map_err(|error| CaptureError::Backend(error.to_string()))?;
+        let fallback_front = i32::try_from(native_windows.len()).unwrap_or(i32::MAX);
+        let mut windows = native_windows
             .into_iter()
-            .filter_map(|window| {
+            .enumerate()
+            .filter_map(|(index, window)| {
                 if window_is_owned_by_process(window.pid().ok(), std::process::id()) {
                     return None;
                 }
@@ -113,10 +116,13 @@ impl XcapBackend {
                 #[cfg(not(target_os = "linux"))]
                 let display_id = Monitor::from_point(x, y).ok()?.id().ok()?;
 
+                let fallback_z =
+                    fallback_front.saturating_sub(i32::try_from(index).unwrap_or(i32::MAX));
                 Some(Ok(WindowDescriptor {
                     id: window.id().ok()?.to_string(),
                     title: window.title().ok()?,
                     app_name: window.app_name().ok(),
+                    z_order: window.z().unwrap_or(fallback_z),
                     x,
                     y,
                     width,
@@ -124,7 +130,9 @@ impl XcapBackend {
                     display_id: display_id.to_string(),
                 }))
             })
-            .collect()
+            .collect::<CaptureResult<Vec<_>>>()?;
+        windows.sort_by_key(|window| std::cmp::Reverse(window.z_order));
+        Ok(windows)
     }
 
     pub fn capture_window(&self, id: &str) -> CaptureResult<RgbaImage> {

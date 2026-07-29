@@ -15,6 +15,8 @@ pub struct AppSettings {
     #[serde(default)]
     pub settings_schema_version: u8,
     pub output_directory: String,
+    #[serde(default = "default_new_capture_shortcut")]
+    pub new_capture_shortcut: String,
     pub region_shortcut: String,
     pub window_shortcut: String,
     pub display_shortcut: String,
@@ -90,6 +92,7 @@ impl Default for AppSettings {
         Self {
             settings_schema_version: CURRENT_SETTINGS_SCHEMA_VERSION,
             output_directory: default_output_directory().to_string_lossy().into_owned(),
+            new_capture_shortcut: default_new_capture_shortcut(),
             region_shortcut: "Ctrl+Shift+4".to_owned(),
             window_shortcut: "Ctrl+Shift+W".to_owned(),
             display_shortcut: "Ctrl+Shift+3".to_owned(),
@@ -378,6 +381,10 @@ const fn default_auto_copy_to_clipboard() -> bool {
     true
 }
 
+fn default_new_capture_shortcut() -> String {
+    "Ctrl+Shift+Space".to_owned()
+}
+
 fn default_video_shortcut() -> String {
     "Ctrl+Shift+5".to_owned()
 }
@@ -618,6 +625,7 @@ mod tests {
         assert!(settings.last_screen_permission_request_id.is_none());
         assert!(settings.pending_capture_after_restart.is_none());
         assert!(settings.auto_copy_to_clipboard);
+        assert_eq!(settings.new_capture_shortcut, "Ctrl+Shift+Space");
         assert_eq!(settings.recording.video_fps, 60);
         assert_eq!(
             settings.recording.video_max_resolution,
@@ -689,6 +697,7 @@ mod tests {
         assert!(!settings.recording.show_cursor);
         assert_eq!(settings.recording.gif_fps, 15);
         assert_eq!(settings.recording.gif_max_colors, 256);
+        assert_eq!(settings.new_capture_shortcut, "Ctrl+Shift+Space");
         assert_eq!(settings.recording.video_shortcut, "Ctrl+Shift+5");
         assert!(settings.recording.open_editor_after_recording);
     }

@@ -16,6 +16,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 const settings: AppSettings = {
   output_directory: "/Users/josevalerio/Captures",
+  new_capture_shortcut: "Ctrl+Shift+Space",
   region_shortcut: "Ctrl+Shift+4",
   window_shortcut: "Ctrl+Shift+W",
   display_shortcut: "Ctrl+Shift+3",
@@ -97,6 +98,15 @@ describe("Preferences", () => {
       });
     });
     expect(await screen.findByText("Changes saved")).toBeInTheDocument();
+  });
+
+  it("presents the unified New Capture shortcut as the primary launcher", async () => {
+    render(<Preferences />);
+
+    const recorder = await screen.findByRole("button", { name: "New Capture" });
+    expect(recorder).toHaveTextContent("Ctrl");
+    expect(recorder).toHaveTextContent("Shift");
+    expect(recorder).toHaveTextContent("Space");
   });
 
   it("shows the installed version and offers a manual update check", async () => {

@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-import { RecordingHud } from "./App";
+import { RecordingControlsHiddenNotice, RecordingHud } from "./App";
 import type { RecordingSessionSnapshot } from "./types";
 
 const { startDragging } = vi.hoisted(() => ({
@@ -112,7 +112,7 @@ describe("RecordingHud", () => {
 
     expect(screen.getByText("Recording")).toBeInTheDocument();
     expect(screen.queryByText("Not in recording")).not.toBeInTheDocument();
-    const privacy = screen.getByText("These controls won’t show in the recording");
+    const privacy = screen.getByText("These controls won’t appear in the output");
     expect(privacy).toBeInTheDocument();
     expect(container.querySelector(".recording-hud")?.firstElementChild).toBe(privacy);
     expect(container.querySelector(".recording-hud-main")).toContainElement(
@@ -152,6 +152,14 @@ describe("RecordingHud", () => {
     });
     expect(screen.getByRole("button", { name: "Stop recording" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Move recording controls" })).not.toBeInTheDocument();
+  });
+
+  it("explains how to restore controls after they are hidden", () => {
+    render(<RecordingControlsHiddenNotice />);
+
+    expect(screen.getByText("Recording controls hidden")).toBeInTheDocument();
+    expect(screen.getByText("Click the Captures icon in the Dock to bring them back."))
+      .toBeInTheDocument();
   });
 
   it("uses a native Delete recording dialog before discarding", async () => {
