@@ -205,12 +205,6 @@ jobs:
       CAPTURES_OFFICIAL_RELEASE: "1"
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-      KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-      APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@v4
       - name: Install Linux build dependencies
@@ -271,15 +265,31 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: bash scripts/build-ffmpeg-sidecars.sh
-      - name: Prepare the release-only version and credentials
+      - name: Prepare the release-only version
+        if: runner.os != 'macOS'
+        run: node scripts/prepare-release-build.mjs "${{ needs.prepare.outputs.app_version }}"
+      - name: Prepare the release-only version and Apple credentials
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
         run: node scripts/prepare-release-build.mjs "${{ needs.prepare.outputs.app_version }}"
       - name: Import and verify the Developer ID certificate
         if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         shell: bash
         run: |
+          set -euo pipefail
+
           keychain="$RUNNER_TEMP/captures-signing.keychain-db"
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
-          security default-keychain -s "$keychain"
+          security default-keychain -d user -s "$keychain"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
           security set-keychain-settings -t 3600 -u "$keychain"
           security import "$APPLE_CERTIFICATE_PATH" \
@@ -313,6 +323,49 @@ jobs:
           tagName: ${{ needs.prepare.outputs.tag }}
           uploadUpdaterJson: true
           updaterJsonPreferNsis: true
+      - name: Notarize, staple, and validate the macOS release
+        if: runner.os == 'macOS'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          app="target/${{ matrix.target }}/release/bundle/macos/Captures.app"
+          dmg="$(
+            find "target/${{ matrix.target }}/release/bundle/dmg" \
+              -maxdepth 1 \
+              -type f \
+              -name '*.dmg' \
+              -print \
+              -quit
+          )"
+          if [[ ! -d "$app" || -z "$dmg" ]]; then
+            echo "Could not find the packaged Captures.app and DMG." >&2
+            exit 1
+          fi
+
+          codesign --verify --deep --strict --verbose=2 "$app"
+          spctl --assess --type execute --verbose=2 "$app"
+          xcrun stapler validate "$app"
+
+          xcrun notarytool submit "$dmg" \
+            --key "$APPLE_API_KEY_PATH" \
+            --key-id "$APPLE_API_KEY" \
+            --issuer "$APPLE_API_ISSUER" \
+            --wait
+          xcrun stapler staple -v "$dmg"
+
+          codesign --verify --strict --verbose=2 "$dmg"
+          spctl --assess \
+            --type open \
+            --context context:primary-signature \
+            --verbose=2 \
+            "$dmg"
+          xcrun stapler validate "$dmg"
+
+          gh release upload "$TAG" "$dmg" --clobber
       - name: Validate the packaged media sidecars and notices
         if: runner.os == 'macOS'
         shell: bash
@@ -339,8 +392,8 @@ jobs:
         shell: bash
         run: gh release upload "$TAG" target/ffmpeg-dist/* --clobber
 
-  publish:
-    name: Validate and publish release
+  validate_draft:
+    name: Validate draft release
     needs: [prepare, package]
     runs-on: ubuntu-24.04
     permissions:
@@ -361,16 +414,21 @@ jobs:
           gh release download "$TAG" --dir release-assets
           node scripts/release-assets.mjs release-assets "$APP_VERSION"
           gh release upload "$TAG" release-assets/SHA256SUMS --clobber
-      - name: Publish and mark latest
+      - name: Confirm the release remains a draft
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.prepare.outputs.tag }}
-        run: gh release edit "$TAG" --draft=false --prerelease=false --latest
+        shell: bash
+        run: |
+          if [[ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" != "true" ]]; then
+            echo "Release $TAG was unexpectedly published." >&2
+            exit 1
+          fi
 
   cleanup:
     name: Remove incomplete release
-    if: ${{ always() && needs.prepare.result == 'success' && needs.publish.result != 'success' }}
-    needs: [prepare, package, publish]
+    if: ${{ always() && needs.prepare.result == 'success' && needs.validate_draft.result != 'success' }}
+    needs: [prepare, package, validate_draft]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
