@@ -21,6 +21,7 @@ import {
   hitTestElement,
   imageSizeAtWidth,
   isSupportedImageFile,
+  loadImageFile,
   outputDimensions,
   positionImportedImage,
   reorderScreenshotLayers,
@@ -490,7 +491,11 @@ export function ScreenshotEditor() {
     const image = new Image();
     const cached: CachedImage = { image, status: "loading" };
     imageCacheRef.current.set(src, cached);
-    image.crossOrigin = "anonymous";
+    // Custom capture protocol needs CORS for canvas export. blob:/data: object
+    // URLs from dropped files are same-origin and fail if marked anonymous.
+    if (!src.startsWith("blob:") && !src.startsWith("data:")) {
+      image.crossOrigin = "anonymous";
+    }
     image.onload = () => {
       cached.status = "loaded";
       setImageRevision((revision) => revision + 1);
@@ -908,17 +913,18 @@ export function ScreenshotEditor() {
     if (!initial) return;
     let next = initial;
     let lastId: string | null = null;
+    const createdUrls: string[] = [];
     try {
       for (const [index, file] of images.entries()) {
-        const src = URL.createObjectURL(file);
-        objectUrlsRef.current.add(src);
-        const image = await new Promise<HTMLImageElement>((resolve, reject) => {
-          const loaded = new Image();
-          loaded.onload = () => resolve(loaded);
-          loaded.onerror = () => reject(new Error(`${file.name} could not be loaded.`));
-          loaded.src = src;
-        });
-        imageCacheRef.current.set(src, { image, status: "loaded" });
+        // Prefer a blob object URL (cheap, revocable). Fall back to a data URL
+        // if the webview rejects the blob load — historically our CSP omitted
+        // blob: from img-src, which produced "could not be loaded" on drop.
+        const image = await loadImageFile(file);
+        createdUrls.push(image.src);
+        if (image.src.startsWith("blob:")) {
+          objectUrlsRef.current.add(image.src);
+        }
+        imageCacheRef.current.set(image.src, { image, status: "loaded" });
         const position = positionImportedImage(
           image.naturalWidth,
           image.naturalHeight,
@@ -934,7 +940,7 @@ export function ScreenshotEditor() {
           id: editorId(),
           kind: "image",
           source: "imported",
-          src,
+          src: image.src,
           name: file.name,
           x: position.x,
           y: position.y,
@@ -950,7 +956,14 @@ export function ScreenshotEditor() {
       setSelectedId(lastId);
       setTool("select");
       setImageRevision((revision) => revision + 1);
+      setError("");
     } catch (reason) {
+      createdUrls.forEach((url) => {
+        if (url.startsWith("blob:")) {
+          URL.revokeObjectURL(url);
+          objectUrlsRef.current.delete(url);
+        }
+      });
       setError(String(reason));
     }
   };

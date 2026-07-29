@@ -422,6 +422,50 @@ export function outputDimensions(
 export type ScreenshotExportFormat = "png" | "jpeg" | "webp";
 
 /**
+ * Load a dropped/picked image file into an HTMLImageElement.
+ *
+ * Uses a blob object URL first. If that fails (e.g. CSP without `blob:` in
+ * img-src), falls back to a data URL so imports still work.
+ */
+export async function loadImageFile(file: File): Promise<HTMLImageElement> {
+  const blobUrl = URL.createObjectURL(file);
+  try {
+    return await decodeImageSource(blobUrl);
+  } catch {
+    URL.revokeObjectURL(blobUrl);
+  }
+
+  const dataUrl = await readFileAsDataUrl(file);
+  try {
+    return await decodeImageSource(dataUrl);
+  } catch {
+    throw new Error(`${file.name} could not be loaded.`);
+  }
+}
+
+function decodeImageSource(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    // blob:/data: sources are same-origin; do not mark anonymous or decode fails.
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("image decode failed"));
+    image.src = src;
+  });
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") resolve(reader.result);
+      else reject(new Error("Could not read the image file."));
+    };
+    reader.onerror = () => reject(new Error("Could not read the image file."));
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
  * Browser-side encode used only for a live export size estimate. Final save
  * still goes through the Rust encoder, so this is approximate.
  */

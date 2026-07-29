@@ -8,6 +8,7 @@ import {
   hitTestElement,
   imageSizeAtWidth,
   isSupportedImageFile,
+  loadImageFile,
   outputDimensions,
   positionImportedImage,
   reorderScreenshotLayers,
@@ -207,5 +208,63 @@ describe("screenshot editor geometry", () => {
     await expect(estimateCanvasExportBytes(canvas, "png", 100)).resolves.toBe(2_500);
     await expect(estimateCanvasExportBytes(canvas, "jpeg", 70)).resolves.toBe(700);
     expect(toBlob).toHaveBeenCalledWith(expect.any(Function), "image/jpeg", 0.7);
+  });
+
+  it("loads dropped image files and falls back to a data URL when blob decode fails", async () => {
+    const file = new File([new Uint8Array([1, 2, 3])], "overlay.png", {
+      type: "image/png",
+    });
+    const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:test-image");
+    const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    const originalImage = window.Image;
+    let loadCount = 0;
+    // @ts-expect-error test stub for Image load/decode behavior
+    window.Image = class {
+      onload: ((event: Event) => void) | null = null;
+      onerror: ((event: Event) => void) | null = null;
+      naturalWidth = 64;
+      naturalHeight = 48;
+      #src = "";
+      get src() {
+        return this.#src;
+      }
+      set src(value: string) {
+        this.#src = value;
+        loadCount += 1;
+        queueMicrotask(() => {
+          if (value.startsWith("blob:")) {
+            this.onerror?.(new Event("error"));
+            return;
+          }
+          this.onload?.(new Event("load"));
+        });
+      }
+    };
+
+    const originalFileReader = window.FileReader;
+    window.FileReader = class {
+      result: string | null = null;
+      onload: ((event: ProgressEvent<FileReader>) => void) | null = null;
+      onerror: ((event: ProgressEvent<FileReader>) => void) | null = null;
+      readAsDataURL() {
+        queueMicrotask(() => {
+          this.result = "data:image/png;base64,aaa";
+          this.onload?.(new ProgressEvent("load") as ProgressEvent<FileReader>);
+        });
+      }
+    } as unknown as typeof FileReader;
+
+    try {
+      const image = await loadImageFile(file);
+      expect(image.src).toBe("data:image/png;base64,aaa");
+      expect(createObjectURL).toHaveBeenCalledWith(file);
+      expect(revokeObjectURL).toHaveBeenCalledWith("blob:test-image");
+      expect(loadCount).toBe(2);
+    } finally {
+      window.Image = originalImage;
+      window.FileReader = originalFileReader;
+      createObjectURL.mockRestore();
+      revokeObjectURL.mockRestore();
+    }
   });
 });
