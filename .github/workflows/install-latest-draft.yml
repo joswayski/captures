@@ -9,7 +9,9 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  # GitHub exposes draft releases only to identities with push access.
+  # Fork pull requests are skipped by the job condition below.
+  contents: write
 
 jobs:
   install:
