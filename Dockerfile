@@ -14,6 +14,7 @@ COPY apps/desktop/package.json apps/desktop/
 RUN npm ci
 
 COPY apps/web apps/web
+COPY shared shared
 
 # Railway provides a different commit SHA for every GitHub deployment. Referencing
 # it here invalidates this layer so the static site gets a fresh main-branch timeline.

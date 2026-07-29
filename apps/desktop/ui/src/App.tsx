@@ -5,6 +5,11 @@ import { message, open } from "@tauri-apps/plugin-dialog";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 
+import {
+  applyColorTheme,
+  COLOR_THEMES,
+  DEFAULT_COLOR_THEME,
+} from "../../../../shared/themes";
 import { formatFileSize } from "./lib/format";
 import { reconcileClipboardState } from "./lib/clipboard";
 import {
@@ -267,7 +272,38 @@ function emitViewerActivation(artifactId: string | null, active: boolean) {
   }).catch(() => undefined);
 }
 
+function useColorThemeSync() {
+  useEffect(() => {
+    if (!isTauri()) return;
+
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    const applySettingsTheme = (settings: AppSettings) => {
+      applyColorTheme(settings.theme ?? DEFAULT_COLOR_THEME);
+    };
+
+    void invoke<AppSettings>("get_settings")
+      .then((settings) => {
+        if (active) applySettingsTheme(settings);
+      })
+      .catch(() => undefined);
+
+    void listen<AppSettings>("settings-changed", ({ payload }) => {
+      if (active) applySettingsTheme(payload);
+    }).then((dispose) => {
+      if (active) unlisten = dispose;
+      else dispose();
+    }).catch(() => undefined);
+
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, []);
+}
+
 export function App() {
+  useColorThemeSync();
   const view = query("view");
   if (view === "overlay") return <CaptureOverlay />;
   if (view === "recording-selector") return <RecordingSelector />;
@@ -4593,6 +4629,38 @@ export function Preferences() {
           </div>
         )}
       </header>
+
+      <section className="settings-section appearance-section">
+        <h2>Appearance</h2>
+        <p className="help-text">
+          Apply one color system across every Captures window. Status colors keep their meaning.
+        </p>
+        <div className="theme-options" role="radiogroup" aria-label="Color theme">
+          {COLOR_THEMES.map((theme) => (
+            <button
+              key={theme.id}
+              type="button"
+              className={`theme-option${settings.theme === theme.id ? " active" : ""}`}
+              role="radio"
+              aria-checked={settings.theme === theme.id}
+              onClick={() => {
+                applyColorTheme(theme.id);
+                update("theme", theme.id);
+              }}
+            >
+              <span className="theme-option-preview" data-capture-theme={theme.id} aria-hidden="true">
+                <span />
+                <span />
+              </span>
+              <span className="theme-option-copy">
+                <strong>{theme.name}</strong>
+                <small>{theme.description}</small>
+              </span>
+              <span className="theme-option-check" aria-hidden="true">✓</span>
+            </button>
+          ))}
+        </div>
+      </section>
 
       <section className="settings-section">
         <h2>Captures</h2>

@@ -16,6 +16,7 @@ macOS is the primary development target today. Windows and Linux builds are avai
 - Capture user-facing Captures windows such as Preferences, Capture History, previews, editors, and the open New Capture controls with a direct screenshot shortcut; transient capture chrome stays out of window-target lists.
 - Review recordings on an aspect-correct filmstrip timeline, adjust crop and audio, then save changes to the original or make a named copy, with preserved quality, optional compression, or an exact maximum file size.
 - Open one desktop Capture and Record overlay from the menu bar, Spotlight, or the macOS Dock, switch between screenshot and recording targets in place, or start immediately with customizable global shortcuts.
+- Choose a Mustard, Saffron, Cobalt, or Mint color theme in Preferences; the selected palette updates every Captures window.
 - Copy captures to the clipboard automatically, save them as full-resolution lossless PNGs, or inspect them in a full-size viewer.
 - Keep multiple recent captures in a quick-access preview stack, and drag a preview directly into file-upload targets.
 - Restore captures from a private, rolling 30-day local history.

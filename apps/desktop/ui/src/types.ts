@@ -1,3 +1,7 @@
+import type { ColorTheme } from "../../../../shared/themes";
+
+export type { ColorTheme };
+
 export type CaptureMode = "region" | "window" | "display";
 export type RecordingKind = "video" | "gif";
 export type RecordingState =
@@ -48,6 +52,7 @@ export interface ActiveSession {
 
 export interface AppSettings {
   settings_schema_version?: number;
+  theme: ColorTheme;
   output_directory: string;
   new_capture_shortcut: string;
   region_shortcut: string;
