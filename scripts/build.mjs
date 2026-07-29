@@ -231,10 +231,8 @@ if (isWindows) {
     process.exit(1);
   }
 }
-if (isMac) {
-  log("Preparing the pinned LGPL FFmpeg sidecars…");
-  runChecked("/bin/bash", ["scripts/build-ffmpeg-sidecars.sh"], { cwd: ROOT, stdio: "inherit" });
-}
+log("Preparing the pinned LGPL FFmpeg sidecars…");
+runChecked("bash", ["scripts/build-ffmpeg-sidecars.sh"], { cwd: ROOT, stdio: "inherit" });
 
 const npmCli = npmCliPath();
 if (!npmCli) {
@@ -245,13 +243,9 @@ if (!npmCli) {
 }
 const args = ["run", "tauri:build", "--workspace", "@captures/desktop"];
 const tauriArgs = [];
-const buildConfig = isMac
-  ? environment.TAURI_SIGNING_PRIVATE_KEY
-    ? "src-tauri/tauri.recording.conf.json"
-    : "src-tauri/tauri.recording.local.conf.json"
-  : !environment.TAURI_SIGNING_PRIVATE_KEY
-    ? "src-tauri/tauri.local.conf.json"
-    : null;
+const buildConfig = environment.TAURI_SIGNING_PRIVATE_KEY
+  ? "src-tauri/tauri.recording.conf.json"
+  : "src-tauri/tauri.recording.local.conf.json";
 if (buildConfig) {
   tauriArgs.push("--config", buildConfig);
 }

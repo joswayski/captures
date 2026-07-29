@@ -5,7 +5,8 @@
       "binaries/ffprobe"
     ],
     "resources": {
-      "ffmpeg": "notices/ffmpeg"
+      "ffmpeg": "notices/ffmpeg",
+      "openh264": "notices/openh264"
     }
   }
 }

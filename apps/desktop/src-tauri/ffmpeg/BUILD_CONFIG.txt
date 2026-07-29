@@ -13,15 +13,29 @@ Configuration flags:
 --disable-programs
 --disable-shared
 --disable-version3
---enable-audiotoolbox
 --enable-ffmpeg
 --enable-ffprobe
 --enable-small
 --enable-static
---enable-videotoolbox
 --enable-zlib
 
-The build script enables only FFmpeg's LGPL configuration. Its only explicitly
-enabled external library is the system zlib needed for PNG posters. It does not
-enable GPL or nonfree components and does not include libx264. H.264 export
-uses Apple VideoToolbox.
+Platform flags:
+
+macOS:
+--enable-audiotoolbox
+--enable-videotoolbox
+
+Windows:
+--enable-w32threads
+--extra-ldflags=-static
+--pkg-config-flags=--static
+
+Linux:
+--enable-pthreads
+
+The build script combines the common flags with the matching platform flags.
+It enables only FFmpeg's LGPL configuration. Its only explicitly enabled
+external library is the system zlib needed for PNG posters. It does not enable
+GPL or nonfree components and does not include libx264. H.264 export uses Apple
+VideoToolbox on macOS and Captures' bundled OpenH264 library on Windows and
+Linux.

@@ -11,11 +11,17 @@ const validConfiguration = `
 --disable-version3
 --enable-audiotoolbox
 --enable-videotoolbox
+--enable-pthreads
+--enable-w32threads
+--extra-ldflags=-static
+--pkg-config-flags=--static
 --enable-zlib
 `;
 
 test("accepts the pinned LGPL-only FFmpeg configuration", () => {
-  assert.doesNotThrow(() => validateBuildConfigurationText(validConfiguration));
+  for (const platform of ["darwin", "linux", "win32"]) {
+    assert.doesNotThrow(() => validateBuildConfigurationText(validConfiguration, platform));
+  }
 });
 
 test("rejects GPL or nonfree FFmpeg configurations", () => {

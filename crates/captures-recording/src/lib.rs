@@ -7,6 +7,7 @@ mod session;
 pub use draft::{DraftStore, RecordingDraftManifest, RecordingSegmentManifest, RecoveryError};
 pub use model::{
     AudioDevice, AudioDeviceKind, AudioOptions, CaptureRect, GifOptions, MaxResolution,
-    RecordingKind, RecordingOptions, RecordingSessionSnapshot, RecordingState, RecordingTarget,
+    RecordingKind, RecordingOptions, RecordingSegmentInfo, RecordingSessionSnapshot,
+    RecordingState, RecordingTarget,
 };
 pub use session::{RecordingCoordinator, RecordingError, RecordingResult};

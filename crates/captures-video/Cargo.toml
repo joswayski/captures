@@ -1,17 +1,14 @@
 [package]
-name = "captures-media"
+name = "captures-video"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-serde.workspace = true
-serde_json.workspace = true
+mp4 = "0.14.0"
+openh264 = "0.9.7"
 thiserror.workspace = true
-
-[target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
-captures-video = { path = "../captures-video" }
 
 [dev-dependencies]
 tempfile = "3"

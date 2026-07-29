@@ -113,11 +113,33 @@ pub enum CaptureSelectorMode {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RecordingCapabilities {
+    pub system_audio: bool,
+    pub microphone: bool,
+    pub cursor_control: bool,
+    pub click_highlights: bool,
+    pub controls_excluded: bool,
+}
+
+impl RecordingCapabilities {
+    pub const fn current() -> Self {
+        Self {
+            system_audio: cfg!(target_os = "macos"),
+            microphone: cfg!(target_os = "macos"),
+            cursor_control: cfg!(target_os = "macos"),
+            click_highlights: cfg!(target_os = "macos"),
+            controls_excluded: cfg!(any(target_os = "macos", target_os = "windows")),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RecordingSelectionSession {
     pub id: String,
     pub kind: RecordingKind,
     pub initial_mode: CaptureSelectorMode,
     pub recording_available: bool,
+    pub recording_capabilities: RecordingCapabilities,
     pub display: DisplayDescriptor,
     pub window_coordinate_scale: f64,
     pub snapshot_url: String,
@@ -509,7 +531,6 @@ pub fn snapshot_url(session_id: &str) -> String {
     capture_asset_url(&format!("session/{session_id}"))
 }
 
-#[cfg(target_os = "macos")]
 pub fn recording_selection_url(session_id: &str) -> String {
     capture_asset_url(&format!("recording-selection/{session_id}"))
 }
@@ -559,11 +580,9 @@ mod tests {
     use captures_recording::{RecordingKind, RecordingTarget};
     use std::path::Path;
 
-    #[cfg(target_os = "macos")]
-    use super::recording_selection_url;
     use super::{
         AppSettings, HistoryEntry, RecordingArtifact, migrate_output_directory, migrate_settings,
-        recording_media_url, recording_poster_url, snapshot_url,
+        recording_media_url, recording_poster_url, recording_selection_url, snapshot_url,
     };
 
     #[test]
@@ -572,6 +591,7 @@ mod tests {
             snapshot_url("session-id"),
             recording_media_url("artifact-id"),
             recording_poster_url("artifact-id"),
+            recording_selection_url("selection-id"),
         ];
 
         #[cfg(target_os = "windows")]
@@ -584,11 +604,6 @@ mod tests {
         assert!(
             urls.iter()
                 .all(|url| url.starts_with("captures-capture://localhost/"))
-        );
-
-        #[cfg(target_os = "macos")]
-        assert!(
-            recording_selection_url("selection-id").starts_with("captures-capture://localhost/")
         );
     }
 

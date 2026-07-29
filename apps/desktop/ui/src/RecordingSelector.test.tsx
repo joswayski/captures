@@ -49,6 +49,13 @@ const session: RecordingSelectionSession = {
   kind: "video",
   initial_mode: "recording",
   recording_available: true,
+  recording_capabilities: {
+    system_audio: true,
+    microphone: true,
+    cursor_control: true,
+    click_highlights: true,
+    controls_excluded: true,
+  },
   display: {
     id: "display-1",
     name: "Display",
@@ -202,6 +209,49 @@ describe("RecordingSelector", () => {
             max_resolution: "original",
             show_cursor: true,
             highlight_clicks: true,
+          }),
+        }),
+      });
+    });
+  });
+
+  it("disables unsupported recording options without sending stale macOS settings", async () => {
+    preparedSession = {
+      ...session,
+      recording_capabilities: {
+        system_audio: false,
+        microphone: false,
+        cursor_control: false,
+        click_highlights: false,
+        controls_excluded: false,
+      },
+    };
+    const { container } = render(<RecordingSelector />);
+
+    const cursorToggle = await screen.findByRole("checkbox", { name: "Show cursor" });
+    const clicksToggle = screen.getByRole("checkbox", { name: "Show clicks" });
+    const audioToggle = screen.getByRole("checkbox", { name: "Record desktop audio" });
+    const microphone = screen.getByRole("combobox", { name: "Microphone" });
+    expect(cursorToggle).toBeDisabled();
+    expect(clicksToggle).toBeDisabled();
+    expect(audioToggle).toBeDisabled();
+    expect(microphone).toBeDisabled();
+    expect(container.querySelector(".capture-selector-note")).toHaveTextContent(
+      "Hide these controls to keep them out of the recording",
+    );
+    expect(invoke).not.toHaveBeenCalledWith("list_recording_audio_devices");
+
+    fireEvent.click(screen.getByRole("button", { name: "Start recording" }));
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("start_recording", {
+        request: expect.objectContaining({
+          options: expect.objectContaining({
+            show_cursor: false,
+            highlight_clicks: false,
+            audio: expect.objectContaining({
+              capture_system_audio: false,
+              microphone_device_id: null,
+            }),
           }),
         }),
       });
@@ -385,6 +435,19 @@ describe("RecordingSelector", () => {
       "d",
       expect.stringContaining("M300 160H1200V800H300Z"),
     );
+  });
+
+  it("keeps region and display capture available when the desktop cannot enumerate windows", async () => {
+    preparedSession = {
+      ...session,
+      windows: [],
+    };
+    render(<RecordingSelector />);
+
+    expect(await screen.findByRole("button", { name: "Window" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Region" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Full screen" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Start recording" })).toBeEnabled();
   });
 
   it("keeps the selector surface fixed while the controls are dragged within the display", async () => {

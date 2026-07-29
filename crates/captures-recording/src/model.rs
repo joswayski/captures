@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -217,6 +219,19 @@ pub struct RecordingSessionSnapshot {
     pub countdown_remaining_seconds: Option<u8>,
     pub warning: Option<String>,
     pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecordingSegmentInfo {
+    pub path: PathBuf,
+    pub microphone_path: Option<PathBuf>,
+    pub microphone_offset_ms: i64,
+    pub microphone_warning: Option<String>,
+    pub width: u32,
+    pub height: u32,
+    pub duration_ms: u64,
+    pub size_bytes: u64,
+    pub dropped_frames: u64,
 }
 
 #[cfg(test)]

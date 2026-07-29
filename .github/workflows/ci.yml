@@ -83,6 +83,8 @@ jobs:
           test -f "$app/Contents/Resources/notices/ffmpeg/BUILD_CONFIG.txt"
           test -f "$app/Contents/Resources/notices/ffmpeg/COPYING.LGPLv2.1"
           test -f "$app/Contents/Resources/notices/ffmpeg/NOTICE.md"
+          test -f "$app/Contents/Resources/notices/openh264/LICENSE"
+          test -f "$app/Contents/Resources/notices/openh264/NOTICE.md"
           node scripts/validate-ffmpeg-sidecars.mjs \
             "$ffmpeg" \
             "$ffprobe" \
@@ -132,8 +134,12 @@ jobs:
             libxcb1-dev \
             libxdo-dev \
             libxrandr-dev \
+            nasm \
             pkg-config \
-            wget
+            wget \
+            xz-utils \
+            yasm \
+            zlib1g-dev
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -141,7 +147,25 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: 1.94.0
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        with:
+          msystem: UCRT64
+          path-type: inherit
+          install: >-
+            base-devel
+            diffutils
+            make
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-nasm
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-yasm
+            mingw-w64-ucrt-x86_64-zlib
       - run: npm ci
+      - name: Build Windows media sidecars
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: bash scripts/build-ffmpeg-sidecars.sh
       - name: Build desktop app through the root build command
         run: npm run build -- --bundles ${{ matrix.bundle }}
       - uses: actions/upload-artifact@v4

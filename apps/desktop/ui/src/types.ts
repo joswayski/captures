@@ -111,6 +111,13 @@ export interface RecordingSelectionSession {
   kind: RecordingKind;
   initial_mode: "screenshot" | "recording";
   recording_available: boolean;
+  recording_capabilities: {
+    system_audio: boolean;
+    microphone: boolean;
+    cursor_control: boolean;
+    click_highlights: boolean;
+    controls_excluded: boolean;
+  };
   display: DisplayDescriptor;
   window_coordinate_scale: number;
   snapshot_url: string;

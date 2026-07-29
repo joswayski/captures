@@ -4,7 +4,16 @@ Every successful push to `main` runs `.github/workflows/release.yml`. Release wo
 
 The public version is CalVer in `YYYY.MM.DD.N` form, using the `America/New_York` date and a same-day revision from 1 through 99. A release named `Captures 2026.07.19.1` uses tag `v2026.07.19.1`. Tauri receives the SemVer-compatible internal version `2026.7.1901`; source manifests remain at the development version.
 
-The workflow creates a draft release at the exact tested commit. Each platform uploads its installer, updater archive, and updater signature. The macOS job also builds and inspects the pinned LGPL FFmpeg sidecars, verifies their copies inside `Captures.app`, and uploads the matching FFmpeg source archive, detached signature, build configuration, LGPL license, and notice. The final job requires those files plus a DMG, NSIS installer, AppImage, Debian package, complete `latest.json`, and `SHA256SUMS` before it publishes the release and marks it latest. A failed build removes its draft and tag, leaving the prior release and updater manifest untouched. If draft creation itself is interrupted, the next run removes only stale drafts with its generated tag before retrying.
+The workflow creates a draft release at the exact tested commit. Each platform
+builds and validates its pinned LGPL FFmpeg sidecars, then uploads its installer,
+updater archive, and updater signature. The macOS job also verifies the sidecars
+inside `Captures.app` and uploads the shared FFmpeg source archive, detached
+signature, build configuration, LGPL license, and notice. The final job requires
+those files plus a DMG, NSIS installer, AppImage, Debian package, complete
+`latest.json`, and `SHA256SUMS` before it publishes the release and marks it
+latest. A failed build removes its draft and tag, leaving the prior release and
+updater manifest untouched. If draft creation itself is interrupted, the next
+run removes only stale drafts with its generated tag before retrying.
 
 ## GitHub release environment
 
@@ -44,6 +53,13 @@ The first updater-enabled build must be downloaded and installed manually. Befor
 13. Record a Retina region, window, and display with **Original** resolution and verify their masters use physical rather than logical pixels. Confirm moving content continues to update, cursor movement remains visible, **Show clicks** forces the cursor on and renders click feedback, and an untouched **Preserve quality** save updates the original without re-encoding. Verify audio-only changes preserve the video stream, visual edits use the high-quality H.264 path, a failed edit leaves the original intact, filename and folder remain editable when updating the original, optional **Keep original** saves a copy, collisions are rejected, strict maximum-size output does not exceed its selected KB, MB, or GB ceiling, and a successful save opens Finder with the measured final size and a **Show in Folder** action shown.
 14. While recording, start a region screenshot and confirm the HUD fades away without flickering before the selector appears.
 15. Delete a quick-access preview and confirm its native window becomes click-through immediately while the particle animation finishes.
-16. Confirm the packaged FFmpeg/ffprobe sidecars run on a clean Mac and the release includes every source and compliance asset listed in `docs/media-sidecars.md`.
+16. On clean Windows and Linux machines, record a display, region, and fixed
+    window area; pause and resume; save an MP4; export a GIF; and apply a crop
+    and resize in the editor. Confirm unsupported audio, click, and cursor
+    controls are disabled. On Wayland, choose the same display in the portal and
+    hide the recording HUD before capturing its area.
+17. Confirm the packaged FFmpeg/ffprobe sidecars run on clean macOS, Windows,
+    and Linux installations and the release includes every source and
+    compliance asset listed in `docs/media-sidecars.md`.
 
 Windows packages are intentionally unsigned during the private alpha and may trigger SmartScreen. Add Authenticode signing before a public launch.

@@ -1068,7 +1068,11 @@ export function RecordingSelector() {
   }, []);
 
   const loadAudioDevices = useCallback(() => {
-    if (devicesLoading || devicesLoaded) return;
+    if (
+      devicesLoading
+      || devicesLoaded
+      || !sessionRef.current?.recording_capabilities.microphone
+    ) return;
     setDevicesLoading(true);
     void invoke<AudioDevice[]>("list_recording_audio_devices")
       .then((audioDevices) => {
@@ -1169,10 +1173,19 @@ export function RecordingSelector() {
       setActionMode(selection.initial_mode);
       setFps(currentSettings.recording.video_fps);
       setMaxResolution(currentSettings.recording.video_max_resolution);
-      setShowCursor(currentSettings.recording.show_cursor);
-      setShowClicks(currentSettings.recording.highlight_clicks);
-      setSystemAudio(currentSettings.recording.capture_system_audio);
-      setMicrophoneId(currentSettings.recording.microphone_device_id);
+      const capabilities = selection.recording_capabilities;
+      setShowCursor(
+        capabilities.cursor_control ? currentSettings.recording.show_cursor : false,
+      );
+      setShowClicks(
+        capabilities.click_highlights ? currentSettings.recording.highlight_clicks : false,
+      );
+      setSystemAudio(
+        capabilities.system_audio ? currentSettings.recording.capture_system_audio : false,
+      );
+      setMicrophoneId(
+        capabilities.microphone ? currentSettings.recording.microphone_device_id : null,
+      );
       setTargetMode("region");
       setSelectedWindow(null);
       setHoveredWindow(null);
@@ -1294,10 +1307,19 @@ export function RecordingSelector() {
   }, [session?.id, revealSelector]);
 
   useEffect(() => {
-    if (!session?.id || actionMode !== "recording") return;
+    if (
+      !session?.id
+      || actionMode !== "recording"
+      || !session.recording_capabilities.microphone
+    ) return;
     const timer = window.setTimeout(loadAudioDevices, 0);
     return () => window.clearTimeout(timer);
-  }, [actionMode, loadAudioDevices, session?.id]);
+  }, [
+    actionMode,
+    loadAudioDevices,
+    session?.id,
+    session?.recording_capabilities.microphone,
+  ]);
 
   useLayoutEffect(() => {
     const from = panelResizeFromRef.current;
@@ -1483,12 +1505,12 @@ export function RecordingSelector() {
       frames_per_second: fps,
       max_resolution: maxResolution,
       countdown_seconds: settings.recording.countdown_seconds,
-      show_cursor: showCursor,
-      highlight_clicks: showClicks,
+      show_cursor: session.recording_capabilities.cursor_control && showCursor,
+      highlight_clicks: session.recording_capabilities.click_highlights && showClicks,
       show_keystrokes: settings.recording.show_keystrokes,
       audio: {
-        capture_system_audio: systemAudio,
-        microphone_device_id: microphoneId,
+        capture_system_audio: session.recording_capabilities.system_audio && systemAudio,
+        microphone_device_id: session.recording_capabilities.microphone ? microphoneId : null,
         mono_output: settings.recording.mono_audio,
         system_volume_percent: 100,
         microphone_volume_percent: 100,
@@ -1681,7 +1703,7 @@ export function RecordingSelector() {
               className={actionMode === "recording" ? "active" : ""}
               aria-pressed={actionMode === "recording"}
               disabled={!session.recording_available}
-              title={session.recording_available ? undefined : "Screen recording is currently available on macOS only"}
+              title={session.recording_available ? undefined : "Screen recording is not available on this platform"}
               onClick={() => switchActionMode("recording")}
             ><span className="capture-record-dot" aria-hidden="true" />Record</button>
           </div>
@@ -1699,6 +1721,10 @@ export function RecordingSelector() {
                 type="button"
                 className={targetMode === mode ? "active" : ""}
                 aria-pressed={targetMode === mode}
+                disabled={mode === "window" && windowLayouts.length === 0}
+                title={mode === "window" && windowLayouts.length === 0
+                  ? "Window capture is not available in this desktop session"
+                  : undefined}
                 onClick={() => {
                   setTargetMode(mode);
                   setHoveredWindow(null);
@@ -1748,50 +1774,82 @@ export function RecordingSelector() {
               />
             </div>
             <div className="recording-field"><span>Show cursor</span>
-              <label className="recording-toggle">
+              <label
+                className="recording-toggle"
+                title={session.recording_capabilities.cursor_control
+                  ? undefined
+                  : "Cursor capture is currently available on macOS only"}
+              >
                 <input
                   aria-label="Show cursor"
                   type="checkbox"
                   checked={showCursor}
+                  disabled={!session.recording_capabilities.cursor_control}
                   onChange={(event) => {
                     setShowCursor(event.target.checked);
                     if (!event.target.checked) setShowClicks(false);
                   }}
                 />
                 <span className="recording-switch" aria-hidden="true" />
-                <span>{showCursor ? "On" : "Off"}</span>
+                <span>{session.recording_capabilities.cursor_control
+                  ? showCursor ? "On" : "Off"
+                  : "Unavailable"}</span>
               </label>
             </div>
             <div className="recording-field"><span>Show clicks</span>
-              <label className="recording-toggle">
+              <label
+                className="recording-toggle"
+                title={session.recording_capabilities.click_highlights
+                  ? undefined
+                  : "Click highlights are currently available on macOS only"}
+              >
                 <input
                   aria-label="Show clicks"
                   type="checkbox"
                   checked={showClicks}
+                  disabled={!session.recording_capabilities.click_highlights}
                   onChange={(event) => {
                     setShowClicks(event.target.checked);
                     if (event.target.checked) setShowCursor(true);
                   }}
                 />
                 <span className="recording-switch" aria-hidden="true" />
-                <span>{showClicks ? "On" : "Off"}</span>
+                <span>{session.recording_capabilities.click_highlights
+                  ? showClicks ? "On" : "Off"
+                  : "Unavailable"}</span>
               </label>
             </div>
             <div className="recording-field"><span>Desktop audio</span>
-              <label className="recording-toggle">
-                <input aria-label="Record desktop audio" type="checkbox" checked={systemAudio} onChange={(event) => setSystemAudio(event.target.checked)} />
+              <label
+                className="recording-toggle"
+                title={session.recording_capabilities.system_audio
+                  ? undefined
+                  : "Desktop audio recording is currently available on macOS only"}
+              >
+                <input
+                  aria-label="Record desktop audio"
+                  type="checkbox"
+                  checked={systemAudio}
+                  disabled={!session.recording_capabilities.system_audio}
+                  onChange={(event) => setSystemAudio(event.target.checked)}
+                />
                 <span className="recording-switch" aria-hidden="true" />
-                <span>{systemAudio ? "On" : "Off"}</span>
+                <span>{session.recording_capabilities.system_audio
+                  ? systemAudio ? "On" : "Off"
+                  : "Unavailable"}</span>
               </label>
             </div>
             <div className="recording-field recording-microphone-field"><span>Microphone</span>
               <CustomSelect
                 value={microphoneId ?? "off"}
-                disabled={devicesLoading}
+                disabled={!session.recording_capabilities.microphone || devicesLoading}
                 onOpen={loadAudioDevices}
                 ariaLabel="Microphone"
                 options={[
-                  { value: "off", label: "Off" },
+                  {
+                    value: "off",
+                    label: session.recording_capabilities.microphone ? "Off" : "Unavailable",
+                  },
                   ...(devicesLoading ? [{ value: "__loading", label: "Loading microphones…", disabled: true }] : []),
                   ...(microphoneId && !devices.some((device) => device.id === microphoneId)
                     ? [{ value: microphoneId, label: devicesLoading ? "Loading microphone…" : "Selected microphone" }]
@@ -1804,7 +1862,10 @@ export function RecordingSelector() {
           </div>
         )}
         <p className="capture-selector-note">
-          These controls won’t appear in the output <span aria-hidden="true">·</span> Press <kbd>Enter</kbd> to confirm
+          {session.recording_capabilities.controls_excluded
+            ? "These controls won’t appear in the output"
+            : "Hide these controls to keep them out of the recording"}{" "}
+          <span aria-hidden="true">·</span> Press <kbd>Enter</kbd> to confirm
         </p>
         {error && <p className="recording-selector-error" role="alert">{error}</p>}
       </section>

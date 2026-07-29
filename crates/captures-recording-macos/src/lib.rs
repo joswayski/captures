@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use captures_recording::{AudioDevice, RecordingOptions};
+use captures_recording::{AudioDevice, RecordingOptions, RecordingSegmentInfo};
 use thiserror::Error;
 
 #[cfg(target_os = "macos")]
@@ -12,19 +12,6 @@ mod native;
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 mod writer;
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SegmentInfo {
-    pub path: PathBuf,
-    pub microphone_path: Option<PathBuf>,
-    pub microphone_offset_ms: i64,
-    pub microphone_warning: Option<String>,
-    pub width: u32,
-    pub height: u32,
-    pub duration_ms: u64,
-    pub size_bytes: u64,
-    pub dropped_frames: u64,
-}
 
 #[derive(Debug, Error)]
 pub enum MacRecordingError {
@@ -108,7 +95,7 @@ impl MacRecordingSegment {
         }
     }
 
-    pub fn stop(self) -> MacRecordingResult<SegmentInfo> {
+    pub fn stop(self) -> MacRecordingResult<RecordingSegmentInfo> {
         #[cfg(target_os = "macos")]
         {
             let screen = self.inner.stop();
