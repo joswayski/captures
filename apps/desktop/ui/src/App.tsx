@@ -17,6 +17,7 @@ import {
 import { ScreenshotEditor } from "./ScreenshotEditor";
 import {
   applyColorTheme,
+  buildCustomThemeVariables,
   COLOR_THEMES,
   DEFAULT_COLOR_THEME,
   DEFAULT_CUSTOM_THEME,
@@ -4798,18 +4799,19 @@ export function Preferences() {
         <div className="theme-options" role="radiogroup" aria-label="Color theme">
           {COLOR_THEMES.map((theme) => {
             const previewStyle = theme.id === "custom"
-              ? {
-                  "--theme-accent": settings.custom_theme.accent,
-                  "--theme-signal": settings.custom_theme.signal,
-                } as CSSProperties
+              ? buildCustomThemeVariables(settings.custom_theme) as CSSProperties
               : undefined;
             return (
               <button
                 key={theme.id}
                 type="button"
-                className={`theme-option${settings.theme === theme.id ? " active" : ""}`}
+                className={`theme-option theme-option-${theme.id}${settings.theme === theme.id ? " active" : ""}`}
                 role="radio"
                 aria-checked={settings.theme === theme.id}
+                aria-label={`${theme.name}: ${theme.description}`}
+                data-capture-theme={theme.id}
+                style={previewStyle}
+                title={theme.description}
                 onClick={() => {
                   applyColorTheme(theme.id, settings.custom_theme);
                   update("theme", theme.id);
@@ -4817,8 +4819,6 @@ export function Preferences() {
               >
                 <span
                   className="theme-option-preview"
-                  data-capture-theme={theme.id}
-                  style={previewStyle}
                   aria-hidden="true"
                 >
                   <span />
@@ -4838,13 +4838,13 @@ export function Preferences() {
             <div className="custom-theme-editor-heading">
               <div>
                 <strong>Custom colors</strong>
-                <small>Supporting shades are generated automatically for contrast.</small>
+                <small>Open either RGB picker or enter a hex value. Supporting shades stay readable.</small>
               </div>
               <button
                 type="button"
                 onClick={() => setCustomTheme({ ...DEFAULT_CUSTOM_THEME })}
               >
-                Reset to Mustard
+                Reset colors
               </button>
             </div>
             <div className="custom-theme-fields">

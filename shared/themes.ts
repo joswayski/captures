@@ -5,14 +5,29 @@ export const COLOR_THEMES = [
     description: "Captures mustard and signal red",
   },
   {
+    id: "ember",
+    name: "Ember",
+    description: "Warm orange and electric pink",
+  },
+  {
+    id: "rose",
+    name: "Rose",
+    description: "Bright rose and coral",
+  },
+  {
     id: "violet",
     name: "Violet",
-    description: "Electric violet and hot coral",
+    description: "Orchid violet and raspberry",
   },
   {
     id: "cobalt",
     name: "Cobalt",
-    description: "Technical blue and coral",
+    description: "True blue and coral",
+  },
+  {
+    id: "aqua",
+    name: "Aqua",
+    description: "Clear cyan and watermelon",
   },
   {
     id: "mint",
@@ -20,9 +35,19 @@ export const COLOR_THEMES = [
     description: "Fresh mint and vermilion",
   },
   {
+    id: "lime",
+    name: "Lime",
+    description: "Crisp lime and vermilion",
+  },
+  {
+    id: "mono",
+    name: "Mono",
+    description: "Vercel-like black and white",
+  },
+  {
     id: "custom",
     name: "Custom",
-    description: "Choose your own colors",
+    description: "Build your own RGB palette",
   },
 ] as const;
 
@@ -35,8 +60,8 @@ export interface CustomThemeColors {
 
 export const DEFAULT_COLOR_THEME: ColorTheme = "mustard";
 export const DEFAULT_CUSTOM_THEME: CustomThemeColors = {
-  accent: "#ffca28",
-  signal: "#ef4650",
+  accent: "#32d3ff",
+  signal: "#ff4fc3",
 };
 export const COLOR_THEME_STORAGE_KEY = "captures-color-theme";
 export const CUSTOM_THEME_STORAGE_KEY = "captures-custom-theme";
