@@ -10,10 +10,11 @@ updater archive, and updater signature. The macOS job also verifies the sidecars
 inside `Captures.app` and uploads the shared FFmpeg source archive, detached
 signature, build configuration, LGPL license, and notice. The final job requires
 those files plus a DMG, NSIS installer, AppImage, Debian package, complete
-`latest.json`, and `SHA256SUMS` before it publishes the release and marks it
-latest. A failed build removes its draft and tag, leaving the prior release and
-updater manifest untouched. If draft creation itself is interrupted, the next
-run removes only stale drafts with its generated tag before retrying.
+`latest.json`, and `SHA256SUMS`, then confirms the release is still a draft.
+The workflow never publishes automatically. A failed build removes its draft
+and tag, leaving earlier drafts and any intentionally published release
+untouched. If draft creation itself is interrupted, the next run removes only
+stale drafts with its generated tag before retrying.
 
 ## Public-release gates
 
@@ -24,7 +25,7 @@ Creating an installer and signing a Tauri updater archive do not by themselves m
 | macOS | Developer ID Application signature, Apple notarization, stapled ticket, and clean-machine Gatekeeper validation | CI signs and notarizes the app, notarizes and staples the DMG, and verifies both; clean-Mac validation remains manual |
 | Windows | Publicly trusted Authenticode signatures and RFC 3161 timestamps on both `captures.exe` and the NSIS installer | Updater archives are signed, but Authenticode is not configured |
 | Linux | `SHA256SUMS` plus GitHub build-provenance attestations for the `.deb` and AppImage | Checksums and updater signatures exist; attestations are not configured |
-| All platforms | Every downloadable artifact must come from the tested commit, pass clean-machine installation, and remain unpublished if any platform is incomplete | Draft validation exists; it must be extended with the Windows and provenance gates |
+| All platforms | Every downloadable artifact must come from the tested commit, pass clean-machine installation, and remain unpublished if any platform is incomplete | The workflow validates complete drafts and never publishes them automatically; Windows and provenance gates remain |
 
 These signatures have separate trust boundaries:
 
@@ -136,7 +137,7 @@ Linux has no single platform-wide publisher certificate comparable to Apple Deve
 1. Continue building every release artifact only in the release workflow for the tested commit.
 2. Generate `SHA256SUMS` over the final downloadable artifacts.
 3. Generate a GitHub artifact attestation for every DMG, NSIS installer, `.deb`, AppImage, updater archive, and checksum manifest.
-4. Confirm each artifact has a retrievable attestation before the publish job makes the draft public.
+4. Confirm each artifact has a retrievable attestation before a maintainer intentionally publishes the draft.
 5. Verify the release from a clean Ubuntu system:
 
    ```sh
@@ -156,16 +157,20 @@ If Captures later operates an APT repository, that repository must publish signe
 
 ## Bootstrap and acceptance
 
-The first updater-enabled build must be downloaded and installed manually. Before relying on automatic releases, test this sequence on clean machines:
+The first updater-enabled build must be downloaded and installed manually.
+Draft releases are intentionally absent from the public updater endpoint, so
+complete draft validation first and test automatic updates only after choosing
+to publish an initial release. Before relying on automatic releases, test this
+sequence on clean machines:
 
-1. Install one published release on macOS, Windows, and Ubuntu.
+1. Download one completed draft while signed in to GitHub and install it on macOS, Windows, and Ubuntu.
 2. Merge another PR on the same New York calendar day and confirm the revision increments.
-3. Confirm the release appears only after all platform assets and all three `latest.json` entries exist.
-4. Choose **Later**, then install from the tray and verify the displayed version after restart.
+3. Confirm the completed release contains all platform assets and all three `latest.json` entries but remains a draft.
+4. After intentionally publishing the initial release, publish a subsequent validated release, choose **Later**, then install from the tray and verify the displayed version after restart.
 5. On macOS, verify notarization, stapling, and Screen Recording permission survive the update.
 6. On Windows, verify Authenticode on both the application executable and NSIS installer, then confirm NSIS updates in place. On Linux, verify `SHA256SUMS` and GitHub attestations before confirming AppImage updates in place and `.deb` directs the user to the release download.
 7. Tamper with an updater archive in a test release and confirm signature verification rejects it.
-8. Force one platform build to fail and confirm the failed draft/tag is deleted while the previous release remains latest.
+8. Force one platform build to fail and confirm the failed draft/tag is deleted while earlier drafts and any intentionally published release remain unchanged.
 9. On macOS, rapidly resize a recording region, confirm window highlights use rounded corners, and verify Window mode starts without choosing an arbitrary system window. Drag the selector controls from any non-interactive panel surface, press Escape repeatedly to cancel, and verify the selector, countdown, and HUD can be captured by another app while Captures excludes them from its own output.
 10. Record a visually static display for at least 10 seconds, then repeat while continuously moving content on a secondary display. Confirm the single full-display countdown fades from 3 to 2 to 1 without flashing 3 again, Escape cancels it, the start chime plays only when recording begins and is absent from recorded audio, real motion continues past the initial frame, and both finalized durations are within 250 ms or 5% of wall-clock time, whichever is larger. On macOS 15+, enable **Show clicks** and verify clicks receive the system highlight.
 11. Verify the recording HUD uses one compact control row with no border or shadow, shows unclipped tooltips and the faded **These controls won’t show in the recording** note below it, labels its active state **Recording**, responds on hover, drags from non-interactive background space, hides completely, and returns when Captures is opened from the macOS Dock. Confirm Restart requires explicit native confirmation.

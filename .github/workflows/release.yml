@@ -392,8 +392,8 @@ jobs:
         shell: bash
         run: gh release upload "$TAG" target/ffmpeg-dist/* --clobber
 
-  publish:
-    name: Validate and publish release
+  validate_draft:
+    name: Validate draft release
     needs: [prepare, package]
     runs-on: ubuntu-24.04
     permissions:
@@ -414,16 +414,21 @@ jobs:
           gh release download "$TAG" --dir release-assets
           node scripts/release-assets.mjs release-assets "$APP_VERSION"
           gh release upload "$TAG" release-assets/SHA256SUMS --clobber
-      - name: Publish and mark latest
+      - name: Confirm the release remains a draft
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.prepare.outputs.tag }}
-        run: gh release edit "$TAG" --draft=false --prerelease=false --latest
+        shell: bash
+        run: |
+          if [[ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" != "true" ]]; then
+            echo "Release $TAG was unexpectedly published." >&2
+            exit 1
+          fi
 
   cleanup:
     name: Remove incomplete release
-    if: ${{ always() && needs.prepare.result == 'success' && needs.publish.result != 'success' }}
-    needs: [prepare, package, publish]
+    if: ${{ always() && needs.prepare.result == 'success' && needs.validate_draft.result != 'success' }}
+    needs: [prepare, package, validate_draft]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

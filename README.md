@@ -57,9 +57,10 @@ recording controls from captured output; on Linux, hide the controls before
 recording content underneath them. Wayland asks for a screen again through the
 system portal, so choose the same display selected in Captures.
 
-## Download
+## Releases
 
-Download the latest builds from [GitHub Releases](https://github.com/joswayski/captures/releases/latest). Captures is still early software, so expect rough edges.
+Captures is not publicly distributed yet. Automated builds remain as draft
+GitHub Releases for maintainer testing until the launch checklist is complete.
 
 ## Shortcuts
 
