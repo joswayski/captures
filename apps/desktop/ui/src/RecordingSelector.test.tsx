@@ -17,6 +17,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 const settings: AppSettings = {
   output_directory: "/Users/josevalerio/Captures",
+  new_capture_shortcut: "Ctrl+Shift+Space",
   region_shortcut: "Ctrl+Shift+4",
   window_shortcut: "Ctrl+Shift+W",
   display_shortcut: "Ctrl+Shift+3",
@@ -65,6 +66,7 @@ const session: RecordingSelectionSession = {
       id: "front-window",
       title: "Captures window",
       app_name: "Captures",
+      z_order: 30,
       x: 100,
       y: 80,
       width: 800,
@@ -72,23 +74,25 @@ const session: RecordingSelectionSession = {
       display_id: "display-1",
     },
     {
-      id: "back-window",
-      title: "Front eligible window",
-      app_name: "Browser",
-      x: 300,
-      y: 160,
-      width: 900,
-      height: 640,
-      display_id: "display-1",
-    },
-    {
       id: "rear-window",
       title: "Rear window",
       app_name: "Notes",
+      z_order: 10,
       x: 420,
       y: 220,
       width: 720,
       height: 520,
+      display_id: "display-1",
+    },
+    {
+      id: "back-window",
+      title: "Front eligible window",
+      app_name: "Browser",
+      z_order: 20,
+      x: 300,
+      y: 160,
+      width: 900,
+      height: 640,
       display_id: "display-1",
     },
   ],
@@ -224,7 +228,7 @@ describe("RecordingSelector", () => {
     expect(targetSwitch).toHaveAttribute("data-active", "region");
     expect(targetSwitch?.querySelector(".capture-segmented-indicator")).not.toBeNull();
     expect(container.querySelector(".capture-selector-note")).toHaveTextContent(
-      "Controls won’t appear in the output · Press Enter to confirm",
+      "These controls won’t appear in the output · Press Enter to confirm",
     );
     expect(screen.getByRole("button", { name: "Take screenshot" }))
       .toHaveAttribute("aria-keyshortcuts", "Enter");
@@ -347,7 +351,9 @@ describe("RecordingSelector", () => {
     expect(screen.queryByText(/enable (Capture|Record)/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Select Captures window" })).not.toBeInTheDocument();
     const frontWindow = screen.getByRole("button", { name: "Select Front eligible window" });
+    const rearWindow = screen.getByRole("button", { name: "Select Rear window" });
     expect(frontWindow).not.toHaveClass("selected");
+    expect(Number(frontWindow.style.zIndex)).toBeGreaterThan(Number(rearWindow.style.zIndex));
     expect(frontWindow).toHaveStyle({
       left: "300px",
       top: "160px",
@@ -361,7 +367,6 @@ describe("RecordingSelector", () => {
     fireEvent.keyDown(window, { key: "Enter" });
     expect(invoke).not.toHaveBeenCalledWith("start_recording", expect.anything());
 
-    const rearWindow = screen.getByRole("button", { name: "Select Rear window" });
     fireEvent.mouseEnter(rearWindow);
     await waitFor(() => {
       expect(rearWindow).toHaveClass("hovered");

@@ -57,13 +57,14 @@ Download the latest builds from [GitHub Releases](https://github.com/joswayski/c
 
 | Default shortcut | Action |
 | --- | --- |
+| `Ctrl+Shift+Space` | Open New Capture |
 | `Ctrl+Shift+4` | Capture a region |
 | `Ctrl+Shift+W` | Capture a window |
 | `Ctrl+Shift+3` | Capture the display under the pointer |
 | `Ctrl+Shift+5` | Record the screen, then save video or GIF |
 | `Esc` | Cancel an active capture or recording countdown |
 
-All four global capture shortcuts can be changed in Preferences.
+All five global capture shortcuts can be changed in Preferences.
 
 ## Development
 

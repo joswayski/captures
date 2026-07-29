@@ -87,6 +87,7 @@ type CommandResult<T> = Result<T, String>;
 const AUTOSTART_ARG: &str = "--captures-autostart";
 const RECORDING_EDITOR_WINDOW_PREFIX: &str = "recording-editor-";
 const RECORDING_SAVED_NOTICE_PREFIX: &str = "recording-saved-";
+const RECORDING_CONTROLS_HIDDEN_NOTICE_PREFIX: &str = "recording-controls-hidden-";
 
 struct ClipboardWrite {
     revision: isize,
@@ -857,13 +858,16 @@ fn update_settings(
             .to_string_lossy()
             .into_owned();
     }
-    if settings.region_shortcut.trim().is_empty()
+    if settings.new_capture_shortcut.trim().is_empty()
+        || settings.region_shortcut.trim().is_empty()
         || settings.window_shortcut.trim().is_empty()
         || settings.display_shortcut.trim().is_empty()
         || settings.recording.video_shortcut.trim().is_empty()
     {
         return Err("all shortcuts must be set".to_owned());
     }
+    let new_capture_shortcut =
+        parse_shortcut(&settings.new_capture_shortcut).map_err(|error| error.to_string())?;
     let region_shortcut =
         parse_shortcut(&settings.region_shortcut).map_err(|error| error.to_string())?;
     let window_shortcut =
@@ -873,6 +877,7 @@ fn update_settings(
     let video_shortcut =
         parse_shortcut(&settings.recording.video_shortcut).map_err(|error| error.to_string())?;
     let shortcuts = [
+        new_capture_shortcut,
         region_shortcut,
         window_shortcut,
         display_shortcut,
@@ -902,7 +907,8 @@ fn update_settings(
         previous_settings.last_screen_permission_request_id.clone();
     settings.pending_capture_after_restart = previous_settings.pending_capture_after_restart;
 
-    let shortcuts_changed = settings.region_shortcut != previous_settings.region_shortcut
+    let shortcuts_changed = settings.new_capture_shortcut != previous_settings.new_capture_shortcut
+        || settings.region_shortcut != previous_settings.region_shortcut
         || settings.window_shortcut != previous_settings.window_shortcut
         || settings.display_shortcut != previous_settings.display_shortcut
         || settings.recording.video_shortcut != previous_settings.recording.video_shortcut;
@@ -1779,11 +1785,35 @@ fn register_shortcuts_with(app: &AppHandle, settings: &AppSettings) -> Result<()
     app.global_shortcut()
         .unregister_all()
         .map_err(|error| AppError::Shortcut(error.to_string()))?;
+    register_new_capture_shortcut(app, &settings.new_capture_shortcut)?;
     register_shortcut(app, &settings.region_shortcut, CaptureMode::Region)?;
     register_shortcut(app, &settings.window_shortcut, CaptureMode::Window)?;
     register_shortcut(app, &settings.display_shortcut, CaptureMode::Display)?;
     register_recording_shortcut(app, &settings.recording.video_shortcut)?;
     Ok(())
+}
+
+fn register_new_capture_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), AppError> {
+    let parsed = parse_shortcut(shortcut)?;
+    let armed = AtomicBool::new(false);
+    app.global_shortcut()
+        .on_shortcut(parsed, move |app, _shortcut, event| {
+            if !should_trigger_shortcut(&armed, event.state()) {
+                return;
+            }
+            if app
+                .get_webview_window("preferences")
+                .is_some_and(|window| window.is_focused().unwrap_or(false))
+            {
+                return;
+            }
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                wait_for_capture_shortcut_release().await;
+                open_capture_controls(&app, CaptureSelectorMode::Screenshot);
+            });
+        })
+        .map_err(|error| AppError::Shortcut(error.to_string()))
 }
 
 fn register_shortcut(app: &AppHandle, shortcut: &str, mode: CaptureMode) -> Result<(), AppError> {
@@ -2122,6 +2152,8 @@ fn startup_notice_position(app: &AppHandle) -> (f64, f64) {
 
 const RECORDING_SAVED_NOTICE_WIDTH: f64 = 440.0;
 const RECORDING_SAVED_NOTICE_HEIGHT: f64 = 116.0;
+const RECORDING_CONTROLS_HIDDEN_NOTICE_WIDTH: f64 = 390.0;
+const RECORDING_CONTROLS_HIDDEN_NOTICE_HEIGHT: f64 = 82.0;
 
 fn show_recording_saved_notice(app: &AppHandle, artifact_id: &str) -> Result<(), tauri::Error> {
     let available = app
@@ -2183,7 +2215,72 @@ fn show_recording_saved_notice(app: &AppHandle, artifact_id: &str) -> Result<(),
 
     let timer_app = app.clone();
     std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_secs(9));
+        std::thread::sleep(std::time::Duration::from_millis(11_200));
+        let handle = timer_app.clone();
+        let _ = timer_app.run_on_main_thread(move || {
+            if let Some(window) = handle.get_webview_window(&label) {
+                let _ = window.destroy();
+            }
+        });
+    });
+    Ok(())
+}
+
+fn show_recording_controls_hidden_notice(
+    app: &AppHandle,
+    position: Option<(f64, f64)>,
+) -> Result<(), tauri::Error> {
+    for (label, window) in app.webview_windows() {
+        if label.starts_with(RECORDING_CONTROLS_HIDDEN_NOTICE_PREFIX) {
+            window.destroy()?;
+        }
+    }
+    let label = format!(
+        "{RECORDING_CONTROLS_HIDDEN_NOTICE_PREFIX}{}",
+        Uuid::new_v4()
+    );
+    let (x, y) = position.unwrap_or_else(|| {
+        bottom_center_notice_position(
+            app,
+            RECORDING_CONTROLS_HIDDEN_NOTICE_WIDTH,
+            RECORDING_CONTROLS_HIDDEN_NOTICE_HEIGHT,
+        )
+    });
+    let window = WebviewWindowBuilder::new(
+        app,
+        &label,
+        WebviewUrl::App("index.html?view=recording-controls-hidden".into()),
+    )
+    .title("Recording controls hidden")
+    .inner_size(
+        RECORDING_CONTROLS_HIDDEN_NOTICE_WIDTH,
+        RECORDING_CONTROLS_HIDDEN_NOTICE_HEIGHT,
+    )
+    .position(x, y)
+    .decorations(false)
+    .always_on_top(true)
+    .visible_on_all_workspaces(true)
+    .skip_taskbar(true)
+    .resizable(false)
+    .shadow(false)
+    .transparent(true)
+    .background_color(Color(0, 0, 0, 0))
+    .focused(false)
+    .visible(false)
+    .build()?;
+    let _ = window.set_content_protected(true);
+    window.set_ignore_cursor_events(true)?;
+
+    #[cfg(target_os = "macos")]
+    captures_macos_window::show_without_activating(&window)
+        .map_err(|error| tauri::Error::Anyhow(anyhow::anyhow!(error)))?;
+
+    #[cfg(not(target_os = "macos"))]
+    window.show()?;
+
+    let timer_app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(6_200));
         let handle = timer_app.clone();
         let _ = timer_app.run_on_main_thread(move || {
             if let Some(window) = handle.get_webview_window(&label) {
@@ -2212,6 +2309,26 @@ fn top_right_notice_position(app: &AppHandle, width: f64, _height: f64) -> (f64,
             let top = f64::from(position.y) / scale;
             let right = left + f64::from(size.width) / scale;
             (right - width - 18.0, top + 30.0)
+        })
+        .unwrap_or((20.0, 30.0))
+}
+
+fn bottom_center_notice_position(app: &AppHandle, width: f64, height: f64) -> (f64, f64) {
+    app.primary_monitor()
+        .ok()
+        .flatten()
+        .map(|monitor| {
+            let scale = monitor.scale_factor().max(1.0);
+            let position = monitor.position();
+            let size = monitor.size();
+            let left = f64::from(position.x) / scale;
+            let top = f64::from(position.y) / scale;
+            let display_width = f64::from(size.width) / scale;
+            let display_height = f64::from(size.height) / scale;
+            (
+                left + (display_width - width) / 2.0,
+                top + display_height - height - 18.0,
+            )
         })
         .unwrap_or((20.0, 30.0))
 }
@@ -2664,6 +2781,7 @@ fn focus_primary_app_window(app: &AppHandle) {
         && let Some(window) = app.get_webview_window("recording-hud")
         && !window.is_visible().unwrap_or(false)
     {
+        hide_recording_controls_hidden_notices(app);
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
@@ -2736,6 +2854,14 @@ fn hide_window(app: &AppHandle, label: &str) {
 fn hide_recording_saved_notices(app: &AppHandle) {
     for (label, window) in app.webview_windows() {
         if label.starts_with(RECORDING_SAVED_NOTICE_PREFIX) {
+            let _ = window.hide();
+        }
+    }
+}
+
+fn hide_recording_controls_hidden_notices(app: &AppHandle) {
+    for (label, window) in app.webview_windows() {
+        if label.starts_with(RECORDING_CONTROLS_HIDDEN_NOTICE_PREFIX) {
             let _ = window.hide();
         }
     }
@@ -2966,6 +3092,7 @@ mod tests {
             id: "overlay".to_owned(),
             title: "NVIDIA GeForce Overlay DT".to_owned(),
             app_name: Some("NVIDIA App".to_owned()),
+            z_order: 1,
             x: 0,
             y: 0,
             width: 3_840,
@@ -3029,6 +3156,7 @@ mod tests {
             parse_shortcut("Ctrl+Shift+4").expect("legacy shortcut should parse"),
             parse_shortcut("Control+Shift+Digit4").expect("recorded shortcut should parse")
         );
+        assert!(parse_shortcut("Ctrl+Shift+Space").is_ok());
     }
 
     #[test]

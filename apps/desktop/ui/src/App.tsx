@@ -17,6 +17,7 @@ import {
 } from "./lib/recordingEditor";
 import {
   dragSelectionRect,
+  frontToBackWindows,
   isCapturableSelection,
   selectionRect,
   type SelectionDragMode,
@@ -273,6 +274,7 @@ export function App() {
   if (view === "recording-hud") return <RecordingHud />;
   if (view === "recording-editor") return <RecordingEditor />;
   if (view === "recording-saved") return <RecordingSavedNotice />;
+  if (view === "recording-controls-hidden") return <RecordingControlsHiddenNotice />;
   if (view === "thumbnail") return <Thumbnail />;
   if (view === "viewer") return <ArtifactViewer />;
   if (view === "history") return <CaptureHistory />;
@@ -287,7 +289,7 @@ function IdleView() {
     <main className="idle-view">
       <div className="brand-mark">Captures</div>
       <h1>Captures is running</h1>
-      <p>Use the capture shortcut or the tray icon to take a screenshot.</p>
+      <p>Press Ctrl+Shift+Space or use the tray icon to start a new capture.</p>
     </main>
   );
 }
@@ -300,7 +302,7 @@ function StartupNotice() {
       </div>
       <div>
         <strong>Captures is running</strong>
-        <p>Use the tray icon or Ctrl+Shift+4 to capture.</p>
+        <p>Use the tray icon or Ctrl+Shift+Space for a new capture.</p>
       </div>
     </main>
   );
@@ -349,6 +351,18 @@ export function RecordingSavedNotice() {
         aria-label="Dismiss"
         onClick={dismiss}
       >×</button>
+    </main>
+  );
+}
+
+export function RecordingControlsHiddenNotice() {
+  return (
+    <main className="recording-controls-hidden-notice" role="status">
+      <span className="recording-controls-hidden-icon" aria-hidden="true"><CaptureIcon /></span>
+      <div>
+        <strong>Recording controls hidden</strong>
+        <p>Click the Captures icon in the Dock to bring them back.</p>
+      </div>
     </main>
   );
 }
@@ -1396,7 +1410,9 @@ export function RecordingSelector() {
     clearRegionDrag();
   };
 
-  const selectableWindows = session.windows.filter((window) => !isCapturesOwnedWindow(window));
+  const selectableWindows = frontToBackWindows(
+    session.windows.filter((window) => !isCapturesOwnedWindow(window)),
+  );
   const windowLayouts = selectableWindows.map((window, index) => {
     const scale = Math.max(session.window_coordinate_scale || 1, 1);
     return {
@@ -1790,7 +1806,7 @@ export function RecordingSelector() {
           </div>
         )}
         <p className="capture-selector-note">
-          Controls won’t appear in the output <span aria-hidden="true">·</span> Press <kbd>Enter</kbd> to confirm
+          These controls won’t appear in the output <span aria-hidden="true">·</span> Press <kbd>Enter</kbd> to confirm
         </p>
         {error && <p className="recording-selector-error" role="alert">{error}</p>}
       </section>
@@ -1988,7 +2004,7 @@ export function RecordingHud() {
       className={`recording-hud recording-hud-${snapshot.state}`}
       onPointerDown={startHudDrag}
     >
-      <span className="recording-hud-privacy">These controls won’t show in the recording</span>
+      <span className="recording-hud-privacy">These controls won’t appear in the output</span>
       <div className="recording-hud-main">
         <div className="recording-hud-status">
           <span className="recording-dot" aria-hidden="true" />
@@ -2165,6 +2181,7 @@ export function RecordingEditor() {
   const [destinationDirectory, setDestinationDirectory] = useState("");
   const [makeCopy, setMakeCopy] = useState(false);
   const [previewPlaying, setPreviewPlaying] = useState(false);
+  const [previewLoop, setPreviewLoop] = useState(false);
   const [toast, setToast] = useState("");
   const [error, setError] = useState("");
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -2459,9 +2476,15 @@ export function RecordingEditor() {
     setError("");
     try {
       if (video.paused) {
+        const selectedStart = trimStart / 1_000;
         const selectedEnd = trimEnd / 1_000;
-        if (video.ended || video.currentTime >= selectedEnd - 0.01) {
-          video.currentTime = trimStart / 1_000;
+        if (
+          video.ended
+          || video.currentTime < selectedStart - 0.01
+          || video.currentTime >= selectedEnd - 0.01
+        ) {
+          video.currentTime = selectedStart;
+          setPlayheadMs(trimStart);
         }
         await video.play();
       } else {
@@ -2471,6 +2494,34 @@ export function RecordingEditor() {
       setPreviewPlaying(false);
       setError(`Preview could not play: ${String(error)}`);
     }
+  };
+  const updatePreviewPlaybackTime = (video: HTMLVideoElement) => {
+    const currentMs = video.currentTime * 1_000;
+    if (!video.paused && currentMs >= trimEnd) {
+      if (previewLoop) {
+        video.currentTime = trimStart / 1_000;
+        setPlayheadMs(trimStart);
+      } else {
+        video.pause();
+        video.currentTime = trimEnd / 1_000;
+        setPlayheadMs(trimEnd);
+        setPreviewPlaying(false);
+      }
+      return;
+    }
+    setPlayheadMs(currentMs);
+  };
+  const handlePreviewEnded = (video: HTMLVideoElement) => {
+    if (!previewLoop) {
+      setPreviewPlaying(false);
+      return;
+    }
+    video.currentTime = trimStart / 1_000;
+    setPlayheadMs(trimStart);
+    void video.play().catch((error) => {
+      setPreviewPlaying(false);
+      setError(`Preview could not loop: ${String(error)}`);
+    });
   };
 
   const chooseDestinationDirectory = async () => {
@@ -2577,9 +2628,33 @@ export function RecordingEditor() {
         <div className="recording-preview-toolbar">
           <strong>Preview</strong>
           <div className="recording-preview-toolbar-actions">
-            <div className="editor-segmented preview-size-segmented" aria-label="Preview size">
-              <button type="button" className={previewMode === "fit" ? "active" : ""} onClick={() => setPreviewMode("fit")}>Fit</button>
-              <button type="button" className={previewMode === "actual" ? "active" : ""} onClick={() => setPreviewMode("actual")}>100%</button>
+            {artifact.kind === "video" && (
+              <button
+                type="button"
+                className={`recording-preview-loop${previewLoop ? " active" : ""}`}
+                aria-pressed={previewLoop}
+                onClick={() => setPreviewLoop((current) => !current)}
+              ><span aria-hidden="true">↻</span>Loop preview</button>
+            )}
+            <div
+              className="editor-segmented preview-size-segmented"
+              role="group"
+              aria-label="Preview size"
+              data-active={previewMode}
+            >
+              <SegmentedControlIndicator value={previewMode} />
+              <button
+                type="button"
+                className={previewMode === "fit" ? "active" : ""}
+                aria-pressed={previewMode === "fit"}
+                onClick={() => setPreviewMode("fit")}
+              >Fit</button>
+              <button
+                type="button"
+                className={previewMode === "actual" ? "active" : ""}
+                aria-pressed={previewMode === "actual"}
+                onClick={() => setPreviewMode("actual")}
+              >100%</button>
             </div>
           </div>
         </div>
@@ -2610,11 +2685,11 @@ export function RecordingEditor() {
                 onClick={() => void togglePreviewPlayback()}
                 onPlay={() => setPreviewPlaying(true)}
                 onPause={() => setPreviewPlaying(false)}
-                onEnded={() => setPreviewPlaying(false)}
+                onEnded={(event) => handlePreviewEnded(event.currentTarget)}
                 onLoadedMetadata={(event) => {
                   event.currentTarget.currentTime = playheadMs / 1_000;
                 }}
-                onTimeUpdate={(event) => setPlayheadMs(event.currentTarget.currentTime * 1_000)}
+                onTimeUpdate={(event) => updatePreviewPlaybackTime(event.currentTarget)}
                 onSeeked={(event) => setPlayheadMs(event.currentTarget.currentTime * 1_000)}
               />
             ) : (
@@ -2713,6 +2788,7 @@ export function RecordingEditor() {
             aria-valuetext={formatEditorTime(trimStart, duration)}
             onPointerDown={(event) => {
               trimDragRef.current = "start";
+              seekTo(trimStart);
               event.currentTarget.setPointerCapture(event.pointerId);
               event.preventDefault();
               event.stopPropagation();
@@ -2744,6 +2820,7 @@ export function RecordingEditor() {
             aria-valuetext={formatEditorTime(trimEnd, duration)}
             onPointerDown={(event) => {
               trimDragRef.current = "end";
+              seekTo(trimEnd);
               event.currentTarget.setPointerCapture(event.pointerId);
               event.preventDefault();
               event.stopPropagation();
@@ -2973,6 +3050,7 @@ export function RecordingEditor() {
               aria-label="Saved filename"
               spellCheck={false}
               disabled={Boolean(exportId)}
+              onFocus={(event) => event.currentTarget.select()}
               onChange={(event) => {
                 setFilenameStem(event.target.value);
                 setError("");
@@ -3210,9 +3288,10 @@ function CaptureOverlay() {
   const windowLayouts = useMemo(() => {
     if (mode !== "window" || !session) return [];
     const scale = Math.max(session.window_coordinate_scale || 1, 1);
-    // CGWindowList is front-to-back; index 0 is topmost (highest z-index).
-    return session.windows
-      .filter((window) => window.width >= 48 && window.height >= 48)
+    // Native z-order is front-to-back; index 0 is topmost (highest z-index).
+    return frontToBackWindows(
+      session.windows.filter((window) => window.width >= 48 && window.height >= 48),
+    )
       .map((window, index, list) => ({
         window,
         left: (window.x - session.display.x) / scale,
@@ -4445,6 +4524,14 @@ export function Preferences() {
 
       <section className="settings-section">
         <h2>Shortcuts</h2>
+        <ShortcutInput
+          id="new-capture-shortcut"
+          label="New Capture"
+          value={settings.new_capture_shortcut}
+          recording={recordingShortcut === "new-capture-shortcut"}
+          onRecordingChange={(recording) => setRecordingShortcut(recording ? "new-capture-shortcut" : null)}
+          onChange={(value) => update("new_capture_shortcut", value)}
+        />
         <ShortcutInput
           id="region-shortcut"
           label="Region"

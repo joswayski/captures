@@ -12,6 +12,16 @@ export interface SelectionRect {
 
 export type SelectionDragMode = "create" | "move" | "nw" | "ne" | "sw" | "se";
 
+export function frontToBackWindows<T extends { z_order: number }>(windows: readonly T[]): T[] {
+  return windows
+    .map((window, index) => ({ index, window }))
+    .sort((left, right) => (
+      right.window.z_order - left.window.z_order
+      || left.index - right.index
+    ))
+    .map(({ window }) => window);
+}
+
 export function selectionRect(start: SelectionPoint, end: SelectionPoint): SelectionRect {
   return {
     x: Math.min(start.x, end.x),

@@ -28,6 +28,8 @@ pub struct WindowDescriptor {
     pub id: String,
     pub title: String,
     pub app_name: Option<String>,
+    #[serde(default)]
+    pub z_order: i32,
     pub x: i32,
     pub y: i32,
     pub width: u32,

@@ -56,6 +56,7 @@ const timeline: RecordingTimelinePreview = {
 
 const settings: AppSettings = {
   output_directory: "/Users/josevalerio/Captures",
+  new_capture_shortcut: "Ctrl+Shift+Space",
   region_shortcut: "Ctrl+Shift+4",
   window_shortcut: "Ctrl+Shift+W",
   display_shortcut: "Ctrl+Shift+3",
@@ -154,6 +155,12 @@ describe("RecordingEditor", () => {
     expect(screen.getAllByRole("button", { name: /Resize crop/ })).toHaveLength(8);
     fireEvent.click(screen.getByRole("button", { name: "100%" }));
     expect(preview).toHaveStyle({ width: "1140px", height: "692px" });
+    expect(container.querySelector(".preview-size-segmented .capture-segmented-indicator"))
+      .not.toBeNull();
+    expect(screen.getByRole("button", { name: "Loop preview" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
 
     const video = container.querySelector<HTMLVideoElement>("video");
     expect(video).not.toBeNull();
@@ -164,12 +171,87 @@ describe("RecordingEditor", () => {
     expect(play).toHaveBeenCalledOnce();
   });
 
+  it("keeps playback inside the trim range, seeks on handle clicks, and optionally loops the preview", async () => {
+    const { container } = render(<RecordingEditor />);
+
+    expect(await screen.findByRole("heading", { name: "Edit recording" })).toBeInTheDocument();
+    const video = container.querySelector<HTMLVideoElement>("video");
+    expect(video).not.toBeNull();
+    let paused = true;
+    Object.defineProperty(video!, "paused", {
+      configurable: true,
+      get: () => paused,
+    });
+    const play = vi.spyOn(video!, "play").mockImplementation(async () => {
+      paused = false;
+    });
+    const pause = vi.spyOn(video!, "pause").mockImplementation(() => {
+      paused = true;
+    });
+    const trimStart = screen.getByRole("slider", { name: "Trim start" });
+    const trimEnd = screen.getByRole("slider", { name: "Trim end" });
+    trimStart.setPointerCapture = vi.fn();
+    trimEnd.setPointerCapture = vi.fn();
+
+    fireEvent.keyDown(trimStart, { key: "PageUp" });
+    fireEvent.keyDown(trimStart, { key: "PageUp" });
+    fireEvent.keyDown(trimEnd, { key: "PageDown" });
+    fireEvent.keyDown(trimEnd, { key: "PageDown" });
+    expect(trimStart).toHaveAttribute("aria-valuetext", "0:02.000");
+    expect(trimEnd).toHaveAttribute("aria-valuetext", "0:06.750");
+
+    video!.currentTime = 4;
+    fireEvent.seeked(video!);
+    fireEvent.pointerDown(trimStart, { pointerId: 1 });
+    expect(video!.currentTime).toBe(2);
+    expect(container.querySelector(".timeline-playhead")).toHaveStyle({
+      left: `${2_000 / artifact.duration_ms * 100}%`,
+    });
+    fireEvent.pointerUp(trimStart, { pointerId: 1 });
+
+    fireEvent.pointerDown(trimEnd, { pointerId: 2 });
+    expect(video!.currentTime).toBe(6.75);
+    expect(container.querySelector(".timeline-playhead")).toHaveStyle({
+      left: `${6_750 / artifact.duration_ms * 100}%`,
+    });
+    fireEvent.pointerUp(trimEnd, { pointerId: 2 });
+
+    fireEvent.click(screen.getByRole("button", { name: "Play preview" }));
+    await waitFor(() => expect(play).toHaveBeenCalledOnce());
+    expect(video!.currentTime).toBe(2);
+    fireEvent.play(video!);
+
+    video!.currentTime = 7;
+    fireEvent.timeUpdate(video!);
+    expect(pause).toHaveBeenCalledOnce();
+    expect(video!.currentTime).toBe(6.75);
+    expect(container.querySelector(".timeline-playhead")).toHaveStyle({
+      left: `${6_750 / artifact.duration_ms * 100}%`,
+    });
+
+    const loop = screen.getByRole("button", { name: "Loop preview" });
+    fireEvent.click(loop);
+    expect(loop).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Play preview" }));
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(2));
+    video!.currentTime = 7;
+    fireEvent.timeUpdate(video!);
+    expect(pause).toHaveBeenCalledOnce();
+    expect(video!.currentTime).toBe(2);
+    expect(container.querySelector(".timeline-playhead")).toHaveStyle({
+      left: `${2_000 / artifact.duration_ms * 100}%`,
+    });
+  });
+
   it("updates the source by default and can explicitly save a copy", async () => {
     render(<RecordingEditor />);
 
     const filename = await screen.findByRole("textbox", { name: "Saved filename" });
     expect(filename).toHaveValue("Captures_1140x692");
     expect(filename).toBeEnabled();
+    fireEvent.focus(filename);
+    expect((filename as HTMLInputElement).selectionStart).toBe(0);
+    expect((filename as HTMLInputElement).selectionEnd).toBe("Captures_1140x692".length);
     expect(screen.getByRole("checkbox", { name: "Make a copy" })).not.toBeChecked();
     expect(screen.queryByRole("radio")).not.toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Save quality" })).toHaveTextContent(

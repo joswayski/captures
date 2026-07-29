@@ -2793,10 +2793,27 @@ pub fn hide_recording_hud(
     let window = app.get_webview_window("recording-hud").ok_or_else(|| {
         AppError::Task("recording controls are unavailable".to_owned()).to_string()
     })?;
-    window.hide().map_err(|error| error.to_string())
+    let notice_position = window.outer_position().ok().and_then(|position| {
+        let size = window.outer_size().ok()?;
+        let scale = window.scale_factor().ok()?.max(1.0);
+        Some((
+            f64::from(position.x) / scale
+                + (f64::from(size.width) / scale - crate::RECORDING_CONTROLS_HIDDEN_NOTICE_WIDTH)
+                    / 2.0,
+            f64::from(position.y) / scale
+                + (f64::from(size.height) / scale - crate::RECORDING_CONTROLS_HIDDEN_NOTICE_HEIGHT)
+                    / 2.0,
+        ))
+    });
+    window.hide().map_err(|error| error.to_string())?;
+    if let Err(error) = crate::show_recording_controls_hidden_notice(&app, notice_position) {
+        eprintln!("failed to show recording controls hidden notice: {error}");
+    }
+    Ok(())
 }
 
 fn show_recording_hud(app: &AppHandle) -> Result<(), AppError> {
+    crate::hide_recording_controls_hidden_notices(app);
     let window = app
         .get_webview_window("recording-hud")
         .ok_or_else(|| AppError::Task("recording controls are unavailable".to_owned()))?;
