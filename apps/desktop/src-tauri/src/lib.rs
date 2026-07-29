@@ -42,6 +42,7 @@ use uuid::Uuid;
 
 mod models;
 mod recording;
+mod screenshot_editor;
 mod state;
 mod storage;
 mod updates;
@@ -51,6 +52,7 @@ use models::{
     CaptureSelectorMode, CaptureSession, ClipboardCopyStatus, ClipboardState,
     HISTORY_RETENTION_DAYS, HistoryEntry,
 };
+use screenshot_editor::SCREENSHOT_EDITOR_WINDOW_PREFIX;
 use state::{AppState, ClipboardFingerprint};
 
 #[derive(Debug, Error)]
@@ -151,6 +153,7 @@ pub fn run() {
                     .status(asset.status)
                     .header("Content-Type", asset.mime_type)
                     .header("Content-Length", asset.bytes.len().to_string())
+                    .header("Access-Control-Allow-Origin", "*")
                     .header("Cache-Control", "no-store");
                 if asset.total_length.is_some() {
                     response = response.header("Accept-Ranges", "bytes");
@@ -164,6 +167,7 @@ pub fn run() {
                 Some(bytes) => tauri::http::Response::builder()
                     .status(200)
                     .header("Content-Type", "image/png")
+                    .header("Access-Control-Allow-Origin", "*")
                     .header("Cache-Control", "no-store")
                     .body(bytes)
                     .expect("valid image response"),
@@ -197,6 +201,10 @@ pub fn run() {
             trash_artifact,
             dismiss_artifact,
             open_artifact_viewer,
+            screenshot_editor::open_screenshot_editor,
+            screenshot_editor::default_screenshot_edit_path,
+            screenshot_editor::copy_screenshot_edit,
+            screenshot_editor::save_screenshot_edit,
             show_capture_overlay,
             reveal_capture_overlay,
             sync_capture_cursor,
@@ -2791,7 +2799,9 @@ fn primary_app_window_priority(label: &str) -> Option<u8> {
     if matches!(label, "recording-selector" | "recording-countdown") {
         return Some(0);
     }
-    if label.starts_with(RECORDING_EDITOR_WINDOW_PREFIX) {
+    if label.starts_with(RECORDING_EDITOR_WINDOW_PREFIX)
+        || label.starts_with(SCREENSHOT_EDITOR_WINDOW_PREFIX)
+    {
         return Some(1);
     }
     if label == "history" {
@@ -3626,6 +3636,10 @@ mod tests {
     #[test]
     fn app_reopen_prefers_editors_over_utility_windows() {
         assert_eq!(primary_app_window_priority("recording-editor-abc"), Some(1));
+        assert_eq!(
+            primary_app_window_priority("screenshot-editor-abc"),
+            Some(1)
+        );
         assert_eq!(primary_app_window_priority("history"), Some(2));
         assert_eq!(primary_app_window_priority("recording-hud"), Some(4));
         assert_eq!(primary_app_window_priority("thumbnail"), None);

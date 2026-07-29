@@ -106,11 +106,22 @@ describe("ThumbnailCard", () => {
     render(<ThumbnailCard artifact={artifact(null)} clipboardCurrent viewerActive={false} onRemoved={() => undefined} />);
 
     expect(screen.getByText("Copied to clipboard")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Full size" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Close" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Copy" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save file" })).toBeInTheDocument();
+  });
+
+  it("opens the cross-platform screenshot editor from quick access", () => {
+    render(<ThumbnailCard artifact={artifact(null)} clipboardCurrent viewerActive={false} onRemoved={() => undefined} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+
+    expect(invoke).toHaveBeenCalledWith("open_screenshot_editor", {
+      artifactId: "capture-1",
+    });
   });
 
   it("after a folder save: Close keeps the file, Delete removes it", () => {

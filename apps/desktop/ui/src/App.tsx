@@ -5,6 +5,7 @@ import { message, open } from "@tauri-apps/plugin-dialog";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 
+import { ScreenshotEditor } from "./ScreenshotEditor";
 import { formatFileSize } from "./lib/format";
 import { reconcileClipboardState } from "./lib/clipboard";
 import {
@@ -274,6 +275,7 @@ export function App() {
   if (view === "recording-countdown") return <RecordingCountdown />;
   if (view === "recording-hud") return <RecordingHud />;
   if (view === "recording-editor") return <RecordingEditor />;
+  if (view === "screenshot-editor") return <ScreenshotEditor />;
   if (view === "recording-saved") return <RecordingSavedNotice />;
   if (view === "recording-controls-hidden") return <RecordingControlsHiddenNotice />;
   if (view === "thumbnail") return <Thumbnail />;
@@ -520,6 +522,8 @@ function ArtifactViewer() {
   const artifactId = query("artifact_id");
   const [artifact, setArtifact] = useState<CaptureArtifact | null>(null);
   const [fit, setFit] = useState(true);
+  const [openingEditor, setOpeningEditor] = useState(false);
+  const [editorError, setEditorError] = useState("");
 
   useEffect(() => {
     let active = true;
@@ -582,10 +586,26 @@ function ArtifactViewer() {
           <strong>Captures Preview</strong>
           <span>{artifact.width} × {artifact.height}</span>
         </div>
-        <button type="button" onClick={() => setFit((current) => !current)}>
-          {fit ? "Actual size" : "Fit to window"}
-        </button>
+        <div className="viewer-toolbar-actions">
+          <button
+            type="button"
+            disabled={openingEditor}
+            onClick={() => {
+              setOpeningEditor(true);
+              setEditorError("");
+              void invoke("open_screenshot_editor", { artifactId: artifact.id })
+                .catch((error) => setEditorError(String(error)))
+                .finally(() => setOpeningEditor(false));
+            }}
+          >
+            <EditIcon />{openingEditor ? "Opening…" : "Edit"}
+          </button>
+          <button type="button" onClick={() => setFit((current) => !current)}>
+            {fit ? "Actual size" : "Fit to window"}
+          </button>
+        </div>
       </header>
+      {editorError && <p className="viewer-error" role="alert">{editorError}</p>}
       <div className="viewer-canvas" onDoubleClick={() => setFit((current) => !current)}>
         <img
           key={artifact.id}
@@ -692,7 +712,7 @@ export function HistoryCard({
   entry: ArtifactSummary;
   onDeleted: (artifactId: string) => void;
 }) {
-  const [busy, setBusy] = useState<"restoring" | "opening" | "revealing" | "deleting" | null>(null);
+  const [busy, setBusy] = useState<"restoring" | "editing" | "opening" | "revealing" | "deleting" | null>(null);
   const [restored, setRestored] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [error, setError] = useState("");
@@ -726,6 +746,20 @@ export function HistoryCard({
     setError("");
     try {
       await invoke("open_recording_editor", { artifactId: entry.id });
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const editScreenshot = async () => {
+    if (busy || entry.kind !== "screenshot") return;
+    setBusy("editing");
+    setError("");
+    try {
+      await invoke("restore_history_artifact", { artifactId: entry.id });
+      await invoke("open_screenshot_editor", { artifactId: entry.id });
     } catch (error) {
       setError(String(error));
     } finally {
@@ -793,14 +827,24 @@ export function HistoryCard({
           entry.kind !== "screenshot" && entry.missing ? "history-missing-actions" : "",
         ].filter(Boolean).join(" ")}>
           {entry.kind === "screenshot" ? (
-            <button
-              type="button"
-              className="history-restore"
-              disabled={busy !== null}
-              onClick={() => void restore()}
-            >
-              {restored ? <><CheckIcon />Restored</> : <><RestoreIcon />{busy === "restoring" ? "Restoring…" : "Restore"}</>}
-            </button>
+            <>
+              <button
+                type="button"
+                className="history-restore"
+                disabled={busy !== null}
+                onClick={() => void editScreenshot()}
+              >
+                <EditIcon />{busy === "editing" ? "Opening…" : "Edit"}
+              </button>
+              <button
+                type="button"
+                className="history-reveal"
+                disabled={busy !== null}
+                onClick={() => void restore()}
+              >
+                {restored ? <><CheckIcon />Restored</> : <><RestoreIcon />{busy === "restoring" ? "Restoring…" : "Restore"}</>}
+              </button>
+            </>
           ) : !entry.missing ? (
             <>
               <button
@@ -4038,6 +4082,12 @@ export function ThumbnailCard({
     void runAction("open_artifact_viewer");
   };
 
+  const openEditor = () => {
+    if (isExitLocked() || isExiting) return;
+    if (cardRef.current) setThumbnailNativeActiveCard(cardRef.current);
+    void runAction("open_screenshot_editor");
+  };
+
   const beginFileDrag = async (event: React.DragEvent<HTMLImageElement>) => {
     event.preventDefault();
     if (fileDraggingRef.current || isExitLocked() || isExiting) {
@@ -4250,6 +4300,13 @@ export function ThumbnailCard({
         </div>
         <div className="thumbnail-top-right">
           <IconButton
+            label="Edit"
+            disabled={isExiting}
+            onClick={openEditor}
+          >
+            <EditIcon />
+          </IconButton>
+          <IconButton
             label="Full size"
             disabled={isExiting}
             onClick={openViewer}
@@ -4338,6 +4395,10 @@ function FolderIcon() {
 
 function ExpandIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M21 16v5h-5M3 16v5h5M9 9 3 3m12 6 6-6m-6 12 6 6M9 15l-6 6" /></svg>;
+}
+
+function EditIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 16-1 5 5-1L19 9l-4-4ZM13.5 6.5l4 4M4 16l4 4" /></svg>;
 }
 
 function TrashIcon() {
