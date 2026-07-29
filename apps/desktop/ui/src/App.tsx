@@ -942,6 +942,31 @@ type RecordingRegionDrag = {
 type RecordingPanelPosition = { left: number; top: number };
 type RecordingPanelDrag = { pointerId: number; offsetX: number; offsetY: number };
 
+export function CaptureGuidance({
+  mode,
+  feedback = false,
+}: {
+  mode: Extract<CaptureMode, "region" | "window">;
+  feedback?: boolean;
+}) {
+  const title = mode === "window"
+    ? "Select a window to continue"
+    : feedback
+      ? "Click and drag to select a region"
+      : "Drag to select a region";
+
+  return (
+    <div
+      className={`capture-guidance${feedback ? " capture-guidance-feedback" : ""}`}
+      role="status"
+      aria-live="polite"
+    >
+      <strong>{title}</strong>
+      <span>Esc to cancel</span>
+    </div>
+  );
+}
+
 export function RecordingCountdown() {
   const [snapshot, setSnapshot] = useState<RecordingSessionSnapshot | null>(null);
   const [remaining, setRemaining] = useState<number | null>(null);
@@ -1614,11 +1639,8 @@ export function RecordingSelector() {
         bounds={{ width: session.display.width, height: session.display.height }}
         dimWithoutHole={targetMode === "window"}
       />
-      {targetMode === "window" && !selectedWindow && (
-        <div className="recording-window-guidance" role="status">
-          <strong>Select a window to continue</strong>
-        </div>
-      )}
+      {targetMode === "region" && <CaptureGuidance mode="region" />}
+      {targetMode === "window" && !selectedWindow && <CaptureGuidance mode="window" />}
       {targetMode !== "window" && selectedRect && selectedRect.width > 0 && selectedRect.height > 0 && (
         <div
           className={`recording-selection-frame recording-selection-${targetMode}${targetMode === "region" ? " movable" : ""}`}
@@ -3504,18 +3526,11 @@ function CaptureOverlay() {
         hole={dimHole}
         bounds={{ width: session.display.width, height: session.display.height }}
       />
-      <div
+      <CaptureGuidance
         key={`${sessionId}-${selectionFeedback}`}
-        className={`capture-hint${selectionFeedback > 0 ? " capture-hint-feedback" : ""}`}
-        role="status"
-        aria-live="polite"
-      >
-        {mode === "region"
-          ? selectionFeedback > 0
-            ? "Click and drag to select an area · Esc to cancel"
-            : "Drag to capture · Esc to cancel"
-          : "Select a window · Esc to cancel"}
-      </div>
+        mode={mode === "region" ? "region" : "window"}
+        feedback={mode === "region" && selectionFeedback > 0}
+      />
       {hasSelection && rect && (
         <div
           className="selection-box"

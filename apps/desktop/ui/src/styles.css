@@ -132,7 +132,7 @@ h1, h2, p { margin: 0; }
 .capture-region { transition: none; }
 .capture-surface.capture-visible { opacity: 1; pointer-events: auto; }
 .capture-surface.capture-priming { pointer-events: none; transition: none; }
-.capture-priming .capture-shade, .capture-priming .capture-hint, .capture-priming .window-targets { transition: none; }
+.capture-priming .capture-shade, .capture-priming .capture-guidance, .capture-priming .window-targets { transition: none; }
 /* Full-res snapshot is sized to the display; keep crisp scaling on Retina. */
 .capture-snapshot { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; image-rendering: auto; pointer-events: none; }
 .capture-region.capture-visible:not(.capture-priming) { cursor: crosshair; }
@@ -151,10 +151,13 @@ html.capture-window-cursor, html.capture-window-cursor * { cursor: var(--capture
 .capture-region .capture-shade { opacity: 0; transition: opacity .32s cubic-bezier(.42,0,.58,1); }
 .capture-region.capture-visible .capture-shade { opacity: 1; }
 .capture-window .capture-shade { fill: rgba(8, 12, 20, .4); background: rgba(8, 12, 20, .4); }
-.capture-hint { position: absolute; z-index: 10000; top: 22px; left: 50%; transform: translate(-50%, -6px); border: 1px solid rgba(255,255,255,.14); border-radius: 999px; padding: 9px 16px; color: #fff; background: rgba(17,18,26,.78); box-shadow: 0 8px 30px rgba(0,0,0,.25); opacity: 0; transition: opacity .3s ease-out, transform .3s ease-out; pointer-events: none; font-size: 13px; }
-.capture-visible .capture-hint { opacity: 1; transform: translate(-50%, 0); }
-.capture-hint-feedback { border-color: rgba(255,190,92,.72); color: #fff4d8; background: rgba(45,31,18,.9); animation: capture-hint-nudge .3s ease-out; }
-@keyframes capture-hint-nudge { 0%, 100% { margin-left: 0; } 25% { margin-left: -8px; } 75% { margin-left: 8px; } }
+.capture-guidance { position: absolute; z-index: 10; top: 18%; left: 50%; display: grid; min-width: 220px; padding: 11px 15px; justify-items: center; gap: 3px; border: 1px solid rgba(255,255,255,.3); border-radius: 10px; color: #f7f7f8; background: rgba(20,21,24,.92); box-shadow: 0 12px 34px rgba(0,0,0,.34), 0 0 0 1px rgba(255,255,255,.05) inset; backdrop-filter: blur(18px); pointer-events: none; text-align: center; transform: translateX(-50%); animation: capture-guidance-in .2s ease-out both; }
+.capture-guidance strong { font-size: 13px; font-weight: 800; }
+.capture-guidance span { color: rgba(247,247,248,.72); font-size: 11px; font-weight: 650; }
+.capture-guidance-feedback { border-color: rgba(255,190,92,.72); color: #fff4d8; background: rgba(45,31,18,.9); animation: capture-guidance-nudge .3s ease-out; }
+.capture-guidance-feedback span { color: rgba(255,244,216,.78); }
+@keyframes capture-guidance-in { from { opacity: 0; transform: translate(-50%, -5px); } to { opacity: 1; transform: translate(-50%, 0); } }
+@keyframes capture-guidance-nudge { 0%, 100% { margin-left: 0; } 25% { margin-left: -8px; } 75% { margin-left: 8px; } }
 /* Marquee only — outside dim comes from the atomic CaptureDim cutout. */
 .selection-box { position: absolute; z-index: 5; border: 2px solid var(--chrome-active); background: transparent; box-shadow: 0 0 0 1px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.45) inset; pointer-events: none; }
 .selection-box span { position: absolute; top: -30px; left: 0; padding: 5px 8px; border-radius: 5px; color: var(--chrome-active-ink); background: var(--chrome-active); font-size: 12px; font-weight: 700; white-space: nowrap; }
@@ -487,7 +490,7 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 }
 @keyframes thumbnail-action-pop { from { opacity: .25; transform: scale(.65); } to { opacity: 1; transform: scale(1); } }
 @media (prefers-reduced-motion: reduce) {
-  .capture-surface, .capture-shade, .capture-hint, .window-targets, .recording-countdown, .recording-countdown-content, .thumbnail-card, .thumbnail-card::after, .thumbnail-card img, .clipboard-confirmation, .thumbnail-top-actions, .thumbnail-main-actions, .thumbnail-main-actions svg, .thumbnail-dust, .thumbnail-dust-layer { animation-duration: .01ms !important; transition-duration: .01ms; }
+  .capture-surface, .capture-shade, .capture-guidance, .window-targets, .recording-countdown, .recording-countdown-content, .thumbnail-card, .thumbnail-card::after, .thumbnail-card img, .clipboard-confirmation, .thumbnail-top-actions, .thumbnail-main-actions, .thumbnail-main-actions svg, .thumbnail-dust, .thumbnail-dust-layer { animation-duration: .01ms !important; transition-duration: .01ms; }
   .thumbnail-card.thumbnail-exit-dismiss img { animation: none; filter: blur(2px) brightness(.56); transform: scale(1.015); }
   .thumbnail-dust { opacity: 0; }
 }
@@ -563,9 +566,6 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .recording-window-target:hover::before, .recording-window-target.hovered::before, .recording-window-target.selected::before { border-color: rgba(255,255,255,.92); background: rgba(255,255,255,.12); box-shadow: 0 0 0 1px rgba(255,255,255,.25); }
 .recording-window-target span { position: relative; z-index: 1; display: inline-block; max-width: calc(100% - 6px); margin: 4px; padding: 4px 7px; overflow: hidden; border-radius: 4px; background: transparent; opacity: 0; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .recording-window-target:hover span, .recording-window-target.hovered span, .recording-window-target.selected span { background: rgba(17,18,26,.88); opacity: 1; }
-.recording-window-guidance { position: absolute; z-index: 10; top: 18%; left: 50%; display: grid; min-width: 220px; padding: 11px 15px; justify-items: center; gap: 3px; border: 1px solid rgba(255,255,255,.3); border-radius: 10px; color: #f7f7f8; background: rgba(20,21,24,.92); box-shadow: 0 12px 34px rgba(0,0,0,.34), 0 0 0 1px rgba(255,255,255,.05) inset; backdrop-filter: blur(18px); pointer-events: none; text-align: center; transform: translateX(-50%); animation: recording-window-guidance-in .2s ease-out both; }
-.recording-window-guidance strong { font-size: 13px; font-weight: 800; }
-@keyframes recording-window-guidance-in { from { opacity: 0; transform: translate(-50%, -5px); } to { opacity: 1; transform: translate(-50%, 0); } }
 .recording-selector-panel { position: absolute; z-index: 20; bottom: 22px; left: 50%; width: max-content; max-width: calc(100% - 32px); overflow: visible; border: 1px solid rgba(255,255,255,.14); border-radius: 15px; background: rgba(26,27,30,.97); box-shadow: 0 18px 55px rgba(0,0,0,.48); backdrop-filter: blur(24px); cursor: grab; touch-action: none; transform: translateX(-50%); }
 .recording-selector-panel[data-resizing="true"] { overflow: hidden; }
 .recording-selector-panel.dragging { cursor: grabbing; }
@@ -845,6 +845,6 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .recording-recovery-section { max-width: 1180px; margin: 0 auto 22px; padding: 16px; border: 1px solid rgba(255,202,40,.24); border-radius: 10px; background: #222117; }.recording-recovery-section > .help-text { margin: 4px 0 12px; color: #aaa998; font-size: 11px; line-height: 1.45; }.recording-recovery-row { display: flex; padding: 11px 0; align-items: center; justify-content: space-between; gap: 16px; border-top: 1px solid rgba(255,255,255,.08); }.recording-recovery-row strong, .recording-recovery-row small { display: block; }.recording-recovery-row strong { color: #f5f5f5; font-size: 12px; }.recording-recovery-row small { margin-top: 3px; color: #9a9a9f; font-size: 10px; }.recording-recovery-row small.warning, .recording-recovery-section .settings-error { color: #ff9da7; }.recording-recovery-row > div:last-child { display: flex; flex: 0 0 auto; gap: 6px; }.recording-recovery-row button { border: 1px solid #45453d; border-radius: 6px; padding: 7px 9px; color: #ecece8; background: #34342d; font-size: 10px; font-weight: 750; }.recording-recovery-row button.danger { border-color: #8f3842; background: #7b2933; }.recording-recovery-row button:disabled { opacity: .45; }.recording-recovery-section .settings-error { margin-top: 9px; font-size: 10px; }
 @media (max-width: 820px) { .recording-selector-panel { width: calc(100% - 32px); }.recording-options-row { grid-template-columns: repeat(2,minmax(0,1fr)); }.recording-start { margin-left: 0; }.recording-editor { padding-bottom: 142px; }.recording-editor-grid { grid-template-columns: 1fr; }.editor-output-card, .editor-audio-card { grid-column: auto; }.recording-save-footer { min-height: 116px; padding: 8px 16px; grid-template-columns: minmax(0,1fr) max-content; justify-content: stretch; gap: 7px 14px; }.recording-filename { grid-column: 1; }.recording-make-copy { grid-column: 2; margin-top: 19px; }.recording-save-action-area { min-width: 0; grid-column: 1 / -1; }.recording-save-toast, .recording-save-actions { justify-content: flex-end; } }
 @media (prefers-reduced-motion: reduce) {
-  .recording-start:not(:disabled) > span::after, .recording-window-guidance, .recording-options-row { animation: none; }
+  .recording-start:not(:disabled) > span::after, .capture-guidance, .recording-options-row { animation: none; }
   .capture-segmented-indicator.ready { transition-duration: .01ms; }
 }
