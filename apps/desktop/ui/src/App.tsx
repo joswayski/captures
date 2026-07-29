@@ -3,13 +3,25 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { message, open } from "@tauri-apps/plugin-dialog";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { ScreenshotEditor } from "./ScreenshotEditor";
 import {
   applyColorTheme,
   COLOR_THEMES,
   DEFAULT_COLOR_THEME,
+  DEFAULT_CUSTOM_THEME,
+  normalizeCustomThemeColors,
+  normalizeHexColor,
 } from "../../../../shared/themes";
 import { formatFileSize } from "./lib/format";
 import { reconcileClipboardState } from "./lib/clipboard";
@@ -64,6 +76,7 @@ import type {
   CaptureArtifact,
   CaptureMode,
   ClipboardState,
+  CustomThemeColors,
   EditSpec,
   ExportProgress,
   ExportSpec,
@@ -280,7 +293,10 @@ function useColorThemeSync() {
     let active = true;
     let unlisten: (() => void) | undefined;
     const applySettingsTheme = (settings: AppSettings) => {
-      applyColorTheme(settings.theme ?? DEFAULT_COLOR_THEME);
+      applyColorTheme(
+        settings.theme ?? DEFAULT_COLOR_THEME,
+        settings.custom_theme ?? DEFAULT_CUSTOM_THEME,
+      );
     };
 
     void invoke<AppSettings>("get_settings")
@@ -4542,6 +4558,60 @@ type PreferencesSaveStatus = {
   message: string;
 };
 
+function ThemeColorField({
+  label,
+  description,
+  value,
+  onChange,
+}: {
+  label: string;
+  description: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const pickerId = useId();
+  const commitHexValue = (input: HTMLInputElement) => {
+    const normalized = normalizeHexColor(input.value);
+    if (normalized) onChange(normalized);
+    else input.value = value.toUpperCase();
+  };
+
+  return (
+    <div className="custom-theme-field">
+      <label htmlFor={pickerId}>{label}</label>
+      <div className="custom-theme-color-control">
+        <input
+          id={pickerId}
+          type="color"
+          value={value}
+          aria-label={`${label} color picker`}
+          onChange={(event) => onChange(event.target.value)}
+        />
+        <input
+          key={value}
+          type="text"
+          defaultValue={value.toUpperCase()}
+          aria-label={`${label} hex value`}
+          maxLength={7}
+          spellCheck={false}
+          onBlur={(event) => commitHexValue(event.currentTarget)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              event.currentTarget.blur();
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              event.currentTarget.value = value.toUpperCase();
+              event.currentTarget.blur();
+            }
+          }}
+        />
+      </div>
+      <small>{description}</small>
+    </div>
+  );
+}
+
 export function Preferences() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [recordingDevices, setRecordingDevices] = useState<AudioDevice[]>([]);
@@ -4683,6 +4753,21 @@ export function Preferences() {
     scheduleSettingsSave(next);
   };
 
+  const setCustomTheme = (colors: CustomThemeColors) => {
+    const current = settingsRef.current;
+    if (!current) return;
+    const customTheme = normalizeCustomThemeColors(colors);
+    const next: AppSettings = {
+      ...current,
+      theme: "custom",
+      custom_theme: customTheme,
+    };
+    applyColorTheme("custom", customTheme);
+    settingsRef.current = next;
+    setSettings(next);
+    scheduleSettingsSave(next);
+  };
+
   const chooseDirectory = async () => {
     const selected = await open({ directory: true, multiple: false, title: "Choose capture folder" });
     if (typeof selected === "string") update("output_directory", selected);
@@ -4711,30 +4796,79 @@ export function Preferences() {
           Apply one color system across every Captures window. Status colors keep their meaning.
         </p>
         <div className="theme-options" role="radiogroup" aria-label="Color theme">
-          {COLOR_THEMES.map((theme) => (
-            <button
-              key={theme.id}
-              type="button"
-              className={`theme-option${settings.theme === theme.id ? " active" : ""}`}
-              role="radio"
-              aria-checked={settings.theme === theme.id}
-              onClick={() => {
-                applyColorTheme(theme.id);
-                update("theme", theme.id);
-              }}
-            >
-              <span className="theme-option-preview" data-capture-theme={theme.id} aria-hidden="true">
-                <span />
-                <span />
-              </span>
-              <span className="theme-option-copy">
-                <strong>{theme.name}</strong>
-                <small>{theme.description}</small>
-              </span>
-              <span className="theme-option-check" aria-hidden="true">✓</span>
-            </button>
-          ))}
+          {COLOR_THEMES.map((theme) => {
+            const previewStyle = theme.id === "custom"
+              ? {
+                  "--theme-accent": settings.custom_theme.accent,
+                  "--theme-signal": settings.custom_theme.signal,
+                } as CSSProperties
+              : undefined;
+            return (
+              <button
+                key={theme.id}
+                type="button"
+                className={`theme-option${settings.theme === theme.id ? " active" : ""}`}
+                role="radio"
+                aria-checked={settings.theme === theme.id}
+                onClick={() => {
+                  applyColorTheme(theme.id, settings.custom_theme);
+                  update("theme", theme.id);
+                }}
+              >
+                <span
+                  className="theme-option-preview"
+                  data-capture-theme={theme.id}
+                  style={previewStyle}
+                  aria-hidden="true"
+                >
+                  <span />
+                  <span />
+                </span>
+                <span className="theme-option-copy">
+                  <strong>{theme.name}</strong>
+                  <small>{theme.description}</small>
+                </span>
+                <span className="theme-option-check" aria-hidden="true">✓</span>
+              </button>
+            );
+          })}
         </div>
+        {settings.theme === "custom" && (
+          <div className="custom-theme-editor" role="group" aria-label="Custom theme colors">
+            <div className="custom-theme-editor-heading">
+              <div>
+                <strong>Custom colors</strong>
+                <small>Supporting shades are generated automatically for contrast.</small>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCustomTheme({ ...DEFAULT_CUSTOM_THEME })}
+              >
+                Reset to Mustard
+              </button>
+            </div>
+            <div className="custom-theme-fields">
+              <ThemeColorField
+                label="Accent"
+                description="Capture actions, selections, focus, and editing."
+                value={settings.custom_theme.accent}
+                onChange={(accent) => setCustomTheme({
+                  ...settings.custom_theme,
+                  accent,
+                })}
+              />
+              <ThemeColorField
+                label="Recording signal"
+                description="Recording indicators, errors, and destructive actions."
+                value={settings.custom_theme.signal}
+                onChange={(signal) => setCustomTheme({
+                  ...settings.custom_theme,
+                  signal,
+                })}
+              />
+            </div>
+          </div>
+        )}
       </section>
 
       <section className="settings-section">

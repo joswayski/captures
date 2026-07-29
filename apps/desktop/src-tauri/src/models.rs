@@ -16,6 +16,8 @@ pub struct AppSettings {
     pub settings_schema_version: u8,
     #[serde(default)]
     pub theme: ColorTheme,
+    #[serde(default)]
+    pub custom_theme: CustomThemeSettings,
     pub output_directory: String,
     #[serde(default = "default_new_capture_shortcut")]
     pub new_capture_shortcut: String,
@@ -38,9 +40,34 @@ pub struct AppSettings {
 pub enum ColorTheme {
     #[default]
     Mustard,
-    Saffron,
+    #[serde(alias = "saffron")]
+    Violet,
     Cobalt,
     Mint,
+    Custom,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CustomThemeSettings {
+    #[serde(default = "default_custom_theme_accent")]
+    pub accent: String,
+    #[serde(default = "default_custom_theme_signal")]
+    pub signal: String,
+}
+
+impl CustomThemeSettings {
+    pub fn is_valid(&self) -> bool {
+        is_hex_color(&self.accent) && is_hex_color(&self.signal)
+    }
+}
+
+impl Default for CustomThemeSettings {
+    fn default() -> Self {
+        Self {
+            accent: default_custom_theme_accent(),
+            signal: default_custom_theme_signal(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -104,6 +131,7 @@ impl Default for AppSettings {
         Self {
             settings_schema_version: CURRENT_SETTINGS_SCHEMA_VERSION,
             theme: ColorTheme::default(),
+            custom_theme: CustomThemeSettings::default(),
             output_directory: default_output_directory().to_string_lossy().into_owned(),
             new_capture_shortcut: default_new_capture_shortcut(),
             region_shortcut: "Ctrl+Shift+4".to_owned(),
@@ -116,6 +144,20 @@ impl Default for AppSettings {
             recording: RecordingSettings::default(),
         }
     }
+}
+
+fn default_custom_theme_accent() -> String {
+    "#ffca28".to_owned()
+}
+
+fn default_custom_theme_signal() -> String {
+    "#ef4650".to_owned()
+}
+
+fn is_hex_color(value: &str) -> bool {
+    value.len() == 7
+        && value.starts_with('#')
+        && value.as_bytes()[1..].iter().all(u8::is_ascii_hexdigit)
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -617,9 +659,9 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        AppSettings, ColorTheme, HistoryEntry, RecordingArtifact, migrate_output_directory,
-        migrate_settings, recording_controls_are_excluded, recording_media_url,
-        recording_poster_url, recording_selection_url, snapshot_url,
+        AppSettings, ColorTheme, CustomThemeSettings, HistoryEntry, RecordingArtifact,
+        migrate_output_directory, migrate_settings, recording_controls_are_excluded,
+        recording_media_url, recording_poster_url, recording_selection_url, snapshot_url,
     };
 
     #[test]
@@ -686,6 +728,7 @@ mod tests {
         assert!(settings.pending_capture_after_restart.is_none());
         assert!(settings.auto_copy_to_clipboard);
         assert_eq!(settings.theme, ColorTheme::Mustard);
+        assert_eq!(settings.custom_theme, CustomThemeSettings::default());
         assert_eq!(settings.new_capture_shortcut, "Ctrl+Shift+Space");
         assert_eq!(settings.recording.video_fps, 60);
         assert_eq!(
@@ -795,9 +838,13 @@ mod tests {
     }
 
     #[test]
-    fn persists_the_selected_color_theme() {
+    fn persists_the_selected_color_theme_and_custom_colors() {
         let settings = AppSettings {
-            theme: ColorTheme::Cobalt,
+            theme: ColorTheme::Custom,
+            custom_theme: CustomThemeSettings {
+                accent: "#123abc".to_owned(),
+                signal: "#fe4567".to_owned(),
+            },
             ..AppSettings::default()
         };
 
@@ -805,7 +852,39 @@ mod tests {
         let restored: AppSettings =
             serde_json::from_str(&json).expect("settings should deserialize");
 
-        assert_eq!(restored.theme, ColorTheme::Cobalt);
+        assert_eq!(restored.theme, ColorTheme::Custom);
+        assert_eq!(restored.custom_theme, settings.custom_theme);
+    }
+
+    #[test]
+    fn replaces_the_retired_saffron_theme_with_violet() {
+        let mut value =
+            serde_json::to_value(AppSettings::default()).expect("settings should serialize");
+        value["theme"] = serde_json::Value::String("saffron".to_owned());
+
+        let restored: AppSettings =
+            serde_json::from_value(value).expect("legacy Saffron settings should deserialize");
+
+        assert_eq!(restored.theme, ColorTheme::Violet);
+    }
+
+    #[test]
+    fn validates_custom_theme_hex_colors() {
+        assert!(CustomThemeSettings::default().is_valid());
+        assert!(
+            CustomThemeSettings {
+                accent: "#123ABC".to_owned(),
+                signal: "#abcdef".to_owned(),
+            }
+            .is_valid()
+        );
+        assert!(
+            !CustomThemeSettings {
+                accent: "123abc".to_owned(),
+                signal: "#abcdef".to_owned(),
+            }
+            .is_valid()
+        );
     }
 
     #[test]

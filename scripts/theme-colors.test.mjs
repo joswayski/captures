@@ -23,7 +23,7 @@ test("every declared color theme has a shared CSS palette and backend value", as
   const backendIds = [...rustEnum.matchAll(/^\s*([A-Z][A-Za-z]+),$/gmu)]
     .map((match) => match[1].replaceAll(/([a-z0-9])([A-Z])/gu, "$1_$2").toLowerCase());
 
-  assert.deepEqual(ids, ["mustard", "saffron", "cobalt", "mint"]);
+  assert.deepEqual(ids, ["mustard", "violet", "cobalt", "mint", "custom"]);
   assert.deepEqual(backendIds, ids);
   for (const id of ids) {
     assert.match(sharedCss, new RegExp(`data-capture-theme="${id}"`, "u"));
@@ -64,13 +64,16 @@ test("preset accent and signal values are not duplicated outside the shared pale
 
 test("theme action colors preserve readable text contrast", async () => {
   const sharedCss = await readFile(sharedCssPath, "utf8");
-  const ids = ["mustard", "saffron", "cobalt", "mint"];
+  const ids = ["mustard", "violet", "cobalt", "mint", "custom"];
 
   for (const id of ids) {
-    const block = sharedCss.match(
-      new RegExp(`\\[data-capture-theme="${id}"\\]\\s*\\{([^}]+)\\}`, "u"),
-    )?.[1];
-    assert.ok(block, `missing palette block for ${id}`);
+    const selectorStart = sharedCss.indexOf(`[data-capture-theme="${id}"]`);
+    assert.notEqual(selectorStart, -1, `missing palette selector for ${id}`);
+    const blockStart = sharedCss.indexOf("{", selectorStart);
+    const blockEnd = sharedCss.indexOf("}", blockStart);
+    assert.notEqual(blockStart, -1, `missing palette block start for ${id}`);
+    assert.notEqual(blockEnd, -1, `missing palette block end for ${id}`);
+    const block = sharedCss.slice(blockStart + 1, blockEnd);
 
     const value = (property) => {
       const color = block.match(new RegExp(`--${property}:\\s*(#[0-9a-f]{6})`, "iu"))?.[1];
