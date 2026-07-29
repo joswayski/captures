@@ -277,6 +277,8 @@ describe("RecordingSelector", () => {
     expect(screenshotMode.querySelector(".capture-icon-spark")).not.toBeNull();
     expect(targetSwitch).toHaveAttribute("data-active", "region");
     expect(targetSwitch?.querySelector(".capture-segmented-indicator")).not.toBeNull();
+    const regionGuidance = screen.getByText("Drag to select a region").closest(".capture-guidance");
+    expect(regionGuidance).toHaveTextContent("Esc to cancel");
     expect(container.querySelector(".capture-selector-note")).toHaveTextContent(
       "These controls won’t appear in the output · Press Enter to confirm",
     );
@@ -287,7 +289,10 @@ describe("RecordingSelector", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Window" }));
     expect(targetSwitch).toHaveAttribute("data-active", "window");
+    const windowGuidance = screen.getByText("Select a window to continue").closest(".capture-guidance");
+    expect(windowGuidance).toHaveTextContent("Esc to cancel");
     fireEvent.click(screen.getByRole("button", { name: "Select Front eligible window" }));
+    expect(screen.queryByText("Select a window to continue")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Record", pressed: false }));
     expect(actionSwitch).toHaveAttribute("data-active", "recording");
@@ -397,7 +402,8 @@ describe("RecordingSelector", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Window" }));
 
     expect(screen.queryByText(/Window selected/)).not.toBeInTheDocument();
-    expect(screen.getByText("Select a window to continue")).toBeInTheDocument();
+    const windowGuidance = screen.getByText("Select a window to continue").closest(".capture-guidance");
+    expect(windowGuidance).toHaveTextContent("Esc to cancel");
     expect(screen.queryByText(/enable (Capture|Record)/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Select Captures Preferences" })).toBeInTheDocument();
     const frontWindow = screen.getByRole("button", { name: "Select Front eligible window" });
@@ -430,6 +436,7 @@ describe("RecordingSelector", () => {
     fireEvent.click(frontWindow);
     expect(frontWindow).toHaveClass("selected");
     expect(screen.queryByText("Select a window")).not.toBeInTheDocument();
+    expect(screen.queryByText("Esc to cancel")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start recording" })).toBeEnabled();
     expect(container.querySelector(".capture-shade-path")).toHaveAttribute(
       "d",
