@@ -15,6 +15,24 @@ latest. A failed build removes its draft and tag, leaving the prior release and
 updater manifest untouched. If draft creation itself is interrupted, the next
 run removes only stale drafts with its generated tag before retrying.
 
+## Public-release gates
+
+Creating an installer and signing a Tauri updater archive do not by themselves make a production public release. Do not treat a release as production-ready until every gate below is enforced by the workflow and passes:
+
+| Platform or concern | Required before production publishing | Current implementation |
+| --- | --- | --- |
+| macOS | Developer ID Application signature, Apple notarization, stapled ticket, and clean-machine Gatekeeper validation | CI wiring exists; it requires the Apple credentials below |
+| Windows | Publicly trusted Authenticode signatures and RFC 3161 timestamps on both `captures.exe` and the NSIS installer | Updater archives are signed, but Authenticode is not configured |
+| Linux | `SHA256SUMS` plus GitHub build-provenance attestations for the `.deb` and AppImage | Checksums and updater signatures exist; attestations are not configured |
+| All platforms | Every downloadable artifact must come from the tested commit, pass clean-machine installation, and remain unpublished if any platform is incomplete | Draft validation exists; it must be extended with the Windows and provenance gates |
+
+These signatures have separate trust boundaries:
+
+- Apple and Authenticode signatures establish the operating-system publisher.
+- `TAURI_SIGNING_PRIVATE_KEY` lets installed copies authenticate automatic updates; it does not identify the Windows publisher or replace Apple notarization.
+- GitHub artifact attestations establish which repository, commit, and workflow produced a downloaded artifact.
+- `SHA256SUMS` detects file changes after publication.
+
 ## GitHub release environment
 
 Create a GitHub environment named `release`, restrict its deployment branches to `main`, and add these environment secrets:
@@ -34,6 +52,102 @@ Commit only the updater public key. Keep the updater private key, its password, 
 
 The macOS build intentionally fails when any Apple credential is missing or the imported identity is not a Developer ID Application certificate. Do not merge the updater bootstrap PR until the paid Apple Developer account, certificate, and notarization credentials are ready.
 
+## macOS signing and notarization
+
+Direct distribution outside the Mac App Store requires a Developer ID Application signature and Apple notarization. A Developer ID Installer certificate is not needed for the DMG; it is used for signed `.pkg` installers. The same Developer ID Application identity can sign Captures and DBM, although each repository must independently protect its release environment and validate its output.
+
+1. Create a certificate signing request in Keychain Access.
+2. Create a **Developer ID Application** certificate in the Apple Developer portal, install it in the login keychain, and export the identity and private key as a password-protected `.p12`.
+3. Create an App Store Connect **Team API key** with Developer access. Save its issuer ID, key ID, and downloaded `.p8`; Apple permits the private key to be downloaded only once.
+4. Back up the `.p12`, `.p8`, Tauri updater private key, passwords, and recovery information in encrypted offline storage.
+5. Add the Apple values to the `release` environment using the exact secret names above.
+6. Confirm the workflow signs, notarizes, and staples the app and DMG, then validate them on a clean supported Mac without using a Gatekeeper bypass.
+
+Before publishing, verify the signature, Gatekeeper assessment, and stapled ticket:
+
+```sh
+codesign --verify --deep --strict --verbose=2 Captures.app
+spctl --assess --type execute --verbose=2 Captures.app
+xcrun stapler validate Captures.app
+xcrun stapler validate Captures.dmg
+```
+
+## Windows Authenticode signing
+
+Use a publicly trusted code-signing service before production publishing. The preferred CI route is **Microsoft Artifact Signing Public Trust** because its private signing keys remain in Microsoft's managed service instead of being exported into GitHub.
+
+The same Artifact Signing account, validated identity, and Public Trust certificate profile can serve Captures and DBM.
+
+### Account setup
+
+1. Create an Azure subscription and Microsoft Entra tenant, then confirm the legal name and address on the Azure billing profile are correct.
+2. Register the `Microsoft.CodeSigning` resource provider.
+3. Create an Artifact Signing account.
+4. Complete **Individual Public Trust** identity validation. Microsoft notes that validation can take from 1 to 20 business days, so start it before a planned production release.
+5. Create a **Public Trust** certificate profile. Do not use a Public Trust Test or Private Trust profile for public downloads.
+6. Create an Entra application or workload identity for GitHub Actions and grant it the **Artifact Signing Certificate Profile Signer** role scoped to the certificate profile.
+7. Add a GitHub OIDC federated credential restricted to:
+
+   ```text
+   repo:joswayski/captures:environment:release
+   ```
+
+   OIDC avoids storing a long-lived Azure client secret in GitHub.
+
+### Environment variables
+
+Add these non-secret values as variables on the existing `release` environment:
+
+| Variable | Value |
+| --- | --- |
+| `AZURE_CLIENT_ID` | Entra application or workload identity client ID |
+| `AZURE_TENANT_ID` | Entra tenant ID |
+| `AZURE_SUBSCRIPTION_ID` | Azure subscription containing Artifact Signing |
+| `AZURE_ARTIFACT_SIGNING_ENDPOINT` | Regional Artifact Signing endpoint |
+| `AZURE_ARTIFACT_SIGNING_ACCOUNT` | Artifact Signing account name |
+| `AZURE_ARTIFACT_SIGNING_PROFILE` | Public Trust certificate profile name |
+
+The Windows package job must request `id-token: write`, authenticate to Azure with OIDC, and integrate Artifact Signing with Tauri so that both `captures.exe` and the final NSIS installer are signed. Sign with SHA-256 and use Microsoft's RFC 3161 timestamp service. Timestamping is required because Artifact Signing certificates are intentionally short-lived.
+
+Validate both files before upload:
+
+```powershell
+Get-AuthenticodeSignature .\captures.exe |
+  Format-List Status, StatusMessage, SignerCertificate, TimeStamperCertificate
+
+Get-AuthenticodeSignature .\Captures_*_x64-setup.exe |
+  Format-List Status, StatusMessage, SignerCertificate, TimeStamperCertificate
+```
+
+Both results must report `Valid`, show the expected publisher, and include a timestamp. Test the installer on a clean Windows 11 system and confirm the UAC dialog displays that verified publisher.
+
+If Microsoft Artifact Signing is unavailable, use a publicly trusted OV/EV code-signing certificate from a certificate authority. Follow that provider's current hardware-token or cloud-HSM instructions; do not assume an exportable `.pfx` is permitted.
+
+## Linux publication integrity
+
+Linux has no single platform-wide publisher certificate comparable to Apple Developer ID or Windows Authenticode. For direct GitHub Release downloads, require verifiable integrity and provenance. GitHub attestations apply to every platform, so generate them for the macOS and Windows artifacts as well:
+
+1. Continue building every release artifact only in the release workflow for the tested commit.
+2. Generate `SHA256SUMS` over the final downloadable artifacts.
+3. Generate a GitHub artifact attestation for every DMG, NSIS installer, `.deb`, AppImage, updater archive, and checksum manifest.
+4. Confirm each artifact has a retrievable attestation before the publish job makes the draft public.
+5. Verify the release from a clean Ubuntu system:
+
+   ```sh
+   sha256sum --check SHA256SUMS
+   gh attestation verify ./Captures_VERSION_amd64.deb --repo joswayski/captures
+   gh attestation verify ./Captures_VERSION_amd64.AppImage --repo joswayski/captures
+   sudo apt install ./Captures_VERSION_amd64.deb
+   chmod +x ./Captures_VERSION_amd64.AppImage
+   ./Captures_VERSION_amd64.AppImage
+   ```
+
+The attestation job must grant `contents: read`, `id-token: write`, and `attestations: write` and use GitHub's official `actions/attest` action.
+
+An embedded GPG signature may also be added to the AppImage, but AppImage does not automatically verify it. Do not use an embedded AppImage signature as a replacement for checksums and build provenance.
+
+If Captures later operates an APT repository, that repository must publish signed `InRelease` metadata or `Release` plus `Release.gpg`. Distribute the repository public key through an authenticated channel and configure users with a repository-specific keyring and `signed-by=`. Signing a standalone `.deb` is not a substitute for signing APT repository metadata.
+
 ## Bootstrap and acceptance
 
 The first updater-enabled build must be downloaded and installed manually. Before relying on automatic releases, test this sequence on clean machines:
@@ -43,7 +157,7 @@ The first updater-enabled build must be downloaded and installed manually. Befor
 3. Confirm the release appears only after all platform assets and all three `latest.json` entries exist.
 4. Choose **Later**, then install from the tray and verify the displayed version after restart.
 5. On macOS, verify notarization, stapling, and Screen Recording permission survive the update.
-6. Verify Windows NSIS and Linux AppImage update in place; verify `.deb` directs the user to the release download.
+6. On Windows, verify Authenticode on both the application executable and NSIS installer, then confirm NSIS updates in place. On Linux, verify `SHA256SUMS` and GitHub attestations before confirming AppImage updates in place and `.deb` directs the user to the release download.
 7. Tamper with an updater archive in a test release and confirm signature verification rejects it.
 8. Force one platform build to fail and confirm the failed draft/tag is deleted while the previous release remains latest.
 9. On macOS, rapidly resize a recording region, confirm window highlights use rounded corners, and verify Window mode starts without choosing an arbitrary system window. Drag the selector controls from any non-interactive panel surface, press Escape repeatedly to cancel, and verify the selector, countdown, and HUD can be captured by another app while Captures excludes them from its own output.
@@ -62,4 +176,15 @@ The first updater-enabled build must be downloaded and installed manually. Befor
     and Linux installations and the release includes every source and
     compliance asset listed in `docs/media-sidecars.md`.
 
-Windows packages are intentionally unsigned during the private alpha and may trigger SmartScreen. Add Authenticode signing before a public launch.
+## References
+
+- [Apple: Developer ID certificates](https://developer.apple.com/help/account/certificates/create-developer-id-certificates)
+- [Apple: notarizing macOS software](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)
+- [Tauri: macOS code signing](https://v2.tauri.app/distribute/sign/macos/)
+- [Microsoft: set up Artifact Signing](https://learn.microsoft.com/azure/artifact-signing/quickstart)
+- [Microsoft: Artifact Signing integrations](https://learn.microsoft.com/azure/artifact-signing/how-to-signing-integrations)
+- [Azure: Artifact Signing GitHub Action](https://github.com/Azure/artifact-signing-action)
+- [Tauri: Windows code signing](https://v2.tauri.app/distribute/sign/windows/)
+- [GitHub: artifact attestations](https://docs.github.com/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations)
+- [Tauri: Linux code signing](https://v2.tauri.app/distribute/sign/linux/)
+- [Debian: package and repository signing](https://www.debian.org/doc/manuals/securing-debian-manual/deb-pack-sign.en.html)
