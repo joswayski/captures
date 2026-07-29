@@ -15,8 +15,10 @@ export function thumbnailCursorSyncAction(
 }
 
 /**
- * After a dismiss the native window may stay tall (shrinking blanks WKWebView).
- * Empty space above the bottom-anchored stack must not steal clicks.
+ * Keep the native window interactive only over a live preview card. After a
+ * dismiss it may stay tall (shrinking blanks WKWebView), and a deleting card
+ * keeps its layout slot while its particles finish. Empty space and exiting
+ * slots must pass clicks through without disabling the remaining cards.
  */
 export function shouldIgnoreThumbnailCursorEvents(
   position: ThumbnailPointerPosition,
@@ -25,7 +27,8 @@ export function shouldIgnoreThumbnailCursorEvents(
   if (!position.inside) return false;
   const target = root.elementFromPoint(position.x, position.y);
   if (!target) return true;
-  return !target.closest(".thumbnail-stack");
+  const card = target.closest(".thumbnail-card");
+  return !card || card.classList.contains("thumbnail-exiting");
 }
 
 export function clearThumbnailNativeHover(root: ParentNode = document) {

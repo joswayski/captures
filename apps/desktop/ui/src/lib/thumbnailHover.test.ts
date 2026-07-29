@@ -118,23 +118,33 @@ describe("clearThumbnailNativeHover", () => {
 });
 
 describe("shouldIgnoreThumbnailCursorEvents", () => {
-  it("keeps the stack interactive and passes through empty oversized regions", () => {
+  it("keeps live cards interactive and passes through empty or exiting regions", () => {
     document.body.innerHTML = `
       <main class="thumbnail-stack">
-        <article class="thumbnail-card"><button>Copy</button></article>
+        <article id="live" class="thumbnail-card"><button>Copy</button></article>
+        <article id="exiting" class="thumbnail-card thumbnail-exiting">
+          <button>Delete</button>
+        </article>
       </main>
     `;
     const stack = document.querySelector(".thumbnail-stack")!;
-    const outside = document.body;
+    const live = document.querySelector("#live")!;
+    const exiting = document.querySelector("#exiting")!;
     Object.defineProperty(document, "elementFromPoint", {
       configurable: true,
-      value: vi.fn(() => stack),
+      value: vi.fn(() => live),
     });
     expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: true })).toBe(false);
 
     Object.defineProperty(document, "elementFromPoint", {
       configurable: true,
-      value: vi.fn(() => outside),
+      value: vi.fn(() => exiting),
+    });
+    expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: true })).toBe(true);
+
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => stack),
     });
     expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: true })).toBe(true);
     expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: false })).toBe(false);

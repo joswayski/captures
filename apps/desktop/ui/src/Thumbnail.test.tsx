@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import { Thumbnail } from "./App";
 import type { CaptureArtifact } from "./types";
@@ -44,6 +44,7 @@ describe("Thumbnail", () => {
 
   afterEach(() => {
     document.documentElement.classList.remove("thumbnail-native-tracking");
+    Reflect.deleteProperty(document, "elementFromPoint");
     vi.clearAllMocks();
   });
 
@@ -104,16 +105,55 @@ describe("Thumbnail", () => {
     }
   });
 
-  it("makes the native preview window click-through as soon as deletion begins", async () => {
-    render(<Thumbnail />);
-    await screen.findByRole("article");
+  it("keeps other previews interactive while a deleted slot passes clicks through", async () => {
+    let pointerReady = false;
+    let pointerTarget: Element | null = null;
+    const secondArtifact = {
+      ...artifact,
+      id: "capture-2",
+      preview_url: "captures-capture://artifact/capture-2",
+      full_url: "captures-capture://artifact-full/capture-2",
+    };
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifacts") return [artifact, secondArtifact];
+      if (command === "get_clipboard_state") {
+        return { revision: 0, artifact_id: secondArtifact.id };
+      }
+      if (command === "get_thumbnail_pointer_position") {
+        return pointerReady ? { x: 40, y: 40, inside: true } : null;
+      }
+      return undefined;
+    });
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => pointerTarget),
+    });
 
-    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    render(<Thumbnail />);
+    const cards = await screen.findAllByRole("article");
+    const firstDelete = within(cards[0]).getByRole("button", { name: "Delete" });
+    const secondDelete = within(cards[1]).getByRole("button", { name: "Delete" });
+    pointerReady = true;
+    pointerTarget = firstDelete;
+
+    fireEvent.click(firstDelete);
 
     await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith("set_thumbnail_ignore_cursor_events", {
-        ignore: true,
-      });
+      const ignoreCalls = vi.mocked(invoke).mock.calls
+        .filter(([command]) => command === "set_thumbnail_ignore_cursor_events");
+      expect(ignoreCalls.at(-1)?.[1]).toEqual({ ignore: true });
     });
+
+    pointerTarget = secondDelete;
+    window.dispatchEvent(new Event("captures-thumbnail-layout-changed"));
+    await waitFor(() => {
+      const ignoreCalls = vi.mocked(invoke).mock.calls
+        .filter(([command]) => command === "set_thumbnail_ignore_cursor_events");
+      expect(ignoreCalls.at(-1)?.[1]).toEqual({ ignore: false });
+    });
+
+    fireEvent.click(secondDelete);
+    expect(cards[0]).toHaveClass("thumbnail-exit-delete");
+    expect(cards[1]).toHaveClass("thumbnail-exit-delete");
   });
 });

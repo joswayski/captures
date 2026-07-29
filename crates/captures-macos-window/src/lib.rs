@@ -213,15 +213,31 @@ pub fn init_panel_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
     tauri_nspanel::init()
 }
 
-/// Configures the capture preview as an inactive-app HUD.
+/// Configures an interactive overlay as an inactive-app HUD with the native
+/// cursor fallback used by capture previews and notices.
 ///
 /// Tauri enables mouse-move events on its `NSWindow`, but WebKit's own tracking
 /// can still become inactive when another application is frontmost. An
-/// `ActiveAlways` tracking area keeps CSS hover and pointer events alive.
+/// `ActiveAlways` tracking area keeps hover and pointer events alive.
 pub fn configure_inactive_hover(window: &WebviewWindow) -> Result<(), &'static str> {
+    configure_inactive_hover_with_cursor(window, CursorMode::Arrow)
+}
+
+/// Configures an inactive HUD whose CSS remains responsible for its cursor.
+///
+/// Making the non-activating panel key on hover lets WebKit refresh `:hover`
+/// and cursor rectangles without bringing the Captures application forward.
+pub fn configure_webview_inactive_hover(window: &WebviewWindow) -> Result<(), &'static str> {
+    configure_inactive_hover_with_cursor(window, CursorMode::WebView)
+}
+
+fn configure_inactive_hover_with_cursor(
+    window: &WebviewWindow,
+    initial_cursor: CursorMode,
+) -> Result<(), &'static str> {
     let panel = window
         .to_panel::<ThumbnailPanel>()
-        .map_err(|_| "failed to convert the capture preview to an NSPanel")?;
+        .map_err(|_| "failed to convert the inactive HUD to an NSPanel")?;
     panel.set_style_mask(panel.as_panel().styleMask() | NSWindowStyleMask::NonactivatingPanel);
     panel.set_level(NSStatusWindowLevel as i64);
     panel.set_floating_panel(true);
@@ -237,7 +253,7 @@ pub fn configure_inactive_hover(window: &WebviewWindow) -> Result<(), &'static s
 
     window
         .as_ref()
-        .with_webview(|platform_webview| {
+        .with_webview(move |platform_webview| {
             let pointer = platform_webview.inner();
             // SAFETY: Tauri supplies the live WKWebView to this callback. A
             // WKWebView inherits from NSView and remains alive for the entire
@@ -268,7 +284,7 @@ pub fn configure_inactive_hover(window: &WebviewWindow) -> Result<(), &'static s
                 )
             };
             webview.addTrackingArea(&area);
-            install_cursor_tracker(webview, CursorMode::Arrow, CursorSurface::Thumbnail);
+            install_cursor_tracker(webview, initial_cursor, CursorSurface::Thumbnail);
         })
         .map_err(|_| "macOS webview handle is unavailable")
 }
