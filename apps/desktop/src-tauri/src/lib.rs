@@ -180,6 +180,7 @@ pub fn run() {
             get_active_session,
             get_pending_session,
             get_settings,
+            set_shortcut_capture_suppressed,
             update_settings,
             get_artifacts,
             get_artifact,
@@ -649,6 +650,13 @@ fn sync_capture_cursor(
 #[tauri::command]
 fn get_settings(state: tauri::State<'_, Arc<AppState>>) -> AppSettings {
     state.settings()
+}
+
+#[tauri::command]
+fn set_shortcut_capture_suppressed(state: tauri::State<'_, Arc<AppState>>, suppressed: bool) {
+    state
+        .shortcut_capture_suppressed
+        .store(suppressed, Ordering::Release);
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -1819,18 +1827,16 @@ fn register_new_capture_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), 
 fn register_shortcut(app: &AppHandle, shortcut: &str, mode: CaptureMode) -> Result<(), AppError> {
     let parsed = parse_shortcut(shortcut)?;
     let armed = AtomicBool::new(false);
+    let suppressed_while_pressed = AtomicBool::new(false);
     app.global_shortcut()
         .on_shortcut(parsed, move |app, _shortcut, event| {
-            if !should_trigger_shortcut(&armed, event.state()) {
-                return;
-            }
-            if app
-                .get_webview_window("preferences")
-                .is_some_and(|window| window.is_focused().unwrap_or(false))
-            {
-                return;
-            }
             let state = app.state::<Arc<AppState>>().inner().clone();
+            let suppressed = shortcut_capture_is_suppressed(app, &state);
+            let trigger_is_suppressed =
+                track_shortcut_suppression(&suppressed_while_pressed, event.state(), suppressed);
+            if !should_trigger_shortcut(&armed, event.state()) || trigger_is_suppressed {
+                return;
+            }
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
                 wait_for_capture_shortcut_release().await;
@@ -1847,18 +1853,16 @@ fn register_shortcut(app: &AppHandle, shortcut: &str, mode: CaptureMode) -> Resu
 fn register_recording_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), AppError> {
     let parsed = parse_shortcut(shortcut)?;
     let armed = AtomicBool::new(false);
+    let suppressed_while_pressed = AtomicBool::new(false);
     app.global_shortcut()
         .on_shortcut(parsed, move |app, _shortcut, event| {
-            if !should_trigger_shortcut(&armed, event.state()) {
-                return;
-            }
-            if app
-                .get_webview_window("preferences")
-                .is_some_and(|window| window.is_focused().unwrap_or(false))
-            {
-                return;
-            }
             let state = app.state::<Arc<AppState>>().inner().clone();
+            let suppressed = shortcut_capture_is_suppressed(app, &state);
+            let trigger_is_suppressed =
+                track_shortcut_suppression(&suppressed_while_pressed, event.state(), suppressed);
+            if !should_trigger_shortcut(&armed, event.state()) || trigger_is_suppressed {
+                return;
+            }
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
                 wait_for_capture_shortcut_release().await;
@@ -1870,6 +1874,29 @@ fn register_recording_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), Ap
             });
         })
         .map_err(|error| AppError::Shortcut(error.to_string()))
+}
+
+fn shortcut_capture_is_suppressed(app: &AppHandle, state: &AppState) -> bool {
+    state.shortcut_capture_suppressed.load(Ordering::Acquire)
+        && app
+            .get_webview_window("preferences")
+            .is_some_and(|window| window.is_focused().unwrap_or(false))
+}
+
+fn track_shortcut_suppression(
+    suppressed_while_pressed: &AtomicBool,
+    state: ShortcutState,
+    currently_suppressed: bool,
+) -> bool {
+    match state {
+        ShortcutState::Pressed => {
+            suppressed_while_pressed.store(currently_suppressed, Ordering::Release);
+            currently_suppressed
+        }
+        ShortcutState::Released => {
+            suppressed_while_pressed.swap(false, Ordering::AcqRel) || currently_suppressed
+        }
+    }
 }
 
 async fn wait_for_capture_shortcut_release() {
@@ -3013,11 +3040,7 @@ fn window_is_capturable(
     if window.width < 48 || window.height < 48 {
         return false;
     }
-    if window
-        .app_name
-        .as_deref()
-        .is_some_and(|name| name.eq_ignore_ascii_case("Captures"))
-    {
+    if captures_window_is_internal(window) {
         return false;
     }
     #[cfg(target_os = "windows")]
@@ -3046,6 +3069,31 @@ fn window_is_capturable(
     true
 }
 
+fn captures_window_is_internal(window: &captures_capture::WindowDescriptor) -> bool {
+    let captures_owned = window.app_name.as_deref().is_some_and(|name| {
+        let name = name.trim();
+        name.eq_ignore_ascii_case("Captures")
+            || name.eq_ignore_ascii_case("Captures.app")
+            || name.eq_ignore_ascii_case("captures.exe")
+    });
+    if !captures_owned {
+        return false;
+    }
+
+    const INTERNAL_WINDOW_TITLES: &[&str] = &[
+        "Captures",
+        "Captures is running",
+        "Captures Recording Controls",
+        "Captures Recording Countdown",
+        "Captures Update",
+        "Recording saved",
+    ];
+    let title = window.title.trim();
+    INTERNAL_WINDOW_TITLES
+        .iter()
+        .any(|internal| title.eq_ignore_ascii_case(internal))
+}
+
 #[cfg(any(target_os = "windows", test))]
 fn windows_window_is_capture_overlay(window: &captures_capture::WindowDescriptor) -> bool {
     window
@@ -3071,7 +3119,8 @@ mod tests {
         display_contains_pointer, parse_shortcut, recording_saved_notice_label,
         should_activate_capture_cursor_before_reveal, should_trigger_shortcut,
         thumbnail_cursor_action, thumbnail_geometry, thumbnail_pointer_position,
-        thumbnail_visible_window_height, viewer_window_label, windows_window_is_capture_overlay,
+        thumbnail_visible_window_height, track_shortcut_suppression, viewer_window_label,
+        window_is_capturable, windows_window_is_capture_overlay,
     };
 
     use captures_capture::{DisplayDescriptor, WindowDescriptor};
@@ -3104,6 +3153,60 @@ mod tests {
         let mut app = overlay.clone();
         app.title = "NVIDIA App".to_owned();
         assert!(!windows_window_is_capture_overlay(&app));
+    }
+
+    #[test]
+    fn includes_user_facing_captures_windows_but_excludes_capture_chrome() {
+        let display = DisplayDescriptor {
+            id: "display".to_owned(),
+            name: "Display".to_owned(),
+            x: 0,
+            y: 0,
+            width: 1_440,
+            height: 900,
+            scale_factor: 2.0,
+            is_primary: true,
+        };
+        let captures_window = |title: &str| WindowDescriptor {
+            id: title.to_owned(),
+            title: title.to_owned(),
+            app_name: Some("Captures.app".to_owned()),
+            z_order: 1,
+            x: 80,
+            y: 80,
+            width: 640,
+            height: 480,
+            display_id: display.id.clone(),
+        };
+
+        for title in [
+            "Captures Preferences",
+            "Capture History",
+            "Captures Preview",
+            "Captures Editor",
+        ] {
+            assert!(
+                window_is_capturable(&captures_window(title), &display),
+                "{title} should be available for self-capture"
+            );
+        }
+        for title in [
+            "Captures",
+            "Captures is running",
+            "Captures Recording Controls",
+            "Captures Recording Countdown",
+            "Captures Update",
+            "Recording saved",
+        ] {
+            assert!(
+                !window_is_capturable(&captures_window(title), &display),
+                "{title} should stay out of capture targets"
+            );
+        }
+
+        let mut other_app = captures_window("Captures");
+        other_app.app_name = Some("Browser".to_owned());
+        assert!(window_is_capturable(&other_app, &display));
     }
 
     #[test]
@@ -3169,6 +3272,32 @@ mod tests {
         assert!(!should_trigger_shortcut(&armed, ShortcutState::Released));
         assert!(!should_trigger_shortcut(&armed, ShortcutState::Pressed));
         assert!(should_trigger_shortcut(&armed, ShortcutState::Released));
+    }
+
+    #[test]
+    fn keeps_a_shortcut_suppressed_until_its_keys_are_released() {
+        let suppressed_while_pressed = AtomicBool::new(false);
+
+        assert!(track_shortcut_suppression(
+            &suppressed_while_pressed,
+            ShortcutState::Pressed,
+            true,
+        ));
+        assert!(track_shortcut_suppression(
+            &suppressed_while_pressed,
+            ShortcutState::Released,
+            false,
+        ));
+        assert!(!track_shortcut_suppression(
+            &suppressed_while_pressed,
+            ShortcutState::Pressed,
+            false,
+        ));
+        assert!(!track_shortcut_suppression(
+            &suppressed_while_pressed,
+            ShortcutState::Released,
+            false,
+        ));
     }
 
     #[test]

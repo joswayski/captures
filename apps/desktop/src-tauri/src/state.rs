@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, atomic::AtomicBool};
 #[cfg(any(target_os = "linux", test))]
 use std::time::{Duration, Instant};
 
@@ -154,6 +154,7 @@ pub struct AppState {
     pub clipboard_ownership: Mutex<ClipboardOwnership>,
     pub thumbnail_visibility: Mutex<ThumbnailVisibility>,
     pub screen_permission_requested_this_launch: Mutex<bool>,
+    pub shortcut_capture_suppressed: AtomicBool,
     pub backend: XcapBackend,
 }
 
@@ -182,6 +183,7 @@ impl AppState {
             clipboard_ownership: Mutex::new(ClipboardOwnership::default()),
             thumbnail_visibility: Mutex::new(ThumbnailVisibility::default()),
             screen_permission_requested_this_launch: Mutex::new(false),
+            shortcut_capture_suppressed: AtomicBool::new(false),
             backend: XcapBackend,
         })
     }

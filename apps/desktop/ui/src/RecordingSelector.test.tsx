@@ -64,7 +64,7 @@ const session: RecordingSelectionSession = {
   windows: [
     {
       id: "front-window",
-      title: "Captures window",
+      title: "Captures Preferences",
       app_name: "Captures",
       z_order: 30,
       x: 100,
@@ -349,7 +349,7 @@ describe("RecordingSelector", () => {
     expect(screen.queryByText(/Window selected/)).not.toBeInTheDocument();
     expect(screen.getByText("Select a window to continue")).toBeInTheDocument();
     expect(screen.queryByText(/enable (Capture|Record)/)).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Select Captures window" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Select Captures Preferences" })).toBeInTheDocument();
     const frontWindow = screen.getByRole("button", { name: "Select Front eligible window" });
     const rearWindow = screen.getByRole("button", { name: "Select Rear window" });
     expect(frontWindow).not.toHaveClass("selected");

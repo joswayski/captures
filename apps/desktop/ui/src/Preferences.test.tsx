@@ -50,6 +50,7 @@ describe("Preferences", () => {
       if (command === "get_update_status") {
         return { state: "idle", current_version: "0.1.0", current_display_version: "0.1.0" };
       }
+      if (command === "set_shortcut_capture_suppressed") return undefined;
       if (command === "update_settings") return (args as { settings: AppSettings }).settings;
       throw new Error(`unexpected command: ${command}`);
     });
@@ -85,6 +86,11 @@ describe("Preferences", () => {
 
     const recorder = await screen.findByRole("button", { name: "Window" });
     fireEvent.click(recorder);
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("set_shortcut_capture_suppressed", {
+        suppressed: true,
+      });
+    });
     fireEvent.keyDown(recorder, {
       code: "Digit0",
       key: ")",
@@ -97,6 +103,9 @@ describe("Preferences", () => {
         settings: expect.objectContaining({ window_shortcut: "Control+Shift+Digit0" }),
       });
     });
+    expect(invoke).toHaveBeenCalledWith("set_shortcut_capture_suppressed", {
+      suppressed: false,
+    });
     expect(await screen.findByText("Changes saved")).toBeInTheDocument();
   });
 
@@ -107,6 +116,27 @@ describe("Preferences", () => {
     expect(recorder).toHaveTextContent("Ctrl");
     expect(recorder).toHaveTextContent("Shift");
     expect(recorder).toHaveTextContent("Space");
+  });
+
+  it("separates recording toggles from the selects above them", async () => {
+    render(<Preferences />);
+
+    const mono = await screen.findByRole("checkbox", {
+      name: "Export recording audio in mono",
+    });
+    const showCursor = screen.getByRole("checkbox", {
+      name: "Show cursor in recordings",
+    });
+    const showClicks = screen.getByRole("checkbox", {
+      name: "Show clicks in recordings",
+    });
+
+    expect(mono.closest("label")).toHaveClass("recording-setting-after-select");
+    expect(showCursor.closest("label")).toHaveClass(
+      "recording-setting-after-select",
+      "recording-behavior-toggle",
+    );
+    expect(showClicks.closest("label")).toHaveClass("recording-behavior-toggle");
   });
 
   it("shows the installed version and offers a manual update check", async () => {
