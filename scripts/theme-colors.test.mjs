@@ -23,7 +23,18 @@ test("every declared color theme has a shared CSS palette and backend value", as
   const backendIds = [...rustEnum.matchAll(/^\s*([A-Z][A-Za-z]+),$/gmu)]
     .map((match) => match[1].replaceAll(/([a-z0-9])([A-Z])/gu, "$1_$2").toLowerCase());
 
-  assert.deepEqual(ids, ["mustard", "violet", "cobalt", "mint", "custom"]);
+  assert.deepEqual(ids, [
+    "mustard",
+    "ember",
+    "rose",
+    "violet",
+    "cobalt",
+    "aqua",
+    "mint",
+    "lime",
+    "mono",
+    "custom",
+  ]);
   assert.deepEqual(backendIds, ids);
   for (const id of ids) {
     assert.match(sharedCss, new RegExp(`data-capture-theme="${id}"`, "u"));
@@ -38,6 +49,23 @@ test("desktop and web surfaces consume the shared theme source", async () => {
 
   assert.match(desktopCss, /@import "\.\.\/\.\.\/\.\.\/\.\.\/shared\/themes\.css";/u);
   assert.match(webCss, /@import "\.\.\/\.\.\/\.\.\/shared\/themes\.css";/u);
+});
+
+test("preferences keeps presets compact and gives Custom a full-spectrum treatment", async () => {
+  const desktopCss = await readFile(desktopCssPath, "utf8");
+
+  assert.match(
+    desktopCss,
+    /\.theme-options\s*\{[^}]*grid-template-columns:\s*repeat\(5,/u,
+  );
+  assert.match(
+    desktopCss,
+    /\.theme-option-custom \.theme-option-preview\s*\{[^}]*linear-gradient/u,
+  );
+  assert.match(
+    desktopCss,
+    /\.custom-theme-editor::before\s*\{[^}]*linear-gradient/u,
+  );
 });
 
 test("preset accent and signal values are not duplicated outside the shared palette", async () => {
@@ -64,7 +92,18 @@ test("preset accent and signal values are not duplicated outside the shared pale
 
 test("theme action colors preserve readable text contrast", async () => {
   const sharedCss = await readFile(sharedCssPath, "utf8");
-  const ids = ["mustard", "violet", "cobalt", "mint", "custom"];
+  const ids = [
+    "mustard",
+    "ember",
+    "rose",
+    "violet",
+    "cobalt",
+    "aqua",
+    "mint",
+    "lime",
+    "mono",
+    "custom",
+  ];
 
   for (const id of ids) {
     const selectorStart = sharedCss.indexOf(`[data-capture-theme="${id}"]`);

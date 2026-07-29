@@ -40,10 +40,15 @@ pub struct AppSettings {
 pub enum ColorTheme {
     #[default]
     Mustard,
+    Ember,
+    Rose,
     #[serde(alias = "saffron")]
     Violet,
     Cobalt,
+    Aqua,
     Mint,
+    Lime,
+    Mono,
     Custom,
 }
 
@@ -147,11 +152,11 @@ impl Default for AppSettings {
 }
 
 fn default_custom_theme_accent() -> String {
-    "#ffca28".to_owned()
+    "#32d3ff".to_owned()
 }
 
 fn default_custom_theme_signal() -> String {
-    "#ef4650".to_owned()
+    "#ff4fc3".to_owned()
 }
 
 fn is_hex_color(value: &str) -> bool {

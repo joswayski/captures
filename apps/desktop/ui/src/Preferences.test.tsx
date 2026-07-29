@@ -134,6 +134,27 @@ describe("Preferences", () => {
     });
   });
 
+  it("presents the expanded spectrum as compact theme choices", async () => {
+    render(<Preferences />);
+
+    expect(await screen.findAllByRole("radio")).toHaveLength(10);
+    expect(screen.getByRole("radio", { name: /Violet/ })).toHaveAttribute(
+      "data-capture-theme",
+      "violet",
+    );
+    expect(screen.getByRole("radio", { name: /Cobalt/ })).toHaveAttribute(
+      "data-capture-theme",
+      "cobalt",
+    );
+    expect(screen.getByRole("radio", { name: /Mono/ })).toHaveAttribute(
+      "title",
+      "Vercel-like black and white",
+    );
+    expect(screen.getByRole("radio", { name: /Custom/ })).toHaveClass(
+      "theme-option-custom",
+    );
+  });
+
   it("builds and persists a custom theme from editable colors", async () => {
     render(<Preferences />);
 
@@ -161,6 +182,21 @@ describe("Preferences", () => {
           custom_theme: {
             accent: "#123456",
             signal: "#22aa55",
+          },
+        }),
+      });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset colors" }));
+    expect(document.documentElement.style.getPropertyValue("--theme-accent")).toBe("#32d3ff");
+    expect(document.documentElement.style.getPropertyValue("--theme-signal")).toBe("#ff4fc3");
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("update_settings", {
+        settings: expect.objectContaining({
+          theme: "custom",
+          custom_theme: {
+            accent: "#32d3ff",
+            signal: "#ff4fc3",
           },
         }),
       });
