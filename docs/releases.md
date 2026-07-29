@@ -16,6 +16,13 @@ and tag, leaving earlier drafts and any intentionally published release
 untouched. If draft creation itself is interrupted, the next run removes only
 stale drafts with its generated tag before retrying.
 
+Creating the draft early is only a private staging step. Do not publish it while
+platform jobs are still uploading assets. Publish only after the **Validate
+draft release** job succeeds and `SHA256SUMS` is present; that marker means every
+required macOS, Windows, and Linux artifact was downloaded and validated
+together. The existence of the draft page by itself does not mean the release is
+complete.
+
 ## Install the latest draft
 
 Use the CI-produced draft rather than a local build when testing the exact
@@ -36,6 +43,10 @@ removes the installed app package, installs the macOS Apple Silicon DMG, Windows
 x64 NSIS installer, Debian/Ubuntu x64 package, or Linux x64 AppImage, and launches
 Captures again. User data, capture history, settings, and operating-system
 permissions are not removed.
+
+Changes to the installer command run this same download, uninstall, native
+install, and post-install verification flow on ephemeral macOS Apple Silicon,
+Windows x64, and Ubuntu x64 GitHub-hosted runners.
 
 Useful options:
 

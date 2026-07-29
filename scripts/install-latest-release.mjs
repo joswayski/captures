@@ -8,6 +8,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -297,6 +298,15 @@ function installMacDmg(assetPath, directory, launch) {
     runChecked("/bin/rm", ["-rf", applicationsApp]);
     log(`Installing ${APP_NAME}.app in /Applications…`);
     runChecked("/usr/bin/ditto", [sourceApp, applicationsApp]);
+    if (!existsSync(applicationsApp)) {
+      throw new Error(`${APP_NAME}.app was not installed in /Applications`);
+    }
+    runChecked("/usr/bin/codesign", ["--verify", "--deep", "--strict", "--verbose=2", applicationsApp], {
+      stdio: "inherit",
+    });
+    runChecked("/usr/sbin/spctl", ["--assess", "--type", "execute", "--verbose=2", applicationsApp], {
+      stdio: "inherit",
+    });
   } finally {
     if (mounted) {
       const detached = run("/usr/bin/hdiutil", ["detach", mountPoint], { stdio: "inherit" });
@@ -338,6 +348,39 @@ $registryPaths = @(
   "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",
   "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
 )
+
+function Find-CapturesExecutable {
+  $candidates = @(
+    (Join-Path $env:LOCALAPPDATA "Captures\captures.exe"),
+    (Join-Path $env:ProgramFiles "Captures\captures.exe")
+  )
+  $entries = @(
+    Get-ItemProperty -Path $registryPaths -ErrorAction SilentlyContinue |
+      Where-Object { $_.DisplayName -eq "Captures" }
+  )
+  foreach ($entry in $entries) {
+    $installLocation = [string]$entry.InstallLocation
+    if (-not [string]::IsNullOrWhiteSpace($installLocation)) {
+      $candidates += Join-Path $installLocation "captures.exe"
+    }
+
+    $uninstallCommand = [string]$entry.UninstallString
+    if (-not [string]::IsNullOrWhiteSpace($uninstallCommand)) {
+      $uninstaller = if ($uninstallCommand -match '^"([^"]+)"') {
+        $Matches[1]
+      } else {
+        ($uninstallCommand -split '\s+', 2)[0]
+      }
+      $candidates += Join-Path (Split-Path -Parent $uninstaller) "captures.exe"
+    }
+  }
+
+  return $candidates |
+    Where-Object { Test-Path -LiteralPath $_ } |
+    Select-Object -Unique |
+    Select-Object -First 1
+}
+
 $installed = @(
   Get-ItemProperty -Path $registryPaths -ErrorAction SilentlyContinue |
     Where-Object { $_.DisplayName -eq "Captures" }
@@ -367,17 +410,14 @@ if ($installer.ExitCode -ne 0) {
   throw "Captures installer exited with code $($installer.ExitCode)."
 }
 
+$application = Find-CapturesExecutable
+if (-not $application) {
+  throw "Captures installer exited successfully, but captures.exe was not found."
+}
+Write-Host "Verified installed executable at $application."
+
 if ($env:CAPTURES_LAUNCH_AFTER_INSTALL -eq "1") {
-  $candidates = @(
-    (Join-Path $env:LOCALAPPDATA "Captures\captures.exe"),
-    (Join-Path $env:ProgramFiles "Captures\captures.exe")
-  )
-  $application = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-  if ($application) {
-    Start-Process -FilePath $application
-  } else {
-    Write-Warning "Captures installed, but its executable was not found for automatic launch."
-  }
+  Start-Process -FilePath $application
 }
 `;
 
@@ -427,6 +467,10 @@ function installDebianPackage(assetPath, launch) {
   }
   log(`Installing ${basename(assetPath)}…`);
   runChecked("sudo", ["apt-get", "install", "--yes", assetPath], { stdio: "inherit" });
+  const verified = runChecked("dpkg-query", ["--show", "--showformat=${db:Status-Abbrev}", packageName]);
+  if (!verified.stdout.startsWith("ii")) {
+    throw new Error(`${packageName} was not registered as an installed Debian package`);
+  }
   if (launch) launchDetached(BINARY_NAME);
   log(`Installed ${APP_NAME} from ${basename(assetPath)}.`);
 }
@@ -440,6 +484,9 @@ function installAppImage(assetPath, launch) {
   log(`Installing ${basename(assetPath)} → ${destination}…`);
   copyFileSync(assetPath, destination);
   chmodSync(destination, 0o755);
+  if (!existsSync(destination) || (statSync(destination).mode & 0o111) === 0) {
+    throw new Error(`${APP_NAME} AppImage was not installed as an executable at ${destination}`);
+  }
   if (launch) launchDetached(destination);
   log(`Installed ${APP_NAME} at ${destination}.`);
 }

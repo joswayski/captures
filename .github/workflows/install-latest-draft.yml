@@ -1,0 +1,38 @@
+name: Install latest draft
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/install-latest-draft.yml"
+      - "scripts/install-latest-release.mjs"
+      - "scripts/install-latest-release.test.mjs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    name: Install latest draft (${{ matrix.name }})
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS Apple Silicon
+            os: macos-26
+          - name: Windows x64
+            os: windows-2025
+          - name: Ubuntu x64
+            os: ubuntu-24.04
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install and verify the newest complete draft
+        run: node scripts/install-latest-release.mjs --no-launch
