@@ -176,7 +176,7 @@ describe("RecordingEditor", () => {
     expect(play).toHaveBeenCalledOnce();
   });
 
-  it("keeps playback inside the trim range, seeks on handle clicks, and optionally loops the preview", async () => {
+  it("keeps playback inside the trim range, seeks on handle clicks without nudging edges, and optionally loops", async () => {
     const { container } = render(<RecordingEditor />);
 
     expect(await screen.findByRole("heading", { name: "Edit recording" })).toBeInTheDocument();
@@ -197,6 +197,19 @@ describe("RecordingEditor", () => {
     const trimEnd = screen.getByRole("slider", { name: "Trim end" });
     trimStart.setPointerCapture = vi.fn();
     trimEnd.setPointerCapture = vi.fn();
+    const track = container.querySelector<HTMLElement>(".timeline-track");
+    expect(track).not.toBeNull();
+    vi.spyOn(track!, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 1_000,
+      bottom: 78,
+      width: 1_000,
+      height: 78,
+      toJSON: () => undefined,
+    });
 
     fireEvent.keyDown(trimStart, { key: "PageUp" });
     fireEvent.keyDown(trimStart, { key: "PageUp" });
@@ -205,21 +218,40 @@ describe("RecordingEditor", () => {
     expect(trimStart).toHaveAttribute("aria-valuetext", "0:02.000");
     expect(trimEnd).toHaveAttribute("aria-valuetext", "0:06.750");
 
+    // Click (and sub-threshold wiggle) seeks playhead without moving the trim edge.
+    const startClientX = (2_000 / artifact.duration_ms) * 1_000;
     video!.currentTime = 4;
     fireEvent.seeked(video!);
-    fireEvent.pointerDown(trimStart, { pointerId: 1 });
+    fireEvent.pointerDown(trimStart, { pointerId: 1, clientX: startClientX });
+    fireEvent.pointerMove(trimStart, { pointerId: 1, clientX: startClientX + 2 });
     expect(video!.currentTime).toBe(2);
+    expect(trimStart).toHaveAttribute("aria-valuetext", "0:02.000");
     expect(container.querySelector(".timeline-playhead")).toHaveStyle({
       left: `${2_000 / artifact.duration_ms * 100}%`,
     });
     fireEvent.pointerUp(trimStart, { pointerId: 1 });
+    expect(trimStart).toHaveAttribute("aria-valuetext", "0:02.000");
 
-    fireEvent.pointerDown(trimEnd, { pointerId: 2 });
+    const endClientX = (6_750 / artifact.duration_ms) * 1_000;
+    fireEvent.pointerDown(trimEnd, { pointerId: 2, clientX: endClientX });
+    fireEvent.pointerMove(trimEnd, { pointerId: 2, clientX: endClientX - 1 });
     expect(video!.currentTime).toBe(6.75);
+    expect(trimEnd).toHaveAttribute("aria-valuetext", "0:06.750");
     expect(container.querySelector(".timeline-playhead")).toHaveStyle({
       left: `${6_750 / artifact.duration_ms * 100}%`,
     });
     fireEvent.pointerUp(trimEnd, { pointerId: 2 });
+    expect(trimEnd).toHaveAttribute("aria-valuetext", "0:06.750");
+
+    // Dragging past the threshold moves the trim edge, then restore for playback checks.
+    fireEvent.pointerDown(trimStart, { pointerId: 3, clientX: startClientX });
+    fireEvent.pointerMove(trimStart, { pointerId: 3, clientX: startClientX + 50 });
+    expect(trimStart).toHaveAttribute("aria-valuetext", "0:02.438");
+    fireEvent.pointerUp(trimStart, { pointerId: 3 });
+    fireEvent.pointerDown(trimStart, { pointerId: 4, clientX: startClientX + 50 });
+    fireEvent.pointerMove(trimStart, { pointerId: 4, clientX: startClientX });
+    fireEvent.pointerUp(trimStart, { pointerId: 4 });
+    expect(trimStart).toHaveAttribute("aria-valuetext", "0:02.000");
 
     fireEvent.click(screen.getByRole("button", { name: "Play preview" }));
     await waitFor(() => expect(play).toHaveBeenCalledOnce());
@@ -245,6 +277,50 @@ describe("RecordingEditor", () => {
     expect(video!.currentTime).toBe(2);
     expect(container.querySelector(".timeline-playhead")).toHaveStyle({
       left: `${2_000 / artifact.duration_ms * 100}%`,
+    });
+  });
+
+  it("updates the playhead every animation frame while the preview is playing", async () => {
+    const rafQueue: FrameRequestCallback[] = [];
+    const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      rafQueue.push(callback);
+      return rafQueue.length;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+
+    const { container } = render(<RecordingEditor />);
+    expect(await screen.findByRole("heading", { name: "Edit recording" })).toBeInTheDocument();
+    const video = container.querySelector<HTMLVideoElement>("video");
+    expect(video).not.toBeNull();
+    let paused = true;
+    Object.defineProperty(video!, "paused", {
+      configurable: true,
+      get: () => paused,
+    });
+    vi.spyOn(video!, "play").mockImplementation(async () => {
+      paused = false;
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Play preview" }));
+    fireEvent.play(video!);
+    await waitFor(() => expect(raf).toHaveBeenCalled());
+
+    video!.currentTime = 1.25;
+    const pending = rafQueue.splice(0);
+    await act(async () => {
+      for (const callback of pending) callback(performance.now());
+    });
+    expect(container.querySelector(".timeline-playhead")).toHaveStyle({
+      left: `${1_250 / artifact.duration_ms * 100}%`,
+    });
+
+    video!.currentTime = 3.5;
+    const next = rafQueue.splice(0);
+    await act(async () => {
+      for (const callback of next) callback(performance.now());
+    });
+    expect(container.querySelector(".timeline-playhead")).toHaveStyle({
+      left: `${3_500 / artifact.duration_ms * 100}%`,
     });
   });
 
