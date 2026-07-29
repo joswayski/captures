@@ -66,7 +66,10 @@ import {
   THUMBNAIL_DELETE_ORIGIN_Y,
   type ThumbnailDustParticle,
 } from "./lib/thumbnailExit";
-import { shouldScrollThumbnailStackToEnd } from "./lib/thumbnailLayout";
+import {
+  createThumbnailStackShiftController,
+  shouldScrollThumbnailStackToEnd,
+} from "./lib/thumbnailLayout";
 import { reconcileActiveViewer } from "./lib/viewerActivation";
 import type {
   ActiveSession,
@@ -3877,6 +3880,17 @@ export function Thumbnail() {
       cancelled = true;
     };
   }, [artifacts.length]);
+
+  const hasThumbnailCards = artifacts.length > 0;
+  useEffect(() => {
+    // Dust deletes hold their layout slot until ash finishes. Survivors above
+    // must slide by N slots when several deletes run at once — pure CSS only
+    // moved a single 184px step and teleported the rest on removal.
+    if (!hasThumbnailCards) return;
+    const stack = stackRef.current;
+    if (!stack) return;
+    return createThumbnailStackShiftController(stack);
+  }, [hasThumbnailCards]);
 
   useEffect(() => {
     // Keep one native hover tracker for the lifetime of the thumbnail window.

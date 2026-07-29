@@ -192,8 +192,12 @@ html.capture-window-cursor, html.capture-window-cursor * { cursor: var(--capture
   0%, 22.222% { opacity: 1; animation-timing-function: cubic-bezier(.42, 0, .58, 1); }
   100% { opacity: 0; }
 }
-/* Isolate exit animations so surviving cards do not inherit transition flicker. */
-.thumbnail-card:not([class*="thumbnail-exit-"]) { transition: box-shadow .22s ease; will-change: auto; }
+/* Isolate exit animations so surviving cards do not inherit transition flicker.
+   Stack-shifting survivors keep a transform transition so multi-delete settle eases. */
+.thumbnail-card:not([class*="thumbnail-exit-"]):not(.thumbnail-stack-shifting) {
+  transition: box-shadow .22s ease;
+  will-change: auto;
+}
 .thumbnail-svg-defs { position: absolute; width: 0; height: 0; overflow: hidden; pointer-events: none; }
 /* Cover fills the card (no letterbox bars). Full-res fidelity lives in the viewer. */
 .thumbnail-card img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: center; border: 0; border-radius: 12px; background: transparent; transition: filter .18s ease, transform .22s ease; }
@@ -278,12 +282,20 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
   box-shadow: none;
   border-radius: 12px;
 }
-/* Only cards above the deleted slot move in the bottom-anchored stack. Move
-   them independently of the outgoing slot so they can start settling while
-   the last dust fades without pulling the particle layer down with them. */
-.thumbnail-card:not(.thumbnail-exiting):has(~ .thumbnail-exit-delete.thumbnail-exit-dust) {
-  animation: thumbnail-stack-motion-blur .58s 1.8s cubic-bezier(.4,0,.2,1) both;
-  will-change: filter, transform;
+/*
+ * Multi-slot stack settle is driven in JS (see createThumbnailStackShiftController).
+ * CSS alone could only translate by one fixed slot (184px); concurrent deletes
+ * need N × slot, with instant transform drops when a finished hole is removed
+ * so layout reflow does not teleport survivors.
+ */
+.thumbnail-card.thumbnail-stack-shifting {
+  transform: translateY(var(--thumbnail-stack-shift, 0px));
+  transition: transform .58s cubic-bezier(.4, 0, .2, 1), filter .58s cubic-bezier(.4, 0, .2, 1);
+  will-change: transform, filter;
+  filter: blur(0);
+}
+.thumbnail-card.thumbnail-stack-shift-instant {
+  transition: none !important;
 }
 /*
  * Once a live card starts moving into a deleted slot, cover its controls until
@@ -426,12 +438,6 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
    * fixed so the ash remains anchored; the card is removed after animationend.
    */
   0%, 100% { flex-basis: 160px; height: 160px; margin-bottom: 0; opacity: 1; }
-}
-@keyframes thumbnail-stack-motion-blur {
-  /* Start at 1.80s instead of waiting for the dust layer to disappear. */
-  0% { filter: blur(0); transform: translateY(0); }
-  50% { filter: blur(.8px); }
-  100% { filter: blur(0); transform: translateY(184px); }
 }
 @keyframes thumbnail-stack-interaction-guard {
   from { pointer-events: none; }
