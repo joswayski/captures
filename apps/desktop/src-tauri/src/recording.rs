@@ -490,13 +490,16 @@ async fn start_recording_inner(
         }
     };
     emit_snapshot(&app, &snapshot);
-    if let Err(error) = prepare_recording_hud(&app, &selected_display).and_then(|()| {
-        if snapshot.options.countdown_seconds > 0 {
-            show_recording_countdown(&app, &selected_display)
-        } else {
-            Ok(())
-        }
-    }) {
+    if let Err(error) = prepare_recording_hud(&app, &selected_display)
+        .await
+        .and_then(|()| {
+            if snapshot.options.countdown_seconds > 0 {
+                show_recording_countdown(&app, &selected_display)
+            } else {
+                Ok(())
+            }
+        })
+    {
         fail_session(&app, &state, &snapshot.id, error.to_string());
         restore_recording_ui(&app, &state);
         return Err(error);
@@ -2837,13 +2840,17 @@ pub fn reveal_recording_selector(
     Ok(())
 }
 
-fn prepare_recording_hud(app: &AppHandle, display: &DisplayDescriptor) -> Result<(), AppError> {
+async fn prepare_recording_hud(
+    app: &AppHandle,
+    display: &DisplayDescriptor,
+) -> Result<(), AppError> {
     let x = f64::from(display.x) + (f64::from(display.width) - RECORDING_HUD_FULL_WIDTH) / 2.0;
     let y = f64::from(display.y) + f64::from(display.height)
         - RECORDING_HUD_HEIGHT
         - RECORDING_HUD_BOTTOM_MARGIN;
-    if app.get_webview_window("recording-hud").is_none() {
-        let window = WebviewWindowBuilder::new(
+    let created = app.get_webview_window("recording-hud").is_none();
+    if created {
+        WebviewWindowBuilder::new(
             app,
             "recording-hud",
             WebviewUrl::App("index.html?view=recording-hud".into()),
@@ -2863,23 +2870,44 @@ fn prepare_recording_hud(app: &AppHandle, display: &DisplayDescriptor) -> Result
         .focused(false)
         .visible(false)
         .build()?;
-        #[cfg(target_os = "macos")]
-        captures_macos_window::configure_webview_inactive_hover(&window)
-            .map_err(|error| AppError::Task(error.to_owned()))?;
-        #[cfg(not(target_os = "macos"))]
-        let _ = window;
     }
-    let window = app
-        .get_webview_window("recording-hud")
-        .ok_or_else(|| AppError::Task("recording controls are unavailable".to_owned()))?;
-    window.set_size(tauri::LogicalSize::new(
-        RECORDING_HUD_FULL_WIDTH,
-        RECORDING_HUD_HEIGHT,
-    ))?;
-    window.set_position(tauri::LogicalPosition::new(x, y))?;
-    window.set_content_protected(recording_overlay_content_protected())?;
-    window.hide()?;
-    Ok(())
+
+    let handle = app.clone();
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    // Async Tauri commands run on a Tokio worker. Converting the HUD to an
+    // NSPanel touches AppKit and must complete on the main thread before the
+    // countdown can reveal any recording controls.
+    app.run_on_main_thread(move || {
+        let result = (|| -> Result<(), String> {
+            let window = handle
+                .get_webview_window("recording-hud")
+                .ok_or_else(|| "recording controls are unavailable".to_owned())?;
+            #[cfg(target_os = "macos")]
+            if created {
+                captures_macos_window::configure_webview_inactive_hover(&window)
+                    .map_err(str::to_owned)?;
+            }
+            window
+                .set_size(tauri::LogicalSize::new(
+                    RECORDING_HUD_FULL_WIDTH,
+                    RECORDING_HUD_HEIGHT,
+                ))
+                .map_err(|error| error.to_string())?;
+            window
+                .set_position(tauri::LogicalPosition::new(x, y))
+                .map_err(|error| error.to_string())?;
+            window
+                .set_content_protected(recording_overlay_content_protected())
+                .map_err(|error| error.to_string())?;
+            window.hide().map_err(|error| error.to_string())?;
+            Ok(())
+        })();
+        let _ = sender.send(result);
+    })?;
+    receiver
+        .await
+        .map_err(|_| AppError::Task("recording controls setup was interrupted".to_owned()))?
+        .map_err(AppError::Task)
 }
 
 #[tauri::command]

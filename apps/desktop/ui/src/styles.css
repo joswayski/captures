@@ -582,7 +582,7 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .capture-action-switch button:disabled { cursor: not-allowed; opacity: .35; }
 .capture-selector-close:focus-visible, .capture-action-switch button:focus-visible, .recording-target-switch button:focus-visible, .capture-selector-primary:focus-visible { outline: 2px solid var(--chrome-active); outline-offset: 2px; }
 .capture-action-switch svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.capture-record-dot { display: block; width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; background: #ef4650; }
+.capture-record-dot { display: block; width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; background: currentColor; }
 .capture-selector-divider { width: 1px; height: 30px; flex: 0 0 auto; background: rgba(255,255,255,.1); }
 .recording-target-switch { position: relative; display: flex; isolation: isolate; padding: 2px; border-radius: 8px; background: #101114; }
 .recording-target-switch button, .recording-cancel { border: 0; border-radius: 6px; padding: 6px 9px; color: #a9aaae; background: transparent; font-size: 10px; font-weight: 700; }
@@ -606,7 +606,7 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .recording-toggle input:focus-visible + .recording-switch { box-shadow: 0 0 0 3px rgba(255,202,40,.2); }
 .recording-options-row select, .recording-settings-section select, .recording-editor select, .recording-editor input[type="number"] { min-height: 32px; border: 1px solid #3d3e43; border-radius: 6px; padding: 5px 8px; color: #f3f3f4; background: #111216; outline: none; }
 .recording-options-row select:focus, .recording-settings-section select:focus, .recording-editor select:focus, .recording-editor input:focus { border-color: #f0b91a; box-shadow: 0 0 0 2px rgba(240,185,26,.12); }
-.recording-start { display: flex; min-width: 98px; min-height: 40px; margin-left: auto; padding: 9px 14px; align-items: center; justify-content: center; gap: 7px; border: 0; border-radius: 8px; color: #18191c; background: #ffca28; box-shadow: 0 5px 16px rgba(255,190,20,.2); font-size: 11px; font-weight: 850; }
+.recording-start { display: flex; min-width: 98px; min-height: 40px; margin-left: auto; padding: 9px 14px; align-items: center; justify-content: center; gap: 7px; border: 0; border-radius: 8px; color: var(--chrome-active-ink); background: var(--chrome-active); box-shadow: 0 5px 16px rgba(0,0,0,.24); font-size: 11px; font-weight: 850; }
 .capture-selector-primary svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
 .capture-selector-primary-screenshot { color: var(--chrome-active-ink); background: var(--chrome-active); box-shadow: 0 5px 16px rgba(0,0,0,.24); }
 .capture-selector-primary-recording > .capture-record-dot { position: relative; width: 10px; height: 10px; }
@@ -698,8 +698,14 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .recording-field { display: flex; min-width: 0; flex-direction: column; gap: 6px; color: #999a9f; font-size: 9px; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; }
 .recording-field .recording-toggle { display: flex; min-height: 34px; padding: 0 2px; align-items: center; gap: 7px; border: 0; color: #d3d4d8; background: transparent; cursor: pointer; font-size: 10px; letter-spacing: 0; text-transform: none; transition: color .15s ease; }
 .recording-field .recording-toggle:hover { color: white; }
+.recording-selector-panel .recording-toggle input:checked + .recording-switch { border-color: var(--chrome-active); background: var(--chrome-active); box-shadow: 0 3px 12px rgba(0,0,0,.24); }
+.recording-selector-panel .recording-toggle input:checked + .recording-switch::after { background: var(--chrome-active-ink); }
+.recording-selector-panel .recording-toggle input:focus-visible + .recording-switch { box-shadow: 0 0 0 3px rgba(255,255,255,.2); }
+.recording-selector-panel .recording-options-row select:focus { border-color: var(--chrome-active); box-shadow: 0 0 0 2px rgba(255,255,255,.15); }
+.recording-selector-panel .custom-select-trigger:focus-visible, .recording-selector-panel .custom-select.open .custom-select-trigger { border-color: var(--chrome-active); box-shadow: 0 0 0 2px rgba(255,255,255,.15); }
+.recording-selector-panel .custom-select-listbox button[aria-selected="true"] { color: white; }
 .recording-start { transition: background .16s ease, box-shadow .16s ease, filter .16s ease, transform .16s ease; }
-.capture-selector-primary-recording:hover:not(:disabled) { background: #ffd451; box-shadow: 0 7px 20px rgba(255,190,20,.3); filter: brightness(1.03); transform: translateY(-1px); }
+.capture-selector-primary-recording:hover:not(:disabled) { background: var(--chrome-active-hover); box-shadow: 0 7px 20px rgba(0,0,0,.3); filter: brightness(1.03); transform: translateY(-1px); }
 .capture-selector-primary-screenshot:hover:not(:disabled) { background: var(--chrome-active-hover); box-shadow: 0 7px 20px rgba(0,0,0,.3); filter: brightness(1.03); transform: translateY(-1px); }
 .recording-start:active:not(:disabled) { transform: translateY(0) scale(.98); }
 .recording-selector-error { border-radius: 0 0 15px 15px; }
