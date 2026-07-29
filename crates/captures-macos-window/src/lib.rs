@@ -235,6 +235,8 @@ fn configure_inactive_hover_with_cursor(
     window: &WebviewWindow,
     initial_cursor: CursorMode,
 ) -> Result<(), &'static str> {
+    let _main_thread =
+        MainThreadMarker::new().ok_or("inactive HUD setup must run on the main thread")?;
     let panel = window
         .to_panel::<ThumbnailPanel>()
         .map_err(|_| "failed to convert the inactive HUD to an NSPanel")?;
