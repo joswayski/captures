@@ -228,6 +228,7 @@ pub fn run() {
             recording::cancel_recording_selection,
             recording::capture_selection_screenshot,
             recording::list_recording_audio_devices,
+            recording::recording_controls_are_excluded,
             recording::get_recording_snapshot,
             recording::start_recording,
             recording::pause_recording,
@@ -330,6 +331,9 @@ fn refresh_autostart_registration(app: &tauri::App) {
 }
 
 fn open_capture_controls(app: &AppHandle, initial_mode: CaptureSelectorMode) {
+    if restore_hidden_recording_controls(app) {
+        return;
+    }
     let state = app.state::<Arc<AppState>>().inner().clone();
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -2821,18 +2825,7 @@ fn focus_or_show_primary_app_window(app: &AppHandle) {
 }
 
 fn focus_primary_app_window(app: &AppHandle) {
-    let recording_is_active = {
-        let state = app.state::<Arc<AppState>>();
-        recording::recording_controls_are_available(state.inner())
-    };
-    if recording_is_active
-        && let Some(window) = app.get_webview_window("recording-hud")
-        && !window.is_visible().unwrap_or(false)
-    {
-        hide_recording_controls_hidden_notices(app);
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
+    if restore_hidden_recording_controls(app) {
         return;
     }
     let primary = app
@@ -2850,6 +2843,24 @@ fn focus_primary_app_window(app: &AppHandle) {
     } else {
         open_capture_controls(app, CaptureSelectorMode::Screenshot);
     }
+}
+
+fn restore_hidden_recording_controls(app: &AppHandle) -> bool {
+    let recording_is_active = {
+        let state = app.state::<Arc<AppState>>();
+        recording::recording_controls_are_available(state.inner())
+    };
+    if recording_is_active
+        && let Some(window) = app.get_webview_window("recording-hud")
+        && !window.is_visible().unwrap_or(false)
+    {
+        hide_recording_controls_hidden_notices(app);
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        return true;
+    }
+    false
 }
 
 #[cfg(target_os = "linux")]

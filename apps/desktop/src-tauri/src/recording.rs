@@ -33,8 +33,9 @@ use crate::{
     models::{
         CaptureArtifact, CaptureSelectorMode, HistoryEntry, RecordingArtifact,
         RecordingArtifactData, RecordingCapabilities, RecordingSelection,
-        RecordingSelectionSession, recording_media_url, recording_poster_url,
-        recording_recovery_directory, recording_selection_url, recording_timeline_url,
+        RecordingSelectionSession, recording_controls_are_excluded as platform_controls_excluded,
+        recording_media_url, recording_poster_url, recording_recovery_directory,
+        recording_selection_url, recording_timeline_url,
     },
     state::AppState,
     storage,
@@ -92,7 +93,7 @@ const fn screenshot_capture_is_blocked_for(recording_state: Option<RecordingStat
     )
 }
 
-fn recording_session_is_active(state: &AppState) -> bool {
+pub(crate) fn recording_session_is_active(state: &AppState) -> bool {
     state
         .recording
         .lock()
@@ -167,7 +168,7 @@ pub struct RecordingExportProgress {
 pub struct RecordingExportComplete {
     pub export_id: String,
     pub artifact: RecordingArtifact,
-    pub finder_error: Option<String>,
+    pub reveal_error: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -425,6 +426,11 @@ pub fn list_recording_audio_devices() -> Vec<captures_recording::AudioDevice> {
     {
         captures_recording_xcap::microphone_devices()
     }
+}
+
+#[tauri::command]
+pub const fn recording_controls_are_excluded() -> bool {
+    platform_controls_excluded()
 }
 
 #[tauri::command]
@@ -1663,7 +1669,7 @@ pub fn start_recording_export(
                     artifact.clone(),
                     generated_poster.unwrap_or(poster_png),
                 );
-                let finder_error = app
+                let reveal_error = app
                     .opener()
                     .reveal_item_in_dir(PathBuf::from(&artifact.path))
                     .err()
@@ -1673,7 +1679,7 @@ pub fn start_recording_export(
                     RecordingExportComplete {
                         export_id: task_export_id,
                         artifact,
-                        finder_error,
+                        reveal_error,
                     },
                 );
             }

@@ -2,7 +2,11 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-import { RecordingControlsHiddenNotice, RecordingHud } from "./App";
+import {
+  RecordingControlsHiddenNotice,
+  RecordingHud,
+  RecordingSavedNotice,
+} from "./App";
 import type { RecordingSessionSnapshot } from "./types";
 
 const { startDragging } = vi.hoisted(() => ({
@@ -75,6 +79,7 @@ describe("RecordingHud", () => {
     vi.mocked(listen).mockRejectedValue(new Error("event bridge unavailable"));
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "get_recording_snapshot") return snapshot;
+      if (command === "recording_controls_are_excluded") return true;
       if (command === "start_capture") return undefined;
       if (command === "hide_recording_hud") return undefined;
       throw new Error(`unexpected command: ${command}`);
@@ -158,8 +163,32 @@ describe("RecordingHud", () => {
     render(<RecordingControlsHiddenNotice />);
 
     expect(screen.getByText("Recording controls hidden")).toBeInTheDocument();
-    expect(screen.getByText("Click the Captures icon in the Dock to bring them back."))
+    expect(screen.getByText(
+      "Choose New Capture in the Captures menu or use your shortcut to bring them back.",
+    ))
       .toBeInTheDocument();
+  });
+
+  it("uses portable file-browser wording for a saved recording", () => {
+    render(<RecordingSavedNotice />);
+
+    expect(screen.getByRole("button", { name: "Show in Folder" })).toBeDisabled();
+    expect(screen.queryByText(/Finder|Explorer/)).not.toBeInTheDocument();
+  });
+
+  it("warns when the platform cannot exclude recording controls", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_recording_snapshot") return snapshot;
+      if (command === "recording_controls_are_excluded") return false;
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<RecordingHud />);
+
+    expect(await screen.findByText("Hide these controls to keep them out of the recording"))
+      .toBeInTheDocument();
+    expect(screen.queryByText("These controls won’t appear in the output"))
+      .not.toBeInTheDocument();
   });
 
   it("uses a native Delete recording dialog before discarding", async () => {
@@ -171,6 +200,7 @@ describe("RecordingHud", () => {
     nativeMessage.mockResolvedValueOnce("Delete");
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "get_recording_snapshot") return snapshot;
+      if (command === "recording_controls_are_excluded") return true;
       if (command === "discard_recording") return { ...snapshot, state: "discarded" };
       throw new Error(`unexpected command: ${command}`);
     });
@@ -201,6 +231,7 @@ describe("RecordingHud", () => {
     nativeMessage.mockResolvedValueOnce("Restart");
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "get_recording_snapshot") return snapshot;
+      if (command === "recording_controls_are_excluded") return true;
       if (command === "restart_recording") return { ...snapshot, state: "countdown" };
       throw new Error(`unexpected command: ${command}`);
     });
