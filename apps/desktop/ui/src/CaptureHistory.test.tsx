@@ -86,6 +86,7 @@ describe("CaptureHistory", () => {
       if (command === "get_capture_history") return [entry];
       if (command === "get_recording_drafts") return [];
       if (command === "restore_history_artifact") return undefined;
+      if (command === "open_screenshot_editor") return undefined;
       if (command === "delete_history_artifact") return undefined;
       if (command === "open_recording_editor") return undefined;
       if (command === "reveal_recording_artifact") return undefined;
@@ -116,6 +117,26 @@ describe("CaptureHistory", () => {
     fireEvent.click(screen.getByRole("button", { name: "Confirm permanent deletion" }));
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("delete_history_artifact", { artifactId: entry.id });
+    });
+  });
+
+  it("restores a historical screenshot before opening it in the editor", async () => {
+    render(<CaptureHistory />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+
+    await waitFor(() => {
+      const restoreCall = vi.mocked(invoke).mock.calls.findIndex(
+        ([command]) => command === "restore_history_artifact",
+      );
+      const editorCall = vi.mocked(invoke).mock.calls.findIndex(
+        ([command]) => command === "open_screenshot_editor",
+      );
+      expect(restoreCall).toBeGreaterThanOrEqual(0);
+      expect(editorCall).toBeGreaterThan(restoreCall);
+      expect(invoke).toHaveBeenCalledWith("open_screenshot_editor", {
+        artifactId: entry.id,
+      });
     });
   });
 

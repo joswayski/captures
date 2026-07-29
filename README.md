@@ -15,6 +15,7 @@ macOS is the primary development target today. Windows and Linux builds are avai
 - Take a lossless region, window, or display screenshot while a recording continues.
 - Capture user-facing Captures windows such as Preferences, Capture History, previews, editors, and the open New Capture controls with a direct screenshot shortcut; transient capture chrome stays out of window-target lists.
 - Review recordings on an aspect-correct filmstrip timeline, adjust crop and audio, then save changes to the original or make a named copy, with preserved quality, optional compression, or an exact maximum file size.
+- Edit screenshots locally on macOS, Windows, and Linux with formatted text, rectangles, ellipses, lines, straight or curved arrows, and smoothed freehand drawing; crop, resize, combine dropped images, copy the result, or save a non-destructive PNG, JPEG, or lossless WebP copy. Lossless PNG remains the default.
 - Open one desktop Capture and Record overlay from the menu bar, Spotlight, or the macOS Dock, switch between screenshot and recording targets in place, or start immediately with customizable global shortcuts.
 - Choose a Mustard, Saffron, Cobalt, or Mint color theme in Preferences; the selected palette updates every Captures window.
 - Copy captures to the clipboard automatically, save them as full-resolution lossless PNGs, or inspect them in a full-size viewer.
@@ -30,8 +31,6 @@ The roadmap is still taking shape. Likely additions include:
 - Hardware-accelerated encoding for the Windows and Linux recording backends.
 - Native Wayland window targeting, pointer and click-highlight support, and reliable exclusion of Captures controls from Linux recordings.
 - Editable click highlights and keystroke overlays after recording.
-- Screenshot markup and editing.
-- Optional compressed screenshot formats and quality controls; lossless PNG remains the default.
 - Optional cloud hosting for images and recordings with shareable `captur.es/<id>` links.
 - Scrolling capture for content larger than the screen.
 - On-device text recognition (OCR).
