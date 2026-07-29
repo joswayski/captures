@@ -359,7 +359,7 @@ function Find-CapturesExecutable {
       Where-Object { $_.DisplayName -eq "Captures" }
   )
   foreach ($entry in $entries) {
-    $installLocation = [string]$entry.InstallLocation
+    $installLocation = ([string]$entry.InstallLocation).Trim().Trim('"')
     if (-not [string]::IsNullOrWhiteSpace($installLocation)) {
       $candidates += Join-Path $installLocation "captures.exe"
     }
@@ -459,6 +459,8 @@ function installDebianPackage(assetPath, launch) {
     throw new Error(`the Debian package has an invalid package name: ${packageName}`);
   }
 
+  log("Refreshing Debian package metadata…");
+  runChecked("sudo", ["apt-get", "update"], { stdio: "inherit" });
   quitLinuxCaptures();
   const installed = run("dpkg-query", ["--show", "--showformat=${db:Status-Abbrev}", packageName]);
   if (installed.status === 0 && installed.stdout.startsWith("ii")) {
