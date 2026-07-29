@@ -2736,7 +2736,7 @@ fn prepare_recording_hud(app: &AppHandle, display: &DisplayDescriptor) -> Result
         - RECORDING_HUD_HEIGHT
         - RECORDING_HUD_BOTTOM_MARGIN;
     if app.get_webview_window("recording-hud").is_none() {
-        WebviewWindowBuilder::new(
+        let window = WebviewWindowBuilder::new(
             app,
             "recording-hud",
             WebviewUrl::App("index.html?view=recording-hud".into()),
@@ -2752,8 +2752,15 @@ fn prepare_recording_hud(app: &AppHandle, display: &DisplayDescriptor) -> Result
         .shadow(false)
         .transparent(true)
         .background_color(Color(0, 0, 0, 0))
+        .accept_first_mouse(true)
+        .focused(false)
         .visible(false)
         .build()?;
+        #[cfg(target_os = "macos")]
+        captures_macos_window::configure_webview_inactive_hover(&window)
+            .map_err(|error| AppError::Task(error.to_owned()))?;
+        #[cfg(not(target_os = "macos"))]
+        let _ = window;
     }
     let window = app
         .get_webview_window("recording-hud")
@@ -2794,6 +2801,10 @@ fn show_recording_hud(app: &AppHandle) -> Result<(), AppError> {
         .get_webview_window("recording-hud")
         .ok_or_else(|| AppError::Task("recording controls are unavailable".to_owned()))?;
     window.set_content_protected(false)?;
+    #[cfg(target_os = "macos")]
+    captures_macos_window::show_without_activating(&window)
+        .map_err(|error| AppError::Task(error.to_owned()))?;
+    #[cfg(not(target_os = "macos"))]
     window.show()?;
     Ok(())
 }

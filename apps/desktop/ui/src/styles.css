@@ -259,9 +259,34 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 /* Only cards above the deleted slot move in the bottom-anchored stack. Move
    them independently of the outgoing slot so they can start settling while
    the last dust fades without pulling the particle layer down with them. */
-.thumbnail-card:has(~ .thumbnail-exit-delete.thumbnail-exit-dust) {
-  animation: thumbnail-stack-motion-blur 2.9s linear both;
+.thumbnail-card:not(.thumbnail-exiting):has(~ .thumbnail-exit-delete.thumbnail-exit-dust) {
+  animation: thumbnail-stack-motion-blur .58s 1.8s cubic-bezier(.4,0,.2,1) both;
   will-change: filter, transform;
+}
+/*
+ * Once a live card starts moving into a deleted slot, cover its controls until
+ * the exiting slots are removed. Rapid deletes still work during the long
+ * pre-motion dissolve, but a different trash button cannot slide under a
+ * still pointer and receive an accidental click.
+ */
+.thumbnail-card:not(.thumbnail-exiting):has(~ .thumbnail-exit-delete.thumbnail-exit-dust)::before {
+  position: absolute;
+  z-index: 30;
+  inset: 0;
+  border-radius: inherit;
+  content: "";
+  cursor: default;
+  pointer-events: none;
+  animation: thumbnail-stack-interaction-guard 1ms 1.8s step-end forwards;
+}
+.thumbnail-card:not(.thumbnail-exiting):has(~ .thumbnail-exit-delete:not(.thumbnail-exit-dust))::before {
+  position: absolute;
+  z-index: 30;
+  inset: 0;
+  border-radius: inherit;
+  content: "";
+  cursor: default;
+  pointer-events: auto;
 }
 /*
  * Visual baseline restored from 30aa257 (soft blur + long ease fades),
@@ -381,10 +406,14 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
   0%, 100% { flex-basis: 160px; height: 160px; margin-bottom: 0; opacity: 1; }
 }
 @keyframes thumbnail-stack-motion-blur {
-  /* Start at 1.80s instead of waiting until 2.32s for the dust layer to hide. */
-  0%, 62% { filter: blur(0); transform: translateY(0); animation-timing-function: cubic-bezier(.4,0,.2,1); }
-  72% { filter: blur(.8px); }
-  82%, 100% { filter: blur(0); transform: translateY(184px); }
+  /* Start at 1.80s instead of waiting for the dust layer to disappear. */
+  0% { filter: blur(0); transform: translateY(0); }
+  50% { filter: blur(.8px); }
+  100% { filter: blur(0); transform: translateY(184px); }
+}
+@keyframes thumbnail-stack-interaction-guard {
+  from { pointer-events: none; }
+  to { pointer-events: auto; }
 }
 /* Fallback when dust is disabled (reduced motion or failed particle build). */
 .thumbnail-exit-delete:not(.thumbnail-exit-dust) {
