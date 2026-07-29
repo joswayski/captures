@@ -107,7 +107,7 @@ if [[ ! -x "$FFMPEG_OUTPUT" || ! -x "$FFPROBE_OUTPUT" || "${CAPTURES_REBUILD_FFM
   else
     JOBS="${NUMBER_OF_PROCESSORS:-2}"
   fi
-  make -j"$JOBS" ffmpeg ffprobe
+  make -j"$JOBS" "ffmpeg$EXECUTABLE_SUFFIX" "ffprobe$EXECUTABLE_SUFFIX"
   cp "ffmpeg$EXECUTABLE_SUFFIX" "$FFMPEG_OUTPUT"
   cp "ffprobe$EXECUTABLE_SUFFIX" "$FFPROBE_OUTPUT"
   popd >/dev/null

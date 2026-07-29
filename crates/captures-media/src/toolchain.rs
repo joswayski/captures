@@ -1677,11 +1677,18 @@ mod tests {
     }
 
     #[cfg(target_os = "macos")]
-    fn media_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    fn media_test_guard() -> Option<std::sync::MutexGuard<'static, ()>> {
+        let (toolchain, _) = bundled_toolchain();
+        if !toolchain.ffmpeg.is_file() || !toolchain.ffprobe.is_file() {
+            eprintln!("macOS media sidecars are not prepared in this checkout");
+            return None;
+        }
         static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-        LOCK.get_or_init(|| std::sync::Mutex::new(()))
-            .lock()
-            .expect("media test lock")
+        Some(
+            LOCK.get_or_init(|| std::sync::Mutex::new(()))
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
     }
 
     #[cfg(target_os = "macos")]
@@ -1764,7 +1771,9 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn preserve_export_is_byte_identical_when_untouched() {
-        let _guard = media_test_guard();
+        let Some(_guard) = media_test_guard() else {
+            return;
+        };
         let directory = tempfile::tempdir().expect("temporary directory");
         let source = directory.path().join("source.mp4");
         let destination = directory.path().join("copy.mp4");
@@ -1791,7 +1800,9 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn audio_only_edits_copy_the_video_stream() {
-        let _guard = media_test_guard();
+        let Some(_guard) = media_test_guard() else {
+            return;
+        };
         let directory = tempfile::tempdir().expect("temporary directory");
         let source = directory.path().join("source.mp4");
         let destination = directory.path().join("audio-edit.mp4");
@@ -1829,7 +1840,9 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn visual_edits_use_the_high_quality_h264_path() {
-        let _guard = media_test_guard();
+        let Some(_guard) = media_test_guard() else {
+            return;
+        };
         if !video_toolbox_available() {
             eprintln!("VideoToolbox is unavailable in this execution context");
             return;
@@ -1871,7 +1884,9 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn timeline_sprite_contains_twelve_sampled_frames() {
-        let _guard = media_test_guard();
+        let Some(_guard) = media_test_guard() else {
+            return;
+        };
         let directory = tempfile::tempdir().expect("temporary directory");
         let source = directory.path().join("source.mp4");
         let destination = directory.path().join("timeline.png");
@@ -1900,7 +1915,9 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn maximum_size_export_never_exceeds_the_exact_ceiling() {
-        let _guard = media_test_guard();
+        let Some(_guard) = media_test_guard() else {
+            return;
+        };
         if !video_toolbox_available() {
             eprintln!("VideoToolbox is unavailable in this execution context");
             return;
