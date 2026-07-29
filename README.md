@@ -13,7 +13,7 @@ macOS is the primary development target today. Windows and Linux builds are avai
 - For video, record desktop audio and a selected microphone independently, with pause, resume, restart, mute, interruption recovery, and hideable recording controls.
 - Include the pointer and animated click highlights on macOS 15+, Windows, and Linux X11.
 - Take a lossless region, window, or display screenshot while a recording continues.
-- Capture user-facing Captures windows such as Preferences, Capture History, previews, and editors; capture controls stay out of the result.
+- Capture user-facing Captures windows such as Preferences, Capture History, previews, editors, and the open New Capture controls with a direct screenshot shortcut; transient capture chrome stays out of window-target lists.
 - Review recordings on an aspect-correct filmstrip timeline, adjust crop and audio, then save changes to the original or make a named copy, with preserved quality, optional compression, or an exact maximum file size.
 - Open one desktop Capture and Record overlay from the menu bar, Spotlight, or the macOS Dock, switch between screenshot and recording targets in place, or start immediately with customizable global shortcuts.
 - Copy captures to the clipboard automatically, save them as full-resolution lossless PNGs, or inspect them in a full-size viewer.
