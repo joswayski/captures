@@ -3,9 +3,13 @@ import ReactDOM from "react-dom/client";
 
 import { App } from "./App";
 import "./styles.css";
-import { applyColorTheme, readStoredColorTheme } from "../../../../shared/themes";
+import {
+  applyColorTheme,
+  readStoredColorTheme,
+  readStoredCustomTheme,
+} from "../../../../shared/themes";
 
-applyColorTheme(readStoredColorTheme());
+applyColorTheme(readStoredColorTheme(), readStoredCustomTheme());
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

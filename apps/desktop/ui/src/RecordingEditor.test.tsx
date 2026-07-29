@@ -56,6 +56,10 @@ const timeline: RecordingTimelinePreview = {
 
 const settings: AppSettings = {
   theme: "mustard",
+  custom_theme: {
+    accent: "#ffca28",
+    signal: "#ef4650",
+  },
   output_directory: "/Users/josevalerio/Captures",
   new_capture_shortcut: "Ctrl+Shift+Space",
   region_shortcut: "Ctrl+Shift+4",

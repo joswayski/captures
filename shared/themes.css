@@ -1,5 +1,6 @@
 :root,
-[data-capture-theme="mustard"] {
+[data-capture-theme="mustard"],
+[data-capture-theme="custom"] {
   --theme-accent: #ffca28;
   --theme-accent-hover: #ffd451;
   --theme-accent-strong: #f0b91a;
@@ -31,36 +32,36 @@
   --theme-web-ink-soft: #817b6e;
 }
 
-[data-capture-theme="saffron"] {
-  --theme-accent: #e4b84a;
-  --theme-accent-hover: #edc967;
-  --theme-accent-strong: #c99a31;
-  --theme-accent-ink: #1c1912;
-  --theme-accent-readable: #71550a;
-  --theme-accent-rgb: 228, 184, 74;
-  --theme-accent-text: #f4d98f;
-  --theme-accent-text-strong: #fff0bd;
-  --theme-accent-surface: #2b2518;
-  --theme-accent-surface-strong: #39301b;
+[data-capture-theme="violet"] {
+  --theme-accent: #7c4dff;
+  --theme-accent-hover: #8051f5;
+  --theme-accent-strong: #6739df;
+  --theme-accent-ink: #ffffff;
+  --theme-accent-readable: #6840d4;
+  --theme-accent-rgb: 124, 77, 255;
+  --theme-accent-text: #cbbcff;
+  --theme-accent-text-strong: #eee9ff;
+  --theme-accent-surface: #231c3d;
+  --theme-accent-surface-strong: #2c2252;
 
-  --theme-signal: #f05a5f;
-  --theme-signal-hover: #f47477;
-  --theme-signal-strong: #d94750;
-  --theme-signal-deep: #a93641;
-  --theme-signal-ink: #2d1216;
-  --theme-signal-rgb: 240, 90, 95;
-  --theme-signal-text: #ffc0c3;
-  --theme-signal-text-strong: #ff9ea4;
-  --theme-signal-surface: #2d1d20;
+  --theme-signal: #ff4f6d;
+  --theme-signal-hover: #ff637d;
+  --theme-signal-strong: #e43e5b;
+  --theme-signal-deep: #aa2c44;
+  --theme-signal-ink: #2f1018;
+  --theme-signal-rgb: 255, 79, 109;
+  --theme-signal-text: #ffc0cc;
+  --theme-signal-text-strong: #ff9bad;
+  --theme-signal-surface: #321c24;
 
-  --theme-web-canvas: #fbf8f1;
-  --theme-web-surface: #fffdf7;
-  --theme-web-surface-strong: #1c1a16;
-  --theme-web-border: #e8dfcc;
-  --theme-web-border-strong: #cfc1a2;
-  --theme-web-ink: #211e18;
-  --theme-web-ink-muted: #635d50;
-  --theme-web-ink-soft: #887f6d;
+  --theme-web-canvas: #faf8ff;
+  --theme-web-surface: #ffffff;
+  --theme-web-surface-strong: #17141f;
+  --theme-web-border: #e6e0f2;
+  --theme-web-border-strong: #c6bcdd;
+  --theme-web-ink: #201a2a;
+  --theme-web-ink-muted: #5e5570;
+  --theme-web-ink-soft: #817790;
 }
 
 [data-capture-theme="cobalt"] {

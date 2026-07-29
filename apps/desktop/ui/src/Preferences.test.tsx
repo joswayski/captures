@@ -16,6 +16,10 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 const settings: AppSettings = {
   theme: "mustard",
+  custom_theme: {
+    accent: "#ffca28",
+    signal: "#ef4650",
+  },
   output_directory: "/Users/josevalerio/Captures",
   new_capture_shortcut: "Ctrl+Shift+Space",
   region_shortcut: "Ctrl+Shift+4",
@@ -60,6 +64,7 @@ describe("Preferences", () => {
   afterEach(() => {
     vi.clearAllMocks();
     document.documentElement.removeAttribute("data-capture-theme");
+    document.documentElement.removeAttribute("style");
     window.localStorage.clear();
   });
 
@@ -125,6 +130,39 @@ describe("Preferences", () => {
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("update_settings", {
         settings: expect.objectContaining({ theme: "cobalt" }),
+      });
+    });
+  });
+
+  it("builds and persists a custom theme from editable colors", async () => {
+    render(<Preferences />);
+
+    fireEvent.click(await screen.findByRole("radio", { name: /Custom/ }));
+    const editor = screen.getByRole("group", { name: "Custom theme colors" });
+    expect(editor).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Accent color picker"), {
+      target: { value: "#123456" },
+    });
+    const signalHex = screen.getByRole("textbox", {
+      name: "Recording signal hex value",
+    });
+    fireEvent.change(signalHex, { target: { value: "#22AA55" } });
+    fireEvent.blur(signalHex);
+
+    expect(document.documentElement).toHaveAttribute("data-capture-theme", "custom");
+    expect(document.documentElement.style.getPropertyValue("--theme-accent")).toBe("#123456");
+    expect(document.documentElement.style.getPropertyValue("--theme-signal")).toBe("#22aa55");
+    expect(document.documentElement.style.getPropertyValue("--theme-accent-hover")).not.toBe("");
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("update_settings", {
+        settings: expect.objectContaining({
+          theme: "custom",
+          custom_theme: {
+            accent: "#123456",
+            signal: "#22aa55",
+          },
+        }),
       });
     });
   });

@@ -923,6 +923,9 @@ fn update_settings(
     {
         return Err("recording settings are outside their supported range".to_owned());
     }
+    if !settings.custom_theme.is_valid() {
+        return Err("custom theme colors must use #RRGGBB values".to_owned());
+    }
 
     // Migration and permission bookkeeping are internal state, not
     // user-editable settings.
