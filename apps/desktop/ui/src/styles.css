@@ -871,12 +871,12 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .screenshot-editor-history-actions > .screenshot-add-image:hover { border-color: white; color: #17181b; background: white; }
 .screenshot-editor-zoom { display: flex; height: 31px; margin-left: 4px; align-items: center; overflow: hidden; border: 1px solid #414247; border-radius: 7px; background: #292a2f; }
 .screenshot-editor-zoom button { height: 100%; border: 0; border-right: 1px solid #414247; padding: 0 8px; color: #a9aaaf; background: transparent; font-size: 9px; font-weight: 750; }
-.screenshot-editor-zoom button.active { color: #17181b; background: var(--editing-accent); }
+.screenshot-editor-zoom button.active { color: var(--theme-accent-ink); background: var(--editing-accent); }
 .screenshot-editor-zoom select { width: 64px; height: 100%; border: 0; padding: 0 5px; color: #dedee0; background: #292a2f; outline: none; font-size: 9px; }
 .screenshot-tool-rail { z-index: 5; display: flex; grid-row: 2; grid-column: 1; padding: 9px 7px; flex-direction: column; gap: 4px; overflow-y: auto; border-right: 1px solid #303136; background: #1d1e22; }
 .screenshot-tool-rail button { position: relative; display: grid; min-height: 48px; padding: 5px 2px; place-items: center; gap: 2px; border: 1px solid transparent; border-radius: 8px; color: #9d9ea4; background: transparent; }
 .screenshot-tool-rail button:hover { color: #f0f0f1; background: #292a2f; }
-.screenshot-tool-rail button.active { border-color: rgba(255,202,40,.28); color: #ffe28a; background: rgba(255,202,40,.1); box-shadow: 0 0 0 1px rgba(255,202,40,.04) inset; }
+.screenshot-tool-rail button.active { border-color: rgba(var(--theme-accent-rgb),.28); color: var(--theme-accent-text); background: rgba(var(--theme-accent-rgb),.1); box-shadow: 0 0 0 1px rgba(var(--theme-accent-rgb),.04) inset; }
 .screenshot-tool-rail svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .screenshot-tool-rail span { max-width: 58px; font-size: 8px; font-weight: 700; line-height: 1.1; text-align: center; white-space: normal; }
 .screenshot-canvas-viewport { position: relative; display: grid; min-width: 0; min-height: 0; grid-row: 2; grid-column: 2; padding: 28px; overflow: auto; place-items: center; overscroll-behavior: contain; background-color: #0d0e10; background-image: linear-gradient(45deg,rgba(255,255,255,.025) 25%,transparent 25%),linear-gradient(-45deg,rgba(255,255,255,.025) 25%,transparent 25%),linear-gradient(45deg,transparent 75%,rgba(255,255,255,.025) 75%),linear-gradient(-45deg,transparent 75%,rgba(255,255,255,.025) 75%); background-position: 0 0,0 10px,10px -10px,-10px 0; background-size: 20px 20px; }
@@ -885,7 +885,7 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .screenshot-canvas.tool-select { cursor: default; }
 .screenshot-canvas.tool-crop, .screenshot-canvas.tool-text, .screenshot-canvas.tool-rectangle, .screenshot-canvas.tool-ellipse, .screenshot-canvas.tool-line, .screenshot-canvas.tool-arrow, .screenshot-canvas.tool-curved_arrow, .screenshot-canvas.tool-pen { cursor: crosshair; }
 .screenshot-drop-overlay { position: fixed; z-index: 80; inset: 70px 304px 100px 88px; display: grid; place-content: center; justify-items: center; border: 2px dashed rgba(255,255,255,.72); border-radius: 14px; color: white; background: rgba(17,18,22,.9); box-shadow: 0 16px 50px rgba(0,0,0,.45); backdrop-filter: blur(16px); pointer-events: none; }
-.screenshot-drop-overlay svg { width: 42px; height: 42px; margin-bottom: 12px; fill: none; stroke: #ffca28; stroke-width: 1.5; }
+.screenshot-drop-overlay svg { width: 42px; height: 42px; margin-bottom: 12px; fill: none; stroke: var(--editing-accent); stroke-width: 1.5; }
 .screenshot-drop-overlay strong { font-size: 18px; }.screenshot-drop-overlay span { margin-top: 6px; color: #aaaab0; font-size: 11px; }
 .screenshot-properties { min-height: 0; grid-row: 2; grid-column: 3; padding: 0 14px 20px; overflow-y: auto; border-left: 1px solid #303136; background: #1d1e22; }
 .screenshot-properties-heading { position: sticky; z-index: 3; top: 0; display: flex; min-height: 48px; margin: 0 -14px 12px; padding: 0 14px; align-items: center; justify-content: space-between; border-bottom: 1px solid #303136; background: rgba(29,30,34,.96); backdrop-filter: blur(14px); }
@@ -899,7 +899,7 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .screenshot-property-section label { display: flex; min-width: 0; flex-direction: column; gap: 6px; color: #9a9ba1; font-size: 9px; font-weight: 700; }
 .screenshot-property-section input:not([type=range]):not([type=checkbox]), .screenshot-property-section select, .screenshot-property-section textarea { width: 100%; min-height: 31px; border: 1px solid #424349; border-radius: 6px; padding: 6px 8px; color: #ededee; background: #111216; outline: none; font-size: 10px; }
 .screenshot-property-section textarea { min-height: 74px; resize: vertical; line-height: 1.4; }
-.screenshot-property-section input:focus, .screenshot-property-section select:focus, .screenshot-property-section textarea:focus { border-color: #d6a718; box-shadow: 0 0 0 2px rgba(255,202,40,.12); }
+.screenshot-property-section input:focus, .screenshot-property-section select:focus, .screenshot-property-section textarea:focus { border-color: var(--theme-accent-strong); box-shadow: 0 0 0 2px rgba(var(--theme-accent-rgb),.12); }
 .screenshot-number-pair { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
 .screenshot-range { display: grid; grid-template-columns: minmax(0,1fr) 42px; align-items: center; gap: 8px; }
 .screenshot-range input { width: 100%; accent-color: var(--editing-accent); }
@@ -907,10 +907,10 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .screenshot-property-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
 .screenshot-property-actions button, .screenshot-layer-actions button { min-height: 31px; border: 1px solid #414247; border-radius: 6px; color: #d9dade; background: #2b2c31; font-size: 9px; font-weight: 750; }
 .screenshot-property-actions button:hover, .screenshot-layer-actions button:hover { background: #37383e; }
-.screenshot-property-actions button.primary { border-color: #d5a619; color: #17181b; background: var(--editing-accent); }
+.screenshot-property-actions button.primary { border-color: var(--theme-accent-strong); color: var(--theme-accent-ink); background: var(--editing-accent); }
 .screenshot-format-buttons { display: grid; grid-template-columns: repeat(5,1fr); gap: 5px; }
 .screenshot-format-buttons button { display: grid; min-height: 29px; place-items: center; border: 1px solid #414247; border-radius: 5px; color: #b5b6ba; background: #292a2f; font-size: 11px; font-weight: 800; }
-.screenshot-format-buttons button.active { border-color: rgba(255,202,40,.45); color: #ffe28a; background: rgba(255,202,40,.12); }
+.screenshot-format-buttons button.active { border-color: rgba(var(--theme-accent-rgb),.45); color: var(--theme-accent-text); background: rgba(var(--theme-accent-rgb),.12); }
 .screenshot-format-buttons svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; }
 .screenshot-check-row { display: flex !important; min-height: 26px; flex-direction: row !important; align-items: center; gap: 7px !important; cursor: pointer; }
 .screenshot-check-row input { width: auto; accent-color: var(--editing-accent); }
@@ -918,7 +918,7 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .screenshot-color-field legend { margin-bottom: 7px; padding: 0; color: #9a9ba1; font-size: 9px; font-weight: 700; }
 .screenshot-color-field > div { display: flex; align-items: center; gap: 5px; }
 .screenshot-color-field button, .screenshot-custom-color { position: relative; display: block; width: 22px; height: 22px; flex: 0 0 auto; overflow: hidden; border: 1px solid rgba(255,255,255,.24); border-radius: 50%; padding: 0; box-shadow: 0 1px 2px rgba(0,0,0,.3); }
-.screenshot-color-field button.active { box-shadow: 0 0 0 2px #1d1e22, 0 0 0 4px #ffca28; }
+.screenshot-color-field button.active { box-shadow: 0 0 0 2px #1d1e22, 0 0 0 4px var(--editing-accent); }
 .screenshot-custom-color { border-radius: 6px; background: conic-gradient(#f44,#ff4,#4f4,#4ff,#44f,#f4f,#f44); cursor: pointer; }
 .screenshot-custom-color::after { position: absolute; inset: 4px; border: 1px solid rgba(255,255,255,.5); border-radius: 3px; background: #1d1e22; content: ""; pointer-events: none; }
 .screenshot-custom-color input { position: absolute; inset: -8px; width: 40px; height: 40px; opacity: 0; cursor: pointer; }
@@ -937,8 +937,8 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .screenshot-export-actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
 .screenshot-export-actions button { display: inline-flex; min-width: 82px; min-height: 34px; padding: 6px 11px; align-items: center; justify-content: center; gap: 6px; border: 1px solid #46474d; border-radius: 7px; color: #e4e4e6; background: #2d2e33; font-size: 10px; font-weight: 800; white-space: nowrap; }
 .screenshot-export-actions button:hover:not(:disabled) { border-color: #5b5c62; background: #3a3b40; transform: translateY(-1px); }
-.screenshot-export-actions button.primary { min-width: 104px; border-color: #ddaE1b; color: #17181b; background: var(--editing-accent); }
-.screenshot-export-actions button.primary:hover:not(:disabled) { background: #ffd451; }
+.screenshot-export-actions button.primary { min-width: 104px; border-color: var(--theme-accent-strong); color: var(--theme-accent-ink); background: var(--editing-accent); }
+.screenshot-export-actions button.primary:hover:not(:disabled) { background: var(--theme-accent-hover); }
 .screenshot-export-actions button:disabled { cursor: wait; opacity: .55; }
 .screenshot-export-actions svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 @media (max-width: 1040px) {

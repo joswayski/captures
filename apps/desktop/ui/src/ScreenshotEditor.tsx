@@ -309,17 +309,18 @@ function drawEditorOverlays(
   selected: ScreenshotElement | null,
   crop: EditorRect | null,
   displayScale: number,
+  accentColor: string,
 ): void {
   const unit = 1 / Math.max(0.01, displayScale);
   if (selected) {
     const bounds = elementBounds(selected);
     context.save();
-    context.strokeStyle = "#ffca28";
+    context.strokeStyle = accentColor;
     context.lineWidth = 2 * unit;
     context.setLineDash([7 * unit, 5 * unit]);
     context.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
     context.setLineDash([]);
-    context.fillStyle = "#ffca28";
+    context.fillStyle = accentColor;
     for (const point of [
       [bounds.x, bounds.y],
       [bounds.x + bounds.width, bounds.y],
@@ -530,7 +531,17 @@ export function ScreenshotEditor() {
     const context = canvas.getContext("2d");
     if (!context) return;
     renderScreenshot(context, editorDocument, imageCacheRef.current);
-    drawEditorOverlays(context, editorDocument, selected, cropSelection, displayScale);
+    const accentColor = getComputedStyle(canvas)
+      .getPropertyValue("--theme-accent")
+      .trim() || "#ffffff";
+    drawEditorOverlays(
+      context,
+      editorDocument,
+      selected,
+      cropSelection,
+      displayScale,
+      accentColor,
+    );
   }, [
     cropSelection,
     displayScale,
