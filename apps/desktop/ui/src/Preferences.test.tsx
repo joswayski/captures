@@ -15,6 +15,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 const settings: AppSettings = {
+  theme: "mustard",
   output_directory: "/Users/josevalerio/Captures",
   new_capture_shortcut: "Ctrl+Shift+Space",
   region_shortcut: "Ctrl+Shift+4",
@@ -58,6 +59,8 @@ describe("Preferences", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+    document.documentElement.removeAttribute("data-capture-theme");
+    window.localStorage.clear();
   });
 
   it("automatically persists changes and reports that they were saved", async () => {
@@ -107,6 +110,23 @@ describe("Preferences", () => {
       suppressed: false,
     });
     expect(await screen.findByText("Changes saved")).toBeInTheDocument();
+  });
+
+  it("previews and persists a color theme", async () => {
+    render(<Preferences />);
+
+    const cobalt = await screen.findByRole("radio", { name: /Cobalt/ });
+    expect(cobalt).not.toBeChecked();
+
+    fireEvent.click(cobalt);
+
+    expect(document.documentElement).toHaveAttribute("data-capture-theme", "cobalt");
+    expect(cobalt).toBeChecked();
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("update_settings", {
+        settings: expect.objectContaining({ theme: "cobalt" }),
+      });
+    });
   });
 
   it("presents the unified New Capture shortcut as the primary launcher", async () => {

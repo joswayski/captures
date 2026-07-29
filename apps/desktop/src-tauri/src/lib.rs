@@ -950,6 +950,9 @@ fn update_settings(
     }
     storage::save_settings(&settings).map_err(|error| error.to_string())?;
     *state.settings.write() = settings.clone();
+    if let Err(error) = app.emit("settings-changed", &settings) {
+        eprintln!("failed to broadcast updated settings: {error}");
+    }
     Ok(settings)
 }
 
