@@ -2379,8 +2379,18 @@ export function RecordingEditor() {
   const timelineRef = useRef<HTMLDivElement>(null);
   const timelineScrubbingRef = useRef(false);
   const trimDragRef = useRef<"start" | "end" | null>(null);
+  /** Pending trim-handle press; edge only moves after a small drag threshold. */
+  const trimPointerRef = useRef<{
+    edge: "start" | "end";
+    startX: number;
+    dragging: boolean;
+  } | null>(null);
   const cropDragRef = useRef<EditorCropDrag | null>(null);
   const pendingExportFingerprintRef = useRef("");
+  const trimStartRef = useRef(0);
+  const trimEndRef = useRef(0);
+  const previewLoopRef = useRef(false);
+  const TRIM_DRAG_THRESHOLD_PX = 3;
 
   useEffect(() => {
     let active = true;
@@ -2481,6 +2491,47 @@ export function RecordingEditor() {
     const timer = window.setTimeout(() => setToast(""), 4_000);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    trimStartRef.current = trimStart;
+  }, [trimStart]);
+  useEffect(() => {
+    trimEndRef.current = trimEnd;
+  }, [trimEnd]);
+  useEffect(() => {
+    previewLoopRef.current = previewLoop;
+  }, [previewLoop]);
+
+  // Drive the timeline playhead from the video clock every frame while playing so
+  // it moves smoothly instead of jumping on sparse timeupdate events (~4 Hz).
+  useEffect(() => {
+    if (!previewPlaying) return;
+    let frameId = 0;
+    const tick = () => {
+      const video = videoRef.current;
+      if (video) {
+        const currentMs = video.currentTime * 1_000;
+        const selectedStart = trimStartRef.current;
+        const selectedEnd = trimEndRef.current;
+        if (!video.paused && currentMs >= selectedEnd) {
+          if (previewLoopRef.current) {
+            video.currentTime = selectedStart / 1_000;
+            setPlayheadMs(selectedStart);
+          } else {
+            video.pause();
+            video.currentTime = selectedEnd / 1_000;
+            setPlayheadMs(selectedEnd);
+            setPreviewPlaying(false);
+          }
+        } else if (!video.paused) {
+          setPlayheadMs(currentMs);
+        }
+      }
+      frameId = window.requestAnimationFrame(tick);
+    };
+    frameId = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(frameId);
+  }, [previewPlaying]);
 
   const exportFingerprint = artifact ? recordingEditorFingerprint({
     artifact: artifact.id,
@@ -2628,6 +2679,35 @@ export function RecordingEditor() {
       seekTo(next);
     }
   };
+  const beginTrimHandlePointer = (
+    edge: "start" | "end",
+    event: React.PointerEvent<HTMLButtonElement>,
+  ) => {
+    trimPointerRef.current = {
+      edge,
+      startX: event.clientX,
+      dragging: false,
+    };
+    trimDragRef.current = null;
+    seekTo(edge === "start" ? trimStart : trimEnd);
+    event.currentTarget.setPointerCapture(event.pointerId);
+    event.preventDefault();
+    event.stopPropagation();
+  };
+  const moveTrimHandlePointer = (event: React.PointerEvent<HTMLButtonElement>) => {
+    const pending = trimPointerRef.current;
+    if (!pending) return;
+    if (!pending.dragging) {
+      if (Math.abs(event.clientX - pending.startX) < TRIM_DRAG_THRESHOLD_PX) return;
+      pending.dragging = true;
+      trimDragRef.current = pending.edge;
+    }
+    if (trimDragRef.current) updateTimelinePointer(event.clientX);
+  };
+  const endTrimHandlePointer = () => {
+    trimPointerRef.current = null;
+    trimDragRef.current = null;
+  };
   const startCropDrag = (event: React.PointerEvent<HTMLElement>, handle: EditorCropHandle) => {
     if (!cropEnabled || !previewMediaRef.current) return;
     const bounds = previewMediaRef.current.getBoundingClientRect();
@@ -2699,7 +2779,8 @@ export function RecordingEditor() {
       }
       return;
     }
-    setPlayheadMs(currentMs);
+    // While playing, requestAnimationFrame owns the playhead for smooth motion.
+    if (video.paused) setPlayheadMs(currentMs);
   };
   const handlePreviewEnded = (video: HTMLVideoElement) => {
     if (!previewLoop) {
@@ -2945,11 +3026,11 @@ export function RecordingEditor() {
           }}
           onPointerUp={() => {
             timelineScrubbingRef.current = false;
-            trimDragRef.current = null;
+            endTrimHandlePointer();
           }}
           onPointerCancel={() => {
             timelineScrubbingRef.current = false;
-            trimDragRef.current = null;
+            endTrimHandlePointer();
           }}
         >
           <div className="timeline-filmstrip" aria-hidden="true">
@@ -2976,19 +3057,10 @@ export function RecordingEditor() {
             aria-valuemax={Math.max(0, trimEnd - 1)}
             aria-valuenow={Math.round(trimStart)}
             aria-valuetext={formatEditorTime(trimStart, duration)}
-            onPointerDown={(event) => {
-              trimDragRef.current = "start";
-              seekTo(trimStart);
-              event.currentTarget.setPointerCapture(event.pointerId);
-              event.preventDefault();
-              event.stopPropagation();
-            }}
-            onPointerMove={(event) => {
-              if (trimDragRef.current === "start") updateTimelinePointer(event.clientX);
-            }}
-            onPointerUp={() => {
-              trimDragRef.current = null;
-            }}
+            onPointerDown={(event) => beginTrimHandlePointer("start", event)}
+            onPointerMove={moveTrimHandlePointer}
+            onPointerUp={endTrimHandlePointer}
+            onPointerCancel={endTrimHandlePointer}
             onKeyDown={(event) => {
               const delta = timelineKeyboardDelta(event.key, duration);
               if (delta === null) return;
@@ -3008,19 +3080,10 @@ export function RecordingEditor() {
             aria-valuemax={duration}
             aria-valuenow={Math.round(trimEnd)}
             aria-valuetext={formatEditorTime(trimEnd, duration)}
-            onPointerDown={(event) => {
-              trimDragRef.current = "end";
-              seekTo(trimEnd);
-              event.currentTarget.setPointerCapture(event.pointerId);
-              event.preventDefault();
-              event.stopPropagation();
-            }}
-            onPointerMove={(event) => {
-              if (trimDragRef.current === "end") updateTimelinePointer(event.clientX);
-            }}
-            onPointerUp={() => {
-              trimDragRef.current = null;
-            }}
+            onPointerDown={(event) => beginTrimHandlePointer("end", event)}
+            onPointerMove={moveTrimHandlePointer}
+            onPointerUp={endTrimHandlePointer}
+            onPointerCancel={endTrimHandlePointer}
             onKeyDown={(event) => {
               const delta = timelineKeyboardDelta(event.key, duration);
               if (delta === null) return;
