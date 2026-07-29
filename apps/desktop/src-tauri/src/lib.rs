@@ -722,34 +722,68 @@ fn get_thumbnail_pointer_position(
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ThumbnailCursorKind {
+    Default,
+    Pointer,
+    Grab,
+}
+
 #[cfg(any(target_os = "macos", test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ThumbnailCursorAction {
     Ignore,
     Reset,
-    Apply(bool),
+    Apply(ThumbnailCursorKind),
 }
 
 #[cfg(any(target_os = "macos", test))]
 fn thumbnail_cursor_action(
     suppressed: bool,
     visible: bool,
-    pointing: bool,
+    kind: ThumbnailCursorKind,
 ) -> ThumbnailCursorAction {
     if suppressed {
         ThumbnailCursorAction::Ignore
     } else if visible {
-        ThumbnailCursorAction::Apply(pointing)
+        ThumbnailCursorAction::Apply(kind)
     } else {
         ThumbnailCursorAction::Reset
     }
+}
+
+#[cfg(target_os = "macos")]
+fn apply_thumbnail_cursor_kind(
+    window: &tauri::WebviewWindow,
+    kind: ThumbnailCursorKind,
+) -> Result<(), &'static str> {
+    let native_kind = match kind {
+        ThumbnailCursorKind::Default => captures_macos_window::ThumbnailCursorKind::Default,
+        ThumbnailCursorKind::Pointer => captures_macos_window::ThumbnailCursorKind::Pointer,
+        ThumbnailCursorKind::Grab => captures_macos_window::ThumbnailCursorKind::Grab,
+    };
+    captures_macos_window::set_thumbnail_cursor(window, native_kind)
+}
+
+#[cfg(target_os = "macos")]
+fn reassert_thumbnail_cursor_kind(
+    window: &tauri::WebviewWindow,
+    kind: ThumbnailCursorKind,
+) -> Result<(), &'static str> {
+    let native_kind = match kind {
+        ThumbnailCursorKind::Default => captures_macos_window::ThumbnailCursorKind::Default,
+        ThumbnailCursorKind::Pointer => captures_macos_window::ThumbnailCursorKind::Pointer,
+        ThumbnailCursorKind::Grab => captures_macos_window::ThumbnailCursorKind::Grab,
+    };
+    captures_macos_window::reassert_thumbnail_cursor(window, native_kind)
 }
 
 #[tauri::command]
 fn set_thumbnail_cursor(
     app: AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
-    pointing: bool,
+    kind: ThumbnailCursorKind,
 ) -> CommandResult<()> {
     #[cfg(target_os = "macos")]
     {
@@ -761,7 +795,7 @@ fn set_thumbnail_cursor(
         app.run_on_main_thread(move || {
             let suppressed = state.thumbnail_visibility.lock().is_suppressed();
             let visible = cursor_window.is_visible().unwrap_or(false);
-            let result = match thumbnail_cursor_action(suppressed, visible, pointing) {
+            let result = match thumbnail_cursor_action(suppressed, visible, kind) {
                 // NSCursor is application-wide. Do not even invalidate the
                 // hidden preview's cursor rectangles while capture owns it.
                 ThumbnailCursorAction::Ignore => return,
@@ -769,11 +803,11 @@ fn set_thumbnail_cursor(
                     let _ = cursor_window.set_cursor_icon(CursorIcon::Default);
                     captures_macos_window::reset_pointing_cursor_state(&cursor_window)
                 }
-                ThumbnailCursorAction::Apply(effective_pointing) => {
+                ThumbnailCursorAction::Apply(effective_kind) => {
                     // AppKit owns the inactive preview cursor on macOS. Asking
                     // both Tauri/WebKit and AppKit to set it lets their cursor
                     // rectangles alternate during focus handoffs.
-                    captures_macos_window::set_pointing_cursor(&cursor_window, effective_pointing)
+                    apply_thumbnail_cursor_kind(&cursor_window, effective_kind)
                 }
             };
             if let Err(error) = result {
@@ -785,7 +819,7 @@ fn set_thumbnail_cursor(
 
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (app, state, pointing);
+        let _ = (app, state, kind);
         Ok(())
     }
 }
@@ -794,6 +828,7 @@ fn set_thumbnail_cursor(
 fn reassert_thumbnail_cursor(
     app: AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
+    kind: ThumbnailCursorKind,
 ) -> CommandResult<()> {
     #[cfg(target_os = "macos")]
     {
@@ -804,14 +839,14 @@ fn reassert_thumbnail_cursor(
         app.run_on_main_thread(move || {
             let suppressed = state.thumbnail_visibility.lock().is_suppressed();
             let visible = window.is_visible().unwrap_or(false);
-            let result = match thumbnail_cursor_action(suppressed, visible, true) {
+            let result = match thumbnail_cursor_action(suppressed, visible, kind) {
                 ThumbnailCursorAction::Ignore => return,
                 ThumbnailCursorAction::Reset => {
                     let _ = window.set_cursor_icon(CursorIcon::Default);
                     captures_macos_window::reset_pointing_cursor_state(&window)
                 }
-                ThumbnailCursorAction::Apply(_) => {
-                    captures_macos_window::reassert_pointing_cursor(&window)
+                ThumbnailCursorAction::Apply(effective_kind) => {
+                    reassert_thumbnail_cursor_kind(&window, effective_kind)
                 }
             };
             if let Err(error) = result {
@@ -823,7 +858,7 @@ fn reassert_thumbnail_cursor(
 
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (app, state);
+        let _ = (app, state, kind);
         Ok(())
     }
 }
@@ -3259,7 +3294,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     use super::macos_window_is_capture_overlay;
     use super::{
-        AppError, CaptureMode, ThumbnailCursorAction, clipboard_fingerprint,
+        AppError, CaptureMode, ThumbnailCursorAction, ThumbnailCursorKind, clipboard_fingerprint,
         display_contains_pointer, mask_macos_window_corners, parse_shortcut,
         primary_app_window_priority, recording_saved_notice_label,
         should_activate_capture_cursor_before_reveal, should_trigger_shortcut,
@@ -3501,16 +3536,20 @@ mod tests {
     #[test]
     fn ignores_preview_cursor_updates_while_capture_is_active() {
         assert_eq!(
-            thumbnail_cursor_action(true, false, false),
+            thumbnail_cursor_action(true, false, ThumbnailCursorKind::Default),
             ThumbnailCursorAction::Ignore
         );
         assert_eq!(
-            thumbnail_cursor_action(true, true, true),
+            thumbnail_cursor_action(true, true, ThumbnailCursorKind::Pointer),
             ThumbnailCursorAction::Ignore
         );
         assert_eq!(
-            thumbnail_cursor_action(false, true, true),
-            ThumbnailCursorAction::Apply(true)
+            thumbnail_cursor_action(false, true, ThumbnailCursorKind::Pointer),
+            ThumbnailCursorAction::Apply(ThumbnailCursorKind::Pointer)
+        );
+        assert_eq!(
+            thumbnail_cursor_action(false, true, ThumbnailCursorKind::Grab),
+            ThumbnailCursorAction::Apply(ThumbnailCursorKind::Grab)
         );
     }
 

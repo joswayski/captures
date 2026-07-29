@@ -3,6 +3,7 @@ import {
   createScreenshotDocument,
   cropDocument,
   elementBounds,
+  estimateCanvasExportBytes,
   expandDocumentForElement,
   hitTestElement,
   imageSizeAtWidth,
@@ -185,5 +186,26 @@ describe("screenshot editor geometry", () => {
       width: 1_280,
       height: 720,
     });
+  });
+
+  it("estimates export bytes from the browser encoder", async () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 8;
+    canvas.height = 8;
+    const toBlob = vi.fn((
+      callback: BlobCallback,
+      type?: string,
+      quality?: number,
+    ) => {
+      const size = type === "image/jpeg"
+        ? Math.round(1_000 * (quality ?? 1))
+        : 2_500;
+      callback(new Blob([new Uint8Array(size)], { type: type ?? "image/png" }));
+    });
+    Object.defineProperty(canvas, "toBlob", { value: toBlob });
+
+    await expect(estimateCanvasExportBytes(canvas, "png", 100)).resolves.toBe(2_500);
+    await expect(estimateCanvasExportBytes(canvas, "jpeg", 70)).resolves.toBe(700);
+    expect(toBlob).toHaveBeenCalledWith(expect.any(Function), "image/jpeg", 0.7);
   });
 });

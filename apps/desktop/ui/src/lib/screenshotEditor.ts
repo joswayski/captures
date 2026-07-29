@@ -419,6 +419,34 @@ export function outputDimensions(
   };
 }
 
+export type ScreenshotExportFormat = "png" | "jpeg" | "webp";
+
+/**
+ * Browser-side encode used only for a live export size estimate. Final save
+ * still goes through the Rust encoder, so this is approximate.
+ */
+export async function estimateCanvasExportBytes(
+  canvas: HTMLCanvasElement,
+  format: ScreenshotExportFormat,
+  jpegQuality: number,
+): Promise<number> {
+  const mimeType = format === "jpeg"
+    ? "image/jpeg"
+    : format === "webp"
+      ? "image/webp"
+      : "image/png";
+  const quality = format === "jpeg"
+    ? Math.min(1, Math.max(0.4, jpegQuality / 100))
+    : undefined;
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((result) => {
+      if (result) resolve(result);
+      else reject(new Error("The edited image could not be encoded for size estimation."));
+    }, mimeType, quality);
+  });
+  return blob.size;
+}
+
 export function imageSizeAtWidth(
   element: EditorImageElement,
   width: number,
