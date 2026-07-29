@@ -134,6 +134,10 @@ pub struct RecordingCapabilities {
     pub controls_excluded: bool,
 }
 
+pub const fn recording_controls_are_excluded() -> bool {
+    cfg!(any(target_os = "macos", target_os = "windows"))
+}
+
 impl RecordingCapabilities {
     pub fn current() -> Self {
         #[cfg(target_os = "macos")]
@@ -143,7 +147,7 @@ impl RecordingCapabilities {
                 microphone: true,
                 cursor_control: true,
                 click_highlights: true,
-                controls_excluded: true,
+                controls_excluded: recording_controls_are_excluded(),
             }
         }
         #[cfg(any(target_os = "windows", target_os = "linux"))]
@@ -151,10 +155,13 @@ impl RecordingCapabilities {
             let pointer_features = captures_recording_xcap::pointer_features_available();
             Self {
                 system_audio: true,
-                microphone: !captures_recording_xcap::microphone_devices().is_empty(),
+                // Capability describes platform support, not whether a device
+                // happens to be connected during selector startup. The device
+                // picker performs the one asynchronous enumeration it needs.
+                microphone: true,
                 cursor_control: pointer_features,
                 click_highlights: pointer_features,
-                controls_excluded: cfg!(target_os = "windows"),
+                controls_excluded: recording_controls_are_excluded(),
             }
         }
     }
@@ -611,9 +618,17 @@ mod tests {
 
     use super::{
         AppSettings, ColorTheme, HistoryEntry, RecordingArtifact, migrate_output_directory,
-        migrate_settings, recording_media_url, recording_poster_url, recording_selection_url,
-        snapshot_url,
+        migrate_settings, recording_controls_are_excluded, recording_media_url,
+        recording_poster_url, recording_selection_url, snapshot_url,
     };
+
+    #[test]
+    fn reports_recording_control_exclusion_for_supported_platforms() {
+        assert_eq!(
+            recording_controls_are_excluded(),
+            cfg!(any(target_os = "macos", target_os = "windows"))
+        );
+    }
 
     #[test]
     fn uses_the_platform_custom_protocol_origin_for_capture_assets() {

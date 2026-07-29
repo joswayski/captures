@@ -157,7 +157,7 @@ pub fn defer_visible_notice(app: &AppHandle) {
 
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        while capture_is_active(&app.state::<Arc<AppState>>()) {
+        while active_capture_or_recording(&app.state::<Arc<AppState>>()) {
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
         show_update_notice(&app);
@@ -422,7 +422,7 @@ fn schedule_update_notice(app: &AppHandle, version: String) {
 
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        while capture_is_active(&app.state::<Arc<AppState>>()) {
+        while active_capture_or_recording(&app.state::<Arc<AppState>>()) {
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
         let still_available = matches!(
@@ -441,14 +441,14 @@ fn schedule_update_notice(app: &AppHandle, version: String) {
 fn show_update_notice(app: &AppHandle) {
     let disposition = notice_disposition(
         &app.state::<UpdateCoordinator>().status.lock(),
-        capture_is_active(&app.state::<Arc<AppState>>()),
+        active_capture_or_recording(&app.state::<Arc<AppState>>()),
     );
     match disposition {
         NoticeDisposition::Ignore => return,
         NoticeDisposition::Defer => {
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
-                while capture_is_active(&app.state::<Arc<AppState>>()) {
+                while active_capture_or_recording(&app.state::<Arc<AppState>>()) {
                     tokio::time::sleep(Duration::from_secs(1)).await;
                 }
                 show_update_notice(&app);
@@ -607,21 +607,34 @@ fn platform_update_is_installable() -> bool {
 }
 
 fn capture_is_active(state: &AppState) -> bool {
-    state.thumbnail_visibility.lock().is_suppressed() || !state.sessions.lock().is_empty()
+    state.thumbnail_visibility.lock().is_suppressed()
+        || !state.sessions.lock().is_empty()
+        || state.recording_selection.lock().is_some()
+}
+
+fn active_capture_or_recording(state: &AppState) -> bool {
+    capture_is_active(state) || crate::recording::recording_session_is_active(state)
 }
 
 fn install_restart_blocker(state: &AppState) -> Option<&'static str> {
     let capture_active = capture_is_active(state);
+    let recording_active = crate::recording::recording_session_is_active(state);
     let has_unsaved_capture = state
         .artifacts
         .lock()
         .iter()
         .any(|artifact| artifact.path.is_none());
-    restart_blocker(capture_active, has_unsaved_capture)
+    restart_blocker(capture_active, recording_active, has_unsaved_capture)
 }
 
-fn restart_blocker(capture_active: bool, has_unsaved_capture: bool) -> Option<&'static str> {
-    if capture_active {
+fn restart_blocker(
+    capture_active: bool,
+    recording_active: bool,
+    has_unsaved_capture: bool,
+) -> Option<&'static str> {
+    if recording_active {
+        Some("Finish or cancel the active recording before installing the update.")
+    } else if capture_active {
         Some("Finish or cancel the active capture before installing the update.")
     } else if has_unsaved_capture {
         Some("Save or close every unsaved capture before installing the update.")
@@ -661,16 +674,20 @@ mod tests {
     }
 
     #[test]
-    fn blocks_restart_for_active_or_unsaved_captures() {
+    fn blocks_restart_for_active_work_or_unsaved_captures() {
         assert_eq!(
-            restart_blocker(true, false),
+            restart_blocker(true, false, false),
             Some("Finish or cancel the active capture before installing the update.")
         );
         assert_eq!(
-            restart_blocker(false, true),
+            restart_blocker(false, true, false),
+            Some("Finish or cancel the active recording before installing the update.")
+        );
+        assert_eq!(
+            restart_blocker(false, false, true),
             Some("Save or close every unsaved capture before installing the update.")
         );
-        assert_eq!(restart_blocker(false, false), None);
+        assert_eq!(restart_blocker(false, false, false), None);
     }
 
     #[test]

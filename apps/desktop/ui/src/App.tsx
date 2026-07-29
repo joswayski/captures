@@ -328,7 +328,7 @@ function IdleView() {
     <main className="idle-view">
       <div className="brand-mark">Captures</div>
       <h1>Captures is running</h1>
-      <p>Press Ctrl+Shift+Space or use the tray icon to start a new capture.</p>
+      <p>Use the Captures menu or your New Capture shortcut to start a capture.</p>
     </main>
   );
 }
@@ -341,7 +341,7 @@ function StartupNotice() {
       </div>
       <div>
         <strong>Captures is running</strong>
-        <p>Use the tray icon or Ctrl+Shift+Space for a new capture.</p>
+        <p>Use the Captures menu or your New Capture shortcut.</p>
       </div>
     </main>
   );
@@ -366,7 +366,7 @@ export function RecordingSavedNotice() {
       await invoke("reveal_recording_artifact", { artifactId });
       dismiss();
     } catch (error) {
-      setError(`Finder could not open: ${String(error)}`);
+      setError(`Could not show the recording in its folder: ${String(error)}`);
       setBusy(false);
     }
   };
@@ -383,7 +383,7 @@ export function RecordingSavedNotice() {
         className="recording-saved-reveal"
         disabled={busy || !artifactId}
         onClick={() => void reveal()}
-      ><FolderIcon />{busy ? "Opening…" : "Show in Finder"}</button>
+      ><FolderIcon />{busy ? "Opening…" : "Show in Folder"}</button>
       <button
         type="button"
         className="recording-saved-dismiss"
@@ -400,7 +400,7 @@ export function RecordingControlsHiddenNotice() {
       <span className="recording-controls-hidden-icon" aria-hidden="true"><CaptureIcon /></span>
       <div>
         <strong>Recording controls hidden</strong>
-        <p>Click the Captures icon in the Dock to bring them back.</p>
+        <p>Choose New Capture in the Captures menu or use your shortcut to bring them back.</p>
       </div>
     </main>
   );
@@ -700,7 +700,7 @@ export function CaptureHistory() {
     <main className="capture-history">
       <header className="history-header">
         <div>
-          <p className="eyebrow">ON THIS MAC</p>
+          <p className="eyebrow">ON THIS DEVICE</p>
           <h1>Capture History</h1>
           <p>Screenshots, videos, GIFs, and interrupted recordings you can recover all appear here.</p>
         </div>
@@ -2012,6 +2012,7 @@ function roundRecordingRect(rect: RecordingRect, maxWidth: number, maxHeight: nu
 
 export function RecordingHud() {
   const [snapshot, setSnapshot] = useState<RecordingSessionSnapshot | null>(null);
+  const [controlsExcluded, setControlsExcluded] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [microphonePeak, setMicrophonePeak] = useState(0);
   const [error, setError] = useState("");
@@ -2056,6 +2057,13 @@ export function RecordingHud() {
       const current = await invoke<RecordingSessionSnapshot | null>("get_recording_snapshot");
       if (current) applySnapshot(current);
     })();
+    void invoke<boolean>("recording_controls_are_excluded")
+      .then((excluded) => {
+        if (active) setControlsExcluded(excluded);
+      })
+      .catch(() => {
+        if (active) setControlsExcluded(false);
+      });
     const timer = window.setInterval(() => {
       void invoke<RecordingSessionSnapshot | null>("get_recording_snapshot").then((current) => {
         if (current) applySnapshot(current);
@@ -2163,7 +2171,13 @@ export function RecordingHud() {
       className={`recording-hud recording-hud-${snapshot.state}`}
       onPointerDown={startHudDrag}
     >
-      <span className="recording-hud-privacy">These controls won’t appear in the output</span>
+      <span className="recording-hud-privacy">
+        {controlsExcluded === true
+          ? "These controls won’t appear in the output"
+          : controlsExcluded === false
+            ? "Hide these controls to keep them out of the recording"
+            : "Checking whether controls are excluded…"}
+      </span>
       <div className="recording-hud-main">
         <div className="recording-hud-status">
           <span className="recording-dot" aria-hidden="true" />
@@ -2359,7 +2373,7 @@ export function RecordingEditor() {
         listen<{ export_id: string; progress: ExportProgress }>("recording-export-progress", ({ payload }) => {
           if (active && payload.export_id === exportIdRef.current) setProgress(payload.progress);
         }),
-        listen<{ export_id: string; artifact: RecordingArtifact; finder_error: string | null }>("recording-export-complete", ({ payload }) => {
+        listen<{ export_id: string; artifact: RecordingArtifact; reveal_error: string | null }>("recording-export-complete", ({ payload }) => {
           if (!active || payload.export_id !== exportIdRef.current) return;
           if (payload.artifact.id === artifactId) {
             setArtifact(payload.artifact);
@@ -2369,8 +2383,8 @@ export function RecordingEditor() {
           setToast(
             `${payload.artifact.kind === "gif" ? "GIF" : "Video"} saved — ${formatFileSize(payload.artifact.size_bytes)}.`,
           );
-          if (payload.finder_error) {
-            setError(`The recording was saved, but Finder could not open: ${payload.finder_error}`);
+          if (payload.reveal_error) {
+            setError(`The recording was saved, but its folder could not open: ${payload.reveal_error}`);
           }
           setProgress({ stage: "complete", completed_per_mille: 1000, attempt: 1, message: null });
           setExportId(null);
@@ -2708,7 +2722,7 @@ export function RecordingEditor() {
     try {
       await invoke("reveal_recording_artifact", { artifactId: exported.id });
     } catch (error) {
-      setError(`Finder could not open: ${recordingErrorMessage(error)}`);
+      setError(`Could not show the recording in its folder: ${recordingErrorMessage(error)}`);
     }
   };
 

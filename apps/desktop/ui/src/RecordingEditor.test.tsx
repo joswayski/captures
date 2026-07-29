@@ -289,7 +289,7 @@ describe("RecordingEditor", () => {
         payload: {
           export_id: "export-1",
           artifact: { ...artifact, size_bytes: 40_700 },
-          finder_error: null,
+          reveal_error: null,
         },
       });
     });
