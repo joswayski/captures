@@ -4,6 +4,7 @@ import {
   dragSelectionRect,
   frontToBackWindows,
   isCapturableSelection,
+  roundedRectPath,
   selectionRect,
 } from "./selection";
 
@@ -52,6 +53,29 @@ describe("isCapturableSelection", () => {
 
   it("accepts a dragged region", () => {
     expect(isCapturableSelection({ x: 10, y: 10, width: 20, height: 30 })).toBe(true);
+  });
+});
+
+describe("roundedRectPath", () => {
+  it("builds a rounded window cutout", () => {
+    expect(roundedRectPath(
+      { x: 100, y: 120, width: 300, height: 220 },
+      10,
+    )).toBe(
+      "M110 120H390A10 10 0 0 1 400 130V330A10 10 0 0 1 390 340"
+      + "H110A10 10 0 0 1 100 330V130A10 10 0 0 1 110 120Z",
+    );
+  });
+
+  it("keeps region cutouts square and clamps oversized radii", () => {
+    expect(roundedRectPath(
+      { x: 10, y: 20, width: 30, height: 40 },
+      0,
+    )).toBe("M10 20H40V60H10Z");
+    expect(roundedRectPath(
+      { x: 0, y: 0, width: 12, height: 8 },
+      20,
+    )).toContain("A4 4");
   });
 });
 

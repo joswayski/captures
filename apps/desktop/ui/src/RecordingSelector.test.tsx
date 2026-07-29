@@ -428,7 +428,10 @@ describe("RecordingSelector", () => {
       expect(rearWindow).toHaveClass("hovered");
       expect(container.querySelector(".capture-shade-path")).toHaveAttribute(
         "d",
-        expect.stringContaining("M420 220H1140V740H420Z"),
+        expect.stringContaining(
+          "M430 220H1130A10 10 0 0 1 1140 230V730"
+          + "A10 10 0 0 1 1130 740H430",
+        ),
       );
     });
     fireEvent.mouseLeave(rearWindow);
@@ -440,7 +443,10 @@ describe("RecordingSelector", () => {
     expect(screen.getByRole("button", { name: "Start recording" })).toBeEnabled();
     expect(container.querySelector(".capture-shade-path")).toHaveAttribute(
       "d",
-      expect.stringContaining("M300 160H1200V800H300Z"),
+      expect.stringContaining(
+        "M310 160H1190A10 10 0 0 1 1200 170V790"
+        + "A10 10 0 0 1 1190 800H310",
+      ),
     );
   });
 

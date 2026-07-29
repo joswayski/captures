@@ -19,7 +19,9 @@ import {
   dragSelectionRect,
   frontToBackWindows,
   isCapturableSelection,
+  roundedRectPath,
   selectionRect,
+  WINDOW_CORNER_RADIUS,
   type SelectionDragMode,
   type SelectionPoint,
 } from "./lib/selection";
@@ -3603,7 +3605,10 @@ function CaptureDim({
   const bottom = Math.max(top, Math.min(bounds.height, y + height));
   const path = [
     `M0 0H${bounds.width}V${bounds.height}H0Z`,
-    `M${left} ${top}H${right}V${bottom}H${left}Z`,
+    roundedRectPath(
+      { x: left, y: top, width: right - left, height: bottom - top },
+      mode === "window" ? WINDOW_CORNER_RADIUS : 0,
+    ),
   ].join(" ");
   return (
     <svg

@@ -88,6 +88,10 @@ const AUTOSTART_ARG: &str = "--captures-autostart";
 const RECORDING_EDITOR_WINDOW_PREFIX: &str = "recording-editor-";
 const RECORDING_SAVED_NOTICE_PREFIX: &str = "recording-saved-";
 const RECORDING_CONTROLS_HIDDEN_NOTICE_PREFIX: &str = "recording-controls-hidden-";
+#[cfg(any(target_os = "macos", test))]
+const MACOS_WINDOW_CORNER_RADIUS_POINTS: f64 = 10.0;
+#[cfg(any(target_os = "macos", test))]
+const WINDOW_CORNER_MASK_SAMPLES_PER_AXIS: u32 = 4;
 
 struct ClipboardWrite {
     revision: isize,
@@ -2996,7 +3000,97 @@ fn crop_window_from_session(session: &CaptureSession, window_id: &str) -> Option
         height: f64::from(window.height),
     };
     let physical = rect.to_physical(scale, session.image.width(), session.image.height());
-    session.view(physical)
+    let mut image = session.view(physical)?;
+    #[cfg(target_os = "macos")]
+    mask_macos_window_corners(&mut image, window, &session.display, scale);
+    Some(image)
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn mask_macos_window_corners(
+    image: &mut RgbaImage,
+    window: &captures_capture::WindowDescriptor,
+    display: &captures_capture::DisplayDescriptor,
+    scale: f64,
+) {
+    let window_left = i64::from(window.x);
+    let window_top = i64::from(window.y);
+    let window_right = window_left + i64::from(window.width);
+    let window_bottom = window_top + i64::from(window.height);
+    let display_left = i64::from(display.x);
+    let display_top = i64::from(display.y);
+    let display_right = display_left + i64::from(display.width);
+    let display_bottom = display_top + i64::from(display.height);
+
+    // A fullscreen window has square display edges. A larger, clipped window
+    // also has no visible window corners within this display crop.
+    if window_left <= display_left
+        && window_top <= display_top
+        && window_right >= display_right
+        && window_bottom >= display_bottom
+    {
+        return;
+    }
+
+    let scale = scale.max(1.0);
+    let full_width = f64::from(window.width) * scale;
+    let full_height = f64::from(window.height) * scale;
+    let radius = (MACOS_WINDOW_CORNER_RADIUS_POINTS * scale)
+        .min(full_width / 2.0)
+        .min(full_height / 2.0);
+    if radius <= 0.0 {
+        return;
+    }
+
+    // Crops are clipped to the selected display. Keep coordinates relative to
+    // the full window so a partially offscreen rounded corner is masked only
+    // where that corner is still visible.
+    let crop_offset_x = ((display_left - window_left).max(0) as f64) * scale;
+    let crop_offset_y = ((display_top - window_top).max(0) as f64) * scale;
+    let samples = WINDOW_CORNER_MASK_SAMPLES_PER_AXIS;
+    let sample_count = samples * samples;
+
+    for y in 0..image.height() {
+        let window_y = crop_offset_y + f64::from(y);
+        let near_vertical_corner = window_y < radius || window_y + 1.0 > full_height - radius;
+        if !near_vertical_corner {
+            continue;
+        }
+
+        for x in 0..image.width() {
+            let window_x = crop_offset_x + f64::from(x);
+            let near_horizontal_corner = window_x < radius || window_x + 1.0 > full_width - radius;
+            if !near_horizontal_corner {
+                continue;
+            }
+
+            let mut inside_samples = 0;
+            for sample_y in 0..samples {
+                for sample_x in 0..samples {
+                    let sample_x = window_x + (f64::from(sample_x) + 0.5) / f64::from(samples);
+                    let sample_y = window_y + (f64::from(sample_y) + 0.5) / f64::from(samples);
+                    let center_x = sample_x.clamp(radius, full_width - radius);
+                    let center_y = sample_y.clamp(radius, full_height - radius);
+                    let distance_x = sample_x - center_x;
+                    let distance_y = sample_y - center_y;
+                    if distance_x.mul_add(distance_x, distance_y * distance_y) <= radius * radius {
+                        inside_samples += 1;
+                    }
+                }
+            }
+
+            let mask_alpha = u8::try_from((inside_samples * 255 + sample_count / 2) / sample_count)
+                .expect("corner coverage stays within one byte");
+            let pixel = image.get_pixel_mut(x, y);
+            if mask_alpha == 0 {
+                // Do not leave pixels from windows behind the target hidden in
+                // fully transparent PNG data.
+                pixel.0 = [0, 0, 0, 0];
+            } else {
+                pixel.0[3] = pixel.0[3].min(mask_alpha);
+            }
+        }
+    }
 }
 
 fn image_is_effectively_blank(image: &RgbaImage) -> bool {
@@ -3102,15 +3196,17 @@ fn windows_window_is_capture_overlay(window: &captures_capture::WindowDescriptor
 mod tests {
     use std::sync::atomic::AtomicBool;
 
+    use image::{Rgba, RgbaImage};
     use tauri_plugin_global_shortcut::ShortcutState;
 
     use super::{
         AppError, CaptureMode, ThumbnailCursorAction, clipboard_fingerprint,
-        display_contains_pointer, parse_shortcut, primary_app_window_priority,
-        recording_saved_notice_label, should_activate_capture_cursor_before_reveal,
-        should_trigger_shortcut, thumbnail_cursor_action, thumbnail_geometry,
-        thumbnail_pointer_position, thumbnail_visible_window_height, track_shortcut_suppression,
-        viewer_window_label, window_is_capturable, windows_window_is_capture_overlay,
+        display_contains_pointer, mask_macos_window_corners, parse_shortcut,
+        primary_app_window_priority, recording_saved_notice_label,
+        should_activate_capture_cursor_before_reveal, should_trigger_shortcut,
+        thumbnail_cursor_action, thumbnail_geometry, thumbnail_pointer_position,
+        thumbnail_visible_window_height, track_shortcut_suppression, viewer_window_label,
+        window_is_capturable, windows_window_is_capture_overlay,
     };
 
     use captures_capture::{DisplayDescriptor, WindowDescriptor};
@@ -3123,6 +3219,89 @@ mod tests {
         assert!(should_activate_capture_cursor_before_reveal(
             CaptureMode::Window
         ));
+    }
+
+    #[test]
+    fn masks_background_pixels_outside_macos_window_corners() {
+        let display = DisplayDescriptor {
+            id: "display".to_owned(),
+            name: "Display".to_owned(),
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 100,
+            scale_factor: 2.0,
+            is_primary: true,
+        };
+        let window = WindowDescriptor {
+            id: "window".to_owned(),
+            title: "Window".to_owned(),
+            app_name: Some("App".to_owned()),
+            z_order: 1,
+            x: 10,
+            y: 10,
+            width: 50,
+            height: 40,
+            display_id: display.id.clone(),
+        };
+        let mut image = RgbaImage::from_pixel(100, 80, Rgba([12, 34, 56, 255]));
+
+        mask_macos_window_corners(&mut image, &window, &display, 2.0);
+
+        assert_eq!(image.get_pixel(0, 0).0, [0, 0, 0, 0]);
+        assert_eq!(image.get_pixel(99, 0).0, [0, 0, 0, 0]);
+        assert_eq!(image.get_pixel(0, 79).0, [0, 0, 0, 0]);
+        assert_eq!(image.get_pixel(99, 79).0, [0, 0, 0, 0]);
+        assert_eq!(image.get_pixel(50, 0).0, [12, 34, 56, 255]);
+        assert_eq!(image.get_pixel(50, 40).0, [12, 34, 56, 255]);
+        assert!(
+            image
+                .pixels()
+                .any(|pixel| pixel.0[3] > 0 && pixel.0[3] < 255),
+            "rounded edges should retain antialiased alpha"
+        );
+    }
+
+    #[test]
+    fn masks_only_window_corners_that_remain_inside_the_display_crop() {
+        let display = DisplayDescriptor {
+            id: "display".to_owned(),
+            name: "Display".to_owned(),
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 100,
+            scale_factor: 2.0,
+            is_primary: true,
+        };
+        let mut window = WindowDescriptor {
+            id: "window".to_owned(),
+            title: "Window".to_owned(),
+            app_name: Some("App".to_owned()),
+            z_order: 1,
+            x: -12,
+            y: 10,
+            width: 50,
+            height: 40,
+            display_id: display.id.clone(),
+        };
+        let mut clipped = RgbaImage::from_pixel(76, 80, Rgba([12, 34, 56, 255]));
+
+        mask_macos_window_corners(&mut clipped, &window, &display, 2.0);
+
+        assert_eq!(clipped.get_pixel(0, 0).0[3], 255);
+        assert_eq!(clipped.get_pixel(75, 0).0[3], 0);
+
+        window.x = 0;
+        window.y = 0;
+        window.width = display.width;
+        window.height = display.height;
+        let mut fullscreen = RgbaImage::from_pixel(200, 200, Rgba([12, 34, 56, 255]));
+
+        mask_macos_window_corners(&mut fullscreen, &window, &display, 2.0);
+
+        assert_eq!(fullscreen.get_pixel(0, 0).0[3], 255);
+        assert_eq!(fullscreen.get_pixel(199, 199).0[3], 255);
     }
 
     #[test]
