@@ -11,43 +11,65 @@ export const THUMBNAIL_CARD_SLOT_PX = THUMBNAIL_CARD_HEIGHT_PX + THUMBNAIL_STACK
  * Delay before live cards above a dust-delete begin sliding into the empty
  * slot. Matches the pre-motion ash phase in styles.css.
  */
-export const THUMBNAIL_STACK_MOTION_DELAY_MS = 1_800;
+export const THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS = 1_800;
 
-/** Duration of the stack settle slide (matches prior CSS animation). */
+/**
+ * Delay before live cards above a dismiss begin sliding. Matches the point
+ * where the outgoing preview has fully faded/streaked off-screen.
+ */
+export const THUMBNAIL_DISMISS_STACK_MOTION_DELAY_MS = 450;
+
+/** @deprecated Prefer THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS. */
+export const THUMBNAIL_STACK_MOTION_DELAY_MS = THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS;
+
+/**
+ * Shared settle duration for survivors after delete or dismiss.
+ * Keep identical so both exit paths feel the same.
+ */
 export const THUMBNAIL_STACK_MOTION_DURATION_MS = 580;
+
+/**
+ * How long a dismiss card keeps its layout slot (visual exit + stacked settle).
+ * Matches the CSS `thumbnail-dismiss` animation duration.
+ */
+export const THUMBNAIL_DISMISS_HOLD_MS =
+  THUMBNAIL_DISMISS_STACK_MOTION_DELAY_MS + THUMBNAIL_STACK_MOTION_DURATION_MS;
 
 export type ThumbnailStackCardMotionState = {
   /** True while this card is locked in any exit animation. */
   exiting: boolean;
   /**
-   * True when this card is a dust-delete exit that still occupies layout
-   * space and should eventually pull cards above it downward.
+   * True when this card still occupies layout space and should pull cards
+   * above it downward once `motionReady` (dust-delete or dismiss hold).
    */
-  deleteDust: boolean;
+  holdsLayoutSlot: boolean;
   /**
-   * True once this delete's motion delay has elapsed so its slot contributes
+   * True once this exit's motion delay has elapsed so its slot contributes
    * to the stacked shift of live cards above it.
    */
   motionReady: boolean;
 };
 
 /**
- * Count how many motion-ready dust-delete slots sit below `index` in the
- * bottom-anchored stack. Live cards slide by this many slots.
+ * Count how many motion-ready held-layout exit slots sit below `index`.
+ * Live cards slide by this many slots.
  */
-export function countMotionReadyDeleteSlotsBelow(
+export function countMotionReadySlotsBelow(
   cards: readonly ThumbnailStackCardMotionState[],
   index: number,
 ): number {
   let count = 0;
   for (let i = index + 1; i < cards.length; i += 1) {
     const card = cards[i];
-    if (card?.deleteDust && card.motionReady) count += 1;
+    if (card?.holdsLayoutSlot && card.motionReady) count += 1;
   }
   return count;
 }
 
-/** Pixel shift for a live card sitting above `slots` open delete holes. */
+/** @deprecated Prefer countMotionReadySlotsBelow. */
+export const countMotionReadyDeleteSlotsBelow = countMotionReadySlotsBelow;
+
+/** Pixel shift for a live card sitting above `slots` open exit holes. */
 export function thumbnailStackShiftPx(slots: number): number {
   return Math.max(0, slots) * THUMBNAIL_CARD_SLOT_PX;
 }
@@ -61,13 +83,13 @@ export function computeThumbnailStackShifts(
 ): number[] {
   return cards.map((card, index) => {
     if (card.exiting) return 0;
-    return thumbnailStackShiftPx(countMotionReadyDeleteSlotsBelow(cards, index));
+    return thumbnailStackShiftPx(countMotionReadySlotsBelow(cards, index));
   });
 }
 
 /**
- * Increases should ease so multi-delete stacks accumulate smoothly.
- * Decreases must snap: removing a finished delete reflows layout by one
+ * Increases should ease so multi-exit stacks accumulate smoothly.
+ * Decreases must snap: removing a finished exit reflows layout by one
  * slot, and an instant transform drop of the same amount cancels the jump.
  */
 export function shouldAnimateThumbnailStackShift(
@@ -91,6 +113,20 @@ const STACK_SHIFT_INSTANT_CLASS = "thumbnail-stack-shift-instant";
 function isDustDeleteCard(card: HTMLElement): boolean {
   return card.classList.contains("thumbnail-exit-delete")
     && card.classList.contains("thumbnail-exit-dust");
+}
+
+function isDismissCard(card: HTMLElement): boolean {
+  return card.classList.contains("thumbnail-exit-dismiss");
+}
+
+/** Exits that hold layout and drive the shared survivor settle. */
+function isHeldLayoutExitCard(card: HTMLElement): boolean {
+  return isDismissCard(card) || isDustDeleteCard(card);
+}
+
+function motionDelayMsFor(card: HTMLElement): number {
+  if (isDismissCard(card)) return THUMBNAIL_DISMISS_STACK_MOTION_DELAY_MS;
+  return THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS;
 }
 
 function isExitingCard(card: HTMLElement): boolean {
@@ -129,15 +165,14 @@ function writeStackShiftPx(card: HTMLElement, shiftPx: number, animate: boolean)
 }
 
 /**
- * Drive multi-slot stack collapse for dust deletes.
+ * Drive multi-slot stack collapse for held-layout exits (dust delete + dismiss).
  *
- * Pure CSS can only animate a single fixed 184px step. When several cards
- * below a survivor are deleting, the shift must stack (N × slot). When a
- * finished delete is removed, the layout reflow and transform must update
- * together without an intermediate ease-back.
+ * Survivors slide by N × slot with the same ease for both exit kinds. When a
+ * finished exit is removed, the transform snaps down with the layout reflow
+ * so multi-exit batches do not teleport.
  */
 export function createThumbnailStackShiftController(stack: HTMLElement): () => void {
-  const deleteStartedAt = new WeakMap<HTMLElement, number>();
+  const exitStartedAt = new WeakMap<HTMLElement, number>();
   const scheduledTimers = new Set<ReturnType<typeof setTimeout>>();
   let microtaskQueued = false;
 
@@ -161,22 +196,23 @@ export function createThumbnailStackShiftController(stack: HTMLElement): () => v
     const now = performance.now();
 
     for (const card of cards) {
-      if (!isDustDeleteCard(card)) continue;
-      if (deleteStartedAt.has(card)) continue;
-      deleteStartedAt.set(card, now);
+      if (!isHeldLayoutExitCard(card)) continue;
+      if (exitStartedAt.has(card)) continue;
+      exitStartedAt.set(card, now);
       // Wake once this slot becomes motion-ready (plus a frame of slack).
-      schedule(THUMBNAIL_STACK_MOTION_DELAY_MS + 16);
+      schedule(motionDelayMsFor(card) + 16);
     }
 
     const motionStates: ThumbnailStackCardMotionState[] = cards.map((card) => {
-      const deleteDust = isDustDeleteCard(card);
-      const startedAt = deleteStartedAt.get(card);
-      const motionReady = deleteDust
+      const holdsLayoutSlot = isHeldLayoutExitCard(card);
+      const startedAt = exitStartedAt.get(card);
+      const delayMs = motionDelayMsFor(card);
+      const motionReady = holdsLayoutSlot
         && startedAt !== undefined
-        && now - startedAt >= THUMBNAIL_STACK_MOTION_DELAY_MS;
+        && now - startedAt >= delayMs;
       return {
         exiting: isExitingCard(card),
-        deleteDust,
+        holdsLayoutSlot,
         motionReady,
       };
     });
@@ -198,7 +234,7 @@ export function createThumbnailStackShiftController(stack: HTMLElement): () => v
     }
   };
 
-  // Coalesce to one apply per turn, but stay before paint so a finished delete's
+  // Coalesce to one apply per turn, but stay before paint so a finished exit's
   // layout reflow and transform drop land in the same frame (no teleport flash).
   const queueApply = () => {
     if (microtaskQueued) return;
@@ -217,7 +253,7 @@ export function createThumbnailStackShiftController(stack: HTMLElement): () => v
     attributeFilter: ["class"],
   });
 
-  // Initial sync in case deletes already started before the controller bound.
+  // Initial sync in case exits already started before the controller bound.
   queueApply();
 
   return () => {

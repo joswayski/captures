@@ -218,7 +218,8 @@ describe("ThumbnailCard", () => {
     expect(invoke).not.toHaveBeenCalledWith("trash_artifact", expect.anything());
 
     await act(async () => {
-      vi.advanceTimersByTime(900);
+      // Dismiss holds layout through visual exit + shared stack settle (~1.03s).
+      vi.advanceTimersByTime(1_250);
       await Promise.resolve();
     });
 

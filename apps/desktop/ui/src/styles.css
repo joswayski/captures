@@ -263,10 +263,20 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
   opacity: 0 !important;
   transition: none !important;
 }
-.thumbnail-exit-dismiss { overflow: visible; animation: thumbnail-dismiss .62s cubic-bezier(.4,0,.2,1) forwards; pointer-events: none; }
+/*
+ * Dismiss holds full layout size for the whole exit (like dust-delete) so
+ * survivors settle with the shared stacked translateY ease instead of a flex
+ * reflow. Visual streak/fade finishes first; slot is removed after settle.
+ * Duration = dismiss motion delay (450ms) + stack settle (580ms).
+ */
+.thumbnail-exit-dismiss {
+  overflow: visible;
+  animation: thumbnail-dismiss 1.03s cubic-bezier(.4,0,.2,1) forwards;
+  pointer-events: none;
+}
 /* Horizontal-only SVG blur (stdDeviation x 0) streaks the preview left as it exits. */
 .thumbnail-card.thumbnail-exit-dismiss img {
-  animation: thumbnail-dismiss-streak .62s cubic-bezier(.4,0,.2,1) forwards;
+  animation: thumbnail-dismiss-streak .45s cubic-bezier(.4,0,.2,1) forwards;
   transform-origin: center center;
   will-change: filter, transform;
 }
@@ -284,9 +294,8 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 }
 /*
  * Multi-slot stack settle is driven in JS (see createThumbnailStackShiftController).
- * CSS alone could only translate by one fixed slot (184px); concurrent deletes
- * need N × slot, with instant transform drops when a finished hole is removed
- * so layout reflow does not teleport survivors.
+ * Delete and dismiss both hold layout; survivors ease by N × slot with the same
+ * transition. Finished holes snap the transform down with layout reflow.
  */
 .thumbnail-card.thumbnail-stack-shifting {
   transform: translateY(var(--thumbnail-stack-shift, 0px));
@@ -298,10 +307,9 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
   transition: none !important;
 }
 /*
- * Once a live card starts moving into a deleted slot, cover its controls until
- * the exiting slots are removed. Rapid deletes still work during the long
- * pre-motion dissolve, but a different trash button cannot slide under a
- * still pointer and receive an accidental click.
+ * Once a live card starts moving into an exiting slot, cover its controls until
+ * the holes are removed. Rapid exits still work during the pre-motion phase, but
+ * a different control cannot slide under a still pointer during settle.
  */
 .thumbnail-card:not(.thumbnail-exiting):has(~ .thumbnail-exit-delete.thumbnail-exit-dust)::before {
   position: absolute;
@@ -312,6 +320,16 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
   cursor: default;
   pointer-events: none;
   animation: thumbnail-stack-interaction-guard 1ms 1.8s step-end forwards;
+}
+.thumbnail-card:not(.thumbnail-exiting):has(~ .thumbnail-exit-dismiss)::before {
+  position: absolute;
+  z-index: 30;
+  inset: 0;
+  border-radius: inherit;
+  content: "";
+  cursor: default;
+  pointer-events: none;
+  animation: thumbnail-stack-interaction-guard 1ms .45s step-end forwards;
 }
 .thumbnail-card:not(.thumbnail-exiting):has(~ .thumbnail-exit-delete:not(.thumbnail-exit-dust))::before {
   position: absolute;
@@ -419,10 +437,14 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
   backface-visibility: hidden;
 }
 @keyframes thumbnail-dismiss {
-  /* Slide + fade fully while keeping card size; collapse stack space only once invisible. */
+  /*
+   * Visual exit only — geometry stays fixed so JS can settle survivors with
+   * the same stacked translateY used for dust-delete. Slot removal happens
+   * after animationend once the shared settle has finished.
+   */
   0% { flex-basis: 160px; height: 160px; margin-bottom: 0; opacity: 1; transform: translateX(0); }
-  72% { flex-basis: 160px; height: 160px; margin-bottom: 0; opacity: 0; transform: translateX(-118px); }
-  100% { flex-basis: 0; height: 0; margin-bottom: -24px; opacity: 0; transform: translateX(-118px); }
+  /* ~450ms of 1.03s: fully off-screen; hold through the 580ms stack settle. */
+  44%, 100% { flex-basis: 160px; height: 160px; margin-bottom: 0; opacity: 0; transform: translateX(-118px); }
 }
 /* Stepped url() filters — SVG feGaussianBlur cannot be interpolated smoothly from CSS.
    Start from the locked hover look so dismiss doesn't flash a sharp frame first. */
