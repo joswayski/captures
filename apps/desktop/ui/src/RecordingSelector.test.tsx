@@ -67,6 +67,7 @@ const session: RecordingSelectionSession = {
     is_primary: true,
   },
   window_coordinate_scale: 1,
+  window_corner_radius: 25,
   snapshot_url: "capture://recording-selection/selection-1",
   windows: [
     {
@@ -415,6 +416,7 @@ describe("RecordingSelector", () => {
       top: "160px",
       width: "900px",
       height: "640px",
+      borderRadius: "25px",
     });
     expect(screen.getByRole("button", { name: "Start recording" })).toBeDisabled();
     expect(container.querySelector(".recording-selection-window")).not.toBeInTheDocument();
@@ -429,8 +431,8 @@ describe("RecordingSelector", () => {
       expect(container.querySelector(".capture-shade-path")).toHaveAttribute(
         "d",
         expect.stringContaining(
-          "M430 220H1130A10 10 0 0 1 1140 230V730"
-          + "A10 10 0 0 1 1130 740H430",
+          "M445 220H1115A25 25 0 0 1 1140 245V715"
+          + "A25 25 0 0 1 1115 740H445",
         ),
       );
     });
@@ -444,8 +446,8 @@ describe("RecordingSelector", () => {
     expect(container.querySelector(".capture-shade-path")).toHaveAttribute(
       "d",
       expect.stringContaining(
-        "M310 160H1190A10 10 0 0 1 1200 170V790"
-        + "A10 10 0 0 1 1190 800H310",
+        "M325 160H1175A25 25 0 0 1 1200 185V775"
+        + "A25 25 0 0 1 1175 800H325",
       ),
     );
   });

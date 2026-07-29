@@ -156,6 +156,7 @@ pub struct RecordingSelectionSession {
     pub recording_capabilities: RecordingCapabilities,
     pub display: DisplayDescriptor,
     pub window_coordinate_scale: f64,
+    pub window_corner_radius: f64,
     pub snapshot_url: String,
     pub windows: Vec<WindowDescriptor>,
 }
@@ -459,6 +460,7 @@ pub struct ActiveSession {
     pub mode: CaptureMode,
     pub display: DisplayDescriptor,
     pub window_coordinate_scale: f64,
+    pub window_corner_radius: f64,
     pub snapshot_url: String,
     pub windows: Vec<WindowDescriptor>,
 }

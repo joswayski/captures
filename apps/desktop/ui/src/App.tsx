@@ -21,7 +21,6 @@ import {
   isCapturableSelection,
   roundedRectPath,
   selectionRect,
-  WINDOW_CORNER_RADIUS,
   type SelectionDragMode,
   type SelectionPoint,
 } from "./lib/selection";
@@ -1640,6 +1639,7 @@ export function RecordingSelector() {
         hole={selectedRect}
         bounds={{ width: session.display.width, height: session.display.height }}
         dimWithoutHole={targetMode === "window"}
+        windowCornerRadius={session.window_corner_radius}
       />
       {targetMode === "region" && <CaptureGuidance mode="region" />}
       {targetMode === "window" && !selectedWindow && <CaptureGuidance mode="window" />}
@@ -1675,6 +1675,7 @@ export function RecordingSelector() {
                 width,
                 height,
                 zIndex,
+                borderRadius: session.window_corner_radius,
               }}
               aria-label={`Select ${window.title || "window"}`}
               onPointerDown={(event) => event.stopPropagation()}
@@ -3527,6 +3528,7 @@ function CaptureOverlay() {
         mode={mode}
         hole={dimHole}
         bounds={{ width: session.display.width, height: session.display.height }}
+        windowCornerRadius={session.window_corner_radius}
       />
       <CaptureGuidance
         key={`${sessionId}-${selectionFeedback}`}
@@ -3554,6 +3556,7 @@ function CaptureOverlay() {
                 width: item.width,
                 height: item.height,
                 zIndex: item.zIndex,
+                borderRadius: session.window_corner_radius,
               }}
               title={item.window.title || item.window.app_name || "Window"}
               onPointerEnter={() => setHoveredWindow(item.window.id)}
@@ -3584,11 +3587,13 @@ function CaptureDim({
   hole,
   bounds,
   dimWithoutHole = false,
+  windowCornerRadius = 0,
 }: {
   mode: CaptureMode;
   hole: { x: number; y: number; width: number; height: number } | null;
   bounds: { width: number; height: number };
   dimWithoutHole?: boolean;
+  windowCornerRadius?: number;
 }) {
   // Screenshot window capture stays clear until hover. Recording selection can
   // opt into a full shade while it waits for the user to choose a window.
@@ -3607,7 +3612,7 @@ function CaptureDim({
     `M0 0H${bounds.width}V${bounds.height}H0Z`,
     roundedRectPath(
       { x: left, y: top, width: right - left, height: bottom - top },
-      mode === "window" ? WINDOW_CORNER_RADIUS : 0,
+      mode === "window" ? windowCornerRadius : 0,
     ),
   ].join(" ");
   return (

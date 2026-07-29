@@ -41,6 +41,7 @@ export interface ActiveSession {
   mode: CaptureMode;
   display: DisplayDescriptor;
   window_coordinate_scale: number;
+  window_corner_radius: number;
   snapshot_url: string;
   windows: WindowDescriptor[];
 }
@@ -120,6 +121,7 @@ export interface RecordingSelectionSession {
   };
   display: DisplayDescriptor;
   window_coordinate_scale: number;
+  window_corner_radius: number;
   snapshot_url: string;
   windows: WindowDescriptor[];
 }

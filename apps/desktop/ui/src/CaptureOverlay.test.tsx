@@ -29,6 +29,7 @@ const session: ActiveSession = {
     is_primary: true,
   },
   window_coordinate_scale: 1,
+  window_corner_radius: 25,
   snapshot_url: "capture://session/capture-1",
   windows: [],
 };
