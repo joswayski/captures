@@ -21,7 +21,7 @@ Creating an installer and signing a Tauri updater archive do not by themselves m
 
 | Platform or concern | Required before production publishing | Current implementation |
 | --- | --- | --- |
-| macOS | Developer ID Application signature, Apple notarization, stapled ticket, and clean-machine Gatekeeper validation | CI wiring exists; it requires the Apple credentials below |
+| macOS | Developer ID Application signature, Apple notarization, stapled ticket, and clean-machine Gatekeeper validation | CI signs and notarizes the app, notarizes and staples the DMG, and verifies both; clean-Mac validation remains manual |
 | Windows | Publicly trusted Authenticode signatures and RFC 3161 timestamps on both `captures.exe` and the NSIS installer | Updater archives are signed, but Authenticode is not configured |
 | Linux | `SHA256SUMS` plus GitHub build-provenance attestations for the `.deb` and AppImage | Checksums and updater signatures exist; attestations are not configured |
 | All platforms | Every downloadable artifact must come from the tested commit, pass clean-machine installation, and remain unpublished if any platform is incomplete | Draft validation exists; it must be extended with the Windows and provenance gates |
@@ -50,7 +50,11 @@ Create a GitHub environment named `release`, restrict its deployment branches to
 
 Commit only the updater public key. Keep the updater private key, its password, and the App Store Connect private key in encrypted offline backups. Losing the updater private key means existing installations cannot verify a replacement key or receive another in-app update.
 
-The macOS build intentionally fails when any Apple credential is missing or the imported identity is not a Developer ID Application certificate. Do not merge the updater bootstrap PR until the paid Apple Developer account, certificate, and notarization credentials are ready.
+The macOS build intentionally fails when any Apple credential is missing, the
+imported identity is not a Developer ID Application certificate, or the app or
+DMG fails signing, notarization, stapling, or Gatekeeper validation. Do not
+merge a release-workflow change unless every required credential is configured
+on the protected environment.
 
 ## macOS signing and notarization
 
@@ -69,6 +73,8 @@ Before publishing, verify the signature, Gatekeeper assessment, and stapled tick
 codesign --verify --deep --strict --verbose=2 Captures.app
 spctl --assess --type execute --verbose=2 Captures.app
 xcrun stapler validate Captures.app
+codesign --verify --strict --verbose=2 Captures.dmg
+spctl --assess --type open --context context:primary-signature --verbose=2 Captures.dmg
 xcrun stapler validate Captures.dmg
 ```
 

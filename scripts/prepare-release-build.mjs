@@ -40,5 +40,14 @@ if (process.platform === "darwin") {
   const apiKeyPath = join(runnerTemp, `AuthKey_${process.env.APPLE_API_KEY}.p8`);
   writeFileSync(certificatePath, Buffer.from(process.env.APPLE_CERTIFICATE, "base64"), { mode: 0o600 });
   writeFileSync(apiKeyPath, process.env.APPLE_API_PRIVATE_KEY, { mode: 0o600 });
-  appendFileSync(githubEnv, `APPLE_CERTIFICATE_PATH=${certificatePath}\nAPPLE_API_KEY_PATH=${apiKeyPath}\n`);
+  appendFileSync(
+    githubEnv,
+    [
+      `APPLE_CERTIFICATE_PATH=${certificatePath}`,
+      `APPLE_API_ISSUER=${process.env.APPLE_API_ISSUER}`,
+      `APPLE_API_KEY=${process.env.APPLE_API_KEY}`,
+      `APPLE_API_KEY_PATH=${apiKeyPath}`,
+      "",
+    ].join("\n"),
+  );
 }
