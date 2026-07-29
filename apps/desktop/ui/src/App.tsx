@@ -15,6 +15,7 @@ import {
 } from "react";
 
 import { ScreenshotEditor } from "./ScreenshotEditor";
+import { NotchedSlider } from "./RangeSlider";
 import {
   applyColorTheme,
   buildCustomThemeVariables,
@@ -2340,6 +2341,24 @@ const FILE_SIZE_UNIT_BYTES: Record<FileSizeUnit, number> = {
   gb: 1_000_000_000,
 };
 
+const RECORDING_QUALITY_OPTIONS = [
+  {
+    value: "small",
+    label: "Smaller",
+    description: "Smallest file with more visible compression.",
+  },
+  {
+    value: "standard",
+    label: "Balanced",
+    description: "Good quality with a meaningfully smaller file.",
+  },
+  {
+    value: "high",
+    label: "High",
+    description: "Larger file with the least quality loss.",
+  },
+] as const;
+
 export function RecordingEditor() {
   const artifactId = query("artifact_id");
   const [artifact, setArtifact] = useState<RecordingArtifact | null>(null);
@@ -3187,7 +3206,7 @@ export function RecordingEditor() {
                 {
                   value: "compress",
                   label: "Compress",
-                  description: "Choose a smaller file with a quality preset.",
+                  description: "Choose a smaller file with a notched quality control.",
                 },
                 {
                   value: "maximum",
@@ -3202,43 +3221,19 @@ export function RecordingEditor() {
             {sizeMode === "preserve"
               ? "Original quality with no extra compression unless an edit requires it."
               : sizeMode === "compress"
-                ? "Choose a smaller file with a quality preset."
+                ? "Choose a smaller file with a notched quality control."
                 : "Set a hard size limit for the saved file."}
           </p>
           {sizeMode === "compress" && (
-            <>
-              <div className="editor-field"><span>Compression preset</span>
-                <CustomSelect
-                  value={quality}
-                  ariaLabel="Compression preset"
-                  options={[
-                    {
-                      value: "high",
-                      label: "High quality",
-                      description: "Larger file with the least quality loss.",
-                    },
-                    {
-                      value: "standard",
-                      label: "Balanced",
-                      description: "Good quality with a smaller file.",
-                    },
-                    {
-                      value: "small",
-                      label: "Smaller file",
-                      description: "Smallest file with more quality loss.",
-                    },
-                  ]}
-                  onChange={(value) => setQuality(value as typeof quality)}
-                />
-              </div>
-              <p className="editor-field-help">
-                {quality === "high"
-                  ? "Larger file with the least quality loss."
-                  : quality === "standard"
-                    ? "Good quality with a smaller file."
-                    : "Smallest file with more quality loss."}
-              </p>
-            </>
+            <div className="editor-field editor-quality-slider">
+              <span>Quality</span>
+              <NotchedSlider
+                ariaLabel="Compression quality"
+                value={quality}
+                options={RECORDING_QUALITY_OPTIONS}
+                onChange={setQuality}
+              />
+            </div>
           )}
           {sizeMode === "maximum" && (
             <div className="editor-field"><span>Maximum file size</span>
@@ -4219,15 +4214,6 @@ export function ThumbnailCard({
     }
   };
 
-  const openViewer = () => {
-    if (isExitLocked() || isExiting) return;
-    // Viewer activation rerenders both the old and new active cards. Keep the
-    // actual pointer presentation in a DOM attribute React does not reconcile,
-    // so that render cannot flash the bright image and metadata between polls.
-    if (cardRef.current) setThumbnailNativeActiveCard(cardRef.current);
-    void runAction("open_artifact_viewer");
-  };
-
   const openEditor = () => {
     if (isExitLocked() || isExiting) return;
     if (cardRef.current) setThumbnailNativeActiveCard(cardRef.current);
@@ -4452,13 +4438,6 @@ export function ThumbnailCard({
           >
             <EditIcon />
           </IconButton>
-          <IconButton
-            label="Full size"
-            disabled={isExiting}
-            onClick={openViewer}
-          >
-            <ExpandIcon />
-          </IconButton>
         </div>
       </div>
       <div className="thumbnail-main-actions">
@@ -4537,10 +4516,6 @@ function CopyIcon() {
 
 function FolderIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /><circle cx="16.5" cy="13.5" r="2.5" /><path d="m18.3 15.3 2.2 2.2" /></svg>;
-}
-
-function ExpandIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M21 16v5h-5M3 16v5h5M9 9 3 3m12 6 6-6m-6 12 6 6M9 15l-6 6" /></svg>;
 }
 
 function EditIcon() {

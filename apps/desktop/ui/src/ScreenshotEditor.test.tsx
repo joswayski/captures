@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import { ScreenshotEditor } from "./ScreenshotEditor";
 import type { CaptureArtifact } from "./types";
@@ -65,6 +65,9 @@ describe("ScreenshotEditor", () => {
     expect(invoke).toHaveBeenCalledWith("get_artifact", {
       artifactId: "capture-1",
     });
+    const layers = screen.getByRole("region", { name: "Layers" });
+    expect(within(layers).getByText("Original screenshot")).toBeInTheDocument();
+    expect(within(layers).getByText("Locked background")).toBeInTheDocument();
   });
 
   it("creates selectable formatted text directly on the canvas", async () => {
@@ -94,21 +97,71 @@ describe("ScreenshotEditor", () => {
     expect(await screen.findByRole("textbox", { name: "Text" })).toHaveValue("Text");
     expect(screen.getByRole("button", { name: "Bold" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Italic" })).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("region", { name: "Layers" })).getAllByText("Text"),
+    ).toHaveLength(2);
   });
 
-  it("keeps PNG lossless by default and reveals JPEG quality only when selected", async () => {
+  it("does not select a new shape until Select & move is used", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findAllByText("1440 × 900");
+
+    fireEvent.click(screen.getByRole("button", { name: "Rectangle (R)" }));
+    const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
+    canvas.setPointerCapture = vi.fn();
+    canvas.hasPointerCapture = vi.fn(() => true);
+    canvas.releasePointerCapture = vi.fn();
+    vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 1_440,
+      bottom: 900,
+      width: 1_440,
+      height: 900,
+      toJSON: () => ({}),
+    });
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 2,
+      clientX: 100,
+      clientY: 100,
+    });
+    fireEvent.pointerMove(canvas, {
+      pointerId: 2,
+      clientX: 300,
+      clientY: 240,
+    });
+    fireEvent.pointerUp(canvas, {
+      pointerId: 2,
+      clientX: 300,
+      clientY: 240,
+    });
+
+    expect(screen.queryByRole("button", { name: "Delete selected item" }))
+      .not.toBeInTheDocument();
+    expect(
+      within(screen.getByRole("region", { name: "Layers" })).getByText("Rectangle"),
+    ).toBeInTheDocument();
+  });
+
+  it("uses maximum lossless output by default and a notched JPEG quality control", async () => {
     render(<ScreenshotEditor />);
     await screen.findAllByText("1440 × 900");
 
     const format = screen.getByLabelText("Format");
     expect(format).toHaveValue("png");
-    expect(screen.queryByText("JPEG quality")).not.toBeInTheDocument();
+    expect(screen.getByText("Maximum · lossless")).toBeInTheDocument();
+    expect(screen.queryByRole("slider", { name: "Image quality" })).not.toBeInTheDocument();
+    expect(screen.getByRole("spinbutton", { name: "Maximum file size" })).toHaveValue(null);
 
     fireEvent.change(format, { target: { value: "jpeg" } });
 
     await waitFor(() => {
-      expect(screen.getByText("JPEG quality")).toBeInTheDocument();
+      expect(screen.getByRole("slider", { name: "Image quality" })).toBeInTheDocument();
     });
-    expect(screen.getByText("92%")).toBeInTheDocument();
+    expect(screen.getByRole("slider", { name: "Image quality" }))
+      .toHaveAttribute("aria-valuetext", "Maximum");
   });
 });

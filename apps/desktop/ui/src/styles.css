@@ -166,7 +166,7 @@ html.capture-window-cursor, html.capture-window-cursor * { cursor: var(--capture
 @keyframes capture-guidance-in { from { opacity: 0; transform: translate(-50%, -5px); } to { opacity: 1; transform: translate(-50%, 0); } }
 @keyframes capture-guidance-nudge { 0%, 100% { margin-left: 0; } 25% { margin-left: -8px; } 75% { margin-left: 8px; } }
 /* Marquee only — outside dim comes from the atomic CaptureDim cutout. */
-.selection-box { position: absolute; z-index: 5; border: 2px solid var(--chrome-active); background: transparent; box-shadow: 0 0 0 1px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.45) inset; pointer-events: none; }
+.selection-box { position: absolute; z-index: 5; border: 2px solid var(--chrome-active); background: transparent; box-shadow: 0 0 0 1px rgba(255,255,255,.45) inset; pointer-events: none; }
 .selection-box span { position: absolute; top: -30px; left: 0; padding: 5px 8px; border-radius: 5px; color: var(--chrome-active-ink); background: var(--chrome-active); font-size: 12px; font-weight: 700; white-space: nowrap; }
 .window-targets { position: absolute; inset: 0; z-index: 5; opacity: 0; transition: opacity .3s ease-out; }
 .capture-visible .window-targets { opacity: 1; }
@@ -181,7 +181,7 @@ html.capture-window-cursor, html.capture-window-cursor * { cursor: var(--capture
    keeps surviving cards stable while only empty window space is cropped. */
 .thumbnail-stack { position: absolute; bottom: 0; left: 0; right: 0; display: flex; flex-direction: column; gap: 24px; width: 100%; height: auto; max-height: 100%; padding: 28px; overflow-y: auto; overflow-anchor: none; background: transparent; scrollbar-width: none; }
 .thumbnail-stack::-webkit-scrollbar { display: none; }
-/* overflow:visible so tooltips (Full size, etc.) are not clipped by the card edge. */
+/* overflow:visible so preview-action tooltips are not clipped by the card edge. */
 .thumbnail-card { position: relative; isolation: isolate; overflow: visible; flex: 0 0 160px; width: 100%; height: 160px; margin-bottom: 0; background: transparent; border-radius: 12px; box-shadow: 0 8px 16px rgba(0,0,0,.34), 0 2px 5px rgba(0,0,0,.22); cursor: default; transition: flex-basis .26s ease, height .26s ease, margin-bottom .26s ease, opacity .2s ease, transform .2s ease, filter .2s ease, box-shadow .22s ease; will-change: flex-basis, height, opacity, transform; }
 .thumbnail-card.thumbnail-file-dragging { cursor: grabbing; }
 .thumbnail-card.thumbnail-viewer-active { box-shadow: 0 8px 16px rgba(0,0,0,.34), 0 2px 5px rgba(0,0,0,.22), 0 0 0 1px rgba(var(--theme-accent-rgb),.82), 0 0 17px rgba(var(--theme-accent-rgb),.24); }
@@ -237,7 +237,7 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-top-action
 .thumbnail-top-actions .icon-button:hover::after, .thumbnail-top-actions .icon-button.native-pointer-hover::after, .thumbnail-top-actions .icon-button:focus-visible::after { transform: translate(-50%, 0); }
 .thumbnail-top-left .icon-button::after { left: 0; transform: translate(0, 2px); }
 .thumbnail-top-left .icon-button:hover::after, .thumbnail-top-left .icon-button.native-pointer-hover::after, .thumbnail-top-left .icon-button:focus-visible::after { transform: translate(0, 0); }
-/* Full size sits on the right edge — anchor tooltip to the right so it isn't clipped. */
+/* Right-edge actions anchor their tooltip inward so it is not clipped. */
 .thumbnail-top-right .icon-button::after { left: auto; right: 0; transform: translate(0, 2px); }
 .thumbnail-top-right .icon-button:hover::after, .thumbnail-top-right .icon-button.native-pointer-hover::after, .thumbnail-top-right .icon-button:focus-visible::after { transform: translate(0, 0); }
 .thumbnail-main-actions { position: absolute; z-index: 3; top: 50%; left: 50%; display: grid; gap: 7px; width: 132px; transform: translate(-50%, -47%); }
@@ -625,7 +625,7 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .recording-selector ::selection { color: inherit; background: transparent; }
 .recording-selector-snapshot { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; pointer-events: none; }
 .recording-target-region { cursor: crosshair; }
-.recording-selection-frame { position: absolute; z-index: 3; border: 2px solid var(--chrome-active); border-radius: 3px; background: transparent; box-shadow: 0 0 0 1px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.45) inset; pointer-events: none; }
+.recording-selection-frame { position: absolute; z-index: 3; border: 2px solid var(--chrome-active); border-radius: 3px; background: transparent; box-shadow: 0 0 0 1px rgba(255,255,255,.45) inset; pointer-events: none; }
 .recording-selection-frame.movable { pointer-events: auto; cursor: move; }
 .recording-selection-frame > span { position: absolute; top: -30px; left: 50%; padding: 5px 8px; border: 1px solid rgba(0,0,0,.18); border-radius: 6px; color: var(--chrome-active-ink); background: var(--chrome-active); box-shadow: 0 4px 14px rgba(0,0,0,.28); font-size: 11px; font-weight: 800; transform: translateX(-50%); white-space: nowrap; }
 .recording-selection-frame .handle { position: absolute; width: 10px; height: 10px; border: 2px solid var(--chrome-active-ink); border-radius: 50%; background: var(--chrome-active); box-shadow: 0 1px 4px rgba(0,0,0,.35); }
@@ -757,6 +757,29 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .custom-select-listbox button[aria-selected="true"] { color: var(--theme-accent-text); }
 .custom-select-listbox button:disabled { color: #707177; }
 
+/* Shared, platform-neutral slider used by photo annotations and video/image
+   export quality. Native range behavior stays intact while the visual track,
+   thumb, and discrete marks match the rest of the editor chrome. */
+.range-slider { --range-progress: 0%; display: grid; min-width: 0; grid-template-rows: 17px 24px 17px; gap: 1px; }
+.range-slider-value { display: flex; min-width: 0; align-items: center; justify-content: flex-end; }
+.range-slider-value output { max-width: 100%; overflow: hidden; color: #d8d9dc; font-size: 9px; font-weight: 800; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+.range-slider-track { position: relative; min-width: 0; height: 24px; }
+.range-slider input[type="range"] { position: absolute; z-index: 2; inset: 0; width: 100%; height: 24px; margin: 0; appearance: none; background: transparent; cursor: pointer; outline: none; }
+.range-slider input[type="range"]::-webkit-slider-runnable-track { height: 7px; border: 1px solid rgba(255,255,255,.13); border-radius: 999px; background: linear-gradient(90deg,var(--editing-accent) 0 var(--range-progress),#4a4b50 var(--range-progress) 100%); box-shadow: 0 1px 3px rgba(0,0,0,.42) inset; }
+.range-slider input[type="range"]::-webkit-slider-thumb { width: 22px; height: 22px; margin-top: -8px; border: 1px solid rgba(0,0,0,.16); border-radius: 999px; appearance: none; background: #f7f7f7; box-shadow: 0 2px 7px rgba(0,0,0,.48), 0 0 0 1px rgba(255,255,255,.4) inset; transition: box-shadow .14s ease, transform .14s ease; }
+.range-slider input[type="range"]:hover::-webkit-slider-thumb { box-shadow: 0 3px 9px rgba(0,0,0,.55), 0 0 0 3px rgba(var(--theme-accent-rgb),.16); transform: scale(1.04); }
+.range-slider input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 2px 8px rgba(0,0,0,.5), 0 0 0 3px rgba(var(--theme-accent-rgb),.34); }
+.range-slider input[type="range"]::-moz-range-track { height: 7px; border: 1px solid rgba(255,255,255,.13); border-radius: 999px; background: #4a4b50; box-shadow: 0 1px 3px rgba(0,0,0,.42) inset; }
+.range-slider input[type="range"]::-moz-range-progress { height: 7px; border-radius: 999px; background: var(--editing-accent); }
+.range-slider input[type="range"]::-moz-range-thumb { width: 22px; height: 22px; border: 1px solid rgba(0,0,0,.16); border-radius: 999px; background: #f7f7f7; box-shadow: 0 2px 7px rgba(0,0,0,.48); }
+.range-slider-ticks { position: absolute; z-index: 3; top: 0; right: 11px; bottom: 0; left: 11px; pointer-events: none; }
+.range-slider-ticks i { position: absolute; top: 9px; width: 2px; height: 6px; border-radius: 999px; background: rgba(17,18,22,.45); transform: translateX(-50%); }
+.range-slider-labels { position: relative; display: block; height: 17px; margin: 0 11px; pointer-events: none; }
+.range-slider-labels small { position: absolute; top: 1px; color: #77787e; font-size: 7px; font-weight: 700; line-height: 1; transform: translateX(-50%); white-space: nowrap; }
+.range-slider-labels small:first-child { transform: none; }.range-slider-labels small:last-child { transform: translateX(-100%); }
+.range-slider-description { margin: 4px 0 0; color: #8f9096; font-size: 9px; font-weight: 500; line-height: 1.4; }
+.range-slider.disabled { opacity: .5; }.range-slider.disabled input { cursor: default; }
+
 .recording-selector .capture-shade { fill: rgba(5,6,8,.34); background: rgba(5,6,8,.34); }
 .recording-selector .capture-shade-cutout { z-index: 1; }
 .recording-target-window .capture-shade { fill: rgba(5,6,8,.27); background: rgba(5,6,8,.27); }
@@ -863,6 +886,9 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .editor-resolution-field { margin-top: 0; }
 .editor-quality-card .editor-field + .editor-field { margin-top: 13px; }
 .editor-quality-mode-field { max-width: 430px; }
+.editor-quality-slider { max-width: 560px; }
+.editor-quality-slider .notched-slider { padding: 3px 1px 0; }
+.editor-quality-slider .range-slider-value output { color: var(--theme-accent-text); }
 .editor-field-help { max-width: 430px; margin: 7px 0 0; color: #8f9096; font-size: 9px; line-height: 1.4; }
 .editor-field-help + .editor-field { margin-top: 13px; }
 .editor-size-limit { display: grid; grid-template-columns: minmax(100px, 1fr) 92px; gap: 8px; }
@@ -906,7 +932,7 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 
 /* Screenshot editing stays inside one platform-neutral canvas surface. The
    native layer only owns the window, clipboard, and final file write. */
-.screenshot-editor { display: grid; width: 100%; height: 100%; min-width: 860px; min-height: 600px; grid-template: 54px minmax(0,1fr) 84px / 70px minmax(0,1fr) 286px; overflow: hidden; color: #f2f2f1; background: #151619; }
+.screenshot-editor { display: grid; width: 100%; height: 100%; min-width: 860px; min-height: 600px; grid-template: 54px minmax(0,1fr) 108px / 70px minmax(0,1fr) 310px; overflow: hidden; color: #f2f2f1; background: #151619; }
 .screenshot-editor-loading { min-width: 0; min-height: 100%; place-items: center; color: #a7a8ad; }
 .screenshot-editor button, .screenshot-editor input, .screenshot-editor select, .screenshot-editor textarea { font: inherit; }
 .screenshot-editor-header { z-index: 10; display: flex; grid-column: 1 / -1; padding: 0 14px 0 18px; align-items: center; justify-content: space-between; gap: 18px; border-bottom: 1px solid #34353a; background: #202126; box-shadow: 0 4px 14px rgba(0,0,0,.2); }
@@ -936,10 +962,28 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .screenshot-canvas { display: block; width: 100%; height: 100%; user-select: none; touch-action: none; }
 .screenshot-canvas.tool-select { cursor: default; }
 .screenshot-canvas.tool-crop, .screenshot-canvas.tool-text, .screenshot-canvas.tool-rectangle, .screenshot-canvas.tool-ellipse, .screenshot-canvas.tool-line, .screenshot-canvas.tool-arrow, .screenshot-canvas.tool-curved_arrow, .screenshot-canvas.tool-pen { cursor: crosshair; }
-.screenshot-drop-overlay { position: fixed; z-index: 80; inset: 70px 304px 100px 88px; display: grid; place-content: center; justify-items: center; border: 2px dashed rgba(255,255,255,.72); border-radius: 14px; color: white; background: rgba(17,18,22,.9); box-shadow: 0 16px 50px rgba(0,0,0,.45); backdrop-filter: blur(16px); pointer-events: none; }
+.screenshot-drop-overlay { position: fixed; z-index: 80; inset: 70px 328px 124px 88px; display: grid; place-content: center; justify-items: center; border: 2px dashed rgba(255,255,255,.72); border-radius: 14px; color: white; background: rgba(17,18,22,.9); box-shadow: 0 16px 50px rgba(0,0,0,.45); backdrop-filter: blur(16px); pointer-events: none; }
 .screenshot-drop-overlay svg { width: 42px; height: 42px; margin-bottom: 12px; fill: none; stroke: var(--editing-accent); stroke-width: 1.5; }
 .screenshot-drop-overlay strong { font-size: 18px; }.screenshot-drop-overlay span { margin-top: 6px; color: #aaaab0; font-size: 11px; }
-.screenshot-properties { min-height: 0; grid-row: 2; grid-column: 3; padding: 0 14px 20px; overflow-y: auto; border-left: 1px solid #303136; background: #1d1e22; }
+.screenshot-sidebar { display: grid; min-width: 0; min-height: 0; grid-row: 2; grid-column: 3; grid-template-rows: minmax(220px,50%) minmax(0,1fr); overflow: hidden; border-left: 1px solid #303136; background: #1d1e22; }
+.screenshot-layers { display: flex; min-width: 0; min-height: 0; padding: 0 10px 10px; flex-direction: column; background: #202126; }
+.screenshot-layers-heading { display: flex; min-height: 48px; margin: 0 -10px 8px; padding: 0 10px 0 14px; align-items: center; justify-content: space-between; border-bottom: 1px solid #34353a; }
+.screenshot-layers-heading > div { display: flex; min-width: 0; align-items: center; gap: 7px; }.screenshot-layers-heading strong { font-size: 11px; }.screenshot-layers-heading span { display: grid; min-width: 17px; height: 17px; place-items: center; border-radius: 999px; color: #9a9ba0; background: #303136; font-size: 8px; font-weight: 800; }
+.screenshot-layers-heading button { display: grid; width: 29px; height: 29px; padding: 0; place-items: center; border: 1px solid #45464c; border-radius: 7px; color: #e5e5e7; background: #2c2d32; }
+.screenshot-layers-heading button:hover { border-color: #5b5c62; color: white; background: #393a40; }.screenshot-layers-heading button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; }
+.screenshot-layer-list { min-height: 0; margin: 0; padding: 0 2px; overflow-y: auto; list-style: none; scrollbar-width: thin; }
+.screenshot-layer-list li { position: relative; margin: 4px 0; border: 1px solid transparent; border-radius: 8px; background: #292a2f; cursor: grab; transition: border-color .14s ease, background .14s ease, box-shadow .14s ease, opacity .14s ease, transform .14s ease; }
+.screenshot-layer-list li:hover { border-color: #45464c; background: #303136; }.screenshot-layer-list li.active { border-color: var(--editing-accent); background: rgba(var(--theme-accent-rgb),.1); box-shadow: 0 0 0 1px rgba(var(--theme-accent-rgb),.12), 0 5px 14px rgba(0,0,0,.24); }
+.screenshot-layer-list li.dragging { opacity: .42; transform: scale(.985); }.screenshot-layer-list li.locked { cursor: default; }
+.screenshot-layer-list li.drop-before::before, .screenshot-layer-list li.drop-after::after { position: absolute; z-index: 3; right: 3px; left: 3px; height: 2px; border-radius: 999px; background: var(--editing-accent); box-shadow: 0 0 8px rgba(var(--theme-accent-rgb),.5); content: ""; pointer-events: none; }
+.screenshot-layer-list li.drop-before::before { top: -4px; }.screenshot-layer-list li.drop-after::after { bottom: -4px; }
+.screenshot-layer-list li > button { display: grid; width: 100%; min-height: 50px; padding: 5px 7px; grid-template-columns: 13px 50px minmax(0,1fr); align-items: center; gap: 7px; border: 0; color: #e3e3e5; background: transparent; text-align: left; }
+.screenshot-layer-grip { display: grid; place-items: center; color: #6f7076; }.screenshot-layer-grip svg { width: 13px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.screenshot-layer-list li:not(.locked):hover .screenshot-layer-grip { color: #b2b3b8; }.screenshot-layer-list li.locked .screenshot-layer-grip { color: #85868b; }
+.screenshot-layer-preview { display: grid; width: 50px; height: 36px; place-items: center; overflow: hidden; border: 1px solid rgba(255,255,255,.11); border-radius: 5px; color: #aeb0b5; background-color: #151619; background-image: linear-gradient(45deg,#24252a 25%,transparent 25%),linear-gradient(-45deg,#24252a 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#24252a 75%),linear-gradient(-45deg,transparent 75%,#24252a 75%); background-position: 0 0,0 5px,5px -5px,-5px 0; background-size: 10px 10px; }
+.screenshot-layer-preview img { display: block; width: 100%; height: 100%; object-fit: cover; }.screenshot-layer-preview svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.screenshot-layer-copy { display: grid; min-width: 0; gap: 3px; }.screenshot-layer-copy strong, .screenshot-layer-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.screenshot-layer-copy strong { color: #dedee1; font-size: 9px; font-weight: 750; }.screenshot-layer-copy small { color: #7f8086; font-size: 8px; font-weight: 600; }
+.screenshot-properties { min-height: 0; padding: 0 14px 20px; overflow-y: auto; border-top: 1px solid #303136; background: #1d1e22; }
 .screenshot-properties-heading { position: sticky; z-index: 3; top: 0; display: flex; min-height: 48px; margin: 0 -14px 12px; padding: 0 14px; align-items: center; justify-content: space-between; border-bottom: 1px solid #303136; background: rgba(29,30,34,.96); backdrop-filter: blur(14px); }
 .screenshot-properties-heading strong { font-size: 11px; }
 .screenshot-properties-heading button { display: grid; width: 28px; height: 28px; place-items: center; border: 0; border-radius: 6px; color: #ff9da6; background: transparent; }
@@ -976,14 +1020,21 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .screenshot-custom-color input { position: absolute; inset: -8px; width: 40px; height: 40px; opacity: 0; cursor: pointer; }
 .screenshot-layer-actions { display: grid; grid-template-columns: 1fr 1fr; }
 .screenshot-file-name { overflow: hidden; color: #d5d6d8 !important; text-overflow: ellipsis; white-space: nowrap; }
-.screenshot-export-bar { z-index: 20; display: grid; min-width: 0; grid-row: 3; grid-column: 1 / -1; padding: 9px 14px; grid-template-columns: minmax(430px,auto) minmax(180px,1fr) auto; align-items: center; gap: 16px; border-top: 1px solid #3a3b40; background: rgba(31,32,36,.98); box-shadow: 0 -10px 28px rgba(0,0,0,.28); }
+.screenshot-export-bar { z-index: 20; display: grid; min-width: 0; grid-row: 3; grid-column: 1 / -1; padding: 8px 14px; grid-template-columns: minmax(600px,auto) minmax(150px,1fr) auto; align-items: center; gap: 14px; border-top: 1px solid #3a3b40; background: rgba(31,32,36,.98); box-shadow: 0 -10px 28px rgba(0,0,0,.28); }
 .screenshot-export-settings { display: flex; min-width: 0; align-items: flex-end; gap: 8px; }
 .screenshot-export-settings label { display: flex; flex-direction: column; gap: 4px; color: #898a90; font-size: 8px; font-weight: 750; text-transform: uppercase; }
 .screenshot-export-settings select, .screenshot-export-settings input[type=number] { min-width: 92px; height: 31px; border: 1px solid #44454b; border-radius: 6px; padding: 5px 7px; color: #ececef; background: #111216; outline: none; font-size: 9px; text-transform: none; }
 .screenshot-export-settings input[type=number] { width: 88px; min-width: 0; }
 .screenshot-export-settings > span { padding-bottom: 8px; color: #85868c; font-size: 9px; white-space: nowrap; }
-.screenshot-quality { display: grid !important; width: 145px; grid-template: 11px 20px / 1fr 32px; align-items: center; column-gap: 6px; }
-.screenshot-quality input { width: 100%; accent-color: var(--editing-accent); }.screenshot-quality output { color: #bfc0c3; font-size: 9px; text-align: right; }
+.screenshot-export-control { display: flex; min-width: 0; flex-direction: column; gap: 3px; color: #898a90; font-size: 8px; font-weight: 750; text-transform: uppercase; }
+.screenshot-quality { width: 248px; }
+.screenshot-quality .range-slider { grid-template-rows: 14px 22px 14px; }
+.screenshot-quality .range-slider-value output { color: var(--theme-accent-text); font-size: 8px; text-transform: none; }
+.screenshot-quality .range-slider-labels { height: 14px; }.screenshot-quality .range-slider-labels small { max-width: 52px; overflow: hidden; font-size: 6px; text-overflow: ellipsis; }
+.screenshot-quality > strong { display: flex; height: 31px; padding: 0 10px; align-items: center; border: 1px solid #44454b; border-radius: 6px; color: #d6d7da; background: #111216; font-size: 9px; text-transform: none; white-space: nowrap; }
+.screenshot-maximum-size { width: 150px; }.screenshot-maximum-size > span { display: grid; grid-template-columns: minmax(0,1fr) 55px; gap: 5px; }
+.screenshot-maximum-size input[type=number] { width: 100%; }.screenshot-maximum-size select { min-width: 0; width: 55px; padding-right: 3px; }
+.screenshot-output-dimensions { min-width: 68px; text-align: right; }
 .screenshot-export-status { min-width: 0; overflow: hidden; color: #8e8f94; font-size: 9px; line-height: 1.35; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
 .screenshot-export-status.error { color: #ff9da6; }
 .screenshot-export-actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
@@ -994,11 +1045,12 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .screenshot-export-actions button:disabled { cursor: wait; opacity: .55; }
 .screenshot-export-actions svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 @media (max-width: 1040px) {
-  .screenshot-editor { grid-template-columns: 64px minmax(0,1fr) 252px; }
-  .screenshot-drop-overlay { right: 270px; left: 78px; }
+  .screenshot-editor { grid-template-columns: 64px minmax(0,1fr) 270px; }
+  .screenshot-drop-overlay { right: 288px; bottom: 124px; left: 78px; }
   .screenshot-editor-history-actions .screenshot-editor-zoom, .screenshot-editor-history-actions > button:first-child, .screenshot-editor-history-actions > button:nth-child(2) { display: none; }
-  .screenshot-export-bar { grid-template-columns: minmax(390px,auto) 1fr auto; gap: 9px; }
+  .screenshot-export-bar { grid-template-columns: minmax(0,1fr) auto; gap: 9px; }
   .screenshot-export-status { display: none; }
+  .screenshot-quality { width: 190px; }.screenshot-maximum-size { width: 130px; }
 }
 
 .preferences { height: 100%; overflow-y: auto; }

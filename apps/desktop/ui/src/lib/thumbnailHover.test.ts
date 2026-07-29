@@ -76,6 +76,38 @@ describe("applyThumbnailNativeHover", () => {
     expect(button).toHaveClass("native-pointer-hover");
   });
 
+  it("retains the pointing cursor through a transient WebKit focus handoff", () => {
+    document.body.innerHTML = `
+      <article class="thumbnail-card">
+        <img alt="Screenshot preview">
+        <button>Edit</button>
+      </article>
+    `;
+    const image = document.querySelector<HTMLImageElement>("img")!;
+    const button = document.querySelector<HTMLButtonElement>("button")!;
+    vi.spyOn(button, "getBoundingClientRect").mockReturnValue({
+      x: 20,
+      y: 10,
+      top: 10,
+      left: 20,
+      right: 80,
+      bottom: 50,
+      width: 60,
+      height: 40,
+      toJSON: () => ({}),
+    });
+    let handoff = false;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => handoff ? image : button),
+    });
+
+    expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe(true);
+    handoff = true;
+    expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe(true);
+    expect(button).toHaveClass("native-pointer-hover");
+  });
+
   it("moves hover directly to a remaining card after the stack changes", () => {
     document.body.innerHTML = `
       <article id="removed" class="thumbnail-card"><button>Delete</button></article>

@@ -57,6 +57,11 @@ export function setThumbnailNativeActiveCard(
   card.setAttribute(THUMBNAIL_NATIVE_ACTIVE_ATTRIBUTE, "true");
 }
 
+function containsPoint(element: Element, x: number, y: number): boolean {
+  const bounds = element.getBoundingClientRect();
+  return x >= bounds.left && x <= bounds.right && y >= bounds.top && y <= bounds.bottom;
+}
+
 export function applyThumbnailNativeHover(
   position: ThumbnailPointerPosition,
   root: Document = document,
@@ -66,9 +71,15 @@ export function applyThumbnailNativeHover(
     return false;
   }
 
-  const card = root
-    .elementFromPoint(position.x, position.y)
-    ?.closest(".thumbnail-card");
+  const currentButton = root.querySelector<HTMLElement>(".native-pointer-hover");
+  const currentCard = root.querySelector<HTMLElement>(THUMBNAIL_NATIVE_ACTIVE_SELECTOR);
+  const directTarget = root.elementFromPoint(position.x, position.y);
+  const card = directTarget?.closest(".thumbnail-card")
+    ?? (
+      currentCard && containsPoint(currentCard, position.x, position.y)
+        ? currentCard
+        : null
+    );
   if (!card) {
     clearThumbnailNativeHover(root);
     return false;
@@ -81,7 +92,18 @@ export function applyThumbnailNativeHover(
   const target = root
     .elementFromPoint(position.x, position.y)
     ?.closest("button");
-  const button = target && card.contains(target) ? target : null;
+  const directButton = target && card.contains(target) ? target : null;
+  // A focus handoff can make WebKit report the preview image for one poll even
+  // though the pointer has not left the button. Keep the last button while the
+  // native coordinates remain within it so the cursor does not flash to arrow.
+  const button = directButton
+    ?? (
+      currentButton
+      && card.contains(currentButton)
+      && containsPoint(currentButton, position.x, position.y)
+        ? currentButton
+        : null
+    );
 
   root.querySelectorAll(".native-pointer-hover")
     .forEach((element) => {
