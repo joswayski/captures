@@ -1,6 +1,268 @@
+/** Thumbnail card height in CSS pixels (matches `.thumbnail-card` flex-basis/height). */
+export const THUMBNAIL_CARD_HEIGHT_PX = 160;
+
+/** Vertical gap between cards (matches `.thumbnail-stack` gap). */
+export const THUMBNAIL_STACK_GAP_PX = 24;
+
+/** One stack slot: card height + inter-card gap. */
+export const THUMBNAIL_CARD_SLOT_PX = THUMBNAIL_CARD_HEIGHT_PX + THUMBNAIL_STACK_GAP_PX;
+
+/**
+ * Delay before live cards above a dust-delete begin sliding into the empty
+ * slot. Matches the pre-motion ash phase in styles.css.
+ */
+export const THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS = 1_800;
+
+/**
+ * Delay before live cards above a dismiss begin sliding. Matches the point
+ * where the outgoing preview has fully faded/streaked off-screen.
+ */
+export const THUMBNAIL_DISMISS_STACK_MOTION_DELAY_MS = 450;
+
+/** @deprecated Prefer THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS. */
+export const THUMBNAIL_STACK_MOTION_DELAY_MS = THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS;
+
+/**
+ * Shared settle duration for survivors after delete or dismiss.
+ * Keep identical so both exit paths feel the same.
+ */
+export const THUMBNAIL_STACK_MOTION_DURATION_MS = 580;
+
+/**
+ * How long a dismiss card keeps its layout slot (visual exit + stacked settle).
+ * Matches the CSS `thumbnail-dismiss` animation duration.
+ */
+export const THUMBNAIL_DISMISS_HOLD_MS =
+  THUMBNAIL_DISMISS_STACK_MOTION_DELAY_MS + THUMBNAIL_STACK_MOTION_DURATION_MS;
+
+export type ThumbnailStackCardMotionState = {
+  /** True while this card is locked in any exit animation. */
+  exiting: boolean;
+  /**
+   * True when this card still occupies layout space and should pull cards
+   * above it downward once `motionReady` (dust-delete or dismiss hold).
+   */
+  holdsLayoutSlot: boolean;
+  /**
+   * True once this exit's motion delay has elapsed so its slot contributes
+   * to the stacked shift of live cards above it.
+   */
+  motionReady: boolean;
+};
+
+/**
+ * Count how many motion-ready held-layout exit slots sit below `index`.
+ * Live cards slide by this many slots.
+ */
+export function countMotionReadySlotsBelow(
+  cards: readonly ThumbnailStackCardMotionState[],
+  index: number,
+): number {
+  let count = 0;
+  for (let i = index + 1; i < cards.length; i += 1) {
+    const card = cards[i];
+    if (card?.holdsLayoutSlot && card.motionReady) count += 1;
+  }
+  return count;
+}
+
+/** @deprecated Prefer countMotionReadySlotsBelow. */
+export const countMotionReadyDeleteSlotsBelow = countMotionReadySlotsBelow;
+
+/** Pixel shift for a live card sitting above `slots` open exit holes. */
+export function thumbnailStackShiftPx(slots: number): number {
+  return Math.max(0, slots) * THUMBNAIL_CARD_SLOT_PX;
+}
+
+/**
+ * Compute the target translateY (px) for every card in order.
+ * Exiting cards never carry a shift — only live survivors slide.
+ */
+export function computeThumbnailStackShifts(
+  cards: readonly ThumbnailStackCardMotionState[],
+): number[] {
+  return cards.map((card, index) => {
+    if (card.exiting) return 0;
+    return thumbnailStackShiftPx(countMotionReadySlotsBelow(cards, index));
+  });
+}
+
+/**
+ * Increases should ease so multi-exit stacks accumulate smoothly.
+ * Decreases must snap: removing a finished exit reflows layout by one
+ * slot, and an instant transform drop of the same amount cancels the jump.
+ */
+export function shouldAnimateThumbnailStackShift(
+  previousPx: number,
+  nextPx: number,
+): boolean {
+  return nextPx > previousPx;
+}
+
 export function shouldScrollThumbnailStackToEnd(
   previousCount: number,
   nextCount: number,
 ): boolean {
   return nextCount > previousCount;
+}
+
+const STACK_SHIFT_VAR = "--thumbnail-stack-shift";
+const STACK_SHIFTING_CLASS = "thumbnail-stack-shifting";
+const STACK_SHIFT_INSTANT_CLASS = "thumbnail-stack-shift-instant";
+
+function isDustDeleteCard(card: HTMLElement): boolean {
+  return card.classList.contains("thumbnail-exit-delete")
+    && card.classList.contains("thumbnail-exit-dust");
+}
+
+function isDismissCard(card: HTMLElement): boolean {
+  return card.classList.contains("thumbnail-exit-dismiss");
+}
+
+/** Exits that hold layout and drive the shared survivor settle. */
+function isHeldLayoutExitCard(card: HTMLElement): boolean {
+  return isDismissCard(card) || isDustDeleteCard(card);
+}
+
+function motionDelayMsFor(card: HTMLElement): number {
+  if (isDismissCard(card)) return THUMBNAIL_DISMISS_STACK_MOTION_DELAY_MS;
+  return THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS;
+}
+
+function isExitingCard(card: HTMLElement): boolean {
+  return card.classList.contains("thumbnail-exiting");
+}
+
+function readStackShiftPx(card: HTMLElement): number {
+  const raw = card.style.getPropertyValue(STACK_SHIFT_VAR).trim();
+  if (!raw) return 0;
+  const parsed = Number.parseFloat(raw);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function writeStackShiftPx(card: HTMLElement, shiftPx: number, animate: boolean): void {
+  if (shiftPx <= 0) {
+    card.classList.remove(STACK_SHIFTING_CLASS);
+    card.classList.remove(STACK_SHIFT_INSTANT_CLASS);
+    card.style.removeProperty(STACK_SHIFT_VAR);
+    return;
+  }
+
+  if (!animate) {
+    card.classList.add(STACK_SHIFT_INSTANT_CLASS);
+    card.classList.add(STACK_SHIFTING_CLASS);
+    card.style.setProperty(STACK_SHIFT_VAR, `${shiftPx}px`);
+    // Force the browser to commit the snapped value before re-enabling easing
+    // so a later increase still transitions from the correct origin.
+    void card.offsetWidth;
+    card.classList.remove(STACK_SHIFT_INSTANT_CLASS);
+    return;
+  }
+
+  card.classList.remove(STACK_SHIFT_INSTANT_CLASS);
+  card.classList.add(STACK_SHIFTING_CLASS);
+  card.style.setProperty(STACK_SHIFT_VAR, `${shiftPx}px`);
+}
+
+/**
+ * Drive multi-slot stack collapse for held-layout exits (dust delete + dismiss).
+ *
+ * Survivors slide by N × slot with the same ease for both exit kinds. When a
+ * finished exit is removed, the transform snaps down with the layout reflow
+ * so multi-exit batches do not teleport.
+ */
+export function createThumbnailStackShiftController(stack: HTMLElement): () => void {
+  const exitStartedAt = new WeakMap<HTMLElement, number>();
+  const scheduledTimers = new Set<ReturnType<typeof setTimeout>>();
+  let microtaskQueued = false;
+
+  const clearTimers = () => {
+    for (const timer of scheduledTimers) clearTimeout(timer);
+    scheduledTimers.clear();
+  };
+
+  const schedule = (delayMs: number) => {
+    const timer = setTimeout(() => {
+      scheduledTimers.delete(timer);
+      applyShifts();
+    }, Math.max(0, delayMs));
+    scheduledTimers.add(timer);
+  };
+
+  const applyShifts = () => {
+    const cards = Array.from(
+      stack.querySelectorAll<HTMLElement>(":scope > .thumbnail-card"),
+    );
+    const now = performance.now();
+
+    for (const card of cards) {
+      if (!isHeldLayoutExitCard(card)) continue;
+      if (exitStartedAt.has(card)) continue;
+      exitStartedAt.set(card, now);
+      // Wake once this slot becomes motion-ready (plus a frame of slack).
+      schedule(motionDelayMsFor(card) + 16);
+    }
+
+    const motionStates: ThumbnailStackCardMotionState[] = cards.map((card) => {
+      const holdsLayoutSlot = isHeldLayoutExitCard(card);
+      const startedAt = exitStartedAt.get(card);
+      const delayMs = motionDelayMsFor(card);
+      const motionReady = holdsLayoutSlot
+        && startedAt !== undefined
+        && now - startedAt >= delayMs;
+      return {
+        exiting: isExitingCard(card),
+        holdsLayoutSlot,
+        motionReady,
+      };
+    });
+
+    const shifts = computeThumbnailStackShifts(motionStates);
+    for (let index = 0; index < cards.length; index += 1) {
+      const card = cards[index]!;
+      const nextPx = shifts[index] ?? 0;
+      const previousPx = readStackShiftPx(card);
+      if (previousPx === nextPx) {
+        if (nextPx > 0) card.classList.add(STACK_SHIFTING_CLASS);
+        continue;
+      }
+      writeStackShiftPx(
+        card,
+        nextPx,
+        shouldAnimateThumbnailStackShift(previousPx, nextPx),
+      );
+    }
+  };
+
+  // Coalesce to one apply per turn, but stay before paint so a finished exit's
+  // layout reflow and transform drop land in the same frame (no teleport flash).
+  const queueApply = () => {
+    if (microtaskQueued) return;
+    microtaskQueued = true;
+    queueMicrotask(() => {
+      microtaskQueued = false;
+      applyShifts();
+    });
+  };
+
+  const observer = new MutationObserver(queueApply);
+  observer.observe(stack, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["class"],
+  });
+
+  // Initial sync in case exits already started before the controller bound.
+  queueApply();
+
+  return () => {
+    observer.disconnect();
+    clearTimers();
+    for (const card of stack.querySelectorAll<HTMLElement>(":scope > .thumbnail-card")) {
+      card.classList.remove(STACK_SHIFTING_CLASS);
+      card.classList.remove(STACK_SHIFT_INSTANT_CLASS);
+      card.style.removeProperty(STACK_SHIFT_VAR);
+    }
+  };
 }

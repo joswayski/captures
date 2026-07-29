@@ -66,7 +66,10 @@ import {
   THUMBNAIL_DELETE_ORIGIN_Y,
   type ThumbnailDustParticle,
 } from "./lib/thumbnailExit";
-import { shouldScrollThumbnailStackToEnd } from "./lib/thumbnailLayout";
+import {
+  createThumbnailStackShiftController,
+  shouldScrollThumbnailStackToEnd,
+} from "./lib/thumbnailLayout";
 import { reconcileActiveViewer } from "./lib/viewerActivation";
 import type {
   ActiveSession,
@@ -95,7 +98,9 @@ import type {
 } from "./types";
 
 const currentWindow = isTauri() ? getCurrentWindow() : null;
-const THUMBNAIL_DISMISS_FALLBACK_MS = 900;
+// Slightly past dismiss hold (450ms fade + 580ms shared settle) so animationend
+// remains the primary completion path; fallback only covers missed events.
+const THUMBNAIL_DISMISS_FALLBACK_MS = 1_250;
 const THUMBNAIL_DELETE_FALLBACK_MS = 3_200;
 const THUMBNAIL_HIT_TEST_CHANGED_EVENT = "captures-thumbnail-hit-test-changed";
 const RECORDING_SELECTOR_REVEAL_FALLBACK_MS = 200;
@@ -3940,6 +3945,17 @@ export function Thumbnail() {
       cancelled = true;
     };
   }, [artifacts.length]);
+
+  const hasThumbnailCards = artifacts.length > 0;
+  useEffect(() => {
+    // Dust-delete and dismiss both hold layout; survivors above slide by N
+    // slots with the same ease. Pure CSS only moved one fixed step (or reflowed
+    // flex on dismiss), which jittered multi-exit batches.
+    if (!hasThumbnailCards) return;
+    const stack = stackRef.current;
+    if (!stack) return;
+    return createThumbnailStackShiftController(stack);
+  }, [hasThumbnailCards]);
 
   useEffect(() => {
     // Keep one native hover tracker for the lifetime of the thumbnail window.
