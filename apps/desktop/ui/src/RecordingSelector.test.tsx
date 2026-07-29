@@ -16,6 +16,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 const settings: AppSettings = {
+  theme: "mustard",
   output_directory: "/Users/josevalerio/Captures",
   new_capture_shortcut: "Ctrl+Shift+Space",
   region_shortcut: "Ctrl+Shift+4",

@@ -14,6 +14,8 @@ const CURRENT_SETTINGS_SCHEMA_VERSION: u8 = 1;
 pub struct AppSettings {
     #[serde(default)]
     pub settings_schema_version: u8,
+    #[serde(default)]
+    pub theme: ColorTheme,
     pub output_directory: String,
     #[serde(default = "default_new_capture_shortcut")]
     pub new_capture_shortcut: String,
@@ -29,6 +31,16 @@ pub struct AppSettings {
     pub pending_capture_after_restart: Option<CaptureMode>,
     #[serde(default)]
     pub recording: RecordingSettings,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ColorTheme {
+    #[default]
+    Mustard,
+    Saffron,
+    Cobalt,
+    Mint,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -91,6 +103,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             settings_schema_version: CURRENT_SETTINGS_SCHEMA_VERSION,
+            theme: ColorTheme::default(),
             output_directory: default_output_directory().to_string_lossy().into_owned(),
             new_capture_shortcut: default_new_capture_shortcut(),
             region_shortcut: "Ctrl+Shift+4".to_owned(),
@@ -597,8 +610,9 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        AppSettings, HistoryEntry, RecordingArtifact, migrate_output_directory, migrate_settings,
-        recording_media_url, recording_poster_url, recording_selection_url, snapshot_url,
+        AppSettings, ColorTheme, HistoryEntry, RecordingArtifact, migrate_output_directory,
+        migrate_settings, recording_media_url, recording_poster_url, recording_selection_url,
+        snapshot_url,
     };
 
     #[test]
@@ -656,6 +670,7 @@ mod tests {
         assert!(settings.last_screen_permission_request_id.is_none());
         assert!(settings.pending_capture_after_restart.is_none());
         assert!(settings.auto_copy_to_clipboard);
+        assert_eq!(settings.theme, ColorTheme::Mustard);
         assert_eq!(settings.new_capture_shortcut, "Ctrl+Shift+Space");
         assert_eq!(settings.recording.video_fps, 60);
         assert_eq!(
@@ -762,6 +777,20 @@ mod tests {
             serde_json::from_str(&json).expect("settings should deserialize");
 
         assert!(!restored.auto_copy_to_clipboard);
+    }
+
+    #[test]
+    fn persists_the_selected_color_theme() {
+        let settings = AppSettings {
+            theme: ColorTheme::Cobalt,
+            ..AppSettings::default()
+        };
+
+        let json = serde_json::to_string(&settings).expect("settings should serialize");
+        let restored: AppSettings =
+            serde_json::from_str(&json).expect("settings should deserialize");
+
+        assert_eq!(restored.theme, ColorTheme::Cobalt);
     }
 
     #[test]

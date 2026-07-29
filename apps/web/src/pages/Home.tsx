@@ -19,20 +19,25 @@ export default function Home() {
     <div className="flex min-h-dvh flex-col">
       <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-6 py-20 sm:py-24">
         <section className="py-8 sm:py-12">
-          <p className="inline-flex w-fit items-center gap-2 rounded-full border border-accent/15 bg-accent-soft px-2.5 py-1 text-xs font-medium text-accent">
+          <p className="inline-flex w-fit items-center gap-2 rounded-full border border-accent/20 bg-accent-soft px-2.5 py-1 text-xs font-medium text-accent-readable">
             <span className="h-1.5 w-1.5 rounded-full bg-accent" />
             Work in progress
           </p>
-          <h1 className="mt-4 text-4xl font-semibold tracking-tight text-ink sm:text-5xl">
-            Captures
-          </h1>
+          <div className="mt-4 flex items-center gap-3">
+            <span className="brand-symbol" aria-hidden="true">
+              <CaptureIcon className="h-6 w-6" />
+            </span>
+            <h1 className="text-4xl font-semibold tracking-tight text-ink sm:text-5xl">
+              Captures
+            </h1>
+          </div>
           <p className="mt-4 max-w-lg text-base leading-relaxed text-ink-muted">
             A cross-platform screen capture utility by{" "}
             <a
               href={X_URL}
               target="_blank"
               rel="noreferrer"
-              className="font-medium text-ink no-underline underline-offset-2 transition-colors duration-300 ease-out hover:text-accent hover:underline"
+              className="font-medium text-ink no-underline underline-offset-2 transition-colors duration-300 ease-out hover:text-accent-readable hover:underline"
             >
               Jose Valerio
             </a>
@@ -43,7 +48,7 @@ export default function Home() {
               href={REPO_URL}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex cursor-pointer items-center gap-2 rounded-md bg-ink px-4 py-2.5 text-sm font-medium text-white no-underline transition-colors duration-300 ease-out hover:bg-accent"
+              className="inline-flex cursor-pointer items-center gap-2 rounded-md bg-accent px-4 py-2.5 text-sm font-medium text-accent-ink no-underline transition-colors duration-300 ease-out hover:bg-accent-hover"
             >
               <GitHubIcon className="h-4 w-4" />
               View on GitHub
@@ -64,7 +69,7 @@ export default function Home() {
                   href={change.url}
                   target="_blank"
                   rel="noreferrer"
-                  className="font-medium leading-snug text-ink no-underline underline-offset-4 transition-colors duration-300 ease-out hover:text-accent hover:underline"
+                  className="font-medium leading-snug text-ink no-underline underline-offset-4 transition-colors duration-300 ease-out hover:text-accent-readable hover:underline"
                 >
                   {change.title}
                 </a>
@@ -103,6 +108,24 @@ function formatRelativeTime(date: string, now: number) {
   }
 
   return relativeTimeFormatter.format(0, "second");
+}
+
+function CaptureIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      aria-hidden="true"
+      className={className}
+    >
+      <path d="M9 4H6a2 2 0 0 0-2 2v3M15 4h3a2 2 0 0 1 2 2v3M20 15v3a2 2 0 0 1-2 2h-3M9 20H6a2 2 0 0 1-2-2v-3" />
+      <path
+        className="capture-icon-spark"
+        d="M12 8.8c.45 1.65 1.55 2.75 3.2 3.2-1.65.45-2.75 1.55-3.2 3.2-.45-1.65-1.55-2.75-3.2-3.2 1.65-.45 2.75-1.55 3.2-3.2Z"
+      />
+    </svg>
+  );
 }
 
 function GitHubIcon({ className }: { className?: string }) {
