@@ -560,8 +560,8 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .recording-selection-frame .ne, .recording-selection-frame .sw { cursor: nesw-resize; }
 .recording-selection-frame .nw { top: -6px; left: -6px; }.recording-selection-frame .ne { top: -6px; right: -6px; }.recording-selection-frame .sw { bottom: -6px; left: -6px; }.recording-selection-frame .se { right: -6px; bottom: -6px; }
 .recording-window-targets { position: absolute; z-index: 4; inset: 0; pointer-events: none; }
-.recording-window-target { position: absolute; overflow: visible; border: 0; border-radius: 12px; padding: 0; color: transparent; background: transparent; outline: none; appearance: none; cursor: pointer; pointer-events: auto; text-align: left; }
-.recording-window-target::before { position: absolute; inset: 1px; border: 1px solid transparent; border-radius: 11px; background: transparent; content: ""; pointer-events: none; transition: border-color .12s ease, background .12s ease, box-shadow .12s ease; }
+.recording-window-target { position: absolute; overflow: visible; border: 0; border-radius: 10px; padding: 0; color: transparent; background: transparent; outline: none; appearance: none; cursor: pointer; pointer-events: auto; text-align: left; }
+.recording-window-target::before { position: absolute; inset: 1px; border: 1px solid transparent; border-radius: 9px; background: transparent; content: ""; pointer-events: none; transition: border-color .12s ease, background .12s ease, box-shadow .12s ease; }
 .recording-window-target:hover, .recording-window-target.hovered, .recording-window-target.selected { color: white; }
 .recording-window-target:hover::before, .recording-window-target.hovered::before, .recording-window-target.selected::before { border-color: rgba(255,255,255,.92); background: rgba(255,255,255,.12); box-shadow: 0 0 0 1px rgba(255,255,255,.25); }
 .recording-window-target span { position: relative; z-index: 1; display: inline-block; max-width: calc(100% - 6px); margin: 4px; padding: 4px 7px; overflow: hidden; border-radius: 4px; background: transparent; opacity: 0; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }

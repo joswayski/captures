@@ -10,6 +10,8 @@ export interface SelectionRect {
   height: number;
 }
 
+export const WINDOW_CORNER_RADIUS = 10;
+
 export type SelectionDragMode = "create" | "move" | "nw" | "ne" | "sw" | "se";
 
 export function frontToBackWindows<T extends { z_order: number }>(windows: readonly T[]): T[] {
@@ -35,6 +37,32 @@ export function isCapturableSelection(
   rect: SelectionRect | null,
 ): rect is SelectionRect {
   return rect !== null && rect.width >= 2 && rect.height >= 2;
+}
+
+export function roundedRectPath(rect: SelectionRect, cornerRadius: number): string {
+  const left = rect.x;
+  const top = rect.y;
+  const right = rect.x + rect.width;
+  const bottom = rect.y + rect.height;
+  const radius = Math.max(
+    0,
+    Math.min(cornerRadius, rect.width / 2, rect.height / 2),
+  );
+  if (radius === 0) {
+    return `M${left} ${top}H${right}V${bottom}H${left}Z`;
+  }
+  return [
+    `M${left + radius} ${top}`,
+    `H${right - radius}`,
+    `A${radius} ${radius} 0 0 1 ${right} ${top + radius}`,
+    `V${bottom - radius}`,
+    `A${radius} ${radius} 0 0 1 ${right - radius} ${bottom}`,
+    `H${left + radius}`,
+    `A${radius} ${radius} 0 0 1 ${left} ${bottom - radius}`,
+    `V${top + radius}`,
+    `A${radius} ${radius} 0 0 1 ${left + radius} ${top}`,
+    "Z",
+  ].join("");
 }
 
 export function dragSelectionRect(
