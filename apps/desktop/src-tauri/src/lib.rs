@@ -3000,9 +3000,13 @@ fn crop_window_from_session(session: &CaptureSession, window_id: &str) -> Option
         height: f64::from(window.height),
     };
     let physical = rect.to_physical(scale, session.image.width(), session.image.height());
-    let mut image = session.view(physical)?;
+    let image = session.view(physical)?;
     #[cfg(target_os = "macos")]
-    mask_macos_window_corners(&mut image, window, &session.display, scale);
+    let image = {
+        let mut image = image;
+        mask_macos_window_corners(&mut image, window, &session.display, scale);
+        image
+    };
     Some(image)
 }
 
