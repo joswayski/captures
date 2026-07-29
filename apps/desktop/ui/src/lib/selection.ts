@@ -10,8 +10,6 @@ export interface SelectionRect {
   height: number;
 }
 
-export const WINDOW_CORNER_RADIUS = 10;
-
 export type SelectionDragMode = "create" | "move" | "nw" | "ne" | "sw" | "se";
 
 export function frontToBackWindows<T extends { z_order: number }>(windows: readonly T[]): T[] {

@@ -18,7 +18,7 @@ use objc2_app_kit::{
     NSApplication, NSCursor, NSEvent, NSPasteboard, NSSound, NSStatusWindowLevel, NSTrackingArea,
     NSTrackingAreaOptions, NSView, NSViewLayerContentsPlacement, NSWindow, NSWindowStyleMask,
 };
-use objc2_foundation::{NSObject, NSRect, NSSize, NSString};
+use objc2_foundation::{NSObject, NSProcessInfo, NSRect, NSSize, NSString};
 use tauri::WebviewWindow;
 use tauri_nspanel::WebviewWindowExt;
 
@@ -41,6 +41,10 @@ mod thumbnail_panel {
 }
 
 use thumbnail_panel::ThumbnailPanel;
+
+const LEGACY_WINDOW_CORNER_RADIUS_POINTS: f64 = 10.0;
+const LIQUID_GLASS_WINDOW_CORNER_RADIUS_POINTS: f64 = 25.0;
+const LIQUID_GLASS_MACOS_MAJOR_VERSION: isize = 26;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CursorMode {
@@ -297,10 +301,31 @@ fn anchor_layer_contents_to_bottom(view: &NSView) {
 
 /// Shows the preview without making Captures the active application.
 pub fn show_without_activating(window: &WebviewWindow) -> Result<(), &'static str> {
+    let _main_thread =
+        MainThreadMarker::new().ok_or("window reveal must run on the main thread")?;
     let native_window = native_window(window)?;
     native_window.setLevel(NSStatusWindowLevel);
     native_window.orderFrontRegardless();
     Ok(())
+}
+
+/// Returns the standard visible window-corner radius for the current macOS
+/// design generation.
+///
+/// macOS 26 enlarged standard window corners from 10 to 25 points. Capture
+/// selection and output masking use this value to follow the system window
+/// edge instead of applying one radius to every macOS release.
+pub fn standard_window_corner_radius_points() -> f64 {
+    let version = NSProcessInfo::processInfo().operatingSystemVersion();
+    window_corner_radius_for_major_version(version.majorVersion)
+}
+
+fn window_corner_radius_for_major_version(major_version: isize) -> f64 {
+    if major_version >= LIQUID_GLASS_MACOS_MAJOR_VERSION {
+        LIQUID_GLASS_WINDOW_CORNER_RADIUS_POINTS
+    } else {
+        LEGACY_WINDOW_CORNER_RADIUS_POINTS
+    }
 }
 
 /// Installs the capture overlay's native cursor tracker during app startup.
@@ -598,7 +623,7 @@ mod tests {
 
     use super::{
         CursorSurface, cursor_surface_can_apply, shortcut_modifiers_pressed,
-        should_reset_cursor_on_exit,
+        should_reset_cursor_on_exit, window_corner_radius_for_major_version,
     };
 
     #[test]
@@ -611,6 +636,13 @@ mod tests {
         ));
         assert!(!shortcut_modifiers_pressed(NSEventModifierFlags::CapsLock));
         assert!(!shortcut_modifiers_pressed(NSEventModifierFlags::empty()));
+    }
+
+    #[test]
+    fn uses_the_window_radius_for_each_macos_design_generation() {
+        assert_eq!(window_corner_radius_for_major_version(15), 10.0);
+        assert_eq!(window_corner_radius_for_major_version(26), 25.0);
+        assert_eq!(window_corner_radius_for_major_version(27), 25.0);
     }
 
     #[test]

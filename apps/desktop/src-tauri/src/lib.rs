@@ -89,8 +89,6 @@ const RECORDING_EDITOR_WINDOW_PREFIX: &str = "recording-editor-";
 const RECORDING_SAVED_NOTICE_PREFIX: &str = "recording-saved-";
 const RECORDING_CONTROLS_HIDDEN_NOTICE_PREFIX: &str = "recording-controls-hidden-";
 #[cfg(any(target_os = "macos", test))]
-const MACOS_WINDOW_CORNER_RADIUS_POINTS: f64 = 10.0;
-#[cfg(any(target_os = "macos", test))]
 const WINDOW_CORNER_MASK_SAMPLES_PER_AXIS: u32 = 4;
 
 struct ClipboardWrite {
@@ -433,6 +431,7 @@ async fn prepare_capture(
         id: id.to_string(),
         mode,
         window_coordinate_scale: window_coordinate_scale(&session.display),
+        window_corner_radius: window_corner_radius_points(),
         display: session.display.clone(),
         snapshot_url: models::snapshot_url(&id.to_string()),
         windows: session.windows.clone(),
@@ -538,6 +537,7 @@ fn get_active_session(
         id: session.id.to_string(),
         mode: session.mode,
         window_coordinate_scale: window_coordinate_scale(&session.display),
+        window_corner_radius: window_corner_radius_points(),
         display: session.display.clone(),
         snapshot_url: models::snapshot_url(&session.id.to_string()),
         windows: session.windows.clone(),
@@ -555,6 +555,7 @@ fn get_pending_session(state: tauri::State<'_, Arc<AppState>>) -> Option<ActiveS
             id: session.id.to_string(),
             mode: session.mode,
             window_coordinate_scale: window_coordinate_scale(&session.display),
+            window_corner_radius: window_corner_radius_points(),
             display: session.display.clone(),
             snapshot_url: models::snapshot_url(&session.id.to_string()),
             windows: session.windows.clone(),
@@ -1788,6 +1789,17 @@ fn window_coordinate_scale(display: &captures_capture::DisplayDescriptor) -> f64
     }
 }
 
+fn window_corner_radius_points() -> f64 {
+    #[cfg(target_os = "macos")]
+    {
+        captures_macos_window::standard_window_corner_radius_points()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        0.0
+    }
+}
+
 fn register_shortcuts(app: &AppHandle) -> Result<(), AppError> {
     let settings = app.state::<Arc<AppState>>().settings();
     register_shortcuts_with(app, &settings)
@@ -3004,7 +3016,13 @@ fn crop_window_from_session(session: &CaptureSession, window_id: &str) -> Option
     #[cfg(target_os = "macos")]
     let image = {
         let mut image = image;
-        mask_macos_window_corners(&mut image, window, &session.display, scale);
+        mask_macos_window_corners(
+            &mut image,
+            window,
+            &session.display,
+            scale,
+            window_corner_radius_points(),
+        );
         image
     };
     Some(image)
@@ -3016,6 +3034,7 @@ fn mask_macos_window_corners(
     window: &captures_capture::WindowDescriptor,
     display: &captures_capture::DisplayDescriptor,
     scale: f64,
+    corner_radius_points: f64,
 ) {
     let window_left = i64::from(window.x);
     let window_top = i64::from(window.y);
@@ -3039,7 +3058,7 @@ fn mask_macos_window_corners(
     let scale = scale.max(1.0);
     let full_width = f64::from(window.width) * scale;
     let full_height = f64::from(window.height) * scale;
-    let radius = (MACOS_WINDOW_CORNER_RADIUS_POINTS * scale)
+    let radius = (corner_radius_points * scale)
         .min(full_width / 2.0)
         .min(full_height / 2.0);
     if radius <= 0.0 {
@@ -3250,7 +3269,7 @@ mod tests {
         };
         let mut image = RgbaImage::from_pixel(100, 80, Rgba([12, 34, 56, 255]));
 
-        mask_macos_window_corners(&mut image, &window, &display, 2.0);
+        mask_macos_window_corners(&mut image, &window, &display, 2.0, 10.0);
 
         assert_eq!(image.get_pixel(0, 0).0, [0, 0, 0, 0]);
         assert_eq!(image.get_pixel(99, 0).0, [0, 0, 0, 0]);
@@ -3291,7 +3310,7 @@ mod tests {
         };
         let mut clipped = RgbaImage::from_pixel(76, 80, Rgba([12, 34, 56, 255]));
 
-        mask_macos_window_corners(&mut clipped, &window, &display, 2.0);
+        mask_macos_window_corners(&mut clipped, &window, &display, 2.0, 10.0);
 
         assert_eq!(clipped.get_pixel(0, 0).0[3], 255);
         assert_eq!(clipped.get_pixel(75, 0).0[3], 0);
@@ -3302,7 +3321,7 @@ mod tests {
         window.height = display.height;
         let mut fullscreen = RgbaImage::from_pixel(200, 200, Rgba([12, 34, 56, 255]));
 
-        mask_macos_window_corners(&mut fullscreen, &window, &display, 2.0);
+        mask_macos_window_corners(&mut fullscreen, &window, &display, 2.0, 10.0);
 
         assert_eq!(fullscreen.get_pixel(0, 0).0[3], 255);
         assert_eq!(fullscreen.get_pixel(199, 199).0[3], 255);

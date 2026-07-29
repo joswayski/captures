@@ -284,6 +284,7 @@ pub(crate) async fn prepare_capture_selector_inner(
             )),
             recording_capabilities: RecordingCapabilities::current(),
             window_coordinate_scale: crate::window_coordinate_scale(&frame.descriptor),
+            window_corner_radius: crate::window_corner_radius_points(),
             display: frame.descriptor,
             snapshot_url: recording_selection_url(&id),
             windows,
@@ -822,7 +823,7 @@ async fn start_segment(
         }
     }
     destroy_recording_countdown(&app);
-    show_recording_hud(&app)?;
+    show_recording_hud(&app).await?;
     schedule_segment_monitor(app, state, session_id.to_owned(), generation);
     Ok(())
 }
@@ -2947,18 +2948,32 @@ pub fn hide_recording_hud(
     Ok(())
 }
 
-fn show_recording_hud(app: &AppHandle) -> Result<(), AppError> {
-    crate::hide_recording_controls_hidden_notices(app);
-    let window = app
-        .get_webview_window("recording-hud")
-        .ok_or_else(|| AppError::Task("recording controls are unavailable".to_owned()))?;
-    window.set_content_protected(recording_overlay_content_protected())?;
-    #[cfg(target_os = "macos")]
-    captures_macos_window::show_without_activating(&window)
-        .map_err(|error| AppError::Task(error.to_owned()))?;
-    #[cfg(not(target_os = "macos"))]
-    window.show()?;
-    Ok(())
+async fn show_recording_hud(app: &AppHandle) -> Result<(), AppError> {
+    let handle = app.clone();
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    // The countdown completes on a Tokio worker. Revealing the native panel
+    // orders an NSWindow and therefore must run on AppKit's main thread.
+    app.run_on_main_thread(move || {
+        let result = (|| -> Result<(), String> {
+            crate::hide_recording_controls_hidden_notices(&handle);
+            let window = handle
+                .get_webview_window("recording-hud")
+                .ok_or_else(|| "recording controls are unavailable".to_owned())?;
+            window
+                .set_content_protected(recording_overlay_content_protected())
+                .map_err(|error| error.to_string())?;
+            #[cfg(target_os = "macos")]
+            captures_macos_window::show_without_activating(&window).map_err(str::to_owned)?;
+            #[cfg(not(target_os = "macos"))]
+            window.show().map_err(|error| error.to_string())?;
+            Ok(())
+        })();
+        let _ = sender.send(result);
+    })?;
+    receiver
+        .await
+        .map_err(|_| AppError::Task("recording controls reveal was interrupted".to_owned()))?
+        .map_err(AppError::Task)
 }
 
 fn show_recording_countdown(app: &AppHandle, display: &DisplayDescriptor) -> Result<(), AppError> {
