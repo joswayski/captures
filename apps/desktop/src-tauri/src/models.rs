@@ -122,13 +122,27 @@ pub struct RecordingCapabilities {
 }
 
 impl RecordingCapabilities {
-    pub const fn current() -> Self {
-        Self {
-            system_audio: cfg!(target_os = "macos"),
-            microphone: cfg!(target_os = "macos"),
-            cursor_control: cfg!(target_os = "macos"),
-            click_highlights: cfg!(target_os = "macos"),
-            controls_excluded: cfg!(any(target_os = "macos", target_os = "windows")),
+    pub fn current() -> Self {
+        #[cfg(target_os = "macos")]
+        {
+            Self {
+                system_audio: true,
+                microphone: true,
+                cursor_control: true,
+                click_highlights: true,
+                controls_excluded: true,
+            }
+        }
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        {
+            let pointer_features = captures_recording_xcap::pointer_features_available();
+            Self {
+                system_audio: true,
+                microphone: !captures_recording_xcap::microphone_devices().is_empty(),
+                cursor_control: pointer_features,
+                click_highlights: pointer_features,
+                controls_excluded: cfg!(target_os = "windows"),
+            }
         }
     }
 }

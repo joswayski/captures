@@ -10,7 +10,8 @@ macOS is the primary development target today. Windows and Linux builds are avai
 
 - Capture a region, window, or full display.
 - Record a region, window area, or display on macOS 13+, Windows 11, and Linux, then trim, crop, resize, and save it as H.264 video or an optimized GIF.
-- On macOS, record desktop audio and a selected microphone independently, with pause, resume, restart, mute, interruption recovery, and hideable recording controls. macOS 15+ can also show click highlights.
+- For video, record desktop audio and a selected microphone independently, with pause, resume, restart, mute, interruption recovery, and hideable recording controls.
+- Include the pointer and animated click highlights on macOS 15+, Windows, and Linux X11.
 - Take a lossless region, window, or display screenshot while a recording continues.
 - Capture user-facing Captures windows such as Preferences, Capture History, previews, and editors; capture controls stay out of the result.
 - Review recordings on an aspect-correct filmstrip timeline, adjust crop and audio, then save changes to the original or make a named copy, with preserved quality, optional compression, or an exact maximum file size.
@@ -25,8 +26,8 @@ macOS is the primary development target today. Windows and Linux builds are avai
 
 The roadmap is still taking shape. Likely additions include:
 
-- Hardware-accelerated encoding, audio capture, cursor control, and click-highlight parity for the Windows and Linux recording backends.
-- Native Wayland window targeting and reliable exclusion of Captures controls from Linux recordings.
+- Hardware-accelerated encoding for the Windows and Linux recording backends.
+- Native Wayland window targeting, pointer and click-highlight support, and reliable exclusion of Captures controls from Linux recordings.
 - Editable click highlights and keystroke overlays after recording.
 - Screenshot markup and editing.
 - Optional compressed screenshot formats and quality controls; lossless PNG remains the default.
@@ -46,16 +47,20 @@ These are directions, not promised release dates or a fixed order.
 | Platform | Status |
 | --- | --- |
 | macOS 13+ | Screenshots and H.264/AAC or GIF recording; primary development target |
-| Windows 11 | Experimental screenshots and silent H.264 or GIF recording for regions, fixed window areas, and displays |
-| Linux X11 | Experimental screenshots and silent H.264 or GIF recording for regions, fixed window areas, and displays |
-| Linux Wayland | Partial screenshots and experimental silent display/region recording through the desktop portal; window targeting remains limited to XWayland |
+| Windows 11 | Experimental screenshots and recording; video supports desktop/microphone audio, and video/GIF output supports cursor capture and click highlights |
+| Linux X11 | Experimental screenshots and recording; video supports desktop/microphone audio, and video/GIF output supports cursor capture and click highlights |
+| Linux Wayland | Partial screenshots and experimental display/region recording; video supports desktop/microphone audio, while window targeting and pointer features remain unavailable |
 
-The Windows and Linux recorder currently uses a portable CPU H.264 encoder and
-caps output at 4K. Desktop audio, microphone audio, click highlights, and
-cursor capture are macOS-only for now. Windows excludes the
-recording controls from captured output; on Linux, hide the controls before
+The Windows and Linux recorders currently use a portable CPU H.264 encoder and
+cap output at 4K; they do not yet provide ShadowPlay-style GPU encoding.
+Windows captures desktop audio through WASAPI and Linux through PipeWire, while
+both platforms expose available microphones in the recording selector. Cursor
+capture and click highlights work on Windows and Linux X11. Windows excludes
+the recording controls from captured output; on Linux, hide the controls before
 recording content underneath them. Wayland asks for a screen again through the
-system portal, so choose the same display selected in Captures.
+system portal, so choose the same display selected in Captures. Wayland
+compositors do not expose the global pointer and button state this implementation
+needs, so cursor control and click highlights are disabled there.
 
 ## Releases
 
@@ -81,6 +86,9 @@ You will need Rust 1.94 with `rustfmt` and `clippy`, Node.js 24, and npm 11.
 macOS builds currently require the macOS 26 SDK for the pinned ScreenCaptureKit bindings; the app's deployment target remains macOS 13.
 Windows development also requires the Visual Studio C++ build tools, a Windows
 11 SDK, and an MSYS2/MinGW build environment for the bundled media sidecars.
+Linux development requires PipeWire and ALSA development packages. On
+Debian/Ubuntu, install `libpipewire-0.3-dev`, `libspa-0.2-dev`, and
+`libasound2-dev`.
 
 ```sh
 npm install
@@ -134,11 +142,14 @@ can replace it; an installed copy elsewhere is not stopped.
 
 On macOS, recording uses ScreenCaptureKit and Apple's hardware-aware
 VideoToolbox H.264 path. Windows and Linux use the operating system capture APIs
-exposed by `xcap`, followed by Captures' in-process OpenH264 CPU encoder. FFmpeg
-is not the live recorder: separately bundled FFmpeg command-line sidecars
-finalize segments and handle editing and GIF conversion on every platform. The
-sidecars are built without GPL, nonfree, or libx264 components. Build,
-source-distribution, and license details live in
+exposed by `xcap`, followed by Captures' in-process OpenH264 CPU encoder.
+Windows desktop audio uses WASAPI loopback, Linux desktop audio uses PipeWire,
+and microphone input uses the platform audio device exposed through CPAL.
+FFmpeg is not the live recorder: separately bundled FFmpeg command-line
+sidecars synchronize and mux the Windows/Linux video and audio segments, then
+handle editing and GIF conversion on every platform. The sidecars are built
+without GPL, nonfree, or libx264 components. Build, source-distribution, and
+license details live in
 [docs/media-sidecars.md](docs/media-sidecars.md).
 
 ## Privacy

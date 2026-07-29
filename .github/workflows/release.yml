@@ -74,6 +74,7 @@ jobs:
             curl \
             file \
             libayatana-appindicator3-dev \
+            libasound2-dev \
             libclang-dev \
             libdbus-1-dev \
             libegl-dev \
@@ -216,6 +217,7 @@ jobs:
             curl \
             file \
             libayatana-appindicator3-dev \
+            libasound2-dev \
             libclang-dev \
             libdbus-1-dev \
             libegl-dev \

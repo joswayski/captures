@@ -5,6 +5,9 @@ programs for recording finalization, editing, GIF conversion, and
 file-size-targeted exports. FFmpeg is not the live capture backend. macOS
 capture and H.264/AAC recording use Apple frameworks; Windows and Linux capture
 uses `xcap` and the initial H.264/MP4 is encoded in-process with OpenH264.
+Windows and Linux audio is captured into recoverable WAV sidecars during the
+live session; FFmpeg synchronizes and muxes those tracks when it finalizes the
+recording.
 
 The macOS, Windows, and Linux sidecars are built from the source version and
 SHA-256 pinned in `scripts/build-ffmpeg-sidecars.sh`. Every platform

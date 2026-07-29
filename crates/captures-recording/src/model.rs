@@ -224,6 +224,9 @@ pub struct RecordingSessionSnapshot {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RecordingSegmentInfo {
     pub path: PathBuf,
+    pub system_audio_path: Option<PathBuf>,
+    pub system_audio_offset_ms: i64,
+    pub system_audio_warning: Option<String>,
     pub microphone_path: Option<PathBuf>,
     pub microphone_offset_ms: i64,
     pub microphone_warning: Option<String>,

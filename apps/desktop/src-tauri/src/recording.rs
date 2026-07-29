@@ -425,9 +425,9 @@ pub fn list_recording_audio_devices() -> Vec<captures_recording::AudioDevice> {
     {
         captures_recording_macos::microphone_devices()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     {
-        Vec::new()
+        captures_recording_xcap::microphone_devices()
     }
 }
 
@@ -721,6 +721,9 @@ async fn start_segment(
                 .snapshot(now)
                 .is_some_and(|snapshot| snapshot.state == RecordingState::Countdown);
             let dimensions = segment.as_ref().map(NativeRecordingSegment::dimensions);
+            let system_audio_draft = segment
+                .as_ref()
+                .and_then(NativeRecordingSegment::system_audio_draft_info);
             let microphone_draft = segment
                 .as_ref()
                 .and_then(NativeRecordingSegment::microphone_draft_info);
@@ -741,6 +744,21 @@ async fn start_segment(
                 })?
                 .to_string_lossy()
                 .into_owned();
+            let (system_audio_relative_path, system_audio_offset_ms) = system_audio_draft
+                .map(|(system_audio_path, offset_ms)| {
+                    let relative_path = system_audio_path
+                        .strip_prefix(&session.directory)
+                        .map_err(|_| {
+                            AppError::Task(
+                                "desktop audio segment escaped its recovery bundle".to_owned(),
+                            )
+                        })?
+                        .to_string_lossy()
+                        .into_owned();
+                    Ok::<_, AppError>((Some(relative_path), offset_ms))
+                })
+                .transpose()?
+                .unwrap_or((None, 0));
             let (microphone_relative_path, microphone_offset_ms) = microphone_draft
                 .map(|(microphone_path, offset_ms)| {
                     let relative_path = microphone_path
@@ -762,6 +780,9 @@ async fn start_segment(
             session.manifest.segments.push(RecordingSegmentManifest {
                 index,
                 relative_path,
+                system_audio_relative_path,
+                system_audio_offset_ms,
+                system_audio_warning: None,
                 microphone_relative_path,
                 microphone_offset_ms,
                 microphone_warning: None,
@@ -983,10 +1004,15 @@ async fn restart_recording_inner(
             .drain(..)
             .flat_map(|segment| {
                 let video = session.directory.join(segment.relative_path);
+                let system_audio = segment
+                    .system_audio_relative_path
+                    .map(|path| session.directory.join(path));
                 let microphone = segment
                     .microphone_relative_path
                     .map(|path| session.directory.join(path));
-                [Some(video), microphone].into_iter().flatten()
+                [Some(video), system_audio, microphone]
+                    .into_iter()
+                    .flatten()
             })
             .collect::<Vec<_>>();
         session.manifest.state = RecordingState::Countdown;
@@ -1107,6 +1133,11 @@ async fn stop_recording_inner(
                 .iter()
                 .map(|segment| RecordingSegmentInput {
                     video_path: session.directory.join(&segment.relative_path),
+                    system_audio_path: segment
+                        .system_audio_relative_path
+                        .as_ref()
+                        .map(|path| session.directory.join(path)),
+                    system_audio_offset_ms: segment.system_audio_offset_ms,
                     microphone_path: segment
                         .microphone_relative_path
                         .as_ref()
@@ -1888,8 +1919,16 @@ async fn recover_recording_draft_inner(
                 .map(|relative| recovery_child_path(&task_directory, relative))
                 .transpose()?
                 .filter(|path| path.is_file());
+            let system_audio_path = segment
+                .system_audio_relative_path
+                .as_deref()
+                .map(|relative| recovery_child_path(&task_directory, relative))
+                .transpose()?
+                .filter(|path| path.is_file());
             segments.push(RecordingSegmentInput {
                 video_path,
+                system_audio_path,
+                system_audio_offset_ms: segment.system_audio_offset_ms,
                 microphone_path,
                 microphone_offset_ms: segment.microphone_offset_ms,
                 duration_ms: segment.duration_ms,
@@ -2292,10 +2331,24 @@ fn append_segment(
                 })
         })
         .transpose()?;
+    let system_audio_relative_path = info
+        .system_audio_path
+        .as_ref()
+        .map(|path| {
+            path.strip_prefix(&session.directory)
+                .map(|relative| relative.to_string_lossy().into_owned())
+                .map_err(|_| {
+                    AppError::Task("desktop audio segment escaped its recovery bundle".to_owned())
+                })
+        })
+        .transpose()?;
     let segment = RecordingSegmentManifest {
         index: u32::try_from(session.manifest.segments.len())
             .map_err(|_| AppError::Task("recording has too many segments".to_owned()))?,
         relative_path,
+        system_audio_relative_path,
+        system_audio_offset_ms: info.system_audio_offset_ms,
+        system_audio_warning: info.system_audio_warning,
         microphone_relative_path,
         microphone_offset_ms: info.microphone_offset_ms,
         microphone_warning: info.microphone_warning,

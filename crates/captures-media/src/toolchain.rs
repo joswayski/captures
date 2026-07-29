@@ -54,6 +54,8 @@ pub struct ExportOutcome {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RecordingSegmentInput {
     pub video_path: PathBuf,
+    pub system_audio_path: Option<PathBuf>,
+    pub system_audio_offset_ms: i64,
     pub microphone_path: Option<PathBuf>,
     pub microphone_offset_ms: i64,
     pub duration_ms: u64,
@@ -247,7 +249,18 @@ impl MediaToolchain {
         if segments.is_empty() {
             return Err(MediaToolError::IncompleteMetadata);
         }
-        if !audio.microphone_audio {
+        let has_external_system_audio = segments
+            .iter()
+            .any(|segment| segment.system_audio_path.is_some());
+        let has_missing_system_audio = if audio.system_audio && !has_external_system_audio {
+            segments.iter().try_fold(false, |missing, segment| {
+                self.probe(&segment.video_path)
+                    .map(|probe| missing || !probe.has_audio)
+            })?
+        } else {
+            false
+        };
+        if !audio.microphone_audio && !has_external_system_audio && !has_missing_system_audio {
             let paths = segments
                 .iter()
                 .map(|segment| segment.video_path.clone())
@@ -279,46 +292,73 @@ impl MediaToolchain {
         audio: RecordingAudioLayout,
         cancel: &CancelToken,
     ) -> Result<(), MediaToolError> {
-        let system_stream_available =
+        let embedded_system_audio =
             audio.system_audio && self.probe(&segment.video_path)?.has_audio;
         let mut command = Command::new(&self.ffmpeg);
         command.args(["-hide_banner", "-loglevel", "error", "-y", "-i"]);
         command.arg(&segment.video_path);
-        if let Some(microphone_path) = &segment.microphone_path {
+        let mut next_input = 1_usize;
+        let system_audio_input = segment.system_audio_path.as_ref().map(|system_audio_path| {
+            command.arg("-i").arg(system_audio_path);
+            let input = next_input;
+            next_input += 1;
+            input
+        });
+        let microphone_input = segment.microphone_path.as_ref().map(|microphone_path| {
             command.arg("-i").arg(microphone_path);
-        }
+            next_input
+        });
 
         let duration = seconds(segment.duration_ms.max(1));
         let mut filters = Vec::new();
         let mut audio_labels = Vec::new();
+        let independent_tracks = audio.system_audio && audio.microphone_audio;
+        let system_output = if independent_tracks {
+            "[system-source]"
+        } else {
+            "[system]"
+        };
+        let microphone_output = if independent_tracks {
+            "[microphone-source]"
+        } else {
+            "[microphone]"
+        };
         if audio.system_audio {
-            if system_stream_available {
+            if let Some(input) = system_audio_input {
+                let delay = segment.system_audio_offset_ms.max(0);
                 filters.push(format!(
-                    "[0:a:0]aresample=48000:async=1:first_pts=0,apad,atrim=duration={duration}[system]"
+                    "[{input}:a:0]adelay={delay}:all=1,aresample=48000:async=1:first_pts=0,apad,atrim=duration={duration}{system_output}"
+                ));
+            } else if embedded_system_audio {
+                filters.push(format!(
+                    "[0:a:0]aresample=48000:async=1:first_pts=0,apad,atrim=duration={duration}{system_output}"
                 ));
             } else {
                 filters.push(format!(
-                    "anullsrc=r=48000:cl=stereo,atrim=duration={duration}[system]"
+                    "anullsrc=r=48000:cl=stereo,atrim=duration={duration}{system_output}"
                 ));
             }
             audio_labels.push(("[system]", "System Audio"));
         }
-        if segment.microphone_path.is_some() {
-            let delay = segment.microphone_offset_ms.max(0);
-            filters.push(format!(
-                "[1:a:0]adelay={delay}:all=1,aresample=48000:async=1:first_pts=0,apad,atrim=duration={duration}[microphone]"
-            ));
-        } else {
-            filters.push(format!(
-                "anullsrc=r=48000:cl=stereo,atrim=duration={duration}[microphone]"
-            ));
+        if audio.microphone_audio {
+            if let Some(input) = microphone_input {
+                let delay = segment.microphone_offset_ms.max(0);
+                filters.push(format!(
+                    "[{input}:a:0]adelay={delay}:all=1,aresample=48000:async=1:first_pts=0,apad,atrim=duration={duration}{microphone_output}"
+                ));
+            } else {
+                filters.push(format!(
+                    "anullsrc=r=48000:cl=stereo,atrim=duration={duration}{microphone_output}"
+                ));
+            }
+            audio_labels.push(("[microphone]", "Microphone"));
         }
-        audio_labels.push(("[microphone]", "Microphone"));
 
-        if audio.system_audio {
+        if independent_tracks {
+            filters.push("[system-source]asplit=2[system-playback][system]".to_owned());
+            filters.push("[microphone-source]asplit=2[microphone-playback][microphone]".to_owned());
             filters.push(
-                "[system][microphone]amix=inputs=2:normalize=0:dropout_transition=0[playback]"
-                    .to_owned(),
+                "[system-playback][microphone-playback]amix=inputs=2:normalize=0:dropout_transition=0[playback]".to_owned(),
             );
             audio_labels.insert(0, ("[playback]", "System Audio + Microphone"));
         }
@@ -1435,6 +1475,8 @@ mod tests {
         escape_concat_path, export_attempts, fit_even, gif_export_filter, gif_filter, seconds,
         validate_edit_spec, visual_edit_is_identity,
     };
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    use super::{RecordingAudioLayout, RecordingSegmentInput};
     use crate::{
         AudioEdit, CropRect, EditSpec, ExportFormat, ExportSpec, MediaKind, MediaMetadata,
         QualityPreset, toolchain::ProbeResult,
@@ -1948,7 +1990,7 @@ mod tests {
 
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     #[test]
-    fn cross_platform_visual_edits_encode_h264_and_keep_audio() {
+    fn cross_platform_media_pipeline_encodes_and_muxes_audio_tracks() {
         let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
             .canonicalize()
@@ -2019,7 +2061,7 @@ mod tests {
             ..EditSpec::default()
         };
         edit.audio.source_has_system_audio = true;
-        let toolchain = MediaToolchain::new(ffmpeg, ffprobe.clone());
+        let toolchain = MediaToolchain::new(ffmpeg.clone(), ffprobe.clone());
         toolchain
             .export(
                 &source,
@@ -2056,5 +2098,56 @@ mod tests {
             .expect("codec probe");
         assert!(codec.status.success());
         assert_eq!(String::from_utf8_lossy(&codec.stdout).trim(), "h264");
+
+        let system_audio = directory.path().join("system.wav");
+        let microphone = directory.path().join("microphone.wav");
+        for (path, frequency) in [(&system_audio, 440), (&microphone, 880)] {
+            let source = format!("sine=frequency={frequency}:sample_rate=48000");
+            let status = std::process::Command::new(&ffmpeg)
+                .args([
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    &source,
+                    "-t",
+                    "1",
+                    "-c:a",
+                    "pcm_f32le",
+                ])
+                .arg(path)
+                .status()
+                .expect("audio fixture generated");
+            assert!(status.success());
+        }
+        let assembled = directory.path().join("assembled.mp4");
+        toolchain
+            .assemble_recording_segments(
+                &[RecordingSegmentInput {
+                    video_path: source,
+                    system_audio_path: Some(system_audio),
+                    system_audio_offset_ms: 0,
+                    microphone_path: Some(microphone),
+                    microphone_offset_ms: 0,
+                    duration_ms: 1_000,
+                }],
+                &assembled,
+                RecordingAudioLayout {
+                    system_audio: true,
+                    microphone_audio: true,
+                },
+                &CancelToken::default(),
+            )
+            .expect("independent audio tracks assembled");
+        assert_eq!(
+            toolchain
+                .probe(&assembled)
+                .expect("assembled recording probe")
+                .audio_stream_count,
+            3
+        );
     }
 }

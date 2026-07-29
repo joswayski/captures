@@ -18,7 +18,12 @@ use parking_lot::Mutex;
 use thiserror::Error;
 use xcap::{Frame, Monitor, VideoRecorder};
 
-use crate::transform::{FrameRect, FrameTransform};
+use crate::{
+    audio::AudioSegment,
+    overlay::{PointerLayout, PointerOverlay},
+    pointer::{PointerSource, pointer_features_available},
+    transform::{FrameRect, FrameTransform},
+};
 
 const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(3);
 const CONTROL_POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -29,12 +34,10 @@ pub enum XcapRecordingError {
     TargetUnavailable,
     #[error("the selected recording target is outside its display")]
     InvalidTarget,
-    #[error(
-        "desktop audio and microphone recording are not available in the Windows/Linux recorder yet"
-    )]
-    AudioUnavailable,
-    #[error("click highlights are currently available on macOS only")]
-    ClickHighlightsUnavailable,
+    #[error("audio capture failed: {0}")]
+    Audio(String),
+    #[error("cursor and click capture are unavailable in this desktop session")]
+    PointerUnavailable,
     #[error("the screen recorder did not deliver a usable frame")]
     FirstFrameUnavailable,
     #[error("screen capture failed: {0}")]
@@ -54,6 +57,14 @@ struct WorkerOutcome {
     dropped_frames: u64,
 }
 
+struct EncoderContext {
+    transform: FrameTransform,
+    frame_rate: u16,
+    writer: H264Mp4Writer,
+    started_at: Instant,
+    pointer_overlay: Option<PointerOverlay>,
+}
+
 pub struct XcapRecordingSegment {
     recorder: VideoRecorder,
     stop_requested: Arc<AtomicBool>,
@@ -63,6 +74,8 @@ pub struct XcapRecordingSegment {
     width: u32,
     height: u32,
     warning: Arc<Mutex<Option<String>>>,
+    system_audio: Option<AudioSegment>,
+    microphone: Option<AudioSegment>,
 }
 
 impl XcapRecordingSegment {
@@ -74,11 +87,8 @@ impl XcapRecordingSegment {
         options
             .validate()
             .map_err(|error| XcapRecordingError::Worker(error.to_owned()))?;
-        if options.audio.capture_system_audio || options.audio.microphone_device_id.is_some() {
-            return Err(XcapRecordingError::AudioUnavailable);
-        }
-        if options.highlight_clicks {
-            return Err(XcapRecordingError::ClickHighlightsUnavailable);
+        if (options.show_cursor || options.highlight_clicks) && !pointer_features_available() {
+            return Err(XcapRecordingError::PointerUnavailable);
         }
         if let Some(parent) = output_path.parent() {
             fs::create_dir_all(parent)?;
@@ -152,6 +162,18 @@ impl XcapRecordingSegment {
         let warning = Arc::new(Mutex::new(None));
         let latest_frame = Arc::new(Mutex::new(Some(first_image)));
         let dropped_frames = Arc::new(AtomicU64::new(0));
+        let pointer_scale = if cfg!(target_os = "linux") {
+            display.scale_factor
+        } else {
+            1.0
+        };
+        let pointer_overlay = (options.show_cursor || options.highlight_clicks).then(|| {
+            PointerOverlay::new(
+                PointerLayout::new(display.x, display.y, source, width, height, pointer_scale),
+                options.show_cursor,
+                options.highlight_clicks,
+            )
+        });
         let capture_worker = {
             let stop_requested = stop_requested.clone();
             let warning = warning.clone();
@@ -177,6 +199,7 @@ impl XcapRecordingSegment {
             }
         };
         let frame_rate = options.frames_per_second;
+        let video_started_at = Instant::now();
         let encoder_worker = {
             let encoder_stop = stop_requested.clone();
             let latest_frame = latest_frame.clone();
@@ -186,9 +209,13 @@ impl XcapRecordingSegment {
                 .spawn(move || {
                     record_frames(
                         &latest_frame,
-                        transform,
-                        frame_rate,
-                        writer,
+                        EncoderContext {
+                            transform,
+                            frame_rate,
+                            writer,
+                            started_at: video_started_at,
+                            pointer_overlay,
+                        },
                         &dropped_frames,
                         &encoder_stop,
                     )
@@ -203,6 +230,41 @@ impl XcapRecordingSegment {
                 }
             }
         };
+        let mut system_audio = None;
+        if options.audio.capture_system_audio {
+            let path = system_audio_path(&output_path);
+            match AudioSegment::start_system(&path, video_started_at) {
+                Ok(segment) => system_audio = Some(segment),
+                Err(error) => {
+                    let _ = recorder.stop();
+                    stop_requested.store(true, Ordering::Release);
+                    let _ = capture_worker.join();
+                    let _ = encoder_worker.join();
+                    let _ = fs::remove_file(&output_path);
+                    return Err(error);
+                }
+            }
+        }
+        let mut microphone = None;
+        if !options.audio.microphone_muted
+            && let Some(device_id) = options.audio.microphone_device_id.as_deref()
+        {
+            let path = microphone_path(&output_path);
+            match AudioSegment::start_microphone(device_id, &path, video_started_at) {
+                Ok(segment) => microphone = Some(segment),
+                Err(error) => {
+                    let _ = recorder.stop();
+                    stop_requested.store(true, Ordering::Release);
+                    let _ = capture_worker.join();
+                    let _ = encoder_worker.join();
+                    if let Some(system_audio) = system_audio {
+                        let _ = system_audio.discard();
+                    }
+                    let _ = fs::remove_file(&output_path);
+                    return Err(error);
+                }
+            }
+        }
 
         Ok(Self {
             recorder,
@@ -213,6 +275,8 @@ impl XcapRecordingSegment {
             width,
             height,
             warning,
+            system_audio,
+            microphone,
         })
     }
 
@@ -226,17 +290,24 @@ impl XcapRecordingSegment {
             .stop()
             .map_err(|error| XcapRecordingError::Capture(error.to_string()));
         self.stop_requested.store(true, Ordering::Release);
+        let system_audio_result = self.system_audio.take().map(AudioSegment::stop).transpose();
+        let microphone_result = self.microphone.take().map(AudioSegment::stop).transpose();
         let capture_result = self.join_capture_worker();
         let encoder_result = self.join_encoder_worker();
         capture_result?;
         let outcome = encoder_result?;
         recorder_result?;
+        let system_audio = system_audio_result?;
+        let microphone = microphone_result?;
         let size_bytes = fs::metadata(&self.output_path)?.len();
         Ok(RecordingSegmentInfo {
             path: self.output_path,
-            microphone_path: None,
-            microphone_offset_ms: 0,
-            microphone_warning: None,
+            system_audio_path: system_audio.as_ref().and_then(|audio| audio.path.clone()),
+            system_audio_offset_ms: system_audio.as_ref().map_or(0, |audio| audio.offset_ms),
+            system_audio_warning: system_audio.and_then(|audio| audio.warning),
+            microphone_path: microphone.as_ref().and_then(|audio| audio.path.clone()),
+            microphone_offset_ms: microphone.as_ref().map_or(0, |audio| audio.offset_ms),
+            microphone_warning: microphone.and_then(|audio| audio.warning),
             width: self.width,
             height: self.height,
             duration_ms: outcome.duration_ms,
@@ -248,6 +319,12 @@ impl XcapRecordingSegment {
     pub fn discard(mut self) -> XcapRecordingResult<()> {
         let _ = self.recorder.stop();
         self.stop_requested.store(true, Ordering::Release);
+        if let Some(system_audio) = self.system_audio.take() {
+            let _ = system_audio.discard();
+        }
+        if let Some(microphone) = self.microphone.take() {
+            let _ = microphone.discard();
+        }
         let _ = self.join_capture_worker();
         let _ = self.join_encoder_worker();
         match fs::remove_file(self.output_path) {
@@ -258,15 +335,23 @@ impl XcapRecordingSegment {
     }
 
     pub fn warning(&self) -> Option<String> {
-        self.warning.lock().clone()
+        self.warning
+            .lock()
+            .clone()
+            .or_else(|| self.system_audio.as_ref().and_then(AudioSegment::warning))
+            .or_else(|| self.microphone.as_ref().and_then(AudioSegment::warning))
     }
 
-    pub const fn microphone_level(&self) -> f32 {
-        0.0
+    pub fn microphone_level(&self) -> f32 {
+        self.microphone.as_ref().map_or(0.0, AudioSegment::level)
     }
 
     pub fn microphone_draft_info(&self) -> Option<(PathBuf, i64)> {
-        None
+        self.microphone.as_ref().map(AudioSegment::draft_info)
+    }
+
+    pub fn system_audio_draft_info(&self) -> Option<(PathBuf, i64)> {
+        self.system_audio.as_ref().map(AudioSegment::draft_info)
     }
 
     fn join_capture_worker(&mut self) -> XcapRecordingResult<()> {
@@ -319,13 +404,17 @@ fn receive_frames(
 
 fn record_frames(
     latest_frame: &Mutex<Option<RgbaImage>>,
-    transform: FrameTransform,
-    frame_rate: u16,
-    mut writer: H264Mp4Writer,
+    context: EncoderContext,
     dropped_frames: &AtomicU64,
     stop_requested: &AtomicBool,
 ) -> XcapRecordingResult<WorkerOutcome> {
-    let started_at = Instant::now();
+    let EncoderContext {
+        transform,
+        frame_rate,
+        mut writer,
+        started_at,
+        mut pointer_overlay,
+    } = context;
     let frame_interval = Duration::from_secs_f64(1.0 / f64::from(frame_rate));
     let first_image = latest_frame
         .lock()
@@ -333,7 +422,15 @@ fn record_frames(
         .ok_or(XcapRecordingError::FirstFrameUnavailable)?;
     let mut last_rgb = transform.rgb(&first_image);
     let mut skipped_frames = 0_u64;
-    let _ = writer.encode_rgb(&last_rgb, 0)?;
+    let pointer_source = pointer_overlay.as_ref().map(|_| PointerSource::new());
+    encode_frame(
+        &mut writer,
+        &mut last_rgb,
+        0,
+        &mut pointer_overlay,
+        pointer_source.as_ref(),
+        Instant::now(),
+    )?;
     let mut next_frame_at = started_at + frame_interval;
 
     while !stop_requested.load(Ordering::Acquire) {
@@ -347,7 +444,14 @@ fn record_frames(
             last_rgb = transform.rgb(&image);
         }
         let elapsed_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
-        let _ = writer.encode_rgb(&last_rgb, elapsed_ms)?;
+        encode_frame(
+            &mut writer,
+            &mut last_rgb,
+            elapsed_ms,
+            &mut pointer_overlay,
+            pointer_source.as_ref(),
+            Instant::now(),
+        )?;
 
         next_frame_at += frame_interval;
         let now = Instant::now();
@@ -371,6 +475,25 @@ fn record_frames(
             .saturating_add(skipped_frames)
             .saturating_add(info.skipped_frames),
     })
+}
+
+fn encode_frame(
+    writer: &mut H264Mp4Writer,
+    rgb: &mut [u8],
+    elapsed_ms: u64,
+    overlay: &mut Option<PointerOverlay>,
+    pointer: Option<&PointerSource>,
+    now: Instant,
+) -> XcapRecordingResult<()> {
+    let patch = overlay
+        .as_mut()
+        .map(|overlay| overlay.draw(rgb, pointer.and_then(PointerSource::sample), now));
+    let encoded = writer.encode_rgb(rgb, elapsed_ms);
+    if let Some(patch) = patch {
+        patch.restore(rgb);
+    }
+    let _ = encoded?;
+    Ok(())
 }
 
 fn find_monitor(display_id: &str) -> XcapRecordingResult<Monitor> {
@@ -447,4 +570,20 @@ fn set_warning_once(warning: &Mutex<Option<String>>, message: String) {
     if warning.is_none() {
         *warning = Some(message);
     }
+}
+
+fn system_audio_path(output_path: &Path) -> PathBuf {
+    companion_audio_path(output_path, "system")
+}
+
+fn microphone_path(output_path: &Path) -> PathBuf {
+    companion_audio_path(output_path, "mic")
+}
+
+fn companion_audio_path(output_path: &Path, suffix: &str) -> PathBuf {
+    let stem = output_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("segment");
+    output_path.with_file_name(format!("{stem}.{suffix}.wav"))
 }

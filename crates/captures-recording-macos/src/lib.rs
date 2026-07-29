@@ -170,6 +170,10 @@ impl MacRecordingSegment {
             None
         }
     }
+
+    pub const fn system_audio_draft_info(&self) -> Option<(PathBuf, i64)> {
+        None
+    }
 }
 
 pub fn microphone_devices() -> Vec<AudioDevice> {

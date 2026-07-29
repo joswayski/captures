@@ -285,6 +285,9 @@ impl NativeRecordingSegment {
         let duration_ms = self.writer.duration_ms();
         Ok(RecordingSegmentInfo {
             path: self.path,
+            system_audio_path: None,
+            system_audio_offset_ms: 0,
+            system_audio_warning: None,
             microphone_path: None,
             microphone_offset_ms: 0,
             microphone_warning: None,
