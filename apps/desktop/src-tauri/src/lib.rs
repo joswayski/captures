@@ -770,14 +770,9 @@ fn set_thumbnail_cursor(
                     captures_macos_window::reset_pointing_cursor_state(&cursor_window)
                 }
                 ThumbnailCursorAction::Apply(effective_pointing) => {
-                    let icon = if effective_pointing {
-                        CursorIcon::Hand
-                    } else {
-                        CursorIcon::Default
-                    };
-                    if let Err(error) = cursor_window.set_cursor_icon(icon) {
-                        eprintln!("failed to update capture thumbnail window cursor: {error}");
-                    }
+                    // AppKit owns the inactive preview cursor on macOS. Asking
+                    // both Tauri/WebKit and AppKit to set it lets their cursor
+                    // rectangles alternate during focus handoffs.
                     captures_macos_window::set_pointing_cursor(&cursor_window, effective_pointing)
                 }
             };

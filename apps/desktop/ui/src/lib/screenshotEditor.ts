@@ -84,6 +84,19 @@ export type ScreenshotDocument = {
   elements: ScreenshotElement[];
 };
 
+export type LayerDropPlacement = "before" | "after";
+
+const SUPPORTED_IMAGE_EXTENSIONS = new Set([
+  "avif",
+  "bmp",
+  "gif",
+  "jpeg",
+  "jpg",
+  "png",
+  "svg",
+  "webp",
+]);
+
 export function createScreenshotDocument(
   src: string,
   width: number,
@@ -239,6 +252,52 @@ export function expandDocumentForElement(
     height: Math.max(document.height, Math.ceil(bounds.y + bounds.height + padding)),
     elements: [...document.elements, element],
   };
+}
+
+export function isSupportedImageFile(file: Pick<File, "name" | "type">): boolean {
+  if (file.type.toLowerCase().startsWith("image/")) return true;
+  const extension = file.name.split(".").at(-1)?.toLowerCase() ?? "";
+  return SUPPORTED_IMAGE_EXTENSIONS.has(extension);
+}
+
+/**
+ * Screenshot elements are stored back-to-front, while the layer panel is
+ * presented front-to-back. Reorder in the panel's visual order, then convert
+ * back without ever allowing the original screenshot below another layer.
+ */
+export function reorderScreenshotLayers(
+  elements: ScreenshotElement[],
+  movedId: string,
+  targetId: string,
+  placement: LayerDropPlacement,
+): ScreenshotElement[] {
+  const moved = elements.find((element) => element.id === movedId);
+  if (
+    !moved
+    || movedId === targetId
+    || (moved.kind === "image" && moved.source === "background")
+  ) {
+    return elements;
+  }
+
+  const backgrounds = elements.filter((element) => (
+    element.kind === "image" && element.source === "background"
+  ));
+  const visualLayers = elements
+    .filter((element) => !(element.kind === "image" && element.source === "background"))
+    .slice()
+    .reverse();
+  const movedIndex = visualLayers.findIndex((element) => element.id === movedId);
+  if (movedIndex < 0) return elements;
+  const [layer] = visualLayers.splice(movedIndex, 1);
+  const targetIsBackground = backgrounds.some((element) => element.id === targetId);
+  const targetIndex = visualLayers.findIndex((element) => element.id === targetId);
+  if (!targetIsBackground && targetIndex < 0) return elements;
+  const destination = targetIsBackground
+    ? visualLayers.length
+    : targetIndex + (placement === "after" ? 1 : 0);
+  visualLayers.splice(destination, 0, layer);
+  return [...backgrounds, ...visualLayers.reverse()];
 }
 
 export function translateElement(

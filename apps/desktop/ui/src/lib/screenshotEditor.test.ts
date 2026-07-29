@@ -6,8 +6,10 @@ import {
   expandDocumentForElement,
   hitTestElement,
   imageSizeAtWidth,
+  isSupportedImageFile,
   outputDimensions,
   positionImportedImage,
+  reorderScreenshotLayers,
   translateElement,
   type EditorImageElement,
   type EditorShapeElement,
@@ -102,6 +104,41 @@ describe("screenshot editor geometry", () => {
       x: imported.x + 10,
       y: imported.y + 10,
     })?.id).toBe("imported");
+  });
+
+  it("accepts image drops when WebKit omits the MIME type", () => {
+    expect(isSupportedImageFile({ name: "reference.PNG", type: "" })).toBe(true);
+    expect(isSupportedImageFile({ name: "reference", type: "image/webp" })).toBe(true);
+    expect(isSupportedImageFile({ name: "notes.txt", type: "text/plain" })).toBe(false);
+  });
+
+  it("reorders editable layers front-to-back without moving the background", () => {
+    const document = createScreenshotDocument("capture.png", 1_000, 800);
+    const first: EditorImageElement = {
+      id: "first",
+      kind: "image",
+      source: "imported",
+      src: "blob:first",
+      name: "first.png",
+      x: 0,
+      y: 0,
+      width: 100,
+      height: 100,
+      naturalWidth: 100,
+      naturalHeight: 100,
+    };
+    const second = { ...first, id: "second", src: "blob:second", name: "second.png" };
+    const elements = [...document.elements, first, second];
+
+    expect(reorderScreenshotLayers(elements, "first", "second", "before").map(({ id }) => id))
+      .toEqual(["capture-background", "second", "first"]);
+    expect(
+      reorderScreenshotLayers(elements, "second", "capture-background", "after")
+        .map(({ id }) => id),
+    ).toEqual(["capture-background", "second", "first"]);
+    expect(
+      reorderScreenshotLayers(elements, "capture-background", "second", "before"),
+    ).toBe(elements);
   });
 
   it("preserves imported image aspect ratio when resizing", () => {

@@ -440,6 +440,35 @@ describe("RecordingEditor", () => {
     });
   });
 
+  it("uses a notched quality slider instead of compression presets", async () => {
+    render(<RecordingEditor />);
+    await screen.findByRole("heading", { name: "Edit recording" });
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
+    fireEvent.click(screen.getByRole("option", { name: /Compress/ }));
+    const quality = screen.getByRole("slider", { name: "Compression quality" });
+    expect(quality).toHaveAttribute("aria-valuetext", "High");
+    expect(screen.queryByRole("combobox", { name: "Compression preset" }))
+      .not.toBeInTheDocument();
+
+    fireEvent.change(quality, { target: { value: "1" } });
+    expect(quality).toHaveAttribute("aria-valuetext", "Balanced");
+    fireEvent.change(screen.getByRole("textbox", { name: "Saved filename" }), {
+      target: { value: "Balanced recording" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("start_recording_export", {
+        request: expect.objectContaining({
+          export: expect.objectContaining({
+            quality: "standard",
+          }),
+        }),
+      });
+    });
+  });
+
   it("shows a GIF audio warning only when the source actually recorded audio", async () => {
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "get_recording_artifact") {

@@ -18,11 +18,14 @@ import {
   expandDocumentForElement,
   hitTestElement,
   imageSizeAtWidth,
+  isSupportedImageFile,
   outputDimensions,
   positionImportedImage,
+  reorderScreenshotLayers,
   resizeDocumentCanvas,
   translateElement,
   type EditorImageElement,
+  type LayerDropPlacement,
   type EditorPoint,
   type EditorRect,
   type ElementStyle,
@@ -31,10 +34,13 @@ import {
   type ScreenshotTool,
   type ShapeKind,
 } from "./lib/screenshotEditor";
+import { NotchedSlider, RangeSlider } from "./RangeSlider";
 import type { CaptureArtifact } from "./types";
 
 type ExportFormat = "png" | "jpeg" | "webp";
 type ExportSize = "original" | "75" | "50" | "custom";
+type ScreenshotQuality = "70" | "85" | "92" | "97" | "100";
+type ScreenshotFileSizeUnit = "kb" | "mb";
 
 type CachedImage = {
   image: HTMLImageElement;
@@ -67,6 +73,11 @@ type SavedScreenshotEdit = {
   format: ExportFormat;
 };
 
+type LayerDropTarget = {
+  id: string;
+  placement: LayerDropPlacement;
+};
+
 const TOOL_ITEMS: Array<{ tool: ScreenshotTool; label: string; shortcut: string }> = [
   { tool: "select", label: "Select & move", shortcut: "V" },
   { tool: "crop", label: "Crop", shortcut: "C" },
@@ -89,6 +100,24 @@ const COLOR_SWATCHES = [
   "#111318",
   "#ffffff",
 ];
+
+const SCREENSHOT_QUALITY_OPTIONS = [
+  { value: "70", label: "Smaller", shortLabel: "Small" },
+  { value: "85", label: "Balanced", shortLabel: "Medium" },
+  { value: "92", label: "High" },
+  { value: "97", label: "Very high", shortLabel: "V. high" },
+  { value: "100", label: "Maximum", shortLabel: "Max" },
+] as const;
+
+const SCREENSHOT_FILE_SIZE_UNIT_BYTES: Record<ScreenshotFileSizeUnit, number> = {
+  kb: 1_000,
+  mb: 1_000_000,
+};
+
+function isFileTransfer(dataTransfer: DataTransfer): boolean {
+  return Array.from(dataTransfer.types).includes("Files")
+    || dataTransfer.files.length > 0;
+}
 
 function query(name: string): string | null {
   return new URLSearchParams(window.location.search).get(name);
@@ -404,10 +433,15 @@ export function ScreenshotEditor() {
   const [zoom, setZoom] = useState(100);
   const [imageRevision, setImageRevision] = useState(0);
   const [dragActive, setDragActive] = useState(false);
+  const [draggedLayerId, setDraggedLayerId] = useState<string | null>(null);
+  const [layerDropTarget, setLayerDropTarget] = useState<LayerDropTarget | null>(null);
   const [exportFormat, setExportFormat] = useState<ExportFormat>("png");
   const [exportSize, setExportSize] = useState<ExportSize>("original");
   const [customExportWidth, setCustomExportWidth] = useState(1_920);
-  const [jpegQuality, setJpegQuality] = useState(92);
+  const [jpegQuality, setJpegQuality] = useState<ScreenshotQuality>("100");
+  const [maximumFileSize, setMaximumFileSize] = useState("");
+  const [maximumFileSizeUnit, setMaximumFileSizeUnit] =
+    useState<ScreenshotFileSizeUnit>("mb");
   const [busy, setBusy] = useState<"copying" | "saving" | null>(null);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
@@ -631,6 +665,7 @@ export function ScreenshotEditor() {
         const match = TOOL_ITEMS.find(({ shortcut }) => shortcut.toLowerCase() === event.key.toLowerCase());
         if (match) {
           setTool(match.tool);
+          if (match.tool !== "select") setSelectedId(null);
           setCropSelection(null);
         }
       }
@@ -706,6 +741,7 @@ export function ScreenshotEditor() {
     }
 
     const elementId = editorId();
+    setSelectedId(null);
     const element: ScreenshotElement = tool === "pen"
       ? {
         id: elementId,
@@ -736,7 +772,6 @@ export function ScreenshotEditor() {
       initialDocument: current,
     };
     replaceDocument({ ...current, elements: [...current.elements, element] });
-    setSelectedId(elementId);
     event.currentTarget.setPointerCapture(event.pointerId);
   };
 
@@ -840,8 +875,27 @@ export function ScreenshotEditor() {
     commitDocument({ ...current, elements });
   };
 
+  const dropLayer = (
+    movedId: string,
+    targetId: string,
+    placement: LayerDropPlacement,
+  ) => {
+    const current = documentRef.current;
+    if (!current) return;
+    const elements = reorderScreenshotLayers(
+      current.elements,
+      movedId,
+      targetId,
+      placement,
+    );
+    if (elements === current.elements) return;
+    commitDocument({ ...current, elements });
+    setSelectedId(movedId);
+    setTool("select");
+  };
+
   const loadDroppedFiles = async (files: File[], point?: EditorPoint) => {
-    const images = files.filter((file) => file.type.startsWith("image/"));
+    const images = files.filter(isSupportedImageFile);
     if (images.length === 0) {
       setError("Drop PNG, JPEG, WebP, GIF, or another image file.");
       return;
@@ -851,7 +905,7 @@ export function ScreenshotEditor() {
     let next = initial;
     let lastId: string | null = null;
     try {
-      for (const file of images) {
+      for (const [index, file] of images.entries()) {
         const src = URL.createObjectURL(file);
         objectUrlsRef.current.add(src);
         const image = await new Promise<HTMLImageElement>((resolve, reject) => {
@@ -865,7 +919,12 @@ export function ScreenshotEditor() {
           image.naturalWidth,
           image.naturalHeight,
           next,
-          point,
+          point
+            ? {
+              x: point.x + index * 24,
+              y: point.y + index * 24,
+            }
+            : undefined,
         );
         const element: EditorImageElement = {
           id: editorId(),
@@ -941,6 +1000,19 @@ export function ScreenshotEditor() {
 
   const saveEditedImage = async () => {
     if (!artifact || busy) return;
+    const maximumSizeText = maximumFileSize.trim();
+    const maximumSizeBytes = maximumSizeText
+      ? Math.floor(
+        Number(maximumSizeText) * SCREENSHOT_FILE_SIZE_UNIT_BYTES[maximumFileSizeUnit],
+      )
+      : null;
+    if (
+      maximumSizeText
+      && (!Number.isFinite(maximumSizeBytes) || maximumSizeBytes === null || maximumSizeBytes < 10_000)
+    ) {
+      setError("Enter a maximum file size of at least 10 KB, or leave it blank.");
+      return;
+    }
     setBusy("saving");
     setError("");
     setStatus("");
@@ -960,7 +1032,8 @@ export function ScreenshotEditor() {
           artifact_id: artifact.id,
           destination_path: destinationPath,
           format: exportFormat,
-          jpeg_quality: jpegQuality,
+          jpeg_quality: Number(jpegQuality),
+          max_size_bytes: maximumSizeBytes,
           image_png: imagePng,
         },
       });
@@ -1004,20 +1077,24 @@ export function ScreenshotEditor() {
     <main
       className={`screenshot-editor${dragActive ? " screenshot-editor-drag-active" : ""}`}
       onDragEnter={(event) => {
+        if (!isFileTransfer(event.dataTransfer)) return;
         event.preventDefault();
         dropDepthRef.current += 1;
         setDragActive(true);
       }}
       onDragOver={(event) => {
+        if (!isFileTransfer(event.dataTransfer)) return;
         event.preventDefault();
         event.dataTransfer.dropEffect = "copy";
       }}
       onDragLeave={(event) => {
+        if (!dragActive) return;
         event.preventDefault();
         dropDepthRef.current = Math.max(0, dropDepthRef.current - 1);
         if (dropDepthRef.current === 0) setDragActive(false);
       }}
       onDrop={(event) => {
+        if (!isFileTransfer(event.dataTransfer)) return;
         event.preventDefault();
         dropDepthRef.current = 0;
         setDragActive(false);
@@ -1086,6 +1163,7 @@ export function ScreenshotEditor() {
             accept="image/*"
             multiple
             hidden
+            aria-label="Choose image layers"
             onChange={(event) => {
               void loadDroppedFiles(Array.from(event.target.files ?? []));
               event.target.value = "";
@@ -1105,6 +1183,7 @@ export function ScreenshotEditor() {
             title={`${item.label} (${item.shortcut})`}
             onClick={() => {
               setTool(item.tool);
+              if (item.tool !== "select") setSelectedId(null);
               if (item.tool !== "crop") setCropSelection(null);
             }}
           >
@@ -1150,7 +1229,110 @@ export function ScreenshotEditor() {
         )}
       </section>
 
-      <aside className="screenshot-properties" aria-label="Tool properties">
+      <aside className="screenshot-sidebar">
+        <section className="screenshot-layers" aria-label="Layers">
+          <div className="screenshot-layers-heading">
+            <div>
+              <strong>Layers</strong>
+              <span>{editorDocument.elements.length}</span>
+            </div>
+            <button
+              type="button"
+              aria-label="Add image layer"
+              title="Add image layer"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <EditorIcon name="plus" />
+            </button>
+          </div>
+          <ol className="screenshot-layer-list">
+            {[...editorDocument.elements].reverse().map((element) => {
+              const locked = element.kind === "image" && element.source === "background";
+              const dropPlacement = layerDropTarget?.id === element.id
+                ? layerDropTarget.placement
+                : null;
+              return (
+                <li
+                  key={element.id}
+                  className={[
+                    selectedId === element.id ? "active" : "",
+                    locked ? "locked" : "",
+                    draggedLayerId === element.id ? "dragging" : "",
+                    dropPlacement ? `drop-${dropPlacement}` : "",
+                  ].filter(Boolean).join(" ")}
+                  draggable={!locked}
+                  onDragStart={(event) => {
+                    if (locked) {
+                      event.preventDefault();
+                      return;
+                    }
+                    setDraggedLayerId(element.id);
+                    event.dataTransfer.effectAllowed = "move";
+                    event.dataTransfer.setData("application/x-captures-layer", element.id);
+                  }}
+                  onDragOver={(event) => {
+                    const movedId = draggedLayerId
+                      ?? event.dataTransfer.getData("application/x-captures-layer");
+                    if (!movedId || movedId === element.id) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    event.dataTransfer.dropEffect = "move";
+                    const bounds = event.currentTarget.getBoundingClientRect();
+                    const placement = locked || event.clientY < bounds.top + bounds.height / 2
+                      ? "before"
+                      : "after";
+                    setLayerDropTarget({ id: element.id, placement });
+                  }}
+                  onDrop={(event) => {
+                    const movedId = draggedLayerId
+                      ?? event.dataTransfer.getData("application/x-captures-layer");
+                    if (!movedId) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    dropLayer(
+                      movedId,
+                      element.id,
+                      layerDropTarget?.id === element.id
+                        ? layerDropTarget.placement
+                        : "before",
+                    );
+                    setDraggedLayerId(null);
+                    setLayerDropTarget(null);
+                  }}
+                  onDragEnd={() => {
+                    setDraggedLayerId(null);
+                    setLayerDropTarget(null);
+                  }}
+                >
+                  <button
+                    type="button"
+                    aria-pressed={selectedId === element.id}
+                    onClick={() => {
+                      setTool("select");
+                      setCropSelection(null);
+                      setSelectedId(locked ? null : element.id);
+                    }}
+                  >
+                    <span className="screenshot-layer-grip" aria-hidden="true">
+                      <EditorIcon name={locked ? "lock" : "grip"} />
+                    </span>
+                    <span className="screenshot-layer-preview" aria-hidden="true">
+                      {element.kind === "image"
+                        ? <img src={element.src} alt="" draggable={false} />
+                        : <EditorIcon name={layerIconName(element)} />}
+                    </span>
+                    <span className="screenshot-layer-copy">
+                      <strong>{elementLayerName(element)}</strong>
+                      <small>{elementKindLabel(element)}</small>
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ol>
+        </section>
+
+        <section className="screenshot-properties" aria-label="Tool properties">
         <div className="screenshot-properties-heading">
           <strong>{selected ? elementLabel(selected) : toolLabel(tool)}</strong>
           {selected && !(selected.kind === "image" && selected.source === "background") && (
@@ -1351,23 +1533,27 @@ export function ScreenshotEditor() {
             />
             <label>
               Stroke width
-              <div className="screenshot-range">
-                <input
-                  type="range"
-                  min={2}
-                  max={40}
-                  value={selected.style.strokeWidth}
-                  onChange={(event) => updateSelected((element) => (
-                    element.kind === "shape" || element.kind === "path"
-                      ? {
-                        ...element,
-                        style: { ...element.style, strokeWidth: Number(event.target.value) },
-                      }
-                      : element
-                  ))}
-                />
-                <output>{selected.style.strokeWidth}px</output>
-              </div>
+              <RangeSlider
+                ariaLabel="Stroke width"
+                min={2}
+                max={40}
+                value={selected.style.strokeWidth}
+                valueText={`${selected.style.strokeWidth} px`}
+                marks={[
+                  { value: 2, label: "2" },
+                  { value: 12, label: "12" },
+                  { value: 24, label: "24" },
+                  { value: 40, label: "40" },
+                ]}
+                onChange={(strokeWidth) => updateSelected((element) => (
+                  element.kind === "shape" || element.kind === "path"
+                    ? {
+                      ...element,
+                      style: { ...element.style, strokeWidth },
+                    }
+                    : element
+                ))}
+              />
             </label>
             {selected.kind === "shape" && (selected.shape === "rectangle" || selected.shape === "ellipse") && (
               <>
@@ -1405,20 +1591,23 @@ export function ScreenshotEditor() {
             {selected.kind === "shape" && selected.shape === "curved_arrow" && (
               <label>
                 Curve
-                <div className="screenshot-range">
-                  <input
-                    type="range"
-                    min={-50}
-                    max={50}
-                    value={Math.round(selected.bend * 100)}
-                    onChange={(event) => updateSelected((element) => (
-                      element.kind === "shape"
-                        ? { ...element, bend: Number(event.target.value) / 100 }
-                        : element
-                    ))}
-                  />
-                  <output>{Math.round(selected.bend * 100)}%</output>
-                </div>
+                <RangeSlider
+                  ariaLabel="Curve"
+                  min={-50}
+                  max={50}
+                  value={Math.round(selected.bend * 100)}
+                  valueText={`${Math.round(selected.bend * 100)}%`}
+                  marks={[
+                    { value: -50, label: "Left" },
+                    { value: 0, label: "Straight" },
+                    { value: 50, label: "Right" },
+                  ]}
+                  onChange={(bend) => updateSelected((element) => (
+                    element.kind === "shape"
+                      ? { ...element, bend: bend / 100 }
+                      : element
+                  ))}
+                />
               </label>
             )}
           </section>
@@ -1446,19 +1635,23 @@ export function ScreenshotEditor() {
                 />
                 <label>
                   Stroke width
-                  <div className="screenshot-range">
-                    <input
-                      type="range"
-                      min={2}
-                      max={40}
-                      value={defaultStyle.strokeWidth}
-                      onChange={(event) => setDefaultStyle((style) => ({
-                        ...style,
-                        strokeWidth: Number(event.target.value),
-                      }))}
-                    />
-                    <output>{defaultStyle.strokeWidth}px</output>
-                  </div>
+                  <RangeSlider
+                    ariaLabel="Stroke width"
+                    min={2}
+                    max={40}
+                    value={defaultStyle.strokeWidth}
+                    valueText={`${defaultStyle.strokeWidth} px`}
+                    marks={[
+                      { value: 2, label: "2" },
+                      { value: 12, label: "12" },
+                      { value: 24, label: "24" },
+                      { value: 40, label: "40" },
+                    ]}
+                    onChange={(strokeWidth) => setDefaultStyle((style) => ({
+                      ...style,
+                      strokeWidth,
+                    }))}
+                  />
                 </label>
               </>
             ) : (
@@ -1512,6 +1705,7 @@ export function ScreenshotEditor() {
             onChange={(background) => commitDocument({ ...editorDocument, background })}
           />
         </section>
+        </section>
       </aside>
 
       <footer className="screenshot-export-bar">
@@ -1545,20 +1739,44 @@ export function ScreenshotEditor() {
               />
             </label>
           )}
-          {exportFormat === "jpeg" && (
-            <label className="screenshot-quality">
-              JPEG quality
-              <input
-                type="range"
-                min={40}
-                max={100}
+          <div className="screenshot-export-control screenshot-quality">
+            <span>Quality</span>
+            {exportFormat === "jpeg" ? (
+              <NotchedSlider
+                ariaLabel="Image quality"
                 value={jpegQuality}
-                onChange={(event) => setJpegQuality(Number(event.target.value))}
+                options={SCREENSHOT_QUALITY_OPTIONS}
+                onChange={setJpegQuality}
               />
-              <output>{jpegQuality}%</output>
-            </label>
-          )}
-          <span>{output.width} × {output.height}</span>
+            ) : (
+              <strong>Maximum · lossless</strong>
+            )}
+          </div>
+          <label className="screenshot-maximum-size">
+            Maximum size
+            <span>
+              <input
+                type="number"
+                min={maximumFileSizeUnit === "kb" ? 10 : 0.01}
+                step={maximumFileSizeUnit === "kb" ? 1 : 0.01}
+                value={maximumFileSize}
+                placeholder="No limit"
+                aria-label="Maximum file size"
+                onChange={(event) => setMaximumFileSize(event.target.value)}
+              />
+              <select
+                aria-label="Screenshot file size unit"
+                value={maximumFileSizeUnit}
+                onChange={(event) => setMaximumFileSizeUnit(
+                  event.target.value as ScreenshotFileSizeUnit,
+                )}
+              >
+                <option value="kb">KB</option>
+                <option value="mb">MB</option>
+              </select>
+            </span>
+          </label>
+          <span className="screenshot-output-dimensions">{output.width} × {output.height}</span>
         </div>
         <div className={`screenshot-export-status${error ? " error" : ""}`} role={error ? "alert" : "status"}>
           {error || status || "Edits stay local. Saving creates a new copy and preserves the original."}
@@ -1614,11 +1832,35 @@ function ColorField({
 }
 
 function elementLabel(element: ScreenshotElement): string {
-  if (element.kind === "image") return element.source === "background" ? "Original screenshot" : "Image";
+  if (element.kind === "image") {
+    return element.source === "background" ? "Original screenshot" : element.name;
+  }
   if (element.kind === "text") return "Text";
   if (element.kind === "path") return "Freehand drawing";
   if (element.shape === "curved_arrow") return "Curved arrow";
   return element.shape[0].toUpperCase() + element.shape.slice(1);
+}
+
+function elementLayerName(element: ScreenshotElement): string {
+  if (element.kind === "text") {
+    return element.text.trim().split("\n")[0]?.slice(0, 42) || "Text";
+  }
+  return elementLabel(element);
+}
+
+function elementKindLabel(element: ScreenshotElement): string {
+  if (element.kind === "image") {
+    return element.source === "background" ? "Locked background" : "Image";
+  }
+  if (element.kind === "text") return "Text";
+  if (element.kind === "path") return "Drawing";
+  return "Shape";
+}
+
+function layerIconName(element: ScreenshotElement): string {
+  if (element.kind === "text") return "text";
+  if (element.kind === "path") return "pen";
+  return element.kind === "shape" ? element.shape : "image";
 }
 
 function toolLabel(tool: ScreenshotTool): string {
@@ -1641,6 +1883,9 @@ function EditorIcon({ name }: { name: string }) {
   if (name === "trash") return <svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" /></svg>;
   if (name === "copy") return <svg viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2" /><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3" /></svg>;
   if (name === "save") return <svg viewBox="0 0 24 24"><path d="M5 3h12l2 2v16H5Z M8 3v6h8V3M8 17h8" /></svg>;
+  if (name === "plus") return <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>;
+  if (name === "lock") return <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></svg>;
+  if (name === "grip") return <svg viewBox="0 0 24 24"><circle cx="9" cy="7" r=".8" /><circle cx="15" cy="7" r=".8" /><circle cx="9" cy="12" r=".8" /><circle cx="15" cy="12" r=".8" /><circle cx="9" cy="17" r=".8" /><circle cx="15" cy="17" r=".8" /></svg>;
   if (name === "align-center") return <svg viewBox="0 0 24 24"><path d="M5 6h14M8 10h8M5 14h14M8 18h8" /></svg>;
   if (name === "align-right") return <svg viewBox="0 0 24 24"><path d="M5 6h14M9 10h10M5 14h14M9 18h10" /></svg>;
   return <svg viewBox="0 0 24 24"><path d="M5 6h14M5 10h10M5 14h14M5 18h10" /></svg>;

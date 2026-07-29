@@ -61,45 +61,41 @@ describe("ThumbnailCard", () => {
     expect(screen.getByRole("article")).toHaveClass("thumbnail-capture-highlight");
   });
 
-  it("preserves hover presentation while switching full-size viewers", () => {
-    const cards = (activeId: string | null) => (
+  it("preserves hover presentation while opening editors from different previews", () => {
+    const cards = (
       <>
         <ThumbnailCard
           artifact={artifact(null, "capture-1")}
           clipboardCurrent={false}
-          viewerActive={activeId === "capture-1"}
+          viewerActive={false}
           onRemoved={() => undefined}
         />
         <ThumbnailCard
           artifact={artifact(null, "capture-2")}
           clipboardCurrent
-          viewerActive={activeId === "capture-2"}
+          viewerActive={false}
           onRemoved={() => undefined}
         />
       </>
     );
-    const { rerender } = render(cards(null));
+    render(cards);
 
     const [firstCard, secondCard] = screen.getAllByRole("article");
     act(() => {
-      within(firstCard).getByRole("button", { name: "Full size" }).click();
+      within(firstCard).getByRole("button", { name: "Edit" }).click();
     });
 
     expect(firstCard).toHaveAttribute("data-thumbnail-native-active", "true");
-    rerender(cards("capture-1"));
-    expect(firstCard).toHaveAttribute("data-thumbnail-native-active", "true");
 
     act(() => {
-      within(secondCard).getByRole("button", { name: "Full size" }).click();
+      within(secondCard).getByRole("button", { name: "Edit" }).click();
     });
 
     expect(firstCard).not.toHaveAttribute("data-thumbnail-native-active");
     expect(secondCard).toHaveAttribute("data-thumbnail-native-active", "true");
-    rerender(cards("capture-2"));
-    expect(secondCard).toHaveAttribute("data-thumbnail-native-active", "true");
 
-    expect(invoke).toHaveBeenCalledWith("open_artifact_viewer", { artifactId: "capture-1" });
-    expect(invoke).toHaveBeenCalledWith("open_artifact_viewer", { artifactId: "capture-2" });
+    expect(invoke).toHaveBeenCalledWith("open_screenshot_editor", { artifactId: "capture-1" });
+    expect(invoke).toHaveBeenCalledWith("open_screenshot_editor", { artifactId: "capture-2" });
   });
 
   it("before a folder save: Delete only (no Close), Save file for a disk PNG", () => {
@@ -107,7 +103,7 @@ describe("ThumbnailCard", () => {
 
     expect(screen.getByText("Copied to clipboard")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Full size" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Full size" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Close" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Copy" })).not.toBeInTheDocument();
@@ -449,6 +445,6 @@ describe("ThumbnailCard", () => {
     expect(screen.getByText("Saved")).toBeInTheDocument();
     expect(screen.queryByText("Show in Folder")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Full size" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Edit" })).toBeDisabled();
   });
 });
