@@ -14,9 +14,13 @@ use captures_media::{
 };
 use captures_recording::{
     DraftStore, RecordingCoordinator, RecordingDraftManifest, RecordingKind, RecordingOptions,
-    RecordingSegmentManifest, RecordingSessionSnapshot, RecordingState, RecordingTarget,
+    RecordingSegmentInfo, RecordingSegmentManifest, RecordingSessionSnapshot, RecordingState,
+    RecordingTarget,
 };
-use captures_recording_macos::{MacRecordingSegment, SegmentInfo};
+#[cfg(target_os = "macos")]
+use captures_recording_macos::MacRecordingSegment as NativeRecordingSegment;
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+use captures_recording_xcap::XcapRecordingSegment as NativeRecordingSegment;
 use serde::{Deserialize, Serialize};
 use tauri::{
     AppHandle, Emitter, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder, window::Color,
@@ -28,9 +32,9 @@ use crate::{
     AppError,
     models::{
         CaptureArtifact, CaptureSelectorMode, HistoryEntry, RecordingArtifact,
-        RecordingArtifactData, RecordingSelection, RecordingSelectionSession, recording_media_url,
-        recording_poster_url, recording_recovery_directory, recording_selection_url,
-        recording_timeline_url,
+        RecordingArtifactData, RecordingCapabilities, RecordingSelection,
+        RecordingSelectionSession, recording_media_url, recording_poster_url,
+        recording_recovery_directory, recording_selection_url, recording_timeline_url,
     },
     state::AppState,
     storage,
@@ -40,6 +44,7 @@ const RECORDING_STATE_EVENT: &str = "recording-state-changed";
 const RECORDING_COUNTDOWN_EVENT: &str = "recording-countdown";
 const RECORDING_WARNING_EVENT: &str = "recording-warning";
 const RECORDING_ARTIFACT_EVENT: &str = "recording-artifact-ready";
+#[cfg(target_os = "macos")]
 const RECORDING_COUNTDOWN_FADE_OUT_MS: u64 = 180;
 const RECORDING_HUD_FULL_WIDTH: f64 = 430.0;
 const RECORDING_HUD_HEIGHT: f64 = 102.0;
@@ -59,7 +64,7 @@ struct RuntimeSession {
     options: RecordingOptions,
     directory: PathBuf,
     manifest: RecordingDraftManifest,
-    active_segment: Option<MacRecordingSegment>,
+    active_segment: Option<NativeRecordingSegment>,
     active_segment_started_at_ms: Option<u64>,
     poster_png: Vec<u8>,
     display: DisplayDescriptor,
@@ -101,7 +106,6 @@ fn recording_session_is_active(state: &AppState) -> bool {
         .is_some_and(|snapshot| !snapshot.state.is_terminal())
 }
 
-#[cfg(target_os = "macos")]
 pub(crate) fn recording_controls_are_available(state: &AppState) -> bool {
     state
         .recording
@@ -202,11 +206,6 @@ pub async fn prepare_recording_inner(
     app: AppHandle,
     state: Arc<AppState>,
 ) -> Result<RecordingSelectionSession, AppError> {
-    if !cfg!(target_os = "macos") {
-        return Err(AppError::Task(
-            "screen recording is currently available on macOS only".to_owned(),
-        ));
-    }
     prepare_capture_selector_inner(app, state, CaptureSelectorMode::Recording).await
 }
 
@@ -263,7 +262,11 @@ pub(crate) async fn prepare_capture_selector_inner(
         let frame = state.backend.capture_display(&display.id)?;
         let snapshot_png = storage::encode_png(&frame.image)?;
         let windows = state
-            .windows()?
+            .windows()
+            .unwrap_or_else(|error| {
+                eprintln!("window targets are unavailable for this capture: {error}");
+                Vec::new()
+            })
             .into_iter()
             .filter(|window| crate::window_is_capturable(window, &display))
             .collect::<Vec<_>>();
@@ -274,7 +277,12 @@ pub(crate) async fn prepare_capture_selector_inner(
             // decides whether the final copy is video or GIF.
             kind: RecordingKind::Video,
             initial_mode,
-            recording_available: cfg!(target_os = "macos"),
+            recording_available: cfg!(any(
+                target_os = "macos",
+                target_os = "windows",
+                target_os = "linux"
+            )),
+            recording_capabilities: RecordingCapabilities::current(),
             window_coordinate_scale: crate::window_coordinate_scale(&frame.descriptor),
             display: frame.descriptor,
             snapshot_url: recording_selection_url(&id),
@@ -413,7 +421,14 @@ async fn capture_selection_screenshot_inner(
 
 #[tauri::command]
 pub fn list_recording_audio_devices() -> Vec<captures_recording::AudioDevice> {
-    captures_recording_macos::microphone_devices()
+    #[cfg(target_os = "macos")]
+    {
+        captures_recording_macos::microphone_devices()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Vec::new()
+    }
 }
 
 #[tauri::command]
@@ -601,6 +616,7 @@ fn countdown_is_current(state: &AppState, session_id: &str, generation: u64) -> 
             .is_some_and(|snapshot| snapshot.state == RecordingState::Countdown)
 }
 
+#[cfg(target_os = "macos")]
 fn recording_segment_is_current(state: &AppState, session_id: &str, generation: u64) -> bool {
     let runtime = state.recording.lock();
     runtime.generation == generation
@@ -614,13 +630,34 @@ fn recording_segment_is_current(state: &AppState, session_id: &str, generation: 
             .is_some_and(|snapshot| snapshot.state == RecordingState::Recording)
 }
 
+fn start_native_segment(
+    options: &RecordingOptions,
+    path: &Path,
+    display: &DisplayDescriptor,
+) -> Result<NativeRecordingSegment, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = display;
+        NativeRecordingSegment::start(options, path).map_err(|error| error.to_string())
+    }
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    {
+        NativeRecordingSegment::start(options, path, display).map_err(|error| error.to_string())
+    }
+}
+
+fn play_recording_start_chime() {
+    #[cfg(target_os = "macos")]
+    captures_recording_macos::play_start_chime();
+}
+
 async fn start_segment(
     app: AppHandle,
     state: Arc<AppState>,
     session_id: &str,
     generation: u64,
 ) -> Result<(), AppError> {
-    let (options, path) = {
+    let (options, path, display) = {
         let runtime = state.recording.lock();
         if runtime.generation != generation {
             return Ok(());
@@ -644,18 +681,21 @@ async fn start_segment(
         (
             session.options.clone(),
             session.directory.join(format!("segment-{index:03}.mp4")),
+            session.display.clone(),
         )
     };
 
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    destroy_recording_countdown(&app);
     let path_for_start = path.clone();
     let started = tauri::async_runtime::spawn_blocking(move || {
-        MacRecordingSegment::start(&options, &path_for_start)
+        start_native_segment(&options, &path_for_start, &display)
     })
     .await
     .map_err(|error| AppError::Task(error.to_string()))?;
     let segment = match started {
         Ok(segment) => segment,
-        Err(error) => return Err(AppError::Task(error.to_string())),
+        Err(error) => return Err(AppError::Task(error)),
     };
 
     let now = now_ms();
@@ -680,10 +720,10 @@ async fn start_segment(
                 .coordinator
                 .snapshot(now)
                 .is_some_and(|snapshot| snapshot.state == RecordingState::Countdown);
-            let dimensions = segment.as_ref().map(MacRecordingSegment::dimensions);
+            let dimensions = segment.as_ref().map(NativeRecordingSegment::dimensions);
             let microphone_draft = segment
                 .as_ref()
-                .and_then(MacRecordingSegment::microphone_draft_info);
+                .and_then(NativeRecordingSegment::microphone_draft_info);
             let snapshot = runtime
                 .coordinator
                 .transition(session_id, RecordingState::Recording, now)
@@ -747,11 +787,14 @@ async fn start_segment(
     };
     emit_snapshot(&app, &snapshot);
     if started_from_countdown {
-        captures_recording_macos::play_start_chime();
-        tokio::time::sleep(Duration::from_millis(RECORDING_COUNTDOWN_FADE_OUT_MS)).await;
-        if !recording_segment_is_current(&state, session_id, generation) {
-            destroy_recording_countdown(&app);
-            return Ok(());
+        play_recording_start_chime();
+        #[cfg(target_os = "macos")]
+        {
+            tokio::time::sleep(Duration::from_millis(RECORDING_COUNTDOWN_FADE_OUT_MS)).await;
+            if !recording_segment_is_current(&state, session_id, generation) {
+                destroy_recording_countdown(&app);
+                return Ok(());
+            }
         }
     }
     destroy_recording_countdown(&app);
@@ -2193,7 +2236,7 @@ fn take_active_segment(
     state: &AppState,
     session_id: &str,
     expected_state: RecordingState,
-) -> Result<(MacRecordingSegment, u64), AppError> {
+) -> Result<(NativeRecordingSegment, u64), AppError> {
     let mut runtime = state.recording.lock();
     let current = runtime
         .coordinator
@@ -2217,7 +2260,9 @@ fn take_active_segment(
     Ok((segment, started_at_ms))
 }
 
-async fn stop_native_segment(segment: MacRecordingSegment) -> Result<SegmentInfo, AppError> {
+async fn stop_native_segment(
+    segment: NativeRecordingSegment,
+) -> Result<RecordingSegmentInfo, AppError> {
     tauri::async_runtime::spawn_blocking(move || segment.stop())
         .await
         .map_err(|error| AppError::Task(error.to_string()))?
@@ -2226,7 +2271,7 @@ async fn stop_native_segment(segment: MacRecordingSegment) -> Result<SegmentInfo
 
 fn append_segment(
     session: &mut RuntimeSession,
-    info: SegmentInfo,
+    info: RecordingSegmentInfo,
     started_at_ms: u64,
     now: u64,
 ) -> Result<(), AppError> {
@@ -2497,10 +2542,19 @@ fn media_toolchain(app: &AppHandle) -> MediaToolchain {
         "x86_64-unknown-linux-gnu"
     };
     let find = |name: &str| {
-        let suffixed_name = format!("{name}-{target_suffix}");
+        let executable_name = if cfg!(target_os = "windows") {
+            format!("{name}.exe")
+        } else {
+            name.to_owned()
+        };
+        let suffixed_name = if cfg!(target_os = "windows") {
+            format!("{name}-{target_suffix}.exe")
+        } else {
+            format!("{name}-{target_suffix}")
+        };
         executable_directory
             .as_ref()
-            .map(|directory| directory.join(name))
+            .map(|directory| directory.join(&executable_name))
             .filter(|path| path.is_file())
             .or_else(|| {
                 executable_directory
@@ -2511,7 +2565,7 @@ fn media_toolchain(app: &AppHandle) -> MediaToolchain {
             .or_else(|| {
                 resource_directory
                     .as_ref()
-                    .map(|directory| directory.join("binaries").join(name))
+                    .map(|directory| directory.join("binaries").join(&executable_name))
                     .filter(|path| path.is_file())
             })
             .or_else(|| {
@@ -2559,7 +2613,7 @@ fn create_recording_selector_window(app: &AppHandle) -> Result<(), AppError> {
     .focused(false)
     .visible(true)
     .build()?;
-    window.set_content_protected(false)?;
+    window.set_content_protected(recording_overlay_content_protected())?;
     Ok(())
 }
 
@@ -2594,7 +2648,7 @@ async fn prepare_recording_selector(
                 ))
                 .map_err(|error| error.to_string())?;
             window
-                .set_content_protected(false)
+                .set_content_protected(recording_overlay_content_protected())
                 .map_err(|error| error.to_string())?;
             // A hidden or zero-alpha WKWebView can be suspended before React
             // installs its recording-selection listener. Wake it at a tiny,
@@ -2770,7 +2824,7 @@ fn prepare_recording_hud(app: &AppHandle, display: &DisplayDescriptor) -> Result
         RECORDING_HUD_HEIGHT,
     ))?;
     window.set_position(tauri::LogicalPosition::new(x, y))?;
-    window.set_content_protected(false)?;
+    window.set_content_protected(recording_overlay_content_protected())?;
     window.hide()?;
     Ok(())
 }
@@ -2817,7 +2871,7 @@ fn show_recording_hud(app: &AppHandle) -> Result<(), AppError> {
     let window = app
         .get_webview_window("recording-hud")
         .ok_or_else(|| AppError::Task("recording controls are unavailable".to_owned()))?;
-    window.set_content_protected(false)?;
+    window.set_content_protected(recording_overlay_content_protected())?;
     #[cfg(target_os = "macos")]
     captures_macos_window::show_without_activating(&window)
         .map_err(|error| AppError::Task(error.to_owned()))?;
@@ -2859,7 +2913,7 @@ fn show_recording_countdown(app: &AppHandle, display: &DisplayDescriptor) -> Res
         f64::from(display.x),
         f64::from(display.y),
     ))?;
-    window.set_content_protected(false)?;
+    window.set_content_protected(recording_overlay_content_protected())?;
     window.show()?;
     #[cfg(target_os = "macos")]
     focus_recording_window(app, "recording-countdown");
@@ -2875,6 +2929,10 @@ fn destroy_recording_countdown(app: &AppHandle) {
     {
         eprintln!("failed to close recording countdown: {error}");
     }
+}
+
+const fn recording_overlay_content_protected() -> bool {
+    cfg!(target_os = "windows")
 }
 
 fn show_recording_editor(app: &AppHandle, artifact_id: &str) -> Result<(), AppError> {

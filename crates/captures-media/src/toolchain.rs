@@ -11,7 +11,11 @@ use std::{
     time::Duration,
 };
 
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+use captures_video::H264Mp4Writer;
 use serde::Deserialize;
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+use std::io;
 use thiserror::Error;
 
 use crate::{
@@ -547,9 +551,29 @@ impl MediaToolchain {
         }
         if spec.format == ExportFormat::WebM {
             return Err(MediaToolError::Process(
-                "WebM export is unavailable in the macOS media bundle".to_owned(),
+                "WebM export is not available in the bundled media tools".to_owned(),
             ));
         }
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        {
+            self.run_openh264_export(input, output, edit, spec, attempt, cancel)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            self.run_videotoolbox_export(input, output, edit, spec, attempt, cancel)
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn run_videotoolbox_export(
+        &self,
+        input: &Path,
+        output: &Path,
+        edit: &EditSpec,
+        spec: &ExportSpec,
+        attempt: &VideoAttempt,
+        cancel: &CancelToken,
+    ) -> Result<(), MediaToolError> {
         let mut command = Command::new(&self.ffmpeg);
         command.args(["-hide_banner", "-loglevel", "error", "-y"]);
         if edit.trim_start_ms > 0 {
@@ -602,6 +626,199 @@ impl MediaToolchain {
             command.arg("-an");
         }
         command.args(["-movflags", "+faststart"]).arg(output);
+        run_command(&mut command, cancel, "FFmpeg")
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    fn run_openh264_export(
+        &self,
+        input: &Path,
+        output: &Path,
+        edit: &EditSpec,
+        spec: &ExportSpec,
+        attempt: &VideoAttempt,
+        cancel: &CancelToken,
+    ) -> Result<(), MediaToolError> {
+        let encoded_video = if attempt.has_audio {
+            temporary_output_path(output, "openh264-video")
+        } else {
+            output.to_path_buf()
+        };
+        let result = self
+            .encode_openh264_video(input, &encoded_video, edit, spec, attempt, cancel)
+            .and_then(|()| {
+                if attempt.has_audio {
+                    self.mux_openh264_audio(input, &encoded_video, output, edit, attempt, cancel)
+                } else {
+                    Ok(())
+                }
+            });
+        if result.is_err() {
+            let _ = fs::remove_file(output);
+        }
+        if attempt.has_audio {
+            let _ = fs::remove_file(encoded_video);
+        }
+        result
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    fn encode_openh264_video(
+        &self,
+        input: &Path,
+        output: &Path,
+        edit: &EditSpec,
+        spec: &ExportSpec,
+        attempt: &VideoAttempt,
+        cancel: &CancelToken,
+    ) -> Result<(), MediaToolError> {
+        if cancel.is_cancelled() {
+            return Err(MediaToolError::Cancelled);
+        }
+        let (width, height) = fit_openh264_dimensions(attempt.width, attempt.height);
+        let mut writer = H264Mp4Writer::create(
+            output,
+            width,
+            height,
+            attempt.frames_per_second,
+            openh264_bitrate(attempt, spec),
+        )
+        .map_err(|error| MediaToolError::Process(error.to_string()))?;
+        let mut command = Command::new(&self.ffmpeg);
+        command.args(["-hide_banner", "-loglevel", "error", "-y"]);
+        if edit.trim_start_ms > 0 {
+            command.args(["-ss", &seconds(edit.trim_start_ms)]);
+        }
+        command.arg("-i").arg(input);
+        if let Some(trim_end_ms) = edit.trim_end_ms {
+            command.args([
+                "-to",
+                &seconds(trim_end_ms.saturating_sub(edit.trim_start_ms)),
+            ]);
+        }
+        let video_filter = video_filter(edit, width, height, attempt.frames_per_second);
+        command
+            .args(["-vf", &video_filter, "-map", "0:v:0", "-an"])
+            .args(["-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command
+            .spawn()
+            .map_err(|error| map_spawn_error(error, "FFmpeg"))?;
+        let Some(mut stdout) = child.stdout.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(MediaToolError::Process(
+                "failed to read decoded video frames".to_owned(),
+            ));
+        };
+        let Some(mut stderr) = child.stderr.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(MediaToolError::Process(
+                "failed to capture media tool errors".to_owned(),
+            ));
+        };
+        let mut stderr_reader = Some(thread::spawn(move || {
+            let mut bytes = Vec::new();
+            stderr.read_to_end(&mut bytes).map(|_| bytes)
+        }));
+        let frame_size = usize::try_from(width)
+            .ok()
+            .and_then(|width| {
+                usize::try_from(height)
+                    .ok()
+                    .and_then(|height| width.checked_mul(height))
+            })
+            .and_then(|pixels| pixels.checked_mul(3))
+            .ok_or(MediaToolError::IncompleteMetadata)?;
+        let mut frame = vec![0_u8; frame_size];
+        let mut frame_index = 0_u64;
+        let result = (|| -> Result<(), MediaToolError> {
+            while read_complete_frame(&mut stdout, &mut frame)? {
+                if cancel.is_cancelled() {
+                    return Err(MediaToolError::Cancelled);
+                }
+                let timestamp_ms =
+                    frame_index.saturating_mul(1_000) / u64::from(attempt.frames_per_second);
+                writer
+                    .encode_rgb(&frame, timestamp_ms)
+                    .map_err(|error| MediaToolError::Process(error.to_string()))?;
+                frame_index = frame_index.saturating_add(1);
+            }
+            let status = child.wait()?;
+            let stderr = stderr_reader
+                .take()
+                .ok_or_else(|| {
+                    MediaToolError::Process("media tool error reader was missing".to_owned())
+                })?
+                .join()
+                .map_err(|_| {
+                    MediaToolError::Process("media tool error reader panicked".to_owned())
+                })??;
+            complete_child(status, &stderr)?;
+            let duration_ms =
+                frame_index.saturating_mul(1_000) / u64::from(attempt.frames_per_second);
+            writer
+                .finish(duration_ms.max(1))
+                .map_err(|error| MediaToolError::Process(error.to_string()))?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = child.kill();
+            let _ = child.wait();
+            if let Some(stderr_reader) = stderr_reader.take() {
+                let _ = stderr_reader.join();
+            }
+            let _ = fs::remove_file(output);
+        }
+        result
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    fn mux_openh264_audio(
+        &self,
+        input: &Path,
+        encoded_video: &Path,
+        output: &Path,
+        edit: &EditSpec,
+        attempt: &VideoAttempt,
+        cancel: &CancelToken,
+    ) -> Result<(), MediaToolError> {
+        let mut command = Command::new(&self.ffmpeg);
+        command.args(["-hide_banner", "-loglevel", "error", "-y"]);
+        if edit.trim_start_ms > 0 {
+            command.args(["-ss", &seconds(edit.trim_start_ms)]);
+        }
+        command.arg("-i").arg(input).arg("-i").arg(encoded_video);
+        if let Some(trim_end_ms) = edit.trim_end_ms {
+            command.args([
+                "-t",
+                &seconds(trim_end_ms.saturating_sub(edit.trim_start_ms)),
+            ]);
+        }
+        let audio_filter = audio_filter(edit, attempt)?;
+        command
+            .args([
+                "-filter_complex",
+                &audio_filter,
+                "-map",
+                "1:v:0",
+                "-map",
+                "[audio_out]",
+                "-c:v",
+                "copy",
+                "-c:a",
+                "aac",
+                "-b:a",
+                &attempt.audio_bitrate.to_string(),
+            ])
+            .args(["-movflags", "+faststart"]);
+        if edit.audio.mono_output || attempt.force_mono {
+            command.args(["-ac", "1"]);
+        }
+        command.arg(output);
         run_command(&mut command, cancel, "FFmpeg")
     }
 
@@ -905,6 +1122,38 @@ fn fit_even(width: u32, height: u32, maximum_height: u32) -> (u32, u32) {
     (width, height)
 }
 
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn fit_openh264_dimensions(width: u32, height: u32) -> (u32, u32) {
+    let (maximum_width, maximum_height) = if width >= height {
+        (3_840.0, 2_160.0)
+    } else {
+        (2_160.0, 3_840.0)
+    };
+    let scale = (maximum_width / f64::from(width.max(1)))
+        .min(maximum_height / f64::from(height.max(1)))
+        .min(1.0);
+    (
+        ((f64::from(width) * scale).floor() as u32 & !1).max(2),
+        ((f64::from(height) * scale).floor() as u32 & !1).max(2),
+    )
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn openh264_bitrate(attempt: &VideoAttempt, spec: &ExportSpec) -> u32 {
+    let bits_per_pixel_percent = match spec.quality {
+        QualityPreset::Preserve | QualityPreset::High => 12_u64,
+        QualityPreset::Standard => 8,
+        QualityPreset::Small => 5,
+    };
+    let estimated = u64::from(attempt.width)
+        .saturating_mul(u64::from(attempt.height))
+        .saturating_mul(u64::from(attempt.frames_per_second))
+        .saturating_mul(bits_per_pixel_percent)
+        / 100;
+    let bitrate = attempt.video_bitrate.unwrap_or(estimated);
+    u32::try_from(bitrate.clamp(250_000, 50_000_000)).unwrap_or(50_000_000)
+}
+
 fn video_filter(edit: &EditSpec, width: u32, height: u32, fps: u16) -> String {
     let mut filters = Vec::new();
     if let Some(crop) = edit.crop {
@@ -1043,6 +1292,24 @@ fn run_command(
     }
 }
 
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn read_complete_frame(reader: &mut impl Read, frame: &mut [u8]) -> io::Result<bool> {
+    let mut filled = 0;
+    while filled < frame.len() {
+        match reader.read(&mut frame[filled..])? {
+            0 if filled == 0 => return Ok(false),
+            0 => {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "FFmpeg returned a partial raw video frame",
+                ));
+            }
+            count => filled += count,
+        }
+    }
+    Ok(true)
+}
+
 fn complete_child(status: ExitStatus, stderr: &[u8]) -> Result<(), MediaToolError> {
     if status.success() {
         Ok(())
@@ -1161,10 +1428,12 @@ struct FfprobeFormat {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "macos")]
+    use super::TimelineSpriteSpec;
     use super::{
-        CancelToken, MediaToolchain, TimelineSpriteSpec, VideoAttempt, audio_edit_is_identity,
-        audio_filter, escape_concat_path, export_attempts, fit_even, gif_export_filter, gif_filter,
-        seconds, validate_edit_spec, visual_edit_is_identity,
+        CancelToken, MediaToolchain, VideoAttempt, audio_edit_is_identity, audio_filter,
+        escape_concat_path, export_attempts, fit_even, gif_export_filter, gif_filter, seconds,
+        validate_edit_spec, visual_edit_is_identity,
     };
     use crate::{
         AudioEdit, CropRect, EditSpec, ExportFormat, ExportSpec, MediaKind, MediaMetadata,
@@ -1408,11 +1677,18 @@ mod tests {
     }
 
     #[cfg(target_os = "macos")]
-    fn media_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    fn media_test_guard() -> Option<std::sync::MutexGuard<'static, ()>> {
+        let (toolchain, _) = bundled_toolchain();
+        if !toolchain.ffmpeg.is_file() || !toolchain.ffprobe.is_file() {
+            eprintln!("macOS media sidecars are not prepared in this checkout");
+            return None;
+        }
         static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-        LOCK.get_or_init(|| std::sync::Mutex::new(()))
-            .lock()
-            .expect("media test lock")
+        Some(
+            LOCK.get_or_init(|| std::sync::Mutex::new(()))
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
     }
 
     #[cfg(target_os = "macos")]
@@ -1495,7 +1771,9 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn preserve_export_is_byte_identical_when_untouched() {
-        let _guard = media_test_guard();
+        let Some(_guard) = media_test_guard() else {
+            return;
+        };
         let directory = tempfile::tempdir().expect("temporary directory");
         let source = directory.path().join("source.mp4");
         let destination = directory.path().join("copy.mp4");
@@ -1522,7 +1800,9 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn audio_only_edits_copy_the_video_stream() {
-        let _guard = media_test_guard();
+        let Some(_guard) = media_test_guard() else {
+            return;
+        };
         let directory = tempfile::tempdir().expect("temporary directory");
         let source = directory.path().join("source.mp4");
         let destination = directory.path().join("audio-edit.mp4");
@@ -1560,7 +1840,9 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn visual_edits_use_the_high_quality_h264_path() {
-        let _guard = media_test_guard();
+        let Some(_guard) = media_test_guard() else {
+            return;
+        };
         if !video_toolbox_available() {
             eprintln!("VideoToolbox is unavailable in this execution context");
             return;
@@ -1602,7 +1884,9 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn timeline_sprite_contains_twelve_sampled_frames() {
-        let _guard = media_test_guard();
+        let Some(_guard) = media_test_guard() else {
+            return;
+        };
         let directory = tempfile::tempdir().expect("temporary directory");
         let source = directory.path().join("source.mp4");
         let destination = directory.path().join("timeline.png");
@@ -1631,7 +1915,9 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn maximum_size_export_never_exceeds_the_exact_ceiling() {
-        let _guard = media_test_guard();
+        let Some(_guard) = media_test_guard() else {
+            return;
+        };
         if !video_toolbox_available() {
             eprintln!("VideoToolbox is unavailable in this execution context");
             return;
@@ -1658,5 +1944,117 @@ mod tests {
 
         assert!(outcome.size_bytes <= maximum);
         assert!(std::fs::metadata(destination).unwrap().len() <= maximum);
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    #[test]
+    fn cross_platform_visual_edits_encode_h264_and_keep_audio() {
+        let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .expect("repository root");
+        let target = if cfg!(target_os = "windows") {
+            "x86_64-pc-windows-msvc.exe"
+        } else {
+            "x86_64-unknown-linux-gnu"
+        };
+        let ffmpeg = std::env::var_os("CAPTURES_TEST_FFMPEG")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                repository
+                    .join("apps/desktop/src-tauri/binaries")
+                    .join(format!("ffmpeg-{target}"))
+            });
+        let ffprobe = std::env::var_os("CAPTURES_TEST_FFPROBE")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                repository
+                    .join("apps/desktop/src-tauri/binaries")
+                    .join(format!("ffprobe-{target}"))
+            });
+        if !ffmpeg.is_file() || !ffprobe.is_file() {
+            eprintln!("cross-platform media sidecars are not prepared in this checkout");
+            return;
+        }
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let source = directory.path().join("source.mp4");
+        let destination = directory.path().join("crop.mp4");
+        let status = std::process::Command::new(&ffmpeg)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=320x180:rate=30",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=48000",
+                "-t",
+                "1",
+                "-c:v",
+                "mpeg4",
+                "-q:v",
+                "2",
+                "-c:a",
+                "aac",
+                "-shortest",
+            ])
+            .arg(&source)
+            .status()
+            .expect("bundled FFmpeg starts");
+        assert!(status.success(), "test recording generated");
+
+        let mut edit = EditSpec {
+            crop: Some(CropRect {
+                x: 10,
+                y: 10,
+                width: 300,
+                height: 160,
+            }),
+            ..EditSpec::default()
+        };
+        edit.audio.source_has_system_audio = true;
+        let toolchain = MediaToolchain::new(ffmpeg, ffprobe.clone());
+        toolchain
+            .export(
+                &source,
+                &destination,
+                &edit,
+                &ExportSpec {
+                    format: ExportFormat::Mp4,
+                    quality: QualityPreset::Preserve,
+                    max_size_bytes: None,
+                    frames_per_second: Some(30),
+                    gif_max_colors: None,
+                },
+                &CancelToken::default(),
+                |_| {},
+            )
+            .expect("OpenH264 crop and audio mux");
+
+        let probe = toolchain.probe(&destination).expect("edited probe");
+        assert_eq!((probe.metadata.width, probe.metadata.height), (300, 160));
+        assert!(probe.has_audio);
+        let codec = std::process::Command::new(ffprobe)
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=codec_name",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+            ])
+            .arg(destination)
+            .output()
+            .expect("codec probe");
+        assert!(codec.status.success());
+        assert_eq!(String::from_utf8_lossy(&codec.stdout).trim(), "h264");
     }
 }

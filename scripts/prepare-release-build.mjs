@@ -22,12 +22,10 @@ if (missing.length > 0) {
   throw new Error(`missing release environment secrets: ${missing.join(", ")}`);
 }
 
-const releaseConfiguration = process.platform === "darwin"
-  ? {
-      ...JSON.parse(readFileSync(resolve("apps/desktop/src-tauri/tauri.recording.conf.json"), "utf8")),
-      version: appVersion,
-    }
-  : { version: appVersion };
+const releaseConfiguration = {
+  ...JSON.parse(readFileSync(resolve("apps/desktop/src-tauri/tauri.recording.conf.json"), "utf8")),
+  version: appVersion,
+};
 writeFileSync(
   resolve("apps/desktop/src-tauri/tauri.release.conf.json"),
   `${JSON.stringify(releaseConfiguration, null, 2)}\n`,

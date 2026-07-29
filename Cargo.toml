@@ -5,7 +5,9 @@ members = [
     "crates/captures-media",
     "crates/captures-macos-window",
     "crates/captures-recording",
+    "crates/captures-recording-xcap",
     "crates/captures-recording-macos",
+    "crates/captures-video",
 ]
 resolver = "2"
 

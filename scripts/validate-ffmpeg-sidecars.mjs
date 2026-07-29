@@ -10,8 +10,6 @@ const REQUIRED_CONFIGURATION_FLAGS = [
   "--disable-network",
   "--disable-nonfree",
   "--disable-version3",
-  "--enable-audiotoolbox",
-  "--enable-videotoolbox",
   "--enable-zlib",
 ];
 const FORBIDDEN_CONFIGURATION_FLAGS = [
@@ -20,7 +18,7 @@ const FORBIDDEN_CONFIGURATION_FLAGS = [
   "--enable-version3",
   "--enable-libx264",
 ];
-const REQUIRED_ENCODERS = ["aac", "gif", "h264_videotoolbox", "png"];
+const REQUIRED_ENCODERS = ["aac", "gif", "mpeg4", "png"];
 const REQUIRED_FILTERS = [
   "amix",
   "aresample",
@@ -50,6 +48,14 @@ function assertNonEmpty(path, label) {
   if (statSync(path).size === 0) throw new Error(`${label} is empty`);
 }
 
+function platformConfigurationFlags(platform) {
+  if (platform === "darwin") return ["--enable-audiotoolbox", "--enable-videotoolbox"];
+  if (platform === "win32") {
+    return ["--enable-w32threads", "--extra-ldflags=-static", "--pkg-config-flags=--static"];
+  }
+  return ["--enable-pthreads"];
+}
+
 function validateSyntheticPipeline(ffmpeg, ffprobe) {
   const directory = mkdtempSync(join(tmpdir(), "captures-ffmpeg-smoke-"));
   const source = join(directory, "source.mp4");
@@ -60,8 +66,7 @@ function validateSyntheticPipeline(ffmpeg, ffprobe) {
       "-hide_banner", "-loglevel", "error", "-y",
       "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=15",
       "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
-      "-t", "1", "-shortest", "-c:v", "h264_videotoolbox", "-allow_sw", "1",
-      "-b:v", "800k", "-c:a", "aac", source,
+      "-t", "1", "-shortest", "-c:v", "mpeg4", "-q:v", "3", "-c:a", "aac", source,
     ]);
     run(ffmpeg, [
       "-hide_banner", "-loglevel", "error", "-y", "-ss", "0", "-i", source,
@@ -84,8 +89,11 @@ function validateSyntheticPipeline(ffmpeg, ffprobe) {
   }
 }
 
-export function validateBuildConfigurationText(text) {
+export function validateBuildConfigurationText(text, platform = process.platform) {
   for (const flag of REQUIRED_CONFIGURATION_FLAGS) assertIncludes(text, flag, "FFmpeg build configuration");
+  for (const flag of platformConfigurationFlags(platform)) {
+    assertIncludes(text, flag, "FFmpeg build configuration");
+  }
   for (const flag of FORBIDDEN_CONFIGURATION_FLAGS) {
     if (text.includes(flag)) throw new Error(`FFmpeg build configuration contains forbidden flag ${flag}`);
   }
@@ -99,13 +107,21 @@ export function validateSidecars(ffmpeg, ffprobe, buildConfiguration) {
   const ffprobeVersion = run(ffprobe, ["-hide_banner", "-version"]);
   assertIncludes(ffmpegVersion, "ffmpeg version 8.1.2", "FFmpeg sidecar");
   assertIncludes(ffprobeVersion, "ffprobe version 8.1.2", "ffprobe sidecar");
-  for (const flag of REQUIRED_CONFIGURATION_FLAGS) assertIncludes(ffmpegVersion, flag, "FFmpeg sidecar");
+  for (const flag of [
+    ...REQUIRED_CONFIGURATION_FLAGS,
+    ...platformConfigurationFlags(process.platform),
+  ]) {
+    assertIncludes(ffmpegVersion, flag, "FFmpeg sidecar");
+  }
   for (const flag of FORBIDDEN_CONFIGURATION_FLAGS) {
     if (ffmpegVersion.includes(flag)) throw new Error(`FFmpeg sidecar contains forbidden flag ${flag}`);
   }
 
   const encoders = run(ffmpeg, ["-hide_banner", "-encoders"]);
-  for (const encoder of REQUIRED_ENCODERS) {
+  const requiredEncoders = process.platform === "darwin"
+    ? [...REQUIRED_ENCODERS, "h264_videotoolbox"]
+    : REQUIRED_ENCODERS;
+  for (const encoder of requiredEncoders) {
     if (!new RegExp(`\\b${encoder.replaceAll("+", "\\+")}\\b`, "u").test(encoders)) {
       throw new Error(`FFmpeg sidecar is missing required encoder ${encoder}`);
     }

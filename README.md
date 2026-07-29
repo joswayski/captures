@@ -9,8 +9,8 @@ macOS is the primary development target today. Windows and Linux builds are avai
 ## Features
 
 - Capture a region, window, or full display.
-- On macOS 13+, record a region, window, or display at up to its native pixel resolution, then trim, crop, resize, and save it as H.264/AAC video or an optimized GIF.
-- Record desktop audio and a selected microphone independently, with pause, resume, restart, mute, interruption recovery, and hideable recording controls. macOS 15+ can also show click highlights.
+- Record a region, window area, or display on macOS 13+, Windows 11, and Linux, then trim, crop, resize, and save it as H.264 video or an optimized GIF.
+- On macOS, record desktop audio and a selected microphone independently, with pause, resume, restart, mute, interruption recovery, and hideable recording controls. macOS 15+ can also show click highlights.
 - Take a lossless region, window, or display screenshot while a recording continues.
 - Capture user-facing Captures windows such as Preferences, Capture History, previews, and editors; capture controls stay out of the result.
 - Review recordings on an aspect-correct filmstrip timeline, adjust crop and audio, then save changes to the original or make a named copy, with preserved quality, optional compression, or an exact maximum file size.
@@ -25,11 +25,11 @@ macOS is the primary development target today. Windows and Linux builds are avai
 
 The roadmap is still taking shape. Likely additions include:
 
-- Windows and Linux recording backends, followed by recording feature parity across platforms.
+- Hardware-accelerated encoding, audio capture, cursor control, and click-highlight parity for the Windows and Linux recording backends.
+- Native Wayland window targeting and reliable exclusion of Captures controls from Linux recordings.
 - Editable click highlights and keystroke overlays after recording.
 - Screenshot markup and editing.
 - Optional compressed screenshot formats and quality controls; lossless PNG remains the default.
-- Full feature parity across macOS, Windows, and Linux.
 - Optional cloud hosting for images and recordings with shareable `captur.es/<id>` links.
 - Scrolling capture for content larger than the screen.
 - On-device text recognition (OCR).
@@ -45,10 +45,17 @@ These are directions, not promised release dates or a fixed order.
 
 | Platform | Status |
 | --- | --- |
-| macOS 13+ | Screenshots, video, and GIF recording; primary development target |
-| Windows 11 | Experimental screenshots; recording is planned |
-| Linux X11 | Experimental screenshots; recording is planned |
-| Linux Wayland | Partial screenshot support through the desktop portal and XWayland; recording is planned |
+| macOS 13+ | Screenshots and H.264/AAC or GIF recording; primary development target |
+| Windows 11 | Experimental screenshots and silent H.264 or GIF recording for regions, fixed window areas, and displays |
+| Linux X11 | Experimental screenshots and silent H.264 or GIF recording for regions, fixed window areas, and displays |
+| Linux Wayland | Partial screenshots and experimental silent display/region recording through the desktop portal; window targeting remains limited to XWayland |
+
+The Windows and Linux recorder currently uses a portable CPU H.264 encoder and
+caps output at 4K. Desktop audio, microphone audio, click highlights, and
+cursor capture are macOS-only for now. Windows excludes the
+recording controls from captured output; on Linux, hide the controls before
+recording content underneath them. Wayland asks for a screen again through the
+system portal, so choose the same display selected in Captures.
 
 ## Download
 
@@ -71,11 +78,12 @@ All five global capture shortcuts can be changed in Preferences.
 
 You will need Rust 1.94 with `rustfmt` and `clippy`, Node.js 24, and npm 11.
 macOS builds currently require the macOS 26 SDK for the pinned ScreenCaptureKit bindings; the app's deployment target remains macOS 13.
-Windows development also requires the Visual Studio C++ build tools and a Windows 11 SDK.
+Windows development also requires the Visual Studio C++ build tools, a Windows
+11 SDK, and an MSYS2/MinGW build environment for the bundled media sidecars.
 
 ```sh
 npm install
-npm run prepare:media # macOS: first run only, unless the pinned build changes
+npm run prepare:media # first run on each OS, unless the pinned build changes
 npm run dev
 ```
 
@@ -87,14 +95,15 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Build an installer or app bundle on the operating system where it will run. On macOS, `npm run build` also:
+Build an installer or app bundle on the operating system where it will run.
+`npm run build` builds and validates the platform's pinned LGPL-only FFmpeg and
+ffprobe sidecars before packaging. On macOS it also:
 
 1. Unmounts stale disk images left by earlier builds in this checkout
-2. Builds and validates the pinned LGPL-only FFmpeg and ffprobe sidecars
-3. Builds the release bundle
-4. Quits any running Captures instance only after the build succeeds
-5. Installs `Captures.app` into `/Applications` (replacing any previous copy)
-6. Launches Captures
+2. Builds the release bundle
+3. Quits any running Captures instance only after the build succeeds
+4. Installs `Captures.app` into `/Applications` (replacing any previous copy)
+5. Launches Captures
 
 Installers and app bundles are still written under `target/release/bundle` (including the DMG).
 
@@ -122,7 +131,14 @@ an NSIS installer `.exe` under `target/release/bundle/nsis`, an `.msi` under
 Before compiling, the build stops a running copy at that exact unpackaged path so Windows
 can replace it; an installed copy elsewhere is not stopped.
 
-Recording capture uses ScreenCaptureKit and Apple media APIs. Editing and GIF conversion use separately bundled FFmpeg command-line sidecars built without GPL, nonfree, or libx264 components. Build, source-distribution, and license details live in [docs/media-sidecars.md](docs/media-sidecars.md).
+On macOS, recording uses ScreenCaptureKit and Apple's hardware-aware
+VideoToolbox H.264 path. Windows and Linux use the operating system capture APIs
+exposed by `xcap`, followed by Captures' in-process OpenH264 CPU encoder. FFmpeg
+is not the live recorder: separately bundled FFmpeg command-line sidecars
+finalize segments and handle editing and GIF conversion on every platform. The
+sidecars are built without GPL, nonfree, or libx264 components. Build,
+source-distribution, and license details live in
+[docs/media-sidecars.md](docs/media-sidecars.md).
 
 ## Privacy
 

@@ -8,7 +8,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use captures_recording::{AudioDevice, AudioDeviceKind, RecordingOptions, RecordingTarget};
+use captures_recording::{
+    AudioDevice, AudioDeviceKind, RecordingOptions, RecordingSegmentInfo, RecordingTarget,
+};
 use core_graphics::display::CGDisplay as CoreGraphicsDisplay;
 use screencapturekit::{
     audio_devices::AudioInputDevice,
@@ -26,7 +28,7 @@ use screencapturekit::{
 };
 
 use crate::{
-    MacRecordingError, MacRecordingResult, SegmentInfo,
+    MacRecordingError, MacRecordingResult,
     writer::{ClickHighlightSource, MediaWriter},
 };
 
@@ -256,7 +258,7 @@ impl NativeRecordingSegment {
             .clone()
     }
 
-    pub fn stop(mut self) -> MacRecordingResult<SegmentInfo> {
+    pub fn stop(mut self) -> MacRecordingResult<RecordingSegmentInfo> {
         // ScreenCaptureKit can report a generic stop error after it has already
         // stopped delivering samples. The media collected up to that point is
         // still valid, so always detach the outputs and finalize the writer.
@@ -281,7 +283,7 @@ impl NativeRecordingSegment {
         }
         let size_bytes = fs::metadata(&self.path)?.len();
         let duration_ms = self.writer.duration_ms();
-        Ok(SegmentInfo {
+        Ok(RecordingSegmentInfo {
             path: self.path,
             microphone_path: None,
             microphone_offset_ms: 0,

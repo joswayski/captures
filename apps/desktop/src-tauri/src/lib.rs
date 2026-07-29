@@ -2771,7 +2771,6 @@ fn show_capture_history(app: &AppHandle) {
     });
 }
 
-#[cfg(target_os = "macos")]
 fn primary_app_window_priority(label: &str) -> Option<u8> {
     if matches!(label, "recording-selector" | "recording-countdown") {
         return Some(0);
@@ -2789,16 +2788,9 @@ fn primary_app_window_priority(label: &str) -> Option<u8> {
 }
 
 fn focus_or_show_primary_app_window(app: &AppHandle) {
-    #[cfg(target_os = "macos")]
-    {
-        focus_primary_app_window(app);
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    open_capture_controls(app, CaptureSelectorMode::Screenshot);
+    focus_primary_app_window(app);
 }
 
-#[cfg(target_os = "macos")]
 fn focus_primary_app_window(app: &AppHandle) {
     let recording_is_active = {
         let state = app.state::<Arc<AppState>>();
@@ -3112,15 +3104,13 @@ mod tests {
 
     use tauri_plugin_global_shortcut::ShortcutState;
 
-    #[cfg(target_os = "macos")]
-    use super::primary_app_window_priority;
     use super::{
         AppError, CaptureMode, ThumbnailCursorAction, clipboard_fingerprint,
-        display_contains_pointer, parse_shortcut, recording_saved_notice_label,
-        should_activate_capture_cursor_before_reveal, should_trigger_shortcut,
-        thumbnail_cursor_action, thumbnail_geometry, thumbnail_pointer_position,
-        thumbnail_visible_window_height, track_shortcut_suppression, viewer_window_label,
-        window_is_capturable, windows_window_is_capture_overlay,
+        display_contains_pointer, parse_shortcut, primary_app_window_priority,
+        recording_saved_notice_label, should_activate_capture_cursor_before_reveal,
+        should_trigger_shortcut, thumbnail_cursor_action, thumbnail_geometry,
+        thumbnail_pointer_position, thumbnail_visible_window_height, track_shortcut_suppression,
+        viewer_window_label, window_is_capturable, windows_window_is_capture_overlay,
     };
 
     use captures_capture::{DisplayDescriptor, WindowDescriptor};
@@ -3384,9 +3374,8 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
-    fn dock_reopen_prefers_editors_over_utility_windows() {
+    fn app_reopen_prefers_editors_over_utility_windows() {
         assert_eq!(primary_app_window_priority("recording-editor-abc"), Some(1));
         assert_eq!(primary_app_window_priority("history"), Some(2));
         assert_eq!(primary_app_window_priority("recording-hud"), Some(4));

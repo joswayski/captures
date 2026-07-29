@@ -12,19 +12,48 @@ BINARIES_DIRECTORY="$ROOT/apps/desktop/src-tauri/binaries"
 COMPLIANCE_DIRECTORY="$ROOT/apps/desktop/src-tauri/ffmpeg"
 DIST_DIRECTORY="$ROOT/target/ffmpeg-dist"
 
-if [[ "$(uname -s)" != "Darwin" ]]; then
-  echo "FFmpeg recording sidecars are currently built for macOS only." >&2
+TARGET_TRIPLE="$(rustc -vV | sed -n 's/^host: //p')"
+if [[ -z "$TARGET_TRIPLE" ]]; then
+  echo "Could not determine the Rust host target." >&2
   exit 1
 fi
-
-case "$(uname -m)" in
-  arm64) TARGET_TRIPLE="aarch64-apple-darwin" ;;
-  x86_64) TARGET_TRIPLE="x86_64-apple-darwin" ;;
-  *) echo "Unsupported macOS architecture: $(uname -m)" >&2; exit 1 ;;
+EXECUTABLE_SUFFIX=""
+PLATFORM_FLAGS=()
+case "$(uname -s)" in
+  Darwin)
+    [[ "$TARGET_TRIPLE" == *-apple-darwin ]] || {
+      echo "Unsupported macOS target: $TARGET_TRIPLE" >&2
+      exit 1
+    }
+    PLATFORM_FLAGS=(--enable-audiotoolbox --enable-videotoolbox)
+    ;;
+  Linux)
+    [[ "$TARGET_TRIPLE" == *-unknown-linux-gnu ]] || {
+      echo "Unsupported Linux target: $TARGET_TRIPLE" >&2
+      exit 1
+    }
+    PLATFORM_FLAGS=(--enable-pthreads)
+    ;;
+  MINGW*|MSYS*|CYGWIN*)
+    [[ "$TARGET_TRIPLE" == *-pc-windows-msvc ]] || {
+      echo "Unsupported Windows target: $TARGET_TRIPLE" >&2
+      exit 1
+    }
+    EXECUTABLE_SUFFIX=".exe"
+    PLATFORM_FLAGS=(
+      --enable-w32threads
+      --extra-ldflags=-static
+      --pkg-config-flags=--static
+    )
+    ;;
+  *)
+    echo "Unsupported operating system: $(uname -s)" >&2
+    exit 1
+    ;;
 esac
 
-FFMPEG_OUTPUT="$BINARIES_DIRECTORY/ffmpeg-$TARGET_TRIPLE"
-FFPROBE_OUTPUT="$BINARIES_DIRECTORY/ffprobe-$TARGET_TRIPLE"
+FFMPEG_OUTPUT="$BINARIES_DIRECTORY/ffmpeg-$TARGET_TRIPLE$EXECUTABLE_SUFFIX"
+FFPROBE_OUTPUT="$BINARIES_DIRECTORY/ffprobe-$TARGET_TRIPLE$EXECUTABLE_SUFFIX"
 CONFIGURE_FLAGS=(
   --disable-autodetect
   --disable-debug
@@ -36,20 +65,23 @@ CONFIGURE_FLAGS=(
   --disable-programs
   --disable-shared
   --disable-version3
-  --enable-audiotoolbox
   --enable-ffmpeg
   --enable-ffprobe
   --enable-small
   --enable-static
-  --enable-videotoolbox
   --enable-zlib
+  "${PLATFORM_FLAGS[@]}"
 )
 
 mkdir -p "$BUILD_ROOT" "$BINARIES_DIRECTORY" "$COMPLIANCE_DIRECTORY" "$DIST_DIRECTORY"
 if [[ ! -f "$SOURCE_ARCHIVE" ]]; then
   curl -fsSL "https://ffmpeg.org/releases/ffmpeg-$FFMPEG_VERSION.tar.xz" -o "$SOURCE_ARCHIVE"
 fi
-ACTUAL_SHA256="$(shasum -a 256 "$SOURCE_ARCHIVE" | awk '{print $1}')"
+if command -v shasum >/dev/null 2>&1; then
+  ACTUAL_SHA256="$(shasum -a 256 "$SOURCE_ARCHIVE" | awk '{print $1}')"
+else
+  ACTUAL_SHA256="$(sha256sum "$SOURCE_ARCHIVE" | awk '{print $1}')"
+fi
 if [[ "$ACTUAL_SHA256" != "$FFMPEG_SHA256" ]]; then
   echo "FFmpeg source checksum mismatch: expected $FFMPEG_SHA256, got $ACTUAL_SHA256" >&2
   exit 1
@@ -68,9 +100,16 @@ if [[ ! -x "$FFMPEG_OUTPUT" || ! -x "$FFPROBE_OUTPUT" || "${CAPTURES_REBUILD_FFM
   pushd "$SOURCE_DIRECTORY" >/dev/null
   make distclean >/dev/null 2>&1 || true
   ./configure "${CONFIGURE_FLAGS[@]}"
-  make -j"$(sysctl -n hw.logicalcpu)" ffmpeg ffprobe
-  cp ffmpeg "$FFMPEG_OUTPUT"
-  cp ffprobe "$FFPROBE_OUTPUT"
+  if command -v nproc >/dev/null 2>&1; then
+    JOBS="$(nproc)"
+  elif command -v sysctl >/dev/null 2>&1; then
+    JOBS="$(sysctl -n hw.logicalcpu)"
+  else
+    JOBS="${NUMBER_OF_PROCESSORS:-2}"
+  fi
+  make -j"$JOBS" "ffmpeg$EXECUTABLE_SUFFIX" "ffprobe$EXECUTABLE_SUFFIX"
+  cp "ffmpeg$EXECUTABLE_SUFFIX" "$FFMPEG_OUTPUT"
+  cp "ffprobe$EXECUTABLE_SUFFIX" "$FFPROBE_OUTPUT"
   popd >/dev/null
   chmod 755 "$FFMPEG_OUTPUT" "$FFPROBE_OUTPUT"
 fi
