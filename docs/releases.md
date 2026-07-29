@@ -180,9 +180,12 @@ sequence on clean machines:
 15. Delete a quick-access preview and confirm its native window becomes click-through immediately while the particle animation finishes.
 16. On clean Windows and Linux machines, record a display, region, and fixed
     window area; pause and resume; save an MP4; export a GIF; and apply a crop
-    and resize in the editor. Confirm unsupported audio, click, and cursor
-    controls are disabled. On Wayland, choose the same display in the portal and
-    hide the recording HUD before capturing its area.
+    and resize in the editor. Record desktop audio and each available microphone
+    independently, verify the live microphone meter and mute control, and confirm
+    the finalized MP4 exposes editable system and microphone tracks. On Windows
+    and X11, verify cursor visibility and animated click highlights. On Wayland,
+    confirm pointer options are disabled, choose the same display in the portal,
+    and hide the recording HUD before capturing its area.
 17. Confirm the packaged FFmpeg/ffprobe sidecars run on clean macOS, Windows,
     and Linux installations and the release includes every source and
     compliance asset listed in `docs/media-sidecars.md`.

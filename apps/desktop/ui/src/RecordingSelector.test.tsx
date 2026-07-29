@@ -215,7 +215,7 @@ describe("RecordingSelector", () => {
     });
   });
 
-  it("disables unsupported recording options without sending stale macOS settings", async () => {
+  it("disables unsupported recording options without sending stale settings", async () => {
     preparedSession = {
       ...session,
       recording_capabilities: {

@@ -1778,7 +1778,7 @@ export function RecordingSelector() {
                 className="recording-toggle"
                 title={session.recording_capabilities.cursor_control
                   ? undefined
-                  : "Cursor capture is currently available on macOS only"}
+                  : "Cursor capture is unavailable in this desktop session"}
               >
                 <input
                   aria-label="Show cursor"
@@ -1801,7 +1801,7 @@ export function RecordingSelector() {
                 className="recording-toggle"
                 title={session.recording_capabilities.click_highlights
                   ? undefined
-                  : "Click highlights are currently available on macOS only"}
+                  : "Click highlights are unavailable in this desktop session"}
               >
                 <input
                   aria-label="Show clicks"
@@ -1824,7 +1824,7 @@ export function RecordingSelector() {
                 className="recording-toggle"
                 title={session.recording_capabilities.system_audio
                   ? undefined
-                  : "Desktop audio recording is currently available on macOS only"}
+                  : "Desktop audio recording is unavailable in this desktop session"}
               >
                 <input
                   aria-label="Record desktop audio"
@@ -4658,7 +4658,7 @@ export function Preferences() {
             />
           </div>
         </div>
-        <label className="check-row capture-option"><input type="checkbox" checked={settings.recording.capture_system_audio} onChange={(event) => updateRecording("capture_system_audio", event.target.checked)} /><span>Record desktop audio<small>Captures excludes its own sounds and asks for access only when enabled.</small></span></label>
+        <label className="check-row capture-option"><input type="checkbox" checked={settings.recording.capture_system_audio} onChange={(event) => updateRecording("capture_system_audio", event.target.checked)} /><span>Record desktop audio<small>Records sound playing through the system output.</small></span></label>
         <div className="settings-select-field field-label"><span>Default microphone</span>
           <CustomSelect
             value={settings.recording.microphone_device_id ?? "off"}

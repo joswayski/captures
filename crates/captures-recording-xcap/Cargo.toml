@@ -14,7 +14,25 @@ thiserror.workspace = true
 
 [target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
 captures-capture = { path = "../captures-capture" }
+cpal = "0.16"
+hound = "3.5"
 xcap = { version = "0.9.6", features = ["wgc"] }
 
-[lints]
-workspace = true
+[target.'cfg(target_os = "linux")'.dependencies]
+pipewire = "0.9.2"
+x11rb = "0.13.2"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "allow", priority = -1 }
+missing_errors_doc = "allow"

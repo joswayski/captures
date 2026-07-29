@@ -17,6 +17,12 @@ pub struct RecordingSegmentManifest {
     pub index: u32,
     pub relative_path: String,
     #[serde(default)]
+    pub system_audio_relative_path: Option<String>,
+    #[serde(default)]
+    pub system_audio_offset_ms: i64,
+    #[serde(default)]
+    pub system_audio_warning: Option<String>,
+    #[serde(default)]
     pub microphone_relative_path: Option<String>,
     #[serde(default)]
     pub microphone_offset_ms: i64,
@@ -238,6 +244,9 @@ mod tests {
         first.segments.push(RecordingSegmentManifest {
             index: 0,
             relative_path: "segment-000.mp4".to_owned(),
+            system_audio_relative_path: Some("segment-000.system.wav".to_owned()),
+            system_audio_offset_ms: 4,
+            system_audio_warning: None,
             microphone_relative_path: Some("segment-000.mic.wav".to_owned()),
             microphone_offset_ms: 12,
             microphone_warning: None,
