@@ -1,0 +1,63 @@
+name: Install latest release
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/install-latest-release.yml"
+      - "scripts/install-latest-release.mjs"
+      - "scripts/install-latest-release.test.mjs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    name: Find a published release
+    runs-on: ubuntu-24.04
+    outputs:
+      available: ${{ steps.release.outputs.available }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check whether a stable release is published
+        id: release
+        shell: bash
+        run: |
+          count="$(
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+              --jq '[.[] | select(.draft == false and .prerelease == false)] | length'
+          )"
+          if (( count > 0 )); then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No stable release exists yet. Installer verification will begin after the first automatic release is published." >> "$GITHUB_STEP_SUMMARY"
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  install:
+    name: Install latest release (${{ matrix.name }})
+    needs: discover
+    if: needs.discover.outputs.available == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS Apple Silicon
+            os: macos-26
+          - name: Windows x64
+            os: windows-2025
+          - name: Ubuntu x64
+            os: ubuntu-24.04
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install and verify the newest complete release
+        run: node scripts/install-latest-release.mjs --no-launch

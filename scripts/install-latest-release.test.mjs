@@ -7,20 +7,33 @@ import test from "node:test";
 
 import {
   expectedChecksum,
-  latestDraftRelease,
+  latestPublishedRelease,
   parseOptions,
   platformSpec,
   releaseReadiness,
   verifyChecksum,
 } from "./install-latest-release.mjs";
 
-test("selects the newest draft even when an older draft is complete", () => {
-  const release = latestDraftRelease([
-    { id: 3, draft: false, created_at: "2026-07-29T16:00:00Z" },
-    { id: 1, draft: true, created_at: "2026-07-28T16:00:00Z" },
-    { id: 2, draft: true, created_at: "2026-07-29T15:00:00Z" },
+test("selects the newest stable published release", () => {
+  const release = latestPublishedRelease([
+    {
+      id: 3,
+      draft: false,
+      prerelease: false,
+      created_at: "2026-07-29T16:00:00Z",
+      published_at: "2026-07-29T17:00:00Z",
+    },
+    { id: 1, draft: true, prerelease: false, created_at: "2026-07-30T16:00:00Z" },
+    {
+      id: 2,
+      draft: false,
+      prerelease: false,
+      created_at: "2026-07-28T16:00:00Z",
+      published_at: "2026-07-28T17:00:00Z",
+    },
+    { id: 4, draft: false, prerelease: true, created_at: "2026-07-31T16:00:00Z" },
   ]);
-  assert.equal(release.id, 2);
+  assert.equal(release.id, 3);
 });
 
 test("requires both the system installer and completed-release marker", () => {

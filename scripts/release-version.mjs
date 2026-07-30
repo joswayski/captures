@@ -71,8 +71,18 @@ function currentTags() {
     .filter(Boolean);
 }
 
+export function configuredReleaseDate(timestamp = process.env.CAPTURES_RELEASE_TIMESTAMP) {
+  if (!timestamp) return releaseDate();
+
+  const parsed = new Date(timestamp);
+  if (Number.isNaN(parsed.valueOf())) {
+    throw new Error(`CAPTURES_RELEASE_TIMESTAMP must be an ISO-8601 timestamp, received ${timestamp}`);
+  }
+  return releaseDate(parsed);
+}
+
 function main() {
-  const version = nextReleaseVersion(releaseDate(), currentTags());
+  const version = nextReleaseVersion(configuredReleaseDate(), currentTags());
   const output = process.env.GITHUB_OUTPUT;
   if (output) {
     appendFileSync(

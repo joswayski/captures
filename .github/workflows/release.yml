@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Optional main-branch commit to rebuild as a historical release
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -15,6 +20,9 @@ jobs:
     permissions:
       actions: read
       contents: read
+    outputs:
+      release_sha: ${{ steps.target.outputs.release_sha }}
+      release_timestamp: ${{ steps.target.outputs.release_timestamp }}
     steps:
       - name: Restrict releases to main
         shell: bash
@@ -23,6 +31,29 @@ jobs:
             echo "Releases can only run from main." >&2
             exit 1
           fi
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Resolve the main commit to release
+        id: target
+        env:
+          REQUESTED_SHA: ${{ inputs.target_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git fetch origin main
+          release_sha="${REQUESTED_SHA:-$GITHUB_SHA}"
+          release_sha="$(git rev-parse "${release_sha}^{commit}")"
+          if ! git merge-base --is-ancestor "$release_sha" origin/main; then
+            echo "${release_sha} is not a commit on main." >&2
+            exit 1
+          fi
+          release_timestamp="$(git show -s --format=%cI "$release_sha")"
+          {
+            echo "release_sha=$release_sha"
+            echo "release_timestamp=$release_timestamp"
+          } >> "$GITHUB_OUTPUT"
       - name: Wait without dropping a main push
         env:
           GH_TOKEN: ${{ github.token }}
@@ -42,12 +73,35 @@ jobs:
             sleep 30
           done
 
+  version:
+    name: Choose release version
+    needs: queue
+    runs-on: ubuntu-24.04
+    outputs:
+      app_version: ${{ steps.version.outputs.app_version }}
+      display_version: ${{ steps.version.outputs.display_version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Choose the next CalVer
+        id: version
+        env:
+          CAPTURES_RELEASE_TIMESTAMP: ${{ needs.queue.outputs.release_timestamp }}
+        run: node scripts/release-version.mjs
+
   frontend:
     name: Frontend and release checks
     needs: queue
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.queue.outputs.release_sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -65,6 +119,8 @@ jobs:
         os: [macos-26, windows-2025, ubuntu-24.04]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.queue.outputs.release_sha }}
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         run: |
@@ -100,32 +156,25 @@ jobs:
 
   prepare:
     name: Create draft release
-    needs: [frontend, rust]
+    needs: [queue, version, frontend, rust]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     outputs:
-      app_version: ${{ steps.version.outputs.app_version }}
-      display_version: ${{ steps.version.outputs.display_version }}
+      app_version: ${{ needs.version.outputs.app_version }}
+      display_version: ${{ needs.version.outputs.display_version }}
+      release_sha: ${{ needs.queue.outputs.release_sha }}
       release_id: ${{ steps.draft.outputs.release_id }}
       release_notes: ${{ steps.draft.outputs.release_notes }}
-      tag: ${{ steps.version.outputs.tag }}
+      tag: ${{ needs.version.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-      - name: Choose the next CalVer
-        id: version
-        run: node scripts/release-version.mjs
       - name: Create the draft at the tested commit
         id: draft
         env:
           GH_TOKEN: ${{ github.token }}
-          DISPLAY_VERSION: ${{ steps.version.outputs.display_version }}
-          TAG: ${{ steps.version.outputs.tag }}
+          DISPLAY_VERSION: ${{ needs.version.outputs.display_version }}
+          RELEASE_SHA: ${{ needs.queue.outputs.release_sha }}
+          TAG: ${{ needs.version.outputs.tag }}
         shell: bash
         run: |
           stale_release_ids="$(
@@ -155,7 +204,7 @@ jobs:
             --method POST \
             "repos/${GITHUB_REPOSITORY}/releases" \
             -f tag_name="$TAG" \
-            -f target_commitish="$GITHUB_SHA" \
+            -f target_commitish="$RELEASE_SHA" \
             -f name="Captures $DISPLAY_VERSION" \
             -F draft=true \
             -F generate_release_notes=true \
@@ -163,7 +212,7 @@ jobs:
           release_id="$(jq -er .id "$release_file")"
           jq -r '.body // ""' "$release_file" > "$notes_file"
           if [[ ! -s "$notes_file" ]]; then
-            fallback_notes="Automated build of commit ${GITHUB_SHA:0:7}."
+            fallback_notes="Automated build of commit ${RELEASE_SHA:0:7}."
             echo "$fallback_notes" > "$notes_file"
             gh api \
               --method PATCH \
@@ -208,6 +257,8 @@ jobs:
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.release_sha }}
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         run: |
@@ -395,7 +446,7 @@ jobs:
         run: gh release upload "$TAG" target/ffmpeg-dist/* --clobber
 
   validate_draft:
-    name: Validate draft release
+    name: Validate staged release
     needs: [prepare, package]
     runs-on: ubuntu-24.04
     permissions:
@@ -405,7 +456,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Download and validate the complete draft
+      - name: Download and validate the complete staged release
         env:
           APP_VERSION: ${{ needs.prepare.outputs.app_version }}
           GH_TOKEN: ${{ github.token }}
@@ -427,10 +478,43 @@ jobs:
             exit 1
           fi
 
+  publish:
+    name: Publish release
+    needs: [prepare, validate_draft]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Publish the fully validated release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gh api \
+            --method PATCH \
+            "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            -F draft=false \
+            -F prerelease=false \
+            -f make_latest=true \
+            --silent
+          published="$(
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+              --jq '[.draft, .tag_name] | @tsv'
+          )"
+          if [[ "$published" != $'false\t'"$TAG" ]]; then
+            echo "Release ${TAG} was not published as expected." >&2
+            exit 1
+          fi
+
   cleanup:
     name: Remove incomplete release
-    if: ${{ always() && needs.prepare.result == 'success' && needs.validate_draft.result != 'success' }}
-    needs: [prepare, package, validate_draft]
+    if: ${{ always() && needs.prepare.result == 'success' && needs.publish.result != 'success' }}
+    needs: [prepare, package, validate_draft, publish]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -438,5 +522,32 @@ jobs:
       - name: Remove the failed draft and tag
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
           TAG: ${{ needs.prepare.outputs.tag }}
-        run: gh release delete "$TAG" --cleanup-tag --yes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          release="$(
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+              2>/dev/null \
+              || true
+          )"
+          if [[ -z "$release" ]]; then
+            exit 0
+          fi
+          if [[ "$(jq -r .draft <<< "$release")" != "true" ]]; then
+            echo "Refusing to remove published release ${TAG}." >&2
+            exit 1
+          fi
+          gh api \
+            --method DELETE \
+            "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            --silent
+          gh api \
+            --method DELETE \
+            "repos/${GITHUB_REPOSITORY}/git/refs/tags/${TAG}" \
+            --silent \
+            2>/dev/null \
+            || true

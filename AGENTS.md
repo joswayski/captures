@@ -4,13 +4,13 @@
 
 - Captures is a work-in-progress, cross-platform screen capture utility. Keep public wording broad enough to cover screenshots, GIFs, and video.
 - Clearly separate current features from roadmap ideas. Do not present tentative work as shipped or promise release dates unless the repository already commits to them.
-- Preserve the privacy-first model: captures stay local unless the user explicitly chooses a future upload or sharing action.
 
 ## Repository map
 
 - `apps/desktop` contains the Tauri desktop application and its React UI.
 - `apps/web` contains the static project website.
 - `crates` contains the shared Rust capture and platform-integration crates.
+- `DEVELOPMENT.md` contains local setup, validation, and packaging instructions.
 - `docs/releases.md` contains maintainer release and recovery procedures.
 - `apps/web/vite.config.ts` fetches homepage history from the GitHub API at build time. Do not check in hardcoded or generated commit history.
 
@@ -31,6 +31,7 @@
 ## Documentation
 
 - Every pull request must leave the root `README.md` accurate. Update it when a change affects features, platform support, shortcuts, setup, build commands, privacy, networking, releases, or deployment.
+- Keep the root README product-focused. Put local setup, validation, and packaging details in `DEVELOPMENT.md`.
 - If a pull request does not need a README edit, still verify that its changes do not make the README inaccurate; do not add no-op wording solely to touch the file.
 - Keep the README concise and user-oriented. Put detailed maintainer release procedures in `docs/releases.md` and web-specific operations in `apps/web/README.md`.
 - Keep current behavior and roadmap sections distinct, especially for features that are not implemented yet.

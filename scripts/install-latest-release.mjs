@@ -79,11 +79,12 @@ export function parseOptions(args) {
   return options;
 }
 
-export function latestDraftRelease(releases) {
+export function latestPublishedRelease(releases) {
   return releases
-    .filter((release) => release.draft)
+    .filter((release) => !release.draft && !release.prerelease)
     .sort((left, right) => {
-      const dateOrder = Date.parse(right.created_at) - Date.parse(left.created_at);
+      const dateOrder = Date.parse(right.published_at ?? right.created_at)
+        - Date.parse(left.published_at ?? left.created_at);
       return dateOrder || right.id - left.id;
     })[0] ?? null;
 }
@@ -173,14 +174,14 @@ function confirmGitHubAccess() {
 
   const auth = run("gh", ["auth", "status"]);
   if (auth.status !== 0) {
-    throw new Error("GitHub CLI must be signed in to access draft releases. Run `gh auth login`.");
+    throw new Error("GitHub CLI must be signed in to access releases. Run `gh auth login`.");
   }
 }
 
-function fetchLatestDraft() {
+function fetchLatestRelease() {
   const releases = githubJson(`repos/${REPOSITORY}/releases?per_page=100`);
-  const release = latestDraftRelease(releases);
-  if (!release) throw new Error(`no draft releases were found in ${REPOSITORY}`);
+  const release = latestPublishedRelease(releases);
+  if (!release) throw new Error(`no published releases were found in ${REPOSITORY}`);
   return release;
 }
 
@@ -496,13 +497,13 @@ function installAppImage(assetPath, launch) {
 function printHelp() {
   console.log(`Usage: npm run install:latest -- [options]
 
-Downloads, verifies, and installs the newest complete draft release for this system.
-The command waits up to one hour for an in-progress release by default.
+Downloads, verifies, and installs the newest complete release for this system.
+The command verifies the release checksum before changing the installed app.
 
 Options:
-  --dry-run    Report the newest draft's status without downloading or installing
+  --dry-run    Report the newest release's status without downloading or installing
   --no-launch  Do not open Captures after installation
-  --no-wait    Fail immediately if the newest draft is still building
+  --no-wait    Fail immediately if the newest release is incomplete
   --help       Show this help`);
 }
 
@@ -518,8 +519,8 @@ export async function main(args = process.argv.slice(2)) {
     && commandExists("dpkg-deb")
     && commandExists("apt-get", ["--version"]);
   const spec = platformSpec(process.platform, process.arch, preferDebian);
-  const release = fetchLatestDraft();
-  log(`Newest draft: ${release.name} (${release.tag_name}).`);
+  const release = fetchLatestRelease();
+  log(`Newest release: ${release.name} (${release.tag_name}).`);
 
   const initialReadiness = releaseReadiness(release, spec);
   if (options.dryRun) {
