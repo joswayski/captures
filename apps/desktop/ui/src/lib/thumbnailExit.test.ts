@@ -1,6 +1,7 @@
 import {
   buildThumbnailDustParticles,
   coverBackgroundLayout,
+  playThumbnailDustAnimations,
   prefersReducedMotion,
   THUMBNAIL_CARD_FALLBACK_HEIGHT,
   THUMBNAIL_CARD_FALLBACK_WIDTH,
@@ -213,5 +214,59 @@ describe("thumbnail exit effects", () => {
     expect(prefersReducedMotion({ matches: true })).toBe(true);
     expect(prefersReducedMotion({ matches: false })).toBe(false);
     expect(prefersReducedMotion(null)).toBe(false);
+  });
+
+  it("plays explicit WAAPI keyframes per dust chip so WebView2 cannot drop motion", () => {
+    const particles = buildThumbnailDustParticles(100, 80, {
+      cols: 2,
+      rows: 1,
+      random: () => 0.5,
+      chromeLeadMs: 0,
+    });
+    const animateCalls: Array<{ keyframes: Keyframe[]; options: KeyframeAnimationOptions }> = [];
+    const chips = particles.map((particle) => {
+      const el = document.createElement("span");
+      el.animate = ((keyframes: Keyframe[] | PropertyIndexedKeyframes | null, options?: number | KeyframeAnimationOptions) => {
+        animateCalls.push({
+          keyframes: Array.isArray(keyframes) ? keyframes : [],
+          options: typeof options === "object" && options ? options : {},
+        });
+        return {
+          cancel: () => undefined,
+        } as Animation;
+      }) as typeof el.animate;
+      // Keep particle identity available for assertions if needed.
+      el.dataset.particleId = String(particle.id);
+      return el;
+    });
+
+    const stop = playThumbnailDustAnimations(chips, particles);
+    expect(animateCalls).toHaveLength(particles.length);
+
+    const first = animateCalls[0];
+    expect(first.options.delay).toBe(particles[0].delayMs);
+    expect(first.options.duration).toBe(particles[0].durationMs);
+    expect(first.options.fill).toBe("forwards");
+
+    // Endpoint transform must embed resolved px values (not CSS variables).
+    const endFrame = first.keyframes[first.keyframes.length - 1];
+    expect(String(endFrame.transform)).toContain(`${particles[0].dx}px`);
+    expect(String(endFrame.transform)).toContain(`${particles[0].dy}px`);
+    expect(String(endFrame.transform)).not.toContain("var(");
+
+    expect(() => stop()).not.toThrow();
+  });
+
+  it("skips chips without Element.animate so tests and older hosts stay safe", () => {
+    const particles = buildThumbnailDustParticles(60, 40, {
+      cols: 2,
+      rows: 1,
+      random: () => 0.25,
+    });
+    const plain = document.createElement("span");
+    // jsdom may still provide animate; remove it to model a host without WAAPI.
+    // @ts-expect-error intentional host probe
+    plain.animate = undefined;
+    expect(() => playThumbnailDustAnimations([plain], particles)).not.toThrow();
   });
 });

@@ -406,9 +406,13 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging img { cur
   100% { opacity: 0; filter: blur(2px) brightness(.56); transform: scale(1.015); }
 }
 /*
- * Expanded layer bounds so hover-matched blur does not cage flying chips
- * inside the card rectangle (filter creates a containing box).
+ * Expanded layer bounds so flying chips are not caged inside the card.
  * Particle left/top are offset by the same inset in JS.
+ *
+ * Intentionally no CSS `filter` on this layer: a parent filter flattens chips
+ * into one compositor surface, and Windows WebView2 often then drops per-chip
+ * transform animation — leaving only the opacity fade. Dim is applied per chip
+ * instead; flight is driven by the Web Animations API (see playThumbnailDustAnimations).
  */
 .thumbnail-dust-layer {
   --dust-pad: 120px;
@@ -421,8 +425,6 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging img { cur
   pointer-events: none;
   border-radius: 0;
   overflow: visible;
-  /* 30aa257 look: same hover blur + dim for the whole dissolve. */
-  filter: blur(2px) brightness(.56);
   /* Clip to the card (inset by pad) while intact, then open fully for fly-out. */
   clip-path: inset(var(--dust-pad) round 12px);
   animation: thumbnail-dust-clip 2.55s cubic-bezier(.33,0,.2,1) forwards;
@@ -432,12 +434,11 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging img { cur
   display: block;
   border-radius: 0;
   background-repeat: no-repeat;
+  /* Match the hovered preview dim without a parent filter that cages motion. */
+  filter: brightness(.56);
   opacity: 1;
   transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
   box-shadow: none;
-  animation-name: thumbnail-dust-fly;
-  animation-timing-function: cubic-bezier(.28, 0, .12, 1);
-  animation-fill-mode: both;
   will-change: transform, opacity;
   backface-visibility: hidden;
 }
@@ -496,38 +497,7 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging img { cur
     opacity: 0;
   }
 }
-/*
- * Smooth 30aa257-style lift/fade. Rest has no shadow (no grid flash);
- * soft edge appears only once a chip begins to fly.
- * Opacity hits 0 before flight ends so residual chips never sit visible
- * when the parent card finally collapses stack space.
- */
-@keyframes thumbnail-dust-fly {
-  0% {
-    opacity: 1;
-    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
-    box-shadow: none;
-  }
-  14% {
-    opacity: 1;
-    transform: translate3d(calc(var(--dust-x, 0px) * 0.06), calc(var(--dust-y, -40px) * 0.06), 0) rotate(calc(var(--dust-rotate, 12deg) * 0.08)) scale(0.98);
-    box-shadow:
-      0 0 0 0.5px rgba(0, 0, 0, .08),
-      0 1px 3px rgba(0, 0, 0, .14);
-  }
-  50% {
-    opacity: .72;
-  }
-  /* Fully transparent while still drifting up — never reverse into a drop. */
-  82% {
-    opacity: 0;
-  }
-  100% {
-    opacity: 0;
-    transform: translate3d(var(--dust-x, 0px), var(--dust-y, -40px), 0) rotate(var(--dust-rotate, 12deg)) scale(0.18);
-    box-shadow: none;
-  }
-}
+/* Dust chip flight keyframes live in playThumbnailDustAnimations (WAAPI). */
 @keyframes thumbnail-action-pop { from { opacity: .25; transform: scale(.65); } to { opacity: 1; transform: scale(1); } }
 @media (prefers-reduced-motion: reduce) {
   .capture-surface, .capture-shade, .capture-guidance, .window-targets, .recording-countdown, .recording-countdown-content, .thumbnail-card, .thumbnail-card::after, .thumbnail-card img, .clipboard-confirmation, .thumbnail-top-actions, .thumbnail-main-actions, .thumbnail-main-actions svg, .thumbnail-dust, .thumbnail-dust-layer { animation-duration: .01ms !important; transition-duration: .01ms; }

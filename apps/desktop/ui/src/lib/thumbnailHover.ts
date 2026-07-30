@@ -1,11 +1,65 @@
 import type { ThumbnailPointerPosition } from "../types";
 
 export const THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS = 100;
+
+/**
+ * Cap native pointer IPC so a hung invoke after sleep/resume cannot leave the
+ * poll loop permanently locked (`polling === true` forever).
+ */
+export const THUMBNAIL_POINTER_POLL_TIMEOUT_MS = 400;
+
+/**
+ * After this many consecutive null/failed pointer samples, re-enable hit testing
+ * so a pre-sleep `ignore_cursor_events(true)` cannot leave the stack frozen.
+ * At the 40ms poll interval this is roughly half a second.
+ */
+export const THUMBNAIL_NULL_POLL_RECOVER_COUNT = 12;
+
 const THUMBNAIL_NATIVE_ACTIVE_ATTRIBUTE = "data-thumbnail-native-active";
 const THUMBNAIL_NATIVE_ACTIVE_SELECTOR = `[${THUMBNAIL_NATIVE_ACTIVE_ATTRIBUTE}="true"]`;
 
 /** Cursor kind for the always-on-top capture previews. */
 export type ThumbnailCursorKind = "default" | "pointer" | "grab";
+
+/**
+ * Race an async poll against a timeout so sleep/resume cannot stall the loop.
+ * Resolves with `null` on timeout (same as a transient unavailable sample).
+ */
+export function withThumbnailPointerTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number = THUMBNAIL_POINTER_POLL_TIMEOUT_MS,
+): Promise<T | null> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(null);
+    }, Math.max(0, timeoutMs));
+    promise.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(null);
+      },
+    );
+  });
+}
+
+/** True when a run of empty pointer samples should force interaction recovery. */
+export function shouldRecoverThumbnailAfterNullPolls(
+  consecutiveNullOrFailed: number,
+  threshold: number = THUMBNAIL_NULL_POLL_RECOVER_COUNT,
+): boolean {
+  return consecutiveNullOrFailed >= threshold;
+}
 
 export function thumbnailCursorSyncAction(
   current: ThumbnailCursorKind,

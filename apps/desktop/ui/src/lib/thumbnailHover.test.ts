@@ -4,9 +4,12 @@ import {
   applyThumbnailNativeHover,
   clearThumbnailNativeHover,
   shouldIgnoreThumbnailCursorEvents,
+  shouldRecoverThumbnailAfterNullPolls,
   thumbnailCssCursor,
   thumbnailCursorSyncAction,
   THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS,
+  THUMBNAIL_NULL_POLL_RECOVER_COUNT,
+  withThumbnailPointerTimeout,
 } from "./thumbnailHover";
 
 afterEach(() => {
@@ -245,5 +248,27 @@ describe("thumbnailCssCursor", () => {
     expect(thumbnailCssCursor("default")).toBe("");
     expect(thumbnailCssCursor("pointer")).toBe("pointer");
     expect(thumbnailCssCursor("grab")).toBe("grab");
+  });
+});
+
+describe("thumbnail interactivity recovery helpers", () => {
+  it("recovers only after a sustained run of empty pointer samples", () => {
+    expect(shouldRecoverThumbnailAfterNullPolls(0)).toBe(false);
+    expect(shouldRecoverThumbnailAfterNullPolls(THUMBNAIL_NULL_POLL_RECOVER_COUNT - 1)).toBe(false);
+    expect(shouldRecoverThumbnailAfterNullPolls(THUMBNAIL_NULL_POLL_RECOVER_COUNT)).toBe(true);
+  });
+
+  it("times out hung pointer polls so sleep cannot stall the loop", async () => {
+    const hung = new Promise<string>(() => undefined);
+    const result = await withThumbnailPointerTimeout(hung, 20);
+    expect(result).toBeNull();
+  });
+
+  it("resolves successful pointer polls before the timeout", async () => {
+    const result = await withThumbnailPointerTimeout(
+      Promise.resolve({ x: 1, y: 2, inside: true }),
+      100,
+    );
+    expect(result).toEqual({ x: 1, y: 2, inside: true });
   });
 });
