@@ -4,6 +4,7 @@ import {
   applyThumbnailNativeHover,
   clearThumbnailNativeHover,
   shouldIgnoreThumbnailCursorEvents,
+  thumbnailCssCursor,
   thumbnailCursorSyncAction,
   THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS,
 } from "./thumbnailHover";
@@ -33,10 +34,29 @@ describe("applyThumbnailNativeHover", () => {
       value: elementFromPoint,
     });
 
-    expect(applyThumbnailNativeHover({ x: 40, y: 80, inside: true })).toBe(true);
+    expect(applyThumbnailNativeHover({ x: 40, y: 80, inside: true })).toBe("pointer");
     expect(card).toHaveAttribute("data-thumbnail-native-active", "true");
     expect(button).toHaveClass("native-pointer-hover");
     expect(elementFromPoint).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses a grab cursor over the preview image so file drag is obvious", () => {
+    document.body.innerHTML = `
+      <article class="thumbnail-card">
+        <img alt="Screenshot preview">
+        <div class="thumbnail-main-actions"><button>Copy</button></div>
+      </article>
+    `;
+    const image = document.querySelector<HTMLImageElement>("img")!;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => image),
+    });
+
+    expect(applyThumbnailNativeHover({ x: 40, y: 80, inside: true })).toBe("grab");
+    expect(document.querySelector(".thumbnail-card"))
+      .toHaveAttribute("data-thumbnail-native-active", "true");
+    expect(document.querySelector("button")).not.toHaveClass("native-pointer-hover");
   });
 
   it("clears native hover when the pointer leaves the preview", () => {
@@ -46,7 +66,7 @@ describe("applyThumbnailNativeHover", () => {
       </article>
     `;
 
-    expect(applyThumbnailNativeHover({ x: 0, y: 0, inside: false })).toBe(false);
+    expect(applyThumbnailNativeHover({ x: 0, y: 0, inside: false })).toBe("default");
     expect(document.querySelector(".thumbnail-card"))
       .not.toHaveAttribute("data-thumbnail-native-active");
     expect(document.querySelector("button")).not.toHaveClass("native-pointer-hover");
@@ -70,7 +90,7 @@ describe("applyThumbnailNativeHover", () => {
       }),
     });
 
-    expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe(true);
+    expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe("pointer");
     expect(becameInactive).toBe(false);
     expect(card).toHaveAttribute("data-thumbnail-native-active", "true");
     expect(button).toHaveClass("native-pointer-hover");
@@ -102,9 +122,9 @@ describe("applyThumbnailNativeHover", () => {
       value: vi.fn(() => handoff ? image : button),
     });
 
-    expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe(true);
+    expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe("pointer");
     handoff = true;
-    expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe(true);
+    expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe("pointer");
     expect(button).toHaveClass("native-pointer-hover");
   });
 
@@ -123,10 +143,10 @@ describe("applyThumbnailNativeHover", () => {
       value: vi.fn(() => target),
     });
 
-    expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe(true);
+    expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe("pointer");
     removed.remove();
     target = remainingButton;
-    expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe(true);
+    expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe("pointer");
 
     expect(remaining).toHaveAttribute("data-thumbnail-native-active", "true");
     expect(remainingButton).toHaveClass("native-pointer-hover");
@@ -185,24 +205,45 @@ describe("shouldIgnoreThumbnailCursorEvents", () => {
 
 describe("thumbnailCursorSyncAction", () => {
   it("syncs cursor transitions immediately", () => {
-    expect(thumbnailCursorSyncAction(false, true, 0)).toBe("transition");
-    expect(thumbnailCursorSyncAction(true, false, 0)).toBe("transition");
+    expect(thumbnailCursorSyncAction("default", "pointer", 0)).toBe("transition");
+    expect(thumbnailCursorSyncAction("pointer", "default", 0)).toBe("transition");
+    expect(thumbnailCursorSyncAction("default", "grab", 0)).toBe("transition");
+    expect(thumbnailCursorSyncAction("grab", "pointer", 0)).toBe("transition");
   });
 
-  it("periodically reasserts a pointing cursor that macOS may have reset", () => {
+  it("periodically reasserts interactive cursors that macOS may have reset", () => {
     expect(
       thumbnailCursorSyncAction(
-        true,
-        true,
+        "pointer",
+        "pointer",
         THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS - 1,
       ),
     ).toBeNull();
     expect(
-      thumbnailCursorSyncAction(true, true, THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS),
+      thumbnailCursorSyncAction(
+        "pointer",
+        "pointer",
+        THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS,
+      ),
+    ).toBe("reassert");
+    expect(
+      thumbnailCursorSyncAction(
+        "grab",
+        "grab",
+        THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS,
+      ),
     ).toBe("reassert");
   });
 
   it("does not reassert the default cursor", () => {
-    expect(thumbnailCursorSyncAction(false, false, Number.POSITIVE_INFINITY)).toBeNull();
+    expect(thumbnailCursorSyncAction("default", "default", Number.POSITIVE_INFINITY)).toBeNull();
+  });
+});
+
+describe("thumbnailCssCursor", () => {
+  it("maps cursor kinds to CSS values", () => {
+    expect(thumbnailCssCursor("default")).toBe("");
+    expect(thumbnailCssCursor("pointer")).toBe("pointer");
+    expect(thumbnailCssCursor("grab")).toBe("grab");
   });
 });

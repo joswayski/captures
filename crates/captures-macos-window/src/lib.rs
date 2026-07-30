@@ -51,7 +51,16 @@ enum CursorMode {
     Arrow,
     Crosshair,
     PointingHand,
+    OpenHand,
     WebView,
+}
+
+/// Cursor shown over the always-on-top capture previews.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ThumbnailCursorKind {
+    Default,
+    Pointer,
+    Grab,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -161,6 +170,7 @@ impl CursorTrackingOwner {
             CursorMode::Arrow => NSCursor::arrowCursor().set(),
             CursorMode::Crosshair => NSCursor::crosshairCursor().set(),
             CursorMode::PointingHand => NSCursor::pointingHandCursor().set(),
+            CursorMode::OpenHand => NSCursor::openHandCursor().set(),
             CursorMode::WebView => {}
         }
     }
@@ -457,39 +467,81 @@ pub fn resize_from_bottom(
 
 /// Updates the cursor even while another application remains frontmost.
 pub fn set_pointing_cursor(window: &WebviewWindow, pointing: bool) -> Result<(), &'static str> {
+    set_thumbnail_cursor(
+        window,
+        if pointing {
+            ThumbnailCursorKind::Pointer
+        } else {
+            ThumbnailCursorKind::Default
+        },
+    )
+}
+
+/// Applies a thumbnail cursor kind even while Captures is not frontmost.
+///
+/// Preview cards use:
+/// - `Pointer` over action buttons
+/// - `Grab` over the image (file drag source)
+/// - `Default` when the pointer is outside a live card
+pub fn set_thumbnail_cursor(
+    window: &WebviewWindow,
+    kind: ThumbnailCursorKind,
+) -> Result<(), &'static str> {
     if capture_overlay_owns_cursor() {
         return reset_pointing_cursor_state(window);
     }
     let native_window = native_window(window)?;
-    set_cursor_rects_enabled(native_window, !pointing);
-    let mode = if pointing {
-        CursorMode::PointingHand
-    } else {
-        CursorMode::Arrow
+    let interactive = !matches!(kind, ThumbnailCursorKind::Default);
+    set_cursor_rects_enabled(native_window, !interactive);
+    let mode = match kind {
+        ThumbnailCursorKind::Default => CursorMode::Arrow,
+        ThumbnailCursorKind::Pointer => CursorMode::PointingHand,
+        ThumbnailCursorKind::Grab => CursorMode::OpenHand,
     };
     set_tracked_cursor(window, mode, CursorSurface::Thumbnail)?;
-    if pointing {
-        NSCursor::pointingHandCursor().set();
-    } else {
-        NSCursor::arrowCursor().set();
+    match kind {
+        ThumbnailCursorKind::Default => NSCursor::arrowCursor().set(),
+        ThumbnailCursorKind::Pointer => NSCursor::pointingHandCursor().set(),
+        ThumbnailCursorKind::Grab => NSCursor::openHandCursor().set(),
     }
     Ok(())
 }
 
-/// Reapplies the pointing cursor without rebuilding WebKit cursor state.
+/// Reapplies the current interactive thumbnail cursor without rebuilding
+/// WebKit cursor rectangles.
 ///
 /// macOS restores the frontmost application's arrow when Captures becomes
-/// inactive, even though the preview can still be hovering the same button.
-/// Cursor rectangles remain disabled while a button is active, so setting the
-/// native cursor again is enough to restore the hand without cursor flicker.
+/// inactive, even though the preview can still be hovering the same control.
+/// Cursor rectangles remain disabled while a non-default cursor is active, so
+/// setting the native cursor again restores the hand without flicker.
 pub fn reassert_pointing_cursor(window: &WebviewWindow) -> Result<(), &'static str> {
+    reassert_thumbnail_cursor(window, ThumbnailCursorKind::Pointer)
+}
+
+/// Reapplies a non-default thumbnail cursor (pointer or grab).
+pub fn reassert_thumbnail_cursor(
+    window: &WebviewWindow,
+    kind: ThumbnailCursorKind,
+) -> Result<(), &'static str> {
+    if matches!(kind, ThumbnailCursorKind::Default) {
+        return reset_pointing_cursor_state(window);
+    }
     if capture_overlay_owns_cursor() {
         return reset_pointing_cursor_state(window);
     }
     let native_window = native_window(window)?;
     set_cursor_rects_enabled(native_window, false);
-    set_tracked_cursor(window, CursorMode::PointingHand, CursorSurface::Thumbnail)?;
-    NSCursor::pointingHandCursor().set();
+    let mode = match kind {
+        ThumbnailCursorKind::Default => CursorMode::Arrow,
+        ThumbnailCursorKind::Pointer => CursorMode::PointingHand,
+        ThumbnailCursorKind::Grab => CursorMode::OpenHand,
+    };
+    set_tracked_cursor(window, mode, CursorSurface::Thumbnail)?;
+    match kind {
+        ThumbnailCursorKind::Default => NSCursor::arrowCursor().set(),
+        ThumbnailCursorKind::Pointer => NSCursor::pointingHandCursor().set(),
+        ThumbnailCursorKind::Grab => NSCursor::openHandCursor().set(),
+    }
     Ok(())
 }
 

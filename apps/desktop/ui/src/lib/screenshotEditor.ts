@@ -419,6 +419,78 @@ export function outputDimensions(
   };
 }
 
+export type ScreenshotExportFormat = "png" | "jpeg" | "webp";
+
+/**
+ * Load a dropped/picked image file into an HTMLImageElement.
+ *
+ * Uses a blob object URL first. If that fails (e.g. CSP without `blob:` in
+ * img-src), falls back to a data URL so imports still work.
+ */
+export async function loadImageFile(file: File): Promise<HTMLImageElement> {
+  const blobUrl = URL.createObjectURL(file);
+  try {
+    return await decodeImageSource(blobUrl);
+  } catch {
+    URL.revokeObjectURL(blobUrl);
+  }
+
+  const dataUrl = await readFileAsDataUrl(file);
+  try {
+    return await decodeImageSource(dataUrl);
+  } catch {
+    throw new Error(`${file.name} could not be loaded.`);
+  }
+}
+
+function decodeImageSource(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    // blob:/data: sources are same-origin; do not mark anonymous or decode fails.
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("image decode failed"));
+    image.src = src;
+  });
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") resolve(reader.result);
+      else reject(new Error("Could not read the image file."));
+    };
+    reader.onerror = () => reject(new Error("Could not read the image file."));
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * Browser-side encode used only for a live export size estimate. Final save
+ * still goes through the Rust encoder, so this is approximate.
+ */
+export async function estimateCanvasExportBytes(
+  canvas: HTMLCanvasElement,
+  format: ScreenshotExportFormat,
+  jpegQuality: number,
+): Promise<number> {
+  const mimeType = format === "jpeg"
+    ? "image/jpeg"
+    : format === "webp"
+      ? "image/webp"
+      : "image/png";
+  const quality = format === "jpeg"
+    ? Math.min(1, Math.max(0.4, jpegQuality / 100))
+    : undefined;
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((result) => {
+      if (result) resolve(result);
+      else reject(new Error("The edited image could not be encoded for size estimation."));
+    }, mimeType, quality);
+  });
+  return blob.size;
+}
+
 export function imageSizeAtWidth(
   element: EditorImageElement,
   width: number,

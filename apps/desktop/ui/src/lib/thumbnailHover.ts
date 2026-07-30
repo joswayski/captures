@@ -4,14 +4,29 @@ export const THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS = 100;
 const THUMBNAIL_NATIVE_ACTIVE_ATTRIBUTE = "data-thumbnail-native-active";
 const THUMBNAIL_NATIVE_ACTIVE_SELECTOR = `[${THUMBNAIL_NATIVE_ACTIVE_ATTRIBUTE}="true"]`;
 
+/** Cursor kind for the always-on-top capture previews. */
+export type ThumbnailCursorKind = "default" | "pointer" | "grab";
+
 export function thumbnailCursorSyncAction(
-  current: boolean,
-  next: boolean,
+  current: ThumbnailCursorKind,
+  next: ThumbnailCursorKind,
   elapsedMs: number,
 ): "transition" | "reassert" | null {
   if (current !== next) return "transition";
-  if (next && elapsedMs >= THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS) return "reassert";
+  // macOS restores the frontmost app's arrow while Captures is inactive.
+  // Keep reasserting any interactive cursor (pointer on buttons, grab on the
+  // drag source image) so the affordance does not disappear after focus moves
+  // to the editor, another Captures window, or a different app.
+  if (next !== "default" && elapsedMs >= THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS) {
+    return "reassert";
+  }
   return null;
+}
+
+export function thumbnailCssCursor(kind: ThumbnailCursorKind): string {
+  if (kind === "pointer") return "pointer";
+  if (kind === "grab") return "grab";
+  return "";
 }
 
 /**
@@ -62,13 +77,20 @@ function containsPoint(element: Element, x: number, y: number): boolean {
   return x >= bounds.left && x <= bounds.right && y >= bounds.top && y <= bounds.bottom;
 }
 
+/**
+ * Activates the hovered preview card and returns which cursor to show.
+ *
+ * - `pointer` over action buttons
+ * - `grab` over the preview image / card chrome (file drag source)
+ * - `default` outside a live card
+ */
 export function applyThumbnailNativeHover(
   position: ThumbnailPointerPosition,
   root: Document = document,
-): boolean {
+): ThumbnailCursorKind {
   if (!position.inside) {
     clearThumbnailNativeHover(root);
-    return false;
+    return "default";
   }
 
   const currentButton = root.querySelector<HTMLElement>(".native-pointer-hover");
@@ -80,9 +102,9 @@ export function applyThumbnailNativeHover(
         ? currentCard
         : null
     );
-  if (!card) {
+  if (!card || card.classList.contains("thumbnail-exiting")) {
     clearThumbnailNativeHover(root);
-    return false;
+    return "default";
   }
 
   // The action layers do not accept pointer events until their card is active.
@@ -110,5 +132,5 @@ export function applyThumbnailNativeHover(
       if (element !== button) element.classList.remove("native-pointer-hover");
     });
   button?.classList.add("native-pointer-hover");
-  return button !== null;
+  return button ? "pointer" : "grab";
 }

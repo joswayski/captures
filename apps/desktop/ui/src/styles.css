@@ -182,8 +182,9 @@ html.capture-window-cursor, html.capture-window-cursor * { cursor: var(--capture
 .thumbnail-stack { position: absolute; bottom: 0; left: 0; right: 0; display: flex; flex-direction: column; gap: 24px; width: 100%; height: auto; max-height: 100%; padding: 28px; overflow-y: auto; overflow-anchor: none; background: transparent; scrollbar-width: none; }
 .thumbnail-stack::-webkit-scrollbar { display: none; }
 /* overflow:visible so preview-action tooltips are not clipped by the card edge. */
-.thumbnail-card { position: relative; isolation: isolate; overflow: visible; flex: 0 0 160px; width: 100%; height: 160px; margin-bottom: 0; background: transparent; border-radius: 12px; box-shadow: 0 8px 16px rgba(0,0,0,.34), 0 2px 5px rgba(0,0,0,.22); cursor: default; transition: flex-basis .26s ease, height .26s ease, margin-bottom .26s ease, opacity .2s ease, transform .2s ease, filter .2s ease, box-shadow .22s ease; will-change: flex-basis, height, opacity, transform; }
+.thumbnail-card { position: relative; isolation: isolate; overflow: visible; flex: 0 0 160px; width: 100%; height: 160px; margin-bottom: 0; background: transparent; border-radius: 12px; box-shadow: 0 8px 16px rgba(0,0,0,.34), 0 2px 5px rgba(0,0,0,.22); cursor: grab; transition: flex-basis .26s ease, height .26s ease, margin-bottom .26s ease, opacity .2s ease, transform .2s ease, filter .2s ease, box-shadow .22s ease; will-change: flex-basis, height, opacity, transform; }
 .thumbnail-card.thumbnail-file-dragging { cursor: grabbing; }
+.thumbnail-card.thumbnail-file-dragging, .thumbnail-card.thumbnail-file-dragging * { cursor: grabbing !important; }
 .thumbnail-card.thumbnail-viewer-active { box-shadow: 0 8px 16px rgba(0,0,0,.34), 0 2px 5px rgba(0,0,0,.22), 0 0 0 1px rgba(var(--theme-accent-rgb),.82), 0 0 17px rgba(var(--theme-accent-rgb),.24); }
 .thumbnail-card::after { position: absolute; z-index: 8; inset: 0; border-radius: inherit; box-shadow: 0 0 0 1px rgba(var(--theme-accent-rgb),.82), 0 0 17px rgba(var(--theme-accent-rgb),.24); content: ""; opacity: 0; pointer-events: none; }
 .thumbnail-card.thumbnail-capture-highlight::after { animation: thumbnail-capture-highlight 4.5s linear; }
@@ -200,7 +201,7 @@ html.capture-window-cursor, html.capture-window-cursor * { cursor: var(--capture
 }
 .thumbnail-svg-defs { position: absolute; width: 0; height: 0; overflow: hidden; pointer-events: none; }
 /* Cover fills the card (no letterbox bars). Full-res fidelity lives in the viewer. */
-.thumbnail-card img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: center; border: 0; border-radius: 12px; background: transparent; transition: filter .18s ease, transform .22s ease; }
+.thumbnail-card img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: center; border: 0; border-radius: 12px; background: transparent; cursor: grab; transition: filter .18s ease, transform .22s ease; }
 html:not(.thumbnail-native-tracking) .thumbnail-card:hover img, .thumbnail-card:focus-within img, .thumbnail-card[data-thumbnail-native-active="true"] img { filter: blur(2px) brightness(.56); transform: scale(1.015); }
 /* Lock the hovered look on exit so clearing :hover / native-active never flashes a sharp preview. */
 .thumbnail-card[class*="thumbnail-exit-"] img {
@@ -251,6 +252,10 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-main-actio
 .thumbnail-main-actions button:focus { outline: none; }
 .thumbnail-main-actions button:focus-visible { box-shadow: 0 4px 16px rgba(0,0,0,.3), 0 0 0 2px rgba(var(--theme-accent-rgb),.65); }
 html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !important; }
+/* Native AppKit cursor is the source of truth while polling; mirror grab on the
+   image so CSS and WKWebView stay consistent when cursor rectangles re-enable. */
+html.thumbnail-native-tracking .thumbnail-card[data-thumbnail-native-active="true"] img { cursor: grab !important; }
+html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging img { cursor: grabbing !important; }
 .thumbnail-main-actions svg, .icon-button svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .thumbnail-main-actions svg { animation: thumbnail-action-pop .2s ease-out; }
 /* Exit lock: no clicks, hover, or focus while dismiss/delete animation plays. */
@@ -1020,25 +1025,40 @@ html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !im
 .screenshot-custom-color input { position: absolute; inset: -8px; width: 40px; height: 40px; opacity: 0; cursor: pointer; }
 .screenshot-layer-actions { display: grid; grid-template-columns: 1fr 1fr; }
 .screenshot-file-name { overflow: hidden; color: #d5d6d8 !important; text-overflow: ellipsis; white-space: nowrap; }
-.screenshot-export-bar { z-index: 20; display: grid; min-width: 0; grid-row: 3; grid-column: 1 / -1; padding: 8px 14px; grid-template-columns: minmax(600px,auto) minmax(150px,1fr) auto; align-items: center; gap: 14px; border-top: 1px solid #3a3b40; background: rgba(31,32,36,.98); box-shadow: 0 -10px 28px rgba(0,0,0,.28); }
-.screenshot-export-settings { display: flex; min-width: 0; align-items: flex-end; gap: 8px; }
-.screenshot-export-settings label { display: flex; flex-direction: column; gap: 4px; color: #898a90; font-size: 8px; font-weight: 750; text-transform: uppercase; }
-.screenshot-export-settings select, .screenshot-export-settings input[type=number] { min-width: 92px; height: 31px; border: 1px solid #44454b; border-radius: 6px; padding: 5px 7px; color: #ececef; background: #111216; outline: none; font-size: 9px; text-transform: none; }
+.screenshot-export-bar { z-index: 20; display: grid; min-width: 0; grid-row: 3; grid-column: 1 / -1; padding: 10px 14px; grid-template-columns: minmax(600px,auto) minmax(150px,1fr) auto; align-items: center; gap: 14px; border-top: 1px solid #3a3b40; background: rgba(31,32,36,.98); box-shadow: 0 -10px 28px rgba(0,0,0,.28); }
+/* Left settings and right actions share one vertical centerline. Labels sit
+   above controls; control rows use a shared 34px height matching Save/Copy. */
+.screenshot-export-settings { display: flex; min-width: 0; align-items: center; gap: 10px; }
+.screenshot-export-settings label,
+.screenshot-export-control { display: flex; min-width: 0; flex-direction: column; justify-content: center; gap: 4px; color: #898a90; font-size: 8px; font-weight: 750; line-height: 1; text-transform: uppercase; }
+.screenshot-export-settings select,
+.screenshot-export-settings input[type=number] { min-width: 92px; height: 34px; border: 1px solid #44454b; border-radius: 6px; padding: 0 8px; color: #ececef; background: #111216; outline: none; font-size: 9px; line-height: 1; text-transform: none; }
 .screenshot-export-settings input[type=number] { width: 88px; min-width: 0; }
-.screenshot-export-settings > span { padding-bottom: 8px; color: #85868c; font-size: 9px; white-space: nowrap; }
-.screenshot-export-control { display: flex; min-width: 0; flex-direction: column; gap: 3px; color: #898a90; font-size: 8px; font-weight: 750; text-transform: uppercase; }
 .screenshot-quality { width: 248px; }
-.screenshot-quality .range-slider { grid-template-rows: 14px 22px 14px; }
-.screenshot-quality .range-slider-value output { color: var(--theme-accent-text); font-size: 8px; text-transform: none; }
-.screenshot-quality .range-slider-labels { height: 14px; }.screenshot-quality .range-slider-labels small { max-width: 52px; overflow: hidden; font-size: 6px; text-overflow: ellipsis; }
-.screenshot-quality > strong { display: flex; height: 31px; padding: 0 10px; align-items: center; border: 1px solid #44454b; border-radius: 6px; color: #d6d7da; background: #111216; font-size: 9px; text-transform: none; white-space: nowrap; }
-.screenshot-maximum-size { width: 150px; }.screenshot-maximum-size > span { display: grid; grid-template-columns: minmax(0,1fr) 55px; gap: 5px; }
-.screenshot-maximum-size input[type=number] { width: 100%; }.screenshot-maximum-size select { min-width: 0; width: 55px; padding-right: 3px; }
-.screenshot-output-dimensions { min-width: 68px; text-align: right; }
+/* Compact quality control: value + track + preset labels, centered with selects. */
+.screenshot-quality .range-slider { grid-template-rows: 11px 20px 11px; gap: 0; }
+.screenshot-quality .range-slider-value { min-height: 11px; align-items: flex-end; }
+.screenshot-quality .range-slider-value output { color: var(--theme-accent-text); font-size: 8px; line-height: 1; text-transform: none; }
+.screenshot-quality .range-slider-track { height: 20px; }
+.screenshot-quality .range-slider input[type="range"] { height: 20px; }
+.screenshot-quality .range-slider input[type="range"]::-webkit-slider-thumb { width: 18px; height: 18px; margin-top: -6px; }
+.screenshot-quality .range-slider-ticks { top: 0; bottom: 0; }
+.screenshot-quality .range-slider-ticks i { top: 7px; height: 5px; }
+.screenshot-quality .range-slider-labels { height: 11px; margin: 0 10px; }
+.screenshot-quality .range-slider-labels small { max-width: 48px; overflow: hidden; top: 0; font-size: 6px; text-overflow: ellipsis; }
+.screenshot-quality > strong { display: flex; height: 34px; padding: 0 10px; align-items: center; border: 1px solid #44454b; border-radius: 6px; color: #d6d7da; background: #111216; font-size: 9px; text-transform: none; white-space: nowrap; }
+.screenshot-maximum-size { width: 150px; }
+.screenshot-maximum-size > span { display: grid; grid-template-columns: minmax(0,1fr) 55px; gap: 5px; align-items: center; }
+.screenshot-maximum-size input[type=number] { width: 100%; }
+.screenshot-maximum-size select { min-width: 0; width: 55px; height: 34px; padding-right: 3px; }
+.screenshot-output-meta { display: flex; min-width: 88px; flex-direction: column; align-items: flex-end; justify-content: center; gap: 3px; color: #85868c; font-size: 9px; line-height: 1.2; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.screenshot-output-dimensions { color: #85868c; }
+.screenshot-output-estimate { color: #a7a8ad; font-weight: 700; }
+.screenshot-output-estimate[data-pending="true"] { color: #6f7075; font-weight: 600; }
 .screenshot-export-status { min-width: 0; overflow: hidden; color: #8e8f94; font-size: 9px; line-height: 1.35; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
 .screenshot-export-status.error { color: #ff9da6; }
 .screenshot-export-actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
-.screenshot-export-actions button { display: inline-flex; min-width: 82px; min-height: 34px; padding: 6px 11px; align-items: center; justify-content: center; gap: 6px; border: 1px solid #46474d; border-radius: 7px; color: #e4e4e6; background: #2d2e33; font-size: 10px; font-weight: 800; white-space: nowrap; }
+.screenshot-export-actions button { display: inline-flex; min-width: 82px; height: 34px; min-height: 34px; padding: 0 11px; align-items: center; justify-content: center; gap: 6px; border: 1px solid #46474d; border-radius: 7px; color: #e4e4e6; background: #2d2e33; font-size: 10px; font-weight: 800; white-space: nowrap; }
 .screenshot-export-actions button:hover:not(:disabled) { border-color: #5b5c62; background: #3a3b40; transform: translateY(-1px); }
 .screenshot-export-actions button.primary { min-width: 104px; border-color: var(--theme-accent-strong); color: var(--theme-accent-ink); background: var(--editing-accent); }
 .screenshot-export-actions button.primary:hover:not(:disabled) { background: var(--theme-accent-hover); }

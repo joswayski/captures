@@ -164,4 +164,89 @@ describe("ScreenshotEditor", () => {
     expect(screen.getByRole("slider", { name: "Image quality" }))
       .toHaveAttribute("aria-valuetext", "Maximum");
   });
+
+  it("shows an estimated export size when format and quality change", async () => {
+    const toBlob = vi.fn((
+      callback: BlobCallback,
+      type?: string,
+      quality?: number,
+    ) => {
+      const size = type === "image/jpeg"
+        ? Math.max(1, Math.round(80_000 * (quality ?? 1)))
+        : 220_000;
+      callback(new Blob([new Uint8Array(size)], { type: type ?? "image/png" }));
+    });
+    const context = {
+      canvas: document.createElement("canvas"),
+      drawImage: vi.fn(),
+      fillRect: vi.fn(),
+      clearRect: vi.fn(),
+      save: vi.fn(),
+      restore: vi.fn(),
+      beginPath: vi.fn(),
+      moveTo: vi.fn(),
+      lineTo: vi.fn(),
+      stroke: vi.fn(),
+      fill: vi.fn(),
+      arc: vi.fn(),
+      closePath: vi.fn(),
+      setLineDash: vi.fn(),
+      measureText: () => ({ width: 40 }),
+      fillText: vi.fn(),
+      strokeText: vi.fn(),
+      translate: vi.fn(),
+      scale: vi.fn(),
+      rotate: vi.fn(),
+      quadraticCurveTo: vi.fn(),
+      imageSmoothingEnabled: true,
+      imageSmoothingQuality: "high",
+      createLinearGradient: () => ({ addColorStop: vi.fn() }),
+    } as unknown as CanvasRenderingContext2D;
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(context);
+    Object.defineProperty(HTMLCanvasElement.prototype, "toBlob", {
+      configurable: true,
+      value: toBlob,
+    });
+
+    // Background screenshot image must report as loaded for export estimation.
+    const originalImage = window.Image;
+    class LoadedImage {
+      onload: ((event: Event) => void) | null = null;
+      onerror: ((event: Event) => void) | null = null;
+      naturalWidth = 1_440;
+      naturalHeight = 900;
+      width = 1_440;
+      height = 900;
+      crossOrigin = "";
+      set src(_value: string) {
+        queueMicrotask(() => this.onload?.(new Event("load")));
+      }
+    }
+    // @ts-expect-error test stub for Image load timing
+    window.Image = LoadedImage;
+
+    try {
+      render(<ScreenshotEditor />);
+      await screen.findAllByText("1440 × 900");
+
+      await waitFor(() => {
+        expect(screen.getByText(/≈/)).toBeInTheDocument();
+      }, { timeout: 2_000 });
+
+      fireEvent.change(screen.getByLabelText("Format"), { target: { value: "jpeg" } });
+      await waitFor(() => {
+        expect(screen.getByRole("slider", { name: "Image quality" })).toBeInTheDocument();
+      });
+      fireEvent.change(screen.getByRole("slider", { name: "Image quality" }), {
+        target: { value: "0" },
+      });
+
+      await waitFor(() => {
+        expect(toBlob.mock.calls.some((call) => call[1] === "image/jpeg")).toBe(true);
+        expect(screen.getByText(/≈/)).toBeInTheDocument();
+      }, { timeout: 2_000 });
+    } finally {
+      window.Image = originalImage;
+    }
+  });
 });

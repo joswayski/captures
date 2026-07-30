@@ -55,7 +55,9 @@ import {
   clearThumbnailNativeHover,
   setThumbnailNativeActiveCard,
   shouldIgnoreThumbnailCursorEvents,
+  thumbnailCssCursor,
   thumbnailCursorSyncAction,
+  type ThumbnailCursorKind,
 } from "./lib/thumbnailHover";
 import {
   buildThumbnailDustParticles,
@@ -3955,28 +3957,28 @@ export function Thumbnail() {
   useEffect(() => {
     // Keep one native hover tracker for the lifetime of the thumbnail window.
     // Restarting it when a card is added or removed briefly clears the hover
-    // presentation and releases the native pointing cursor.
+    // presentation and releases the native interactive cursor.
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let polling = false;
-    let pointingCursor = false;
+    let cursorKind: ThumbnailCursorKind = "default";
     let ignoringCursorEvents = false;
     let lastCursorSyncAt = 0;
-    const setPointingCursor = (pointing: boolean) => {
-      document.documentElement.style.cursor = pointing ? "pointer" : "";
+    const setThumbnailCursor = (kind: ThumbnailCursorKind) => {
+      document.documentElement.style.cursor = thumbnailCssCursor(kind);
       const now = performance.now();
       const action = thumbnailCursorSyncAction(
-        pointingCursor,
-        pointing,
+        cursorKind,
+        kind,
         now - lastCursorSyncAt,
       );
       if (!action) return;
-      pointingCursor = pointing;
+      cursorKind = kind;
       lastCursorSyncAt = now;
       if (action === "reassert") {
-        void invoke("reassert_thumbnail_cursor");
+        void invoke("reassert_thumbnail_cursor", { kind });
       } else {
-        void invoke("set_thumbnail_cursor", { pointing });
+        void invoke("set_thumbnail_cursor", { kind });
       }
     };
 
@@ -3994,7 +3996,7 @@ export function Thumbnail() {
 
     const clearNativeHover = () => {
       clearNativeClasses();
-      setPointingCursor(false);
+      setThumbnailCursor("default");
     };
 
     const stopNativeTracking = () => {
@@ -4006,7 +4008,7 @@ export function Thumbnail() {
     const applyNativeHover = (position: ThumbnailPointerPosition) => {
       document.documentElement.classList.add("thumbnail-native-tracking");
       setIgnoreCursorEvents(shouldIgnoreThumbnailCursorEvents(position));
-      setPointingCursor(applyThumbnailNativeHover(position));
+      setThumbnailCursor(applyThumbnailNativeHover(position));
     };
 
     const schedulePoll = (delay: number) => {
