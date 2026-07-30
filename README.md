@@ -1,9 +1,9 @@
 # Captures
 
-> [!WARNING]
-> Captures is a work in progress.
-
 Captures is a cross-platform screen capture utility built for quick captures and a lightweight workflow.
+
+> [!WARNING]
+> Captures is functional, but still experimental and under active development.
 
 [Visit captur.es](https://captur.es) for the project website and latest development updates.
 
