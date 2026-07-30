@@ -1,6 +1,9 @@
 # Captures
 
-Captures is a work-in-progress, cross-platform screen capture utility. It is built for quick captures, a lightweight workflow, and privacy by default.
+> [!WARNING]
+> Captures is a work in progress.
+
+Captures is a cross-platform screen capture utility built for quick captures and a lightweight workflow.
 
 [Visit captur.es](https://captur.es) for the project website and latest development updates.
 
@@ -20,9 +23,8 @@ macOS is the primary development target today. Windows and Linux builds are avai
 - Choose from nine color presets—including Mustard and a black-and-white Mono option—or build a custom RGB accent and recording-signal palette in Preferences; changes update every Captures window.
 - Copy captures to the clipboard automatically, save them as full-resolution lossless PNGs, or inspect them in a full-size viewer.
 - Keep multiple recent captures in a quick-access preview stack, and drag a preview directly into file-upload targets.
-- Restore captures from a private, rolling 30-day local history.
+- Restore captures from a rolling 30-day local history.
 - Launch at login and receive in-app update notifications.
-- Keep captures local today, with no uploads or analytics.
 
 ## Roadmap
 
@@ -36,7 +38,6 @@ The roadmap is still taking shape. Likely additions include:
 - On-device text recognition (OCR).
 - Timed captures and an easy way to repeat the previous capture area.
 - Pinned captures that stay visible above other windows.
-- Optional, privacy-preserving product health metrics for active installations, app and OS versions, feature success rates, crashes, unclean exits, and detected hangs. Diagnostics will be off until the user explicitly opts in and will never include capture contents.
 - A **Send Feedback to Developer…** action that lets the user review and submit a short description with a redacted diagnostic summary, including the Captures version, operating system, device architecture, recent in-app action breadcrumbs, and any related crash identifier.
 - AI-assisted issue triage that groups incoming reports, proposes root causes and fixes, and can open draft pull requests for human review. Automated reports will never be merged or released without maintainer approval.
 
@@ -64,18 +65,20 @@ needs, so cursor control and click highlights are disabled there.
 
 ## Releases
 
-Captures is not publicly distributed yet. Automated builds remain as draft
-GitHub Releases for maintainer testing until the launch checklist is complete.
-Maintainers signed in with the GitHub CLI can replace the installed app with the
-newest fully validated draft for their current system:
+Every successful push to `main` publishes a GitHub Release after its macOS,
+Windows, and Linux packages pass the full release validation. The first release
+of a New York calendar day ends in `.1`; later releases that day use `.2`, `.3`,
+and so on.
+
+Anyone signed in with the GitHub CLI can replace the installed app with the
+newest fully validated release for their current system:
 
 ```sh
 npm run install:latest
 ```
 
-The command waits for an in-progress draft to finish, verifies its published
-checksum, quits and replaces Captures while preserving local app data, then
-launches the installed build.
+The command verifies the published checksum, quits and replaces Captures while
+preserving local app data, then launches the installed build.
 
 ## Shortcuts
 
@@ -161,12 +164,6 @@ handle editing and GIF conversion on every platform. The sidecars are built
 without GPL, nonfree, or libx264 components. Build, source-distribution, and
 license details live in
 [docs/media-sidecars.md](docs/media-sidecars.md).
-
-## Privacy
-
-Captures stores pending previews and its 30-day screenshot recovery history locally. Finished recording masters are written directly to the local Captures folder before the editor opens, so closing the editor does not discard the recording; a confirmation notice can reveal the saved file in the system file browser. **Save** updates the original by default, while **Make a copy** saves a named copy and leaves the original untouched. Recording history stores only metadata and posters that reference those files. Interrupted-session bundles remain local and appear in Capture History for recovery, and GIF source masters are pruned after seven days. Captures does not upload captures or send telemetry. Official release builds contact GitHub Releases only to check for and download application updates; locally built copies do not perform background update checks.
-
-Future cloud sharing, product-health diagnostics, and feedback submission will be optional and explicit. Before sending a diagnostic report, Captures will show what is included and omit capture contents, filenames, clipboard data, and typed text by default.
 
 ## License and trademarks
 

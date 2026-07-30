@@ -1,11 +1,24 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { nextReleaseVersion, releaseDate } from "./release-version.mjs";
+import {
+  configuredReleaseDate,
+  nextReleaseVersion,
+  releaseDate,
+} from "./release-version.mjs";
 
 test("uses the New York calendar date across UTC midnight", () => {
   assert.equal(releaseDate(new Date("2026-07-20T01:30:00Z")), "2026-07-19");
   assert.equal(releaseDate(new Date("2026-07-20T04:30:00Z")), "2026-07-20");
+});
+
+test("keeps the first release of each day explicitly numbered", () => {
+  assert.equal(nextReleaseVersion("2026-07-29", []).displayVersion, "2026.07.29.1");
+});
+
+test("derives a historical release date from the main commit timestamp", () => {
+  assert.equal(configuredReleaseDate("2026-07-30T02:31:24Z"), "2026-07-29");
+  assert.throws(() => configuredReleaseDate("not-a-timestamp"), /ISO-8601 timestamp/u);
 });
 
 test("creates the first public and updater-safe versions for a date", () => {

@@ -1,42 +1,53 @@
 # Captures releases
 
-Every successful push to `main` runs `.github/workflows/release.yml`. Release workflows wait in commit order without cancelling older pending pushes, run the frontend and Rust quality gates, and then build macOS Apple Silicon, Windows x64, and Linux x64 packages.
+Every push to `main` runs `.github/workflows/release.yml`. Release workflows
+wait in commit order without cancelling older pending pushes, run the frontend
+and Rust quality gates, and then build macOS Apple Silicon, Windows x64, and
+Linux x64 packages. A release is published only when every job succeeds.
 
-The public version is CalVer in `YYYY.MM.DD.N` form, using the `America/New_York` date and a same-day revision from 1 through 99. A release named `Captures 2026.07.19.1` uses tag `v2026.07.19.1`. Tauri receives the SemVer-compatible internal version `2026.7.1901`; source manifests remain at the development version.
+The public version is CalVer in `YYYY.MM.DD.N` form, using the
+`America/New_York` date of the main-branch commit and a same-day revision from 1
+through 99. The first release always includes `.1`; it is not implied. A release
+named `Captures 2026.07.19.1` uses tag `v2026.07.19.1`. Tauri receives the
+SemVer-compatible internal version `2026.7.1901`; source manifests remain at the
+development version.
 
-The workflow creates a draft release at the exact tested commit. Each platform
+The workflow stages a draft release at the exact tested commit. Each platform
 builds and validates its pinned LGPL FFmpeg sidecars, then uploads its installer,
 updater archive, and updater signature. The macOS job also verifies the sidecars
 inside `Captures.app` and uploads the shared FFmpeg source archive, detached
 signature, build configuration, LGPL license, and notice. The final job requires
 those files plus a DMG, NSIS installer, AppImage, Debian package, complete
-`latest.json`, and `SHA256SUMS`, then confirms the release is still a draft.
-The workflow never publishes automatically. A failed build removes its draft
-and tag, leaving earlier drafts and any intentionally published release
-untouched. If draft creation itself is interrupted, the next run removes only
-stale drafts with its generated tag before retrying.
+`latest.json`, and `SHA256SUMS`, confirms the release is still staged, and then
+publishes it. A failed build removes its draft and tag, leaving published
+releases untouched. If draft creation itself is interrupted, the next run
+removes only stale drafts with its generated tag before retrying.
 
-Creating the draft early is only a private staging step. Do not publish it while
-platform jobs are still uploading assets. Publish only after the **Validate
-draft release** job succeeds and `SHA256SUMS` is present; that marker means every
-required macOS, Windows, and Linux artifact was downloaded and validated
-together. The existence of the draft page by itself does not mean the release is
-complete.
+Creating the draft early is only a private staging step. The **Publish release**
+job runs only after **Validate staged release** succeeds and `SHA256SUMS` is
+present; that marker means every required macOS, Windows, and Linux artifact was
+downloaded and validated together. The existence of a draft page by itself does
+not mean the release is complete.
 
-## Install the latest draft
+For a historical backfill, dispatch the workflow from `main` with `target_sha`
+set to a commit that is already on `main`. The workflow checks out and rebuilds
+that commit, derives its New York date from the commit timestamp, and publishes
+the next revision for that date. Dispatch historical commits from oldest to
+newest so their revisions preserve merge order.
 
-Use the CI-produced draft rather than a local build when testing the exact
+## Install the latest release
+
+Use the CI-produced release rather than a local build when testing the exact
 installer, signing, notarization, and packaging path intended for users:
 
 ```sh
 npm run install:latest
 ```
 
-The command requires Node.js 24 and an authenticated GitHub CLI because draft
-releases are not public. It always selects the newest draft, then waits up to one
-hour for both the current system's installer and `SHA256SUMS`. The checksum file
-is the completion marker uploaded only after the entire draft passes release
-validation, so the command never silently falls back to an older build.
+The command requires Node.js 24 and an authenticated GitHub CLI. It always
+selects the newest stable published release and requires both the current
+system's installer and `SHA256SUMS`. The checksum file is the completion marker
+uploaded only after the entire staged release passes validation.
 
 After downloading and verifying the installer, the command quits Captures,
 removes the installed app package, installs the macOS Apple Silicon DMG, Windows
@@ -51,10 +62,10 @@ Windows x64, and Ubuntu x64 GitHub-hosted runners.
 Useful options:
 
 ```sh
-# Show whether the newest draft is ready without changing the installed app
+# Show whether the newest release is ready without changing the installed app
 npm run install:latest -- --dry-run
 
-# Fail instead of waiting when the newest draft is still building
+# Fail instead of waiting when the newest release is incomplete
 npm run install:latest -- --no-wait
 
 # Install without launching Captures afterward
@@ -70,7 +81,7 @@ Creating an installer and signing a Tauri updater archive do not by themselves m
 | macOS | Developer ID Application signature, Apple notarization, stapled ticket, and clean-machine Gatekeeper validation | CI signs and notarizes the app, notarizes and staples the DMG, and verifies both; clean-Mac validation remains manual |
 | Windows | Publicly trusted Authenticode signatures and RFC 3161 timestamps on both `captures.exe` and the NSIS installer | Updater archives are signed, but Authenticode is not configured |
 | Linux | `SHA256SUMS` plus GitHub build-provenance attestations for the `.deb` and AppImage | Checksums and updater signatures exist; attestations are not configured |
-| All platforms | Every downloadable artifact must come from the tested commit, pass clean-machine installation, and remain unpublished if any platform is incomplete | The workflow validates complete drafts and never publishes them automatically; Windows and provenance gates remain |
+| All platforms | Every downloadable artifact must come from the tested commit, pass clean-machine installation, and remain unpublished if any platform is incomplete | The workflow validates the complete staged release before publishing; Windows and provenance gates remain |
 
 These signatures have separate trust boundaries:
 
@@ -182,7 +193,7 @@ Linux has no single platform-wide publisher certificate comparable to Apple Deve
 1. Continue building every release artifact only in the release workflow for the tested commit.
 2. Generate `SHA256SUMS` over the final downloadable artifacts.
 3. Generate a GitHub artifact attestation for every DMG, NSIS installer, `.deb`, AppImage, updater archive, and checksum manifest.
-4. Confirm each artifact has a retrievable attestation before a maintainer intentionally publishes the draft.
+4. Confirm each artifact has a retrievable attestation before treating an automated release as production-ready.
 5. Verify the release from a clean Ubuntu system:
 
    ```sh
@@ -203,19 +214,18 @@ If Captures later operates an APT repository, that repository must publish signe
 ## Bootstrap and acceptance
 
 The first updater-enabled build must be downloaded and installed manually.
-Draft releases are intentionally absent from the public updater endpoint, so
-complete draft validation first and test automatic updates only after choosing
-to publish an initial release. Before relying on automatic releases, test this
-sequence on clean machines:
+Subsequent validated releases appear in the public updater endpoint
+automatically. Before relying on automatic releases, test this sequence on clean
+machines:
 
-1. Download one completed draft while signed in to GitHub and install it on macOS, Windows, and Ubuntu.
+1. Download one completed release and install it on macOS, Windows, and Ubuntu.
 2. Merge another PR on the same New York calendar day and confirm the revision increments.
-3. Confirm the completed release contains all platform assets and all three `latest.json` entries but remains a draft.
-4. After intentionally publishing the initial release, publish a subsequent validated release, choose **Later**, then install from the tray and verify the displayed version after restart.
+3. Confirm the completed release contains all platform assets and all three `latest.json` entries and is public.
+4. When a subsequent validated release appears, choose **Later**, then install from the tray and verify the displayed version after restart.
 5. On macOS, verify notarization, stapling, and Screen Recording permission survive the update.
 6. On Windows, verify Authenticode on both the application executable and NSIS installer, then confirm NSIS updates in place. On Linux, verify `SHA256SUMS` and GitHub attestations before confirming AppImage updates in place and `.deb` directs the user to the release download.
 7. Tamper with an updater archive in a test release and confirm signature verification rejects it.
-8. Force one platform build to fail and confirm the failed draft/tag is deleted while earlier drafts and any intentionally published release remain unchanged.
+8. Force one platform build to fail and confirm the failed draft/tag is deleted while published releases remain unchanged.
 9. On macOS, rapidly resize a recording region and confirm window highlights use rounded corners. Open New Capture, use the direct region and display shortcuts to capture the visible controls, and verify the window shortcut selects real app windows instead of the full-screen macOS Screenshot surface. Drag the selector controls from any non-interactive panel surface, press Escape repeatedly to cancel, and verify the countdown and HUD can be captured by another app while Captures excludes them from its own output.
 10. Record a visually static display for at least 10 seconds, then repeat while continuously moving content on a secondary display. Confirm the single full-display countdown fades from 3 to 2 to 1 without flashing 3 again, Escape cancels it, the start chime plays only when recording begins and is absent from recorded audio, real motion continues past the initial frame, and both finalized durations are within 250 ms or 5% of wall-clock time, whichever is larger. On macOS 15+, enable **Show clicks** and verify clicks receive the system highlight.
 11. Verify the recording HUD uses one compact control row with no border or shadow, shows unclipped tooltips and the faded **These controls won’t show in the recording** note below it, labels its active state **Recording**, responds on hover, drags from non-interactive background space, hides completely, and returns when Captures is opened from the macOS Dock. Confirm Restart requires explicit native confirmation.
