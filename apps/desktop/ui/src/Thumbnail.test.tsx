@@ -89,6 +89,33 @@ describe("Thumbnail", () => {
     expect(card).toHaveAttribute("data-thumbnail-native-active", "true");
   });
 
+  it("re-arms preview hit testing after the page becomes visible again", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifacts") return [artifact];
+      if (command === "get_clipboard_state") {
+        return { revision: 0, artifact_id: artifact.id };
+      }
+      if (command === "get_thumbnail_pointer_position") return null;
+      return undefined;
+    });
+
+    render(<Thumbnail />);
+    await screen.findByRole("article");
+
+    document.documentElement.classList.add("thumbnail-native-tracking");
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      get: () => false,
+    });
+
+    document.dispatchEvent(new Event("visibilitychange"));
+
+    await waitFor(() => {
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith("refresh_thumbnail_interactivity");
+    });
+    expect(document.documentElement).not.toHaveClass("thumbnail-native-tracking");
+  });
+
   it("rejects inbound drags so a dropped screenshot cannot replace the preview UI", async () => {
     render(<Thumbnail />);
     await screen.findByRole("article");

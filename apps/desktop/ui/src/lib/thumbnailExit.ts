@@ -211,3 +211,76 @@ export function buildThumbnailDustParticles(
 
   return particles;
 }
+
+/**
+ * Drive dust chip flight with the Web Animations API.
+ *
+ * CSS `@keyframes` that read per-chip custom properties (`--dust-x`, etc.) are
+ * unreliable in Windows WebView2: transforms often stay at rest while only the
+ * parent layer / source image opacity fades — reading as a plain dissolve.
+ * Explicit WAAPI keyframes with resolved pixel values animate consistently on
+ * WebView2, WKWebView, and WebKitGTK.
+ */
+export function playThumbnailDustAnimations(
+  chips: ArrayLike<Element>,
+  particles: readonly ThumbnailDustParticle[],
+): () => void {
+  const animations: Animation[] = [];
+  const count = Math.min(chips.length, particles.length);
+  for (let index = 0; index < count; index += 1) {
+    const chip = chips[index];
+    const particle = particles[index];
+    if (!(chip instanceof HTMLElement) || !particle) continue;
+
+    // Some jsdom/test environments stub Element.animate.
+    if (typeof chip.animate !== "function") continue;
+
+    const animation = chip.animate(
+      [
+        {
+          opacity: 1,
+          transform: "translate3d(0, 0, 0) rotate(0deg) scale(1)",
+          boxShadow: "none",
+          offset: 0,
+        },
+        {
+          opacity: 1,
+          transform: `translate3d(${particle.dx * 0.06}px, ${particle.dy * 0.06}px, 0) rotate(${particle.rotate * 0.08}deg) scale(0.98)`,
+          boxShadow: "0 0 0 0.5px rgba(0, 0, 0, .08), 0 1px 3px rgba(0, 0, 0, .14)",
+          offset: 0.14,
+        },
+        {
+          opacity: 0.72,
+          offset: 0.5,
+        },
+        {
+          opacity: 0,
+          offset: 0.82,
+        },
+        {
+          opacity: 0,
+          transform: `translate3d(${particle.dx}px, ${particle.dy}px, 0) rotate(${particle.rotate}deg) scale(0.18)`,
+          boxShadow: "none",
+          offset: 1,
+        },
+      ],
+      {
+        duration: particle.durationMs,
+        delay: particle.delayMs,
+        easing: "cubic-bezier(0.28, 0, 0.12, 1)",
+        fill: "forwards",
+      },
+    );
+    animations.push(animation);
+  }
+
+  return () => {
+    for (const animation of animations) {
+      try {
+        animation.cancel();
+      } catch {
+        // Ignore already-finished animations.
+      }
+    }
+  };
+}

@@ -214,6 +214,7 @@ pub fn run() {
             set_thumbnail_cursor,
             reassert_thumbnail_cursor,
             set_thumbnail_ignore_cursor_events,
+            refresh_thumbnail_interactivity,
             open_captures_folder,
             open_capture_history,
             open_preferences,
@@ -878,6 +879,32 @@ fn set_thumbnail_ignore_cursor_events(
     window
         .set_ignore_cursor_events(ignore)
         .map_err(|error| error.to_string())
+}
+
+/// Re-arm the preview stack after sleep/resume or a hung WebView.
+///
+/// Power transitions often leave `ignore_cursor_events` stuck, drop always-on-top,
+/// or freeze hit testing so cards render but do not hover or click.
+#[tauri::command]
+fn refresh_thumbnail_interactivity(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> CommandResult<()> {
+    let suppressed = state.thumbnail_visibility.lock().is_suppressed();
+    let count = state.artifacts.lock().len();
+    let Some(window) = app.get_webview_window("thumbnail") else {
+        return Ok(());
+    };
+    // Always re-enable hit testing first — a stuck click-through state is the
+    // usual "frozen previews" symptom after sleep.
+    let _ = window.set_ignore_cursor_events(false);
+    let _ = window.set_always_on_top(true);
+    if count > 0 && !suppressed {
+        show_thumbnail_window(&window);
+        // Re-apply geometry after display sleep (DPI / work area can change).
+        update_thumbnail_stack(&app);
+    }
+    Ok(())
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -2536,13 +2563,24 @@ fn thumbnail_visible_window_height(
 }
 
 fn show_thumbnail_window(window: &tauri::WebviewWindow) {
+    // Sleep/resume and compositor handoffs can leave the window click-through.
+    // Showing always re-arms hit testing; the JS hover poll then re-applies
+    // ignore-cursor for empty stack chrome within a frame.
+    let _ = window.set_ignore_cursor_events(false);
+
     #[cfg(target_os = "macos")]
     if let Err(error) = captures_macos_window::show_without_activating(window) {
         eprintln!("failed to raise capture thumbnail stack: {error}");
     }
 
     #[cfg(not(target_os = "macos"))]
-    let _ = window.show();
+    {
+        // Re-assert topmost around show so Windows taskbar / Linux panels cannot
+        // cover the stack when the two share the same topmost z-band.
+        let _ = window.set_always_on_top(true);
+        let _ = window.show();
+        let _ = window.set_always_on_top(true);
+    }
 }
 
 fn restore_thumbnail_stack(app: &AppHandle, state: &Arc<AppState>) {
@@ -2589,18 +2627,23 @@ fn thumbnail_window_geometry(app: &AppHandle, count: usize) -> (f64, f64, f64) {
         .ok()
         .flatten()
         .map(|monitor| {
-            // Keep the preview inside the usable desktop. The monitor's full
-            // bounds include reserved UI such as the Windows taskbar, macOS
-            // Dock, and Linux panels.
+            // Prefer the usable desktop (work area). Full monitor bounds include
+            // reserved UI such as the Windows taskbar, macOS Dock, and Linux panels.
             let work_area = monitor.work_area();
-            let position = work_area.position;
-            let size = work_area.size;
+            let full_position = *monitor.position();
+            let full_size = *monitor.size();
             thumbnail_geometry(
-                position.x,
-                position.y,
-                size.width,
-                size.height,
-                monitor.scale_factor(),
+                ThumbnailMonitorBounds {
+                    work_x: work_area.position.x,
+                    work_y: work_area.position.y,
+                    work_width: work_area.size.width,
+                    work_height: work_area.size.height,
+                    full_x: full_position.x,
+                    full_y: full_position.y,
+                    full_width: full_size.width,
+                    full_height: full_size.height,
+                    scale_factor: monitor.scale_factor(),
+                },
                 count,
             )
         })
@@ -2612,30 +2655,58 @@ fn thumbnail_stack_height(count: usize) -> f64 {
     THUMBNAIL_PADDING * 2.0 + cards * THUMBNAIL_CARD_HEIGHT + (cards - 1.0) * THUMBNAIL_GAP
 }
 
-fn thumbnail_geometry(
-    x: i32,
-    y: i32,
-    width: u32,
-    height: u32,
-    scale_factor: f64,
-    count: usize,
-) -> (f64, f64, f64) {
-    const EDGE_MARGIN: f64 = THUMBNAIL_PADDING;
+/// Extra logical pixels to keep the stack clear of system chrome.
+/// Applied on every platform so previews never sit flush against a dock/taskbar.
+const THUMBNAIL_SYSTEM_CHROME_GAP: f64 = 12.0;
 
-    let scale = scale_factor.max(1.0);
-    let left = f64::from(x) / scale;
-    let top = f64::from(y) / scale;
-    let width = f64::from(width) / scale;
-    let available_height = f64::from(height) / scale - EDGE_MARGIN * 2.0;
-    let stack_height = thumbnail_stack_height(count).min(available_height.max(1.0));
-    let left_aligned = left + EDGE_MARGIN - THUMBNAIL_PADDING;
-    let bottom_aligned =
-        top + f64::from(height) / scale - stack_height - EDGE_MARGIN + THUMBNAIL_PADDING;
+/// When work area equals the full monitor (auto-hide taskbar/dock/panel), reserve
+/// this many logical pixels along the bottom so revealing chrome cannot cover cards.
+const THUMBNAIL_AUTO_HIDE_RESERVE: f64 = 48.0;
+
+#[derive(Clone, Copy, Debug)]
+struct ThumbnailMonitorBounds {
+    work_x: i32,
+    work_y: i32,
+    work_width: u32,
+    work_height: u32,
+    full_x: i32,
+    full_y: i32,
+    full_width: u32,
+    full_height: u32,
+    scale_factor: f64,
+}
+
+fn thumbnail_geometry(bounds: ThumbnailMonitorBounds, count: usize) -> (f64, f64, f64) {
+    let scale = bounds.scale_factor.max(1.0);
+    let left = f64::from(bounds.work_x) / scale;
+    let top = f64::from(bounds.work_y) / scale;
+    let width = f64::from(bounds.work_width) / scale;
+    let mut height = f64::from(bounds.work_height) / scale;
+
+    // Auto-hide taskbars/docks report a work area equal to the full monitor.
+    // Carve out a bottom reserve so previews still float above the chrome when
+    // it reappears.
+    let work_matches_full = bounds.work_x == bounds.full_x
+        && bounds.work_y == bounds.full_y
+        && bounds.work_width == bounds.full_width
+        && bounds.work_height == bounds.full_height;
+    if work_matches_full {
+        let bottom_reserve = THUMBNAIL_AUTO_HIDE_RESERVE.min((height * 0.12).max(0.0));
+        height = (height - bottom_reserve).max(1.0);
+    }
+
+    // Keep a small permanent gap above the work-area bottom so cards never sit
+    // flush against a visible taskbar/panel edge (padding alone is easy to miss).
+    let bottom_gap = THUMBNAIL_SYSTEM_CHROME_GAP;
+    let available_height = (height - bottom_gap - THUMBNAIL_PADDING).max(1.0);
+    let stack_height = thumbnail_stack_height(count).min(available_height);
+    // Window left sits at the work-area edge; CSS stack padding provides the
+    // visual inset so the transparent frame can still reach the screen edge.
+    let left_aligned = left;
+    let bottom_aligned = top + height - stack_height - bottom_gap;
     (
-        left_aligned
-            .min(left + width - THUMBNAIL_WIDTH - EDGE_MARGIN + THUMBNAIL_PADDING)
-            .max(left),
-        bottom_aligned.max(top + EDGE_MARGIN),
+        left_aligned.min(left + width - THUMBNAIL_WIDTH).max(left),
+        bottom_aligned.max(top),
         stack_height,
     )
 }
@@ -3294,7 +3365,8 @@ mod tests {
     #[cfg(target_os = "macos")]
     use super::macos_window_is_capture_overlay;
     use super::{
-        AppError, CaptureMode, ThumbnailCursorAction, ThumbnailCursorKind, clipboard_fingerprint,
+        AppError, CaptureMode, THUMBNAIL_AUTO_HIDE_RESERVE, THUMBNAIL_SYSTEM_CHROME_GAP,
+        ThumbnailCursorAction, ThumbnailCursorKind, ThumbnailMonitorBounds, clipboard_fingerprint,
         display_contains_pointer, mask_macos_window_corners, parse_shortcut,
         primary_app_window_priority, recording_saved_notice_label,
         should_activate_capture_cursor_before_reveal, should_trigger_shortcut,
@@ -3302,6 +3374,24 @@ mod tests {
         thumbnail_visible_window_height, track_shortcut_suppression, viewer_window_label,
         window_is_capturable, windows_window_is_capture_overlay,
     };
+
+    fn bounds(
+        work: (i32, i32, u32, u32),
+        full: (i32, i32, u32, u32),
+        scale_factor: f64,
+    ) -> ThumbnailMonitorBounds {
+        ThumbnailMonitorBounds {
+            work_x: work.0,
+            work_y: work.1,
+            work_width: work.2,
+            work_height: work.3,
+            full_x: full.0,
+            full_y: full.1,
+            full_width: full.2,
+            full_height: full.3,
+            scale_factor,
+        }
+    }
 
     use captures_capture::{DisplayDescriptor, WindowDescriptor};
 
@@ -3602,21 +3692,45 @@ mod tests {
 
     #[test]
     fn stacks_thumbnails_upward_in_logical_pixels_on_retina_displays() {
+        // Work area already excludes dock/taskbar; full bounds differ so no
+        // auto-hide reserve is applied. Extra system-chrome gap lifts the stack.
         assert_eq!(
-            thumbnail_geometry(0, 0, 3_992, 2_048, 2.0, 1),
-            (0.0, 808.0, 216.0)
+            thumbnail_geometry(bounds((0, 0, 3_992, 2_048), (0, 0, 3_992, 2_160), 2.0), 1),
+            (0.0, 796.0, 216.0)
         );
         assert_eq!(
-            thumbnail_geometry(-3_840, 0, 3_840, 2_048, 2.0, 2),
-            (-1_920.0, 624.0, 400.0)
+            thumbnail_geometry(
+                bounds((-3_840, 0, 3_840, 2_048), (-3_840, 0, 3_840, 2_160), 2.0),
+                2
+            ),
+            (-1_920.0, 612.0, 400.0)
         );
     }
 
     #[test]
     fn keeps_the_thumbnail_stack_inside_the_monitor_work_area() {
-        let (_, top, height) = thumbnail_geometry(0, 0, 1_920, 1_040, 1.0, 1);
+        // 1920×1040 work area on a 1920×1080 display (48px taskbar).
+        let (_, top, height) =
+            thumbnail_geometry(bounds((0, 0, 1_920, 1_040), (0, 0, 1_920, 1_080), 1.0), 1);
 
-        assert_eq!(top + height, 1_040.0);
+        // Window bottom sits system-chrome gap above the work-area bottom.
+        assert_eq!(top + height, 1_040.0 - THUMBNAIL_SYSTEM_CHROME_GAP);
+        assert!(top + height < 1_040.0);
+    }
+
+    #[test]
+    fn reserves_space_when_work_area_matches_full_monitor_auto_hide() {
+        // Auto-hide taskbar: work area == full 1920×1080 monitor.
+        let (_, top, height) =
+            thumbnail_geometry(bounds((0, 0, 1_920, 1_080), (0, 0, 1_920, 1_080), 1.0), 1);
+
+        let window_bottom = top + height;
+        // Must clear both the auto-hide reserve and the permanent chrome gap.
+        assert!(window_bottom <= 1_080.0 - THUMBNAIL_AUTO_HIDE_RESERVE);
+        assert_eq!(
+            window_bottom,
+            1_080.0 - THUMBNAIL_AUTO_HIDE_RESERVE - THUMBNAIL_SYSTEM_CHROME_GAP
+        );
     }
 
     #[test]

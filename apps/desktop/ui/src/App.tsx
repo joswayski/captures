@@ -55,12 +55,15 @@ import {
   clearThumbnailNativeHover,
   setThumbnailNativeActiveCard,
   shouldIgnoreThumbnailCursorEvents,
+  shouldRecoverThumbnailAfterNullPolls,
   thumbnailCssCursor,
   thumbnailCursorSyncAction,
+  withThumbnailPointerTimeout,
   type ThumbnailCursorKind,
 } from "./lib/thumbnailHover";
 import {
   buildThumbnailDustParticles,
+  playThumbnailDustAnimations,
   prefersReducedMotion,
   THUMBNAIL_CARD_FALLBACK_HEIGHT,
   THUMBNAIL_CARD_FALLBACK_WIDTH,
@@ -3964,6 +3967,7 @@ export function Thumbnail() {
     let cursorKind: ThumbnailCursorKind = "default";
     let ignoringCursorEvents = false;
     let lastCursorSyncAt = 0;
+    let consecutiveNullPolls = 0;
     const setThumbnailCursor = (kind: ThumbnailCursorKind) => {
       document.documentElement.style.cursor = thumbnailCssCursor(kind);
       const now = performance.now();
@@ -3982,8 +3986,8 @@ export function Thumbnail() {
       }
     };
 
-    const setIgnoreCursorEvents = (ignore: boolean) => {
-      if (ignoringCursorEvents === ignore) return;
+    const setIgnoreCursorEvents = (ignore: boolean, force = false) => {
+      if (!force && ignoringCursorEvents === ignore) return;
       ignoringCursorEvents = ignore;
       // After dismiss the window may stay tall; empty space above the stack
       // must pass clicks through so it does not block the desktop.
@@ -4002,7 +4006,7 @@ export function Thumbnail() {
     const stopNativeTracking = () => {
       document.documentElement.classList.remove("thumbnail-native-tracking");
       clearNativeHover();
-      setIgnoreCursorEvents(false);
+      setIgnoreCursorEvents(false, true);
     };
 
     const applyNativeHover = (position: ThumbnailPointerPosition) => {
@@ -4020,41 +4024,87 @@ export function Thumbnail() {
       }, delay);
     };
 
+    /**
+     * After sleep/resume the WebView can keep click-through, drop always-on-top,
+     * or leave a hung pointer poll. Force the stack interactive again and fall
+     * back to CSS :hover until native samples resume.
+     */
+    const recoverInteractivity = () => {
+      consecutiveNullPolls = 0;
+      polling = false;
+      // Drop native-only presentation so CSS hover works while we re-arm.
+      document.documentElement.classList.remove("thumbnail-native-tracking");
+      clearNativeClasses();
+      setIgnoreCursorEvents(false, true);
+      void invoke("refresh_thumbnail_interactivity").catch(() => undefined);
+      schedulePoll(0);
+    };
+
     const poll = async () => {
       if (cancelled || polling) return;
       polling = true;
       let delay = 250;
+      let recovered = false;
       try {
-        const position = await invoke<ThumbnailPointerPosition | null>(
-          "get_thumbnail_pointer_position",
+        // Timeout so a hung IPC after sleep cannot leave `polling` stuck true.
+        const position = await withThumbnailPointerTimeout(
+          invoke<ThumbnailPointerPosition | null>("get_thumbnail_pointer_position"),
         );
         if (cancelled) return;
         if (!position) {
+          consecutiveNullPolls += 1;
+          // Platforms without native pointer samples (Windows/Linux today) always
+          // return null — only recover when we are already in a click-through or
+          // native-tracking state that null samples cannot clear themselves.
+          const needsRecovery = ignoringCursorEvents
+            || document.documentElement.classList.contains("thumbnail-native-tracking");
+          if (
+            needsRecovery
+            && shouldRecoverThumbnailAfterNullPolls(consecutiveNullPolls)
+          ) {
+            recovered = true;
+            recoverInteractivity();
+            return;
+          }
           // A focus handoff can briefly make the native pointer query
           // unavailable. Preserve the last presentation until a real sample
           // confirms that the pointer moved away so the card cannot flash.
           delay = 40;
         } else {
+          consecutiveNullPolls = 0;
           applyNativeHover(position);
           delay = 40;
         }
       } catch {
-        // Treat a transient native query failure as indeterminate too. A valid
-        // outside sample still clears hover immediately through applyNativeHover.
+        consecutiveNullPolls += 1;
+        const needsRecovery = ignoringCursorEvents
+          || document.documentElement.classList.contains("thumbnail-native-tracking");
+        if (
+          needsRecovery
+          && shouldRecoverThumbnailAfterNullPolls(consecutiveNullPolls)
+        ) {
+          recovered = true;
+          recoverInteractivity();
+          return;
+        }
         delay = 40;
       } finally {
         polling = false;
-        schedulePoll(delay);
+        // recoverInteractivity already scheduled the next poll.
+        if (!cancelled && !recovered) schedulePoll(delay);
       }
     };
 
-    const resumePolling = () => {
+    const resumeFromSuspension = () => {
       if (document.hidden) return;
-      schedulePoll(0);
+      recoverInteractivity();
     };
 
     const pollImmediately = () => {
-      if (!document.hidden) schedulePoll(0);
+      if (document.hidden) return;
+      // Unlock a poll that may have been mid-flight when the OS suspended JS.
+      polling = false;
+      schedulePoll(0);
     };
 
     const updateThumbnailHitTest = () => {
@@ -4062,13 +4112,15 @@ export function Thumbnail() {
       pollImmediately();
     };
 
-    document.addEventListener("visibilitychange", resumePolling);
+    document.addEventListener("visibilitychange", resumeFromSuspension);
     // Clicking an inactive thumbnail briefly makes its panel key before a
     // full-size viewer takes focus. Keep the last native hover presentation
     // during that transfer; the immediate poll will reconcile it without
     // flashing the metadata and unblurred image in between.
     window.addEventListener("focus", pollImmediately);
-    window.addEventListener("pageshow", resumePolling);
+    window.addEventListener("pageshow", resumeFromSuspension);
+    window.addEventListener("online", resumeFromSuspension);
+    document.addEventListener("resume", resumeFromSuspension as EventListener);
     window.addEventListener("captures-thumbnail-ready", pollImmediately);
     window.addEventListener("captures-thumbnail-layout-changed", pollImmediately);
     window.addEventListener(
@@ -4079,9 +4131,11 @@ export function Thumbnail() {
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
-      document.removeEventListener("visibilitychange", resumePolling);
+      document.removeEventListener("visibilitychange", resumeFromSuspension);
       window.removeEventListener("focus", pollImmediately);
-      window.removeEventListener("pageshow", resumePolling);
+      window.removeEventListener("pageshow", resumeFromSuspension);
+      window.removeEventListener("online", resumeFromSuspension);
+      document.removeEventListener("resume", resumeFromSuspension as EventListener);
       window.removeEventListener("captures-thumbnail-ready", pollImmediately);
       window.removeEventListener("captures-thumbnail-layout-changed", pollImmediately);
       window.removeEventListener(
@@ -4156,6 +4210,7 @@ export function ThumbnailCard({
     copyFailed: boolean;
   } | null>(null);
   const cardRef = useRef<HTMLElement>(null);
+  const dustLayerRef = useRef<HTMLDivElement>(null);
   const fileDraggingRef = useRef(false);
   const exitAction = useRef<string | null>(null);
   /**
@@ -4188,6 +4243,16 @@ export function ThumbnailCard({
       if (exitFallbackTimer.current) clearTimeout(exitFallbackTimer.current);
     };
   }, []);
+
+  // WAAPI chip flight — avoids CSS custom-property keyframes that WebView2 drops.
+  // Depend on `exit` too so the layer is mounted before we query chips.
+  useEffect(() => {
+    if (exit !== "delete" || !dustParticles || dustParticles.length === 0) return;
+    const layer = dustLayerRef.current;
+    if (!layer) return;
+    const chips = layer.querySelectorAll(".thumbnail-dust");
+    return playThumbnailDustAnimations(chips, dustParticles);
+  }, [dustParticles, exit]);
 
   const showSavedFeedback = () => {
     if (isExitLocked()) return;
@@ -4377,7 +4442,7 @@ export function ThumbnailCard({
         onError={markThumbnailReady}
       />
       {usingDust && (
-        <div className="thumbnail-dust-layer" aria-hidden="true">
+        <div ref={dustLayerRef} className="thumbnail-dust-layer" aria-hidden="true">
           {dustParticles.map((particle) => (
             <span
               key={particle.id}
@@ -4390,11 +4455,6 @@ export function ThumbnailCard({
                 backgroundImage: `url(${JSON.stringify(artifact.preview_url).slice(1, -1)})`,
                 backgroundSize: `${particle.surfaceWidth}px ${particle.surfaceHeight}px`,
                 backgroundPosition: `${particle.bgX}px ${particle.bgY}px`,
-                ["--dust-x" as string]: `${particle.dx}px`,
-                ["--dust-y" as string]: `${particle.dy}px`,
-                ["--dust-rotate" as string]: `${particle.rotate}deg`,
-                animationDelay: `${particle.delayMs}ms`,
-                animationDuration: `${particle.durationMs}ms`,
               }}
             />
           ))}
