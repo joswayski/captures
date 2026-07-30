@@ -28,9 +28,9 @@ The roadmap is still taking shape. Likely additions include:
 - Timed screenshots and an easy way to repeat the previous capture area.
 - Pinned captures that stay visible above other windows.
 - Editable click highlights and keystroke overlays after recording.
-- Optional hosted sharing for images and recordings.
+- Optional hosted sharing for images and recordings with shareable `captur.es/<id>` links.
 - Faster recording on Windows and Linux.
-- Automatic exclusion of Captures controls on Linux recordings.
+- Keep recording controls out of Linux recordings.
 - Window, cursor, and click-highlight support on Wayland.
 
 These are directions, not promised release dates or a fixed order.
