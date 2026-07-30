@@ -12,8 +12,34 @@ permissions:
   contents: read
 
 jobs:
+  discover:
+    name: Find a published release
+    runs-on: ubuntu-24.04
+    outputs:
+      available: ${{ steps.release.outputs.available }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check whether a stable release is published
+        id: release
+        shell: bash
+        run: |
+          count="$(
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+              --jq '[.[] | select(.draft == false and .prerelease == false)] | length'
+          )"
+          if (( count > 0 )); then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No stable release exists yet. Installer verification will begin after the first automatic release is published." >> "$GITHUB_STEP_SUMMARY"
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
   install:
     name: Install latest release (${{ matrix.name }})
+    needs: discover
+    if: needs.discover.outputs.available == 'true'
     strategy:
       fail-fast: false
       matrix:
