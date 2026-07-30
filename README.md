@@ -19,9 +19,7 @@ Captures is a cross-platform screen capture utility built for quick captures and
 - Restore recent screenshots from a 30-day history.
 - Customize global shortcuts and color themes.
 
-## Roadmap
-
-The roadmap is still taking shape. Likely additions include:
+## Wishlist
 
 - Scrolling capture for content larger than the screen.
 - On-device text recognition (OCR).
@@ -32,8 +30,6 @@ The roadmap is still taking shape. Likely additions include:
 - Faster recording on Windows and Linux.
 - Keep recording controls out of Linux recordings.
 - Window, cursor, and click-highlight support on Wayland.
-
-These are directions, not promised release dates or a fixed order.
 
 ## Platform status
 
@@ -46,10 +42,8 @@ These are directions, not promised release dates or a fixed order.
 
 ## Releases
 
-Every successful push to `main` publishes a GitHub Release after its macOS,
-Windows, and Linux packages pass the full release validation. The first release
-of a New York calendar day ends in `.1`; later releases that day use `.2`, `.3`,
-and so on.
+Every successful push to `main` publishes a validated
+[CalVer](https://calver.org/) release using `YYYY.MM.DD.N`.
 
 Anyone signed in with the GitHub CLI can replace the installed app with the
 newest fully validated release for their current system:
