@@ -142,6 +142,12 @@ impl ClipboardOwnership {
     }
 }
 
+#[derive(Default)]
+pub struct ScreenshotCountdownRuntime {
+    pub generation: u64,
+    pub active: bool,
+}
+
 pub struct AppState {
     pub settings: RwLock<AppSettings>,
     pub sessions: Mutex<HashMap<Uuid, CaptureSession>>,
@@ -150,6 +156,7 @@ pub struct AppState {
     pub recording_timeline_sprites: Mutex<HashMap<String, Vec<u8>>>,
     pub recording_selection: Mutex<Option<RecordingSelection>>,
     pub recording: Mutex<RecordingRuntime>,
+    pub screenshot_countdown: Mutex<ScreenshotCountdownRuntime>,
     pub history: Mutex<Vec<HistoryEntry>>,
     pub clipboard_ownership: Mutex<ClipboardOwnership>,
     pub thumbnail_visibility: Mutex<ThumbnailVisibility>,
@@ -179,6 +186,7 @@ impl AppState {
             recording_timeline_sprites: Mutex::new(HashMap::new()),
             recording_selection: Mutex::new(None),
             recording: Mutex::new(RecordingRuntime::default()),
+            screenshot_countdown: Mutex::new(ScreenshotCountdownRuntime::default()),
             history: Mutex::new(history),
             clipboard_ownership: Mutex::new(ClipboardOwnership::default()),
             thumbnail_visibility: Mutex::new(ThumbnailVisibility::default()),

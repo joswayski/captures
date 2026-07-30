@@ -63,6 +63,7 @@ export interface AppSettings {
   launch_at_login: boolean;
   last_screen_permission_request_id: string | null;
   pending_capture_after_restart: CaptureMode | null;
+  screenshot_countdown_seconds: number;
   recording: RecordingSettings;
 }
 
