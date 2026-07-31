@@ -907,7 +907,7 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging img { cur
 
 /* Screenshot editing stays inside one platform-neutral canvas surface. The
    native layer only owns the window, clipboard, and final file write. */
-.screenshot-editor { display: grid; width: 100%; height: 100%; min-width: 860px; min-height: 600px; grid-template: 54px minmax(0,1fr) 108px / 70px minmax(0,1fr) 310px; overflow: hidden; color: #f2f2f1; background: #151619; }
+.screenshot-editor { display: grid; width: 100%; height: 100%; min-width: 860px; min-height: 600px; grid-template: 54px minmax(0,1fr) minmax(108px,auto) / 70px minmax(0,1fr) 310px; overflow: hidden; color: #f2f2f1; background: #151619; }
 .screenshot-editor-loading { min-width: 0; min-height: 100%; place-items: center; color: #a7a8ad; }
 .screenshot-editor button, .screenshot-editor input, .screenshot-editor select, .screenshot-editor textarea { font: inherit; }
 .screenshot-editor-header { z-index: 10; display: flex; grid-column: 1 / -1; padding: 0 14px 0 18px; align-items: center; justify-content: space-between; gap: 18px; border-bottom: 1px solid #34353a; background: #202126; box-shadow: 0 4px 14px rgba(0,0,0,.2); }
@@ -995,17 +995,20 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging img { cur
 .screenshot-custom-color input { position: absolute; inset: -8px; width: 40px; height: 40px; opacity: 0; cursor: pointer; }
 .screenshot-layer-actions { display: grid; grid-template-columns: 1fr 1fr; }
 .screenshot-file-name { overflow: hidden; color: #d5d6d8 !important; text-overflow: ellipsis; white-space: nowrap; }
-.screenshot-export-bar { z-index: 20; display: grid; min-width: 0; grid-row: 3; grid-column: 1 / -1; padding: 10px 14px; grid-template-columns: minmax(600px,auto) minmax(150px,1fr) auto; align-items: center; gap: 14px; border-top: 1px solid #3a3b40; background: rgba(31,32,36,.98); box-shadow: 0 -10px 28px rgba(0,0,0,.28); }
-/* Left settings and right actions share one vertical centerline. Labels sit
-   above controls; control rows use a shared 34px height matching Save/Copy. */
-.screenshot-export-settings { display: flex; min-width: 0; align-items: center; gap: 10px; }
+/* Labels sit above a shared 34px control row. Settings and action buttons
+   bottom-align so Copy/Save share that control baseline. */
+.screenshot-export-bar { z-index: 20; display: grid; min-width: 0; grid-row: 3; grid-column: 1 / -1; padding: 10px 14px; grid-template-columns: minmax(0,auto) minmax(120px,1fr) auto; align-items: end; gap: 14px; border-top: 1px solid #3a3b40; background: rgba(31,32,36,.98); box-shadow: 0 -10px 28px rgba(0,0,0,.28); }
+.screenshot-export-settings { display: flex; min-width: 0; flex-wrap: wrap; align-items: end; gap: 10px 12px; }
 .screenshot-export-settings label,
-.screenshot-export-control { display: flex; min-width: 0; flex-direction: column; justify-content: center; gap: 4px; color: #898a90; font-size: 8px; font-weight: 750; line-height: 1; text-transform: uppercase; }
+.screenshot-export-control { display: flex; min-width: 0; flex-direction: column; justify-content: flex-end; gap: 4px; color: #898a90; font-size: 8px; font-weight: 750; line-height: 1; text-transform: uppercase; }
 .screenshot-export-settings select,
 .screenshot-export-settings input[type=number] { min-width: 92px; height: 34px; border: 1px solid #44454b; border-radius: 6px; padding: 0 8px; color: #ececef; background: #111216; outline: none; font-size: 9px; line-height: 1; text-transform: none; }
 .screenshot-export-settings input[type=number] { width: 88px; min-width: 0; }
+.screenshot-export-size-control { display: flex; min-width: 0; height: 34px; align-items: center; gap: 8px; }
+.screenshot-export-size-control select { min-width: 92px; }
+.screenshot-output-dimensions { color: #a0a1a6; font-size: 9px; font-weight: 650; line-height: 1; white-space: nowrap; text-transform: none; font-variant-numeric: tabular-nums; }
 .screenshot-quality { width: 248px; }
-/* Compact quality control: value + track + preset labels, centered with selects. */
+/* Compact quality control: value + track + preset labels, aligned with selects. */
 .screenshot-quality .range-slider { grid-template-rows: 11px 20px 11px; gap: 0; }
 .screenshot-quality .range-slider-value { min-height: 11px; align-items: flex-end; }
 .screenshot-quality .range-slider-value output { color: var(--theme-accent-text); font-size: 8px; line-height: 1; text-transform: none; }
@@ -1021,26 +1024,27 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging img { cur
 .screenshot-maximum-size > span { display: grid; grid-template-columns: minmax(0,1fr) 55px; gap: 5px; align-items: center; }
 .screenshot-maximum-size input[type=number] { width: 100%; }
 .screenshot-maximum-size select { min-width: 0; width: 55px; height: 34px; padding-right: 3px; }
-.screenshot-output-meta { display: flex; min-width: 88px; flex-direction: column; align-items: flex-end; justify-content: center; gap: 3px; color: #85868c; font-size: 9px; line-height: 1.2; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.screenshot-output-dimensions { color: #85868c; }
-.screenshot-output-estimate { color: #a7a8ad; font-weight: 700; }
+.screenshot-output-estimate-control { min-width: 72px; }
+.screenshot-output-estimate { display: flex; height: 34px; align-items: center; color: #a7a8ad; font-size: 9px; font-weight: 700; line-height: 1; text-transform: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .screenshot-output-estimate[data-pending="true"] { color: #6f7075; font-weight: 600; }
-.screenshot-export-status { min-width: 0; overflow: hidden; color: #8e8f94; font-size: 9px; line-height: 1.35; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+.screenshot-export-status { min-width: 0; overflow: hidden; align-self: center; color: #8e8f94; font-size: 9px; line-height: 1.35; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
 .screenshot-export-status.error { color: #ff9da6; }
-.screenshot-export-actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
+.screenshot-export-actions { display: flex; height: 34px; align-items: center; justify-content: flex-end; gap: 7px; }
 .screenshot-export-actions button { display: inline-flex; min-width: 82px; height: 34px; min-height: 34px; padding: 0 11px; align-items: center; justify-content: center; gap: 6px; border: 1px solid #46474d; border-radius: 7px; color: #e4e4e6; background: #2d2e33; font-size: 10px; font-weight: 800; white-space: nowrap; }
 .screenshot-export-actions button:hover:not(:disabled) { border-color: #5b5c62; background: #3a3b40; transform: translateY(-1px); }
 .screenshot-export-actions button.primary { min-width: 104px; border-color: var(--theme-accent-strong); color: var(--theme-accent-ink); background: var(--editing-accent); }
 .screenshot-export-actions button.primary:hover:not(:disabled) { background: var(--theme-accent-hover); }
 .screenshot-export-actions button:disabled { cursor: wait; opacity: .55; }
-.screenshot-export-actions svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.screenshot-export-actions svg { width: 14px; height: 14px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 @media (max-width: 1040px) {
   .screenshot-editor { grid-template-columns: 64px minmax(0,1fr) 270px; }
   .screenshot-drop-overlay { right: 288px; bottom: 124px; left: 78px; }
   .screenshot-editor-history-actions .screenshot-editor-zoom, .screenshot-editor-history-actions > button:first-child, .screenshot-editor-history-actions > button:nth-child(2) { display: none; }
-  .screenshot-export-bar { grid-template-columns: minmax(0,1fr) auto; gap: 9px; }
+  .screenshot-export-bar { grid-template-columns: minmax(0,1fr) auto; align-items: end; gap: 10px 12px; }
   .screenshot-export-status { display: none; }
-  .screenshot-quality { width: 190px; }.screenshot-maximum-size { width: 130px; }
+  .screenshot-quality { width: 170px; }
+  .screenshot-maximum-size { width: 124px; }
+  .screenshot-export-settings { gap: 8px 10px; }
 }
 
 .preferences { height: 100%; overflow-y: auto; }

@@ -1775,14 +1775,19 @@ export function ScreenshotEditor() {
               <option value="webp">WebP · lossless</option>
             </select>
           </label>
-          <label>
+          <label className="screenshot-export-size">
             Output size
-            <select value={exportSize} onChange={(event) => setExportSize(event.target.value as ExportSize)}>
-              <option value="original">Original</option>
-              <option value="75">75%</option>
-              <option value="50">50%</option>
-              <option value="custom">Custom width</option>
-            </select>
+            <span className="screenshot-export-size-control">
+              <select value={exportSize} onChange={(event) => setExportSize(event.target.value as ExportSize)}>
+                <option value="original">Original</option>
+                <option value="75">75%</option>
+                <option value="50">50%</option>
+                <option value="custom">Custom width</option>
+              </select>
+              <span className="screenshot-output-dimensions" aria-live="polite">
+                {output.width} × {output.height}
+              </span>
+            </span>
           </label>
           {exportSize === "custom" && (
             <label>
@@ -1833,9 +1838,9 @@ export function ScreenshotEditor() {
               </select>
             </span>
           </label>
-          <div className="screenshot-output-meta" aria-live="polite">
-            <span className="screenshot-output-dimensions">{output.width} × {output.height}</span>
-            <span
+          <div className="screenshot-export-control screenshot-output-estimate-control" aria-live="polite">
+            <span>Est. size</span>
+            <strong
               className="screenshot-output-estimate"
               data-pending={estimatePending ? "true" : undefined}
               title="Estimated export file size for the current format, quality, and output size"
@@ -1843,9 +1848,9 @@ export function ScreenshotEditor() {
               {estimatePending && estimatedBytes === null
                 ? "Estimating…"
                 : estimatedBytes === null
-                  ? "Size unavailable"
+                  ? "—"
                   : `≈ ${formatFileSize(estimatedBytes)}`}
-            </span>
+            </strong>
           </div>
         </div>
         <div className={`screenshot-export-status${error ? " error" : ""}`} role={error ? "alert" : "status"}>
