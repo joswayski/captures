@@ -17,6 +17,14 @@ export const THUMBNAIL_NULL_POLL_RECOVER_COUNT = 12;
 
 const THUMBNAIL_NATIVE_ACTIVE_ATTRIBUTE = "data-thumbnail-native-active";
 const THUMBNAIL_NATIVE_ACTIVE_SELECTOR = `[${THUMBNAIL_NATIVE_ACTIVE_ATTRIBUTE}="true"]`;
+/**
+ * Marker for the button under the native pointer. Stored as a data attribute
+ * (not a React-managed class) so IconButton re-renders cannot wipe hover for a
+ * frame and flash the AppKit arrow / hover chrome.
+ */
+export const THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE = "data-native-pointer-hover";
+const THUMBNAIL_NATIVE_POINTER_HOVER_SELECTOR =
+  `[${THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE}="true"]`;
 
 /** Cursor kind for the always-on-top capture previews. */
 export type ThumbnailCursorKind = "default" | "pointer" | "grab";
@@ -65,13 +73,18 @@ export function thumbnailCursorSyncAction(
   current: ThumbnailCursorKind,
   next: ThumbnailCursorKind,
   elapsedMs: number,
+  options: { force?: boolean } = {},
 ): "transition" | "reassert" | null {
   if (current !== next) return "transition";
-  // macOS restores the frontmost app's arrow while Captures is inactive.
-  // Keep reasserting any interactive cursor (pointer on buttons, grab on the
-  // drag source image) so the affordance does not disappear after focus moves
-  // to the editor, another Captures window, or a different app.
-  if (next !== "default" && elapsedMs >= THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS) {
+  // macOS restores the frontmost app's arrow while Captures is inactive, and
+  // also on mousedown/mouseup when a preview control is clicked. Keep
+  // reasserting any interactive cursor (pointer on buttons, grab on the drag
+  // source image). Callers pass `force` on pointer/focus events so the hand
+  // is restored immediately instead of waiting for the poll interval.
+  if (
+    next !== "default"
+    && (options.force || elapsedMs >= THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS)
+  ) {
     return "reassert";
   }
   return null;
@@ -101,10 +114,12 @@ export function shouldIgnoreThumbnailCursorEvents(
 }
 
 export function clearThumbnailNativeHover(root: ParentNode = document) {
-  root.querySelectorAll(`${THUMBNAIL_NATIVE_ACTIVE_SELECTOR}, .native-pointer-hover`)
+  root.querySelectorAll(
+    `${THUMBNAIL_NATIVE_ACTIVE_SELECTOR}, ${THUMBNAIL_NATIVE_POINTER_HOVER_SELECTOR}`,
+  )
     .forEach((element) => {
       element.removeAttribute(THUMBNAIL_NATIVE_ACTIVE_ATTRIBUTE);
-      element.classList.remove("native-pointer-hover");
+      element.removeAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE);
     });
 }
 
@@ -147,7 +162,9 @@ export function applyThumbnailNativeHover(
     return "default";
   }
 
-  const currentButton = root.querySelector<HTMLElement>(".native-pointer-hover");
+  const currentButton = root.querySelector<HTMLElement>(
+    THUMBNAIL_NATIVE_POINTER_HOVER_SELECTOR,
+  );
   const currentCard = root.querySelector<HTMLElement>(THUMBNAIL_NATIVE_ACTIVE_SELECTOR);
   const directTarget = root.elementFromPoint(position.x, position.y);
   const card = directTarget?.closest(".thumbnail-card")
@@ -169,9 +186,10 @@ export function applyThumbnailNativeHover(
     .elementFromPoint(position.x, position.y)
     ?.closest("button");
   const directButton = target && card.contains(target) ? target : null;
-  // A focus handoff can make WebKit report the preview image for one poll even
-  // though the pointer has not left the button. Keep the last button while the
-  // native coordinates remain within it so the cursor does not flash to arrow.
+  // A focus handoff or :active scale can make WebKit report the preview image
+  // for one poll even though the pointer has not left the button. Keep the last
+  // button while the native coordinates remain within it so the cursor does not
+  // flash to the default arrow.
   const button = directButton
     ?? (
       currentButton
@@ -181,10 +199,14 @@ export function applyThumbnailNativeHover(
         : null
     );
 
-  root.querySelectorAll(".native-pointer-hover")
+  root.querySelectorAll(THUMBNAIL_NATIVE_POINTER_HOVER_SELECTOR)
     .forEach((element) => {
-      if (element !== button) element.classList.remove("native-pointer-hover");
+      if (element !== button) {
+        element.removeAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE);
+      }
     });
-  button?.classList.add("native-pointer-hover");
+  if (button) {
+    button.setAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE, "true");
+  }
   return button ? "pointer" : "grab";
 }

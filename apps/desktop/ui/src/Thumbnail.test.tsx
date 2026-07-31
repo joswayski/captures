@@ -61,6 +61,72 @@ describe("Thumbnail", () => {
     expect(card).toHaveAttribute("data-thumbnail-native-active", "true");
   });
 
+  it("reasserts the interactive cursor immediately on button pointerdown", async () => {
+    let pointerReady = false;
+    const editButtonRef = { current: null as HTMLElement | null };
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifacts") return [artifact];
+      if (command === "get_clipboard_state") {
+        return { revision: 0, artifact_id: artifact.id };
+      }
+      if (command === "get_thumbnail_pointer_position") {
+        return pointerReady
+          ? { x: 40, y: 20, inside: true }
+          : new Promise(() => undefined);
+      }
+      return undefined;
+    });
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => editButtonRef.current),
+    });
+
+    render(<Thumbnail />);
+    const card = await screen.findByRole("article");
+    const edit = within(card).getByRole("button", { name: "Edit" });
+    editButtonRef.current = edit;
+    vi.spyOn(edit, "getBoundingClientRect").mockReturnValue({
+      x: 20,
+      y: 10,
+      top: 10,
+      left: 20,
+      right: 80,
+      bottom: 50,
+      width: 60,
+      height: 40,
+      toJSON: () => ({}),
+    });
+    pointerReady = true;
+    window.dispatchEvent(new Event("captures-thumbnail-ready"));
+
+    await waitFor(() => {
+      expect(edit).toHaveAttribute("data-native-pointer-hover", "true");
+    });
+    await waitFor(() => {
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith(
+        "set_thumbnail_cursor",
+        { kind: "pointer" },
+      );
+    });
+    vi.mocked(invoke).mockClear();
+
+    // Clicks reset the AppKit arrow; pointerdown must reassert without waiting
+    // for the 100ms throttle window.
+    edit.dispatchEvent(new PointerEvent("pointerdown", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      pointerType: "mouse",
+    }));
+
+    await waitFor(() => {
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith(
+        "reassert_thumbnail_cursor",
+        { kind: "pointer" },
+      );
+    });
+  });
+
   it("preserves native hover when pointer polling is briefly unavailable", async () => {
     let pointerPolls = 0;
     vi.mocked(invoke).mockImplementation(async (command) => {
