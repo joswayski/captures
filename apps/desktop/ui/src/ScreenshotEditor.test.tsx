@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { listen } from "@tauri-apps/api/event";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import { ScreenshotEditor } from "./ScreenshotEditor";
 import type { CaptureArtifact } from "./types";
@@ -248,5 +249,39 @@ describe("ScreenshotEditor", () => {
     } finally {
       window.Image = originalImage;
     }
+  });
+
+  it("keeps copy and save available when the original capture is deleted", async () => {
+    type ArtifactRemovedHandler = (event: { payload: string }) => void;
+    let artifactRemoved: ArtifactRemovedHandler | null = null;
+    vi.mocked(listen).mockImplementation(async (event, handler) => {
+      if (event === "artifact-removed") {
+        artifactRemoved = handler as ArtifactRemovedHandler;
+      }
+      return () => undefined;
+    });
+
+    render(<ScreenshotEditor />);
+    await screen.findAllByText("1440 × 900");
+
+    expect(screen.getByRole("button", { name: "Copy" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Save copy" })).toBeEnabled();
+    expect(
+      screen.getByText("Saving creates a new copy and preserves the original."),
+    ).toBeInTheDocument();
+
+    expect(artifactRemoved).not.toBeNull();
+    act(() => {
+      artifactRemoved!({ payload: "capture-1" });
+    });
+
+    expect(
+      screen.getByText(
+        "The original was deleted. You can still copy or save this edit.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Save copy" })).toBeEnabled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });
