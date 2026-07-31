@@ -3167,6 +3167,7 @@ fn crop_window_from_session(session: &CaptureSession, window_id: &str) -> Option
     Some(image)
 }
 
+#[cfg(target_os = "macos")]
 fn window_visible_corner_radius(window: &captures_capture::WindowDescriptor) -> f64 {
     window
         .corner_radius
