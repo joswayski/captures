@@ -191,6 +191,9 @@ pub fn run() {
             get_artifacts,
             get_artifact,
             prepare_artifact_drag,
+            mark_internal_file_drop,
+            should_keep_preview_after_file_drop,
+            read_prepared_drag_image,
             get_capture_history,
             restore_history_artifact,
             delete_history_artifact,
@@ -1061,10 +1064,109 @@ async fn prepare_artifact_drag(
             .await
             .map_err(|error| error.to_string())?
             .map_err(|error| error.to_string())?;
+    let file_name = files
+        .path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("capture.png")
+        .to_owned();
+    *state.prepared_artifact_drag.lock() = Some(state::PreparedArtifactDrag {
+        path: files.path.clone(),
+        file_name,
+    });
     Ok(ArtifactDragPayload {
         path: files.path.to_string_lossy().into_owned(),
         icon_path: files.icon_path.to_string_lossy().into_owned(),
     })
+}
+
+/// Called by in-app drop targets (screenshot editor) so a successful OS file
+/// drop into Captures itself does not dismiss the source preview.
+#[tauri::command]
+fn mark_internal_file_drop(state: tauri::State<'_, Arc<AppState>>) {
+    *state.last_internal_file_drop.lock() = Some(std::time::Instant::now());
+}
+
+/// Keep the preview when the drop landed on a Captures window or an in-app
+/// drop target just accepted the file. External drops still dismiss.
+#[tauri::command]
+fn should_keep_preview_after_file_drop(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    x: f64,
+    y: f64,
+) -> bool {
+    if let Some(at) = *state.last_internal_file_drop.lock() {
+        // Editor marks the drop before the drag source gets Dropped; allow a
+        // short window so the preview is not dismissed mid-import.
+        if at.elapsed() <= std::time::Duration::from_millis(1_500) {
+            return true;
+        }
+    }
+    captures_window_contains_point(&app, x, y)
+}
+
+/// Read the full-resolution PNG staged for the current preview file drag.
+///
+/// Same-app drops into a webview sometimes deliver an unreadable/empty
+/// `File` to HTML5 drop handlers. The editor falls back to this path.
+#[tauri::command]
+fn read_prepared_drag_image(
+    state: tauri::State<'_, Arc<AppState>>,
+    file_name: String,
+) -> CommandResult<Vec<u8>> {
+    let prepared = state
+        .prepared_artifact_drag
+        .lock()
+        .clone()
+        .ok_or_else(|| "no prepared drag image is available".to_owned())?;
+    if prepared.file_name != file_name {
+        return Err("file does not match the prepared drag image".to_owned());
+    }
+    if !prepared.path.is_file() {
+        return Err("the prepared drag image is no longer available".to_owned());
+    }
+    fs::read(&prepared.path).map_err(|error| error.to_string())
+}
+
+/// Screen-space hit test: is `(x, y)` over any visible Captures window?
+///
+/// Coordinates match `drag::CursorPosition` (top-left origin screen pixels on
+/// macOS/Windows after the drag crate's conversion).
+fn captures_window_contains_point(app: &AppHandle, x: f64, y: f64) -> bool {
+    for (_label, window) in app.webview_windows() {
+        let Ok(true) = window.is_visible() else {
+            continue;
+        };
+        let Ok(position) = window.outer_position() else {
+            continue;
+        };
+        let Ok(size) = window.outer_size() else {
+            continue;
+        };
+        if screen_rect_contains_point(
+            f64::from(position.x),
+            f64::from(position.y),
+            f64::from(size.width),
+            f64::from(size.height),
+            x,
+            y,
+        ) {
+            return true;
+        }
+    }
+    false
+}
+
+fn screen_rect_contains_point(
+    left: f64,
+    top: f64,
+    width: f64,
+    height: f64,
+    x: f64,
+    y: f64,
+) -> bool {
+    x >= left && x < left + width && y >= top && y < top + height
 }
 
 #[tauri::command]
@@ -3817,5 +3919,24 @@ mod tests {
             Some("recording-saved-7e3191ca-8596-4d22-a6e1-4b57a64f00cb".to_owned())
         );
         assert_eq!(recording_saved_notice_label("../history"), None);
+    }
+
+    #[test]
+    fn screen_rect_hit_test_is_half_open_on_right_and_bottom() {
+        assert!(super::screen_rect_contains_point(
+            100.0, 200.0, 400.0, 300.0, 100.0, 200.0
+        ));
+        assert!(super::screen_rect_contains_point(
+            100.0, 200.0, 400.0, 300.0, 499.0, 499.0
+        ));
+        assert!(!super::screen_rect_contains_point(
+            100.0, 200.0, 400.0, 300.0, 500.0, 350.0
+        ));
+        assert!(!super::screen_rect_contains_point(
+            100.0, 200.0, 400.0, 300.0, 250.0, 500.0
+        ));
+        assert!(!super::screen_rect_contains_point(
+            100.0, 200.0, 400.0, 300.0, 99.0, 250.0
+        ));
     }
 }

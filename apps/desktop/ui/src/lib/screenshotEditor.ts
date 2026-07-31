@@ -426,8 +426,51 @@ export type ScreenshotExportFormat = "png" | "jpeg" | "webp";
  *
  * Uses a blob object URL first. If that fails (e.g. CSP without `blob:` in
  * img-src), falls back to a data URL so imports still work.
+ *
+ * When the browser `File` is empty or unreadable (common for same-app drops
+ * from a native preview drag), `preparedBytes` can supply the PNG staged for
+ * that drag so the editor still imports the image.
  */
-export async function loadImageFile(file: File): Promise<HTMLImageElement> {
+export async function loadImageFile(
+  file: File,
+  options?: {
+    preparedBytes?: () => Promise<Uint8Array | number[]>;
+  },
+): Promise<HTMLImageElement> {
+  const loadFromBytes = async (bytes: Uint8Array | number[]): Promise<HTMLImageElement> => {
+    const source = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    if (source.byteLength === 0) {
+      throw new Error(`${file.name} could not be loaded.`);
+    }
+    // Copy into a fresh ArrayBuffer so File/BlobPart typing accepts the payload
+    // across TypeScript DOM lib variants (SharedArrayBuffer vs ArrayBuffer).
+    const payload = Uint8Array.from(source);
+    const restored = new File([payload], file.name, {
+      type: file.type || "image/png",
+    });
+    return decodeFileSources(restored);
+  };
+
+  if (file.size > 0) {
+    try {
+      return await decodeFileSources(file);
+    } catch {
+      // Fall through to prepared drag bytes when present.
+    }
+  }
+
+  if (options?.preparedBytes) {
+    try {
+      return await loadFromBytes(await options.preparedBytes());
+    } catch {
+      // Prefer the original user-facing error below.
+    }
+  }
+
+  throw new Error(`${file.name} could not be loaded.`);
+}
+
+async function decodeFileSources(file: File): Promise<HTMLImageElement> {
   const blobUrl = URL.createObjectURL(file);
   try {
     return await decodeImageSource(blobUrl);
@@ -436,11 +479,7 @@ export async function loadImageFile(file: File): Promise<HTMLImageElement> {
   }
 
   const dataUrl = await readFileAsDataUrl(file);
-  try {
-    return await decodeImageSource(dataUrl);
-  } catch {
-    throw new Error(`${file.name} could not be loaded.`);
-  }
+  return decodeImageSource(dataUrl);
 }
 
 function decodeImageSource(src: string): Promise<HTMLImageElement> {
