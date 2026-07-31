@@ -6,15 +6,19 @@ import {
   estimateCanvasExportBytes,
   expandDocumentForElement,
   hitTestElement,
+  hitTestResizeHandle,
   imageSizeAtWidth,
   isSupportedImageFile,
   loadImageFile,
   outputDimensions,
   positionImportedImage,
   reorderScreenshotLayers,
+  resizeBoundsFromHandle,
+  resizeElement,
   translateElement,
   type EditorImageElement,
   type EditorShapeElement,
+  type EditorTextElement,
 } from "./screenshotEditor";
 
 describe("screenshot editor geometry", () => {
@@ -180,6 +184,80 @@ describe("screenshot editor geometry", () => {
       bend: 0.25,
     });
     expect(elementBounds(shape).width).toBeGreaterThan(100);
+  });
+
+  it("hit-tests corner resize handles and resizes bounds from the opposite corner", () => {
+    const bounds = { x: 100, y: 50, width: 200, height: 100 };
+    expect(hitTestResizeHandle(bounds, { x: 100, y: 50 }, 8)).toBe("nw");
+    expect(hitTestResizeHandle(bounds, { x: 300, y: 150 }, 8)).toBe("se");
+    expect(hitTestResizeHandle(bounds, { x: 200, y: 100 }, 8)).toBeNull();
+
+    expect(resizeBoundsFromHandle(bounds, "se", { x: 400, y: 250 }, 8)).toEqual({
+      x: 100,
+      y: 50,
+      width: 300,
+      height: 200,
+    });
+    expect(resizeBoundsFromHandle(bounds, "nw", { x: 50, y: 20 }, 8)).toEqual({
+      x: 50,
+      y: 20,
+      width: 250,
+      height: 130,
+    });
+  });
+
+  it("scales annotations when their selection box is resized", () => {
+    const shape: EditorShapeElement = {
+      id: "shape",
+      kind: "shape",
+      shape: "rectangle",
+      x: 100,
+      y: 100,
+      endX: 200,
+      endY: 180,
+      bend: 0,
+      style: { color: "#f00", fill: null, strokeWidth: 4 },
+    };
+    const initial = elementBounds(shape);
+    const next = {
+      x: initial.x,
+      y: initial.y,
+      width: initial.width * 2,
+      height: initial.height * 2,
+    };
+    const resized = resizeElement(shape, initial, next);
+    expect(resized).toMatchObject({
+      kind: "shape",
+      x: expect.any(Number),
+      y: expect.any(Number),
+      endX: expect.any(Number),
+      endY: expect.any(Number),
+    });
+    if (resized.kind !== "shape") throw new Error("expected shape");
+    expect(resized.endX - resized.x).toBeCloseTo((shape.endX - shape.x) * 2, 5);
+    expect(resized.endY - resized.y).toBeCloseTo((shape.endY - shape.y) * 2, 5);
+
+    const text: EditorTextElement = {
+      id: "text",
+      kind: "text",
+      x: 40,
+      y: 60,
+      text: "Hi",
+      fontSize: 40,
+      fontFamily: "sans",
+      bold: false,
+      italic: false,
+      align: "left",
+      color: "#f00",
+      background: null,
+    };
+    const textBounds = elementBounds(text);
+    const taller = {
+      ...textBounds,
+      height: textBounds.height * 2,
+    };
+    const resizedText = resizeElement(text, textBounds, taller);
+    expect(resizedText).toMatchObject({ kind: "text", fontSize: 80 });
   });
 
   it("calculates proportional output sizes for export", () => {
