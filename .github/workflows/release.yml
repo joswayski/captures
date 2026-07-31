@@ -206,7 +206,6 @@ jobs:
             -f target_commitish="$RELEASE_SHA" \
             -f name="Captures Nightly $DISPLAY_VERSION" \
             -F draft=true \
-            -F prerelease=true \
             -F generate_release_notes=true \
             > "$release_file"
           release_id="$(jq -er .id "$release_file")"

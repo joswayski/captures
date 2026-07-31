@@ -11,6 +11,13 @@ SOURCE_DIRECTORY="$BUILD_ROOT/ffmpeg-$FFMPEG_VERSION"
 BINARIES_DIRECTORY="$ROOT/apps/desktop/src-tauri/binaries"
 COMPLIANCE_DIRECTORY="$ROOT/apps/desktop/src-tauri/ffmpeg"
 DIST_DIRECTORY="$ROOT/target/ffmpeg-dist"
+CURL_RETRY_ARGS=(
+  --connect-timeout 30
+  --retry 5
+  --retry-all-errors
+  --retry-delay 5
+  --retry-max-time 300
+)
 
 TARGET_TRIPLE="$(rustc -vV | sed -n 's/^host: //p')"
 if [[ -z "$TARGET_TRIPLE" ]]; then
@@ -75,7 +82,9 @@ CONFIGURE_FLAGS=(
 
 mkdir -p "$BUILD_ROOT" "$BINARIES_DIRECTORY" "$COMPLIANCE_DIRECTORY" "$DIST_DIRECTORY"
 if [[ ! -f "$SOURCE_ARCHIVE" ]]; then
-  curl -fsSL "https://ffmpeg.org/releases/ffmpeg-$FFMPEG_VERSION.tar.xz" -o "$SOURCE_ARCHIVE"
+  curl -fsSL "${CURL_RETRY_ARGS[@]}" \
+    "https://ffmpeg.org/releases/ffmpeg-$FFMPEG_VERSION.tar.xz" \
+    -o "$SOURCE_ARCHIVE"
 fi
 if command -v shasum >/dev/null 2>&1; then
   ACTUAL_SHA256="$(shasum -a 256 "$SOURCE_ARCHIVE" | awk '{print $1}')"
@@ -87,7 +96,9 @@ if [[ "$ACTUAL_SHA256" != "$FFMPEG_SHA256" ]]; then
   exit 1
 fi
 if [[ ! -f "$SOURCE_SIGNATURE" ]]; then
-  curl -fsSL "https://ffmpeg.org/releases/ffmpeg-$FFMPEG_VERSION.tar.xz.asc" -o "$SOURCE_SIGNATURE"
+  curl -fsSL "${CURL_RETRY_ARGS[@]}" \
+    "https://ffmpeg.org/releases/ffmpeg-$FFMPEG_VERSION.tar.xz.asc" \
+    -o "$SOURCE_SIGNATURE"
 fi
 
 if [[ ! -x "$FFMPEG_OUTPUT" || ! -x "$FFPROBE_OUTPUT" || "${CAPTURES_REBUILD_FFMPEG:-0}" == "1" ]]; then
