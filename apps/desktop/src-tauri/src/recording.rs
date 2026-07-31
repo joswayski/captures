@@ -345,6 +345,8 @@ fn cancel_recording_selection_inner(
     *selection = None;
     drop(selection);
     destroy_recording_selector(app);
+    #[cfg(target_os = "macos")]
+    captures_macos_window::restore_frontmost_app_after_capture();
     crate::set_capture_huds_protected(app, false);
     crate::restore_thumbnail_stack(app, state);
     Ok(())
@@ -393,6 +395,10 @@ async fn capture_selection_screenshot_inner(
         }
     };
     destroy_recording_selector(&app);
+    // Screenshot-from-controls is done with the selector; hand focus back so an
+    // already-open editor does not stay covering the app the user was using.
+    #[cfg(target_os = "macos")]
+    captures_macos_window::restore_frontmost_app_after_capture();
     crate::set_capture_huds_protected(&app, false);
 
     let prepared = (|| {
@@ -819,11 +825,16 @@ async fn start_segment(
             tokio::time::sleep(Duration::from_millis(RECORDING_COUNTDOWN_FADE_OUT_MS)).await;
             if !recording_segment_is_current(&state, session_id, generation) {
                 destroy_recording_countdown(&app);
+                captures_macos_window::restore_frontmost_app_after_capture();
                 return Ok(());
             }
         }
     }
     destroy_recording_countdown(&app);
+    // Selector/countdown activation can leave editors frontmost. The recording
+    // HUD is non-activating, so hand focus back while the user records.
+    #[cfg(target_os = "macos")]
+    captures_macos_window::restore_frontmost_app_after_capture();
     show_recording_hud(&app).await?;
     schedule_segment_monitor(app, state, session_id.to_owned(), generation);
     Ok(())
@@ -2418,6 +2429,8 @@ fn restore_recording_ui(app: &AppHandle, state: &Arc<AppState>) {
     destroy_recording_selector(app);
     destroy_recording_countdown(app);
     crate::hide_window(app, "recording-hud");
+    #[cfg(target_os = "macos")]
+    captures_macos_window::restore_frontmost_app_after_capture();
     crate::set_capture_huds_protected(app, false);
     crate::restore_thumbnail_stack(app, state);
 }
@@ -3034,6 +3047,10 @@ const fn recording_overlay_content_protected() -> bool {
 
 fn show_recording_editor(app: &AppHandle, artifact_id: &str) -> Result<(), AppError> {
     let label = format!("recording-editor-{artifact_id}");
+    // Opening the editor is intentional; keep Captures focused instead of
+    // restoring the app that was frontmost when recording started.
+    #[cfg(target_os = "macos")]
+    captures_macos_window::clear_frontmost_app_anchor();
     if let Some(window) = app.get_webview_window(&label) {
         window.show()?;
         window.set_focus()?;
