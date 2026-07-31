@@ -1,4 +1,4 @@
-name: Release
+name: Nightly
 
 on:
   push:
@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   queue:
-    name: Wait for earlier releases
+    name: Wait for earlier Nightlies
     runs-on: ubuntu-24.04
     permissions:
       actions: read
@@ -28,7 +28,7 @@ jobs:
         shell: bash
         run: |
           if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
-            echo "Releases can only run from main." >&2
+            echo "Nightlies can only run from main." >&2
             exit 1
           fi
       - uses: actions/checkout@v4
@@ -69,12 +69,12 @@ jobs:
             if [[ -z "$blocker" ]]; then
               break
             fi
-            echo "Waiting for earlier release workflow ${blocker} to finish."
+            echo "Waiting for earlier Nightly workflow ${blocker} to finish."
             sleep 30
           done
 
   version:
-    name: Choose release version
+    name: Choose Nightly version
     needs: queue
     runs-on: ubuntu-24.04
     outputs:
@@ -155,7 +155,7 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   prepare:
-    name: Create draft release
+    name: Stage Nightly
     needs: [queue, version, frontend, rust]
     runs-on: ubuntu-24.04
     permissions:
@@ -184,8 +184,7 @@ jobs:
               | jq \
                 -r \
                 --arg tag "$TAG" \
-                --arg name "Captures $DISPLAY_VERSION" \
-                '.[] | select(.draft and .tag_name == $tag and .name == $name) | .id'
+                '.[] | select(.draft and .tag_name == $tag) | .id'
           )"
           while IFS= read -r stale_release_id; do
             if [[ -z "$stale_release_id" ]]; then
@@ -205,21 +204,29 @@ jobs:
             "repos/${GITHUB_REPOSITORY}/releases" \
             -f tag_name="$TAG" \
             -f target_commitish="$RELEASE_SHA" \
-            -f name="Captures $DISPLAY_VERSION" \
+            -f name="Captures Nightly $DISPLAY_VERSION" \
             -F draft=true \
+            -F prerelease=true \
             -F generate_release_notes=true \
             > "$release_file"
           release_id="$(jq -er .id "$release_file")"
-          jq -r '.body // ""' "$release_file" > "$notes_file"
-          if [[ ! -s "$notes_file" ]]; then
-            fallback_notes="Automated build of commit ${RELEASE_SHA:0:7}."
-            echo "$fallback_notes" > "$notes_file"
-            gh api \
-              --method PATCH \
-              "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
-              -f body="$fallback_notes" \
-              --silent
-          fi
+          generated_notes="$RUNNER_TEMP/generated-release-notes.md"
+          jq -r '.body // ""' "$release_file" > "$generated_notes"
+          {
+            echo "> [!WARNING]"
+            echo "> This Nightly is functional, but experimental. Expect bugs and incomplete features; macOS is the primary development target, while Windows and Linux may be less polished."
+            echo
+            if [[ -s "$generated_notes" ]]; then
+              cat "$generated_notes"
+            else
+              echo "Automated build of commit ${RELEASE_SHA:0:7}."
+            fi
+          } > "$notes_file"
+          gh api \
+            --method PATCH \
+            "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+            -f body="$(cat "$notes_file")" \
+            --silent
           delimiter="captures-release-notes-${GITHUB_RUN_ID}"
           {
             echo "release_id=$release_id"
@@ -252,7 +259,7 @@ jobs:
             target: x86_64-unknown-linux-gnu
             bundles: appimage,deb
     env:
-      CAPTURES_OFFICIAL_RELEASE: "1"
+      CAPTURES_RELEASE_CHANNEL: nightly
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     steps:
@@ -479,13 +486,13 @@ jobs:
           fi
 
   publish:
-    name: Publish release
+    name: Publish Nightly
     needs: [prepare, validate_draft]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
-      - name: Publish the fully validated release
+      - name: Publish the fully validated Nightly
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
@@ -498,21 +505,114 @@ jobs:
             --method PATCH \
             "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
             -F draft=false \
-            -F prerelease=false \
-            -f make_latest=true \
+            -F prerelease=true \
+            -f make_latest=false \
             --silent
           published="$(
             gh api \
               "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
-              --jq '[.draft, .tag_name] | @tsv'
+              --jq '[.draft, .prerelease, .tag_name] | @tsv'
           )"
-          if [[ "$published" != $'false\t'"$TAG" ]]; then
-            echo "Release ${TAG} was not published as expected." >&2
+          if [[ "$published" != $'false\ttrue\t'"$TAG" ]]; then
+            echo "Nightly ${TAG} was not published as expected." >&2
+            exit 1
+          fi
+
+  channel:
+    name: Update Nightly channel
+    needs: publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Point the rolling channel at the greatest Nightly version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          releases_file="$RUNNER_TEMP/releases.json"
+          gh api \
+            --paginate \
+            "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            | jq -s add \
+            > "$releases_file"
+          newest_tag="$(node scripts/nightly-release.mjs "$releases_file")"
+          newest_release="$(
+            gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${newest_tag}"
+          )"
+          newest_name="$(jq -er .name <<< "$newest_release")"
+          newest_target="$(jq -er .target_commitish <<< "$newest_release")"
+          newest_url="$(jq -er .html_url <<< "$newest_release")"
+
+          channel_notes="$RUNNER_TEMP/nightly-channel-notes.md"
+          {
+            echo "> [!WARNING]"
+            echo "> Captures Nightly is functional, but experimental. Expect bugs and incomplete features; macOS is the primary development target, while Windows and Linux may be less polished."
+            echo
+            echo "The newest validated build is [${newest_name}](${newest_url})."
+            echo "Versioned Nightlies remain available as a permanent build history."
+          } > "$channel_notes"
+
+          channel_release="$(
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/releases/tags/nightly" \
+              2>/dev/null \
+              || true
+          )"
+          if [[ -z "$channel_release" ]]; then
+            channel_release="$(
+              gh api \
+                --method POST \
+                "repos/${GITHUB_REPOSITORY}/releases" \
+                -f tag_name=nightly \
+                -f target_commitish="$newest_target" \
+                -f name="Captures Nightly — Latest" \
+                -f body="$(cat "$channel_notes")" \
+                -F draft=false \
+                -F prerelease=true \
+                -f make_latest=false
+            )"
+          else
+            channel_id="$(jq -er .id <<< "$channel_release")"
+            gh api \
+              --method PATCH \
+              "repos/${GITHUB_REPOSITORY}/releases/${channel_id}" \
+              -f name="Captures Nightly — Latest" \
+              -f body="$(cat "$channel_notes")" \
+              -F draft=false \
+              -F prerelease=true \
+              -f make_latest=false \
+              --silent
+          fi
+
+          channel_assets="$RUNNER_TEMP/nightly-channel"
+          mkdir "$channel_assets"
+          gh release download \
+            "$newest_tag" \
+            --pattern latest.json \
+            --dir "$channel_assets"
+          gh release upload \
+            nightly \
+            "$channel_assets/latest.json" \
+            --clobber
+          channel_manifest="$(
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/releases/tags/nightly" \
+              --jq '.assets[] | select(.name == "latest.json") | .browser_download_url'
+          )"
+          if [[ -z "$channel_manifest" ]]; then
+            echo "The rolling Nightly channel is missing latest.json." >&2
             exit 1
           fi
 
   cleanup:
-    name: Remove incomplete release
+    name: Remove incomplete Nightly
     if: ${{ always() && needs.prepare.result == 'success' && needs.publish.result != 'success' }}
     needs: [prepare, package, validate_draft, publish]
     runs-on: ubuntu-24.04

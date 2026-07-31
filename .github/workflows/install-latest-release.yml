@@ -1,4 +1,4 @@
-name: Install latest release
+name: Install latest Nightly
 
 on:
   pull_request:
@@ -6,6 +6,7 @@ on:
       - ".github/workflows/install-latest-release.yml"
       - "scripts/install-latest-release.mjs"
       - "scripts/install-latest-release.test.mjs"
+      - "scripts/nightly-release.mjs"
   workflow_dispatch:
 
 permissions:
@@ -13,31 +14,32 @@ permissions:
 
 jobs:
   discover:
-    name: Find a published release
+    name: Find a published Nightly
     runs-on: ubuntu-24.04
     outputs:
       available: ${{ steps.release.outputs.available }}
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Check whether a stable release is published
+      - name: Check whether a Nightly is published
         id: release
         shell: bash
         run: |
           count="$(
             gh api \
+              --paginate \
               "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
-              --jq '[.[] | select(.draft == false and .prerelease == false)] | length'
+              | jq -s '[.[][] | select(.draft == false and .prerelease == true and (.tag_name | test("^v[0-9]{4}\\.[0-9]{2}\\.[0-9]{2}\\.[1-9][0-9]?$")))] | length'
           )"
           if (( count > 0 )); then
             echo "available=true" >> "$GITHUB_OUTPUT"
           else
-            echo "No stable release exists yet. Installer verification will begin after the first automatic release is published." >> "$GITHUB_STEP_SUMMARY"
+            echo "No Nightly exists yet. Installer verification will begin after the first Nightly is published." >> "$GITHUB_STEP_SUMMARY"
             echo "available=false" >> "$GITHUB_OUTPUT"
           fi
 
   install:
-    name: Install latest release (${{ matrix.name }})
+    name: Install latest Nightly (${{ matrix.name }})
     needs: discover
     if: needs.discover.outputs.available == 'true'
     strategy:
@@ -59,5 +61,5 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Install and verify the newest complete release
+      - name: Install and verify the newest complete Nightly
         run: node scripts/install-latest-release.mjs --no-launch

@@ -4,6 +4,7 @@
 
 - Captures is a work-in-progress, cross-platform screen capture utility. Keep public wording broad enough to cover screenshots, GIFs, and video.
 - Clearly separate current features from roadmap ideas. Do not present tentative work as shipped or promise release dates unless the repository already commits to them.
+- Treat automatic per-merge builds as experimental Nightlies. Do not publish a stable release until the maintainer explicitly starts that channel.
 
 ## Repository map
 
