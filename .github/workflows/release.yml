@@ -310,6 +310,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.prepare.outputs.release_sha }}
+      - name: Load the current release asset helper
+        if: runner.os == 'macOS'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: scripts/github-release-assets.mjs
+          sparse-checkout-cone-mode: false
+          path: release-tools
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         run: |
@@ -469,7 +477,10 @@ jobs:
             "$dmg"
           xcrun stapler validate "$dmg"
 
-          node scripts/github-release-assets.mjs upload "$RELEASE_ID" "$dmg"
+          node "$GITHUB_WORKSPACE/release-tools/scripts/github-release-assets.mjs" \
+            upload \
+            "$RELEASE_ID" \
+            "$dmg"
       - name: Validate the packaged media sidecars and notices
         if: runner.os == 'macOS'
         shell: bash
@@ -494,7 +505,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
         shell: bash
-        run: node scripts/github-release-assets.mjs upload "$RELEASE_ID" target/ffmpeg-dist/*
+        run: >-
+          node "$GITHUB_WORKSPACE/release-tools/scripts/github-release-assets.mjs"
+          upload
+          "$RELEASE_ID"
+          target/ffmpeg-dist/*
 
   validate_draft:
     name: Validate staged release
