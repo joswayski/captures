@@ -39,7 +39,7 @@ function main() {
     throw new Error("usage: node scripts/nightly-release.mjs <releases.json>");
   }
   const release = latestNightlyRelease(JSON.parse(readFileSync(releasesPath, "utf8")));
-  if (!release) throw new Error("no published Captures Nightly was found");
+  if (!release) throw new Error("no published Captures Preview was found");
   process.stdout.write(`${release.tag_name}\n`);
 }
 

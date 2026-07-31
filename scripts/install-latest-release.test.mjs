@@ -14,7 +14,7 @@ import {
 } from "./install-latest-release.mjs";
 import { latestNightlyRelease, nightlyVersion } from "./nightly-release.mjs";
 
-test("selects the greatest published Nightly version instead of the last one published", () => {
+test("selects the greatest published Preview version instead of the last one published", () => {
   const release = latestNightlyRelease([
     {
       id: 3,

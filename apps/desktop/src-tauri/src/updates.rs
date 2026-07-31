@@ -301,7 +301,7 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
 
 async fn check_for_updates_inner(app: &AppHandle, manual: bool) -> Result<UpdateStatus, String> {
     if !nightly_release_build() {
-        let message = "Update checks are available only in Captures Nightly builds.".to_owned();
+        let message = "Update checks are available only in Captures Preview builds.".to_owned();
         let (current_version, current_display_version) = current_versions(app);
         if let Some(status) = check_error_status(
             manual,
@@ -653,7 +653,7 @@ mod tests {
     };
 
     #[test]
-    fn enables_automatic_updates_only_for_nightly_builds() {
+    fn enables_automatic_updates_only_for_preview_builds() {
         assert!(release_channel_enabled(Some("nightly")));
         assert!(!release_channel_enabled(None));
         assert!(!release_channel_enabled(Some("0")));

@@ -177,7 +177,7 @@ function confirmGitHubAccess() {
 function fetchLatestRelease() {
   const releases = githubJson(`repos/${REPOSITORY}/releases?per_page=100`, true);
   const release = latestNightlyRelease(releases);
-  if (!release) throw new Error(`no published Nightly releases were found in ${REPOSITORY}`);
+  if (!release) throw new Error(`no published Preview releases were found in ${REPOSITORY}`);
   return release;
 }
 
@@ -491,15 +491,15 @@ function installAppImage(assetPath, launch) {
 }
 
 function printHelp() {
-  console.log(`Usage: npm run install:nightly -- [options]
+  console.log(`Usage: npm run install:preview -- [options]
 
-Downloads, verifies, and installs the newest complete Nightly for this system.
+Downloads, verifies, and installs the newest complete Preview for this system.
 The command verifies the release checksum before changing the installed app.
 
 Options:
-  --dry-run    Report the newest Nightly's status without downloading or installing
+  --dry-run    Report the newest Preview's status without downloading or installing
   --no-launch  Do not open Captures after installation
-  --no-wait    Fail immediately if the newest Nightly is incomplete
+  --no-wait    Fail immediately if the newest Preview is incomplete
   --help       Show this help`);
 }
 
@@ -516,7 +516,7 @@ export async function main(args = process.argv.slice(2)) {
     && commandExists("apt-get", ["--version"]);
   const spec = platformSpec(process.platform, process.arch, preferDebian);
   const release = fetchLatestRelease();
-  log(`Newest Nightly: ${release.name} (${release.tag_name}).`);
+  log(`Newest Preview: ${release.name} (${release.tag_name}).`);
 
   const initialReadiness = releaseReadiness(release, spec);
   if (options.dryRun) {
@@ -548,7 +548,7 @@ export async function main(args = process.argv.slice(2)) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((error) => {
-    console.error(`Could not install the latest Captures Nightly: ${error.message}`);
+    console.error(`Could not install the latest Captures Preview: ${error.message}`);
     process.exitCode = 1;
   });
 }

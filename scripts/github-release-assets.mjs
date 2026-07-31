@@ -104,6 +104,34 @@ export async function downloadReleaseAssets(releaseId, directory) {
   }
 }
 
+export async function syncReleaseAssets(releaseId, directory) {
+  const source = resolve(directory);
+  const entries = await readdir(source, { withFileTypes: true });
+  if (entries.length === 0) {
+    throw new Error(`release asset directory must not be empty: ${source}`);
+  }
+
+  const paths = entries
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .map((entry) => {
+      if (!entry.isFile() || basename(entry.name) !== entry.name || /[/\\]/u.test(entry.name)) {
+        throw new Error(`release asset directory contains an unsafe entry: ${entry.name}`);
+      }
+      return join(source, entry.name);
+    });
+  const expectedNames = new Set(paths.map((path) => basename(path)));
+
+  // Upload the complete new set before removing versioned assets from the prior
+  // Preview. A failed sync therefore leaves at least one usable installer set.
+  await uploadReleaseAssets(releaseId, paths);
+  for (const asset of await releaseAssets(releaseId)) {
+    if (!expectedNames.has(asset.name)) {
+      await deleteAsset(asset.id);
+      process.stdout.write(`Removed stale ${asset.name} from release ${releaseId}.\n`);
+    }
+  }
+}
+
 async function main(args) {
   const [command, releaseId, ...rest] = args;
   if (!/^[1-9]\d*$/u.test(releaseId ?? "")) {
@@ -120,8 +148,15 @@ async function main(args) {
     await downloadReleaseAssets(releaseId, rest[0]);
     return;
   }
+  if (command === "sync") {
+    if (rest.length !== 1) {
+      throw new Error("sync requires exactly one source directory");
+    }
+    await syncReleaseAssets(releaseId, rest[0]);
+    return;
+  }
   throw new Error(
-    "usage: node scripts/github-release-assets.mjs <upload|download> <release-id> <paths...>",
+    "usage: node scripts/github-release-assets.mjs <upload|download|sync> <release-id> <paths...>",
   );
 }
 

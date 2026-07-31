@@ -5,6 +5,14 @@ Captures is a cross-platform screen capture utility built for quick captures and
 > [!WARNING]
 > Captures is functional, but still experimental and under active development. macOS is the primary development target; Windows and Linux builds are available but may be less polished.
 
+## Download Captures Preview
+
+[**Download the latest Captures Preview**](https://github.com/joswayski/captures/releases/tag/nightly)
+
+Choose the macOS `.dmg`, Windows `.exe`, Ubuntu/Debian `.deb`, or Linux
+AppImage from that page. The Preview updates after every successful merge and
+may contain bugs or incomplete features.
+
 ## Features
 
 - Capture regions, windows, or full displays.
@@ -40,23 +48,13 @@ Captures is a cross-platform screen capture utility built for quick captures and
 | Linux X11 | Supported; recording controls must be hidden manually when needed |
 | Linux Wayland | Experimental; no window targeting, cursor capture, or click highlights |
 
-## Releases
+## Build archive
 
-Every successful push to `main` publishes a validated **Nightly** pre-release
-using [CalVer](https://calver.org/) `YYYY.MM.DD.N`. Nightlies are experimental,
-but each version remains available as a permanent snapshot of the app.
-
-Anyone signed in with the GitHub CLI can replace the installed app with the
-newest fully validated Nightly for their current system:
-
-```sh
-npm run install:nightly
-```
-
-The command verifies the published checksum, quits and replaces Captures while
-preserving local app data, then launches the installed build.
-
-Stable releases will use a separate channel when Captures is ready for launch.
+Every successful push to `main` publishes a validated **Preview** build
+using [CalVer](https://calver.org/) `YYYY.MM.DD.N`. Each dated version remains
+available in the [build archive](https://github.com/joswayski/captures/releases)
+for historical testing. Stable releases will use a separate channel when
+Captures is ready for launch.
 
 ## Shortcuts
 
