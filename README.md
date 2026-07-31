@@ -7,7 +7,7 @@ Captures is a cross-platform screen capture utility built for quick captures and
 
 ## Download Captures Preview
 
-[**Download the latest Captures Preview**](https://github.com/joswayski/captures/releases/tag/nightly)
+[**Download the latest Captures Preview**](https://github.com/joswayski/captures/releases/tag/preview)
 
 Choose the macOS `.dmg`, Windows `.exe`, Ubuntu/Debian `.deb`, or Linux
 AppImage from that page. The Preview updates after every successful merge and

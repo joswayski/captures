@@ -6,7 +6,7 @@ on:
       - ".github/workflows/install-latest-release.yml"
       - "scripts/install-latest-release.mjs"
       - "scripts/install-latest-release.test.mjs"
-      - "scripts/nightly-release.mjs"
+      - "scripts/preview-release.mjs"
   workflow_dispatch:
 
 permissions:

@@ -14,7 +14,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { latestNightlyRelease } from "./nightly-release.mjs";
+import { latestPreviewRelease } from "./preview-release.mjs";
 
 const APP_NAME = "Captures";
 const BINARY_NAME = "captures";
@@ -176,7 +176,7 @@ function confirmGitHubAccess() {
 
 function fetchLatestRelease() {
   const releases = githubJson(`repos/${REPOSITORY}/releases?per_page=100`, true);
-  const release = latestNightlyRelease(releases);
+  const release = latestPreviewRelease(releases);
   if (!release) throw new Error(`no published Preview releases were found in ${REPOSITORY}`);
   return release;
 }

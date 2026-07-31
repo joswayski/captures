@@ -303,7 +303,7 @@ jobs:
             target: x86_64-unknown-linux-gnu
             bundles: appimage,deb
     env:
-      CAPTURES_RELEASE_CHANNEL: nightly
+      CAPTURES_RELEASE_CHANNEL: preview
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     steps:
@@ -631,7 +631,7 @@ jobs:
               "$releases_file"
           )
 
-          newest_tag="$(node scripts/nightly-release.mjs "$releases_file")"
+          newest_tag="$(node scripts/preview-release.mjs "$releases_file")"
           newest_release="$(
             gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${newest_tag}"
           )"
@@ -658,7 +658,7 @@ jobs:
 
           asset_url() {
             encoded_asset="$(jq -rn --arg asset "$1" '$asset | @uri')"
-            printf 'https://github.com/%s/releases/download/nightly/%s' \
+            printf 'https://github.com/%s/releases/download/preview/%s' \
               "$GITHUB_REPOSITORY" \
               "$encoded_asset"
           }
@@ -683,16 +683,34 @@ jobs:
 
           channel_release="$(
             gh api \
-              "repos/${GITHUB_REPOSITORY}/releases/tags/nightly" \
+              "repos/${GITHUB_REPOSITORY}/releases/tags/preview" \
               2>/dev/null \
               || true
           )"
           if [[ -z "$channel_release" ]]; then
+            while IFS= read -r stale_channel_id; do
+              if [[ -n "$stale_channel_id" ]]; then
+                gh api \
+                  --method DELETE \
+                  "repos/${GITHUB_REPOSITORY}/releases/${stale_channel_id}" \
+                  --silent
+              fi
+            done < <(
+              jq -r \
+                '.[] | select(.draft and (.tag_name == "preview" or .name == "Captures Preview — Latest")) | .id' \
+                "$releases_file"
+            )
+            gh api \
+              --method DELETE \
+              "repos/${GITHUB_REPOSITORY}/git/refs/tags/preview" \
+              --silent \
+              2>/dev/null \
+              || true
             channel_release="$(
               gh api \
                 --method POST \
                 "repos/${GITHUB_REPOSITORY}/releases" \
-                -f tag_name=nightly \
+                -f tag_name=preview \
                 -f target_commitish="$newest_target" \
                 -f name="Captures Preview — Latest" \
                 -F draft=true \
@@ -704,7 +722,7 @@ jobs:
           gh api \
             --method PATCH \
             "repos/${GITHUB_REPOSITORY}/releases/${channel_id}" \
-            -f tag_name=nightly \
+            -f tag_name=preview \
             -f target_commitish="$newest_target" \
             -f name="Captures Preview — Latest" \
             -f body="$(cat "$channel_notes")" \
@@ -732,10 +750,30 @@ jobs:
             echo "Actual:   $actual_assets" >&2
             exit 1
           fi
-          if [[ "$(jq -r '[.draft, .prerelease, .tag_name, .name] | @tsv' <<< "$channel_release")" != $'false\ttrue\tnightly\tCaptures Preview — Latest' ]]; then
+          if [[ "$(jq -r '[.draft, .prerelease, .tag_name, .name] | @tsv' <<< "$channel_release")" != $'false\ttrue\tpreview\tCaptures Preview — Latest' ]]; then
             echo "The permanent Preview page metadata is incorrect." >&2
             exit 1
           fi
+
+          legacy_release="$(
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/releases/tags/nightly" \
+              2>/dev/null \
+              || true
+          )"
+          if [[ -n "$legacy_release" ]]; then
+            legacy_release_id="$(jq -er .id <<< "$legacy_release")"
+            gh api \
+              --method DELETE \
+              "repos/${GITHUB_REPOSITORY}/releases/${legacy_release_id}" \
+              --silent
+          fi
+          gh api \
+            --method DELETE \
+            "repos/${GITHUB_REPOSITORY}/git/refs/tags/nightly" \
+            --silent \
+            2>/dev/null \
+            || true
 
   cleanup:
     name: Remove incomplete Preview

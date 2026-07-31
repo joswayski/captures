@@ -10,9 +10,8 @@ using the
 `America/New_York` date of the main-branch commit and a same-day revision from 1
 through 99. A Preview named `Captures Preview 2026.07.19.1` uses tag
 `v2026.07.19.1`. Tauri receives the SemVer-compatible internal version
-`2026.7.1901`; source manifests remain at the development version. The internal
-updater channel and fixed Git tag remain `nightly` for compatibility, but the
-user-facing channel is named Captures Preview and updates after every merge.
+`2026.7.1901`; source manifests remain at the development version. The updater
+channel and fixed Git tag are both named `preview` and update after every merge.
 
 The workflow stages a draft Preview at the exact tested commit. Each platform
 builds and validates its pinned LGPL FFmpeg sidecars, then uploads its installer,
@@ -31,7 +30,7 @@ present; that marker means every required macOS, Windows, and Linux artifact was
 downloaded and validated together. The existence of a draft page by itself does
 not mean the release is complete.
 
-The fixed `nightly` pre-release is the permanent **Captures Preview — Latest**
+The fixed `preview` pre-release is the permanent **Captures Preview — Latest**
 download page, not a historical build. It holds the macOS, Windows, Debian, and
 AppImage installers plus the `latest.json` updater manifest for the greatest
 published CalVer version. It links to the corresponding immutable Preview, while
@@ -39,6 +38,10 @@ the Releases page remains the dated build archive. Selection uses the version,
 not publication time, so publishing an older backfill cannot downgrade the
 download page. Future stable releases can use normal GitHub release metadata and
 their own updater endpoint without replacing the Preview archive.
+
+The first successful Preview publication removes the obsolete `nightly` rolling
+release and tag after the new `preview` page and its installer set are verified.
+No compatibility redirect is retained during this pre-release phase.
 
 For a historical backfill, dispatch the workflow from `main` with `target_sha`
 set to a commit that is already on `main`. The workflow checks out and rebuilds
@@ -82,9 +85,6 @@ npm run install:preview -- --no-wait
 # Install without launching Captures afterward
 npm run install:preview -- --no-launch
 ```
-
-`npm run install:latest` and `npm run install:nightly` remain as compatibility
-aliases.
 
 ## Stable-release gates
 

@@ -11,8 +11,6 @@
     "dev:web": "npm run dev --workspace @captures/web",
     "build": "node scripts/build.mjs",
     "prepare:media": "bash scripts/build-ffmpeg-sidecars.sh",
-    "install:latest": "node scripts/install-latest-release.mjs",
-    "install:nightly": "node scripts/install-latest-release.mjs",
     "install:preview": "node scripts/install-latest-release.mjs",
     "build:web": "npm run build --workspace @captures/web",
     "start:web": "npm run start --workspace @captures/web",
