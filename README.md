@@ -42,18 +42,21 @@ Captures is a cross-platform screen capture utility built for quick captures and
 
 ## Releases
 
-Every successful push to `main` publishes a validated
-[CalVer](https://calver.org/) release using `YYYY.MM.DD.N`.
+Every successful push to `main` publishes a validated **Nightly** pre-release
+using [CalVer](https://calver.org/) `YYYY.MM.DD.N`. Nightlies are experimental,
+but each version remains available as a permanent snapshot of the app.
 
 Anyone signed in with the GitHub CLI can replace the installed app with the
-newest fully validated release for their current system:
+newest fully validated Nightly for their current system:
 
 ```sh
-npm run install:latest
+npm run install:nightly
 ```
 
 The command verifies the published checksum, quits and replaces Captures while
 preserving local app data, then launches the installed build.
+
+Stable releases will use a separate channel when Captures is ready for launch.
 
 ## Shortcuts
 

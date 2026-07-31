@@ -1849,7 +1849,7 @@ export function ScreenshotEditor() {
           </div>
         </div>
         <div className={`screenshot-export-status${error ? " error" : ""}`} role={error ? "alert" : "status"}>
-          {error || status || "Edits stay local. Saving creates a new copy and preserves the original."}
+          {error || status || "Saving creates a new copy and preserves the original."}
         </div>
         <div className="screenshot-export-actions">
           {saved && <button type="button" onClick={() => void showSavedFile()}>Show in folder</button>}

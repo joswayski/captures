@@ -28,8 +28,8 @@
       "icons/icon.ico"
     ],
     "category": "Utility",
-    "shortDescription": "A lightweight, private screen capture utility",
-    "longDescription": "Capture screenshots, videos, and GIFs locally without automatic uploads.",
+    "shortDescription": "A lightweight screen capture utility",
+    "longDescription": "Capture screenshots, videos, and GIFs with a quick, lightweight workflow.",
     "macOS": {
       "minimumSystemVersion": "13.0"
     }
@@ -38,7 +38,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQwNjI5NTdGQTcwNjZDMkYKUldRdmJBYW5mNVZpUUVDR2NUWStpaWxOMDBWNjhBc1FxWmRXM2pyVGZvRFoxaVdPODZCWWdFYlUK",
       "endpoints": [
-        "https://github.com/joswayski/captures/releases/latest/download/latest.json"
+        "https://github.com/joswayski/captures/releases/download/nightly/latest.json"
       ],
       "windows": {
         "installMode": "passive"

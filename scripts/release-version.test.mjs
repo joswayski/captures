@@ -21,7 +21,7 @@ test("derives a historical release date from the main commit timestamp", () => {
   assert.throws(() => configuredReleaseDate("not-a-timestamp"), /ISO-8601 timestamp/u);
 });
 
-test("creates the first public and updater-safe versions for a date", () => {
+test("creates the first Nightly and updater-safe versions for a date", () => {
   assert.deepEqual(nextReleaseVersion("2026-07-19", []), {
     date: "2026-07-19",
     revision: 1,

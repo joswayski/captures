@@ -1,33 +1,42 @@
 # Captures releases
 
-Every push to `main` runs `.github/workflows/release.yml`. Release workflows
-wait in commit order without cancelling older pending pushes, run the frontend
-and Rust quality gates, and then build macOS Apple Silicon, Windows x64, and
-Linux x64 packages. A release is published only when every job succeeds.
+Every push to `main` runs `.github/workflows/release.yml`. Nightly workflows wait
+in commit order without cancelling older pushes, run the frontend and Rust
+quality gates, and then build macOS Apple Silicon, Windows x64, and Linux x64
+packages. A Nightly is published only when every job succeeds.
 
-The public version is CalVer in `YYYY.MM.DD.N` form, using the
+Nightlies are GitHub pre-releases with CalVer versions in `YYYY.MM.DD.N` form,
+using the
 `America/New_York` date of the main-branch commit and a same-day revision from 1
-through 99. The first release always includes `.1`; it is not implied. A release
-named `Captures 2026.07.19.1` uses tag `v2026.07.19.1`. Tauri receives the
-SemVer-compatible internal version `2026.7.1901`; source manifests remain at the
-development version.
+through 99. A Nightly named `Captures Nightly 2026.07.19.1` uses tag
+`v2026.07.19.1`. Tauri receives the SemVer-compatible internal version
+`2026.7.1901`; source manifests remain at the development version. “Nightly” is
+the experimental channel name—the channel updates after every merge, not only
+once per night.
 
-The workflow stages a draft release at the exact tested commit. Each platform
+The workflow stages a draft Nightly at the exact tested commit. Each platform
 builds and validates its pinned LGPL FFmpeg sidecars, then uploads its installer,
 updater archive, and updater signature. The macOS job also verifies the sidecars
 inside `Captures.app` and uploads the shared FFmpeg source archive, detached
 signature, build configuration, LGPL license, and notice. The final job requires
 those files plus a DMG, NSIS installer, AppImage, Debian package, complete
 `latest.json`, and `SHA256SUMS`, confirms the release is still staged, and then
-publishes it. A failed build removes its draft and tag, leaving published
-releases untouched. If draft creation itself is interrupted, the next run
+publishes it as a pre-release. A failed build removes its draft and tag, leaving
+published Nightlies untouched. If draft creation itself is interrupted, the next run
 removes only stale drafts with its generated tag before retrying.
 
-Creating the draft early is only a private staging step. The **Publish release**
+Creating the draft early is only a private staging step. The **Publish Nightly**
 job runs only after **Validate staged release** succeeds and `SHA256SUMS` is
 present; that marker means every required macOS, Windows, and Linux artifact was
 downloaded and validated together. The existence of a draft page by itself does
 not mean the release is complete.
+
+The fixed `nightly` pre-release is a rolling channel, not a historical build. It
+holds the `latest.json` updater manifest for the greatest published CalVer
+version and links to that immutable Nightly. This comparison uses the version,
+not publication time, so publishing an older backfill cannot downgrade the
+channel. Future stable releases can use normal GitHub release metadata and their
+own updater endpoint without replacing the Nightly archive.
 
 For a historical backfill, dispatch the workflow from `main` with `target_sha`
 set to a commit that is already on `main`. The workflow checks out and rebuilds
@@ -35,19 +44,19 @@ that commit, derives its New York date from the commit timestamp, and publishes
 the next revision for that date. Dispatch historical commits from oldest to
 newest so their revisions preserve merge order.
 
-## Install the latest release
+## Install the latest Nightly
 
-Use the CI-produced release rather than a local build when testing the exact
+Use the CI-produced Nightly rather than a local build when testing the exact
 installer, signing, notarization, and packaging path intended for users:
 
 ```sh
-npm run install:latest
+npm run install:nightly
 ```
 
 The command requires Node.js 24 and an authenticated GitHub CLI. It always
-selects the newest stable published release and requires both the current
+selects the greatest published Nightly CalVer and requires both the current
 system's installer and `SHA256SUMS`. The checksum file is the completion marker
-uploaded only after the entire staged release passes validation.
+uploaded only after the entire staged Nightly passes validation.
 
 After downloading and verifying the installer, the command quits Captures,
 removes the installed app package, installs the macOS Apple Silicon DMG, Windows
@@ -62,19 +71,23 @@ Windows x64, and Ubuntu x64 GitHub-hosted runners.
 Useful options:
 
 ```sh
-# Show whether the newest release is ready without changing the installed app
-npm run install:latest -- --dry-run
+# Show whether the newest Nightly is ready without changing the installed app
+npm run install:nightly -- --dry-run
 
-# Fail instead of waiting when the newest release is incomplete
-npm run install:latest -- --no-wait
+# Fail instead of waiting when the newest Nightly is incomplete
+npm run install:nightly -- --no-wait
 
 # Install without launching Captures afterward
-npm run install:latest -- --no-launch
+npm run install:nightly -- --no-launch
 ```
 
-## Public-release gates
+`npm run install:latest` remains as a compatibility alias.
 
-Creating an installer and signing a Tauri updater archive do not by themselves make a production public release. Do not treat a release as production-ready until every gate below is enforced by the workflow and passes:
+## Stable-release gates
+
+Nightlies are intentionally experimental. Creating an installer and signing a
+Tauri updater archive do not by themselves make a stable release. Do not publish
+the stable channel until every gate below is enforced and passes:
 
 | Platform or concern | Required before production publishing | Current implementation |
 | --- | --- | --- |
@@ -91,6 +104,10 @@ These signatures have separate trust boundaries:
 - `SHA256SUMS` detects file changes after publication.
 
 ## GitHub release environment
+
+The `release` environment protects signing and notarization credentials; it is
+not a release channel. Nightly and stable builds can share this environment
+while using different release metadata and updater endpoints.
 
 Create a GitHub environment named `release`, restrict its deployment branches to `main`, and add these environment secrets:
 
@@ -213,9 +230,9 @@ If Captures later operates an APT repository, that repository must publish signe
 
 ## Bootstrap and acceptance
 
-The first updater-enabled build must be downloaded and installed manually.
-Subsequent validated releases appear in the public updater endpoint
-automatically. Before relying on automatic releases, test this sequence on clean
+The first updater-enabled Nightly must be downloaded and installed manually.
+Subsequent validated Nightlies appear in the rolling updater channel
+automatically. Before relying on automatic updates, test this sequence on clean
 machines:
 
 1. Download one completed release and install it on macOS, Windows, and Ubuntu.

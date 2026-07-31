@@ -7,33 +7,46 @@ import test from "node:test";
 
 import {
   expectedChecksum,
-  latestPublishedRelease,
   parseOptions,
   platformSpec,
   releaseReadiness,
   verifyChecksum,
 } from "./install-latest-release.mjs";
+import { latestNightlyRelease, nightlyVersion } from "./nightly-release.mjs";
 
-test("selects the newest stable published release", () => {
-  const release = latestPublishedRelease([
+test("selects the greatest published Nightly version instead of the last one published", () => {
+  const release = latestNightlyRelease([
     {
       id: 3,
       draft: false,
-      prerelease: false,
-      created_at: "2026-07-29T16:00:00Z",
-      published_at: "2026-07-29T17:00:00Z",
+      prerelease: true,
+      tag_name: "v2026.07.31.1",
+      published_at: "2026-07-31T17:00:00Z",
     },
-    { id: 1, draft: true, prerelease: false, created_at: "2026-07-30T16:00:00Z" },
     {
-      id: 2,
+      id: 4,
+      draft: false,
+      prerelease: true,
+      tag_name: "v2026.07.29.17",
+      published_at: "2026-08-01T17:00:00Z",
+    },
+    {
+      id: 5,
       draft: false,
       prerelease: false,
-      created_at: "2026-07-28T16:00:00Z",
-      published_at: "2026-07-28T17:00:00Z",
+      tag_name: "v2026.08.01.1",
+      published_at: "2026-08-01T18:00:00Z",
     },
-    { id: 4, draft: false, prerelease: true, created_at: "2026-07-31T16:00:00Z" },
+    {
+      id: 6,
+      draft: false,
+      prerelease: true,
+      tag_name: "nightly",
+      published_at: "2026-08-01T19:00:00Z",
+    },
   ]);
   assert.equal(release.id, 3);
+  assert.deepEqual(nightlyVersion(release.tag_name), [2026, 7, 31, 1]);
 });
 
 test("requires both the system installer and completed-release marker", () => {
