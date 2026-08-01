@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useState } from "react";
 
-import { CustomSelect, RecordingCountdown } from "./App";
+import { CustomSelect, RecordingCountdown, ScreenshotCountdown } from "./App";
 import type { RecordingSessionSnapshot } from "./types";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -185,5 +185,49 @@ describe("RecordingCountdown", () => {
     expect(container.querySelector(".recording-countdown")).toHaveClass("exiting");
     expect(screen.getByText("1", { selector: "strong" })).toBeInTheDocument();
     expect(screen.queryByText("3", { selector: "strong" })).not.toBeInTheDocument();
+  });
+});
+
+describe("ScreenshotCountdown", () => {
+  const handlers = new Map<string, (event: { payload: unknown }) => void>();
+
+  beforeEach(() => {
+    handlers.clear();
+    vi.mocked(listen).mockImplementation(async (event, handler) => {
+      handlers.set(event, handler as (event: { payload: unknown }) => void);
+      return () => undefined;
+    });
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "cancel_screenshot_countdown") return undefined;
+      throw new Error(`unexpected command: ${command}`);
+    });
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("updates the full-screen countdown and lets Escape cancel", async () => {
+    render(<ScreenshotCountdown />);
+
+    expect(await screen.findByText("Screenshot in")).toBeInTheDocument();
+    await act(async () => {
+      handlers.get("screenshot-countdown")?.({
+        payload: { remaining_seconds: 3 },
+      });
+    });
+    expect(screen.getByText("3", { selector: "strong" })).toBeInTheDocument();
+
+    await act(async () => {
+      handlers.get("screenshot-countdown")?.({
+        payload: { remaining_seconds: 2 },
+      });
+    });
+    expect(screen.getByText("2", { selector: "strong" })).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("cancel_screenshot_countdown");
+    });
   });
 });

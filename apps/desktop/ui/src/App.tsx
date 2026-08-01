@@ -337,6 +337,7 @@ export function App() {
   if (view === "overlay") return <CaptureOverlay />;
   if (view === "recording-selector") return <RecordingSelector />;
   if (view === "recording-countdown") return <RecordingCountdown />;
+  if (view === "screenshot-countdown") return <ScreenshotCountdown />;
   if (view === "recording-hud") return <RecordingHud />;
   if (view === "recording-editor") return <RecordingEditor />;
   if (view === "screenshot-editor") return <ScreenshotEditor />;
@@ -1076,6 +1077,68 @@ export function CaptureGuidance({
   );
 }
 
+export function ScreenshotCountdown() {
+  const [remaining, setRemaining] = useState<number | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+  const [exiting, setExiting] = useState(false);
+  const cancellingRef = useRef(false);
+
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    void listen<{ remaining_seconds: number }>("screenshot-countdown", ({ payload }) => {
+      if (!active) return;
+      setRemaining(payload.remaining_seconds);
+    }).then((dispose) => {
+      if (active) unlisten = dispose;
+      else dispose();
+    }).catch(() => undefined);
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, []);
+
+  const cancel = useCallback(async () => {
+    if (cancellingRef.current) return;
+    cancellingRef.current = true;
+    setCancelling(true);
+    setExiting(true);
+    try {
+      if (!prefersReducedMotion()) {
+        await new Promise((resolve) => setTimeout(resolve, RECORDING_COUNTDOWN_FADE_OUT_MS));
+      }
+      await invoke("cancel_screenshot_countdown");
+    } finally {
+      cancellingRef.current = false;
+      setCancelling(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      void cancel();
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [cancel]);
+
+  return (
+    <main
+      className={`recording-countdown${exiting ? " exiting" : ""}`}
+      aria-live="assertive"
+    >
+      <div className="recording-countdown-content">
+        <span>Screenshot in</span>
+        <strong>{remaining ?? "…"}</strong>
+        <small>{cancelling ? "Cancelling…" : "Press Esc to cancel"}</small>
+      </div>
+    </main>
+  );
+}
+
 export function RecordingCountdown() {
   const [snapshot, setSnapshot] = useState<RecordingSessionSnapshot | null>(null);
   const [remaining, setRemaining] = useState<number | null>(null);
@@ -1628,7 +1691,15 @@ export function RecordingSelector() {
         setSession(null);
         clearRegionDrag();
       } catch (error) {
-        setError(String(error));
+        const message = String(error);
+        if (message.includes("screenshot cancelled")) {
+          activeSessionIdRef.current = null;
+          revealingSessionIdRef.current = null;
+          setSession(null);
+          clearRegionDrag();
+          return;
+        }
+        setError(message);
         setStarting(false);
       }
       return;
@@ -5005,6 +5076,20 @@ export function Preferences() {
             <small>Turn this off to preserve existing text or other clipboard contents.</small>
           </span>
         </label>
+        <div className="settings-select-field field-label"><span>Screenshot countdown</span>
+          <CustomSelect
+            value={String(settings.screenshot_countdown_seconds)}
+            ariaLabel="Screenshot countdown"
+            options={[0, 1, 2, 3, 5, 10].map((value) => ({
+              value: String(value),
+              label: value === 0 ? "Off" : `${value} seconds`,
+            }))}
+            onChange={(value) => update("screenshot_countdown_seconds", Number(value))}
+          />
+        </div>
+        <p className="help-text">
+          Wait before taking a screenshot so you can open menus or hover states. Press Esc to cancel.
+        </p>
       </section>
 
       <section className="settings-section">

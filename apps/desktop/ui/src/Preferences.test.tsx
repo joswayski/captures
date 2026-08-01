@@ -29,6 +29,7 @@ const settings: AppSettings = {
   launch_at_login: false,
   last_screen_permission_request_id: null,
   pending_capture_after_restart: null,
+  screenshot_countdown_seconds: 0,
   recording: {
     video_shortcut: "Ctrl+Shift+5",
     gif_shortcut: "Ctrl+Shift+6",
@@ -87,6 +88,21 @@ describe("Preferences", () => {
       });
     });
     expect(await screen.findByText("Changes saved")).toBeInTheDocument();
+  });
+
+  it("persists a screenshot countdown preference", async () => {
+    render(<Preferences />);
+
+    const countdown = await screen.findByRole("combobox", { name: "Screenshot countdown" });
+    fireEvent.click(countdown);
+    const threeSeconds = await screen.findByRole("option", { name: "3 seconds" });
+    fireEvent.click(threeSeconds);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("update_settings", {
+        settings: expect.objectContaining({ screenshot_countdown_seconds: 3 }),
+      });
+    });
   });
 
   it("automatically applies a newly recorded shortcut", async () => {

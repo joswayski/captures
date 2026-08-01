@@ -213,7 +213,10 @@ pub(crate) async fn prepare_capture_selector_inner(
     if crate::updates::install_is_active(&app) {
         return Err(AppError::UpdateInstalling);
     }
-    if !state.sessions.lock().is_empty() || recording_session_is_active(&state) {
+    if !state.sessions.lock().is_empty()
+        || recording_session_is_active(&state)
+        || crate::screenshot_countdown_is_active(&state)
+    {
         return Err(AppError::CaptureInProgress);
     }
     let pending_selection = {
@@ -366,6 +369,9 @@ async fn capture_selection_screenshot_inner(
     state: Arc<AppState>,
     request: CaptureSelectionScreenshotRequest,
 ) -> Result<CaptureArtifact, AppError> {
+    if crate::screenshot_countdown_is_active(&state) {
+        return Err(AppError::CaptureInProgress);
+    }
     let available = state
         .recording_selection
         .lock()
@@ -395,17 +401,45 @@ async fn capture_selection_screenshot_inner(
     destroy_recording_selector(&app);
     crate::set_capture_huds_protected(&app, false);
 
-    let prepared = (|| {
-        validate_target(&selection.summary, &request.target)?;
-        let mode = capture_mode_for_target(&request.target);
-        let image = image_for_selection(&selection, &request.target)?;
-        Ok::<_, AppError>((mode, image))
-    })();
-    let (mode, image) = match prepared {
-        Ok(prepared) => prepared,
-        Err(error) => {
-            crate::restore_thumbnail_stack(&app, &state);
-            return Err(error);
+    if let Err(error) = validate_target(&selection.summary, &request.target) {
+        crate::restore_thumbnail_stack(&app, &state);
+        return Err(error);
+    }
+    let mode = capture_mode_for_target(&request.target);
+    let countdown_seconds = state.settings().screenshot_countdown_seconds;
+    let image = if countdown_seconds > 0 {
+        // Delay, then recapture live so menus and hover states are current.
+        match crate::run_screenshot_countdown(
+            app.clone(),
+            state.clone(),
+            &selection.summary.display,
+            countdown_seconds,
+        )
+        .await
+        {
+            Ok(true) => match live_image_for_target(&state, &request.target) {
+                Ok(image) => image,
+                Err(error) => {
+                    crate::restore_thumbnail_stack(&app, &state);
+                    return Err(error);
+                }
+            },
+            Ok(false) => {
+                // Cancel already restored the stack.
+                return Err(AppError::ScreenshotCancelled);
+            }
+            Err(error) => {
+                crate::restore_thumbnail_stack(&app, &state);
+                return Err(error);
+            }
+        }
+    } else {
+        match image_for_selection(&selection, &request.target) {
+            Ok(image) => image,
+            Err(error) => {
+                crate::restore_thumbnail_stack(&app, &state);
+                return Err(error);
+            }
         }
     };
 
@@ -414,6 +448,75 @@ async fn capture_selection_screenshot_inner(
         crate::restore_thumbnail_stack(&app, &state);
     }
     result
+}
+
+fn live_image_for_target(
+    state: &AppState,
+    target: &RecordingTarget,
+) -> Result<image::RgbaImage, AppError> {
+    match target {
+        RecordingTarget::Display { display_id } => {
+            Ok(state.backend.capture_display(display_id)?.image)
+        }
+        RecordingTarget::Region { display_id, rect } => {
+            let frame = state.backend.capture_display(display_id)?;
+            crop_display_region(&frame.image, &frame.descriptor, rect)
+        }
+        RecordingTarget::Window { window_id } => match state.backend.capture_window(window_id) {
+            Ok(image) if !crate::image_is_effectively_blank(&image) => Ok(image),
+            _ => {
+                let windows = state.windows().unwrap_or_default();
+                let window = windows
+                    .iter()
+                    .find(|window| &window.id == window_id)
+                    .ok_or(AppError::InvalidSelection)?;
+                let frame = state.backend.capture_display(&window.display_id)?;
+                crop_window_from_display(&frame.image, &frame.descriptor, window)
+            }
+        },
+    }
+}
+
+fn crop_display_region(
+    image: &image::RgbaImage,
+    display: &DisplayDescriptor,
+    rect: &captures_recording::CaptureRect,
+) -> Result<image::RgbaImage, AppError> {
+    let scale_x = f64::from(image.width()) / f64::from(display.width.max(1));
+    let scale_y = f64::from(image.height()) / f64::from(display.height.max(1));
+    let x = (f64::from(rect.x) * scale_x).round().max(0.0) as u32;
+    let y = (f64::from(rect.y) * scale_y).round().max(0.0) as u32;
+    let width = (f64::from(rect.width) * scale_x).round().max(1.0) as u32;
+    let height = (f64::from(rect.height) * scale_y).round().max(1.0) as u32;
+    Ok(image::imageops::crop_imm(
+        image,
+        x.min(image.width().saturating_sub(1)),
+        y.min(image.height().saturating_sub(1)),
+        width.min(image.width().saturating_sub(x)),
+        height.min(image.height().saturating_sub(y)),
+    )
+    .to_image())
+}
+
+fn crop_window_from_display(
+    image: &image::RgbaImage,
+    display: &DisplayDescriptor,
+    window: &captures_capture::WindowDescriptor,
+) -> Result<image::RgbaImage, AppError> {
+    let scale_x = f64::from(image.width()) / f64::from(display.width.max(1));
+    let scale_y = f64::from(image.height()) / f64::from(display.height.max(1));
+    let x = (f64::from(window.x - display.x) * scale_x).round().max(0.0) as u32;
+    let y = (f64::from(window.y - display.y) * scale_y).round().max(0.0) as u32;
+    let width = (f64::from(window.width) * scale_x).round().max(1.0) as u32;
+    let height = (f64::from(window.height) * scale_y).round().max(1.0) as u32;
+    Ok(image::imageops::crop_imm(
+        image,
+        x.min(image.width().saturating_sub(1)),
+        y.min(image.height().saturating_sub(1)),
+        width.min(image.width().saturating_sub(x)),
+        height.min(image.height().saturating_sub(y)),
+    )
+    .to_image())
 }
 
 #[tauri::command]
@@ -2423,7 +2526,7 @@ fn restore_recording_ui(app: &AppHandle, state: &Arc<AppState>) {
 }
 
 #[cfg(target_os = "macos")]
-fn focus_recording_window(app: &AppHandle, label: &'static str) {
+pub(crate) fn focus_recording_window(app: &AppHandle, label: &'static str) {
     let handle = app.clone();
     if let Err(error) = app.run_on_main_thread(move || {
         let Some(window) = handle.get_webview_window(label) else {

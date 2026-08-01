@@ -71,6 +71,8 @@ enum AppError {
     Tauri(#[from] tauri::Error),
     #[error("capture already in progress")]
     CaptureInProgress,
+    #[error("screenshot cancelled")]
+    ScreenshotCancelled,
     #[error("capture session is no longer available")]
     SessionUnavailable,
     #[error("capture history entry is no longer available")]
@@ -183,6 +185,7 @@ pub fn run() {
             commit_region,
             commit_window,
             cancel_capture,
+            cancel_screenshot_countdown,
             get_active_session,
             get_pending_session,
             get_settings,
@@ -370,7 +373,7 @@ async fn start_capture_inner(
     if updates::install_is_active(&app) {
         return Err(AppError::UpdateInstalling);
     }
-    if recording::screenshot_capture_is_blocked(&state) {
+    if recording::screenshot_capture_is_blocked(&state) || screenshot_countdown_is_active(&state) {
         return Err(AppError::CaptureInProgress);
     }
     // A failed overlay (image never loaded, webview stuck, etc.) leaves a session
@@ -389,6 +392,33 @@ async fn start_capture_inner(
     hide_recording_saved_notices(&app);
     updates::defer_visible_notice(&app);
     hide_window(&app, "update");
+
+    let countdown_seconds = state.settings().screenshot_countdown_seconds;
+    if countdown_seconds > 0 {
+        let display = match display_under_pointer(&state) {
+            Ok(display) => display,
+            Err(error) => {
+                set_capture_huds_protected(&app, false);
+                restore_thumbnail_stack(&app, &state);
+                return Err(error);
+            }
+        };
+        match run_screenshot_countdown(app.clone(), state.clone(), &display, countdown_seconds)
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                // Cancel already restored the stack and cleared HUD protection.
+                return Ok(None);
+            }
+            Err(error) => {
+                set_capture_huds_protected(&app, false);
+                restore_thumbnail_stack(&app, &state);
+                return Err(error);
+            }
+        }
+    }
+
     let result = prepare_capture(app.clone(), state.clone(), mode).await;
     set_capture_huds_protected(&app, false);
     if result.is_err() {
@@ -538,6 +568,157 @@ fn cancel_capture(
     state.sessions.lock().remove(&id);
     restore_thumbnail_stack(&app, state.inner());
     Ok(())
+}
+
+#[derive(Clone, serde::Serialize)]
+struct ScreenshotCountdownTick {
+    remaining_seconds: u8,
+}
+
+#[tauri::command]
+fn cancel_screenshot_countdown(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> CommandResult<()> {
+    cancel_screenshot_countdown_inner(&app, state.inner().clone());
+    Ok(())
+}
+
+pub(crate) fn screenshot_countdown_is_active(state: &AppState) -> bool {
+    state.screenshot_countdown.lock().active
+}
+
+/// Runs the full-display screenshot countdown. Returns `Ok(true)` when it
+/// finishes, `Ok(false)` when the user cancels, or an error if the overlay fails.
+pub(crate) async fn run_screenshot_countdown(
+    app: AppHandle,
+    state: Arc<AppState>,
+    display: &captures_capture::DisplayDescriptor,
+    seconds: u8,
+) -> Result<bool, AppError> {
+    if seconds == 0 {
+        return Ok(true);
+    }
+
+    let generation = {
+        let mut runtime = state.screenshot_countdown.lock();
+        if runtime.active {
+            return Err(AppError::CaptureInProgress);
+        }
+        runtime.generation = runtime.generation.wrapping_add(1);
+        runtime.active = true;
+        runtime.generation
+    };
+
+    if let Err(error) = show_screenshot_countdown(&app, display) {
+        let mut runtime = state.screenshot_countdown.lock();
+        if runtime.generation == generation {
+            runtime.active = false;
+        }
+        return Err(error);
+    }
+
+    for remaining in (1..=seconds).rev() {
+        if !screenshot_countdown_is_current(&state, generation) {
+            destroy_screenshot_countdown(&app);
+            return Ok(false);
+        }
+        let _ = app.emit(
+            "screenshot-countdown",
+            ScreenshotCountdownTick {
+                remaining_seconds: remaining,
+            },
+        );
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+
+    let completed = screenshot_countdown_is_current(&state, generation);
+    {
+        let mut runtime = state.screenshot_countdown.lock();
+        if runtime.generation == generation {
+            runtime.active = false;
+        }
+    }
+    destroy_screenshot_countdown(&app);
+    // Give the overlay a beat to leave the display before freezing a frame.
+    if completed {
+        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    }
+    Ok(completed)
+}
+
+fn screenshot_countdown_is_current(state: &AppState, generation: u64) -> bool {
+    let runtime = state.screenshot_countdown.lock();
+    runtime.active && runtime.generation == generation
+}
+
+pub(crate) fn cancel_screenshot_countdown_inner(app: &AppHandle, state: Arc<AppState>) {
+    {
+        let mut runtime = state.screenshot_countdown.lock();
+        if !runtime.active {
+            return;
+        }
+        runtime.generation = runtime.generation.wrapping_add(1);
+        runtime.active = false;
+    }
+    destroy_screenshot_countdown(app);
+    set_capture_huds_protected(app, false);
+    restore_thumbnail_stack(app, &state);
+}
+
+fn show_screenshot_countdown(
+    app: &AppHandle,
+    display: &captures_capture::DisplayDescriptor,
+) -> Result<(), AppError> {
+    if app.get_webview_window("screenshot-countdown").is_none() {
+        WebviewWindowBuilder::new(
+            app,
+            "screenshot-countdown",
+            WebviewUrl::App("index.html?view=screenshot-countdown".into()),
+        )
+        .title("Captures Screenshot Countdown")
+        .inner_size(f64::from(display.width), f64::from(display.height))
+        .position(f64::from(display.x), f64::from(display.y))
+        .decorations(false)
+        .always_on_top(true)
+        .visible_on_all_workspaces(true)
+        .skip_taskbar(true)
+        .shadow(false)
+        .resizable(false)
+        .transparent(true)
+        .background_color(Color(0, 0, 0, 0))
+        .focused(true)
+        .visible(false)
+        .build()?;
+    }
+    let window = app
+        .get_webview_window("screenshot-countdown")
+        .ok_or_else(|| AppError::Task("screenshot countdown is unavailable".to_owned()))?;
+    window.set_size(tauri::LogicalSize::new(
+        f64::from(display.width),
+        f64::from(display.height),
+    ))?;
+    window.set_position(tauri::LogicalPosition::new(
+        f64::from(display.x),
+        f64::from(display.y),
+    ))?;
+    // Keep the countdown out of Captures' own recordings on Windows.
+    window.set_content_protected(cfg!(target_os = "windows"))?;
+    window.show()?;
+    #[cfg(target_os = "macos")]
+    recording::focus_recording_window(app, "screenshot-countdown");
+    if let Err(error) = window.set_focus() {
+        eprintln!("failed to focus screenshot countdown: {error}");
+    }
+    Ok(())
+}
+
+fn destroy_screenshot_countdown(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("screenshot-countdown")
+        && let Err(error) = window.destroy()
+    {
+        eprintln!("failed to close screenshot countdown: {error}");
+    }
 }
 
 #[tauri::command]
@@ -977,8 +1158,9 @@ fn update_settings(
         || settings.recording.gif_max_width < 320
         || !(64..=256).contains(&settings.recording.gif_max_colors)
         || settings.recording.countdown_seconds > 10
+        || settings.screenshot_countdown_seconds > 10
     {
-        return Err("recording settings are outside their supported range".to_owned());
+        return Err("capture settings are outside their supported range".to_owned());
     }
     if !settings.custom_theme.is_valid() {
         return Err("custom theme colors must use #RRGGBB values".to_owned());
@@ -2907,7 +3089,10 @@ fn show_capture_history(app: &AppHandle) {
 }
 
 fn primary_app_window_priority(label: &str) -> Option<u8> {
-    if matches!(label, "recording-selector" | "recording-countdown") {
+    if matches!(
+        label,
+        "recording-selector" | "recording-countdown" | "screenshot-countdown"
+    ) {
         return Some(0);
     }
     if label.starts_with(RECORDING_EDITOR_WINDOW_PREFIX)
@@ -3244,7 +3429,7 @@ fn mask_macos_window_corners(
     }
 }
 
-fn image_is_effectively_blank(image: &RgbaImage) -> bool {
+pub(crate) fn image_is_effectively_blank(image: &RgbaImage) -> bool {
     // Solid / near-solid frames from failed CGWindow captures (common black full-screen).
     let mut samples = 0u32;
     let mut matching = 0u32;
