@@ -38,7 +38,12 @@ impl DisplayDescriptor {
     /// Elsewhere, display dimensions already match that logical CSS space.
     #[must_use]
     pub fn overlay_size(&self) -> (f64, f64) {
-        Self::overlay_size_for(self.width, self.height, self.scale_factor, Self::reports_physical_geometry())
+        Self::overlay_size_for(
+            self.width,
+            self.height,
+            self.scale_factor,
+            Self::reports_physical_geometry(),
+        )
     }
 
     /// Top-left of the fullscreen capture overlay in CSS/DIP coordinates.
@@ -171,8 +176,7 @@ mod tests {
 
     #[test]
     fn windows_overlay_size_converts_physical_display_to_dips() {
-        let (width, height) =
-            DisplayDescriptor::overlay_size_for(3840, 2160, 2.0, true);
+        let (width, height) = DisplayDescriptor::overlay_size_for(3840, 2160, 2.0, true);
         assert!((width - 1920.0).abs() < f64::EPSILON);
         assert!((height - 1080.0).abs() < f64::EPSILON);
     }
@@ -180,18 +184,16 @@ mod tests {
     #[test]
     fn windows_region_scale_maps_css_points_onto_physical_buffer() {
         // 150% DPI laptop: logical 1280×720 overlay, 1920×1080 capture buffer.
-        let scale = DisplayDescriptor::overlay_to_buffer_scale_for(
-            1920, 1080, 1.5, 1920, 1080, true,
-        );
+        let scale =
+            DisplayDescriptor::overlay_to_buffer_scale_for(1920, 1080, 1.5, 1920, 1080, true);
         assert!((scale - 1.5).abs() < 1e-9);
     }
 
     #[test]
     fn logical_geometry_prefers_buffer_ratio_on_retina() {
         // macOS-style: display size already in points; buffer is 2× pixels.
-        let scale = DisplayDescriptor::overlay_to_buffer_scale_for(
-            1512, 982, 2.0, 3024, 1964, false,
-        );
+        let scale =
+            DisplayDescriptor::overlay_to_buffer_scale_for(1512, 982, 2.0, 3024, 1964, false);
         assert!((scale - 2.0).abs() < 1e-9);
     }
 }
