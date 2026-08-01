@@ -118,10 +118,22 @@ impl XcapRecordingSegment {
                 return Err(error);
             }
         };
+        // Region targets are selected in overlay/CSS DIPs. Display/window
+        // geometry stays in the backend's native units (physical on Windows).
+        let (map_width, map_height) = match &options.target {
+            RecordingTarget::Region { .. } => {
+                let (width, height) = display.overlay_size();
+                (
+                    width.round().max(1.0) as u32,
+                    height.round().max(1.0) as u32,
+                )
+            }
+            _ => (display.width.max(1), display.height.max(1)),
+        };
         let frame_rect = FrameRect::from_logical(
             source,
-            display.width,
-            display.height,
+            map_width,
+            map_height,
             first_image.width(),
             first_image.height(),
         );
