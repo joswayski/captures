@@ -35,6 +35,13 @@ pub struct WindowDescriptor {
     pub width: u32,
     pub height: u32,
     pub display_id: String,
+    /// Measured visible corner radius in logical points, when known.
+    ///
+    /// macOS window chrome varies by app and OS generation. When this is set,
+    /// the selector highlight/cutout and PNG corner mask follow it instead of
+    /// the session-wide system default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub corner_radius: Option<f64>,
 }
 
 #[derive(Debug)]

@@ -260,7 +260,7 @@ pub(crate) async fn prepare_capture_selector_inner(
         let display = crate::display_under_pointer(&state)?;
         let frame = state.backend.capture_display(&display.id)?;
         let snapshot_png = storage::encode_png(&frame.image)?;
-        let windows = state
+        let mut windows = state
             .windows()
             .unwrap_or_else(|error| {
                 eprintln!("window targets are unavailable for this capture: {error}");
@@ -269,6 +269,12 @@ pub(crate) async fn prepare_capture_selector_inner(
             .into_iter()
             .filter(|window| crate::window_is_capturable(window, &display))
             .collect::<Vec<_>>();
+        crate::refine_window_chrome_from_snapshot(
+            &mut windows,
+            &frame.descriptor,
+            &frame.image,
+            crate::window_corner_radius_points(),
+        );
         let id = Uuid::new_v4().to_string();
         let summary = RecordingSelectionSession {
             id: id.clone(),

@@ -453,15 +453,23 @@ async fn prepare_capture(
     // Keep the selector background full-resolution and lossless. Region/window
     // crops also come directly from `frame.image`, so no lossy stage is involved.
     let snapshot_png = storage::encode_png(&frame.image)?;
-    let windows = if mode == CaptureMode::Window {
+    let mut windows = if mode == CaptureMode::Window {
         state
             .windows()?
             .into_iter()
             .filter(|window| window_is_capturable(window, &display))
-            .collect()
+            .collect::<Vec<_>>()
     } else {
         Vec::new()
     };
+    if mode == CaptureMode::Window {
+        refine_window_chrome_from_snapshot(
+            &mut windows,
+            &frame.descriptor,
+            &frame.image,
+            window_corner_radius_points(),
+        );
+    }
     let session = CaptureSession {
         id,
         mode,
@@ -2345,8 +2353,11 @@ fn show_capture_window(app: &AppHandle, session: &ActiveSession) {
             return;
         }
         if let Some(window) = handle.get_webview_window("overlay") {
-            let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+            // Size first, then position. A borderless NSWindow grows from its
+            // bottom-left anchor; positioning after the final size keeps the
+            // top-left edge on the selected display (same as the recording selector).
             let _ = window.set_size(LogicalSize::new(width, height));
+            let _ = window.set_position(tauri::LogicalPosition::new(x, y));
             #[cfg(target_os = "linux")]
             let _ = window.set_fullscreen(wayland_session());
             if let Err(error) = handle.emit("capture-session-ready", &session) {
@@ -3343,11 +3354,191 @@ fn crop_window_from_session(session: &CaptureSession, window_id: &str) -> Option
             window,
             &session.display,
             scale,
-            window_corner_radius_points(),
+            window_visible_corner_radius(window),
         );
         image
     };
     Some(image)
+}
+
+#[cfg(target_os = "macos")]
+fn window_visible_corner_radius(window: &captures_capture::WindowDescriptor) -> f64 {
+    window
+        .corner_radius
+        .filter(|radius| radius.is_finite() && *radius >= 0.0)
+        .unwrap_or_else(window_corner_radius_points)
+}
+
+/// Measure each window's visible corner radius from the freeze-frame so the
+/// selector ring, dim cutout, and PNG mask share one shape.
+///
+/// A single OS-default radius is wrong for panels, terminals, and other apps
+/// that keep tighter chrome than the current system window style. Sampling the
+/// already-captured display image avoids a second per-window capture pass.
+fn refine_window_chrome_from_snapshot(
+    windows: &mut [captures_capture::WindowDescriptor],
+    display: &captures_capture::DisplayDescriptor,
+    image: &RgbaImage,
+    fallback_radius: f64,
+) {
+    let scale = capture_buffer_scale(display, image);
+    for window in windows.iter_mut() {
+        if let Some(radius) = estimate_window_corner_radius_from_snapshot(
+            window,
+            display,
+            image,
+            scale,
+            fallback_radius,
+        ) {
+            window.corner_radius = Some(radius);
+        }
+    }
+}
+
+fn estimate_window_corner_radius_from_snapshot(
+    window: &captures_capture::WindowDescriptor,
+    display: &captures_capture::DisplayDescriptor,
+    image: &RgbaImage,
+    scale: f64,
+    fallback_radius: f64,
+) -> Option<f64> {
+    let scale = scale.max(1.0);
+    let left = ((f64::from(window.x - display.x) * scale).round() as i64).max(0);
+    let top = ((f64::from(window.y - display.y) * scale).round() as i64).max(0);
+    let width = ((f64::from(window.width) * scale).round() as i64).max(1);
+    let height = ((f64::from(window.height) * scale).round() as i64).max(1);
+    let right = left + width;
+    let bottom = top + height;
+    if right > i64::from(image.width()) || bottom > i64::from(image.height()) {
+        return None;
+    }
+
+    // Fullscreen-ish targets keep square display edges.
+    if window.x <= display.x
+        && window.y <= display.y
+        && window.x + window.width as i32 >= display.x + display.width as i32
+        && window.y + window.height as i32 >= display.y + display.height as i32
+    {
+        return Some(0.0);
+    }
+
+    let max_radius_px = ((fallback_radius * scale)
+        .min(width as f64 / 2.0)
+        .min(height as f64 / 2.0)
+        .floor() as i64)
+        .max(0);
+    if max_radius_px < 2 {
+        return Some(0.0);
+    }
+
+    let mut samples = Vec::with_capacity(4);
+    for (corner_x, corner_y, dir_x, dir_y) in [
+        (left, top, 1_i64, 1_i64),
+        (right - 1, top, -1, 1),
+        (left, bottom - 1, 1, -1),
+        (right - 1, bottom - 1, -1, -1),
+    ] {
+        if let Some(radius_px) = estimate_corner_radius_px(
+            image,
+            corner_x,
+            corner_y,
+            dir_x,
+            dir_y,
+            max_radius_px,
+            width,
+            height,
+        ) {
+            samples.push(radius_px);
+        }
+    }
+    if samples.is_empty() {
+        return None;
+    }
+    // Inclusive pixel bounds make the trailing edge of a corner one pixel short
+    // of the true radius. Prefer the strongest readable corner instead of the
+    // median, which systematically under-reads rounded chrome.
+    let best_px = *samples.iter().max().unwrap_or(&0) as f64;
+    let radius_points = (best_px / scale).clamp(0.0, fallback_radius.max(0.0));
+    // Prefer half-point steps so CSS border-radius stays stable on Retina.
+    Some((radius_points * 2.0).round() / 2.0)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn estimate_corner_radius_px(
+    image: &RgbaImage,
+    corner_x: i64,
+    corner_y: i64,
+    dir_x: i64,
+    dir_y: i64,
+    max_radius_px: i64,
+    window_width_px: i64,
+    window_height_px: i64,
+) -> Option<i64> {
+    let outside = sample_image(image, corner_x, corner_y)?;
+    // Deep interior of this corner — should land on window chrome/content.
+    let inset = (max_radius_px.max(8) + 4)
+        .min(window_width_px / 3)
+        .min(window_height_px / 3);
+    if inset < 4 {
+        return None;
+    }
+    let inside = sample_image(image, corner_x + dir_x * inset, corner_y + dir_y * inset)?;
+    // If the corner already looks like the interior, this corner is square or
+    // the freeze-frame has no readable edge (e.g. same-colored neighbor).
+    if pixels_similar(outside, inside, 18) {
+        return Some(0);
+    }
+
+    let mut along_x = 0_i64;
+    while along_x < max_radius_px {
+        let x = corner_x + dir_x * along_x;
+        let Some(pixel) = sample_image(image, x, corner_y) else {
+            break;
+        };
+        if !pixels_similar(pixel, outside, 18) {
+            break;
+        }
+        along_x += 1;
+    }
+
+    let mut along_y = 0_i64;
+    while along_y < max_radius_px {
+        let y = corner_y + dir_y * along_y;
+        let Some(pixel) = sample_image(image, corner_x, y) else {
+            break;
+        };
+        if !pixels_similar(pixel, outside, 18) {
+            break;
+        }
+        along_y += 1;
+    }
+
+    // At an inclusive trailing edge the arc is one pixel short of R, so the two
+    // runs can disagree. Keep the longer readable edge for this corner.
+    let radius = along_x.max(along_y).clamp(0, max_radius_px);
+    // Tiny runs are usually anti-alias or 1px framing, not real window chrome.
+    if radius <= 1 {
+        return Some(0);
+    }
+    Some(radius)
+}
+
+fn sample_image(image: &RgbaImage, x: i64, y: i64) -> Option<[u8; 4]> {
+    if x < 0 || y < 0 {
+        return None;
+    }
+    let x = u32::try_from(x).ok()?;
+    let y = u32::try_from(y).ok()?;
+    if x >= image.width() || y >= image.height() {
+        return None;
+    }
+    Some(image.get_pixel(x, y).0)
+}
+
+fn pixels_similar(left: [u8; 4], right: [u8; 4], max_channel_delta: u8) -> bool {
+    left.iter()
+        .zip(right.iter())
+        .all(|(a, b)| a.abs_diff(*b) <= max_channel_delta)
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -3563,10 +3754,10 @@ mod tests {
         ThumbnailCursorAction, ThumbnailCursorKind, ThumbnailMonitorBounds, clipboard_fingerprint,
         display_contains_pointer, mask_macos_window_corners, parse_shortcut,
         primary_app_window_priority, recording_saved_notice_label,
-        should_activate_capture_cursor_before_reveal, should_trigger_shortcut,
-        thumbnail_cursor_action, thumbnail_geometry, thumbnail_pointer_position,
-        thumbnail_visible_window_height, track_shortcut_suppression, viewer_window_label,
-        window_is_capturable, windows_window_is_capture_overlay,
+        refine_window_chrome_from_snapshot, should_activate_capture_cursor_before_reveal,
+        should_trigger_shortcut, thumbnail_cursor_action, thumbnail_geometry,
+        thumbnail_pointer_position, thumbnail_visible_window_height, track_shortcut_suppression,
+        viewer_window_label, window_is_capturable, windows_window_is_capture_overlay,
     };
 
     fn bounds(
@@ -3600,6 +3791,112 @@ mod tests {
     }
 
     #[test]
+    fn estimates_rounded_window_chrome_from_the_freeze_frame() {
+        use image::{Rgba, RgbaImage};
+
+        let display = DisplayDescriptor {
+            id: "display".to_owned(),
+            name: "Display".to_owned(),
+            x: 0,
+            y: 0,
+            width: 200,
+            height: 160,
+            scale_factor: 1.0,
+            is_primary: true,
+        };
+        // Solid background with a rounded window painted on top.
+        let mut image = RgbaImage::from_pixel(200, 160, Rgba([30, 30, 30, 255]));
+        let window_x = 40_i32;
+        let window_y = 30_i32;
+        let window_w = 100_u32;
+        let window_h = 80_u32;
+        let radius = 12.0_f64;
+        for y in 0..window_h {
+            for x in 0..window_w {
+                let px = f64::from(x);
+                let py = f64::from(y);
+                let width = f64::from(window_w);
+                let height = f64::from(window_h);
+                let cx = px.clamp(radius, width - radius);
+                let cy = py.clamp(radius, height - radius);
+                let dx = px - cx;
+                let dy = py - cy;
+                if dx * dx + dy * dy <= radius * radius {
+                    image.put_pixel(
+                        (window_x as u32) + x,
+                        (window_y as u32) + y,
+                        Rgba([200, 210, 220, 255]),
+                    );
+                }
+            }
+        }
+        let mut window = WindowDescriptor {
+            id: "window".to_owned(),
+            title: "Rounded".to_owned(),
+            app_name: Some("App".to_owned()),
+            z_order: 1,
+            x: window_x,
+            y: window_y,
+            width: window_w,
+            height: window_h,
+            display_id: display.id.clone(),
+            corner_radius: None,
+        };
+
+        refine_window_chrome_from_snapshot(
+            std::slice::from_mut(&mut window),
+            &display,
+            &image,
+            25.0,
+        );
+
+        let measured = window
+            .corner_radius
+            .expect("corner radius should be measured");
+        assert!(
+            (measured - radius).abs() <= 2.0,
+            "expected ~{radius}pt, got {measured}"
+        );
+    }
+
+    #[test]
+    fn treats_fullscreen_freeze_frame_windows_as_square() {
+        use image::{Rgba, RgbaImage};
+
+        let display = DisplayDescriptor {
+            id: "display".to_owned(),
+            name: "Display".to_owned(),
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 60,
+            scale_factor: 1.0,
+            is_primary: true,
+        };
+        let image = RgbaImage::from_pixel(80, 60, Rgba([10, 20, 30, 255]));
+        let mut window = WindowDescriptor {
+            id: "fullscreen".to_owned(),
+            title: "Full".to_owned(),
+            app_name: Some("App".to_owned()),
+            z_order: 1,
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 60,
+            display_id: display.id.clone(),
+            corner_radius: None,
+        };
+
+        refine_window_chrome_from_snapshot(
+            std::slice::from_mut(&mut window),
+            &display,
+            &image,
+            25.0,
+        );
+        assert_eq!(window.corner_radius, Some(0.0));
+    }
+
+    #[test]
     fn masks_background_pixels_outside_macos_window_corners() {
         let display = DisplayDescriptor {
             id: "display".to_owned(),
@@ -3621,6 +3918,7 @@ mod tests {
             width: 50,
             height: 40,
             display_id: display.id.clone(),
+            corner_radius: None,
         };
         let mut image = RgbaImage::from_pixel(100, 80, Rgba([12, 34, 56, 255]));
 
@@ -3662,6 +3960,7 @@ mod tests {
             width: 50,
             height: 40,
             display_id: display.id.clone(),
+            corner_radius: None,
         };
         let mut clipped = RgbaImage::from_pixel(76, 80, Rgba([12, 34, 56, 255]));
 
@@ -3694,6 +3993,7 @@ mod tests {
             width: 3_840,
             height: 2_160,
             display_id: "display".to_owned(),
+            corner_radius: None,
         };
         assert!(windows_window_is_capture_overlay(&overlay));
 
@@ -3725,6 +4025,7 @@ mod tests {
             width: 1_728,
             height: 1_117,
             display_id: "display".to_owned(),
+            corner_radius: None,
         };
         assert!(macos_window_is_capture_overlay(&overlay));
         assert!(!window_is_capturable(&overlay, &display));
@@ -3757,6 +4058,7 @@ mod tests {
             width: 640,
             height: 480,
             display_id: display.id.clone(),
+            corner_radius: None,
         };
 
         for title in [

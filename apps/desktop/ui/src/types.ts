@@ -38,6 +38,8 @@ export interface WindowDescriptor {
   width: number;
   height: number;
   display_id: string;
+  /** Measured visible corner radius in logical points, when known. */
+  corner_radius?: number | null;
 }
 
 export interface ActiveSession {

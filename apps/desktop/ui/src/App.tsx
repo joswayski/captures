@@ -1638,6 +1638,7 @@ export function RecordingSelector() {
       top: (window.y - session.display.y) / scale,
       width: window.width / scale,
       height: window.height / scale,
+      cornerRadius: window.corner_radius ?? session.window_corner_radius,
       zIndex: selectableWindows.length - index,
     };
   });
@@ -1653,6 +1654,7 @@ export function RecordingSelector() {
           height: activeWindowLayout.height,
         } : null
       : region;
+  const activeWindowCornerRadius = activeWindowLayout?.cornerRadius ?? session.window_corner_radius;
   const canStart = targetMode === "display"
     || (targetMode === "window" && Boolean(selectedWindow))
     || (targetMode === "region" && Boolean(region && region.width >= 2 && region.height >= 2));
@@ -1818,7 +1820,7 @@ export function RecordingSelector() {
         hole={selectedRect}
         bounds={{ width: session.display.width, height: session.display.height }}
         dimWithoutHole={targetMode === "window"}
-        windowCornerRadius={session.window_corner_radius}
+        windowCornerRadius={activeWindowCornerRadius}
       />
       {targetMode === "region" && <CaptureGuidance mode="region" />}
       {targetMode === "window" && !selectedWindow && <CaptureGuidance mode="window" />}
@@ -1843,7 +1845,7 @@ export function RecordingSelector() {
       )}
       {targetMode === "window" && (
         <div className="recording-window-targets">
-          {windowLayouts.map(({ window, left, top, width, height, zIndex }) => (
+          {windowLayouts.map(({ window, left, top, width, height, cornerRadius, zIndex }) => (
             <button
               key={window.id}
               type="button"
@@ -1854,7 +1856,7 @@ export function RecordingSelector() {
                 width,
                 height,
                 zIndex,
-                borderRadius: session.window_corner_radius,
+                borderRadius: cornerRadius,
               }}
               aria-label={`Select ${window.title || "window"}`}
               onPointerDown={(event) => event.stopPropagation()}
@@ -3610,6 +3612,7 @@ function CaptureOverlay() {
       y: (match.y - session.display.y) / scale,
       width: match.width / scale,
       height: match.height / scale,
+      cornerRadius: match.corner_radius ?? session.window_corner_radius,
     };
   }, [hoveredWindow, mode, session]);
 
@@ -3627,6 +3630,7 @@ function CaptureOverlay() {
         top: (window.y - session.display.y) / scale,
         width: window.width / scale,
         height: window.height / scale,
+        cornerRadius: window.corner_radius ?? session.window_corner_radius,
         zIndex: list.length - index,
       }));
   }, [mode, session]);
@@ -3778,7 +3782,7 @@ function CaptureOverlay() {
         mode={mode}
         hole={dimHole}
         bounds={{ width: session.display.width, height: session.display.height }}
-        windowCornerRadius={session.window_corner_radius}
+        windowCornerRadius={hoveredWindowLayout?.cornerRadius ?? session.window_corner_radius}
       />
       <CaptureGuidance
         key={`${sessionId}-${selectionFeedback}`}
@@ -3806,7 +3810,7 @@ function CaptureOverlay() {
                 width: item.width,
                 height: item.height,
                 zIndex: item.zIndex,
-                borderRadius: session.window_corner_radius,
+                borderRadius: item.cornerRadius,
               }}
               title={item.window.title || item.window.app_name || "Window"}
               onPointerEnter={() => setHoveredWindow(item.window.id)}

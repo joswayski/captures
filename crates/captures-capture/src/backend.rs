@@ -125,6 +125,7 @@ impl XcapBackend {
                     width,
                     height,
                     display_id: display_id.to_string(),
+                    corner_radius: None,
                 }))
             })
             .collect::<CaptureResult<Vec<_>>>()?;
