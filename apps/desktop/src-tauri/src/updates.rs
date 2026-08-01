@@ -119,7 +119,7 @@ pub fn initialize(app: &AppHandle) {
         },
     );
 
-    if cfg!(debug_assertions) || !nightly_release_build() {
+    if cfg!(debug_assertions) || !preview_release_build() {
         return;
     }
 
@@ -300,8 +300,8 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
 }
 
 async fn check_for_updates_inner(app: &AppHandle, manual: bool) -> Result<UpdateStatus, String> {
-    if !nightly_release_build() {
-        let message = "Update checks are available only in Captures Nightly builds.".to_owned();
+    if !preview_release_build() {
+        let message = "Update checks are available only in Captures Preview builds.".to_owned();
         let (current_version, current_display_version) = current_versions(app);
         if let Some(status) = check_error_status(
             manual,
@@ -531,12 +531,12 @@ fn current_versions(app: &AppHandle) -> (String, String) {
     (current_version, current_display_version)
 }
 
-fn nightly_release_build() -> bool {
+fn preview_release_build() -> bool {
     release_channel_enabled(option_env!("CAPTURES_RELEASE_CHANNEL"))
 }
 
 fn release_channel_enabled(value: Option<&str>) -> bool {
-    value == Some("nightly")
+    value == Some("preview")
 }
 
 fn check_error_status(
@@ -653,8 +653,8 @@ mod tests {
     };
 
     #[test]
-    fn enables_automatic_updates_only_for_nightly_builds() {
-        assert!(release_channel_enabled(Some("nightly")));
+    fn enables_automatic_updates_only_for_preview_builds() {
+        assert!(release_channel_enabled(Some("preview")));
         assert!(!release_channel_enabled(None));
         assert!(!release_channel_enabled(Some("0")));
         assert!(!release_channel_enabled(Some("stable")));

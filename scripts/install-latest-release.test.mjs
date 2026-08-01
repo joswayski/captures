@@ -12,10 +12,10 @@ import {
   releaseReadiness,
   verifyChecksum,
 } from "./install-latest-release.mjs";
-import { latestNightlyRelease, nightlyVersion } from "./nightly-release.mjs";
+import { latestPreviewRelease, previewVersion } from "./preview-release.mjs";
 
-test("selects the greatest published Nightly version instead of the last one published", () => {
-  const release = latestNightlyRelease([
+test("selects the greatest published Preview version instead of the last one published", () => {
+  const release = latestPreviewRelease([
     {
       id: 3,
       draft: false,
@@ -41,12 +41,12 @@ test("selects the greatest published Nightly version instead of the last one pub
       id: 6,
       draft: false,
       prerelease: true,
-      tag_name: "nightly",
+      tag_name: "preview",
       published_at: "2026-08-01T19:00:00Z",
     },
   ]);
   assert.equal(release.id, 3);
-  assert.deepEqual(nightlyVersion(release.tag_name), [2026, 7, 31, 1]);
+  assert.deepEqual(previewVersion(release.tag_name), [2026, 7, 31, 1]);
 });
 
 test("requires both the system installer and completed-release marker", () => {

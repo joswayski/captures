@@ -1,4 +1,4 @@
-name: Nightly
+name: Captures Preview
 
 on:
   push:
@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   queue:
-    name: Wait for earlier Nightlies
+    name: Wait for earlier Preview builds
     runs-on: ubuntu-24.04
     permissions:
       actions: read
@@ -28,7 +28,7 @@ jobs:
         shell: bash
         run: |
           if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
-            echo "Nightlies can only run from main." >&2
+            echo "Preview builds can only run from main." >&2
             exit 1
           fi
       - uses: actions/checkout@v4
@@ -69,12 +69,12 @@ jobs:
             if [[ -z "$blocker" ]]; then
               break
             fi
-            echo "Waiting for earlier Nightly workflow ${blocker} to finish."
+            echo "Waiting for earlier Preview workflow ${blocker} to finish."
             sleep 30
           done
 
   version:
-    name: Choose Nightly version
+    name: Choose Preview version
     needs: queue
     runs-on: ubuntu-24.04
     outputs:
@@ -155,7 +155,7 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   prepare:
-    name: Stage Nightly
+    name: Stage Preview
     needs: [queue, version, frontend, rust]
     runs-on: ubuntu-24.04
     permissions:
@@ -248,7 +248,7 @@ jobs:
             "repos/${GITHUB_REPOSITORY}/releases" \
             -f tag_name="$TAG" \
             -f target_commitish="$RELEASE_SHA" \
-            -f name="Captures Nightly $DISPLAY_VERSION" \
+            -f name="Captures Preview $DISPLAY_VERSION" \
             -F draft=true \
             -F generate_release_notes=true \
             > "$release_file"
@@ -257,7 +257,7 @@ jobs:
           jq -r '.body // ""' "$release_file" > "$generated_notes"
           {
             echo "> [!WARNING]"
-            echo "> This Nightly is functional, but experimental. Expect bugs and incomplete features; macOS is the primary development target, while Windows and Linux may be less polished."
+            echo "> This Preview is functional, but experimental. Expect bugs and incomplete features; macOS is the primary development target, while Windows and Linux may be less polished."
             echo
             if [[ -s "$generated_notes" ]]; then
               cat "$generated_notes"
@@ -303,7 +303,7 @@ jobs:
             target: x86_64-unknown-linux-gnu
             bundles: appimage,deb
     env:
-      CAPTURES_RELEASE_CHANNEL: nightly
+      CAPTURES_RELEASE_CHANNEL: preview
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     steps:
@@ -550,13 +550,13 @@ jobs:
           fi
 
   publish:
-    name: Publish Nightly
+    name: Publish Preview
     needs: [prepare, validate_draft]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
-      - name: Publish the fully validated Nightly
+      - name: Publish the fully validated Preview
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
@@ -581,12 +581,12 @@ jobs:
               --jq '[.draft, .prerelease, .tag_name] | @tsv'
           )"
           if [[ "$published" != $'false\ttrue\t'"$TAG" ]]; then
-            echo "Nightly ${TAG} was not published as expected." >&2
+            echo "Preview ${TAG} was not published as expected." >&2
             exit 1
           fi
 
   channel:
-    name: Update Nightly channel
+    name: Update latest Preview
     needs: publish
     runs-on: ubuntu-24.04
     permissions:
@@ -596,7 +596,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Point the rolling channel at the greatest Nightly version
+      - name: Publish the greatest Preview on the permanent download page
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -609,7 +609,29 @@ jobs:
             "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
             | jq -s add \
             > "$releases_file"
-          newest_tag="$(node scripts/nightly-release.mjs "$releases_file")"
+          while IFS= read -r release; do
+            release_id="$(jq -er .id <<< "$release")"
+            release_tag="$(jq -er .tag_name <<< "$release")"
+            current_name="$(jq -r '.name // ""' <<< "$release")"
+            current_body="$(jq -r '.body // ""' <<< "$release")"
+            preview_name="Captures Preview ${release_tag#v}"
+            preview_body="${current_body//This Nightly/This Preview}"
+            preview_body="${preview_body//Captures Nightly/Captures Preview}"
+            if [[ "$current_name" != "$preview_name" || "$current_body" != "$preview_body" ]]; then
+              gh api \
+                --method PATCH \
+                "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+                -f name="$preview_name" \
+                -f body="$preview_body" \
+                --silent
+            fi
+          done < <(
+            jq -c \
+              '.[] | select(.draft == false and .prerelease == true and (.tag_name | test("^v[0-9]{4}\\.[0-9]{2}\\.[0-9]{2}\\.[1-9][0-9]?$")))' \
+              "$releases_file"
+          )
+
+          newest_tag="$(node scripts/preview-release.mjs "$releases_file")"
           newest_release="$(
             gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${newest_tag}"
           )"
@@ -617,69 +639,144 @@ jobs:
           newest_target="$(jq -er .target_commitish <<< "$newest_release")"
           newest_url="$(jq -er .html_url <<< "$newest_release")"
 
-          channel_notes="$RUNNER_TEMP/nightly-channel-notes.md"
+          channel_assets="$RUNNER_TEMP/preview-channel"
+          mkdir "$channel_assets"
+          gh release download \
+            "$newest_tag" \
+            --pattern '*.dmg' \
+            --pattern '*-setup.exe' \
+            --pattern '*.AppImage' \
+            --pattern '*.deb' \
+            --pattern latest.json \
+            --dir "$channel_assets"
+          preview_assets="$(node scripts/preview-release-assets.mjs "$channel_assets")"
+          macos_asset="$(jq -er .macos <<< "$preview_assets")"
+          windows_asset="$(jq -er .windows <<< "$preview_assets")"
+          linux_deb_asset="$(jq -er .linuxDeb <<< "$preview_assets")"
+          linux_appimage_asset="$(jq -er .linuxAppImage <<< "$preview_assets")"
+          updater_asset="$(jq -er .updater <<< "$preview_assets")"
+
+          asset_url() {
+            encoded_asset="$(jq -rn --arg asset "$1" '$asset | @uri')"
+            printf 'https://github.com/%s/releases/download/preview/%s' \
+              "$GITHUB_REPOSITORY" \
+              "$encoded_asset"
+          }
+
+          channel_notes="$RUNNER_TEMP/preview-channel-notes.md"
           {
             echo "> [!WARNING]"
-            echo "> Captures Nightly is functional, but experimental. Expect bugs and incomplete features; macOS is the primary development target, while Windows and Linux may be less polished."
+            echo "> Captures Preview is functional, but experimental. Expect bugs and incomplete features; macOS is the primary development target, while Windows and Linux may be less polished."
             echo
-            echo "The newest validated build is [${newest_name}](${newest_url})."
-            echo "Versioned Nightlies remain available as a permanent build history."
+            echo "Download the latest validated build:"
+            echo
+            echo "- [macOS 13+ — Apple silicon (.dmg)]($(asset_url "$macos_asset"))"
+            echo "- [Windows 11 — x64 installer (.exe)]($(asset_url "$windows_asset"))"
+            echo "- [Ubuntu or Debian — x64 package (.deb)]($(asset_url "$linux_deb_asset"))"
+            echo "- [Other Linux distributions — x64 AppImage]($(asset_url "$linux_appimage_asset"))"
+            echo
+            echo 'The `latest.json` asset is updater metadata, not a manual download.'
+            echo
+            echo "Current version: [${newest_name}](${newest_url})."
+            echo "[Browse the dated build archive](https://github.com/${GITHUB_REPOSITORY}/releases)."
           } > "$channel_notes"
 
           channel_release="$(
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/releases/tags/preview" \
+              2>/dev/null \
+              || true
+          )"
+          if [[ -z "$channel_release" ]]; then
+            while IFS= read -r stale_channel_id; do
+              if [[ -n "$stale_channel_id" ]]; then
+                gh api \
+                  --method DELETE \
+                  "repos/${GITHUB_REPOSITORY}/releases/${stale_channel_id}" \
+                  --silent
+              fi
+            done < <(
+              jq -r \
+                '.[] | select(.draft and (.tag_name == "preview" or .name == "Captures Preview — Latest")) | .id' \
+                "$releases_file"
+            )
+            gh api \
+              --method DELETE \
+              "repos/${GITHUB_REPOSITORY}/git/refs/tags/preview" \
+              --silent \
+              2>/dev/null \
+              || true
+            channel_release="$(
+              gh api \
+                --method POST \
+                "repos/${GITHUB_REPOSITORY}/releases" \
+                -f tag_name=preview \
+                -f target_commitish="$newest_target" \
+                -f name="Captures Preview — Latest" \
+                -F draft=true \
+                -f make_latest=false
+            )"
+          fi
+          channel_id="$(jq -er .id <<< "$channel_release")"
+          node scripts/github-release-assets.mjs sync "$channel_id" "$channel_assets"
+          gh api \
+            --method PATCH \
+            "repos/${GITHUB_REPOSITORY}/releases/${channel_id}" \
+            -f tag_name=preview \
+            -f target_commitish="$newest_target" \
+            -f name="Captures Preview — Latest" \
+            -f body="$(cat "$channel_notes")" \
+            -F draft=false \
+            -F prerelease=true \
+            -f make_latest=false \
+            --silent
+
+          expected_assets="$(
+            jq -cn \
+              --arg macos "$macos_asset" \
+              --arg windows "$windows_asset" \
+              --arg linuxDeb "$linux_deb_asset" \
+              --arg linuxAppImage "$linux_appimage_asset" \
+              --arg updater "$updater_asset" \
+              '[$macos, $windows, $linuxDeb, $linuxAppImage, $updater] | sort'
+          )"
+          channel_release="$(
+            gh api "repos/${GITHUB_REPOSITORY}/releases/${channel_id}"
+          )"
+          actual_assets="$(jq -c '[.assets[].name] | sort' <<< "$channel_release")"
+          if [[ "$actual_assets" != "$expected_assets" ]]; then
+            echo "The permanent Preview page does not contain exactly the expected downloads." >&2
+            echo "Expected: $expected_assets" >&2
+            echo "Actual:   $actual_assets" >&2
+            exit 1
+          fi
+          if [[ "$(jq -r '[.draft, .prerelease, .tag_name, .name] | @tsv' <<< "$channel_release")" != $'false\ttrue\tpreview\tCaptures Preview — Latest' ]]; then
+            echo "The permanent Preview page metadata is incorrect." >&2
+            exit 1
+          fi
+
+          legacy_release="$(
             gh api \
               "repos/${GITHUB_REPOSITORY}/releases/tags/nightly" \
               2>/dev/null \
               || true
           )"
-          if [[ -z "$channel_release" ]]; then
-            channel_release="$(
-              gh api \
-                --method POST \
-                "repos/${GITHUB_REPOSITORY}/releases" \
-                -f tag_name=nightly \
-                -f target_commitish="$newest_target" \
-                -f name="Captures Nightly — Latest" \
-                -f body="$(cat "$channel_notes")" \
-                -F draft=false \
-                -F prerelease=true \
-                -f make_latest=false
-            )"
-          else
-            channel_id="$(jq -er .id <<< "$channel_release")"
+          if [[ -n "$legacy_release" ]]; then
+            legacy_release_id="$(jq -er .id <<< "$legacy_release")"
             gh api \
-              --method PATCH \
-              "repos/${GITHUB_REPOSITORY}/releases/${channel_id}" \
-              -f name="Captures Nightly — Latest" \
-              -f body="$(cat "$channel_notes")" \
-              -F draft=false \
-              -F prerelease=true \
-              -f make_latest=false \
+              --method DELETE \
+              "repos/${GITHUB_REPOSITORY}/releases/${legacy_release_id}" \
               --silent
           fi
-
-          channel_assets="$RUNNER_TEMP/nightly-channel"
-          mkdir "$channel_assets"
-          gh release download \
-            "$newest_tag" \
-            --pattern latest.json \
-            --dir "$channel_assets"
-          gh release upload \
-            nightly \
-            "$channel_assets/latest.json" \
-            --clobber
-          channel_manifest="$(
-            gh api \
-              "repos/${GITHUB_REPOSITORY}/releases/tags/nightly" \
-              --jq '.assets[] | select(.name == "latest.json") | .browser_download_url'
-          )"
-          if [[ -z "$channel_manifest" ]]; then
-            echo "The rolling Nightly channel is missing latest.json." >&2
-            exit 1
-          fi
+          gh api \
+            --method DELETE \
+            "repos/${GITHUB_REPOSITORY}/git/refs/tags/nightly" \
+            --silent \
+            2>/dev/null \
+            || true
 
   cleanup:
-    name: Remove incomplete Nightly
+    name: Remove incomplete Preview
     if: ${{ always() && needs.prepare.result == 'success' && needs.publish.result != 'success' }}
     needs: [prepare, package, validate_draft, publish]
     runs-on: ubuntu-24.04
