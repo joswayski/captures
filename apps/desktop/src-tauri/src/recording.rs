@@ -1760,11 +1760,22 @@ pub fn start_recording_export(
                 // history-only recording, promote a permanent copy even when the
                 // editor overwrites the private recovery media in place.
                 let mut permanent_path = if request.overwrite_source {
-                    source.saved_path.filter(|path| Path::new(path).is_file())
+                    source
+                        .saved_path
+                        .clone()
+                        .filter(|path| Path::new(path).is_file())
                 } else {
                     Some(exported_path.clone())
                 };
-                if permanent_path.is_none() {
+                if let Some(saved_path) = permanent_path.as_ref() {
+                    if Path::new(saved_path) != outcome.path.as_path() {
+                        if let Err(error) = fs::copy(&outcome.path, saved_path) {
+                            eprintln!(
+                                "recording export completed, but the Captures folder copy could not be updated: {error}"
+                            );
+                        }
+                    }
+                } else {
                     let settings = state.settings();
                     match storage::unique_media_path(
                         Path::new(&settings.output_directory),
