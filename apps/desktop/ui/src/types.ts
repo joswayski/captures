@@ -38,6 +38,8 @@ export interface WindowDescriptor {
   width: number;
   height: number;
   display_id: string;
+  /** Measured visible corner radius in logical points, when known. */
+  corner_radius?: number | null;
 }
 
 export interface ActiveSession {
@@ -63,6 +65,7 @@ export interface AppSettings {
   launch_at_login: boolean;
   last_screen_permission_request_id: string | null;
   pending_capture_after_restart: CaptureMode | null;
+  screenshot_countdown_seconds: number;
   recording: RecordingSettings;
 }
 

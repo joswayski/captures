@@ -90,7 +90,7 @@ h1, h2, p { margin: 0; }
 .viewer-toolbar-actions svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .viewer-error { position: absolute; z-index: 4; top: 51px; right: 14px; max-width: min(460px, calc(100% - 28px)); margin: 0; padding: 8px 10px; border: 1px solid rgba(255,112,124,.3); border-radius: 7px; color: #ffc3c9; background: rgba(91,25,34,.94); box-shadow: 0 8px 22px rgba(0,0,0,.32); font-size: 10px; }
 .viewer-canvas { min-width: 0; min-height: 0; padding: 20px; overflow: auto; background-color: #0d0e14; background-image: linear-gradient(45deg, rgba(255,255,255,.025) 25%, transparent 25%), linear-gradient(-45deg, rgba(255,255,255,.025) 25%, transparent 25%), linear-gradient(45deg, transparent 75%, rgba(255,255,255,.025) 75%), linear-gradient(-45deg, transparent 75%, rgba(255,255,255,.025) 75%); background-position: 0 0, 0 8px, 8px -8px, -8px 0; background-size: 16px 16px; }
-.viewer-image { user-select: none; }
+.viewer-image { -webkit-user-select: none; user-select: none; -webkit-user-drag: none; }
 .viewer-image-fit { display: block; width: 100%; height: 100%; object-fit: contain; cursor: zoom-in; }
 .viewer-image-actual { display: block; width: auto; max-width: none; height: auto; margin: 0 auto; cursor: zoom-out; }
 
@@ -170,8 +170,10 @@ html.capture-window-cursor, html.capture-window-cursor * { cursor: var(--capture
 .selection-box span { position: absolute; top: -30px; left: 0; padding: 5px 8px; border-radius: 5px; color: var(--chrome-active-ink); background: var(--chrome-active); font-size: 12px; font-weight: 700; white-space: nowrap; }
 .window-targets { position: absolute; inset: 0; z-index: 5; opacity: 0; transition: opacity .3s ease-out; }
 .capture-visible .window-targets { opacity: 1; }
-.window-target { position: absolute; overflow: hidden; border: 2px solid transparent; border-radius: 0; background: transparent; color: transparent; text-align: left; cursor: inherit; padding: 0; appearance: none; }
-.window-target-hovered, .window-target:hover { border-color: var(--theme-accent); background: rgba(var(--theme-accent-rgb),.12); color: white; }
+/* Hit target matches window bounds exactly. The ring is an outer box-shadow so
+   a 2px stroke never insets into the frozen window chrome (border-box borders did). */
+.window-target { position: absolute; overflow: hidden; border: 0; border-radius: 0; background: transparent; color: transparent; text-align: left; cursor: inherit; padding: 0; appearance: none; box-shadow: none; }
+.window-target-hovered, .window-target:hover { color: white; background: rgba(var(--theme-accent-rgb),.12); box-shadow: 0 0 0 2px var(--theme-accent); }
 .window-target span { display: inline-block; max-width: 100%; padding: 4px 7px; overflow: hidden; border-radius: 4px; background: transparent; opacity: 0; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .window-target-hovered span, .window-target:hover span { background: rgba(17,18,26,.88); opacity: 1; }
 
@@ -179,10 +181,11 @@ html.capture-window-cursor, html.capture-window-cursor * { cursor: var(--capture
    A full-height column + margin-top:auto reflows the top card when the native
    window shrinks after a dismiss, which makes that card flicker. Auto height
    keeps surviving cards stable while only empty window space is cropped. */
-.thumbnail-stack { position: absolute; bottom: 0; left: 0; right: 0; display: flex; flex-direction: column; gap: 24px; width: 100%; height: auto; max-height: 100%; padding: 28px; overflow-y: auto; overflow-anchor: none; background: transparent; scrollbar-width: none; }
+.thumbnail-stack { position: absolute; bottom: 0; left: 0; right: 0; display: flex; flex-direction: column; gap: 24px; width: 100%; height: auto; max-height: 100%; padding: 28px; overflow-y: auto; overflow-anchor: none; background: transparent; scrollbar-width: none; -webkit-user-select: none; user-select: none; }
 .thumbnail-stack::-webkit-scrollbar { display: none; }
-/* overflow:visible so preview-action tooltips are not clipped by the card edge. */
-.thumbnail-card { position: relative; isolation: isolate; overflow: visible; flex: 0 0 160px; width: 100%; height: 160px; margin-bottom: 0; background: transparent; border-radius: 12px; box-shadow: 0 8px 16px rgba(0,0,0,.34), 0 2px 5px rgba(0,0,0,.22); cursor: grab; transition: flex-basis .26s ease, height .26s ease, margin-bottom .26s ease, opacity .2s ease, transform .2s ease, filter .2s ease, box-shadow .22s ease; will-change: flex-basis, height, opacity, transform; }
+/* overflow:visible so preview-action tooltips are not clipped by the card edge.
+   user-select:none keeps click-drag from painting the blue text/image selection highlight. */
+.thumbnail-card { position: relative; isolation: isolate; overflow: visible; flex: 0 0 160px; width: 100%; height: 160px; margin-bottom: 0; background: transparent; border-radius: 12px; box-shadow: 0 8px 16px rgba(0,0,0,.34), 0 2px 5px rgba(0,0,0,.22); cursor: grab; transition: flex-basis .26s ease, height .26s ease, margin-bottom .26s ease, opacity .2s ease, transform .2s ease, filter .2s ease, box-shadow .22s ease; will-change: flex-basis, height, opacity, transform; -webkit-user-select: none; user-select: none; }
 .thumbnail-card.thumbnail-file-dragging { cursor: grabbing; }
 .thumbnail-card.thumbnail-file-dragging, .thumbnail-card.thumbnail-file-dragging * { cursor: grabbing !important; }
 .thumbnail-card.thumbnail-viewer-active { box-shadow: 0 8px 16px rgba(0,0,0,.34), 0 2px 5px rgba(0,0,0,.22), 0 0 0 1px rgba(var(--theme-accent-rgb),.82), 0 0 17px rgba(var(--theme-accent-rgb),.24); }
@@ -201,7 +204,7 @@ html.capture-window-cursor, html.capture-window-cursor * { cursor: var(--capture
 }
 .thumbnail-svg-defs { position: absolute; width: 0; height: 0; overflow: hidden; pointer-events: none; }
 /* Cover fills the card (no letterbox bars). Full-res fidelity lives in the viewer. */
-.thumbnail-card img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: center; border: 0; border-radius: 12px; background: transparent; cursor: grab; transition: filter .18s ease, transform .22s ease; }
+.thumbnail-card img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: center; border: 0; border-radius: 12px; background: transparent; cursor: grab; transition: filter .18s ease, transform .22s ease; -webkit-user-select: none; user-select: none; }
 html:not(.thumbnail-native-tracking) .thumbnail-card:hover img, .thumbnail-card:focus-within img, .thumbnail-card[data-thumbnail-native-active="true"] img { filter: blur(2px) brightness(.56); transform: scale(1.015); }
 /* Lock the hovered look on exit so clearing :hover / native-active never flashes a sharp preview. */
 .thumbnail-card[class*="thumbnail-exit-"] img {
@@ -225,33 +228,33 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-top-action
 .thumbnail-top-left { display: flex; align-items: center; gap: 6px; }
 .thumbnail-top-right { display: flex; margin-left: auto; align-items: center; gap: 5px; }
 .icon-button { position: relative; display: grid; width: 29px; height: 29px; padding: 5px; place-items: center; border: 1px solid rgba(255,255,255,.14); border-radius: 7px; color: #f8f8fb; background: rgba(16,17,25,.8); box-shadow: 0 3px 12px rgba(0,0,0,.3); backdrop-filter: blur(12px); cursor: pointer; outline: none; transition: color .14s ease, background .14s ease, transform .14s ease, box-shadow .14s ease; }
-.icon-button:hover, .icon-button.native-pointer-hover { background: rgba(48,49,64,.96); }
-.icon-button:hover, .icon-button.native-pointer-hover { transform: translateY(-1px) scale(1.04); }
+.icon-button:hover, .icon-button[data-native-pointer-hover="true"] { background: rgba(48,49,64,.96); }
+.icon-button:hover, .icon-button[data-native-pointer-hover="true"] { transform: translateY(-1px) scale(1.04); }
 .icon-button:focus { outline: none; }
 .icon-button:focus-visible { box-shadow: 0 3px 12px rgba(0,0,0,.3), 0 0 0 2px rgba(var(--theme-accent-rgb),.65); }
 .icon-button.delete { color: var(--theme-signal); }
-.icon-button.delete:hover, .icon-button.delete.native-pointer-hover { color: white; background: var(--theme-signal-hover); }
+.icon-button.delete:hover, .icon-button.delete[data-native-pointer-hover="true"] { color: white; background: var(--theme-signal-hover); }
 /* Tooltips sit above top-row icons so they stay inside the stack padding. */
 .icon-button::after { position: absolute; top: calc(100% + 6px); left: 50%; padding: 4px 7px; border-radius: 5px; content: attr(data-tooltip); color: white; background: rgba(10,11,16,.94); box-shadow: 0 3px 12px rgba(0,0,0,.3); opacity: 0; transform: translate(-50%, -2px); transition: opacity .12s ease, transform .12s ease; pointer-events: none; font-size: 10px; font-weight: 600; white-space: nowrap; z-index: 20; }
-.icon-button:hover::after, .icon-button.native-pointer-hover::after, .icon-button:focus-visible::after { opacity: 1; transform: translate(-50%, 0); }
+.icon-button:hover::after, .icon-button[data-native-pointer-hover="true"]::after, .icon-button:focus-visible::after { opacity: 1; transform: translate(-50%, 0); }
 .thumbnail-top-actions .icon-button::after { top: auto; bottom: calc(100% + 6px); transform: translate(-50%, 2px); }
-.thumbnail-top-actions .icon-button:hover::after, .thumbnail-top-actions .icon-button.native-pointer-hover::after, .thumbnail-top-actions .icon-button:focus-visible::after { transform: translate(-50%, 0); }
+.thumbnail-top-actions .icon-button:hover::after, .thumbnail-top-actions .icon-button[data-native-pointer-hover="true"]::after, .thumbnail-top-actions .icon-button:focus-visible::after { transform: translate(-50%, 0); }
 .thumbnail-top-left .icon-button::after { left: 0; transform: translate(0, 2px); }
-.thumbnail-top-left .icon-button:hover::after, .thumbnail-top-left .icon-button.native-pointer-hover::after, .thumbnail-top-left .icon-button:focus-visible::after { transform: translate(0, 0); }
+.thumbnail-top-left .icon-button:hover::after, .thumbnail-top-left .icon-button[data-native-pointer-hover="true"]::after, .thumbnail-top-left .icon-button:focus-visible::after { transform: translate(0, 0); }
 /* Right-edge actions anchor their tooltip inward so it is not clipped. */
 .thumbnail-top-right .icon-button::after { left: auto; right: 0; transform: translate(0, 2px); }
-.thumbnail-top-right .icon-button:hover::after, .thumbnail-top-right .icon-button.native-pointer-hover::after, .thumbnail-top-right .icon-button:focus-visible::after { transform: translate(0, 0); }
+.thumbnail-top-right .icon-button:hover::after, .thumbnail-top-right .icon-button[data-native-pointer-hover="true"]::after, .thumbnail-top-right .icon-button:focus-visible::after { transform: translate(0, 0); }
 .thumbnail-main-actions { position: absolute; z-index: 3; top: 50%; left: 50%; display: grid; gap: 7px; width: 132px; transform: translate(-50%, -47%); }
 html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-main-actions, .thumbnail-card:focus-within .thumbnail-main-actions, .thumbnail-card[data-thumbnail-native-active="true"] .thumbnail-main-actions { transform: translate(-50%, -50%); }
 .thumbnail-main-actions button { display: flex; height: 32px; align-items: center; justify-content: center; gap: 7px; border: 1px solid rgba(255,255,255,.18); border-radius: 7px; color: white; background: rgba(25,27,38,.9); box-shadow: 0 4px 16px rgba(0,0,0,.3); backdrop-filter: blur(10px); cursor: pointer; font-size: 11px; font-weight: 700; transition: filter .14s ease, transform .14s ease, box-shadow .14s ease; outline: none; }
 .thumbnail-main-actions button:last-child { color: var(--theme-accent-ink); background: var(--theme-accent); box-shadow: 0 4px 16px rgba(var(--theme-accent-rgb),.24); }
-.thumbnail-main-actions button:hover, .thumbnail-main-actions button.native-pointer-hover { filter: brightness(1.15); transform: translateY(-1px); }
+.thumbnail-main-actions button:hover, .thumbnail-main-actions button[data-native-pointer-hover="true"] { filter: brightness(1.15); transform: translateY(-1px); }
 .thumbnail-main-actions button:active { transform: translateY(1px) scale(.97); }
 .thumbnail-main-actions button:disabled { cursor: wait; opacity: .72; }
 /* Kill the default WKWebView focus ring (can look like a gray dashed box). */
 .thumbnail-main-actions button:focus { outline: none; }
 .thumbnail-main-actions button:focus-visible { box-shadow: 0 4px 16px rgba(0,0,0,.3), 0 0 0 2px rgba(var(--theme-accent-rgb),.65); }
-html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !important; }
+html.thumbnail-native-tracking button[data-native-pointer-hover="true"] { cursor: pointer !important; }
 /* Native AppKit cursor is the source of truth while polling; mirror grab on the
    image so CSS and WKWebView stay consistent when cursor rectangles re-enable. */
 html.thumbnail-native-tracking .thumbnail-card[data-thumbnail-native-active="true"] img { cursor: grab !important; }
@@ -586,8 +589,9 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging img { cur
 .check-row.capture-option { margin-top: 14px; align-items: start; }
 .check-row input[type="checkbox"], .editor-volume input[type="checkbox"] { display: grid; flex: 0 0 auto; width: 17px; height: 17px; margin: 0; place-content: center; border: 1px solid #555765; border-radius: 5px; appearance: none; background: #111219; box-shadow: 0 1px 2px rgba(0,0,0,.26) inset; cursor: pointer; outline: none; transition: border-color .15s ease, background .15s ease, box-shadow .15s ease, transform .15s ease; }
 .check-row input[type="checkbox"]::before, .editor-volume input[type="checkbox"]::before { width: 8px; height: 4px; border-bottom: 2px solid var(--theme-accent-ink); border-left: 2px solid var(--theme-accent-ink); content: ""; opacity: 0; transform: translateY(-1px) rotate(-45deg) scale(.55); transition: opacity .12s ease, transform .16s cubic-bezier(.2,.8,.2,1); }
-.check-row input[type="checkbox"]:hover:not(:disabled), .editor-volume input[type="checkbox"]:hover:not(:disabled) { border-color: #777989; background: #191a23; }
+.check-row input[type="checkbox"]:hover:not(:disabled):not(:checked), .editor-volume input[type="checkbox"]:hover:not(:disabled):not(:checked) { border-color: #777989; background: #191a23; }
 .check-row input[type="checkbox"]:checked, .editor-volume input[type="checkbox"]:checked { border-color: var(--editing-accent); background: var(--editing-accent); box-shadow: 0 0 0 1px rgba(var(--theme-accent-rgb),.14), 0 3px 10px rgba(var(--theme-accent-rgb),.22); }
+.check-row input[type="checkbox"]:checked:hover:not(:disabled), .editor-volume input[type="checkbox"]:checked:hover:not(:disabled) { border-color: var(--theme-accent-strong); background: var(--theme-accent-hover); }
 .check-row input[type="checkbox"]:checked::before, .editor-volume input[type="checkbox"]:checked::before { opacity: 1; transform: translateY(-1px) rotate(-45deg) scale(1); }
 .check-row input[type="checkbox"]:focus-visible, .editor-volume input[type="checkbox"]:focus-visible { box-shadow: 0 0 0 3px rgba(var(--theme-accent-rgb),.2); }
 .check-row input[type="checkbox"]:active:not(:disabled), .editor-volume input[type="checkbox"]:active:not(:disabled) { transform: scale(.92); }
@@ -608,8 +612,9 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging img { cur
 .recording-selection-frame .ne, .recording-selection-frame .sw { cursor: nesw-resize; }
 .recording-selection-frame .nw { top: -6px; left: -6px; }.recording-selection-frame .ne { top: -6px; right: -6px; }.recording-selection-frame .sw { bottom: -6px; left: -6px; }.recording-selection-frame .se { right: -6px; bottom: -6px; }
 .recording-window-targets { position: absolute; z-index: 4; inset: 0; pointer-events: none; }
-.recording-window-target { position: absolute; overflow: visible; border: 2px solid transparent; border-radius: 0; padding: 0; color: transparent; background: transparent; outline: none; appearance: none; cursor: pointer; pointer-events: auto; text-align: left; transition: border-color .12s ease, background .12s ease, box-shadow .12s ease; }
-.recording-window-target:hover, .recording-window-target.hovered, .recording-window-target.selected { border-color: var(--theme-accent); color: white; background: rgba(var(--theme-accent-rgb),.12); }
+/* Outer ring keeps the selectable rect equal to the measured window frame. */
+.recording-window-target { position: absolute; overflow: visible; border: 0; border-radius: 0; padding: 0; color: transparent; background: transparent; outline: none; appearance: none; cursor: pointer; pointer-events: auto; text-align: left; box-shadow: none; transition: background .12s ease, box-shadow .12s ease; }
+.recording-window-target:hover, .recording-window-target.hovered, .recording-window-target.selected { color: white; background: rgba(var(--theme-accent-rgb),.12); box-shadow: 0 0 0 2px var(--theme-accent); }
 .recording-window-target span { position: relative; z-index: 1; display: inline-block; max-width: calc(100% - 6px); margin: 4px; padding: 4px 7px; overflow: hidden; border-radius: 4px; background: transparent; opacity: 0; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .recording-window-target:hover span, .recording-window-target.hovered span, .recording-window-target.selected span { background: rgba(17,18,26,.88); opacity: 1; }
 .recording-selector-panel { position: absolute; z-index: 20; bottom: 22px; left: 50%; width: max-content; max-width: calc(100% - 32px); overflow: visible; border: 1px solid rgba(255,255,255,.14); border-radius: 15px; background: rgba(26,27,30,.97); box-shadow: 0 18px 55px rgba(0,0,0,.48); backdrop-filter: blur(24px); cursor: grab; touch-action: none; transform: translateX(-50%); }
@@ -907,9 +912,12 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging img { cur
 
 /* Screenshot editing stays inside one platform-neutral canvas surface. The
    native layer only owns the window, clipboard, and final file write. */
-.screenshot-editor { display: grid; width: 100%; height: 100%; min-width: 860px; min-height: 600px; grid-template: 54px minmax(0,1fr) minmax(108px,auto) / 70px minmax(0,1fr) 310px; overflow: hidden; color: #f2f2f1; background: #151619; }
+/* user-select:none blocks the blue image/text selection highlight while drawing.
+   Form fields re-enable text selection so labels and export values stay editable. */
+.screenshot-editor { display: grid; width: 100%; height: 100%; min-width: 860px; min-height: 600px; grid-template: 54px minmax(0,1fr) minmax(108px,auto) / 70px minmax(0,1fr) 310px; overflow: hidden; color: #f2f2f1; background: #151619; -webkit-user-select: none; user-select: none; }
 .screenshot-editor-loading { min-width: 0; min-height: 100%; place-items: center; color: #a7a8ad; }
 .screenshot-editor button, .screenshot-editor input, .screenshot-editor select, .screenshot-editor textarea { font: inherit; }
+.screenshot-editor input, .screenshot-editor textarea { -webkit-user-select: text; user-select: text; }
 .screenshot-editor-header { z-index: 10; display: flex; grid-column: 1 / -1; padding: 0 14px 0 18px; align-items: center; justify-content: space-between; gap: 18px; border-bottom: 1px solid #34353a; background: #202126; box-shadow: 0 4px 14px rgba(0,0,0,.2); }
 .screenshot-editor-header > div { display: flex; min-width: 0; align-items: baseline; gap: 10px; }
 .screenshot-editor-header > div:first-child span { color: #f3f3f2; font-size: 12px; font-weight: 800; }
@@ -934,7 +942,7 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging img { cur
 .screenshot-tool-rail span { max-width: 58px; font-size: 8px; font-weight: 700; line-height: 1.1; text-align: center; white-space: normal; }
 .screenshot-canvas-viewport { position: relative; display: grid; min-width: 0; min-height: 0; grid-row: 2; grid-column: 2; padding: 28px; overflow: auto; place-items: center; overscroll-behavior: contain; background-color: #0d0e10; background-image: linear-gradient(45deg,rgba(255,255,255,.025) 25%,transparent 25%),linear-gradient(-45deg,rgba(255,255,255,.025) 25%,transparent 25%),linear-gradient(45deg,transparent 75%,rgba(255,255,255,.025) 75%),linear-gradient(-45deg,transparent 75%,rgba(255,255,255,.025) 75%); background-position: 0 0,0 10px,10px -10px,-10px 0; background-size: 20px 20px; }
 .screenshot-canvas-surface { position: relative; flex: 0 0 auto; background: #f7f7f5; box-shadow: 0 0 0 1px rgba(255,255,255,.15), 0 18px 50px rgba(0,0,0,.45); }
-.screenshot-canvas { display: block; width: 100%; height: 100%; user-select: none; touch-action: none; }
+.screenshot-canvas { display: block; width: 100%; height: 100%; -webkit-user-select: none; user-select: none; touch-action: none; }
 .screenshot-canvas.tool-select { cursor: default; }
 .screenshot-canvas.tool-crop, .screenshot-canvas.tool-text, .screenshot-canvas.tool-rectangle, .screenshot-canvas.tool-ellipse, .screenshot-canvas.tool-line, .screenshot-canvas.tool-arrow, .screenshot-canvas.tool-curved_arrow, .screenshot-canvas.tool-pen { cursor: crosshair; }
 .screenshot-drop-overlay { position: fixed; z-index: 80; inset: 70px 328px 124px 88px; display: grid; place-content: center; justify-items: center; border: 2px dashed rgba(255,255,255,.72); border-radius: 14px; color: white; background: rgba(17,18,22,.9); box-shadow: 0 16px 50px rgba(0,0,0,.45); backdrop-filter: blur(16px); pointer-events: none; }
@@ -956,7 +964,7 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging img { cur
 .screenshot-layer-grip { display: grid; place-items: center; color: #6f7076; }.screenshot-layer-grip svg { width: 13px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .screenshot-layer-list li:not(.locked):hover .screenshot-layer-grip { color: #b2b3b8; }.screenshot-layer-list li.locked .screenshot-layer-grip { color: #85868b; }
 .screenshot-layer-preview { display: grid; width: 50px; height: 36px; place-items: center; overflow: hidden; border: 1px solid rgba(255,255,255,.11); border-radius: 5px; color: #aeb0b5; background-color: #151619; background-image: linear-gradient(45deg,#24252a 25%,transparent 25%),linear-gradient(-45deg,#24252a 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#24252a 75%),linear-gradient(-45deg,transparent 75%,#24252a 75%); background-position: 0 0,0 5px,5px -5px,-5px 0; background-size: 10px 10px; }
-.screenshot-layer-preview img { display: block; width: 100%; height: 100%; object-fit: cover; }.screenshot-layer-preview svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.screenshot-layer-preview img { display: block; width: 100%; height: 100%; object-fit: cover; -webkit-user-select: none; user-select: none; -webkit-user-drag: none; }.screenshot-layer-preview svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .screenshot-layer-copy { display: grid; min-width: 0; gap: 3px; }.screenshot-layer-copy strong, .screenshot-layer-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.screenshot-layer-copy strong { color: #dedee1; font-size: 9px; font-weight: 750; }.screenshot-layer-copy small { color: #7f8086; font-size: 8px; font-weight: 600; }
 .screenshot-properties { min-height: 0; padding: 0 14px 20px; overflow-y: auto; border-top: 1px solid #303136; background: #1d1e22; }
 .screenshot-properties-heading { position: sticky; z-index: 3; top: 0; display: flex; min-height: 48px; margin: 0 -14px 12px; padding: 0 14px; align-items: center; justify-content: space-between; border-bottom: 1px solid #303136; background: rgba(29,30,34,.96); backdrop-filter: blur(14px); }

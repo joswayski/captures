@@ -31,6 +31,8 @@ pub struct AppSettings {
     pub last_screen_permission_request_id: Option<String>,
     #[serde(default)]
     pub pending_capture_after_restart: Option<CaptureMode>,
+    #[serde(default = "default_screenshot_countdown_seconds")]
+    pub screenshot_countdown_seconds: u8,
     #[serde(default)]
     pub recording: RecordingSettings,
 }
@@ -146,6 +148,7 @@ impl Default for AppSettings {
             launch_at_login: false,
             last_screen_permission_request_id: None,
             pending_capture_after_restart: None,
+            screenshot_countdown_seconds: default_screenshot_countdown_seconds(),
             recording: RecordingSettings::default(),
         }
     }
@@ -517,6 +520,10 @@ const fn default_countdown_seconds() -> u8 {
     3
 }
 
+const fn default_screenshot_countdown_seconds() -> u8 {
+    0
+}
+
 const fn default_true() -> bool {
     true
 }
@@ -743,6 +750,12 @@ mod tests {
         assert_eq!(settings.recording.gif_fps, 15);
         assert_eq!(settings.recording.gif_max_width, 800);
         assert!(settings.recording.open_editor_after_recording);
+        assert_eq!(settings.screenshot_countdown_seconds, 0);
+    }
+
+    #[test]
+    fn defaults_screenshot_countdown_to_off() {
+        assert_eq!(AppSettings::default().screenshot_countdown_seconds, 0);
     }
 
     #[test]

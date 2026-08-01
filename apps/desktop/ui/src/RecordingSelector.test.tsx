@@ -30,6 +30,7 @@ const settings: AppSettings = {
   launch_at_login: false,
   last_screen_permission_request_id: null,
   pending_capture_after_restart: null,
+  screenshot_countdown_seconds: 0,
   recording: {
     video_shortcut: "Ctrl+Shift+5",
     gif_shortcut: "Ctrl+Shift+6",
@@ -85,6 +86,7 @@ const session: RecordingSelectionSession = {
       width: 800,
       height: 600,
       display_id: "display-1",
+      corner_radius: 12,
     },
     {
       id: "rear-window",
@@ -96,6 +98,7 @@ const session: RecordingSelectionSession = {
       width: 720,
       height: 520,
       display_id: "display-1",
+      // Falls back to session.window_corner_radius (25).
     },
     {
       id: "back-window",
@@ -107,6 +110,7 @@ const session: RecordingSelectionSession = {
       width: 900,
       height: 640,
       display_id: "display-1",
+      corner_radius: 25,
     },
   ],
 };
@@ -423,6 +427,9 @@ describe("RecordingSelector", () => {
       height: "640px",
       borderRadius: "25px",
     });
+    expect(screen.getByRole("button", { name: "Select Captures Preferences" })).toHaveStyle({
+      borderRadius: "12px",
+    });
     expect(screen.getByRole("button", { name: "Start recording" })).toBeDisabled();
     expect(container.querySelector(".recording-selection-window")).not.toBeInTheDocument();
     expect(container.querySelector(".capture-shade-path")).not.toBeInTheDocument();
@@ -443,16 +450,18 @@ describe("RecordingSelector", () => {
     });
     fireEvent.mouseLeave(rearWindow);
 
-    fireEvent.click(frontWindow);
-    expect(frontWindow).toHaveClass("selected");
+    // Preferences uses a measured 12pt radius, not the session-wide 25pt default.
+    const preferences = screen.getByRole("button", { name: "Select Captures Preferences" });
+    fireEvent.click(preferences);
+    expect(preferences).toHaveClass("selected");
     expect(screen.queryByText("Select a window")).not.toBeInTheDocument();
     expect(screen.queryByText("Esc to cancel")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start recording" })).toBeEnabled();
     expect(container.querySelector(".capture-shade-path")).toHaveAttribute(
       "d",
       expect.stringContaining(
-        "M325 160H1175A25 25 0 0 1 1200 185V775"
-        + "A25 25 0 0 1 1175 800H325",
+        "M112 80H888A12 12 0 0 1 900 92V668"
+        + "A12 12 0 0 1 888 680H112",
       ),
     );
   });

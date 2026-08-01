@@ -1,4 +1,4 @@
-name: Install latest Nightly
+name: Install latest Preview
 
 on:
   pull_request:
@@ -6,7 +6,7 @@ on:
       - ".github/workflows/install-latest-release.yml"
       - "scripts/install-latest-release.mjs"
       - "scripts/install-latest-release.test.mjs"
-      - "scripts/nightly-release.mjs"
+      - "scripts/preview-release.mjs"
   workflow_dispatch:
 
 permissions:
@@ -14,14 +14,14 @@ permissions:
 
 jobs:
   discover:
-    name: Find a published Nightly
+    name: Find a published Preview
     runs-on: ubuntu-24.04
     outputs:
       available: ${{ steps.release.outputs.available }}
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Check whether a Nightly is published
+      - name: Check whether a Preview is published
         id: release
         shell: bash
         run: |
@@ -34,12 +34,12 @@ jobs:
           if (( count > 0 )); then
             echo "available=true" >> "$GITHUB_OUTPUT"
           else
-            echo "No Nightly exists yet. Installer verification will begin after the first Nightly is published." >> "$GITHUB_STEP_SUMMARY"
+            echo "No Preview exists yet. Installer verification will begin after the first Preview is published." >> "$GITHUB_STEP_SUMMARY"
             echo "available=false" >> "$GITHUB_OUTPUT"
           fi
 
   install:
-    name: Install latest Nightly (${{ matrix.name }})
+    name: Install latest Preview (${{ matrix.name }})
     needs: discover
     if: needs.discover.outputs.available == 'true'
     strategy:
@@ -61,5 +61,5 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Install and verify the newest complete Nightly
+      - name: Install and verify the newest complete Preview
         run: node scripts/install-latest-release.mjs --no-launch

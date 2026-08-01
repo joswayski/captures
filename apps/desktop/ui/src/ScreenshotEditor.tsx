@@ -19,19 +19,24 @@ import {
   estimateCanvasExportBytes,
   expandDocumentForElement,
   hitTestElement,
+  hitTestResizeHandle,
   imageSizeAtWidth,
   isSupportedImageFile,
   loadImageFile,
   outputDimensions,
   positionImportedImage,
   reorderScreenshotLayers,
+  resizeBoundsFromHandle,
+  resizeCursor,
   resizeDocumentCanvas,
+  resizeElement,
   translateElement,
   type EditorImageElement,
   type LayerDropPlacement,
   type EditorPoint,
   type EditorRect,
   type ElementStyle,
+  type ResizeHandle,
   type ScreenshotDocument,
   type ScreenshotElement,
   type ScreenshotTool,
@@ -56,6 +61,15 @@ type EditorGesture =
     pointerId: number;
     origin: EditorPoint;
     element: ScreenshotElement;
+    initialDocument: ScreenshotDocument;
+  }
+  | {
+    kind: "resize";
+    pointerId: number;
+    handle: ResizeHandle;
+    element: ScreenshotElement;
+    initialBounds: EditorRect;
+    currentBounds: EditorRect;
     initialDocument: ScreenshotDocument;
   }
   | {
@@ -342,26 +356,30 @@ function drawEditorOverlays(
   crop: EditorRect | null,
   displayScale: number,
   accentColor: string,
+  selectionBoundsOverride: EditorRect | null = null,
 ): void {
   const unit = 1 / Math.max(0.01, displayScale);
-  if (selected) {
-    const bounds = elementBounds(selected);
-    context.save();
-    context.strokeStyle = accentColor;
-    context.lineWidth = 2 * unit;
-    context.setLineDash([7 * unit, 5 * unit]);
-    context.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
-    context.setLineDash([]);
-    context.fillStyle = accentColor;
-    for (const point of [
-      [bounds.x, bounds.y],
-      [bounds.x + bounds.width, bounds.y],
-      [bounds.x + bounds.width, bounds.y + bounds.height],
-      [bounds.x, bounds.y + bounds.height],
-    ]) {
-      context.fillRect(point[0] - 4 * unit, point[1] - 4 * unit, 8 * unit, 8 * unit);
+  if (selected || selectionBoundsOverride) {
+    const bounds = selectionBoundsOverride
+      ?? (selected ? elementBounds(selected) : null);
+    if (bounds) {
+      context.save();
+      context.strokeStyle = accentColor;
+      context.lineWidth = 2 * unit;
+      context.setLineDash([7 * unit, 5 * unit]);
+      context.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
+      context.setLineDash([]);
+      context.fillStyle = accentColor;
+      for (const point of [
+        [bounds.x, bounds.y],
+        [bounds.x + bounds.width, bounds.y],
+        [bounds.x + bounds.width, bounds.y + bounds.height],
+        [bounds.x, bounds.y + bounds.height],
+      ]) {
+        context.fillRect(point[0] - 4 * unit, point[1] - 4 * unit, 8 * unit, 8 * unit);
+      }
+      context.restore();
     }
-    context.restore();
   }
 
   if (crop) {
@@ -437,6 +455,8 @@ export function ScreenshotEditor() {
   const [imageRevision, setImageRevision] = useState(0);
   const [dragActive, setDragActive] = useState(false);
   const [draggedLayerId, setDraggedLayerId] = useState<string | null>(null);
+  const [resizePreviewBounds, setResizePreviewBounds] = useState<EditorRect | null>(null);
+  const [canvasCursor, setCanvasCursor] = useState<string | undefined>(undefined);
   const [layerDropTarget, setLayerDropTarget] = useState<LayerDropTarget | null>(null);
   const [exportFormat, setExportFormat] = useState<ExportFormat>("png");
   const [exportSize, setExportSize] = useState<ExportSize>("original");
@@ -450,6 +470,8 @@ export function ScreenshotEditor() {
   const [busy, setBusy] = useState<"copying" | "saving" | null>(null);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
+  /** Original capture was deleted after the editor opened; the edit is still exportable. */
+  const [sourceMissing, setSourceMissing] = useState(false);
   const [saved, setSaved] = useState<SavedScreenshotEdit | null>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -516,7 +538,13 @@ export function ScreenshotEditor() {
     void (async () => {
       if (!artifactId) throw new Error("No screenshot was selected.");
       unlisten = await listen<string>("artifact-removed", ({ payload }) => {
-        if (payload === artifactId) setError("The original screenshot is no longer available.");
+        if (payload !== artifactId) return;
+        // The canvas still holds the edited image — copy/save remain available.
+        setSourceMissing(true);
+        setError("");
+        setStatus(
+          "The original was deleted. You can still copy or save this edit.",
+        );
       });
       const loaded = await invoke<CaptureArtifact | null>("get_artifact", { artifactId });
       if (!active) return;
@@ -584,11 +612,13 @@ export function ScreenshotEditor() {
       cropSelection,
       displayScale,
       accentColor,
+      resizePreviewBounds,
     );
   }, [
     cropSelection,
     displayScale,
     editorDocument,
+    resizePreviewBounds,
     ensureImage,
     imageRevision,
     selected,
@@ -701,7 +731,34 @@ export function ScreenshotEditor() {
     setSaved(null);
 
     if (tool === "select") {
-      const element = hitTestElement(current.elements, point, 10 / displayScale);
+      const handleRadius = 10 / Math.max(0.01, displayScale);
+      const selectedElement = selectedId
+        ? current.elements.find((element) => element.id === selectedId) ?? null
+        : null;
+      if (
+        selectedElement
+        && !(selectedElement.kind === "image" && selectedElement.source === "background")
+      ) {
+        const bounds = elementBounds(selectedElement);
+        const handle = hitTestResizeHandle(bounds, point, handleRadius);
+        if (handle) {
+          gestureRef.current = {
+            kind: "resize",
+            pointerId: event.pointerId,
+            handle,
+            element: selectedElement,
+            initialBounds: bounds,
+            currentBounds: bounds,
+            initialDocument: current,
+          };
+          setResizePreviewBounds(bounds);
+          setCanvasCursor(resizeCursor(handle));
+          event.currentTarget.setPointerCapture(event.pointerId);
+          return;
+        }
+      }
+
+      const element = hitTestElement(current.elements, point, handleRadius);
       setSelectedId(element?.id ?? null);
       if (element) {
         gestureRef.current = {
@@ -711,7 +768,10 @@ export function ScreenshotEditor() {
           element,
           initialDocument: current,
         };
+        setCanvasCursor("move");
         event.currentTarget.setPointerCapture(event.pointerId);
+      } else {
+        setCanvasCursor(undefined);
       }
       return;
     }
@@ -786,8 +846,29 @@ export function ScreenshotEditor() {
 
   const movePointer = (event: React.PointerEvent<HTMLCanvasElement>) => {
     const gesture = gestureRef.current;
-    if (!gesture || gesture.pointerId !== event.pointerId) return;
     const point = canvasPoint(event);
+    if (!gesture || gesture.pointerId !== event.pointerId) {
+      if (tool === "select") {
+        const current = documentRef.current;
+        const selectedElement = selectedId && current
+          ? current.elements.find((element) => element.id === selectedId) ?? null
+          : null;
+        if (
+          selectedElement
+          && !(selectedElement.kind === "image" && selectedElement.source === "background")
+        ) {
+          const handle = hitTestResizeHandle(
+            elementBounds(selectedElement),
+            point,
+            10 / Math.max(0.01, displayScale),
+          );
+          setCanvasCursor(handle ? resizeCursor(handle) : undefined);
+          return;
+        }
+      }
+      setCanvasCursor(undefined);
+      return;
+    }
     if (gesture.kind === "crop") {
       const aspectRatio = cropAspect === "free"
         ? null
@@ -801,6 +882,7 @@ export function ScreenshotEditor() {
       return;
     }
     if (gesture.kind === "move") {
+      setCanvasCursor("move");
       const moved = translateElement(
         gesture.element,
         point.x - gesture.origin.x,
@@ -810,6 +892,28 @@ export function ScreenshotEditor() {
         gesture.initialDocument,
         gesture.element.id,
         moved,
+      ));
+      return;
+    }
+    if (gesture.kind === "resize") {
+      setCanvasCursor(resizeCursor(gesture.handle));
+      const nextBounds = resizeBoundsFromHandle(
+        gesture.initialBounds,
+        gesture.handle,
+        point,
+        8 / Math.max(0.01, displayScale),
+      );
+      const resized = resizeElement(
+        gesture.element,
+        gesture.initialBounds,
+        nextBounds,
+      );
+      gestureRef.current = { ...gesture, currentBounds: nextBounds };
+      setResizePreviewBounds(nextBounds);
+      replaceDocument(replaceElement(
+        gesture.initialDocument,
+        gesture.element.id,
+        resized,
       ));
       return;
     }
@@ -841,6 +945,8 @@ export function ScreenshotEditor() {
     const gesture = gestureRef.current;
     if (!gesture || gesture.pointerId !== event.pointerId) return;
     gestureRef.current = null;
+    setResizePreviewBounds(null);
+    setCanvasCursor(undefined);
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
@@ -849,6 +955,10 @@ export function ScreenshotEditor() {
     if (!current || JSON.stringify(current) === JSON.stringify(gesture.initialDocument)) return;
     setUndoStack((stack) => [...stack.slice(-99), gesture.initialDocument]);
     setRedoStack([]);
+    if (gesture.kind === "resize" || gesture.kind === "move") {
+      setSaved(null);
+      setStatus("");
+    }
   };
 
   const applyCrop = () => {
@@ -904,6 +1014,9 @@ export function ScreenshotEditor() {
   };
 
   const loadDroppedFiles = async (files: File[], point?: EditorPoint) => {
+    // Tell the preview stack this drop stayed inside Captures so it does not
+    // dismiss the source card when a native file drag ends over the editor.
+    void invoke("mark_internal_file_drop").catch(() => undefined);
     const images = files.filter(isSupportedImageFile);
     if (images.length === 0) {
       setError("Drop PNG, JPEG, WebP, GIF, or another image file.");
@@ -919,7 +1032,13 @@ export function ScreenshotEditor() {
         // Prefer a blob object URL (cheap, revocable). Fall back to a data URL
         // if the webview rejects the blob load — historically our CSP omitted
         // blob: from img-src, which produced "could not be loaded" on drop.
-        const image = await loadImageFile(file);
+        // Same-app drops from a preview card can also hand the webview an empty
+        // File; loadImageFile then reads the PNG staged for the native drag.
+        const image = await loadImageFile(file, {
+          preparedBytes: () => invoke<number[]>("read_prepared_drag_image", {
+            fileName: file.name,
+          }),
+        });
         createdUrls.push(image.src);
         if (image.src.startsWith("blob:")) {
           objectUrlsRef.current.add(image.src);
@@ -1269,6 +1388,7 @@ export function ScreenshotEditor() {
             style={{
               width: editorDocument.width * displayScale,
               height: editorDocument.height * displayScale,
+              cursor: canvasCursor,
             }}
             className={`screenshot-canvas tool-${tool}`}
             onPointerDown={startPointer}
@@ -1854,7 +1974,11 @@ export function ScreenshotEditor() {
           </div>
         </div>
         <div className={`screenshot-export-status${error ? " error" : ""}`} role={error ? "alert" : "status"}>
-          {error || status || "Saving creates a new copy and preserves the original."}
+          {error
+            || status
+            || (sourceMissing
+              ? "The original was deleted. You can still copy or save this edit."
+              : "Saving creates a new copy and preserves the original.")}
         </div>
         <div className="screenshot-export-actions">
           {saved && <button type="button" onClick={() => void showSavedFile()}>Show in folder</button>}

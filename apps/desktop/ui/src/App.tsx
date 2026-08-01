@@ -337,6 +337,7 @@ export function App() {
   if (view === "overlay") return <CaptureOverlay />;
   if (view === "recording-selector") return <RecordingSelector />;
   if (view === "recording-countdown") return <RecordingCountdown />;
+  if (view === "screenshot-countdown") return <ScreenshotCountdown />;
   if (view === "recording-hud") return <RecordingHud />;
   if (view === "recording-editor") return <RecordingEditor />;
   if (view === "screenshot-editor") return <ScreenshotEditor />;
@@ -1076,6 +1077,68 @@ export function CaptureGuidance({
   );
 }
 
+export function ScreenshotCountdown() {
+  const [remaining, setRemaining] = useState<number | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+  const [exiting, setExiting] = useState(false);
+  const cancellingRef = useRef(false);
+
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    void listen<{ remaining_seconds: number }>("screenshot-countdown", ({ payload }) => {
+      if (!active) return;
+      setRemaining(payload.remaining_seconds);
+    }).then((dispose) => {
+      if (active) unlisten = dispose;
+      else dispose();
+    }).catch(() => undefined);
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, []);
+
+  const cancel = useCallback(async () => {
+    if (cancellingRef.current) return;
+    cancellingRef.current = true;
+    setCancelling(true);
+    setExiting(true);
+    try {
+      if (!prefersReducedMotion()) {
+        await new Promise((resolve) => setTimeout(resolve, RECORDING_COUNTDOWN_FADE_OUT_MS));
+      }
+      await invoke("cancel_screenshot_countdown");
+    } finally {
+      cancellingRef.current = false;
+      setCancelling(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      void cancel();
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [cancel]);
+
+  return (
+    <main
+      className={`recording-countdown${exiting ? " exiting" : ""}`}
+      aria-live="assertive"
+    >
+      <div className="recording-countdown-content">
+        <span>Screenshot in</span>
+        <strong>{remaining ?? "…"}</strong>
+        <small>{cancelling ? "Cancelling…" : "Press Esc to cancel"}</small>
+      </div>
+    </main>
+  );
+}
+
 export function RecordingCountdown() {
   const [snapshot, setSnapshot] = useState<RecordingSessionSnapshot | null>(null);
   const [remaining, setRemaining] = useState<number | null>(null);
@@ -1575,6 +1638,7 @@ export function RecordingSelector() {
       top: (window.y - session.display.y) / scale,
       width: window.width / scale,
       height: window.height / scale,
+      cornerRadius: window.corner_radius ?? session.window_corner_radius,
       zIndex: selectableWindows.length - index,
     };
   });
@@ -1590,6 +1654,7 @@ export function RecordingSelector() {
           height: activeWindowLayout.height,
         } : null
       : region;
+  const activeWindowCornerRadius = activeWindowLayout?.cornerRadius ?? session.window_corner_radius;
   const canStart = targetMode === "display"
     || (targetMode === "window" && Boolean(selectedWindow))
     || (targetMode === "region" && Boolean(region && region.width >= 2 && region.height >= 2));
@@ -1628,7 +1693,15 @@ export function RecordingSelector() {
         setSession(null);
         clearRegionDrag();
       } catch (error) {
-        setError(String(error));
+        const message = String(error);
+        if (message.includes("screenshot cancelled")) {
+          activeSessionIdRef.current = null;
+          revealingSessionIdRef.current = null;
+          setSession(null);
+          clearRegionDrag();
+          return;
+        }
+        setError(message);
         setStarting(false);
       }
       return;
@@ -1747,7 +1820,7 @@ export function RecordingSelector() {
         hole={selectedRect}
         bounds={{ width: session.display.width, height: session.display.height }}
         dimWithoutHole={targetMode === "window"}
-        windowCornerRadius={session.window_corner_radius}
+        windowCornerRadius={activeWindowCornerRadius}
       />
       {targetMode === "region" && <CaptureGuidance mode="region" />}
       {targetMode === "window" && !selectedWindow && <CaptureGuidance mode="window" />}
@@ -1772,7 +1845,7 @@ export function RecordingSelector() {
       )}
       {targetMode === "window" && (
         <div className="recording-window-targets">
-          {windowLayouts.map(({ window, left, top, width, height, zIndex }) => (
+          {windowLayouts.map(({ window, left, top, width, height, cornerRadius, zIndex }) => (
             <button
               key={window.id}
               type="button"
@@ -1783,7 +1856,7 @@ export function RecordingSelector() {
                 width,
                 height,
                 zIndex,
-                borderRadius: session.window_corner_radius,
+                borderRadius: cornerRadius,
               }}
               aria-label={`Select ${window.title || "window"}`}
               onPointerDown={(event) => event.stopPropagation()}
@@ -3539,6 +3612,7 @@ function CaptureOverlay() {
       y: (match.y - session.display.y) / scale,
       width: match.width / scale,
       height: match.height / scale,
+      cornerRadius: match.corner_radius ?? session.window_corner_radius,
     };
   }, [hoveredWindow, mode, session]);
 
@@ -3556,6 +3630,7 @@ function CaptureOverlay() {
         top: (window.y - session.display.y) / scale,
         width: window.width / scale,
         height: window.height / scale,
+        cornerRadius: window.corner_radius ?? session.window_corner_radius,
         zIndex: list.length - index,
       }));
   }, [mode, session]);
@@ -3707,7 +3782,7 @@ function CaptureOverlay() {
         mode={mode}
         hole={dimHole}
         bounds={{ width: session.display.width, height: session.display.height }}
-        windowCornerRadius={session.window_corner_radius}
+        windowCornerRadius={hoveredWindowLayout?.cornerRadius ?? session.window_corner_radius}
       />
       <CaptureGuidance
         key={`${sessionId}-${selectionFeedback}`}
@@ -3735,7 +3810,7 @@ function CaptureOverlay() {
                 width: item.width,
                 height: item.height,
                 zIndex: item.zIndex,
-                borderRadius: session.window_corner_radius,
+                borderRadius: item.cornerRadius,
               }}
               title={item.window.title || item.window.app_name || "Window"}
               onPointerEnter={() => setHoveredWindow(item.window.id)}
@@ -3968,13 +4043,17 @@ export function Thumbnail() {
     let ignoringCursorEvents = false;
     let lastCursorSyncAt = 0;
     let consecutiveNullPolls = 0;
-    const setThumbnailCursor = (kind: ThumbnailCursorKind) => {
+    const setThumbnailCursor = (
+      kind: ThumbnailCursorKind,
+      options: { force?: boolean } = {},
+    ) => {
       document.documentElement.style.cursor = thumbnailCssCursor(kind);
       const now = performance.now();
       const action = thumbnailCursorSyncAction(
         cursorKind,
         kind,
         now - lastCursorSyncAt,
+        options,
       );
       if (!action) return;
       cursorKind = kind;
@@ -3984,6 +4063,16 @@ export function Thumbnail() {
       } else {
         void invoke("set_thumbnail_cursor", { kind });
       }
+    };
+
+    /**
+     * Clicks (and the key-window handoff they trigger) make macOS restore the
+     * frontmost app's arrow for a frame. Reassert the current interactive
+     * cursor immediately instead of waiting for the 100ms poll throttle.
+     */
+    const reassertInteractiveCursor = () => {
+      if (cursorKind === "default") return;
+      setThumbnailCursor(cursorKind, { force: true });
     };
 
     const setIgnoreCursorEvents = (ignore: boolean, force = false) => {
@@ -4102,6 +4191,9 @@ export function Thumbnail() {
 
     const pollImmediately = () => {
       if (document.hidden) return;
+      // Focus handoffs restore the frontmost app's arrow; reassert first so
+      // the pointer/grab affordance does not wait for the next throttle window.
+      reassertInteractiveCursor();
       // Unlock a poll that may have been mid-flight when the OS suspended JS.
       polling = false;
       schedulePoll(0);
@@ -4112,12 +4204,21 @@ export function Thumbnail() {
       pollImmediately();
     };
 
+    const onPointerActivity = (event: PointerEvent) => {
+      // Only primary-button presses/releases reset the AppKit cursor on macOS.
+      if (event.pointerType === "mouse" && event.button !== 0) return;
+      reassertInteractiveCursor();
+    };
+
     document.addEventListener("visibilitychange", resumeFromSuspension);
     // Clicking an inactive thumbnail briefly makes its panel key before a
     // full-size viewer takes focus. Keep the last native hover presentation
     // during that transfer; the immediate poll will reconcile it without
     // flashing the metadata and unblurred image in between.
     window.addEventListener("focus", pollImmediately);
+    // Capture-phase so we reassert before WebKit's own cursor update from the click.
+    window.addEventListener("pointerdown", onPointerActivity, true);
+    window.addEventListener("pointerup", onPointerActivity, true);
     window.addEventListener("pageshow", resumeFromSuspension);
     window.addEventListener("online", resumeFromSuspension);
     document.addEventListener("resume", resumeFromSuspension as EventListener);
@@ -4133,6 +4234,8 @@ export function Thumbnail() {
       if (timer) clearTimeout(timer);
       document.removeEventListener("visibilitychange", resumeFromSuspension);
       window.removeEventListener("focus", pollImmediately);
+      window.removeEventListener("pointerdown", onPointerActivity, true);
+      window.removeEventListener("pointerup", onPointerActivity, true);
       window.removeEventListener("pageshow", resumeFromSuspension);
       window.removeEventListener("online", resumeFromSuspension);
       document.removeEventListener("resume", resumeFromSuspension as EventListener);
@@ -4287,6 +4390,36 @@ export function ThumbnailCard({
     void runAction("open_screenshot_editor");
   };
 
+  const finishFileDrag = (
+    result: "Dropped" | "Cancelled",
+    cursorPos: { x: number; y: number },
+  ) => {
+    fileDraggingRef.current = false;
+    setFileDragging(false);
+    // Native OS file drags can leave the always-on-top preview stack
+    // click-through or without hover tracking. Always re-arm after the drag ends.
+    window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
+    void invoke("refresh_thumbnail_interactivity").catch(() => undefined);
+
+    if (result !== "Dropped" || isExitLocked() || isExiting) return;
+
+    void (async () => {
+      let keepPreview = false;
+      try {
+        keepPreview = await invoke<boolean>("should_keep_preview_after_file_drop", {
+          x: Number(cursorPos.x),
+          y: Number(cursorPos.y),
+        });
+      } catch {
+        keepPreview = false;
+      }
+      // Drops into Captures itself (screenshot editor, other app windows) keep
+      // the preview. External targets (Finder, Slack, browser) still dismiss.
+      if (keepPreview || isExitLocked() || isExiting) return;
+      exitWith("dismiss", "dismiss_artifact");
+    })();
+  };
+
   const beginFileDrag = async (event: React.DragEvent<HTMLImageElement>) => {
     event.preventDefault();
     if (fileDraggingRef.current || isExitLocked() || isExiting) {
@@ -4305,17 +4438,18 @@ export function ThumbnailCard({
           icon: payload.icon_path,
           mode: "copy",
         },
-        ({ result }) => {
-          fileDraggingRef.current = false;
-          setFileDragging(false);
-          if (result === "Dropped") {
-            exitWith("dismiss", "dismiss_artifact");
-          }
+        ({ result, cursorPos }) => {
+          finishFileDrag(result, {
+            x: Number(cursorPos.x),
+            y: Number(cursorPos.y),
+          });
         },
       );
     } catch (error) {
       fileDraggingRef.current = false;
       setFileDragging(false);
+      window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
+      void invoke("refresh_thumbnail_interactivity").catch(() => undefined);
       setError(String(error));
     }
   };
@@ -5005,6 +5139,20 @@ export function Preferences() {
             <small>Turn this off to preserve existing text or other clipboard contents.</small>
           </span>
         </label>
+        <div className="settings-select-field field-label"><span>Screenshot countdown</span>
+          <CustomSelect
+            value={String(settings.screenshot_countdown_seconds)}
+            ariaLabel="Screenshot countdown"
+            options={[0, 1, 2, 3, 5, 10].map((value) => ({
+              value: String(value),
+              label: value === 0 ? "Off" : `${value} seconds`,
+            }))}
+            onChange={(value) => update("screenshot_countdown_seconds", Number(value))}
+          />
+        </div>
+        <p className="help-text">
+          Wait before taking a screenshot so you can open menus or hover states. Press Esc to cancel.
+        </p>
       </section>
 
       <section className="settings-section">

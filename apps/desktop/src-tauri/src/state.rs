@@ -1,7 +1,9 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, atomic::AtomicBool};
 #[cfg(any(target_os = "linux", test))]
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use std::time::Instant;
 
 use captures_capture::{DisplayDescriptor, WindowDescriptor, XcapBackend};
 use parking_lot::{Mutex, RwLock};
@@ -15,6 +17,13 @@ use crate::{
     recording::RecordingRuntime,
     storage,
 };
+
+/// Full-resolution file staged for a native OS file drag from a preview card.
+#[derive(Clone, Debug)]
+pub struct PreparedArtifactDrag {
+    pub path: PathBuf,
+    pub file_name: String,
+}
 
 #[derive(Default)]
 pub struct ThumbnailVisibility {
@@ -142,6 +151,12 @@ impl ClipboardOwnership {
     }
 }
 
+#[derive(Default)]
+pub struct ScreenshotCountdownRuntime {
+    pub generation: u64,
+    pub active: bool,
+}
+
 pub struct AppState {
     pub settings: RwLock<AppSettings>,
     pub sessions: Mutex<HashMap<Uuid, CaptureSession>>,
@@ -150,9 +165,14 @@ pub struct AppState {
     pub recording_timeline_sprites: Mutex<HashMap<String, Vec<u8>>>,
     pub recording_selection: Mutex<Option<RecordingSelection>>,
     pub recording: Mutex<RecordingRuntime>,
+    pub screenshot_countdown: Mutex<ScreenshotCountdownRuntime>,
     pub history: Mutex<Vec<HistoryEntry>>,
     pub clipboard_ownership: Mutex<ClipboardOwnership>,
     pub thumbnail_visibility: Mutex<ThumbnailVisibility>,
+    /// Last full-resolution PNG prepared for a preview file drag.
+    pub prepared_artifact_drag: Mutex<Option<PreparedArtifactDrag>>,
+    /// Timestamp of the most recent in-app file drop (e.g. screenshot editor).
+    pub last_internal_file_drop: Mutex<Option<Instant>>,
     pub screen_permission_requested_this_launch: Mutex<bool>,
     pub shortcut_capture_suppressed: AtomicBool,
     pub backend: XcapBackend,
@@ -179,9 +199,12 @@ impl AppState {
             recording_timeline_sprites: Mutex::new(HashMap::new()),
             recording_selection: Mutex::new(None),
             recording: Mutex::new(RecordingRuntime::default()),
+            screenshot_countdown: Mutex::new(ScreenshotCountdownRuntime::default()),
             history: Mutex::new(history),
             clipboard_ownership: Mutex::new(ClipboardOwnership::default()),
             thumbnail_visibility: Mutex::new(ThumbnailVisibility::default()),
+            prepared_artifact_drag: Mutex::new(None),
+            last_internal_file_drop: Mutex::new(None),
             screen_permission_requested_this_launch: Mutex::new(false),
             shortcut_capture_suppressed: AtomicBool::new(false),
             backend: XcapBackend,

@@ -71,6 +71,8 @@ enum AppError {
     Tauri(#[from] tauri::Error),
     #[error("capture already in progress")]
     CaptureInProgress,
+    #[error("screenshot cancelled")]
+    ScreenshotCancelled,
     #[error("capture session is no longer available")]
     SessionUnavailable,
     #[error("capture history entry is no longer available")]
@@ -183,6 +185,7 @@ pub fn run() {
             commit_region,
             commit_window,
             cancel_capture,
+            cancel_screenshot_countdown,
             get_active_session,
             get_pending_session,
             get_settings,
@@ -191,6 +194,9 @@ pub fn run() {
             get_artifacts,
             get_artifact,
             prepare_artifact_drag,
+            mark_internal_file_drop,
+            should_keep_preview_after_file_drop,
+            read_prepared_drag_image,
             get_capture_history,
             restore_history_artifact,
             delete_history_artifact,
@@ -370,7 +376,7 @@ async fn start_capture_inner(
     if updates::install_is_active(&app) {
         return Err(AppError::UpdateInstalling);
     }
-    if recording::screenshot_capture_is_blocked(&state) {
+    if recording::screenshot_capture_is_blocked(&state) || screenshot_countdown_is_active(&state) {
         return Err(AppError::CaptureInProgress);
     }
     // A failed overlay (image never loaded, webview stuck, etc.) leaves a session
@@ -389,6 +395,33 @@ async fn start_capture_inner(
     hide_recording_saved_notices(&app);
     updates::defer_visible_notice(&app);
     hide_window(&app, "update");
+
+    let countdown_seconds = state.settings().screenshot_countdown_seconds;
+    if countdown_seconds > 0 {
+        let display = match display_under_pointer(&state) {
+            Ok(display) => display,
+            Err(error) => {
+                set_capture_huds_protected(&app, false);
+                restore_thumbnail_stack(&app, &state);
+                return Err(error);
+            }
+        };
+        match run_screenshot_countdown(app.clone(), state.clone(), &display, countdown_seconds)
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                // Cancel already restored the stack and cleared HUD protection.
+                return Ok(None);
+            }
+            Err(error) => {
+                set_capture_huds_protected(&app, false);
+                restore_thumbnail_stack(&app, &state);
+                return Err(error);
+            }
+        }
+    }
+
     let result = prepare_capture(app.clone(), state.clone(), mode).await;
     set_capture_huds_protected(&app, false);
     if result.is_err() {
@@ -423,15 +456,23 @@ async fn prepare_capture(
     // Keep the selector background full-resolution and lossless. Region/window
     // crops also come directly from `frame.image`, so no lossy stage is involved.
     let snapshot_png = storage::encode_png(&frame.image)?;
-    let windows = if mode == CaptureMode::Window {
+    let mut windows = if mode == CaptureMode::Window {
         state
             .windows()?
             .into_iter()
             .filter(|window| window_is_capturable(window, &display))
-            .collect()
+            .collect::<Vec<_>>()
     } else {
         Vec::new()
     };
+    if mode == CaptureMode::Window {
+        refine_window_chrome_from_snapshot(
+            &mut windows,
+            &frame.descriptor,
+            &frame.image,
+            window_corner_radius_points(),
+        );
+    }
     let session = CaptureSession {
         id,
         mode,
@@ -540,6 +581,157 @@ fn cancel_capture(
     Ok(())
 }
 
+#[derive(Clone, serde::Serialize)]
+struct ScreenshotCountdownTick {
+    remaining_seconds: u8,
+}
+
+#[tauri::command]
+fn cancel_screenshot_countdown(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> CommandResult<()> {
+    cancel_screenshot_countdown_inner(&app, state.inner().clone());
+    Ok(())
+}
+
+pub(crate) fn screenshot_countdown_is_active(state: &AppState) -> bool {
+    state.screenshot_countdown.lock().active
+}
+
+/// Runs the full-display screenshot countdown. Returns `Ok(true)` when it
+/// finishes, `Ok(false)` when the user cancels, or an error if the overlay fails.
+pub(crate) async fn run_screenshot_countdown(
+    app: AppHandle,
+    state: Arc<AppState>,
+    display: &captures_capture::DisplayDescriptor,
+    seconds: u8,
+) -> Result<bool, AppError> {
+    if seconds == 0 {
+        return Ok(true);
+    }
+
+    let generation = {
+        let mut runtime = state.screenshot_countdown.lock();
+        if runtime.active {
+            return Err(AppError::CaptureInProgress);
+        }
+        runtime.generation = runtime.generation.wrapping_add(1);
+        runtime.active = true;
+        runtime.generation
+    };
+
+    if let Err(error) = show_screenshot_countdown(&app, display) {
+        let mut runtime = state.screenshot_countdown.lock();
+        if runtime.generation == generation {
+            runtime.active = false;
+        }
+        return Err(error);
+    }
+
+    for remaining in (1..=seconds).rev() {
+        if !screenshot_countdown_is_current(&state, generation) {
+            destroy_screenshot_countdown(&app);
+            return Ok(false);
+        }
+        let _ = app.emit(
+            "screenshot-countdown",
+            ScreenshotCountdownTick {
+                remaining_seconds: remaining,
+            },
+        );
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+
+    let completed = screenshot_countdown_is_current(&state, generation);
+    {
+        let mut runtime = state.screenshot_countdown.lock();
+        if runtime.generation == generation {
+            runtime.active = false;
+        }
+    }
+    destroy_screenshot_countdown(&app);
+    // Give the overlay a beat to leave the display before freezing a frame.
+    if completed {
+        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    }
+    Ok(completed)
+}
+
+fn screenshot_countdown_is_current(state: &AppState, generation: u64) -> bool {
+    let runtime = state.screenshot_countdown.lock();
+    runtime.active && runtime.generation == generation
+}
+
+pub(crate) fn cancel_screenshot_countdown_inner(app: &AppHandle, state: Arc<AppState>) {
+    {
+        let mut runtime = state.screenshot_countdown.lock();
+        if !runtime.active {
+            return;
+        }
+        runtime.generation = runtime.generation.wrapping_add(1);
+        runtime.active = false;
+    }
+    destroy_screenshot_countdown(app);
+    set_capture_huds_protected(app, false);
+    restore_thumbnail_stack(app, &state);
+}
+
+fn show_screenshot_countdown(
+    app: &AppHandle,
+    display: &captures_capture::DisplayDescriptor,
+) -> Result<(), AppError> {
+    if app.get_webview_window("screenshot-countdown").is_none() {
+        WebviewWindowBuilder::new(
+            app,
+            "screenshot-countdown",
+            WebviewUrl::App("index.html?view=screenshot-countdown".into()),
+        )
+        .title("Captures Screenshot Countdown")
+        .inner_size(f64::from(display.width), f64::from(display.height))
+        .position(f64::from(display.x), f64::from(display.y))
+        .decorations(false)
+        .always_on_top(true)
+        .visible_on_all_workspaces(true)
+        .skip_taskbar(true)
+        .shadow(false)
+        .resizable(false)
+        .transparent(true)
+        .background_color(Color(0, 0, 0, 0))
+        .focused(true)
+        .visible(false)
+        .build()?;
+    }
+    let window = app
+        .get_webview_window("screenshot-countdown")
+        .ok_or_else(|| AppError::Task("screenshot countdown is unavailable".to_owned()))?;
+    window.set_size(tauri::LogicalSize::new(
+        f64::from(display.width),
+        f64::from(display.height),
+    ))?;
+    window.set_position(tauri::LogicalPosition::new(
+        f64::from(display.x),
+        f64::from(display.y),
+    ))?;
+    // Keep the countdown out of Captures' own recordings on Windows.
+    window.set_content_protected(cfg!(target_os = "windows"))?;
+    window.show()?;
+    #[cfg(target_os = "macos")]
+    recording::focus_recording_window(app, "screenshot-countdown");
+    if let Err(error) = window.set_focus() {
+        eprintln!("failed to focus screenshot countdown: {error}");
+    }
+    Ok(())
+}
+
+fn destroy_screenshot_countdown(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("screenshot-countdown")
+        && let Err(error) = window.destroy()
+    {
+        eprintln!("failed to close screenshot countdown: {error}");
+    }
+}
+
 #[tauri::command]
 fn get_active_session(
     state: tauri::State<'_, Arc<AppState>>,
@@ -601,6 +793,11 @@ fn show_capture_overlay(
             .map_err(|error| error.to_string())?;
         #[cfg(target_os = "macos")]
         captures_macos_window::prepare_capture_overlay(&window).map_err(str::to_owned)?;
+        // Focusing the overlay activates Captures and would otherwise leave
+        // open editors/history windows frontmost after the overlay hides.
+        // Remember the user's app first so hide_capture_overlay can restore it.
+        #[cfg(target_os = "macos")]
+        captures_macos_window::remember_frontmost_app_before_activation();
         window.show().map_err(|error| error.to_string())?;
         window.set_focus().map_err(|error| error.to_string())?;
         #[cfg(target_os = "macos")]
@@ -977,8 +1174,9 @@ fn update_settings(
         || settings.recording.gif_max_width < 320
         || !(64..=256).contains(&settings.recording.gif_max_colors)
         || settings.recording.countdown_seconds > 10
+        || settings.screenshot_countdown_seconds > 10
     {
-        return Err("recording settings are outside their supported range".to_owned());
+        return Err("capture settings are outside their supported range".to_owned());
     }
     if !settings.custom_theme.is_valid() {
         return Err("custom theme colors must use #RRGGBB values".to_owned());
@@ -1061,10 +1259,109 @@ async fn prepare_artifact_drag(
             .await
             .map_err(|error| error.to_string())?
             .map_err(|error| error.to_string())?;
+    let file_name = files
+        .path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("capture.png")
+        .to_owned();
+    *state.prepared_artifact_drag.lock() = Some(state::PreparedArtifactDrag {
+        path: files.path.clone(),
+        file_name,
+    });
     Ok(ArtifactDragPayload {
         path: files.path.to_string_lossy().into_owned(),
         icon_path: files.icon_path.to_string_lossy().into_owned(),
     })
+}
+
+/// Called by in-app drop targets (screenshot editor) so a successful OS file
+/// drop into Captures itself does not dismiss the source preview.
+#[tauri::command]
+fn mark_internal_file_drop(state: tauri::State<'_, Arc<AppState>>) {
+    *state.last_internal_file_drop.lock() = Some(std::time::Instant::now());
+}
+
+/// Keep the preview when the drop landed on a Captures window or an in-app
+/// drop target just accepted the file. External drops still dismiss.
+#[tauri::command]
+fn should_keep_preview_after_file_drop(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    x: f64,
+    y: f64,
+) -> bool {
+    if let Some(at) = *state.last_internal_file_drop.lock() {
+        // Editor marks the drop before the drag source gets Dropped; allow a
+        // short window so the preview is not dismissed mid-import.
+        if at.elapsed() <= std::time::Duration::from_millis(1_500) {
+            return true;
+        }
+    }
+    captures_window_contains_point(&app, x, y)
+}
+
+/// Read the full-resolution PNG staged for the current preview file drag.
+///
+/// Same-app drops into a webview sometimes deliver an unreadable/empty
+/// `File` to HTML5 drop handlers. The editor falls back to this path.
+#[tauri::command]
+fn read_prepared_drag_image(
+    state: tauri::State<'_, Arc<AppState>>,
+    file_name: String,
+) -> CommandResult<Vec<u8>> {
+    let prepared = state
+        .prepared_artifact_drag
+        .lock()
+        .clone()
+        .ok_or_else(|| "no prepared drag image is available".to_owned())?;
+    if prepared.file_name != file_name {
+        return Err("file does not match the prepared drag image".to_owned());
+    }
+    if !prepared.path.is_file() {
+        return Err("the prepared drag image is no longer available".to_owned());
+    }
+    fs::read(&prepared.path).map_err(|error| error.to_string())
+}
+
+/// Screen-space hit test: is `(x, y)` over any visible Captures window?
+///
+/// Coordinates match `drag::CursorPosition` (top-left origin screen pixels on
+/// macOS/Windows after the drag crate's conversion).
+fn captures_window_contains_point(app: &AppHandle, x: f64, y: f64) -> bool {
+    for (_label, window) in app.webview_windows() {
+        let Ok(true) = window.is_visible() else {
+            continue;
+        };
+        let Ok(position) = window.outer_position() else {
+            continue;
+        };
+        let Ok(size) = window.outer_size() else {
+            continue;
+        };
+        if screen_rect_contains_point(
+            f64::from(position.x),
+            f64::from(position.y),
+            f64::from(size.width),
+            f64::from(size.height),
+            x,
+            y,
+        ) {
+            return true;
+        }
+    }
+    false
+}
+
+fn screen_rect_contains_point(
+    left: f64,
+    top: f64,
+    width: f64,
+    height: f64,
+    x: f64,
+    y: f64,
+) -> bool {
+    x >= left && x < left + width && y >= top && y < top + height
 }
 
 #[tauri::command]
@@ -2158,8 +2455,11 @@ fn show_capture_window(app: &AppHandle, session: &ActiveSession) {
             return;
         }
         if let Some(window) = handle.get_webview_window("overlay") {
-            let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+            // Size first, then position. A borderless NSWindow grows from its
+            // bottom-left anchor; positioning after the final size keeps the
+            // top-left edge on the selected display (same as the recording selector).
             let _ = window.set_size(LogicalSize::new(width, height));
+            let _ = window.set_position(tauri::LogicalPosition::new(x, y));
             #[cfg(target_os = "linux")]
             let _ = window.set_fullscreen(wayland_session());
             if let Err(error) = handle.emit("capture-session-ready", &session) {
@@ -2907,7 +3207,10 @@ fn show_capture_history(app: &AppHandle) {
 }
 
 fn primary_app_window_priority(label: &str) -> Option<u8> {
-    if matches!(label, "recording-selector" | "recording-countdown") {
+    if matches!(
+        label,
+        "recording-selector" | "recording-countdown" | "screenshot-countdown"
+    ) {
         return Some(0);
     }
     if label.starts_with(RECORDING_EDITOR_WINDOW_PREFIX)
@@ -3047,6 +3350,10 @@ fn set_capture_huds_protected(app: &AppHandle, protected: bool) {
 }
 
 fn hide_capture_overlay(app: &AppHandle) {
+    // Restore the previous frontmost app while the overlay is still covering
+    // the screen so open editors cannot flash above Chrome/Discord for a frame.
+    #[cfg(target_os = "macos")]
+    captures_macos_window::restore_frontmost_app_after_capture();
     if let Some(window) = app.get_webview_window("overlay") {
         let _ = window.hide();
         let _ = window.set_cursor_icon(CursorIcon::Default);
@@ -3149,11 +3456,191 @@ fn crop_window_from_session(session: &CaptureSession, window_id: &str) -> Option
             window,
             &session.display,
             scale,
-            window_corner_radius_points(),
+            window_visible_corner_radius(window),
         );
         image
     };
     Some(image)
+}
+
+#[cfg(target_os = "macos")]
+fn window_visible_corner_radius(window: &captures_capture::WindowDescriptor) -> f64 {
+    window
+        .corner_radius
+        .filter(|radius| radius.is_finite() && *radius >= 0.0)
+        .unwrap_or_else(window_corner_radius_points)
+}
+
+/// Measure each window's visible corner radius from the freeze-frame so the
+/// selector ring, dim cutout, and PNG mask share one shape.
+///
+/// A single OS-default radius is wrong for panels, terminals, and other apps
+/// that keep tighter chrome than the current system window style. Sampling the
+/// already-captured display image avoids a second per-window capture pass.
+fn refine_window_chrome_from_snapshot(
+    windows: &mut [captures_capture::WindowDescriptor],
+    display: &captures_capture::DisplayDescriptor,
+    image: &RgbaImage,
+    fallback_radius: f64,
+) {
+    let scale = capture_buffer_scale(display, image);
+    for window in windows.iter_mut() {
+        if let Some(radius) = estimate_window_corner_radius_from_snapshot(
+            window,
+            display,
+            image,
+            scale,
+            fallback_radius,
+        ) {
+            window.corner_radius = Some(radius);
+        }
+    }
+}
+
+fn estimate_window_corner_radius_from_snapshot(
+    window: &captures_capture::WindowDescriptor,
+    display: &captures_capture::DisplayDescriptor,
+    image: &RgbaImage,
+    scale: f64,
+    fallback_radius: f64,
+) -> Option<f64> {
+    let scale = scale.max(1.0);
+    let left = ((f64::from(window.x - display.x) * scale).round() as i64).max(0);
+    let top = ((f64::from(window.y - display.y) * scale).round() as i64).max(0);
+    let width = ((f64::from(window.width) * scale).round() as i64).max(1);
+    let height = ((f64::from(window.height) * scale).round() as i64).max(1);
+    let right = left + width;
+    let bottom = top + height;
+    if right > i64::from(image.width()) || bottom > i64::from(image.height()) {
+        return None;
+    }
+
+    // Fullscreen-ish targets keep square display edges.
+    if window.x <= display.x
+        && window.y <= display.y
+        && window.x + window.width as i32 >= display.x + display.width as i32
+        && window.y + window.height as i32 >= display.y + display.height as i32
+    {
+        return Some(0.0);
+    }
+
+    let max_radius_px = ((fallback_radius * scale)
+        .min(width as f64 / 2.0)
+        .min(height as f64 / 2.0)
+        .floor() as i64)
+        .max(0);
+    if max_radius_px < 2 {
+        return Some(0.0);
+    }
+
+    let mut samples = Vec::with_capacity(4);
+    for (corner_x, corner_y, dir_x, dir_y) in [
+        (left, top, 1_i64, 1_i64),
+        (right - 1, top, -1, 1),
+        (left, bottom - 1, 1, -1),
+        (right - 1, bottom - 1, -1, -1),
+    ] {
+        if let Some(radius_px) = estimate_corner_radius_px(
+            image,
+            corner_x,
+            corner_y,
+            dir_x,
+            dir_y,
+            max_radius_px,
+            width,
+            height,
+        ) {
+            samples.push(radius_px);
+        }
+    }
+    if samples.is_empty() {
+        return None;
+    }
+    // Inclusive pixel bounds make the trailing edge of a corner one pixel short
+    // of the true radius. Prefer the strongest readable corner instead of the
+    // median, which systematically under-reads rounded chrome.
+    let best_px = *samples.iter().max().unwrap_or(&0) as f64;
+    let radius_points = (best_px / scale).clamp(0.0, fallback_radius.max(0.0));
+    // Prefer half-point steps so CSS border-radius stays stable on Retina.
+    Some((radius_points * 2.0).round() / 2.0)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn estimate_corner_radius_px(
+    image: &RgbaImage,
+    corner_x: i64,
+    corner_y: i64,
+    dir_x: i64,
+    dir_y: i64,
+    max_radius_px: i64,
+    window_width_px: i64,
+    window_height_px: i64,
+) -> Option<i64> {
+    let outside = sample_image(image, corner_x, corner_y)?;
+    // Deep interior of this corner — should land on window chrome/content.
+    let inset = (max_radius_px.max(8) + 4)
+        .min(window_width_px / 3)
+        .min(window_height_px / 3);
+    if inset < 4 {
+        return None;
+    }
+    let inside = sample_image(image, corner_x + dir_x * inset, corner_y + dir_y * inset)?;
+    // If the corner already looks like the interior, this corner is square or
+    // the freeze-frame has no readable edge (e.g. same-colored neighbor).
+    if pixels_similar(outside, inside, 18) {
+        return Some(0);
+    }
+
+    let mut along_x = 0_i64;
+    while along_x < max_radius_px {
+        let x = corner_x + dir_x * along_x;
+        let Some(pixel) = sample_image(image, x, corner_y) else {
+            break;
+        };
+        if !pixels_similar(pixel, outside, 18) {
+            break;
+        }
+        along_x += 1;
+    }
+
+    let mut along_y = 0_i64;
+    while along_y < max_radius_px {
+        let y = corner_y + dir_y * along_y;
+        let Some(pixel) = sample_image(image, corner_x, y) else {
+            break;
+        };
+        if !pixels_similar(pixel, outside, 18) {
+            break;
+        }
+        along_y += 1;
+    }
+
+    // At an inclusive trailing edge the arc is one pixel short of R, so the two
+    // runs can disagree. Keep the longer readable edge for this corner.
+    let radius = along_x.max(along_y).clamp(0, max_radius_px);
+    // Tiny runs are usually anti-alias or 1px framing, not real window chrome.
+    if radius <= 1 {
+        return Some(0);
+    }
+    Some(radius)
+}
+
+fn sample_image(image: &RgbaImage, x: i64, y: i64) -> Option<[u8; 4]> {
+    if x < 0 || y < 0 {
+        return None;
+    }
+    let x = u32::try_from(x).ok()?;
+    let y = u32::try_from(y).ok()?;
+    if x >= image.width() || y >= image.height() {
+        return None;
+    }
+    Some(image.get_pixel(x, y).0)
+}
+
+fn pixels_similar(left: [u8; 4], right: [u8; 4], max_channel_delta: u8) -> bool {
+    left.iter()
+        .zip(right.iter())
+        .all(|(a, b)| a.abs_diff(*b) <= max_channel_delta)
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -3244,7 +3731,7 @@ fn mask_macos_window_corners(
     }
 }
 
-fn image_is_effectively_blank(image: &RgbaImage) -> bool {
+pub(crate) fn image_is_effectively_blank(image: &RgbaImage) -> bool {
     // Solid / near-solid frames from failed CGWindow captures (common black full-screen).
     let mut samples = 0u32;
     let mut matching = 0u32;
@@ -3369,10 +3856,10 @@ mod tests {
         ThumbnailCursorAction, ThumbnailCursorKind, ThumbnailMonitorBounds, clipboard_fingerprint,
         display_contains_pointer, mask_macos_window_corners, parse_shortcut,
         primary_app_window_priority, recording_saved_notice_label,
-        should_activate_capture_cursor_before_reveal, should_trigger_shortcut,
-        thumbnail_cursor_action, thumbnail_geometry, thumbnail_pointer_position,
-        thumbnail_visible_window_height, track_shortcut_suppression, viewer_window_label,
-        window_is_capturable, windows_window_is_capture_overlay,
+        refine_window_chrome_from_snapshot, should_activate_capture_cursor_before_reveal,
+        should_trigger_shortcut, thumbnail_cursor_action, thumbnail_geometry,
+        thumbnail_pointer_position, thumbnail_visible_window_height, track_shortcut_suppression,
+        viewer_window_label, window_is_capturable, windows_window_is_capture_overlay,
     };
 
     fn bounds(
@@ -3406,6 +3893,112 @@ mod tests {
     }
 
     #[test]
+    fn estimates_rounded_window_chrome_from_the_freeze_frame() {
+        use image::{Rgba, RgbaImage};
+
+        let display = DisplayDescriptor {
+            id: "display".to_owned(),
+            name: "Display".to_owned(),
+            x: 0,
+            y: 0,
+            width: 200,
+            height: 160,
+            scale_factor: 1.0,
+            is_primary: true,
+        };
+        // Solid background with a rounded window painted on top.
+        let mut image = RgbaImage::from_pixel(200, 160, Rgba([30, 30, 30, 255]));
+        let window_x = 40_i32;
+        let window_y = 30_i32;
+        let window_w = 100_u32;
+        let window_h = 80_u32;
+        let radius = 12.0_f64;
+        for y in 0..window_h {
+            for x in 0..window_w {
+                let px = f64::from(x);
+                let py = f64::from(y);
+                let width = f64::from(window_w);
+                let height = f64::from(window_h);
+                let cx = px.clamp(radius, width - radius);
+                let cy = py.clamp(radius, height - radius);
+                let dx = px - cx;
+                let dy = py - cy;
+                if dx * dx + dy * dy <= radius * radius {
+                    image.put_pixel(
+                        (window_x as u32) + x,
+                        (window_y as u32) + y,
+                        Rgba([200, 210, 220, 255]),
+                    );
+                }
+            }
+        }
+        let mut window = WindowDescriptor {
+            id: "window".to_owned(),
+            title: "Rounded".to_owned(),
+            app_name: Some("App".to_owned()),
+            z_order: 1,
+            x: window_x,
+            y: window_y,
+            width: window_w,
+            height: window_h,
+            display_id: display.id.clone(),
+            corner_radius: None,
+        };
+
+        refine_window_chrome_from_snapshot(
+            std::slice::from_mut(&mut window),
+            &display,
+            &image,
+            25.0,
+        );
+
+        let measured = window
+            .corner_radius
+            .expect("corner radius should be measured");
+        assert!(
+            (measured - radius).abs() <= 2.0,
+            "expected ~{radius}pt, got {measured}"
+        );
+    }
+
+    #[test]
+    fn treats_fullscreen_freeze_frame_windows_as_square() {
+        use image::{Rgba, RgbaImage};
+
+        let display = DisplayDescriptor {
+            id: "display".to_owned(),
+            name: "Display".to_owned(),
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 60,
+            scale_factor: 1.0,
+            is_primary: true,
+        };
+        let image = RgbaImage::from_pixel(80, 60, Rgba([10, 20, 30, 255]));
+        let mut window = WindowDescriptor {
+            id: "fullscreen".to_owned(),
+            title: "Full".to_owned(),
+            app_name: Some("App".to_owned()),
+            z_order: 1,
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 60,
+            display_id: display.id.clone(),
+            corner_radius: None,
+        };
+
+        refine_window_chrome_from_snapshot(
+            std::slice::from_mut(&mut window),
+            &display,
+            &image,
+            25.0,
+        );
+        assert_eq!(window.corner_radius, Some(0.0));
+    }
+
+    #[test]
     fn masks_background_pixels_outside_macos_window_corners() {
         let display = DisplayDescriptor {
             id: "display".to_owned(),
@@ -3427,6 +4020,7 @@ mod tests {
             width: 50,
             height: 40,
             display_id: display.id.clone(),
+            corner_radius: None,
         };
         let mut image = RgbaImage::from_pixel(100, 80, Rgba([12, 34, 56, 255]));
 
@@ -3468,6 +4062,7 @@ mod tests {
             width: 50,
             height: 40,
             display_id: display.id.clone(),
+            corner_radius: None,
         };
         let mut clipped = RgbaImage::from_pixel(76, 80, Rgba([12, 34, 56, 255]));
 
@@ -3500,6 +4095,7 @@ mod tests {
             width: 3_840,
             height: 2_160,
             display_id: "display".to_owned(),
+            corner_radius: None,
         };
         assert!(windows_window_is_capture_overlay(&overlay));
 
@@ -3531,6 +4127,7 @@ mod tests {
             width: 1_728,
             height: 1_117,
             display_id: "display".to_owned(),
+            corner_radius: None,
         };
         assert!(macos_window_is_capture_overlay(&overlay));
         assert!(!window_is_capturable(&overlay, &display));
@@ -3563,6 +4160,7 @@ mod tests {
             width: 640,
             height: 480,
             display_id: display.id.clone(),
+            corner_radius: None,
         };
 
         for title in [
@@ -3817,5 +4415,24 @@ mod tests {
             Some("recording-saved-7e3191ca-8596-4d22-a6e1-4b57a64f00cb".to_owned())
         );
         assert_eq!(recording_saved_notice_label("../history"), None);
+    }
+
+    #[test]
+    fn screen_rect_hit_test_is_half_open_on_right_and_bottom() {
+        assert!(super::screen_rect_contains_point(
+            100.0, 200.0, 400.0, 300.0, 100.0, 200.0
+        ));
+        assert!(super::screen_rect_contains_point(
+            100.0, 200.0, 400.0, 300.0, 499.0, 499.0
+        ));
+        assert!(!super::screen_rect_contains_point(
+            100.0, 200.0, 400.0, 300.0, 500.0, 350.0
+        ));
+        assert!(!super::screen_rect_contains_point(
+            100.0, 200.0, 400.0, 300.0, 250.0, 500.0
+        ));
+        assert!(!super::screen_rect_contains_point(
+            100.0, 200.0, 400.0, 300.0, 99.0, 250.0
+        ));
     }
 }

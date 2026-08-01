@@ -1,20 +1,19 @@
 # Captures releases
 
-Every push to `main` runs `.github/workflows/release.yml`. Nightly workflows wait
+Every push to `main` runs `.github/workflows/release.yml`. Preview workflows wait
 in commit order without cancelling older pushes, run the frontend and Rust
 quality gates, and then build macOS Apple Silicon, Windows x64, and Linux x64
-packages. A Nightly is published only when every job succeeds.
+packages. A Preview is published only when every job succeeds.
 
-Nightlies are GitHub pre-releases with CalVer versions in `YYYY.MM.DD.N` form,
+Previews are GitHub pre-releases with CalVer versions in `YYYY.MM.DD.N` form,
 using the
 `America/New_York` date of the main-branch commit and a same-day revision from 1
-through 99. A Nightly named `Captures Nightly 2026.07.19.1` uses tag
+through 99. A Preview named `Captures Preview 2026.07.19.1` uses tag
 `v2026.07.19.1`. Tauri receives the SemVer-compatible internal version
-`2026.7.1901`; source manifests remain at the development version. “Nightly” is
-the experimental channel name—the channel updates after every merge, not only
-once per night.
+`2026.7.1901`; source manifests remain at the development version. The updater
+channel and fixed Git tag are both named `preview` and update after every merge.
 
-The workflow stages a draft Nightly at the exact tested commit. Each platform
+The workflow stages a draft Preview at the exact tested commit. Each platform
 builds and validates its pinned LGPL FFmpeg sidecars, then uploads its installer,
 updater archive, and updater signature. The macOS job also verifies the sidecars
 inside `Captures.app` and uploads the shared FFmpeg source archive, detached
@@ -22,21 +21,27 @@ signature, build configuration, LGPL license, and notice. The final job requires
 those files plus a DMG, NSIS installer, AppImage, Debian package, complete
 `latest.json`, and `SHA256SUMS`, confirms the release is still staged, and then
 publishes it as a pre-release. A failed build removes its draft and tag, leaving
-published Nightlies untouched. If draft creation itself is interrupted, the next run
+published Previews untouched. If draft creation itself is interrupted, the next run
 removes only stale drafts with its generated tag before retrying.
 
-Creating the draft early is only a private staging step. The **Publish Nightly**
+Creating the draft early is only a private staging step. The **Publish Preview**
 job runs only after **Validate staged release** succeeds and `SHA256SUMS` is
 present; that marker means every required macOS, Windows, and Linux artifact was
 downloaded and validated together. The existence of a draft page by itself does
 not mean the release is complete.
 
-The fixed `nightly` pre-release is a rolling channel, not a historical build. It
-holds the `latest.json` updater manifest for the greatest published CalVer
-version and links to that immutable Nightly. This comparison uses the version,
+The fixed `preview` pre-release is the permanent **Captures Preview — Latest**
+download page, not a historical build. It holds the macOS, Windows, Debian, and
+AppImage installers plus the `latest.json` updater manifest for the greatest
+published CalVer version. It links to the corresponding immutable Preview, while
+the Releases page remains the dated build archive. Selection uses the version,
 not publication time, so publishing an older backfill cannot downgrade the
-channel. Future stable releases can use normal GitHub release metadata and their
-own updater endpoint without replacing the Nightly archive.
+download page. Future stable releases can use normal GitHub release metadata and
+their own updater endpoint without replacing the Preview archive.
+
+The first successful Preview publication removes the obsolete `nightly` rolling
+release and tag after the new `preview` page and its installer set are verified.
+No compatibility redirect is retained during this pre-release phase.
 
 For a historical backfill, dispatch the workflow from `main` with `target_sha`
 set to a commit that is already on `main`. The workflow checks out and rebuilds
@@ -44,19 +49,19 @@ that commit, derives its New York date from the commit timestamp, and publishes
 the next revision for that date. Dispatch historical commits from oldest to
 newest so their revisions preserve merge order.
 
-## Install the latest Nightly
+## Install the latest Preview
 
-Use the CI-produced Nightly rather than a local build when testing the exact
+Use the CI-produced Preview rather than a local build when testing the exact
 installer, signing, notarization, and packaging path intended for users:
 
 ```sh
-npm run install:nightly
+npm run install:preview
 ```
 
 The command requires Node.js 24 and an authenticated GitHub CLI. It always
-selects the greatest published Nightly CalVer and requires both the current
+selects the greatest published Preview CalVer and requires both the current
 system's installer and `SHA256SUMS`. The checksum file is the completion marker
-uploaded only after the entire staged Nightly passes validation.
+uploaded only after the entire staged Preview passes validation.
 
 After downloading and verifying the installer, the command quits Captures,
 removes the installed app package, installs the macOS Apple Silicon DMG, Windows
@@ -71,21 +76,19 @@ Windows x64, and Ubuntu x64 GitHub-hosted runners.
 Useful options:
 
 ```sh
-# Show whether the newest Nightly is ready without changing the installed app
-npm run install:nightly -- --dry-run
+# Show whether the newest Preview is ready without changing the installed app
+npm run install:preview -- --dry-run
 
-# Fail instead of waiting when the newest Nightly is incomplete
-npm run install:nightly -- --no-wait
+# Fail instead of waiting when the newest Preview is incomplete
+npm run install:preview -- --no-wait
 
 # Install without launching Captures afterward
-npm run install:nightly -- --no-launch
+npm run install:preview -- --no-launch
 ```
-
-`npm run install:latest` remains as a compatibility alias.
 
 ## Stable-release gates
 
-Nightlies are intentionally experimental. Creating an installer and signing a
+Previews are intentionally experimental. Creating an installer and signing a
 Tauri updater archive do not by themselves make a stable release. Do not publish
 the stable channel until every gate below is enforced and passes:
 
@@ -106,7 +109,7 @@ These signatures have separate trust boundaries:
 ## GitHub release environment
 
 The `release` environment protects signing and notarization credentials; it is
-not a release channel. Nightly and stable builds can share this environment
+not a release channel. Preview and stable builds can share this environment
 while using different release metadata and updater endpoints.
 
 Create a GitHub environment named `release`, restrict its deployment branches to `main`, and add these environment secrets:
@@ -230,8 +233,8 @@ If Captures later operates an APT repository, that repository must publish signe
 
 ## Bootstrap and acceptance
 
-The first updater-enabled Nightly must be downloaded and installed manually.
-Subsequent validated Nightlies appear in the rolling updater channel
+The first updater-enabled Preview must be downloaded and installed manually.
+Subsequent validated Previews appear in the rolling updater channel
 automatically. Before relying on automatic updates, test this sequence on clean
 machines:
 

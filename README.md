@@ -5,11 +5,21 @@ Captures is a cross-platform screen capture utility built for quick captures and
 > [!WARNING]
 > Captures is functional, but still experimental and under active development. macOS is the primary development target; Windows and Linux builds are available but may be less polished.
 
+## Download Captures Preview
+
+[**Download the latest Captures Preview**](https://github.com/joswayski/captures/releases/tag/preview)
+
+Choose the macOS `.dmg`, Windows `.exe`, Ubuntu/Debian `.deb`, or Linux
+AppImage from that page. The Preview updates after every successful merge and
+may contain bugs or incomplete features.
+
 ## Features
 
 - Capture regions, windows, or full displays.
+- Optional countdown before screenshots so you can set up menus and hover states.
 - Record regions, windows, or full displays as H.264 video or GIF.
 - Record desktop audio and a microphone with pause, resume, restart, and mute controls.
+- Configurable countdown before recordings start.
 - Show the cursor and click highlights in recordings where supported.
 - Edit screenshots with text, shapes, arrows, drawing, crop, resize, and image layers.
 - Trim, crop, resize, and adjust audio in recordings.
@@ -23,7 +33,7 @@ Captures is a cross-platform screen capture utility built for quick captures and
 
 - Scrolling capture for content larger than the screen.
 - On-device text recognition (OCR).
-- Timed screenshots and an easy way to repeat the previous capture area.
+- An easy way to repeat the previous capture area.
 - Pinned captures that stay visible above other windows.
 - Editable click highlights and keystroke overlays after recording.
 - Optional hosted sharing for images and recordings with shareable `captur.es/<id>` links.
@@ -40,23 +50,13 @@ Captures is a cross-platform screen capture utility built for quick captures and
 | Linux X11 | Supported; recording controls must be hidden manually when needed |
 | Linux Wayland | Experimental; no window targeting, cursor capture, or click highlights |
 
-## Releases
+## Build archive
 
-Every successful push to `main` publishes a validated **Nightly** pre-release
-using [CalVer](https://calver.org/) `YYYY.MM.DD.N`. Nightlies are experimental,
-but each version remains available as a permanent snapshot of the app.
-
-Anyone signed in with the GitHub CLI can replace the installed app with the
-newest fully validated Nightly for their current system:
-
-```sh
-npm run install:nightly
-```
-
-The command verifies the published checksum, quits and replaces Captures while
-preserving local app data, then launches the installed build.
-
-Stable releases will use a separate channel when Captures is ready for launch.
+Every successful push to `main` publishes a validated **Preview** build
+using [CalVer](https://calver.org/) `YYYY.MM.DD.N`. Each dated version remains
+available in the [build archive](https://github.com/joswayski/captures/releases)
+for historical testing. Stable releases will use a separate channel when
+Captures is ready for launch.
 
 ## Shortcuts
 
@@ -67,7 +67,7 @@ Stable releases will use a separate channel when Captures is ready for launch.
 | `Ctrl+Shift+W` | Capture a window |
 | `Ctrl+Shift+3` | Capture the display under the pointer |
 | `Ctrl+Shift+5` | Record the screen, then save video or GIF |
-| `Esc` | Cancel an active capture or recording countdown |
+| `Esc` | Cancel an active capture, screenshot countdown, or recording countdown |
 
 All five global capture shortcuts can be changed in Preferences.
 
