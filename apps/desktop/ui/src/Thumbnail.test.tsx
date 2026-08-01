@@ -61,7 +61,7 @@ describe("Thumbnail", () => {
     expect(card).toHaveAttribute("data-thumbnail-native-active", "true");
   });
 
-  it("reasserts the interactive cursor immediately on button pointerdown", async () => {
+  it("reasserts the interactive cursor across button and focus handoffs", async () => {
     let pointerReady = false;
     const editButtonRef = { current: null as HTMLElement | null };
     vi.mocked(invoke).mockImplementation(async (command) => {
@@ -125,6 +125,14 @@ describe("Thumbnail", () => {
         { kind: "pointer" },
       );
     });
+
+    vi.mocked(invoke).mockClear();
+    window.dispatchEvent(new Event("blur"));
+
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith(
+      "reassert_thumbnail_cursor",
+      { kind: "pointer" },
+    );
   });
 
   it("preserves native hover when pointer polling is briefly unavailable", async () => {
