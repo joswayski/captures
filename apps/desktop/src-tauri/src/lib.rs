@@ -782,6 +782,11 @@ fn show_capture_overlay(
             .map_err(|error| error.to_string())?;
         #[cfg(target_os = "macos")]
         captures_macos_window::prepare_capture_overlay(&window).map_err(str::to_owned)?;
+        // Focusing the overlay activates Captures and would otherwise leave
+        // open editors/history windows frontmost after the overlay hides.
+        // Remember the user's app first so hide_capture_overlay can restore it.
+        #[cfg(target_os = "macos")]
+        captures_macos_window::remember_frontmost_app_before_activation();
         window.show().map_err(|error| error.to_string())?;
         window.set_focus().map_err(|error| error.to_string())?;
         #[cfg(target_os = "macos")]
@@ -3232,6 +3237,10 @@ fn set_capture_huds_protected(app: &AppHandle, protected: bool) {
 }
 
 fn hide_capture_overlay(app: &AppHandle) {
+    // Restore the previous frontmost app while the overlay is still covering
+    // the screen so open editors cannot flash above Chrome/Discord for a frame.
+    #[cfg(target_os = "macos")]
+    captures_macos_window::restore_frontmost_app_after_capture();
     if let Some(window) = app.get_webview_window("overlay") {
         let _ = window.hide();
         let _ = window.set_cursor_icon(CursorIcon::Default);

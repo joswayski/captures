@@ -91,6 +91,10 @@ pub fn open_screenshot_editor(
     }
 
     let label = format!("{SCREENSHOT_EDITOR_WINDOW_PREFIX}{artifact_id}");
+    // Opening the editor is an intentional focus change; do not hand activation
+    // back to whatever app was frontmost before a prior capture shortcut.
+    #[cfg(target_os = "macos")]
+    captures_macos_window::clear_frontmost_app_anchor();
     if let Some(window) = app.get_webview_window(&label) {
         window.show().map_err(|error| error.to_string())?;
         window.unminimize().map_err(|error| error.to_string())?;

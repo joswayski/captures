@@ -4,7 +4,10 @@ use std::{
     cell::Cell,
     ffi::c_void,
     ptr,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use objc2::{
@@ -15,10 +18,11 @@ use objc2::{
     runtime::AnyObject,
 };
 use objc2_app_kit::{
-    NSApplication, NSCursor, NSEvent, NSPasteboard, NSSound, NSStatusWindowLevel, NSTrackingArea,
-    NSTrackingAreaOptions, NSView, NSViewLayerContentsPlacement, NSWindow, NSWindowStyleMask,
+    NSApplication, NSApplicationActivationOptions, NSCursor, NSEvent, NSPasteboard,
+    NSRunningApplication, NSSound, NSStatusWindowLevel, NSTrackingArea, NSTrackingAreaOptions,
+    NSView, NSViewLayerContentsPlacement, NSWindow, NSWindowStyleMask, NSWorkspace,
 };
-use objc2_foundation::{NSObject, NSProcessInfo, NSRect, NSSize, NSString};
+use objc2_foundation::{NSObject, NSObjectProtocol, NSProcessInfo, NSRect, NSSize, NSString};
 use tauri::WebviewWindow;
 use tauri_nspanel::WebviewWindowExt;
 
@@ -181,6 +185,12 @@ static CURSOR_TRACKER_ASSOCIATION_KEY: u8 = 0;
 // NSCursor is application-wide, so a hidden preview must not replace the
 // cursor selected by the active capture overlay.
 static CAPTURE_OVERLAY_OWNS_CURSOR: AtomicBool = AtomicBool::new(false);
+// When a transient capture surface activates Captures (region/window overlay,
+// recording selector, countdown), sibling document windows such as the
+// screenshot editor are ordered front with the app. Remember the user's
+// previous frontmost app so we can hand focus back after the surface dismisses.
+static FRONTMOST_APP_BEFORE_CAPTURE: Mutex<Option<Retained<NSRunningApplication>>> =
+    Mutex::new(None);
 
 /// Returns whether a standard shortcut modifier is still physically held.
 ///
@@ -415,10 +425,68 @@ pub fn reveal_window(window: &WebviewWindow) -> Result<(), &'static str> {
 /// works even when the selector was launched while another app was frontmost.
 pub fn focus_window(window: &WebviewWindow) -> Result<(), &'static str> {
     let main_thread = MainThreadMarker::new().ok_or("window focus must run on the main thread")?;
+    remember_frontmost_app_before_activation();
     let app = NSApplication::sharedApplication(main_thread);
     app.activate();
     native_window(window)?.makeKeyAndOrderFront(None);
     Ok(())
+}
+
+/// Records the frontmost app before a transient Captures surface steals
+/// activation. No-op when Captures is already frontmost, or when a capture
+/// session already recorded an anchor (selector → countdown should not clobber
+/// the original frontmost app).
+///
+/// Call this immediately before focusing the screenshot overlay or another
+/// capture UI so document windows (editors, history, preferences) can be
+/// returned to the background afterward.
+pub fn remember_frontmost_app_before_activation() {
+    let mut slot = FRONTMOST_APP_BEFORE_CAPTURE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if slot.is_some() {
+        return;
+    }
+    let frontmost = NSWorkspace::sharedWorkspace().frontmostApplication();
+    let current = NSRunningApplication::currentApplication();
+    *slot = match frontmost {
+        Some(app) if !app.isEqual(Some(&*current)) && !app.isTerminated() => Some(app),
+        _ => None,
+    };
+}
+
+/// Drops a remembered frontmost app without restoring it.
+///
+/// Use when Captures intentionally keeps focus (for example opening an editor
+/// after a recording finishes).
+pub fn clear_frontmost_app_anchor() {
+    let mut slot = FRONTMOST_APP_BEFORE_CAPTURE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *slot = None;
+}
+
+/// Hands activation back to the app that was frontmost before a transient
+/// capture surface. Prevents open editors from remaining key after a screenshot
+/// or cancelled selection while the user was working in another app.
+pub fn restore_frontmost_app_after_capture() {
+    let previous = {
+        let mut slot = FRONTMOST_APP_BEFORE_CAPTURE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        slot.take()
+    };
+    let Some(previous) = previous else {
+        return;
+    };
+    if previous.isTerminated() {
+        return;
+    }
+    if let Some(main_thread) = MainThreadMarker::new() {
+        let app = NSApplication::sharedApplication(main_thread);
+        app.yieldActivationToApplication(&previous);
+    }
+    let _ = previous.activateWithOptions(NSApplicationActivationOptions::empty());
 }
 
 /// Restores native overlay state after a capture ends.
