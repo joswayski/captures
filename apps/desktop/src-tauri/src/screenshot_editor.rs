@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, window::Color};
 use uuid::Uuid;
 
+use captures_capture::CaptureMode;
+
 use crate::{
     AppError, CommandResult,
     models::{
@@ -130,14 +132,18 @@ pub fn default_screenshot_edit_path(
     artifact_id: String,
     format: ScreenshotEditFormat,
 ) -> CommandResult<String> {
+    // The editor keeps the image in memory, so export still works after the
+    // original capture is removed from history. Fall back to the output folder.
     let artifact = state
         .artifacts
         .lock()
         .iter()
         .find(|artifact| artifact.id == artifact_id)
-        .cloned()
-        .ok_or_else(|| "the screenshot is no longer available".to_owned())?;
-    let source = artifact.path.as_deref().map(Path::new);
+        .cloned();
+    let source = artifact
+        .as_ref()
+        .and_then(|artifact| artifact.path.as_deref())
+        .map(Path::new);
     let directory = source
         .and_then(Path::parent)
         .map(Path::to_path_buf)
@@ -173,18 +179,20 @@ pub async fn save_screenshot_edit(
     state: tauri::State<'_, Arc<AppState>>,
     request: ScreenshotEditSaveRequest,
 ) -> CommandResult<SavedScreenshotEdit> {
+    // Export is based on the in-memory editor canvas, not the original file.
+    // If the user deleted the source capture while the editor is open, still
+    // allow saving a new copy from the edited pixels.
     let source = state
         .artifacts
         .lock()
         .iter()
         .find(|artifact| artifact.id == request.artifact_id)
-        .cloned()
-        .ok_or_else(|| "the original screenshot is no longer available".to_owned())?;
+        .cloned();
     let destination = validated_destination(&request.destination_path, request.format)
         .map_err(|error| error.to_string())?;
     if source
-        .path
-        .as_deref()
+        .as_ref()
+        .and_then(|artifact| artifact.path.as_deref())
         .is_some_and(|path| Path::new(path) == destination)
     {
         return Err(
@@ -196,6 +204,10 @@ pub async fn save_screenshot_edit(
     let format = request.format;
     let jpeg_quality = request.jpeg_quality;
     let max_size_bytes = request.max_size_bytes;
+    let capture_mode = source
+        .as_ref()
+        .map(|artifact| artifact.mode)
+        .unwrap_or(CaptureMode::Region);
     let task_destination = destination.clone();
     let task_png = request.image_png;
     let (image_png, preview_png, encoded_size, width, height) =
@@ -226,7 +238,7 @@ pub async fn save_screenshot_edit(
         height,
         size_bytes: encoded_size,
         created_at: created_at.clone(),
-        mode: Some(source.mode),
+        mode: Some(capture_mode),
         saved_path: Some(saved_path.clone()),
         mime_type: Some(
             match format {
@@ -259,7 +271,7 @@ pub async fn save_screenshot_edit(
         height,
         size_bytes: encoded_size,
         created_at,
-        mode: source.mode,
+        mode: capture_mode,
         history_saved,
         clipboard_copy_status: ClipboardCopyStatus::Skipped,
         image_png,

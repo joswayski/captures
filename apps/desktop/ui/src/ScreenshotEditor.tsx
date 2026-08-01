@@ -470,6 +470,8 @@ export function ScreenshotEditor() {
   const [busy, setBusy] = useState<"copying" | "saving" | null>(null);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
+  /** Original capture was deleted after the editor opened; the edit is still exportable. */
+  const [sourceMissing, setSourceMissing] = useState(false);
   const [saved, setSaved] = useState<SavedScreenshotEdit | null>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -536,7 +538,13 @@ export function ScreenshotEditor() {
     void (async () => {
       if (!artifactId) throw new Error("No screenshot was selected.");
       unlisten = await listen<string>("artifact-removed", ({ payload }) => {
-        if (payload === artifactId) setError("The original screenshot is no longer available.");
+        if (payload !== artifactId) return;
+        // The canvas still holds the edited image — copy/save remain available.
+        setSourceMissing(true);
+        setError("");
+        setStatus(
+          "The original was deleted. You can still copy or save this edit.",
+        );
       });
       const loaded = await invoke<CaptureArtifact | null>("get_artifact", { artifactId });
       if (!active) return;
@@ -1952,7 +1960,11 @@ export function ScreenshotEditor() {
           </div>
         </div>
         <div className={`screenshot-export-status${error ? " error" : ""}`} role={error ? "alert" : "status"}>
-          {error || status || "Saving creates a new copy and preserves the original."}
+          {error
+            || status
+            || (sourceMissing
+              ? "The original was deleted. You can still copy or save this edit."
+              : "Saving creates a new copy and preserves the original.")}
         </div>
         <div className="screenshot-export-actions">
           {saved && <button type="button" onClick={() => void showSavedFile()}>Show in folder</button>}
