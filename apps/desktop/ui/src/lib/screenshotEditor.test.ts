@@ -345,4 +345,42 @@ describe("screenshot editor geometry", () => {
       revokeObjectURL.mockRestore();
     }
   });
+
+  it("loads prepared drag bytes when the browser File is empty or unreadable", async () => {
+    const emptyFile = new File([], "Captures_2026-07-31_15-47-00_445.png", {
+      type: "image/png",
+    });
+    const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:prepared");
+    const originalImage = window.Image;
+    // @ts-expect-error test stub for Image load/decode behavior
+    window.Image = class {
+      onload: ((event: Event) => void) | null = null;
+      onerror: ((event: Event) => void) | null = null;
+      naturalWidth = 32;
+      naturalHeight = 24;
+      #src = "";
+      get src() {
+        return this.#src;
+      }
+      set src(value: string) {
+        this.#src = value;
+        queueMicrotask(() => this.onload?.(new Event("load")));
+      }
+    };
+
+    try {
+      const image = await loadImageFile(emptyFile, {
+        preparedBytes: async () => new Uint8Array([137, 80, 78, 71]),
+      });
+      expect(image.src).toBe("blob:prepared");
+      expect(createObjectURL).toHaveBeenCalled();
+      const restored = createObjectURL.mock.calls[0]?.[0] as File;
+      expect(restored).toBeInstanceOf(File);
+      expect(restored.name).toBe("Captures_2026-07-31_15-47-00_445.png");
+      expect(restored.size).toBe(4);
+    } finally {
+      window.Image = originalImage;
+      createObjectURL.mockRestore();
+    }
+  });
 });

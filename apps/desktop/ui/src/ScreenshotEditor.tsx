@@ -1014,6 +1014,9 @@ export function ScreenshotEditor() {
   };
 
   const loadDroppedFiles = async (files: File[], point?: EditorPoint) => {
+    // Tell the preview stack this drop stayed inside Captures so it does not
+    // dismiss the source card when a native file drag ends over the editor.
+    void invoke("mark_internal_file_drop").catch(() => undefined);
     const images = files.filter(isSupportedImageFile);
     if (images.length === 0) {
       setError("Drop PNG, JPEG, WebP, GIF, or another image file.");
@@ -1029,7 +1032,13 @@ export function ScreenshotEditor() {
         // Prefer a blob object URL (cheap, revocable). Fall back to a data URL
         // if the webview rejects the blob load — historically our CSP omitted
         // blob: from img-src, which produced "could not be loaded" on drop.
-        const image = await loadImageFile(file);
+        // Same-app drops from a preview card can also hand the webview an empty
+        // File; loadImageFile then reads the PNG staged for the native drag.
+        const image = await loadImageFile(file, {
+          preparedBytes: () => invoke<number[]>("read_prepared_drag_image", {
+            fileName: file.name,
+          }),
+        });
         createdUrls.push(image.src);
         if (image.src.startsWith("blob:")) {
           objectUrlsRef.current.add(image.src);

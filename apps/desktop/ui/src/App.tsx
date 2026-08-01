@@ -4362,6 +4362,36 @@ export function ThumbnailCard({
     void runAction("open_screenshot_editor");
   };
 
+  const finishFileDrag = (
+    result: "Dropped" | "Cancelled",
+    cursorPos: { x: number; y: number },
+  ) => {
+    fileDraggingRef.current = false;
+    setFileDragging(false);
+    // Native OS file drags can leave the always-on-top preview stack
+    // click-through or without hover tracking. Always re-arm after the drag ends.
+    window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
+    void invoke("refresh_thumbnail_interactivity").catch(() => undefined);
+
+    if (result !== "Dropped" || isExitLocked() || isExiting) return;
+
+    void (async () => {
+      let keepPreview = false;
+      try {
+        keepPreview = await invoke<boolean>("should_keep_preview_after_file_drop", {
+          x: Number(cursorPos.x),
+          y: Number(cursorPos.y),
+        });
+      } catch {
+        keepPreview = false;
+      }
+      // Drops into Captures itself (screenshot editor, other app windows) keep
+      // the preview. External targets (Finder, Slack, browser) still dismiss.
+      if (keepPreview || isExitLocked() || isExiting) return;
+      exitWith("dismiss", "dismiss_artifact");
+    })();
+  };
+
   const beginFileDrag = async (event: React.DragEvent<HTMLImageElement>) => {
     event.preventDefault();
     if (fileDraggingRef.current || isExitLocked() || isExiting) {
@@ -4380,17 +4410,18 @@ export function ThumbnailCard({
           icon: payload.icon_path,
           mode: "copy",
         },
-        ({ result }) => {
-          fileDraggingRef.current = false;
-          setFileDragging(false);
-          if (result === "Dropped") {
-            exitWith("dismiss", "dismiss_artifact");
-          }
+        ({ result, cursorPos }) => {
+          finishFileDrag(result, {
+            x: Number(cursorPos.x),
+            y: Number(cursorPos.y),
+          });
         },
       );
     } catch (error) {
       fileDraggingRef.current = false;
       setFileDragging(false);
+      window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
+      void invoke("refresh_thumbnail_interactivity").catch(() => undefined);
       setError(String(error));
     }
   };
