@@ -8,6 +8,7 @@ import {
   thumbnailCssCursor,
   thumbnailCursorSyncAction,
   THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS,
+  THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE,
   THUMBNAIL_NULL_POLL_RECOVER_COUNT,
   withThumbnailPointerTimeout,
 } from "./thumbnailHover";
@@ -17,6 +18,14 @@ afterEach(() => {
   Reflect.deleteProperty(document, "elementFromPoint");
   vi.restoreAllMocks();
 });
+
+function expectNativePointerHover(button: Element | null, hovered: boolean) {
+  if (hovered) {
+    expect(button).toHaveAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE, "true");
+  } else {
+    expect(button).not.toHaveAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE);
+  }
+}
 
 describe("applyThumbnailNativeHover", () => {
   it("activates the card before hit-testing its buttons", () => {
@@ -39,7 +48,7 @@ describe("applyThumbnailNativeHover", () => {
 
     expect(applyThumbnailNativeHover({ x: 40, y: 80, inside: true })).toBe("pointer");
     expect(card).toHaveAttribute("data-thumbnail-native-active", "true");
-    expect(button).toHaveClass("native-pointer-hover");
+    expectNativePointerHover(button, true);
     expect(elementFromPoint).toHaveBeenCalledTimes(2);
   });
 
@@ -59,27 +68,27 @@ describe("applyThumbnailNativeHover", () => {
     expect(applyThumbnailNativeHover({ x: 40, y: 80, inside: true })).toBe("grab");
     expect(document.querySelector(".thumbnail-card"))
       .toHaveAttribute("data-thumbnail-native-active", "true");
-    expect(document.querySelector("button")).not.toHaveClass("native-pointer-hover");
+    expectNativePointerHover(document.querySelector("button"), false);
   });
 
   it("clears native hover when the pointer leaves the preview", () => {
     document.body.innerHTML = `
       <article class="thumbnail-card" data-thumbnail-native-active="true">
-        <button class="native-pointer-hover">Copy</button>
+        <button data-native-pointer-hover="true">Copy</button>
       </article>
     `;
 
     expect(applyThumbnailNativeHover({ x: 0, y: 0, inside: false })).toBe("default");
     expect(document.querySelector(".thumbnail-card"))
       .not.toHaveAttribute("data-thumbnail-native-active");
-    expect(document.querySelector("button")).not.toHaveClass("native-pointer-hover");
+    expectNativePointerHover(document.querySelector("button"), false);
   });
 
   it("keeps the active button interactive between polls", () => {
     document.body.innerHTML = `
       <article class="thumbnail-card" data-thumbnail-native-active="true">
         <img alt="Screenshot preview">
-        <button class="native-pointer-hover">Open Preview</button>
+        <button data-native-pointer-hover="true">Open Preview</button>
       </article>
     `;
     const card = document.querySelector<HTMLElement>(".thumbnail-card")!;
@@ -96,7 +105,7 @@ describe("applyThumbnailNativeHover", () => {
     expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe("pointer");
     expect(becameInactive).toBe(false);
     expect(card).toHaveAttribute("data-thumbnail-native-active", "true");
-    expect(button).toHaveClass("native-pointer-hover");
+    expectNativePointerHover(button, true);
   });
 
   it("retains the pointing cursor through a transient WebKit focus handoff", () => {
@@ -128,7 +137,29 @@ describe("applyThumbnailNativeHover", () => {
     expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe("pointer");
     handoff = true;
     expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe("pointer");
-    expect(button).toHaveClass("native-pointer-hover");
+    expectNativePointerHover(button, true);
+  });
+
+  it("keeps pointer hover when React rewrites the button className", () => {
+    document.body.innerHTML = `
+      <article class="thumbnail-card">
+        <button class="icon-button">Edit</button>
+      </article>
+    `;
+    const button = document.querySelector<HTMLButtonElement>("button")!;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => button),
+    });
+
+    expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe("pointer");
+    expectNativePointerHover(button, true);
+
+    // IconButton re-renders set className from props and would wipe a class-based
+    // hover marker. The data attribute must survive that write.
+    button.className = "icon-button";
+    expectNativePointerHover(button, true);
+    expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe("pointer");
   });
 
   it("moves hover directly to a remaining card after the stack changes", () => {
@@ -152,15 +183,15 @@ describe("applyThumbnailNativeHover", () => {
     expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe("pointer");
 
     expect(remaining).toHaveAttribute("data-thumbnail-native-active", "true");
-    expect(remainingButton).toHaveClass("native-pointer-hover");
+    expectNativePointerHover(remainingButton, true);
   });
 });
 
 describe("clearThumbnailNativeHover", () => {
-  it("clears the native card marker and button class", () => {
+  it("clears the native card marker and button hover attribute", () => {
     document.body.innerHTML = `
       <article data-thumbnail-native-active="true">
-        <button class="native-pointer-hover">Copy</button>
+        <button data-native-pointer-hover="true">Copy</button>
       </article>
     `;
 
@@ -168,7 +199,7 @@ describe("clearThumbnailNativeHover", () => {
 
     expect(document.querySelector("article"))
       .not.toHaveAttribute("data-thumbnail-native-active");
-    expect(document.querySelector("button")).not.toHaveClass("native-pointer-hover");
+    expectNativePointerHover(document.querySelector("button"), false);
   });
 });
 
@@ -236,6 +267,33 @@ describe("thumbnailCursorSyncAction", () => {
         THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS,
       ),
     ).toBe("reassert");
+  });
+
+  it("force-reasserts interactive cursors before the poll throttle for clicks", () => {
+    expect(
+      thumbnailCursorSyncAction(
+        "pointer",
+        "pointer",
+        0,
+        { force: true },
+      ),
+    ).toBe("reassert");
+    expect(
+      thumbnailCursorSyncAction(
+        "grab",
+        "grab",
+        0,
+        { force: true },
+      ),
+    ).toBe("reassert");
+    expect(
+      thumbnailCursorSyncAction(
+        "default",
+        "default",
+        0,
+        { force: true },
+      ),
+    ).toBeNull();
   });
 
   it("does not reassert the default cursor", () => {

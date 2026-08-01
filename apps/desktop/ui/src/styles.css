@@ -228,33 +228,33 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-top-action
 .thumbnail-top-left { display: flex; align-items: center; gap: 6px; }
 .thumbnail-top-right { display: flex; margin-left: auto; align-items: center; gap: 5px; }
 .icon-button { position: relative; display: grid; width: 29px; height: 29px; padding: 5px; place-items: center; border: 1px solid rgba(255,255,255,.14); border-radius: 7px; color: #f8f8fb; background: rgba(16,17,25,.8); box-shadow: 0 3px 12px rgba(0,0,0,.3); backdrop-filter: blur(12px); cursor: pointer; outline: none; transition: color .14s ease, background .14s ease, transform .14s ease, box-shadow .14s ease; }
-.icon-button:hover, .icon-button.native-pointer-hover { background: rgba(48,49,64,.96); }
-.icon-button:hover, .icon-button.native-pointer-hover { transform: translateY(-1px) scale(1.04); }
+.icon-button:hover, .icon-button[data-native-pointer-hover="true"] { background: rgba(48,49,64,.96); }
+.icon-button:hover, .icon-button[data-native-pointer-hover="true"] { transform: translateY(-1px) scale(1.04); }
 .icon-button:focus { outline: none; }
 .icon-button:focus-visible { box-shadow: 0 3px 12px rgba(0,0,0,.3), 0 0 0 2px rgba(var(--theme-accent-rgb),.65); }
 .icon-button.delete { color: var(--theme-signal); }
-.icon-button.delete:hover, .icon-button.delete.native-pointer-hover { color: white; background: var(--theme-signal-hover); }
+.icon-button.delete:hover, .icon-button.delete[data-native-pointer-hover="true"] { color: white; background: var(--theme-signal-hover); }
 /* Tooltips sit above top-row icons so they stay inside the stack padding. */
 .icon-button::after { position: absolute; top: calc(100% + 6px); left: 50%; padding: 4px 7px; border-radius: 5px; content: attr(data-tooltip); color: white; background: rgba(10,11,16,.94); box-shadow: 0 3px 12px rgba(0,0,0,.3); opacity: 0; transform: translate(-50%, -2px); transition: opacity .12s ease, transform .12s ease; pointer-events: none; font-size: 10px; font-weight: 600; white-space: nowrap; z-index: 20; }
-.icon-button:hover::after, .icon-button.native-pointer-hover::after, .icon-button:focus-visible::after { opacity: 1; transform: translate(-50%, 0); }
+.icon-button:hover::after, .icon-button[data-native-pointer-hover="true"]::after, .icon-button:focus-visible::after { opacity: 1; transform: translate(-50%, 0); }
 .thumbnail-top-actions .icon-button::after { top: auto; bottom: calc(100% + 6px); transform: translate(-50%, 2px); }
-.thumbnail-top-actions .icon-button:hover::after, .thumbnail-top-actions .icon-button.native-pointer-hover::after, .thumbnail-top-actions .icon-button:focus-visible::after { transform: translate(-50%, 0); }
+.thumbnail-top-actions .icon-button:hover::after, .thumbnail-top-actions .icon-button[data-native-pointer-hover="true"]::after, .thumbnail-top-actions .icon-button:focus-visible::after { transform: translate(-50%, 0); }
 .thumbnail-top-left .icon-button::after { left: 0; transform: translate(0, 2px); }
-.thumbnail-top-left .icon-button:hover::after, .thumbnail-top-left .icon-button.native-pointer-hover::after, .thumbnail-top-left .icon-button:focus-visible::after { transform: translate(0, 0); }
+.thumbnail-top-left .icon-button:hover::after, .thumbnail-top-left .icon-button[data-native-pointer-hover="true"]::after, .thumbnail-top-left .icon-button:focus-visible::after { transform: translate(0, 0); }
 /* Right-edge actions anchor their tooltip inward so it is not clipped. */
 .thumbnail-top-right .icon-button::after { left: auto; right: 0; transform: translate(0, 2px); }
-.thumbnail-top-right .icon-button:hover::after, .thumbnail-top-right .icon-button.native-pointer-hover::after, .thumbnail-top-right .icon-button:focus-visible::after { transform: translate(0, 0); }
+.thumbnail-top-right .icon-button:hover::after, .thumbnail-top-right .icon-button[data-native-pointer-hover="true"]::after, .thumbnail-top-right .icon-button:focus-visible::after { transform: translate(0, 0); }
 .thumbnail-main-actions { position: absolute; z-index: 3; top: 50%; left: 50%; display: grid; gap: 7px; width: 132px; transform: translate(-50%, -47%); }
 html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-main-actions, .thumbnail-card:focus-within .thumbnail-main-actions, .thumbnail-card[data-thumbnail-native-active="true"] .thumbnail-main-actions { transform: translate(-50%, -50%); }
 .thumbnail-main-actions button { display: flex; height: 32px; align-items: center; justify-content: center; gap: 7px; border: 1px solid rgba(255,255,255,.18); border-radius: 7px; color: white; background: rgba(25,27,38,.9); box-shadow: 0 4px 16px rgba(0,0,0,.3); backdrop-filter: blur(10px); cursor: pointer; font-size: 11px; font-weight: 700; transition: filter .14s ease, transform .14s ease, box-shadow .14s ease; outline: none; }
 .thumbnail-main-actions button:last-child { color: var(--theme-accent-ink); background: var(--theme-accent); box-shadow: 0 4px 16px rgba(var(--theme-accent-rgb),.24); }
-.thumbnail-main-actions button:hover, .thumbnail-main-actions button.native-pointer-hover { filter: brightness(1.15); transform: translateY(-1px); }
+.thumbnail-main-actions button:hover, .thumbnail-main-actions button[data-native-pointer-hover="true"] { filter: brightness(1.15); transform: translateY(-1px); }
 .thumbnail-main-actions button:active { transform: translateY(1px) scale(.97); }
 .thumbnail-main-actions button:disabled { cursor: wait; opacity: .72; }
 /* Kill the default WKWebView focus ring (can look like a gray dashed box). */
 .thumbnail-main-actions button:focus { outline: none; }
 .thumbnail-main-actions button:focus-visible { box-shadow: 0 4px 16px rgba(0,0,0,.3), 0 0 0 2px rgba(var(--theme-accent-rgb),.65); }
-html.thumbnail-native-tracking button.native-pointer-hover { cursor: pointer !important; }
+html.thumbnail-native-tracking button[data-native-pointer-hover="true"] { cursor: pointer !important; }
 /* Native AppKit cursor is the source of truth while polling; mirror grab on the
    image so CSS and WKWebView stay consistent when cursor rectangles re-enable. */
 html.thumbnail-native-tracking .thumbnail-card[data-thumbnail-native-active="true"] img { cursor: grab !important; }
