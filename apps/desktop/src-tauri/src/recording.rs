@@ -494,12 +494,12 @@ fn crop_display_region(
     display: &DisplayDescriptor,
     rect: &captures_recording::CaptureRect,
 ) -> Result<image::RgbaImage, AppError> {
-    let scale_x = f64::from(image.width()) / f64::from(display.width.max(1));
-    let scale_y = f64::from(image.height()) / f64::from(display.height.max(1));
-    let x = (f64::from(rect.x) * scale_x).round().max(0.0) as u32;
-    let y = (f64::from(rect.y) * scale_y).round().max(0.0) as u32;
-    let width = (f64::from(rect.width) * scale_x).round().max(1.0) as u32;
-    let height = (f64::from(rect.height) * scale_y).round().max(1.0) as u32;
+    // Region rects come from the overlay in CSS/DIP space.
+    let scale = display.overlay_to_buffer_scale(image.width(), image.height());
+    let x = (f64::from(rect.x) * scale).round().max(0.0) as u32;
+    let y = (f64::from(rect.y) * scale).round().max(0.0) as u32;
+    let width = (f64::from(rect.width) * scale).round().max(1.0) as u32;
+    let height = (f64::from(rect.height) * scale).round().max(1.0) as u32;
     Ok(image::imageops::crop_imm(
         image,
         x.min(image.width().saturating_sub(1)),
@@ -2314,14 +2314,21 @@ fn validate_target(
                 && rect.is_valid()
                 && rect.x >= 0
                 && rect.y >= 0
-                && u32::try_from(rect.x)
-                    .ok()
-                    .and_then(|x| x.checked_add(rect.width))
-                    .is_some_and(|right| right <= selection.display.width)
-                && u32::try_from(rect.y)
-                    .ok()
-                    .and_then(|y| y.checked_add(rect.height))
-                    .is_some_and(|bottom| bottom <= selection.display.height) =>
+                && {
+                    // Region rects are in overlay/CSS space, not necessarily
+                    // the same units as display.width/height on Windows.
+                    let (overlay_w, overlay_h) = selection.display.overlay_size();
+                    let max_w = overlay_w.round().max(1.0) as u32;
+                    let max_h = overlay_h.round().max(1.0) as u32;
+                    u32::try_from(rect.x)
+                        .ok()
+                        .and_then(|x| x.checked_add(rect.width))
+                        .is_some_and(|right| right <= max_w)
+                        && u32::try_from(rect.y)
+                            .ok()
+                            .and_then(|y| y.checked_add(rect.height))
+                            .is_some_and(|bottom| bottom <= max_h)
+                } =>
         {
             Ok(())
         }
@@ -2344,22 +2351,7 @@ fn image_for_selection(
     let image = match target {
         RecordingTarget::Display { .. } => selection.image.clone(),
         RecordingTarget::Region { rect, .. } => {
-            let scale_x = f64::from(selection.image.width())
-                / f64::from(selection.summary.display.width.max(1));
-            let scale_y = f64::from(selection.image.height())
-                / f64::from(selection.summary.display.height.max(1));
-            let x = (f64::from(rect.x) * scale_x).round().max(0.0) as u32;
-            let y = (f64::from(rect.y) * scale_y).round().max(0.0) as u32;
-            let width = (f64::from(rect.width) * scale_x).round().max(1.0) as u32;
-            let height = (f64::from(rect.height) * scale_y).round().max(1.0) as u32;
-            image::imageops::crop_imm(
-                &selection.image,
-                x.min(selection.image.width().saturating_sub(1)),
-                y.min(selection.image.height().saturating_sub(1)),
-                width.min(selection.image.width().saturating_sub(x)),
-                height.min(selection.image.height().saturating_sub(y)),
-            )
-            .to_image()
+            crop_display_region(&selection.image, &selection.summary.display, rect)?
         }
         RecordingTarget::Window { window_id } => {
             let window = selection
@@ -2368,21 +2360,7 @@ fn image_for_selection(
                 .iter()
                 .find(|window| &window.id == window_id)
                 .ok_or(AppError::InvalidSelection)?;
-            let display = &selection.summary.display;
-            let scale_x = f64::from(selection.image.width()) / f64::from(display.width.max(1));
-            let scale_y = f64::from(selection.image.height()) / f64::from(display.height.max(1));
-            let x = (f64::from(window.x - display.x) * scale_x).round().max(0.0) as u32;
-            let y = (f64::from(window.y - display.y) * scale_y).round().max(0.0) as u32;
-            let width = (f64::from(window.width) * scale_x).round().max(1.0) as u32;
-            let height = (f64::from(window.height) * scale_y).round().max(1.0) as u32;
-            image::imageops::crop_imm(
-                &selection.image,
-                x.min(selection.image.width().saturating_sub(1)),
-                y.min(selection.image.height().saturating_sub(1)),
-                width.min(selection.image.width().saturating_sub(x)),
-                height.min(selection.image.height().saturating_sub(y)),
-            )
-            .to_image()
+            crop_window_from_display(&selection.image, &selection.summary.display, window)?
         }
     };
     Ok(image)
@@ -2812,20 +2790,17 @@ async fn prepare_recording_selector(
             let window = handle
                 .get_webview_window("recording-selector")
                 .ok_or_else(|| "recording selector is unavailable".to_owned())?;
+            // Match the screenshot overlay: on Windows xcap geometry is physical,
+            // while Tauri LogicalSize/Position expect CSS DIPs.
+            let (x, y, width, height) = display.overlay_geometry();
             window
-                .set_size(LogicalSize::new(
-                    f64::from(display.width),
-                    f64::from(display.height),
-                ))
+                .set_size(LogicalSize::new(width, height))
                 .map_err(|error| error.to_string())?;
             // A hidden borderless NSWindow grows from its bottom-left anchor.
             // Position it after resizing so the final top-left edge matches the
             // selected display instead of landing one full screen above it.
             window
-                .set_position(tauri::LogicalPosition::new(
-                    f64::from(display.x),
-                    f64::from(display.y),
-                ))
+                .set_position(tauri::LogicalPosition::new(x, y))
                 .map_err(|error| error.to_string())?;
             window
                 .set_content_protected(recording_overlay_content_protected())
@@ -3100,6 +3075,7 @@ async fn show_recording_hud(app: &AppHandle) -> Result<(), AppError> {
 }
 
 fn show_recording_countdown(app: &AppHandle, display: &DisplayDescriptor) -> Result<(), AppError> {
+    let (x, y, width, height) = display.overlay_geometry();
     if app.get_webview_window("recording-countdown").is_none() {
         WebviewWindowBuilder::new(
             app,
@@ -3107,8 +3083,8 @@ fn show_recording_countdown(app: &AppHandle, display: &DisplayDescriptor) -> Res
             WebviewUrl::App("index.html?view=recording-countdown".into()),
         )
         .title("Captures Recording Countdown")
-        .inner_size(f64::from(display.width), f64::from(display.height))
-        .position(f64::from(display.x), f64::from(display.y))
+        .inner_size(width, height)
+        .position(x, y)
         .decorations(false)
         .always_on_top(true)
         .visible_on_all_workspaces(true)
@@ -3124,14 +3100,8 @@ fn show_recording_countdown(app: &AppHandle, display: &DisplayDescriptor) -> Res
     let window = app
         .get_webview_window("recording-countdown")
         .ok_or_else(|| AppError::Task("recording countdown is unavailable".to_owned()))?;
-    window.set_size(tauri::LogicalSize::new(
-        f64::from(display.width),
-        f64::from(display.height),
-    ))?;
-    window.set_position(tauri::LogicalPosition::new(
-        f64::from(display.x),
-        f64::from(display.y),
-    ))?;
+    window.set_size(tauri::LogicalSize::new(width, height))?;
+    window.set_position(tauri::LogicalPosition::new(x, y))?;
     window.set_content_protected(recording_overlay_content_protected())?;
     window.show()?;
     #[cfg(target_os = "macos")]

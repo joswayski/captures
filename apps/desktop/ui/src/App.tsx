@@ -1386,7 +1386,10 @@ export function RecordingSelector() {
       setTargetMode("region");
       setSelectedWindow(null);
       setHoveredWindow(null);
-      setRegion(defaultRecordingRegion(selection.display.width, selection.display.height));
+      {
+        const overlay = displayOverlaySize(selection.display, selection.window_coordinate_scale);
+        setRegion(defaultRecordingRegion(overlay.width, overlay.height));
+      }
       clearRegionDrag();
       panelDragRef.current = null;
       setPanelDragging(false);
@@ -1589,6 +1592,7 @@ export function RecordingSelector() {
     };
     if (mode === "create") setRegion({ x: start.x, y: start.y, width: 0, height: 0 });
   };
+  const overlaySize = displayOverlaySize(session.display, session.window_coordinate_scale);
   const onPointerMove = (event: React.PointerEvent) => {
     if (!regionDragRef.current || targetMode !== "region") return;
     event.preventDefault();
@@ -1604,7 +1608,7 @@ export function RecordingSelector() {
         drag.origin,
         current,
         drag.initial,
-        { width: session.display.width, height: session.display.height },
+        overlaySize,
       ));
     });
   };
@@ -1617,7 +1621,7 @@ export function RecordingSelector() {
         drag.origin,
         current,
         drag.initial,
-        { width: session.display.width, height: session.display.height },
+        overlaySize,
       ));
     }
     if (
@@ -1645,7 +1649,7 @@ export function RecordingSelector() {
   const activeWindow = hoveredWindow ?? selectedWindow;
   const activeWindowLayout = windowLayouts.find(({ window }) => window.id === activeWindow);
   const selectedRect = targetMode === "display"
-    ? { x: 0, y: 0, width: session.display.width, height: session.display.height }
+    ? { x: 0, y: 0, width: overlaySize.width, height: overlaySize.height }
     : targetMode === "window"
       ? activeWindowLayout ? {
           x: activeWindowLayout.left,
@@ -1669,7 +1673,7 @@ export function RecordingSelector() {
       target = {
         type: "region",
         display_id: session.display.id,
-        rect: roundRecordingRect(region, session.display.width, session.display.height),
+        rect: roundRecordingRect(region, overlaySize.width, overlaySize.height),
       };
     } else {
       return null;
@@ -1818,7 +1822,7 @@ export function RecordingSelector() {
       <CaptureDim
         mode={targetMode}
         hole={selectedRect}
-        bounds={{ width: session.display.width, height: session.display.height }}
+        bounds={overlaySize}
         dimWithoutHole={targetMode === "window"}
         windowCornerRadius={activeWindowCornerRadius}
       />
@@ -2087,6 +2091,24 @@ function CaptureTargetIcon({ mode }: { mode: RecordingTargetMode }) {
     return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="6" width="16" height="13" rx="2.5" /><path d="M4 10h16M7 8h.01M10 8h.01" /></svg>;
   }
   return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="14" rx="2.5" /><path d="M9 21h6M12 18v3" /></svg>;
+}
+
+/**
+ * CSS/DIP size of the capture overlay for a display.
+ *
+ * On Windows, native display width/height are physical pixels while the overlay
+ * and pointer events use logical DIPs. `window_coordinate_scale` is that DPI
+ * factor (1 elsewhere).
+ */
+function displayOverlaySize(
+  display: { width: number; height: number },
+  windowCoordinateScale: number,
+): { width: number; height: number } {
+  const scale = Math.max(windowCoordinateScale || 1, 1);
+  return {
+    width: display.width / scale,
+    height: display.height / scale,
+  };
 }
 
 function defaultRecordingRegion(width: number, height: number): RecordingRect {
@@ -3781,7 +3803,7 @@ function CaptureOverlay() {
       <CaptureDim
         mode={mode}
         hole={dimHole}
-        bounds={{ width: session.display.width, height: session.display.height }}
+        bounds={displayOverlaySize(session.display, session.window_coordinate_scale)}
         windowCornerRadius={hoveredWindowLayout?.cornerRadius ?? session.window_corner_radius}
       />
       <CaptureGuidance

@@ -510,9 +510,12 @@ async fn commit_region(
         .lock()
         .remove(&id)
         .ok_or_else(|| AppError::SessionUnavailable.to_string())?;
-    // Prefer scale from actual buffer vs logical display size so Retina crops stay sharp
-    // even if the platform scale_factor is wrong.
-    let scale = capture_buffer_scale(&session.display, &session.image);
+    // Map overlay/CSS DIPs onto the capture buffer. On Windows the display
+    // descriptor is physical while the overlay is logical, so do not use the
+    // native-geometry scale used for window crops.
+    let scale = session
+        .display
+        .overlay_to_buffer_scale(session.image.width(), session.image.height());
     let physical = rect.to_physical(scale, session.image.width(), session.image.height());
     let Some(image) = session.view(physical) else {
         restore_thumbnail_stack(&app, &state);
@@ -681,6 +684,7 @@ fn show_screenshot_countdown(
     app: &AppHandle,
     display: &captures_capture::DisplayDescriptor,
 ) -> Result<(), AppError> {
+    let (x, y, width, height) = display.overlay_geometry();
     if app.get_webview_window("screenshot-countdown").is_none() {
         WebviewWindowBuilder::new(
             app,
@@ -688,8 +692,8 @@ fn show_screenshot_countdown(
             WebviewUrl::App("index.html?view=screenshot-countdown".into()),
         )
         .title("Captures Screenshot Countdown")
-        .inner_size(f64::from(display.width), f64::from(display.height))
-        .position(f64::from(display.x), f64::from(display.y))
+        .inner_size(width, height)
+        .position(x, y)
         .decorations(false)
         .always_on_top(true)
         .visible_on_all_workspaces(true)
@@ -705,14 +709,8 @@ fn show_screenshot_countdown(
     let window = app
         .get_webview_window("screenshot-countdown")
         .ok_or_else(|| AppError::Task("screenshot countdown is unavailable".to_owned()))?;
-    window.set_size(tauri::LogicalSize::new(
-        f64::from(display.width),
-        f64::from(display.height),
-    ))?;
-    window.set_position(tauri::LogicalPosition::new(
-        f64::from(display.x),
-        f64::from(display.y),
-    ))?;
+    window.set_size(tauri::LogicalSize::new(width, height))?;
+    window.set_position(tauri::LogicalPosition::new(x, y))?;
     // Keep the countdown out of Captures' own recordings on Windows.
     window.set_content_protected(cfg!(target_os = "windows"))?;
     window.show()?;
@@ -2431,23 +2429,8 @@ fn show_capture_window(app: &AppHandle, session: &ActiveSession) {
     let app = app.clone();
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
-        #[cfg(target_os = "windows")]
-        let (x, y, width, height) = {
-            let scale = display.scale_factor.max(1.0);
-            (
-                f64::from(display.x) / scale,
-                f64::from(display.y) / scale,
-                f64::from(display.width) / scale,
-                f64::from(display.height) / scale,
-            )
-        };
-        #[cfg(not(target_os = "windows"))]
-        let (x, y, width, height) = (
-            f64::from(display.x),
-            f64::from(display.y),
-            f64::from(display.width),
-            f64::from(display.height),
-        );
+        // On Windows xcap geometry is physical; Tauri LogicalSize expects DIPs.
+        let (x, y, width, height) = display.overlay_geometry();
         if handle.get_webview_window("overlay").is_none()
             && let Err(error) = create_overlay_window(&handle)
         {
@@ -3419,8 +3402,12 @@ impl CaptureSession {
     }
 }
 
-/// Map overlay/CSS logical coordinates onto the capture buffer. Prefer the ratio of
-/// actual buffer pixels to logical display size over the platform scale alone.
+/// Map native window/display geometry onto the capture buffer.
+///
+/// Coordinates come from the capture backend in the same units as
+/// `display.width`/`height` (logical points on macOS, physical pixels on
+/// Windows). Region selections from the overlay use
+/// [`DisplayDescriptor::overlay_to_buffer_scale`] instead.
 fn capture_buffer_scale(display: &captures_capture::DisplayDescriptor, image: &RgbaImage) -> f64 {
     let logical_w = f64::from(display.width.max(1));
     let logical_h = f64::from(display.height.max(1));
