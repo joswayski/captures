@@ -2961,8 +2961,8 @@ fn thumbnail_stack_height(count: usize) -> f64 {
 /// Applied on every platform so previews never sit flush against a dock/taskbar.
 const THUMBNAIL_SYSTEM_CHROME_GAP: f64 = 12.0;
 
-/// When work area equals the full monitor (auto-hide taskbar/dock/panel), reserve
-/// this many logical pixels along the bottom so revealing chrome cannot cover cards.
+/// When the work area reaches the monitor bottom (auto-hide taskbar/dock/panel),
+/// reserve this many logical pixels so revealing chrome cannot cover cards.
 const THUMBNAIL_AUTO_HIDE_RESERVE: f64 = 48.0;
 
 #[derive(Clone, Copy, Debug)]
@@ -2985,14 +2985,15 @@ fn thumbnail_geometry(bounds: ThumbnailMonitorBounds, count: usize) -> (f64, f64
     let width = f64::from(bounds.work_width) / scale;
     let mut height = f64::from(bounds.work_height) / scale;
 
-    // Auto-hide taskbars/docks report a work area equal to the full monitor.
-    // Carve out a bottom reserve so previews still float above the chrome when
-    // it reappears.
-    let work_matches_full = bounds.work_x == bounds.full_x
-        && bounds.work_y == bounds.full_y
-        && bounds.work_width == bounds.full_width
-        && bounds.work_height == bounds.full_height;
-    if work_matches_full {
+    // Auto-hide taskbars/docks leave the work area flush with the monitor's
+    // bottom edge. Compare bottom edges instead of whole rectangles: macOS
+    // still excludes its top menu bar, so its work area never equals the full
+    // monitor even when an auto-hidden bottom Dock is unreserved.
+    let work_bottom = i64::from(bounds.work_y) + i64::from(bounds.work_height);
+    let full_bottom = i64::from(bounds.full_y) + i64::from(bounds.full_height);
+    let work_spans_full_width =
+        bounds.work_x == bounds.full_x && bounds.work_width == bounds.full_width;
+    if work_bottom == full_bottom && work_spans_full_width {
         let bottom_reserve = THUMBNAIL_AUTO_HIDE_RESERVE.min((height * 0.12).max(0.0));
         height = (height - bottom_reserve).max(1.0);
     }
@@ -4330,6 +4331,20 @@ mod tests {
         assert!(window_bottom <= 1_080.0 - THUMBNAIL_AUTO_HIDE_RESERVE);
         assert_eq!(
             window_bottom,
+            1_080.0 - THUMBNAIL_AUTO_HIDE_RESERVE - THUMBNAIL_SYSTEM_CHROME_GAP
+        );
+    }
+
+    #[test]
+    fn reserves_bottom_space_when_top_system_chrome_remains_visible() {
+        // macOS keeps the menu bar out of the work area even when an
+        // auto-hidden bottom Dock is not reserved. Linux can report the same
+        // shape for a top panel plus auto-hidden bottom panel.
+        let (_, top, height) =
+            thumbnail_geometry(bounds((0, 48, 3_992, 2_112), (0, 0, 3_992, 2_160), 2.0), 1);
+
+        assert_eq!(
+            top + height,
             1_080.0 - THUMBNAIL_AUTO_HIDE_RESERVE - THUMBNAIL_SYSTEM_CHROME_GAP
         );
     }

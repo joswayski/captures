@@ -4082,6 +4082,7 @@ export function Thumbnail() {
     let ignoringCursorEvents = false;
     let lastCursorSyncAt = 0;
     let consecutiveNullPolls = 0;
+    let cursorHandoffTimer: ReturnType<typeof setTimeout> | null = null;
     const setThumbnailCursor = (
       kind: ThumbnailCursorKind,
       options: { force?: boolean } = {},
@@ -4112,6 +4113,20 @@ export function Thumbnail() {
     const reassertInteractiveCursor = () => {
       if (cursorKind === "default") return;
       setThumbnailCursor(cursorKind, { force: true });
+    };
+
+    /**
+     * AppKit and WebKit can install the arrow after their mouse/focus event
+     * finishes. Reassert now and once on the next task so our interactive
+     * cursor wins both sides of that native handoff without waiting for a poll.
+     */
+    const preserveInteractiveCursorAcrossHandoff = () => {
+      reassertInteractiveCursor();
+      if (cursorHandoffTimer) clearTimeout(cursorHandoffTimer);
+      cursorHandoffTimer = setTimeout(() => {
+        cursorHandoffTimer = null;
+        reassertInteractiveCursor();
+      }, 0);
     };
 
     const setIgnoreCursorEvents = (ignore: boolean, force = false) => {
@@ -4242,7 +4257,7 @@ export function Thumbnail() {
       if (document.hidden) return;
       // Focus handoffs restore the frontmost app's arrow; reassert first so
       // the pointer/grab affordance does not wait for the next throttle window.
-      reassertInteractiveCursor();
+      preserveInteractiveCursorAcrossHandoff();
       // Unlock a poll that may have been mid-flight when the OS suspended JS.
       polling = false;
       schedulePoll(0);
@@ -4256,7 +4271,7 @@ export function Thumbnail() {
     const onPointerActivity = (event: PointerEvent) => {
       // Only primary-button presses/releases reset the AppKit cursor on macOS.
       if (event.pointerType === "mouse" && event.button !== 0) return;
-      reassertInteractiveCursor();
+      preserveInteractiveCursorAcrossHandoff();
     };
 
     document.addEventListener("visibilitychange", resumeFromSuspension);
@@ -4265,6 +4280,10 @@ export function Thumbnail() {
     // during that transfer; the immediate poll will reconcile it without
     // flashing the metadata and unblurred image in between.
     window.addEventListener("focus", pollImmediately);
+    // Opening an editor, dialog, or external folder moves key-window focus
+    // away after the click handlers run. Preserve the hovered button's cursor
+    // through that later native transition as well.
+    window.addEventListener("blur", preserveInteractiveCursorAcrossHandoff);
     // Capture-phase so we reassert before WebKit's own cursor update from the click.
     window.addEventListener("pointerdown", onPointerActivity, true);
     window.addEventListener("pointerup", onPointerActivity, true);
@@ -4282,8 +4301,10 @@ export function Thumbnail() {
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
+      if (cursorHandoffTimer) clearTimeout(cursorHandoffTimer);
       document.removeEventListener("visibilitychange", resumeFromSuspension);
       window.removeEventListener("focus", pollImmediately);
+      window.removeEventListener("blur", preserveInteractiveCursorAcrossHandoff);
       window.removeEventListener("pointerdown", onPointerActivity, true);
       window.removeEventListener("pointerup", onPointerActivity, true);
       window.removeEventListener("pageshow", resumeFromSuspension);
