@@ -383,6 +383,7 @@ export function RecordingSavedNotice() {
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [permanentlySaved, setPermanentlySaved] = useState(false);
   const artifactId = notice.artifactId;
 
   useEffect(() => {
@@ -393,12 +394,28 @@ export function RecordingSavedNotice() {
         setNotice({ artifactId: payload.artifact_id, generation: payload.generation });
         setBusy(false);
         setError("");
+        setPermanentlySaved(false);
       },
     ).then((unlisten) => {
       dispose = unlisten;
     }).catch(() => undefined);
     return () => dispose?.();
   }, []);
+
+  useEffect(() => {
+    if (!artifactId) return;
+    let active = true;
+    void invoke<{ saved_path?: string | null } | null>("get_recording_artifact", { artifactId })
+      .then((artifact) => {
+        if (active) setPermanentlySaved(Boolean(artifact?.saved_path));
+      })
+      .catch(() => {
+        if (active) setPermanentlySaved(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [artifactId, notice.generation]);
 
   const dismiss = () => {
     void invoke("dismiss_recording_saved_notice");
@@ -417,19 +434,47 @@ export function RecordingSavedNotice() {
     }
   };
 
+  const save = async () => {
+    if (!artifactId || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await invoke("save_recording_artifact", { artifactId });
+      setPermanentlySaved(true);
+      setBusy(false);
+    } catch (error) {
+      setError(`Could not save the recording: ${String(error)}`);
+      setBusy(false);
+    }
+  };
+
   return (
     <main key={notice.generation} className="recording-saved-notice">
       <span className="recording-saved-icon" aria-hidden="true"><CheckIcon /></span>
       <div className="recording-saved-copy">
-        <strong>Recording saved</strong>
-        <p>{error || "Saved to your Captures folder."}</p>
+        <strong>{permanentlySaved ? "Recording saved" : "Recording ready"}</strong>
+        <p>
+          {error
+            || (permanentlySaved
+              ? "Saved to your Captures folder."
+              : "Kept in Capture History for 30 days. Save a copy anytime.")}
+        </p>
       </div>
-      <button
-        type="button"
-        className="recording-saved-reveal"
-        disabled={busy || !artifactId}
-        onClick={() => void reveal()}
-      ><FolderIcon />{busy ? "Opening…" : "Show in Folder"}</button>
+      {permanentlySaved ? (
+        <button
+          type="button"
+          className="recording-saved-reveal"
+          disabled={busy || !artifactId}
+          onClick={() => void reveal()}
+        ><FolderIcon />{busy ? "Opening…" : "Show in Folder"}</button>
+      ) : (
+        <button
+          type="button"
+          className="recording-saved-reveal"
+          disabled={busy || !artifactId}
+          onClick={() => void save()}
+        ><SaveIcon />{busy ? "Saving…" : "Save file"}</button>
+      )}
       <button
         type="button"
         className="recording-saved-dismiss"
@@ -844,12 +889,16 @@ export function HistoryCard({
   entry: ArtifactSummary;
   onDeleted: (artifactId: string) => void;
 }) {
-  const [busy, setBusy] = useState<"restoring" | "editing" | "opening" | "revealing" | "deleting" | null>(null);
+  const [busy, setBusy] = useState<"restoring" | "editing" | "opening" | "revealing" | "saving" | "deleting" | null>(null);
   const [restored, setRestored] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [error, setError] = useState("");
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const deleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const recordingPermanentlySaved = entry.kind !== "screenshot"
+    && Boolean(entry.saved_path)
+    && !entry.missing;
 
   useEffect(() => () => {
     if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
@@ -905,6 +954,22 @@ export function HistoryCard({
     setError("");
     try {
       await invoke("reveal_recording_artifact", { artifactId: entry.id });
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const saveRecording = async () => {
+    if (busy || entry.kind === "screenshot" || entry.missing) return;
+    setBusy("saving");
+    setError("");
+    try {
+      await invoke("save_recording_artifact", { artifactId: entry.id });
+      setSaved(true);
+      if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
+      feedbackTimer.current = setTimeout(() => setSaved(false), 2_500);
     } catch (error) {
       setError(String(error));
     } finally {
@@ -988,14 +1053,26 @@ export function HistoryCard({
               >
                 <EditIcon />{busy === "opening" ? "Opening…" : "Edit"}
               </button>
-              <button
-                type="button"
-                className="history-reveal"
-                disabled={busy !== null}
-                onClick={() => void revealRecording()}
-              >
-                {busy === "revealing" ? "Showing…" : "Show in Folder"}
-              </button>
+              {recordingPermanentlySaved || saved ? (
+                <button
+                  type="button"
+                  className="history-reveal"
+                  disabled={busy !== null}
+                  onClick={() => void revealRecording()}
+                >
+                  {busy === "revealing" ? "Showing…" : "Show in Folder"}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="history-reveal"
+                  title="Save a permanent copy to your Captures folder"
+                  disabled={busy !== null}
+                  onClick={() => void saveRecording()}
+                >
+                  {busy === "saving" ? "Saving…" : <><SaveIcon />Save file</>}
+                </button>
+              )}
             </>
           ) : null}
           <button
@@ -1004,8 +1081,8 @@ export function HistoryCard({
             aria-label={entry.kind !== "screenshot" && entry.missing
               ? "Remove missing entry"
               : confirmingDelete
-              ? entry.kind === "screenshot" ? "Confirm permanent deletion" : "Confirm removal from History"
-              : entry.kind === "screenshot" ? "Delete from History" : "Remove from History"}
+              ? "Confirm permanent deletion"
+              : "Delete from History"}
             disabled={busy !== null}
             onClick={() => void deleteFromHistory()}
           >
@@ -1013,8 +1090,8 @@ export function HistoryCard({
             {entry.kind !== "screenshot" && entry.missing
               ? busy === "deleting" ? "Removing…" : "Remove entry"
               : confirmingDelete
-                ? entry.kind === "screenshot" ? "Delete forever" : "Remove entry"
-                : entry.kind === "screenshot" ? "Delete" : "Remove"}
+                ? "Delete forever"
+                : "Delete"}
           </button>
         </div>
         {error && <p className="history-card-error" role="alert">{error}</p>}
@@ -5390,7 +5467,7 @@ export function Preferences() {
         </div>
         <label className="check-row recording-setting-after-select recording-behavior-toggle"><input type="checkbox" checked={settings.recording.show_cursor} onChange={(event) => updateRecording("show_cursor", event.target.checked)} /><span>Show cursor in recordings</span></label>
         <label className="check-row recording-behavior-toggle"><input type="checkbox" checked={settings.recording.highlight_clicks} onChange={(event) => updateRecording("highlight_clicks", event.target.checked)} /><span>Show clicks in recordings</span></label>
-        <label className="check-row capture-option"><input type="checkbox" checked={settings.recording.open_editor_after_recording} onChange={(event) => updateRecording("open_editor_after_recording", event.target.checked)} /><span>Open the editor after recording<small>The original is saved first, so closing the editor never loses a recording.</small></span></label>
+        <label className="check-row capture-option"><input type="checkbox" checked={settings.recording.open_editor_after_recording} onChange={(event) => updateRecording("open_editor_after_recording", event.target.checked)} /><span>Open the editor after recording<small>The recording is kept in Capture History for 30 days, so closing the editor never loses it.</small></span></label>
       </section>
 
       <UpdatePreferences />

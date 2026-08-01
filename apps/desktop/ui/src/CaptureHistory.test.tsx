@@ -31,13 +31,13 @@ const recordingEntry: HistoryEntry = {
   kind: "video",
   poster_url: "captures-capture://localhost/poster/recording-1",
   media_url: "captures-capture://localhost/media/recording-1",
-  saved_path: "/Users/example/Captures/recording.mp4",
+  saved_path: null,
   mime_type: "video/mp4",
   duration_ms: 62_500,
   width: 1_920,
   height: 1_080,
-      size_bytes: 5_000_000,
-      dropped_frames: 0,
+  size_bytes: 5_000_000,
+  dropped_frames: 0,
   has_system_audio: true,
   has_microphone_audio: true,
   created_at: "2026-07-19T19:00:00Z",
@@ -91,6 +91,7 @@ describe("CaptureHistory", () => {
       if (command === "clear_capture_history") return undefined;
       if (command === "open_recording_editor") return undefined;
       if (command === "reveal_recording_artifact") return undefined;
+      if (command === "save_recording_artifact") return undefined;
       throw new Error(`unexpected command: ${command}`);
     });
   });
@@ -167,12 +168,12 @@ describe("CaptureHistory", () => {
     });
   });
 
-  it("opens recording entries without duplicating or deleting their media", async () => {
+  it("lets history-only recordings save permanently and delete from history", async () => {
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "get_capture_history") return [recordingEntry];
       if (command === "get_recording_drafts") return [];
       if (command === "open_recording_editor") return undefined;
-      if (command === "reveal_recording_artifact") return undefined;
+      if (command === "save_recording_artifact") return undefined;
       if (command === "delete_history_artifact") return undefined;
       if (command === "clear_capture_history") return undefined;
       throw new Error(`unexpected command: ${command}`);
@@ -184,15 +185,36 @@ describe("CaptureHistory", () => {
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("open_recording_editor", { artifactId: recordingEntry.id });
     });
-    fireEvent.click(screen.getByRole("button", { name: "Show in Folder" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save file" }));
     await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith("reveal_recording_artifact", { artifactId: recordingEntry.id });
+      expect(invoke).toHaveBeenCalledWith("save_recording_artifact", { artifactId: recordingEntry.id });
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Remove from History" }));
-    fireEvent.click(screen.getByRole("button", { name: "Confirm removal from History" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete from History" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm permanent deletion" }));
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("delete_history_artifact", { artifactId: recordingEntry.id });
+    });
+  });
+
+  it("shows permanently saved recordings in their folder", async () => {
+    const savedRecording = {
+      ...recordingEntry,
+      saved_path: "/Users/example/Captures/recording.mp4",
+    };
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_capture_history") return [savedRecording];
+      if (command === "get_recording_drafts") return [];
+      if (command === "reveal_recording_artifact") return undefined;
+      throw new Error(`unexpected command: ${command}`);
+    });
+    render(<CaptureHistory />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Show in Folder" }));
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("reveal_recording_artifact", {
+        artifactId: savedRecording.id,
+      });
     });
   });
 

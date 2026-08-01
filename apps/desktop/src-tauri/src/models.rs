@@ -242,7 +242,11 @@ pub struct RecordingSelection {
 pub struct RecordingArtifact {
     pub id: String,
     pub kind: RecordingKind,
+    /// Playable media path. Prefer private history recovery media when present.
     pub path: String,
+    /// Permanent Captures-folder copy when the user has explicitly saved.
+    #[serde(default)]
+    pub saved_path: Option<String>,
     pub media_url: String,
     pub poster_url: String,
     pub mime_type: String,
@@ -353,7 +357,8 @@ impl HistoryEntry {
             size_bytes: artifact.size_bytes,
             created_at: artifact.created_at.clone(),
             mode: None,
-            saved_path: Some(artifact.path.clone()),
+            // Permanent Captures path only. Recovery media lives under history/{id}/.
+            saved_path: artifact.saved_path.clone(),
             mime_type: Some(artifact.mime_type.clone()),
             duration_ms: Some(artifact.duration_ms),
             target: Some(artifact.target.clone()),
@@ -365,11 +370,13 @@ impl HistoryEntry {
 
     pub fn recording_artifact(&self) -> Option<RecordingArtifact> {
         let kind = self.kind.recording_kind()?;
-        let path = self.saved_path.clone()?;
+        let path = self.recording_media_path()?;
+        let missing = !Path::new(&path).is_file();
         Some(RecordingArtifact {
             id: self.id.clone(),
             kind,
-            path: path.clone(),
+            path,
+            saved_path: self.saved_path.clone(),
             media_url: recording_media_url(&self.id),
             poster_url: recording_poster_url(&self.id),
             mime_type: self.mime_type.clone()?,
@@ -382,8 +389,22 @@ impl HistoryEntry {
             has_microphone_audio: self.has_microphone_audio,
             created_at: self.created_at.clone(),
             target: self.target.clone()?,
-            missing: !Path::new(&path).is_file(),
+            missing,
         })
+    }
+
+    /// Prefer private history recovery media; fall back to a permanent saved path
+    /// (legacy entries stored media only in the Captures folder).
+    pub fn recording_media_path(&self) -> Option<String> {
+        let directory = history_directory().join(&self.id);
+        if let Some(path) = find_history_recording_media(&directory) {
+            return Some(path.to_string_lossy().into_owned());
+        }
+        if let Some(saved_path) = self.saved_path.clone() {
+            return Some(saved_path);
+        }
+        history_recording_media_path(&self.id, self.kind)
+            .map(|path| path.to_string_lossy().into_owned())
     }
 
     pub fn summary(&self) -> Option<ArtifactSummary> {
@@ -404,7 +425,7 @@ impl HistoryEntry {
                     id: artifact.id,
                     poster_url: artifact.poster_url,
                     media_url: artifact.media_url,
-                    saved_path: artifact.path,
+                    saved_path: artifact.saved_path,
                     mime_type: artifact.mime_type,
                     duration_ms: artifact.duration_ms,
                     width: artifact.width,
@@ -427,12 +448,59 @@ impl HistoryEntry {
     }
 }
 
+/// Preferred recovery media file name for a recording kind and source path.
+pub fn history_recording_media_file_name(kind: ArtifactKind, source: &Path) -> Option<String> {
+    kind.recording_kind()?;
+    let extension = source
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or(match kind {
+            ArtifactKind::Gif => "gif",
+            _ => "mp4",
+        });
+    Some(format!("media.{extension}"))
+}
+
+/// Locate private recovery media inside a history entry directory.
+pub fn find_history_recording_media(entry_directory: &Path) -> Option<PathBuf> {
+    const CANDIDATES: &[&str] = &["media.mp4", "media.gif", "media.webm"];
+    CANDIDATES
+        .iter()
+        .map(|name| entry_directory.join(name))
+        .find(|path| path.is_file())
+        .or_else(|| {
+            let entries = std::fs::read_dir(entry_directory).ok()?;
+            entries.flatten().map(|entry| entry.path()).find(|path| {
+                path.is_file()
+                    && path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.starts_with("media."))
+            })
+        })
+}
+
+pub fn history_recording_media_path(entry_id: &str, kind: ArtifactKind) -> Option<PathBuf> {
+    kind.recording_kind()?;
+    Uuid::parse_str(entry_id).ok()?;
+    let directory = history_directory().join(entry_id);
+    find_history_recording_media(&directory).or_else(|| {
+        // Default path used when creating a new recovery entry before the file exists.
+        let fallback = match kind {
+            ArtifactKind::Gif => "media.gif",
+            _ => "media.mp4",
+        };
+        Some(directory.join(fallback))
+    })
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct RecordingArtifactSummaryFields {
     pub id: String,
     pub poster_url: String,
     pub media_url: String,
-    pub saved_path: String,
+    /// Permanent Captures-folder path when the user has saved; null while history-only.
+    pub saved_path: Option<String>,
     pub mime_type: String,
     pub duration_ms: u64,
     pub width: u32,
@@ -911,6 +979,7 @@ mod tests {
             id: "8d11b283-3ac8-4510-8780-4910a7ed4305".to_owned(),
             kind: RecordingKind::Video,
             path: "/missing/Captures_recording.mp4".to_owned(),
+            saved_path: Some("/missing/Captures_recording.mp4".to_owned()),
             media_url: String::new(),
             poster_url: String::new(),
             mime_type: "video/mp4".to_owned(),
@@ -937,6 +1006,7 @@ mod tests {
         assert_eq!(json["duration_ms"], 1_500);
         assert_eq!(json["dropped_frames"], 3);
         assert_eq!(json["missing"], true);
+        assert_eq!(json["saved_path"], "/missing/Captures_recording.mp4");
         assert!(json.get("fields").is_none());
     }
 }
