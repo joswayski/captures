@@ -4663,7 +4663,14 @@ export function ThumbnailCard({
       exitFallbackTimer.current = null;
     }
     void invoke(action, { artifactId: artifact.id })
-      .then(() => onRemoved(artifact.id))
+      .then(() => {
+        onRemoved(artifact.id);
+        // The outgoing inert card can make the native thumbnail window
+        // click-through while an editor owns focus. Re-arm immediately after
+        // removal instead of waiting for a throttled background pointer poll.
+        window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
+        void invoke("refresh_thumbnail_interactivity").catch(() => undefined);
+      })
       .catch((error) => {
         // Only unlock if remove failed — otherwise the card is gone.
         exitingRef.current = false;
@@ -4672,6 +4679,7 @@ export function ThumbnailCard({
         setDustParticles(null);
         setError(String(error));
         window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
+        void invoke("refresh_thumbnail_interactivity").catch(() => undefined);
       });
   };
 

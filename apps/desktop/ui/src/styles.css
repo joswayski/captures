@@ -929,7 +929,7 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging img { cur
    native layer only owns the window, clipboard, and final file write. */
 /* user-select:none blocks the blue image/text selection highlight while drawing.
    Form fields re-enable text selection so labels and export values stay editable. */
-.screenshot-editor { display: grid; width: 100%; height: 100%; min-width: 860px; min-height: 600px; grid-template: 54px minmax(0,1fr) minmax(108px,auto) / 70px minmax(0,1fr) 310px; overflow: hidden; color: #f2f2f1; background: #151619; -webkit-user-select: none; user-select: none; }
+.screenshot-editor { display: grid; width: 100%; height: 100%; min-width: 860px; min-height: 600px; grid-template: 54px minmax(0,1fr) minmax(154px,auto) / 70px minmax(0,1fr) 310px; overflow: hidden; color: #f2f2f1; background: #151619; -webkit-user-select: none; user-select: none; }
 .screenshot-editor-loading { min-width: 0; min-height: 100%; place-items: center; color: #a7a8ad; }
 .screenshot-editor button, .screenshot-editor input, .screenshot-editor select, .screenshot-editor textarea { font: inherit; }
 .screenshot-editor input, .screenshot-editor textarea { -webkit-user-select: text; user-select: text; }
@@ -1034,7 +1034,7 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging img { cur
 .screenshot-file-name { overflow: hidden; color: #d5d6d8 !important; text-overflow: ellipsis; white-space: nowrap; }
 /* Labels sit above a shared 34px control row. Settings and action buttons
    bottom-align so Copy/Save share that control baseline. */
-.screenshot-export-bar { z-index: 20; display: grid; min-width: 0; grid-row: 3; grid-column: 1 / -1; padding: 10px 14px; grid-template-columns: minmax(0,auto) minmax(120px,1fr) auto; align-items: end; gap: 14px; border-top: 1px solid #3a3b40; background: rgba(31,32,36,.98); box-shadow: 0 -10px 28px rgba(0,0,0,.28); }
+.screenshot-export-bar { z-index: 20; display: flex; min-width: 0; grid-row: 3; grid-column: 1 / -1; padding: 10px 14px; flex-direction: column; gap: 10px; border-top: 1px solid #3a3b40; background: rgba(31,32,36,.98); box-shadow: 0 -10px 28px rgba(0,0,0,.28); }
 .screenshot-export-settings { display: flex; min-width: 0; flex-wrap: wrap; align-items: end; gap: 10px 12px; }
 .screenshot-export-settings label,
 .screenshot-export-control { display: flex; min-width: 0; flex-direction: column; justify-content: flex-end; gap: 4px; color: #898a90; font-size: 8px; font-weight: 750; line-height: 1; text-transform: uppercase; }
@@ -1045,7 +1045,10 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging img { cur
 .screenshot-export-size-control select { min-width: 92px; }
 .screenshot-output-dimensions { color: #a0a1a6; font-size: 9px; font-weight: 650; line-height: 1; white-space: nowrap; text-transform: none; font-variant-numeric: tabular-nums; }
 .screenshot-custom-dimensions { width: 226px; }.screenshot-custom-dimensions > div { display: grid; height: 34px; grid-template-columns: minmax(0,1fr) auto minmax(0,1fr) 32px; align-items: center; gap: 5px; }.screenshot-custom-dimensions input[type=number] { width: 100%; min-width: 0; }.screenshot-custom-dimensions > div > span { color: #77787d; font-size: 9px; }.screenshot-custom-dimensions button { display: grid; width: 32px; height: 34px; padding: 0; place-items: center; border: 1px solid #44454b; border-radius: 6px; color: #8c8d92; background: #111216; }.screenshot-custom-dimensions button.active { border-color: rgba(var(--theme-accent-rgb),.5); color: var(--theme-accent-text); background: rgba(var(--theme-accent-rgb),.1); }.screenshot-custom-dimensions button svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.screenshot-quality-mode { width: 152px; }
+.screenshot-quality-mode select { width: 100%; }
 .screenshot-quality { width: 248px; }
+.screenshot-lossless-quality { width: 164px; }
 /* Compact quality control: value + track + preset labels, aligned with selects. */
 .screenshot-quality .range-slider { grid-template-rows: 11px 20px 11px; gap: 0; }
 .screenshot-quality .range-slider-value { min-height: 11px; align-items: flex-end; }
@@ -1058,14 +1061,16 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging img { cur
 .screenshot-quality .range-slider-labels { height: 11px; margin: 0 10px; }
 .screenshot-quality .range-slider-labels small { max-width: 48px; overflow: hidden; top: 0; font-size: 6px; text-overflow: ellipsis; }
 .screenshot-quality > strong { display: flex; height: 34px; padding: 0 10px; align-items: center; border: 1px solid #44454b; border-radius: 6px; color: #d6d7da; background: #111216; font-size: 9px; text-transform: none; white-space: nowrap; }
-.screenshot-maximum-size { width: 150px; }
+.screenshot-maximum-size { width: 164px; }
 .screenshot-maximum-size > span { display: grid; grid-template-columns: minmax(0,1fr) 55px; gap: 5px; align-items: center; }
 .screenshot-maximum-size input[type=number] { width: 100%; }
 .screenshot-maximum-size select { min-width: 0; width: 55px; height: 34px; padding-right: 3px; }
 .screenshot-output-estimate-control { min-width: 72px; }
 .screenshot-output-estimate { display: flex; height: 34px; align-items: center; color: #a7a8ad; font-size: 9px; font-weight: 700; line-height: 1; text-transform: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .screenshot-output-estimate[data-pending="true"] { color: #6f7075; font-weight: 600; }
-.screenshot-export-status { display: flex; min-width: 0; height: 34px; overflow: hidden; align-self: end; align-items: center; color: #8e8f94; font-size: 9px; line-height: 1.35; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+.screenshot-save-row { display: grid; min-width: 0; grid-template-columns: minmax(280px,420px) minmax(140px,1fr) auto; align-items: end; gap: 14px; }
+.screenshot-filename { min-width: 0; }
+.screenshot-export-status { display: flex; min-width: 0; min-height: 34px; max-height: 50px; overflow: auto; align-items: center; color: #8e8f94; cursor: text; font-size: 9px; line-height: 1.35; text-align: right; white-space: normal; -webkit-user-select: text; user-select: text; }
 .screenshot-export-status.error { color: #ff9da6; }
 .screenshot-export-actions { display: flex; min-height: 34px; align-items: center; justify-content: flex-end; gap: 7px; }
 .screenshot-make-copy { display: inline-flex; height: 34px; align-items: center; gap: 7px; color: #b7b8bd; cursor: pointer; font-size: 9px; font-weight: 750; white-space: nowrap; }.screenshot-make-copy > input { position: absolute; opacity: 0; pointer-events: none; }.screenshot-make-copy .recording-switch { width: 28px; height: 16px; }.screenshot-make-copy .recording-switch::after { width: 10px; height: 10px; }.screenshot-make-copy:hover .recording-switch { border-color: #696a70; background: #2c2d32; }.screenshot-make-copy input:checked + .recording-switch { border-color: var(--theme-accent); background: var(--theme-accent); box-shadow: 0 3px 12px rgba(var(--theme-accent-rgb),.24); }.screenshot-make-copy input:checked + .recording-switch::after { background: var(--theme-accent-ink); transform: translateX(12px); }.screenshot-make-copy input:focus-visible + .recording-switch { box-shadow: 0 0 0 3px rgba(var(--theme-accent-rgb),.2); }.screenshot-make-copy:has(input:disabled) { cursor: default; opacity: .58; }
@@ -1078,9 +1083,12 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging img { cur
 @media (max-width: 1040px) {
   .screenshot-editor { grid-template-columns: 64px minmax(0,1fr) 270px; }
   .screenshot-editor-history-actions .screenshot-editor-zoom, .screenshot-editor-history-actions > button:first-child, .screenshot-editor-history-actions > button:nth-child(2) { display: none; }
-  .screenshot-export-bar { grid-template-columns: minmax(0,1fr) auto; align-items: end; gap: 10px 12px; }
-  .screenshot-export-status { display: none; }
+  .screenshot-save-row { grid-template-columns: minmax(260px,1fr) auto; gap: 8px 12px; }
+  .screenshot-filename { grid-row: 1; grid-column: 1; }
+  .screenshot-export-actions { grid-row: 1; grid-column: 2; }
+  .screenshot-export-status { grid-row: 2; grid-column: 1 / -1; min-height: 20px; text-align: left; }
   .screenshot-quality { width: 170px; }
+  .screenshot-lossless-quality { width: 150px; }
   .screenshot-maximum-size { width: 124px; }
   .screenshot-export-settings { gap: 8px 10px; }
 }

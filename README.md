@@ -23,7 +23,7 @@ may contain bugs or incomplete features.
 - Show the cursor and click highlights in recordings where supported.
 - Edit screenshots with text, shapes, arrows, drawing, crop, resize, and image layers.
 - Trim, crop, resize, and adjust audio in recordings.
-- Save lossless PNGs by default, with JPEG and WebP export options.
+- Save lossless PNGs by default, with lossless WebP, adjustable JPEG compression, and optional JPEG file-size limits.
 - Copy, save, preview, or drag recent captures into other apps.
 - Take screenshots without stopping an active recording.
 - Restore recent screenshots and recordings from a 30-day Capture History.
