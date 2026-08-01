@@ -1767,15 +1767,15 @@ pub fn start_recording_export(
                 } else {
                     Some(exported_path.clone())
                 };
-                if let Some(saved_path) = permanent_path.as_ref() {
-                    if Path::new(saved_path) != outcome.path.as_path() {
-                        if let Err(error) = fs::copy(&outcome.path, saved_path) {
-                            eprintln!(
-                                "recording export completed, but the Captures folder copy could not be updated: {error}"
-                            );
-                        }
+                if let Some(saved_path) = permanent_path.as_ref()
+                    && Path::new(saved_path) != outcome.path.as_path()
+                {
+                    if let Err(error) = fs::copy(&outcome.path, saved_path) {
+                        eprintln!(
+                            "recording export completed, but the Captures folder copy could not be updated: {error}"
+                        );
                     }
-                } else {
+                } else if permanent_path.is_none() {
                     let settings = state.settings();
                     match storage::unique_media_path(
                         Path::new(&settings.output_directory),
