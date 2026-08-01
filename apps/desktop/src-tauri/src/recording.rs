@@ -23,7 +23,8 @@ use captures_recording_macos::MacRecordingSegment as NativeRecordingSegment;
 use captures_recording_xcap::XcapRecordingSegment as NativeRecordingSegment;
 use serde::{Deserialize, Serialize};
 use tauri::{
-    AppHandle, Emitter, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder, window::Color,
+    AppHandle, Emitter, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder,
+    webview::PageLoadEvent, window::Color,
 };
 use tauri_plugin_opener::OpenerExt;
 use uuid::Uuid;
@@ -3132,6 +3133,7 @@ fn show_recording_editor(app: &AppHandle, artifact_id: &str) -> Result<(), AppEr
     captures_macos_window::clear_frontmost_app_anchor();
     if let Some(window) = app.get_webview_window(&label) {
         window.show()?;
+        window.unminimize()?;
         window.set_focus()?;
         return Ok(());
     }
@@ -3148,6 +3150,18 @@ fn show_recording_editor(app: &AppHandle, artifact_id: &str) -> Result<(), AppEr
     .center()
     .resizable(true)
     .background_color(Color(24, 25, 29, 255))
+    .focused(false)
+    .visible(false)
+    .on_page_load(|window, payload| {
+        if payload.event() == PageLoadEvent::Finished
+            && let Err(error) = window
+                .show()
+                .and_then(|_| window.unminimize())
+                .and_then(|_| window.set_focus())
+        {
+            eprintln!("failed to reveal recording editor: {error}");
+        }
+    })
     .build()?;
     Ok(())
 }

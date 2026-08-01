@@ -27,10 +27,24 @@ export type ElementStyle = {
   strokeWidth: number;
 };
 
+export type LayerBlendMode =
+  | "source-over"
+  | "multiply"
+  | "screen"
+  | "overlay"
+  | "darken"
+  | "lighten";
+
+export type ImageSnapEdge = "top" | "right" | "bottom" | "left";
+
 type EditorElementBase = {
   id: string;
   x: number;
   y: number;
+  locked: boolean;
+  visible: boolean;
+  opacity: number;
+  blendMode: LayerBlendMode;
 };
 
 export type EditorImageElement = EditorElementBase & {
@@ -118,6 +132,10 @@ export function createScreenshotDocument(
       height,
       naturalWidth: width,
       naturalHeight: height,
+      locked: true,
+      visible: true,
+      opacity: 100,
+      blendMode: "source-over",
     }],
   };
 }
@@ -240,17 +258,86 @@ export function positionImportedImage(
   };
 }
 
+export function closestImageSnapEdge(
+  point: EditorPoint,
+  target: EditorRect,
+): ImageSnapEdge {
+  const distances: Array<[ImageSnapEdge, number]> = [
+    ["top", Math.abs(point.y - target.y)],
+    ["right", Math.abs(point.x - (target.x + target.width))],
+    ["bottom", Math.abs(point.y - (target.y + target.height))],
+    ["left", Math.abs(point.x - target.x)],
+  ];
+  distances.sort((left, right) => left[1] - right[1]);
+  return distances[0][0];
+}
+
+/** Position an imported image flush against one edge of another layer. */
+export function positionImportedImageAtEdge(
+  naturalWidth: number,
+  naturalHeight: number,
+  document: Pick<ScreenshotDocument, "width" | "height">,
+  target: EditorRect,
+  edge: ImageSnapEdge,
+): EditorRect {
+  const centered = positionImportedImage(
+    naturalWidth,
+    naturalHeight,
+    document,
+    { x: target.x + target.width / 2, y: target.y + target.height / 2 },
+  );
+  if (edge === "top") {
+    return {
+      ...centered,
+      x: Math.round(target.x + (target.width - centered.width) / 2),
+      y: Math.round(target.y - centered.height),
+    };
+  }
+  if (edge === "right") {
+    return {
+      ...centered,
+      x: Math.round(target.x + target.width),
+      y: Math.round(target.y + (target.height - centered.height) / 2),
+    };
+  }
+  if (edge === "left") {
+    return {
+      ...centered,
+      x: Math.round(target.x - centered.width),
+      y: Math.round(target.y + (target.height - centered.height) / 2),
+    };
+  }
+  return {
+    ...centered,
+    x: Math.round(target.x + (target.width - centered.width) / 2),
+    y: Math.round(target.y + target.height),
+  };
+}
+
 export function expandDocumentForElement(
   document: ScreenshotDocument,
   element: ScreenshotElement,
   padding = 24,
 ): ScreenshotDocument {
   const bounds = elementBounds(element);
+  const shiftX = Math.max(0, Math.ceil(-bounds.x));
+  const shiftY = Math.max(0, Math.ceil(-bounds.y));
+  const shiftedElement = translateElement(element, shiftX, shiftY);
+  const shiftedBounds = elementBounds(shiftedElement);
   return {
     ...document,
-    width: Math.max(document.width, Math.ceil(bounds.x + bounds.width + padding)),
-    height: Math.max(document.height, Math.ceil(bounds.y + bounds.height + padding)),
-    elements: [...document.elements, element],
+    width: Math.max(
+      document.width + shiftX,
+      Math.ceil(shiftedBounds.x + shiftedBounds.width + padding),
+    ),
+    height: Math.max(
+      document.height + shiftY,
+      Math.ceil(shiftedBounds.y + shiftedBounds.height + padding),
+    ),
+    elements: [
+      ...document.elements.map((current) => translateElement(current, shiftX, shiftY)),
+      shiftedElement,
+    ],
   };
 }
 
@@ -263,7 +350,7 @@ export function isSupportedImageFile(file: Pick<File, "name" | "type">): boolean
 /**
  * Screenshot elements are stored back-to-front, while the layer panel is
  * presented front-to-back. Reorder in the panel's visual order, then convert
- * back without ever allowing the original screenshot below another layer.
+ * back. Locked layers remain fixed until the user explicitly unlocks them.
  */
 export function reorderScreenshotLayers(
   elements: ScreenshotElement[],
@@ -275,29 +362,52 @@ export function reorderScreenshotLayers(
   if (
     !moved
     || movedId === targetId
-    || (moved.kind === "image" && moved.source === "background")
+    || moved.locked
   ) {
     return elements;
   }
 
-  const backgrounds = elements.filter((element) => (
-    element.kind === "image" && element.source === "background"
-  ));
-  const visualLayers = elements
-    .filter((element) => !(element.kind === "image" && element.source === "background"))
-    .slice()
-    .reverse();
-  const movedIndex = visualLayers.findIndex((element) => element.id === movedId);
-  if (movedIndex < 0) return elements;
-  const [layer] = visualLayers.splice(movedIndex, 1);
-  const targetIsBackground = backgrounds.some((element) => element.id === targetId);
-  const targetIndex = visualLayers.findIndex((element) => element.id === targetId);
-  if (!targetIsBackground && targetIndex < 0) return elements;
-  const destination = targetIsBackground
-    ? visualLayers.length
-    : targetIndex + (placement === "after" ? 1 : 0);
-  visualLayers.splice(destination, 0, layer);
-  return [...backgrounds, ...visualLayers.reverse()];
+  const movedIndex = elements.findIndex((element) => element.id === movedId);
+  const remaining = elements.filter((element) => element.id !== movedId);
+  const targetIndex = remaining.findIndex((element) => element.id === targetId);
+  if (targetIndex < 0) return elements;
+
+  // In storage order, panel "before" means immediately in front of the
+  // target. Clamp the insertion to the unlocked run that originally contained
+  // the layer so every locked layer keeps its exact stack position.
+  const desired = targetIndex + (placement === "before" ? 1 : 0);
+  const lockedBelow = elements
+    .map((element, index) => ({ element, index }))
+    .filter(({ element, index }) => element.locked && index < movedIndex)
+    .at(-1)?.index;
+  const lockedAbove = elements.findIndex(
+    (element, index) => element.locked && index > movedIndex,
+  );
+  const minimum = lockedBelow === undefined ? 0 : lockedBelow + 1;
+  const maximum = lockedAbove < 0 ? remaining.length : lockedAbove - 1;
+  const destination = clamp(desired, minimum, maximum);
+  remaining.splice(destination, 0, moved);
+  return remaining;
+}
+
+export function duplicateScreenshotElement(
+  element: ScreenshotElement,
+  id: string,
+  offset = 24,
+): ScreenshotElement {
+  const copy = translateElement({
+    ...element,
+    id,
+    locked: false,
+    visible: true,
+    ...(element.kind === "image"
+      ? {
+        source: "imported" as const,
+        name: `${element.name} copy`,
+      }
+      : {}),
+  }, offset, offset);
+  return copy;
 }
 
 export function translateElement(
@@ -524,7 +634,7 @@ export function hitTestElement(
 ): ScreenshotElement | null {
   for (let index = elements.length - 1; index >= 0; index -= 1) {
     const element = elements[index];
-    if (element.kind === "image" && element.source === "background") continue;
+    if (!element.visible || element.locked) continue;
     const bounds = elementBounds(element);
     if (
       point.x >= bounds.x - tolerance

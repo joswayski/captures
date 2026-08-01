@@ -103,6 +103,28 @@ describe("ScreenshotEditor", () => {
     ).toHaveLength(2);
   });
 
+  it("lets the original layer be unlocked and exposes layer appearance controls", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findAllByText("1440 × 900");
+
+    fireEvent.click(screen.getByRole("button", { name: /Original screenshotLocked background/ }));
+    expect(screen.getByRole("slider", { name: "Layer opacity" })).toHaveValue("100");
+    expect(screen.getByLabelText("Blend mode")).toHaveValue("source-over");
+    expect(screen.getByRole("button", { name: "Locked" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Visible" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Locked" }));
+    expect(screen.getByRole("button", { name: "Unlocked" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Duplicate" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Delete" })).toBeEnabled();
+  });
+
   it("does not select a new shape until Select & move is used", async () => {
     render(<ScreenshotEditor />);
     await screen.findAllByText("1440 × 900");
@@ -155,7 +177,10 @@ describe("ScreenshotEditor", () => {
     expect(format).toHaveValue("png");
     expect(screen.getByText("Maximum · lossless")).toBeInTheDocument();
     expect(screen.queryByRole("slider", { name: "Image quality" })).not.toBeInTheDocument();
-    expect(screen.getByRole("spinbutton", { name: "Maximum file size" })).toHaveValue(null);
+    expect(screen.queryByRole("spinbutton", { name: "Maximum file size" }))
+      .not.toBeInTheDocument();
+    expect(screen.getByText("Lossless export keeps every pixel and replaces the original."))
+      .toBeInTheDocument();
 
     fireEvent.change(format, { target: { value: "jpeg" } });
 
@@ -164,6 +189,27 @@ describe("ScreenshotEditor", () => {
     });
     expect(screen.getByRole("slider", { name: "Image quality" }))
       .toHaveAttribute("aria-valuetext", "Maximum");
+    expect(screen.getByRole("spinbutton", { name: "Maximum file size" })).toHaveValue(null);
+  });
+
+  it("supports explicit custom output width and height", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findAllByText("1440 × 900");
+
+    fireEvent.change(screen.getByLabelText(/Output size/), {
+      target: { value: "custom" },
+    });
+    const width = screen.getByRole("spinbutton", { name: "Custom output width" });
+    const height = screen.getByRole("spinbutton", { name: "Custom output height" });
+    expect(width).toHaveValue(1_440);
+    expect(height).toHaveValue(900);
+
+    fireEvent.change(width, { target: { value: "720" } });
+    expect(height).toHaveValue(450);
+    fireEvent.click(screen.getByRole("button", { name: "Lock output aspect ratio" }));
+    fireEvent.change(height, { target: { value: "500" } });
+    expect(width).toHaveValue(720);
+    expect(height).toHaveValue(500);
   });
 
   it("shows an estimated export size when format and quality change", async () => {
@@ -264,10 +310,11 @@ describe("ScreenshotEditor", () => {
     render(<ScreenshotEditor />);
     await screen.findAllByText("1440 × 900");
 
-    expect(screen.getByRole("button", { name: "Copy" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Save copy" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Copy image" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+    expect(screen.getByRole("checkbox", { name: "Make a copy" })).not.toBeChecked();
     expect(
-      screen.getByText("Saving creates a new copy and preserves the original."),
+      screen.getByText("Lossless export keeps every pixel and replaces the original."),
     ).toBeInTheDocument();
 
     expect(artifactRemoved).not.toBeNull();
@@ -280,8 +327,10 @@ describe("ScreenshotEditor", () => {
         "The original was deleted. You can still copy or save this edit.",
       ),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Copy" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Save copy" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Copy image" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+    expect(screen.getByRole("checkbox", { name: "Make a copy" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Make a copy" })).toBeDisabled();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

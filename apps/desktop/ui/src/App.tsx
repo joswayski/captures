@@ -377,14 +377,31 @@ function StartupNotice() {
 }
 
 export function RecordingSavedNotice() {
-  const artifactId = query("artifact_id");
-  const noticeId = query("notice_id");
+  const [notice, setNotice] = useState({
+    artifactId: query("artifact_id"),
+    generation: 0,
+  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const artifactId = notice.artifactId;
+
+  useEffect(() => {
+    let dispose: (() => void) | undefined;
+    void listen<{ artifact_id: string; generation: number }>(
+      "recording-saved-artifact",
+      ({ payload }) => {
+        setNotice({ artifactId: payload.artifact_id, generation: payload.generation });
+        setBusy(false);
+        setError("");
+      },
+    ).then((unlisten) => {
+      dispose = unlisten;
+    }).catch(() => undefined);
+    return () => dispose?.();
+  }, []);
 
   const dismiss = () => {
-    if (!noticeId) return;
-    void invoke("dismiss_recording_saved_notice", { noticeId });
+    void invoke("dismiss_recording_saved_notice");
   };
 
   const reveal = async () => {
@@ -401,7 +418,7 @@ export function RecordingSavedNotice() {
   };
 
   return (
-    <main className="recording-saved-notice">
+    <main key={notice.generation} className="recording-saved-notice">
       <span className="recording-saved-icon" aria-hidden="true"><CheckIcon /></span>
       <div className="recording-saved-copy">
         <strong>Recording saved</strong>
@@ -4140,14 +4157,16 @@ export function Thumbnail() {
      * or leave a hung pointer poll. Force the stack interactive again and fall
      * back to CSS :hover until native samples resume.
      */
-    const recoverInteractivity = () => {
+    const recoverInteractivity = (refreshNative = true) => {
       consecutiveNullPolls = 0;
       polling = false;
       // Drop native-only presentation so CSS hover works while we re-arm.
       document.documentElement.classList.remove("thumbnail-native-tracking");
       clearNativeClasses();
       setIgnoreCursorEvents(false, true);
-      void invoke("refresh_thumbnail_interactivity").catch(() => undefined);
+      if (refreshNative) {
+        void invoke("refresh_thumbnail_interactivity").catch(() => undefined);
+      }
       schedulePoll(0);
     };
 
@@ -4211,6 +4230,14 @@ export function Thumbnail() {
       recoverInteractivity();
     };
 
+    const resumeFromNativeShow = () => {
+      if (document.hidden) return;
+      // The native command already restored the window and z-order. Reset only
+      // the WebView-side polling state so this event cannot recursively invoke
+      // refresh_thumbnail_interactivity.
+      recoverInteractivity(false);
+    };
+
     const pollImmediately = () => {
       if (document.hidden) return;
       // Focus handoffs restore the frontmost app's arrow; reassert first so
@@ -4243,6 +4270,7 @@ export function Thumbnail() {
     window.addEventListener("pointerup", onPointerActivity, true);
     window.addEventListener("pageshow", resumeFromSuspension);
     window.addEventListener("online", resumeFromSuspension);
+    window.addEventListener("captures-thumbnail-resumed", resumeFromNativeShow);
     document.addEventListener("resume", resumeFromSuspension as EventListener);
     window.addEventListener("captures-thumbnail-ready", pollImmediately);
     window.addEventListener("captures-thumbnail-layout-changed", pollImmediately);
@@ -4260,6 +4288,7 @@ export function Thumbnail() {
       window.removeEventListener("pointerup", onPointerActivity, true);
       window.removeEventListener("pageshow", resumeFromSuspension);
       window.removeEventListener("online", resumeFromSuspension);
+      window.removeEventListener("captures-thumbnail-resumed", resumeFromNativeShow);
       document.removeEventListener("resume", resumeFromSuspension as EventListener);
       window.removeEventListener("captures-thumbnail-ready", pollImmediately);
       window.removeEventListener("captures-thumbnail-layout-changed", pollImmediately);
@@ -4575,6 +4604,7 @@ export function ThumbnailCard({
       ref={cardRef}
       className={[
         "thumbnail-card",
+        thumbnailReady ? "thumbnail-ready" : "thumbnail-pending",
         thumbnailReady ? "thumbnail-capture-highlight" : "",
         viewerActive && !isExiting ? "thumbnail-viewer-active" : "",
         fileDragging ? "thumbnail-file-dragging" : "",

@@ -13,8 +13,10 @@ import {
 import { formatFileSize } from "./lib/format";
 import {
   boundedCropRect,
+  closestImageSnapEdge,
   createScreenshotDocument,
   cropDocument,
+  duplicateScreenshotElement,
   elementBounds,
   estimateCanvasExportBytes,
   expandDocumentForElement,
@@ -24,7 +26,7 @@ import {
   isSupportedImageFile,
   loadImageFile,
   outputDimensions,
-  positionImportedImage,
+  positionImportedImageAtEdge,
   reorderScreenshotLayers,
   resizeBoundsFromHandle,
   resizeCursor,
@@ -32,6 +34,8 @@ import {
   resizeElement,
   translateElement,
   type EditorImageElement,
+  type ImageSnapEdge,
+  type LayerBlendMode,
   type LayerDropPlacement,
   type EditorPoint,
   type EditorRect,
@@ -95,6 +99,11 @@ type LayerDropTarget = {
   placement: LayerDropPlacement;
 };
 
+type ImageDropGuide = {
+  edge: ImageSnapEdge;
+  target: EditorRect;
+};
+
 const TOOL_ITEMS: Array<{ tool: ScreenshotTool; label: string; shortcut: string }> = [
   { tool: "select", label: "Select & move", shortcut: "V" },
   { tool: "crop", label: "Crop", shortcut: "C" },
@@ -130,6 +139,17 @@ const SCREENSHOT_FILE_SIZE_UNIT_BYTES: Record<ScreenshotFileSizeUnit, number> = 
   kb: 1_000,
   mb: 1_000_000,
 };
+const MAX_SCREENSHOT_OUTPUT_DIMENSION = 16_384;
+const MAX_SCREENSHOT_OUTPUT_PIXELS = 100_000_000;
+
+const LAYER_BLEND_MODE_OPTIONS: Array<{ value: LayerBlendMode; label: string }> = [
+  { value: "source-over", label: "Normal" },
+  { value: "multiply", label: "Multiply" },
+  { value: "screen", label: "Screen" },
+  { value: "overlay", label: "Overlay" },
+  { value: "darken", label: "Darken" },
+  { value: "lighten", label: "Lighten" },
+];
 
 function isFileTransfer(dataTransfer: DataTransfer): boolean {
   return Array.from(dataTransfer.types).includes("Files")
@@ -322,6 +342,10 @@ function renderScreenshot(
   context.imageSmoothingEnabled = true;
   context.imageSmoothingQuality = "high";
   for (const element of document.elements) {
+    if (!element.visible) continue;
+    context.save();
+    context.globalAlpha = Math.max(0, Math.min(1, element.opacity / 100));
+    context.globalCompositeOperation = element.blendMode;
     if (element.kind === "image") {
       const cached = imageCache.get(element.src);
       if (cached?.status === "loaded") {
@@ -346,6 +370,7 @@ function renderScreenshot(
       drawSmoothPath(context, element.points);
       context.restore();
     }
+    context.restore();
   }
 }
 
@@ -359,7 +384,7 @@ function drawEditorOverlays(
   selectionBoundsOverride: EditorRect | null = null,
 ): void {
   const unit = 1 / Math.max(0.01, displayScale);
-  if (selected || selectionBoundsOverride) {
+  if ((selected?.visible ?? false) || selectionBoundsOverride) {
     const bounds = selectionBoundsOverride
       ?? (selected ? elementBounds(selected) : null);
     if (bounds) {
@@ -432,6 +457,33 @@ function exportFilter(format: ExportFormat): { name: string; extensions: string[
   return { name: "PNG image", extensions: ["png"] };
 }
 
+function screenshotOutputDimensions(
+  document: Pick<ScreenshotDocument, "width" | "height">,
+  size: ExportSize,
+  customWidth: number,
+  customHeight: number,
+): { width: number; height: number } {
+  if (size === "original") return { width: document.width, height: document.height };
+  if (size === "custom") {
+    return {
+      width: Math.max(1, Math.min(MAX_SCREENSHOT_OUTPUT_DIMENSION, Math.round(customWidth))),
+      height: Math.max(1, Math.min(MAX_SCREENSHOT_OUTPUT_DIMENSION, Math.round(customHeight))),
+    };
+  }
+  return outputDimensions(
+    document.width,
+    document.height,
+    Math.round(document.width * Number(size) / 100),
+  );
+}
+
+function screenshotPathMatchesFormat(path: string | null, format: ExportFormat): boolean {
+  if (!path) return false;
+  const extension = path.split(/[\\/]/).at(-1)?.split(".").at(-1)?.toLowerCase();
+  if (format === "jpeg") return extension === "jpg" || extension === "jpeg";
+  return extension === format;
+}
+
 export function ScreenshotEditor() {
   const artifactId = query("artifact_id");
   const [artifact, setArtifact] = useState<CaptureArtifact | null>(null);
@@ -454,6 +506,7 @@ export function ScreenshotEditor() {
   const [zoom, setZoom] = useState(100);
   const [imageRevision, setImageRevision] = useState(0);
   const [dragActive, setDragActive] = useState(false);
+  const [imageDropGuide, setImageDropGuide] = useState<ImageDropGuide | null>(null);
   const [draggedLayerId, setDraggedLayerId] = useState<string | null>(null);
   const [resizePreviewBounds, setResizePreviewBounds] = useState<EditorRect | null>(null);
   const [canvasCursor, setCanvasCursor] = useState<string | undefined>(undefined);
@@ -461,6 +514,8 @@ export function ScreenshotEditor() {
   const [exportFormat, setExportFormat] = useState<ExportFormat>("png");
   const [exportSize, setExportSize] = useState<ExportSize>("original");
   const [customExportWidth, setCustomExportWidth] = useState(1_920);
+  const [customExportHeight, setCustomExportHeight] = useState(1_080);
+  const [exportAspectLocked, setExportAspectLocked] = useState(true);
   const [jpegQuality, setJpegQuality] = useState<ScreenshotQuality>("100");
   const [maximumFileSize, setMaximumFileSize] = useState("");
   const [maximumFileSizeUnit, setMaximumFileSizeUnit] =
@@ -472,6 +527,7 @@ export function ScreenshotEditor() {
   const [error, setError] = useState("");
   /** Original capture was deleted after the editor opened; the edit is still exportable. */
   const [sourceMissing, setSourceMissing] = useState(false);
+  const [makeCopy, setMakeCopy] = useState(false);
   const [saved, setSaved] = useState<SavedScreenshotEdit | null>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -541,6 +597,7 @@ export function ScreenshotEditor() {
         if (payload !== artifactId) return;
         // The canvas still holds the edited image — copy/save remain available.
         setSourceMissing(true);
+        setMakeCopy(true);
         setError("");
         setStatus(
           "The original was deleted. You can still copy or save this edit.",
@@ -558,6 +615,8 @@ export function ScreenshotEditor() {
       setArtifact(loaded);
       replaceDocument(next);
       setCustomExportWidth(loaded.width);
+      setCustomExportHeight(loaded.height);
+      setMakeCopy(!loaded.path);
       setDefaultFontSize(Math.max(24, Math.min(72, Math.round(Math.min(loaded.width, loaded.height) * 0.055))));
     })().catch((reason) => {
       if (active) setError(String(reason));
@@ -655,7 +714,7 @@ export function ScreenshotEditor() {
   const deleteSelected = useCallback(() => {
     const current = documentRef.current;
     const element = current?.elements.find(({ id }) => id === selectedId);
-    if (!current || !element || (element.kind === "image" && element.source === "background")) return;
+    if (!current || !element || element.locked) return;
     commitDocument({
       ...current,
       elements: current.elements.filter(({ id }) => id !== selectedId),
@@ -666,7 +725,7 @@ export function ScreenshotEditor() {
   const nudgeSelected = useCallback((deltaX: number, deltaY: number) => {
     const current = documentRef.current;
     const element = current?.elements.find(({ id }) => id === selectedId);
-    if (!current || !element || (element.kind === "image" && element.source === "background")) return;
+    if (!current || !element || element.locked) return;
     commitDocument(replaceElement(
       current,
       element.id,
@@ -737,7 +796,7 @@ export function ScreenshotEditor() {
         : null;
       if (
         selectedElement
-        && !(selectedElement.kind === "image" && selectedElement.source === "background")
+        && !selectedElement.locked
       ) {
         const bounds = elementBounds(selectedElement);
         const handle = hitTestResizeHandle(bounds, point, handleRadius);
@@ -802,6 +861,10 @@ export function ScreenshotEditor() {
         align: "left",
         color: defaultStyle.color,
         background: null,
+        locked: false,
+        visible: true,
+        opacity: 100,
+        blendMode: "source-over",
       };
       commitDocument({ ...current, elements: [...current.elements, element] });
       setSelectedId(element.id);
@@ -819,6 +882,10 @@ export function ScreenshotEditor() {
         y: point.y,
         points: [point],
         style: { ...defaultStyle, fill: null },
+        locked: false,
+        visible: true,
+        opacity: 100,
+        blendMode: "source-over",
       }
       : {
         id: elementId,
@@ -833,6 +900,10 @@ export function ScreenshotEditor() {
           ...defaultStyle,
           fill: tool === "rectangle" || tool === "ellipse" ? defaultStyle.fill : null,
         },
+        locked: false,
+        visible: true,
+        opacity: 100,
+        blendMode: "source-over",
       };
     gestureRef.current = {
       kind: "draw",
@@ -855,16 +926,23 @@ export function ScreenshotEditor() {
           : null;
         if (
           selectedElement
-          && !(selectedElement.kind === "image" && selectedElement.source === "background")
+          && !selectedElement.locked
         ) {
           const handle = hitTestResizeHandle(
             elementBounds(selectedElement),
             point,
             10 / Math.max(0.01, displayScale),
           );
-          setCanvasCursor(handle ? resizeCursor(handle) : undefined);
-          return;
+          if (handle) {
+            setCanvasCursor(resizeCursor(handle));
+            return;
+          }
         }
+        const hovered = current
+          ? hitTestElement(current.elements, point, 10 / Math.max(0.01, displayScale))
+          : null;
+        setCanvasCursor(hovered ? "move" : undefined);
+        return;
       }
       setCanvasCursor(undefined);
       return;
@@ -977,20 +1055,44 @@ export function ScreenshotEditor() {
     commitDocument(replaceElement(current, element.id, updater(element)));
   };
 
+  const updateLayer = (
+    elementId: string,
+    updater: (element: ScreenshotElement) => ScreenshotElement,
+  ) => {
+    const current = documentRef.current;
+    const element = current?.elements.find(({ id }) => id === elementId);
+    if (!current || !element) return;
+    commitDocument(replaceElement(current, element.id, updater(element)));
+  };
+
+  const duplicateSelected = () => {
+    const current = documentRef.current;
+    const index = current?.elements.findIndex(({ id }) => id === selectedId) ?? -1;
+    if (!current || index < 0) return;
+    const duplicate = duplicateScreenshotElement(current.elements[index], editorId());
+    const elements = [...current.elements];
+    elements.splice(index + 1, 0, duplicate);
+    commitDocument({ ...current, elements });
+    setSelectedId(duplicate.id);
+    setTool("select");
+  };
+
   const moveLayer = (direction: "front" | "back") => {
     const current = documentRef.current;
     if (!current || !selectedId) return;
     const index = current.elements.findIndex(({ id }) => id === selectedId);
-    if (index < 0) return;
-    const minimum = current.elements[0]?.kind === "image"
-      && current.elements[0].source === "background" ? 1 : 0;
-    const destination = direction === "front"
-      ? current.elements.length - 1
-      : minimum;
-    if (index === destination) return;
-    const elements = [...current.elements];
-    const [element] = elements.splice(index, 1);
-    elements.splice(destination, 0, element);
+    if (index < 0 || current.elements[index].locked) return;
+    const target = direction === "front"
+      ? current.elements.at(-1)
+      : current.elements[0];
+    if (!target || target.id === selectedId) return;
+    const elements = reorderScreenshotLayers(
+      current.elements,
+      selectedId,
+      target.id,
+      direction === "front" ? "before" : "after",
+    );
+    if (elements === current.elements) return;
     commitDocument({ ...current, elements });
   };
 
@@ -1013,7 +1115,19 @@ export function ScreenshotEditor() {
     setTool("select");
   };
 
-  const loadDroppedFiles = async (files: File[], point?: EditorPoint) => {
+  const defaultImageDropGuide = (current: ScreenshotDocument): ImageDropGuide => {
+    const target = current.elements.find((element) => (
+      element.id === selectedId && element.kind === "image"
+    ));
+    return {
+      edge: "bottom",
+      target: target?.visible
+        ? elementBounds(target)
+        : { x: 0, y: 0, width: current.width, height: current.height },
+    };
+  };
+
+  const loadDroppedFiles = async (files: File[], guide?: ImageDropGuide) => {
     // Tell the preview stack this drop stayed inside Captures so it does not
     // dismiss the source card when a native file drag ends over the editor.
     void invoke("mark_internal_file_drop").catch(() => undefined);
@@ -1026,9 +1140,10 @@ export function ScreenshotEditor() {
     if (!initial) return;
     let next = initial;
     let lastId: string | null = null;
+    let placement = guide ?? defaultImageDropGuide(initial);
     const createdUrls: string[] = [];
     try {
-      for (const [index, file] of images.entries()) {
+      for (const file of images) {
         // Prefer a blob object URL (cheap, revocable). Fall back to a data URL
         // if the webview rejects the blob load — historically our CSP omitted
         // blob: from img-src, which produced "could not be loaded" on drop.
@@ -1044,16 +1159,12 @@ export function ScreenshotEditor() {
           objectUrlsRef.current.add(image.src);
         }
         imageCacheRef.current.set(image.src, { image, status: "loaded" });
-        const position = positionImportedImage(
+        const position = positionImportedImageAtEdge(
           image.naturalWidth,
           image.naturalHeight,
           next,
-          point
-            ? {
-              x: point.x + index * 24,
-              y: point.y + index * 24,
-            }
-            : undefined,
+          placement.target,
+          placement.edge,
         );
         const element: EditorImageElement = {
           id: editorId(),
@@ -1067,9 +1178,17 @@ export function ScreenshotEditor() {
           height: position.height,
           naturalWidth: image.naturalWidth,
           naturalHeight: image.naturalHeight,
+          locked: false,
+          visible: true,
+          opacity: 100,
+          blendMode: "source-over",
         };
         next = expandDocumentForElement(next, element);
         lastId = element.id;
+        const added = next.elements.find(({ id }) => id === element.id);
+        if (added) {
+          placement = { edge: placement.edge, target: elementBounds(added) };
+        }
       }
       commitDocument(next);
       setSelectedId(lastId);
@@ -1087,11 +1206,34 @@ export function ScreenshotEditor() {
     }
   };
 
+  const updateCustomExportDimension = (dimension: "width" | "height", value: number) => {
+    const current = documentRef.current;
+    const next = Math.max(1, Math.min(MAX_SCREENSHOT_OUTPUT_DIMENSION, Math.round(value)));
+    if (!current || !exportAspectLocked) {
+      if (dimension === "width") setCustomExportWidth(next);
+      else setCustomExportHeight(next);
+      return;
+    }
+    if (dimension === "width") {
+      setCustomExportWidth(next);
+      setCustomExportHeight(Math.max(1, Math.min(
+        MAX_SCREENSHOT_OUTPUT_DIMENSION,
+        Math.round(next * current.height / current.width),
+      )));
+    } else {
+      setCustomExportHeight(next);
+      setCustomExportWidth(Math.max(1, Math.min(
+        MAX_SCREENSHOT_OUTPUT_DIMENSION,
+        Math.round(next * current.width / current.height),
+      )));
+    }
+  };
+
   const renderFlattened = useCallback((): HTMLCanvasElement => {
     const current = documentRef.current;
     if (!current) throw new Error("The editor is still loading.");
     const missing = current.elements
-      .filter((element): element is EditorImageElement => element.kind === "image")
+      .filter((element): element is EditorImageElement => element.kind === "image" && element.visible)
       .find((element) => imageCacheRef.current.get(element.src)?.status !== "loaded");
     if (missing) throw new Error(`${missing.name} has not finished loading.`);
     const source = window.document.createElement("canvas");
@@ -1100,12 +1242,15 @@ export function ScreenshotEditor() {
     const sourceContext = source.getContext("2d");
     if (!sourceContext) throw new Error("Canvas rendering is unavailable.");
     renderScreenshot(sourceContext, current, imageCacheRef.current);
-    const requestedWidth = exportSize === "original"
-      ? current.width
-      : exportSize === "custom"
-        ? customExportWidth
-        : Math.round(current.width * Number(exportSize) / 100);
-    const dimensions = outputDimensions(current.width, current.height, requestedWidth);
+    const dimensions = screenshotOutputDimensions(
+      current,
+      exportSize,
+      customExportWidth,
+      customExportHeight,
+    );
+    if (dimensions.width * dimensions.height > MAX_SCREENSHOT_OUTPUT_PIXELS) {
+      throw new Error("Output size is limited to 100 million pixels.");
+    }
     if (dimensions.width === current.width && dimensions.height === current.height) return source;
     const output = window.document.createElement("canvas");
     output.width = dimensions.width;
@@ -1116,7 +1261,7 @@ export function ScreenshotEditor() {
     outputContext.imageSmoothingQuality = "high";
     outputContext.drawImage(source, 0, 0, dimensions.width, dimensions.height);
     return output;
-  }, [customExportWidth, exportSize]);
+  }, [customExportHeight, customExportWidth, exportSize]);
 
   useEffect(() => {
     if (!editorDocument) return;
@@ -1150,6 +1295,7 @@ export function ScreenshotEditor() {
     };
   }, [
     customExportWidth,
+    customExportHeight,
     editorDocument,
     exportFormat,
     exportSize,
@@ -1176,7 +1322,7 @@ export function ScreenshotEditor() {
 
   const saveEditedImage = async () => {
     if (!artifact || busy) return;
-    const maximumSizeText = maximumFileSize.trim();
+    const maximumSizeText = exportFormat === "jpeg" ? maximumFileSize.trim() : "";
     const maximumSizeBytes = maximumSizeText
       ? Math.floor(
         Number(maximumSizeText) * SCREENSHOT_FILE_SIZE_UNIT_BYTES[maximumFileSizeUnit],
@@ -1193,14 +1339,20 @@ export function ScreenshotEditor() {
     setError("");
     setStatus("");
     try {
-      const defaultPath = await invoke<string>("default_screenshot_edit_path", {
-        artifactId: artifact.id,
-        format: exportFormat,
-      });
-      const destinationPath = await saveDialog({
-        defaultPath,
-        filters: [exportFilter(exportFormat)],
-      });
+      const overwriteSource = !makeCopy
+        && !sourceMissing
+        && screenshotPathMatchesFormat(artifact.path, exportFormat);
+      let destinationPath = overwriteSource ? artifact.path : null;
+      if (!destinationPath) {
+        const defaultPath = await invoke<string>("default_screenshot_edit_path", {
+          artifactId: artifact.id,
+          format: exportFormat,
+        });
+        destinationPath = await saveDialog({
+          defaultPath,
+          filters: [exportFilter(exportFormat)],
+        });
+      }
       if (!destinationPath) return;
       const imagePng = await canvasPngBytes(renderFlattened());
       const result = await invoke<SavedScreenshotEdit>("save_screenshot_edit", {
@@ -1210,11 +1362,13 @@ export function ScreenshotEditor() {
           format: exportFormat,
           jpeg_quality: Number(jpegQuality),
           max_size_bytes: maximumSizeBytes,
+          overwrite_source: overwriteSource,
           image_png: imagePng,
         },
       });
+      if (overwriteSource) setArtifact(result.artifact);
       setSaved(result);
-      setStatus(`Saved ${result.path}`);
+      setStatus(overwriteSource ? "Saved changes to the original." : `Saved ${result.path}`);
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -1239,15 +1393,37 @@ export function ScreenshotEditor() {
     );
   }
 
-  const output = outputDimensions(
-    editorDocument.width,
-    editorDocument.height,
-    exportSize === "original"
-      ? editorDocument.width
-      : exportSize === "custom"
-        ? customExportWidth
-        : Math.round(editorDocument.width * Number(exportSize) / 100),
+  const output = screenshotOutputDimensions(
+    editorDocument,
+    exportSize,
+    customExportWidth,
+    customExportHeight,
   );
+  const formatRequiresCopy = sourceMissing
+    || !screenshotPathMatchesFormat(artifact.path, exportFormat);
+  const savingCopy = makeCopy || formatRequiresCopy;
+
+  const updateImageDropGuide = (clientX: number, clientY: number) => {
+    const canvas = canvasRef.current;
+    const current = documentRef.current;
+    if (!canvas || !current) return;
+    const targetElement = current.elements.find((element) => (
+      element.id === selectedId && element.kind === "image"
+    ));
+    const target = targetElement?.visible
+      ? elementBounds(targetElement)
+      : { x: 0, y: 0, width: current.width, height: current.height };
+    if (!targetElement?.visible) {
+      setImageDropGuide({ edge: "bottom", target });
+      return;
+    }
+    const bounds = canvas.getBoundingClientRect();
+    const point = {
+      x: (clientX - bounds.left) * canvas.width / Math.max(1, bounds.width),
+      y: (clientY - bounds.top) * canvas.height / Math.max(1, bounds.height),
+    };
+    setImageDropGuide({ edge: closestImageSnapEdge(point, target), target });
+  };
 
   return (
     <main
@@ -1257,40 +1433,31 @@ export function ScreenshotEditor() {
         event.preventDefault();
         dropDepthRef.current += 1;
         setDragActive(true);
+        if (!imageDropGuide) setImageDropGuide(defaultImageDropGuide(editorDocument));
       }}
       onDragOver={(event) => {
         if (!isFileTransfer(event.dataTransfer)) return;
         event.preventDefault();
         event.dataTransfer.dropEffect = "copy";
+        updateImageDropGuide(event.clientX, event.clientY);
       }}
       onDragLeave={(event) => {
         if (!dragActive) return;
         event.preventDefault();
         dropDepthRef.current = Math.max(0, dropDepthRef.current - 1);
-        if (dropDepthRef.current === 0) setDragActive(false);
+        if (dropDepthRef.current === 0) {
+          setDragActive(false);
+          setImageDropGuide(null);
+        }
       }}
       onDrop={(event) => {
         if (!isFileTransfer(event.dataTransfer)) return;
         event.preventDefault();
         dropDepthRef.current = 0;
         setDragActive(false);
-        const canvas = canvasRef.current;
-        let point: EditorPoint | undefined;
-        if (canvas) {
-          const bounds = canvas.getBoundingClientRect();
-          if (
-            event.clientX >= bounds.left
-            && event.clientX <= bounds.right
-            && event.clientY >= bounds.top
-            && event.clientY <= bounds.bottom
-          ) {
-            point = {
-              x: (event.clientX - bounds.left) * canvas.width / Math.max(1, bounds.width),
-              y: (event.clientY - bounds.top) * canvas.height / Math.max(1, bounds.height),
-            };
-          }
-        }
-        void loadDroppedFiles(Array.from(event.dataTransfer.files), point);
+        const guide = imageDropGuide ?? defaultImageDropGuide(editorDocument);
+        setImageDropGuide(null);
+        void loadDroppedFiles(Array.from(event.dataTransfer.files), guide);
       }}
     >
       <header className="screenshot-editor-header">
@@ -1396,12 +1563,26 @@ export function ScreenshotEditor() {
             onPointerUp={finishPointer}
             onPointerCancel={finishPointer}
           />
+          {dragActive && imageDropGuide && (
+            <div
+              className={`screenshot-drop-snap-guide edge-${imageDropGuide.edge}`}
+              style={{
+                left: imageDropGuide.target.x * displayScale,
+                top: imageDropGuide.target.y * displayScale,
+                width: imageDropGuide.target.width * displayScale,
+                height: imageDropGuide.target.height * displayScale,
+              }}
+              aria-hidden="true"
+            >
+              <span>{imageDropLabel(imageDropGuide.edge)}</span>
+            </div>
+          )}
         </div>
         {dragActive && (
           <div className="screenshot-drop-overlay" aria-hidden="true">
             <EditorIcon name="image" />
-            <strong>Drop images to combine them</strong>
-            <span>Each image stays movable and resizable.</span>
+            <strong>{imageDropGuide ? imageDropLabel(imageDropGuide.edge) : "Drop image"}</strong>
+            <span>It will snap to the highlighted edge and stay editable.</span>
           </div>
         )}
       </section>
@@ -1424,7 +1605,7 @@ export function ScreenshotEditor() {
           </div>
           <ol className="screenshot-layer-list">
             {[...editorDocument.elements].reverse().map((element) => {
-              const locked = element.kind === "image" && element.source === "background";
+              const locked = element.locked;
               const dropPlacement = layerDropTarget?.id === element.id
                 ? layerDropTarget.placement
                 : null;
@@ -1434,6 +1615,7 @@ export function ScreenshotEditor() {
                   className={[
                     selectedId === element.id ? "active" : "",
                     locked ? "locked" : "",
+                    element.visible ? "" : "hidden",
                     draggedLayerId === element.id ? "dragging" : "",
                     dropPlacement ? `drop-${dropPlacement}` : "",
                   ].filter(Boolean).join(" ")}
@@ -1455,7 +1637,7 @@ export function ScreenshotEditor() {
                     event.stopPropagation();
                     event.dataTransfer.dropEffect = "move";
                     const bounds = event.currentTarget.getBoundingClientRect();
-                    const placement = locked || event.clientY < bounds.top + bounds.height / 2
+                    const placement = event.clientY < bounds.top + bounds.height / 2
                       ? "before"
                       : "after";
                     setLayerDropTarget({ id: element.id, placement });
@@ -1483,11 +1665,12 @@ export function ScreenshotEditor() {
                 >
                   <button
                     type="button"
+                    className="screenshot-layer-select"
                     aria-pressed={selectedId === element.id}
                     onClick={() => {
                       setTool("select");
                       setCropSelection(null);
-                      setSelectedId(locked ? null : element.id);
+                      setSelectedId(element.id);
                     }}
                   >
                     <span className="screenshot-layer-grip" aria-hidden="true">
@@ -1503,6 +1686,37 @@ export function ScreenshotEditor() {
                       <small>{elementKindLabel(element)}</small>
                     </span>
                   </button>
+                  <span className="screenshot-layer-quick-actions">
+                    <button
+                      type="button"
+                      aria-label={`${element.visible ? "Hide" : "Show"} ${elementLayerName(element)}`}
+                      title={element.visible ? "Hide layer" : "Show layer"}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        updateLayer(element.id, (current) => ({
+                          ...current,
+                          visible: !current.visible,
+                        }));
+                      }}
+                    >
+                      <EditorIcon name={element.visible ? "eye" : "eye-off"} />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`${locked ? "Unlock" : "Lock"} ${elementLayerName(element)}`}
+                      title={locked ? "Unlock layer" : "Lock layer"}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        updateLayer(element.id, (current) => ({
+                          ...current,
+                          locked: !current.locked,
+                        }));
+                        setSelectedId(element.id);
+                      }}
+                    >
+                      <EditorIcon name={locked ? "lock" : "unlock"} />
+                    </button>
+                  </span>
                 </li>
               );
             })}
@@ -1512,12 +1726,92 @@ export function ScreenshotEditor() {
         <section className="screenshot-properties" aria-label="Tool properties">
         <div className="screenshot-properties-heading">
           <strong>{selected ? elementLabel(selected) : toolLabel(tool)}</strong>
-          {selected && !(selected.kind === "image" && selected.source === "background") && (
+          {selected && !selected.locked && (
             <button type="button" aria-label="Delete selected item" onClick={deleteSelected}>
               <EditorIcon name="trash" />
             </button>
           )}
         </div>
+
+        {selected && (
+          <section className="screenshot-property-section screenshot-layer-inspector">
+            {selected.kind === "image" && (
+              <label>
+                Layer name
+                <input
+                  value={selected.name}
+                  onChange={(event) => updateSelected((element) => (
+                    element.kind === "image" ? { ...element, name: event.target.value } : element
+                  ))}
+                />
+              </label>
+            )}
+            <label>
+              Blend mode
+              <select
+                value={selected.blendMode}
+                onChange={(event) => updateSelected((element) => ({
+                  ...element,
+                  blendMode: event.target.value as LayerBlendMode,
+                }))}
+              >
+                {LAYER_BLEND_MODE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Opacity
+              <RangeSlider
+                ariaLabel="Layer opacity"
+                min={0}
+                max={100}
+                value={selected.opacity}
+                valueText={`${selected.opacity}%`}
+                marks={[
+                  { value: 0, label: "0" },
+                  { value: 50, label: "50" },
+                  { value: 100, label: "100" },
+                ]}
+                onChange={(opacity) => updateSelected((element) => ({ ...element, opacity }))}
+              />
+            </label>
+            <div className="screenshot-layer-state-grid">
+              <button
+                type="button"
+                className={selected.locked ? "active" : ""}
+                aria-pressed={selected.locked}
+                onClick={() => updateSelected((element) => ({
+                  ...element,
+                  locked: !element.locked,
+                }))}
+              >
+                <EditorIcon name={selected.locked ? "lock" : "unlock"} />
+                {selected.locked ? "Locked" : "Unlocked"}
+              </button>
+              <button
+                type="button"
+                className={selected.visible ? "active" : ""}
+                aria-pressed={selected.visible}
+                onClick={() => updateSelected((element) => ({
+                  ...element,
+                  visible: !element.visible,
+                }))}
+              >
+                <EditorIcon name={selected.visible ? "eye" : "eye-off"} />
+                {selected.visible ? "Visible" : "Hidden"}
+              </button>
+            </div>
+            <div className="screenshot-layer-action-grid">
+              <button type="button" onClick={duplicateSelected}>
+                <EditorIcon name="duplicate" />Duplicate
+              </button>
+              <button type="button" disabled={selected.locked} onClick={deleteSelected}>
+                <EditorIcon name="trash" />Delete
+              </button>
+            </div>
+          </section>
+        )}
 
         {tool === "crop" && (
           <section className="screenshot-property-section">
@@ -1654,9 +1948,8 @@ export function ScreenshotEditor() {
           </section>
         )}
 
-        {selected?.kind === "image" && selected.source === "imported" && (
+        {selected?.kind === "image" && (
           <section className="screenshot-property-section">
-            <p className="screenshot-file-name" title={selected.name}>{selected.name}</p>
             <div className="screenshot-number-pair">
               <label>
                 Width
@@ -1665,6 +1958,7 @@ export function ScreenshotEditor() {
                   min={1}
                   max={16_384}
                   value={Math.round(selected.width)}
+                  disabled={selected.locked}
                   onChange={(event) => updateSelected((element) => {
                     if (element.kind !== "image") return element;
                     const size = imageSizeAtWidth(element, Number(event.target.value));
@@ -1678,6 +1972,7 @@ export function ScreenshotEditor() {
                 <input
                   type="number"
                   value={Math.round(selected.x)}
+                  disabled={selected.locked}
                   onChange={(event) => updateSelected((element) => (
                     element.kind === "image" ? { ...element, x: Number(event.target.value) } : element
                   ))}
@@ -1688,6 +1983,7 @@ export function ScreenshotEditor() {
                 <input
                   type="number"
                   value={Math.round(selected.y)}
+                  disabled={selected.locked}
                   onChange={(event) => updateSelected((element) => (
                     element.kind === "image" ? { ...element, y: Number(event.target.value) } : element
                   ))}
@@ -1837,7 +2133,7 @@ export function ScreenshotEditor() {
           </section>
         )}
 
-        {selected && !(selected.kind === "image" && selected.source === "background") && (
+        {selected && !selected.locked && (
           <section className="screenshot-property-section screenshot-layer-actions">
             <button type="button" onClick={() => moveLayer("front")}>Bring to front</button>
             <button type="button" onClick={() => moveLayer("back")}>Send to back</button>
@@ -1889,7 +2185,11 @@ export function ScreenshotEditor() {
         <div className="screenshot-export-settings">
           <label>
             Format
-            <select value={exportFormat} onChange={(event) => setExportFormat(event.target.value as ExportFormat)}>
+            <select value={exportFormat} onChange={(event) => {
+              const next = event.target.value as ExportFormat;
+              setExportFormat(next);
+              if (!screenshotPathMatchesFormat(artifact.path, next)) setMakeCopy(true);
+            }}>
               <option value="png">PNG · lossless</option>
               <option value="jpeg">JPEG</option>
               <option value="webp">WebP · lossless</option>
@@ -1898,11 +2198,18 @@ export function ScreenshotEditor() {
           <label className="screenshot-export-size">
             Output size
             <span className="screenshot-export-size-control">
-              <select value={exportSize} onChange={(event) => setExportSize(event.target.value as ExportSize)}>
+              <select value={exportSize} onChange={(event) => {
+                const next = event.target.value as ExportSize;
+                if (next === "custom" && exportSize !== "custom") {
+                  setCustomExportWidth(editorDocument.width);
+                  setCustomExportHeight(editorDocument.height);
+                }
+                setExportSize(next);
+              }}>
                 <option value="original">Original</option>
                 <option value="75">75%</option>
                 <option value="50">50%</option>
-                <option value="custom">Custom width</option>
+                <option value="custom">Custom</option>
               </select>
               <span className="screenshot-output-dimensions" aria-live="polite">
                 {output.width} × {output.height}
@@ -1910,16 +2217,38 @@ export function ScreenshotEditor() {
             </span>
           </label>
           {exportSize === "custom" && (
-            <label>
-              Width
-              <input
-                type="number"
-                min={1}
-                max={16_384}
-                value={customExportWidth}
-                onChange={(event) => setCustomExportWidth(Number(event.target.value))}
-              />
-            </label>
+            <div className="screenshot-export-control screenshot-custom-dimensions">
+              <span>Width × height</span>
+              <div>
+                <input
+                  type="number"
+                  min={1}
+                  max={MAX_SCREENSHOT_OUTPUT_DIMENSION}
+                  value={customExportWidth}
+                  aria-label="Custom output width"
+                  onChange={(event) => updateCustomExportDimension("width", Number(event.target.value))}
+                />
+                <span aria-hidden="true">×</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={MAX_SCREENSHOT_OUTPUT_DIMENSION}
+                  value={customExportHeight}
+                  aria-label="Custom output height"
+                  onChange={(event) => updateCustomExportDimension("height", Number(event.target.value))}
+                />
+                <button
+                  type="button"
+                  className={exportAspectLocked ? "active" : ""}
+                  aria-label="Lock output aspect ratio"
+                  aria-pressed={exportAspectLocked}
+                  title="Lock output aspect ratio"
+                  onClick={() => setExportAspectLocked((locked) => !locked)}
+                >
+                  <EditorIcon name={exportAspectLocked ? "lock" : "unlock"} />
+                </button>
+              </div>
+            </div>
           )}
           <div className="screenshot-export-control screenshot-quality">
             <span>Quality</span>
@@ -1934,30 +2263,35 @@ export function ScreenshotEditor() {
               <strong>Maximum · lossless</strong>
             )}
           </div>
-          <label className="screenshot-maximum-size">
-            Maximum size
-            <span>
-              <input
-                type="number"
-                min={maximumFileSizeUnit === "kb" ? 10 : 0.01}
-                step={maximumFileSizeUnit === "kb" ? 1 : 0.01}
-                value={maximumFileSize}
-                placeholder="No limit"
-                aria-label="Maximum file size"
-                onChange={(event) => setMaximumFileSize(event.target.value)}
-              />
-              <select
-                aria-label="Screenshot file size unit"
-                value={maximumFileSizeUnit}
-                onChange={(event) => setMaximumFileSizeUnit(
-                  event.target.value as ScreenshotFileSizeUnit,
-                )}
-              >
-                <option value="kb">KB</option>
-                <option value="mb">MB</option>
-              </select>
-            </span>
-          </label>
+          {exportFormat === "jpeg" && (
+            <label
+              className="screenshot-maximum-size"
+              title="JPEG quality is lowered only when needed to meet this limit."
+            >
+              JPEG size limit
+              <span>
+                <input
+                  type="number"
+                  min={maximumFileSizeUnit === "kb" ? 10 : 0.01}
+                  step={maximumFileSizeUnit === "kb" ? 1 : 0.01}
+                  value={maximumFileSize}
+                  placeholder="No limit"
+                  aria-label="Maximum file size"
+                  onChange={(event) => setMaximumFileSize(event.target.value)}
+                />
+                <select
+                  aria-label="Screenshot file size unit"
+                  value={maximumFileSizeUnit}
+                  onChange={(event) => setMaximumFileSizeUnit(
+                    event.target.value as ScreenshotFileSizeUnit,
+                  )}
+                >
+                  <option value="kb">KB</option>
+                  <option value="mb">MB</option>
+                </select>
+              </span>
+            </label>
+          )}
           <div className="screenshot-export-control screenshot-output-estimate-control" aria-live="polite">
             <span>Est. size</span>
             <strong
@@ -1978,12 +2312,33 @@ export function ScreenshotEditor() {
             || status
             || (sourceMissing
               ? "The original was deleted. You can still copy or save this edit."
-              : "Saving creates a new copy and preserves the original.")}
+              : exportFormat !== "jpeg"
+                ? savingCopy
+                  ? "Lossless export keeps every pixel and saves a new file."
+                  : "Lossless export keeps every pixel and replaces the original."
+                : savingCopy
+                  ? "Save creates a new file and leaves the original untouched."
+                  : "Save replaces the original; turn on Make a copy to keep it.")}
         </div>
         <div className="screenshot-export-actions">
+          <label
+            className="screenshot-make-copy"
+            title={formatRequiresCopy
+              ? "This format or source can only be saved as a new file"
+              : "Save as a new file and leave the original untouched"}
+          >
+            <input
+              type="checkbox"
+              checked={savingCopy}
+              disabled={formatRequiresCopy || busy !== null}
+              onChange={(event) => setMakeCopy(event.target.checked)}
+            />
+            <span className="recording-switch" aria-hidden="true" />
+            <span>Make a copy</span>
+          </label>
           {saved && <button type="button" onClick={() => void showSavedFile()}>Show in folder</button>}
           <button type="button" disabled={busy !== null} onClick={() => void copyEditedImage()}>
-            <EditorIcon name="copy" />{busy === "copying" ? "Copying…" : "Copy"}
+            <EditorIcon name="copy" />{busy === "copying" ? "Copying…" : "Copy image"}
           </button>
           <button
             type="button"
@@ -1991,7 +2346,7 @@ export function ScreenshotEditor() {
             disabled={busy !== null}
             onClick={() => void saveEditedImage()}
           >
-            <EditorIcon name="save" />{busy === "saving" ? "Saving…" : "Save copy"}
+            <EditorIcon name="save" />{busy === "saving" ? "Saving…" : "Save"}
           </button>
         </div>
       </footer>
@@ -2032,12 +2387,19 @@ function ColorField({
 
 function elementLabel(element: ScreenshotElement): string {
   if (element.kind === "image") {
-    return element.source === "background" ? "Original screenshot" : element.name;
+    return element.name;
   }
   if (element.kind === "text") return "Text";
   if (element.kind === "path") return "Freehand drawing";
   if (element.shape === "curved_arrow") return "Curved arrow";
   return element.shape[0].toUpperCase() + element.shape.slice(1);
+}
+
+function imageDropLabel(edge: ImageSnapEdge): string {
+  if (edge === "top") return "Place above layer";
+  if (edge === "right") return "Place to the right";
+  if (edge === "left") return "Place to the left";
+  return "Place below layer";
 }
 
 function elementLayerName(element: ScreenshotElement): string {
@@ -2049,7 +2411,9 @@ function elementLayerName(element: ScreenshotElement): string {
 
 function elementKindLabel(element: ScreenshotElement): string {
   if (element.kind === "image") {
-    return element.source === "background" ? "Locked background" : "Image";
+    return element.source === "background"
+      ? element.locked ? "Locked background" : "Background"
+      : "Image";
   }
   if (element.kind === "text") return "Text";
   if (element.kind === "path") return "Drawing";
@@ -2084,6 +2448,10 @@ function EditorIcon({ name }: { name: string }) {
   if (name === "save") return <svg viewBox="0 0 24 24"><path d="M5 3h12l2 2v16H5Z M8 3v6h8V3M8 17h8" /></svg>;
   if (name === "plus") return <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>;
   if (name === "lock") return <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></svg>;
+  if (name === "unlock") return <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2" /><path d="M9 10V7a4 4 0 0 1 7.5-2" /></svg>;
+  if (name === "eye") return <svg viewBox="0 0 24 24"><path d="M3 12s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6Z" /><circle cx="12" cy="12" r="2.5" /></svg>;
+  if (name === "eye-off") return <svg viewBox="0 0 24 24"><path d="m4 4 16 16M9.5 6.4A9 9 0 0 1 12 6c5.5 0 9 6 9 6a15 15 0 0 1-2.2 2.9M14.4 17.6A9 9 0 0 1 12 18c-5.5 0-9-6-9-6a15 15 0 0 1 2.1-2.8" /></svg>;
+  if (name === "duplicate") return <svg viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2" /><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3M13.5 11v5M11 13.5h5" /></svg>;
   if (name === "grip") return <svg viewBox="0 0 24 24"><circle cx="9" cy="7" r=".8" /><circle cx="15" cy="7" r=".8" /><circle cx="9" cy="12" r=".8" /><circle cx="15" cy="12" r=".8" /><circle cx="9" cy="17" r=".8" /><circle cx="15" cy="17" r=".8" /></svg>;
   if (name === "align-center") return <svg viewBox="0 0 24 24"><path d="M5 6h14M8 10h8M5 14h14M8 18h8" /></svg>;
   if (name === "align-right") return <svg viewBox="0 0 24 24"><path d="M5 6h14M9 10h10M5 14h14M9 18h10" /></svg>;

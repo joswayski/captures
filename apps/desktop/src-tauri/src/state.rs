@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, atomic::AtomicBool};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicU64},
+};
 #[cfg(any(target_os = "linux", test))]
 use std::time::Duration;
 use std::time::Instant;
@@ -140,6 +143,14 @@ impl ClipboardOwnership {
         true
     }
 
+    pub fn clear_if_artifact(&mut self, artifact_id: &str) -> bool {
+        if self.artifact_id.as_deref() != Some(artifact_id) {
+            return false;
+        }
+        self.clear();
+        true
+    }
+
     fn clear(&mut self) {
         self.revision = None;
         self.artifact_id = None;
@@ -175,6 +186,9 @@ pub struct AppState {
     pub last_internal_file_drop: Mutex<Option<Instant>>,
     pub screen_permission_requested_this_launch: Mutex<bool>,
     pub shortcut_capture_suppressed: AtomicBool,
+    /// Invalidates stale recording-saved notice timers when the same reusable
+    /// notice window is shown again.
+    pub recording_saved_notice_generation: AtomicU64,
     pub backend: XcapBackend,
 }
 
@@ -207,6 +221,7 @@ impl AppState {
             last_internal_file_drop: Mutex::new(None),
             screen_permission_requested_this_launch: Mutex::new(false),
             shortcut_capture_suppressed: AtomicBool::new(false),
+            recording_saved_notice_generation: AtomicU64::new(0),
             backend: XcapBackend,
         })
     }
@@ -275,6 +290,17 @@ mod tests {
         assert_eq!(ownership.current_artifact(42).as_deref(), Some("second"));
         assert!(ownership.current_artifact(43).is_none());
         assert!(ownership.current_artifact(42).is_none());
+    }
+
+    #[test]
+    fn clipboard_ownership_clears_only_the_replaced_artifact() {
+        let mut ownership = ClipboardOwnership::default();
+        ownership.record(41, "first".to_owned(), FINGERPRINT);
+
+        assert!(!ownership.clear_if_artifact("second"));
+        assert_eq!(ownership.current_artifact(41).as_deref(), Some("first"));
+        assert!(ownership.clear_if_artifact("first"));
+        assert!(ownership.current_artifact(41).is_none());
     }
 
     #[test]
