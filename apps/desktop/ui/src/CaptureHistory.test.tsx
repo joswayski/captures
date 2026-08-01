@@ -88,6 +88,7 @@ describe("CaptureHistory", () => {
       if (command === "restore_history_artifact") return undefined;
       if (command === "open_screenshot_editor") return undefined;
       if (command === "delete_history_artifact") return undefined;
+      if (command === "clear_capture_history") return undefined;
       if (command === "open_recording_editor") return undefined;
       if (command === "reveal_recording_artifact") return undefined;
       throw new Error(`unexpected command: ${command}`);
@@ -112,13 +113,37 @@ describe("CaptureHistory", () => {
     });
     expect(await screen.findByRole("button", { name: "Restored" })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Delete from History" }));
+    const deleteButton = screen.getByRole("button", { name: "Delete from History" });
+    expect(deleteButton).toHaveClass("history-delete");
+    expect(deleteButton).not.toHaveClass("history-delete-confirm");
+
+    fireEvent.click(deleteButton);
     expect(screen.getByRole("button", { name: "Confirm permanent deletion" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Confirm permanent deletion" }))
+      .toHaveClass("history-delete-confirm");
     expect(invoke).not.toHaveBeenCalledWith("delete_history_artifact", expect.anything());
 
     fireEvent.click(screen.getByRole("button", { name: "Confirm permanent deletion" }));
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("delete_history_artifact", { artifactId: entry.id });
+    });
+  });
+
+  it("requires confirmation before deleting every capture at once", async () => {
+    render(<CaptureHistory />);
+
+    expect(await screen.findByRole("button", { name: "Delete all captures" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Delete all captures" }));
+    expect(screen.getByRole("button", { name: "Confirm delete all captures" })).toBeInTheDocument();
+    expect(invoke).not.toHaveBeenCalledWith("clear_capture_history");
+
+    fireEvent.click(screen.getByRole("button", { name: "Confirm delete all captures" }));
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("clear_capture_history");
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Delete all captures" })).not.toBeInTheDocument();
+      expect(screen.queryByText("1440 × 900 · 250 KB")).not.toBeInTheDocument();
     });
   });
 
@@ -149,6 +174,7 @@ describe("CaptureHistory", () => {
       if (command === "open_recording_editor") return undefined;
       if (command === "reveal_recording_artifact") return undefined;
       if (command === "delete_history_artifact") return undefined;
+      if (command === "clear_capture_history") return undefined;
       throw new Error(`unexpected command: ${command}`);
     });
     render(<CaptureHistory />);
@@ -176,6 +202,7 @@ describe("CaptureHistory", () => {
       if (command === "get_capture_history") return [missingRecording];
       if (command === "get_recording_drafts") return [];
       if (command === "delete_history_artifact") return undefined;
+      if (command === "clear_capture_history") return undefined;
       throw new Error(`unexpected command: ${command}`);
     });
     const { container } = render(<CaptureHistory />);
@@ -213,6 +240,7 @@ describe("CaptureHistory", () => {
     expect(screen.getByText(/0:04 recovered so far/)).toBeInTheDocument();
     expect(screen.getByText("The recording did not contain a complete video frame")).toBeInTheDocument();
     expect(screen.queryByText(/background task failed/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete all captures" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Recover" }));
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("recover_recording_draft", {

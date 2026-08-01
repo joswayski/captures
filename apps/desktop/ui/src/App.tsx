@@ -706,7 +706,10 @@ export function CaptureHistory() {
   const [drafts, setDrafts] = useState<RecordingDraftManifest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [clearingAll, setClearingAll] = useState(false);
+  const [confirmingClearAll, setConfirmingClearAll] = useState(false);
   const activeRef = useRef(true);
+  const clearAllTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -739,8 +742,35 @@ export function CaptureHistory() {
     return () => {
       activeRef.current = false;
       dispose?.();
+      if (clearAllTimer.current) clearTimeout(clearAllTimer.current);
     };
   }, [refresh]);
+
+  const clearAllHistory = async () => {
+    if (clearingAll || entries.length === 0) return;
+    if (!confirmingClearAll) {
+      setConfirmingClearAll(true);
+      if (clearAllTimer.current) clearTimeout(clearAllTimer.current);
+      clearAllTimer.current = setTimeout(() => setConfirmingClearAll(false), 4_000);
+      return;
+    }
+
+    setClearingAll(true);
+    setError("");
+    try {
+      await invoke("clear_capture_history");
+      if (!activeRef.current) return;
+      setEntries([]);
+      setConfirmingClearAll(false);
+    } catch (error) {
+      if (activeRef.current) {
+        setError(`Couldn’t delete capture history: ${String(error)}`);
+        setConfirmingClearAll(false);
+      }
+    } finally {
+      if (activeRef.current) setClearingAll(false);
+    }
+  };
 
   return (
     <main className="capture-history">
@@ -751,9 +781,29 @@ export function CaptureHistory() {
           <p>Screenshots, videos, GIFs, and interrupted recordings you can recover all appear here.</p>
         </div>
         {!loading && entries.length > 0 && (
-          <span className="history-count">
-            {entries.length} {entries.length === 1 ? "capture" : "captures"}
-          </span>
+          <div className="history-header-actions">
+            <span className="history-count">
+              {entries.length} {entries.length === 1 ? "capture" : "captures"}
+            </span>
+            <button
+              type="button"
+              className={confirmingClearAll
+                ? "history-clear-all history-clear-all-confirm"
+                : "history-clear-all"}
+              aria-label={confirmingClearAll
+                ? "Confirm delete all captures"
+                : "Delete all captures"}
+              disabled={clearingAll}
+              onClick={() => void clearAllHistory()}
+            >
+              <TrashIcon />
+              {clearingAll
+                ? "Deleting…"
+                : confirmingClearAll
+                  ? "Delete all forever"
+                  : "Delete all"}
+            </button>
+          </div>
         )}
       </header>
 
@@ -905,14 +955,14 @@ export function HistoryCard({
         {entry.kind !== "screenshot" && entry.dropped_frames > 0 && <p className="history-recording-warning">{entry.dropped_frames.toLocaleString()} frame{entry.dropped_frames === 1 ? "" : "s"} dropped while recording</p>}
         <div className={[
           "history-actions",
-          entry.kind === "screenshot" ? "" : "history-recording-actions",
+          entry.kind === "screenshot" ? "history-screenshot-actions" : "history-recording-actions",
           entry.kind !== "screenshot" && entry.missing ? "history-missing-actions" : "",
         ].filter(Boolean).join(" ")}>
           {entry.kind === "screenshot" ? (
             <>
               <button
                 type="button"
-                className="history-restore"
+                className="history-edit"
                 disabled={busy !== null}
                 onClick={() => void editScreenshot()}
               >
@@ -921,6 +971,7 @@ export function HistoryCard({
               <button
                 type="button"
                 className="history-reveal"
+                title="Bring this screenshot back as a floating preview"
                 disabled={busy !== null}
                 onClick={() => void restore()}
               >
@@ -931,11 +982,11 @@ export function HistoryCard({
             <>
               <button
                 type="button"
-                className="history-restore"
+                className="history-edit"
                 disabled={busy !== null}
                 onClick={() => void openRecording()}
               >
-                {busy === "opening" ? "Opening…" : "Edit"}
+                <EditIcon />{busy === "opening" ? "Opening…" : "Edit"}
               </button>
               <button
                 type="button"

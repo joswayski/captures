@@ -201,6 +201,7 @@ pub fn run() {
             get_capture_history,
             restore_history_artifact,
             delete_history_artifact,
+            clear_capture_history,
             get_clipboard_state,
             copy_artifact,
             save_artifact,
@@ -1483,6 +1484,42 @@ async fn delete_history_artifact(
         .recording_artifacts
         .lock()
         .retain(|artifact| artifact.summary.id != artifact_id);
+    app.emit("capture-history-changed", ())
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn clear_capture_history(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> CommandResult<()> {
+    let ids: Vec<String> = state
+        .history
+        .lock()
+        .iter()
+        .map(|entry| entry.id.clone())
+        .collect();
+    if ids.is_empty() {
+        return Ok(());
+    }
+
+    let ids_for_delete = ids.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        for artifact_id in &ids_for_delete {
+            storage::delete_history_capture(artifact_id)?;
+        }
+        Ok::<(), AppError>(())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())?;
+
+    state.history.lock().clear();
+    state
+        .recording_artifacts
+        .lock()
+        .retain(|artifact| !ids.iter().any(|id| id == &artifact.summary.id));
     app.emit("capture-history-changed", ())
         .map_err(|error| error.to_string())?;
     Ok(())
