@@ -173,6 +173,8 @@ export interface RecordingArtifact {
   id: string;
   kind: RecordingKind;
   path: string;
+  /** Permanent Captures-folder copy when the user has explicitly saved. */
+  saved_path?: string | null;
   media_url: string;
   poster_url: string;
   mime_type: string;
@@ -267,7 +269,8 @@ export interface RecordingArtifactSummary extends ArtifactSummaryBase {
   kind: "video" | "gif";
   poster_url: string;
   media_url: string;
-  saved_path: string;
+  /** Permanent Captures-folder path when saved; null while history-only. */
+  saved_path: string | null;
   mime_type: string;
   duration_ms: number;
   dropped_frames: number;

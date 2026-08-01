@@ -169,10 +169,12 @@ describe("RecordingHud", () => {
       .toBeInTheDocument();
   });
 
-  it("uses portable file-browser wording for a saved recording", () => {
+  it("offers history recovery wording until a recording is permanently saved", () => {
     render(<RecordingSavedNotice />);
 
-    expect(screen.getByRole("button", { name: "Show in Folder" })).toBeDisabled();
+    expect(screen.getByText("Recording ready")).toBeInTheDocument();
+    expect(screen.getByText(/Kept in Capture History for 30 days/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save file" })).toBeDisabled();
     expect(screen.queryByText(/Finder|Explorer/)).not.toBeInTheDocument();
   });
 
@@ -187,7 +189,18 @@ describe("RecordingHud", () => {
       }
       return () => undefined;
     });
-    vi.mocked(invoke).mockResolvedValue(undefined);
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "get_recording_artifact") {
+        const artifactId = (args as { artifactId?: string } | undefined)?.artifactId;
+        if (artifactId === "recording-2") {
+          return { id: artifactId, saved_path: "/Users/example/Captures/recording-2.mp4" };
+        }
+        return { id: artifactId, saved_path: null };
+      }
+      if (command === "reveal_recording_artifact") return undefined;
+      if (command === "dismiss_recording_saved_notice") return undefined;
+      return undefined;
+    });
     render(<RecordingSavedNotice />);
 
     expect(savedNoticeHandler).not.toBeNull();
@@ -196,6 +209,7 @@ describe("RecordingHud", () => {
         payload: { artifact_id: "recording-2", generation: 2 },
       });
     });
+    expect(await screen.findByRole("button", { name: "Show in Folder" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Show in Folder" }));
 
     await waitFor(() => {

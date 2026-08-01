@@ -15,7 +15,7 @@ use crate::{
     AppError,
     models::{
         AppSettings, ArtifactKind, CaptureArtifact, HISTORY_RETENTION_DAYS, HistoryEntry,
-        RecordingArtifactData,
+        RecordingArtifactData, find_history_recording_media, history_recording_media_file_name,
     },
 };
 
@@ -296,15 +296,52 @@ pub fn save_history_capture(
     Ok(())
 }
 
-pub fn save_history_recording(entry: &HistoryEntry, poster_png: &[u8]) -> Result<(), AppError> {
-    if entry.kind == ArtifactKind::Screenshot || entry.recording_artifact().is_none() {
+/// Save a recording into private capture history.
+///
+/// Copies `media_source` into the history entry as recovery media (retained for
+/// [`HISTORY_RETENTION_DAYS`]). `entry.saved_path` should only be set when the
+/// user has also permanently saved a Captures-folder copy.
+pub fn save_history_recording(
+    entry: &HistoryEntry,
+    poster_png: &[u8],
+    media_source: &Path,
+) -> Result<PathBuf, AppError> {
+    if entry.kind == ArtifactKind::Screenshot || entry.kind.recording_kind().is_none() {
         return Err(AppError::Task(
             "recording history metadata is incomplete".to_owned(),
         ));
     }
+    if !media_source.is_file() {
+        return Err(AppError::Task(
+            "recording media is no longer available".to_owned(),
+        ));
+    }
+    let media_name = history_recording_media_file_name(entry.kind, media_source)
+        .ok_or_else(|| AppError::Task("recording history metadata is incomplete".to_owned()))?;
     let directory = crate::models::history_directory();
-    save_history_entry_in(&directory, entry, None, poster_png)?;
+    let recovery_path = save_history_entry_in(
+        &directory,
+        entry,
+        None,
+        poster_png,
+        Some((media_source, media_name.as_str())),
+    )?;
     let _ = load_capture_history_from(&directory, Utc::now())?;
+    recovery_path
+        .ok_or_else(|| AppError::Task("recording history media was not written".to_owned()))
+}
+
+/// Rewrite history metadata in place (for example after a permanent save) without
+/// replacing recovery media already stored in the entry directory.
+pub fn update_history_entry_metadata(entry: &HistoryEntry) -> Result<(), AppError> {
+    let directory = history_entry_directory(&crate::models::history_directory(), &entry.id)?;
+    if !directory.is_dir() {
+        return Err(AppError::HistoryUnavailable);
+    }
+    let temporary = directory.join(format!(".{}.metadata.tmp", Uuid::new_v4()));
+    fs::write(&temporary, serde_json::to_vec_pretty(entry)?)?;
+    let destination = directory.join(HISTORY_METADATA_FILE);
+    fs::rename(temporary, destination)?;
     Ok(())
 }
 
@@ -350,7 +387,7 @@ fn save_history_capture_in(
     image_png: &[u8],
     preview_png: &[u8],
 ) -> Result<(), AppError> {
-    save_history_entry_in(root, entry, Some(image_png), preview_png)
+    save_history_entry_in(root, entry, Some(image_png), preview_png, None).map(|_| ())
 }
 
 fn save_history_entry_in(
@@ -358,7 +395,8 @@ fn save_history_entry_in(
     entry: &HistoryEntry,
     image_png: Option<&[u8]>,
     preview_png: &[u8],
-) -> Result<(), AppError> {
+    media: Option<(&Path, &str)>,
+) -> Result<Option<PathBuf>, AppError> {
     fs::create_dir_all(root)?;
     let destination = history_entry_directory(root, &entry.id)?;
     let temporary = root.join(format!(".{}.{}.tmp", entry.id, Uuid::new_v4()));
@@ -370,6 +408,25 @@ fn save_history_entry_in(
             fs::write(temporary.join(HISTORY_IMAGE_FILE), image_png)?;
         }
         fs::write(temporary.join(HISTORY_PREVIEW_FILE), preview_png)?;
+        let recovery_media = if let Some((media_source, media_name)) = media {
+            let media_destination = temporary.join(media_name);
+            // Same-path copies are no-ops on some platforms; skip when identical.
+            if media_source != media_destination.as_path() {
+                fs::copy(media_source, &media_destination)?;
+            }
+            Some(media_destination)
+        } else if let Some(existing) = find_history_recording_media(&destination) {
+            // Preserve existing recovery media when only metadata/poster change.
+            let media_name = existing
+                .file_name()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("media.bin"));
+            let preserved = temporary.join(media_name);
+            fs::copy(&existing, &preserved)?;
+            Some(preserved)
+        } else {
+            None
+        };
         fs::write(
             temporary.join(HISTORY_METADATA_FILE),
             serde_json::to_vec_pretty(entry)?,
@@ -390,7 +447,9 @@ fn save_history_entry_in(
         } else {
             fs::rename(&temporary, &destination)?;
         }
-        Ok::<(), AppError>(())
+        let final_media =
+            recovery_media.map(|path| destination.join(path.file_name().expect("media file name")));
+        Ok::<_, AppError>(final_media)
     })();
 
     if result.is_err() {
@@ -443,7 +502,9 @@ fn load_capture_history_from(
             }
         };
         let created_at = created_at.with_timezone(&Utc);
-        if history_entry.kind == ArtifactKind::Screenshot && created_at < cutoff {
+        // Screenshots and recordings share the same recovery window. Permanent
+        // Captures-folder saves (entry.saved_path) are not deleted by this prune.
+        if created_at < cutoff {
             let _ = fs::remove_dir_all(path);
             continue;
         }
@@ -453,7 +514,17 @@ fn load_capture_history_from(
                     history_entry.mode.is_some() && path.join(HISTORY_IMAGE_FILE).is_file()
                 }
                 ArtifactKind::Video | ArtifactKind::Gif => {
+                    let has_recovery_media = find_history_recording_media(&path).is_some();
+                    let has_permanent_media = history_entry
+                        .saved_path
+                        .as_ref()
+                        .is_some_and(|saved| Path::new(saved).is_file());
+                    // Keep legacy metadata rows that still point at an external path
+                    // even if that file is currently missing (surface as missing).
                     history_entry.recording_artifact().is_some()
+                        && (has_recovery_media
+                            || has_permanent_media
+                            || history_entry.saved_path.is_some())
                 }
             };
         if !files_are_valid {
@@ -870,15 +941,109 @@ mod tests {
     }
 
     #[test]
-    fn recording_history_keeps_metadata_and_poster_without_copying_media() {
+    fn recording_history_stores_recovery_media_and_expires_like_screenshots() {
+        let directory = tempdir().expect("temporary directory");
+        let now = Utc.with_ymd_and_hms(2026, 7, 19, 12, 0, 0).unwrap();
+        let recent_id = uuid::Uuid::new_v4().to_string();
+        let expired_id = uuid::Uuid::new_v4().to_string();
+        let recent_media = directory.path().join("recent-source.mp4");
+        let expired_media = directory.path().join("expired-source.mp4");
+        std::fs::write(&recent_media, b"recent-bytes").expect("recent media");
+        std::fs::write(&expired_media, b"expired-bytes").expect("expired media");
+
+        let recent = HistoryEntry::from_recording(&RecordingArtifact {
+            id: recent_id.clone(),
+            kind: RecordingKind::Video,
+            path: recent_media.to_string_lossy().into_owned(),
+            saved_path: None,
+            media_url: format!("captures-capture://localhost/media/{recent_id}"),
+            poster_url: format!("captures-capture://localhost/poster/{recent_id}"),
+            mime_type: "video/mp4".to_owned(),
+            duration_ms: 4_200,
+            width: 1_920,
+            height: 1_080,
+            size_bytes: 12,
+            dropped_frames: 0,
+            has_system_audio: true,
+            has_microphone_audio: false,
+            created_at: (now - Duration::days(10)).to_rfc3339(),
+            target: RecordingTarget::Display {
+                display_id: "1".to_owned(),
+            },
+            missing: false,
+        });
+        let expired = HistoryEntry::from_recording(&RecordingArtifact {
+            id: expired_id.clone(),
+            kind: RecordingKind::Video,
+            path: expired_media.to_string_lossy().into_owned(),
+            saved_path: None,
+            media_url: format!("captures-capture://localhost/media/{expired_id}"),
+            poster_url: format!("captures-capture://localhost/poster/{expired_id}"),
+            mime_type: "video/mp4".to_owned(),
+            duration_ms: 1_000,
+            width: 1_280,
+            height: 720,
+            size_bytes: 12,
+            dropped_frames: 0,
+            has_system_audio: false,
+            has_microphone_audio: false,
+            created_at: (now - Duration::days(40)).to_rfc3339(),
+            target: RecordingTarget::Display {
+                display_id: "1".to_owned(),
+            },
+            missing: false,
+        });
+
+        save_history_entry_in(
+            directory.path(),
+            &recent,
+            None,
+            b"recent-poster",
+            Some((&recent_media, "media.mp4")),
+        )
+        .expect("recent recording history saved");
+        save_history_entry_in(
+            directory.path(),
+            &expired,
+            None,
+            b"expired-poster",
+            Some((&expired_media, "media.mp4")),
+        )
+        .expect("expired recording history saved");
+
+        let loaded = load_capture_history_from(directory.path(), now).expect("history loaded");
+        assert_eq!(
+            loaded.len(),
+            1,
+            "recordings expire after the shared recovery window"
+        );
+        assert_eq!(loaded[0].id, recent_id);
+        assert!(
+            directory
+                .path()
+                .join(&recent_id)
+                .join("media.mp4")
+                .is_file()
+        );
+        assert!(!directory.path().join(expired_id).exists());
+        assert_eq!(
+            std::fs::read(directory.path().join(&recent_id).join("media.mp4")).unwrap(),
+            b"recent-bytes",
+        );
+    }
+
+    #[test]
+    fn legacy_recording_history_keeps_external_saved_path_rows() {
         let directory = tempdir().expect("temporary directory");
         let now = Utc.with_ymd_and_hms(2026, 7, 19, 12, 0, 0).unwrap();
         let id = uuid::Uuid::new_v4().to_string();
         let media_path = directory.path().join("externally-managed.mp4");
-        let artifact = RecordingArtifact {
+        std::fs::write(&media_path, b"legacy").expect("legacy media");
+        let entry = HistoryEntry::from_recording(&RecordingArtifact {
             id: id.clone(),
             kind: RecordingKind::Video,
             path: media_path.to_string_lossy().into_owned(),
+            saved_path: Some(media_path.to_string_lossy().into_owned()),
             media_url: format!("captures-capture://localhost/media/{id}"),
             poster_url: format!("captures-capture://localhost/poster/{id}"),
             mime_type: "video/mp4".to_owned(),
@@ -889,25 +1054,23 @@ mod tests {
             dropped_frames: 0,
             has_system_audio: true,
             has_microphone_audio: false,
-            created_at: (now - Duration::days(90)).to_rfc3339(),
+            created_at: (now - Duration::days(10)).to_rfc3339(),
             target: RecordingTarget::Display {
                 display_id: "1".to_owned(),
             },
-            missing: true,
-        };
-        let entry = HistoryEntry::from_recording(&artifact);
+            missing: false,
+        });
 
-        save_history_entry_in(directory.path(), &entry, None, b"poster")
-            .expect("recording history saved");
+        save_history_entry_in(directory.path(), &entry, None, b"poster", None)
+            .expect("legacy recording history saved");
         let loaded = load_capture_history_from(directory.path(), now).expect("history loaded");
 
-        assert_eq!(
-            loaded.len(),
-            1,
-            "recording metadata does not expire with screenshot recovery"
-        );
+        assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].kind, ArtifactKind::Video);
-        assert!(loaded[0].recording_artifact().unwrap().missing);
+        assert_eq!(
+            loaded[0].saved_path.as_deref(),
+            Some(media_path.to_string_lossy().as_ref())
+        );
         assert!(!directory.path().join(&id).join(HISTORY_IMAGE_FILE).exists());
         assert_eq!(
             std::fs::read(directory.path().join(&id).join(HISTORY_PREVIEW_FILE)).unwrap(),

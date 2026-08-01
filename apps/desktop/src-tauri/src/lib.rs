@@ -254,6 +254,7 @@ pub fn run() {
             recording::cancel_recording_export,
             recording::reveal_recording_artifact,
             recording::open_recording_editor,
+            recording::save_recording_artifact,
             recording::trash_recording_artifact,
             recording::get_recording_drafts,
             recording::recover_recording_draft,
@@ -1371,10 +1372,9 @@ fn get_capture_history(state: tauri::State<'_, Arc<AppState>>) -> Vec<ArtifactSu
         let mut entries = state.history.lock();
         let mut expired_ids = Vec::new();
         entries.retain(|entry| {
-            let recent = entry.kind != ArtifactKind::Screenshot
-                || DateTime::parse_from_rfc3339(&entry.created_at)
-                    .map(|created_at| created_at.with_timezone(&Utc) >= cutoff)
-                    .unwrap_or(false);
+            let recent = DateTime::parse_from_rfc3339(&entry.created_at)
+                .map(|created_at| created_at.with_timezone(&Utc) >= cutoff)
+                .unwrap_or(false);
             if !recent {
                 expired_ids.push(entry.id.clone());
             }

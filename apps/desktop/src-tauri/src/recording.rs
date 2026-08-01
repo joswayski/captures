@@ -1280,18 +1280,18 @@ async fn stop_recording_inner(
         && segments
             .iter()
             .any(|segment| segment.microphone_path.is_some());
-    let settings = state.settings();
-    let destination = storage::unique_media_path(
-        Path::new(&settings.output_directory),
-        if options.kind == RecordingKind::Video {
-            "mp4"
-        } else {
-            "gif"
-        },
-    )?;
+    let extension = if options.kind == RecordingKind::Video {
+        "mp4"
+    } else {
+        "gif"
+    };
+    // Assemble into the session workspace first, then promote into private history
+    // recovery storage (not the user's Captures folder) so dismiss/delete of the
+    // editor can still recover the recording for HISTORY_RETENTION_DAYS.
+    let assembled = directory.join(format!("assembled.{extension}"));
     let toolchain = media_toolchain(&app);
     let cancel = CancelToken::default();
-    let destination_for_task = destination.clone();
+    let destination_for_task = assembled.clone();
     let options_for_task = options.clone();
     let directory_for_task = directory.clone();
     let probe = tauri::async_runtime::spawn_blocking(move || {
@@ -1350,10 +1350,11 @@ async fn stop_recording_inner(
                 .sum()
         })
         .unwrap_or(0);
-    let artifact = RecordingArtifact {
+    let mut artifact = RecordingArtifact {
         id: artifact_id.clone(),
         kind: options.kind,
-        path: destination.to_string_lossy().into_owned(),
+        path: assembled.to_string_lossy().into_owned(),
+        saved_path: None,
         media_url: recording_media_url(&artifact_id),
         poster_url: recording_poster_url(&artifact_id),
         mime_type: if options.kind == RecordingKind::Video {
@@ -1373,7 +1374,7 @@ async fn stop_recording_inner(
         target: options.target.clone(),
         missing: false,
     };
-    upsert_recording_artifact(&app, &state, artifact.clone(), poster_png.clone());
+    upsert_recording_artifact(&app, &state, &mut artifact, poster_png.clone());
     let _ = fs::write(directory.join("poster.png"), poster_png);
 
     let now = now_ms();
@@ -1403,10 +1404,11 @@ async fn stop_recording_inner(
     if options.kind == RecordingKind::Video {
         let _ = DraftStore::new(recording_recovery_directory()).remove(session_id);
     }
+    let settings = state.settings();
     if settings.recording.open_editor_after_recording
         && let Err(error) = show_recording_editor(&app, &artifact.id)
     {
-        eprintln!("recording was saved, but the editor could not open: {error}");
+        eprintln!("recording was saved to history, but the editor could not open: {error}");
     }
     Ok(artifact)
 }
@@ -1753,14 +1755,58 @@ pub fn start_recording_export(
                         (true, true) => (true, false),
                         (false, false) => (false, false),
                     };
-                let artifact = RecordingArtifact {
+                let exported_path = outcome.path.to_string_lossy().into_owned();
+                // Prefer an existing Captures-folder save. On first Save of a
+                // history-only recording, promote a permanent copy even when the
+                // editor overwrites the private recovery media in place.
+                let mut permanent_path = if request.overwrite_source {
+                    source
+                        .saved_path
+                        .clone()
+                        .filter(|path| Path::new(path).is_file())
+                } else {
+                    Some(exported_path.clone())
+                };
+                if let Some(saved_path) = permanent_path.as_ref()
+                    && Path::new(saved_path) != outcome.path.as_path()
+                {
+                    if let Err(error) = fs::copy(&outcome.path, saved_path) {
+                        eprintln!(
+                            "recording export completed, but the Captures folder copy could not be updated: {error}"
+                        );
+                    }
+                } else if permanent_path.is_none() {
+                    let settings = state.settings();
+                    match storage::unique_media_path(
+                        Path::new(&settings.output_directory),
+                        extension,
+                    ) {
+                        Ok(destination) => match fs::copy(&outcome.path, &destination) {
+                            Ok(_) => {
+                                permanent_path = Some(destination.to_string_lossy().into_owned());
+                            }
+                            Err(error) => {
+                                eprintln!(
+                                    "recording export completed, but a Captures folder copy could not be created: {error}"
+                                );
+                            }
+                        },
+                        Err(error) => {
+                            eprintln!(
+                                "recording export completed, but a Captures folder path could not be prepared: {error}"
+                            );
+                        }
+                    }
+                }
+                let mut artifact = RecordingArtifact {
                     id: artifact_id.clone(),
                     kind: if extension == "gif" {
                         RecordingKind::Gif
                     } else {
                         RecordingKind::Video
                     },
-                    path: outcome.path.to_string_lossy().into_owned(),
+                    path: exported_path,
+                    saved_path: permanent_path,
                     media_url: recording_media_url(&artifact_id),
                     poster_url: recording_poster_url(&artifact_id),
                     mime_type: match extension {
@@ -1787,12 +1833,16 @@ pub fn start_recording_export(
                 upsert_recording_artifact(
                     &app,
                     &state,
-                    artifact.clone(),
+                    &mut artifact,
                     generated_poster.unwrap_or(poster_png),
                 );
+                let reveal_path = artifact
+                    .saved_path
+                    .clone()
+                    .unwrap_or_else(|| artifact.path.clone());
                 let reveal_error = app
                     .opener()
-                    .reveal_item_in_dir(PathBuf::from(&artifact.path))
+                    .reveal_item_in_dir(PathBuf::from(reveal_path))
                     .err()
                     .map(|error| error.to_string());
                 let _ = app.emit(
@@ -1858,13 +1908,18 @@ pub fn reveal_recording_artifact(
     state: tauri::State<'_, Arc<AppState>>,
     artifact_id: String,
 ) -> Result<(), String> {
-    let path = state
+    ensure_recording_artifact_loaded(state.inner(), &artifact_id)?;
+    let artifact = state
         .recording_artifacts
         .lock()
         .iter()
         .find(|artifact| artifact.summary.id == artifact_id)
-        .map(|artifact| artifact.summary.path.clone())
+        .map(|artifact| artifact.summary.clone())
         .ok_or_else(|| "recording is no longer available".to_owned())?;
+    let path = artifact
+        .saved_path
+        .filter(|path| Path::new(path).is_file())
+        .ok_or_else(|| "Save this recording before showing it in its folder".to_owned())?;
     app.opener()
         .reveal_item_in_dir(PathBuf::from(path))
         .map_err(|error| error.to_string())
@@ -1876,6 +1931,7 @@ pub fn open_recording_editor(
     state: tauri::State<'_, Arc<AppState>>,
     artifact_id: String,
 ) -> Result<(), String> {
+    ensure_recording_artifact_loaded(state.inner(), &artifact_id)?;
     let available = state.recording_artifacts.lock().iter().any(|artifact| {
         artifact.summary.id == artifact_id && Path::new(&artifact.summary.path).is_file()
     });
@@ -1885,32 +1941,150 @@ pub fn open_recording_editor(
     show_recording_editor(&app, &artifact_id).map_err(|error| error.to_string())
 }
 
+fn ensure_recording_artifact_loaded(state: &AppState, artifact_id: &str) -> Result<(), String> {
+    if state
+        .recording_artifacts
+        .lock()
+        .iter()
+        .any(|artifact| artifact.summary.id == artifact_id)
+    {
+        return Ok(());
+    }
+    let entry = state
+        .history
+        .lock()
+        .iter()
+        .find(|entry| entry.id == artifact_id)
+        .cloned()
+        .ok_or_else(|| "recording is no longer available".to_owned())?;
+    let data = storage::load_recording_artifact(&entry)
+        .ok_or_else(|| "the recording file is missing".to_owned())?;
+    state.recording_artifacts.lock().push(data);
+    Ok(())
+}
+
 #[tauri::command]
 pub fn trash_recording_artifact(
     app: AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
     artifact_id: String,
 ) -> Result<(), String> {
-    let path = state
+    let artifact = state
         .recording_artifacts
         .lock()
         .iter()
         .find(|artifact| artifact.summary.id == artifact_id)
-        .map(|artifact| artifact.summary.path.clone())
+        .map(|artifact| artifact.summary.clone())
         .ok_or_else(|| "recording is no longer available".to_owned())?;
-    if Path::new(&path).exists() {
-        trash::delete(path).map_err(|error| error.to_string())?;
+    // Match screenshots: only trash an explicit Captures-folder save. Private
+    // history recovery media stays available for HISTORY_RETENTION_DAYS.
+    if let Some(saved_path) = artifact.saved_path.as_ref() {
+        if Path::new(saved_path).exists() {
+            trash::delete(saved_path).map_err(|error| error.to_string())?;
+        }
+        if let Some(entry) = state
+            .history
+            .lock()
+            .iter_mut()
+            .find(|entry| entry.id == artifact_id)
+        {
+            entry.saved_path = None;
+            let _ = storage::update_history_entry_metadata(entry);
+        }
+        if let Some(live) = state
+            .recording_artifacts
+            .lock()
+            .iter_mut()
+            .find(|live| live.summary.id == artifact_id)
+        {
+            live.summary.saved_path = None;
+        }
     }
     state
         .recording_artifacts
         .lock()
         .retain(|artifact| artifact.summary.id != artifact_id);
     state.recording_timeline_sprites.lock().remove(&artifact_id);
-    let _ = storage::delete_history_capture(&artifact_id);
-    state.history.lock().retain(|entry| entry.id != artifact_id);
-    let _ = app.emit("capture-history-changed", ());
     let _ = app.emit("recording-artifact-removed", artifact_id);
+    let _ = app.emit("capture-history-changed", ());
     Ok(())
+}
+
+/// Copy a history-only recording into the user's Captures folder permanently.
+#[tauri::command]
+pub async fn save_recording_artifact(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    artifact_id: String,
+) -> Result<RecordingArtifact, String> {
+    let state = state.inner().clone();
+    ensure_recording_artifact_loaded(&state, &artifact_id)?;
+    let artifact = state
+        .recording_artifacts
+        .lock()
+        .iter()
+        .find(|artifact| artifact.summary.id == artifact_id)
+        .map(|artifact| artifact.summary.clone())
+        .ok_or_else(|| "recording is no longer available".to_owned())?;
+    if let Some(saved_path) = artifact.saved_path.as_ref()
+        && Path::new(saved_path).is_file()
+    {
+        return Ok(artifact);
+    }
+    if !Path::new(&artifact.path).is_file() {
+        return Err("the recording file is missing".to_owned());
+    }
+    let extension = Path::new(&artifact.path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or(if artifact.kind == RecordingKind::Gif {
+            "gif"
+        } else {
+            "mp4"
+        })
+        .to_owned();
+    let source = PathBuf::from(artifact.path.clone());
+    let settings = state.settings();
+    let destination = tauri::async_runtime::spawn_blocking(move || {
+        storage::unique_media_path(Path::new(&settings.output_directory), &extension)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())?;
+    tauri::async_runtime::spawn_blocking({
+        let source = source.clone();
+        let destination = destination.clone();
+        move || fs::copy(source, destination)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())?;
+
+    let saved_path = destination.to_string_lossy().into_owned();
+    let updated = {
+        let mut recording_artifacts = state.recording_artifacts.lock();
+        let live = recording_artifacts
+            .iter_mut()
+            .find(|live| live.summary.id == artifact_id)
+            .ok_or_else(|| "recording is no longer available".to_owned())?;
+        live.summary.saved_path = Some(saved_path.clone());
+        live.summary.missing = false;
+        live.summary.clone()
+    };
+    if let Some(entry) = state
+        .history
+        .lock()
+        .iter_mut()
+        .find(|entry| entry.id == artifact_id)
+    {
+        entry.saved_path = Some(saved_path);
+        if let Err(error) = storage::update_history_entry_metadata(entry) {
+            eprintln!("failed to update recording history after save: {error}");
+        }
+    }
+    let _ = app.emit("capture-history-changed", ());
+    let _ = app.emit(RECORDING_ARTIFACT_EVENT, &updated);
+    Ok(updated)
 }
 
 #[tauri::command]
@@ -2007,7 +2181,8 @@ async fn recover_recording_draft_inner(
     } else {
         "gif"
     };
-    let destination = storage::unique_media_path(Path::new(&settings.output_directory), extension)?;
+    // Recover into the draft workspace, then promote into private history recovery.
+    let destination = directory.join(format!("assembled.{extension}"));
     let task_app = app.clone();
     let mut task_manifest = manifest.clone();
     let task_directory = directory.clone();
@@ -2125,10 +2300,11 @@ async fn recover_recording_draft_inner(
     .map_err(|error| AppError::Task(error.to_string()))??;
 
     let artifact_id = Uuid::new_v4().to_string();
-    let artifact = RecordingArtifact {
+    let mut artifact = RecordingArtifact {
         id: artifact_id.clone(),
         kind: manifest.options.kind,
         path: destination.to_string_lossy().into_owned(),
+        saved_path: None,
         media_url: recording_media_url(&artifact_id),
         poster_url: recording_poster_url(&artifact_id),
         mime_type: probe.metadata.mime_type,
@@ -2150,7 +2326,7 @@ async fn recover_recording_draft_inner(
         target: manifest.options.target.clone(),
         missing: false,
     };
-    upsert_recording_artifact(&app, &state, artifact.clone(), poster_png);
+    upsert_recording_artifact(&app, &state, &mut artifact, poster_png);
 
     let mut recovered_manifest = recovered_manifest;
     recovered_manifest.state = RecordingState::Ready;
@@ -2627,20 +2803,26 @@ fn replace_recording_source_at(
 fn upsert_recording_artifact(
     app: &AppHandle,
     state: &AppState,
-    artifact: RecordingArtifact,
+    artifact: &mut RecordingArtifact,
     poster_png: Vec<u8>,
 ) {
-    let history_entry = HistoryEntry::from_recording(&artifact);
-    let history_saved = match storage::save_history_recording(&history_entry, &poster_png) {
-        Ok(()) => true,
-        Err(error) => {
-            eprintln!("failed to save recording history: {error}");
-            false
-        }
-    };
+    let media_source = PathBuf::from(&artifact.path);
+    let history_entry = HistoryEntry::from_recording(artifact);
+    let history_saved =
+        match storage::save_history_recording(&history_entry, &poster_png, &media_source) {
+            Ok(recovery_path) => {
+                artifact.path = recovery_path.to_string_lossy().into_owned();
+                artifact.missing = false;
+                true
+            }
+            Err(error) => {
+                eprintln!("failed to save recording history: {error}");
+                false
+            }
+        };
     let artifact_id = artifact.id.clone();
     let artifact_data = RecordingArtifactData {
-        summary: artifact,
+        summary: artifact.clone(),
         poster_png,
     };
     let mut recording_artifacts = state.recording_artifacts.lock();

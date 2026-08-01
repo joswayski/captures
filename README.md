@@ -26,7 +26,7 @@ may contain bugs or incomplete features.
 - Save lossless PNGs by default, with JPEG and WebP export options.
 - Copy, save, preview, or drag recent captures into other apps.
 - Take screenshots without stopping an active recording.
-- Restore recent screenshots from a 30-day history.
+- Restore recent screenshots and recordings from a 30-day Capture History.
 - Customize global shortcuts and color themes.
 
 ## Wishlist
