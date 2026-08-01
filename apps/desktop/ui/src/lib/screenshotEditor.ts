@@ -332,6 +332,137 @@ export function translateElement(
   };
 }
 
+/** Corner handles drawn around a selected annotation. */
+export type ResizeHandle = "nw" | "ne" | "sw" | "se";
+
+const RESIZE_HANDLES: ResizeHandle[] = ["nw", "ne", "se", "sw"];
+
+/**
+ * Hit-test the four corner resize handles of a selection box.
+ * `handleRadius` is in document pixels (scale for display zoom before calling).
+ */
+export function hitTestResizeHandle(
+  bounds: EditorRect,
+  point: EditorPoint,
+  handleRadius: number,
+): ResizeHandle | null {
+  const radius = Math.max(4, handleRadius);
+  for (const handle of RESIZE_HANDLES) {
+    const corner = resizeHandlePoint(bounds, handle);
+    if (
+      Math.abs(point.x - corner.x) <= radius
+      && Math.abs(point.y - corner.y) <= radius
+    ) {
+      return handle;
+    }
+  }
+  return null;
+}
+
+export function resizeHandlePoint(bounds: EditorRect, handle: ResizeHandle): EditorPoint {
+  if (handle === "nw") return { x: bounds.x, y: bounds.y };
+  if (handle === "ne") return { x: bounds.x + bounds.width, y: bounds.y };
+  if (handle === "se") return { x: bounds.x + bounds.width, y: bounds.y + bounds.height };
+  return { x: bounds.x, y: bounds.y + bounds.height };
+}
+
+/**
+ * Compute a new selection rectangle while dragging a corner handle.
+ * The opposite corner stays fixed; the dragged corner follows `current`.
+ */
+export function resizeBoundsFromHandle(
+  initial: EditorRect,
+  handle: ResizeHandle,
+  current: EditorPoint,
+  minimumSize = 8,
+): EditorRect {
+  const min = Math.max(1, minimumSize);
+  const anchor = resizeHandlePoint(initial, oppositeResizeHandle(handle));
+  const width = Math.max(min, Math.abs(current.x - anchor.x));
+  const height = Math.max(min, Math.abs(current.y - anchor.y));
+  // Prefer the side the pointer is on when past the anchor so the box can flip.
+  const flippedX = current.x < anchor.x;
+  const flippedY = current.y < anchor.y;
+  return {
+    x: flippedX ? anchor.x - width : anchor.x,
+    y: flippedY ? anchor.y - height : anchor.y,
+    width,
+    height,
+  };
+}
+
+export function oppositeResizeHandle(handle: ResizeHandle): ResizeHandle {
+  if (handle === "nw") return "se";
+  if (handle === "ne") return "sw";
+  if (handle === "se") return "nw";
+  return "ne";
+}
+
+/**
+ * Map an element so its content scales from `initialBounds` into `nextBounds`.
+ * Used while dragging selection handles (text, shapes, paths, images).
+ */
+export function resizeElement(
+  element: ScreenshotElement,
+  initialBounds: EditorRect,
+  nextBounds: EditorRect,
+): ScreenshotElement {
+  const scaleX = nextBounds.width / Math.max(1, initialBounds.width);
+  const scaleY = nextBounds.height / Math.max(1, initialBounds.height);
+  const mapPoint = (point: EditorPoint): EditorPoint => ({
+    x: nextBounds.x + (point.x - initialBounds.x) * scaleX,
+    y: nextBounds.y + (point.y - initialBounds.y) * scaleY,
+  });
+
+  if (element.kind === "image") {
+    const topLeft = mapPoint({ x: element.x, y: element.y });
+    return {
+      ...element,
+      x: topLeft.x,
+      y: topLeft.y,
+      width: Math.max(1, element.width * scaleX),
+      height: Math.max(1, element.height * scaleY),
+    };
+  }
+
+  if (element.kind === "text") {
+    // Text bounds are derived from font size; scale type size with the box height.
+    const scale = Math.max(0.05, scaleY);
+    const topLeft = mapPoint({ x: element.x, y: element.y });
+    return {
+      ...element,
+      x: topLeft.x,
+      y: topLeft.y,
+      fontSize: Math.max(8, Math.round(element.fontSize * scale)),
+    };
+  }
+
+  if (element.kind === "shape") {
+    const start = mapPoint({ x: element.x, y: element.y });
+    const end = mapPoint({ x: element.endX, y: element.endY });
+    return {
+      ...element,
+      x: start.x,
+      y: start.y,
+      endX: end.x,
+      endY: end.y,
+    };
+  }
+
+  const origin = mapPoint({ x: element.x, y: element.y });
+  return {
+    ...element,
+    x: origin.x,
+    y: origin.y,
+    points: element.points.map(mapPoint),
+  };
+}
+
+export function resizeCursor(handle: ResizeHandle): string {
+  if (handle === "nw" || handle === "se") return "nwse-resize";
+  return "nesw-resize";
+}
+
 export function elementBounds(element: ScreenshotElement): EditorRect {
   if (element.kind === "image") {
     return {
