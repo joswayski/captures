@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
@@ -174,6 +174,36 @@ describe("RecordingHud", () => {
 
     expect(screen.getByRole("button", { name: "Show in Folder" })).toBeDisabled();
     expect(screen.queryByText(/Finder|Explorer/)).not.toBeInTheDocument();
+  });
+
+  it("updates the reusable saved notice for the latest recording", async () => {
+    type SavedNoticeHandler = (event: {
+      payload: { artifact_id: string; generation: number };
+    }) => void;
+    let savedNoticeHandler: SavedNoticeHandler | null = null;
+    vi.mocked(listen).mockImplementation(async (event, handler) => {
+      if (event === "recording-saved-artifact") {
+        savedNoticeHandler = handler as SavedNoticeHandler;
+      }
+      return () => undefined;
+    });
+    vi.mocked(invoke).mockResolvedValue(undefined);
+    render(<RecordingSavedNotice />);
+
+    expect(savedNoticeHandler).not.toBeNull();
+    act(() => {
+      savedNoticeHandler!({
+        payload: { artifact_id: "recording-2", generation: 2 },
+      });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Show in Folder" }));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("reveal_recording_artifact", {
+        artifactId: "recording-2",
+      });
+      expect(invoke).toHaveBeenCalledWith("dismiss_recording_saved_notice");
+    });
   });
 
   it("warns when the platform cannot exclude recording controls", async () => {

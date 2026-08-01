@@ -362,6 +362,7 @@ fn save_history_entry_in(
     fs::create_dir_all(root)?;
     let destination = history_entry_directory(root, &entry.id)?;
     let temporary = root.join(format!(".{}.{}.tmp", entry.id, Uuid::new_v4()));
+    let backup = root.join(format!(".{}.{}.bak", entry.id, Uuid::new_v4()));
     fs::create_dir(&temporary)?;
 
     let result = (|| {
@@ -373,7 +374,22 @@ fn save_history_entry_in(
             temporary.join(HISTORY_METADATA_FILE),
             serde_json::to_vec_pretty(entry)?,
         )?;
-        fs::rename(&temporary, destination)?;
+        if destination.exists() {
+            fs::rename(&destination, &backup)?;
+            if let Err(error) = fs::rename(&temporary, &destination) {
+                let rollback = fs::rename(&backup, &destination);
+                return Err(match rollback {
+                    Ok(()) => error.into(),
+                    Err(rollback_error) => AppError::Task(format!(
+                        "capture history could not be replaced ({error}), and the previous entry could not be restored ({rollback_error}); its backup remains at {}",
+                        backup.display()
+                    )),
+                });
+            }
+            let _ = fs::remove_dir_all(&backup);
+        } else {
+            fs::rename(&temporary, &destination)?;
+        }
         Ok::<(), AppError>(())
     })();
 
@@ -761,6 +777,36 @@ mod tests {
             std::fs::read(directory.path().join(&recent_id).join(HISTORY_PREVIEW_FILE)).unwrap(),
             b"recent-preview",
         );
+    }
+
+    #[test]
+    fn history_save_atomically_replaces_an_existing_entry() {
+        let directory = tempdir().expect("temporary directory");
+        let id = uuid::Uuid::new_v4().to_string();
+        let mut entry = history_entry(&id, Utc::now().to_rfc3339());
+        save_history_capture_in(directory.path(), &entry, b"old-full", b"old-preview")
+            .expect("initial history saved");
+
+        entry.size_bytes = 42;
+        save_history_capture_in(directory.path(), &entry, b"new-full", b"new-preview")
+            .expect("history replaced");
+
+        let saved = directory.path().join(&id);
+        assert_eq!(
+            std::fs::read(saved.join(HISTORY_IMAGE_FILE)).unwrap(),
+            b"new-full"
+        );
+        assert_eq!(
+            std::fs::read(saved.join(HISTORY_PREVIEW_FILE)).unwrap(),
+            b"new-preview"
+        );
+        assert!(std::fs::read_dir(directory.path()).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with('.')
+        }));
     }
 
     #[test]

@@ -182,6 +182,24 @@ describe("Thumbnail", () => {
     expect(document.documentElement).not.toHaveClass("thumbnail-native-tracking");
   });
 
+  it("resumes WebView polling after a native show without recursively refreshing the window", async () => {
+    render(<Thumbnail />);
+    await screen.findByRole("article");
+    vi.mocked(invoke).mockClear();
+
+    fireEvent(window, new Event("captures-thumbnail-resumed"));
+
+    await waitFor(() => {
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith(
+        "set_thumbnail_ignore_cursor_events",
+        { ignore: false },
+      );
+    });
+    expect(vi.mocked(invoke).mock.calls.some(([command]) => (
+      command === "refresh_thumbnail_interactivity"
+    ))).toBe(false);
+  });
+
   it("rejects inbound drags so a dropped screenshot cannot replace the preview UI", async () => {
     render(<Thumbnail />);
     await screen.findByRole("article");

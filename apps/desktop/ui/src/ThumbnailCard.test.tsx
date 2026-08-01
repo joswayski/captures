@@ -51,6 +51,7 @@ describe("ThumbnailCard", () => {
     const image = screen.getByRole("img", { name: "Screenshot preview" });
     expect(image)
       .toHaveAttribute("src", "captures-capture://artifact-full/capture-1");
+    expect(screen.getByRole("article")).toHaveClass("thumbnail-pending");
     expect(screen.getByRole("article")).not.toHaveClass("thumbnail-capture-highlight");
 
     await act(async () => {
@@ -58,7 +59,10 @@ describe("ThumbnailCard", () => {
       await Promise.resolve();
     });
 
-    expect(screen.getByRole("article")).toHaveClass("thumbnail-capture-highlight");
+    expect(screen.getByRole("article")).toHaveClass(
+      "thumbnail-ready",
+      "thumbnail-capture-highlight",
+    );
   });
 
   it("preserves hover presentation while opening editors from different previews", () => {

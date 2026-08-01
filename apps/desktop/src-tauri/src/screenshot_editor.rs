@@ -11,7 +11,10 @@ use image::{
     codecs::{jpeg::JpegEncoder, webp::WebPEncoder},
 };
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, window::Color};
+use tauri::{
+    AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, webview::PageLoadEvent,
+    window::Color,
+};
 use uuid::Uuid;
 
 use captures_capture::CaptureMode;
@@ -19,8 +22,8 @@ use captures_capture::CaptureMode;
 use crate::{
     AppError, CommandResult,
     models::{
-        ArtifactKind, CaptureArtifact, ClipboardCopyStatus, HistoryEntry, artifact_full_url,
-        artifact_url, history_full_url, history_preview_url,
+        ArtifactKind, CaptureArtifact, ClipboardCopyStatus, ClipboardState, HistoryEntry,
+        artifact_full_url, artifact_url, history_full_url, history_preview_url,
     },
     state::AppState,
     storage,
@@ -67,6 +70,8 @@ pub struct ScreenshotEditSaveRequest {
     jpeg_quality: u8,
     #[serde(default)]
     max_size_bytes: Option<u64>,
+    #[serde(default)]
+    overwrite_source: bool,
     image_png: Vec<u8>,
 }
 
@@ -104,7 +109,7 @@ pub fn open_screenshot_editor(
         return Ok(());
     }
 
-    let window = WebviewWindowBuilder::new(
+    WebviewWindowBuilder::new(
         &app,
         label,
         WebviewUrl::App(
@@ -120,10 +125,19 @@ pub fn open_screenshot_editor(
     .background_color(Color(21, 22, 25, 255))
     .focused(false)
     .visible(false)
+    .on_page_load(|window, payload| {
+        if payload.event() == PageLoadEvent::Finished
+            && let Err(error) = window
+                .show()
+                .and_then(|_| window.unminimize())
+                .and_then(|_| window.set_focus())
+        {
+            eprintln!("failed to reveal screenshot editor: {error}");
+        }
+    })
     .build()
     .map_err(|error| error.to_string())?;
-    window.show().map_err(|error| error.to_string())?;
-    window.set_focus().map_err(|error| error.to_string())
+    Ok(())
 }
 
 #[tauri::command]
@@ -190,17 +204,24 @@ pub async fn save_screenshot_edit(
         .cloned();
     let destination = validated_destination(&request.destination_path, request.format)
         .map_err(|error| error.to_string())?;
-    if source
+    let source_path = source
         .as_ref()
         .and_then(|artifact| artifact.path.as_deref())
-        .is_some_and(|path| Path::new(path) == destination)
-    {
+        .map(Path::new);
+    if request.overwrite_source && source_path != Some(destination.as_path()) {
         return Err(
-            "Choose a new file name. Captures preserves the original screenshot when editing."
+            "the original screenshot is unavailable or does not match the save destination"
+                .to_owned(),
+        );
+    }
+    if !request.overwrite_source && source_path == Some(destination.as_path()) {
+        return Err(
+            "Choose a new file name, or turn off Make a copy to replace the original screenshot."
                 .to_owned(),
         );
     }
 
+    let overwrite_source = request.overwrite_source;
     let format = request.format;
     let jpeg_quality = request.jpeg_quality;
     let max_size_bytes = request.max_size_bytes;
@@ -226,14 +247,36 @@ pub async fn save_screenshot_edit(
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())?;
 
-    let artifact_id = Uuid::new_v4().to_string();
-    let created_at = Utc::now().to_rfc3339();
+    let artifact_id = if overwrite_source {
+        source
+            .as_ref()
+            .expect("overwrite source was validated")
+            .id
+            .clone()
+    } else {
+        Uuid::new_v4().to_string()
+    };
+    let created_at = if overwrite_source {
+        source
+            .as_ref()
+            .expect("overwrite source was validated")
+            .created_at
+            .clone()
+    } else {
+        Utc::now().to_rfc3339()
+    };
+    let url_revision = overwrite_source.then(|| Uuid::new_v4().to_string());
+    let versioned_url = |url: String| {
+        url_revision
+            .as_ref()
+            .map_or(url.clone(), |revision| format!("{url}?revision={revision}"))
+    };
     let saved_path = destination.to_string_lossy().into_owned();
     let history_entry = HistoryEntry {
         id: artifact_id.clone(),
         kind: ArtifactKind::Screenshot,
-        preview_url: history_preview_url(&artifact_id),
-        full_url: history_full_url(&artifact_id),
+        preview_url: versioned_url(history_preview_url(&artifact_id)),
+        full_url: versioned_url(history_full_url(&artifact_id)),
         width,
         height,
         size_bytes: encoded_size,
@@ -265,8 +308,8 @@ pub async fn save_screenshot_edit(
     let artifact = CaptureArtifact {
         id: artifact_id.clone(),
         path: Some(saved_path.clone()),
-        preview_url: artifact_url(&artifact_id),
-        full_url: artifact_full_url(&artifact_id),
+        preview_url: versioned_url(artifact_url(&artifact_id)),
+        full_url: versioned_url(artifact_full_url(&artifact_id)),
         width,
         height,
         size_bytes: encoded_size,
@@ -278,20 +321,53 @@ pub async fn save_screenshot_edit(
         preview_png,
     };
     if history_saved {
-        state.history.lock().insert(0, history_entry);
+        let mut history = state.history.lock();
+        if overwrite_source
+            && let Some(existing) = history.iter_mut().find(|entry| entry.id == artifact_id)
+        {
+            *existing = history_entry;
+        } else {
+            history.insert(0, history_entry);
+        }
     }
-    state.artifacts.lock().push(artifact.clone());
-    state
-        .thumbnail_visibility
-        .lock()
-        .wait_for_artifact(artifact.id.clone());
-    app.emit("capture-completed", &artifact)
-        .map_err(|error| error.to_string())?;
+    if overwrite_source {
+        let mut artifacts = state.artifacts.lock();
+        let existing = artifacts
+            .iter_mut()
+            .find(|existing| existing.id == artifact_id)
+            .ok_or_else(|| "the original screenshot is no longer available".to_owned())?;
+        *existing = artifact.clone();
+        drop(artifacts);
+        app.emit("artifact-updated", &artifact)
+            .map_err(|error| error.to_string())?;
+        if state
+            .clipboard_ownership
+            .lock()
+            .clear_if_artifact(&artifact_id)
+        {
+            app.emit(
+                "clipboard-owner-changed",
+                ClipboardState {
+                    revision: super::current_clipboard_revision(),
+                    artifact_id: None,
+                },
+            )
+            .map_err(|error| error.to_string())?;
+        }
+    } else {
+        state.artifacts.lock().push(artifact.clone());
+        state
+            .thumbnail_visibility
+            .lock()
+            .wait_for_artifact(artifact.id.clone());
+        app.emit("capture-completed", &artifact)
+            .map_err(|error| error.to_string())?;
+        super::restore_thumbnail_stack(&app, state.inner());
+    }
     if history_saved {
         app.emit("capture-history-changed", ())
             .map_err(|error| error.to_string())?;
     }
-    super::restore_thumbnail_stack(&app, state.inner());
 
     Ok(SavedScreenshotEdit {
         artifact,

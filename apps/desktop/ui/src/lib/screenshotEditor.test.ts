@@ -1,7 +1,9 @@
 import {
   boundedCropRect,
+  closestImageSnapEdge,
   createScreenshotDocument,
   cropDocument,
+  duplicateScreenshotElement,
   elementBounds,
   estimateCanvasExportBytes,
   expandDocumentForElement,
@@ -12,6 +14,7 @@ import {
   loadImageFile,
   outputDimensions,
   positionImportedImage,
+  positionImportedImageAtEdge,
   reorderScreenshotLayers,
   resizeBoundsFromHandle,
   resizeElement,
@@ -20,6 +23,13 @@ import {
   type EditorShapeElement,
   type EditorTextElement,
 } from "./screenshotEditor";
+
+const editableLayer = {
+  locked: false,
+  visible: true,
+  opacity: 100,
+  blendMode: "source-over" as const,
+};
 
 describe("screenshot editor geometry", () => {
   it("creates a lossless full-resolution document", () => {
@@ -58,6 +68,7 @@ describe("screenshot editor geometry", () => {
   it("crops by translating every editable layer", () => {
     const document = createScreenshotDocument("capture.png", 1_000, 800);
     const shape: EditorShapeElement = {
+      ...editableLayer,
       id: "shape",
       kind: "shape",
       shape: "arrow",
@@ -92,6 +103,7 @@ describe("screenshot editor geometry", () => {
       { x: 900, y: 700 },
     );
     const imported: EditorImageElement = {
+      ...editableLayer,
       id: "imported",
       kind: "image",
       source: "imported",
@@ -121,6 +133,7 @@ describe("screenshot editor geometry", () => {
   it("reorders editable layers front-to-back without moving the background", () => {
     const document = createScreenshotDocument("capture.png", 1_000, 800);
     const first: EditorImageElement = {
+      ...editableLayer,
       id: "first",
       kind: "image",
       source: "imported",
@@ -145,10 +158,63 @@ describe("screenshot editor geometry", () => {
     expect(
       reorderScreenshotLayers(elements, "capture-background", "second", "before"),
     ).toBe(elements);
+
+    const unlocked = elements.map((element) => ({ ...element, locked: false }));
+    expect(
+      reorderScreenshotLayers(unlocked, "capture-background", "second", "before")
+        .map(({ id }) => id),
+    ).toEqual(["first", "second", "capture-background"]);
+  });
+
+  it("snaps imports flush to the chosen layer edge and expands negative bounds", () => {
+    const document = createScreenshotDocument("capture.png", 1_000, 800);
+    const target = { x: 200, y: 100, width: 400, height: 300 };
+    expect(closestImageSnapEdge({ x: 395, y: 405 }, target)).toBe("bottom");
+
+    const position = positionImportedImageAtEdge(300, 200, document, target, "left");
+    expect(position.x + position.width).toBe(target.x);
+    const imported: EditorImageElement = {
+      ...editableLayer,
+      id: "left-image",
+      kind: "image",
+      source: "imported",
+      src: "blob:left",
+      name: "left.png",
+      naturalWidth: 300,
+      naturalHeight: 200,
+      ...position,
+    };
+    const expanded = expandDocumentForElement(document, imported, 0);
+    expect(expanded.elements.at(-1)).toMatchObject({ x: 0 });
+    expect(expanded.elements[0].x).toBeGreaterThan(0);
+  });
+
+  it("duplicates layers as visible unlocked imports", () => {
+    const background = createScreenshotDocument("capture.png", 1_000, 800).elements[0];
+    const copy = duplicateScreenshotElement(background, "copy", 12);
+    expect(copy).toMatchObject({
+      id: "copy",
+      kind: "image",
+      source: "imported",
+      x: 12,
+      y: 12,
+      locked: false,
+      visible: true,
+    });
+  });
+
+  it("only hit-tests visible unlocked layers for move-hover affordances", () => {
+    const document = createScreenshotDocument("capture.png", 1_000, 800);
+    expect(hitTestElement(document.elements, { x: 20, y: 20 })).toBeNull();
+    const background = { ...document.elements[0], locked: false };
+    expect(hitTestElement([background], { x: 20, y: 20 })?.id).toBe("capture-background");
+    expect(hitTestElement([{ ...background, visible: false }], { x: 20, y: 20 }))
+      .toBeNull();
   });
 
   it("preserves imported image aspect ratio when resizing", () => {
     const image: EditorImageElement = {
+      ...editableLayer,
       id: "image",
       kind: "image",
       source: "imported",
@@ -166,6 +232,7 @@ describe("screenshot editor geometry", () => {
 
   it("moves paths and shapes without changing their geometry", () => {
     const shape: EditorShapeElement = {
+      ...editableLayer,
       id: "shape",
       kind: "shape",
       shape: "curved_arrow",
@@ -208,6 +275,7 @@ describe("screenshot editor geometry", () => {
 
   it("scales annotations when their selection box is resized", () => {
     const shape: EditorShapeElement = {
+      ...editableLayer,
       id: "shape",
       kind: "shape",
       shape: "rectangle",
@@ -238,6 +306,7 @@ describe("screenshot editor geometry", () => {
     expect(resized.endY - resized.y).toBeCloseTo((shape.endY - shape.y) * 2, 5);
 
     const text: EditorTextElement = {
+      ...editableLayer,
       id: "text",
       kind: "text",
       x: 40,

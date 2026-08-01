@@ -90,7 +90,8 @@ enum AppError {
 type CommandResult<T> = Result<T, String>;
 const AUTOSTART_ARG: &str = "--captures-autostart";
 const RECORDING_EDITOR_WINDOW_PREFIX: &str = "recording-editor-";
-const RECORDING_SAVED_NOTICE_PREFIX: &str = "recording-saved-";
+const RECORDING_SAVED_NOTICE_LABEL: &str = "recording-saved";
+const RECORDING_SAVED_NOTICE_EVENT: &str = "recording-saved-artifact";
 const RECORDING_CONTROLS_HIDDEN_NOTICE_PREFIX: &str = "recording-controls-hidden-";
 #[cfg(any(target_os = "macos", test))]
 const WINDOW_CORNER_MASK_SAMPLES_PER_AXIS: u32 = 4;
@@ -1756,11 +1757,15 @@ fn open_preferences(app: AppHandle) -> CommandResult<()> {
 }
 
 #[tauri::command]
-fn dismiss_recording_saved_notice(app: AppHandle, notice_id: String) -> CommandResult<()> {
-    let label = recording_saved_notice_label(&notice_id)
-        .ok_or_else(|| "recording saved notice is unavailable".to_owned())?;
-    if let Some(window) = app.get_webview_window(&label) {
-        window.destroy().map_err(|error| error.to_string())?;
+fn dismiss_recording_saved_notice(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> CommandResult<()> {
+    state
+        .recording_saved_notice_generation
+        .fetch_add(1, Ordering::Relaxed);
+    if let Some(window) = app.get_webview_window(RECORDING_SAVED_NOTICE_LABEL) {
+        window.hide().map_err(|error| error.to_string())?;
     }
     Ok(())
 }
@@ -2556,51 +2561,61 @@ const RECORDING_SAVED_NOTICE_HEIGHT: f64 = 116.0;
 const RECORDING_CONTROLS_HIDDEN_NOTICE_WIDTH: f64 = 390.0;
 const RECORDING_CONTROLS_HIDDEN_NOTICE_HEIGHT: f64 = 82.0;
 
+#[derive(Clone, serde::Serialize)]
+struct RecordingSavedNoticePayload {
+    artifact_id: String,
+    generation: u64,
+}
+
 fn show_recording_saved_notice(app: &AppHandle, artifact_id: &str) -> Result<(), tauri::Error> {
-    let available = app
-        .state::<Arc<AppState>>()
-        .recording_artifacts
-        .lock()
-        .iter()
-        .any(|artifact| {
-            artifact.summary.id == artifact_id && PathBuf::from(&artifact.summary.path).is_file()
-        });
+    let state = app.state::<Arc<AppState>>().inner().clone();
+    let available = state.recording_artifacts.lock().iter().any(|artifact| {
+        artifact.summary.id == artifact_id && PathBuf::from(&artifact.summary.path).is_file()
+    });
     if !available {
         return Ok(());
     }
 
-    let notice_id = Uuid::new_v4().to_string();
-    let label = format!("{RECORDING_SAVED_NOTICE_PREFIX}{notice_id}");
+    let generation = state
+        .recording_saved_notice_generation
+        .fetch_add(1, Ordering::Relaxed)
+        .wrapping_add(1);
     let (x, y) = top_right_notice_position(
         app,
         RECORDING_SAVED_NOTICE_WIDTH,
         RECORDING_SAVED_NOTICE_HEIGHT,
     );
-    let window = WebviewWindowBuilder::new(
-        app,
-        &label,
-        WebviewUrl::App(
-            format!(
-                "index.html?view=recording-saved&artifact_id={artifact_id}&notice_id={notice_id}"
-            )
-            .into(),
-        ),
-    )
-    .title("Recording saved")
-    .inner_size(RECORDING_SAVED_NOTICE_WIDTH, RECORDING_SAVED_NOTICE_HEIGHT)
-    .position(x, y)
-    .decorations(false)
-    .always_on_top(true)
-    .visible_on_all_workspaces(true)
-    .skip_taskbar(true)
-    .resizable(false)
-    .shadow(false)
-    .transparent(true)
-    .background_color(Color(0, 0, 0, 0))
-    .accept_first_mouse(true)
-    .focused(false)
-    .visible(false)
-    .build()?;
+    let payload = RecordingSavedNoticePayload {
+        artifact_id: artifact_id.to_owned(),
+        generation,
+    };
+    let window = if let Some(window) = app.get_webview_window(RECORDING_SAVED_NOTICE_LABEL) {
+        window.emit(RECORDING_SAVED_NOTICE_EVENT, &payload)?;
+        window
+    } else {
+        WebviewWindowBuilder::new(
+            app,
+            RECORDING_SAVED_NOTICE_LABEL,
+            WebviewUrl::App(
+                format!("index.html?view=recording-saved&artifact_id={artifact_id}").into(),
+            ),
+        )
+        .title("Recording saved")
+        .inner_size(RECORDING_SAVED_NOTICE_WIDTH, RECORDING_SAVED_NOTICE_HEIGHT)
+        .position(x, y)
+        .decorations(false)
+        .always_on_top(true)
+        .visible_on_all_workspaces(true)
+        .skip_taskbar(true)
+        .resizable(false)
+        .shadow(false)
+        .transparent(true)
+        .background_color(Color(0, 0, 0, 0))
+        .accept_first_mouse(true)
+        .focused(false)
+        .visible(false)
+        .build()?
+    };
     let _ = window.set_content_protected(true);
 
     #[cfg(target_os = "macos")]
@@ -2615,12 +2630,18 @@ fn show_recording_saved_notice(app: &AppHandle, artifact_id: &str) -> Result<(),
     window.show()?;
 
     let timer_app = app.clone();
+    let timer_state = state;
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(11_200));
         let handle = timer_app.clone();
         let _ = timer_app.run_on_main_thread(move || {
-            if let Some(window) = handle.get_webview_window(&label) {
-                let _ = window.destroy();
+            if timer_state
+                .recording_saved_notice_generation
+                .load(Ordering::Relaxed)
+                == generation
+                && let Some(window) = handle.get_webview_window(RECORDING_SAVED_NOTICE_LABEL)
+            {
+                let _ = window.hide();
             }
         });
     });
@@ -2690,12 +2711,6 @@ fn show_recording_controls_hidden_notice(
         });
     });
     Ok(())
-}
-
-fn recording_saved_notice_label(notice_id: &str) -> Option<String> {
-    Uuid::parse_str(notice_id)
-        .ok()
-        .map(|_| format!("{RECORDING_SAVED_NOTICE_PREFIX}{notice_id}"))
 }
 
 fn top_right_notice_position(app: &AppHandle, width: f64, _height: f64) -> (f64, f64) {
@@ -2850,6 +2865,10 @@ fn show_thumbnail_window(window: &tauri::WebviewWindow) {
     // Showing always re-arms hit testing; the JS hover poll then re-applies
     // ignore-cursor for empty stack chrome within a frame.
     let _ = window.set_ignore_cursor_events(false);
+    // Tauri's hide pauses the WebView lifecycle on macOS. Resume it through
+    // Tauri before raising the native panel so React hover and IPC polling do
+    // not remain frozen after a capture hides the stack.
+    let _ = window.show();
 
     #[cfg(target_os = "macos")]
     if let Err(error) = captures_macos_window::show_without_activating(window) {
@@ -2861,9 +2880,9 @@ fn show_thumbnail_window(window: &tauri::WebviewWindow) {
         // Re-assert topmost around show so Windows taskbar / Linux panels cannot
         // cover the stack when the two share the same topmost z-band.
         let _ = window.set_always_on_top(true);
-        let _ = window.show();
         let _ = window.set_always_on_top(true);
     }
+    let _ = window.eval("window.dispatchEvent(new Event('captures-thumbnail-resumed'))");
 }
 
 fn restore_thumbnail_stack(app: &AppHandle, state: &Arc<AppState>) {
@@ -3301,10 +3320,8 @@ fn hide_window(app: &AppHandle, label: &str) {
 }
 
 fn hide_recording_saved_notices(app: &AppHandle) {
-    for (label, window) in app.webview_windows() {
-        if label.starts_with(RECORDING_SAVED_NOTICE_PREFIX) {
-            let _ = window.hide();
-        }
+    if let Some(window) = app.get_webview_window(RECORDING_SAVED_NOTICE_LABEL) {
+        let _ = window.hide();
     }
 }
 
@@ -3323,9 +3340,8 @@ fn set_capture_huds_protected(app: &AppHandle, protected: bool) {
     for (label, window) in app.webview_windows() {
         if (matches!(
             label.as_str(),
-            "thumbnail" | "startup" | "update" | "recording-hud"
-        ) || label.starts_with(RECORDING_SAVED_NOTICE_PREFIX))
-            && let Err(error) = window.set_content_protected(protected)
+            "thumbnail" | "startup" | "update" | "recording-hud" | RECORDING_SAVED_NOTICE_LABEL
+        )) && let Err(error) = window.set_content_protected(protected)
         {
             eprintln!("failed to update {label} capture protection: {error}");
         }
@@ -3842,11 +3858,11 @@ mod tests {
         AppError, CaptureMode, THUMBNAIL_AUTO_HIDE_RESERVE, THUMBNAIL_SYSTEM_CHROME_GAP,
         ThumbnailCursorAction, ThumbnailCursorKind, ThumbnailMonitorBounds, clipboard_fingerprint,
         display_contains_pointer, mask_macos_window_corners, parse_shortcut,
-        primary_app_window_priority, recording_saved_notice_label,
-        refine_window_chrome_from_snapshot, should_activate_capture_cursor_before_reveal,
-        should_trigger_shortcut, thumbnail_cursor_action, thumbnail_geometry,
-        thumbnail_pointer_position, thumbnail_visible_window_height, track_shortcut_suppression,
-        viewer_window_label, window_is_capturable, windows_window_is_capture_overlay,
+        primary_app_window_priority, refine_window_chrome_from_snapshot,
+        should_activate_capture_cursor_before_reveal, should_trigger_shortcut,
+        thumbnail_cursor_action, thumbnail_geometry, thumbnail_pointer_position,
+        thumbnail_visible_window_height, track_shortcut_suppression, viewer_window_label,
+        window_is_capturable, windows_window_is_capture_overlay,
     };
 
     fn bounds(
@@ -4393,15 +4409,6 @@ mod tests {
         assert_eq!(primary_app_window_priority("history"), Some(2));
         assert_eq!(primary_app_window_priority("recording-hud"), Some(4));
         assert_eq!(primary_app_window_priority("thumbnail"), None);
-    }
-
-    #[test]
-    fn recording_saved_notice_labels_only_accept_uuid_tokens() {
-        assert_eq!(
-            recording_saved_notice_label("7e3191ca-8596-4d22-a6e1-4b57a64f00cb"),
-            Some("recording-saved-7e3191ca-8596-4d22-a6e1-4b57a64f00cb".to_owned())
-        );
-        assert_eq!(recording_saved_notice_label("../history"), None);
     }
 
     #[test]
