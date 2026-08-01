@@ -681,12 +681,14 @@ jobs:
             echo "[Browse the dated build archive](https://github.com/${GITHUB_REPOSITORY}/releases)."
           } > "$channel_notes"
 
-          channel_release="$(
+          channel_release=""
+          if ! channel_release="$(
             gh api \
               "repos/${GITHUB_REPOSITORY}/releases/tags/preview" \
-              2>/dev/null \
-              || true
-          )"
+              2>/dev/null
+          )"; then
+            channel_release=""
+          fi
           if [[ -z "$channel_release" ]]; then
             while IFS= read -r stale_channel_id; do
               if [[ -n "$stale_channel_id" ]]; then
@@ -755,12 +757,14 @@ jobs:
             exit 1
           fi
 
-          legacy_release="$(
+          legacy_release=""
+          if ! legacy_release="$(
             gh api \
               "repos/${GITHUB_REPOSITORY}/releases/tags/nightly" \
-              2>/dev/null \
-              || true
-          )"
+              2>/dev/null
+          )"; then
+            legacy_release=""
+          fi
           if [[ -n "$legacy_release" ]]; then
             legacy_release_id="$(jq -er .id <<< "$legacy_release")"
             gh api \
