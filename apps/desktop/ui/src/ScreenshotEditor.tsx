@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   useCallback,
   useEffect,
@@ -52,7 +52,8 @@ import type { CaptureArtifact } from "./types";
 type ExportFormat = "png" | "jpeg" | "webp";
 type ExportSize = "original" | "75" | "50" | "custom";
 type ScreenshotQuality = "70" | "85" | "92" | "97" | "100";
-type ScreenshotFileSizeUnit = "kb" | "mb";
+type ScreenshotQualityMode = "compress" | "maximum";
+type ScreenshotFileSizeUnit = "kb" | "mb" | "gb";
 
 type CachedImage = {
   image: HTMLImageElement;
@@ -138,6 +139,7 @@ const SCREENSHOT_QUALITY_OPTIONS = [
 const SCREENSHOT_FILE_SIZE_UNIT_BYTES: Record<ScreenshotFileSizeUnit, number> = {
   kb: 1_000,
   mb: 1_000_000,
+  gb: 1_000_000_000,
 };
 const MAX_SCREENSHOT_OUTPUT_DIMENSION = 16_384;
 const MAX_SCREENSHOT_OUTPUT_PIXELS = 100_000_000;
@@ -451,12 +453,6 @@ async function canvasPngBytes(canvas: HTMLCanvasElement): Promise<number[]> {
   return Array.from(new Uint8Array(await blob.arrayBuffer()));
 }
 
-function exportFilter(format: ExportFormat): { name: string; extensions: string[] } {
-  if (format === "jpeg") return { name: "JPEG image", extensions: ["jpg", "jpeg"] };
-  if (format === "webp") return { name: "WebP image", extensions: ["webp"] };
-  return { name: "PNG image", extensions: ["png"] };
-}
-
 function screenshotOutputDimensions(
   document: Pick<ScreenshotDocument, "width" | "height">,
   size: ExportSize,
@@ -482,6 +478,67 @@ function screenshotPathMatchesFormat(path: string | null, format: ExportFormat):
   const extension = path.split(/[\\/]/).at(-1)?.split(".").at(-1)?.toLowerCase();
   if (format === "jpeg") return extension === "jpg" || extension === "jpeg";
   return extension === format;
+}
+
+function screenshotFileStem(path: string): string {
+  const filename = path.split(/[\\/]/).at(-1) || "Captures_screenshot";
+  return filename.replace(/\.[^.]+$/, "") || "Captures_screenshot";
+}
+
+function screenshotParentDirectory(path: string): string {
+  const separator = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  if (separator < 0) return ".";
+  if (separator === 0) return path.slice(0, 1);
+  return path.slice(0, separator);
+}
+
+function screenshotFilenameError(fileStem: string): string {
+  const trimmed = fileStem.trim();
+  const reserved = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i;
+  const forbidden = '<>:"/\\|?*';
+  const hasForbiddenCharacter = Array.from(trimmed).some((character) => (
+    character.charCodeAt(0) < 32 || forbidden.includes(character)
+  ));
+  if (
+    !trimmed
+    || trimmed !== fileStem
+    || trimmed === "."
+    || trimmed === ".."
+    || hasForbiddenCharacter
+    || /[. ]$/.test(trimmed)
+    || reserved.test(trimmed)
+  ) {
+    return "Enter a filename without folders or reserved characters.";
+  }
+  return "";
+}
+
+function screenshotFormatExtension(
+  format: ExportFormat,
+  sourcePath: string | null,
+): string {
+  if (format !== "jpeg") return format;
+  return sourcePath?.toLowerCase().endsWith(".jpeg") ? "jpeg" : "jpg";
+}
+
+function screenshotDestinationPath(
+  directory: string,
+  fileStem: string,
+  format: ExportFormat,
+  sourcePath: string | null,
+): string {
+  const separator = directory.includes("\\") && !directory.includes("/") ? "\\" : "/";
+  const base = directory.replace(/[\\/]+$/, "");
+  const filename = `${fileStem}.${screenshotFormatExtension(format, sourcePath)}`;
+  return base ? `${base}${separator}${filename}` : `${separator}${filename}`;
+}
+
+function formatScreenshotMaximumFileSizeInput(
+  bytes: number,
+  unit: ScreenshotFileSizeUnit,
+): string {
+  const value = bytes / SCREENSHOT_FILE_SIZE_UNIT_BYTES[unit];
+  return Number(value.toPrecision(8)).toString();
 }
 
 export function ScreenshotEditor() {
@@ -517,9 +574,13 @@ export function ScreenshotEditor() {
   const [customExportHeight, setCustomExportHeight] = useState(1_080);
   const [exportAspectLocked, setExportAspectLocked] = useState(true);
   const [jpegQuality, setJpegQuality] = useState<ScreenshotQuality>("100");
-  const [maximumFileSize, setMaximumFileSize] = useState("");
+  const [qualityMode, setQualityMode] =
+    useState<ScreenshotQualityMode>("compress");
+  const [maximumFileSize, setMaximumFileSize] = useState("10");
   const [maximumFileSizeUnit, setMaximumFileSizeUnit] =
     useState<ScreenshotFileSizeUnit>("mb");
+  const [filenameStem, setFilenameStem] = useState("");
+  const [destinationDirectory, setDestinationDirectory] = useState("");
   const [estimatedBytes, setEstimatedBytes] = useState<number | null>(null);
   const [estimatePending, setEstimatePending] = useState(false);
   const [busy, setBusy] = useState<"copying" | "saving" | null>(null);
@@ -606,6 +667,11 @@ export function ScreenshotEditor() {
       const loaded = await invoke<CaptureArtifact | null>("get_artifact", { artifactId });
       if (!active) return;
       if (!loaded) throw new Error("The screenshot is no longer available.");
+      const initialPath = loaded.path ?? await invoke<string>("default_screenshot_edit_path", {
+        artifactId: loaded.id,
+        format: "png",
+      });
+      if (!active) return;
       const next = createScreenshotDocument(
         loaded.full_url,
         loaded.width,
@@ -617,6 +683,8 @@ export function ScreenshotEditor() {
       setCustomExportWidth(loaded.width);
       setCustomExportHeight(loaded.height);
       setMakeCopy(!loaded.path);
+      setFilenameStem(screenshotFileStem(initialPath));
+      setDestinationDirectory(screenshotParentDirectory(initialPath));
       setDefaultFontSize(Math.max(24, Math.min(72, Math.round(Math.min(loaded.width, loaded.height) * 0.055))));
     })().catch((reason) => {
       if (active) setError(String(reason));
@@ -1322,38 +1390,47 @@ export function ScreenshotEditor() {
 
   const saveEditedImage = async () => {
     if (!artifact || busy) return;
-    const maximumSizeText = exportFormat === "jpeg" ? maximumFileSize.trim() : "";
+    const invalidFilename = screenshotFilenameError(filenameStem);
+    if (invalidFilename) {
+      setError(invalidFilename);
+      return;
+    }
+    if (!destinationDirectory.trim()) {
+      setError("Choose a destination folder for the edited screenshot.");
+      return;
+    }
+    const maximumSizeText = exportFormat === "jpeg" && qualityMode === "maximum"
+      ? maximumFileSize.trim()
+      : "";
     const maximumSizeBytes = maximumSizeText
       ? Math.floor(
         Number(maximumSizeText) * SCREENSHOT_FILE_SIZE_UNIT_BYTES[maximumFileSizeUnit],
       )
       : null;
     if (
-      maximumSizeText
-      && (!Number.isFinite(maximumSizeBytes) || maximumSizeBytes === null || maximumSizeBytes < 10_000)
+      exportFormat === "jpeg"
+      && qualityMode === "maximum"
+      && (!maximumSizeText
+        || !Number.isFinite(maximumSizeBytes)
+        || maximumSizeBytes === null
+        || maximumSizeBytes < 10_000)
     ) {
-      setError("Enter a maximum file size of at least 10 KB, or leave it blank.");
+      setError("Enter a maximum file size of at least 10 KB.");
       return;
     }
     setBusy("saving");
     setError("");
     setStatus("");
     try {
-      const overwriteSource = !makeCopy
+      const destinationPath = screenshotDestinationPath(
+        destinationDirectory,
+        filenameStem,
+        exportFormat,
+        artifact.path,
+      );
+      const overwriteSource = !savingCopy
         && !sourceMissing
-        && screenshotPathMatchesFormat(artifact.path, exportFormat);
-      let destinationPath = overwriteSource ? artifact.path : null;
-      if (!destinationPath) {
-        const defaultPath = await invoke<string>("default_screenshot_edit_path", {
-          artifactId: artifact.id,
-          format: exportFormat,
-        });
-        destinationPath = await saveDialog({
-          defaultPath,
-          filters: [exportFilter(exportFormat)],
-        });
-      }
-      if (!destinationPath) return;
+        && artifact.path === destinationPath;
       const imagePng = await canvasPngBytes(renderFlattened());
       const result = await invoke<SavedScreenshotEdit>("save_screenshot_edit", {
         request: {
@@ -1369,10 +1446,37 @@ export function ScreenshotEditor() {
       if (overwriteSource) setArtifact(result.artifact);
       setSaved(result);
       setStatus(overwriteSource ? "Saved changes to the original." : `Saved ${result.path}`);
+      try {
+        await invoke("reveal_artifact", { artifactId: result.artifact.id });
+      } catch (reason) {
+        setError(`The screenshot was saved, but its folder could not open: ${String(reason)}`);
+      }
     } catch (reason) {
       setError(String(reason));
     } finally {
       setBusy(null);
+    }
+  };
+
+  const chooseDestinationDirectory = async () => {
+    if (!artifact || busy) return;
+    setError("");
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: "Choose save location",
+        defaultPath: destinationDirectory,
+      });
+      if (typeof selected === "string") {
+        setDestinationDirectory(selected);
+        if (artifact.path && selected !== screenshotParentDirectory(artifact.path)) {
+          setMakeCopy(true);
+        }
+        setStatus("");
+      }
+    } catch (reason) {
+      setError(`Save location could not be changed: ${String(reason)}`);
     }
   };
 
@@ -1402,6 +1506,34 @@ export function ScreenshotEditor() {
   const formatRequiresCopy = sourceMissing
     || !screenshotPathMatchesFormat(artifact.path, exportFormat);
   const savingCopy = makeCopy || formatRequiresCopy;
+  const sourceDirectory = artifact.path ? screenshotParentDirectory(artifact.path) : "";
+  const sourceStem = artifact.path ? screenshotFileStem(artifact.path) : "";
+  const maximumSizeBytes = exportFormat === "jpeg" && qualityMode === "maximum"
+    ? Number(maximumFileSize) * SCREENSHOT_FILE_SIZE_UNIT_BYTES[maximumFileSizeUnit]
+    : null;
+  const estimatedSizeLabel = estimatePending && estimatedBytes === null
+    ? "Estimating…"
+    : estimatedBytes === null
+      ? "—"
+      : maximumSizeBytes !== null
+        && Number.isFinite(maximumSizeBytes)
+        && maximumSizeBytes >= 10_000
+        && estimatedBytes > maximumSizeBytes
+        ? `≤ ${formatFileSize(maximumSizeBytes)}`
+        : `≈ ${formatFileSize(estimatedBytes)}`;
+
+  const updateMakeCopy = (enabled: boolean) => {
+    if (formatRequiresCopy) return;
+    setMakeCopy(enabled);
+    if (enabled && filenameStem === sourceStem && destinationDirectory === sourceDirectory) {
+      setFilenameStem(`${sourceStem}-copy`);
+    } else if (!enabled) {
+      setFilenameStem(sourceStem);
+      setDestinationDirectory(sourceDirectory);
+    }
+    setSaved(null);
+    setStatus("");
+  };
 
   const updateImageDropGuide = (clientX: number, clientY: number) => {
     const canvas = canvasRef.current;
@@ -2186,9 +2318,9 @@ export function ScreenshotEditor() {
           <label>
             Format
             <select value={exportFormat} onChange={(event) => {
-              const next = event.target.value as ExportFormat;
-              setExportFormat(next);
-              if (!screenshotPathMatchesFormat(artifact.path, next)) setMakeCopy(true);
+              setExportFormat(event.target.value as ExportFormat);
+              setSaved(null);
+              setStatus("");
             }}>
               <option value="png">PNG · lossless</option>
               <option value="jpeg">JPEG</option>
@@ -2250,44 +2382,70 @@ export function ScreenshotEditor() {
               </div>
             </div>
           )}
-          <div className="screenshot-export-control screenshot-quality">
-            <span>Quality</span>
-            {exportFormat === "jpeg" ? (
+          {exportFormat === "jpeg" ? (
+            <label className="screenshot-quality-mode">
+              Save quality
+              <select
+                aria-label="Save quality"
+                value={qualityMode}
+                onChange={(event) => {
+                  setQualityMode(event.target.value as ScreenshotQualityMode);
+                  setSaved(null);
+                  setStatus("");
+                }}
+              >
+                <option value="compress">Compress</option>
+                <option value="maximum">Maximum file size</option>
+              </select>
+            </label>
+          ) : (
+            <div className="screenshot-export-control screenshot-quality screenshot-lossless-quality">
+              <span>Quality</span>
+              <strong>Maximum · lossless</strong>
+            </div>
+          )}
+          {exportFormat === "jpeg" && qualityMode === "compress" && (
+            <div className="screenshot-export-control screenshot-quality">
+              <span>Compression quality</span>
               <NotchedSlider
                 ariaLabel="Image quality"
                 value={jpegQuality}
                 options={SCREENSHOT_QUALITY_OPTIONS}
                 onChange={setJpegQuality}
               />
-            ) : (
-              <strong>Maximum · lossless</strong>
-            )}
-          </div>
-          {exportFormat === "jpeg" && (
+            </div>
+          )}
+          {exportFormat === "jpeg" && qualityMode === "maximum" && (
             <label
               className="screenshot-maximum-size"
               title="JPEG quality is lowered only when needed to meet this limit."
             >
-              JPEG size limit
+              Maximum file size
               <span>
                 <input
                   type="number"
-                  min={maximumFileSizeUnit === "kb" ? 10 : 0.01}
-                  step={maximumFileSizeUnit === "kb" ? 1 : 0.01}
+                  min={maximumFileSizeUnit === "kb" ? 10 : maximumFileSizeUnit === "mb" ? 0.01 : 0.00001}
+                  step={maximumFileSizeUnit === "kb" ? 1 : maximumFileSizeUnit === "mb" ? 0.01 : 0.00001}
                   value={maximumFileSize}
-                  placeholder="No limit"
                   aria-label="Maximum file size"
                   onChange={(event) => setMaximumFileSize(event.target.value)}
                 />
                 <select
                   aria-label="Screenshot file size unit"
                   value={maximumFileSizeUnit}
-                  onChange={(event) => setMaximumFileSizeUnit(
-                    event.target.value as ScreenshotFileSizeUnit,
-                  )}
+                  onChange={(event) => {
+                    const nextUnit = event.target.value as ScreenshotFileSizeUnit;
+                    const bytes = Number(maximumFileSize)
+                      * SCREENSHOT_FILE_SIZE_UNIT_BYTES[maximumFileSizeUnit];
+                    setMaximumFileSizeUnit(nextUnit);
+                    if (Number.isFinite(bytes)) {
+                      setMaximumFileSize(formatScreenshotMaximumFileSizeInput(bytes, nextUnit));
+                    }
+                  }}
                 >
                   <option value="kb">KB</option>
                   <option value="mb">MB</option>
+                  <option value="gb">GB</option>
                 </select>
               </span>
             </label>
@@ -2299,55 +2457,99 @@ export function ScreenshotEditor() {
               data-pending={estimatePending ? "true" : undefined}
               title="Estimated export file size for the current format, quality, and output size"
             >
-              {estimatePending && estimatedBytes === null
-                ? "Estimating…"
-                : estimatedBytes === null
-                  ? "—"
-                  : `≈ ${formatFileSize(estimatedBytes)}`}
+              {estimatedSizeLabel}
             </strong>
           </div>
         </div>
-        <div className={`screenshot-export-status${error ? " error" : ""}`} role={error ? "alert" : "status"}>
-          {error
-            || status
-            || (sourceMissing
-              ? "The original was deleted. You can still copy or save this edit."
-              : exportFormat !== "jpeg"
-                ? savingCopy
-                  ? "Lossless export keeps every pixel and saves a new file."
-                  : "Lossless export keeps every pixel and replaces the original."
-                : savingCopy
-                  ? "Save creates a new file and leaves the original untouched."
-                  : "Save replaces the original; turn on Make a copy to keep it.")}
-        </div>
-        <div className="screenshot-export-actions">
-          <label
-            className="screenshot-make-copy"
-            title={formatRequiresCopy
-              ? "This format or source can only be saved as a new file"
-              : "Save as a new file and leave the original untouched"}
+        <div className="screenshot-save-row">
+          <div className="recording-filename screenshot-filename">
+            <div className="recording-filename-heading">
+              <label htmlFor="screenshot-save-filename">Filename</label>
+              <div className="recording-destination">
+                <span>Saving to</span>
+                <output aria-label="Save location" title={destinationDirectory}>
+                  {destinationDirectory}
+                </output>
+                <button
+                  type="button"
+                  aria-label="Change save location"
+                  disabled={busy !== null}
+                  onClick={() => void chooseDestinationDirectory()}
+                >Change…</button>
+              </div>
+            </div>
+            <span className="recording-filename-input">
+              <input
+                id="screenshot-save-filename"
+                value={filenameStem}
+                aria-label="Saved filename"
+                spellCheck={false}
+                disabled={busy !== null}
+                onFocus={(event) => event.currentTarget.select()}
+                onChange={(event) => {
+                  const next = event.target.value;
+                  setFilenameStem(next);
+                  if (artifact.path && (next !== sourceStem || destinationDirectory !== sourceDirectory)) {
+                    setMakeCopy(true);
+                  }
+                  setSaved(null);
+                  setError("");
+                  setStatus("");
+                }}
+              />
+              <strong>.{screenshotFormatExtension(exportFormat, artifact.path)}</strong>
+            </span>
+          </div>
+          <div
+            className={`screenshot-export-status${error ? " error" : ""}`}
+            role={error ? "alert" : "status"}
           >
-            <input
-              type="checkbox"
-              checked={savingCopy}
-              disabled={formatRequiresCopy || busy !== null}
-              onChange={(event) => setMakeCopy(event.target.checked)}
-            />
-            <span className="recording-switch" aria-hidden="true" />
-            <span>Make a copy</span>
-          </label>
-          {saved && <button type="button" onClick={() => void showSavedFile()}>Show in folder</button>}
-          <button type="button" disabled={busy !== null} onClick={() => void copyEditedImage()}>
-            <EditorIcon name="copy" />{busy === "copying" ? "Copying…" : "Copy image"}
-          </button>
-          <button
-            type="button"
-            className="primary"
-            disabled={busy !== null}
-            onClick={() => void saveEditedImage()}
-          >
-            <EditorIcon name="save" />{busy === "saving" ? "Saving…" : "Save"}
-          </button>
+            {error
+              || status
+              || (sourceMissing
+                ? "The original was deleted. You can still copy or save this edit."
+                : exportFormat !== "jpeg"
+                  ? savingCopy
+                    ? "Lossless export keeps every pixel and saves a new file."
+                    : "Lossless export keeps every pixel and replaces the original."
+                  : qualityMode === "maximum"
+                    ? savingCopy
+                      ? "The JPEG stays within the selected limit and saves as a new file."
+                      : "The JPEG stays within the selected limit and replaces the original."
+                    : savingCopy
+                      ? "Save creates a new file and leaves the original untouched."
+                      : "Save replaces the original; turn on Make a copy to keep it.")}
+          </div>
+          <div className="screenshot-export-actions">
+            {!formatRequiresCopy && (
+              <label
+                className="screenshot-make-copy"
+                title="Save as a new file and leave the original untouched"
+              >
+                <input
+                  aria-label="Make a copy"
+                  type="checkbox"
+                  checked={makeCopy}
+                  disabled={busy !== null}
+                  onChange={(event) => updateMakeCopy(event.target.checked)}
+                />
+                <span className="recording-switch" aria-hidden="true" />
+                <span>Make a copy</span>
+              </label>
+            )}
+            {saved && <button type="button" onClick={() => void showSavedFile()}>Show in Folder</button>}
+            <button type="button" disabled={busy !== null} onClick={() => void copyEditedImage()}>
+              <EditorIcon name="copy" />{busy === "copying" ? "Copying…" : "Copy image"}
+            </button>
+            <button
+              type="button"
+              className="primary"
+              disabled={busy !== null}
+              onClick={() => void saveEditedImage()}
+            >
+              <EditorIcon name="save" />{busy === "saving" ? "Saving…" : "Save"}
+            </button>
+          </div>
         </div>
       </footer>
     </main>

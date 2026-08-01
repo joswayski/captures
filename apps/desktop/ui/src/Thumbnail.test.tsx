@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import { Thumbnail } from "./App";
 import type { CaptureArtifact } from "./types";
@@ -274,5 +274,36 @@ describe("Thumbnail", () => {
     fireEvent.click(secondDelete);
     expect(cards[0]).toHaveClass("thumbnail-exit-delete");
     expect(cards[1]).toHaveClass("thumbnail-exit-delete");
+  });
+
+  it("re-arms native preview hit testing as soon as deletion completes", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifacts") return [artifact];
+      if (command === "get_clipboard_state") {
+        return { revision: 0, artifact_id: artifact.id };
+      }
+      if (command === "get_thumbnail_pointer_position") return null;
+      return undefined;
+    });
+
+    render(<Thumbnail />);
+    const card = await screen.findByRole("article");
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(within(card).getByRole("button", { name: "Delete" }));
+      expect(card).toHaveClass("thumbnail-exit-delete");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3_201);
+      });
+
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith("dismiss_artifact", {
+        artifactId: artifact.id,
+      });
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith(
+        "refresh_thumbnail_interactivity",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

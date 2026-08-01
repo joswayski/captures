@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import { ScreenshotEditor } from "./ScreenshotEditor";
@@ -14,7 +15,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
-  save: vi.fn(async () => null),
+  open: vi.fn(async () => null),
 }));
 
 const artifact: CaptureArtifact = {
@@ -30,6 +31,79 @@ const artifact: CaptureArtifact = {
   history_saved: true,
   clipboard_copy_status: "copied",
 };
+
+function installExportableCanvas(): () => void {
+  const context = {
+    canvas: document.createElement("canvas"),
+    drawImage: vi.fn(),
+    fillRect: vi.fn(),
+    clearRect: vi.fn(),
+    save: vi.fn(),
+    restore: vi.fn(),
+    beginPath: vi.fn(),
+    moveTo: vi.fn(),
+    lineTo: vi.fn(),
+    stroke: vi.fn(),
+    fill: vi.fn(),
+    arc: vi.fn(),
+    closePath: vi.fn(),
+    setLineDash: vi.fn(),
+    measureText: () => ({ width: 40 }),
+    fillText: vi.fn(),
+    strokeText: vi.fn(),
+    translate: vi.fn(),
+    scale: vi.fn(),
+    rotate: vi.fn(),
+    quadraticCurveTo: vi.fn(),
+    imageSmoothingEnabled: true,
+    imageSmoothingQuality: "high",
+    createLinearGradient: () => ({ addColorStop: vi.fn() }),
+  } as unknown as CanvasRenderingContext2D;
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(context);
+
+  const originalToBlob = Object.getOwnPropertyDescriptor(
+    HTMLCanvasElement.prototype,
+    "toBlob",
+  );
+  Object.defineProperty(HTMLCanvasElement.prototype, "toBlob", {
+    configurable: true,
+    value: (callback: BlobCallback, type?: string) => {
+      const bytes = new Uint8Array(128);
+      const blob = new Blob([bytes], { type: type ?? "image/png" });
+      if (typeof blob.arrayBuffer !== "function") {
+        Object.defineProperty(blob, "arrayBuffer", {
+          value: async () => bytes.buffer,
+        });
+      }
+      callback(blob);
+    },
+  });
+
+  const originalImage = window.Image;
+  class LoadedImage {
+    onload: ((event: Event) => void) | null = null;
+    onerror: ((event: Event) => void) | null = null;
+    naturalWidth = 1_440;
+    naturalHeight = 900;
+    width = 1_440;
+    height = 900;
+    crossOrigin = "";
+    set src(_value: string) {
+      queueMicrotask(() => this.onload?.(new Event("load")));
+    }
+  }
+  // @ts-expect-error test stub for Image load timing
+  window.Image = LoadedImage;
+
+  return () => {
+    window.Image = originalImage;
+    if (originalToBlob) {
+      Object.defineProperty(HTMLCanvasElement.prototype, "toBlob", originalToBlob);
+    } else {
+      Reflect.deleteProperty(HTMLCanvasElement.prototype, "toBlob");
+    }
+  };
+}
 
 describe("ScreenshotEditor", () => {
   beforeEach(() => {
@@ -169,13 +243,15 @@ describe("ScreenshotEditor", () => {
     ).toBeInTheDocument();
   });
 
-  it("uses maximum lossless output by default and a notched JPEG quality control", async () => {
+  it("keeps lossless output by default and makes JPEG size targeting an explicit mode", async () => {
     render(<ScreenshotEditor />);
     await screen.findAllByText("1440 × 900");
 
     const format = screen.getByLabelText("Format");
     expect(format).toHaveValue("png");
     expect(screen.getByText("Maximum · lossless")).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Save quality" }))
+      .not.toBeInTheDocument();
     expect(screen.queryByRole("slider", { name: "Image quality" })).not.toBeInTheDocument();
     expect(screen.queryByRole("spinbutton", { name: "Maximum file size" }))
       .not.toBeInTheDocument();
@@ -185,11 +261,22 @@ describe("ScreenshotEditor", () => {
     fireEvent.change(format, { target: { value: "jpeg" } });
 
     await waitFor(() => {
+      expect(screen.getByRole("combobox", { name: "Save quality" })).toHaveValue("compress");
       expect(screen.getByRole("slider", { name: "Image quality" })).toBeInTheDocument();
     });
     expect(screen.getByRole("slider", { name: "Image quality" }))
       .toHaveAttribute("aria-valuetext", "Maximum");
-    expect(screen.getByRole("spinbutton", { name: "Maximum file size" })).toHaveValue(null);
+    expect(screen.queryByRole("spinbutton", { name: "Maximum file size" }))
+      .not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("combobox", { name: "Save quality" }), {
+      target: { value: "maximum" },
+    });
+
+    expect(screen.queryByRole("slider", { name: "Image quality" })).not.toBeInTheDocument();
+    expect(screen.getByRole("spinbutton", { name: "Maximum file size" })).toHaveValue(10);
+    expect(screen.getByRole("combobox", { name: "Screenshot file size unit" }))
+      .toHaveValue("mb");
   });
 
   it("supports explicit custom output width and height", async () => {
@@ -297,6 +384,80 @@ describe("ScreenshotEditor", () => {
     }
   });
 
+  it("names the destination before saving, honors the size mode, and reveals the result", async () => {
+    const restoreCanvas = installExportableCanvas();
+    const savedArtifact = {
+      ...artifact,
+      id: "capture-edited",
+      path: "/Users/example/Pictures/edited-photo.jpg",
+    };
+    vi.mocked(open).mockResolvedValue("/Users/example/Pictures");
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifact") return artifact;
+      if (command === "save_screenshot_edit") {
+        return {
+          artifact: savedArtifact,
+          path: savedArtifact.path,
+          format: "jpeg",
+        };
+      }
+      if (command === "reveal_artifact") return undefined;
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    try {
+      render(<ScreenshotEditor />);
+      expect(await screen.findByRole("textbox", { name: "Saved filename" }))
+        .toHaveValue("capture");
+      expect(screen.getByLabelText("Save location"))
+        .toHaveTextContent("/Users/example/Captures");
+
+      fireEvent.click(screen.getByRole("button", { name: "Change save location" }));
+      await waitFor(() => {
+        expect(screen.getByLabelText("Save location"))
+          .toHaveTextContent("/Users/example/Pictures");
+      });
+      expect(open).toHaveBeenCalledWith({
+        directory: true,
+        multiple: false,
+        title: "Choose save location",
+        defaultPath: "/Users/example/Captures",
+      });
+
+      fireEvent.change(screen.getByRole("textbox", { name: "Saved filename" }), {
+        target: { value: "edited-photo" },
+      });
+      fireEvent.change(screen.getByLabelText("Format"), { target: { value: "jpeg" } });
+      fireEvent.change(screen.getByRole("combobox", { name: "Save quality" }), {
+        target: { value: "maximum" },
+      });
+      await act(async () => undefined);
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+      await waitFor(() => {
+        expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+        expect(invoke).toHaveBeenCalledWith(
+          "save_screenshot_edit",
+          {
+            request: expect.objectContaining({
+              artifact_id: artifact.id,
+              destination_path: "/Users/example/Pictures/edited-photo.jpg",
+              format: "jpeg",
+              jpeg_quality: 100,
+              max_size_bytes: 10_000_000,
+              overwrite_source: false,
+            }),
+          },
+        );
+      });
+      expect(invoke).toHaveBeenCalledWith("reveal_artifact", {
+        artifactId: savedArtifact.id,
+      });
+    } finally {
+      restoreCanvas();
+    }
+  });
+
   it("keeps copy and save available when the original capture is deleted", async () => {
     type ArtifactRemovedHandler = (event: { payload: string }) => void;
     let artifactRemoved: ArtifactRemovedHandler | null = null;
@@ -326,11 +487,11 @@ describe("ScreenshotEditor", () => {
       screen.getByText(
         "The original was deleted. You can still copy or save this edit.",
       ),
-    ).toBeInTheDocument();
+    ).toHaveClass("screenshot-export-status");
     expect(screen.getByRole("button", { name: "Copy image" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
-    expect(screen.getByRole("checkbox", { name: "Make a copy" })).toBeChecked();
-    expect(screen.getByRole("checkbox", { name: "Make a copy" })).toBeDisabled();
+    expect(screen.queryByRole("checkbox", { name: "Make a copy" }))
+      .not.toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });
