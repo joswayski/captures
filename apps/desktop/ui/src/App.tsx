@@ -75,6 +75,8 @@ import {
 import {
   createThumbnailStackShiftController,
   shouldScrollThumbnailStackToEnd,
+  thumbnailStackOverflow,
+  THUMBNAIL_CARD_SLOT_PX,
 } from "./lib/thumbnailLayout";
 import { reconcileActiveViewer } from "./lib/viewerActivation";
 import type {
@@ -4055,10 +4057,28 @@ export function Thumbnail() {
     artifact_id: null,
   });
   const [activeViewerArtifactId, setActiveViewerArtifactId] = useState<string | null>(null);
+  const [stackOverflow, setStackOverflow] = useState({
+    hasOlder: false,
+    hasNewer: false,
+  });
   const stackRef = useRef<HTMLElement>(null);
   const previousArtifactCount = useRef(0);
   const applyClipboardState = useCallback((next: ClipboardState) => {
     setClipboardState((current) => reconcileClipboardState(current, next));
+  }, []);
+  const refreshStackOverflow = useCallback(() => {
+    const stack = stackRef.current;
+    if (!stack) return;
+    const next = thumbnailStackOverflow(
+      stack.scrollTop,
+      stack.scrollHeight,
+      stack.clientHeight,
+    );
+    setStackOverflow((current) => (
+      current.hasOlder === next.hasOlder && current.hasNewer === next.hasNewer
+        ? current
+        : next
+    ));
   }, []);
 
   useEffect(() => {
@@ -4175,18 +4195,35 @@ export function Thumbnail() {
       stackRef.current.scrollTop = stackRef.current.scrollHeight;
     }
     previousArtifactCount.current = artifacts.length;
+    refreshStackOverflow();
     let cancelled = false;
     // Sync may grow the native window for new cards. It intentionally does not
     // shrink after dismissals — that recomposes WKWebView and flickers survivors.
     void invoke("sync_thumbnail_stack")
       .catch(() => undefined)
       .finally(() => {
-        if (!cancelled) window.dispatchEvent(new Event("captures-thumbnail-layout-changed"));
+        if (!cancelled) {
+          refreshStackOverflow();
+          window.dispatchEvent(new Event("captures-thumbnail-layout-changed"));
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [artifacts.length]);
+  }, [artifacts.length, refreshStackOverflow]);
+
+  useEffect(() => {
+    const refresh = () => refreshStackOverflow();
+    window.addEventListener("resize", refresh);
+    window.addEventListener("captures-thumbnail-ready", refresh);
+    window.addEventListener("captures-thumbnail-layout-changed", refresh);
+    refresh();
+    return () => {
+      window.removeEventListener("resize", refresh);
+      window.removeEventListener("captures-thumbnail-ready", refresh);
+      window.removeEventListener("captures-thumbnail-layout-changed", refresh);
+    };
+  }, [artifacts.length, refreshStackOverflow]);
 
   const hasThumbnailCards = artifacts.length > 0;
   useEffect(() => {
@@ -4451,34 +4488,77 @@ export function Thumbnail() {
 
   if (artifacts.length === 0) return null;
 
+  const scrollStackBy = (slots: number) => {
+    const stack = stackRef.current;
+    if (!stack) return;
+    stack.scrollTo({
+      top: stack.scrollTop + slots * THUMBNAIL_CARD_SLOT_PX,
+      behavior: prefersReducedMotion() ? "auto" : "smooth",
+    });
+  };
+
   return (
-    <main ref={stackRef} className="thumbnail-stack">
-      {/* Horizontal-only Gaussian blur for dismiss motion streak (stdDeviation x 0). */}
-      <svg className="thumbnail-svg-defs" aria-hidden="true" focusable="false">
-        <defs>
-          <filter id="thumbnail-motion-blur-a" x="-50%" y="-20%" width="200%" height="140%" colorInterpolationFilters="sRGB">
-            <feGaussianBlur stdDeviation="3.5 0" />
-          </filter>
-          <filter id="thumbnail-motion-blur-b" x="-60%" y="-20%" width="220%" height="140%" colorInterpolationFilters="sRGB">
-            <feGaussianBlur stdDeviation="8 0" />
-          </filter>
-          <filter id="thumbnail-motion-blur-c" x="-70%" y="-20%" width="240%" height="140%" colorInterpolationFilters="sRGB">
-            <feGaussianBlur stdDeviation="14 0" />
-          </filter>
-        </defs>
-      </svg>
-      {artifacts.map((artifact) => (
-        <ThumbnailCard
-          key={artifact.id}
-          artifact={artifact}
-          clipboardCurrent={clipboardState.artifact_id === artifact.id}
-          viewerActive={activeViewerArtifactId === artifact.id}
-          onRemoved={(artifactId) => {
-            setArtifacts((current) => current.filter(({ id }) => id !== artifactId));
-          }}
-        />
-      ))}
-    </main>
+    <>
+      <main
+        ref={stackRef}
+        className="thumbnail-stack"
+        onScroll={refreshStackOverflow}
+      >
+        {/* Horizontal-only Gaussian blur for dismiss motion streak (stdDeviation x 0). */}
+        <svg className="thumbnail-svg-defs" aria-hidden="true" focusable="false">
+          <defs>
+            <filter id="thumbnail-motion-blur-a" x="-50%" y="-20%" width="200%" height="140%" colorInterpolationFilters="sRGB">
+              <feGaussianBlur stdDeviation="3.5 0" />
+            </filter>
+            <filter id="thumbnail-motion-blur-b" x="-60%" y="-20%" width="220%" height="140%" colorInterpolationFilters="sRGB">
+              <feGaussianBlur stdDeviation="8 0" />
+            </filter>
+            <filter id="thumbnail-motion-blur-c" x="-70%" y="-20%" width="240%" height="140%" colorInterpolationFilters="sRGB">
+              <feGaussianBlur stdDeviation="14 0" />
+            </filter>
+          </defs>
+        </svg>
+        {artifacts.map((artifact) => (
+          <ThumbnailCard
+            key={artifact.id}
+            artifact={artifact}
+            clipboardCurrent={clipboardState.artifact_id === artifact.id}
+            viewerActive={activeViewerArtifactId === artifact.id}
+            onRemoved={(artifactId) => {
+              setArtifacts((current) => current.filter(({ id }) => id !== artifactId));
+            }}
+          />
+        ))}
+      </main>
+      {stackOverflow.hasOlder && (
+        <button
+          type="button"
+          className="thumbnail-overflow-cue thumbnail-overflow-cue-older"
+          aria-label="Show older captures"
+          onClick={() => scrollStackBy(-1)}
+        >
+          <ThumbnailOverflowChevron direction="up" />
+        </button>
+      )}
+      {stackOverflow.hasNewer && (
+        <button
+          type="button"
+          className="thumbnail-overflow-cue thumbnail-overflow-cue-newer"
+          aria-label="Show newer captures"
+          onClick={() => scrollStackBy(1)}
+        >
+          <ThumbnailOverflowChevron direction="down" />
+        </button>
+      )}
+    </>
+  );
+}
+
+function ThumbnailOverflowChevron({ direction }: { direction: "up" | "down" }) {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <path d={direction === "up" ? "M3.5 10 8 5.5 12.5 10" : "M3.5 6 8 10.5 12.5 6"} />
+    </svg>
   );
 }
 

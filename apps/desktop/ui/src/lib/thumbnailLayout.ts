@@ -106,6 +106,34 @@ export function shouldScrollThumbnailStackToEnd(
   return nextCount > previousCount;
 }
 
+export type ThumbnailStackOverflow = {
+  /** Older previews are clipped above the visible scrollport. */
+  hasOlder: boolean;
+  /** Newer previews are clipped below the visible scrollport. */
+  hasNewer: boolean;
+};
+
+/**
+ * Determine which stack edges have hidden cards. A small tolerance avoids
+ * flickering the edge affordances on fractional WebView scroll positions.
+ */
+export function thumbnailStackOverflow(
+  scrollTop: number,
+  scrollHeight: number,
+  clientHeight: number,
+  tolerance = 1,
+): ThumbnailStackOverflow {
+  const maxScrollTop = Math.max(0, scrollHeight - clientHeight);
+  if (maxScrollTop <= tolerance) {
+    return { hasOlder: false, hasNewer: false };
+  }
+  const currentScrollTop = Math.min(maxScrollTop, Math.max(0, scrollTop));
+  return {
+    hasOlder: currentScrollTop > tolerance,
+    hasNewer: currentScrollTop < maxScrollTop - tolerance,
+  };
+}
+
 const STACK_SHIFT_VAR = "--thumbnail-stack-shift";
 const STACK_SHIFTING_CLASS = "thumbnail-stack-shifting";
 const STACK_SHIFT_INSTANT_CLASS = "thumbnail-stack-shift-instant";

@@ -6,6 +6,7 @@ import {
   countMotionReadySlotsBelow,
   shouldAnimateThumbnailStackShift,
   shouldScrollThumbnailStackToEnd,
+  thumbnailStackOverflow,
   thumbnailStackShiftPx,
   THUMBNAIL_CARD_SLOT_PX,
   THUMBNAIL_DISMISS_HOLD_MS,
@@ -47,6 +48,25 @@ describe("thumbnail stack layout", () => {
   it("does not force a second scroll after a capture closes", () => {
     expect(shouldScrollThumbnailStackToEnd(2, 1)).toBe(false);
     expect(shouldScrollThumbnailStackToEnd(2, 2)).toBe(false);
+  });
+
+  it("reports hidden previews at each scroll edge", () => {
+    expect(thumbnailStackOverflow(0, 1_000, 400)).toEqual({
+      hasOlder: false,
+      hasNewer: true,
+    });
+    expect(thumbnailStackOverflow(300, 1_000, 400)).toEqual({
+      hasOlder: true,
+      hasNewer: true,
+    });
+    expect(thumbnailStackOverflow(600, 1_000, 400)).toEqual({
+      hasOlder: true,
+      hasNewer: false,
+    });
+    expect(thumbnailStackOverflow(0, 400, 400)).toEqual({
+      hasOlder: false,
+      hasNewer: false,
+    });
   });
 
   it("counts only motion-ready held-layout exits below a live card", () => {
