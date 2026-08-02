@@ -547,6 +547,16 @@ pub fn encode_png(image: &RgbaImage) -> Result<Vec<u8>, AppError> {
     encode_png_with_filter(image, FilterType::Sub)
 }
 
+/// Encode a PNG for user export. `compact` uses slower, stronger compression for
+/// smaller files while keeping the same pixels (still PNG, no format change).
+pub fn encode_png_export(image: &RgbaImage, compact: bool) -> Result<Vec<u8>, AppError> {
+    if compact {
+        encode_png_with_quality(image, CompressionType::Best, FilterType::Adaptive)
+    } else {
+        encode_png_with_filter(image, FilterType::Sub)
+    }
+}
+
 /// Downscale a full-resolution capture to logical display pixels (tests / legacy).
 #[allow(dead_code)]
 pub fn encode_preview_png(image: &RgbaImage, scale_factor: f64) -> Result<Vec<u8>, AppError> {
@@ -597,8 +607,16 @@ fn encode_drag_icon_png(preview_png: &[u8]) -> Result<Vec<u8>, AppError> {
 }
 
 fn encode_png_with_filter(image: &RgbaImage, filter: FilterType) -> Result<Vec<u8>, AppError> {
+    encode_png_with_quality(image, CompressionType::Fast, filter)
+}
+
+fn encode_png_with_quality(
+    image: &RgbaImage,
+    compression: CompressionType,
+    filter: FilterType,
+) -> Result<Vec<u8>, AppError> {
     let mut bytes = Vec::new();
-    PngEncoder::new_with_quality(&mut bytes, CompressionType::Fast, filter)
+    PngEncoder::new_with_quality(&mut bytes, compression, filter)
         .write_image(
             image.as_raw(),
             image.width(),
