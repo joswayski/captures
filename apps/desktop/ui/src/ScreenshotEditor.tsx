@@ -24,6 +24,7 @@ import {
   expandDocumentForElement,
   expandDocumentToFitBounds,
   hitTestElement,
+  previewExpandedCanvasRect,
   hitTestResizeHandle,
   imageDropGuideAtPoint,
   imageSizeAtWidth,
@@ -112,6 +113,13 @@ type LayerDropTarget = {
 type ImageDropGuide = {
   edge: ImageSnapEdge;
   target: EditorRect;
+};
+
+/** Live preview while a layer is dragged/resized past the canvas edge. */
+type CanvasExpandPreview = {
+  edges: ImageSnapEdge[];
+  /** Expanded canvas in current document coordinates (may have negative origin). */
+  rect: EditorRect;
 };
 
 type MagnifyGestureEvent = Event & {
@@ -648,7 +656,7 @@ export function ScreenshotEditor() {
   const [draggedLayerId, setDraggedLayerId] = useState<string | null>(null);
   const [resizePreviewBounds, setResizePreviewBounds] = useState<EditorRect | null>(null);
   const [alignmentGuides, setAlignmentGuides] = useState<AlignmentSnapGuide[]>([]);
-  const [canvasExpandEdges, setCanvasExpandEdges] = useState<ImageSnapEdge[]>([]);
+  const [canvasExpandPreview, setCanvasExpandPreview] = useState<CanvasExpandPreview | null>(null);
   const [canvasCursor, setCanvasCursor] = useState<string | undefined>(undefined);
   const [layerDropTarget, setLayerDropTarget] = useState<LayerDropTarget | null>(null);
   const [exportFormat, setExportFormat] = useState<ExportFormat>("png");
@@ -1345,7 +1353,7 @@ export function ScreenshotEditor() {
         moved,
       );
       setAlignmentGuides(snapped.guides);
-      setCanvasExpandEdges(canvasOverflowEdges(
+      setCanvasExpandPreview(canvasExpandPreviewForBounds(
         elementBounds(moved),
         gesture.initialDocument,
       ));
@@ -1382,7 +1390,7 @@ export function ScreenshotEditor() {
       gestureRef.current = { ...gesture, currentBounds: snapped.bounds };
       setResizePreviewBounds(snapped.bounds);
       setAlignmentGuides(snapped.guides);
-      setCanvasExpandEdges(canvasOverflowEdges(
+      setCanvasExpandPreview(canvasExpandPreviewForBounds(
         snapped.bounds,
         gesture.initialDocument,
       ));
@@ -1423,7 +1431,7 @@ export function ScreenshotEditor() {
     gestureRef.current = null;
     setResizePreviewBounds(null);
     setAlignmentGuides([]);
-    setCanvasExpandEdges([]);
+    setCanvasExpandPreview(null);
     setCanvasCursor(undefined);
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
@@ -2135,16 +2143,51 @@ export function ScreenshotEditor() {
               aria-hidden="true"
             />
           ))}
-          {canvasExpandEdges.length > 0 && (
-            <div
-              className={[
-                "screenshot-canvas-expand-hint",
-                ...canvasExpandEdges.map((edge) => `edge-${edge}`),
-              ].join(" ")}
-              aria-hidden="true"
-            >
-              <span>Release to expand canvas</span>
-            </div>
+          {canvasExpandPreview && (
+            <>
+              <div
+                className="screenshot-canvas-expand-ghost"
+                style={{
+                  left: canvasExpandPreview.rect.x * displayScale,
+                  top: canvasExpandPreview.rect.y * displayScale,
+                  width: canvasExpandPreview.rect.width * displayScale,
+                  height: canvasExpandPreview.rect.height * displayScale,
+                }}
+                aria-hidden="true"
+              />
+              <div
+                className={[
+                  "screenshot-canvas-expand-hint",
+                  ...canvasExpandPreview.edges.map((edge) => `edge-${edge}`),
+                ].join(" ")}
+                aria-hidden="true"
+              >
+                {canvasExpandPreview.edges.map((edge) => (
+                  <div
+                    key={edge}
+                    className={`screenshot-canvas-expand-edge edge-${edge}`}
+                  >
+                    <div className="screenshot-canvas-expand-bloom" />
+                    <div className="screenshot-canvas-expand-particles">
+                      {DROP_SNAP_PARTICLES.map((particle) => (
+                        <i
+                          key={`${edge}-${particle.id}`}
+                          className="screenshot-canvas-expand-particle"
+                          style={{
+                            ["--snap-along" as string]: particle.along,
+                            ["--snap-travel" as string]: particle.travel,
+                            ["--snap-delay" as string]: particle.delay,
+                            ["--snap-duration" as string]: particle.duration,
+                            ["--snap-size" as string]: particle.size,
+                          }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                <span>Release to expand canvas</span>
+              </div>
+            </>
           )}
         </div>
         {dragActive && (
@@ -3086,6 +3129,17 @@ function imageDropLabel(edge: ImageSnapEdge): string {
   if (edge === "right") return "Place to the right";
   if (edge === "left") return "Place to the left";
   return "Place below layer";
+}
+
+function canvasExpandPreviewForBounds(
+  bounds: EditorRect,
+  canvas: Pick<ScreenshotDocument, "width" | "height">,
+): CanvasExpandPreview | null {
+  const edges = canvasOverflowEdges(bounds, canvas);
+  if (edges.length === 0) return null;
+  const rect = previewExpandedCanvasRect(bounds, canvas);
+  if (!rect) return null;
+  return { edges, rect };
 }
 
 /** Fixed particle seeds for the image-drop edge snap stream (CSS-driven). */
