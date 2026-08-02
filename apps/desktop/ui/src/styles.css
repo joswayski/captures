@@ -1048,7 +1048,7 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 .screenshot-editor-header > div { display: flex; min-width: 0; align-items: center; gap: 10px; }
 .screenshot-editor-title { align-items: center !important; gap: 12px !important; flex-wrap: wrap; }
 .screenshot-editor-title > span { color: #f3f3f2; font-size: 12px; font-weight: 800; }
-/* Canvas size/trim/background are document chrome — always visible in the header. */
+/* Canvas size/trim/background are document chrome — sit inline with the title, no boxed chrome. */
 .screenshot-canvas-toolbar {
   display: flex;
   min-width: 0;
@@ -1056,10 +1056,9 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   flex-wrap: wrap;
   align-items: center;
   gap: 6px 8px;
-  padding: 3px 4px 3px 8px;
-  border: 1px solid #38393e;
-  border-radius: 8px;
-  background: #26272c;
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 .screenshot-canvas-dim {
   display: inline-flex;
@@ -1112,6 +1111,54 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   font-size: 9px !important;
   font-weight: 700;
   white-space: nowrap;
+}
+/* Compact custom checkbox so checked vs unchecked is obvious in the header strip. */
+.screenshot-canvas-bg-toggle input[type="checkbox"] {
+  display: grid;
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  place-content: center;
+  border: 1px solid #555765;
+  border-radius: 4px;
+  appearance: none;
+  -webkit-appearance: none;
+  background: #111219;
+  box-shadow: 0 1px 2px rgba(0,0,0,.26) inset;
+  cursor: pointer;
+  outline: none;
+  accent-color: unset;
+  transition: border-color .15s ease, background .15s ease, box-shadow .15s ease, transform .15s ease;
+}
+.screenshot-canvas-bg-toggle input[type="checkbox"]::before {
+  width: 7px;
+  height: 3.5px;
+  border-bottom: 1.75px solid var(--theme-accent-ink);
+  border-left: 1.75px solid var(--theme-accent-ink);
+  content: "";
+  opacity: 0;
+  transform: translateY(-0.5px) rotate(-45deg) scale(.55);
+  transition: opacity .12s ease, transform .16s cubic-bezier(.2,.8,.2,1);
+}
+.screenshot-canvas-bg-toggle input[type="checkbox"]:hover:not(:disabled):not(:checked) {
+  border-color: #777989;
+  background: #191a23;
+}
+.screenshot-canvas-bg-toggle input[type="checkbox"]:checked {
+  border-color: var(--editing-accent);
+  background: var(--editing-accent);
+  box-shadow: 0 0 0 1px rgba(var(--theme-accent-rgb),.14), 0 2px 8px rgba(var(--theme-accent-rgb),.22);
+}
+.screenshot-canvas-bg-toggle input[type="checkbox"]:checked::before {
+  opacity: 1;
+  transform: translateY(-0.5px) rotate(-45deg) scale(1);
+}
+.screenshot-canvas-bg-toggle input[type="checkbox"]:focus-visible {
+  box-shadow: 0 0 0 3px rgba(var(--theme-accent-rgb),.2);
+}
+.screenshot-canvas-bg-toggle input[type="checkbox"]:active:not(:disabled) {
+  transform: scale(.92);
 }
 .screenshot-canvas-toolbar .screenshot-color-field.compact {
   display: flex;
@@ -1759,6 +1806,243 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   .screenshot-canvas-expand-bloom { opacity: .7; }
   .screenshot-canvas-expand-particle { opacity: 0; }
 }
+
+/*
+ * Trim-edges hover: red “negative” of the expand glow — highlight margins that
+ * will be removed, with particles streaming into the discard strips.
+ */
+.screenshot-canvas-trim-hint {
+  /* Local red palette so this reuses expand structure without theme accent. */
+  --trim-rgb: 255, 92, 106;
+  --trim-accent: #ff5c6a;
+  --trim-ink: #1a080a;
+  position: absolute;
+  z-index: 4;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+/* Soft wash over each margin strip that will be discarded. */
+.screenshot-canvas-trim-region {
+  position: absolute;
+  z-index: 1;
+  pointer-events: none;
+  background: rgba(var(--trim-rgb), .14);
+  box-shadow: inset 0 0 24px rgba(var(--trim-rgb), .12);
+  animation: canvas-trim-region-breathe 1.7s ease-in-out infinite;
+}
+/* Keep-boundary ghost so the remaining canvas is readable. */
+.screenshot-canvas-trim-keep {
+  position: absolute;
+  z-index: 2;
+  border: 1.5px dashed rgba(var(--trim-rgb), .72);
+  border-radius: 3px;
+  background: transparent;
+  box-shadow:
+    0 0 0 1px rgba(var(--trim-rgb), .1),
+    0 0 22px rgba(var(--trim-rgb), .18);
+  pointer-events: none;
+  animation: canvas-trim-keep-breathe 1.7s ease-in-out infinite;
+}
+.screenshot-canvas-trim-edge {
+  position: absolute;
+  z-index: 3;
+  overflow: visible;
+  pointer-events: none;
+}
+.screenshot-canvas-trim-edge::after {
+  position: absolute;
+  z-index: 2;
+  border-radius: 999px;
+  background: var(--trim-accent);
+  box-shadow:
+    0 0 8px rgba(var(--trim-rgb), .95),
+    0 0 20px rgba(var(--trim-rgb), .55),
+    0 0 32px rgba(var(--trim-rgb), .32);
+  content: "";
+  animation: canvas-trim-edge-pulse 1.4s ease-in-out infinite;
+}
+.screenshot-canvas-trim-edge.edge-top,
+.screenshot-canvas-trim-edge.edge-bottom { right: 0; left: 0; height: 0; }
+.screenshot-canvas-trim-edge.edge-top { top: 0; }
+.screenshot-canvas-trim-edge.edge-bottom { bottom: 0; }
+.screenshot-canvas-trim-edge.edge-left,
+.screenshot-canvas-trim-edge.edge-right { top: 0; bottom: 0; width: 0; }
+.screenshot-canvas-trim-edge.edge-left { left: 0; }
+.screenshot-canvas-trim-edge.edge-right { right: 0; }
+.screenshot-canvas-trim-edge.edge-top::after,
+.screenshot-canvas-trim-edge.edge-bottom::after { right: -1px; left: -1px; height: 4px; }
+.screenshot-canvas-trim-edge.edge-top::after { top: -2px; }
+.screenshot-canvas-trim-edge.edge-bottom::after { bottom: -2px; }
+.screenshot-canvas-trim-edge.edge-left::after,
+.screenshot-canvas-trim-edge.edge-right::after { top: -1px; bottom: -1px; width: 4px; }
+.screenshot-canvas-trim-edge.edge-left::after { left: -2px; }
+.screenshot-canvas-trim-edge.edge-right::after { right: -2px; }
+/* Bloom into the margin that will be removed (outward from the keep rect). */
+.screenshot-canvas-trim-bloom {
+  position: absolute;
+  z-index: 1;
+  pointer-events: none;
+  opacity: .95;
+  filter: blur(.5px);
+  animation: drop-snap-bloom-breathe 1.6s ease-in-out infinite;
+}
+.screenshot-canvas-trim-edge.edge-top .screenshot-canvas-trim-bloom {
+  top: -96px;
+  right: 0;
+  left: 0;
+  height: 96px;
+  background:
+    linear-gradient(
+      to top,
+      rgba(var(--trim-rgb), .5) 0%,
+      rgba(var(--trim-rgb), .2) 38%,
+      rgba(var(--trim-rgb), .06) 72%,
+      transparent 100%
+    );
+  mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 88%, transparent 100%);
+}
+.screenshot-canvas-trim-edge.edge-bottom .screenshot-canvas-trim-bloom {
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 96px;
+  background:
+    linear-gradient(
+      to bottom,
+      rgba(var(--trim-rgb), .5) 0%,
+      rgba(var(--trim-rgb), .2) 38%,
+      rgba(var(--trim-rgb), .06) 72%,
+      transparent 100%
+    );
+  mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 88%, transparent 100%);
+}
+.screenshot-canvas-trim-edge.edge-left .screenshot-canvas-trim-bloom {
+  top: 0;
+  bottom: 0;
+  left: -96px;
+  width: 96px;
+  background:
+    linear-gradient(
+      to left,
+      rgba(var(--trim-rgb), .5) 0%,
+      rgba(var(--trim-rgb), .2) 38%,
+      rgba(var(--trim-rgb), .06) 72%,
+      transparent 100%
+    );
+  mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%);
+}
+.screenshot-canvas-trim-edge.edge-right .screenshot-canvas-trim-bloom {
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 96px;
+  background:
+    linear-gradient(
+      to right,
+      rgba(var(--trim-rgb), .5) 0%,
+      rgba(var(--trim-rgb), .2) 38%,
+      rgba(var(--trim-rgb), .06) 72%,
+      transparent 100%
+    );
+  mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%);
+}
+.screenshot-canvas-trim-particles {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+.screenshot-canvas-trim-particle {
+  position: absolute;
+  width: var(--snap-size, 3px);
+  height: var(--snap-size, 3px);
+  border-radius: 999px;
+  background: var(--trim-accent);
+  box-shadow:
+    0 0 4px rgba(var(--trim-rgb), .95),
+    0 0 10px rgba(var(--trim-rgb), .5);
+  opacity: 0;
+  will-change: transform, opacity;
+  animation-name: drop-snap-particle-right;
+  animation-duration: var(--snap-duration, 1.2s);
+  animation-delay: var(--snap-delay, 0s);
+  animation-timing-function: cubic-bezier(.2,.65,.25,1);
+  animation-iteration-count: infinite;
+}
+.screenshot-canvas-trim-edge.edge-top .screenshot-canvas-trim-particle {
+  left: calc(var(--snap-along, .5) * 100%);
+  top: 0;
+  animation-name: drop-snap-particle-top;
+}
+.screenshot-canvas-trim-edge.edge-bottom .screenshot-canvas-trim-particle {
+  left: calc(var(--snap-along, .5) * 100%);
+  bottom: 0;
+  animation-name: drop-snap-particle-bottom;
+}
+.screenshot-canvas-trim-edge.edge-left .screenshot-canvas-trim-particle {
+  top: calc(var(--snap-along, .5) * 100%);
+  left: 0;
+  animation-name: drop-snap-particle-left;
+}
+.screenshot-canvas-trim-edge.edge-right .screenshot-canvas-trim-particle {
+  top: calc(var(--snap-along, .5) * 100%);
+  right: 0;
+  animation-name: drop-snap-particle-right;
+}
+@keyframes canvas-trim-region-breathe {
+  0%, 100% { opacity: .82; }
+  50% { opacity: 1; }
+}
+@keyframes canvas-trim-keep-breathe {
+  0%, 100% {
+    opacity: .88;
+    box-shadow:
+      0 0 0 1px rgba(var(--trim-rgb), .08),
+      0 0 18px rgba(var(--trim-rgb), .14);
+  }
+  50% {
+    opacity: 1;
+    box-shadow:
+      0 0 0 1px rgba(var(--trim-rgb), .16),
+      0 0 28px rgba(var(--trim-rgb), .24);
+  }
+}
+@keyframes canvas-trim-edge-pulse {
+  0%, 100% {
+    opacity: 1;
+    filter: brightness(1);
+    box-shadow:
+      0 0 8px rgba(var(--trim-rgb), .9),
+      0 0 18px rgba(var(--trim-rgb), .5),
+      0 0 30px rgba(var(--trim-rgb), .28);
+  }
+  50% {
+    opacity: .9;
+    filter: brightness(1.12);
+    box-shadow:
+      0 0 12px rgba(var(--trim-rgb), 1),
+      0 0 26px rgba(var(--trim-rgb), .68),
+      0 0 42px rgba(var(--trim-rgb), .4);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .screenshot-canvas-trim-region,
+  .screenshot-canvas-trim-keep,
+  .screenshot-canvas-trim-edge::after,
+  .screenshot-canvas-trim-bloom,
+  .screenshot-canvas-trim-particle {
+    animation: none !important;
+  }
+  .screenshot-canvas-trim-region { opacity: .9; }
+  .screenshot-canvas-trim-keep { opacity: .94; }
+  .screenshot-canvas-trim-particle { opacity: 0; }
+}
 .screenshot-sidebar { display: grid; min-width: 0; min-height: 0; grid-row: 2; grid-column: 3; grid-template-rows: minmax(220px,50%) minmax(0,1fr); overflow: hidden; border-left: 1px solid #303136; background: #1d1e22; }
 .screenshot-layers { display: flex; min-width: 0; min-height: 0; padding: 0 10px 10px; flex-direction: column; background: #202126; }
 .screenshot-layers-heading { display: flex; min-height: 48px; margin: 0 -10px 8px; padding: 0 10px 0 14px; align-items: center; justify-content: space-between; border-bottom: 1px solid #34353a; }
@@ -1814,7 +2098,58 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 .screenshot-format-buttons button.active { border-color: rgba(var(--theme-accent-rgb),.45); color: var(--theme-accent-text); background: rgba(var(--theme-accent-rgb),.12); }
 .screenshot-format-buttons svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; }
 .screenshot-check-row { display: flex !important; min-height: 26px; flex-direction: row !important; align-items: center; gap: 7px !important; cursor: pointer; }
-.screenshot-check-row input { width: auto; accent-color: var(--editing-accent); }
+/* Match preferences checkboxes so checked state is a clear accent fill + checkmark. */
+.screenshot-check-row input[type="checkbox"] {
+  display: grid;
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  place-content: center;
+  border: 1px solid #555765;
+  border-radius: 4px;
+  appearance: none;
+  -webkit-appearance: none;
+  background: #111219;
+  box-shadow: 0 1px 2px rgba(0,0,0,.26) inset;
+  cursor: pointer;
+  outline: none;
+  accent-color: unset;
+  transition: border-color .15s ease, background .15s ease, box-shadow .15s ease, transform .15s ease;
+}
+.screenshot-check-row input[type="checkbox"]::before {
+  width: 7.5px;
+  height: 4px;
+  border-bottom: 1.75px solid var(--theme-accent-ink);
+  border-left: 1.75px solid var(--theme-accent-ink);
+  content: "";
+  opacity: 0;
+  transform: translateY(-1px) rotate(-45deg) scale(.55);
+  transition: opacity .12s ease, transform .16s cubic-bezier(.2,.8,.2,1);
+}
+.screenshot-check-row input[type="checkbox"]:hover:not(:disabled):not(:checked) {
+  border-color: #777989;
+  background: #191a23;
+}
+.screenshot-check-row input[type="checkbox"]:checked {
+  border-color: var(--editing-accent);
+  background: var(--editing-accent);
+  box-shadow: 0 0 0 1px rgba(var(--theme-accent-rgb),.14), 0 2px 8px rgba(var(--theme-accent-rgb),.22);
+}
+.screenshot-check-row input[type="checkbox"]:checked::before {
+  opacity: 1;
+  transform: translateY(-1px) rotate(-45deg) scale(1);
+}
+.screenshot-check-row input[type="checkbox"]:focus-visible {
+  box-shadow: 0 0 0 3px rgba(var(--theme-accent-rgb),.2);
+}
+.screenshot-check-row input[type="checkbox"]:active:not(:disabled) {
+  transform: scale(.92);
+}
+.screenshot-check-row input[type="checkbox"]:disabled {
+  cursor: default;
+  opacity: .38;
+}
 .screenshot-color-field { min-width: 0; margin: 0; border: 0; padding: 0; }
 .screenshot-color-field legend { margin-bottom: 7px; padding: 0; color: #9a9ba1; font-size: 9px; font-weight: 700; }
 .screenshot-color-field > div { display: flex; align-items: center; gap: 5px; }

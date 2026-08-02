@@ -58,9 +58,11 @@ import {
   TEXT_LINE_HEIGHT_RATIO,
   wrapTextLines,
   translateElement,
+  canvasTrimMarginPreview,
   trimDocumentToContent,
   visibleContentBounds,
   type AlignmentSnapGuide,
+  type CanvasTrimMarginPreview,
   type ArrowHandle,
   type EditorImageElement,
   type ImageDropPlacement,
@@ -840,6 +842,7 @@ export function ScreenshotEditor() {
   const [resizePreviewBounds, setResizePreviewBounds] = useState<EditorRect | null>(null);
   const [alignmentGuides, setAlignmentGuides] = useState<AlignmentSnapGuide[]>([]);
   const [canvasExpandPreview, setCanvasExpandPreview] = useState<CanvasExpandPreview | null>(null);
+  const [trimEdgesHover, setTrimEdgesHover] = useState(false);
   const [canvasCursor, setCanvasCursor] = useState<string | undefined>(undefined);
   /** Command/Ctrl held — pan-ready grab cursor over the viewport. */
   const [panReady, setPanReady] = useState(false);
@@ -1100,6 +1103,12 @@ export function ScreenshotEditor() {
     if (!content) return false;
     return trimDocumentToContent(editorDocument) !== editorDocument;
   }, [editorDocument]);
+
+  /** Hover preview: which current-canvas margins Trim edges would discard. */
+  const trimEdgesPreview = useMemo((): CanvasTrimMarginPreview | null => {
+    if (!trimEdgesHover || !canTrimEdges || !editorDocument) return null;
+    return canvasTrimMarginPreview(editorDocument);
+  }, [trimEdgesHover, canTrimEdges, editorDocument]);
 
   const editingText = editingTextId === selectedId && selected?.kind === "text"
     ? selected
@@ -2225,6 +2234,7 @@ export function ScreenshotEditor() {
     if (trimmed === current) return;
     commitDocument(trimmed);
     setCropSelection(null);
+    setTrimEdgesHover(false);
   };
 
   const updateSelected = (updater: (element: ScreenshotElement) => ScreenshotElement) => {
@@ -2808,6 +2818,10 @@ export function ScreenshotEditor() {
               disabled={!canTrimEdges}
               title="Shrink the canvas to the edges of visible layers"
               onClick={applyTrimEdges}
+              onPointerEnter={() => setTrimEdgesHover(true)}
+              onPointerLeave={() => setTrimEdgesHover(false)}
+              onFocus={() => setTrimEdgesHover(true)}
+              onBlur={() => setTrimEdgesHover(false)}
             >
               Trim edges
             </button>
@@ -3101,6 +3115,104 @@ export function ScreenshotEditor() {
                 <span>Release to expand canvas</span>
               </div>
             </>
+          )}
+          {trimEdgesPreview && (
+            <div className="screenshot-canvas-trim-hint" aria-hidden="true">
+              {trimEdgesPreview.margins.top > 0 && (
+                <div
+                  className="screenshot-canvas-trim-region edge-top"
+                  style={{
+                    left: 0,
+                    top: 0,
+                    width: editorDocument.width * displayScale,
+                    height: trimEdgesPreview.margins.top * displayScale,
+                  }}
+                />
+              )}
+              {trimEdgesPreview.margins.bottom > 0 && (
+                <div
+                  className="screenshot-canvas-trim-region edge-bottom"
+                  style={{
+                    left: 0,
+                    top: (editorDocument.height - trimEdgesPreview.margins.bottom) * displayScale,
+                    width: editorDocument.width * displayScale,
+                    height: trimEdgesPreview.margins.bottom * displayScale,
+                  }}
+                />
+              )}
+              {trimEdgesPreview.margins.left > 0 && (
+                <div
+                  className="screenshot-canvas-trim-region edge-left"
+                  style={{
+                    left: 0,
+                    top: trimEdgesPreview.margins.top * displayScale,
+                    width: trimEdgesPreview.margins.left * displayScale,
+                    height: (
+                      editorDocument.height
+                      - trimEdgesPreview.margins.top
+                      - trimEdgesPreview.margins.bottom
+                    ) * displayScale,
+                  }}
+                />
+              )}
+              {trimEdgesPreview.margins.right > 0 && (
+                <div
+                  className="screenshot-canvas-trim-region edge-right"
+                  style={{
+                    left: (editorDocument.width - trimEdgesPreview.margins.right) * displayScale,
+                    top: trimEdgesPreview.margins.top * displayScale,
+                    width: trimEdgesPreview.margins.right * displayScale,
+                    height: (
+                      editorDocument.height
+                      - trimEdgesPreview.margins.top
+                      - trimEdgesPreview.margins.bottom
+                    ) * displayScale,
+                  }}
+                />
+              )}
+              <div
+                className="screenshot-canvas-trim-keep"
+                style={{
+                  left: trimEdgesPreview.keepRect.x * displayScale,
+                  top: trimEdgesPreview.keepRect.y * displayScale,
+                  width: trimEdgesPreview.keepRect.width * displayScale,
+                  height: trimEdgesPreview.keepRect.height * displayScale,
+                }}
+              />
+              <div
+                style={{
+                  position: "absolute",
+                  left: trimEdgesPreview.keepRect.x * displayScale,
+                  top: trimEdgesPreview.keepRect.y * displayScale,
+                  width: trimEdgesPreview.keepRect.width * displayScale,
+                  height: trimEdgesPreview.keepRect.height * displayScale,
+                }}
+              >
+                {trimEdgesPreview.edges.map((edge) => (
+                  <div
+                    key={edge}
+                    className={`screenshot-canvas-trim-edge edge-${edge}`}
+                  >
+                    <div className="screenshot-canvas-trim-bloom" />
+                    <div className="screenshot-canvas-trim-particles">
+                      {DROP_SNAP_PARTICLES.map((particle) => (
+                        <i
+                          key={`trim-${edge}-${particle.id}`}
+                          className="screenshot-canvas-trim-particle"
+                          style={{
+                            ["--snap-along" as string]: particle.along,
+                            ["--snap-travel" as string]: particle.travel,
+                            ["--snap-delay" as string]: particle.delay,
+                            ["--snap-duration" as string]: particle.duration,
+                            ["--snap-size" as string]: particle.size,
+                          }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           )}
         </div>
         {dragActive && (
