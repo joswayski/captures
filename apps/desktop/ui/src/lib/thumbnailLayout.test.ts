@@ -2,18 +2,25 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import {
+  animateThumbnailStackScroll,
   createThumbnailStackShiftController,
   computeThumbnailStackShifts,
   countMotionReadySlotsBelow,
+  easeOutCubic,
   shouldAnimateThumbnailStackShift,
   shouldScrollThumbnailStackToEnd,
+  thumbnailStackContentHeight,
   thumbnailStackOverflow,
   thumbnailStackShiftPx,
+  THUMBNAIL_CARD_HEIGHT_PX,
   THUMBNAIL_CARD_SLOT_PX,
   THUMBNAIL_DISMISS_HOLD_MS,
   THUMBNAIL_DISMISS_STACK_MOTION_DELAY_MS,
   THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS,
+  THUMBNAIL_STACK_GAP_PX,
   THUMBNAIL_STACK_MOTION_DURATION_MS,
+  THUMBNAIL_STACK_PADDING_PX,
+  THUMBNAIL_STACK_SCROLL_DURATION_MS,
   THUMBNAIL_STACK_SETTLE_MAX_WAIT_MS,
   waitForThumbnailStackSettle,
   type ThumbnailStackCardMotionState,
@@ -71,6 +78,89 @@ describe("thumbnail stack layout", () => {
       hasOlder: false,
       hasNewer: false,
     });
+  });
+
+  it("computes stack content height from card layout, not paint overflow", () => {
+    expect(thumbnailStackContentHeight(0)).toBe(0);
+    expect(thumbnailStackContentHeight(1)).toBe(
+      THUMBNAIL_STACK_PADDING_PX * 2 + THUMBNAIL_CARD_HEIGHT_PX,
+    );
+    expect(thumbnailStackContentHeight(4)).toBe(
+      THUMBNAIL_STACK_PADDING_PX * 2
+        + 4 * THUMBNAIL_CARD_HEIGHT_PX
+        + 3 * THUMBNAIL_STACK_GAP_PX,
+    );
+  });
+
+  it("ignores inflated scrollable overflow when layout content fits", () => {
+    // Four cards fill a 768px stack. Dust chips and settle transforms can make
+    // WebKit report a taller scrollHeight; cues must use layout height instead
+    // so the bottom drawer does not flash while survivors settle.
+    const layoutHeight = thumbnailStackContentHeight(4);
+    const clientHeight = layoutHeight;
+    expect(thumbnailStackOverflow(0, layoutHeight, clientHeight)).toEqual({
+      hasOlder: false,
+      hasNewer: false,
+    });
+    // Same scrollTop against paint-inflated height would incorrectly show hasNewer.
+    expect(thumbnailStackOverflow(0, layoutHeight + 240, clientHeight)).toEqual({
+      hasOlder: false,
+      hasNewer: true,
+    });
+  });
+
+  it("eases overflow-cue scrolls out of the target", () => {
+    expect(easeOutCubic(0)).toBe(0);
+    expect(easeOutCubic(1)).toBe(1);
+    // Ease-out progresses faster than linear early, then decelerates.
+    expect(easeOutCubic(0.5)).toBeGreaterThan(0.5);
+  });
+
+  it("animates stack scroll with ease-out and can cancel mid-flight", () => {
+    const stack = document.createElement("main");
+    Object.defineProperty(stack, "scrollTop", {
+      configurable: true,
+      writable: true,
+      value: 600,
+    });
+
+    const frames: FrameRequestCallback[] = [];
+    let clock = 0;
+    const cancel = animateThumbnailStackScroll(stack, 416, {
+      durationMs: THUMBNAIL_STACK_SCROLL_DURATION_MS,
+      now: () => clock,
+      frame: (callback) => {
+        frames.push(callback);
+        return frames.length;
+      },
+      cancelFrame: () => {
+        frames.length = 0;
+      },
+    });
+
+    expect(frames).toHaveLength(1);
+    clock = THUMBNAIL_STACK_SCROLL_DURATION_MS * 0.5;
+    frames.at(-1)?.(clock);
+    expect(stack.scrollTop).toBeLessThan(600);
+    expect(stack.scrollTop).toBeGreaterThan(416);
+
+    const mid = stack.scrollTop;
+    cancel();
+    clock = THUMBNAIL_STACK_SCROLL_DURATION_MS;
+    frames.at(-1)?.(clock);
+    // Cancel freezes at the last interpolated value.
+    expect(stack.scrollTop).toBe(mid);
+  });
+
+  it("jumps immediately when reduced motion is preferred", () => {
+    const stack = document.createElement("main");
+    Object.defineProperty(stack, "scrollTop", {
+      configurable: true,
+      writable: true,
+      value: 600,
+    });
+    animateThumbnailStackScroll(stack, 416, { reducedMotion: true });
+    expect(stack.scrollTop).toBe(416);
   });
 
   it("counts only motion-ready held-layout exits below a live card", () => {

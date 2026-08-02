@@ -4,8 +4,14 @@ export const THUMBNAIL_CARD_HEIGHT_PX = 160;
 /** Vertical gap between cards (matches `.thumbnail-stack` gap). */
 export const THUMBNAIL_STACK_GAP_PX = 24;
 
+/** Vertical padding on `.thumbnail-stack` (top + bottom each). */
+export const THUMBNAIL_STACK_PADDING_PX = 28;
+
 /** One stack slot: card height + inter-card gap. */
 export const THUMBNAIL_CARD_SLOT_PX = THUMBNAIL_CARD_HEIGHT_PX + THUMBNAIL_STACK_GAP_PX;
+
+/** Duration for one-slot overflow-cue scrolls (ease-out). */
+export const THUMBNAIL_STACK_SCROLL_DURATION_MS = 380;
 
 /**
  * Delay before live cards above a dust-delete begin sliding into the empty
@@ -122,16 +128,36 @@ export type ThumbnailStackOverflow = {
 };
 
 /**
+ * Layout height of the stack for `cardCount` cards, matching CSS geometry.
+ *
+ * Prefer this over `element.scrollHeight` when deciding overflow cues: dust
+ * chips and survivor `translateY` paint outside their boxes and can inflate
+ * WebKit's scrollable overflow, briefly flashing the "newer" drawer while
+ * cards settle into deleted slots.
+ */
+export function thumbnailStackContentHeight(cardCount: number): number {
+  if (cardCount <= 0) return 0;
+  return (
+    THUMBNAIL_STACK_PADDING_PX * 2
+    + cardCount * THUMBNAIL_CARD_HEIGHT_PX
+    + (cardCount - 1) * THUMBNAIL_STACK_GAP_PX
+  );
+}
+
+/**
  * Determine which stack edges have hidden cards. A small tolerance avoids
  * flickering the edge affordances on fractional WebView scroll positions.
+ *
+ * Pass layout content height (see `thumbnailStackContentHeight`) rather than
+ * raw `scrollHeight` so transient paint overflow is ignored.
  */
 export function thumbnailStackOverflow(
   scrollTop: number,
-  scrollHeight: number,
+  contentHeight: number,
   clientHeight: number,
   tolerance = 1,
 ): ThumbnailStackOverflow {
-  const maxScrollTop = Math.max(0, scrollHeight - clientHeight);
+  const maxScrollTop = Math.max(0, contentHeight - clientHeight);
   if (maxScrollTop <= tolerance) {
     return { hasOlder: false, hasNewer: false };
   }
@@ -139,6 +165,68 @@ export function thumbnailStackOverflow(
   return {
     hasOlder: currentScrollTop > tolerance,
     hasNewer: currentScrollTop < maxScrollTop - tolerance,
+  };
+}
+
+/** Ease-out cubic — quick start, soft landing for one-card cue scrolls. */
+export function easeOutCubic(t: number): number {
+  const x = Math.min(1, Math.max(0, t));
+  return 1 - (1 - x) ** 3;
+}
+
+export type AnimateThumbnailStackScrollOptions = {
+  durationMs?: number;
+  reducedMotion?: boolean;
+  /** Injectable clock for tests. Defaults to `performance.now`. */
+  now?: () => number;
+  /** Injectable rAF for tests. Defaults to `requestAnimationFrame`. */
+  frame?: (callback: FrameRequestCallback) => number;
+  /** Injectable cancel for tests. Defaults to `cancelAnimationFrame`. */
+  cancelFrame?: (id: number) => void;
+};
+
+/**
+ * Animate `stack.scrollTop` toward `targetTop` with ease-out. Returns a cancel
+ * function that freezes the scroll at the current interpolated position.
+ */
+export function animateThumbnailStackScroll(
+  stack: HTMLElement,
+  targetTop: number,
+  options: AnimateThumbnailStackScrollOptions = {},
+): () => void {
+  const durationMs = options.durationMs ?? THUMBNAIL_STACK_SCROLL_DURATION_MS;
+  const reducedMotion = options.reducedMotion ?? false;
+  const now = options.now ?? (() => performance.now());
+  const frame = options.frame
+    ?? ((callback: FrameRequestCallback) => requestAnimationFrame(callback));
+  const cancelFrame = options.cancelFrame
+    ?? ((id: number) => cancelAnimationFrame(id));
+
+  const startTop = stack.scrollTop;
+  const delta = targetTop - startTop;
+  if (delta === 0 || reducedMotion || durationMs <= 0) {
+    stack.scrollTop = targetTop;
+    return () => undefined;
+  }
+
+  let cancelled = false;
+  let frameId = 0;
+  const startTime = now();
+
+  const step = (time: number) => {
+    if (cancelled) return;
+    const progress = Math.min(1, (time - startTime) / durationMs);
+    stack.scrollTop = startTop + delta * easeOutCubic(progress);
+    if (progress < 1) {
+      frameId = frame(step);
+    }
+  };
+  frameId = frame(step);
+
+  return () => {
+    if (cancelled) return;
+    cancelled = true;
+    cancelFrame(frameId);
   };
 }
 
