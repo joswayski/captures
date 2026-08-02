@@ -4726,6 +4726,7 @@ export function ThumbnailCard({
     clipboardCurrent: boolean;
     historySaved: boolean;
     copyFailed: boolean;
+    editorActive: boolean;
   } | null>(null);
   const cardRef = useRef<HTMLElement>(null);
   const dustLayerRef = useRef<HTMLDivElement>(null);
@@ -4919,6 +4920,7 @@ export function ThumbnailCard({
       clipboardCurrent,
       historySaved: artifact.history_saved,
       copyFailed: artifact.clipboard_copy_status === "failed",
+      editorActive,
     });
     setBusy(null);
     setError("");
@@ -4971,6 +4973,7 @@ export function ThumbnailCard({
     clipboardCurrent,
     historySaved: artifact.history_saved,
     copyFailed: artifact.clipboard_copy_status === "failed",
+    editorActive,
   };
   // Before a folder save: trash discards the preview (dissolve). After: trash deletes the file.
   // Close only appears once a file exists so you can hide the preview without trashing it.
@@ -5099,7 +5102,7 @@ export function ThumbnailCard({
               : null}
         </div>
         <div className="thumbnail-status-chips">
-          {editorActive && (
+          {chrome.editorActive && (
             <div className="editor-presence-chip" role="status">
               <EditIcon />
               <span>In editor</span>

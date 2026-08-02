@@ -483,7 +483,8 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   opacity: 1;
   animation: thumbnail-chrome-fade-main .85s cubic-bezier(.22, .1, .25, 1) both !important;
 }
-.thumbnail-exit-delete .clipboard-confirmation {
+.thumbnail-exit-delete .clipboard-confirmation,
+.thumbnail-exit-delete .editor-presence-chip {
   z-index: 8 !important;
   pointer-events: none !important;
   transition: none !important;
@@ -614,7 +615,7 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 /* Dust chip flight keyframes live in playThumbnailDustAnimations (WAAPI). */
 @keyframes thumbnail-action-pop { from { opacity: .25; transform: scale(.65); } to { opacity: 1; transform: scale(1); } }
 @media (prefers-reduced-motion: reduce) {
-  .capture-surface, .capture-shade, .capture-guidance, .window-targets, .recording-countdown, .recording-countdown-content, .thumbnail-card, .thumbnail-card::after, .thumbnail-card img, .thumbnail-overflow-cue, .clipboard-confirmation, .thumbnail-top-actions, .thumbnail-main-actions, .thumbnail-main-actions svg, .thumbnail-dust, .thumbnail-dust-layer { animation-duration: .01ms !important; transition-duration: .01ms; }
+  .capture-surface, .capture-shade, .capture-guidance, .window-targets, .recording-countdown, .recording-countdown-content, .thumbnail-card, .thumbnail-card::after, .thumbnail-card img, .thumbnail-overflow-cue, .clipboard-confirmation, .editor-presence-chip, .thumbnail-top-actions, .thumbnail-main-actions, .thumbnail-main-actions svg, .thumbnail-dust, .thumbnail-dust-layer { animation-duration: .01ms !important; transition-duration: .01ms; }
   .thumbnail-card.thumbnail-exit-dismiss img { animation: none; filter: blur(2px) brightness(.56); transform: scale(1.015); }
   .thumbnail-dust { opacity: 0; }
 }
