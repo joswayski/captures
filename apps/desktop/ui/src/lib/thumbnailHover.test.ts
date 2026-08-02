@@ -9,6 +9,7 @@ import {
   shouldRecoverThumbnailAfterNullPolls,
   thumbnailCssCursor,
   thumbnailCursorSyncAction,
+  THUMBNAIL_CURSOR_HANDOFF_REASSERT_DELAYS_MS,
   THUMBNAIL_CURSOR_KIND_ATTRIBUTE,
   THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS,
   THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE,
@@ -331,6 +332,10 @@ describe("thumbnailCursorSyncAction", () => {
 
   it("does not reassert the default cursor", () => {
     expect(thumbnailCursorSyncAction("default", "default", Number.POSITIVE_INFINITY)).toBeNull();
+  });
+
+  it("covers click and editor focus handoffs with short reassert delays", () => {
+    expect([...THUMBNAIL_CURSOR_HANDOFF_REASSERT_DELAYS_MS]).toEqual([0, 16, 48]);
   });
 });
 
