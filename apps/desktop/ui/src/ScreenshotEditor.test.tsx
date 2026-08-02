@@ -458,7 +458,7 @@ describe("ScreenshotEditor", () => {
     expect(guide?.querySelectorAll(".screenshot-drop-snap-particle").length).toBeGreaterThan(0);
   });
 
-  it("offers stack-on-top placement with under-glow when hovering the layer center", async () => {
+  it("offers stack-on-top placement with pointer-tracked under-glow rays", async () => {
     render(<ScreenshotEditor />);
     await screen.findAllByText("1440 × 900");
 
@@ -498,13 +498,46 @@ describe("ScreenshotEditor", () => {
     expect(screen.getByText("It will stack on top of the highlighted layer and stay editable."))
       .toBeInTheDocument();
 
-    const guide = document.querySelector(".screenshot-drop-snap-guide.edge-stack");
+    const guide = document.querySelector(".screenshot-drop-snap-guide.edge-stack") as HTMLElement | null;
     expect(guide).not.toBeNull();
     expect(guide?.querySelector(".screenshot-drop-snap-bloom")).not.toBeNull();
-    expect(guide?.querySelector(".screenshot-drop-snap-stack-plate")).not.toBeNull();
-    expect(guide?.querySelector(".screenshot-drop-snap-stack-shadow")).not.toBeNull();
-    expect(guide?.querySelector(".screenshot-drop-snap-stack-rim")).not.toBeNull();
-    expect(guide?.querySelectorAll(".screenshot-drop-snap-particle").length).toBeGreaterThan(0);
+    expect(guide?.querySelector(".screenshot-drop-snap-stack-rays")).not.toBeNull();
+    expect(guide?.querySelectorAll(".screenshot-drop-snap-stack-ray").length).toBeGreaterThan(0);
+    const plate = guide?.querySelector(".screenshot-drop-snap-stack-plate") as HTMLElement | null;
+    expect(plate).not.toBeNull();
+    expect(plate?.querySelector(".screenshot-drop-snap-stack-shadow")).not.toBeNull();
+    expect(plate?.querySelector(".screenshot-drop-snap-stack-rim")).not.toBeNull();
+    expect(plate?.querySelectorAll(".screenshot-drop-snap-particle").length).toBeGreaterThan(0);
+    // Plate is a compact ghost relative to the target, centered near the pointer
+    // (fit-mode displayScale can be tiny in jsdom, so compare ratios not CSS px).
+    const guideWidth = Number.parseFloat(guide!.style.width);
+    const guideHeight = Number.parseFloat(guide!.style.height);
+    const plateLeft = Number.parseFloat(plate!.style.left);
+    const plateTop = Number.parseFloat(plate!.style.top);
+    const plateWidth = Number.parseFloat(plate!.style.width);
+    const plateHeight = Number.parseFloat(plate!.style.height);
+    expect(plateWidth).toBeGreaterThan(0);
+    expect(plateHeight).toBeGreaterThan(0);
+    expect(plateWidth / guideWidth).toBeLessThan(0.5);
+    expect(plateHeight / guideHeight).toBeLessThan(0.5);
+    expect((plateLeft + plateWidth / 2) / guideWidth).toBeCloseTo(720 / 1_440, 1);
+    expect((plateTop + plateHeight / 2) / guideHeight).toBeCloseTo(450 / 900, 1);
+
+    // Moving the pointer relocates the plate (dynamic, not a static center box).
+    const moved = createEvent.dragOver(editor!, { dataTransfer });
+    Object.defineProperty(moved, "clientX", { configurable: true, value: 900 });
+    Object.defineProperty(moved, "clientY", { configurable: true, value: 520 });
+    fireEvent(editor!, moved);
+    await waitFor(() => {
+      const nextPlate = document.querySelector(
+        ".screenshot-drop-snap-guide.edge-stack .screenshot-drop-snap-stack-plate",
+      ) as HTMLElement | null;
+      expect(nextPlate).not.toBeNull();
+      const nextLeft = Number.parseFloat(nextPlate!.style.left);
+      const nextTop = Number.parseFloat(nextPlate!.style.top);
+      expect(nextLeft).toBeGreaterThan(plateLeft);
+      expect(nextTop).toBeGreaterThan(plateTop);
+    });
   });
 
   it("keeps preserve quality by default and compress does not change the format", async () => {

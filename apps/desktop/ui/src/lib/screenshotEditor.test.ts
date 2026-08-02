@@ -24,6 +24,7 @@ import {
   positionImportedImageAtEdge,
   reorderScreenshotLayers,
   resolveImageDropTarget,
+  stackDropPlateAtPoint,
   resizeBoundsFromHandle,
   resizeElement,
   snapResizedBounds,
@@ -249,7 +250,7 @@ describe("screenshot editor geometry", () => {
     expect(expanded.elements[0].x).toBeGreaterThan(0);
   });
 
-  it("stacks imports centered on the target layer", () => {
+  it("stacks imports on the pointer and tracks a compact plate under the ghost", () => {
     const document = createScreenshotDocument("capture.png", 1_000, 800);
     const target = { x: 200, y: 100, width: 400, height: 300 };
     // Interior of the target stacks; outer band still picks an edge.
@@ -259,9 +260,27 @@ describe("screenshot editor geometry", () => {
     // Outside the rect still snaps to the closest edge.
     expect(imageDropPlacementAtPoint({ x: 100, y: 250 }, target)).toBe("left");
 
-    const position = positionImportedImageAtEdge(300, 200, document, target, "stack");
-    expect(position.x).toBe(Math.round(target.x + (target.width - position.width) / 2));
-    expect(position.y).toBe(Math.round(target.y + (target.height - position.height) / 2));
+    // Default stack (no point) still centers on the target.
+    const centered = positionImportedImageAtEdge(300, 200, document, target, "stack");
+    expect(centered.x).toBe(Math.round(target.x + (target.width - centered.width) / 2));
+    expect(centered.y).toBe(Math.round(target.y + (target.height - centered.height) / 2));
+
+    // With a pointer sample, the import centers on that point.
+    const point = { x: 320, y: 210 };
+    const atPointer = positionImportedImageAtEdge(300, 200, document, target, "stack", point);
+    expect(atPointer.x).toBe(Math.round(point.x - atPointer.width / 2));
+    expect(atPointer.y).toBe(Math.round(point.y - atPointer.height / 2));
+
+    // Plate is compact and follows the pointer (not a full-layer static frame).
+    const plate = stackDropPlateAtPoint(point, target);
+    expect(plate.width).toBeLessThan(target.width * 0.5);
+    expect(plate.height).toBeLessThan(target.height * 0.5);
+    expect(plate.x + plate.width / 2).toBeCloseTo(point.x, 0);
+    expect(plate.y + plate.height / 2).toBeCloseTo(point.y, 0);
+
+    const moved = stackDropPlateAtPoint({ x: 480, y: 300 }, target);
+    expect(moved.x).toBeGreaterThan(plate.x);
+    expect(moved.y).toBeGreaterThan(plate.y);
   });
 
   it("resolves drop snap targets without requiring a selected layer", () => {
@@ -277,8 +296,12 @@ describe("screenshot editor geometry", () => {
     expect(imageDropGuideAtPoint(document, null, { x: 980, y: 400 }).edge).toBe("right");
     expect(imageDropGuideAtPoint(document, null, { x: 500, y: 780 }).edge).toBe("bottom");
     expect(imageDropGuideAtPoint(document, null, { x: 20, y: 400 }).edge).toBe("left");
-    // Center of the canvas stacks on top of the background layer.
-    expect(imageDropGuideAtPoint(document, null, { x: 500, y: 400 }).edge).toBe("stack");
+    // Center of the canvas stacks on top of the background layer; plate tracks the point.
+    const stackGuide = imageDropGuideAtPoint(document, null, { x: 500, y: 400 });
+    expect(stackGuide.edge).toBe("stack");
+    expect(stackGuide.point).toEqual({ x: 500, y: 400 });
+    expect(stackGuide.plate.x + stackGuide.plate.width / 2).toBeCloseTo(500, 0);
+    expect(stackGuide.plate.y + stackGuide.plate.height / 2).toBeCloseTo(400, 0);
 
     const imported: EditorImageElement = {
       ...editableLayer,
