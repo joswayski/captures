@@ -145,6 +145,102 @@ describe("ScreenshotEditor", () => {
     expect(within(layers).getByText("Locked background")).toBeInTheDocument();
   });
 
+  it("zooms with the standard keyboard shortcuts", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findAllByText("1440 × 900");
+
+    const zoom = screen.getByRole("combobox", { name: "Canvas zoom" });
+    fireEvent.change(zoom, { target: { value: "100" } });
+    expect(zoom).toHaveValue("100");
+
+    const zoomIn = new KeyboardEvent("keydown", {
+      key: "=",
+      code: "Equal",
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    fireEvent(window, zoomIn);
+    expect(zoomIn.defaultPrevented).toBe(true);
+    expect(zoom).toHaveValue("125");
+    expect(within(zoom).getByRole("option", { name: "125%" })).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "-", code: "Minus", ctrlKey: true });
+    expect(zoom).toHaveValue("100");
+
+    fireEvent.keyDown(window, { key: "+", code: "NumpadAdd", ctrlKey: true });
+    expect(zoom).toHaveValue("125");
+    fireEvent.keyDown(window, { key: "0", code: "Digit0", ctrlKey: true });
+    expect(zoom).toHaveValue("100");
+  });
+
+  it("zooms on trackpad pinch or modified mouse wheel without consuming scroll", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findAllByText("1440 × 900");
+
+    const viewport = screen.getByLabelText("Screenshot editing canvas");
+    const zoom = screen.getByRole("combobox", { name: "Canvas zoom" });
+    fireEvent.change(zoom, { target: { value: "100" } });
+
+    const scroll = new WheelEvent("wheel", {
+      deltaY: -100,
+      bubbles: true,
+      cancelable: true,
+    });
+    fireEvent(viewport, scroll);
+    expect(scroll.defaultPrevented).toBe(false);
+    expect(zoom).toHaveValue("100");
+
+    const zoomIn = new WheelEvent("wheel", {
+      deltaY: -100,
+      ctrlKey: true,
+      clientX: 320,
+      clientY: 240,
+      bubbles: true,
+      cancelable: true,
+    });
+    fireEvent(viewport, zoomIn);
+    expect(zoomIn.defaultPrevented).toBe(true);
+    expect(Number((zoom as HTMLSelectElement).value))
+      .toBeGreaterThan(100);
+
+    const zoomOut = new WheelEvent("wheel", {
+      deltaY: 100,
+      metaKey: true,
+      clientX: 320,
+      clientY: 240,
+      bubbles: true,
+      cancelable: true,
+    });
+    fireEvent(viewport, zoomOut);
+    expect(zoomOut.defaultPrevented).toBe(true);
+    expect(Number((zoom as HTMLSelectElement).value)).toBeCloseTo(100, 1);
+  });
+
+  it("supports the native macOS magnify gesture", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findAllByText("1440 × 900");
+
+    const viewport = screen.getByLabelText("Screenshot editing canvas");
+    const zoom = screen.getByRole("combobox", { name: "Canvas zoom" });
+    fireEvent.change(zoom, { target: { value: "100" } });
+
+    const start = new Event("gesturestart", { bubbles: true, cancelable: true });
+    Object.assign(start, { clientX: 300, clientY: 200, scale: 1 });
+    fireEvent(viewport, start);
+    expect(start.defaultPrevented).toBe(true);
+
+    const change = new Event("gesturechange", { bubbles: true, cancelable: true });
+    Object.assign(change, { clientX: 300, clientY: 200, scale: 1.5 });
+    fireEvent(viewport, change);
+    expect(change.defaultPrevented).toBe(true);
+    expect(zoom).toHaveValue("150");
+
+    const end = new Event("gestureend", { bubbles: true, cancelable: true });
+    fireEvent(viewport, end);
+    expect(end.defaultPrevented).toBe(true);
+  });
+
   it("creates selectable formatted text directly on the canvas", async () => {
     render(<ScreenshotEditor />);
     await screen.findAllByText("1440 × 900");

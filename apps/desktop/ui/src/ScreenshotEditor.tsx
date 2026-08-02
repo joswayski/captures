@@ -114,6 +114,12 @@ type ImageDropGuide = {
   target: EditorRect;
 };
 
+type MagnifyGestureEvent = Event & {
+  clientX?: number;
+  clientY?: number;
+  scale?: number;
+};
+
 const TOOL_ITEMS: Array<{ tool: ScreenshotTool; label: string; shortcut: string }> = [
   { tool: "select", label: "Select & move", shortcut: "V" },
   { tool: "crop", label: "Crop", shortcut: "C" },
@@ -152,6 +158,11 @@ const SCREENSHOT_FILE_SIZE_UNIT_BYTES: Record<ScreenshotFileSizeUnit, number> = 
 };
 const MAX_SCREENSHOT_OUTPUT_DIMENSION = 16_384;
 const MAX_SCREENSHOT_OUTPUT_PIXELS = 100_000_000;
+const MIN_SCREENSHOT_ZOOM_PERCENT = 5;
+const MAX_SCREENSHOT_ZOOM_PERCENT = 800;
+const KEYBOARD_ZOOM_FACTOR = 1.25;
+const WHEEL_ZOOM_SENSITIVITY = 0.002;
+const SCREENSHOT_ZOOM_OPTIONS = [50, 100, 200] as const;
 
 const LAYER_BLEND_MODE_OPTIONS: Array<{ value: LayerBlendMode; label: string }> = [
   { value: "source-over", label: "Normal" },
@@ -165,6 +176,32 @@ const LAYER_BLEND_MODE_OPTIONS: Array<{ value: LayerBlendMode; label: string }> 
 function isFileTransfer(dataTransfer: DataTransfer): boolean {
   return Array.from(dataTransfer.types).includes("Files")
     || dataTransfer.files.length > 0;
+}
+
+function clampScreenshotZoomPercent(value: number): number {
+  const clamped = Math.min(
+    MAX_SCREENSHOT_ZOOM_PERCENT,
+    Math.max(MIN_SCREENSHOT_ZOOM_PERCENT, value),
+  );
+  return Math.round(clamped * 10) / 10;
+}
+
+function screenshotZoomLabel(value: number): string {
+  return `${Number.isInteger(value) ? value : value.toFixed(1)}%`;
+}
+
+function wheelZoomFactor(
+  deltaY: number,
+  deltaMode: number,
+  viewportHeight: number,
+): number {
+  const deltaUnit = deltaMode === 1
+    ? 16
+    : deltaMode === 2
+      ? Math.max(1, viewportHeight)
+      : 1;
+  const pixelDelta = Math.min(240, Math.max(-240, deltaY * deltaUnit));
+  return Math.exp(-pixelDelta * WHEEL_ZOOM_SENSITIVITY);
 }
 
 function query(name: string): string | null {
@@ -646,6 +683,13 @@ export function ScreenshotEditor() {
   const objectUrlsRef = useRef(new Set<string>());
   const gestureRef = useRef<EditorGesture | null>(null);
   const dropDepthRef = useRef(0);
+  const displayedZoomPercentRef = useRef(100);
+  const zoomAnchorFrameRef = useRef<number | null>(null);
+  const magnifyGestureRef = useRef<{
+    initialZoomPercent: number;
+    clientX: number;
+    clientY: number;
+  } | null>(null);
 
   const updateDocument = useCallback((
     updater: (current: ScreenshotDocument) => ScreenshotDocument,
@@ -685,6 +729,9 @@ export function ScreenshotEditor() {
   useEffect(() => () => {
     if (successTimerRef.current !== null) {
       window.clearTimeout(successTimerRef.current);
+    }
+    if (zoomAnchorFrameRef.current !== null) {
+      window.cancelAnimationFrame(zoomAnchorFrameRef.current);
     }
   }, []);
 
@@ -778,6 +825,75 @@ export function ScreenshotEditor() {
   ), [editorDocument, selectedId]);
 
   const displayScale = zoomMode === "fit" ? fitScale : zoom / 100;
+
+  useLayoutEffect(() => {
+    displayedZoomPercentRef.current = displayScale * 100;
+  }, [displayScale]);
+
+  const setManualZoom = useCallback((
+    requestedZoomPercent: number,
+    clientPoint?: { clientX: number; clientY: number },
+  ) => {
+    if (!Number.isFinite(requestedZoomPercent)) return;
+    const nextZoomPercent = clampScreenshotZoomPercent(requestedZoomPercent);
+    const viewport = viewportRef.current;
+    const canvas = canvasRef.current;
+    let anchor: {
+      clientX: number;
+      clientY: number;
+      xRatio: number;
+      yRatio: number;
+    } | null = null;
+
+    if (viewport && canvas) {
+      const viewportBounds = viewport.getBoundingClientRect();
+      const canvasBounds = canvas.getBoundingClientRect();
+      const clientX = clientPoint?.clientX
+        ?? viewportBounds.left + viewportBounds.width / 2;
+      const clientY = clientPoint?.clientY
+        ?? viewportBounds.top + viewportBounds.height / 2;
+      if (canvasBounds.width > 0 && canvasBounds.height > 0) {
+        anchor = {
+          clientX,
+          clientY,
+          xRatio: (clientX - canvasBounds.left) / canvasBounds.width,
+          yRatio: (clientY - canvasBounds.top) / canvasBounds.height,
+        };
+      }
+    }
+
+    displayedZoomPercentRef.current = nextZoomPercent;
+    setZoom(nextZoomPercent);
+    setZoomMode("manual");
+
+    if (!viewport || !canvas || !anchor) return;
+    if (zoomAnchorFrameRef.current !== null) {
+      window.cancelAnimationFrame(zoomAnchorFrameRef.current);
+    }
+    zoomAnchorFrameRef.current = window.requestAnimationFrame(() => {
+      zoomAnchorFrameRef.current = null;
+      const nextBounds = canvas.getBoundingClientRect();
+      const nextClientX = nextBounds.left + nextBounds.width * anchor.xRatio;
+      const nextClientY = nextBounds.top + nextBounds.height * anchor.yRatio;
+      viewport.scrollLeft += nextClientX - anchor.clientX;
+      viewport.scrollTop += nextClientY - anchor.clientY;
+    });
+  }, []);
+
+  const zoomBy = useCallback((
+    factor: number,
+    clientPoint?: { clientX: number; clientY: number },
+  ) => {
+    setManualZoom(displayedZoomPercentRef.current * factor, clientPoint);
+  }, [setManualZoom]);
+
+  const activateFitZoom = useCallback(() => {
+    if (zoomAnchorFrameRef.current !== null) {
+      window.cancelAnimationFrame(zoomAnchorFrameRef.current);
+      zoomAnchorFrameRef.current = null;
+    }
+    setZoomMode("fit");
+  }, []);
 
   useLayoutEffect(() => {
     if (!editorDocument || !viewportRef.current) return;
@@ -879,9 +995,40 @@ export function ScreenshotEditor() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      const command = event.metaKey || event.ctrlKey;
+      if (
+        command
+        && (
+          event.key === "+"
+          || event.key === "="
+          || event.code === "Equal"
+          || event.code === "NumpadAdd"
+        )
+      ) {
+        event.preventDefault();
+        zoomBy(KEYBOARD_ZOOM_FACTOR);
+        return;
+      }
+      if (
+        command
+        && (
+          event.key === "-"
+          || event.key === "_"
+          || event.code === "Minus"
+          || event.code === "NumpadSubtract"
+        )
+      ) {
+        event.preventDefault();
+        zoomBy(1 / KEYBOARD_ZOOM_FACTOR);
+        return;
+      }
+      if (command && (event.key === "0" || event.code === "Numpad0")) {
+        event.preventDefault();
+        setManualZoom(100);
+        return;
+      }
       const target = event.target as HTMLElement | null;
       if (target?.matches("input, textarea, select, [contenteditable=true]")) return;
-      const command = event.metaKey || event.ctrlKey;
       if (command && event.key.toLowerCase() === "z") {
         event.preventDefault();
         if (event.shiftKey) redo();
@@ -914,7 +1061,77 @@ export function ScreenshotEditor() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [deleteSelected, nudgeSelected, redo, undo]);
+  }, [deleteSelected, nudgeSelected, redo, setManualZoom, undo, zoomBy]);
+
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!editorDocument || !viewport) return;
+
+    const eventPoint = (event: MagnifyGestureEvent) => {
+      const bounds = viewport.getBoundingClientRect();
+      const clientX = event.clientX;
+      const clientY = event.clientY;
+      return {
+        clientX: typeof clientX === "number" && Number.isFinite(clientX)
+          ? clientX
+          : bounds.left + bounds.width / 2,
+        clientY: typeof clientY === "number" && Number.isFinite(clientY)
+          ? clientY
+          : bounds.top + bounds.height / 2,
+      };
+    };
+
+    const onWheel = (event: WheelEvent) => {
+      if ((!event.ctrlKey && !event.metaKey) || event.deltaY === 0) return;
+      event.preventDefault();
+      if (magnifyGestureRef.current) return;
+      zoomBy(
+        wheelZoomFactor(event.deltaY, event.deltaMode, viewport.clientHeight),
+        { clientX: event.clientX, clientY: event.clientY },
+      );
+    };
+
+    const onGestureStart = (event: Event) => {
+      event.preventDefault();
+      const point = eventPoint(event as MagnifyGestureEvent);
+      magnifyGestureRef.current = {
+        initialZoomPercent: displayedZoomPercentRef.current,
+        ...point,
+      };
+    };
+
+    const onGestureChange = (event: Event) => {
+      const gesture = magnifyGestureRef.current;
+      if (!gesture) return;
+      event.preventDefault();
+      const scale = (event as MagnifyGestureEvent).scale;
+      if (typeof scale !== "number" || !Number.isFinite(scale) || scale <= 0) return;
+      setManualZoom(gesture.initialZoomPercent * scale, {
+        clientX: gesture.clientX,
+        clientY: gesture.clientY,
+      });
+    };
+
+    const onGestureEnd = (event: Event) => {
+      if (!magnifyGestureRef.current) return;
+      event.preventDefault();
+      magnifyGestureRef.current = null;
+    };
+
+    viewport.addEventListener("wheel", onWheel, { passive: false });
+    viewport.addEventListener("gesturestart", onGestureStart, { passive: false });
+    viewport.addEventListener("gesturechange", onGestureChange, { passive: false });
+    viewport.addEventListener("gestureend", onGestureEnd, { passive: false });
+    viewport.addEventListener("gesturecancel", onGestureEnd, { passive: false });
+    return () => {
+      viewport.removeEventListener("wheel", onWheel);
+      viewport.removeEventListener("gesturestart", onGestureStart);
+      viewport.removeEventListener("gesturechange", onGestureChange);
+      viewport.removeEventListener("gestureend", onGestureEnd);
+      viewport.removeEventListener("gesturecancel", onGestureEnd);
+      magnifyGestureRef.current = null;
+    };
+  }, [editorDocument, setManualZoom, zoomBy]);
 
   const canvasPoint = (event: React.PointerEvent<HTMLCanvasElement>): EditorPoint => {
     const canvas = event.currentTarget;
@@ -1786,25 +2003,26 @@ export function ScreenshotEditor() {
             <button
               type="button"
               className={zoomMode === "fit" ? "active" : ""}
-              onClick={() => setZoomMode("fit")}
+              onClick={activateFitZoom}
             >
               Fit
             </button>
             <select
               aria-label="Canvas zoom"
+              title="Pinch or use Command/Ctrl + or - to zoom"
               value={zoomMode === "fit" ? "fit" : String(zoom)}
               onChange={(event) => {
-                if (event.target.value === "fit") setZoomMode("fit");
-                else {
-                  setZoomMode("manual");
-                  setZoom(Number(event.target.value));
-                }
+                if (event.target.value === "fit") activateFitZoom();
+                else setManualZoom(Number(event.target.value));
               }}
             >
               <option value="fit">Fit</option>
-              <option value="50">50%</option>
-              <option value="100">100%</option>
-              <option value="200">200%</option>
+              {zoomMode === "manual"
+                && !SCREENSHOT_ZOOM_OPTIONS.some((option) => option === zoom)
+                && <option value={String(zoom)}>{screenshotZoomLabel(zoom)}</option>}
+              {SCREENSHOT_ZOOM_OPTIONS.map((option) => (
+                <option key={option} value={String(option)}>{option}%</option>
+              ))}
             </select>
           </span>
           <button type="button" className="screenshot-add-image" onClick={() => fileInputRef.current?.click()}>
