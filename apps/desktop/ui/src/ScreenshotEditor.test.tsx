@@ -961,7 +961,7 @@ describe("ScreenshotEditor", () => {
     expect(guide?.querySelectorAll(".screenshot-drop-snap-particle").length).toBeGreaterThan(0);
   });
 
-  it("projects stack-on-top light from the target and centers its toast on the viewport", async () => {
+  it("emits soft stack light from the drag preview and centers its toast on the viewport", async () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
 
@@ -1018,15 +1018,18 @@ describe("ScreenshotEditor", () => {
 
     const guide = document.querySelector(".screenshot-drop-snap-guide.edge-stack") as HTMLElement | null;
     expect(guide).not.toBeNull();
-    const light = guide?.querySelector(".screenshot-drop-snap-stack-light") as SVGElement | null;
+    const light = guide?.querySelector(".screenshot-drop-snap-stack-light") as HTMLElement | null;
     expect(light).not.toBeNull();
-    expect(light?.querySelector(".screenshot-drop-snap-stack-window-rim")).not.toBeNull();
-    expect(light?.querySelectorAll(".screenshot-drop-snap-stack-volume polygon").length)
-      .toBeGreaterThan(0);
-    expect(light?.querySelectorAll(".screenshot-drop-snap-stack-shafts polygon").length)
-      .toBeGreaterThan(0);
+    expect(light?.querySelector(".screenshot-drop-snap-stack-atmosphere")).not.toBeNull();
+    expect(light?.querySelectorAll(".screenshot-drop-snap-stack-rays")).toHaveLength(2);
+    expect(light?.querySelectorAll(".screenshot-drop-snap-stack-ray")).toHaveLength(6);
+    expect(light?.querySelector(".screenshot-drop-snap-stack-edge-glow")).not.toBeNull();
+    // The emitter is the compact native-preview footprint, not the target layer.
+    expect(Number.parseFloat(light?.style.width ?? "100")).toBeLessThan(50);
+    expect(Number.parseFloat(light?.style.height ?? "100")).toBeLessThan(50);
+    expect(light?.querySelector("svg, polygon")).toBeNull();
     // The real native drag preview is the only floating rectangle: no detached
-    // radial halo, opaque backing plate, shadow, or decorative particles.
+    // target-wide bloom, opaque backing plate, shadow, or decorative particles.
     expect(guide?.querySelector(".screenshot-drop-snap-bloom")).toBeNull();
     expect(guide?.querySelector(".screenshot-drop-snap-stack-plate")).toBeNull();
     expect(guide?.querySelector(".screenshot-drop-snap-stack-shadow")).toBeNull();
@@ -1035,8 +1038,9 @@ describe("ScreenshotEditor", () => {
     expect(guide?.querySelector(":scope > span")).toBeNull();
     expect(Number(light?.dataset.focusX)).toBeCloseTo(720, 0);
     expect(Number(light?.dataset.focusY)).toBeCloseTo(450, 0);
+    const initialLeft = Number.parseFloat(light?.style.left ?? "0");
 
-    // Moving the pointer bends the light volume toward it.
+    // Moving the pointer moves the whole local emitter with the preview.
     const moved = createEvent.dragOver(editor!, { dataTransfer });
     Object.defineProperty(moved, "clientX", { configurable: true, value: 900 });
     Object.defineProperty(moved, "clientY", { configurable: true, value: 520 });
@@ -1044,9 +1048,10 @@ describe("ScreenshotEditor", () => {
     await waitFor(() => {
       const nextLight = document.querySelector(
         ".screenshot-drop-snap-guide.edge-stack .screenshot-drop-snap-stack-light",
-      ) as SVGElement | null;
+      ) as HTMLElement | null;
       expect(Number(nextLight?.dataset.focusX)).toBeGreaterThan(720);
       expect(Number(nextLight?.dataset.focusY)).toBeGreaterThan(450);
+      expect(Number.parseFloat(nextLight?.style.left ?? "0")).toBeGreaterThan(initialLeft);
     });
   });
 

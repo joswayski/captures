@@ -408,8 +408,8 @@ describe("screenshot editor geometry", () => {
     expect(atPointer.x).toBe(Math.round(point.x - atPointer.width / 2));
     expect(atPointer.y).toBe(Math.round(point.y - atPointer.height / 2));
 
-    // The invisible opening stays compact and follows the pointer; the UI uses
-    // it to shape the light volume without drawing a fake drag-preview tile.
+    // The estimated native-preview emitter stays compact and follows the
+    // pointer without drawing a fake drag-preview tile.
     const focus = stackDropLightFocusAtPoint(point, target);
     expect(focus.width).toBeLessThan(target.width * 0.5);
     expect(focus.height).toBeLessThan(target.height * 0.5);

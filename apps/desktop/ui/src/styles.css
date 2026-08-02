@@ -1372,65 +1372,256 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   right: 0;
   animation-name: drop-snap-particle-right;
 }
-/* Stack-on-top: the target layer is the luminous window/light source. */
+/* Stack-on-top: light leaks only from behind the native drag preview. */
 .screenshot-drop-snap-guide.edge-stack {
   isolation: isolate;
   border-color: transparent;
   background: transparent;
-  box-shadow:
-    inset 0 0 40px rgba(var(--theme-accent-rgb),.055),
-    0 0 14px rgba(var(--theme-accent-rgb),.075);
+  box-shadow: none;
 }
 /* Hide the solid single-edge bar used for top/right/bottom/left. */
 .screenshot-drop-snap-guide.edge-stack::after {
   display: none;
 }
 /*
- * Perspective planes connect every edge of the highlighted layer to an
- * invisible opening beneath the native drag preview. This reads as light
- * projected out of the layer instead of a halo around a fake gray tile.
+ * The emitter follows the estimated native-preview footprint. Layered conic
+ * gradients are blurred and radially masked so their sectors dissolve into
+ * atmospheric shafts instead of reading as flat polygon wedges.
  */
 .screenshot-drop-snap-stack-light {
   position: absolute;
   z-index: 1;
-  inset: -1px;
+  isolation: isolate;
+  border-radius: 8px;
+  pointer-events: none;
+  transform: translateZ(0);
+}
+.screenshot-drop-snap-stack-light > i {
+  position: absolute;
   display: block;
-  width: calc(100% + 2px);
-  height: calc(100% + 2px);
-  overflow: visible;
-  color: var(--editing-accent);
   pointer-events: none;
 }
-.screenshot-drop-snap-stack-window-wash {
-  fill: currentColor;
-  opacity: .035;
+.screenshot-drop-snap-stack-atmosphere {
+  z-index: 0;
+  inset: -58%;
+  border-radius: 44%;
+  background:
+    radial-gradient(
+      ellipse at center,
+      rgba(255,255,255,.22) 0%,
+      rgba(var(--theme-accent-rgb),.2) 19%,
+      rgba(var(--theme-accent-rgb),.09) 43%,
+      transparent 72%
+    );
+  filter: blur(16px);
+  opacity: .7;
+  animation: drop-snap-stack-atmosphere-breathe 3.4s ease-in-out infinite;
 }
-.screenshot-drop-snap-stack-volume polygon,
-.screenshot-drop-snap-stack-shafts polygon {
-  fill: url("#screenshot-stack-light-volume");
+.screenshot-drop-snap-stack-rays {
+  border-radius: 50%;
+  transform-origin: center;
+  will-change: opacity, transform;
 }
-.screenshot-drop-snap-stack-volume.soft {
-  opacity: .82;
-  filter: blur(8px);
-  animation: drop-snap-stack-light-breathe 2.8s ease-in-out infinite;
-}
-.screenshot-drop-snap-stack-volume.core {
-  opacity: .46;
-  filter: blur(1.5px);
-}
-.screenshot-drop-snap-stack-shafts {
-  opacity: .64;
-  filter: blur(3.5px);
-  animation: drop-snap-stack-shafts-breathe 3.6s ease-in-out infinite;
-}
-.screenshot-drop-snap-stack-window-rim {
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.25;
-  vector-effect: non-scaling-stroke;
+.screenshot-drop-snap-stack-rays.far {
+  z-index: 1;
+  inset: -112%;
+  background:
+    conic-gradient(
+      from -12deg at 50% 50%,
+      transparent 0deg,
+      rgba(var(--theme-accent-rgb),.08) 18deg,
+      rgba(255,255,255,.2) 35deg,
+      rgba(var(--theme-accent-rgb),.09) 55deg,
+      transparent 78deg,
+      transparent 102deg,
+      rgba(var(--theme-accent-rgb),.09) 124deg,
+      rgba(255,255,255,.17) 146deg,
+      rgba(var(--theme-accent-rgb),.065) 166deg,
+      transparent 194deg,
+      transparent 218deg,
+      rgba(var(--theme-accent-rgb),.075) 242deg,
+      rgba(255,255,255,.18) 264deg,
+      rgba(var(--theme-accent-rgb),.08) 284deg,
+      transparent 310deg,
+      transparent 332deg,
+      rgba(255,255,255,.15) 348deg,
+      transparent 360deg
+    );
+  -webkit-mask-image:
+    radial-gradient(
+      ellipse at center,
+      transparent 0%,
+      rgba(0,0,0,.18) 25%,
+      #000 42%,
+      rgba(0,0,0,.72) 62%,
+      transparent 84%
+    );
+  mask-image:
+    radial-gradient(
+      ellipse at center,
+      transparent 0%,
+      rgba(0,0,0,.18) 25%,
+      #000 42%,
+      rgba(0,0,0,.72) 62%,
+      transparent 84%
+    );
+  filter: blur(17px);
   opacity: .56;
-  filter: drop-shadow(0 0 5px rgba(var(--theme-accent-rgb),.46))
-    drop-shadow(0 0 13px rgba(var(--theme-accent-rgb),.18));
+  animation: drop-snap-stack-rays-breathe 4.1s ease-in-out -.9s infinite;
+}
+.screenshot-drop-snap-stack-rays.near {
+  z-index: 2;
+  inset: -88%;
+  background:
+    conic-gradient(
+      from 8deg at 50% 50%,
+      transparent 0deg,
+      rgba(255,255,255,.32) 16deg,
+      rgba(var(--theme-accent-rgb),.17) 31deg,
+      transparent 52deg,
+      transparent 70deg,
+      rgba(var(--theme-accent-rgb),.15) 89deg,
+      rgba(255,255,255,.28) 107deg,
+      transparent 132deg,
+      transparent 160deg,
+      rgba(var(--theme-accent-rgb),.17) 180deg,
+      rgba(255,255,255,.3) 197deg,
+      transparent 222deg,
+      transparent 249deg,
+      rgba(255,255,255,.27) 270deg,
+      rgba(var(--theme-accent-rgb),.14) 287deg,
+      transparent 313deg,
+      transparent 337deg,
+      rgba(var(--theme-accent-rgb),.16) 350deg,
+      transparent 360deg
+    );
+  -webkit-mask-image:
+    radial-gradient(
+      ellipse at center,
+      transparent 0%,
+      rgba(0,0,0,.22) 27%,
+      #000 44%,
+      rgba(0,0,0,.68) 59%,
+      transparent 78%
+    );
+  mask-image:
+    radial-gradient(
+      ellipse at center,
+      transparent 0%,
+      rgba(0,0,0,.22) 27%,
+      #000 44%,
+      rgba(0,0,0,.68) 59%,
+      transparent 78%
+    );
+  filter: blur(7px);
+  opacity: .72;
+  animation: drop-snap-stack-rays-breathe 3.2s ease-in-out infinite;
+}
+.screenshot-drop-snap-stack-ray {
+  z-index: 2;
+  border-radius: 999px;
+  filter: blur(8px);
+  opacity: .54;
+  transform-origin: center;
+  animation: drop-snap-stack-shaft-breathe 3.7s ease-in-out infinite;
+}
+.screenshot-drop-snap-stack-ray.from-left {
+  right: 92%;
+  height: 18%;
+  background:
+    linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(var(--theme-accent-rgb),.1) 32%,
+      rgba(var(--theme-accent-rgb),.26) 76%,
+      rgba(255,255,255,.46) 100%
+    );
+  transform-origin: right center;
+}
+.screenshot-drop-snap-stack-ray.from-left.upper {
+  top: 18%;
+  width: 112%;
+  transform: rotate(5deg);
+}
+.screenshot-drop-snap-stack-ray.from-left.lower {
+  top: 69%;
+  width: 84%;
+  transform: rotate(-7deg);
+  animation-delay: -1.4s;
+}
+.screenshot-drop-snap-stack-ray.from-right {
+  left: 92%;
+  height: 18%;
+  background:
+    linear-gradient(
+      90deg,
+      rgba(255,255,255,.46) 0%,
+      rgba(var(--theme-accent-rgb),.26) 24%,
+      rgba(var(--theme-accent-rgb),.1) 68%,
+      transparent 100%
+    );
+  transform-origin: left center;
+}
+.screenshot-drop-snap-stack-ray.from-right.upper {
+  top: 25%;
+  width: 104%;
+  transform: rotate(-4deg);
+  animation-delay: -.7s;
+}
+.screenshot-drop-snap-stack-ray.from-right.lower {
+  top: 72%;
+  width: 76%;
+  transform: rotate(7deg);
+  animation-delay: -2.1s;
+}
+.screenshot-drop-snap-stack-ray.from-top {
+  bottom: 91%;
+  left: 23%;
+  width: 17%;
+  height: 98%;
+  background:
+    linear-gradient(
+      180deg,
+      transparent 0%,
+      rgba(var(--theme-accent-rgb),.1) 34%,
+      rgba(var(--theme-accent-rgb),.25) 76%,
+      rgba(255,255,255,.44) 100%
+    );
+  transform: rotate(-5deg);
+  transform-origin: center bottom;
+  animation-delay: -1.8s;
+}
+.screenshot-drop-snap-stack-ray.from-bottom {
+  top: 91%;
+  left: 66%;
+  width: 18%;
+  height: 88%;
+  background:
+    linear-gradient(
+      180deg,
+      rgba(255,255,255,.44) 0%,
+      rgba(var(--theme-accent-rgb),.25) 24%,
+      rgba(var(--theme-accent-rgb),.1) 66%,
+      transparent 100%
+    );
+  transform: rotate(5deg);
+  transform-origin: center top;
+  animation-delay: -2.6s;
+}
+.screenshot-drop-snap-stack-edge-glow {
+  z-index: 3;
+  inset: -1px;
+  border-radius: 8px;
+  background: transparent;
+  box-shadow:
+    0 0 5px rgba(255,255,255,.48),
+    0 0 14px rgba(var(--theme-accent-rgb),.5),
+    0 0 32px rgba(var(--theme-accent-rgb),.24),
+    0 0 56px rgba(var(--theme-accent-rgb),.1),
+    inset 0 0 9px rgba(255,255,255,.12);
+  filter: blur(.8px);
+  opacity: .82;
+  animation: drop-snap-stack-edge-breathe 2.9s ease-in-out infinite;
 }
 @keyframes drop-snap-edge-pulse {
   0%, 100% {
@@ -1454,13 +1645,21 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   0%, 100% { opacity: .82; transform: scale(1); }
   50% { opacity: 1; transform: scale(1.04); }
 }
-@keyframes drop-snap-stack-light-breathe {
-  0%, 100% { opacity: .72; }
-  50% { opacity: .9; }
+@keyframes drop-snap-stack-atmosphere-breathe {
+  0%, 100% { opacity: .68; transform: scale(.98); }
+  50% { opacity: .84; transform: scale(1.035); }
 }
-@keyframes drop-snap-stack-shafts-breathe {
-  0%, 100% { opacity: .48; }
-  48% { opacity: .7; }
+@keyframes drop-snap-stack-rays-breathe {
+  0%, 100% { opacity: .42; transform: scale(.985); }
+  50% { opacity: .6; transform: scale(1.025); }
+}
+@keyframes drop-snap-stack-shaft-breathe {
+  0%, 100% { opacity: .46; }
+  50% { opacity: .66; }
+}
+@keyframes drop-snap-stack-edge-breathe {
+  0%, 100% { opacity: .74; }
+  50% { opacity: .88; }
 }
 @keyframes drop-snap-particle-right {
   0% {
@@ -1529,14 +1728,19 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   .screenshot-drop-snap-guide::after,
   .screenshot-drop-snap-bloom,
   .screenshot-drop-snap-particle,
-  .screenshot-drop-snap-stack-volume.soft,
-  .screenshot-drop-snap-stack-shafts {
+  .screenshot-drop-snap-stack-atmosphere,
+  .screenshot-drop-snap-stack-rays,
+  .screenshot-drop-snap-stack-ray,
+  .screenshot-drop-snap-stack-edge-glow {
     animation: none !important;
   }
   .screenshot-drop-snap-bloom { opacity: .7; }
   .screenshot-drop-snap-particle { opacity: 0; }
-  .screenshot-drop-snap-stack-volume.soft { opacity: .82; }
-  .screenshot-drop-snap-stack-shafts { opacity: .56; }
+  .screenshot-drop-snap-stack-atmosphere { opacity: .76; transform: none; }
+  .screenshot-drop-snap-stack-rays.far { opacity: .46; transform: none; }
+  .screenshot-drop-snap-stack-rays.near { opacity: .54; transform: none; }
+  .screenshot-drop-snap-stack-ray { opacity: .5; }
+  .screenshot-drop-snap-stack-edge-glow { opacity: .8; }
 }
 /* Alignment guides while moving/resizing a selected layer (same accent language as drop snap). */
 .screenshot-align-snap-guide { position: absolute; z-index: 5; pointer-events: none; background: var(--editing-accent); box-shadow: 0 0 10px rgba(var(--theme-accent-rgb),.75); }
