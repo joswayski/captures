@@ -313,33 +313,35 @@ describe("ScreenshotEditor", () => {
     expect(screen.queryByText("Place below layer")).not.toBeInTheDocument();
   });
 
-  it("keeps lossless output by default and makes JPEG size targeting an explicit mode", async () => {
+  it("keeps preserve quality by default and exposes compress controls for any format", async () => {
     render(<ScreenshotEditor />);
     await screen.findAllByText("1440 × 900");
 
     const format = screen.getByLabelText("Format");
     expect(format).toHaveValue("png");
-    // PNG/WebP are always lossless — no quality control (and no fake disabled dropdown).
-    expect(screen.queryByText("Quality")).not.toBeInTheDocument();
-    expect(screen.queryByText("Maximum · lossless")).not.toBeInTheDocument();
-    expect(screen.queryByRole("combobox", { name: "Save quality" }))
-      .not.toBeInTheDocument();
+    const saveQuality = screen.getByRole("combobox", { name: "Save quality" });
+    expect(saveQuality).toHaveValue("preserve");
     expect(screen.queryByRole("slider", { name: "Image quality" })).not.toBeInTheDocument();
     expect(screen.queryByRole("spinbutton", { name: "Maximum file size" }))
       .not.toBeInTheDocument();
     expect(screen.getByText("Lossless export keeps every pixel and replaces the original."))
       .toBeInTheDocument();
 
-    fireEvent.change(format, { target: { value: "jpeg" } });
+    // Compress is available even while the format starts as PNG; it switches to JPEG.
+    fireEvent.change(saveQuality, { target: { value: "compress" } });
 
     await waitFor(() => {
-      expect(screen.getByRole("combobox", { name: "Save quality" })).toHaveValue("compress");
+      expect(format).toHaveValue("jpeg");
       expect(screen.getByRole("slider", { name: "Image quality" })).toBeInTheDocument();
     });
     expect(screen.getByRole("slider", { name: "Image quality" }))
       .toHaveAttribute("aria-valuetext", "Maximum");
     expect(screen.queryByRole("spinbutton", { name: "Maximum file size" }))
       .not.toBeInTheDocument();
+    // Source is PNG, so JPEG compress always saves a new file.
+    expect(
+      screen.getByText("Compressed JPEG saves as a new file and leaves the original untouched."),
+    ).toBeInTheDocument();
 
     fireEvent.change(screen.getByRole("combobox", { name: "Save quality" }), {
       target: { value: "maximum" },
@@ -349,6 +351,51 @@ describe("ScreenshotEditor", () => {
     expect(screen.getByRole("spinbutton", { name: "Maximum file size" })).toHaveValue(10);
     expect(screen.getByRole("combobox", { name: "Screenshot file size unit" }))
       .toHaveValue("mb");
+
+    // Returning to a lossless format restores preserve quality.
+    fireEvent.change(format, { target: { value: "png" } });
+    expect(screen.getByRole("combobox", { name: "Save quality" })).toHaveValue("preserve");
+    expect(screen.queryByRole("spinbutton", { name: "Maximum file size" }))
+      .not.toBeInTheDocument();
+  });
+
+  it("uses the original file size when export is original + lossless and unedited", async () => {
+    const toBlob = vi.fn((callback: BlobCallback) => {
+      callback(new Blob([new Uint8Array(999_999)], { type: "image/png" }));
+    });
+    Object.defineProperty(HTMLCanvasElement.prototype, "toBlob", {
+      configurable: true,
+      value: toBlob,
+    });
+    const originalImage = window.Image;
+    class LoadedImage {
+      onload: ((event: Event) => void) | null = null;
+      onerror: ((event: Event) => void) | null = null;
+      naturalWidth = 1_440;
+      naturalHeight = 900;
+      width = 1_440;
+      height = 900;
+      crossOrigin = "";
+      set src(_value: string) {
+        queueMicrotask(() => this.onload?.(new Event("load")));
+      }
+    }
+    // @ts-expect-error test stub for Image load timing
+    window.Image = LoadedImage;
+
+    try {
+      render(<ScreenshotEditor />);
+      await screen.findAllByText("1440 × 900");
+
+      // Original PNG at full size with preserve quality → known capture size (250 KB).
+      await waitFor(() => {
+        expect(screen.getByText("≈ 250 KB")).toBeInTheDocument();
+      }, { timeout: 2_000 });
+      // Browser re-encode path should not run for the unedited original estimate.
+      expect(toBlob).not.toHaveBeenCalled();
+    } finally {
+      window.Image = originalImage;
+    }
   });
 
   it("supports explicit custom output width and height", async () => {
@@ -439,8 +486,11 @@ describe("ScreenshotEditor", () => {
         expect(screen.getByText(/≈/)).toBeInTheDocument();
       }, { timeout: 2_000 });
 
-      fireEvent.change(screen.getByLabelText("Format"), { target: { value: "jpeg" } });
+      fireEvent.change(screen.getByRole("combobox", { name: "Save quality" }), {
+        target: { value: "compress" },
+      });
       await waitFor(() => {
+        expect(screen.getByLabelText("Format")).toHaveValue("jpeg");
         expect(screen.getByRole("slider", { name: "Image quality" })).toBeInTheDocument();
       });
       fireEvent.change(screen.getByRole("slider", { name: "Image quality" }), {
@@ -499,10 +549,10 @@ describe("ScreenshotEditor", () => {
       fireEvent.change(screen.getByRole("textbox", { name: "Saved filename" }), {
         target: { value: "edited-photo" },
       });
-      fireEvent.change(screen.getByLabelText("Format"), { target: { value: "jpeg" } });
       fireEvent.change(screen.getByRole("combobox", { name: "Save quality" }), {
         target: { value: "maximum" },
       });
+      expect(screen.getByLabelText("Format")).toHaveValue("jpeg");
       await act(async () => undefined);
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
