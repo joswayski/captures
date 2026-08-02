@@ -268,6 +268,77 @@ export function cropDocument(
   };
 }
 
+/**
+ * Axis-aligned union of every *visible* layer's bounds (including locked ones).
+ * Hidden layers are ignored so they do not hold empty canvas open.
+ * Returns `null` when nothing is visible.
+ */
+export function visibleContentBounds(
+  document: Pick<ScreenshotDocument, "elements">,
+): EditorRect | null {
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  let found = false;
+  for (const element of document.elements) {
+    if (!element.visible) continue;
+    found = true;
+    const bounds = elementBounds(element);
+    minX = Math.min(minX, bounds.x);
+    minY = Math.min(minY, bounds.y);
+    maxX = Math.max(maxX, bounds.x + bounds.width);
+    maxY = Math.max(maxY, bounds.y + bounds.height);
+  }
+  if (!found) return null;
+  return {
+    x: minX,
+    y: minY,
+    width: Math.max(1, maxX - minX),
+    height: Math.max(1, maxY - minY),
+  };
+}
+
+/**
+ * Shrink (or expand-then-fit) the canvas so empty margin around visible layers
+ * is removed — like Sharp's `trim()`, but driven by layer geometry rather than
+ * flattened pixel sampling. Optional padding keeps a uniform border.
+ *
+ * Content outside the current canvas is kept and becomes the new frame origin.
+ * Returns the same document reference when already tight or nothing is visible.
+ */
+export function trimDocumentToContent(
+  document: ScreenshotDocument,
+  padding = 0,
+): ScreenshotDocument {
+  const content = visibleContentBounds(document);
+  if (!content) return document;
+
+  const safePadding = Math.max(0, Math.round(padding));
+  const x = Math.floor(content.x) - safePadding;
+  const y = Math.floor(content.y) - safePadding;
+  const right = Math.ceil(content.x + content.width) + safePadding;
+  const bottom = Math.ceil(content.y + content.height) + safePadding;
+  const width = Math.max(1, right - x);
+  const height = Math.max(1, bottom - y);
+
+  if (
+    x === 0
+    && y === 0
+    && width === document.width
+    && height === document.height
+  ) {
+    return document;
+  }
+
+  return {
+    ...document,
+    width,
+    height,
+    elements: document.elements.map((element) => translateElement(element, -x, -y)),
+  };
+}
+
 export function resizeDocumentCanvas(
   document: ScreenshotDocument,
   width: number,

@@ -30,6 +30,8 @@ import {
   snapResizedBounds,
   snapTranslatedBounds,
   translateElement,
+  trimDocumentToContent,
+  visibleContentBounds,
   type EditorImageElement,
   type EditorShapeElement,
   type EditorTextElement,
@@ -153,6 +155,124 @@ describe("screenshot editor geometry", () => {
       endX: 400,
       endY: 300,
     });
+  });
+
+  it("trims the canvas to the union of visible layer bounds", () => {
+    const base = createScreenshotDocument("capture.png", 1_000, 800);
+    // Shrink the original capture so empty canvas margin remains.
+    const background = {
+      ...base.elements[0],
+      x: 80,
+      y: 40,
+      width: 400,
+      height: 300,
+    } as EditorImageElement;
+    const imported: EditorImageElement = {
+      ...editableLayer,
+      id: "imported",
+      kind: "image",
+      source: "imported",
+      src: "blob:import",
+      name: "import.png",
+      naturalWidth: 200,
+      naturalHeight: 150,
+      x: 420,
+      y: 280,
+      width: 200,
+      height: 150,
+    };
+    const document = {
+      ...base,
+      elements: [background, imported],
+    };
+
+    expect(visibleContentBounds(document)).toEqual({
+      x: 80,
+      y: 40,
+      width: 540,
+      height: 390,
+    });
+
+    const trimmed = trimDocumentToContent(document);
+    expect(trimmed).toMatchObject({ width: 540, height: 390 });
+    expect(trimmed.elements[0]).toMatchObject({ x: 0, y: 0, width: 400, height: 300 });
+    expect(trimmed.elements[1]).toMatchObject({ x: 340, y: 240, width: 200, height: 150 });
+    // Already tight — identity.
+    expect(trimDocumentToContent(trimmed)).toBe(trimmed);
+  });
+
+  it("ignores hidden layers when trimming and supports padding", () => {
+    const base = createScreenshotDocument("capture.png", 500, 500);
+    const visible: EditorImageElement = {
+      ...editableLayer,
+      id: "visible",
+      kind: "image",
+      source: "imported",
+      src: "blob:a",
+      name: "a.png",
+      naturalWidth: 100,
+      naturalHeight: 100,
+      x: 50,
+      y: 50,
+      width: 100,
+      height: 100,
+    };
+    const hidden: EditorImageElement = {
+      ...visible,
+      id: "hidden",
+      name: "b.png",
+      src: "blob:b",
+      visible: false,
+      x: 0,
+      y: 0,
+      width: 500,
+      height: 500,
+    };
+    const document = {
+      ...base,
+      // Drop the full-bleed original so the canvas is mostly empty.
+      elements: [visible, hidden],
+    };
+
+    expect(visibleContentBounds(document)).toEqual({
+      x: 50,
+      y: 50,
+      width: 100,
+      height: 100,
+    });
+
+    const padded = trimDocumentToContent(document, 10);
+    expect(padded).toMatchObject({ width: 120, height: 120 });
+    expect(padded.elements[0]).toMatchObject({ x: 10, y: 10 });
+  });
+
+  it("keeps overhanging content when trimming", () => {
+    const base = createScreenshotDocument("capture.png", 200, 200);
+    const overhang: EditorImageElement = {
+      ...editableLayer,
+      id: "overhang",
+      kind: "image",
+      source: "imported",
+      src: "blob:over",
+      name: "over.png",
+      naturalWidth: 100,
+      naturalHeight: 100,
+      x: -40,
+      y: 20,
+      width: 100,
+      height: 100,
+    };
+    const document = {
+      ...base,
+      elements: [
+        { ...base.elements[0], visible: false },
+        overhang,
+      ],
+    };
+
+    const trimmed = trimDocumentToContent(document);
+    expect(trimmed).toMatchObject({ width: 100, height: 100 });
+    expect(trimmed.elements[1]).toMatchObject({ x: 0, y: 0 });
   });
 
   it("places dropped screenshots as movable layers and expands the canvas", () => {
