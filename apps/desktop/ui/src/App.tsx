@@ -51,12 +51,13 @@ import {
   shortcutDisplayTokens,
 } from "./lib/shortcut";
 import {
+  applyThumbnailCssCursor,
   applyThumbnailNativeHover,
+  clearThumbnailCssCursor,
   clearThumbnailNativeHover,
   setThumbnailNativeActiveCard,
   shouldIgnoreThumbnailCursorEvents,
   shouldRecoverThumbnailAfterNullPolls,
-  thumbnailCssCursor,
   thumbnailCursorSyncAction,
   withThumbnailPointerTimeout,
   type ThumbnailCursorKind,
@@ -4252,7 +4253,12 @@ export function Thumbnail() {
       kind: ThumbnailCursorKind,
       options: { force?: boolean } = {},
     ) => {
-      document.documentElement.style.cursor = thumbnailCssCursor(kind);
+      // Only touch CSS when the hit-tested kind changes. Rewriting style.cursor
+      // every 40ms poll made WebKit re-evaluate cursor rectangles and flash the
+      // default arrow between AppKit grab/pointer updates.
+      if (kind !== cursorKind) {
+        applyThumbnailCssCursor(kind);
+      }
       const now = performance.now();
       const action = thumbnailCursorSyncAction(
         cursorKind,
@@ -4273,7 +4279,7 @@ export function Thumbnail() {
     /**
      * Clicks (and the key-window handoff they trigger) make macOS restore the
      * frontmost app's arrow for a frame. Reassert the current interactive
-     * cursor immediately instead of waiting for the 100ms poll throttle.
+     * cursor immediately instead of waiting for the next pointer poll.
      */
     const reassertInteractiveCursor = () => {
       if (cursorKind === "default") return;
@@ -4314,6 +4320,7 @@ export function Thumbnail() {
     const stopNativeTracking = () => {
       document.documentElement.classList.remove("thumbnail-native-tracking");
       clearNativeHover();
+      clearThumbnailCssCursor();
       setIgnoreCursorEvents(false, true);
     };
 
@@ -4343,6 +4350,8 @@ export function Thumbnail() {
       // Drop native-only presentation so CSS hover works while we re-arm.
       document.documentElement.classList.remove("thumbnail-native-tracking");
       clearNativeClasses();
+      clearThumbnailCssCursor();
+      cursorKind = "default";
       setIgnoreCursorEvents(false, true);
       if (refreshNative) {
         void invoke("refresh_thumbnail_interactivity").catch(() => undefined);

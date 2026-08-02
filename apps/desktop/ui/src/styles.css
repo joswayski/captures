@@ -281,11 +281,17 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-main-actio
 /* Kill the default WKWebView focus ring (can look like a gray dashed box). */
 .thumbnail-main-actions button:focus { outline: none; }
 .thumbnail-main-actions button:focus-visible { box-shadow: 0 4px 16px rgba(0,0,0,.3), 0 0 0 2px rgba(var(--theme-accent-rgb),.65); }
-html.thumbnail-native-tracking button[data-native-pointer-hover="true"] { cursor: pointer !important; }
-/* Native AppKit cursor is the source of truth while polling; mirror grab on the
-   image so CSS and WKWebView stay consistent when cursor rectangles re-enable. */
-html.thumbnail-native-tracking .thumbnail-card[data-thumbnail-native-active="true"] img { cursor: grab !important; }
-html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging img { cursor: grabbing !important; }
+/* Native AppKit owns the cursor while polling. Mirror one hit-tested kind on the
+   whole tree so WebKit cannot alternate element-level pointer/grab/default rules
+   (or the system arrow) on every mouse/cursor-rectangle update. */
+html.thumbnail-native-tracking[data-thumbnail-cursor="grab"],
+html.thumbnail-native-tracking[data-thumbnail-cursor="grab"] * { cursor: grab !important; }
+html.thumbnail-native-tracking[data-thumbnail-cursor="pointer"],
+html.thumbnail-native-tracking[data-thumbnail-cursor="pointer"] * { cursor: pointer !important; }
+html.thumbnail-native-tracking[data-thumbnail-cursor="default"],
+html.thumbnail-native-tracking[data-thumbnail-cursor="default"] * { cursor: default !important; }
+html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging,
+html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * { cursor: grabbing !important; }
 .thumbnail-main-actions svg, .icon-button svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .thumbnail-main-actions svg { animation: thumbnail-action-pop .2s ease-out; }
 /* Exit lock: no clicks, hover, or focus while dismiss/delete animation plays. */
