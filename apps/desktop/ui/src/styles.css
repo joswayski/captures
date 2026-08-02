@@ -1045,9 +1045,25 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 }
 .screenshot-editor input, .screenshot-editor textarea { -webkit-user-select: text; user-select: text; }
 .screenshot-editor-header { z-index: 10; display: flex; grid-column: 1 / -1; padding: 0 14px 0 18px; align-items: center; justify-content: space-between; gap: 18px; border-bottom: 1px solid #34353a; background: #202126; box-shadow: 0 4px 14px rgba(0,0,0,.2); }
-.screenshot-editor-header > div { display: flex; min-width: 0; align-items: baseline; gap: 10px; }
-.screenshot-editor-header > div:first-child span { color: #f3f3f2; font-size: 12px; font-weight: 800; }
-.screenshot-editor-header > div:first-child strong { color: #87888d; font-size: 9px; font-weight: 650; }
+.screenshot-editor-header > div { display: flex; min-width: 0; align-items: center; gap: 10px; }
+.screenshot-editor-title { align-items: center !important; gap: 12px !important; }
+.screenshot-editor-title > span { color: #f3f3f2; font-size: 12px; font-weight: 800; }
+/* Canvas size/background are document chrome, not layer props — live next to the frame readout. */
+.screenshot-canvas-control { position: relative; flex: 0 0 auto; }
+.screenshot-canvas-trigger { display: inline-flex; min-height: 28px; padding: 4px 8px 4px 9px; align-items: center; gap: 5px; border: 1px solid transparent; border-radius: 7px; color: #87888d; background: transparent; font: inherit; }
+.screenshot-canvas-trigger:hover { border-color: #414247; color: #d5d6d8; background: #2a2b30; }
+.screenshot-canvas-trigger.open, .screenshot-canvas-trigger:focus-visible { border-color: rgba(var(--theme-accent-rgb),.4); color: #ececed; background: #2a2b30; box-shadow: 0 0 0 2px rgba(var(--theme-accent-rgb),.12); outline: none; }
+.screenshot-canvas-trigger strong { color: inherit; font-size: 9px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.screenshot-canvas-trigger svg { width: 12px; height: 12px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; transition: transform .14s ease; }
+.screenshot-canvas-trigger.open svg { transform: rotate(180deg); }
+.screenshot-canvas-panel { position: absolute; z-index: 40; top: calc(100% + 8px); left: 0; display: flex; width: min(280px, calc(100vw - 24px)); padding: 12px; flex-direction: column; gap: 11px; border: 1px solid #44454c; border-radius: 10px; background: #1d1e22; box-shadow: 0 16px 40px rgba(0,0,0,.5); }
+.screenshot-canvas-panel-heading { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.screenshot-canvas-panel-heading strong { color: #ececed; font-size: 11px; font-weight: 800; }
+.screenshot-canvas-panel-heading span { color: #85868c; font-size: 9px; font-weight: 550; line-height: 1.3; }
+.screenshot-canvas-panel label { display: flex; min-width: 0; flex-direction: column; gap: 6px; color: #9a9ba1; font-size: 9px; font-weight: 700; }
+.screenshot-canvas-panel input:not([type=range]):not([type=checkbox]), .screenshot-canvas-panel select { width: 100%; min-height: 31px; border: 1px solid #424349; border-radius: 6px; padding: 6px 8px; color: #ededee; background: #111216; outline: none; font-size: 10px; }
+.screenshot-canvas-panel input:focus, .screenshot-canvas-panel select:focus { border-color: var(--theme-accent-strong); box-shadow: 0 0 0 2px rgba(var(--theme-accent-rgb),.12); }
+.screenshot-canvas-panel .screenshot-property-actions { grid-template-columns: 1fr; }
 .screenshot-editor-history-actions { align-items: center !important; }
 .screenshot-editor-history-actions > button { display: inline-flex; min-height: 31px; align-items: center; justify-content: center; gap: 6px; border: 1px solid #414247; border-radius: 7px; padding: 6px 9px; color: #dedee0; background: #2c2d32; font-size: 10px; font-weight: 750; }
 .screenshot-editor-history-actions > button:not(.screenshot-add-image) { width: 31px; padding: 6px; }
