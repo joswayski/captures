@@ -1924,8 +1924,12 @@ export function ScreenshotEditor() {
                       setSelectedId(element.id);
                     }}
                   >
-                    <span className="screenshot-layer-grip" aria-hidden="true">
-                      <EditorIcon name={locked ? "lock" : "grip"} />
+                    <span
+                      className="screenshot-layer-grip"
+                      aria-hidden="true"
+                      title={locked ? "Layer is locked" : "Drag to reorder"}
+                    >
+                      <EditorIcon name="grip" />
                     </span>
                     <span className="screenshot-layer-preview" aria-hidden="true">
                       {element.kind === "image"
@@ -1940,6 +1944,8 @@ export function ScreenshotEditor() {
                   <span className="screenshot-layer-quick-actions">
                     <button
                       type="button"
+                      className={element.visible ? "" : "active"}
+                      aria-pressed={!element.visible}
                       aria-label={`${element.visible ? "Hide" : "Show"} ${elementLayerName(element)}`}
                       title={element.visible ? "Hide layer" : "Show layer"}
                       onClick={(event) => {
@@ -1954,6 +1960,8 @@ export function ScreenshotEditor() {
                     </button>
                     <button
                       type="button"
+                      className={locked ? "active" : ""}
+                      aria-pressed={locked}
                       aria-label={`${locked ? "Unlock" : "Lock"} ${elementLayerName(element)}`}
                       title={locked ? "Unlock layer" : "Lock layer"}
                       onClick={(event) => {
