@@ -40,6 +40,7 @@ describe("screenshot editor geometry", () => {
     expect(document).toMatchObject({
       width: 2_560,
       height: 1_440,
+      background: "#f7f7f5",
       elements: [{
         kind: "image",
         source: "background",
@@ -47,6 +48,14 @@ describe("screenshot editor geometry", () => {
         height: 1_440,
       }],
     });
+  });
+
+  it("allows a transparent document canvas background", () => {
+    const document = {
+      ...createScreenshotDocument("capture.png", 800, 600),
+      background: null,
+    };
+    expect(document.background).toBeNull();
   });
 
   it("constrains a crop to the canvas and requested aspect ratio", () => {

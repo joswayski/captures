@@ -94,7 +94,8 @@ export type ScreenshotElement =
 export type ScreenshotDocument = {
   width: number;
   height: number;
-  background: string;
+  /** Solid fill behind all layers. `null` keeps the canvas transparent (PNG/WebP alpha). */
+  background: string | null;
   elements: ScreenshotElement[];
 };
 

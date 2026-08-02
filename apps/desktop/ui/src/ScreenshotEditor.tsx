@@ -340,8 +340,10 @@ function renderScreenshot(
   imageCache: Map<string, CachedImage>,
 ): void {
   context.clearRect(0, 0, document.width, document.height);
-  context.fillStyle = document.background;
-  context.fillRect(0, 0, document.width, document.height);
+  if (document.background) {
+    context.fillStyle = document.background;
+    context.fillRect(0, 0, document.width, document.height);
+  }
   context.imageSmoothingEnabled = true;
   context.imageSmoothingQuality = "high";
   for (const element of document.elements) {
@@ -1670,10 +1672,14 @@ export function ScreenshotEditor() {
         aria-label="Screenshot editing canvas"
       >
         <div
-          className="screenshot-canvas-surface"
+          className={[
+            "screenshot-canvas-surface",
+            editorDocument.background ? "" : "transparent",
+          ].filter(Boolean).join(" ")}
           style={{
             width: editorDocument.width * displayScale,
             height: editorDocument.height * displayScale,
+            backgroundColor: editorDocument.background ?? undefined,
           }}
         >
           <canvas
@@ -2300,11 +2306,24 @@ export function ScreenshotEditor() {
               />
             </label>
           </div>
-          <ColorField
-            label="Canvas background"
-            value={editorDocument.background}
-            onChange={(background) => commitDocument({ ...editorDocument, background })}
-          />
+          <label className="screenshot-check-row">
+            <input
+              type="checkbox"
+              checked={editorDocument.background !== null}
+              onChange={(event) => commitDocument({
+                ...editorDocument,
+                background: event.target.checked ? "#f7f7f5" : null,
+              })}
+            />
+            Solid canvas background
+          </label>
+          {editorDocument.background !== null && (
+            <ColorField
+              label="Canvas background"
+              value={editorDocument.background}
+              onChange={(background) => commitDocument({ ...editorDocument, background })}
+            />
+          )}
         </section>
         </section>
       </aside>
@@ -2378,7 +2397,7 @@ export function ScreenshotEditor() {
               </div>
             </div>
           )}
-          {exportFormat === "jpeg" ? (
+          {exportFormat === "jpeg" && (
             <label className="screenshot-quality-mode">
               Save quality
               <select
@@ -2394,11 +2413,6 @@ export function ScreenshotEditor() {
                 <option value="maximum">Maximum file size</option>
               </select>
             </label>
-          ) : (
-            <div className="screenshot-export-control screenshot-quality screenshot-lossless-quality">
-              <span>Quality</span>
-              <strong>Maximum · lossless</strong>
-            </div>
           )}
           {exportFormat === "jpeg" && qualityMode === "compress" && (
             <div className="screenshot-export-control screenshot-quality">

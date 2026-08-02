@@ -199,6 +199,32 @@ describe("ScreenshotEditor", () => {
     expect(screen.getByRole("button", { name: "Delete" })).toBeEnabled();
   });
 
+  it("can clear the solid canvas background for transparent PNG/WebP exports", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findAllByText("1440 × 900");
+
+    const solidBackground = screen.getByRole("checkbox", {
+      name: "Solid canvas background",
+    });
+    expect(solidBackground).toBeChecked();
+    expect(screen.getByText("Canvas background")).toBeInTheDocument();
+
+    const surface = screen
+      .getByLabelText("Screenshot editing canvas")
+      .querySelector(".screenshot-canvas-surface");
+    expect(surface).not.toHaveClass("transparent");
+
+    fireEvent.click(solidBackground);
+    expect(solidBackground).not.toBeChecked();
+    expect(screen.queryByText("Canvas background")).not.toBeInTheDocument();
+    expect(surface).toHaveClass("transparent");
+
+    fireEvent.click(solidBackground);
+    expect(solidBackground).toBeChecked();
+    expect(screen.getByText("Canvas background")).toBeInTheDocument();
+    expect(surface).not.toHaveClass("transparent");
+  });
+
   it("does not select a new shape until Select & move is used", async () => {
     render(<ScreenshotEditor />);
     await screen.findAllByText("1440 × 900");
@@ -293,7 +319,9 @@ describe("ScreenshotEditor", () => {
 
     const format = screen.getByLabelText("Format");
     expect(format).toHaveValue("png");
-    expect(screen.getByText("Maximum · lossless")).toBeInTheDocument();
+    // PNG/WebP are always lossless — no quality control (and no fake disabled dropdown).
+    expect(screen.queryByText("Quality")).not.toBeInTheDocument();
+    expect(screen.queryByText("Maximum · lossless")).not.toBeInTheDocument();
     expect(screen.queryByRole("combobox", { name: "Save quality" }))
       .not.toBeInTheDocument();
     expect(screen.queryByRole("slider", { name: "Image quality" })).not.toBeInTheDocument();
