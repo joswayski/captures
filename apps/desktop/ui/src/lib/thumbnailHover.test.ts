@@ -75,6 +75,34 @@ describe("applyThumbnailNativeHover", () => {
     expectNativePointerHover(document.querySelector("button"), false);
   });
 
+  it("keeps grab when the first sample is the image (no prior button hover)", () => {
+    // Regression: grab only appeared after visiting a button first because the
+    // first default→grab handoff lost the open-hand cursor. Hit-testing itself
+    // must still return grab on a cold entry over the drag source.
+    document.body.innerHTML = `
+      <article class="thumbnail-card">
+        <img alt="Screenshot preview">
+        <div class="thumbnail-main-actions">
+          <button>Copy</button>
+          <button>Save file</button>
+        </div>
+      </article>
+    `;
+    const image = document.querySelector<HTMLImageElement>("img")!;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => image),
+    });
+
+    expect(applyThumbnailNativeHover({ x: 12, y: 12, inside: true })).toBe("grab");
+    expect(applyThumbnailNativeHover({ x: 12, y: 12, inside: true })).toBe("grab");
+    expect(document.querySelector(".thumbnail-card"))
+      .toHaveAttribute("data-thumbnail-native-active", "true");
+    expect(
+      document.querySelectorAll(`[${THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE}="true"]`),
+    ).toHaveLength(0);
+  });
+
   it("clears native hover when the pointer leaves the preview", () => {
     document.body.innerHTML = `
       <article class="thumbnail-card" data-thumbnail-native-active="true">

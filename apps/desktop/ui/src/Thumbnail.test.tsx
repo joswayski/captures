@@ -145,6 +145,58 @@ describe("Thumbnail", () => {
     });
   });
 
+  it("applies the grab cursor on first hover over the preview image", async () => {
+    let pointerReady = false;
+    const imageRef = { current: null as HTMLElement | null };
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifacts") return [artifact];
+      if (command === "get_clipboard_state") {
+        return { revision: 0, artifact_id: artifact.id };
+      }
+      if (command === "get_thumbnail_pointer_position") {
+        return pointerReady
+          ? { x: 40, y: 80, inside: true }
+          : new Promise(() => undefined);
+      }
+      return undefined;
+    });
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => imageRef.current),
+    });
+
+    render(<Thumbnail />);
+    const card = await screen.findByRole("article");
+    const image = within(card).getByRole("img", { name: "Screenshot preview" });
+    imageRef.current = image;
+    pointerReady = true;
+    window.dispatchEvent(new Event("captures-thumbnail-ready"));
+
+    await waitFor(() => {
+      expect(card).toHaveAttribute("data-thumbnail-native-active", "true");
+    });
+    await waitFor(() => {
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith(
+        "set_thumbnail_cursor",
+        { kind: "grab" },
+      );
+    });
+    expect(document.documentElement).toHaveAttribute(
+      "data-thumbnail-cursor",
+      "grab",
+    );
+    expect(document.documentElement.style.cursor).toBe("grab");
+
+    // Stationary first entry must also schedule a handoff reassert so AppKit
+    // open-hand survives makeKey without requiring a detour over a button.
+    await waitFor(() => {
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith(
+        "reassert_thumbnail_cursor",
+        { kind: "grab" },
+      );
+    });
+  });
+
   it("preserves native hover when pointer polling is briefly unavailable", async () => {
     let pointerPolls = 0;
     vi.mocked(invoke).mockImplementation(async (command) => {

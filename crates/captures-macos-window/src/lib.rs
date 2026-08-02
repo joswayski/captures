@@ -209,6 +209,17 @@ impl CursorTrackingOwner {
         {
             set_cursor_rects_enabled(&window, false);
         }
+        // Thumbnail: JS poll owns the cursor kind (grab on the image, pointer
+        // on buttons). Forcing the arrow on every mouseMoved while mode is
+        // still Arrow races the first open-hand update and also suppresses CSS
+        // `grab` over the drag source before that poll. Capture overlay still
+        // needs an explicit arrow when requested.
+        if matches!(mode, CursorMode::Arrow)
+            && self.ivars().surface == CursorSurface::Thumbnail
+            && event.is_some()
+        {
+            return;
+        }
         apply_cursor_mode(mode);
     }
 }
@@ -691,6 +702,12 @@ pub fn set_thumbnail_cursor(
     }
     let native_window = native_window(window)?;
     let interactive = !matches!(kind, ThumbnailCursorKind::Default);
+    // Becoming key lets WebKit own cursor rectangles. Take key first while
+    // applying grab/pointer so the subsequent disable sticks for a stationary
+    // first hover over the drag source (not only after moving onto a button).
+    if interactive && !native_window.isKeyWindow() {
+        native_window.makeKeyWindow();
+    }
     set_cursor_rects_enabled(native_window, !interactive);
     let mode = match kind {
         ThumbnailCursorKind::Default => CursorMode::Arrow,
@@ -698,10 +715,12 @@ pub fn set_thumbnail_cursor(
         ThumbnailCursorKind::Grab => CursorMode::OpenHand,
     };
     set_tracked_cursor(window, mode, CursorSurface::Thumbnail)?;
-    match kind {
-        ThumbnailCursorKind::Default => NSCursor::arrowCursor().set(),
-        ThumbnailCursorKind::Pointer => NSCursor::pointingHandCursor().set(),
-        ThumbnailCursorKind::Grab => NSCursor::openHandCursor().set(),
+    apply_thumbnail_ns_cursor(kind);
+    // makeKeyWindow can re-enable rectangles asynchronously after this returns.
+    // Re-disable and re-set so grab survives a stationary entry onto the image.
+    if interactive {
+        set_cursor_rects_enabled(native_window, false);
+        apply_thumbnail_ns_cursor(kind);
     }
     Ok(())
 }
@@ -729,6 +748,9 @@ pub fn reassert_thumbnail_cursor(
         return reset_pointing_cursor_state(window);
     }
     let native_window = native_window(window)?;
+    if !native_window.isKeyWindow() {
+        native_window.makeKeyWindow();
+    }
     set_cursor_rects_enabled(native_window, false);
     let mode = match kind {
         ThumbnailCursorKind::Default => CursorMode::Arrow,
@@ -736,12 +758,19 @@ pub fn reassert_thumbnail_cursor(
         ThumbnailCursorKind::Grab => CursorMode::OpenHand,
     };
     set_tracked_cursor(window, mode, CursorSurface::Thumbnail)?;
-    match kind {
-        ThumbnailCursorKind::Default => NSCursor::arrowCursor().set(),
-        ThumbnailCursorKind::Pointer => NSCursor::pointingHandCursor().set(),
-        ThumbnailCursorKind::Grab => NSCursor::openHandCursor().set(),
-    }
+    apply_thumbnail_ns_cursor(kind);
+    set_cursor_rects_enabled(native_window, false);
+    apply_thumbnail_ns_cursor(kind);
     Ok(())
+}
+
+fn apply_thumbnail_ns_cursor(kind: ThumbnailCursorKind) {
+    let mode = match kind {
+        ThumbnailCursorKind::Default => CursorMode::Arrow,
+        ThumbnailCursorKind::Pointer => CursorMode::PointingHand,
+        ThumbnailCursorKind::Grab => CursorMode::OpenHand,
+    };
+    apply_cursor_mode(mode);
 }
 
 /// Clears the preview's stored pointing cursor without changing the cursor
