@@ -290,27 +290,39 @@ describe("Thumbnail", () => {
     render(<Thumbnail />);
     await screen.findByRole("article");
     const stack = document.querySelector<HTMLElement>(".thumbnail-stack")!;
+    // Layout height for one card is 216px; force a taller client so the
+    // content-height helper still reports overflow via mocked scrollTop.
     Object.defineProperties(stack, {
-      clientHeight: { configurable: true, value: 400 },
-      scrollHeight: { configurable: true, value: 1_000 },
+      clientHeight: { configurable: true, value: 100 },
     });
-    stack.scrollTop = 600;
+    // With one card, layout height is 216 → maxScroll = 116. Pin near bottom.
+    stack.scrollTop = 116;
 
     fireEvent.scroll(stack);
 
     const older = await screen.findByRole("button", { name: "Show older captures" });
     expect(screen.queryByRole("button", { name: "Show newer captures" })).toBeNull();
-    const scrollTo = vi.fn();
-    Object.defineProperty(stack, "scrollTo", {
-      configurable: true,
-      value: scrollTo,
+
+    const frames: FrameRequestCallback[] = [];
+    const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
+      frames.push(cb);
+      return frames.length;
     });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    const now = vi.spyOn(performance, "now").mockReturnValue(0);
 
     fireEvent.click(older);
 
-    expect(scrollTo).toHaveBeenCalledWith({ top: 416, behavior: "smooth" });
+    expect(frames).toHaveLength(1);
+    now.mockReturnValue(380);
+    frames[0]?.(380);
+    // One slot up from 116 → 0 (clamped).
+    expect(stack.scrollTop).toBe(0);
 
-    stack.scrollTop = 300;
+    raf.mockRestore();
+    now.mockRestore();
+
+    stack.scrollTop = 50;
     fireEvent.scroll(stack);
     expect(await screen.findByRole("button", { name: "Show newer captures" }))
       .toBeInTheDocument();

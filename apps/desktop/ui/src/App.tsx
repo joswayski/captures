@@ -75,8 +75,10 @@ import {
   type ThumbnailDustParticle,
 } from "./lib/thumbnailExit";
 import {
+  animateThumbnailStackScroll,
   createThumbnailStackShiftController,
   shouldScrollThumbnailStackToEnd,
+  thumbnailStackContentHeight,
   thumbnailStackOverflow,
   THUMBNAIL_CARD_SLOT_PX,
   waitForThumbnailStackSettle,
@@ -4066,15 +4068,19 @@ export function Thumbnail() {
   });
   const stackRef = useRef<HTMLElement>(null);
   const previousArtifactCount = useRef(0);
+  const cancelStackScroll = useRef<(() => void) | null>(null);
   const applyClipboardState = useCallback((next: ClipboardState) => {
     setClipboardState((current) => reconcileClipboardState(current, next));
   }, []);
   const refreshStackOverflow = useCallback(() => {
     const stack = stackRef.current;
     if (!stack) return;
+    // Use layout geometry, not scrollHeight: dust chips and settle transforms
+    // inflate WebKit paint overflow and flash the bottom "newer" cue mid-exit.
+    const cardCount = stack.querySelectorAll(":scope > .thumbnail-card").length;
     const next = thumbnailStackOverflow(
       stack.scrollTop,
-      stack.scrollHeight,
+      thumbnailStackContentHeight(cardCount),
       stack.clientHeight,
     );
     setStackOverflow((current) => (
@@ -4543,14 +4549,30 @@ export function Thumbnail() {
     };
   }, []);
 
+  useEffect(() => {
+    return () => {
+      cancelStackScroll.current?.();
+      cancelStackScroll.current = null;
+    };
+  }, []);
+
   if (artifacts.length === 0) return null;
 
   const scrollStackBy = (slots: number) => {
     const stack = stackRef.current;
     if (!stack) return;
-    stack.scrollTo({
-      top: stack.scrollTop + slots * THUMBNAIL_CARD_SLOT_PX,
-      behavior: prefersReducedMotion() ? "auto" : "smooth",
+    const cardCount = stack.querySelectorAll(":scope > .thumbnail-card").length;
+    const maxScrollTop = Math.max(
+      0,
+      thumbnailStackContentHeight(cardCount) - stack.clientHeight,
+    );
+    const targetTop = Math.min(
+      maxScrollTop,
+      Math.max(0, stack.scrollTop + slots * THUMBNAIL_CARD_SLOT_PX),
+    );
+    cancelStackScroll.current?.();
+    cancelStackScroll.current = animateThumbnailStackScroll(stack, targetTop, {
+      reducedMotion: prefersReducedMotion(),
     });
   };
 
