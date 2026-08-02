@@ -41,6 +41,7 @@ import {
   snapResizedBounds,
   snapTranslatedBounds,
   translateElement,
+  canvasTrimMarginPreview,
   trimDocumentToContent,
   visibleContentBounds,
   wrapTextLines,
@@ -290,6 +291,63 @@ describe("screenshot editor geometry", () => {
     const trimmed = trimDocumentToContent(document);
     expect(trimmed).toMatchObject({ width: 100, height: 100 });
     expect(trimmed.elements[1]).toMatchObject({ x: 0, y: 0 });
+  });
+
+  it("describes on-canvas margins for the trim-edges hover preview", () => {
+    const base = createScreenshotDocument("capture.png", 500, 400);
+    const inset: EditorImageElement = {
+      ...editableLayer,
+      id: "inset",
+      kind: "image",
+      source: "imported",
+      src: "blob:inset",
+      name: "inset.png",
+      naturalWidth: 200,
+      naturalHeight: 150,
+      x: 40,
+      y: 30,
+      width: 200,
+      height: 150,
+    };
+    const document = {
+      ...base,
+      elements: [{ ...base.elements[0], visible: false }, inset],
+    };
+
+    const preview = canvasTrimMarginPreview(document);
+    expect(preview).toEqual({
+      keepRect: { x: 40, y: 30, width: 200, height: 150 },
+      margins: { left: 40, top: 30, right: 260, bottom: 220 },
+      edges: ["top", "right", "bottom", "left"],
+    });
+    expect(canvasTrimMarginPreview(trimDocumentToContent(document))).toBeNull();
+  });
+
+  it("omits overhang-only edges from the trim-edges hover preview", () => {
+    const base = createScreenshotDocument("capture.png", 200, 200);
+    // Content fills the canvas on three sides and overhangs left — nothing is
+    // discarded from the current frame (trim expands), so no removal preview.
+    const overhang: EditorImageElement = {
+      ...editableLayer,
+      id: "overhang",
+      kind: "image",
+      source: "imported",
+      src: "blob:over",
+      name: "over.png",
+      naturalWidth: 240,
+      naturalHeight: 200,
+      x: -40,
+      y: 0,
+      width: 240,
+      height: 200,
+    };
+    const document = {
+      ...base,
+      elements: [{ ...base.elements[0], visible: false }, overhang],
+    };
+
+    expect(trimDocumentToContent(document)).not.toBe(document);
+    expect(canvasTrimMarginPreview(document)).toBeNull();
   });
 
   it("places dropped screenshots as movable layers and expands the canvas", () => {

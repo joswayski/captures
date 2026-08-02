@@ -668,6 +668,34 @@ describe("ScreenshotEditor", () => {
     });
   });
 
+  it("previews margins that Trim edges would remove while hovering the control", async () => {
+    render(<ScreenshotEditor />);
+    const widthInput = await screen.findByLabelText("Width");
+    const canvasToolbar = screen.getByRole("group", { name: "Canvas" });
+    const canvas = screen.getByLabelText("Screenshot editing canvas");
+
+    fireEvent.change(widthInput, { target: { value: "1600" } });
+    const canvasTrim = within(canvasToolbar).getByRole("button", { name: "Trim edges" });
+    await waitFor(() => {
+      expect(canvasTrim).toBeEnabled();
+    });
+
+    expect(canvas.querySelector(".screenshot-canvas-trim-hint")).toBeNull();
+
+    fireEvent.pointerEnter(canvasTrim);
+    await waitFor(() => {
+      const hint = canvas.querySelector(".screenshot-canvas-trim-hint");
+      expect(hint).not.toBeNull();
+      expect(hint?.querySelector(".screenshot-canvas-trim-region.edge-right")).not.toBeNull();
+      expect(hint?.querySelectorAll(".screenshot-canvas-trim-particle").length).toBeGreaterThan(0);
+    });
+
+    fireEvent.pointerLeave(canvasTrim);
+    await waitFor(() => {
+      expect(canvas.querySelector(".screenshot-canvas-trim-hint")).toBeNull();
+    });
+  });
+
   it("does not select a new shape until Select & move is used", async () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");

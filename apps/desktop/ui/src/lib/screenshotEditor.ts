@@ -460,6 +460,72 @@ export function trimDocumentToContent(
   };
 }
 
+/**
+ * Live hover preview for **Trim edges**: which current-canvas margins would be
+ * discarded. Content that already overhangs is not “removed” from the frame
+ * (the canvas grows instead), so only positive interior margins are returned.
+ * `null` when trim is a no-op or there is nothing to cut away on-canvas.
+ */
+export type CanvasTrimMarginPreview = {
+  /** Portion of the current canvas that remains after trim (document coords). */
+  keepRect: EditorRect;
+  /** Pixel strip sizes that will be removed from each edge. */
+  margins: { top: number; right: number; bottom: number; left: number };
+  /** Edges with a positive margin (for edge glow / particles). */
+  edges: ImageSnapEdge[];
+};
+
+export function canvasTrimMarginPreview(
+  document: ScreenshotDocument,
+  padding = 0,
+): CanvasTrimMarginPreview | null {
+  if (trimDocumentToContent(document, padding) === document) return null;
+
+  const content = visibleContentBounds(document);
+  if (!content) return null;
+
+  const safePadding = Math.max(0, Math.round(padding));
+  // Keep rect is the content bounds (plus padding) clamped to the current canvas.
+  // Margins outside that rect on the *current* canvas are what get discarded.
+  const keepLeft = Math.max(0, Math.floor(content.x) - safePadding);
+  const keepTop = Math.max(0, Math.floor(content.y) - safePadding);
+  const keepRight = Math.min(
+    document.width,
+    Math.ceil(content.x + content.width) + safePadding,
+  );
+  const keepBottom = Math.min(
+    document.height,
+    Math.ceil(content.y + content.height) + safePadding,
+  );
+
+  if (keepRight <= keepLeft || keepBottom <= keepTop) return null;
+
+  const margins = {
+    left: keepLeft,
+    top: keepTop,
+    right: Math.max(0, document.width - keepRight),
+    bottom: Math.max(0, document.height - keepBottom),
+  };
+
+  const edges: ImageSnapEdge[] = [];
+  if (margins.top > 0) edges.push("top");
+  if (margins.right > 0) edges.push("right");
+  if (margins.bottom > 0) edges.push("bottom");
+  if (margins.left > 0) edges.push("left");
+  if (edges.length === 0) return null;
+
+  return {
+    keepRect: {
+      x: keepLeft,
+      y: keepTop,
+      width: keepRight - keepLeft,
+      height: keepBottom - keepTop,
+    },
+    margins,
+    edges,
+  };
+}
+
 export function resizeDocumentCanvas(
   document: ScreenshotDocument,
   width: number,
