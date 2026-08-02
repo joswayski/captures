@@ -92,6 +92,11 @@ export type EditorTextElement = EditorElementBase & {
   kind: "text";
   text: string;
   fontSize: number;
+  /**
+   * Layout box width used for wrapping. Height is derived from wrapped lines
+   * so the selection box tracks content rather than a free-form tall empty area.
+   */
+  width: number;
   fontFamily: "sans" | "serif" | "mono";
   bold: boolean;
   italic: boolean;
@@ -99,6 +104,107 @@ export type EditorTextElement = EditorElementBase & {
   color: string;
   background: string | null;
 };
+
+/** Line box height as a multiple of fontSize (matches canvas + inline editor). */
+export const TEXT_LINE_HEIGHT_RATIO = 1.25;
+
+/**
+ * Approximate average glyph advance relative to fontSize for sans-like faces.
+ * Used when a Canvas measureText context is not available (hit tests, bounds).
+ */
+export const TEXT_CHAR_WIDTH_RATIO = 0.56;
+
+/** Minimum text box width so a single glyph still fits. */
+export function minTextBoxWidth(fontSize: number): number {
+  return Math.max(8, Math.round(fontSize * 0.5));
+}
+
+/** Estimate the advance width of a single line without a canvas context. */
+export function estimateTextWidth(text: string, fontSize: number): number {
+  if (!text) return fontSize * TEXT_CHAR_WIDTH_RATIO;
+  return Math.max(1, text.length) * fontSize * TEXT_CHAR_WIDTH_RATIO;
+}
+
+/** Default box width for newly placed text (fits a short sample with room to grow). */
+export function defaultTextBoxWidth(fontSize: number, sample = "Text"): number {
+  return Math.max(
+    Math.round(fontSize * 2.5),
+    Math.ceil(estimateTextWidth(sample, fontSize) + fontSize * 0.75),
+  );
+}
+
+function hardBreakToken(
+  token: string,
+  maxWidth: number,
+  measure: (line: string) => number,
+): string[] {
+  const parts: string[] = [];
+  let current = "";
+  for (const char of [...token]) {
+    const next = current + char;
+    if (current && measure(next) > maxWidth) {
+      parts.push(current);
+      current = char;
+    } else {
+      current = next;
+    }
+  }
+  if (current) parts.push(current);
+  return parts.length > 0 ? parts : [token];
+}
+
+/**
+ * Word-wrap `text` into lines that fit within `maxWidth`.
+ * Explicit newlines always break. Tokens wider than the box are hard-broken.
+ */
+export function wrapTextLines(
+  text: string,
+  maxWidth: number,
+  fontSize: number,
+  measure: (line: string) => number = (line) => estimateTextWidth(line, fontSize),
+): string[] {
+  const width = Math.max(minTextBoxWidth(fontSize), maxWidth);
+  const paragraphs = text.split("\n");
+  const lines: string[] = [];
+
+  for (const paragraph of paragraphs) {
+    if (paragraph === "") {
+      lines.push("");
+      continue;
+    }
+
+    // Keep whitespace tokens so spacing inside a line is preserved.
+    const tokens = paragraph.split(/(\s+)/);
+    let current = "";
+
+    for (const token of tokens) {
+      if (!token) continue;
+
+      if (/^\s+$/.test(token)) {
+        if (current) current += token;
+        continue;
+      }
+
+      const pieces = measure(token) <= width
+        ? [token]
+        : hardBreakToken(token, width, measure);
+
+      for (const piece of pieces) {
+        const candidate = current ? `${current}${piece}` : piece;
+        if (current && measure(candidate) > width) {
+          lines.push(current.replace(/\s+$/, ""));
+          current = piece;
+        } else {
+          current = candidate;
+        }
+      }
+    }
+
+    lines.push(current.replace(/\s+$/, ""));
+  }
+
+  return lines.length > 0 ? lines : [""];
+}
 
 export type EditorShapeElement = EditorElementBase & {
   kind: "shape";
@@ -1099,14 +1205,13 @@ export function resizeElement(
   }
 
   if (element.kind === "text") {
-    // Text bounds are derived from font size; scale type size with the box height.
-    const scale = Math.max(0.05, scaleY);
-    const topLeft = mapPoint({ x: element.x, y: element.y });
+    // Text boxes keep font size stable; resize only changes wrap width + origin.
+    // Height of the selection follows wrapped content after the gesture ends.
     return {
       ...element,
-      x: topLeft.x,
-      y: topLeft.y,
-      fontSize: Math.max(8, Math.round(element.fontSize * scale)),
+      x: nextBounds.x,
+      y: nextBounds.y,
+      width: Math.max(minTextBoxWidth(element.fontSize), nextBounds.width),
     };
   }
 
@@ -1146,16 +1251,13 @@ export function elementBounds(element: ScreenshotElement): EditorRect {
     };
   }
   if (element.kind === "text") {
-    const lines = element.text.split("\n");
-    const width = Math.max(
-      element.fontSize,
-      ...lines.map((line) => Math.max(1, line.length) * element.fontSize * 0.62),
-    );
+    const boxWidth = Math.max(minTextBoxWidth(element.fontSize), element.width);
+    const lines = wrapTextLines(element.text, boxWidth, element.fontSize);
     return {
       x: element.x,
       y: element.y,
-      width,
-      height: Math.max(1, lines.length) * element.fontSize * 1.25,
+      width: boxWidth,
+      height: Math.max(1, lines.length) * element.fontSize * TEXT_LINE_HEIGHT_RATIO,
     };
   }
   if (element.kind === "shape") {

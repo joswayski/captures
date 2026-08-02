@@ -46,6 +46,9 @@ import {
   snapResizedBounds,
   snapTranslatedBounds,
   stackDropPlateAtPoint,
+  defaultTextBoxWidth,
+  TEXT_LINE_HEIGHT_RATIO,
+  wrapTextLines,
   translateElement,
   trimDocumentToContent,
   visibleContentBounds,
@@ -371,8 +374,8 @@ function drawText(
   context: CanvasRenderingContext2D,
   element: Extract<ScreenshotElement, { kind: "text" }>,
 ): void {
-  const lines = element.text.split("\n");
-  const lineHeight = element.fontSize * 1.25;
+  const boxWidth = Math.max(element.fontSize * 0.5, element.width);
+  const lineHeight = element.fontSize * TEXT_LINE_HEIGHT_RATIO;
   context.save();
   context.font = [
     element.italic ? "italic" : "",
@@ -382,19 +385,21 @@ function drawText(
   ].filter(Boolean).join(" ");
   context.textBaseline = "top";
   context.textAlign = element.align;
-  const width = Math.max(
+  const lines = wrapTextLines(
+    element.text,
+    boxWidth,
     element.fontSize,
-    ...lines.map((line) => context.measureText(line || " ").width),
+    (line) => context.measureText(line || " ").width,
   );
   const anchorX = element.align === "center"
-    ? element.x + width / 2
-    : element.align === "right" ? element.x + width : element.x;
+    ? element.x + boxWidth / 2
+    : element.align === "right" ? element.x + boxWidth : element.x;
   if (element.background) {
     context.fillStyle = element.background;
     context.fillRect(
       element.x - element.fontSize * 0.18,
       element.y - element.fontSize * 0.12,
-      width + element.fontSize * 0.36,
+      boxWidth + element.fontSize * 0.36,
       lines.length * lineHeight + element.fontSize * 0.14,
     );
   }
@@ -959,12 +964,13 @@ export function ScreenshotEditor() {
     const bounds = elementBounds(editingText);
     const horizontalPadding = editingText.fontSize * 0.18;
     const verticalPadding = editingText.fontSize * 0.12;
+    // Match the layout box so wrapping tracks canvas width (not a second outline).
     return {
       left: (editingText.x - horizontalPadding) * displayScale,
       top: (editingText.y - verticalPadding) * displayScale,
       width: Math.max(
-        72,
-        (bounds.width + horizontalPadding * 2) * displayScale,
+        48,
+        (editingText.width + horizontalPadding * 2) * displayScale,
       ),
       height: Math.max(
         28,
@@ -1072,14 +1078,16 @@ export function ScreenshotEditor() {
     const accentColor = getComputedStyle(canvas)
       .getPropertyValue("--theme-accent")
       .trim() || "#ffffff";
+    // While the inline text editor is open it provides its own focus chrome;
+    // drawing the selection box too produces a second dashed highlight.
     drawEditorOverlays(
       context,
       editorDocument,
-      selected,
+      editingText ? null : selected,
       cropSelection,
       displayScale,
       accentColor,
-      resizePreviewBounds,
+      editingText ? null : resizePreviewBounds,
     );
   }, [
     cropSelection,
@@ -1561,6 +1569,7 @@ export function ScreenshotEditor() {
         y: point.y,
         text: "Text",
         fontSize: defaultFontSize,
+        width: defaultTextBoxWidth(defaultFontSize),
         fontFamily: "sans",
         bold: false,
         italic: false,
@@ -2579,7 +2588,7 @@ export function ScreenshotEditor() {
               className="screenshot-inline-text-editor"
               aria-label="Edit text on canvas"
               value={editingText.text}
-              wrap="off"
+              wrap="soft"
               spellCheck
               style={{
                 ...inlineTextLayout,
@@ -2589,7 +2598,7 @@ export function ScreenshotEditor() {
                 fontSize: editingText.fontSize * displayScale,
                 fontWeight: editingText.bold ? 700 : 400,
                 fontStyle: editingText.italic ? "italic" : "normal",
-                lineHeight: 1.25,
+                lineHeight: TEXT_LINE_HEIGHT_RATIO,
                 textAlign: editingText.align,
                 opacity: editingText.opacity / 100,
                 mixBlendMode: editingText.blendMode === "source-over"

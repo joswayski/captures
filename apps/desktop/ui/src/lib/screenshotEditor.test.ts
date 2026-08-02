@@ -35,6 +35,7 @@ import {
   translateElement,
   trimDocumentToContent,
   visibleContentBounds,
+  wrapTextLines,
   type EditorImageElement,
   type EditorShapeElement,
   type EditorTextElement,
@@ -47,6 +48,11 @@ const editableLayer = {
   blendMode: "source-over" as const,
   sourceArtifactId: null as string | null,
 };
+
+function estimateLineFits(line: string, maxWidth: number, fontSize: number): boolean {
+  if (!line) return true;
+  return line.length * fontSize * 0.56 <= maxWidth + fontSize * 0.56;
+}
 
 describe("screenshot editor geometry", () => {
   it("creates a lossless full-resolution document", () => {
@@ -703,8 +709,9 @@ describe("screenshot editor geometry", () => {
       kind: "text",
       x: 40,
       y: 60,
-      text: "Hi",
+      text: "Hi there friend",
       fontSize: 40,
+      width: 120,
       fontFamily: "sans",
       bold: false,
       italic: false,
@@ -713,12 +720,46 @@ describe("screenshot editor geometry", () => {
       background: null,
     };
     const textBounds = elementBounds(text);
+    // Stretching taller must not explode the type size — only box origin/width change.
     const taller = {
       ...textBounds,
       height: textBounds.height * 2,
     };
-    const resizedText = resizeElement(text, textBounds, taller);
-    expect(resizedText).toMatchObject({ kind: "text", fontSize: 80 });
+    const resizedTaller = resizeElement(text, textBounds, taller);
+    expect(resizedTaller).toMatchObject({
+      kind: "text",
+      fontSize: 40,
+      width: 120,
+      x: textBounds.x,
+      y: textBounds.y,
+    });
+
+    const wider = {
+      ...textBounds,
+      width: textBounds.width * 2,
+    };
+    const resizedWider = resizeElement(text, textBounds, wider);
+    expect(resizedWider).toMatchObject({
+      kind: "text",
+      fontSize: 40,
+      width: 240,
+    });
+    // Wider box reflows to fewer lines (or equal when already single-line).
+    expect(elementBounds(resizedWider as EditorTextElement).height)
+      .toBeLessThanOrEqual(elementBounds(text).height);
+  });
+
+  it("wraps text within the box width without scaling font size", () => {
+    const wrapped = wrapTextLines("one two three four", 80, 20);
+    expect(wrapped.length).toBeGreaterThan(1);
+    expect(wrapped.every((line) => estimateLineFits(line, 80, 20))).toBe(true);
+
+    const withBreaks = wrapTextLines("hello\nworld", 400, 20);
+    expect(withBreaks).toEqual(["hello", "world"]);
+
+    const hard = wrapTextLines("supercalifragilistic", 40, 20);
+    expect(hard.length).toBeGreaterThan(1);
+    expect(hard.join("")).toBe("supercalifragilistic");
   });
 
   it("calculates proportional output sizes for export", () => {
