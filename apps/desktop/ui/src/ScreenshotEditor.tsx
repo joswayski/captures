@@ -2214,25 +2214,13 @@ export function ScreenshotEditor() {
             >
               {imageDropGuide.edge === "stack" ? (
                 <>
-                  {/* Soft under-light pool that fades with distance (edge-bloom language). */}
+                  {/* Soft ambient under-light around the plate (no discrete rays). */}
                   <div className="screenshot-drop-snap-bloom" />
-                  {/* God-rays from under the floating plate onto the target layer. */}
-                  <div className="screenshot-drop-snap-stack-rays" aria-hidden="true">
-                    {DROP_STACK_RAYS.map((ray) => (
-                      <i
-                        key={ray.id}
-                        className="screenshot-drop-snap-stack-ray"
-                        style={{
-                          ["--ray-angle" as string]: `${ray.angle}deg`,
-                          ["--ray-length" as string]: ray.length,
-                          ["--ray-width" as string]: ray.width,
-                          ["--ray-delay" as string]: ray.delay,
-                          ["--ray-opacity" as string]: ray.opacity,
-                        }}
-                      />
-                    ))}
-                  </div>
-                  {/* Pointer-tracking plate ≈ OS drag ghost: casts shadow + under-rim. */}
+                  {/*
+                    Pointer-tracking plate ≈ OS drag ghost. Opaque fill masks the glow
+                    under the preview so light only reads as a halo around it.
+                    Label lives in the top toast only — no canvas badge.
+                  */}
                   <div
                     className="screenshot-drop-snap-stack-plate"
                     style={{
@@ -2261,16 +2249,6 @@ export function ScreenshotEditor() {
                       ))}
                     </div>
                   </div>
-                  <span
-                    style={{
-                      left: (imageDropGuide.plate.x + imageDropGuide.plate.width / 2
-                        - imageDropGuide.target.x) * displayScale,
-                      top: (imageDropGuide.plate.y - imageDropGuide.target.y) * displayScale - 10,
-                      transform: "translate(-50%, -100%)",
-                    }}
-                  >
-                    {imageDropLabel(imageDropGuide.edge)}
-                  </span>
                 </>
               ) : (
                 <>
@@ -2292,6 +2270,7 @@ export function ScreenshotEditor() {
                       />
                     ))}
                   </div>
+                  {/* Edge modes keep an on-canvas cue; stack relies on the top toast only. */}
                   <span>{imageDropLabel(imageDropGuide.edge)}</span>
                 </>
               )}
@@ -2365,12 +2344,9 @@ export function ScreenshotEditor() {
         {dragActive && (
           <div className="screenshot-drop-overlay" aria-hidden="true">
             <EditorIcon name="image" />
+            {/* Fixed title slot + shared subtitle keep the toast from shifting when the edge changes. */}
             <strong>{imageDropGuide ? imageDropLabel(imageDropGuide.edge) : "Drop image"}</strong>
-            <span>
-              {imageDropGuide?.edge === "stack"
-                ? "It will stack on top of the highlighted layer and stay editable."
-                : "It will snap to the highlighted edge and stay editable."}
-            </span>
+            <span>Drop to place — stays editable as a layer.</span>
           </div>
         )}
       </section>
@@ -3300,12 +3276,13 @@ function elementLabel(element: ScreenshotElement): string {
   return element.shape[0].toUpperCase() + element.shape.slice(1);
 }
 
+/** Short, similar-length labels so the drop toast does not reflow between modes. */
 function imageDropLabel(edge: ImageDropPlacement): string {
   if (edge === "stack") return "Place on top";
-  if (edge === "top") return "Place above layer";
-  if (edge === "right") return "Place to the right";
-  if (edge === "left") return "Place to the left";
-  return "Place below layer";
+  if (edge === "top") return "Place above";
+  if (edge === "right") return "Place right";
+  if (edge === "left") return "Place left";
+  return "Place below";
 }
 
 function canvasExpandPreviewForBounds(
@@ -3347,8 +3324,8 @@ const DROP_SNAP_PARTICLES: Array<{
 ];
 
 /**
- * Particles for stack-on-top: seeds around the floating plate perimeter, rise
- * on the z-axis (scale + fade) rather than streaming sideways off an edge.
+ * Subtle particles for stack-on-top: soft sparkle on the plate rim only
+ * (no extruded ray beams — ambient glow is CSS radial light).
  */
 const DROP_STACK_PARTICLES: Array<{
   id: string;
@@ -3360,46 +3337,14 @@ const DROP_STACK_PARTICLES: Array<{
   duration: string;
   size: string;
 }> = [
-  { id: "s0", x: 0.08, y: 0.08, travel: 1.15, delay: "0s", duration: "1.2s", size: "3px" },
-  { id: "s1", x: 0.5, y: 0.02, travel: 1.35, delay: "0.15s", duration: "1.35s", size: "2px" },
-  { id: "s2", x: 0.92, y: 0.1, travel: 1.1, delay: "0.32s", duration: "1.1s", size: "4px" },
-  { id: "s3", x: 0.98, y: 0.5, travel: 1.25, delay: "0.08s", duration: "1.28s", size: "2px" },
-  { id: "s4", x: 0.9, y: 0.92, travel: 1.18, delay: "0.42s", duration: "1.22s", size: "3px" },
-  { id: "s5", x: 0.5, y: 0.98, travel: 1.4, delay: "0.22s", duration: "1.4s", size: "2px" },
-  { id: "s6", x: 0.08, y: 0.9, travel: 1.05, delay: "0.55s", duration: "1.08s", size: "3px" },
-  { id: "s7", x: 0.02, y: 0.5, travel: 1.22, delay: "0.05s", duration: "1.3s", size: "2px" },
-  { id: "s8", x: 0.22, y: 0.12, travel: 0.95, delay: "0.68s", duration: "1.0s", size: "2px" },
-  { id: "s9", x: 0.78, y: 0.15, travel: 1.3, delay: "0.48s", duration: "1.42s", size: "3px" },
-  { id: "s10", x: 0.82, y: 0.82, travel: 1.12, delay: "0.78s", duration: "1.15s", size: "2px" },
-  { id: "s11", x: 0.18, y: 0.8, travel: 1.28, delay: "0.35s", duration: "1.32s", size: "4px" },
-  { id: "s12", x: 0.35, y: 0.05, travel: 1.08, delay: "0.9s", duration: "1.18s", size: "2px" },
-  { id: "s13", x: 0.65, y: 0.95, travel: 1.2, delay: "0.6s", duration: "1.25s", size: "3px" },
-];
-
-/**
- * Soft god-ray beams from under the stack plate (window-light language).
- * Angles fan out under the floating preview as it tracks the pointer.
- */
-const DROP_STACK_RAYS: Array<{
-  id: string;
-  angle: number;
-  length: string;
-  width: string;
-  delay: string;
-  opacity: number;
-}> = [
-  { id: "r0", angle: -72, length: "min(42%, 160px)", width: "10px", delay: "0s", opacity: 0.55 },
-  { id: "r1", angle: -48, length: "min(52%, 200px)", width: "14px", delay: "0.12s", opacity: 0.7 },
-  { id: "r2", angle: -28, length: "min(48%, 180px)", width: "9px", delay: "0.28s", opacity: 0.5 },
-  { id: "r3", angle: -10, length: "min(58%, 220px)", width: "16px", delay: "0.05s", opacity: 0.75 },
-  { id: "r4", angle: 8, length: "min(54%, 210px)", width: "12px", delay: "0.2s", opacity: 0.65 },
-  { id: "r5", angle: 26, length: "min(46%, 175px)", width: "8px", delay: "0.4s", opacity: 0.48 },
-  { id: "r6", angle: 44, length: "min(50%, 190px)", width: "13px", delay: "0.15s", opacity: 0.68 },
-  { id: "r7", angle: 66, length: "min(40%, 150px)", width: "9px", delay: "0.35s", opacity: 0.45 },
-  { id: "r8", angle: 180, length: "min(36%, 130px)", width: "11px", delay: "0.25s", opacity: 0.35 },
-  { id: "r9", angle: -120, length: "min(34%, 120px)", width: "8px", delay: "0.5s", opacity: 0.32 },
-  { id: "r10", angle: 120, length: "min(38%, 140px)", width: "10px", delay: "0.18s", opacity: 0.38 },
-  { id: "r11", angle: -155, length: "min(30%, 110px)", width: "7px", delay: "0.45s", opacity: 0.28 },
+  { id: "s0", x: 0.1, y: 0.08, travel: 0.55, delay: "0s", duration: "1.4s", size: "2px" },
+  { id: "s1", x: 0.5, y: 0.04, travel: 0.65, delay: "0.25s", duration: "1.55s", size: "2px" },
+  { id: "s2", x: 0.9, y: 0.1, travel: 0.5, delay: "0.4s", duration: "1.3s", size: "3px" },
+  { id: "s3", x: 0.96, y: 0.5, travel: 0.6, delay: "0.12s", duration: "1.45s", size: "2px" },
+  { id: "s4", x: 0.88, y: 0.9, travel: 0.55, delay: "0.5s", duration: "1.35s", size: "2px" },
+  { id: "s5", x: 0.5, y: 0.96, travel: 0.7, delay: "0.3s", duration: "1.5s", size: "2px" },
+  { id: "s6", x: 0.1, y: 0.88, travel: 0.5, delay: "0.6s", duration: "1.25s", size: "3px" },
+  { id: "s7", x: 0.04, y: 0.5, travel: 0.58, delay: "0.18s", duration: "1.4s", size: "2px" },
 ];
 
 function elementLayerName(element: ScreenshotElement): string {

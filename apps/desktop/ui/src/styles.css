@@ -1072,9 +1072,11 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 .screenshot-canvas { display: block; width: 100%; height: 100%; -webkit-user-select: none; user-select: none; touch-action: none; }
 .screenshot-canvas.tool-select { cursor: default; }
 .screenshot-canvas.tool-crop, .screenshot-canvas.tool-text, .screenshot-canvas.tool-rectangle, .screenshot-canvas.tool-ellipse, .screenshot-canvas.tool-line, .screenshot-canvas.tool-arrow, .screenshot-canvas.tool-curved_arrow, .screenshot-canvas.tool-pen { cursor: crosshair; }
-.screenshot-drop-overlay { position: fixed; z-index: 80; top: 72px; left: 50%; display: grid; min-width: 250px; padding: 10px 14px 10px 45px; border: 1px solid rgba(var(--theme-accent-rgb),.72); border-radius: 10px; color: white; background: rgba(17,18,22,.94); box-shadow: 0 12px 34px rgba(0,0,0,.42); backdrop-filter: blur(16px); pointer-events: none; transform: translateX(-50%); }
+/* Fixed width so title swaps (above / below / on top / left / right) do not reflow the toast. */
+.screenshot-drop-overlay { position: fixed; z-index: 80; top: 72px; left: 50%; display: grid; width: 280px; min-width: 280px; max-width: 280px; padding: 10px 14px 10px 45px; border: 1px solid rgba(var(--theme-accent-rgb),.72); border-radius: 10px; color: white; background: rgba(17,18,22,.94); box-shadow: 0 12px 34px rgba(0,0,0,.42); backdrop-filter: blur(16px); pointer-events: none; transform: translateX(-50%); }
 .screenshot-drop-overlay svg { position: absolute; top: 50%; left: 13px; width: 23px; height: 23px; fill: none; stroke: var(--editing-accent); stroke-width: 1.7; transform: translateY(-50%); }
-.screenshot-drop-overlay strong { font-size: 11px; }.screenshot-drop-overlay span { margin-top: 3px; color: #aaaab0; font-size: 9px; }
+.screenshot-drop-overlay strong { min-height: 14px; overflow: hidden; font-size: 11px; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
+.screenshot-drop-overlay span { margin-top: 3px; min-height: 12px; color: #aaaab0; font-size: 9px; line-height: 1.3; white-space: nowrap; }
 /* Image-drop edge snap: bright edge bar + outward bloom + particles toward the drop side. */
 .screenshot-drop-snap-guide {
   position: absolute;
@@ -1230,163 +1232,126 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   animation-name: drop-snap-particle-right;
 }
 /*
- * Stack-on-top: soft target frame (no hard double-box), pointer-tracking plate,
- * god-rays from under the plate, edge-style bloom fade + particles.
+ * Stack-on-top: soft ambient under-light around a pointer-tracking plate.
+ * No discrete extruded rays — just a smooth light gradient that fades out.
  */
 .screenshot-drop-snap-guide.edge-stack {
-  border-color: rgba(var(--theme-accent-rgb),.28);
+  border-color: rgba(var(--theme-accent-rgb),.22);
   background: transparent;
   box-shadow:
-    0 0 0 1px rgba(0,0,0,.22),
-    0 0 28px rgba(var(--theme-accent-rgb),.16);
+    0 0 0 1px rgba(0,0,0,.18),
+    0 0 22px rgba(var(--theme-accent-rgb),.1);
 }
 /* Hide the solid single-edge bar used for top/right/bottom/left. */
 .screenshot-drop-snap-guide.edge-stack::after {
   display: none;
 }
 /*
- * Soft light pool under the floating plate — fades outward like edge bloom,
- * origin tracks --plate-cx/cy from the pointer-driven plate.
+ * Ambient halo: soft radial light around the plate, punched out under the plate
+ * so glow does not paint through the OS drag preview footprint.
  */
 .screenshot-drop-snap-guide.edge-stack .screenshot-drop-snap-bloom {
-  inset: -6%;
+  inset: -8%;
   height: auto;
   width: auto;
-  right: -6%;
-  bottom: -6%;
-  left: -6%;
+  right: -8%;
+  bottom: -8%;
+  left: -8%;
   background:
     radial-gradient(
       ellipse
-        calc(var(--plate-w, 30%) * 1.85)
-        calc(var(--plate-h, 28%) * 1.85)
+        calc(var(--plate-w, 30%) * 2.4)
+        calc(var(--plate-h, 28%) * 2.4)
         at var(--plate-cx, 50%) var(--plate-cy, 50%),
-      rgba(var(--theme-accent-rgb),.48) 0%,
-      rgba(var(--theme-accent-rgb),.28) 18%,
-      rgba(var(--theme-accent-rgb),.12) 42%,
-      rgba(var(--theme-accent-rgb),.04) 62%,
-      transparent 78%
+      transparent 0%,
+      transparent 22%,
+      rgba(var(--theme-accent-rgb),.22) 36%,
+      rgba(var(--theme-accent-rgb),.14) 48%,
+      rgba(var(--theme-accent-rgb),.06) 64%,
+      transparent 82%
+    ),
+    radial-gradient(
+      ellipse
+        calc(var(--plate-w, 30%) * 3.2)
+        calc(var(--plate-h, 28%) * 3.2)
+        at var(--plate-cx, 50%) var(--plate-cy, 50%),
+      rgba(var(--theme-accent-rgb),.08) 0%,
+      rgba(var(--theme-accent-rgb),.04) 40%,
+      transparent 72%
     );
+  /* Cut a soft hole under the plate so light only rings the silhouette. */
   mask-image:
     radial-gradient(
-      ellipse 95% 92% at 50% 50%,
-      #000 0%,
-      #000 55%,
-      transparent 100%
+      ellipse
+        calc(var(--plate-w, 30%) * 1.05)
+        calc(var(--plate-h, 28%) * 1.05)
+        at var(--plate-cx, 50%) var(--plate-cy, 50%),
+      transparent 0%,
+      transparent 42%,
+      #000 68%,
+      #000 100%
     );
   -webkit-mask-image:
     radial-gradient(
-      ellipse 95% 92% at 50% 50%,
-      #000 0%,
-      #000 55%,
-      transparent 100%
+      ellipse
+        calc(var(--plate-w, 30%) * 1.05)
+        calc(var(--plate-h, 28%) * 1.05)
+        at var(--plate-cx, 50%) var(--plate-cy, 50%),
+      transparent 0%,
+      transparent 42%,
+      #000 68%,
+      #000 100%
     );
-  filter: blur(.8px);
-  opacity: .95;
+  filter: blur(6px);
+  opacity: .9;
   animation-name: drop-snap-stack-bloom-breathe;
-}
-/* God-rays: beams from under the plate across the target (window-light language). */
-.screenshot-drop-snap-stack-rays {
-  position: absolute;
-  z-index: 1;
-  inset: 0;
-  overflow: hidden;
-  pointer-events: none;
-  /* Soft falloff so rays dissolve before the target edge. */
-  mask-image:
-    radial-gradient(
-      ellipse 88% 84% at var(--plate-cx, 50%) var(--plate-cy, 50%),
-      #000 0%,
-      #000 28%,
-      rgba(0,0,0,.55) 55%,
-      transparent 82%
-    );
-  -webkit-mask-image:
-    radial-gradient(
-      ellipse 88% 84% at var(--plate-cx, 50%) var(--plate-cy, 50%),
-      #000 0%,
-      #000 28%,
-      rgba(0,0,0,.55) 55%,
-      transparent 82%
-    );
-}
-.screenshot-drop-snap-stack-ray {
-  position: absolute;
-  left: var(--plate-cx, 50%);
-  top: var(--plate-cy, 50%);
-  width: var(--ray-length, 160px);
-  height: var(--ray-width, 10px);
-  border-radius: 999px;
-  background:
-    linear-gradient(
-      90deg,
-      rgba(var(--theme-accent-rgb),.72) 0%,
-      rgba(var(--theme-accent-rgb),.35) 28%,
-      rgba(var(--theme-accent-rgb),.1) 62%,
-      transparent 100%
-    );
-  box-shadow:
-    0 0 10px rgba(var(--theme-accent-rgb),.35),
-    0 0 22px rgba(var(--theme-accent-rgb),.18);
-  opacity: 0;
-  transform-origin: 0 50%;
-  transform: rotate(var(--ray-angle, 0deg)) translate3d(0, -50%, 0) scaleX(.55);
-  filter: blur(1.2px);
-  will-change: transform, opacity;
-  animation: drop-snap-stack-ray-sweep 1.7s ease-in-out infinite;
-  animation-delay: var(--ray-delay, 0s);
 }
 /* Pointer-tracking plate ≈ OS drag ghost; JS sets left/top/width/height. */
 .screenshot-drop-snap-stack-plate {
   position: absolute;
   z-index: 2;
-  border-radius: 5px;
+  border-radius: 6px;
   pointer-events: none;
-  animation: drop-snap-stack-plate-float 1.8s ease-in-out infinite;
-}
-/* Cast shadow / mask of the floating plate onto the target layer. */
-.screenshot-drop-snap-stack-shadow {
-  position: absolute;
-  inset: 2%;
-  border-radius: inherit;
-  background:
-    linear-gradient(
-      165deg,
-      rgba(8,9,12,.22) 0%,
-      rgba(8,9,12,.52) 48%,
-      rgba(8,9,12,.6) 100%
-    );
-  box-shadow:
-    0 14px 36px rgba(0,0,0,.48),
-    0 6px 14px rgba(0,0,0,.32),
-    0 0 48px rgba(0,0,0,.2);
+  /* Subtle float only — no aggressive pulse that fights the OS ghost. */
+  animation: drop-snap-stack-plate-float 2.2s ease-in-out infinite;
 }
 /*
- * Under-rim: light from the canvas hits the underside of the floating plate and
- * reads as a bright edge around the dropped image silhouette.
+ * Opaque dark plate under the OS preview so ambient light cannot show through
+ * the drag ghost; soft outer shadow seats the preview on the canvas.
+ */
+.screenshot-drop-snap-stack-shadow {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: rgba(10,11,14,.82);
+  box-shadow:
+    0 10px 28px rgba(0,0,0,.45),
+    0 3px 10px rgba(0,0,0,.28),
+    0 0 0 1px rgba(0,0,0,.35);
+}
+/*
+ * Soft under-rim: light from the canvas catches the silhouette edge without
+ * looking like discrete extruded rays.
  */
 .screenshot-drop-snap-stack-rim {
   position: absolute;
   inset: 0;
   border-radius: inherit;
   box-shadow:
-    0 0 0 1px rgba(var(--theme-accent-rgb),.65),
-    0 0 12px rgba(var(--theme-accent-rgb),.6),
-    0 0 28px rgba(var(--theme-accent-rgb),.35),
-    inset 0 0 16px rgba(var(--theme-accent-rgb),.24),
-    inset 0 1px 0 rgba(255,255,255,.28),
-    inset 0 -8px 18px rgba(var(--theme-accent-rgb),.2);
+    0 0 0 1px rgba(var(--theme-accent-rgb),.45),
+    0 0 14px rgba(var(--theme-accent-rgb),.28),
+    0 0 32px rgba(var(--theme-accent-rgb),.14),
+    inset 0 0 18px rgba(var(--theme-accent-rgb),.1);
   background:
     linear-gradient(
       180deg,
-      rgba(var(--theme-accent-rgb),.14) 0%,
-      transparent 30%,
-      transparent 58%,
-      rgba(var(--theme-accent-rgb),.18) 100%
+      rgba(var(--theme-accent-rgb),.1) 0%,
+      transparent 35%,
+      transparent 70%,
+      rgba(var(--theme-accent-rgb),.08) 100%
     );
-  animation: drop-snap-stack-rim-pulse 1.5s ease-in-out infinite;
 }
-/* Stack particles live on the plate and lift off its perimeter. */
+/* Stack particles live on the plate and lift softly off its perimeter. */
 .screenshot-drop-snap-stack-plate .screenshot-drop-snap-particles {
   z-index: 3;
 }
@@ -1395,6 +1360,7 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   top: calc(var(--snap-y, .5) * 100%);
   right: auto;
   bottom: auto;
+  opacity: 0;
   animation-name: drop-snap-particle-stack;
 }
 @keyframes drop-snap-edge-pulse {
@@ -1421,37 +1387,11 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 }
 @keyframes drop-snap-stack-bloom-breathe {
   0%, 100% { opacity: .78; transform: scale(1); }
-  50% { opacity: 1; transform: scale(1.04); }
+  50% { opacity: .95; transform: scale(1.02); }
 }
 @keyframes drop-snap-stack-plate-float {
-  0%, 100% { transform: translateY(0) scale(1); }
-  50% { transform: translateY(-4%) scale(1.02); }
-}
-@keyframes drop-snap-stack-rim-pulse {
-  0%, 100% {
-    opacity: .9;
-    filter: brightness(1);
-  }
-  50% {
-    opacity: 1;
-    filter: brightness(1.14);
-  }
-}
-/* Rays breathe and stretch as if light spills from under the floating plate. */
-@keyframes drop-snap-stack-ray-sweep {
-  0%, 100% {
-    opacity: calc(var(--ray-opacity, .55) * .55);
-    transform: rotate(var(--ray-angle, 0deg)) translate3d(0, -50%, 0) scaleX(.62);
-    filter: blur(1.4px) brightness(.95);
-  }
-  45% {
-    opacity: var(--ray-opacity, .55);
-    transform: rotate(var(--ray-angle, 0deg)) translate3d(0, -50%, 0) scaleX(1);
-    filter: blur(1px) brightness(1.12);
-  }
-  70% {
-    opacity: calc(var(--ray-opacity, .55) * .75);
-  }
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2px); }
 }
 @keyframes drop-snap-particle-right {
   0% {
@@ -1501,23 +1441,23 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
     transform: translate3d(-50%, calc(var(--snap-travel, 1) * 72px), 0) scale(.2);
   }
 }
-/* Particles lift off the plate as if riding the under-glow upward. */
+/* Soft rim sparkles — short travel, low opacity (not extruded ray beams). */
 @keyframes drop-snap-particle-stack {
   0% {
     opacity: 0;
-    transform: translate3d(-50%, -50%, 0) scale(.45);
+    transform: translate3d(-50%, -50%, 0) scale(.4);
   }
-  12% { opacity: 1; }
-  60% { opacity: .55; }
+  18% { opacity: .7; }
+  70% { opacity: .35; }
   100% {
     opacity: 0;
     transform:
       translate3d(
-        calc(-50% + (var(--snap-x, .5) - .5) * var(--snap-travel, 1) * 28px),
-        calc(-50% - var(--snap-travel, 1) * 48px),
+        calc(-50% + (var(--snap-x, .5) - .5) * var(--snap-travel, 1) * 12px),
+        calc(-50% - var(--snap-travel, 1) * 18px),
         0
       )
-      scale(.12);
+      scale(.2);
   }
 }
 .screenshot-drop-snap-guide > span {
@@ -1539,18 +1479,12 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   .screenshot-drop-snap-guide::after,
   .screenshot-drop-snap-bloom,
   .screenshot-drop-snap-particle,
-  .screenshot-drop-snap-stack-plate,
-  .screenshot-drop-snap-stack-rim,
-  .screenshot-drop-snap-stack-ray {
+  .screenshot-drop-snap-stack-plate {
     animation: none !important;
   }
   .screenshot-drop-snap-bloom { opacity: .7; }
   .screenshot-drop-snap-particle { opacity: 0; }
   .screenshot-drop-snap-stack-plate { transform: none; }
-  .screenshot-drop-snap-stack-ray {
-    opacity: calc(var(--ray-opacity, .55) * .7);
-    transform: rotate(var(--ray-angle, 0deg)) translate3d(0, -50%, 0) scaleX(.9);
-  }
 }
 /* Alignment guides while moving/resizing a selected layer (same accent language as drop snap). */
 .screenshot-align-snap-guide { position: absolute; z-index: 5; pointer-events: none; background: var(--editing-accent); box-shadow: 0 0 10px rgba(var(--theme-accent-rgb),.75); }

@@ -439,7 +439,7 @@ describe("ScreenshotEditor", () => {
 
     fireEvent.dragEnter(editor!, { dataTransfer });
     // Default before a pointer sample is bottom.
-    expect(screen.getAllByText("Place below layer").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Place below").length).toBeGreaterThan(0);
 
     // Hover near the top edge without selecting a layer — previously always stayed "bottom".
     // jsdom drag events do not copy clientX/Y from fireEvent options; pin them on the event.
@@ -448,9 +448,9 @@ describe("ScreenshotEditor", () => {
     Object.defineProperty(topOver, "clientY", { configurable: true, value: 40 });
     fireEvent(editor!, topOver);
     await waitFor(() => {
-      expect(screen.getAllByText("Place above layer").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("Place above").length).toBeGreaterThan(0);
     });
-    expect(screen.queryByText("Place below layer")).not.toBeInTheDocument();
+    expect(screen.queryByText("Place below")).not.toBeInTheDocument();
 
     const guide = document.querySelector(".screenshot-drop-snap-guide.edge-top");
     expect(guide).not.toBeNull();
@@ -458,7 +458,7 @@ describe("ScreenshotEditor", () => {
     expect(guide?.querySelectorAll(".screenshot-drop-snap-particle").length).toBeGreaterThan(0);
   });
 
-  it("offers stack-on-top placement with pointer-tracked under-glow rays", async () => {
+  it("offers stack-on-top placement with soft ambient under-glow (no discrete rays)", async () => {
     render(<ScreenshotEditor />);
     await screen.findAllByText("1440 × 900");
 
@@ -493,16 +493,19 @@ describe("ScreenshotEditor", () => {
     Object.defineProperty(stackOver, "clientY", { configurable: true, value: 450 });
     fireEvent(editor!, stackOver);
     await waitFor(() => {
-      expect(screen.getAllByText("Place on top").length).toBeGreaterThan(0);
+      // Toast is the only "Place on top" label (no canvas badge for stack).
+      expect(screen.getAllByText("Place on top")).toHaveLength(1);
     });
-    expect(screen.getByText("It will stack on top of the highlighted layer and stay editable."))
-      .toBeInTheDocument();
+    expect(screen.getByText("Drop to place — stays editable as a layer.")).toBeInTheDocument();
 
     const guide = document.querySelector(".screenshot-drop-snap-guide.edge-stack") as HTMLElement | null;
     expect(guide).not.toBeNull();
     expect(guide?.querySelector(".screenshot-drop-snap-bloom")).not.toBeNull();
-    expect(guide?.querySelector(".screenshot-drop-snap-stack-rays")).not.toBeNull();
-    expect(guide?.querySelectorAll(".screenshot-drop-snap-stack-ray").length).toBeGreaterThan(0);
+    // Soft ambient only — no extruded ray beams.
+    expect(guide?.querySelector(".screenshot-drop-snap-stack-rays")).toBeNull();
+    expect(guide?.querySelectorAll(".screenshot-drop-snap-stack-ray").length).toBe(0);
+    // Stack mode does not render a second on-canvas label badge.
+    expect(guide?.querySelector(":scope > span")).toBeNull();
     const plate = guide?.querySelector(".screenshot-drop-snap-stack-plate") as HTMLElement | null;
     expect(plate).not.toBeNull();
     expect(plate?.querySelector(".screenshot-drop-snap-stack-shadow")).not.toBeNull();
