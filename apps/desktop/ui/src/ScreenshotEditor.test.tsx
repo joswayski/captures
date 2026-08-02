@@ -429,7 +429,7 @@ describe("ScreenshotEditor", () => {
     expect(guide?.querySelectorAll(".screenshot-drop-snap-particle").length).toBeGreaterThan(0);
   });
 
-  it("keeps preserve quality by default and exposes compress controls for any format", async () => {
+  it("keeps preserve quality by default and compress does not change the format", async () => {
     render(<ScreenshotEditor />);
     await screen.findAllByText("1440 × 900");
 
@@ -440,21 +440,28 @@ describe("ScreenshotEditor", () => {
     expect(screen.queryByRole("slider", { name: "Image quality" })).not.toBeInTheDocument();
     expect(screen.queryByRole("spinbutton", { name: "Maximum file size" }))
       .not.toBeInTheDocument();
-    expect(screen.getByText("Lossless export keeps every pixel and replaces the original."))
-      .toBeInTheDocument();
+    expect(
+      screen.getByText("Keeps original quality as PNG and replaces the original."),
+    ).toBeInTheDocument();
 
-    // Compress is available even while the format starts as PNG; it switches to JPEG.
+    // Compress keeps PNG; the quality slider is JPEG-only.
     fireEvent.change(saveQuality, { target: { value: "compress" } });
 
     await waitFor(() => {
-      expect(format).toHaveValue("jpeg");
-      expect(screen.getByRole("slider", { name: "Image quality" })).toBeInTheDocument();
+      expect(format).toHaveValue("png");
     });
-    expect(screen.getByRole("slider", { name: "Image quality" }))
-      .toHaveAttribute("aria-valuetext", "Maximum");
+    expect(screen.queryByRole("slider", { name: "Image quality" })).not.toBeInTheDocument();
     expect(screen.queryByRole("spinbutton", { name: "Maximum file size" }))
       .not.toBeInTheDocument();
-    // Source is PNG, so JPEG compress always saves a new file.
+    expect(
+      screen.getByText("Compressed PNG replaces the original; turn on Make a copy to keep it."),
+    ).toBeInTheDocument();
+
+    fireEvent.change(format, { target: { value: "jpeg" } });
+    expect(screen.getByRole("combobox", { name: "Save quality" })).toHaveValue("compress");
+    expect(screen.getByRole("slider", { name: "Image quality" }))
+      .toHaveAttribute("aria-valuetext", "Maximum");
+    // Source is still a PNG path, so a JPEG save is always a new file.
     expect(
       screen.getByText("Compressed JPEG saves as a new file and leaves the original untouched."),
     ).toBeInTheDocument();
@@ -467,15 +474,15 @@ describe("ScreenshotEditor", () => {
     expect(screen.getByRole("spinbutton", { name: "Maximum file size" })).toHaveValue(10);
     expect(screen.getByRole("combobox", { name: "Screenshot file size unit" }))
       .toHaveValue("mb");
+    expect(format).toHaveValue("jpeg");
 
-    // Returning to a lossless format restores preserve quality.
+    // Switching format keeps the quality mode; maximum works for PNG too.
     fireEvent.change(format, { target: { value: "png" } });
-    expect(screen.getByRole("combobox", { name: "Save quality" })).toHaveValue("preserve");
-    expect(screen.queryByRole("spinbutton", { name: "Maximum file size" }))
-      .not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Save quality" })).toHaveValue("maximum");
+    expect(screen.getByRole("spinbutton", { name: "Maximum file size" })).toBeInTheDocument();
   });
 
-  it("uses the original file size when export is original + lossless and unedited", async () => {
+  it("uses the original file size when export is original + preserve quality and unedited", async () => {
     const toBlob = vi.fn((callback: BlobCallback) => {
       callback(new Blob([new Uint8Array(999_999)], { type: "image/png" }));
     });
@@ -605,6 +612,9 @@ describe("ScreenshotEditor", () => {
       fireEvent.change(screen.getByRole("combobox", { name: "Save quality" }), {
         target: { value: "compress" },
       });
+      // PNG compress keeps PNG; switch to JPEG to exercise the quality estimate path.
+      expect(screen.getByLabelText("Format")).toHaveValue("png");
+      fireEvent.change(screen.getByLabelText("Format"), { target: { value: "jpeg" } });
       await waitFor(() => {
         expect(screen.getByLabelText("Format")).toHaveValue("jpeg");
         expect(screen.getByRole("slider", { name: "Image quality" })).toBeInTheDocument();
@@ -627,7 +637,7 @@ describe("ScreenshotEditor", () => {
     const savedArtifact = {
       ...artifact,
       id: "capture-edited",
-      path: "/Users/example/Pictures/edited-photo.jpg",
+      path: "/Users/example/Pictures/edited-photo.png",
     };
     vi.mocked(open).mockResolvedValue("/Users/example/Pictures");
     vi.mocked(invoke).mockImplementation(async (command) => {
@@ -636,7 +646,7 @@ describe("ScreenshotEditor", () => {
         return {
           artifact: savedArtifact,
           path: savedArtifact.path,
-          format: "jpeg",
+          format: "png",
         };
       }
       if (command === "reveal_artifact") return undefined;
@@ -668,7 +678,8 @@ describe("ScreenshotEditor", () => {
       fireEvent.change(screen.getByRole("combobox", { name: "Save quality" }), {
         target: { value: "maximum" },
       });
-      expect(screen.getByLabelText("Format")).toHaveValue("jpeg");
+      // Maximum size keeps the selected PNG format.
+      expect(screen.getByLabelText("Format")).toHaveValue("png");
       await act(async () => undefined);
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
@@ -679,8 +690,9 @@ describe("ScreenshotEditor", () => {
           {
             request: expect.objectContaining({
               artifact_id: artifact.id,
-              destination_path: "/Users/example/Pictures/edited-photo.jpg",
-              format: "jpeg",
+              destination_path: "/Users/example/Pictures/edited-photo.png",
+              format: "png",
+              quality_mode: "maximum",
               jpeg_quality: 100,
               max_size_bytes: 10_000_000,
               overwrite_source: false,
@@ -713,7 +725,7 @@ describe("ScreenshotEditor", () => {
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
     expect(screen.getByRole("checkbox", { name: "Make a copy" })).not.toBeChecked();
     expect(
-      screen.getByText("Lossless export keeps every pixel and replaces the original."),
+      screen.getByText("Keeps original quality as PNG and replaces the original."),
     ).toBeInTheDocument();
 
     expect(artifactRemoved).not.toBeNull();
@@ -727,7 +739,7 @@ describe("ScreenshotEditor", () => {
       ),
     ).toHaveClass("screenshot-export-hint");
     expect(
-      screen.queryByText("Lossless export keeps every pixel and replaces the original."),
+      screen.queryByText("Keeps original quality as PNG and replaces the original."),
     ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy image" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
@@ -748,7 +760,7 @@ describe("ScreenshotEditor", () => {
       render(<ScreenshotEditor />);
       await screen.findAllByText("1440 × 900");
 
-      const hint = "Lossless export keeps every pixel and replaces the original.";
+      const hint = "Keeps original quality as PNG and replaces the original.";
       expect(screen.getByText(hint)).toBeInTheDocument();
 
       fireEvent.click(screen.getByRole("button", { name: "Copy image" }));

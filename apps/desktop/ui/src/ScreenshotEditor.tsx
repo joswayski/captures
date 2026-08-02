@@ -1679,14 +1679,11 @@ export function ScreenshotEditor() {
     let cancelled = false;
     const timer = window.setTimeout(() => {
       if (cancelled) return;
-      const estimateFormat: ExportFormat = qualityMode === "preserve"
-        ? exportFormat
-        : "jpeg";
       if (shouldUseOriginalFileSizeEstimate(
         artifact,
         editorDocument,
         baselineDocumentRef.current,
-        estimateFormat,
+        exportFormat,
         exportSize,
         qualityMode,
       )) {
@@ -1698,12 +1695,13 @@ export function ScreenshotEditor() {
       void (async () => {
         try {
           const canvas = renderFlattened();
-          const estimateQuality = qualityMode === "preserve"
-            ? 100
-            : Number(jpegQuality);
+          // Only JPEG has a quality knob in the browser estimate; PNG/WebP keep format.
+          const estimateQuality = exportFormat === "jpeg" && qualityMode !== "preserve"
+            ? Number(jpegQuality)
+            : 100;
           const bytes = await estimateCanvasExportBytes(
             canvas,
-            estimateFormat,
+            exportFormat,
             estimateQuality,
           );
           if (!cancelled) {
@@ -1780,12 +1778,8 @@ export function ScreenshotEditor() {
       setError("Enter a maximum file size of at least 10 KB.");
       return;
     }
-    // Size targeting and quality presets need a lossy codec (JPEG).
-    const saveFormat: ExportFormat = qualityMode === "preserve" ? exportFormat : "jpeg";
+    // Keep the user-selected format. Compress/maximum only change how that format is encoded.
     const saveQuality = qualityMode === "preserve" ? 100 : Number(jpegQuality);
-    if (saveFormat !== exportFormat) {
-      setExportFormat(saveFormat);
-    }
     setBusy("saving");
     setError("");
     clearSuccess();
@@ -1793,7 +1787,7 @@ export function ScreenshotEditor() {
       const destinationPath = screenshotDestinationPath(
         destinationDirectory,
         filenameStem,
-        saveFormat,
+        exportFormat,
         artifact.path,
       );
       const overwriteSource = !savingCopy
@@ -1804,7 +1798,8 @@ export function ScreenshotEditor() {
         request: {
           artifact_id: artifact.id,
           destination_path: destinationPath,
-          format: saveFormat,
+          format: exportFormat,
+          quality_mode: qualityMode,
           jpeg_quality: saveQuality,
           max_size_bytes: maximumSizeBytes,
           overwrite_source: overwriteSource,
@@ -1879,12 +1874,8 @@ export function ScreenshotEditor() {
     customExportWidth,
     customExportHeight,
   );
-  // Compress and maximum-size modes always encode as JPEG so quality/size limits work.
-  const effectiveExportFormat: ExportFormat = qualityMode === "preserve"
-    ? exportFormat
-    : "jpeg";
   const formatRequiresCopy = sourceMissing
-    || !screenshotPathMatchesFormat(artifact.path, effectiveExportFormat);
+    || !screenshotPathMatchesFormat(artifact.path, exportFormat);
   const savingCopy = makeCopy || formatRequiresCopy;
   const sourceDirectory = artifact.path ? screenshotParentDirectory(artifact.path) : "";
   const sourceStem = artifact.path ? screenshotFileStem(artifact.path) : "";
@@ -1899,25 +1890,24 @@ export function ScreenshotEditor() {
         && Number.isFinite(maximumSizeBytes)
         && maximumSizeBytes >= 10_000
         && estimatedBytes > maximumSizeBytes
+        && exportFormat === "jpeg"
         ? `≤ ${formatFileSize(maximumSizeBytes)}`
         : `≈ ${formatFileSize(estimatedBytes)}`;
+  const formatLabel = exportFormat === "jpeg"
+    ? "JPEG"
+    : exportFormat === "webp"
+      ? "WebP"
+      : "PNG";
+  const showJpegQualitySlider = qualityMode === "compress" && exportFormat === "jpeg";
 
   const applyExportFormat = (format: ExportFormat) => {
     setExportFormat(format);
-    // Lossless codecs stay preserve-only; compression switches the mode off.
-    if (format !== "jpeg" && qualityMode !== "preserve") {
-      setQualityMode("preserve");
-    }
     setSaved(null);
     clearSuccess();
   };
 
   const applyQualityMode = (mode: ScreenshotQualityMode) => {
     setQualityMode(mode);
-    // Quality presets and hard size caps need JPEG (PNG/WebP stay lossless).
-    if (mode !== "preserve" && exportFormat !== "jpeg") {
-      setExportFormat("jpeg");
-    }
     setSaved(null);
     clearSuccess();
   };
@@ -2786,12 +2776,12 @@ export function ScreenshotEditor() {
           <label>
             Format
             <select
-              value={effectiveExportFormat}
+              value={exportFormat}
               onChange={(event) => applyExportFormat(event.target.value as ExportFormat)}
             >
-              <option value="png">PNG · lossless</option>
+              <option value="png">PNG</option>
               <option value="jpeg">JPEG</option>
-              <option value="webp">WebP · lossless</option>
+              <option value="webp">WebP</option>
             </select>
           </label>
           <label className="screenshot-export-size">
@@ -2863,7 +2853,7 @@ export function ScreenshotEditor() {
               <option value="maximum">Maximum file size</option>
             </select>
           </label>
-          {qualityMode === "compress" && (
+          {showJpegQualitySlider && (
             <div className="screenshot-export-control screenshot-quality">
               <span>Compression quality</span>
               <NotchedSlider
@@ -2877,7 +2867,9 @@ export function ScreenshotEditor() {
           {qualityMode === "maximum" && (
             <label
               className="screenshot-maximum-size"
-              title="JPEG quality is lowered only when needed to meet this limit."
+              title={exportFormat === "jpeg"
+                ? "JPEG quality is lowered only when needed to meet this limit."
+                : `Uses stronger ${formatLabel} compression. If still over the limit, reduce dimensions or switch format.`}
             >
               Maximum file size
               <span>
@@ -2956,7 +2948,7 @@ export function ScreenshotEditor() {
                   clearSuccess();
                 }}
               />
-              <strong>.{screenshotFormatExtension(effectiveExportFormat, artifact.path)}</strong>
+              <strong>.{screenshotFormatExtension(exportFormat, artifact.path)}</strong>
             </span>
           </div>
           <div
@@ -2980,18 +2972,22 @@ export function ScreenshotEditor() {
               <div className="screenshot-export-hint">
                 {sourceMissing
                   ? "The original was deleted. You can still copy or save this edit."
-                  : qualityMode === "preserve" && effectiveExportFormat !== "jpeg"
+                  : qualityMode === "preserve"
                     ? savingCopy
-                      ? "Lossless export keeps every pixel and saves a new file."
-                      : "Lossless export keeps every pixel and replaces the original."
+                      ? `Keeps original quality as ${formatLabel} and saves a new file.`
+                      : `Keeps original quality as ${formatLabel} and replaces the original.`
                     : qualityMode === "maximum"
-                      ? savingCopy
-                        ? "The JPEG stays within the selected limit and saves as a new file."
-                        : "The JPEG stays within the selected limit and replaces the original."
+                      ? exportFormat === "jpeg"
+                        ? savingCopy
+                          ? "The JPEG stays within the selected limit and saves as a new file."
+                          : "The JPEG stays within the selected limit and replaces the original."
+                        : savingCopy
+                          ? `Compresses ${formatLabel} to aim for the size limit and saves a new file.`
+                          : `Compresses ${formatLabel} to aim for the size limit and replaces the original.`
                       : qualityMode === "compress"
                         ? savingCopy
-                          ? "Compressed JPEG saves as a new file and leaves the original untouched."
-                          : "Compressed JPEG replaces the original; turn on Make a copy to keep it."
+                          ? `Compressed ${formatLabel} saves as a new file and leaves the original untouched.`
+                          : `Compressed ${formatLabel} replaces the original; turn on Make a copy to keep it.`
                         : savingCopy
                           ? "Save creates a new file and leaves the original untouched."
                           : "Save replaces the original; turn on Make a copy to keep it."}
