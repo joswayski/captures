@@ -381,6 +381,261 @@ export function expandDocumentForElement(
   };
 }
 
+/**
+ * Grow the canvas so `bounds` sits fully inside it. Negative overflow shifts every
+ * layer so content stays put relative to the expanded frame.
+ */
+export function expandDocumentToFitBounds(
+  document: ScreenshotDocument,
+  bounds: EditorRect,
+  padding = 0,
+): ScreenshotDocument {
+  const shiftX = Math.max(0, Math.ceil(-bounds.x));
+  const shiftY = Math.max(0, Math.ceil(-bounds.y));
+  const fitted = {
+    x: bounds.x + shiftX,
+    y: bounds.y + shiftY,
+    width: bounds.width,
+    height: bounds.height,
+  };
+  const width = Math.max(
+    document.width + shiftX,
+    Math.ceil(fitted.x + fitted.width + padding),
+  );
+  const height = Math.max(
+    document.height + shiftY,
+    Math.ceil(fitted.y + fitted.height + padding),
+  );
+  if (
+    shiftX === 0
+    && shiftY === 0
+    && width === document.width
+    && height === document.height
+  ) {
+    return document;
+  }
+  return {
+    ...document,
+    width,
+    height,
+    elements: document.elements.map((current) => translateElement(current, shiftX, shiftY)),
+  };
+}
+
+/** Screen-pixel snap distance converted to document units via display scale. */
+export const ALIGNMENT_SNAP_SCREEN_PX = 10;
+
+export type AlignmentSnapGuide = {
+  orientation: "vertical" | "horizontal";
+  /** Document X for vertical guides, Y for horizontal. */
+  position: number;
+};
+
+export type BoundsSnapResult = {
+  bounds: EditorRect;
+  guides: AlignmentSnapGuide[];
+};
+
+/**
+ * Vertical/horizontal lines layers can snap against: canvas borders plus every
+ * other visible layer's edges.
+ */
+export function collectAlignmentSnapLines(
+  document: Pick<ScreenshotDocument, "width" | "height" | "elements">,
+  excludeId: string | null,
+): { vertical: number[]; horizontal: number[] } {
+  const vertical = new Set<number>([0, document.width]);
+  const horizontal = new Set<number>([0, document.height]);
+  for (const element of document.elements) {
+    if (element.id === excludeId || !element.visible) continue;
+    const bounds = elementBounds(element);
+    vertical.add(bounds.x);
+    vertical.add(bounds.x + bounds.width);
+    horizontal.add(bounds.y);
+    horizontal.add(bounds.y + bounds.height);
+  }
+  return {
+    vertical: [...vertical],
+    horizontal: [...horizontal],
+  };
+}
+
+function closestSnapPosition(
+  value: number,
+  lines: number[],
+  threshold: number,
+): number | null {
+  let best: number | null = null;
+  let bestDistance = threshold;
+  for (const line of lines) {
+    const distance = Math.abs(line - value);
+    if (distance <= bestDistance) {
+      bestDistance = distance;
+      best = line;
+    }
+  }
+  return best;
+}
+
+/**
+ * Snap a freely translated box so its edges align with nearby snap lines.
+ * Picks at most one X delta and one Y delta (closest within threshold).
+ */
+export function snapTranslatedBounds(
+  bounds: EditorRect,
+  lines: { vertical: number[]; horizontal: number[] },
+  threshold: number,
+): BoundsSnapResult {
+  if (threshold <= 0) return { bounds, guides: [] };
+
+  type AxisHit = { delta: number; position: number };
+  const pickAxis = (
+    candidates: number[],
+    snapLines: number[],
+  ): AxisHit | null => {
+    let best: AxisHit | null = null;
+    let bestAbs = threshold;
+    for (const value of candidates) {
+      const snapped = closestSnapPosition(value, snapLines, threshold);
+      if (snapped === null) continue;
+      const delta = snapped - value;
+      const abs = Math.abs(delta);
+      if (abs < bestAbs - 1e-9) {
+        bestAbs = abs;
+        best = { delta, position: snapped };
+      }
+    }
+    return best;
+  };
+
+  const left = bounds.x;
+  const right = bounds.x + bounds.width;
+  const top = bounds.y;
+  const bottom = bounds.y + bounds.height;
+  const xHit = pickAxis([left, right], lines.vertical);
+  const yHit = pickAxis([top, bottom], lines.horizontal);
+
+  const next = {
+    ...bounds,
+    x: bounds.x + (xHit?.delta ?? 0),
+    y: bounds.y + (yHit?.delta ?? 0),
+  };
+  const guides: AlignmentSnapGuide[] = [];
+  const pushUnique = (guide: AlignmentSnapGuide) => {
+    if (guides.some((existing) => (
+      existing.orientation === guide.orientation
+      && Math.abs(existing.position - guide.position) <= 1e-6
+    ))) {
+      return;
+    }
+    guides.push(guide);
+  };
+  if (xHit) {
+    // Light every edge that now sits on a snap line (same-width dual matches).
+    for (const edge of [next.x, next.x + next.width]) {
+      if (lines.vertical.some((line) => Math.abs(line - edge) <= 1e-6)) {
+        pushUnique({ orientation: "vertical", position: edge });
+      }
+    }
+  }
+  if (yHit) {
+    for (const edge of [next.y, next.y + next.height]) {
+      if (lines.horizontal.some((line) => Math.abs(line - edge) <= 1e-6)) {
+        pushUnique({ orientation: "horizontal", position: edge });
+      }
+    }
+  }
+  return { bounds: next, guides };
+}
+
+/**
+ * Snap edges moved by a corner resize so they align with nearby snap lines.
+ * The corner opposite the handle (before any flip) stays fixed when possible.
+ */
+export function snapResizedBounds(
+  initialBounds: EditorRect,
+  handle: ResizeHandle,
+  nextBounds: EditorRect,
+  lines: { vertical: number[]; horizontal: number[] },
+  threshold: number,
+  minimumSize = 8,
+): BoundsSnapResult {
+  if (threshold <= 0) return { bounds: nextBounds, guides: [] };
+  const min = Math.max(1, minimumSize);
+  const anchor = resizeHandlePoint(initialBounds, oppositeResizeHandle(handle));
+  let { x, y, width, height } = nextBounds;
+  const guides: AlignmentSnapGuide[] = [];
+
+  const leftFree = Math.abs(x - anchor.x) > 0.5;
+  const rightFree = Math.abs(x + width - anchor.x) > 0.5;
+  const topFree = Math.abs(y - anchor.y) > 0.5;
+  const bottomFree = Math.abs(y + height - anchor.y) > 0.5;
+
+  if (leftFree) {
+    const snapped = closestSnapPosition(x, lines.vertical, threshold);
+    if (snapped !== null) {
+      const nextWidth = width + (x - snapped);
+      if (nextWidth >= min) {
+        width = nextWidth;
+        x = snapped;
+        guides.push({ orientation: "vertical", position: snapped });
+      }
+    }
+  }
+  if (rightFree) {
+    const right = x + width;
+    const snapped = closestSnapPosition(right, lines.vertical, threshold);
+    if (snapped !== null) {
+      const nextWidth = snapped - x;
+      if (nextWidth >= min) {
+        width = nextWidth;
+        guides.push({ orientation: "vertical", position: snapped });
+      }
+    }
+  }
+  if (topFree) {
+    const snapped = closestSnapPosition(y, lines.horizontal, threshold);
+    if (snapped !== null) {
+      const nextHeight = height + (y - snapped);
+      if (nextHeight >= min) {
+        height = nextHeight;
+        y = snapped;
+        guides.push({ orientation: "horizontal", position: snapped });
+      }
+    }
+  }
+  if (bottomFree) {
+    const bottom = y + height;
+    const snapped = closestSnapPosition(bottom, lines.horizontal, threshold);
+    if (snapped !== null) {
+      const nextHeight = snapped - y;
+      if (nextHeight >= min) {
+        height = nextHeight;
+        guides.push({ orientation: "horizontal", position: snapped });
+      }
+    }
+  }
+
+  return {
+    bounds: { x, y, width, height },
+    guides,
+  };
+}
+
+/** Which canvas borders a box crosses (partially outside the document). */
+export function canvasOverflowEdges(
+  bounds: EditorRect,
+  canvas: Pick<ScreenshotDocument, "width" | "height">,
+  epsilon = 0.5,
+): ImageSnapEdge[] {
+  const edges: ImageSnapEdge[] = [];
+  if (bounds.x < -epsilon) edges.push("left");
+  if (bounds.y < -epsilon) edges.push("top");
+  if (bounds.x + bounds.width > canvas.width + epsilon) edges.push("right");
+  if (bounds.y + bounds.height > canvas.height + epsilon) edges.push("bottom");
+  return edges;
+}
+
 export function isSupportedImageFile(file: Pick<File, "name" | "type">): boolean {
   if (file.type.toLowerCase().startsWith("image/")) return true;
   const extension = file.name.split(".").at(-1)?.toLowerCase() ?? "";

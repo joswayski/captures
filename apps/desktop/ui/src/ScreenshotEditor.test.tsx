@@ -559,11 +559,45 @@ describe("ScreenshotEditor", () => {
       screen.getByText(
         "The original was deleted. You can still copy or save this edit.",
       ),
-    ).toHaveClass("screenshot-export-status");
+    ).toHaveClass("screenshot-export-hint");
+    expect(
+      screen.queryByText("Lossless export keeps every pixel and replaces the original."),
+    ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy image" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
     expect(screen.queryByRole("checkbox", { name: "Make a copy" }))
       .not.toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("shows a success state for copy without replacing the export hint", async () => {
+    const restoreCanvas = installExportableCanvas();
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifact") return artifact;
+      if (command === "copy_screenshot_edit") return undefined;
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    try {
+      render(<ScreenshotEditor />);
+      await screen.findAllByText("1440 × 900");
+
+      const hint = "Lossless export keeps every pixel and replaces the original.";
+      expect(screen.getByText(hint)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Copy image" }));
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
+      });
+      expect(screen.getByText("Copied to clipboard")).toHaveClass("success");
+      // Hint stays put so the footer does not reflow around a status swap.
+      expect(screen.getByText(hint)).toBeInTheDocument();
+      expect(invoke).toHaveBeenCalledWith("copy_screenshot_edit", {
+        imagePng: expect.any(Array),
+      });
+    } finally {
+      restoreCanvas();
+    }
   });
 });
