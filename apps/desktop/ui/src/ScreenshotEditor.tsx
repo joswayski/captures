@@ -16,6 +16,7 @@ import {
   ALIGNMENT_SNAP_SCREEN_PX,
   arrowBendFromControlPoint,
   arrowControlPoint,
+  arrowHeadLength,
   boundedCropRect,
   canvasOverflowEdges,
   collectAlignmentSnapLines,
@@ -300,7 +301,7 @@ function arrowHead(
   strokeWidth: number,
 ): void {
   const angle = Math.atan2(end.y - tangent.y, end.x - tangent.x);
-  const length = Math.max(14, strokeWidth * 4.2);
+  const length = arrowHeadLength(strokeWidth);
   context.beginPath();
   context.moveTo(end.x, end.y);
   context.lineTo(
