@@ -326,6 +326,11 @@ describe("ScreenshotEditor", () => {
       expect(screen.getAllByText("Place above layer").length).toBeGreaterThan(0);
     });
     expect(screen.queryByText("Place below layer")).not.toBeInTheDocument();
+
+    const guide = document.querySelector(".screenshot-drop-snap-guide.edge-top");
+    expect(guide).not.toBeNull();
+    expect(guide?.querySelector(".screenshot-drop-snap-bloom")).not.toBeNull();
+    expect(guide?.querySelectorAll(".screenshot-drop-snap-particle").length).toBeGreaterThan(0);
   });
 
   it("keeps preserve quality by default and exposes compress controls for any format", async () => {
