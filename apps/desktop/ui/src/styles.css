@@ -1062,7 +1062,6 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging img { cur
 .screenshot-quality-mode { width: 152px; }
 .screenshot-quality-mode select { width: 100%; }
 .screenshot-quality { width: 248px; }
-.screenshot-lossless-quality { width: 164px; }
 /* Compact quality control: value + track + preset labels, aligned with selects. */
 .screenshot-quality .range-slider { grid-template-rows: 11px 20px 11px; gap: 0; }
 .screenshot-quality .range-slider-value { min-height: 11px; align-items: flex-end; }
@@ -1102,7 +1101,6 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging img { cur
   .screenshot-export-actions { grid-row: 1; grid-column: 2; }
   .screenshot-export-status { grid-row: 2; grid-column: 1 / -1; min-height: 20px; text-align: left; }
   .screenshot-quality { width: 170px; }
-  .screenshot-lossless-quality { width: 150px; }
   .screenshot-maximum-size { width: 124px; }
   .screenshot-export-settings { gap: 8px 10px; }
 }

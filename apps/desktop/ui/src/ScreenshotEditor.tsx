@@ -2397,7 +2397,7 @@ export function ScreenshotEditor() {
               </div>
             </div>
           )}
-          {exportFormat === "jpeg" ? (
+          {exportFormat === "jpeg" && (
             <label className="screenshot-quality-mode">
               Save quality
               <select
@@ -2413,11 +2413,6 @@ export function ScreenshotEditor() {
                 <option value="maximum">Maximum file size</option>
               </select>
             </label>
-          ) : (
-            <div className="screenshot-export-control screenshot-quality screenshot-lossless-quality">
-              <span>Quality</span>
-              <strong>Maximum · lossless</strong>
-            </div>
           )}
           {exportFormat === "jpeg" && qualityMode === "compress" && (
             <div className="screenshot-export-control screenshot-quality">

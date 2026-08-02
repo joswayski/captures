@@ -319,7 +319,9 @@ describe("ScreenshotEditor", () => {
 
     const format = screen.getByLabelText("Format");
     expect(format).toHaveValue("png");
-    expect(screen.getByText("Maximum · lossless")).toBeInTheDocument();
+    // PNG/WebP are always lossless — no quality control (and no fake disabled dropdown).
+    expect(screen.queryByText("Quality")).not.toBeInTheDocument();
+    expect(screen.queryByText("Maximum · lossless")).not.toBeInTheDocument();
     expect(screen.queryByRole("combobox", { name: "Save quality" }))
       .not.toBeInTheDocument();
     expect(screen.queryByRole("slider", { name: "Image quality" })).not.toBeInTheDocument();
