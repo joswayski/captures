@@ -9,6 +9,7 @@ import {
   expandDocumentForElement,
   hitTestElement,
   hitTestResizeHandle,
+  imageDropGuideAtPoint,
   imageSizeAtWidth,
   isSupportedImageFile,
   loadImageFile,
@@ -16,6 +17,7 @@ import {
   positionImportedImage,
   positionImportedImageAtEdge,
   reorderScreenshotLayers,
+  resolveImageDropTarget,
   resizeBoundsFromHandle,
   resizeElement,
   translateElement,
@@ -187,6 +189,52 @@ describe("screenshot editor geometry", () => {
     const expanded = expandDocumentForElement(document, imported, 0);
     expect(expanded.elements.at(-1)).toMatchObject({ x: 0 });
     expect(expanded.elements[0].x).toBeGreaterThan(0);
+  });
+
+  it("resolves drop snap targets without requiring a selected layer", () => {
+    const document = createScreenshotDocument("capture.png", 1_000, 800);
+    // No selection still snaps against the original screenshot, not a hardcoded bottom edge.
+    expect(resolveImageDropTarget(document, null)).toEqual({
+      x: 0,
+      y: 0,
+      width: 1_000,
+      height: 800,
+    });
+    expect(imageDropGuideAtPoint(document, null, { x: 500, y: 20 }).edge).toBe("top");
+    expect(imageDropGuideAtPoint(document, null, { x: 980, y: 400 }).edge).toBe("right");
+    expect(imageDropGuideAtPoint(document, null, { x: 500, y: 780 }).edge).toBe("bottom");
+    expect(imageDropGuideAtPoint(document, null, { x: 20, y: 400 }).edge).toBe("left");
+
+    const imported: EditorImageElement = {
+      ...editableLayer,
+      id: "imported",
+      kind: "image",
+      source: "imported",
+      src: "blob:imported",
+      name: "imported.png",
+      x: 100,
+      y: 100,
+      width: 200,
+      height: 150,
+      naturalWidth: 200,
+      naturalHeight: 150,
+    };
+    const layered = { ...document, elements: [...document.elements, imported] };
+    // Prefer the selected image when present.
+    expect(resolveImageDropTarget(layered, "imported")).toEqual({
+      x: 100,
+      y: 100,
+      width: 200,
+      height: 150,
+    });
+    // Otherwise use the front-most visible image.
+    expect(resolveImageDropTarget(layered, null)).toEqual({
+      x: 100,
+      y: 100,
+      width: 200,
+      height: 150,
+    });
+    expect(imageDropGuideAtPoint(layered, "imported", { x: 50, y: 175 }).edge).toBe("left");
   });
 
   it("duplicates layers as visible unlocked imports", () => {
