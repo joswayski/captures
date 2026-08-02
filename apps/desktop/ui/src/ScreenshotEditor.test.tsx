@@ -138,7 +138,7 @@ describe("ScreenshotEditor", () => {
   it("loads the full-resolution artifact and exposes every requested annotation tool", async () => {
     render(<ScreenshotEditor />);
 
-    expect((await screen.findAllByText("1440 × 900")).length).toBeGreaterThan(0);
+    expect(await screen.findByLabelText("Width")).toHaveValue(1440);
     for (const name of [
       "Select & move (V)",
       "Crop (C)",
@@ -168,7 +168,7 @@ describe("ScreenshotEditor", () => {
 
   it("clears editor presence when the original layer is deleted", async () => {
     render(<ScreenshotEditor />);
-    await screen.findAllByText("1440 × 900");
+    await screen.findByLabelText("Width");
 
     const layers = screen.getByRole("region", { name: "Layers" });
     // Background starts locked; unlock before delete is allowed.
@@ -190,7 +190,7 @@ describe("ScreenshotEditor", () => {
 
   it("zooms with the standard keyboard shortcuts", async () => {
     render(<ScreenshotEditor />);
-    await screen.findAllByText("1440 × 900");
+    await screen.findByLabelText("Width");
 
     const zoom = screen.getByRole("combobox", { name: "Canvas zoom" });
     fireEvent.change(zoom, { target: { value: "100" } });
@@ -219,7 +219,7 @@ describe("ScreenshotEditor", () => {
 
   it("zooms on trackpad pinch or modified mouse wheel without consuming scroll", async () => {
     render(<ScreenshotEditor />);
-    await screen.findAllByText("1440 × 900");
+    await screen.findByLabelText("Width");
 
     const viewport = screen.getByLabelText("Screenshot editing canvas");
     const zoom = screen.getByRole("combobox", { name: "Canvas zoom" });
@@ -262,7 +262,7 @@ describe("ScreenshotEditor", () => {
 
   it("supports the native macOS magnify gesture", async () => {
     render(<ScreenshotEditor />);
-    await screen.findAllByText("1440 × 900");
+    await screen.findByLabelText("Width");
 
     const viewport = screen.getByLabelText("Screenshot editing canvas");
     const zoom = screen.getByRole("combobox", { name: "Canvas zoom" });
@@ -286,7 +286,7 @@ describe("ScreenshotEditor", () => {
 
   it("pans the viewport with Space-drag and Command/Ctrl-drag", async () => {
     render(<ScreenshotEditor />);
-    await screen.findAllByText("1440 × 900");
+    await screen.findByLabelText("Width");
 
     const viewport = screen.getByLabelText("Screenshot editing canvas");
     const canvas = viewport.querySelector("canvas")!;
@@ -351,7 +351,7 @@ describe("ScreenshotEditor", () => {
 
   it("creates selectable formatted text directly on the canvas", async () => {
     render(<ScreenshotEditor />);
-    await screen.findAllByText("1440 × 900");
+    await screen.findByLabelText("Width");
 
     fireEvent.change(screen.getByRole("combobox", { name: "Canvas zoom" }), {
       target: { value: "100" },
@@ -403,7 +403,7 @@ describe("ScreenshotEditor", () => {
 
   it("copies, pastes, and duplicates the selected layer with standard shortcuts", async () => {
     render(<ScreenshotEditor />);
-    await screen.findAllByText("1440 × 900");
+    await screen.findByLabelText("Width");
 
     fireEvent.click(screen.getByRole("button", { name: "Text (T)" }));
     const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
@@ -451,7 +451,7 @@ describe("ScreenshotEditor", () => {
 
   it("draws one straight Arrow and bends it from its canvas control handle", async () => {
     render(<ScreenshotEditor />);
-    await screen.findAllByText("1440 × 900");
+    await screen.findByLabelText("Width");
 
     fireEvent.change(screen.getByRole("combobox", { name: "Canvas zoom" }), {
       target: { value: "100" },
@@ -507,7 +507,7 @@ describe("ScreenshotEditor", () => {
 
   it("lets the original layer be unlocked and exposes layer appearance controls", async () => {
     render(<ScreenshotEditor />);
-    await screen.findAllByText("1440 × 900");
+    await screen.findByLabelText("Width");
 
     const layers = screen.getByRole("region", { name: "Layers" });
     // One lock control on the layer row (status is the control's pressed state, not a second icon).
@@ -544,16 +544,16 @@ describe("ScreenshotEditor", () => {
 
   it("can clear the solid canvas background for transparent PNG/WebP exports", async () => {
     render(<ScreenshotEditor />);
-    await screen.findAllByText("1440 × 900");
+    await screen.findByLabelText("Width");
 
-    // Canvas background lives in the header popover (document chrome, not layers).
-    fireEvent.click(screen.getByRole("button", { name: "1440 × 900" }));
-    const canvasPanel = screen.getByRole("dialog", { name: "Canvas" });
-    const solidBackground = within(canvasPanel).getByRole("checkbox", {
-      name: "Solid canvas background",
+    // Canvas background lives in the header toolbar (document chrome, not layers).
+    const canvasToolbar = screen.getByRole("group", { name: "Canvas" });
+    const solidBackground = within(canvasToolbar).getByRole("checkbox", {
+      name: "Solid background",
     });
     expect(solidBackground).toBeChecked();
-    expect(within(canvasPanel).getByText("Canvas background")).toBeInTheDocument();
+    // Compact ColorField keeps legend visually hidden but still exposes swatches.
+    expect(within(canvasToolbar).getByLabelText("Canvas background: #ffffff")).toBeInTheDocument();
 
     const surface = screen
       .getByLabelText("Screenshot editing canvas")
@@ -562,43 +562,40 @@ describe("ScreenshotEditor", () => {
 
     fireEvent.click(solidBackground);
     expect(solidBackground).not.toBeChecked();
-    expect(within(canvasPanel).queryByText("Canvas background")).not.toBeInTheDocument();
+    expect(within(canvasToolbar).queryByLabelText(/Canvas background:/)).not.toBeInTheDocument();
     expect(surface).toHaveClass("transparent");
 
     fireEvent.click(solidBackground);
     expect(solidBackground).toBeChecked();
-    expect(within(canvasPanel).getByText("Canvas background")).toBeInTheDocument();
+    expect(within(canvasToolbar).getByLabelText("Canvas background: #ffffff")).toBeInTheDocument();
     expect(surface).not.toHaveClass("transparent");
   });
 
-  it("offers Trim edges in the header Canvas panel and disables it when already tight", async () => {
+  it("offers Trim edges in the header canvas toolbar and disables it when already tight", async () => {
     render(<ScreenshotEditor />);
-    await screen.findAllByText("1440 × 900");
-
-    fireEvent.click(screen.getByRole("button", { name: "1440 × 900" }));
-    const canvasPanel = screen.getByRole("dialog", { name: "Canvas" });
+    const widthInput = await screen.findByLabelText("Width");
+    const canvasToolbar = screen.getByRole("group", { name: "Canvas" });
 
     // Fresh capture fills the canvas — nothing to trim.
-    const canvasTrim = within(canvasPanel).getByRole("button", { name: "Trim edges" });
+    const canvasTrim = within(canvasToolbar).getByRole("button", { name: "Trim edges" });
     expect(canvasTrim).toBeDisabled();
 
     // Manual canvas growth creates empty margin; trim should re-enable.
-    const widthInput = within(canvasPanel).getByLabelText("Width");
     fireEvent.change(widthInput, { target: { value: "1600" } });
     await waitFor(() => {
-      expect(within(canvasPanel).getByRole("button", { name: "Trim edges" })).toBeEnabled();
+      expect(within(canvasToolbar).getByRole("button", { name: "Trim edges" })).toBeEnabled();
     });
 
-    fireEvent.click(within(canvasPanel).getByRole("button", { name: "Trim edges" }));
+    fireEvent.click(within(canvasToolbar).getByRole("button", { name: "Trim edges" }));
     await waitFor(() => {
-      expect(screen.getAllByText("1440 × 900").length).toBeGreaterThan(0);
-      expect(within(canvasPanel).getByRole("button", { name: "Trim edges" })).toBeDisabled();
+      expect(screen.getByLabelText("Width")).toHaveValue(1440);
+      expect(within(canvasToolbar).getByRole("button", { name: "Trim edges" })).toBeDisabled();
     });
   });
 
   it("does not select a new shape until Select & move is used", async () => {
     render(<ScreenshotEditor />);
-    await screen.findAllByText("1440 × 900");
+    await screen.findByLabelText("Width");
 
     fireEvent.click(screen.getByRole("button", { name: "Rectangle (R)" }));
     const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
@@ -642,7 +639,7 @@ describe("ScreenshotEditor", () => {
 
   it("deselects the active layer when clicking the empty viewport chrome", async () => {
     render(<ScreenshotEditor />);
-    await screen.findAllByText("1440 × 900");
+    await screen.findByLabelText("Width");
 
     fireEvent.change(screen.getByRole("combobox", { name: "Canvas zoom" }), {
       target: { value: "100" },
@@ -689,7 +686,7 @@ describe("ScreenshotEditor", () => {
 
   it("can start an arrow outside the canvas and expands to fit on release", async () => {
     render(<ScreenshotEditor />);
-    await screen.findAllByText("1440 × 900");
+    await screen.findByLabelText("Width");
 
     fireEvent.change(screen.getByRole("combobox", { name: "Canvas zoom" }), {
       target: { value: "100" },
@@ -749,7 +746,7 @@ describe("ScreenshotEditor", () => {
 
   it("snaps image drop guides to the closest edge without a selected layer", async () => {
     render(<ScreenshotEditor />);
-    await screen.findAllByText("1440 × 900");
+    await screen.findByLabelText("Width");
 
     const editor = screen.getByText("Screenshot editor").closest("main");
     expect(editor).toBeTruthy();
@@ -798,7 +795,7 @@ describe("ScreenshotEditor", () => {
 
   it("offers stack-on-top placement with soft ambient under-glow (no discrete rays)", async () => {
     render(<ScreenshotEditor />);
-    await screen.findAllByText("1440 × 900");
+    await screen.findByLabelText("Width");
 
     const editor = screen.getByText("Screenshot editor").closest("main");
     expect(editor).toBeTruthy();
@@ -883,7 +880,7 @@ describe("ScreenshotEditor", () => {
 
   it("keeps preserve quality by default and compress does not change the format", async () => {
     render(<ScreenshotEditor />);
-    await screen.findAllByText("1440 × 900");
+    await screen.findByLabelText("Width");
 
     const format = screen.getByLabelText("Format");
     expect(format).toHaveValue("png");
@@ -960,7 +957,7 @@ describe("ScreenshotEditor", () => {
 
     try {
       render(<ScreenshotEditor />);
-      await screen.findAllByText("1440 × 900");
+      await screen.findByLabelText("Width");
 
       // Original PNG at full size with preserve quality → known capture size (250 KB).
       await waitFor(() => {
@@ -975,7 +972,7 @@ describe("ScreenshotEditor", () => {
 
   it("supports explicit custom output width and height", async () => {
     render(<ScreenshotEditor />);
-    await screen.findAllByText("1440 × 900");
+    await screen.findByLabelText("Width");
 
     fireEvent.change(screen.getByLabelText(/Output size/), {
       target: { value: "custom" },
@@ -1055,7 +1052,7 @@ describe("ScreenshotEditor", () => {
 
     try {
       render(<ScreenshotEditor />);
-      await screen.findAllByText("1440 × 900");
+      await screen.findByLabelText("Width");
 
       await waitFor(() => {
         expect(screen.getByText(/≈/)).toBeInTheDocument();
@@ -1184,7 +1181,7 @@ describe("ScreenshotEditor", () => {
     });
 
     render(<ScreenshotEditor />);
-    await screen.findAllByText("1440 × 900");
+    await screen.findByLabelText("Width");
 
     expect(screen.getByRole("button", { name: "Copy image" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
@@ -1223,7 +1220,7 @@ describe("ScreenshotEditor", () => {
 
     try {
       render(<ScreenshotEditor />);
-      await screen.findAllByText("1440 × 900");
+      await screen.findByLabelText("Width");
 
       const hint = "Keeps original quality as PNG and replaces the original.";
       expect(screen.getByText(hint)).toBeInTheDocument();
