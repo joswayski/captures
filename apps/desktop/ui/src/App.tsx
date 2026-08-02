@@ -60,6 +60,7 @@ import {
   shouldRecoverThumbnailAfterNullPolls,
   thumbnailCursorSyncAction,
   withThumbnailPointerTimeout,
+  THUMBNAIL_CURSOR_HANDOFF_REASSERT_DELAYS_MS,
   type ThumbnailCursorKind,
 } from "./lib/thumbnailHover";
 import {
@@ -78,6 +79,7 @@ import {
   shouldScrollThumbnailStackToEnd,
   thumbnailStackOverflow,
   THUMBNAIL_CARD_SLOT_PX,
+  waitForThumbnailStackSettle,
 } from "./lib/thumbnailLayout";
 import { reconcileActiveViewer } from "./lib/viewerActivation";
 import type {
@@ -4250,7 +4252,7 @@ export function Thumbnail() {
     let ignoreCursorUpdate: Promise<void> = Promise.resolve();
     let lastCursorSyncAt = 0;
     let consecutiveNullPolls = 0;
-    let cursorHandoffTimer: ReturnType<typeof setTimeout> | null = null;
+    let cursorHandoffTimers: ReturnType<typeof setTimeout>[] = [];
     /**
      * Clicks (and the key-window handoff they trigger) make macOS restore the
      * frontmost app's arrow for a frame. Reassert the current interactive
@@ -4261,18 +4263,24 @@ export function Thumbnail() {
       setThumbnailCursor(cursorKind, { force: true });
     };
 
+    const clearCursorHandoffTimers = () => {
+      for (const timer of cursorHandoffTimers) clearTimeout(timer);
+      cursorHandoffTimers = [];
+    };
+
     /**
-     * AppKit and WebKit can install the arrow after their mouse/focus event
-     * finishes. Reassert now and once on the next task so our interactive
-     * cursor wins both sides of that native handoff without waiting for a poll.
+     * AppKit and WebKit install the arrow during mouse up/down and again when
+     * Edit steals key-window focus. Reassert now and on a short delay schedule
+     * so the hand wins both the click and the editor handoff without a poll.
      */
     const preserveInteractiveCursorAcrossHandoff = () => {
       reassertInteractiveCursor();
-      if (cursorHandoffTimer) clearTimeout(cursorHandoffTimer);
-      cursorHandoffTimer = setTimeout(() => {
-        cursorHandoffTimer = null;
-        reassertInteractiveCursor();
-      }, 0);
+      clearCursorHandoffTimers();
+      cursorHandoffTimers = THUMBNAIL_CURSOR_HANDOFF_REASSERT_DELAYS_MS.map((delay) => (
+        setTimeout(() => {
+          reassertInteractiveCursor();
+        }, delay)
+      ));
     };
 
     const setThumbnailCursor = (
@@ -4474,9 +4482,13 @@ export function Thumbnail() {
       pollImmediately();
     };
 
-    const onPointerActivity = (event: PointerEvent) => {
+    const onPointerActivity = (event: Event) => {
       // Only primary-button presses/releases reset the AppKit cursor on macOS.
-      if (event.pointerType === "mouse" && event.button !== 0) return;
+      if (event instanceof PointerEvent) {
+        if (event.pointerType === "mouse" && event.button !== 0) return;
+      } else if (event instanceof MouseEvent && event.button !== 0) {
+        return;
+      }
       preserveInteractiveCursorAcrossHandoff();
     };
 
@@ -4493,6 +4505,9 @@ export function Thumbnail() {
     // Capture-phase so we reassert before WebKit's own cursor update from the click.
     window.addEventListener("pointerdown", onPointerActivity, true);
     window.addEventListener("pointerup", onPointerActivity, true);
+    // `click` fires after mouseup and after the Edit handler starts opening the
+    // editor window — cover that later AppKit handoff as well.
+    window.addEventListener("click", onPointerActivity, true);
     window.addEventListener("pageshow", resumeFromSuspension);
     window.addEventListener("online", resumeFromSuspension);
     window.addEventListener("captures-thumbnail-resumed", resumeFromNativeShow);
@@ -4507,12 +4522,13 @@ export function Thumbnail() {
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
-      if (cursorHandoffTimer) clearTimeout(cursorHandoffTimer);
+      clearCursorHandoffTimers();
       document.removeEventListener("visibilitychange", resumeFromSuspension);
       window.removeEventListener("focus", pollImmediately);
       window.removeEventListener("blur", preserveInteractiveCursorAcrossHandoff);
       window.removeEventListener("pointerdown", onPointerActivity, true);
       window.removeEventListener("pointerup", onPointerActivity, true);
+      window.removeEventListener("click", onPointerActivity, true);
       window.removeEventListener("pageshow", resumeFromSuspension);
       window.removeEventListener("online", resumeFromSuspension);
       window.removeEventListener("captures-thumbnail-resumed", resumeFromNativeShow);
@@ -4783,7 +4799,12 @@ export function ThumbnailCard({
       clearTimeout(exitFallbackTimer.current);
       exitFallbackTimer.current = null;
     }
-    void invoke(action, { artifactId: artifact.id })
+    // A second exit can retarget the survivor transform while this card's own
+    // animation is finishing. Releasing the held slot at that instant makes
+    // the flex reflow race the in-flight compositor transition and visibly
+    // snap. Wait for the browser's live stack transition, not a fixed estimate.
+    void waitForThumbnailStackSettle(cardRef.current)
+      .then(() => invoke(action, { artifactId: artifact.id }))
       .then(() => {
         onRemoved(artifact.id);
         // The outgoing inert card can make the native thumbnail window
