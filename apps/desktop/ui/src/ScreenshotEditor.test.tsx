@@ -546,11 +546,14 @@ describe("ScreenshotEditor", () => {
     render(<ScreenshotEditor />);
     await screen.findAllByText("1440 × 900");
 
-    const solidBackground = screen.getByRole("checkbox", {
+    // Canvas background lives in the header popover (document chrome, not layers).
+    fireEvent.click(screen.getByRole("button", { name: "1440 × 900" }));
+    const canvasPanel = screen.getByRole("dialog", { name: "Canvas" });
+    const solidBackground = within(canvasPanel).getByRole("checkbox", {
       name: "Solid canvas background",
     });
     expect(solidBackground).toBeChecked();
-    expect(screen.getByText("Canvas background")).toBeInTheDocument();
+    expect(within(canvasPanel).getByText("Canvas background")).toBeInTheDocument();
 
     const surface = screen
       .getByLabelText("Screenshot editing canvas")
@@ -559,34 +562,37 @@ describe("ScreenshotEditor", () => {
 
     fireEvent.click(solidBackground);
     expect(solidBackground).not.toBeChecked();
-    expect(screen.queryByText("Canvas background")).not.toBeInTheDocument();
+    expect(within(canvasPanel).queryByText("Canvas background")).not.toBeInTheDocument();
     expect(surface).toHaveClass("transparent");
 
     fireEvent.click(solidBackground);
     expect(solidBackground).toBeChecked();
-    expect(screen.getByText("Canvas background")).toBeInTheDocument();
+    expect(within(canvasPanel).getByText("Canvas background")).toBeInTheDocument();
     expect(surface).not.toHaveClass("transparent");
   });
 
-  it("offers Trim edges in the Canvas panel and disables it when already tight", async () => {
+  it("offers Trim edges in the header Canvas panel and disables it when already tight", async () => {
     render(<ScreenshotEditor />);
     await screen.findAllByText("1440 × 900");
 
+    fireEvent.click(screen.getByRole("button", { name: "1440 × 900" }));
+    const canvasPanel = screen.getByRole("dialog", { name: "Canvas" });
+
     // Fresh capture fills the canvas — nothing to trim.
-    const canvasTrim = screen.getAllByRole("button", { name: "Trim edges" })[0];
+    const canvasTrim = within(canvasPanel).getByRole("button", { name: "Trim edges" });
     expect(canvasTrim).toBeDisabled();
 
     // Manual canvas growth creates empty margin; trim should re-enable.
-    const widthInput = screen.getByLabelText("Width");
+    const widthInput = within(canvasPanel).getByLabelText("Width");
     fireEvent.change(widthInput, { target: { value: "1600" } });
     await waitFor(() => {
-      expect(screen.getAllByRole("button", { name: "Trim edges" })[0]).toBeEnabled();
+      expect(within(canvasPanel).getByRole("button", { name: "Trim edges" })).toBeEnabled();
     });
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Trim edges" })[0]);
+    fireEvent.click(within(canvasPanel).getByRole("button", { name: "Trim edges" }));
     await waitFor(() => {
       expect(screen.getAllByText("1440 × 900").length).toBeGreaterThan(0);
-      expect(screen.getAllByRole("button", { name: "Trim edges" })[0]).toBeDisabled();
+      expect(within(canvasPanel).getByRole("button", { name: "Trim edges" })).toBeDisabled();
     });
   });
 

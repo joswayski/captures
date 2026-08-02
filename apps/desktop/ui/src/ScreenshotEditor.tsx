@@ -717,6 +717,8 @@ export function ScreenshotEditor() {
   const [spacePanReady, setSpacePanReady] = useState(false);
   const [panActive, setPanActive] = useState(false);
   const [layerDropTarget, setLayerDropTarget] = useState<LayerDropTarget | null>(null);
+  /** Document-level canvas size/background controls live in the header, not the layer sidebar. */
+  const [canvasPanelOpen, setCanvasPanelOpen] = useState(false);
   const [exportFormat, setExportFormat] = useState<ExportFormat>("png");
   const [exportSize, setExportSize] = useState<ExportSize>("original");
   const [customExportWidth, setCustomExportWidth] = useState(1_920);
@@ -743,6 +745,7 @@ export function ScreenshotEditor() {
   const [saved, setSaved] = useState<SavedScreenshotEdit | null>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const canvasPanelRef = useRef<HTMLDivElement>(null);
   const inlineTextRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageCacheRef = useRef(new Map<string, CachedImage>());
@@ -1193,6 +1196,28 @@ export function ScreenshotEditor() {
     setTool("select");
     return true;
   }, [commitDocument, selectedId]);
+
+  useEffect(() => {
+    if (!canvasPanelOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setCanvasPanelOpen(false);
+      }
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (canvasPanelRef.current?.contains(target)) return;
+      setCanvasPanelOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("pointerdown", onPointerDown, true);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("pointerdown", onPointerDown, true);
+    };
+  }, [canvasPanelOpen]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -2461,9 +2486,98 @@ export function ScreenshotEditor() {
       }}
     >
       <header className="screenshot-editor-header">
-        <div>
+        <div className="screenshot-editor-title">
           <span>Screenshot editor</span>
-          <strong>{editorDocument.width} × {editorDocument.height}</strong>
+          <div className="screenshot-canvas-control" ref={canvasPanelRef}>
+            <button
+              type="button"
+              className={[
+                "screenshot-canvas-trigger",
+                canvasPanelOpen ? "open" : "",
+              ].filter(Boolean).join(" ")}
+              aria-expanded={canvasPanelOpen}
+              aria-controls="screenshot-canvas-panel"
+              aria-haspopup="dialog"
+              title="Canvas size and background"
+              onClick={() => setCanvasPanelOpen((open) => !open)}
+            >
+              <strong>{editorDocument.width} × {editorDocument.height}</strong>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m7 10 5 5 5-5" />
+              </svg>
+            </button>
+            {canvasPanelOpen && (
+              <div
+                id="screenshot-canvas-panel"
+                className="screenshot-canvas-panel"
+                role="dialog"
+                aria-label="Canvas"
+              >
+                <div className="screenshot-canvas-panel-heading">
+                  <strong>Canvas</strong>
+                  <span>Size, trim, and background</span>
+                </div>
+                <div className="screenshot-number-pair">
+                  <label>
+                    Width
+                    <input
+                      type="number"
+                      min={1}
+                      max={16_384}
+                      value={editorDocument.width}
+                      onChange={(event) => commitDocument(resizeDocumentCanvas(
+                        editorDocument,
+                        Number(event.target.value),
+                        editorDocument.height,
+                      ))}
+                    />
+                  </label>
+                  <label>
+                    Height
+                    <input
+                      type="number"
+                      min={1}
+                      max={16_384}
+                      value={editorDocument.height}
+                      onChange={(event) => commitDocument(resizeDocumentCanvas(
+                        editorDocument,
+                        editorDocument.width,
+                        Number(event.target.value),
+                      ))}
+                    />
+                  </label>
+                </div>
+                <div className="screenshot-property-actions">
+                  <button
+                    type="button"
+                    disabled={!canTrimEdges}
+                    title="Shrink the canvas to the edges of visible layers"
+                    onClick={applyTrimEdges}
+                  >
+                    Trim edges
+                  </button>
+                </div>
+                <label className="screenshot-check-row">
+                  <input
+                    type="checkbox"
+                    checked={editorDocument.background !== null}
+                    onChange={(event) => commitDocument({
+                      ...editorDocument,
+                      background: event.target.checked ? "#f7f7f5" : null,
+                    })}
+                  />
+                  Solid canvas background
+                </label>
+                {editorDocument.background !== null && (
+                  <ColorField
+                    label="Canvas background"
+                    value={editorDocument.background}
+                    onChange={(background) => commitDocument({ ...editorDocument, background })}
+                  />
+                )}
+              </div>
+            )}
+          </div>
         </div>
         <div className="screenshot-editor-history-actions">
           <button type="button" disabled={undoStack.length === 0} onClick={undo} aria-label="Undo">
@@ -3053,16 +3167,6 @@ export function ScreenshotEditor() {
             ) : (
               <p>Drag over the area you want to keep.</p>
             )}
-            <div className="screenshot-property-actions">
-              <button
-                type="button"
-                disabled={!canTrimEdges}
-                title="Shrink the canvas to the edges of visible layers"
-                onClick={applyTrimEdges}
-              >
-                Trim edges
-              </button>
-            </div>
           </section>
         )}
 
@@ -3362,68 +3466,6 @@ export function ScreenshotEditor() {
             <button type="button" onClick={() => moveLayer("back")}>Send to back</button>
           </section>
         )}
-
-        <section className="screenshot-property-section">
-          <h2>Canvas</h2>
-          <div className="screenshot-number-pair">
-            <label>
-              Width
-              <input
-                type="number"
-                min={1}
-                max={16_384}
-                value={editorDocument.width}
-                onChange={(event) => commitDocument(resizeDocumentCanvas(
-                  editorDocument,
-                  Number(event.target.value),
-                  editorDocument.height,
-                ))}
-              />
-            </label>
-            <label>
-              Height
-              <input
-                type="number"
-                min={1}
-                max={16_384}
-                value={editorDocument.height}
-                onChange={(event) => commitDocument(resizeDocumentCanvas(
-                  editorDocument,
-                  editorDocument.width,
-                  Number(event.target.value),
-                ))}
-              />
-            </label>
-          </div>
-          <div className="screenshot-property-actions">
-            <button
-              type="button"
-              disabled={!canTrimEdges}
-              title="Shrink the canvas to the edges of visible layers"
-              onClick={applyTrimEdges}
-            >
-              Trim edges
-            </button>
-          </div>
-          <label className="screenshot-check-row">
-            <input
-              type="checkbox"
-              checked={editorDocument.background !== null}
-              onChange={(event) => commitDocument({
-                ...editorDocument,
-                background: event.target.checked ? "#f7f7f5" : null,
-              })}
-            />
-            Solid canvas background
-          </label>
-          {editorDocument.background !== null && (
-            <ColorField
-              label="Canvas background"
-              value={editorDocument.background}
-              onChange={(background) => commitDocument({ ...editorDocument, background })}
-            />
-          )}
-        </section>
         </section>
       </aside>
 
