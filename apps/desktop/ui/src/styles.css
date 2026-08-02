@@ -1333,137 +1333,65 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   right: 0;
   animation-name: drop-snap-particle-right;
 }
-/*
- * Stack-on-top: soft ambient under-light around a pointer-tracking plate.
- * No discrete extruded rays — just a smooth light gradient that fades out.
- */
+/* Stack-on-top: the target layer is the luminous window/light source. */
 .screenshot-drop-snap-guide.edge-stack {
-  border-color: rgba(var(--theme-accent-rgb),.22);
+  isolation: isolate;
+  border-color: transparent;
   background: transparent;
   box-shadow:
-    0 0 0 1px rgba(0,0,0,.18),
-    0 0 22px rgba(var(--theme-accent-rgb),.1);
+    inset 0 0 40px rgba(var(--theme-accent-rgb),.055),
+    0 0 14px rgba(var(--theme-accent-rgb),.075);
 }
 /* Hide the solid single-edge bar used for top/right/bottom/left. */
 .screenshot-drop-snap-guide.edge-stack::after {
   display: none;
 }
 /*
- * Ambient halo: soft radial light around the plate, punched out under the plate
- * so glow does not paint through the OS drag preview footprint.
+ * Perspective planes connect every edge of the highlighted layer to an
+ * invisible opening beneath the native drag preview. This reads as light
+ * projected out of the layer instead of a halo around a fake gray tile.
  */
-.screenshot-drop-snap-guide.edge-stack .screenshot-drop-snap-bloom {
-  inset: -8%;
-  height: auto;
-  width: auto;
-  right: -8%;
-  bottom: -8%;
-  left: -8%;
-  background:
-    radial-gradient(
-      ellipse
-        calc(var(--plate-w, 30%) * 2.4)
-        calc(var(--plate-h, 28%) * 2.4)
-        at var(--plate-cx, 50%) var(--plate-cy, 50%),
-      transparent 0%,
-      transparent 22%,
-      rgba(var(--theme-accent-rgb),.22) 36%,
-      rgba(var(--theme-accent-rgb),.14) 48%,
-      rgba(var(--theme-accent-rgb),.06) 64%,
-      transparent 82%
-    ),
-    radial-gradient(
-      ellipse
-        calc(var(--plate-w, 30%) * 3.2)
-        calc(var(--plate-h, 28%) * 3.2)
-        at var(--plate-cx, 50%) var(--plate-cy, 50%),
-      rgba(var(--theme-accent-rgb),.08) 0%,
-      rgba(var(--theme-accent-rgb),.04) 40%,
-      transparent 72%
-    );
-  /* Cut a soft hole under the plate so light only rings the silhouette. */
-  mask-image:
-    radial-gradient(
-      ellipse
-        calc(var(--plate-w, 30%) * 1.05)
-        calc(var(--plate-h, 28%) * 1.05)
-        at var(--plate-cx, 50%) var(--plate-cy, 50%),
-      transparent 0%,
-      transparent 42%,
-      #000 68%,
-      #000 100%
-    );
-  -webkit-mask-image:
-    radial-gradient(
-      ellipse
-        calc(var(--plate-w, 30%) * 1.05)
-        calc(var(--plate-h, 28%) * 1.05)
-        at var(--plate-cx, 50%) var(--plate-cy, 50%),
-      transparent 0%,
-      transparent 42%,
-      #000 68%,
-      #000 100%
-    );
-  filter: blur(6px);
-  opacity: .9;
-  animation-name: drop-snap-stack-bloom-breathe;
-}
-/* Pointer-tracking plate ≈ OS drag ghost; JS sets left/top/width/height. */
-.screenshot-drop-snap-stack-plate {
+.screenshot-drop-snap-stack-light {
   position: absolute;
-  z-index: 2;
-  border-radius: 6px;
+  z-index: 1;
+  inset: -1px;
+  display: block;
+  width: calc(100% + 2px);
+  height: calc(100% + 2px);
+  overflow: visible;
+  color: var(--editing-accent);
   pointer-events: none;
-  /* Subtle float only — no aggressive pulse that fights the OS ghost. */
-  animation: drop-snap-stack-plate-float 2.2s ease-in-out infinite;
 }
-/*
- * Opaque dark plate under the OS preview so ambient light cannot show through
- * the drag ghost; soft outer shadow seats the preview on the canvas.
- */
-.screenshot-drop-snap-stack-shadow {
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background: rgba(10,11,14,.82);
-  box-shadow:
-    0 10px 28px rgba(0,0,0,.45),
-    0 3px 10px rgba(0,0,0,.28),
-    0 0 0 1px rgba(0,0,0,.35);
+.screenshot-drop-snap-stack-window-wash {
+  fill: currentColor;
+  opacity: .035;
 }
-/*
- * Soft under-rim: light from the canvas catches the silhouette edge without
- * looking like discrete extruded rays.
- */
-.screenshot-drop-snap-stack-rim {
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  box-shadow:
-    0 0 0 1px rgba(var(--theme-accent-rgb),.45),
-    0 0 14px rgba(var(--theme-accent-rgb),.28),
-    0 0 32px rgba(var(--theme-accent-rgb),.14),
-    inset 0 0 18px rgba(var(--theme-accent-rgb),.1);
-  background:
-    linear-gradient(
-      180deg,
-      rgba(var(--theme-accent-rgb),.1) 0%,
-      transparent 35%,
-      transparent 70%,
-      rgba(var(--theme-accent-rgb),.08) 100%
-    );
+.screenshot-drop-snap-stack-volume polygon,
+.screenshot-drop-snap-stack-shafts polygon {
+  fill: url("#screenshot-stack-light-volume");
 }
-/* Stack particles live on the plate and lift softly off its perimeter. */
-.screenshot-drop-snap-stack-plate .screenshot-drop-snap-particles {
-  z-index: 3;
+.screenshot-drop-snap-stack-volume.soft {
+  opacity: .82;
+  filter: blur(8px);
+  animation: drop-snap-stack-light-breathe 2.8s ease-in-out infinite;
 }
-.screenshot-drop-snap-stack-plate .screenshot-drop-snap-particle {
-  left: calc(var(--snap-x, .5) * 100%);
-  top: calc(var(--snap-y, .5) * 100%);
-  right: auto;
-  bottom: auto;
-  opacity: 0;
-  animation-name: drop-snap-particle-stack;
+.screenshot-drop-snap-stack-volume.core {
+  opacity: .46;
+  filter: blur(1.5px);
+}
+.screenshot-drop-snap-stack-shafts {
+  opacity: .64;
+  filter: blur(3.5px);
+  animation: drop-snap-stack-shafts-breathe 3.6s ease-in-out infinite;
+}
+.screenshot-drop-snap-stack-window-rim {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.25;
+  vector-effect: non-scaling-stroke;
+  opacity: .56;
+  filter: drop-shadow(0 0 5px rgba(var(--theme-accent-rgb),.46))
+    drop-shadow(0 0 13px rgba(var(--theme-accent-rgb),.18));
 }
 @keyframes drop-snap-edge-pulse {
   0%, 100% {
@@ -1487,13 +1415,13 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   0%, 100% { opacity: .82; transform: scale(1); }
   50% { opacity: 1; transform: scale(1.04); }
 }
-@keyframes drop-snap-stack-bloom-breathe {
-  0%, 100% { opacity: .78; transform: scale(1); }
-  50% { opacity: .95; transform: scale(1.02); }
+@keyframes drop-snap-stack-light-breathe {
+  0%, 100% { opacity: .72; }
+  50% { opacity: .9; }
 }
-@keyframes drop-snap-stack-plate-float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-2px); }
+@keyframes drop-snap-stack-shafts-breathe {
+  0%, 100% { opacity: .48; }
+  48% { opacity: .7; }
 }
 @keyframes drop-snap-particle-right {
   0% {
@@ -1543,25 +1471,6 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
     transform: translate3d(-50%, calc(var(--snap-travel, 1) * 72px), 0) scale(.2);
   }
 }
-/* Soft rim sparkles — short travel, low opacity (not extruded ray beams). */
-@keyframes drop-snap-particle-stack {
-  0% {
-    opacity: 0;
-    transform: translate3d(-50%, -50%, 0) scale(.4);
-  }
-  18% { opacity: .7; }
-  70% { opacity: .35; }
-  100% {
-    opacity: 0;
-    transform:
-      translate3d(
-        calc(-50% + (var(--snap-x, .5) - .5) * var(--snap-travel, 1) * 12px),
-        calc(-50% - var(--snap-travel, 1) * 18px),
-        0
-      )
-      scale(.2);
-  }
-}
 .screenshot-drop-snap-guide > span {
   position: absolute;
   z-index: 4;
@@ -1581,12 +1490,14 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   .screenshot-drop-snap-guide::after,
   .screenshot-drop-snap-bloom,
   .screenshot-drop-snap-particle,
-  .screenshot-drop-snap-stack-plate {
+  .screenshot-drop-snap-stack-volume.soft,
+  .screenshot-drop-snap-stack-shafts {
     animation: none !important;
   }
   .screenshot-drop-snap-bloom { opacity: .7; }
   .screenshot-drop-snap-particle { opacity: 0; }
-  .screenshot-drop-snap-stack-plate { transform: none; }
+  .screenshot-drop-snap-stack-volume.soft { opacity: .82; }
+  .screenshot-drop-snap-stack-shafts { opacity: .56; }
 }
 /* Alignment guides while moving/resizing a selected layer (same accent language as drop snap). */
 .screenshot-align-snap-guide { position: absolute; z-index: 5; pointer-events: none; background: var(--editing-accent); box-shadow: 0 0 10px rgba(var(--theme-accent-rgb),.75); }

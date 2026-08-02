@@ -53,13 +53,13 @@ export const IMAGE_DROP_EDGE_BAND_FRACTION = 0.22;
 export type ImageDropGuideInfo = {
   edge: ImageDropPlacement;
   target: EditorRect;
-  /** Document-space pointer sample used for stack plate tracking. */
+  /** Document-space pointer sample used for stack-light focus tracking. */
   point: EditorPoint;
   /**
-   * Floating “drag ghost” silhouette for stack-on-top feedback. Tracks the
-   * pointer so under-light / rays follow the OS drag preview, not a fixed box.
+   * Invisible focal opening for the stack-on-top light volume. It follows the
+   * pointer without drawing a synthetic rectangle beneath the OS drag preview.
    */
-  plate: EditorRect;
+  focus: EditorRect;
 };
 
 type EditorElementBase = {
@@ -570,11 +570,11 @@ export function resolveImageDropTarget(
 }
 
 /**
- * Size + place a compact stack plate under the drag pointer (approx OS ghost).
- * Smaller than the target so the silhouette tracks the floating preview instead
- * of framing the whole layer.
+ * Size + place the invisible opening under the native drag preview. It stays
+ * smaller than the target so the light volume follows the pointer instead of
+ * collapsing into the layer bounds.
  */
-export function stackDropPlateAtPoint(
+export function stackDropLightFocusAtPoint(
   point: EditorPoint,
   target: EditorRect,
 ): EditorRect {
@@ -615,7 +615,7 @@ export function imageDropGuideAtPoint(
     edge: imageDropPlacementAtPoint(point, target),
     target,
     point,
-    plate: stackDropPlateAtPoint(point, target),
+    focus: stackDropLightFocusAtPoint(point, target),
   };
 }
 
