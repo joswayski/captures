@@ -133,9 +133,39 @@ type PanGesture = {
   pointerId: number;
   clientX: number;
   clientY: number;
-  scrollLeft: number;
-  scrollTop: number;
+  originPanX: number;
+  originPanY: number;
 };
+
+/** True when a keyboard event is Command (Mac) or Ctrl (Windows/Linux). */
+function isPanModifierKey(event: KeyboardEvent): boolean {
+  return event.key === "Meta"
+    || event.key === "Control"
+    || event.code === "MetaLeft"
+    || event.code === "MetaRight"
+    || event.code === "ControlLeft"
+    || event.code === "ControlRight";
+}
+
+/** Canvas is "lost" when almost none of it intersects the viewport. */
+function isCanvasMostlyOffscreen(
+  viewport: DOMRectReadOnly,
+  surface: DOMRectReadOnly,
+): boolean {
+  const overlapWidth = Math.max(
+    0,
+    Math.min(surface.right, viewport.right) - Math.max(surface.left, viewport.left),
+  );
+  const overlapHeight = Math.max(
+    0,
+    Math.min(surface.bottom, viewport.bottom) - Math.max(surface.top, viewport.top),
+  );
+  const overlapArea = overlapWidth * overlapHeight;
+  if (overlapArea <= 0) return true;
+  const surfaceArea = Math.max(1, surface.width * surface.height);
+  // A thin sliver still counts as lost (Maps-style recenter cue).
+  return overlapArea < Math.min(48 * 48, surfaceArea * 0.04);
+}
 
 type SavedScreenshotEdit = {
   artifact: CaptureArtifact;
@@ -811,8 +841,12 @@ export function ScreenshotEditor() {
   const [alignmentGuides, setAlignmentGuides] = useState<AlignmentSnapGuide[]>([]);
   const [canvasExpandPreview, setCanvasExpandPreview] = useState<CanvasExpandPreview | null>(null);
   const [canvasCursor, setCanvasCursor] = useState<string | undefined>(undefined);
-  const [spacePanReady, setSpacePanReady] = useState(false);
+  /** Command/Ctrl held — pan-ready grab cursor over the viewport. */
+  const [panReady, setPanReady] = useState(false);
   const [panActive, setPanActive] = useState(false);
+  /** Free view offset (CSS px) so the canvas can be dragged fully off-screen. */
+  const [viewPan, setViewPan] = useState({ x: 0, y: 0 });
+  const [canvasOffscreen, setCanvasOffscreen] = useState(false);
   const [layerDropTarget, setLayerDropTarget] = useState<LayerDropTarget | null>(null);
   const [exportFormat, setExportFormat] = useState<ExportFormat>("png");
   const [exportSize, setExportSize] = useState<ExportSize>("original");
@@ -839,6 +873,7 @@ export function ScreenshotEditor() {
   const [makeCopy, setMakeCopy] = useState(false);
   const [saved, setSaved] = useState<SavedScreenshotEdit | null>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
+  const surfaceRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const inlineTextRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -847,7 +882,8 @@ export function ScreenshotEditor() {
   const objectUrlsRef = useRef(new Set<string>());
   const gestureRef = useRef<EditorGesture | null>(null);
   const panGestureRef = useRef<PanGesture | null>(null);
-  const spacePressedRef = useRef(false);
+  const modifierPanRef = useRef(false);
+  const viewPanRef = useRef({ x: 0, y: 0 });
   const selectInlineTextRef = useRef(false);
   const layerClipboardRef = useRef<{
     element: ScreenshotElement;
@@ -1159,8 +1195,26 @@ export function ScreenshotEditor() {
       const nextBounds = canvas.getBoundingClientRect();
       const nextClientX = nextBounds.left + nextBounds.width * anchor.xRatio;
       const nextClientY = nextBounds.top + nextBounds.height * anchor.yRatio;
-      viewport.scrollLeft += nextClientX - anchor.clientX;
-      viewport.scrollTop += nextClientY - anchor.clientY;
+      // Prefer scroll when the viewport overflows; otherwise nudge free pan so
+      // zoom still stays under the pointer after a Command/Ctrl drag-pan.
+      const dx = nextClientX - anchor.clientX;
+      const dy = nextClientY - anchor.clientY;
+      const prevLeft = viewport.scrollLeft;
+      const prevTop = viewport.scrollTop;
+      viewport.scrollLeft = prevLeft + dx;
+      viewport.scrollTop = prevTop + dy;
+      const scrolledX = viewport.scrollLeft - prevLeft;
+      const scrolledY = viewport.scrollTop - prevTop;
+      const residualX = dx - scrolledX;
+      const residualY = dy - scrolledY;
+      if (Math.abs(residualX) > 0.5 || Math.abs(residualY) > 0.5) {
+        const nextPan = {
+          x: viewPanRef.current.x - residualX,
+          y: viewPanRef.current.y - residualY,
+        };
+        viewPanRef.current = nextPan;
+        setViewPan(nextPan);
+      }
     });
   }, []);
 
@@ -1176,6 +1230,8 @@ export function ScreenshotEditor() {
       window.cancelAnimationFrame(zoomAnchorFrameRef.current);
       zoomAnchorFrameRef.current = null;
     }
+    viewPanRef.current = { x: 0, y: 0 };
+    setViewPan({ x: 0, y: 0 });
     setZoomMode("fit");
   }, []);
 
@@ -1332,10 +1388,10 @@ export function ScreenshotEditor() {
         && target.matches("input, textarea, select, [contenteditable=true]");
       const interactiveTarget = target instanceof Element
         && target.matches("input, textarea, select, button, a, [contenteditable=true]");
-      if (event.code === "Space" && !interactiveTarget) {
-        event.preventDefault();
-        spacePressedRef.current = true;
-        setSpacePanReady(true);
+      // Command (macOS) / Ctrl (Windows & Linux) hold enables click-drag pan.
+      if (isPanModifierKey(event) && !interactiveTarget) {
+        modifierPanRef.current = true;
+        setPanReady(true);
         return;
       }
       if (
@@ -1414,20 +1470,22 @@ export function ScreenshotEditor() {
         }
       }
     };
-    const stopSpacePan = () => {
-      spacePressedRef.current = false;
-      setSpacePanReady(false);
+    const stopModifierPan = () => {
+      modifierPanRef.current = false;
+      setPanReady(false);
     };
     const onKeyUp = (event: KeyboardEvent) => {
-      if (event.code === "Space") stopSpacePan();
+      if (isPanModifierKey(event) || (!event.metaKey && !event.ctrlKey)) {
+        stopModifierPan();
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
-    window.addEventListener("blur", stopSpacePan);
+    window.addEventListener("blur", stopModifierPan);
     return () => {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
-      window.removeEventListener("blur", stopSpacePan);
+      window.removeEventListener("blur", stopModifierPan);
     };
   }, [
     copySelectedLayer,
@@ -1514,15 +1572,17 @@ export function ScreenshotEditor() {
   const startPanPointer = (event: React.PointerEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement | null;
     if (target?.closest("input, textarea, select, button, [contenteditable=true]")) return;
-    const modifierPan = spacePressedRef.current || event.metaKey || event.ctrlKey;
+    // Pan from anywhere on the viewport — canvas, chrome, or layer hit targets —
+    // while Command/Ctrl is held (or middle mouse). Capture phase wins over tools.
+    const modifierPan = modifierPanRef.current || event.metaKey || event.ctrlKey;
     if ((event.button !== 0 || !modifierPan) && event.button !== 1) return;
     const viewport = event.currentTarget;
     panGestureRef.current = {
       pointerId: event.pointerId,
       clientX: event.clientX,
       clientY: event.clientY,
-      scrollLeft: viewport.scrollLeft,
-      scrollTop: viewport.scrollTop,
+      originPanX: viewPanRef.current.x,
+      originPanY: viewPanRef.current.y,
     };
     setPanActive(true);
     event.preventDefault();
@@ -1535,8 +1595,12 @@ export function ScreenshotEditor() {
   const movePanPointer = (event: React.PointerEvent<HTMLDivElement>) => {
     const gesture = panGestureRef.current;
     if (!gesture || gesture.pointerId !== event.pointerId) return;
-    event.currentTarget.scrollLeft = gesture.scrollLeft - (event.clientX - gesture.clientX);
-    event.currentTarget.scrollTop = gesture.scrollTop - (event.clientY - gesture.clientY);
+    const next = {
+      x: gesture.originPanX + (event.clientX - gesture.clientX),
+      y: gesture.originPanY + (event.clientY - gesture.clientY),
+    };
+    viewPanRef.current = next;
+    setViewPan(next);
     event.preventDefault();
     event.stopPropagation();
   };
@@ -1555,6 +1619,51 @@ export function ScreenshotEditor() {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
   };
+
+  const recenterCanvas = useCallback(() => {
+    viewPanRef.current = { x: 0, y: 0 };
+    setViewPan({ x: 0, y: 0 });
+    const viewport = viewportRef.current;
+    if (viewport) {
+      const maxLeft = Math.max(0, viewport.scrollWidth - viewport.clientWidth);
+      const maxTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+      viewport.scrollLeft = maxLeft / 2;
+      viewport.scrollTop = maxTop / 2;
+    }
+    setCanvasOffscreen(false);
+  }, []);
+
+  // Fade in Recenter when free pan (or scroll) leaves almost none of the canvas visible.
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    const surface = surfaceRef.current;
+    if (!viewport || !surface || !editorDocument) {
+      setCanvasOffscreen(false);
+      return undefined;
+    }
+
+    const update = () => {
+      setCanvasOffscreen(isCanvasMostlyOffscreen(
+        viewport.getBoundingClientRect(),
+        surface.getBoundingClientRect(),
+      ));
+    };
+
+    update();
+    viewport.addEventListener("scroll", update, { passive: true });
+    window.addEventListener("resize", update);
+    let observer: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== "undefined") {
+      observer = new ResizeObserver(update);
+      observer.observe(viewport);
+      observer.observe(surface);
+    }
+    return () => {
+      viewport.removeEventListener("scroll", update);
+      window.removeEventListener("resize", update);
+      observer?.disconnect();
+    };
+  }, [editorDocument, displayScale, viewPan]);
 
   /** Map client coordinates into document space (may be outside the canvas). */
   const clientToDocumentPoint = (clientX: number, clientY: number): EditorPoint => {
@@ -1780,8 +1889,8 @@ export function ScreenshotEditor() {
     // Only the viewport padding/empty area — not the canvas surface or overlays.
     if (event.target !== event.currentTarget) return;
     if (event.button !== 0) return;
-    // Space / Cmd / Ctrl / middle-button pan is handled in capture phase.
-    if (spacePressedRef.current || event.metaKey || event.ctrlKey) return;
+    // Command/Ctrl / middle-button pan is handled in capture phase.
+    if (modifierPanRef.current || event.metaKey || event.ctrlKey) return;
     if (panGestureRef.current) return;
     // Crop is a canvas-relative selection; ignore starts in the chrome.
     if (tool === "crop") return;
@@ -2800,7 +2909,7 @@ export function ScreenshotEditor() {
         ref={viewportRef}
         className={[
           "screenshot-canvas-viewport",
-          spacePanReady ? "is-pan-ready" : "",
+          panReady ? "is-pan-ready" : "",
           panActive ? "is-panning" : "",
         ].filter(Boolean).join(" ")}
         aria-label="Screenshot editing canvas"
@@ -2813,7 +2922,20 @@ export function ScreenshotEditor() {
         onPointerUp={finishPointer}
         onPointerCancel={finishPointer}
       >
+        <button
+          type="button"
+          className={[
+            "screenshot-canvas-recenter",
+            canvasOffscreen ? "is-visible" : "",
+          ].filter(Boolean).join(" ")}
+          aria-hidden={!canvasOffscreen}
+          tabIndex={canvasOffscreen ? 0 : -1}
+          onClick={recenterCanvas}
+        >
+          Recenter
+        </button>
         <div
+          ref={surfaceRef}
           className={[
             "screenshot-canvas-surface",
             editorDocument.background ? "" : "transparent",
@@ -2822,6 +2944,7 @@ export function ScreenshotEditor() {
             width: editorDocument.width * displayScale,
             height: editorDocument.height * displayScale,
             backgroundColor: editorDocument.background ?? undefined,
+            transform: `translate(${viewPan.x}px, ${viewPan.y}px)`,
           }}
         >
           <canvas
@@ -2831,7 +2954,7 @@ export function ScreenshotEditor() {
             style={{
               width: editorDocument.width * displayScale,
               height: editorDocument.height * displayScale,
-              cursor: panActive ? "grabbing" : spacePanReady ? "grab" : canvasCursor,
+              cursor: panActive ? "grabbing" : panReady ? "grab" : canvasCursor,
             }}
             className={`screenshot-canvas tool-${tool}`}
             onPointerDown={startPointer}
