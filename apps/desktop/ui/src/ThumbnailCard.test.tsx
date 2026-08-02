@@ -525,6 +525,41 @@ describe("ThumbnailCard", () => {
     expect(card).toHaveClass("thumbnail-exit-dust");
   });
 
+  it("keeps the in-editor chip mounted during delete so it can fade with chrome", () => {
+    const { rerender } = render(
+      <ThumbnailCard
+        artifact={artifact(null)}
+        clipboardCurrent={false}
+        viewerActive={false}
+        editorActive
+        onRemoved={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText("In editor")).toBeInTheDocument();
+
+    act(() => {
+      screen.getByRole("button", { name: "Delete" }).click();
+    });
+    const card = screen.getByRole("article");
+    expect(card).toHaveClass("thumbnail-exit-delete");
+    expect(card).toHaveClass("thumbnail-exiting");
+    // Still present for the chrome fade (CSS handles opacity), even if presence flips.
+    expect(screen.getByText("In editor")).toBeInTheDocument();
+    expect(card.querySelector(".editor-presence-chip")).not.toBeNull();
+
+    rerender(
+      <ThumbnailCard
+        artifact={artifact(null)}
+        clipboardCurrent={false}
+        viewerActive={false}
+        editorActive={false}
+        onRemoved={() => undefined}
+      />,
+    );
+    expect(screen.getByText("In editor")).toBeInTheDocument();
+  });
+
   it("starts the delete disintegration animation when Delete is clicked after save", () => {
     render(
       <ThumbnailCard
