@@ -60,7 +60,8 @@ import type { CaptureArtifact } from "./types";
 type ExportFormat = "png" | "jpeg" | "webp";
 type ExportSize = "original" | "75" | "50" | "custom";
 type ScreenshotQuality = "70" | "85" | "92" | "97" | "100";
-type ScreenshotQualityMode = "compress" | "maximum";
+/** Matches the recording editor: preserve by default, compress with presets, or cap size. */
+type ScreenshotQualityMode = "preserve" | "compress" | "maximum";
 type ScreenshotFileSizeUnit = "kb" | "mb" | "gb";
 
 type CachedImage = {
@@ -551,6 +552,38 @@ function formatScreenshotMaximumFileSizeInput(
   return Number(value.toPrecision(8)).toString();
 }
 
+/**
+ * When nothing about the export changes pixels or codec vs the loaded capture,
+ * show the known original file size instead of a browser re-encode estimate.
+ */
+function shouldUseOriginalFileSizeEstimate(
+  artifact: CaptureArtifact,
+  editorDocument: ScreenshotDocument,
+  baselineDocument: ScreenshotDocument | null,
+  exportFormat: ExportFormat,
+  exportSize: ExportSize,
+  qualityMode: ScreenshotQualityMode,
+): boolean {
+  if (qualityMode !== "preserve") return false;
+  if (exportSize !== "original") return false;
+  if (exportFormat === "jpeg") return false;
+  if (!baselineDocument) return false;
+  if (
+    editorDocument.width !== artifact.width
+    || editorDocument.height !== artifact.height
+  ) {
+    return false;
+  }
+  if (JSON.stringify(editorDocument) !== JSON.stringify(baselineDocument)) {
+    return false;
+  }
+  if (artifact.path) {
+    return screenshotPathMatchesFormat(artifact.path, exportFormat);
+  }
+  // Fresh captures are written as PNG when no path is available yet.
+  return exportFormat === "png";
+}
+
 export function ScreenshotEditor() {
   const artifactId = query("artifact_id");
   const [artifact, setArtifact] = useState<CaptureArtifact | null>(null);
@@ -588,7 +621,7 @@ export function ScreenshotEditor() {
   const [exportAspectLocked, setExportAspectLocked] = useState(true);
   const [jpegQuality, setJpegQuality] = useState<ScreenshotQuality>("100");
   const [qualityMode, setQualityMode] =
-    useState<ScreenshotQualityMode>("compress");
+    useState<ScreenshotQualityMode>("preserve");
   const [maximumFileSize, setMaximumFileSize] = useState("10");
   const [maximumFileSizeUnit, setMaximumFileSizeUnit] =
     useState<ScreenshotFileSizeUnit>("mb");
@@ -596,6 +629,7 @@ export function ScreenshotEditor() {
   const [destinationDirectory, setDestinationDirectory] = useState("");
   const [estimatedBytes, setEstimatedBytes] = useState<number | null>(null);
   const [estimatePending, setEstimatePending] = useState(false);
+  const baselineDocumentRef = useRef<ScreenshotDocument | null>(null);
   const [busy, setBusy] = useState<"copying" | "saving" | null>(null);
   /** Transient success for copy/save — does not replace the stable export hint. */
   const [success, setSuccess] = useState<{ kind: "copy" | "save"; message: string } | null>(null);
@@ -717,9 +751,13 @@ export function ScreenshotEditor() {
       );
       ensureImage(loaded.full_url);
       setArtifact(loaded);
+      baselineDocumentRef.current = next;
       replaceDocument(next);
       setCustomExportWidth(loaded.width);
       setCustomExportHeight(loaded.height);
+      setExportFormat("png");
+      setExportSize("original");
+      setQualityMode("preserve");
       setMakeCopy(!loaded.path);
       setFilenameStem(screenshotFileStem(initialPath));
       setDestinationDirectory(screenshotParentDirectory(initialPath));
@@ -1420,18 +1458,36 @@ export function ScreenshotEditor() {
   }, [customExportHeight, customExportWidth, exportSize]);
 
   useEffect(() => {
-    if (!editorDocument) return;
+    if (!editorDocument || !artifact) return;
     let cancelled = false;
     const timer = window.setTimeout(() => {
       if (cancelled) return;
+      const estimateFormat: ExportFormat = qualityMode === "preserve"
+        ? exportFormat
+        : "jpeg";
+      if (shouldUseOriginalFileSizeEstimate(
+        artifact,
+        editorDocument,
+        baselineDocumentRef.current,
+        estimateFormat,
+        exportSize,
+        qualityMode,
+      )) {
+        setEstimatedBytes(artifact.size_bytes);
+        setEstimatePending(false);
+        return;
+      }
       setEstimatePending(true);
       void (async () => {
         try {
           const canvas = renderFlattened();
+          const estimateQuality = qualityMode === "preserve"
+            ? 100
+            : Number(jpegQuality);
           const bytes = await estimateCanvasExportBytes(
             canvas,
-            exportFormat,
-            Number(jpegQuality),
+            estimateFormat,
+            estimateQuality,
           );
           if (!cancelled) {
             setEstimatedBytes(bytes);
@@ -1450,6 +1506,7 @@ export function ScreenshotEditor() {
       window.clearTimeout(timer);
     };
   }, [
+    artifact,
     customExportWidth,
     customExportHeight,
     editorDocument,
@@ -1457,6 +1514,7 @@ export function ScreenshotEditor() {
     exportSize,
     imageRevision,
     jpegQuality,
+    qualityMode,
     renderFlattened,
   ]);
 
@@ -1487,7 +1545,7 @@ export function ScreenshotEditor() {
       setError("Choose a destination folder for the edited screenshot.");
       return;
     }
-    const maximumSizeText = exportFormat === "jpeg" && qualityMode === "maximum"
+    const maximumSizeText = qualityMode === "maximum"
       ? maximumFileSize.trim()
       : "";
     const maximumSizeBytes = maximumSizeText
@@ -1496,8 +1554,7 @@ export function ScreenshotEditor() {
       )
       : null;
     if (
-      exportFormat === "jpeg"
-      && qualityMode === "maximum"
+      qualityMode === "maximum"
       && (!maximumSizeText
         || !Number.isFinite(maximumSizeBytes)
         || maximumSizeBytes === null
@@ -1506,6 +1563,12 @@ export function ScreenshotEditor() {
       setError("Enter a maximum file size of at least 10 KB.");
       return;
     }
+    // Size targeting and quality presets need a lossy codec (JPEG).
+    const saveFormat: ExportFormat = qualityMode === "preserve" ? exportFormat : "jpeg";
+    const saveQuality = qualityMode === "preserve" ? 100 : Number(jpegQuality);
+    if (saveFormat !== exportFormat) {
+      setExportFormat(saveFormat);
+    }
     setBusy("saving");
     setError("");
     clearSuccess();
@@ -1513,7 +1576,7 @@ export function ScreenshotEditor() {
       const destinationPath = screenshotDestinationPath(
         destinationDirectory,
         filenameStem,
-        exportFormat,
+        saveFormat,
         artifact.path,
       );
       const overwriteSource = !savingCopy
@@ -1524,14 +1587,19 @@ export function ScreenshotEditor() {
         request: {
           artifact_id: artifact.id,
           destination_path: destinationPath,
-          format: exportFormat,
-          jpeg_quality: Number(jpegQuality),
+          format: saveFormat,
+          jpeg_quality: saveQuality,
           max_size_bytes: maximumSizeBytes,
           overwrite_source: overwriteSource,
           image_png: imagePng,
         },
       });
-      if (overwriteSource) setArtifact(result.artifact);
+      if (overwriteSource) {
+        setArtifact(result.artifact);
+        if (documentRef.current) {
+          baselineDocumentRef.current = documentRef.current;
+        }
+      }
       setSaved(result);
       showSuccess(
         "save",
@@ -1594,12 +1662,16 @@ export function ScreenshotEditor() {
     customExportWidth,
     customExportHeight,
   );
+  // Compress and maximum-size modes always encode as JPEG so quality/size limits work.
+  const effectiveExportFormat: ExportFormat = qualityMode === "preserve"
+    ? exportFormat
+    : "jpeg";
   const formatRequiresCopy = sourceMissing
-    || !screenshotPathMatchesFormat(artifact.path, exportFormat);
+    || !screenshotPathMatchesFormat(artifact.path, effectiveExportFormat);
   const savingCopy = makeCopy || formatRequiresCopy;
   const sourceDirectory = artifact.path ? screenshotParentDirectory(artifact.path) : "";
   const sourceStem = artifact.path ? screenshotFileStem(artifact.path) : "";
-  const maximumSizeBytes = exportFormat === "jpeg" && qualityMode === "maximum"
+  const maximumSizeBytes = qualityMode === "maximum"
     ? Number(maximumFileSize) * SCREENSHOT_FILE_SIZE_UNIT_BYTES[maximumFileSizeUnit]
     : null;
   const estimatedSizeLabel = estimatePending && estimatedBytes === null
@@ -1612,6 +1684,26 @@ export function ScreenshotEditor() {
         && estimatedBytes > maximumSizeBytes
         ? `≤ ${formatFileSize(maximumSizeBytes)}`
         : `≈ ${formatFileSize(estimatedBytes)}`;
+
+  const applyExportFormat = (format: ExportFormat) => {
+    setExportFormat(format);
+    // Lossless codecs stay preserve-only; compression switches the mode off.
+    if (format !== "jpeg" && qualityMode !== "preserve") {
+      setQualityMode("preserve");
+    }
+    setSaved(null);
+    clearSuccess();
+  };
+
+  const applyQualityMode = (mode: ScreenshotQualityMode) => {
+    setQualityMode(mode);
+    // Quality presets and hard size caps need JPEG (PNG/WebP stay lossless).
+    if (mode !== "preserve" && exportFormat !== "jpeg") {
+      setExportFormat("jpeg");
+    }
+    setSaved(null);
+    clearSuccess();
+  };
 
   const updateMakeCopy = (enabled: boolean) => {
     if (formatRequiresCopy) return;
@@ -2457,11 +2549,10 @@ export function ScreenshotEditor() {
         <div className="screenshot-export-settings">
           <label>
             Format
-            <select value={exportFormat} onChange={(event) => {
-              setExportFormat(event.target.value as ExportFormat);
-              setSaved(null);
-              clearSuccess();
-            }}>
+            <select
+              value={effectiveExportFormat}
+              onChange={(event) => applyExportFormat(event.target.value as ExportFormat)}
+            >
               <option value="png">PNG · lossless</option>
               <option value="jpeg">JPEG</option>
               <option value="webp">WebP · lossless</option>
@@ -2522,24 +2613,21 @@ export function ScreenshotEditor() {
               </div>
             </div>
           )}
-          {exportFormat === "jpeg" && (
-            <label className="screenshot-quality-mode">
-              Save quality
-              <select
-                aria-label="Save quality"
-                value={qualityMode}
-                onChange={(event) => {
-                  setQualityMode(event.target.value as ScreenshotQualityMode);
-                  setSaved(null);
-                  clearSuccess();
-                }}
-              >
-                <option value="compress">Compress</option>
-                <option value="maximum">Maximum file size</option>
-              </select>
-            </label>
-          )}
-          {exportFormat === "jpeg" && qualityMode === "compress" && (
+          <label className="screenshot-quality-mode">
+            Save quality
+            <select
+              aria-label="Save quality"
+              value={qualityMode}
+              onChange={(event) => {
+                applyQualityMode(event.target.value as ScreenshotQualityMode);
+              }}
+            >
+              <option value="preserve">Preserve quality</option>
+              <option value="compress">Compress</option>
+              <option value="maximum">Maximum file size</option>
+            </select>
+          </label>
+          {qualityMode === "compress" && (
             <div className="screenshot-export-control screenshot-quality">
               <span>Compression quality</span>
               <NotchedSlider
@@ -2550,7 +2638,7 @@ export function ScreenshotEditor() {
               />
             </div>
           )}
-          {exportFormat === "jpeg" && qualityMode === "maximum" && (
+          {qualityMode === "maximum" && (
             <label
               className="screenshot-maximum-size"
               title="JPEG quality is lowered only when needed to meet this limit."
@@ -2632,7 +2720,7 @@ export function ScreenshotEditor() {
                   clearSuccess();
                 }}
               />
-              <strong>.{screenshotFormatExtension(exportFormat, artifact.path)}</strong>
+              <strong>.{screenshotFormatExtension(effectiveExportFormat, artifact.path)}</strong>
             </span>
           </div>
           <div
@@ -2656,7 +2744,7 @@ export function ScreenshotEditor() {
               <div className="screenshot-export-hint">
                 {sourceMissing
                   ? "The original was deleted. You can still copy or save this edit."
-                  : exportFormat !== "jpeg"
+                  : qualityMode === "preserve" && effectiveExportFormat !== "jpeg"
                     ? savingCopy
                       ? "Lossless export keeps every pixel and saves a new file."
                       : "Lossless export keeps every pixel and replaces the original."
@@ -2664,9 +2752,13 @@ export function ScreenshotEditor() {
                       ? savingCopy
                         ? "The JPEG stays within the selected limit and saves as a new file."
                         : "The JPEG stays within the selected limit and replaces the original."
-                      : savingCopy
-                        ? "Save creates a new file and leaves the original untouched."
-                        : "Save replaces the original; turn on Make a copy to keep it."}
+                      : qualityMode === "compress"
+                        ? savingCopy
+                          ? "Compressed JPEG saves as a new file and leaves the original untouched."
+                          : "Compressed JPEG replaces the original; turn on Make a copy to keep it."
+                        : savingCopy
+                          ? "Save creates a new file and leaves the original untouched."
+                          : "Save replaces the original; turn on Make a copy to keep it."}
               </div>
             )}
           </div>

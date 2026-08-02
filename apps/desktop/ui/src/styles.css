@@ -1119,7 +1119,7 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 .screenshot-export-size-control select { min-width: 92px; }
 .screenshot-output-dimensions { color: #a0a1a6; font-size: 9px; font-weight: 650; line-height: 1; white-space: nowrap; text-transform: none; font-variant-numeric: tabular-nums; }
 .screenshot-custom-dimensions { width: 226px; }.screenshot-custom-dimensions > div { display: grid; height: 34px; grid-template-columns: minmax(0,1fr) auto minmax(0,1fr) 32px; align-items: center; gap: 5px; }.screenshot-custom-dimensions input[type=number] { width: 100%; min-width: 0; }.screenshot-custom-dimensions > div > span { color: #77787d; font-size: 9px; }.screenshot-custom-dimensions button { display: grid; width: 32px; height: 34px; padding: 0; place-items: center; border: 1px solid #44454b; border-radius: 6px; color: #8c8d92; background: #111216; }.screenshot-custom-dimensions button.active { border-color: rgba(var(--theme-accent-rgb),.5); color: var(--theme-accent-text); background: rgba(var(--theme-accent-rgb),.1); }.screenshot-custom-dimensions button svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.screenshot-quality-mode { width: 152px; }
+.screenshot-quality-mode { width: 168px; }
 .screenshot-quality-mode select { width: 100%; }
 .screenshot-quality { width: 248px; }
 /* Compact quality control: value + track + preset labels, aligned with selects. */
