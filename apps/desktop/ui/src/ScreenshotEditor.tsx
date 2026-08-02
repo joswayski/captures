@@ -533,6 +533,13 @@ function screenshotFileStem(path: string): string {
   return filename.replace(/\.[^.]+$/, "") || "Captures_screenshot";
 }
 
+function screenshotEditedFileStem(stem: string): string {
+  const trimmed = stem.trim();
+  if (!trimmed) return "Captures_screenshot-edited";
+  if (trimmed.endsWith("-edited") || trimmed.endsWith("-copy")) return trimmed;
+  return `${trimmed}-edited`;
+}
+
 function screenshotParentDirectory(path: string): string {
   const separator = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
   if (separator < 0) return ".";
@@ -1811,11 +1818,16 @@ export function ScreenshotEditor() {
           image_png: imagePng,
         },
       });
-      if (overwriteSource) {
-        setArtifact(result.artifact);
-        if (documentRef.current) {
-          baselineDocumentRef.current = documentRef.current;
-        }
+      // Always adopt the saved artifact so a first Captures-folder save becomes
+      // the new original (Save overwrites it; Make a copy creates another file).
+      setArtifact(result.artifact);
+      if (result.artifact.path) {
+        setMakeCopy(false);
+        setFilenameStem(screenshotFileStem(result.artifact.path));
+        setDestinationDirectory(screenshotParentDirectory(result.artifact.path));
+      }
+      if (documentRef.current) {
+        baselineDocumentRef.current = documentRef.current;
       }
       setSaved(result);
       showSuccess(
@@ -1926,8 +1938,11 @@ export function ScreenshotEditor() {
     if (formatRequiresCopy) return;
     setMakeCopy(enabled);
     if (enabled && filenameStem === sourceStem && destinationDirectory === sourceDirectory) {
-      setFilenameStem(`${sourceStem}-copy`);
-    } else if (!enabled) {
+      setFilenameStem(screenshotEditedFileStem(sourceStem));
+    } else if (!enabled && (
+      filenameStem === screenshotEditedFileStem(sourceStem)
+      || filenameStem === `${sourceStem}-copy`
+    )) {
       setFilenameStem(sourceStem);
       setDestinationDirectory(sourceDirectory);
     }
@@ -3001,7 +3016,7 @@ export function ScreenshotEditor() {
           <div className="screenshot-export-actions">
             {!formatRequiresCopy && (
               <label
-                className="screenshot-make-copy"
+                className="recording-toggle screenshot-make-copy"
                 title="Save as a new file and leave the original untouched"
               >
                 <input

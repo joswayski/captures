@@ -1655,20 +1655,38 @@ pub fn start_recording_export(
         .as_deref()
         .filter(|directory| !directory.is_empty())
         .map(Path::new);
-    let final_destination = match (request.overwrite_source, selected_directory) {
-        (true, directory) => storage::recording_replacement_destination_path_in(
+    let permanent_source = source
+        .saved_path
+        .as_deref()
+        .map(Path::new)
+        .filter(|path| path.is_file());
+    let final_destination = match (
+        request.overwrite_source,
+        selected_directory,
+        permanent_source,
+    ) {
+        (true, directory, Some(permanent)) => {
+            storage::recording_replacement_destination_path_in_with_replaceable(
+                &source_path,
+                directory,
+                &request.file_stem,
+                extension,
+                &[permanent],
+            )
+        }
+        (true, directory, None) => storage::recording_replacement_destination_path_in(
             &source_path,
             directory,
             &request.file_stem,
             extension,
         ),
-        (false, Some(directory)) => storage::recording_destination_path_in(
+        (false, Some(directory), _) => storage::recording_destination_path_in(
             &source_path,
             Some(directory),
             &request.file_stem,
             extension,
         ),
-        (false, None) => {
+        (false, None, _) => {
             storage::recording_destination_path(&source_path, &request.file_stem, extension)
         }
     }
@@ -1689,6 +1707,8 @@ pub fn start_recording_export(
 
     let task_export_id = export_id.clone();
     let state = state.inner().clone();
+    let requested_file_stem = request.file_stem.clone();
+    let requested_destination_directory = request.destination_directory.clone();
     tauri::async_runtime::spawn(async move {
         let toolchain = media_toolchain(&app);
         let input = PathBuf::from(&source.path);
@@ -1756,14 +1776,22 @@ pub fn start_recording_export(
                         (false, false) => (false, false),
                     };
                 let exported_path = outcome.path.to_string_lossy().into_owned();
-                // Prefer an existing Captures-folder save. On first Save of a
-                // history-only recording, promote a permanent copy even when the
-                // editor overwrites the private recovery media in place.
+                let recovery_path = PathBuf::from(&source.path);
+                // Prefer the user-facing Captures path:
+                // - Make a copy / format change → the export path itself
+                // - Overwrite that already landed outside recovery media → that path
+                // - Overwrite of recovery media with an existing permanent save → keep it
+                // - First history-only Save that only rewrote recovery media → promote
+                //   using the editor's chosen folder + filename when possible
                 let mut permanent_path = if request.overwrite_source {
-                    source
-                        .saved_path
-                        .clone()
-                        .filter(|path| Path::new(path).is_file())
+                    if outcome.path != recovery_path {
+                        Some(exported_path.clone())
+                    } else {
+                        source
+                            .saved_path
+                            .clone()
+                            .filter(|path| Path::new(path).is_file())
+                    }
                 } else {
                     Some(exported_path.clone())
                 };
@@ -1777,23 +1805,44 @@ pub fn start_recording_export(
                     }
                 } else if permanent_path.is_none() {
                     let settings = state.settings();
-                    match storage::unique_media_path(
-                        Path::new(&settings.output_directory),
-                        extension,
-                    ) {
-                        Ok(destination) => match fs::copy(&outcome.path, &destination) {
-                            Ok(_) => {
+                    let preferred = requested_destination_directory
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|directory| !directory.is_empty())
+                        .map(PathBuf::from)
+                        .filter(|directory| directory.is_dir())
+                        .map(|directory| {
+                            directory.join(format!("{}.{}", requested_file_stem.trim(), extension))
+                        })
+                        .filter(|destination| {
+                            !destination.exists() || destination == outcome.path.as_path()
+                        });
+                    let promote = preferred.or_else(|| {
+                        storage::unique_media_path(Path::new(&settings.output_directory), extension)
+                            .ok()
+                    });
+                    match promote {
+                        Some(destination) => {
+                            let copied = if destination == outcome.path {
+                                true
+                            } else {
+                                match fs::copy(&outcome.path, &destination) {
+                                    Ok(_) => true,
+                                    Err(error) => {
+                                        eprintln!(
+                                            "recording export completed, but a Captures folder copy could not be created: {error}"
+                                        );
+                                        false
+                                    }
+                                }
+                            };
+                            if copied {
                                 permanent_path = Some(destination.to_string_lossy().into_owned());
                             }
-                            Err(error) => {
-                                eprintln!(
-                                    "recording export completed, but a Captures folder copy could not be created: {error}"
-                                );
-                            }
-                        },
-                        Err(error) => {
+                        }
+                        None => {
                             eprintln!(
-                                "recording export completed, but a Captures folder path could not be prepared: {error}"
+                                "recording export completed, but a Captures folder path could not be prepared"
                             );
                         }
                     }
@@ -2778,11 +2827,16 @@ fn replace_recording_source_at(
     if source == destination {
         return replace_recording_source(source, replacement);
     }
+    // Overwriting an existing permanent Captures save (destination != recovery source).
     if destination.exists() {
-        return Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            "a file with that name already exists",
-        ));
+        replace_recording_source(destination, replacement)?;
+        // Recovery media is rebuilt from the permanent save on the next history upsert.
+        // Drop the old recovery file when it is a different path so we do not leave a
+        // stale unedited copy beside the new permanent file.
+        if source.exists() {
+            let _ = fs::remove_file(source);
+        }
+        return Ok(());
     }
 
     fs::rename(replacement, destination)?;
@@ -3435,25 +3489,24 @@ mod tests {
     }
 
     #[test]
-    fn replacing_a_recording_never_overwrites_an_existing_destination() {
+    fn replacing_a_recording_can_overwrite_an_existing_permanent_destination() {
         let source_directory = tempdir().expect("source directory");
         let destination_directory = tempdir().expect("destination directory");
-        let source = source_directory.path().join("recording.mp4");
+        let source = source_directory.path().join("media.mp4");
         let replacement = destination_directory.path().join(".replacement.mp4");
-        let destination = destination_directory.path().join("existing.mp4");
-        std::fs::write(&source, b"original").expect("source");
+        let destination = destination_directory.path().join("Captures_clip.mp4");
+        std::fs::write(&source, b"recovery").expect("source");
         std::fs::write(&replacement, b"edited").expect("replacement");
-        std::fs::write(&destination, b"keep").expect("destination");
+        std::fs::write(&destination, b"previous permanent").expect("destination");
 
-        assert!(replace_recording_source_at(&source, &replacement, &destination).is_err());
-        assert_eq!(std::fs::read(&source).expect("source kept"), b"original");
+        replace_recording_source_at(&source, &replacement, &destination)
+            .expect("permanent destination replaced");
+
+        assert!(!source.exists());
+        assert!(!replacement.exists());
         assert_eq!(
-            std::fs::read(&replacement).expect("replacement kept"),
+            std::fs::read(&destination).expect("permanent recording"),
             b"edited"
-        );
-        assert_eq!(
-            std::fs::read(&destination).expect("destination kept"),
-            b"keep"
         );
     }
 }

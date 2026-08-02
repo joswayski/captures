@@ -211,7 +211,7 @@ pub fn recording_destination_path_in(
     file_stem: &str,
     extension: &str,
 ) -> Result<PathBuf, AppError> {
-    recording_destination_path_in_mode(source, selected_directory, file_stem, extension, false)
+    recording_destination_path_in_mode(source, selected_directory, file_stem, extension, &[])
 }
 
 pub fn recording_replacement_destination_path_in(
@@ -220,7 +220,28 @@ pub fn recording_replacement_destination_path_in(
     file_stem: &str,
     extension: &str,
 ) -> Result<PathBuf, AppError> {
-    recording_destination_path_in_mode(source, selected_directory, file_stem, extension, true)
+    recording_replacement_destination_path_in_with_replaceable(
+        source,
+        selected_directory,
+        file_stem,
+        extension,
+        &[],
+    )
+}
+
+/// Like [`recording_replacement_destination_path_in`], but also allows replacing an
+/// existing permanent Captures-folder save (distinct from private recovery media).
+pub fn recording_replacement_destination_path_in_with_replaceable(
+    source: &Path,
+    selected_directory: Option<&Path>,
+    file_stem: &str,
+    extension: &str,
+    replaceable: &[&Path],
+) -> Result<PathBuf, AppError> {
+    let mut paths = Vec::with_capacity(replaceable.len() + 1);
+    paths.push(source);
+    paths.extend_from_slice(replaceable);
+    recording_destination_path_in_mode(source, selected_directory, file_stem, extension, &paths)
 }
 
 fn recording_destination_path_in_mode(
@@ -228,7 +249,7 @@ fn recording_destination_path_in_mode(
     selected_directory: Option<&Path>,
     file_stem: &str,
     extension: &str,
-    allow_source: bool,
+    replaceable: &[&Path],
 ) -> Result<PathBuf, AppError> {
     let stem = file_stem.trim();
     let reserved = [
@@ -273,7 +294,8 @@ fn recording_destination_path_in_mode(
         ));
     }
     let destination = directory.join(format!("{stem}.{extension}"));
-    if destination.exists() && !(allow_source && destination == source) {
+    let can_replace = replaceable.contains(&destination.as_path());
+    if destination.exists() && !can_replace {
         return Err(AppError::Task(format!(
             "“{stem}.{extension}” already exists; choose another filename"
         )));
@@ -634,8 +656,9 @@ mod tests {
         HISTORY_IMAGE_FILE, HISTORY_PREVIEW_FILE, clear_drag_exports_in, encode_drag_icon_png,
         encode_png, encode_preview_png, encode_thumbnail_png, load_capture_history_from,
         prepare_artifact_drag_in, recording_destination_path, recording_destination_path_in,
-        recording_replacement_destination_path_in, save_encoded_capture, save_history_capture_in,
-        save_history_entry_in, save_settings_to, unique_path,
+        recording_replacement_destination_path_in,
+        recording_replacement_destination_path_in_with_replaceable, save_encoded_capture,
+        save_history_capture_in, save_history_entry_in, save_settings_to, unique_path,
     };
     use crate::models::{
         AppSettings, ArtifactKind, CaptureArtifact, ClipboardCopyStatus, HistoryEntry,
@@ -761,6 +784,41 @@ mod tests {
                 "mp4",
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn recording_replacement_can_overwrite_a_known_permanent_save() {
+        let recovery_directory = tempdir().expect("recovery directory");
+        let captures_directory = tempdir().expect("captures directory");
+        let recovery = recovery_directory.path().join("media.mp4");
+        let permanent = captures_directory.path().join("Captures_clip.mp4");
+        std::fs::write(&recovery, b"recovery").expect("recovery written");
+        std::fs::write(&permanent, b"permanent").expect("permanent written");
+
+        assert_eq!(
+            recording_replacement_destination_path_in_with_replaceable(
+                &recovery,
+                Some(captures_directory.path()),
+                "Captures_clip",
+                "mp4",
+                &[&permanent],
+            )
+            .expect("permanent save is replaceable"),
+            permanent
+        );
+        std::fs::write(captures_directory.path().join("other.mp4"), b"other")
+            .expect("other permanent written");
+        assert!(
+            recording_replacement_destination_path_in_with_replaceable(
+                &recovery,
+                Some(captures_directory.path()),
+                "other",
+                "mp4",
+                &[&permanent],
+            )
+            .is_err(),
+            "unrelated existing files must still be refused"
         );
     }
 

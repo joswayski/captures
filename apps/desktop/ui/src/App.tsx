@@ -30,8 +30,9 @@ import { reconcileClipboardState } from "./lib/clipboard";
 import {
   editorCropAfterDrag,
   formatEditorTime,
+  recordingEditedFileStem,
   recordingFilenameError,
-  recordingFileStem,
+  recordingUserFacingDefaults,
   timelineKeyboardDelta,
   type EditorCropHandle,
 } from "./lib/recordingEditor";
@@ -2711,8 +2712,16 @@ export function RecordingEditor() {
         invoke<AppSettings>("get_settings").catch(() => null),
       ]);
       if (!active || !loaded) return;
-      const initialFilenameStem = recordingFileStem(loaded.path);
-      const initialDestinationDirectory = recordingParentDirectory(loaded.path);
+      // Prefer a permanent Captures-folder save. Never default the footer to
+      // private history recovery media (`media.mp4` under Capture History).
+      const initialSave = recordingUserFacingDefaults({
+        path: loaded.path,
+        savedPath: loaded.saved_path,
+        createdAt: loaded.created_at,
+        outputDirectory: loadedSettings?.output_directory ?? "",
+      });
+      const initialFilenameStem = initialSave.stem;
+      const initialDestinationDirectory = initialSave.directory;
       const initialOutputFormat = loaded.kind === "gif" ? "gif" : "mp4";
       const initialSizeMode = loaded.kind === "gif" ? "compress" : "preserve";
       const initialGifFps = loadedSettings?.recording.gif_fps ?? 15;
@@ -2852,8 +2861,16 @@ export function RecordingEditor() {
     ? dimensionsAtMaximumWidth(baseOutputDimensions.width, baseOutputDimensions.height, gifMaxWidth)
     : baseOutputDimensions;
   const hasRecordedAudio = artifact.has_system_audio || artifact.has_microphone_audio;
-  const sourceDirectory = recordingParentDirectory(artifact.path);
-  const sourceStem = recordingFileStem(artifact.path);
+  // User-facing original is the permanent Captures save when present — not the
+  // private history recovery path (`…/history/<id>/media.mp4`).
+  const originalSave = recordingUserFacingDefaults({
+    path: artifact.path,
+    savedPath: artifact.saved_path,
+    createdAt: artifact.created_at,
+    outputDirectory: destinationDirectory,
+  });
+  const sourceDirectory = originalSave.directory;
+  const sourceStem = originalSave.stem;
   const sourceFormat = artifact.kind === "gif" ? "gif" : "mp4";
   const formatRequiresCopy = outputFormat !== sourceFormat;
   const alreadySaved = Boolean(exported && savedFingerprint === exportFingerprint);
@@ -2864,8 +2881,8 @@ export function RecordingEditor() {
     if (!enabled && formatRequiresCopy) return;
     setMakeCopy(enabled);
     if (enabled && filenameStem === sourceStem && destinationDirectory === sourceDirectory) {
-      setFilenameStem(`${sourceStem}-copy`);
-    } else if (!enabled && filenameStem === `${sourceStem}-copy`) {
+      setFilenameStem(recordingEditedFileStem(sourceStem));
+    } else if (!enabled && filenameStem === recordingEditedFileStem(sourceStem)) {
       setFilenameStem(sourceStem);
     }
     setSavedFingerprint(null);
@@ -2877,7 +2894,7 @@ export function RecordingEditor() {
     setOutputFormat(format);
     if (format !== sourceFormat && !makeCopy) {
       setMakeCopy(true);
-      setFilenameStem(`${sourceStem}-copy`);
+      setFilenameStem(recordingEditedFileStem(sourceStem));
       setDestinationDirectory(sourceDirectory);
     }
     if (format === "gif" && sizeMode === "preserve") setSizeMode("compress");
@@ -3635,13 +3652,6 @@ function editorOutputDimensions(
   const maximum = preset === "1080" ? 1080 : preset === "720" ? 720 : height;
   const scale = height > maximum ? maximum / height : 1;
   return { width: evenDimension(width * scale), height: evenDimension(height * scale) };
-}
-
-function recordingParentDirectory(path: string): string {
-  const separator = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
-  if (separator < 0) return ".";
-  if (separator === 0) return path.slice(0, 1);
-  return path.slice(0, separator);
 }
 
 function formatMaximumFileSizeInput(bytes: number, unit: FileSizeUnit): string {

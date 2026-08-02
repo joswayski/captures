@@ -649,6 +649,7 @@ describe("ScreenshotEditor", () => {
         .toHaveValue("capture");
       expect(screen.getByLabelText("Save location"))
         .toHaveTextContent("/Users/example/Captures");
+      expect(screen.getByRole("checkbox", { name: "Make a copy" })).not.toBeChecked();
 
       fireEvent.click(screen.getByRole("button", { name: "Change save location" }));
       await waitFor(() => {
@@ -691,6 +692,18 @@ describe("ScreenshotEditor", () => {
       expect(invoke).toHaveBeenCalledWith("reveal_artifact", {
         artifactId: savedArtifact.id,
       });
+      // After the first copy save, the editor treats that file as the original
+      // so later Save overwrites and Make a copy creates another file.
+      await waitFor(() => {
+        expect(screen.getByRole("textbox", { name: "Saved filename" }))
+          .toHaveValue("edited-photo");
+        expect(screen.getByLabelText("Save location"))
+          .toHaveTextContent("/Users/example/Pictures");
+        expect(screen.getByRole("checkbox", { name: "Make a copy" })).not.toBeChecked();
+      });
+      fireEvent.click(screen.getByRole("checkbox", { name: "Make a copy" }));
+      expect(screen.getByRole("textbox", { name: "Saved filename" }))
+        .toHaveValue("edited-photo-edited");
     } finally {
       restoreCanvas();
     }
