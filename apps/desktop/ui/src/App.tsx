@@ -84,6 +84,10 @@ import {
   THUMBNAIL_CARD_SLOT_PX,
   waitForThumbnailStackSettle,
 } from "./lib/thumbnailLayout";
+import {
+  artifactIdsInEditors,
+  reconcileEditorPresence,
+} from "./lib/editorPresence";
 import { reconcileActiveViewer } from "./lib/viewerActivation";
 import type {
   ActiveSession,
@@ -108,6 +112,7 @@ import type {
   RecordingTimelinePreview,
   ThumbnailPointerPosition,
   UpdateStatus,
+  EditorLayerPresence,
   ViewerActivationState,
 } from "./types";
 
@@ -2771,6 +2776,22 @@ export function RecordingEditor() {
     };
   }, [artifactId]);
 
+  // Recording editors are one artifact per window — mark the source as in-editor.
+  useEffect(() => {
+    if (!artifactId || !artifact) return;
+    const editorId = `recording-editor-${artifactId}`;
+    const publish = (artifactIds: string[]) => {
+      void Promise.resolve(emit<EditorLayerPresence>("editor-layers-changed", {
+        editor_id: editorId,
+        artifact_ids: artifactIds,
+      })).catch(() => undefined);
+    };
+    publish([artifactId]);
+    return () => {
+      publish([]);
+    };
+  }, [artifact, artifactId]);
+
   useEffect(() => {
     if (!toast) return;
     const timer = window.setTimeout(() => setToast(""), 4_000);
@@ -4072,6 +4093,13 @@ export function Thumbnail() {
     artifact_id: null,
   });
   const [activeViewerArtifactId, setActiveViewerArtifactId] = useState<string | null>(null);
+  const [editorPresence, setEditorPresence] = useState<Map<string, string[]>>(
+    () => new Map(),
+  );
+  const editorActiveArtifactIds = useMemo(
+    () => artifactIdsInEditors(editorPresence),
+    [editorPresence],
+  );
   const [stackOverflow, setStackOverflow] = useState({
     hasOlder: false,
     hasNewer: false,
@@ -4125,6 +4153,9 @@ export function Thumbnail() {
         }),
         listen<ViewerActivationState>("viewer-activation-changed", ({ payload }) => {
           setActiveViewerArtifactId((current) => reconcileActiveViewer(current, payload));
+        }),
+        listen<EditorLayerPresence>("editor-layers-changed", ({ payload }) => {
+          setEditorPresence((current) => reconcileEditorPresence(current, payload));
         }),
       ]);
       const initialArtifacts = await invoke<CaptureArtifact[]>("get_artifacts");
@@ -4613,6 +4644,7 @@ export function Thumbnail() {
             artifact={artifact}
             clipboardCurrent={clipboardState.artifact_id === artifact.id}
             viewerActive={activeViewerArtifactId === artifact.id}
+            editorActive={editorActiveArtifactIds.has(artifact.id)}
             onRemoved={(artifactId) => {
               setArtifacts((current) => current.filter(({ id }) => id !== artifactId));
             }}
@@ -4655,11 +4687,14 @@ export function ThumbnailCard({
   artifact,
   clipboardCurrent,
   viewerActive,
+  editorActive = false,
   onRemoved,
 }: {
   artifact: CaptureArtifact;
   clipboardCurrent: boolean;
   viewerActive: boolean;
+  /** True when this capture is still present as a layer in an open editor. */
+  editorActive?: boolean;
   onRemoved: (artifactId: string) => void;
 }) {
   const [feedback, setFeedback] = useState<"saved" | null>(null);
@@ -4938,6 +4973,7 @@ export function ThumbnailCard({
         thumbnailReady ? "thumbnail-ready" : "thumbnail-pending",
         thumbnailReady ? "thumbnail-capture-highlight" : "",
         viewerActive && !isExiting ? "thumbnail-viewer-active" : "",
+        editorActive && !isExiting ? "thumbnail-editor-active" : "",
         fileDragging ? "thumbnail-file-dragging" : "",
         exit ? `thumbnail-exit-${exit}` : "",
         usingDust ? "thumbnail-exit-dust" : "",
@@ -5011,7 +5047,8 @@ export function ThumbnailCard({
         </div>
         <div className="thumbnail-top-right">
           <IconButton
-            label="Edit"
+            className={editorActive ? "active" : ""}
+            label={editorActive ? "Open editor" : "Edit"}
             disabled={isExiting}
             onClick={openEditor}
           >
@@ -5050,12 +5087,20 @@ export function ThumbnailCard({
               ? <span className="warning">Clipboard unavailable</span>
               : null}
         </div>
-        {chrome.clipboardCurrent && (
-          <div className="clipboard-confirmation" role="status">
-            <CheckIcon />
-            <span>Copied to clipboard</span>
-          </div>
-        )}
+        <div className="thumbnail-status-chips">
+          {editorActive && (
+            <div className="editor-presence-chip" role="status">
+              <EditIcon />
+              <span>In editor</span>
+            </div>
+          )}
+          {chrome.clipboardCurrent && (
+            <div className="clipboard-confirmation" role="status">
+              <CheckIcon />
+              <span>Copied to clipboard</span>
+            </div>
+          )}
+        </div>
       </div>
       {error && <p className="thumbnail-message">{error}</p>}
     </article>
@@ -5075,11 +5120,13 @@ function IconButton({
   disabled?: boolean;
   onClick: () => void;
 }) {
+  const pressed = className.split(/\s+/).includes("active");
   return (
     <button
       type="button"
-      className={`icon-button ${className}`}
+      className={`icon-button ${className}`.trim()}
       aria-label={label}
+      aria-pressed={pressed || undefined}
       data-tooltip={label}
       disabled={disabled}
       onClick={disabled ? undefined : onClick}

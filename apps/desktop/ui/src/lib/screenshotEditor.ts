@@ -65,6 +65,11 @@ export type EditorImageElement = EditorElementBase & {
   source: "background" | "imported";
   src: string;
   name: string;
+  /**
+   * Capture History / mini-preview artifact this layer came from, when known.
+   * Used so the preview stack can show which cards are already in an editor.
+   */
+  sourceArtifactId: string | null;
   width: number;
   height: number;
   naturalWidth: number;
@@ -129,6 +134,7 @@ export function createScreenshotDocument(
   src: string,
   width: number,
   height: number,
+  sourceArtifactId: string | null = null,
 ): ScreenshotDocument {
   return {
     width: Math.max(1, Math.round(width)),
@@ -140,6 +146,7 @@ export function createScreenshotDocument(
       source: "background",
       src,
       name: "Original screenshot",
+      sourceArtifactId,
       x: 0,
       y: 0,
       width,
@@ -152,6 +159,19 @@ export function createScreenshotDocument(
       blendMode: "source-over",
     }],
   };
+}
+
+/** Artifact IDs currently represented by image layers in a document. */
+export function collectEditorSourceArtifactIds(
+  elements: readonly ScreenshotElement[],
+): string[] {
+  const ids = new Set<string>();
+  for (const element of elements) {
+    if (element.kind === "image" && element.sourceArtifactId) {
+      ids.add(element.sourceArtifactId);
+    }
+  }
+  return [...ids].sort();
 }
 
 export function normalizeRect(start: EditorPoint, end: EditorPoint): EditorRect {
