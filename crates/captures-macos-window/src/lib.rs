@@ -92,13 +92,13 @@ define_class!(
         #[unsafe(method(mouseEntered:))]
         fn mouse_entered(&self, event: &NSEvent) {
             self.activate_window_if_needed(event);
-            self.apply_cursor();
+            self.apply_cursor(Some(event));
         }
 
         #[unsafe(method(mouseMoved:))]
         fn mouse_moved(&self, event: &NSEvent) {
             self.activate_window_if_needed(event);
-            self.apply_cursor();
+            self.apply_cursor(Some(event));
         }
 
         #[unsafe(method(mouseExited:))]
@@ -115,7 +115,7 @@ define_class!(
         #[unsafe(method(cursorUpdate:))]
         fn cursor_update(&self, event: &NSEvent) {
             self.activate_window_if_needed(event);
-            self.apply_cursor();
+            self.apply_cursor(Some(event));
         }
     }
 );
@@ -147,6 +147,12 @@ impl CursorTrackingOwner {
             && !window.isKeyWindow()
         {
             window.makeKeyWindow();
+            // Becoming key lets WebKit re-enable cursor rectangles. Keep them
+            // off while AppKit owns an interactive grab/pointer cursor so the
+            // arrow and CSS pointer cannot alternate every mouse event.
+            if cursor_mode_is_interactive(self.ivars().mode.get()) {
+                set_cursor_rects_enabled(&window, false);
+            }
         }
     }
 
@@ -166,11 +172,22 @@ impl CursorTrackingOwner {
         }
     }
 
-    fn apply_cursor(&self) {
+    fn apply_cursor(&self, event: Option<&NSEvent>) {
         if !cursor_surface_can_apply(self.ivars().surface, capture_overlay_owns_cursor()) {
             return;
         }
-        match self.ivars().mode.get() {
+        let mode = self.ivars().mode.get();
+        // WebKit may re-enable cursor rectangles after focus or layer updates.
+        // Re-disable on every interactive apply so CSS cannot flash the default
+        // arrow between AppKit open-hand / pointing-hand updates.
+        if cursor_mode_is_interactive(mode)
+            && let Some(event) = event
+            && let Some(main_thread) = MainThreadMarker::new()
+            && let Some(window) = event.window(main_thread)
+        {
+            set_cursor_rects_enabled(&window, false);
+        }
+        match mode {
             CursorMode::Arrow => NSCursor::arrowCursor().set(),
             CursorMode::Crosshair => NSCursor::crosshairCursor().set(),
             CursorMode::PointingHand => NSCursor::pointingHandCursor().set(),
@@ -178,6 +195,13 @@ impl CursorTrackingOwner {
             CursorMode::WebView => {}
         }
     }
+}
+
+fn cursor_mode_is_interactive(mode: CursorMode) -> bool {
+    matches!(
+        mode,
+        CursorMode::PointingHand | CursorMode::OpenHand | CursorMode::Crosshair
+    )
 }
 
 // The address of this byte is used as the Objective-C association key.

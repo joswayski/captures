@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  applyThumbnailCssCursor,
   applyThumbnailNativeHover,
+  clearThumbnailCssCursor,
   clearThumbnailNativeHover,
   shouldIgnoreThumbnailCursorEvents,
   shouldRecoverThumbnailAfterNullPolls,
   thumbnailCssCursor,
   thumbnailCursorSyncAction,
+  THUMBNAIL_CURSOR_KIND_ATTRIBUTE,
   THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS,
   THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE,
   THUMBNAIL_NULL_POLL_RECOVER_COUNT,
@@ -274,7 +277,22 @@ describe("thumbnailCursorSyncAction", () => {
     expect(thumbnailCursorSyncAction("grab", "pointer", 0)).toBe("transition");
   });
 
-  it("periodically reasserts interactive cursors that macOS may have reset", () => {
+  it("reasserts interactive cursors on every poll so macOS cannot flash the arrow", () => {
+    expect(
+      thumbnailCursorSyncAction(
+        "pointer",
+        "pointer",
+        THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS,
+      ),
+    ).toBe("reassert");
+    expect(
+      thumbnailCursorSyncAction(
+        "grab",
+        "grab",
+        THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS,
+      ),
+    ).toBe("reassert");
+    // Negative elapsed is only used in tests; production always passes >= 0.
     expect(
       thumbnailCursorSyncAction(
         "pointer",
@@ -282,23 +300,9 @@ describe("thumbnailCursorSyncAction", () => {
         THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS - 1,
       ),
     ).toBeNull();
-    expect(
-      thumbnailCursorSyncAction(
-        "pointer",
-        "pointer",
-        THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS,
-      ),
-    ).toBe("reassert");
-    expect(
-      thumbnailCursorSyncAction(
-        "grab",
-        "grab",
-        THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS,
-      ),
-    ).toBe("reassert");
   });
 
-  it("force-reasserts interactive cursors before the poll throttle for clicks", () => {
+  it("force-reasserts interactive cursors for clicks and focus handoffs", () => {
     expect(
       thumbnailCursorSyncAction(
         "pointer",
@@ -332,9 +336,35 @@ describe("thumbnailCursorSyncAction", () => {
 
 describe("thumbnailCssCursor", () => {
   it("maps cursor kinds to CSS values", () => {
-    expect(thumbnailCssCursor("default")).toBe("");
+    expect(thumbnailCssCursor("default")).toBe("default");
     expect(thumbnailCssCursor("pointer")).toBe("pointer");
     expect(thumbnailCssCursor("grab")).toBe("grab");
+  });
+
+  it("mirrors the hit-tested kind on the document without redundant writes", () => {
+    applyThumbnailCssCursor("grab");
+    expect(document.documentElement.style.cursor).toBe("grab");
+    expect(document.documentElement).toHaveAttribute(
+      THUMBNAIL_CURSOR_KIND_ATTRIBUTE,
+      "grab",
+    );
+
+    // Same kind must not thrash style.cursor — WebKit treats each write as a
+    // cursor-rectangle update and can flash the default arrow.
+    const previous = document.documentElement.style.cursor;
+    applyThumbnailCssCursor("grab");
+    expect(document.documentElement.style.cursor).toBe(previous);
+
+    applyThumbnailCssCursor("pointer");
+    expect(document.documentElement.style.cursor).toBe("pointer");
+    expect(document.documentElement).toHaveAttribute(
+      THUMBNAIL_CURSOR_KIND_ATTRIBUTE,
+      "pointer",
+    );
+
+    clearThumbnailCssCursor();
+    expect(document.documentElement.style.cursor).toBe("");
+    expect(document.documentElement).not.toHaveAttribute(THUMBNAIL_CURSOR_KIND_ATTRIBUTE);
   });
 });
 

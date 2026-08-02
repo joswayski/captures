@@ -1,6 +1,14 @@
 import type { ThumbnailPointerPosition } from "../types";
 
-export const THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS = 100;
+/**
+ * Reassert interactive preview cursors on every successful poll. macOS restores
+ * the frontmost app's arrow while Captures is inactive; a 100ms throttle left a
+ * visible default↔hand flash on each frame between reasserts.
+ */
+export const THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS = 0;
+
+/** DOM marker mirroring the native cursor kind while pointer polling is active. */
+export const THUMBNAIL_CURSOR_KIND_ATTRIBUTE = "data-thumbnail-cursor";
 
 /**
  * Cap native pointer IPC so a hung invoke after sleep/resume cannot leave the
@@ -79,8 +87,8 @@ export function thumbnailCursorSyncAction(
   // macOS restores the frontmost app's arrow while Captures is inactive, and
   // also on mousedown/mouseup when a preview control is clicked. Keep
   // reasserting any interactive cursor (pointer on buttons, grab on the drag
-  // source image). Callers pass `force` on pointer/focus events so the hand
-  // is restored immediately instead of waiting for the poll interval.
+  // source image) on every poll. Callers also pass `force` on pointer/focus
+  // events so the hand is restored immediately around native handoffs.
   if (
     next !== "default"
     && (options.force || elapsedMs >= THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS)
@@ -93,7 +101,32 @@ export function thumbnailCursorSyncAction(
 export function thumbnailCssCursor(kind: ThumbnailCursorKind): string {
   if (kind === "pointer") return "pointer";
   if (kind === "grab") return "grab";
-  return "";
+  return "default";
+}
+
+/**
+ * Mirror the hit-tested cursor kind on the document so WebKit cursor rectangles
+ * cannot alternate between element-level `pointer` / `grab` / default rules
+ * while AppKit owns the real cursor.
+ */
+export function applyThumbnailCssCursor(
+  kind: ThumbnailCursorKind,
+  root: HTMLElement = document.documentElement,
+) {
+  const cssCursor = thumbnailCssCursor(kind);
+  if (root.style.cursor !== cssCursor) {
+    root.style.cursor = cssCursor;
+  }
+  if (root.getAttribute(THUMBNAIL_CURSOR_KIND_ATTRIBUTE) !== kind) {
+    root.setAttribute(THUMBNAIL_CURSOR_KIND_ATTRIBUTE, kind);
+  }
+}
+
+export function clearThumbnailCssCursor(
+  root: HTMLElement = document.documentElement,
+) {
+  root.style.cursor = "";
+  root.removeAttribute(THUMBNAIL_CURSOR_KIND_ATTRIBUTE);
 }
 
 /**
