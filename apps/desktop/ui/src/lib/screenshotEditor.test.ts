@@ -1,9 +1,14 @@
 import {
+  arrowBendAmount,
   arrowBendFromControlPoint,
   arrowControlPoint,
+  arrowDefaultMidHandle,
+  arrowVertices,
+  arrowWithBend,
   boundedCropRect,
   canvasOverflowEdges,
   closestImageSnapEdge,
+  closestPointOnArrow,
   collectAlignmentSnapLines,
   collectEditorSourceArtifactIds,
   createScreenshotDocument,
@@ -15,16 +20,19 @@ import {
   expandDocumentToFitBounds,
   previewExpandedCanvasRect,
   hitTestElement,
-  hitTestArrowControlPoint,
+  hitTestArrowHandle,
   hitTestResizeHandle,
   imageDropGuideAtPoint,
   imageDropPlacementAtPoint,
   imageSizeAtWidth,
+  insertArrowControl,
   isSupportedImageFile,
   loadImageFile,
+  MAX_ARROW_CONTROLS,
   outputDimensions,
   positionImportedImage,
   positionImportedImageAtEdge,
+  removeArrowControl,
   reorderScreenshotLayers,
   resolveImageDropTarget,
   stackDropPlateAtPoint,
@@ -148,7 +156,7 @@ describe("screenshot editor geometry", () => {
       y: 150,
       endX: 500,
       endY: 350,
-      bend: 0,
+      controls: [],
       style: { color: "#f00", fill: null, strokeWidth: 8 },
     };
     const cropped = cropDocument(
@@ -516,7 +524,7 @@ describe("screenshot editor geometry", () => {
       y: 20,
       endX: 110,
       endY: 120,
-      bend: 0.25,
+      controls: [{ x: 70, y: 90 }],
       style: { color: "#fff", fill: null, strokeWidth: 6 },
     };
     expect(translateElement(shape, 30, -5)).toMatchObject({
@@ -524,12 +532,12 @@ describe("screenshot editor geometry", () => {
       y: 15,
       endX: 140,
       endY: 115,
-      bend: 0.25,
+      controls: [{ x: 100, y: 85 }],
     });
     expect(elementBounds(shape).width).toBeGreaterThan(100);
   });
 
-  it("uses one arrow model for straight and freely bent arrows", () => {
+  it("uses one arrow model for straight, single-curve, and multi-point arrows", () => {
     const arrow: EditorShapeElement = {
       ...editableLayer,
       id: "arrow",
@@ -539,22 +547,54 @@ describe("screenshot editor geometry", () => {
       y: 100,
       endX: 300,
       endY: 100,
-      bend: 0,
+      controls: [],
       style: { color: "#fff", fill: null, strokeWidth: 6 },
     };
 
+    expect(arrowVertices(arrow)).toEqual([
+      { x: 100, y: 100 },
+      { x: 300, y: 100 },
+    ]);
+    expect(arrowDefaultMidHandle(arrow)).toEqual({ x: 200, y: 100 });
     expect(arrowControlPoint(arrow)).toEqual({ x: 200, y: 100 });
-    expect(hitTestArrowControlPoint(arrow, { x: 205, y: 104 }, 8)).toBe(true);
+    expect(hitTestArrowHandle(arrow, { x: 205, y: 104 }, 8)).toEqual({ kind: "mid" });
+    expect(hitTestArrowHandle(arrow, { x: 100, y: 100 }, 8)).toEqual({ kind: "start" });
+    expect(hitTestArrowHandle(arrow, { x: 300, y: 100 }, 8)).toEqual({ kind: "end" });
     expect(arrowBendFromControlPoint(arrow, { x: 200, y: 200 })).toBeCloseTo(0.5);
     expect(arrowBendFromControlPoint(arrow, { x: 200, y: -300 })).toBe(-1);
 
-    const bent = { ...arrow, bend: 0.5 };
+    const bent = arrowWithBend(arrow, 0.5);
+    expect(bent.controls).toEqual([{ x: 200, y: 200 }]);
     expect(arrowControlPoint(bent)).toEqual({ x: 200, y: 200 });
+    expect(arrowBendAmount(bent)).toBeCloseTo(0.5);
     expect(elementBounds(bent).height).toBeGreaterThan(elementBounds(arrow).height);
+    expect(hitTestArrowHandle(bent, { x: 200, y: 200 }, 8)).toEqual({
+      kind: "control",
+      index: 0,
+    });
+
+    const withTwo = insertArrowControl(bent, { x: 250, y: 150 });
+    expect(withTwo?.controls).toHaveLength(2);
+    expect(removeArrowControl(withTwo!, 0).controls).toHaveLength(1);
+
+    let capped: EditorShapeElement = arrow;
+    for (let i = 0; i < MAX_ARROW_CONTROLS + 2; i += 1) {
+      const next = insertArrowControl(capped, {
+        x: 120 + i * 20,
+        y: 140 + i * 5,
+      });
+      if (next) capped = next;
+    }
+    expect(capped.controls).toHaveLength(MAX_ARROW_CONTROLS);
+    expect(insertArrowControl(capped, { x: 200, y: 180 })).toBeNull();
+
+    const near = closestPointOnArrow(arrow, { x: 200, y: 108 });
+    expect(near.distance).toBeLessThan(10);
+    expect(near.point.x).toBeCloseTo(200, 0);
   });
 
   it("bounds arrows by path geometry so empty curve sides do not block trim", () => {
-    // Horizontal shaft, bend pulls the control point only downward.
+    // Horizontal shaft, single free control only downward.
     const arrow: EditorShapeElement = {
       ...editableLayer,
       id: "arrow",
@@ -564,7 +604,7 @@ describe("screenshot editor geometry", () => {
       y: 200,
       endX: 300,
       endY: 200,
-      bend: 0.5,
+      controls: [{ x: 200, y: 300 }],
       style: { color: "#f00", fill: null, strokeWidth: 4 },
     };
     // Control at (200, 300). Curve hull is below the shaft — not above it.
@@ -612,7 +652,7 @@ describe("screenshot editor geometry", () => {
       y: 50,
       endX: 150,
       endY: 50,
-      bend: 0,
+      controls: [],
       style: { color: "#0f0", fill: null, strokeWidth: 4 },
     };
     const lineBounds = elementBounds(line);
@@ -758,7 +798,7 @@ describe("screenshot editor geometry", () => {
       y: 100,
       endX: 200,
       endY: 180,
-      bend: 0,
+      controls: [],
       style: { color: "#f00", fill: null, strokeWidth: 4 },
     };
     const initial = elementBounds(shape);

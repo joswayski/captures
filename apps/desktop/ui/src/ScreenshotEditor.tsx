@@ -14,11 +14,15 @@ import { sameSortedIds } from "./lib/editorPresence";
 import { formatFileSize } from "./lib/format";
 import {
   ALIGNMENT_SNAP_SCREEN_PX,
-  arrowBendFromControlPoint,
-  arrowControlPoint,
+  arrowBendAmount,
+  arrowDefaultMidHandle,
   arrowHeadLength,
+  arrowHeadTangentPoint,
+  arrowVertices,
+  arrowWithBend,
   boundedCropRect,
   canvasOverflowEdges,
+  closestPointOnArrow,
   collectAlignmentSnapLines,
   collectEditorSourceArtifactIds,
   createScreenshotDocument,
@@ -28,16 +32,19 @@ import {
   estimateCanvasExportBytes,
   expandDocumentForElement,
   expandDocumentToFitBounds,
-  hitTestArrowControlPoint,
+  hitTestArrowHandle,
   hitTestElement,
+  insertArrowControl,
   previewExpandedCanvasRect,
   hitTestResizeHandle,
   imageDropGuideAtPoint,
   imageSizeAtWidth,
   isSupportedImageFile,
   loadImageFile,
+  MAX_ARROW_CONTROLS,
   outputDimensions,
   positionImportedImageAtEdge,
+  removeArrowControl,
   reorderScreenshotLayers,
   resolveImageDropTarget,
   resizeBoundsFromHandle,
@@ -54,6 +61,7 @@ import {
   trimDocumentToContent,
   visibleContentBounds,
   type AlignmentSnapGuide,
+  type ArrowHandle,
   type EditorImageElement,
   type ImageDropPlacement,
   type ImageSnapEdge,
@@ -114,8 +122,9 @@ type EditorGesture =
     origin: EditorPoint;
   }
   | {
-    kind: "bend";
+    kind: "arrow-handle";
     pointerId: number;
+    handle: ArrowHandle;
     element: Extract<ScreenshotElement, { kind: "shape" }>;
     initialDocument: ScreenshotDocument;
   };
@@ -294,6 +303,87 @@ function drawSmoothPath(
   context.stroke();
 }
 
+/** Stroke an arrow shaft: straight, single quadratic, or smooth multi-control. */
+function strokeArrowPath(
+  context: CanvasRenderingContext2D,
+  vertices: EditorPoint[],
+): void {
+  if (vertices.length < 2) return;
+  context.beginPath();
+  context.moveTo(vertices[0].x, vertices[0].y);
+  if (vertices.length === 2) {
+    context.lineTo(vertices[1].x, vertices[1].y);
+  } else if (vertices.length === 3) {
+    context.quadraticCurveTo(
+      vertices[1].x,
+      vertices[1].y,
+      vertices[2].x,
+      vertices[2].y,
+    );
+  } else {
+    for (let index = 1; index < vertices.length - 2; index += 1) {
+      const midpoint = {
+        x: (vertices[index].x + vertices[index + 1].x) / 2,
+        y: (vertices[index].y + vertices[index + 1].y) / 2,
+      };
+      context.quadraticCurveTo(
+        vertices[index].x,
+        vertices[index].y,
+        midpoint.x,
+        midpoint.y,
+      );
+    }
+    const last = vertices.length - 1;
+    context.quadraticCurveTo(
+      vertices[last - 1].x,
+      vertices[last - 1].y,
+      vertices[last].x,
+      vertices[last].y,
+    );
+  }
+  context.stroke();
+}
+
+function drawArrowEndpointHandle(
+  context: CanvasRenderingContext2D,
+  point: EditorPoint,
+  unit: number,
+  accentColor: string,
+): void {
+  const size = 8 * unit;
+  context.fillStyle = accentColor;
+  context.strokeStyle = "#ffffff";
+  context.lineWidth = 1.5 * unit;
+  context.fillRect(point.x - size / 2, point.y - size / 2, size, size);
+  context.strokeRect(point.x - size / 2, point.y - size / 2, size, size);
+}
+
+function drawArrowControlHandle(
+  context: CanvasRenderingContext2D,
+  point: EditorPoint,
+  unit: number,
+  accentColor: string,
+  options?: { stemFrom?: EditorPoint },
+): void {
+  context.save();
+  context.strokeStyle = accentColor;
+  context.fillStyle = "#ffffff";
+  context.lineWidth = 1.5 * unit;
+  if (options?.stemFrom) {
+    context.setLineDash([4 * unit, 4 * unit]);
+    context.beginPath();
+    context.moveTo(options.stemFrom.x, options.stemFrom.y);
+    context.lineTo(point.x, point.y);
+    context.stroke();
+    context.setLineDash([]);
+  }
+  context.beginPath();
+  context.arc(point.x, point.y, 7 * unit, 0, Math.PI * 2);
+  context.fill();
+  context.stroke();
+  context.restore();
+}
+
 function arrowHead(
   context: CanvasRenderingContext2D,
   end: EditorPoint,
@@ -354,12 +444,13 @@ function drawShape(
   }
 
   if (shape === "arrow") {
-    const control = arrowControlPoint(element) ?? { x, y };
-    context.beginPath();
-    context.moveTo(x, y);
-    context.quadraticCurveTo(control.x, control.y, endX, endY);
-    context.stroke();
-    arrowHead(context, { x: endX, y: endY }, control, style.strokeWidth);
+    strokeArrowPath(context, arrowVertices(element));
+    arrowHead(
+      context,
+      { x: endX, y: endY },
+      arrowHeadTangentPoint(element),
+      style.strokeWidth,
+    );
     context.restore();
     return;
   }
@@ -487,27 +578,26 @@ function drawEditorOverlays(
         context.fillRect(point[0] - 4 * unit, point[1] - 4 * unit, 8 * unit, 8 * unit);
       }
       if (selected?.kind === "shape" && selected.shape === "arrow") {
-        const control = arrowControlPoint(selected);
-        if (control) {
-          const midpoint = {
-            x: (selected.x + selected.endX) / 2,
-            y: (selected.y + selected.endY) / 2,
-          };
-          context.save();
-          context.strokeStyle = accentColor;
-          context.fillStyle = "#ffffff";
-          context.lineWidth = 1.5 * unit;
-          context.setLineDash([4 * unit, 4 * unit]);
-          context.beginPath();
-          context.moveTo(midpoint.x, midpoint.y);
-          context.lineTo(control.x, control.y);
-          context.stroke();
-          context.setLineDash([]);
-          context.beginPath();
-          context.arc(control.x, control.y, 7 * unit, 0, Math.PI * 2);
-          context.fill();
-          context.stroke();
-          context.restore();
+        const start = { x: selected.x, y: selected.y };
+        const end = { x: selected.endX, y: selected.endY };
+        drawArrowEndpointHandle(context, start, unit, accentColor);
+        drawArrowEndpointHandle(context, end, unit, accentColor);
+        if (selected.controls.length === 0) {
+          // Default mid handle sits on the shaft so curving is discoverable.
+          drawArrowControlHandle(
+            context,
+            arrowDefaultMidHandle(selected),
+            unit,
+            accentColor,
+          );
+        } else {
+          for (const control of selected.controls) {
+            // Stem from chord midpoint toward each free control for visual cue.
+            const stemFrom = arrowDefaultMidHandle(selected);
+            drawArrowControlHandle(context, control, unit, accentColor, {
+              stemFrom: selected.controls.length === 1 ? stemFrom : undefined,
+            });
+          }
         }
       }
       context.restore();
@@ -1511,17 +1601,24 @@ export function ScreenshotEditor() {
         if (
           selectedElement.kind === "shape"
           && selectedElement.shape === "arrow"
-          && hitTestArrowControlPoint(selectedElement, point, interactionRadius)
         ) {
-          gestureRef.current = {
-            kind: "bend",
-            pointerId: event.pointerId,
-            element: selectedElement,
-            initialDocument: current,
-          };
-          setCanvasCursor("grabbing");
-          capturePointerTarget(event.currentTarget, event.pointerId);
-          return;
+          const arrowHandle = hitTestArrowHandle(
+            selectedElement,
+            point,
+            interactionRadius,
+          );
+          if (arrowHandle) {
+            gestureRef.current = {
+              kind: "arrow-handle",
+              pointerId: event.pointerId,
+              handle: arrowHandle,
+              element: selectedElement,
+              initialDocument: current,
+            };
+            setCanvasCursor("grabbing");
+            capturePointerTarget(event.currentTarget, event.pointerId);
+            return;
+          }
         }
       }
 
@@ -1612,7 +1709,7 @@ export function ScreenshotEditor() {
         y: point.y,
         endX: point.x,
         endY: point.y,
-        bend: 0,
+        controls: [],
         style: {
           ...defaultStyle,
           fill: tool === "rectangle" || tool === "ellipse" ? defaultStyle.fill : null,
@@ -1668,14 +1765,20 @@ export function ScreenshotEditor() {
           if (
             selectedElement.kind === "shape"
             && selectedElement.shape === "arrow"
-            && hitTestArrowControlPoint(
+          ) {
+            const arrowHandle = hitTestArrowHandle(
               selectedElement,
               point,
               10 / Math.max(0.01, displayScale),
-            )
-          ) {
-            setCanvasCursor("grab");
-            return;
+            );
+            if (arrowHandle) {
+              setCanvasCursor(
+                arrowHandle.kind === "start" || arrowHandle.kind === "end"
+                  ? "move"
+                  : "grab",
+              );
+              return;
+            }
           }
           const handle = hitTestResizeHandle(
             elementBounds(selectedElement),
@@ -1708,20 +1811,31 @@ export function ScreenshotEditor() {
       ));
       return;
     }
-    if (gesture.kind === "bend") {
-      const bent = {
-        ...gesture.element,
-        bend: arrowBendFromControlPoint(gesture.element, point),
-      };
+    if (gesture.kind === "arrow-handle") {
+      const handle = gesture.handle;
+      let next = gesture.element;
+      if (handle.kind === "start") {
+        next = { ...gesture.element, x: point.x, y: point.y };
+      } else if (handle.kind === "end") {
+        next = { ...gesture.element, endX: point.x, endY: point.y };
+      } else if (handle.kind === "mid") {
+        next = { ...gesture.element, controls: [{ x: point.x, y: point.y }] };
+      } else {
+        const controlIndex = handle.index;
+        const controls = gesture.element.controls.map((control, index) => (
+          index === controlIndex ? { x: point.x, y: point.y } : control
+        ));
+        next = { ...gesture.element, controls };
+      }
       setCanvasCursor("grabbing");
       setCanvasExpandPreview(canvasExpandPreviewForBounds(
-        elementBounds(bent),
+        elementBounds(next),
         gesture.initialDocument,
       ));
       replaceDocument(replaceElement(
         gesture.initialDocument,
         gesture.element.id,
-        bent,
+        next,
       ));
       return;
     }
@@ -1867,11 +1981,11 @@ export function ScreenshotEditor() {
       return;
     }
 
-    // Past-edge moves, resizes, bends, and new drawings expand the canvas on release.
+    // Past-edge moves, resizes, arrow edits, and new drawings expand the canvas on release.
     if (
       gesture.kind === "resize"
       || gesture.kind === "move"
-      || gesture.kind === "bend"
+      || gesture.kind === "arrow-handle"
       || gesture.kind === "draw"
     ) {
       const elementId = gesture.kind === "draw" ? gesture.elementId : gesture.element.id;
@@ -1892,18 +2006,59 @@ export function ScreenshotEditor() {
     setRedoStack([]);
   };
 
-  const editTextAtPointer = (event: React.MouseEvent<HTMLCanvasElement>) => {
+  const handleCanvasDoubleClick = (event: React.MouseEvent<HTMLCanvasElement>) => {
     const current = documentRef.current;
     if (!current || tool !== "select" || event.button !== 0) return;
     const point = clientToDocumentPoint(event.clientX, event.clientY);
-    const element = hitTestElement(
-      current.elements,
-      point,
-      10 / Math.max(0.01, displayScale),
-    );
-    if (element?.kind !== "text") return;
-    event.preventDefault();
-    beginTextEditing(element.id);
+    const interactionRadius = 10 / Math.max(0.01, displayScale);
+
+    // Prefer the selected arrow so double-click on its shaft adds a control.
+    const selectedElement = selectedId
+      ? current.elements.find((element) => element.id === selectedId) ?? null
+      : null;
+    if (
+      selectedElement
+      && selectedElement.kind === "shape"
+      && selectedElement.shape === "arrow"
+      && !selectedElement.locked
+    ) {
+      const handle = hitTestArrowHandle(selectedElement, point, interactionRadius);
+      if (handle?.kind === "control") {
+        event.preventDefault();
+        commitDocument(replaceElement(
+          current,
+          selectedElement.id,
+          removeArrowControl(selectedElement, handle.index),
+        ));
+        return;
+      }
+      if (handle?.kind === "start" || handle?.kind === "end" || handle?.kind === "mid") {
+        // Don't open text edit / ignore endpoint double-clicks.
+        return;
+      }
+      const closest = closestPointOnArrow(selectedElement, point);
+      const pathHitRadius = Math.max(
+        interactionRadius,
+        selectedElement.style.strokeWidth * 2 + 6 / Math.max(0.01, displayScale),
+      );
+      if (
+        closest.distance <= pathHitRadius
+        && selectedElement.controls.length < MAX_ARROW_CONTROLS
+      ) {
+        const updated = insertArrowControl(selectedElement, closest.point);
+        if (updated) {
+          event.preventDefault();
+          commitDocument(replaceElement(current, selectedElement.id, updated));
+          return;
+        }
+      }
+    }
+
+    const element = hitTestElement(current.elements, point, interactionRadius);
+    if (element?.kind === "text") {
+      event.preventDefault();
+      beginTextEditing(element.id);
+    }
   };
 
   const applyCrop = () => {
@@ -2642,7 +2797,7 @@ export function ScreenshotEditor() {
             onPointerMove={movePointer}
             onPointerUp={finishPointer}
             onPointerCancel={finishPointer}
-            onDoubleClick={editTextAtPointer}
+            onDoubleClick={handleCanvasDoubleClick}
           />
           {editingText && inlineTextLayout && (
             <textarea
@@ -3337,26 +3492,48 @@ export function ScreenshotEditor() {
               </>
             )}
             {selected.kind === "shape" && selected.shape === "arrow" && (
-              <label>
-                Curve
-                <RangeSlider
-                  ariaLabel="Curve"
-                  min={-100}
-                  max={100}
-                  value={Math.round(selected.bend * 100)}
-                  valueText={`${Math.round(selected.bend * 100)}%`}
-                  marks={[
-                    { value: -100, label: "Left" },
-                    { value: 0, label: "Straight" },
-                    { value: 100, label: "Right" },
-                  ]}
-                  onChange={(bend) => updateSelected((element) => (
-                    element.kind === "shape"
-                      ? { ...element, bend: bend / 100 }
-                      : element
-                  ))}
-                />
-              </label>
+              <>
+                {selected.controls.length <= 1 ? (
+                  <label>
+                    Curve
+                    <RangeSlider
+                      ariaLabel="Curve"
+                      min={-100}
+                      max={100}
+                      value={Math.round(arrowBendAmount(selected) * 100)}
+                      valueText={`${Math.round(arrowBendAmount(selected) * 100)}%`}
+                      marks={[
+                        { value: -100, label: "Left" },
+                        { value: 0, label: "Straight" },
+                        { value: 100, label: "Right" },
+                      ]}
+                      onChange={(bend) => updateSelected((element) => (
+                        element.kind === "shape"
+                          ? arrowWithBend(element, bend / 100)
+                          : element
+                      ))}
+                    />
+                  </label>
+                ) : (
+                  <div className="screenshot-property-actions">
+                    <button
+                      type="button"
+                      onClick={() => updateSelected((element) => (
+                        element.kind === "shape"
+                          ? { ...element, controls: [] }
+                          : element
+                      ))}
+                    >
+                      Straighten arrow
+                    </button>
+                  </div>
+                )}
+                <p>
+                  Drag handles to curve. Double-click the shaft to add a point
+                  ({selected.controls.length}/{MAX_ARROW_CONTROLS}); double-click a
+                  point to remove it.
+                </p>
+              </>
             )}
           </section>
         )}

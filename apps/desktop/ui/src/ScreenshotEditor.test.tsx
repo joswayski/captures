@@ -484,6 +484,7 @@ describe("ScreenshotEditor", () => {
     fireEvent.click(within(layers).getByRole("button", { name: /ArrowShape/ }));
     const curve = screen.getByRole("slider", { name: "Curve" });
     expect(curve).toHaveValue("0");
+    expect(screen.getByText(/Double-click the shaft to add a point/)).toBeInTheDocument();
 
     fireEvent.pointerDown(canvas, {
       button: 0,
@@ -503,6 +504,80 @@ describe("ScreenshotEditor", () => {
       clientY: 200,
     });
     expect(curve).toHaveValue("50");
+  });
+
+  it("adds and removes arrow curve points with double-click", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findAllByText("1440 × 900");
+
+    fireEvent.change(screen.getByRole("combobox", { name: "Canvas zoom" }), {
+      target: { value: "100" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Arrow (A)" }));
+    const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
+    canvas.setPointerCapture = vi.fn();
+    canvas.hasPointerCapture = vi.fn(() => true);
+    canvas.releasePointerCapture = vi.fn();
+    setCanvasBounds(canvas);
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 40,
+      clientX: 100,
+      clientY: 200,
+    });
+    fireEvent.pointerMove(canvas, {
+      pointerId: 40,
+      clientX: 400,
+      clientY: 200,
+    });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 40,
+      clientX: 400,
+      clientY: 200,
+    });
+
+    const layers = screen.getByRole("region", { name: "Layers" });
+    fireEvent.click(within(layers).getByRole("button", { name: /ArrowShape/ }));
+    expect(screen.getByText(/\(0\/4\)/)).toBeInTheDocument();
+
+    // Create a first bend so the path has room for another point.
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 41,
+      clientX: 250,
+      clientY: 200,
+    });
+    fireEvent.pointerMove(canvas, {
+      pointerId: 41,
+      clientX: 250,
+      clientY: 280,
+    });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 41,
+      clientX: 250,
+      clientY: 280,
+    });
+    expect(screen.getByText(/\(1\/4\)/)).toBeInTheDocument();
+
+    // Double-click farther along the shaft to insert a second control.
+    fireEvent.doubleClick(canvas, {
+      button: 0,
+      clientX: 340,
+      clientY: 230,
+    });
+    expect(screen.getByText(/\(2\/4\)/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Straighten arrow" })).toBeInTheDocument();
+
+    // Double-click the first control handle to remove it.
+    fireEvent.doubleClick(canvas, {
+      button: 0,
+      clientX: 250,
+      clientY: 280,
+    });
+    expect(screen.getByText(/\(1\/4\)/)).toBeInTheDocument();
+    expect(screen.getByRole("slider", { name: "Curve" })).toBeInTheDocument();
   });
 
   it("lets the original layer be unlocked and exposes layer appearance controls", async () => {
