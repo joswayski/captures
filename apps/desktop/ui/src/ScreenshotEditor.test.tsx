@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import { ScreenshotEditor } from "./ScreenshotEditor";
 import type { CaptureArtifact } from "./types";
@@ -413,11 +413,11 @@ describe("ScreenshotEditor", () => {
     expect(screen.getAllByText("Place below layer").length).toBeGreaterThan(0);
 
     // Hover near the top edge without selecting a layer — previously always stayed "bottom".
-    fireEvent.dragOver(editor!, {
-      dataTransfer,
-      clientX: 720,
-      clientY: 40,
-    });
+    // jsdom drag events do not copy clientX/Y from fireEvent options; pin them on the event.
+    const topOver = createEvent.dragOver(editor!, { dataTransfer });
+    Object.defineProperty(topOver, "clientX", { configurable: true, value: 720 });
+    Object.defineProperty(topOver, "clientY", { configurable: true, value: 40 });
+    fireEvent(editor!, topOver);
     await waitFor(() => {
       expect(screen.getAllByText("Place above layer").length).toBeGreaterThan(0);
     });
@@ -426,6 +426,55 @@ describe("ScreenshotEditor", () => {
     const guide = document.querySelector(".screenshot-drop-snap-guide.edge-top");
     expect(guide).not.toBeNull();
     expect(guide?.querySelector(".screenshot-drop-snap-bloom")).not.toBeNull();
+    expect(guide?.querySelectorAll(".screenshot-drop-snap-particle").length).toBeGreaterThan(0);
+  });
+
+  it("offers stack-on-top placement with under-glow when hovering the layer center", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findAllByText("1440 × 900");
+
+    const editor = screen.getByText("Screenshot editor").closest("main");
+    expect(editor).toBeTruthy();
+    const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
+    // jsdom canvas layout is often 0×0; pin both backing store and client rect so
+    // client→document mapping hits the layer interior (stack zone).
+    Object.defineProperty(canvas, "width", { configurable: true, value: 1_440 });
+    Object.defineProperty(canvas, "height", { configurable: true, value: 900 });
+    vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 1_440,
+      bottom: 900,
+      width: 1_440,
+      height: 900,
+      toJSON: () => ({}),
+    });
+
+    const dataTransfer = {
+      types: ["Files"],
+      dropEffect: "none",
+      files: [],
+    };
+
+    fireEvent.dragEnter(editor!, { dataTransfer });
+    const stackOver = createEvent.dragOver(editor!, { dataTransfer });
+    Object.defineProperty(stackOver, "clientX", { configurable: true, value: 720 });
+    Object.defineProperty(stackOver, "clientY", { configurable: true, value: 450 });
+    fireEvent(editor!, stackOver);
+    await waitFor(() => {
+      expect(screen.getAllByText("Place on top").length).toBeGreaterThan(0);
+    });
+    expect(screen.getByText("It will stack on top of the highlighted layer and stay editable."))
+      .toBeInTheDocument();
+
+    const guide = document.querySelector(".screenshot-drop-snap-guide.edge-stack");
+    expect(guide).not.toBeNull();
+    expect(guide?.querySelector(".screenshot-drop-snap-bloom")).not.toBeNull();
+    expect(guide?.querySelector(".screenshot-drop-snap-stack-plate")).not.toBeNull();
+    expect(guide?.querySelector(".screenshot-drop-snap-stack-shadow")).not.toBeNull();
+    expect(guide?.querySelector(".screenshot-drop-snap-stack-rim")).not.toBeNull();
     expect(guide?.querySelectorAll(".screenshot-drop-snap-particle").length).toBeGreaterThan(0);
   });
 

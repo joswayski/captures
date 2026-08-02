@@ -13,6 +13,7 @@ import {
   hitTestElement,
   hitTestResizeHandle,
   imageDropGuideAtPoint,
+  imageDropPlacementAtPoint,
   imageSizeAtWidth,
   isSupportedImageFile,
   loadImageFile,
@@ -205,6 +206,21 @@ describe("screenshot editor geometry", () => {
     expect(expanded.elements[0].x).toBeGreaterThan(0);
   });
 
+  it("stacks imports centered on the target layer", () => {
+    const document = createScreenshotDocument("capture.png", 1_000, 800);
+    const target = { x: 200, y: 100, width: 400, height: 300 };
+    // Interior of the target stacks; outer band still picks an edge.
+    expect(imageDropPlacementAtPoint({ x: 400, y: 250 }, target)).toBe("stack");
+    expect(imageDropPlacementAtPoint({ x: 210, y: 250 }, target)).toBe("left");
+    expect(imageDropPlacementAtPoint({ x: 400, y: 110 }, target)).toBe("top");
+    // Outside the rect still snaps to the closest edge.
+    expect(imageDropPlacementAtPoint({ x: 100, y: 250 }, target)).toBe("left");
+
+    const position = positionImportedImageAtEdge(300, 200, document, target, "stack");
+    expect(position.x).toBe(Math.round(target.x + (target.width - position.width) / 2));
+    expect(position.y).toBe(Math.round(target.y + (target.height - position.height) / 2));
+  });
+
   it("resolves drop snap targets without requiring a selected layer", () => {
     const document = createScreenshotDocument("capture.png", 1_000, 800);
     // No selection still snaps against the original screenshot, not a hardcoded bottom edge.
@@ -218,6 +234,8 @@ describe("screenshot editor geometry", () => {
     expect(imageDropGuideAtPoint(document, null, { x: 980, y: 400 }).edge).toBe("right");
     expect(imageDropGuideAtPoint(document, null, { x: 500, y: 780 }).edge).toBe("bottom");
     expect(imageDropGuideAtPoint(document, null, { x: 20, y: 400 }).edge).toBe("left");
+    // Center of the canvas stacks on top of the background layer.
+    expect(imageDropGuideAtPoint(document, null, { x: 500, y: 400 }).edge).toBe("stack");
 
     const imported: EditorImageElement = {
       ...editableLayer,
@@ -249,6 +267,7 @@ describe("screenshot editor geometry", () => {
       height: 150,
     });
     expect(imageDropGuideAtPoint(layered, "imported", { x: 50, y: 175 }).edge).toBe("left");
+    expect(imageDropGuideAtPoint(layered, "imported", { x: 200, y: 175 }).edge).toBe("stack");
   });
 
   it("duplicates layers as visible unlocked imports", () => {
