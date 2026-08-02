@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import {
   computeThumbnailStackShifts,
   countMotionReadySlotsBelow,
@@ -11,6 +14,11 @@ import {
   type ThumbnailStackCardMotionState,
 } from "./thumbnailLayout";
 
+const thumbnailStyles = readFileSync(
+  resolve(process.cwd(), "ui/src/styles.css"),
+  "utf8",
+);
+
 function card(
   partial: Partial<ThumbnailStackCardMotionState>,
 ): ThumbnailStackCardMotionState {
@@ -23,6 +31,15 @@ function card(
 }
 
 describe("thumbnail stack layout", () => {
+  it("releases the arrival animation before cards exit or shift", () => {
+    const arrival = thumbnailStyles.match(
+      /\.thumbnail-card\.thumbnail-ready([^{}]*)\{([^{}]*animation:\s*thumbnail-arrive[^{}]*)\}/,
+    );
+
+    expect(arrival?.[1]).toContain(":not(.thumbnail-exiting)");
+    expect(arrival?.[2]).not.toMatch(/\b(?:both|forwards)\b/);
+  });
+
   it("scrolls to reveal newly added captures", () => {
     expect(shouldScrollThumbnailStackToEnd(1, 2)).toBe(true);
   });
