@@ -43,6 +43,7 @@ import {
   translateElement,
   type AlignmentSnapGuide,
   type EditorImageElement,
+  type ImageDropPlacement,
   type ImageSnapEdge,
   type LayerBlendMode,
   type LayerDropPlacement,
@@ -111,7 +112,7 @@ type LayerDropTarget = {
 };
 
 type ImageDropGuide = {
-  edge: ImageSnapEdge;
+  edge: ImageDropPlacement;
   target: EditorRect;
 };
 
@@ -2104,24 +2105,54 @@ export function ScreenshotEditor() {
               }}
               aria-hidden="true"
             >
-              <div className="screenshot-drop-snap-bloom" />
-              <div className="screenshot-drop-snap-particles">
-                {DROP_SNAP_PARTICLES.map((particle) => (
-                  <i
-                    key={particle.id}
-                    className="screenshot-drop-snap-particle"
-                    style={{
-                      // Stagger along the edge, travel distance, and timing for a
-                      // continuous stream toward the drop side without JS loops.
-                      ["--snap-along" as string]: particle.along,
-                      ["--snap-travel" as string]: particle.travel,
-                      ["--snap-delay" as string]: particle.delay,
-                      ["--snap-duration" as string]: particle.duration,
-                      ["--snap-size" as string]: particle.size,
-                    }}
-                  />
-                ))}
-              </div>
+              {imageDropGuide.edge === "stack" ? (
+                <>
+                  {/* Soft z-axis under-glow from the canvas under the floating plate. */}
+                  <div className="screenshot-drop-snap-bloom" />
+                  {/* Incoming-image footprint: casts a shadow and lets under-light rim the edges. */}
+                  <div className="screenshot-drop-snap-stack-plate">
+                    <div className="screenshot-drop-snap-stack-shadow" />
+                    <div className="screenshot-drop-snap-stack-rim" />
+                  </div>
+                  <div className="screenshot-drop-snap-particles">
+                    {DROP_STACK_PARTICLES.map((particle) => (
+                      <i
+                        key={particle.id}
+                        className="screenshot-drop-snap-particle"
+                        style={{
+                          ["--snap-x" as string]: particle.x,
+                          ["--snap-y" as string]: particle.y,
+                          ["--snap-travel" as string]: particle.travel,
+                          ["--snap-delay" as string]: particle.delay,
+                          ["--snap-duration" as string]: particle.duration,
+                          ["--snap-size" as string]: particle.size,
+                        }}
+                      />
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="screenshot-drop-snap-bloom" />
+                  <div className="screenshot-drop-snap-particles">
+                    {DROP_SNAP_PARTICLES.map((particle) => (
+                      <i
+                        key={particle.id}
+                        className="screenshot-drop-snap-particle"
+                        style={{
+                          // Stagger along the edge, travel distance, and timing for a
+                          // continuous stream toward the drop side without JS loops.
+                          ["--snap-along" as string]: particle.along,
+                          ["--snap-travel" as string]: particle.travel,
+                          ["--snap-delay" as string]: particle.delay,
+                          ["--snap-duration" as string]: particle.duration,
+                          ["--snap-size" as string]: particle.size,
+                        }}
+                      />
+                    ))}
+                  </div>
+                </>
+              )}
               <span>{imageDropLabel(imageDropGuide.edge)}</span>
             </div>
           )}
@@ -2194,7 +2225,11 @@ export function ScreenshotEditor() {
           <div className="screenshot-drop-overlay" aria-hidden="true">
             <EditorIcon name="image" />
             <strong>{imageDropGuide ? imageDropLabel(imageDropGuide.edge) : "Drop image"}</strong>
-            <span>It will snap to the highlighted edge and stay editable.</span>
+            <span>
+              {imageDropGuide?.edge === "stack"
+                ? "It will stack on top of the highlighted layer and stay editable."
+                : "It will snap to the highlighted edge and stay editable."}
+            </span>
           </div>
         )}
       </section>
@@ -3124,7 +3159,8 @@ function elementLabel(element: ScreenshotElement): string {
   return element.shape[0].toUpperCase() + element.shape.slice(1);
 }
 
-function imageDropLabel(edge: ImageSnapEdge): string {
+function imageDropLabel(edge: ImageDropPlacement): string {
+  if (edge === "stack") return "Place on top";
   if (edge === "top") return "Place above layer";
   if (edge === "right") return "Place to the right";
   if (edge === "left") return "Place to the left";
@@ -3167,6 +3203,34 @@ const DROP_SNAP_PARTICLES: Array<{
   { id: "p11", along: 0.42, travel: 1.35, delay: "0.85s", duration: "1.4s", size: "2px" },
   { id: "p12", along: 0.15, travel: 0.65, delay: "0.95s", duration: "0.9s", size: "2px" },
   { id: "p13", along: 0.68, travel: 1.08, delay: "1.05s", duration: "1.25s", size: "3px" },
+];
+
+/**
+ * Particles for stack-on-top: seeds around the floating plate perimeter, rise
+ * on the z-axis (scale + fade) rather than streaming sideways off an edge.
+ */
+const DROP_STACK_PARTICLES: Array<{
+  id: string;
+  /** 0–1 position within the stack plate (CSS left/top). */
+  x: number;
+  y: number;
+  travel: number;
+  delay: string;
+  duration: string;
+  size: string;
+}> = [
+  { id: "s0", x: 0.12, y: 0.1, travel: 0.9, delay: "0s", duration: "1.25s", size: "3px" },
+  { id: "s1", x: 0.5, y: 0.06, travel: 1.1, delay: "0.2s", duration: "1.4s", size: "2px" },
+  { id: "s2", x: 0.88, y: 0.12, travel: 0.85, delay: "0.38s", duration: "1.15s", size: "3px" },
+  { id: "s3", x: 0.94, y: 0.5, travel: 1.05, delay: "0.12s", duration: "1.3s", size: "2px" },
+  { id: "s4", x: 0.9, y: 0.88, travel: 0.95, delay: "0.48s", duration: "1.2s", size: "4px" },
+  { id: "s5", x: 0.5, y: 0.94, travel: 1.15, delay: "0.28s", duration: "1.35s", size: "2px" },
+  { id: "s6", x: 0.1, y: 0.86, travel: 0.8, delay: "0.62s", duration: "1.1s", size: "3px" },
+  { id: "s7", x: 0.06, y: 0.5, travel: 1.0, delay: "0.08s", duration: "1.28s", size: "2px" },
+  { id: "s8", x: 0.28, y: 0.18, travel: 0.75, delay: "0.72s", duration: "1.05s", size: "2px" },
+  { id: "s9", x: 0.72, y: 0.22, travel: 1.2, delay: "0.55s", duration: "1.45s", size: "3px" },
+  { id: "s10", x: 0.78, y: 0.78, travel: 0.88, delay: "0.9s", duration: "1.18s", size: "2px" },
+  { id: "s11", x: 0.22, y: 0.76, travel: 1.08, delay: "0.42s", duration: "1.32s", size: "3px" },
 ];
 
 function elementLayerName(element: ScreenshotElement): string {

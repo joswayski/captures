@@ -37,6 +37,19 @@ export type LayerBlendMode =
 
 export type ImageSnapEdge = "top" | "right" | "bottom" | "left";
 
+/**
+ * Where a dropped image lands relative to the snap target layer.
+ * Edge values place the import flush against that side; `stack` centers it
+ * on top of the target (higher z-order via append-to-layers).
+ */
+export type ImageDropPlacement = ImageSnapEdge | "stack";
+
+/**
+ * Outer fraction of the target layer treated as edge snap zones.
+ * Interior (the remaining center) stacks the import on top.
+ */
+export const IMAGE_DROP_EDGE_BAND_FRACTION = 0.22;
+
 type EditorElementBase = {
   id: string;
   x: number;
@@ -274,6 +287,38 @@ export function closestImageSnapEdge(
 }
 
 /**
+ * Pick edge snap vs stack-on-top for a pointer over a drop target.
+ * Interior of the target (outside the outer edge bands) stacks; near an edge
+ * or outside the rect still snaps to the closest edge.
+ */
+export function imageDropPlacementAtPoint(
+  point: EditorPoint,
+  target: EditorRect,
+): ImageDropPlacement {
+  const relativeX = point.x - target.x;
+  const relativeY = point.y - target.y;
+  const inside = relativeX >= 0
+    && relativeY >= 0
+    && relativeX <= target.width
+    && relativeY <= target.height;
+  if (inside && target.width > 0 && target.height > 0) {
+    const edgeBandX = target.width * IMAGE_DROP_EDGE_BAND_FRACTION;
+    const edgeBandY = target.height * IMAGE_DROP_EDGE_BAND_FRACTION;
+    // Only offer a real stack zone when both axes leave some interior room.
+    if (edgeBandX * 2 < target.width && edgeBandY * 2 < target.height) {
+      const nearLeft = relativeX < edgeBandX;
+      const nearRight = relativeX > target.width - edgeBandX;
+      const nearTop = relativeY < edgeBandY;
+      const nearBottom = relativeY > target.height - edgeBandY;
+      if (!nearLeft && !nearRight && !nearTop && !nearBottom) {
+        return "stack";
+      }
+    }
+  }
+  return closestImageSnapEdge(point, target);
+}
+
+/**
  * Pick the layer bounds that an imported image should snap against.
  * Prefer the selected visible image; otherwise the front-most visible image;
  * otherwise the full canvas.
@@ -304,21 +349,24 @@ export function imageDropGuideAtPoint(
   document: Pick<ScreenshotDocument, "width" | "height" | "elements">,
   selectedId: string | null,
   point: EditorPoint,
-): { edge: ImageSnapEdge; target: EditorRect } {
+): { edge: ImageDropPlacement; target: EditorRect } {
   const target = resolveImageDropTarget(document, selectedId);
   return {
-    edge: closestImageSnapEdge(point, target),
+    edge: imageDropPlacementAtPoint(point, target),
     target,
   };
 }
 
-/** Position an imported image flush against one edge of another layer. */
+/**
+ * Position an imported image relative to a drop target: flush to an edge, or
+ * centered on top of the layer when placement is `stack`.
+ */
 export function positionImportedImageAtEdge(
   naturalWidth: number,
   naturalHeight: number,
   document: Pick<ScreenshotDocument, "width" | "height">,
   target: EditorRect,
-  edge: ImageSnapEdge,
+  edge: ImageDropPlacement,
 ): EditorRect {
   const centered = positionImportedImage(
     naturalWidth,
@@ -326,6 +374,13 @@ export function positionImportedImageAtEdge(
     document,
     { x: target.x + target.width / 2, y: target.y + target.height / 2 },
   );
+  if (edge === "stack") {
+    return {
+      ...centered,
+      x: Math.round(target.x + (target.width - centered.width) / 2),
+      y: Math.round(target.y + (target.height - centered.height) / 2),
+    };
+  }
   if (edge === "top") {
     return {
       ...centered,
