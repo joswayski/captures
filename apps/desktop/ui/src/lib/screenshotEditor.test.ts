@@ -596,6 +596,8 @@ describe("screenshot editor geometry", () => {
 
   it("bounds arrows by path geometry so empty curve sides do not block trim", () => {
     // Horizontal shaft, single free control only downward.
+    // Quadratic apex is at t=0.5 → y = 0.25*200 + 0.5*300 + 0.25*200 = 250,
+    // not the off-path control at y=300.
     const arrow: EditorShapeElement = {
       ...editableLayer,
       id: "arrow",
@@ -608,13 +610,14 @@ describe("screenshot editor geometry", () => {
       controls: [{ x: 200, y: 300 }],
       style: { color: "#f00", fill: null, strokeWidth: 4 },
     };
-    // Control at (200, 300). Curve hull is below the shaft — not above it.
     expect(arrowControlPoint(arrow)).toEqual({ x: 200, y: 300 });
     const bounds = elementBounds(arrow);
     // Only stroke/head padding may sit above y=200; the old isotropic curve
     // pad would place the top near y=200 - length*|bend| ≈ 100 or lower.
     expect(bounds.y).toBeGreaterThan(170);
-    expect(bounds.y + bounds.height).toBeGreaterThan(300);
+    // Painted apex is ~250; free control at 300 must not inflate the box.
+    expect(bounds.y + bounds.height).toBeGreaterThan(250);
+    expect(bounds.y + bounds.height).toBeLessThan(280);
     // Empty left/right of the shaft should not get a full curve-radius pad.
     expect(bounds.x).toBeGreaterThan(70);
     expect(bounds.x + bounds.width).toBeLessThan(330);
@@ -641,6 +644,69 @@ describe("screenshot editor geometry", () => {
     const trimmed = trimDocumentToContent(document);
     expect(trimmed.height).toBeLessThan(document.height);
     expect(trimmed.width).toBeLessThan(document.width);
+  });
+
+  it("does not expand or block trim when only an off-path control sits past the edge", () => {
+    // Endpoints and painted curve stay inside 400×300; the free control is
+    // well below the bottom edge. Expand and trim must ignore that handle.
+    const arrow: EditorShapeElement = {
+      ...editableLayer,
+      id: "arrow",
+      kind: "shape",
+      shape: "arrow",
+      x: 80,
+      y: 120,
+      endX: 320,
+      endY: 120,
+      controls: [{ x: 200, y: 420 }],
+      style: { color: "#f00", fill: null, strokeWidth: 4 },
+    };
+    const document = {
+      ...createScreenshotDocument("capture.png", 400, 300),
+      elements: [arrow],
+    };
+
+    const bounds = elementBounds(arrow);
+    expect(bounds.y).toBeGreaterThan(0);
+    // Quadratic apex y = 0.25*120 + 0.5*420 + 0.25*120 = 270 (inside 300).
+    expect(bounds.y + bounds.height).toBeLessThan(300);
+    expect(bounds.y + bounds.height).toBeGreaterThan(260);
+    // Control sits at y=420 — must not be part of content bounds.
+    expect(bounds.y + bounds.height).toBeLessThan(420);
+
+    expect(canvasOverflowEdges(bounds, document)).toEqual([]);
+    expect(previewExpandedCanvasRect(bounds, document)).toBeNull();
+    expect(expandDocumentToFitBounds(document, bounds, 0)).toBe(document);
+
+    // Extra empty margin under the curve (canvas taller than content) trims.
+    const tall = { ...document, height: 500 };
+    const trimmed = trimDocumentToContent(tall);
+    expect(trimmed.height).toBeLessThan(tall.height);
+    expect(trimmed.height).toBeLessThan(320);
+  });
+
+  it("bounds multi-point arrows from the painted path, not free vertices", () => {
+    // Free vertices act as quadratic controls and sit off the stroke.
+    const arrow: EditorShapeElement = {
+      ...editableLayer,
+      id: "arrow",
+      kind: "shape",
+      shape: "arrow",
+      x: 50,
+      y: 200,
+      endX: 350,
+      endY: 200,
+      controls: [
+        { x: 120, y: 40 },
+        { x: 280, y: 360 },
+      ],
+      style: { color: "#f00", fill: null, strokeWidth: 4 },
+    };
+    const bounds = elementBounds(arrow);
+    // Off-path free vertices at y=40 / y=360 must not define the box alone;
+    // samples pull the hull inward toward the actual segments.
+    expect(bounds.y).toBeGreaterThan(40);
+    expect(bounds.y + bounds.height).toBeLessThan(360);
   });
 
   it("bounds lines and boxes by stroke extent without phantom padding", () => {
