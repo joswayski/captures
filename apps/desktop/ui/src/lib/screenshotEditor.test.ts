@@ -593,6 +593,83 @@ describe("screenshot editor geometry", () => {
     expect(near.point.x).toBeCloseTo(200, 0);
   });
 
+  it("bounds arrows by path geometry so empty curve sides do not block trim", () => {
+    // Horizontal shaft, single free control only downward.
+    const arrow: EditorShapeElement = {
+      ...editableLayer,
+      id: "arrow",
+      kind: "shape",
+      shape: "arrow",
+      x: 100,
+      y: 200,
+      endX: 300,
+      endY: 200,
+      controls: [{ x: 200, y: 300 }],
+      style: { color: "#f00", fill: null, strokeWidth: 4 },
+    };
+    // Control at (200, 300). Curve hull is below the shaft — not above it.
+    expect(arrowControlPoint(arrow)).toEqual({ x: 200, y: 300 });
+    const bounds = elementBounds(arrow);
+    // Only stroke/head padding may sit above y=200; the old isotropic curve
+    // pad would place the top near y=200 - length*|bend| ≈ 100 or lower.
+    expect(bounds.y).toBeGreaterThan(170);
+    expect(bounds.y + bounds.height).toBeGreaterThan(300);
+    // Empty left/right of the shaft should not get a full curve-radius pad.
+    expect(bounds.x).toBeGreaterThan(70);
+    expect(bounds.x + bounds.width).toBeLessThan(330);
+
+    // Canvas grown around a small capture + this bent arrow: empty margin
+    // above the content must remain trimmable.
+    const base = createScreenshotDocument("capture.png", 500, 500);
+    const document = {
+      ...base,
+      elements: [
+        {
+          ...base.elements[0],
+          x: 150,
+          y: 180,
+          width: 100,
+          height: 40,
+        } as EditorImageElement,
+        arrow,
+      ],
+    };
+    const content = visibleContentBounds(document);
+    expect(content).not.toBeNull();
+    expect(content!.y).toBeGreaterThan(0);
+    const trimmed = trimDocumentToContent(document);
+    expect(trimmed.height).toBeLessThan(document.height);
+    expect(trimmed.width).toBeLessThan(document.width);
+  });
+
+  it("bounds lines and boxes by stroke extent without phantom padding", () => {
+    const line: EditorShapeElement = {
+      ...editableLayer,
+      id: "line",
+      kind: "shape",
+      shape: "line",
+      x: 50,
+      y: 50,
+      endX: 150,
+      endY: 50,
+      controls: [],
+      style: { color: "#0f0", fill: null, strokeWidth: 4 },
+    };
+    const lineBounds = elementBounds(line);
+    expect(lineBounds.y).toBeGreaterThan(40);
+    expect(lineBounds.height).toBeLessThan(20);
+
+    const rect: EditorShapeElement = {
+      ...line,
+      id: "rect",
+      shape: "rectangle",
+      endY: 120,
+    };
+    const rectBounds = elementBounds(rect);
+    // strokeExtent(4) = ceil(2) + 1 = 3
+    expect(rectBounds).toMatchObject({ x: 47, y: 47, width: 106, height: 76 });
+  });
+
   it("hit-tests corner resize handles and resizes bounds from the opposite corner", () => {
     const bounds = { x: 100, y: 50, width: 200, height: 100 };
     expect(hitTestResizeHandle(bounds, { x: 100, y: 50 }, 8)).toBe("nw");

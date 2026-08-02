@@ -1229,6 +1229,80 @@ export function closestPointOnArrow(
 }
 
 /**
+ * Drawn arrow-head wing length (must match the renderer in ScreenshotEditor).
+ * Used for content bounds so trim/expand account for the head, not just the shaft.
+ */
+export function arrowHeadLength(strokeWidth: number): number {
+  return Math.max(14, strokeWidth * 4.2);
+}
+
+/** Outward extent of a stroked path (half width + round cap/join slop). */
+function strokeExtent(strokeWidth: number): number {
+  return Math.max(2, Math.ceil(strokeWidth / 2) + 1);
+}
+
+/** Axis-aligned box around points, expanded by uniform padding. */
+function boundsFromPoints(points: EditorPoint[], padding: number): EditorRect {
+  const xs = points.map(({ x }) => x);
+  const ys = points.map(({ y }) => y);
+  const left = Math.min(...xs);
+  const top = Math.min(...ys);
+  const right = Math.max(...xs);
+  const bottom = Math.max(...ys);
+  const pad = Math.max(0, padding);
+  return {
+    x: left - pad,
+    y: top - pad,
+    width: Math.max(1, right - left) + pad * 2,
+    height: Math.max(1, bottom - top) + pad * 2,
+  };
+}
+
+/**
+ * Bounds of the painted shape (stroke + arrow head), not the loose selection
+ * chrome. Single-control curves use the Bezier control-point convex hull so
+ * empty space on the unbent side of an arrow does not inflate the canvas or
+ * block edge trim. Multi-control paths include free vertices (and samples).
+ */
+function shapeElementBounds(element: EditorShapeElement): EditorRect {
+  const strokePad = strokeExtent(element.style.strokeWidth);
+
+  if (element.shape === "rectangle" || element.shape === "ellipse") {
+    const rect = normalizeRect(
+      { x: element.x, y: element.y },
+      { x: element.endX, y: element.endY },
+    );
+    return {
+      x: rect.x - strokePad,
+      y: rect.y - strokePad,
+      width: Math.max(1, rect.width) + strokePad * 2,
+      height: Math.max(1, rect.height) + strokePad * 2,
+    };
+  }
+
+  // Line / arrow: hull of endpoints (+ free controls for arrows).
+  const points: EditorPoint[] = [
+    { x: element.x, y: element.y },
+    { x: element.endX, y: element.endY },
+  ];
+  if (element.shape === "arrow") {
+    for (const control of element.controls) {
+      points.push(control);
+    }
+    // Multi-segment smooth paths can bow past the vertex hull — sample them.
+    if (element.controls.length > 1) {
+      for (const sample of sampleArrowPath(element, 12)) {
+        points.push(sample);
+      }
+    }
+    // Wings leave the tip at ±30°; lateral extent ≈ sin(30°) * length.
+    const headPad = Math.ceil(arrowHeadLength(element.style.strokeWidth) * 0.55);
+    return boundsFromPoints(points, strokePad + headPad);
+  }
+  return boundsFromPoints(points, strokePad);
+}
+
+/**
  * Single-control bend amount for the Curve slider (−1…1). Zero when straight
  * or multi-control. Positive/negative curve to opposite sides of the chord.
  */
@@ -1532,44 +1606,7 @@ export function elementBounds(element: ScreenshotElement): EditorRect {
     };
   }
   if (element.kind === "shape") {
-    const strokePadding = Math.max(8, element.style.strokeWidth * 3);
-    if (element.shape === "arrow") {
-      const xs = [
-        element.x,
-        element.endX,
-        ...element.controls.map((point) => point.x),
-      ];
-      const ys = [
-        element.y,
-        element.endY,
-        ...element.controls.map((point) => point.y),
-      ];
-      // Sample the curved shaft so large bows expand the selection box.
-      for (const sample of sampleArrowPath(element, 12)) {
-        xs.push(sample.x);
-        ys.push(sample.y);
-      }
-      const left = Math.min(...xs);
-      const top = Math.min(...ys);
-      const right = Math.max(...xs);
-      const bottom = Math.max(...ys);
-      return {
-        x: left - strokePadding,
-        y: top - strokePadding,
-        width: Math.max(1, right - left) + strokePadding * 2,
-        height: Math.max(1, bottom - top) + strokePadding * 2,
-      };
-    }
-    const rect = normalizeRect(
-      { x: element.x, y: element.y },
-      { x: element.endX, y: element.endY },
-    );
-    return {
-      x: rect.x - strokePadding,
-      y: rect.y - strokePadding,
-      width: Math.max(1, rect.width) + strokePadding * 2,
-      height: Math.max(1, rect.height) + strokePadding * 2,
-    };
+    return shapeElementBounds(element);
   }
   if (element.points.length === 0) {
     return { x: element.x, y: element.y, width: 1, height: 1 };
