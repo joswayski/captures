@@ -1260,9 +1260,13 @@ function boundsFromPoints(points: EditorPoint[], padding: number): EditorRect {
 
 /**
  * Bounds of the painted shape (stroke + arrow head), not the loose selection
- * chrome. Single-control curves use the Bezier control-point convex hull so
- * empty space on the unbent side of an arrow does not inflate the canvas or
- * block edge trim. Multi-control paths include free vertices (and samples).
+ * chrome.
+ *
+ * Free Bezier control points sit off the stroke (the path only approaches
+ * them). Including them in content bounds used to expand the canvas and block
+ * **Trim edges** whenever a handle sat past an edge even though the painted
+ * shaft stayed inside. Bounds therefore follow path samples for arrows, not
+ * the control handles.
  */
 function shapeElementBounds(element: EditorShapeElement): EditorRect {
   const strokePad = strokeExtent(element.style.strokeWidth);
@@ -1280,26 +1284,28 @@ function shapeElementBounds(element: EditorShapeElement): EditorRect {
     };
   }
 
-  // Line / arrow: hull of endpoints (+ free controls for arrows).
-  const points: EditorPoint[] = [
-    { x: element.x, y: element.y },
-    { x: element.endX, y: element.endY },
-  ];
   if (element.shape === "arrow") {
-    for (const control of element.controls) {
-      points.push(control);
-    }
-    // Multi-segment smooth paths can bow past the vertex hull — sample them.
-    if (element.controls.length > 1) {
-      for (const sample of sampleArrowPath(element, 12)) {
-        points.push(sample);
-      }
-    }
+    // Sample the same quadratic / multi-point path the canvas draws.
+    const samples = sampleArrowPath(element, 24);
+    const points = samples.length > 0
+      ? samples
+      : [
+        { x: element.x, y: element.y },
+        { x: element.endX, y: element.endY },
+      ];
     // Wings leave the tip at ±30°; lateral extent ≈ sin(30°) * length.
     const headPad = Math.ceil(arrowHeadLength(element.style.strokeWidth) * 0.55);
     return boundsFromPoints(points, strokePad + headPad);
   }
-  return boundsFromPoints(points, strokePad);
+
+  // Line: hull of endpoints + stroke extent.
+  return boundsFromPoints(
+    [
+      { x: element.x, y: element.y },
+      { x: element.endX, y: element.endY },
+    ],
+    strokePad,
+  );
 }
 
 /**
