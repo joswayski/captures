@@ -634,6 +634,113 @@ describe("ScreenshotEditor", () => {
     ).toBeInTheDocument();
   });
 
+  it("deselects the active layer when clicking the empty viewport chrome", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findAllByText("1440 × 900");
+
+    fireEvent.change(screen.getByRole("combobox", { name: "Canvas zoom" }), {
+      target: { value: "100" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Text (T)" }));
+    const viewport = screen.getByLabelText("Screenshot editing canvas");
+    const canvas = viewport.querySelector("canvas")!;
+    setCanvasBounds(canvas);
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 40,
+      clientX: 120,
+      clientY: 80,
+    });
+    fireEvent.blur(await screen.findByRole("textbox", { name: "Edit text on canvas" }));
+
+    // Select the text layer (Select tool becomes active via layer list click).
+    fireEvent.click(screen.getByRole("button", { name: "Select & move (V)" }));
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 41,
+      clientX: 140,
+      clientY: 95,
+    });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 41,
+      clientX: 140,
+      clientY: 95,
+    });
+    expect(screen.getByRole("button", { name: "Delete selected item" }))
+      .toBeInTheDocument();
+
+    // Click the checkerboard / empty padding around the canvas surface.
+    fireEvent.pointerDown(viewport, {
+      button: 0,
+      pointerId: 42,
+      clientX: -40,
+      clientY: -30,
+    });
+    expect(screen.queryByRole("button", { name: "Delete selected item" }))
+      .not.toBeInTheDocument();
+  });
+
+  it("can start an arrow outside the canvas and expands to fit on release", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findAllByText("1440 × 900");
+
+    fireEvent.change(screen.getByRole("combobox", { name: "Canvas zoom" }), {
+      target: { value: "100" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Arrow (A)" }));
+    const viewport = screen.getByLabelText("Screenshot editing canvas");
+    const canvas = viewport.querySelector("canvas")!;
+    // Place the canvas away from the client origin so chrome clicks map to
+    // negative document coordinates left/above the image.
+    vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
+      x: 100,
+      y: 80,
+      top: 80,
+      left: 100,
+      right: 100 + 1_440,
+      bottom: 80 + 900,
+      width: 1_440,
+      height: 900,
+      toJSON: () => ({}),
+    });
+    viewport.setPointerCapture = vi.fn();
+    viewport.hasPointerCapture = vi.fn(() => true);
+    viewport.releasePointerCapture = vi.fn();
+
+    // Start in the empty chrome left of the canvas, drag onto the image.
+    fireEvent.pointerDown(viewport, {
+      button: 0,
+      pointerId: 50,
+      clientX: 60,
+      clientY: 200,
+    });
+    fireEvent.pointerMove(viewport, {
+      pointerId: 50,
+      clientX: 280,
+      clientY: 260,
+    });
+    fireEvent.pointerUp(viewport, {
+      button: 0,
+      pointerId: 50,
+      clientX: 280,
+      clientY: 260,
+    });
+
+    expect(
+      within(screen.getByRole("region", { name: "Layers" })).getByText("Arrow"),
+    ).toBeInTheDocument();
+    // Start was ~40px left of the canvas; stroke padding expands further.
+    await waitFor(() => {
+      const sizeLabels = screen.getAllByText(/\d+\s*×\s*\d+/);
+      expect(sizeLabels.some((node) => {
+        const match = node.textContent?.match(/(\d+)\s*×\s*(\d+)/);
+        if (!match) return false;
+        return Number(match[1]) > 1_440;
+      })).toBe(true);
+    });
+  });
+
   it("snaps image drop guides to the closest edge without a selected layer", async () => {
     render(<ScreenshotEditor />);
     await screen.findAllByText("1440 × 900");

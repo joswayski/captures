@@ -760,17 +760,6 @@ export function ScreenshotEditor() {
     clientY: number;
   } | null>(null);
 
-  const updateDocument = useCallback((
-    updater: (current: ScreenshotDocument) => ScreenshotDocument,
-  ) => {
-    setEditorDocument((current) => {
-      if (!current) return current;
-      const next = updater(current);
-      documentRef.current = next;
-      return next;
-    });
-  }, []);
-
   const replaceDocument = useCallback((next: ScreenshotDocument) => {
     documentRef.current = next;
     setEditorDocument(next);
@@ -1429,19 +1418,56 @@ export function ScreenshotEditor() {
     }
   };
 
-  const canvasPoint = (event: React.PointerEvent<HTMLCanvasElement>): EditorPoint => {
-    const canvas = event.currentTarget;
+  /** Map client coordinates into document space (may be outside the canvas). */
+  const clientToDocumentPoint = (clientX: number, clientY: number): EditorPoint => {
+    const canvas = canvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
     const bounds = canvas.getBoundingClientRect();
     return {
-      x: (event.clientX - bounds.left) * canvas.width / Math.max(1, bounds.width),
-      y: (event.clientY - bounds.top) * canvas.height / Math.max(1, bounds.height),
+      x: (clientX - bounds.left) * canvas.width / Math.max(1, bounds.width),
+      y: (clientY - bounds.top) * canvas.height / Math.max(1, bounds.height),
     };
   };
 
-  const startPointer = (event: React.PointerEvent<HTMLCanvasElement>) => {
+  const canvasPoint = (
+    event: Pick<React.PointerEvent, "clientX" | "clientY">,
+  ): EditorPoint => clientToDocumentPoint(event.clientX, event.clientY);
+
+  const capturePointerTarget = (
+    target: EventTarget & { setPointerCapture?: (pointerId: number) => void },
+    pointerId: number,
+  ) => {
+    if (typeof target.setPointerCapture === "function") {
+      target.setPointerCapture(pointerId);
+    }
+  };
+
+  const releasePointerTarget = (
+    target: EventTarget & {
+      hasPointerCapture?: (pointerId: number) => boolean;
+      releasePointerCapture?: (pointerId: number) => void;
+    },
+    pointerId: number,
+  ) => {
+    if (
+      typeof target.hasPointerCapture === "function"
+      && typeof target.releasePointerCapture === "function"
+      && target.hasPointerCapture(pointerId)
+    ) {
+      target.releasePointerCapture(pointerId);
+    }
+  };
+
+  /**
+   * Begin an edit gesture at a document-space point. The capture target may be
+   * the canvas or the viewport chrome (so drawing can start outside the image).
+   */
+  const startPointerAt = (
+    event: React.PointerEvent<Element>,
+    point: EditorPoint,
+  ) => {
     const current = documentRef.current;
     if (!current || event.button !== 0) return;
-    const point = canvasPoint(event);
     const interactionRadius = 10 / Math.max(0.01, displayScale);
     setEditingTextId(null);
     setError("");
@@ -1470,7 +1496,7 @@ export function ScreenshotEditor() {
           };
           setResizePreviewBounds(bounds);
           setCanvasCursor(resizeCursor(handle));
-          event.currentTarget.setPointerCapture(event.pointerId);
+          capturePointerTarget(event.currentTarget, event.pointerId);
           return;
         }
         if (
@@ -1485,7 +1511,7 @@ export function ScreenshotEditor() {
             initialDocument: current,
           };
           setCanvasCursor("grabbing");
-          event.currentTarget.setPointerCapture(event.pointerId);
+          capturePointerTarget(event.currentTarget, event.pointerId);
           return;
         }
       }
@@ -1503,7 +1529,7 @@ export function ScreenshotEditor() {
           initialDocument: current,
         };
         setCanvasCursor("move");
-        event.currentTarget.setPointerCapture(event.pointerId);
+        capturePointerTarget(event.currentTarget, event.pointerId);
       } else {
         setCanvasCursor(undefined);
       }
@@ -1518,7 +1544,7 @@ export function ScreenshotEditor() {
         pointerId: event.pointerId,
         origin: point,
       };
-      event.currentTarget.setPointerCapture(event.pointerId);
+      capturePointerTarget(event.currentTarget, event.pointerId);
       return;
     }
 
@@ -1546,7 +1572,9 @@ export function ScreenshotEditor() {
         opacity: 100,
         blendMode: "source-over",
       };
-      commitDocument({ ...current, elements: [...current.elements, element] });
+      // Expand when text is placed past the canvas edge (e.g. viewport chrome).
+      const withText = { ...current, elements: [...current.elements, element] };
+      commitDocument(expandDocumentToFitBounds(withText, elementBounds(element), 0));
       beginTextEditing(element.id, true);
       return;
     }
@@ -1591,10 +1619,30 @@ export function ScreenshotEditor() {
       initialDocument: current,
     };
     replaceDocument({ ...current, elements: [...current.elements, element] });
-    event.currentTarget.setPointerCapture(event.pointerId);
+    capturePointerTarget(event.currentTarget, event.pointerId);
   };
 
-  const movePointer = (event: React.PointerEvent<HTMLCanvasElement>) => {
+  const startPointer = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    startPointerAt(event, canvasPoint(event));
+  };
+
+  /**
+   * Pointer on the checkerboard / empty viewport chrome around the canvas.
+   * Drawing tools can start off-canvas; Select clears the current selection.
+   */
+  const startOutsidePointer = (event: React.PointerEvent<HTMLDivElement>) => {
+    // Only the viewport padding/empty area — not the canvas surface or overlays.
+    if (event.target !== event.currentTarget) return;
+    if (event.button !== 0) return;
+    // Space / Cmd / Ctrl / middle-button pan is handled in capture phase.
+    if (spacePressedRef.current || event.metaKey || event.ctrlKey) return;
+    if (panGestureRef.current) return;
+    // Crop is a canvas-relative selection; ignore starts in the chrome.
+    if (tool === "crop") return;
+    startPointerAt(event, canvasPoint(event));
+  };
+
+  const movePointer = (event: React.PointerEvent<Element>) => {
     const gesture = gestureRef.current;
     const point = canvasPoint(event);
     if (!gesture || gesture.pointerId !== event.pointerId) {
@@ -1749,31 +1797,40 @@ export function ScreenshotEditor() {
       ));
       return;
     }
-    updateDocument((current) => {
-      const element = current.elements.find(({ id }) => id === gesture.elementId);
-      if (!element) return current;
-      if (element.kind === "path") {
-        const last = element.points.at(-1);
-        if (last && Math.hypot(point.x - last.x, point.y - last.y) < 1.5 / displayScale) {
-          return current;
-        }
-        return replaceElement(current, element.id, {
+    // Freehand / shape draw: track the pointer (including past the canvas edge).
+    const current = documentRef.current;
+    if (!current || gesture.kind !== "draw") return;
+    const element = current.elements.find(({ id }) => id === gesture.elementId);
+    if (!element) return;
+    let updated: ScreenshotElement | null = null;
+    if (element.kind === "path") {
+      const last = element.points.at(-1);
+      if (last && Math.hypot(point.x - last.x, point.y - last.y) < 1.5 / displayScale) {
+        updated = element;
+      } else {
+        updated = {
           ...element,
           points: [...element.points, point],
-        });
+        };
       }
-      if (element.kind === "shape") {
-        return replaceElement(current, element.id, {
-          ...element,
-          endX: point.x,
-          endY: point.y,
-        });
-      }
-      return current;
-    });
+    } else if (element.kind === "shape") {
+      updated = {
+        ...element,
+        endX: point.x,
+        endY: point.y,
+      };
+    }
+    if (!updated) return;
+    if (updated !== element) {
+      replaceDocument(replaceElement(current, element.id, updated));
+    }
+    setCanvasExpandPreview(canvasExpandPreviewForBounds(
+      elementBounds(updated),
+      gesture.initialDocument,
+    ));
   };
 
-  const finishPointer = (event: React.PointerEvent<HTMLCanvasElement>) => {
+  const finishPointer = (event: React.PointerEvent<Element>) => {
     const gesture = gestureRef.current;
     if (!gesture || gesture.pointerId !== event.pointerId) return;
     gestureRef.current = null;
@@ -1781,9 +1838,7 @@ export function ScreenshotEditor() {
     setAlignmentGuides([]);
     setCanvasExpandPreview(null);
     setCanvasCursor(undefined);
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
+    releasePointerTarget(event.currentTarget, event.pointerId);
     if (gesture.kind === "crop") return;
     let current = documentRef.current;
     if (!current) return;
@@ -1802,9 +1857,15 @@ export function ScreenshotEditor() {
       return;
     }
 
-    // Dragging a layer past the canvas edge expands the document on release.
-    if (gesture.kind === "resize" || gesture.kind === "move" || gesture.kind === "bend") {
-      const element = current.elements.find(({ id }) => id === gesture.element.id);
+    // Past-edge moves, resizes, bends, and new drawings expand the canvas on release.
+    if (
+      gesture.kind === "resize"
+      || gesture.kind === "move"
+      || gesture.kind === "bend"
+      || gesture.kind === "draw"
+    ) {
+      const elementId = gesture.kind === "draw" ? gesture.elementId : gesture.element.id;
+      const element = current.elements.find(({ id }) => id === elementId);
       if (element) {
         const expanded = expandDocumentToFitBounds(current, elementBounds(element), 0);
         if (expanded !== current) {
@@ -1824,12 +1885,7 @@ export function ScreenshotEditor() {
   const editTextAtPointer = (event: React.MouseEvent<HTMLCanvasElement>) => {
     const current = documentRef.current;
     if (!current || tool !== "select" || event.button !== 0) return;
-    const canvas = event.currentTarget;
-    const bounds = canvas.getBoundingClientRect();
-    const point = {
-      x: (event.clientX - bounds.left) * canvas.width / Math.max(1, bounds.width),
-      y: (event.clientY - bounds.top) * canvas.height / Math.max(1, bounds.height),
-    };
+    const point = clientToDocumentPoint(event.clientX, event.clientY);
     const element = hitTestElement(
       current.elements,
       point,
@@ -2485,6 +2541,10 @@ export function ScreenshotEditor() {
         onPointerMoveCapture={movePanPointer}
         onPointerUpCapture={finishPanPointer}
         onPointerCancelCapture={finishPanPointer}
+        onPointerDown={startOutsidePointer}
+        onPointerMove={movePointer}
+        onPointerUp={finishPointer}
+        onPointerCancel={finishPointer}
       >
         <div
           className={[
