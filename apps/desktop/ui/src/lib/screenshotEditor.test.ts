@@ -10,6 +10,7 @@ import {
   estimateCanvasExportBytes,
   expandDocumentForElement,
   expandDocumentToFitBounds,
+  previewExpandedCanvasRect,
   hitTestElement,
   hitTestResizeHandle,
   imageDropGuideAtPoint,
@@ -417,6 +418,28 @@ describe("screenshot editor geometry", () => {
       { x: 900, y: 750, width: 200, height: 100 },
       document,
     )).toEqual(["right", "bottom"]);
+
+    expect(previewExpandedCanvasRect(overflowing, document)).toEqual({
+      x: -40,
+      y: 0,
+      width: 1_040,
+      height: 800,
+    });
+    expect(previewExpandedCanvasRect(
+      { x: 900, y: 750, width: 200, height: 100 },
+      document,
+    )).toEqual({
+      x: 0,
+      y: 0,
+      width: 1_100,
+      height: 850,
+    });
+    expect(previewExpandedCanvasRect({
+      x: 10,
+      y: 10,
+      width: 100,
+      height: 100,
+    }, document)).toBeNull();
 
     const expanded = expandDocumentToFitBounds(document, overflowing, 0);
     expect(expanded.width).toBe(1_040);

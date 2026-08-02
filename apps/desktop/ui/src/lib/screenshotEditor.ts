@@ -437,6 +437,45 @@ export function expandDocumentForElement(
 }
 
 /**
+ * Preview of the expanded canvas in *current* document coordinates (origin still
+ * at the pre-expand top-left). Null when no growth is needed. Matches
+ * {@link expandDocumentToFitBounds} geometry without mutating layers.
+ */
+export function previewExpandedCanvasRect(
+  bounds: EditorRect,
+  canvas: Pick<ScreenshotDocument, "width" | "height">,
+  padding = 0,
+): EditorRect | null {
+  const shiftX = Math.max(0, Math.ceil(-bounds.x));
+  const shiftY = Math.max(0, Math.ceil(-bounds.y));
+  const fittedX = bounds.x + shiftX;
+  const fittedY = bounds.y + shiftY;
+  const width = Math.max(
+    canvas.width + shiftX,
+    Math.ceil(fittedX + bounds.width + padding),
+  );
+  const height = Math.max(
+    canvas.height + shiftY,
+    Math.ceil(fittedY + bounds.height + padding),
+  );
+  if (
+    shiftX === 0
+    && shiftY === 0
+    && width === canvas.width
+    && height === canvas.height
+  ) {
+    return null;
+  }
+  return {
+    // Normalize -0 to 0 so previews match exact object equality in tests/UI.
+    x: shiftX === 0 ? 0 : -shiftX,
+    y: shiftY === 0 ? 0 : -shiftY,
+    width,
+    height,
+  };
+}
+
+/**
  * Grow the canvas so `bounds` sits fully inside it. Negative overflow shifts every
  * layer so content stays put relative to the expanded frame.
  */
@@ -445,34 +484,14 @@ export function expandDocumentToFitBounds(
   bounds: EditorRect,
   padding = 0,
 ): ScreenshotDocument {
-  const shiftX = Math.max(0, Math.ceil(-bounds.x));
-  const shiftY = Math.max(0, Math.ceil(-bounds.y));
-  const fitted = {
-    x: bounds.x + shiftX,
-    y: bounds.y + shiftY,
-    width: bounds.width,
-    height: bounds.height,
-  };
-  const width = Math.max(
-    document.width + shiftX,
-    Math.ceil(fitted.x + fitted.width + padding),
-  );
-  const height = Math.max(
-    document.height + shiftY,
-    Math.ceil(fitted.y + fitted.height + padding),
-  );
-  if (
-    shiftX === 0
-    && shiftY === 0
-    && width === document.width
-    && height === document.height
-  ) {
-    return document;
-  }
+  const preview = previewExpandedCanvasRect(bounds, document, padding);
+  if (!preview) return document;
+  const shiftX = -preview.x;
+  const shiftY = -preview.y;
   return {
     ...document,
-    width,
-    height,
+    width: preview.width,
+    height: preview.height,
     elements: document.elements.map((current) => translateElement(current, shiftX, shiftY)),
   };
 }

@@ -42,6 +42,22 @@ pub enum ScreenshotEditFormat {
     Webp,
 }
 
+/// How aggressively to encode while keeping the user-selected format.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ScreenshotExportQualityMode {
+    #[default]
+    Preserve,
+    Compress,
+    Maximum,
+}
+
+impl ScreenshotExportQualityMode {
+    const fn uses_compact_encode(self) -> bool {
+        !matches!(self, Self::Preserve)
+    }
+}
+
 impl ScreenshotEditFormat {
     const fn extension(self) -> &'static str {
         match self {
@@ -67,6 +83,8 @@ pub struct ScreenshotEditSaveRequest {
     artifact_id: String,
     destination_path: String,
     format: ScreenshotEditFormat,
+    #[serde(default)]
+    quality_mode: ScreenshotExportQualityMode,
     jpeg_quality: u8,
     #[serde(default)]
     max_size_bytes: Option<u64>,
@@ -218,6 +236,7 @@ pub async fn save_screenshot_edit(
 
     let overwrite_source = request.overwrite_source;
     let format = request.format;
+    let quality_mode = request.quality_mode;
     let jpeg_quality = request.jpeg_quality;
     let max_size_bytes = request.max_size_bytes;
     let capture_mode = source
@@ -233,7 +252,13 @@ pub async fn save_screenshot_edit(
             let height = image.height();
             let image_png = storage::encode_png(&image)?;
             let preview_png = storage::encode_thumbnail_png(&image)?;
-            let output = encode_export_with_limit(&image, format, jpeg_quality, max_size_bytes)?;
+            let output = encode_export_with_limit(
+                &image,
+                format,
+                quality_mode,
+                jpeg_quality,
+                max_size_bytes,
+            )?;
             let encoded_size = u64::try_from(output.len()).unwrap_or(u64::MAX);
             write_export_atomically(&task_destination, &output)?;
             Ok::<_, AppError>((image_png, preview_png, encoded_size, width, height))
@@ -395,19 +420,25 @@ fn decode_editor_png(bytes: &[u8]) -> Result<RgbaImage, AppError> {
 fn encode_export(
     image: &RgbaImage,
     format: ScreenshotEditFormat,
+    quality_mode: ScreenshotExportQualityMode,
     jpeg_quality: u8,
 ) -> Result<Vec<u8>, AppError> {
-    if matches!(format, ScreenshotEditFormat::Png) {
-        return storage::encode_png(image);
-    }
-    let mut bytes = Vec::new();
     match format {
-        ScreenshotEditFormat::Png => unreachable!(),
+        ScreenshotEditFormat::Png => {
+            storage::encode_png_export(image, quality_mode.uses_compact_encode())
+        }
         ScreenshotEditFormat::Jpeg => {
+            let quality = if matches!(quality_mode, ScreenshotExportQualityMode::Preserve) {
+                100
+            } else {
+                jpeg_quality
+            };
             let rgb = composite_onto_white(image);
-            return encode_jpeg(&rgb, jpeg_quality);
+            encode_jpeg(&rgb, quality)
         }
         ScreenshotEditFormat::Webp => {
+            // image crate WebP is lossless-only; compress still keeps WebP, not JPEG.
+            let mut bytes = Vec::new();
             WebPEncoder::new_lossless(&mut bytes)
                 .write_image(
                     image.as_raw(),
@@ -416,18 +447,24 @@ fn encode_export(
                     ExtendedColorType::Rgba8,
                 )
                 .map_err(|error| AppError::Image(error.to_string()))?;
+            Ok(bytes)
         }
     }
-    Ok(bytes)
 }
 
 fn encode_export_with_limit(
     image: &RgbaImage,
     format: ScreenshotEditFormat,
+    quality_mode: ScreenshotExportQualityMode,
     jpeg_quality: u8,
     max_size_bytes: Option<u64>,
 ) -> Result<Vec<u8>, AppError> {
-    let output = encode_export(image, format, jpeg_quality)?;
+    let effective_mode = if max_size_bytes.is_some() {
+        ScreenshotExportQualityMode::Maximum
+    } else {
+        quality_mode
+    };
+    let output = encode_export(image, format, effective_mode, jpeg_quality)?;
     let Some(maximum) = max_size_bytes else {
         return Ok(output);
     };
@@ -436,7 +473,7 @@ fn encode_export_with_limit(
     }
     if !matches!(format, ScreenshotEditFormat::Jpeg) {
         return Err(AppError::Image(format!(
-            "the lossless {} is larger than the requested maximum; choose JPEG or reduce the output size",
+            "the {} is larger than the requested maximum even with stronger compression; reduce the output size, raise the limit, or switch to JPEG for more aggressive size control",
             format.extension().to_uppercase()
         )));
     }
@@ -566,8 +603,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        ScreenshotEditFormat, composite_onto_white, encode_export, encode_export_with_limit,
-        unique_edit_path, validated_destination, write_export_atomically,
+        ScreenshotEditFormat, ScreenshotExportQualityMode, composite_onto_white, encode_export,
+        encode_export_with_limit, unique_edit_path, validated_destination, write_export_atomically,
     };
 
     fn sample() -> RgbaImage {
@@ -593,17 +630,39 @@ mod tests {
     }
 
     #[test]
-    fn exports_png_jpeg_and_lossless_webp() {
+    fn exports_png_jpeg_and_webp_without_changing_format() {
         for (format, expected) in [
             (ScreenshotEditFormat::Png, ImageFormat::Png),
             (ScreenshotEditFormat::Jpeg, ImageFormat::Jpeg),
             (ScreenshotEditFormat::Webp, ImageFormat::WebP),
         ] {
-            let bytes = encode_export(&sample(), format, 92).expect("image encoded");
+            let bytes = encode_export(&sample(), format, ScreenshotExportQualityMode::Compress, 92)
+                .expect("image encoded");
             let decoded = image::load_from_memory_with_format(&bytes, expected)
                 .expect("encoded image is readable");
             assert_eq!((decoded.width(), decoded.height()), (3, 2));
         }
+    }
+
+    #[test]
+    fn compact_png_stays_png_and_is_not_larger_than_fast_encode() {
+        let image = detailed_sample();
+        let preserve = encode_export(
+            &image,
+            ScreenshotEditFormat::Png,
+            ScreenshotExportQualityMode::Preserve,
+            100,
+        )
+        .unwrap();
+        let compressed = encode_export(
+            &image,
+            ScreenshotEditFormat::Png,
+            ScreenshotExportQualityMode::Compress,
+            85,
+        )
+        .unwrap();
+        assert_eq!(&compressed[..8], b"\x89PNG\r\n\x1a\n");
+        assert!(compressed.len() <= preserve.len());
     }
 
     #[test]
@@ -616,14 +675,31 @@ mod tests {
     #[test]
     fn jpeg_quality_falls_until_the_requested_file_limit_is_met() {
         let image = detailed_sample();
-        let high = encode_export(&image, ScreenshotEditFormat::Jpeg, 100).unwrap();
-        let low = encode_export(&image, ScreenshotEditFormat::Jpeg, 40).unwrap();
+        let high = encode_export(
+            &image,
+            ScreenshotEditFormat::Jpeg,
+            ScreenshotExportQualityMode::Compress,
+            100,
+        )
+        .unwrap();
+        let low = encode_export(
+            &image,
+            ScreenshotEditFormat::Jpeg,
+            ScreenshotExportQualityMode::Compress,
+            40,
+        )
+        .unwrap();
         assert!(high.len() > low.len());
         let maximum = u64::try_from((high.len() + low.len()) / 2).unwrap();
 
-        let limited =
-            encode_export_with_limit(&image, ScreenshotEditFormat::Jpeg, 100, Some(maximum))
-                .expect("JPEG fits the requested maximum");
+        let limited = encode_export_with_limit(
+            &image,
+            ScreenshotEditFormat::Jpeg,
+            ScreenshotExportQualityMode::Maximum,
+            100,
+            Some(maximum),
+        )
+        .expect("JPEG fits the requested maximum");
 
         assert!(u64::try_from(limited.len()).unwrap() <= maximum);
         image::load_from_memory_with_format(&limited, ImageFormat::Jpeg)
@@ -631,12 +707,20 @@ mod tests {
     }
 
     #[test]
-    fn lossless_exports_explain_when_the_requested_limit_cannot_be_met() {
-        let error =
-            encode_export_with_limit(&detailed_sample(), ScreenshotEditFormat::Png, 100, Some(10))
-                .expect_err("lossless output should not silently degrade");
+    fn png_exports_explain_when_the_requested_limit_cannot_be_met() {
+        let error = encode_export_with_limit(
+            &detailed_sample(),
+            ScreenshotEditFormat::Png,
+            ScreenshotExportQualityMode::Maximum,
+            100,
+            Some(10),
+        )
+        .expect_err("PNG should not silently switch format to meet a size cap");
 
-        assert!(error.to_string().contains("choose JPEG"));
+        let message = error.to_string();
+        assert!(message.contains("PNG"));
+        assert!(message.contains("JPEG") || message.contains("reduce the output size"));
+        assert!(!message.contains("lossless"));
     }
 
     #[test]
