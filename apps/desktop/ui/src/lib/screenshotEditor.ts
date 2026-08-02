@@ -16,10 +16,9 @@ export type ScreenshotTool =
   | "ellipse"
   | "line"
   | "arrow"
-  | "curved_arrow"
   | "pen";
 
-export type ShapeKind = "rectangle" | "ellipse" | "line" | "arrow" | "curved_arrow";
+export type ShapeKind = "rectangle" | "ellipse" | "line" | "arrow";
 
 export type ElementStyle = {
   color: string;
@@ -959,6 +958,53 @@ export function translateElement(
   };
 }
 
+/** Quadratic Bezier control point for the unified straight-or-curved arrow. */
+export function arrowControlPoint(element: EditorShapeElement): EditorPoint | null {
+  if (element.shape !== "arrow") return null;
+  const deltaX = element.endX - element.x;
+  const deltaY = element.endY - element.y;
+  return {
+    x: (element.x + element.endX) / 2 - deltaY * element.bend,
+    y: (element.y + element.endY) / 2 + deltaX * element.bend,
+  };
+}
+
+/**
+ * Convert a dragged control-point position back into the arrow's normalized
+ * bend. A bend of zero is straight; positive and negative values curve to
+ * opposite sides of the arrow.
+ */
+export function arrowBendFromControlPoint(
+  element: EditorShapeElement,
+  point: EditorPoint,
+  maximumBend = 1,
+): number {
+  if (element.shape !== "arrow") return element.bend;
+  const deltaX = element.endX - element.x;
+  const deltaY = element.endY - element.y;
+  const lengthSquared = deltaX * deltaX + deltaY * deltaY;
+  if (lengthSquared < 1) return 0;
+  const midpointX = (element.x + element.endX) / 2;
+  const midpointY = (element.y + element.endY) / 2;
+  const projected = (
+    (point.x - midpointX) * -deltaY
+    + (point.y - midpointY) * deltaX
+  ) / lengthSquared;
+  const limit = Math.max(0, maximumBend);
+  return clamp(projected, -limit, limit);
+}
+
+export function hitTestArrowControlPoint(
+  element: EditorShapeElement,
+  point: EditorPoint,
+  handleRadius: number,
+): boolean {
+  const control = arrowControlPoint(element);
+  if (!control) return false;
+  const radius = Math.max(4, handleRadius);
+  return Math.hypot(point.x - control.x, point.y - control.y) <= radius;
+}
+
 /** Corner handles drawn around a selected annotation. */
 export type ResizeHandle = "nw" | "ne" | "sw" | "se";
 
@@ -1117,7 +1163,7 @@ export function elementBounds(element: ScreenshotElement): EditorRect {
       { x: element.x, y: element.y },
       { x: element.endX, y: element.endY },
     );
-    const curvePadding = element.shape === "curved_arrow"
+    const curvePadding = element.shape === "arrow"
       ? Math.hypot(rect.width, rect.height) * Math.abs(element.bend)
       : 0;
     const strokePadding = Math.max(8, element.style.strokeWidth * 3);

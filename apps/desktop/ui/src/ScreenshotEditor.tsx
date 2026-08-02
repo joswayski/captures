@@ -14,6 +14,8 @@ import { sameSortedIds } from "./lib/editorPresence";
 import { formatFileSize } from "./lib/format";
 import {
   ALIGNMENT_SNAP_SCREEN_PX,
+  arrowBendFromControlPoint,
+  arrowControlPoint,
   boundedCropRect,
   canvasOverflowEdges,
   collectAlignmentSnapLines,
@@ -25,6 +27,7 @@ import {
   estimateCanvasExportBytes,
   expandDocumentForElement,
   expandDocumentToFitBounds,
+  hitTestArrowControlPoint,
   hitTestElement,
   previewExpandedCanvasRect,
   hitTestResizeHandle,
@@ -82,6 +85,8 @@ type EditorGesture =
     pointerId: number;
     origin: EditorPoint;
     element: ScreenshotElement;
+    wasSelected: boolean;
+    didMove: boolean;
     initialDocument: ScreenshotDocument;
   }
   | {
@@ -103,7 +108,21 @@ type EditorGesture =
     kind: "crop";
     pointerId: number;
     origin: EditorPoint;
+  }
+  | {
+    kind: "bend";
+    pointerId: number;
+    element: Extract<ScreenshotElement, { kind: "shape" }>;
+    initialDocument: ScreenshotDocument;
   };
+
+type PanGesture = {
+  pointerId: number;
+  clientX: number;
+  clientY: number;
+  scrollLeft: number;
+  scrollTop: number;
+};
 
 type SavedScreenshotEdit = {
   artifact: CaptureArtifact;
@@ -144,7 +163,6 @@ const TOOL_ITEMS: Array<{ tool: ScreenshotTool; label: string; shortcut: string 
   { tool: "ellipse", label: "Ellipse", shortcut: "O" },
   { tool: "line", label: "Line", shortcut: "L" },
   { tool: "arrow", label: "Arrow", shortcut: "A" },
-  { tool: "curved_arrow", label: "Curved arrow", shortcut: "B" },
   { tool: "pen", label: "Freehand", shortcut: "P" },
 ];
 
@@ -331,13 +349,8 @@ function drawShape(
     return;
   }
 
-  if (shape === "curved_arrow") {
-    const midpoint = { x: (x + endX) / 2, y: (y + endY) / 2 };
-    const delta = { x: endX - x, y: endY - y };
-    const control = {
-      x: midpoint.x - delta.y * element.bend,
-      y: midpoint.y + delta.x * element.bend,
-    };
+  if (shape === "arrow") {
+    const control = arrowControlPoint(element) ?? { x, y };
     context.beginPath();
     context.moveTo(x, y);
     context.quadraticCurveTo(control.x, control.y, endX, endY);
@@ -351,9 +364,6 @@ function drawShape(
   context.moveTo(x, y);
   context.lineTo(endX, endY);
   context.stroke();
-  if (shape === "arrow") {
-    arrowHead(context, { x: endX, y: endY }, { x, y }, style.strokeWidth);
-  }
   context.restore();
 }
 
@@ -399,6 +409,7 @@ function renderScreenshot(
   context: CanvasRenderingContext2D,
   document: ScreenshotDocument,
   imageCache: Map<string, CachedImage>,
+  hiddenElementId: string | null = null,
 ): void {
   context.clearRect(0, 0, document.width, document.height);
   if (document.background) {
@@ -408,7 +419,7 @@ function renderScreenshot(
   context.imageSmoothingEnabled = true;
   context.imageSmoothingQuality = "high";
   for (const element of document.elements) {
-    if (!element.visible) continue;
+    if (!element.visible || element.id === hiddenElementId) continue;
     context.save();
     context.globalAlpha = Math.max(0, Math.min(1, element.opacity / 100));
     context.globalCompositeOperation = element.blendMode;
@@ -468,6 +479,30 @@ function drawEditorOverlays(
         [bounds.x, bounds.y + bounds.height],
       ]) {
         context.fillRect(point[0] - 4 * unit, point[1] - 4 * unit, 8 * unit, 8 * unit);
+      }
+      if (selected?.kind === "shape" && selected.shape === "arrow") {
+        const control = arrowControlPoint(selected);
+        if (control) {
+          const midpoint = {
+            x: (selected.x + selected.endX) / 2,
+            y: (selected.y + selected.endY) / 2,
+          };
+          context.save();
+          context.strokeStyle = accentColor;
+          context.fillStyle = "#ffffff";
+          context.lineWidth = 1.5 * unit;
+          context.setLineDash([4 * unit, 4 * unit]);
+          context.beginPath();
+          context.moveTo(midpoint.x, midpoint.y);
+          context.lineTo(control.x, control.y);
+          context.stroke();
+          context.setLineDash([]);
+          context.beginPath();
+          context.arc(control.x, control.y, 7 * unit, 0, Math.PI * 2);
+          context.fill();
+          context.stroke();
+          context.restore();
+        }
       }
       context.restore();
     }
@@ -653,6 +688,7 @@ export function ScreenshotEditor() {
   const [redoStack, setRedoStack] = useState<ScreenshotDocument[]>([]);
   const [tool, setTool] = useState<ScreenshotTool>("select");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [editingTextId, setEditingTextId] = useState<string | null>(null);
   const [cropSelection, setCropSelection] = useState<EditorRect | null>(null);
   const [cropAspect, setCropAspect] = useState("free");
   const [defaultStyle, setDefaultStyle] = useState<ElementStyle>({
@@ -673,6 +709,8 @@ export function ScreenshotEditor() {
   const [alignmentGuides, setAlignmentGuides] = useState<AlignmentSnapGuide[]>([]);
   const [canvasExpandPreview, setCanvasExpandPreview] = useState<CanvasExpandPreview | null>(null);
   const [canvasCursor, setCanvasCursor] = useState<string | undefined>(undefined);
+  const [spacePanReady, setSpacePanReady] = useState(false);
+  const [panActive, setPanActive] = useState(false);
   const [layerDropTarget, setLayerDropTarget] = useState<LayerDropTarget | null>(null);
   const [exportFormat, setExportFormat] = useState<ExportFormat>("png");
   const [exportSize, setExportSize] = useState<ExportSize>("original");
@@ -700,11 +738,19 @@ export function ScreenshotEditor() {
   const [saved, setSaved] = useState<SavedScreenshotEdit | null>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const inlineTextRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageCacheRef = useRef(new Map<string, CachedImage>());
   const successTimerRef = useRef<number | null>(null);
   const objectUrlsRef = useRef(new Set<string>());
   const gestureRef = useRef<EditorGesture | null>(null);
+  const panGestureRef = useRef<PanGesture | null>(null);
+  const spacePressedRef = useRef(false);
+  const selectInlineTextRef = useRef(false);
+  const layerClipboardRef = useRef<{
+    element: ScreenshotElement;
+    pasteCount: number;
+  } | null>(null);
   const dropDepthRef = useRef(0);
   const displayedZoomPercentRef = useRef(100);
   const zoomAnchorFrameRef = useRef<number | null>(null);
@@ -895,7 +941,49 @@ export function ScreenshotEditor() {
     return trimDocumentToContent(editorDocument) !== editorDocument;
   }, [editorDocument]);
 
+  const editingText = editingTextId === selectedId && selected?.kind === "text"
+    ? selected
+    : null;
+
+  const beginTextEditing = useCallback((elementId: string, selectAll = false) => {
+    selectInlineTextRef.current = selectAll;
+    setSelectedId(elementId);
+    setEditingTextId(elementId);
+    setTool("select");
+    setCropSelection(null);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!editingTextId) return;
+    const input = inlineTextRef.current;
+    if (!input) return;
+    input.focus({ preventScroll: true });
+    if (selectInlineTextRef.current) input.select();
+    else input.setSelectionRange(input.value.length, input.value.length);
+    selectInlineTextRef.current = false;
+  }, [editingTextId]);
+
   const displayScale = zoomMode === "fit" ? fitScale : zoom / 100;
+
+  const inlineTextLayout = useMemo(() => {
+    if (!editingText) return null;
+    const bounds = elementBounds(editingText);
+    const horizontalPadding = editingText.fontSize * 0.18;
+    const verticalPadding = editingText.fontSize * 0.12;
+    return {
+      left: (editingText.x - horizontalPadding) * displayScale,
+      top: (editingText.y - verticalPadding) * displayScale,
+      width: Math.max(
+        72,
+        (bounds.width + horizontalPadding * 2) * displayScale,
+      ),
+      height: Math.max(
+        28,
+        (bounds.height + verticalPadding * 2) * displayScale,
+      ),
+      padding: `${verticalPadding * displayScale}px ${horizontalPadding * displayScale}px`,
+    };
+  }, [displayScale, editingText]);
 
   useLayoutEffect(() => {
     displayedZoomPercentRef.current = displayScale * 100;
@@ -991,7 +1079,7 @@ export function ScreenshotEditor() {
     if (canvas.height !== editorDocument.height) canvas.height = editorDocument.height;
     const context = canvas.getContext("2d");
     if (!context) return;
-    renderScreenshot(context, editorDocument, imageCacheRef.current);
+    renderScreenshot(context, editorDocument, imageCacheRef.current, editingText?.id ?? null);
     const accentColor = getComputedStyle(canvas)
       .getPropertyValue("--theme-accent")
       .trim() || "#ffffff";
@@ -1007,6 +1095,7 @@ export function ScreenshotEditor() {
   }, [
     cropSelection,
     displayScale,
+    editingText?.id,
     editorDocument,
     resizePreviewBounds,
     ensureImage,
@@ -1064,9 +1153,64 @@ export function ScreenshotEditor() {
     ));
   }, [commitDocument, selectedId]);
 
+  const duplicateSelected = useCallback(() => {
+    const current = documentRef.current;
+    const index = current?.elements.findIndex(({ id }) => id === selectedId) ?? -1;
+    if (!current || index < 0) return false;
+    const duplicate = duplicateScreenshotElement(current.elements[index], editorId());
+    const elements = [...current.elements];
+    elements.splice(index + 1, 0, duplicate);
+    commitDocument({ ...current, elements });
+    setSelectedId(duplicate.id);
+    setEditingTextId(null);
+    setTool("select");
+    return true;
+  }, [commitDocument, selectedId]);
+
+  const copySelectedLayer = useCallback(() => {
+    const current = documentRef.current;
+    const element = current?.elements.find(({ id }) => id === selectedId);
+    if (!element) return false;
+    // Documents are updated immutably, so this object is a stable clipboard snapshot.
+    layerClipboardRef.current = { element, pasteCount: 0 };
+    return true;
+  }, [selectedId]);
+
+  const pasteLayer = useCallback(() => {
+    const clipboard = layerClipboardRef.current;
+    const current = documentRef.current;
+    if (!clipboard || !current) return false;
+    clipboard.pasteCount += 1;
+    const duplicate = duplicateScreenshotElement(
+      clipboard.element,
+      editorId(),
+      24 * clipboard.pasteCount,
+    );
+    const selectedIndex = current.elements.findIndex(({ id }) => id === selectedId);
+    const insertionIndex = selectedIndex >= 0 ? selectedIndex + 1 : current.elements.length;
+    const elements = [...current.elements];
+    elements.splice(insertionIndex, 0, duplicate);
+    commitDocument({ ...current, elements });
+    setSelectedId(duplicate.id);
+    setEditingTextId(null);
+    setTool("select");
+    return true;
+  }, [commitDocument, selectedId]);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const command = event.metaKey || event.ctrlKey;
+      const target = event.target as HTMLElement | null;
+      const editingField = target instanceof Element
+        && target.matches("input, textarea, select, [contenteditable=true]");
+      const interactiveTarget = target instanceof Element
+        && target.matches("input, textarea, select, button, a, [contenteditable=true]");
+      if (event.code === "Space" && !interactiveTarget) {
+        event.preventDefault();
+        spacePressedRef.current = true;
+        setSpacePanReady(true);
+        return;
+      }
       if (
         command
         && (
@@ -1098,8 +1242,19 @@ export function ScreenshotEditor() {
         setManualZoom(100);
         return;
       }
-      const target = event.target as HTMLElement | null;
-      if (target?.matches("input, textarea, select, [contenteditable=true]")) return;
+      if (editingField) return;
+      if (command && event.key.toLowerCase() === "c") {
+        if (copySelectedLayer()) event.preventDefault();
+        return;
+      }
+      if (command && event.key.toLowerCase() === "v") {
+        if (pasteLayer()) event.preventDefault();
+        return;
+      }
+      if (command && event.key.toLowerCase() === "d") {
+        if (duplicateSelected()) event.preventDefault();
+        return;
+      }
       if (command && event.key.toLowerCase() === "z") {
         event.preventDefault();
         if (event.shiftKey) redo();
@@ -1112,6 +1267,7 @@ export function ScreenshotEditor() {
         return;
       }
       if (event.key === "Escape") {
+        setEditingTextId(null);
         setSelectedId(null);
         setCropSelection(null);
         return;
@@ -1124,15 +1280,39 @@ export function ScreenshotEditor() {
       else if (!command && !event.altKey) {
         const match = TOOL_ITEMS.find(({ shortcut }) => shortcut.toLowerCase() === event.key.toLowerCase());
         if (match) {
+          setEditingTextId(null);
           setTool(match.tool);
           if (match.tool !== "select") setSelectedId(null);
           setCropSelection(null);
         }
       }
     };
+    const stopSpacePan = () => {
+      spacePressedRef.current = false;
+      setSpacePanReady(false);
+    };
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.code === "Space") stopSpacePan();
+    };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [deleteSelected, nudgeSelected, redo, setManualZoom, undo, zoomBy]);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", stopSpacePan);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", stopSpacePan);
+    };
+  }, [
+    copySelectedLayer,
+    deleteSelected,
+    duplicateSelected,
+    nudgeSelected,
+    pasteLayer,
+    redo,
+    setManualZoom,
+    undo,
+    zoomBy,
+  ]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -1204,6 +1384,51 @@ export function ScreenshotEditor() {
     };
   }, [editorDocument, setManualZoom, zoomBy]);
 
+  const startPanPointer = (event: React.PointerEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement | null;
+    if (target?.closest("input, textarea, select, button, [contenteditable=true]")) return;
+    const modifierPan = spacePressedRef.current || event.metaKey || event.ctrlKey;
+    if ((event.button !== 0 || !modifierPan) && event.button !== 1) return;
+    const viewport = event.currentTarget;
+    panGestureRef.current = {
+      pointerId: event.pointerId,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      scrollLeft: viewport.scrollLeft,
+      scrollTop: viewport.scrollTop,
+    };
+    setPanActive(true);
+    event.preventDefault();
+    event.stopPropagation();
+    if (typeof viewport.setPointerCapture === "function") {
+      viewport.setPointerCapture(event.pointerId);
+    }
+  };
+
+  const movePanPointer = (event: React.PointerEvent<HTMLDivElement>) => {
+    const gesture = panGestureRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    event.currentTarget.scrollLeft = gesture.scrollLeft - (event.clientX - gesture.clientX);
+    event.currentTarget.scrollTop = gesture.scrollTop - (event.clientY - gesture.clientY);
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  const finishPanPointer = (event: React.PointerEvent<HTMLDivElement>) => {
+    const gesture = panGestureRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    panGestureRef.current = null;
+    setPanActive(false);
+    event.preventDefault();
+    event.stopPropagation();
+    if (
+      typeof event.currentTarget.hasPointerCapture === "function"
+      && event.currentTarget.hasPointerCapture(event.pointerId)
+    ) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
+
   const canvasPoint = (event: React.PointerEvent<HTMLCanvasElement>): EditorPoint => {
     const canvas = event.currentTarget;
     const bounds = canvas.getBoundingClientRect();
@@ -1217,12 +1442,13 @@ export function ScreenshotEditor() {
     const current = documentRef.current;
     if (!current || event.button !== 0) return;
     const point = canvasPoint(event);
+    const interactionRadius = 10 / Math.max(0.01, displayScale);
+    setEditingTextId(null);
     setError("");
     clearSuccess();
     setSaved(null);
 
     if (tool === "select") {
-      const handleRadius = 10 / Math.max(0.01, displayScale);
       const selectedElement = selectedId
         ? current.elements.find((element) => element.id === selectedId) ?? null
         : null;
@@ -1231,7 +1457,7 @@ export function ScreenshotEditor() {
         && !selectedElement.locked
       ) {
         const bounds = elementBounds(selectedElement);
-        const handle = hitTestResizeHandle(bounds, point, handleRadius);
+        const handle = hitTestResizeHandle(bounds, point, interactionRadius);
         if (handle) {
           gestureRef.current = {
             kind: "resize",
@@ -1247,9 +1473,24 @@ export function ScreenshotEditor() {
           event.currentTarget.setPointerCapture(event.pointerId);
           return;
         }
+        if (
+          selectedElement.kind === "shape"
+          && selectedElement.shape === "arrow"
+          && hitTestArrowControlPoint(selectedElement, point, interactionRadius)
+        ) {
+          gestureRef.current = {
+            kind: "bend",
+            pointerId: event.pointerId,
+            element: selectedElement,
+            initialDocument: current,
+          };
+          setCanvasCursor("grabbing");
+          event.currentTarget.setPointerCapture(event.pointerId);
+          return;
+        }
       }
 
-      const element = hitTestElement(current.elements, point, handleRadius);
+      const element = hitTestElement(current.elements, point, interactionRadius);
       setSelectedId(element?.id ?? null);
       if (element) {
         gestureRef.current = {
@@ -1257,6 +1498,8 @@ export function ScreenshotEditor() {
           pointerId: event.pointerId,
           origin: point,
           element,
+          wasSelected: element.id === selectedId,
+          didMove: false,
           initialDocument: current,
         };
         setCanvasCursor("move");
@@ -1280,6 +1523,11 @@ export function ScreenshotEditor() {
     }
 
     if (tool === "text") {
+      const existing = hitTestElement(current.elements, point, interactionRadius);
+      if (existing?.kind === "text") {
+        beginTextEditing(existing.id);
+        return;
+      }
       const element: ScreenshotElement = {
         id: editorId(),
         kind: "text",
@@ -1299,8 +1547,7 @@ export function ScreenshotEditor() {
         blendMode: "source-over",
       };
       commitDocument({ ...current, elements: [...current.elements, element] });
-      setSelectedId(element.id);
-      setTool("select");
+      beginTextEditing(element.id, true);
       return;
     }
 
@@ -1327,7 +1574,7 @@ export function ScreenshotEditor() {
         y: point.y,
         endX: point.x,
         endY: point.y,
-        bend: 0.24,
+        bend: 0,
         style: {
           ...defaultStyle,
           fill: tool === "rectangle" || tool === "ellipse" ? defaultStyle.fill : null,
@@ -1360,6 +1607,18 @@ export function ScreenshotEditor() {
           selectedElement
           && !selectedElement.locked
         ) {
+          if (
+            selectedElement.kind === "shape"
+            && selectedElement.shape === "arrow"
+            && hitTestArrowControlPoint(
+              selectedElement,
+              point,
+              10 / Math.max(0.01, displayScale),
+            )
+          ) {
+            setCanvasCursor("grab");
+            return;
+          }
           const handle = hitTestResizeHandle(
             elementBounds(selectedElement),
             point,
@@ -1391,8 +1650,34 @@ export function ScreenshotEditor() {
       ));
       return;
     }
+    if (gesture.kind === "bend") {
+      const bent = {
+        ...gesture.element,
+        bend: arrowBendFromControlPoint(gesture.element, point),
+      };
+      setCanvasCursor("grabbing");
+      setCanvasExpandPreview(canvasExpandPreviewForBounds(
+        elementBounds(bent),
+        gesture.initialDocument,
+      ));
+      replaceDocument(replaceElement(
+        gesture.initialDocument,
+        gesture.element.id,
+        bent,
+      ));
+      return;
+    }
     if (gesture.kind === "move") {
       setCanvasCursor("move");
+      const directTextEditCandidate = gesture.element.kind === "text" && gesture.wasSelected;
+      const didMove = gesture.didMove || Math.hypot(
+        point.x - gesture.origin.x,
+        point.y - gesture.origin.y,
+      ) > (directTextEditCandidate ? 2 / Math.max(0.01, displayScale) : 0);
+      if (didMove !== gesture.didMove) {
+        gestureRef.current = { ...gesture, didMove };
+      }
+      if (directTextEditCandidate && !didMove) return;
       const snapThreshold = ALIGNMENT_SNAP_SCREEN_PX / Math.max(0.01, displayScale);
       const free = translateElement(
         gesture.element,
@@ -1502,9 +1787,23 @@ export function ScreenshotEditor() {
     if (gesture.kind === "crop") return;
     let current = documentRef.current;
     if (!current) return;
+    const releasePoint = gesture.kind === "move" ? canvasPoint(event) : null;
+
+    if (
+      gesture.kind === "move"
+      && gesture.element.kind === "text"
+      && gesture.wasSelected
+      && !gesture.didMove
+      && releasePoint
+      && Math.hypot(releasePoint.x - gesture.origin.x, releasePoint.y - gesture.origin.y)
+        <= 2 / Math.max(0.01, displayScale)
+    ) {
+      beginTextEditing(gesture.element.id);
+      return;
+    }
 
     // Dragging a layer past the canvas edge expands the document on release.
-    if (gesture.kind === "resize" || gesture.kind === "move") {
+    if (gesture.kind === "resize" || gesture.kind === "move" || gesture.kind === "bend") {
       const element = current.elements.find(({ id }) => id === gesture.element.id);
       if (element) {
         const expanded = expandDocumentToFitBounds(current, elementBounds(element), 0);
@@ -1520,6 +1819,25 @@ export function ScreenshotEditor() {
     if (JSON.stringify(current) === JSON.stringify(gesture.initialDocument)) return;
     setUndoStack((stack) => [...stack.slice(-99), gesture.initialDocument]);
     setRedoStack([]);
+  };
+
+  const editTextAtPointer = (event: React.MouseEvent<HTMLCanvasElement>) => {
+    const current = documentRef.current;
+    if (!current || tool !== "select" || event.button !== 0) return;
+    const canvas = event.currentTarget;
+    const bounds = canvas.getBoundingClientRect();
+    const point = {
+      x: (event.clientX - bounds.left) * canvas.width / Math.max(1, bounds.width),
+      y: (event.clientY - bounds.top) * canvas.height / Math.max(1, bounds.height),
+    };
+    const element = hitTestElement(
+      current.elements,
+      point,
+      10 / Math.max(0.01, displayScale),
+    );
+    if (element?.kind !== "text") return;
+    event.preventDefault();
+    beginTextEditing(element.id);
   };
 
   const applyCrop = () => {
@@ -1555,18 +1873,6 @@ export function ScreenshotEditor() {
     const element = current?.elements.find(({ id }) => id === elementId);
     if (!current || !element) return;
     commitDocument(replaceElement(current, element.id, updater(element)));
-  };
-
-  const duplicateSelected = () => {
-    const current = documentRef.current;
-    const index = current?.elements.findIndex(({ id }) => id === selectedId) ?? -1;
-    if (!current || index < 0) return;
-    const duplicate = duplicateScreenshotElement(current.elements[index], editorId());
-    const elements = [...current.elements];
-    elements.splice(index + 1, 0, duplicate);
-    commitDocument({ ...current, elements });
-    setSelectedId(duplicate.id);
-    setTool("select");
   };
 
   const moveLayer = (direction: "front" | "back") => {
@@ -2155,6 +2461,7 @@ export function ScreenshotEditor() {
             aria-label={`${item.label} (${item.shortcut})`}
             title={`${item.label} (${item.shortcut})`}
             onClick={() => {
+              setEditingTextId(null);
               setTool(item.tool);
               if (item.tool !== "select") setSelectedId(null);
               if (item.tool !== "crop") setCropSelection(null);
@@ -2168,8 +2475,16 @@ export function ScreenshotEditor() {
 
       <section
         ref={viewportRef}
-        className="screenshot-canvas-viewport"
+        className={[
+          "screenshot-canvas-viewport",
+          spacePanReady ? "is-pan-ready" : "",
+          panActive ? "is-panning" : "",
+        ].filter(Boolean).join(" ")}
         aria-label="Screenshot editing canvas"
+        onPointerDownCapture={startPanPointer}
+        onPointerMoveCapture={movePanPointer}
+        onPointerUpCapture={finishPanPointer}
+        onPointerCancelCapture={finishPanPointer}
       >
         <div
           className={[
@@ -2189,14 +2504,51 @@ export function ScreenshotEditor() {
             style={{
               width: editorDocument.width * displayScale,
               height: editorDocument.height * displayScale,
-              cursor: canvasCursor,
+              cursor: panActive ? "grabbing" : spacePanReady ? "grab" : canvasCursor,
             }}
             className={`screenshot-canvas tool-${tool}`}
             onPointerDown={startPointer}
             onPointerMove={movePointer}
             onPointerUp={finishPointer}
             onPointerCancel={finishPointer}
+            onDoubleClick={editTextAtPointer}
           />
+          {editingText && inlineTextLayout && (
+            <textarea
+              ref={inlineTextRef}
+              className="screenshot-inline-text-editor"
+              aria-label="Edit text on canvas"
+              value={editingText.text}
+              wrap="off"
+              spellCheck
+              style={{
+                ...inlineTextLayout,
+                color: editingText.color,
+                backgroundColor: editingText.background ?? "transparent",
+                fontFamily: fontFamily(editingText),
+                fontSize: editingText.fontSize * displayScale,
+                fontWeight: editingText.bold ? 700 : 400,
+                fontStyle: editingText.italic ? "italic" : "normal",
+                lineHeight: 1.25,
+                textAlign: editingText.align,
+                opacity: editingText.opacity / 100,
+                mixBlendMode: editingText.blendMode === "source-over"
+                  ? "normal"
+                  : editingText.blendMode,
+              }}
+              onChange={(event) => updateLayer(editingText.id, (element) => (
+                element.kind === "text" ? { ...element, text: event.target.value } : element
+              ))}
+              onBlur={() => setEditingTextId((current) => (
+                current === editingText.id ? null : current
+              ))}
+              onKeyDown={(event) => {
+                if (event.key !== "Escape") return;
+                event.preventDefault();
+                event.currentTarget.blur();
+              }}
+            />
+          )}
           {dragActive && imageDropGuide && (
             <div
               className={`screenshot-drop-snap-guide edge-${imageDropGuide.edge}`}
@@ -2475,6 +2827,7 @@ export function ScreenshotEditor() {
                     className="screenshot-layer-select"
                     aria-pressed={selectedId === element.id}
                     onClick={() => {
+                      setEditingTextId(null);
                       setTool("select");
                       setCropSelection(null);
                       setSelectedId(element.id);
@@ -2522,6 +2875,7 @@ export function ScreenshotEditor() {
                       title={locked ? "Unlock layer" : "Lock layer"}
                       onClick={(event) => {
                         event.stopPropagation();
+                        setEditingTextId(null);
                         updateLayer(element.id, (current) => ({
                           ...current,
                           locked: !current.locked,
@@ -2618,7 +2972,7 @@ export function ScreenshotEditor() {
               </button>
             </div>
             <div className="screenshot-layer-action-grid">
-              <button type="button" onClick={duplicateSelected}>
+              <button type="button" title="Duplicate (Command/Ctrl+D)" onClick={duplicateSelected}>
                 <EditorIcon name="duplicate" />Duplicate
               </button>
               <button type="button" disabled={selected.locked} onClick={deleteSelected}>
@@ -2672,7 +3026,6 @@ export function ScreenshotEditor() {
             <label>
               Text
               <textarea
-                autoFocus
                 rows={4}
                 value={selected.text}
                 onChange={(event) => updateSelected((element) => (
@@ -2886,19 +3239,19 @@ export function ScreenshotEditor() {
                 )}
               </>
             )}
-            {selected.kind === "shape" && selected.shape === "curved_arrow" && (
+            {selected.kind === "shape" && selected.shape === "arrow" && (
               <label>
                 Curve
                 <RangeSlider
                   ariaLabel="Curve"
-                  min={-50}
-                  max={50}
+                  min={-100}
+                  max={100}
                   value={Math.round(selected.bend * 100)}
                   valueText={`${Math.round(selected.bend * 100)}%`}
                   marks={[
-                    { value: -50, label: "Left" },
+                    { value: -100, label: "Left" },
                     { value: 0, label: "Straight" },
-                    { value: 50, label: "Right" },
+                    { value: 100, label: "Right" },
                   ]}
                   onChange={(bend) => updateSelected((element) => (
                     element.kind === "shape"
@@ -3335,7 +3688,6 @@ function elementLabel(element: ScreenshotElement): string {
   }
   if (element.kind === "text") return "Text";
   if (element.kind === "path") return "Freehand drawing";
-  if (element.shape === "curved_arrow") return "Curved arrow";
   return element.shape[0].toUpperCase() + element.shape.slice(1);
 }
 
@@ -3477,7 +3829,6 @@ function EditorIcon({ name }: { name: string }) {
   if (name === "ellipse") return <svg viewBox="0 0 24 24"><ellipse cx="12" cy="12" rx="8" ry="6.5" /></svg>;
   if (name === "line") return <svg viewBox="0 0 24 24"><path d="M5 19 19 5" /></svg>;
   if (name === "arrow") return <svg viewBox="0 0 24 24"><path d="M4 20 20 4M12 4h8v8" /></svg>;
-  if (name === "curved_arrow") return <svg viewBox="0 0 24 24"><path d="M4 18C7 7 14 5 20 8M15 3l5 5-6 3" /></svg>;
   if (name === "pen") return <svg viewBox="0 0 24 24"><path d="M4 16c4-7 6-8 8-3s4 4 8-4M4 20h16" /></svg>;
   if (name === "undo") return <svg viewBox="0 0 24 24"><path d="m9 7-5 5 5 5M5 12h8a6 6 0 0 1 6 6" /></svg>;
   if (name === "redo") return <svg viewBox="0 0 24 24"><path d="m15 7 5 5-5 5M19 12h-8a6 6 0 0 0-6 6" /></svg>;

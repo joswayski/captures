@@ -106,6 +106,20 @@ function installExportableCanvas(): () => void {
   };
 }
 
+function setCanvasBounds(canvas: HTMLCanvasElement, width = 1_440, height = 900): void {
+  vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
+    x: 0,
+    y: 0,
+    top: 0,
+    left: 0,
+    right: width,
+    bottom: height,
+    width,
+    height,
+    toJSON: () => ({}),
+  });
+}
+
 describe("ScreenshotEditor", () => {
   beforeEach(() => {
     window.history.replaceState({}, "", "/?view=screenshot-editor&artifact_id=capture-1");
@@ -133,11 +147,11 @@ describe("ScreenshotEditor", () => {
       "Ellipse (O)",
       "Line (L)",
       "Arrow (A)",
-      "Curved arrow (B)",
       "Freehand (P)",
     ]) {
       expect(screen.getByRole("button", { name })).toBeInTheDocument();
     }
+    expect(screen.queryByRole("button", { name: /Curved arrow/ })).not.toBeInTheDocument();
     expect(invoke).toHaveBeenCalledWith("get_artifact", {
       artifactId: "capture-1",
     });
@@ -270,23 +284,84 @@ describe("ScreenshotEditor", () => {
     expect(end.defaultPrevented).toBe(true);
   });
 
+  it("pans the viewport with Space-drag and Command/Ctrl-drag", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findAllByText("1440 × 900");
+
+    const viewport = screen.getByLabelText("Screenshot editing canvas");
+    const canvas = viewport.querySelector("canvas")!;
+    viewport.setPointerCapture = vi.fn();
+    viewport.hasPointerCapture = vi.fn(() => true);
+    viewport.releasePointerCapture = vi.fn();
+    viewport.scrollLeft = 200;
+    viewport.scrollTop = 120;
+
+    const spaceDown = new KeyboardEvent("keydown", {
+      code: "Space",
+      key: " ",
+      bubbles: true,
+      cancelable: true,
+    });
+    fireEvent(document.body, spaceDown);
+    expect(spaceDown.defaultPrevented).toBe(true);
+    expect(viewport).toHaveClass("is-pan-ready");
+
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      buttons: 1,
+      pointerId: 10,
+      clientX: 400,
+      clientY: 300,
+    });
+    expect(viewport).toHaveClass("is-panning");
+    fireEvent.pointerMove(viewport, {
+      buttons: 1,
+      pointerId: 10,
+      clientX: 350,
+      clientY: 260,
+    });
+    expect(viewport.scrollLeft).toBe(250);
+    expect(viewport.scrollTop).toBe(160);
+    fireEvent.pointerUp(viewport, { button: 0, pointerId: 10 });
+    expect(viewport).not.toHaveClass("is-panning");
+    fireEvent.keyUp(document.body, { code: "Space", key: " " });
+    expect(viewport).not.toHaveClass("is-pan-ready");
+
+    viewport.scrollLeft = 90;
+    viewport.scrollTop = 70;
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      buttons: 1,
+      pointerId: 11,
+      clientX: 300,
+      clientY: 220,
+      metaKey: true,
+    });
+    fireEvent.pointerMove(viewport, {
+      buttons: 1,
+      pointerId: 11,
+      clientX: 270,
+      clientY: 200,
+      metaKey: true,
+    });
+    expect(viewport.scrollLeft).toBe(120);
+    expect(viewport.scrollTop).toBe(90);
+    fireEvent.pointerUp(viewport, { button: 0, pointerId: 11, metaKey: true });
+  });
+
   it("creates selectable formatted text directly on the canvas", async () => {
     render(<ScreenshotEditor />);
     await screen.findAllByText("1440 × 900");
 
+    fireEvent.change(screen.getByRole("combobox", { name: "Canvas zoom" }), {
+      target: { value: "100" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Text (T)" }));
     const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
-    vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
-      x: 0,
-      y: 0,
-      top: 0,
-      left: 0,
-      right: 1_440,
-      bottom: 900,
-      width: 1_440,
-      height: 900,
-      toJSON: () => ({}),
-    });
+    canvas.setPointerCapture = vi.fn();
+    canvas.hasPointerCapture = vi.fn(() => true);
+    canvas.releasePointerCapture = vi.fn();
+    setCanvasBounds(canvas);
     fireEvent.pointerDown(canvas, {
       button: 0,
       pointerId: 1,
@@ -294,12 +369,140 @@ describe("ScreenshotEditor", () => {
       clientY: 80,
     });
 
-    expect(await screen.findByRole("textbox", { name: "Text" })).toHaveValue("Text");
+    const inlineEditor = await screen.findByRole("textbox", {
+      name: "Edit text on canvas",
+    });
+    expect(inlineEditor).toHaveValue("Text");
+    expect(inlineEditor).toHaveFocus();
+    fireEvent.change(inlineEditor, { target: { value: "Inline text" } });
+    expect(screen.getByRole("textbox", { name: "Text" })).toHaveValue("Inline text");
     expect(screen.getByRole("button", { name: "Bold" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Italic" })).toBeInTheDocument();
     expect(
-      within(screen.getByRole("region", { name: "Layers" })).getAllByText("Text"),
-    ).toHaveLength(2);
+      within(screen.getByRole("region", { name: "Layers" })).getByText("Inline text"),
+    ).toBeInTheDocument();
+
+    fireEvent.blur(inlineEditor);
+    expect(screen.queryByRole("textbox", { name: "Edit text on canvas" }))
+      .not.toBeInTheDocument();
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 2,
+      clientX: 150,
+      clientY: 100,
+    });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 2,
+      clientX: 150,
+      clientY: 100,
+    });
+    expect(await screen.findByRole("textbox", { name: "Edit text on canvas" }))
+      .toHaveValue("Inline text");
+  });
+
+  it("copies, pastes, and duplicates the selected layer with standard shortcuts", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findAllByText("1440 × 900");
+
+    fireEvent.click(screen.getByRole("button", { name: "Text (T)" }));
+    const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
+    setCanvasBounds(canvas);
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 20,
+      clientX: 120,
+      clientY: 80,
+    });
+    fireEvent.blur(await screen.findByRole("textbox", { name: "Edit text on canvas" }));
+
+    const layerList = screen.getByRole("region", { name: "Layers" })
+      .querySelector(".screenshot-layer-list")!;
+    expect(layerList.children).toHaveLength(2);
+
+    const copy = new KeyboardEvent("keydown", {
+      key: "c",
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    fireEvent(canvas, copy);
+    expect(copy.defaultPrevented).toBe(true);
+    const paste = new KeyboardEvent("keydown", {
+      key: "v",
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    fireEvent(canvas, paste);
+    expect(paste.defaultPrevented).toBe(true);
+    expect(layerList.children).toHaveLength(3);
+
+    const duplicate = new KeyboardEvent("keydown", {
+      key: "d",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    fireEvent(canvas, duplicate);
+    expect(duplicate.defaultPrevented).toBe(true);
+    expect(layerList.children).toHaveLength(4);
+  });
+
+  it("draws one straight Arrow and bends it from its canvas control handle", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findAllByText("1440 × 900");
+
+    fireEvent.change(screen.getByRole("combobox", { name: "Canvas zoom" }), {
+      target: { value: "100" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Arrow (A)" }));
+    const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
+    canvas.setPointerCapture = vi.fn();
+    canvas.hasPointerCapture = vi.fn(() => true);
+    canvas.releasePointerCapture = vi.fn();
+    setCanvasBounds(canvas);
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 30,
+      clientX: 100,
+      clientY: 100,
+    });
+    fireEvent.pointerMove(canvas, {
+      pointerId: 30,
+      clientX: 300,
+      clientY: 100,
+    });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 30,
+      clientX: 300,
+      clientY: 100,
+    });
+
+    const layers = screen.getByRole("region", { name: "Layers" });
+    fireEvent.click(within(layers).getByRole("button", { name: /ArrowShape/ }));
+    const curve = screen.getByRole("slider", { name: "Curve" });
+    expect(curve).toHaveValue("0");
+
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 31,
+      clientX: 200,
+      clientY: 100,
+    });
+    fireEvent.pointerMove(canvas, {
+      pointerId: 31,
+      clientX: 200,
+      clientY: 200,
+    });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 31,
+      clientX: 200,
+      clientY: 200,
+    });
+    expect(curve).toHaveValue("50");
   });
 
   it("lets the original layer be unlocked and exposes layer appearance controls", async () => {
