@@ -1,4 +1,6 @@
 import {
+  arrowBendFromControlPoint,
+  arrowControlPoint,
   boundedCropRect,
   canvasOverflowEdges,
   closestImageSnapEdge,
@@ -13,6 +15,7 @@ import {
   expandDocumentToFitBounds,
   previewExpandedCanvasRect,
   hitTestElement,
+  hitTestArrowControlPoint,
   hitTestResizeHandle,
   imageDropGuideAtPoint,
   imageDropPlacementAtPoint,
@@ -502,7 +505,7 @@ describe("screenshot editor geometry", () => {
       ...editableLayer,
       id: "shape",
       kind: "shape",
-      shape: "curved_arrow",
+      shape: "arrow",
       x: 10,
       y: 20,
       endX: 110,
@@ -518,6 +521,30 @@ describe("screenshot editor geometry", () => {
       bend: 0.25,
     });
     expect(elementBounds(shape).width).toBeGreaterThan(100);
+  });
+
+  it("uses one arrow model for straight and freely bent arrows", () => {
+    const arrow: EditorShapeElement = {
+      ...editableLayer,
+      id: "arrow",
+      kind: "shape",
+      shape: "arrow",
+      x: 100,
+      y: 100,
+      endX: 300,
+      endY: 100,
+      bend: 0,
+      style: { color: "#fff", fill: null, strokeWidth: 6 },
+    };
+
+    expect(arrowControlPoint(arrow)).toEqual({ x: 200, y: 100 });
+    expect(hitTestArrowControlPoint(arrow, { x: 205, y: 104 }, 8)).toBe(true);
+    expect(arrowBendFromControlPoint(arrow, { x: 200, y: 200 })).toBeCloseTo(0.5);
+    expect(arrowBendFromControlPoint(arrow, { x: 200, y: -300 })).toBe(-1);
+
+    const bent = { ...arrow, bend: 0.5 };
+    expect(arrowControlPoint(bent)).toEqual({ x: 200, y: 200 });
+    expect(elementBounds(bent).height).toBeGreaterThan(elementBounds(arrow).height);
   });
 
   it("hit-tests corner resize handles and resizes bounds from the opposite corner", () => {

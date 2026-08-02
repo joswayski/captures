@@ -21,7 +21,7 @@ may contain bugs or incomplete features.
 - Record desktop audio and a microphone with pause, resume, restart, and mute controls.
 - Configurable countdown before recordings start.
 - Show the cursor and click highlights in recordings where supported.
-- Edit screenshots with text, shapes, arrows, drawing, crop, resize, zoom, and image layers that snap to edges while moving or resizing (release past a canvas edge to expand it). Dropped images can snap to a layer edge or stack on top. Trim edges shrinks the canvas to the bounds of visible layers.
+- Edit screenshots with inline text, shapes, bendable arrows, drawing, crop, resize, zoom, and image layers that snap to edges while moving or resizing (release past a canvas edge to expand it). Dropped images can snap to a layer edge or stack on top. Trim edges shrinks the canvas to the bounds of visible layers.
 - Trim, crop, resize, and adjust audio in recordings.
 - Save PNGs by default, or export as JPEG or WebP. Compress and maximum-file-size modes keep the selected format (JPEG quality slider for JPEG; stronger packing for PNG).
 - Use optional quick-access mini previews to copy, save, preview, or drag recent screenshots into other apps.
@@ -73,7 +73,9 @@ All five global capture shortcuts can be changed in Preferences.
 
 In the screenshot editor, pinch on a trackpad or hold `Command`/`Ctrl` while
 scrolling to zoom around the pointer. Use `Command`/`Ctrl` + `+` or `-` to zoom
-from the keyboard, and `Command`/`Ctrl` + `0` to return to 100%.
+from the keyboard, and `Command`/`Ctrl` + `0` to return to 100%. Hold `Space`,
+`Command`, or `Ctrl` while dragging to pan. Duplicate the selected layer with
+`Command`/`Ctrl` + `D`, or use `Command`/`Ctrl` + `C` and `V` to copy and paste it.
 
 ## Development
 
