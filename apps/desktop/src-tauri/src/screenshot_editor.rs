@@ -103,9 +103,7 @@ pub fn open_screenshot_editor(
     #[cfg(target_os = "macos")]
     captures_macos_window::clear_frontmost_app_anchor();
     if let Some(window) = app.get_webview_window(&label) {
-        window.show().map_err(|error| error.to_string())?;
-        window.unminimize().map_err(|error| error.to_string())?;
-        window.set_focus().map_err(|error| error.to_string())?;
+        crate::reveal_and_focus_document_window(&window).map_err(|error| error.to_string())?;
         return Ok(());
     }
 
@@ -127,10 +125,7 @@ pub fn open_screenshot_editor(
     .visible(false)
     .on_page_load(|window, payload| {
         if payload.event() == PageLoadEvent::Finished
-            && let Err(error) = window
-                .show()
-                .and_then(|_| window.unminimize())
-                .and_then(|_| window.set_focus())
+            && let Err(error) = crate::reveal_and_focus_document_window(&window)
         {
             eprintln!("failed to reveal screenshot editor: {error}");
         }

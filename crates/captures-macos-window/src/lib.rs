@@ -566,8 +566,29 @@ pub fn reveal_window(window: &WebviewWindow) -> Result<(), &'static str> {
 /// Activates an accessory app window and makes it key so keyboard cancellation
 /// works even when the selector was launched while another app was frontmost.
 pub fn focus_window(window: &WebviewWindow) -> Result<(), &'static str> {
-    let main_thread = MainThreadMarker::new().ok_or("window focus must run on the main thread")?;
     remember_frontmost_app_before_activation();
+    make_key_and_activate(window)
+}
+
+/// Activates Captures and makes a document window key without recording a
+/// capture frontmost-app anchor.
+///
+/// Editors and other intentional document surfaces call this after the
+/// always-on-top thumbnail Edit click. That click briefly makes the preview
+/// panel key; without app activation + `makeKeyAndOrderFront`, WebKit leaves
+/// CSS `:hover` and `cursor` styles inactive until the user clicks again.
+/// Re-asserts on the next main-queue turn so the panel handoff cannot win.
+pub fn activate_document_window(window: &WebviewWindow) -> Result<(), &'static str> {
+    make_key_and_activate(window)?;
+    let window = window.clone();
+    DispatchQueue::main().exec_async(move || {
+        let _ = make_key_and_activate(&window);
+    });
+    Ok(())
+}
+
+fn make_key_and_activate(window: &WebviewWindow) -> Result<(), &'static str> {
+    let main_thread = MainThreadMarker::new().ok_or("window focus must run on the main thread")?;
     let app = NSApplication::sharedApplication(main_thread);
     app.activate();
     native_window(window)?.makeKeyAndOrderFront(None);

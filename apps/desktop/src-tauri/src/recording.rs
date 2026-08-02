@@ -3314,9 +3314,7 @@ fn show_recording_editor(app: &AppHandle, artifact_id: &str) -> Result<(), AppEr
     #[cfg(target_os = "macos")]
     captures_macos_window::clear_frontmost_app_anchor();
     if let Some(window) = app.get_webview_window(&label) {
-        window.show()?;
-        window.unminimize()?;
-        window.set_focus()?;
+        crate::reveal_and_focus_document_window(&window)?;
         return Ok(());
     }
     WebviewWindowBuilder::new(
@@ -3336,10 +3334,7 @@ fn show_recording_editor(app: &AppHandle, artifact_id: &str) -> Result<(), AppEr
     .visible(false)
     .on_page_load(|window, payload| {
         if payload.event() == PageLoadEvent::Finished
-            && let Err(error) = window
-                .show()
-                .and_then(|_| window.unminimize())
-                .and_then(|_| window.set_focus())
+            && let Err(error) = crate::reveal_and_focus_document_window(&window)
         {
             eprintln!("failed to reveal recording editor: {error}");
         }

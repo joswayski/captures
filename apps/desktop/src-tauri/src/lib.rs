@@ -3210,6 +3210,36 @@ fn wayland_session() -> bool {
             .is_some_and(|session| session.to_string_lossy().eq_ignore_ascii_case("wayland"))
 }
 
+/// Show, unminimize, and focus a document window so hover and cursor styles
+/// work immediately after opening from a mini-preview Edit click.
+///
+/// On macOS, Tauri `set_focus` alone is not enough when the always-on-top
+/// thumbnail panel just handled the click: the app must activate and the
+/// editor must become key for WebKit CSS `:hover` / `cursor` to update.
+pub(crate) fn reveal_and_focus_document_window(
+    window: &tauri::WebviewWindow,
+) -> Result<(), tauri::Error> {
+    window.show()?;
+    window.unminimize()?;
+    window.set_focus()?;
+    #[cfg(target_os = "macos")]
+    schedule_document_window_activation(window);
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn schedule_document_window_activation(window: &tauri::WebviewWindow) {
+    let window = window.clone();
+    let app = window.app_handle().clone();
+    if let Err(error) = app.run_on_main_thread(move || {
+        if let Err(error) = captures_macos_window::activate_document_window(&window) {
+            eprintln!("failed to activate document window: {error}");
+        }
+    }) {
+        eprintln!("failed to schedule document window activation: {error}");
+    }
+}
+
 fn show_capture_history(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("history") {
         let _ = window.show();
