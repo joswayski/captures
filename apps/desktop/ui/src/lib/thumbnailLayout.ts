@@ -251,7 +251,13 @@ export function createThumbnailStackShiftController(stack: HTMLElement): () => v
       const nextPx = shifts[index] ?? 0;
       const previousPx = readStackShiftPx(card);
       if (previousPx === nextPx) {
-        if (nextPx > 0) card.classList.add(STACK_SHIFTING_CLASS);
+        // WebKit emits a class-attribute MutationRecord even when classList.add
+        // repeats an existing token. Since this controller observes `class`,
+        // rewriting the settled class would queue applyShifts forever and
+        // starve timers, hover polling, clicks, and exit completion.
+        if (nextPx > 0 && !card.classList.contains(STACK_SHIFTING_CLASS)) {
+          card.classList.add(STACK_SHIFTING_CLASS);
+        }
         continue;
       }
       writeStackShiftPx(

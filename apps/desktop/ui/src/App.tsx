@@ -4244,8 +4244,10 @@ export function Thumbnail() {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let polling = false;
+    let pointerPollGeneration = 0;
     let cursorKind: ThumbnailCursorKind = "default";
     let ignoringCursorEvents = false;
+    let ignoreCursorUpdate: Promise<void> = Promise.resolve();
     let lastCursorSyncAt = 0;
     let consecutiveNullPolls = 0;
     let cursorHandoffTimer: ReturnType<typeof setTimeout> | null = null;
@@ -4305,7 +4307,21 @@ export function Thumbnail() {
       ignoringCursorEvents = ignore;
       // After dismiss the window may stay tall; empty space above the stack
       // must pass clicks through so it does not block the desktop.
-      void invoke("set_thumbnail_ignore_cursor_events", { ignore }).catch(() => undefined);
+      // Serialize whole-window hit-test updates. A delayed `true` from an old
+      // pointer sample must never land after deletion has re-armed survivors.
+      ignoreCursorUpdate = ignoreCursorUpdate.then(async () => {
+        await invoke("set_thumbnail_ignore_cursor_events", { ignore })
+          .catch(() => undefined);
+      });
+    };
+
+    const invalidatePointerPoll = () => {
+      pointerPollGeneration += 1;
+      polling = false;
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
     };
 
     const clearNativeClasses = () => {
@@ -4346,7 +4362,7 @@ export function Thumbnail() {
      */
     const recoverInteractivity = (refreshNative = true) => {
       consecutiveNullPolls = 0;
-      polling = false;
+      invalidatePointerPoll();
       // Drop native-only presentation so CSS hover works while we re-arm.
       document.documentElement.classList.remove("thumbnail-native-tracking");
       clearNativeClasses();
@@ -4361,6 +4377,7 @@ export function Thumbnail() {
 
     const poll = async () => {
       if (cancelled || polling) return;
+      const generation = pointerPollGeneration;
       polling = true;
       let delay = 250;
       let recovered = false;
@@ -4369,7 +4386,7 @@ export function Thumbnail() {
         const position = await withThumbnailPointerTimeout(
           invoke<ThumbnailPointerPosition | null>("get_thumbnail_pointer_position"),
         );
-        if (cancelled) return;
+        if (cancelled || generation !== pointerPollGeneration) return;
         if (!position) {
           consecutiveNullPolls += 1;
           // Platforms without native pointer samples (Windows/Linux today) always
@@ -4395,6 +4412,7 @@ export function Thumbnail() {
           delay = 40;
         }
       } catch {
+        if (cancelled || generation !== pointerPollGeneration) return;
         consecutiveNullPolls += 1;
         const needsRecovery = ignoringCursorEvents
           || document.documentElement.classList.contains("thumbnail-native-tracking");
@@ -4408,9 +4426,11 @@ export function Thumbnail() {
         }
         delay = 40;
       } finally {
-        polling = false;
-        // recoverInteractivity already scheduled the next poll.
-        if (!cancelled && !recovered) schedulePoll(delay);
+        if (!cancelled && generation === pointerPollGeneration) {
+          polling = false;
+          // recoverInteractivity already scheduled the next poll.
+          if (!recovered) schedulePoll(delay);
+        }
       }
     };
 
@@ -4428,17 +4448,21 @@ export function Thumbnail() {
     };
 
     const pollImmediately = () => {
+      // Invalidate the in-flight sample even when the WebView is currently
+      // hidden. It may describe a slot that React is about to remove.
+      invalidatePointerPoll();
       if (document.hidden) return;
       // Focus handoffs restore the frontmost app's arrow; reassert first so
       // the pointer/grab affordance does not wait for the next throttle window.
       preserveInteractiveCursorAcrossHandoff();
-      // Unlock a poll that may have been mid-flight when the OS suspended JS.
-      polling = false;
       schedulePoll(0);
     };
 
     const updateThumbnailHitTest = () => {
       clearNativeHover();
+      // Re-arm the whole native window before sampling the changed DOM. The
+      // immediate poll can still make genuinely empty space click-through.
+      setIgnoreCursorEvents(false, true);
       pollImmediately();
     };
 

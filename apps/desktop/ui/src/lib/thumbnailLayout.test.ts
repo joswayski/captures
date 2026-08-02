@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import {
+  createThumbnailStackShiftController,
   computeThumbnailStackShifts,
   countMotionReadySlotsBelow,
   shouldAnimateThumbnailStackShift,
@@ -11,6 +12,7 @@ import {
   THUMBNAIL_CARD_SLOT_PX,
   THUMBNAIL_DISMISS_HOLD_MS,
   THUMBNAIL_DISMISS_STACK_MOTION_DELAY_MS,
+  THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS,
   THUMBNAIL_STACK_MOTION_DURATION_MS,
   type ThumbnailStackCardMotionState,
 } from "./thumbnailLayout";
@@ -156,5 +158,47 @@ describe("thumbnail stack layout", () => {
       THUMBNAIL_DISMISS_STACK_MOTION_DELAY_MS + THUMBNAIL_STACK_MOTION_DURATION_MS,
     );
     expect(THUMBNAIL_STACK_MOTION_DURATION_MS).toBe(580);
+  });
+
+  it("does not rewrite a settled shift class from its own mutation observer", async () => {
+    vi.useFakeTimers();
+    const originalMutationObserver = globalThis.MutationObserver;
+    const observer = { callback: null as MutationCallback | null };
+    class ControlledMutationObserver {
+      constructor(callback: MutationCallback) {
+        observer.callback = callback;
+      }
+
+      observe() {}
+      disconnect() {}
+      takeRecords(): MutationRecord[] { return []; }
+    }
+    globalThis.MutationObserver = ControlledMutationObserver as unknown as typeof MutationObserver;
+
+    const stack = document.createElement("main");
+    const survivor = document.createElement("article");
+    survivor.className = "thumbnail-card";
+    const exiting = document.createElement("article");
+    exiting.className = "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
+    stack.append(survivor, exiting);
+    const dispose = createThumbnailStackShiftController(stack);
+
+    try {
+      await Promise.resolve();
+      vi.advanceTimersByTime(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16);
+      expect(survivor).toHaveClass("thumbnail-stack-shifting");
+
+      const add = vi.spyOn(survivor.classList, "add");
+      const callback = observer.callback;
+      if (!callback) throw new Error("stack controller did not create a mutation observer");
+      callback([], {} as MutationObserver);
+      await Promise.resolve();
+
+      expect(add).not.toHaveBeenCalled();
+    } finally {
+      dispose();
+      globalThis.MutationObserver = originalMutationObserver;
+      vi.useRealTimers();
+    }
   });
 });
