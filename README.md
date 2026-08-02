@@ -21,7 +21,7 @@ may contain bugs or incomplete features.
 - Record desktop audio and a microphone with pause, resume, restart, and mute controls.
 - Configurable countdown before recordings start.
 - Show the cursor and click highlights in recordings where supported.
-- Edit screenshots with text, shapes, arrows, drawing, crop, resize, and image layers that snap to edges while moving or resizing (release past a canvas edge to expand it).
+- Edit screenshots with text, shapes, arrows, drawing, crop, resize, zoom, and image layers that snap to edges while moving or resizing (release past a canvas edge to expand it).
 - Trim, crop, resize, and adjust audio in recordings.
 - Save lossless PNGs by default, with lossless WebP, or switch to compress / maximum-file-size modes (JPEG) with quality presets like the video editor.
 - Copy, save, preview, or drag recent captures into other apps.
@@ -70,6 +70,10 @@ Captures is ready for launch.
 | `Esc` | Cancel an active capture, screenshot countdown, or recording countdown |
 
 All five global capture shortcuts can be changed in Preferences.
+
+In the screenshot editor, pinch on a trackpad or hold `Command`/`Ctrl` while
+scrolling to zoom around the pointer. Use `Command`/`Ctrl` + `+` or `-` to zoom
+from the keyboard, and `Command`/`Ctrl` + `0` to return to 100%.
 
 ## Development
 
