@@ -272,6 +272,45 @@ export function closestImageSnapEdge(
   return distances[0][0];
 }
 
+/**
+ * Pick the layer bounds that an imported image should snap against.
+ * Prefer the selected visible image; otherwise the front-most visible image;
+ * otherwise the full canvas.
+ */
+export function resolveImageDropTarget(
+  document: Pick<ScreenshotDocument, "width" | "height" | "elements">,
+  selectedId: string | null,
+): EditorRect {
+  const selected = document.elements.find((element) => (
+    element.id === selectedId
+    && element.kind === "image"
+    && element.visible
+  ));
+  if (selected) return elementBounds(selected);
+
+  for (let index = document.elements.length - 1; index >= 0; index -= 1) {
+    const element = document.elements[index];
+    if (element.kind === "image" && element.visible) {
+      return elementBounds(element);
+    }
+  }
+
+  return { x: 0, y: 0, width: document.width, height: document.height };
+}
+
+/** Live drop-guide for an image import at a document-space pointer position. */
+export function imageDropGuideAtPoint(
+  document: Pick<ScreenshotDocument, "width" | "height" | "elements">,
+  selectedId: string | null,
+  point: EditorPoint,
+): { edge: ImageSnapEdge; target: EditorRect } {
+  const target = resolveImageDropTarget(document, selectedId);
+  return {
+    edge: closestImageSnapEdge(point, target),
+    target,
+  };
+}
+
 /** Position an imported image flush against one edge of another layer. */
 export function positionImportedImageAtEdge(
   naturalWidth: number,

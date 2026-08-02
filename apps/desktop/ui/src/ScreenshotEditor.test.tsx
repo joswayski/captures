@@ -243,6 +243,50 @@ describe("ScreenshotEditor", () => {
     ).toBeInTheDocument();
   });
 
+  it("snaps image drop guides to the closest edge without a selected layer", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findAllByText("1440 × 900");
+
+    const editor = screen.getByText("Screenshot editor").closest("main");
+    expect(editor).toBeTruthy();
+    const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
+    // jsdom often reports 0×0 canvas layout; force a known client→document mapping.
+    Object.defineProperty(canvas, "width", { configurable: true, value: 1_440 });
+    Object.defineProperty(canvas, "height", { configurable: true, value: 900 });
+    vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 1_440,
+      bottom: 900,
+      width: 1_440,
+      height: 900,
+      toJSON: () => ({}),
+    });
+
+    const dataTransfer = {
+      types: ["Files"],
+      dropEffect: "none",
+      files: [],
+    };
+
+    fireEvent.dragEnter(editor!, { dataTransfer });
+    // Default before a pointer sample is bottom.
+    expect(screen.getAllByText("Place below layer").length).toBeGreaterThan(0);
+
+    // Hover near the top edge without selecting a layer — previously always stayed "bottom".
+    fireEvent.dragOver(editor!, {
+      dataTransfer,
+      clientX: 720,
+      clientY: 40,
+    });
+    await waitFor(() => {
+      expect(screen.getAllByText("Place above layer").length).toBeGreaterThan(0);
+    });
+    expect(screen.queryByText("Place below layer")).not.toBeInTheDocument();
+  });
+
   it("keeps lossless output by default and makes JPEG size targeting an explicit mode", async () => {
     render(<ScreenshotEditor />);
     await screen.findAllByText("1440 × 900");

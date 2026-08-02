@@ -13,7 +13,6 @@ import {
 import { formatFileSize } from "./lib/format";
 import {
   boundedCropRect,
-  closestImageSnapEdge,
   createScreenshotDocument,
   cropDocument,
   duplicateScreenshotElement,
@@ -22,12 +21,14 @@ import {
   expandDocumentForElement,
   hitTestElement,
   hitTestResizeHandle,
+  imageDropGuideAtPoint,
   imageSizeAtWidth,
   isSupportedImageFile,
   loadImageFile,
   outputDimensions,
   positionImportedImageAtEdge,
   reorderScreenshotLayers,
+  resolveImageDropTarget,
   resizeBoundsFromHandle,
   resizeCursor,
   resizeDocumentCanvas,
@@ -564,6 +565,7 @@ export function ScreenshotEditor() {
   const [imageRevision, setImageRevision] = useState(0);
   const [dragActive, setDragActive] = useState(false);
   const [imageDropGuide, setImageDropGuide] = useState<ImageDropGuide | null>(null);
+  const imageDropGuideRef = useRef<ImageDropGuide | null>(null);
   const [draggedLayerId, setDraggedLayerId] = useState<string | null>(null);
   const [resizePreviewBounds, setResizePreviewBounds] = useState<EditorRect | null>(null);
   const [canvasCursor, setCanvasCursor] = useState<string | undefined>(undefined);
@@ -1183,16 +1185,15 @@ export function ScreenshotEditor() {
     setTool("select");
   };
 
-  const defaultImageDropGuide = (current: ScreenshotDocument): ImageDropGuide => {
-    const target = current.elements.find((element) => (
-      element.id === selectedId && element.kind === "image"
-    ));
-    return {
-      edge: "bottom",
-      target: target?.visible
-        ? elementBounds(target)
-        : { x: 0, y: 0, width: current.width, height: current.height },
-    };
+  const defaultImageDropGuide = (current: ScreenshotDocument): ImageDropGuide => ({
+    // Used only when a drop arrives before any drag-over pointer sample.
+    edge: "bottom",
+    target: resolveImageDropTarget(current, selectedId),
+  });
+
+  const setImageDropGuideState = (guide: ImageDropGuide | null) => {
+    imageDropGuideRef.current = guide;
+    setImageDropGuide(guide);
   };
 
   const loadDroppedFiles = async (files: File[], guide?: ImageDropGuide) => {
@@ -1539,22 +1540,12 @@ export function ScreenshotEditor() {
     const canvas = canvasRef.current;
     const current = documentRef.current;
     if (!canvas || !current) return;
-    const targetElement = current.elements.find((element) => (
-      element.id === selectedId && element.kind === "image"
-    ));
-    const target = targetElement?.visible
-      ? elementBounds(targetElement)
-      : { x: 0, y: 0, width: current.width, height: current.height };
-    if (!targetElement?.visible) {
-      setImageDropGuide({ edge: "bottom", target });
-      return;
-    }
     const bounds = canvas.getBoundingClientRect();
     const point = {
       x: (clientX - bounds.left) * canvas.width / Math.max(1, bounds.width),
       y: (clientY - bounds.top) * canvas.height / Math.max(1, bounds.height),
     };
-    setImageDropGuide({ edge: closestImageSnapEdge(point, target), target });
+    setImageDropGuideState(imageDropGuideAtPoint(current, selectedId, point));
   };
 
   return (
@@ -1565,7 +1556,9 @@ export function ScreenshotEditor() {
         event.preventDefault();
         dropDepthRef.current += 1;
         setDragActive(true);
-        if (!imageDropGuide) setImageDropGuide(defaultImageDropGuide(editorDocument));
+        if (!imageDropGuideRef.current) {
+          setImageDropGuideState(defaultImageDropGuide(editorDocument));
+        }
       }}
       onDragOver={(event) => {
         if (!isFileTransfer(event.dataTransfer)) return;
@@ -1579,7 +1572,7 @@ export function ScreenshotEditor() {
         dropDepthRef.current = Math.max(0, dropDepthRef.current - 1);
         if (dropDepthRef.current === 0) {
           setDragActive(false);
-          setImageDropGuide(null);
+          setImageDropGuideState(null);
         }
       }}
       onDrop={(event) => {
@@ -1587,8 +1580,11 @@ export function ScreenshotEditor() {
         event.preventDefault();
         dropDepthRef.current = 0;
         setDragActive(false);
-        const guide = imageDropGuide ?? defaultImageDropGuide(editorDocument);
-        setImageDropGuide(null);
+        // Prefer the latest pointer sample from dragover; React state can lag.
+        const guide = imageDropGuideRef.current
+          ?? imageDropGuide
+          ?? defaultImageDropGuide(editorDocument);
+        setImageDropGuideState(null);
         void loadDroppedFiles(Array.from(event.dataTransfer.files), guide);
       }}
     >
