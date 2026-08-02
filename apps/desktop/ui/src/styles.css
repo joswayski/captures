@@ -1122,9 +1122,16 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * { curso
 .screenshot-output-estimate[data-pending="true"] { color: #6f7075; font-weight: 600; }
 .screenshot-save-row { display: grid; min-width: 0; grid-template-columns: minmax(280px,420px) minmax(140px,1fr) auto; align-items: end; gap: 14px; }
 .screenshot-filename { min-width: 0; }
-.screenshot-export-status { display: flex; min-width: 0; min-height: 34px; max-height: 50px; overflow: auto; align-items: center; color: #8e8f94; cursor: text; font-size: 9px; line-height: 1.35; text-align: right; white-space: normal; -webkit-user-select: text; user-select: text; }
-.screenshot-export-status.error { color: #ff9da6; }
+/* Stable two-line status: reserved success/error row + always-visible export hint. */
+.screenshot-export-status { display: flex; min-width: 0; min-height: 34px; flex-direction: column; justify-content: center; gap: 3px; color: #8e8f94; cursor: text; font-size: 9px; line-height: 1.35; text-align: right; -webkit-user-select: text; user-select: text; }
+.screenshot-export-notice { min-height: 12px; overflow: hidden; font-size: 9px; font-weight: 750; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
+.screenshot-export-notice.idle { visibility: hidden; }
+.screenshot-export-notice.success { color: #8fe4a2; visibility: visible; }
+.screenshot-export-notice.error { max-height: 34px; overflow: auto; color: #ff9da6; visibility: visible; white-space: normal; }
+.screenshot-export-hint { min-width: 0; color: #8e8f94; font-size: 9px; font-weight: 500; line-height: 1.35; white-space: normal; }
+.screenshot-export-status.has-error .screenshot-export-hint { display: none; }
 .screenshot-export-actions { display: flex; min-height: 34px; align-items: center; justify-content: flex-end; gap: 7px; }
+.screenshot-export-actions > button.success { border-color: rgba(143, 228, 162, .45); color: #8fe4a2; background: rgba(143, 228, 162, .1); }
 .screenshot-make-copy { display: inline-flex; height: 34px; align-items: center; gap: 7px; color: #b7b8bd; cursor: pointer; font-size: 9px; font-weight: 750; white-space: nowrap; }.screenshot-make-copy > input { position: absolute; opacity: 0; pointer-events: none; }.screenshot-make-copy .recording-switch { width: 28px; height: 16px; }.screenshot-make-copy .recording-switch::after { width: 10px; height: 10px; }.screenshot-make-copy:hover .recording-switch { border-color: #696a70; background: #2c2d32; }.screenshot-make-copy input:checked + .recording-switch { border-color: var(--theme-accent); background: var(--theme-accent); box-shadow: 0 3px 12px rgba(var(--theme-accent-rgb),.24); }.screenshot-make-copy input:checked + .recording-switch::after { background: var(--theme-accent-ink); transform: translateX(12px); }.screenshot-make-copy input:focus-visible + .recording-switch { box-shadow: 0 0 0 3px rgba(var(--theme-accent-rgb),.2); }.screenshot-make-copy:has(input:disabled) { cursor: default; opacity: .58; }
 .screenshot-export-actions > button { display: inline-flex; min-width: 82px; height: 34px; min-height: 34px; padding: 0 11px; align-items: center; justify-content: center; gap: 6px; border: 1px solid #46474d; border-radius: 7px; color: #e4e4e6; background: #2d2e33; font-size: 10px; font-weight: 800; white-space: nowrap; }
 .screenshot-export-actions button:hover:not(:disabled) { border-color: #5b5c62; background: #3a3b40; transform: translateY(-1px); }

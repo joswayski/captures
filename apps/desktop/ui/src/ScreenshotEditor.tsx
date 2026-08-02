@@ -597,7 +597,8 @@ export function ScreenshotEditor() {
   const [estimatedBytes, setEstimatedBytes] = useState<number | null>(null);
   const [estimatePending, setEstimatePending] = useState(false);
   const [busy, setBusy] = useState<"copying" | "saving" | null>(null);
-  const [status, setStatus] = useState("");
+  /** Transient success for copy/save — does not replace the stable export hint. */
+  const [success, setSuccess] = useState<{ kind: "copy" | "save"; message: string } | null>(null);
   const [error, setError] = useState("");
   /** Original capture was deleted after the editor opened; the edit is still exportable. */
   const [sourceMissing, setSourceMissing] = useState(false);
@@ -607,6 +608,7 @@ export function ScreenshotEditor() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageCacheRef = useRef(new Map<string, CachedImage>());
+  const successTimerRef = useRef<number | null>(null);
   const objectUrlsRef = useRef(new Set<string>());
   const gestureRef = useRef<EditorGesture | null>(null);
   const dropDepthRef = useRef(0);
@@ -627,6 +629,31 @@ export function ScreenshotEditor() {
     setEditorDocument(next);
   }, []);
 
+  const clearSuccess = useCallback(() => {
+    if (successTimerRef.current !== null) {
+      window.clearTimeout(successTimerRef.current);
+      successTimerRef.current = null;
+    }
+    setSuccess(null);
+  }, []);
+
+  const showSuccess = useCallback((kind: "copy" | "save", message: string) => {
+    if (successTimerRef.current !== null) {
+      window.clearTimeout(successTimerRef.current);
+    }
+    setSuccess({ kind, message });
+    successTimerRef.current = window.setTimeout(() => {
+      setSuccess(null);
+      successTimerRef.current = null;
+    }, 4_000);
+  }, []);
+
+  useEffect(() => () => {
+    if (successTimerRef.current !== null) {
+      window.clearTimeout(successTimerRef.current);
+    }
+  }, []);
+
   const commitDocument = useCallback((next: ScreenshotDocument) => {
     const current = documentRef.current;
     if (!current || JSON.stringify(current) === JSON.stringify(next)) return;
@@ -634,8 +661,8 @@ export function ScreenshotEditor() {
     setRedoStack([]);
     replaceDocument(next);
     setSaved(null);
-    setStatus("");
-  }, [replaceDocument]);
+    clearSuccess();
+  }, [clearSuccess, replaceDocument]);
 
   const ensureImage = useCallback((src: string): CachedImage => {
     const existing = imageCacheRef.current.get(src);
@@ -673,9 +700,7 @@ export function ScreenshotEditor() {
         setSourceMissing(true);
         setMakeCopy(true);
         setError("");
-        setStatus(
-          "The original was deleted. You can still copy or save this edit.",
-        );
+        clearSuccess();
       });
       const loaded = await invoke<CaptureArtifact | null>("get_artifact", { artifactId });
       if (!active) return;
@@ -708,7 +733,7 @@ export function ScreenshotEditor() {
       objectUrls.forEach((url) => URL.revokeObjectURL(url));
       objectUrls.clear();
     };
-  }, [artifactId, ensureImage, replaceDocument]);
+  }, [artifactId, clearSuccess, ensureImage, replaceDocument]);
 
   const selected = useMemo(() => (
     editorDocument?.elements.find((element) => element.id === selectedId) ?? null
@@ -867,7 +892,7 @@ export function ScreenshotEditor() {
     if (!current || event.button !== 0) return;
     const point = canvasPoint(event);
     setError("");
-    setStatus("");
+    clearSuccess();
     setSaved(null);
 
     if (tool === "select") {
@@ -1163,7 +1188,7 @@ export function ScreenshotEditor() {
         }
       }
       setSaved(null);
-      setStatus("");
+      clearSuccess();
     }
 
     if (JSON.stringify(current) === JSON.stringify(gesture.initialDocument)) return;
@@ -1439,11 +1464,11 @@ export function ScreenshotEditor() {
     if (busy) return;
     setBusy("copying");
     setError("");
-    setStatus("");
+    clearSuccess();
     try {
       const imagePng = await canvasPngBytes(renderFlattened());
       await invoke("copy_screenshot_edit", { imagePng });
-      setStatus("Edited screenshot copied to the clipboard.");
+      showSuccess("copy", "Copied to clipboard");
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -1483,7 +1508,7 @@ export function ScreenshotEditor() {
     }
     setBusy("saving");
     setError("");
-    setStatus("");
+    clearSuccess();
     try {
       const destinationPath = screenshotDestinationPath(
         destinationDirectory,
@@ -1508,7 +1533,10 @@ export function ScreenshotEditor() {
       });
       if (overwriteSource) setArtifact(result.artifact);
       setSaved(result);
-      setStatus(overwriteSource ? "Saved changes to the original." : `Saved ${result.path}`);
+      showSuccess(
+        "save",
+        overwriteSource ? "Saved changes to the original" : `Saved ${result.path}`,
+      );
       try {
         await invoke("reveal_artifact", { artifactId: result.artifact.id });
       } catch (reason) {
@@ -1536,7 +1564,7 @@ export function ScreenshotEditor() {
         if (artifact.path && selected !== screenshotParentDirectory(artifact.path)) {
           setMakeCopy(true);
         }
-        setStatus("");
+        clearSuccess();
       }
     } catch (reason) {
       setError(`Save location could not be changed: ${String(reason)}`);
@@ -1595,7 +1623,7 @@ export function ScreenshotEditor() {
       setDestinationDirectory(sourceDirectory);
     }
     setSaved(null);
-    setStatus("");
+    clearSuccess();
   };
 
   const updateImageDropGuide = (clientX: number, clientY: number) => {
@@ -2424,7 +2452,7 @@ export function ScreenshotEditor() {
             <select value={exportFormat} onChange={(event) => {
               setExportFormat(event.target.value as ExportFormat);
               setSaved(null);
-              setStatus("");
+              clearSuccess();
             }}>
               <option value="png">PNG · lossless</option>
               <option value="jpeg">JPEG</option>
@@ -2495,7 +2523,7 @@ export function ScreenshotEditor() {
                 onChange={(event) => {
                   setQualityMode(event.target.value as ScreenshotQualityMode);
                   setSaved(null);
-                  setStatus("");
+                  clearSuccess();
                 }}
               >
                 <option value="compress">Compress</option>
@@ -2593,31 +2621,46 @@ export function ScreenshotEditor() {
                   }
                   setSaved(null);
                   setError("");
-                  setStatus("");
+                  clearSuccess();
                 }}
               />
               <strong>.{screenshotFormatExtension(exportFormat, artifact.path)}</strong>
             </span>
           </div>
           <div
-            className={`screenshot-export-status${error ? " error" : ""}`}
-            role={error ? "alert" : "status"}
+            className={[
+              "screenshot-export-status",
+              error ? "has-error" : "",
+              !error && success ? "has-success" : "",
+            ].filter(Boolean).join(" ")}
           >
-            {error
-              || status
-              || (sourceMissing
-                ? "The original was deleted. You can still copy or save this edit."
-                : exportFormat !== "jpeg"
-                  ? savingCopy
-                    ? "Lossless export keeps every pixel and saves a new file."
-                    : "Lossless export keeps every pixel and replaces the original."
-                  : qualityMode === "maximum"
+            <div
+              className={[
+                "screenshot-export-notice",
+                error ? "error" : success ? "success" : "idle",
+              ].join(" ")}
+              role={error ? "alert" : success ? "status" : undefined}
+              aria-live={error ? "assertive" : "polite"}
+            >
+              {error || success?.message || "\u00a0"}
+            </div>
+            {!error && (
+              <div className="screenshot-export-hint">
+                {sourceMissing
+                  ? "The original was deleted. You can still copy or save this edit."
+                  : exportFormat !== "jpeg"
                     ? savingCopy
-                      ? "The JPEG stays within the selected limit and saves as a new file."
-                      : "The JPEG stays within the selected limit and replaces the original."
-                    : savingCopy
-                      ? "Save creates a new file and leaves the original untouched."
-                      : "Save replaces the original; turn on Make a copy to keep it.")}
+                      ? "Lossless export keeps every pixel and saves a new file."
+                      : "Lossless export keeps every pixel and replaces the original."
+                    : qualityMode === "maximum"
+                      ? savingCopy
+                        ? "The JPEG stays within the selected limit and saves as a new file."
+                        : "The JPEG stays within the selected limit and replaces the original."
+                      : savingCopy
+                        ? "Save creates a new file and leaves the original untouched."
+                        : "Save replaces the original; turn on Make a copy to keep it."}
+              </div>
+            )}
           </div>
           <div className="screenshot-export-actions">
             {!formatRequiresCopy && (
@@ -2637,8 +2680,18 @@ export function ScreenshotEditor() {
               </label>
             )}
             {saved && <button type="button" onClick={() => void showSavedFile()}>Show in Folder</button>}
-            <button type="button" disabled={busy !== null} onClick={() => void copyEditedImage()}>
-              <EditorIcon name="copy" />{busy === "copying" ? "Copying…" : "Copy image"}
+            <button
+              type="button"
+              className={success?.kind === "copy" ? "success" : undefined}
+              disabled={busy !== null}
+              onClick={() => void copyEditedImage()}
+            >
+              <EditorIcon name={success?.kind === "copy" ? "check" : "copy"} />
+              {busy === "copying"
+                ? "Copying…"
+                : success?.kind === "copy"
+                  ? "Copied"
+                  : "Copy image"}
             </button>
             <button
               type="button"
@@ -2746,6 +2799,7 @@ function EditorIcon({ name }: { name: string }) {
   if (name === "image") return <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="8" cy="9" r="1.5" /><path d="m5 18 5-5 3 3 2-2 4 4" /></svg>;
   if (name === "trash") return <svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" /></svg>;
   if (name === "copy") return <svg viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2" /><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3" /></svg>;
+  if (name === "check") return <svg viewBox="0 0 24 24"><path d="m5 12 4.5 4.5L19 7" /></svg>;
   if (name === "save") return <svg viewBox="0 0 24 24"><path d="M5 3h12l2 2v16H5Z M8 3v6h8V3M8 17h8" /></svg>;
   if (name === "plus") return <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>;
   if (name === "lock") return <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></svg>;
