@@ -336,4 +336,114 @@ describe("Thumbnail", () => {
       vi.useRealTimers();
     }
   });
+
+  it("ignores an older pointer poll after deletion has re-armed the surviving previews", async () => {
+    type PointerSample = { x: number; y: number; inside: boolean } | null;
+    const pointerPolls: Array<(sample: PointerSample) => void> = [];
+    let pointerTarget: Element | null = null;
+    const secondArtifact = {
+      ...artifact,
+      id: "capture-2",
+      preview_url: "captures-capture://artifact/capture-2",
+      full_url: "captures-capture://artifact-full/capture-2",
+    };
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifacts") return [artifact, secondArtifact];
+      if (command === "get_clipboard_state") {
+        return { revision: 0, artifact_id: secondArtifact.id };
+      }
+      if (command === "get_thumbnail_pointer_position") {
+        return new Promise<PointerSample>((resolve) => pointerPolls.push(resolve));
+      }
+      return undefined;
+    });
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => pointerTarget),
+    });
+
+    render(<Thumbnail />);
+    const cards = await screen.findAllByRole("article");
+    await waitFor(() => expect(pointerPolls).toHaveLength(1));
+
+    fireEvent.click(within(cards[0]).getByRole("button", { name: "Delete" }));
+    const deleteFinished = new Event("animationend", { bubbles: true });
+    Object.defineProperty(deleteFinished, "animationName", {
+      value: "thumbnail-delete",
+    });
+    fireEvent(cards[0], deleteFinished);
+    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(1));
+    await waitFor(() => expect(pointerPolls.length).toBeGreaterThanOrEqual(2));
+
+    // The completion poll sees the surviving card in its new position.
+    pointerTarget = within(screen.getByRole("article")).getByRole("button", {
+      name: "Delete",
+    });
+    await act(async () => {
+      pointerPolls.at(-1)?.({ x: 40, y: 40, inside: true });
+      await Promise.resolve();
+    });
+
+    // The poll that was already in flight before deletion now resolves over
+    // the old, empty slot. It must not put the entire native window back into
+    // click-through mode after the survivors were re-armed.
+    pointerTarget = null;
+    await act(async () => {
+      pointerPolls[0]?.({ x: 40, y: 40, inside: true });
+      await Promise.resolve();
+    });
+
+    const ignoreCalls = vi.mocked(invoke).mock.calls
+      .filter(([command]) => command === "set_thumbnail_ignore_cursor_events");
+    expect(ignoreCalls.at(-1)?.[1]).toEqual({ ignore: false });
+  });
+
+  it("serializes native hit-test updates so a delayed click-through cannot beat re-arming", async () => {
+    const clickThroughGate = { release: null as (() => void) | null };
+    let nativeClickThrough = false;
+    let pointerPoll = 0;
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "get_artifacts") return [artifact];
+      if (command === "get_clipboard_state") {
+        return { revision: 0, artifact_id: artifact.id };
+      }
+      if (command === "get_thumbnail_pointer_position") {
+        pointerPoll += 1;
+        if (pointerPoll === 1) return { x: 40, y: 40, inside: true };
+        return new Promise(() => undefined);
+      }
+      if (command === "set_thumbnail_ignore_cursor_events") {
+        const ignore = Boolean((args as { ignore?: boolean } | undefined)?.ignore);
+        if (ignore) {
+          await new Promise<void>((resolve) => {
+            clickThroughGate.release = () => {
+              nativeClickThrough = true;
+              resolve();
+            };
+          });
+        } else {
+          nativeClickThrough = false;
+        }
+      }
+      return undefined;
+    });
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => null),
+    });
+
+    render(<Thumbnail />);
+    await screen.findByRole("article");
+    await waitFor(() => expect(clickThroughGate.release).not.toBeNull());
+
+    window.dispatchEvent(new Event("captures-thumbnail-hit-test-changed"));
+    clickThroughGate.release?.();
+
+    await waitFor(() => {
+      const ignoreCalls = vi.mocked(invoke).mock.calls
+        .filter(([command]) => command === "set_thumbnail_ignore_cursor_events");
+      expect(ignoreCalls.at(-1)?.[1]).toEqual({ ignore: false });
+    });
+    expect(nativeClickThrough).toBe(false);
+  });
 });
