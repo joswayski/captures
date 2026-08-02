@@ -228,6 +228,7 @@ pub(crate) async fn prepare_capture_selector_inner(
         })
     };
     if let Some(summary) = pending_selection {
+        crate::suppress_thumbnail_capture_ui(&state);
         crate::set_capture_huds_protected(&app, true);
         crate::hide_window(&app, "thumbnail");
         crate::hide_window(&app, "startup");
@@ -252,11 +253,8 @@ pub(crate) async fn prepare_capture_selector_inner(
         return Err(error.into());
     }
 
-    crate::set_capture_huds_protected(&app, true);
-    crate::hide_window(&app, "thumbnail");
-    crate::hide_window(&app, "startup");
-    crate::hide_recording_saved_notices(&app);
-    crate::hide_window(&app, "update");
+    crate::suppress_thumbnail_capture_ui(&state);
+    crate::hide_capture_huds_before_snapshot(&app).await;
     let prepared = (|| {
         let display = crate::display_under_pointer(&state)?;
         let frame = state.backend.capture_display(&display.id)?;
@@ -358,7 +356,7 @@ fn cancel_recording_selection_inner(
     #[cfg(target_os = "macos")]
     captures_macos_window::restore_frontmost_app_after_capture();
     crate::set_capture_huds_protected(app, false);
-    crate::restore_thumbnail_stack(app, state);
+    crate::restore_thumbnail_capture_ui(app, state);
     Ok(())
 }
 
@@ -389,7 +387,7 @@ async fn capture_selection_screenshot_inner(
     if !available {
         return Err(AppError::SessionUnavailable);
     }
-    crate::begin_thumbnail_capture(&state)?;
+    let thumbnail_capture_generation = crate::begin_thumbnail_capture(&state)?;
     let selection = {
         let mut pending = state.recording_selection.lock();
         match pending.take() {
@@ -397,12 +395,12 @@ async fn capture_selection_screenshot_inner(
             Some(selection) => {
                 *pending = Some(selection);
                 drop(pending);
-                crate::restore_thumbnail_stack(&app, &state);
+                crate::restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
                 return Err(AppError::SessionUnavailable);
             }
             None => {
                 drop(pending);
-                crate::restore_thumbnail_stack(&app, &state);
+                crate::restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
                 return Err(AppError::SessionUnavailable);
             }
         }
@@ -412,10 +410,11 @@ async fn capture_selection_screenshot_inner(
     // already-open editor does not stay covering the app the user was using.
     #[cfg(target_os = "macos")]
     captures_macos_window::restore_frontmost_app_after_capture();
+    crate::restore_thumbnail_capture_ui(&app, &state);
     crate::set_capture_huds_protected(&app, false);
 
     if let Err(error) = validate_target(&selection.summary, &request.target) {
-        crate::restore_thumbnail_stack(&app, &state);
+        crate::restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
         return Err(error);
     }
     let mode = capture_mode_for_target(&request.target);
@@ -427,13 +426,14 @@ async fn capture_selection_screenshot_inner(
             state.clone(),
             &selection.summary.display,
             countdown_seconds,
+            thumbnail_capture_generation,
         )
         .await
         {
             Ok(true) => match live_image_for_target(&state, &request.target) {
                 Ok(image) => image,
                 Err(error) => {
-                    crate::restore_thumbnail_stack(&app, &state);
+                    crate::restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
                     return Err(error);
                 }
             },
@@ -442,7 +442,7 @@ async fn capture_selection_screenshot_inner(
                 return Err(AppError::ScreenshotCancelled);
             }
             Err(error) => {
-                crate::restore_thumbnail_stack(&app, &state);
+                crate::restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
                 return Err(error);
             }
         }
@@ -450,15 +450,16 @@ async fn capture_selection_screenshot_inner(
         match image_for_selection(&selection, &request.target) {
             Ok(image) => image,
             Err(error) => {
-                crate::restore_thumbnail_stack(&app, &state);
+                crate::restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
                 return Err(error);
             }
         }
     };
 
-    let result = crate::finish_capture(&app, &state, mode, image).await;
+    let result =
+        crate::finish_capture(&app, &state, mode, image, thumbnail_capture_generation).await;
     if result.is_err() {
-        crate::restore_thumbnail_stack(&app, &state);
+        crate::restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
     }
     result
 }
@@ -1399,7 +1400,7 @@ async fn stop_recording_inner(
     let _ = app.emit(RECORDING_ARTIFACT_EVENT, &artifact);
     destroy_recording_countdown(&app);
     crate::hide_window(&app, "recording-hud");
-    crate::restore_thumbnail_stack(&app, &state);
+    crate::restore_thumbnail_capture_ui(&app, &state);
 
     if options.kind == RecordingKind::Video {
         let _ = DraftStore::new(recording_recovery_directory()).remove(session_id);
@@ -1453,7 +1454,7 @@ async fn discard_recording_inner(
     emit_snapshot(&app, &snapshot);
     destroy_recording_countdown(&app);
     crate::hide_window(&app, "recording-hud");
-    crate::restore_thumbnail_stack(&app, &state);
+    crate::restore_thumbnail_capture_ui(&app, &state);
     Ok(snapshot)
 }
 
@@ -2745,7 +2746,7 @@ fn restore_recording_ui(app: &AppHandle, state: &Arc<AppState>) {
     #[cfg(target_os = "macos")]
     captures_macos_window::restore_frontmost_app_after_capture();
     crate::set_capture_huds_protected(app, false);
-    crate::restore_thumbnail_stack(app, state);
+    crate::restore_thumbnail_capture_ui(app, state);
 }
 
 #[cfg(target_os = "macos")]

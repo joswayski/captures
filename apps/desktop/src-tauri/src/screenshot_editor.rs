@@ -376,13 +376,9 @@ pub async fn save_screenshot_edit(
         }
     } else {
         state.artifacts.lock().push(artifact.clone());
-        state
-            .thumbnail_visibility
-            .lock()
-            .wait_for_artifact(artifact.id.clone());
         app.emit("capture-completed", &artifact)
             .map_err(|error| error.to_string())?;
-        super::restore_thumbnail_stack(&app, state.inner());
+        super::refresh_thumbnail_stack(&app);
     }
     if history_saved {
         app.emit("capture-history-changed", ())

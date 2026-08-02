@@ -26,6 +26,8 @@ pub struct AppSettings {
     pub display_shortcut: String,
     #[serde(default = "default_auto_copy_to_clipboard")]
     pub auto_copy_to_clipboard: bool,
+    #[serde(default = "default_true")]
+    pub show_mini_previews: bool,
     pub launch_at_login: bool,
     #[serde(default)]
     pub last_screen_permission_request_id: Option<String>,
@@ -145,6 +147,7 @@ impl Default for AppSettings {
             window_shortcut: "Ctrl+Shift+W".to_owned(),
             display_shortcut: "Ctrl+Shift+3".to_owned(),
             auto_copy_to_clipboard: true,
+            show_mini_previews: true,
             launch_at_login: false,
             last_screen_permission_request_id: None,
             pending_capture_after_restart: None,
@@ -611,6 +614,7 @@ pub struct ActiveSession {
 pub struct CaptureSession {
     pub id: Uuid,
     pub mode: CaptureMode,
+    pub thumbnail_capture_generation: u64,
     pub display: DisplayDescriptor,
     pub image: RgbaImage,
     pub snapshot_png: Vec<u8>,
@@ -807,6 +811,7 @@ mod tests {
         assert!(settings.last_screen_permission_request_id.is_none());
         assert!(settings.pending_capture_after_restart.is_none());
         assert!(settings.auto_copy_to_clipboard);
+        assert!(settings.show_mini_previews);
         assert_eq!(settings.theme, ColorTheme::Mustard);
         assert_eq!(settings.custom_theme, CustomThemeSettings::default());
         assert_eq!(settings.new_capture_shortcut, "Ctrl+Shift+Space");
@@ -921,6 +926,20 @@ mod tests {
             serde_json::from_str(&json).expect("settings should deserialize");
 
         assert!(!restored.auto_copy_to_clipboard);
+    }
+
+    #[test]
+    fn persists_disabled_mini_previews() {
+        let settings = AppSettings {
+            show_mini_previews: false,
+            ..AppSettings::default()
+        };
+
+        let json = serde_json::to_string(&settings).expect("settings should serialize");
+        let restored: AppSettings =
+            serde_json::from_str(&json).expect("settings should deserialize");
+
+        assert!(!restored.show_mini_previews);
     }
 
     #[test]

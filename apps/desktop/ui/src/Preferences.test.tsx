@@ -26,6 +26,7 @@ const settings: AppSettings = {
   window_shortcut: "Ctrl+Shift+W",
   display_shortcut: "Ctrl+Shift+3",
   auto_copy_to_clipboard: true,
+  show_mini_previews: true,
   launch_at_login: false,
   last_screen_permission_request_id: null,
   pending_capture_after_restart: null,
@@ -101,6 +102,22 @@ describe("Preferences", () => {
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("update_settings", {
         settings: expect.objectContaining({ screenshot_countdown_seconds: 3 }),
+      });
+    });
+  });
+
+  it("can disable quick-access mini previews", async () => {
+    render(<Preferences />);
+
+    const miniPreviews = await screen.findByRole("checkbox", {
+      name: /Show mini previews after screenshots/,
+    });
+    expect(miniPreviews).toBeChecked();
+    fireEvent.click(miniPreviews);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("update_settings", {
+        settings: expect.objectContaining({ show_mini_previews: false }),
       });
     });
   });
