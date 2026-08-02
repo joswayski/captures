@@ -4251,33 +4251,6 @@ export function Thumbnail() {
     let lastCursorSyncAt = 0;
     let consecutiveNullPolls = 0;
     let cursorHandoffTimer: ReturnType<typeof setTimeout> | null = null;
-    const setThumbnailCursor = (
-      kind: ThumbnailCursorKind,
-      options: { force?: boolean } = {},
-    ) => {
-      // Only touch CSS when the hit-tested kind changes. Rewriting style.cursor
-      // every 40ms poll made WebKit re-evaluate cursor rectangles and flash the
-      // default arrow between AppKit grab/pointer updates.
-      if (kind !== cursorKind) {
-        applyThumbnailCssCursor(kind);
-      }
-      const now = performance.now();
-      const action = thumbnailCursorSyncAction(
-        cursorKind,
-        kind,
-        now - lastCursorSyncAt,
-        options,
-      );
-      if (!action) return;
-      cursorKind = kind;
-      lastCursorSyncAt = now;
-      if (action === "reassert") {
-        void invoke("reassert_thumbnail_cursor", { kind });
-      } else {
-        void invoke("set_thumbnail_cursor", { kind });
-      }
-    };
-
     /**
      * Clicks (and the key-window handoff they trigger) make macOS restore the
      * frontmost app's arrow for a frame. Reassert the current interactive
@@ -4300,6 +4273,41 @@ export function Thumbnail() {
         cursorHandoffTimer = null;
         reassertInteractiveCursor();
       }, 0);
+    };
+
+    const setThumbnailCursor = (
+      kind: ThumbnailCursorKind,
+      options: { force?: boolean } = {},
+    ) => {
+      // Only touch CSS when the hit-tested kind changes. Rewriting style.cursor
+      // every 40ms poll made WebKit re-evaluate cursor rectangles and flash the
+      // default arrow between AppKit grab/pointer updates.
+      if (kind !== cursorKind) {
+        applyThumbnailCssCursor(kind);
+      }
+      const now = performance.now();
+      const action = thumbnailCursorSyncAction(
+        cursorKind,
+        kind,
+        now - lastCursorSyncAt,
+        options,
+      );
+      if (!action) return;
+      const becameInteractive = cursorKind === "default" && kind !== "default";
+      cursorKind = kind;
+      lastCursorSyncAt = now;
+      if (action === "reassert") {
+        void invoke("reassert_thumbnail_cursor", { kind });
+      } else {
+        void invoke("set_thumbnail_cursor", { kind });
+      }
+      // First entry onto the drag source often has a stationary pointer after
+      // the nonactivating panel becomes key. Reassert on the next task so
+      // grab/pointer survive that handoff without requiring a detour over a
+      // button (which generates mouseMoved and accidentally fixed it before).
+      if (becameInteractive) {
+        preserveInteractiveCursorAcrossHandoff();
+      }
     };
 
     const setIgnoreCursorEvents = (ignore: boolean, force = false) => {

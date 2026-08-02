@@ -205,7 +205,7 @@ html.capture-window-cursor, html.capture-window-cursor * { cursor: var(--capture
 @keyframes thumbnail-overflow-cue-in { from { opacity: 0; transform: translateX(-50%) scale(.86); } to { opacity: 1; transform: translateX(-50%) scale(1); } }
 /* overflow:visible so preview-action tooltips are not clipped by the card edge.
    user-select:none keeps click-drag from painting the blue text/image selection highlight. */
-.thumbnail-card { position: relative; isolation: isolate; overflow: visible; flex: 0 0 160px; width: 100%; height: 160px; margin-bottom: 0; background: transparent; border-radius: 12px; box-shadow: 0 8px 16px rgba(0,0,0,.34), 0 2px 5px rgba(0,0,0,.22); cursor: grab; transition: flex-basis .26s ease, height .26s ease, margin-bottom .26s ease, opacity .2s ease, transform .2s ease, filter .2s ease, box-shadow .22s ease; will-change: flex-basis, height, opacity, transform; -webkit-user-select: none; user-select: none; }
+.thumbnail-card { position: relative; isolation: isolate; overflow: visible; flex: 0 0 160px; width: 100%; height: 160px; margin-bottom: 0; background: transparent; border-radius: 12px; box-shadow: 0 8px 16px rgba(0,0,0,.34), 0 2px 5px rgba(0,0,0,.22); cursor: -webkit-grab; cursor: grab; transition: flex-basis .26s ease, height .26s ease, margin-bottom .26s ease, opacity .2s ease, transform .2s ease, filter .2s ease, box-shadow .22s ease; will-change: flex-basis, height, opacity, transform; -webkit-user-select: none; user-select: none; }
 /* Reserve the final slot while hidden so scroll-to-end sees the new card's
    real height before the native window appears. Only the card itself rises in. */
 .thumbnail-card.thumbnail-pending { opacity: 0; pointer-events: none; transform: translateY(24px) scale(.975); filter: blur(3px); }
@@ -213,8 +213,8 @@ html.capture-window-cursor, html.capture-window-cursor * { cursor: var(--capture
    starts, so survivor shifts and the exit completion animation can take over. */
 .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting) { animation: thumbnail-arrive .52s cubic-bezier(.22,.65,.28,1); }
 @keyframes thumbnail-arrive { from { opacity: 0; transform: translateY(24px) scale(.975); filter: blur(3px); } to { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); } }
-.thumbnail-card.thumbnail-file-dragging { cursor: grabbing; }
-.thumbnail-card.thumbnail-file-dragging, .thumbnail-card.thumbnail-file-dragging * { cursor: grabbing !important; }
+.thumbnail-card.thumbnail-file-dragging { cursor: -webkit-grabbing; cursor: grabbing; }
+.thumbnail-card.thumbnail-file-dragging, .thumbnail-card.thumbnail-file-dragging * { cursor: -webkit-grabbing !important; cursor: grabbing !important; }
 .thumbnail-card.thumbnail-viewer-active { box-shadow: 0 8px 16px rgba(0,0,0,.34), 0 2px 5px rgba(0,0,0,.22), 0 0 0 1px rgba(var(--theme-accent-rgb),.82), 0 0 17px rgba(var(--theme-accent-rgb),.24); }
 .thumbnail-card::after { position: absolute; z-index: 8; inset: 0; border-radius: inherit; box-shadow: 0 0 0 1px rgba(var(--theme-accent-rgb),.82), 0 0 17px rgba(var(--theme-accent-rgb),.24); content: ""; opacity: 0; pointer-events: none; }
 .thumbnail-card.thumbnail-capture-highlight::after { animation: thumbnail-capture-highlight 4.5s linear; }
@@ -231,7 +231,7 @@ html.capture-window-cursor, html.capture-window-cursor * { cursor: var(--capture
 }
 .thumbnail-svg-defs { position: absolute; width: 0; height: 0; overflow: hidden; pointer-events: none; }
 /* Cover fills the card (no letterbox bars). Full-res fidelity lives in the viewer. */
-.thumbnail-card img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: center; border: 0; border-radius: 12px; background: transparent; cursor: grab; transition: filter .18s ease, transform .22s ease; -webkit-user-select: none; user-select: none; }
+.thumbnail-card img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: center; border: 0; border-radius: 12px; background: transparent; cursor: -webkit-grab; cursor: grab; transition: filter .18s ease, transform .22s ease; -webkit-user-select: none; user-select: none; }
 html:not(.thumbnail-native-tracking) .thumbnail-card:hover img, .thumbnail-card:focus-within img, .thumbnail-card[data-thumbnail-native-active="true"] img { filter: blur(2px) brightness(.56); transform: scale(1.015); }
 /* Lock the hovered look on exit so clearing :hover / native-active never flashes a sharp preview. */
 .thumbnail-card[class*="thumbnail-exit-"] img {
@@ -285,13 +285,28 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-main-actio
    whole tree so WebKit cannot alternate element-level pointer/grab/default rules
    (or the system arrow) on every mouse/cursor-rectangle update. */
 html.thumbnail-native-tracking[data-thumbnail-cursor="grab"],
-html.thumbnail-native-tracking[data-thumbnail-cursor="grab"] * { cursor: grab !important; }
+html.thumbnail-native-tracking[data-thumbnail-cursor="grab"] * {
+  cursor: -webkit-grab !important;
+  cursor: grab !important;
+}
 html.thumbnail-native-tracking[data-thumbnail-cursor="pointer"],
 html.thumbnail-native-tracking[data-thumbnail-cursor="pointer"] * { cursor: pointer !important; }
 html.thumbnail-native-tracking[data-thumbnail-cursor="default"],
 html.thumbnail-native-tracking[data-thumbnail-cursor="default"] * { cursor: default !important; }
+/* Drag source fallback: keep grab on the preview image while the card is live,
+   even if the document-wide kind is briefly still `default` (first hover before
+   AppKit open-hand sticks, or after a key-window handoff). Higher specificity
+   than the default rule above so stationary entry onto the image shows grab
+   without requiring a detour over an action button first. */
+html.thumbnail-native-tracking .thumbnail-card[data-thumbnail-native-active="true"] img {
+  cursor: -webkit-grab !important;
+  cursor: grab !important;
+}
 html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging,
-html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * { cursor: grabbing !important; }
+html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
+  cursor: -webkit-grabbing !important;
+  cursor: grabbing !important;
+}
 .thumbnail-main-actions svg, .icon-button svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .thumbnail-main-actions svg { animation: thumbnail-action-pop .2s ease-out; }
 /* Exit lock: no clicks, hover, or focus while dismiss/delete animation plays. */
