@@ -12,13 +12,17 @@ import {
 
 import { formatFileSize } from "./lib/format";
 import {
+  ALIGNMENT_SNAP_SCREEN_PX,
   boundedCropRect,
+  canvasOverflowEdges,
+  collectAlignmentSnapLines,
   createScreenshotDocument,
   cropDocument,
   duplicateScreenshotElement,
   elementBounds,
   estimateCanvasExportBytes,
   expandDocumentForElement,
+  expandDocumentToFitBounds,
   hitTestElement,
   hitTestResizeHandle,
   imageDropGuideAtPoint,
@@ -33,7 +37,10 @@ import {
   resizeCursor,
   resizeDocumentCanvas,
   resizeElement,
+  snapResizedBounds,
+  snapTranslatedBounds,
   translateElement,
+  type AlignmentSnapGuide,
   type EditorImageElement,
   type ImageSnapEdge,
   type LayerBlendMode,
@@ -570,6 +577,8 @@ export function ScreenshotEditor() {
   const imageDropGuideRef = useRef<ImageDropGuide | null>(null);
   const [draggedLayerId, setDraggedLayerId] = useState<string | null>(null);
   const [resizePreviewBounds, setResizePreviewBounds] = useState<EditorRect | null>(null);
+  const [alignmentGuides, setAlignmentGuides] = useState<AlignmentSnapGuide[]>([]);
+  const [canvasExpandEdges, setCanvasExpandEdges] = useState<ImageSnapEdge[]>([]);
   const [canvasCursor, setCanvasCursor] = useState<string | undefined>(undefined);
   const [layerDropTarget, setLayerDropTarget] = useState<LayerDropTarget | null>(null);
   const [exportFormat, setExportFormat] = useState<ExportFormat>("png");
@@ -1033,33 +1042,70 @@ export function ScreenshotEditor() {
     }
     if (gesture.kind === "move") {
       setCanvasCursor("move");
-      const moved = translateElement(
+      const snapThreshold = ALIGNMENT_SNAP_SCREEN_PX / Math.max(0.01, displayScale);
+      const free = translateElement(
         gesture.element,
         point.x - gesture.origin.x,
         point.y - gesture.origin.y,
       );
-      replaceDocument(replaceElement(
+      const freeBounds = elementBounds(free);
+      const lines = collectAlignmentSnapLines(
+        gesture.initialDocument,
+        gesture.element.id,
+      );
+      const snapped = snapTranslatedBounds(freeBounds, lines, snapThreshold);
+      const deltaX = snapped.bounds.x - freeBounds.x;
+      const deltaY = snapped.bounds.y - freeBounds.y;
+      const moved = (deltaX !== 0 || deltaY !== 0)
+        ? translateElement(free, deltaX, deltaY)
+        : free;
+      const nextDocument = replaceElement(
         gesture.initialDocument,
         gesture.element.id,
         moved,
+      );
+      setAlignmentGuides(snapped.guides);
+      setCanvasExpandEdges(canvasOverflowEdges(
+        elementBounds(moved),
+        gesture.initialDocument,
       ));
+      replaceDocument(nextDocument);
       return;
     }
     if (gesture.kind === "resize") {
       setCanvasCursor(resizeCursor(gesture.handle));
-      const nextBounds = resizeBoundsFromHandle(
+      const minSize = 8 / Math.max(0.01, displayScale);
+      const snapThreshold = ALIGNMENT_SNAP_SCREEN_PX / Math.max(0.01, displayScale);
+      const freeBounds = resizeBoundsFromHandle(
         gesture.initialBounds,
         gesture.handle,
         point,
-        8 / Math.max(0.01, displayScale),
+        minSize,
+      );
+      const lines = collectAlignmentSnapLines(
+        gesture.initialDocument,
+        gesture.element.id,
+      );
+      const snapped = snapResizedBounds(
+        gesture.initialBounds,
+        gesture.handle,
+        freeBounds,
+        lines,
+        snapThreshold,
+        minSize,
       );
       const resized = resizeElement(
         gesture.element,
         gesture.initialBounds,
-        nextBounds,
+        snapped.bounds,
       );
-      gestureRef.current = { ...gesture, currentBounds: nextBounds };
-      setResizePreviewBounds(nextBounds);
+      gestureRef.current = { ...gesture, currentBounds: snapped.bounds };
+      setResizePreviewBounds(snapped.bounds);
+      setAlignmentGuides(snapped.guides);
+      setCanvasExpandEdges(canvasOverflowEdges(
+        snapped.bounds,
+        gesture.initialDocument,
+      ));
       replaceDocument(replaceElement(
         gesture.initialDocument,
         gesture.element.id,
@@ -1096,19 +1142,33 @@ export function ScreenshotEditor() {
     if (!gesture || gesture.pointerId !== event.pointerId) return;
     gestureRef.current = null;
     setResizePreviewBounds(null);
+    setAlignmentGuides([]);
+    setCanvasExpandEdges([]);
     setCanvasCursor(undefined);
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
     if (gesture.kind === "crop") return;
-    const current = documentRef.current;
-    if (!current || JSON.stringify(current) === JSON.stringify(gesture.initialDocument)) return;
-    setUndoStack((stack) => [...stack.slice(-99), gesture.initialDocument]);
-    setRedoStack([]);
+    let current = documentRef.current;
+    if (!current) return;
+
+    // Dragging a layer past the canvas edge expands the document on release.
     if (gesture.kind === "resize" || gesture.kind === "move") {
+      const element = current.elements.find(({ id }) => id === gesture.element.id);
+      if (element) {
+        const expanded = expandDocumentToFitBounds(current, elementBounds(element), 0);
+        if (expanded !== current) {
+          replaceDocument(expanded);
+          current = expanded;
+        }
+      }
       setSaved(null);
       setStatus("");
     }
+
+    if (JSON.stringify(current) === JSON.stringify(gesture.initialDocument)) return;
+    setUndoStack((stack) => [...stack.slice(-99), gesture.initialDocument]);
+    setRedoStack([]);
   };
 
   const applyCrop = () => {
@@ -1709,6 +1769,35 @@ export function ScreenshotEditor() {
               aria-hidden="true"
             >
               <span>{imageDropLabel(imageDropGuide.edge)}</span>
+            </div>
+          )}
+          {alignmentGuides.map((guide) => (
+            <div
+              key={`${guide.orientation}-${guide.position}`}
+              className={`screenshot-align-snap-guide ${guide.orientation}`}
+              style={guide.orientation === "vertical"
+                ? {
+                  left: guide.position * displayScale,
+                  top: 0,
+                  height: editorDocument.height * displayScale,
+                }
+                : {
+                  top: guide.position * displayScale,
+                  left: 0,
+                  width: editorDocument.width * displayScale,
+                }}
+              aria-hidden="true"
+            />
+          ))}
+          {canvasExpandEdges.length > 0 && (
+            <div
+              className={[
+                "screenshot-canvas-expand-hint",
+                ...canvasExpandEdges.map((edge) => `edge-${edge}`),
+              ].join(" ")}
+              aria-hidden="true"
+            >
+              <span>Release to expand canvas</span>
             </div>
           )}
         </div>

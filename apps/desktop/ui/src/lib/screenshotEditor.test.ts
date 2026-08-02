@@ -1,12 +1,15 @@
 import {
   boundedCropRect,
+  canvasOverflowEdges,
   closestImageSnapEdge,
+  collectAlignmentSnapLines,
   createScreenshotDocument,
   cropDocument,
   duplicateScreenshotElement,
   elementBounds,
   estimateCanvasExportBytes,
   expandDocumentForElement,
+  expandDocumentToFitBounds,
   hitTestElement,
   hitTestResizeHandle,
   imageDropGuideAtPoint,
@@ -20,6 +23,8 @@ import {
   resolveImageDropTarget,
   resizeBoundsFromHandle,
   resizeElement,
+  snapResizedBounds,
+  snapTranslatedBounds,
   translateElement,
   type EditorImageElement,
   type EditorShapeElement,
@@ -328,6 +333,82 @@ describe("screenshot editor geometry", () => {
       width: 250,
       height: 130,
     });
+  });
+
+  it("snaps moved layers to other image edges and the canvas border", () => {
+    const document = createScreenshotDocument("capture.png", 1_000, 800);
+    const imported: EditorImageElement = {
+      ...editableLayer,
+      id: "imported",
+      kind: "image",
+      source: "imported",
+      src: "blob:imported",
+      name: "imported.png",
+      x: 200,
+      y: 100,
+      width: 100,
+      height: 80,
+      naturalWidth: 100,
+      naturalHeight: 80,
+    };
+    const layered = { ...document, elements: [...document.elements, imported] };
+    const lines = collectAlignmentSnapLines(layered, "moving");
+    expect(lines.vertical).toEqual(expect.arrayContaining([0, 1_000, 200, 300]));
+    expect(lines.horizontal).toEqual(expect.arrayContaining([0, 800, 100, 180]));
+
+    // Near the right edge of the imported layer.
+    const snapped = snapTranslatedBounds(
+      { x: 305, y: 40, width: 50, height: 40 },
+      lines,
+      10,
+    );
+    expect(snapped.bounds.x).toBe(300);
+    expect(snapped.guides).toContainEqual({ orientation: "vertical", position: 300 });
+
+    // Near the top canvas border.
+    const toCanvas = snapTranslatedBounds(
+      { x: 40, y: 6, width: 50, height: 40 },
+      lines,
+      10,
+    );
+    expect(toCanvas.bounds.y).toBe(0);
+    expect(toCanvas.guides).toContainEqual({ orientation: "horizontal", position: 0 });
+  });
+
+  it("snaps resized edges against neighboring layers", () => {
+    const lines = {
+      vertical: [0, 400, 1_000],
+      horizontal: [0, 300, 800],
+    };
+    const initial = { x: 100, y: 100, width: 200, height: 120 };
+    const free = resizeBoundsFromHandle(initial, "se", { x: 405, y: 295 }, 8);
+    const snapped = snapResizedBounds(initial, "se", free, lines, 10, 8);
+    expect(snapped.bounds).toMatchObject({ x: 100, y: 100, width: 300, height: 200 });
+    expect(snapped.guides).toEqual(expect.arrayContaining([
+      { orientation: "vertical", position: 400 },
+      { orientation: "horizontal", position: 300 },
+    ]));
+  });
+
+  it("detects canvas overflow and expands the document to fit bounds", () => {
+    const document = createScreenshotDocument("capture.png", 1_000, 800);
+    const overflowing = { x: -40, y: 100, width: 200, height: 100 };
+    expect(canvasOverflowEdges(overflowing, document)).toEqual(["left"]);
+    expect(canvasOverflowEdges(
+      { x: 900, y: 750, width: 200, height: 100 },
+      document,
+    )).toEqual(["right", "bottom"]);
+
+    const expanded = expandDocumentToFitBounds(document, overflowing, 0);
+    expect(expanded.width).toBe(1_040);
+    expect(expanded.height).toBe(800);
+    expect(expanded.elements[0]).toMatchObject({ x: 40, y: 0 });
+    expect(expandDocumentToFitBounds(document, {
+      x: 10,
+      y: 10,
+      width: 100,
+      height: 100,
+    })).toBe(document);
   });
 
   it("scales annotations when their selection box is resized", () => {
