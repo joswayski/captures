@@ -53,7 +53,7 @@ import {
   resizeElement,
   snapResizedBounds,
   snapTranslatedBounds,
-  stackDropPlateAtPoint,
+  stackDropLightFocusAtPoint,
   defaultTextBoxWidth,
   TEXT_LINE_HEIGHT_RATIO,
   wrapTextLines,
@@ -152,7 +152,12 @@ type ImageDropGuide = {
   edge: ImageDropPlacement;
   target: EditorRect;
   point: EditorPoint;
-  plate: EditorRect;
+  focus: EditorRect;
+};
+
+type DropToastAnchor = {
+  left: number;
+  top: number;
 };
 
 /** Live preview while a layer is dragged/resized past the canvas edge. */
@@ -800,6 +805,7 @@ export function ScreenshotEditor() {
   const [dragActive, setDragActive] = useState(false);
   const [imageDropGuide, setImageDropGuide] = useState<ImageDropGuide | null>(null);
   const imageDropGuideRef = useRef<ImageDropGuide | null>(null);
+  const [dropToastAnchor, setDropToastAnchor] = useState<DropToastAnchor | null>(null);
   const [draggedLayerId, setDraggedLayerId] = useState<string | null>(null);
   const [resizePreviewBounds, setResizePreviewBounds] = useState<EditorRect | null>(null);
   const [alignmentGuides, setAlignmentGuides] = useState<AlignmentSnapGuide[]>([]);
@@ -855,6 +861,39 @@ export function ScreenshotEditor() {
     clientX: number;
     clientY: number;
   } | null>(null);
+
+  const refreshDropToastAnchor = useCallback(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const bounds = viewport.getBoundingClientRect();
+    const next = {
+      left: bounds.left + bounds.width / 2,
+      top: bounds.top + 18,
+    };
+    setDropToastAnchor((current) => (
+      current
+      && Math.abs(current.left - next.left) < 0.5
+      && Math.abs(current.top - next.top) < 0.5
+        ? current
+        : next
+    ));
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!dragActive) return undefined;
+    refreshDropToastAnchor();
+    window.addEventListener("resize", refreshDropToastAnchor);
+    const viewport = viewportRef.current;
+    let observer: ResizeObserver | null = null;
+    if (viewport && typeof ResizeObserver !== "undefined") {
+      observer = new ResizeObserver(refreshDropToastAnchor);
+      observer.observe(viewport);
+    }
+    return () => {
+      window.removeEventListener("resize", refreshDropToastAnchor);
+      observer?.disconnect();
+    };
+  }, [dragActive, refreshDropToastAnchor]);
 
   const replaceDocument = useCallback((next: ScreenshotDocument) => {
     documentRef.current = next;
@@ -2145,7 +2184,7 @@ export function ScreenshotEditor() {
       edge: "bottom",
       target,
       point,
-      plate: stackDropPlateAtPoint(point, target),
+      focus: stackDropLightFocusAtPoint(point, target),
     };
   };
 
@@ -2228,7 +2267,7 @@ export function ScreenshotEditor() {
             edge: placement.edge,
             target,
             point,
-            plate: stackDropPlateAtPoint(point, target),
+            focus: stackDropLightFocusAtPoint(point, target),
           };
         }
       }
@@ -2601,6 +2640,7 @@ export function ScreenshotEditor() {
         if (dropDepthRef.current === 0) {
           setDragActive(false);
           setImageDropGuideState(null);
+          setDropToastAnchor(null);
         }
       }}
       onDrop={(event) => {
@@ -2608,6 +2648,7 @@ export function ScreenshotEditor() {
         event.preventDefault();
         dropDepthRef.current = 0;
         setDragActive(false);
+        setDropToastAnchor(null);
         // Prefer the latest pointer sample from dragover; React state can lag.
         const guide = imageDropGuideRef.current
           ?? imageDropGuide
@@ -2843,70 +2884,11 @@ export function ScreenshotEditor() {
                 top: imageDropGuide.target.y * displayScale,
                 width: imageDropGuide.target.width * displayScale,
                 height: imageDropGuide.target.height * displayScale,
-                // Plate center in target-local % so god-rays track the pointer.
-                ...(imageDropGuide.edge === "stack"
-                  ? {
-                    ["--plate-cx" as string]: `${
-                      ((imageDropGuide.plate.x + imageDropGuide.plate.width / 2
-                        - imageDropGuide.target.x)
-                        / Math.max(1, imageDropGuide.target.width)) * 100
-                    }%`,
-                    ["--plate-cy" as string]: `${
-                      ((imageDropGuide.plate.y + imageDropGuide.plate.height / 2
-                        - imageDropGuide.target.y)
-                        / Math.max(1, imageDropGuide.target.height)) * 100
-                    }%`,
-                    ["--plate-w" as string]: `${
-                      (imageDropGuide.plate.width
-                        / Math.max(1, imageDropGuide.target.width)) * 100
-                    }%`,
-                    ["--plate-h" as string]: `${
-                      (imageDropGuide.plate.height
-                        / Math.max(1, imageDropGuide.target.height)) * 100
-                    }%`,
-                  }
-                  : {}),
               }}
               aria-hidden="true"
             >
               {imageDropGuide.edge === "stack" ? (
-                <>
-                  {/* Soft ambient under-light around the plate (no discrete rays). */}
-                  <div className="screenshot-drop-snap-bloom" />
-                  {/*
-                    Pointer-tracking plate ≈ OS drag ghost. Opaque fill masks the glow
-                    under the preview so light only reads as a halo around it.
-                    Label lives in the top toast only — no canvas badge.
-                  */}
-                  <div
-                    className="screenshot-drop-snap-stack-plate"
-                    style={{
-                      left: (imageDropGuide.plate.x - imageDropGuide.target.x) * displayScale,
-                      top: (imageDropGuide.plate.y - imageDropGuide.target.y) * displayScale,
-                      width: imageDropGuide.plate.width * displayScale,
-                      height: imageDropGuide.plate.height * displayScale,
-                    }}
-                  >
-                    <div className="screenshot-drop-snap-stack-shadow" />
-                    <div className="screenshot-drop-snap-stack-rim" />
-                    <div className="screenshot-drop-snap-particles">
-                      {DROP_STACK_PARTICLES.map((particle) => (
-                        <i
-                          key={particle.id}
-                          className="screenshot-drop-snap-particle"
-                          style={{
-                            ["--snap-x" as string]: particle.x,
-                            ["--snap-y" as string]: particle.y,
-                            ["--snap-travel" as string]: particle.travel,
-                            ["--snap-delay" as string]: particle.delay,
-                            ["--snap-duration" as string]: particle.duration,
-                            ["--snap-size" as string]: particle.size,
-                          }}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                </>
+                <StackDropLight guide={imageDropGuide} />
               ) : (
                 <>
                   <div className="screenshot-drop-snap-bloom" />
@@ -2999,7 +2981,11 @@ export function ScreenshotEditor() {
           )}
         </div>
         {dragActive && (
-          <div className="screenshot-drop-overlay" aria-hidden="true">
+          <div
+            className="screenshot-drop-overlay"
+            style={dropToastAnchor ?? undefined}
+            aria-hidden="true"
+          >
             <EditorIcon name="image" />
             {/* Fixed title slot + shared subtitle keep the toast from shifting when the edge changes. */}
             <strong>{imageDropGuide ? imageDropLabel(imageDropGuide.edge) : "Drop image"}</strong>
@@ -3906,6 +3892,106 @@ function elementLabel(element: ScreenshotElement): string {
   return element.shape[0].toUpperCase() + element.shape.slice(1);
 }
 
+/**
+ * Stack placement treats the target layer as a luminous window. Four broad
+ * perspective planes and a handful of softer shafts converge on an invisible
+ * opening beneath the native drag preview; no synthetic preview tile is drawn.
+ */
+function StackDropLight({ guide }: { guide: ImageDropGuide }) {
+  const width = Math.max(1, guide.target.width);
+  const height = Math.max(1, guide.target.height);
+  const focusWidth = Math.min(width * 0.32, Math.max(1, guide.focus.width * 0.74));
+  const focusHeight = Math.min(height * 0.32, Math.max(1, guide.focus.height * 0.74));
+  const rawFocusX = guide.point.x - guide.target.x;
+  const rawFocusY = guide.point.y - guide.target.y;
+  const focusX = Math.min(
+    width - focusWidth / 2,
+    Math.max(focusWidth / 2, rawFocusX),
+  );
+  const focusY = Math.min(
+    height - focusHeight / 2,
+    Math.max(focusHeight / 2, rawFocusY),
+  );
+  const focusLeft = focusX - focusWidth / 2;
+  const focusRight = focusX + focusWidth / 2;
+  const focusTop = focusY - focusHeight / 2;
+  const focusBottom = focusY + focusHeight / 2;
+  const falloffRadius = Math.max(width, height) * 0.72;
+  const rimInset = Math.min(1, width / 4, height / 4);
+
+  const volumePlanes = [
+    `0,0 ${width},0 ${focusRight},${focusTop} ${focusLeft},${focusTop}`,
+    `${width},0 ${width},${height} ${focusRight},${focusBottom} ${focusRight},${focusTop}`,
+    `${width},${height} 0,${height} ${focusLeft},${focusBottom} ${focusRight},${focusBottom}`,
+    `0,${height} 0,0 ${focusLeft},${focusTop} ${focusLeft},${focusBottom}`,
+  ];
+  const lightShafts = [
+    `${width * 0.04},0 ${width * 0.22},0 ${focusLeft + focusWidth * 0.36},${focusTop} ${focusLeft + focusWidth * 0.12},${focusTop}`,
+    `${width * 0.58},0 ${width * 0.78},0 ${focusLeft + focusWidth * 0.82},${focusTop} ${focusLeft + focusWidth * 0.55},${focusTop}`,
+    `${width},${height * 0.12} ${width},${height * 0.32} ${focusRight},${focusTop + focusHeight * 0.38} ${focusRight},${focusTop + focusHeight * 0.1}`,
+    `${width},${height * 0.64} ${width},${height * 0.82} ${focusRight},${focusTop + focusHeight * 0.88} ${focusRight},${focusTop + focusHeight * 0.62}`,
+    `${width * 0.14},${height} ${width * 0.32},${height} ${focusLeft + focusWidth * 0.4},${focusBottom} ${focusLeft + focusWidth * 0.16},${focusBottom}`,
+    `${width * 0.68},${height} ${width * 0.9},${height} ${focusLeft + focusWidth * 0.9},${focusBottom} ${focusLeft + focusWidth * 0.62},${focusBottom}`,
+    `0,${height * 0.22} 0,${height * 0.42} ${focusLeft},${focusTop + focusHeight * 0.5} ${focusLeft},${focusTop + focusHeight * 0.22}`,
+    `0,${height * 0.7} 0,${height * 0.9} ${focusLeft},${focusTop + focusHeight * 0.92} ${focusLeft},${focusTop + focusHeight * 0.65}`,
+  ];
+
+  return (
+    <svg
+      className="screenshot-drop-snap-stack-light"
+      viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio="none"
+      data-focus-x={focusX}
+      data-focus-y={focusY}
+      aria-hidden="true"
+    >
+      <defs>
+        <radialGradient
+          id="screenshot-stack-light-volume"
+          gradientUnits="userSpaceOnUse"
+          cx={focusX}
+          cy={focusY}
+          r={falloffRadius}
+        >
+          <stop offset="0" stopColor="currentColor" stopOpacity=".015" />
+          <stop offset=".28" stopColor="currentColor" stopOpacity=".035" />
+          <stop offset=".65" stopColor="currentColor" stopOpacity=".14" />
+          <stop offset="1" stopColor="currentColor" stopOpacity=".32" />
+        </radialGradient>
+      </defs>
+      <rect
+        className="screenshot-drop-snap-stack-window-wash"
+        x={rimInset}
+        y={rimInset}
+        width={Math.max(0, width - rimInset * 2)}
+        height={Math.max(0, height - rimInset * 2)}
+      />
+      <g className="screenshot-drop-snap-stack-volume soft">
+        {volumePlanes.map((points, index) => (
+          <polygon key={`soft-${index}`} points={points} />
+        ))}
+      </g>
+      <g className="screenshot-drop-snap-stack-volume core">
+        {volumePlanes.map((points, index) => (
+          <polygon key={`core-${index}`} points={points} />
+        ))}
+      </g>
+      <g className="screenshot-drop-snap-stack-shafts">
+        {lightShafts.map((points, index) => (
+          <polygon key={index} points={points} />
+        ))}
+      </g>
+      <rect
+        className="screenshot-drop-snap-stack-window-rim"
+        x={rimInset}
+        y={rimInset}
+        width={Math.max(0, width - rimInset * 2)}
+        height={Math.max(0, height - rimInset * 2)}
+      />
+    </svg>
+  );
+}
+
 /** Short, similar-length labels so the drop toast does not reflow between modes. */
 function imageDropLabel(edge: ImageDropPlacement): string {
   if (edge === "stack") return "Place on top";
@@ -3951,30 +4037,6 @@ const DROP_SNAP_PARTICLES: Array<{
   { id: "p11", along: 0.42, travel: 1.35, delay: "0.85s", duration: "1.4s", size: "2px" },
   { id: "p12", along: 0.15, travel: 0.65, delay: "0.95s", duration: "0.9s", size: "2px" },
   { id: "p13", along: 0.68, travel: 1.08, delay: "1.05s", duration: "1.25s", size: "3px" },
-];
-
-/**
- * Subtle particles for stack-on-top: soft sparkle on the plate rim only
- * (no extruded ray beams — ambient glow is CSS radial light).
- */
-const DROP_STACK_PARTICLES: Array<{
-  id: string;
-  /** 0–1 position within the stack plate (CSS left/top). */
-  x: number;
-  y: number;
-  travel: number;
-  delay: string;
-  duration: string;
-  size: string;
-}> = [
-  { id: "s0", x: 0.1, y: 0.08, travel: 0.55, delay: "0s", duration: "1.4s", size: "2px" },
-  { id: "s1", x: 0.5, y: 0.04, travel: 0.65, delay: "0.25s", duration: "1.55s", size: "2px" },
-  { id: "s2", x: 0.9, y: 0.1, travel: 0.5, delay: "0.4s", duration: "1.3s", size: "3px" },
-  { id: "s3", x: 0.96, y: 0.5, travel: 0.6, delay: "0.12s", duration: "1.45s", size: "2px" },
-  { id: "s4", x: 0.88, y: 0.9, travel: 0.55, delay: "0.5s", duration: "1.35s", size: "2px" },
-  { id: "s5", x: 0.5, y: 0.96, travel: 0.7, delay: "0.3s", duration: "1.5s", size: "2px" },
-  { id: "s6", x: 0.1, y: 0.88, travel: 0.5, delay: "0.6s", duration: "1.25s", size: "3px" },
-  { id: "s7", x: 0.04, y: 0.5, travel: 0.58, delay: "0.18s", duration: "1.4s", size: "2px" },
 ];
 
 function elementLayerName(element: ScreenshotElement): string {

@@ -868,13 +868,25 @@ describe("ScreenshotEditor", () => {
     expect(guide?.querySelectorAll(".screenshot-drop-snap-particle").length).toBeGreaterThan(0);
   });
 
-  it("offers stack-on-top placement with soft ambient under-glow (no discrete rays)", async () => {
+  it("projects stack-on-top light from the target and centers its toast on the viewport", async () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
 
     const editor = screen.getByText("Screenshot editor").closest("main");
     expect(editor).toBeTruthy();
-    const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
+    const viewport = screen.getByLabelText("Screenshot editing canvas");
+    vi.spyOn(viewport, "getBoundingClientRect").mockReturnValue({
+      x: 70,
+      y: 54,
+      top: 54,
+      left: 70,
+      right: 890,
+      bottom: 700,
+      width: 820,
+      height: 646,
+      toJSON: () => ({}),
+    });
+    const canvas = viewport.querySelector("canvas")!;
     // jsdom canvas layout is often 0×0; pin both backing store and client rect so
     // client→document mapping hits the layer interior (stack zone).
     Object.defineProperty(canvas, "width", { configurable: true, value: 1_440 });
@@ -907,49 +919,41 @@ describe("ScreenshotEditor", () => {
       expect(screen.getAllByText("Place on top")).toHaveLength(1);
     });
     expect(screen.getByText("Drop to place — stays editable as a layer.")).toBeInTheDocument();
+    const toast = screen.getByText("Place on top").closest(".screenshot-drop-overlay");
+    // 70 + 820 / 2 = 480: centered in the visible canvas viewport, not the window.
+    expect(toast).toHaveStyle({ left: "480px", top: "72px" });
 
     const guide = document.querySelector(".screenshot-drop-snap-guide.edge-stack") as HTMLElement | null;
     expect(guide).not.toBeNull();
-    expect(guide?.querySelector(".screenshot-drop-snap-bloom")).not.toBeNull();
-    // Soft ambient only — no extruded ray beams.
-    expect(guide?.querySelector(".screenshot-drop-snap-stack-rays")).toBeNull();
-    expect(guide?.querySelectorAll(".screenshot-drop-snap-stack-ray").length).toBe(0);
+    const light = guide?.querySelector(".screenshot-drop-snap-stack-light") as SVGElement | null;
+    expect(light).not.toBeNull();
+    expect(light?.querySelector(".screenshot-drop-snap-stack-window-rim")).not.toBeNull();
+    expect(light?.querySelectorAll(".screenshot-drop-snap-stack-volume polygon").length)
+      .toBeGreaterThan(0);
+    expect(light?.querySelectorAll(".screenshot-drop-snap-stack-shafts polygon").length)
+      .toBeGreaterThan(0);
+    // The real native drag preview is the only floating rectangle: no detached
+    // radial halo, opaque backing plate, shadow, or decorative particles.
+    expect(guide?.querySelector(".screenshot-drop-snap-bloom")).toBeNull();
+    expect(guide?.querySelector(".screenshot-drop-snap-stack-plate")).toBeNull();
+    expect(guide?.querySelector(".screenshot-drop-snap-stack-shadow")).toBeNull();
+    expect(guide?.querySelectorAll(".screenshot-drop-snap-particle")).toHaveLength(0);
     // Stack mode does not render a second on-canvas label badge.
     expect(guide?.querySelector(":scope > span")).toBeNull();
-    const plate = guide?.querySelector(".screenshot-drop-snap-stack-plate") as HTMLElement | null;
-    expect(plate).not.toBeNull();
-    expect(plate?.querySelector(".screenshot-drop-snap-stack-shadow")).not.toBeNull();
-    expect(plate?.querySelector(".screenshot-drop-snap-stack-rim")).not.toBeNull();
-    expect(plate?.querySelectorAll(".screenshot-drop-snap-particle").length).toBeGreaterThan(0);
-    // Plate is a compact ghost relative to the target, centered near the pointer
-    // (fit-mode displayScale can be tiny in jsdom, so compare ratios not CSS px).
-    const guideWidth = Number.parseFloat(guide!.style.width);
-    const guideHeight = Number.parseFloat(guide!.style.height);
-    const plateLeft = Number.parseFloat(plate!.style.left);
-    const plateTop = Number.parseFloat(plate!.style.top);
-    const plateWidth = Number.parseFloat(plate!.style.width);
-    const plateHeight = Number.parseFloat(plate!.style.height);
-    expect(plateWidth).toBeGreaterThan(0);
-    expect(plateHeight).toBeGreaterThan(0);
-    expect(plateWidth / guideWidth).toBeLessThan(0.5);
-    expect(plateHeight / guideHeight).toBeLessThan(0.5);
-    expect((plateLeft + plateWidth / 2) / guideWidth).toBeCloseTo(720 / 1_440, 1);
-    expect((plateTop + plateHeight / 2) / guideHeight).toBeCloseTo(450 / 900, 1);
+    expect(Number(light?.dataset.focusX)).toBeCloseTo(720, 0);
+    expect(Number(light?.dataset.focusY)).toBeCloseTo(450, 0);
 
-    // Moving the pointer relocates the plate (dynamic, not a static center box).
+    // Moving the pointer bends the light volume toward it.
     const moved = createEvent.dragOver(editor!, { dataTransfer });
     Object.defineProperty(moved, "clientX", { configurable: true, value: 900 });
     Object.defineProperty(moved, "clientY", { configurable: true, value: 520 });
     fireEvent(editor!, moved);
     await waitFor(() => {
-      const nextPlate = document.querySelector(
-        ".screenshot-drop-snap-guide.edge-stack .screenshot-drop-snap-stack-plate",
-      ) as HTMLElement | null;
-      expect(nextPlate).not.toBeNull();
-      const nextLeft = Number.parseFloat(nextPlate!.style.left);
-      const nextTop = Number.parseFloat(nextPlate!.style.top);
-      expect(nextLeft).toBeGreaterThan(plateLeft);
-      expect(nextTop).toBeGreaterThan(plateTop);
+      const nextLight = document.querySelector(
+        ".screenshot-drop-snap-guide.edge-stack .screenshot-drop-snap-stack-light",
+      ) as SVGElement | null;
+      expect(Number(nextLight?.dataset.focusX)).toBeGreaterThan(720);
+      expect(Number(nextLight?.dataset.focusY)).toBeGreaterThan(450);
     });
   });
 
