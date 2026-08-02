@@ -43,6 +43,8 @@ import {
   snapResizedBounds,
   snapTranslatedBounds,
   translateElement,
+  trimDocumentToContent,
+  visibleContentBounds,
   type AlignmentSnapGuide,
   type EditorImageElement,
   type ImageDropPlacement,
@@ -882,6 +884,14 @@ export function ScreenshotEditor() {
     editorDocument?.elements.find((element) => element.id === selectedId) ?? null
   ), [editorDocument, selectedId]);
 
+  /** True when visible layers leave empty margin (or overhang) on the canvas. */
+  const canTrimEdges = useMemo(() => {
+    if (!editorDocument) return false;
+    const content = visibleContentBounds(editorDocument);
+    if (!content) return false;
+    return trimDocumentToContent(editorDocument) !== editorDocument;
+  }, [editorDocument]);
+
   const displayScale = zoomMode === "fit" ? fitScale : zoom / 100;
 
   useLayoutEffect(() => {
@@ -1516,6 +1526,15 @@ export function ScreenshotEditor() {
     setCropSelection(null);
     setSelectedId(null);
     setTool("select");
+  };
+
+  const applyTrimEdges = () => {
+    const current = documentRef.current;
+    if (!current) return;
+    const trimmed = trimDocumentToContent(current);
+    if (trimmed === current) return;
+    commitDocument(trimmed);
+    setCropSelection(null);
   };
 
   const updateSelected = (updater: (element: ScreenshotElement) => ScreenshotElement) => {
@@ -2555,6 +2574,16 @@ export function ScreenshotEditor() {
             ) : (
               <p>Drag over the area you want to keep.</p>
             )}
+            <div className="screenshot-property-actions">
+              <button
+                type="button"
+                disabled={!canTrimEdges}
+                title="Shrink the canvas to the edges of visible layers"
+                onClick={applyTrimEdges}
+              >
+                Trim edges
+              </button>
+            </div>
           </section>
         )}
 
@@ -2887,6 +2916,16 @@ export function ScreenshotEditor() {
                 ))}
               />
             </label>
+          </div>
+          <div className="screenshot-property-actions">
+            <button
+              type="button"
+              disabled={!canTrimEdges}
+              title="Shrink the canvas to the edges of visible layers"
+              onClick={applyTrimEdges}
+            >
+              Trim edges
+            </button>
           </div>
           <label className="screenshot-check-row">
             <input

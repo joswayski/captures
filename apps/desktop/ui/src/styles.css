@@ -1759,7 +1759,8 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 .screenshot-range output { color: #c6c7ca; font-size: 9px; text-align: right; }
 .screenshot-property-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
 .screenshot-property-actions button, .screenshot-layer-actions button { min-height: 31px; border: 1px solid #414247; border-radius: 6px; color: #d9dade; background: #2b2c31; font-size: 9px; font-weight: 750; }
-.screenshot-property-actions button:hover, .screenshot-layer-actions button:hover { background: #37383e; }
+.screenshot-property-actions button:hover:not(:disabled), .screenshot-layer-actions button:hover:not(:disabled) { background: #37383e; }
+.screenshot-property-actions button:disabled, .screenshot-layer-actions button:disabled { cursor: default; opacity: .45; }
 .screenshot-property-actions button.primary { border-color: var(--theme-accent-strong); color: var(--theme-accent-ink); background: var(--editing-accent); }
 .screenshot-format-buttons { display: grid; grid-template-columns: repeat(5,1fr); gap: 5px; }
 .screenshot-format-buttons button { display: grid; min-height: 29px; place-items: center; border: 1px solid #414247; border-radius: 5px; color: #b5b6ba; background: #292a2f; font-size: 11px; font-weight: 800; }

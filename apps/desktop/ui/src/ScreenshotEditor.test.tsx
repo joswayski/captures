@@ -365,6 +365,28 @@ describe("ScreenshotEditor", () => {
     expect(surface).not.toHaveClass("transparent");
   });
 
+  it("offers Trim edges in the Canvas panel and disables it when already tight", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findAllByText("1440 × 900");
+
+    // Fresh capture fills the canvas — nothing to trim.
+    const canvasTrim = screen.getAllByRole("button", { name: "Trim edges" })[0];
+    expect(canvasTrim).toBeDisabled();
+
+    // Manual canvas growth creates empty margin; trim should re-enable.
+    const widthInput = screen.getByLabelText("Width");
+    fireEvent.change(widthInput, { target: { value: "1600" } });
+    await waitFor(() => {
+      expect(screen.getAllByRole("button", { name: "Trim edges" })[0]).toBeEnabled();
+    });
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Trim edges" })[0]);
+    await waitFor(() => {
+      expect(screen.getAllByText("1440 × 900").length).toBeGreaterThan(0);
+      expect(screen.getAllByRole("button", { name: "Trim edges" })[0]).toBeDisabled();
+    });
+  });
+
   it("does not select a new shape until Select & move is used", async () => {
     render(<ScreenshotEditor />);
     await screen.findAllByText("1440 × 900");
