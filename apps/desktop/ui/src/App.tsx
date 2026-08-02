@@ -79,6 +79,7 @@ import {
   shouldScrollThumbnailStackToEnd,
   thumbnailStackOverflow,
   THUMBNAIL_CARD_SLOT_PX,
+  waitForThumbnailStackSettle,
 } from "./lib/thumbnailLayout";
 import { reconcileActiveViewer } from "./lib/viewerActivation";
 import type {
@@ -4790,7 +4791,12 @@ export function ThumbnailCard({
       clearTimeout(exitFallbackTimer.current);
       exitFallbackTimer.current = null;
     }
-    void invoke(action, { artifactId: artifact.id })
+    // A second exit can retarget the survivor transform while this card's own
+    // animation is finishing. Releasing the held slot at that instant makes
+    // the flex reflow race the in-flight compositor transition and visibly
+    // snap. Wait for the browser's live stack transition, not a fixed estimate.
+    void waitForThumbnailStackSettle(cardRef.current)
+      .then(() => invoke(action, { artifactId: artifact.id }))
       .then(() => {
         onRemoved(artifact.id);
         // The outgoing inert card can make the native thumbnail window

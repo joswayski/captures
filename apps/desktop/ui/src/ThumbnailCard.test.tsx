@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import { ThumbnailCard } from "./App";
 import type { CaptureArtifact } from "./types";
@@ -237,6 +237,72 @@ describe("ThumbnailCard", () => {
     });
     expect(invoke).not.toHaveBeenCalledWith("trash_artifact", expect.anything());
     expect(onRemoved).toHaveBeenCalledWith("capture-1");
+  });
+
+  it("waits for an overlapping survivor shift before removing a dismissed preview", async () => {
+    let playState: AnimationPlayState = "running";
+    let finishMotion: (() => void) | null = null;
+    const finished = new Promise<Animation>((resolve) => {
+      finishMotion = () => {
+        playState = "finished";
+        resolve(motion);
+      };
+    });
+    const motion = {
+      get finished() {
+        return finished;
+      },
+      get playState() {
+        return playState;
+      },
+      transitionProperty: "transform",
+    } as unknown as Animation;
+    const onRemoved = vi.fn();
+    render(
+      <main>
+        <article
+          className="thumbnail-card thumbnail-stack-shifting"
+          data-testid="survivor"
+        />
+        <ThumbnailCard
+          artifact={artifact("/Users/josevalerio/Captures/capture.png", "capture-3")}
+          clipboardCurrent={false}
+          viewerActive={false}
+          onRemoved={onRemoved}
+        />
+      </main>,
+    );
+    const survivor = screen.getByTestId("survivor");
+    Object.defineProperty(survivor, "getAnimations", {
+      configurable: true,
+      value: () => [motion],
+    });
+    const exitingCard = screen.getAllByRole("article")[1]!;
+
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    const dismissFinished = new Event("animationend", { bubbles: true });
+    Object.defineProperty(dismissFinished, "animationName", {
+      value: "thumbnail-dismiss",
+    });
+    fireEvent(exitingCard, dismissFinished);
+    await act(async () => Promise.resolve());
+
+    expect(vi.mocked(invoke).mock.calls.some(([command]) => (
+      command === "dismiss_artifact"
+    ))).toBe(false);
+    expect(onRemoved).not.toHaveBeenCalled();
+
+    await act(async () => {
+      finishMotion?.();
+      await finished;
+    });
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("dismiss_artifact", {
+        artifactId: "capture-3",
+      });
+    });
+    expect(onRemoved).toHaveBeenCalledWith("capture-3");
   });
 
   it("keeps the preview when a file drop lands inside Captures (e.g. the editor)", async () => {
