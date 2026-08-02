@@ -7,6 +7,13 @@ import type { ThumbnailPointerPosition } from "../types";
  */
 export const THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS = 0;
 
+/**
+ * Extra reassert delays (ms) after a click or focus handoff. Immediate (0) covers
+ * the next task; later ticks cover WebKit's post-click arrow install and the
+ * key-window steal when Edit opens the screenshot editor.
+ */
+export const THUMBNAIL_CURSOR_HANDOFF_REASSERT_DELAYS_MS = [0, 16, 48] as const;
+
 /** DOM marker mirroring the native cursor kind while pointer polling is active. */
 export const THUMBNAIL_CURSOR_KIND_ATTRIBUTE = "data-thumbnail-cursor";
 

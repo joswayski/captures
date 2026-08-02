@@ -6,10 +6,12 @@ use std::{
     ptr,
     sync::{
         Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
     },
 };
 
+use block2::RcBlock;
+use dispatch2::DispatchQueue;
 use objc2::{
     AllocAnyThread, DefinedClass, MainThreadMarker, define_class,
     ffi::{OBJC_ASSOCIATION_RETAIN_NONATOMIC, objc_getAssociatedObject, objc_setAssociatedObject},
@@ -18,7 +20,7 @@ use objc2::{
     runtime::AnyObject,
 };
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationOptions, NSCursor, NSEvent, NSPasteboard,
+    NSApplication, NSApplicationActivationOptions, NSCursor, NSEvent, NSEventMask, NSPasteboard,
     NSRunningApplication, NSSound, NSStatusWindowLevel, NSTrackingArea, NSTrackingAreaOptions,
     NSView, NSViewLayerContentsPlacement, NSWindow, NSWindowStyleMask, NSWorkspace,
 };
@@ -51,12 +53,25 @@ const LIQUID_GLASS_WINDOW_CORNER_RADIUS_POINTS: f64 = 25.0;
 const LIQUID_GLASS_MACOS_MAJOR_VERSION: isize = 26;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
 enum CursorMode {
-    Arrow,
-    Crosshair,
-    PointingHand,
-    OpenHand,
-    WebView,
+    Arrow = 0,
+    Crosshair = 1,
+    PointingHand = 2,
+    OpenHand = 3,
+    WebView = 4,
+}
+
+impl CursorMode {
+    fn from_u8(value: u8) -> Self {
+        match value {
+            1 => Self::Crosshair,
+            2 => Self::PointingHand,
+            3 => Self::OpenHand,
+            4 => Self::WebView,
+            _ => Self::Arrow,
+        }
+    }
 }
 
 /// Cursor shown over the always-on-top capture previews.
@@ -127,11 +142,18 @@ impl CursorTrackingOwner {
             surface,
         });
         // SAFETY: `NSObject`'s `init` method has this signature.
-        unsafe { msg_send![super(this), init] }
+        let owner = unsafe { msg_send![super(this), init] };
+        if surface == CursorSurface::Thumbnail {
+            publish_thumbnail_cursor_mode(mode);
+        }
+        owner
     }
 
     fn set_mode(&self, mode: CursorMode) {
         self.ivars().mode.set(mode);
+        if self.ivars().surface == CursorSurface::Thumbnail {
+            publish_thumbnail_cursor_mode(mode);
+        }
     }
 
     fn activate_window_if_needed(&self, event: &NSEvent) {
@@ -187,13 +209,7 @@ impl CursorTrackingOwner {
         {
             set_cursor_rects_enabled(&window, false);
         }
-        match mode {
-            CursorMode::Arrow => NSCursor::arrowCursor().set(),
-            CursorMode::Crosshair => NSCursor::crosshairCursor().set(),
-            CursorMode::PointingHand => NSCursor::pointingHandCursor().set(),
-            CursorMode::OpenHand => NSCursor::openHandCursor().set(),
-            CursorMode::WebView => {}
-        }
+        apply_cursor_mode(mode);
     }
 }
 
@@ -202,6 +218,97 @@ fn cursor_mode_is_interactive(mode: CursorMode) -> bool {
         mode,
         CursorMode::PointingHand | CursorMode::OpenHand | CursorMode::Crosshair
     )
+}
+
+/// Last AppKit cursor mode published for the always-on-top thumbnail stack.
+///
+/// Click handling lives in WebKit, which resets `NSCursor` to the arrow on
+/// primary-button down/up. JS reassert arrives one IPC hop too late and flashes
+/// the default arrow. A process-local event monitor re-applies this mode on the
+/// same run loop as the mouse event (and once more on the next turn).
+static THUMBNAIL_CURSOR_MODE: AtomicU8 = AtomicU8::new(CursorMode::Arrow as u8);
+static THUMBNAIL_CLICK_CURSOR_MONITOR: Mutex<Option<MainThreadMonitor>> = Mutex::new(None);
+
+/// Retains an AppKit event monitor installed only on the main thread.
+///
+/// `Retained<AnyObject>` is neither `Send` nor `Sync`; the monitor is only
+/// created/held from AppKit's main thread and never used from other threads.
+/// The retained object is intentionally unread after install — dropping it
+/// would unregister the monitor.
+#[allow(dead_code)]
+struct MainThreadMonitor(Retained<AnyObject>);
+
+// SAFETY: The wrapped monitor is only installed and retained on AppKit's main
+// thread. We never call into it from other threads; the Mutex only guards the
+// Option so install races are serialized.
+unsafe impl Send for MainThreadMonitor {}
+// SAFETY: Same as `Send` — access is main-thread-only via AppKit callbacks.
+unsafe impl Sync for MainThreadMonitor {}
+
+fn publish_thumbnail_cursor_mode(mode: CursorMode) {
+    THUMBNAIL_CURSOR_MODE.store(mode as u8, Ordering::Release);
+    if cursor_mode_is_interactive(mode) {
+        ensure_thumbnail_click_cursor_monitor();
+    }
+}
+
+fn thumbnail_cursor_mode() -> CursorMode {
+    CursorMode::from_u8(THUMBNAIL_CURSOR_MODE.load(Ordering::Acquire))
+}
+
+fn apply_cursor_mode(mode: CursorMode) {
+    match mode {
+        CursorMode::Arrow => NSCursor::arrowCursor().set(),
+        CursorMode::Crosshair => NSCursor::crosshairCursor().set(),
+        CursorMode::PointingHand => NSCursor::pointingHandCursor().set(),
+        CursorMode::OpenHand => NSCursor::openHandCursor().set(),
+        CursorMode::WebView => {}
+    }
+}
+
+/// Re-apply the interactive thumbnail cursor after a click/key-window handoff.
+///
+/// Returns whether an interactive cursor was reasserted (for tests).
+fn reassert_thumbnail_cursor_after_click() -> bool {
+    if capture_overlay_owns_cursor() {
+        return false;
+    }
+    let mode = thumbnail_cursor_mode();
+    if !cursor_mode_is_interactive(mode) {
+        return false;
+    }
+    apply_cursor_mode(mode);
+    true
+}
+
+fn ensure_thumbnail_click_cursor_monitor() {
+    let Ok(mut guard) = THUMBNAIL_CLICK_CURSOR_MONITOR.lock() else {
+        return;
+    };
+    if guard.is_some() {
+        return;
+    }
+    // SAFETY: The block only reads process-local atomics and sets NSCursor on
+    // the main AppKit thread (local monitors run there). Returning the event
+    // pointer unchanged leaves delivery intact.
+    let block = RcBlock::new(|event: ptr::NonNull<NSEvent>| -> *mut NSEvent {
+        let reasserted = reassert_thumbnail_cursor_after_click();
+        if reasserted {
+            // WebKit installs the arrow while handling the click. Reassert again
+            // on the next main-queue turn so our hand wins after that handler.
+            DispatchQueue::main().exec_async(|| {
+                let _ = reassert_thumbnail_cursor_after_click();
+            });
+        }
+        event.as_ptr()
+    });
+    let monitor = unsafe {
+        NSEvent::addLocalMonitorForEventsMatchingMask_handler(
+            NSEventMask::LeftMouseDown | NSEventMask::LeftMouseUp,
+            &block,
+        )
+    };
+    *guard = monitor.map(MainThreadMonitor);
 }
 
 // The address of this byte is used as the Objective-C association key.
@@ -763,10 +870,14 @@ fn native_window(window: &WebviewWindow) -> Result<&NSWindow, &'static str> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::Ordering;
+
     use objc2_app_kit::NSEventModifierFlags;
 
     use super::{
-        CursorSurface, cursor_surface_can_apply, shortcut_modifiers_pressed,
+        CAPTURE_OVERLAY_OWNS_CURSOR, CursorMode, CursorSurface, THUMBNAIL_CURSOR_MODE,
+        cursor_mode_is_interactive, cursor_surface_can_apply,
+        reassert_thumbnail_cursor_after_click, shortcut_modifiers_pressed,
         should_reset_cursor_on_exit, window_corner_radius_for_major_version,
     };
 
@@ -807,5 +918,34 @@ mod tests {
             CursorSurface::CaptureOverlay,
             true
         ));
+    }
+
+    #[test]
+    fn interactive_cursor_modes_cover_preview_buttons_and_drag() {
+        assert!(cursor_mode_is_interactive(CursorMode::PointingHand));
+        assert!(cursor_mode_is_interactive(CursorMode::OpenHand));
+        assert!(cursor_mode_is_interactive(CursorMode::Crosshair));
+        assert!(!cursor_mode_is_interactive(CursorMode::Arrow));
+        assert!(!cursor_mode_is_interactive(CursorMode::WebView));
+    }
+
+    #[test]
+    fn click_reassert_only_runs_for_interactive_thumbnail_cursors() {
+        let previous_mode = THUMBNAIL_CURSOR_MODE.swap(CursorMode::Arrow as u8, Ordering::AcqRel);
+        let previous_overlay = CAPTURE_OVERLAY_OWNS_CURSOR.swap(false, Ordering::AcqRel);
+
+        assert!(!reassert_thumbnail_cursor_after_click());
+
+        THUMBNAIL_CURSOR_MODE.store(CursorMode::PointingHand as u8, Ordering::Release);
+        assert!(reassert_thumbnail_cursor_after_click());
+
+        THUMBNAIL_CURSOR_MODE.store(CursorMode::OpenHand as u8, Ordering::Release);
+        assert!(reassert_thumbnail_cursor_after_click());
+
+        CAPTURE_OVERLAY_OWNS_CURSOR.store(true, Ordering::Release);
+        assert!(!reassert_thumbnail_cursor_after_click());
+
+        CAPTURE_OVERLAY_OWNS_CURSOR.store(previous_overlay, Ordering::Release);
+        THUMBNAIL_CURSOR_MODE.store(previous_mode, Ordering::Release);
     }
 }

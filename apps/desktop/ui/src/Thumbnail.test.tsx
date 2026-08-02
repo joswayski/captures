@@ -111,7 +111,8 @@ describe("Thumbnail", () => {
     vi.mocked(invoke).mockClear();
 
     // Clicks reset the AppKit arrow; pointerdown must reassert without waiting
-    // for the 100ms throttle window.
+    // for a poll. Follow-up delays cover WebKit's post-click arrow and the
+    // Edit→editor key-window handoff.
     edit.dispatchEvent(new PointerEvent("pointerdown", {
       bubbles: true,
       cancelable: true,
@@ -133,6 +134,15 @@ describe("Thumbnail", () => {
       "reassert_thumbnail_cursor",
       { kind: "pointer" },
     );
+
+    // Delayed handoff ticks must keep reasserting while the editor steals focus.
+    await waitFor(() => {
+      expect(
+        vi.mocked(invoke).mock.calls.filter(
+          ([command]) => command === "reassert_thumbnail_cursor",
+        ).length,
+      ).toBeGreaterThan(1);
+    });
   });
 
   it("preserves native hover when pointer polling is briefly unavailable", async () => {
