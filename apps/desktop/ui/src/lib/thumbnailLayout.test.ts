@@ -14,6 +14,8 @@ import {
   THUMBNAIL_DISMISS_STACK_MOTION_DELAY_MS,
   THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS,
   THUMBNAIL_STACK_MOTION_DURATION_MS,
+  THUMBNAIL_STACK_SETTLE_MAX_WAIT_MS,
+  waitForThumbnailStackSettle,
   type ThumbnailStackCardMotionState,
 } from "./thumbnailLayout";
 
@@ -198,6 +200,107 @@ describe("thumbnail stack layout", () => {
     } finally {
       dispose();
       globalThis.MutationObserver = originalMutationObserver;
+      vi.useRealTimers();
+    }
+  });
+
+  it("follows a survivor transition when another exit retargets it", async () => {
+    const controlledTransition = () => {
+      let playState: AnimationPlayState = "running";
+      let resolveFinished: (animation: Animation) => void = () => undefined;
+      let rejectFinished: (reason?: unknown) => void = () => undefined;
+      const finished = new Promise<Animation>((resolve, reject) => {
+        resolveFinished = resolve;
+        rejectFinished = reject;
+      });
+      const animation = {
+        get finished() {
+          return finished;
+        },
+        get playState() {
+          return playState;
+        },
+        transitionProperty: "transform",
+      } as unknown as Animation;
+      return {
+        animation,
+        cancel: () => {
+          playState = "idle";
+          rejectFinished(new DOMException("Retargeted", "AbortError"));
+        },
+        finish: () => {
+          playState = "finished";
+          resolveFinished(animation);
+        },
+      };
+    };
+
+    const stack = document.createElement("main");
+    const survivor = document.createElement("article");
+    survivor.className = "thumbnail-card thumbnail-stack-shifting";
+    const exiting = document.createElement("article");
+    exiting.className = "thumbnail-card thumbnail-exit-dismiss thumbnail-exiting";
+    stack.append(survivor, exiting);
+    document.body.append(stack);
+    const first = controlledTransition();
+    const second = controlledTransition();
+    let active = first.animation;
+    Object.defineProperty(survivor, "getAnimations", {
+      configurable: true,
+      value: () => [active],
+    });
+
+    try {
+      let settled = false;
+      const wait = waitForThumbnailStackSettle(exiting).then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+
+      active = second.animation;
+      first.cancel();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      second.finish();
+      await wait;
+      expect(settled).toBe(true);
+    } finally {
+      stack.remove();
+    }
+  });
+
+  it("bounds the settle wait when a hidden WebView pauses transitions", async () => {
+    vi.useFakeTimers();
+    const stack = document.createElement("main");
+    const survivor = document.createElement("article");
+    survivor.className = "thumbnail-card thumbnail-stack-shifting";
+    const exiting = document.createElement("article");
+    exiting.className = "thumbnail-card thumbnail-exit-delete thumbnail-exiting";
+    stack.append(survivor, exiting);
+    document.body.append(stack);
+    const pausedTransition = {
+      finished: new Promise<Animation>(() => undefined),
+      pending: false,
+      playState: "running",
+      transitionProperty: "transform",
+    } as unknown as Animation;
+    Object.defineProperty(survivor, "getAnimations", {
+      configurable: true,
+      value: () => [pausedTransition],
+    });
+
+    try {
+      let settled = false;
+      const wait = waitForThumbnailStackSettle(exiting).then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(THUMBNAIL_STACK_SETTLE_MAX_WAIT_MS);
+      await wait;
+      expect(settled).toBe(true);
+    } finally {
+      stack.remove();
       vi.useRealTimers();
     }
   });

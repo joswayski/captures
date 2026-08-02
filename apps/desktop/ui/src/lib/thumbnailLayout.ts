@@ -29,6 +29,14 @@ export const THUMBNAIL_STACK_MOTION_DELAY_MS = THUMBNAIL_DELETE_STACK_MOTION_DEL
 export const THUMBNAIL_STACK_MOTION_DURATION_MS = 580;
 
 /**
+ * Bound any wait for a retargeted survivor transition. Two settle windows
+ * cover a delete/close overlap while still guaranteeing cleanup if a hidden
+ * WebView pauses its animations.
+ */
+export const THUMBNAIL_STACK_SETTLE_MAX_WAIT_MS =
+  THUMBNAIL_STACK_MOTION_DURATION_MS * 2 + 100;
+
+/**
  * How long a dismiss card keeps its layout slot (visual exit + stacked settle).
  * Matches the CSS `thumbnail-dismiss` animation duration.
  */
@@ -190,6 +198,77 @@ function writeStackShiftPx(card: HTMLElement, shiftPx: number, animate: boolean)
   card.classList.remove(STACK_SHIFT_INSTANT_CLASS);
   card.classList.add(STACK_SHIFTING_CLASS);
   card.style.setProperty(STACK_SHIFT_VAR, `${shiftPx}px`);
+}
+
+type StackTransition = Animation & {
+  transitionProperty?: string;
+};
+
+function activeThumbnailStackTransitions(stack: HTMLElement): Animation[] {
+  const transitions: Animation[] = [];
+  const survivors = stack.querySelectorAll<HTMLElement>(
+    ":scope > .thumbnail-card.thumbnail-stack-shifting:not(.thumbnail-exiting)",
+  );
+  for (const survivor of survivors) {
+    if (typeof survivor.getAnimations !== "function") continue;
+    let animations: Animation[];
+    try {
+      animations = survivor.getAnimations();
+    } catch {
+      continue;
+    }
+    for (const animation of animations) {
+      const transition = animation as StackTransition;
+      if (!transition.transitionProperty) continue;
+      if (!transition.pending && transition.playState !== "running") continue;
+      transitions.push(animation);
+    }
+  }
+  return transitions;
+}
+
+function waitForAnimationBatch(
+  animations: readonly Animation[],
+  timeoutMs: number,
+): Promise<void> {
+  return new Promise((resolve) => {
+    let complete = false;
+    const finish = () => {
+      if (complete) return;
+      complete = true;
+      clearTimeout(timeout);
+      resolve();
+    };
+    const timeout = setTimeout(finish, Math.max(0, timeoutMs));
+    void Promise.allSettled(animations.map((animation) => animation.finished))
+      .then(finish);
+  });
+}
+
+/**
+ * Wait until the browser has actually finished moving survivors before an
+ * exiting card releases its held flex slot. Delete and dismiss timings can
+ * overlap and retarget the same CSS transition; relying on either exit's
+ * nominal duration can otherwise remove a slot mid-transition and snap the
+ * remaining stack to its stored target.
+ */
+export async function waitForThumbnailStackSettle(
+  exitCard: HTMLElement | null,
+  maxWaitMs = THUMBNAIL_STACK_SETTLE_MAX_WAIT_MS,
+): Promise<void> {
+  const stack = exitCard?.parentElement;
+  if (!stack) return;
+  const deadline = Date.now() + Math.max(0, maxWaitMs);
+
+  while (exitCard.isConnected) {
+    const transitions = activeThumbnailStackTransitions(stack);
+    if (transitions.length === 0) return;
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) return;
+    // A transition's `finished` promise rejects when a later exit retargets
+    // it. Re-query after every batch so the replacement transition is awaited.
+    await waitForAnimationBatch(transitions, remainingMs);
+  }
 }
 
 /**
