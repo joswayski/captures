@@ -91,17 +91,31 @@ describe("Preferences", () => {
     expect(await screen.findByText("Changes saved")).toBeInTheDocument();
   });
 
-  it("persists a screenshot countdown preference", async () => {
+  it("persists custom screenshot and recording countdown preferences", async () => {
     render(<Preferences />);
 
-    const countdown = await screen.findByRole("combobox", { name: "Screenshot countdown" });
-    fireEvent.click(countdown);
-    const threeSeconds = await screen.findByRole("option", { name: "3 seconds" });
-    fireEvent.click(threeSeconds);
+    const screenshotCountdown = await screen.findByRole("combobox", {
+      name: "Screenshot countdown",
+    });
+    fireEvent.click(screenshotCountdown);
+    fireEvent.click(await screen.findByRole("option", { name: "4 seconds" }));
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("update_settings", {
-        settings: expect.objectContaining({ screenshot_countdown_seconds: 3 }),
+        settings: expect.objectContaining({ screenshot_countdown_seconds: 4 }),
+      });
+    });
+
+    const recordingCountdown = screen.getByRole("combobox", { name: "Recording countdown" });
+    fireEvent.click(recordingCountdown);
+    fireEvent.click(await screen.findByRole("option", { name: "7 seconds" }));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("update_settings", {
+        settings: expect.objectContaining({
+          screenshot_countdown_seconds: 4,
+          recording: expect.objectContaining({ countdown_seconds: 7 }),
+        }),
       });
     });
   });

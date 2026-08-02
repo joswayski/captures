@@ -195,6 +195,7 @@ pub struct ScreenshotCountdownRuntime {
     pub generation: u64,
     pub active: bool,
     pub thumbnail_capture_generation: Option<u64>,
+    pub remaining_seconds: u8,
 }
 
 pub struct AppState {

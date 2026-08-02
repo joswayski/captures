@@ -124,6 +124,7 @@ const THUMBNAIL_DELETE_FALLBACK_MS = 3_200;
 const THUMBNAIL_HIT_TEST_CHANGED_EVENT = "captures-thumbnail-hit-test-changed";
 const RECORDING_SELECTOR_REVEAL_FALLBACK_MS = 200;
 const RECORDING_COUNTDOWN_FADE_OUT_MS = 180;
+const COUNTDOWN_SECONDS = Array.from({ length: 11 }, (_, seconds) => seconds);
 
 function query(name: string): string | null {
   return new URLSearchParams(window.location.search).get(name);
@@ -1244,12 +1245,22 @@ export function ScreenshotCountdown() {
   useEffect(() => {
     let active = true;
     let unlisten: (() => void) | undefined;
-    void listen<{ remaining_seconds: number }>("screenshot-countdown", ({ payload }) => {
+    const applyRemaining = (next: number) => {
       if (!active) return;
-      setRemaining(payload.remaining_seconds);
-    }).then((dispose) => {
-      if (active) unlisten = dispose;
-      else dispose();
+      setRemaining((current) => current === null ? next : Math.min(current, next));
+    };
+    void listen<{ remaining_seconds: number }>("screenshot-countdown", ({ payload }) => {
+      applyRemaining(payload.remaining_seconds);
+    }).then(async (dispose) => {
+      if (!active) {
+        dispose();
+        return;
+      }
+      unlisten = dispose;
+      const current = await invoke<{ remaining_seconds: number } | null>(
+        "get_screenshot_countdown",
+      );
+      if (current) applyRemaining(current.remaining_seconds);
     }).catch(() => undefined);
     return () => {
       active = false;
@@ -5584,9 +5595,9 @@ export function Preferences() {
           <CustomSelect
             value={String(settings.screenshot_countdown_seconds)}
             ariaLabel="Screenshot countdown"
-            options={[0, 1, 2, 3, 5, 10].map((value) => ({
+            options={COUNTDOWN_SECONDS.map((value) => ({
               value: String(value),
-              label: value === 0 ? "Off" : `${value} seconds`,
+              label: value === 0 ? "Off" : value === 1 ? "1 second" : `${value} seconds`,
             }))}
             onChange={(value) => update("screenshot_countdown_seconds", Number(value))}
           />
@@ -5701,7 +5712,7 @@ export function Preferences() {
           <CustomSelect
             value={String(settings.recording.countdown_seconds)}
             ariaLabel="Recording countdown"
-            options={[0, 1, 2, 3, 5, 10].map((value) => ({ value: String(value), label: value === 0 ? "Off" : `${value} seconds` }))}
+            options={COUNTDOWN_SECONDS.map((value) => ({ value: String(value), label: value === 0 ? "Off" : value === 1 ? "1 second" : `${value} seconds` }))}
             onChange={(value) => updateRecording("countdown_seconds", Number(value))}
           />
         </div>
