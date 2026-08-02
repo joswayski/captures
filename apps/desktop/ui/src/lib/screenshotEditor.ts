@@ -211,9 +211,25 @@ export type EditorShapeElement = EditorElementBase & {
   shape: ShapeKind;
   endX: number;
   endY: number;
-  bend: number;
+  /**
+   * Intermediate free control points between start `(x, y)` and end `(endX, endY)`.
+   * Meaningful for arrows only (other shapes keep this empty).
+   * Empty = straight shaft; one point = quadratic curve; more = smooth multi-segment path.
+   */
+  controls: EditorPoint[];
   style: ElementStyle;
 };
+
+/** Maximum intermediate control points on a single arrow. */
+export const MAX_ARROW_CONTROLS = 4;
+
+/** Editable handle on a selected arrow (endpoints, free controls, or the default mid). */
+export type ArrowHandle =
+  | { kind: "start" }
+  | { kind: "end" }
+  | { kind: "control"; index: number }
+  /** Shown only when `controls` is empty — dragging creates the first control. */
+  | { kind: "mid" };
 
 export type EditorPathElement = EditorElementBase & {
   kind: "path";
@@ -1055,6 +1071,10 @@ export function translateElement(
       y: element.y + deltaY,
       endX: element.endX + deltaX,
       endY: element.endY + deltaY,
+      controls: element.controls.map((point) => ({
+        x: point.x + deltaX,
+        y: point.y + deltaY,
+      })),
     };
   }
   return {
@@ -1064,28 +1084,172 @@ export function translateElement(
   };
 }
 
-/** Quadratic Bezier control point for the unified straight-or-curved arrow. */
-export function arrowControlPoint(element: EditorShapeElement): EditorPoint | null {
-  if (element.shape !== "arrow") return null;
-  const deltaX = element.endX - element.x;
-  const deltaY = element.endY - element.y;
+/** Ordered vertices for an arrow: start → free controls → end. */
+export function arrowVertices(element: EditorShapeElement): EditorPoint[] {
+  return [
+    { x: element.x, y: element.y },
+    ...element.controls,
+    { x: element.endX, y: element.endY },
+  ];
+}
+
+/** Midpoint of the start→end chord (default mid handle when the arrow is straight). */
+export function arrowDefaultMidHandle(element: EditorShapeElement): EditorPoint {
   return {
-    x: (element.x + element.endX) / 2 - deltaY * element.bend,
-    y: (element.y + element.endY) / 2 + deltaX * element.bend,
+    x: (element.x + element.endX) / 2,
+    y: (element.y + element.endY) / 2,
   };
 }
 
 /**
- * Convert a dragged control-point position back into the arrow's normalized
- * bend. A bend of zero is straight; positive and negative values curve to
- * opposite sides of the arrow.
+ * Point used for the arrowhead tangent (approximate direction into the tip).
+ * For a single free control this is the quadratic control; otherwise the
+ * second-to-last vertex.
+ */
+export function arrowHeadTangentPoint(element: EditorShapeElement): EditorPoint {
+  if (element.controls.length === 1) {
+    return element.controls[0];
+  }
+  if (element.controls.length > 1) {
+    return element.controls[element.controls.length - 1];
+  }
+  return { x: element.x, y: element.y };
+}
+
+/**
+ * Sample points along the arrow shaft for hit-testing and closest-point queries.
+ * Matches the canvas stroke: straight, single quadratic, or smooth multi-segment.
+ */
+export function sampleArrowPath(
+  element: EditorShapeElement,
+  samplesPerSegment = 24,
+): EditorPoint[] {
+  const vertices = arrowVertices(element);
+  if (vertices.length < 2) return vertices;
+  const samples: EditorPoint[] = [];
+  const steps = Math.max(4, samplesPerSegment);
+
+  if (vertices.length === 2) {
+    const [p0, p1] = vertices;
+    for (let i = 0; i <= steps; i += 1) {
+      const t = i / steps;
+      samples.push({
+        x: p0.x + (p1.x - p0.x) * t,
+        y: p0.y + (p1.y - p0.y) * t,
+      });
+    }
+    return samples;
+  }
+
+  if (vertices.length === 3) {
+    const [p0, p1, p2] = vertices;
+    for (let i = 0; i <= steps; i += 1) {
+      const t = i / steps;
+      const mt = 1 - t;
+      samples.push({
+        x: mt * mt * p0.x + 2 * mt * t * p1.x + t * t * p2.x,
+        y: mt * mt * p0.y + 2 * mt * t * p1.y + t * t * p2.y,
+      });
+    }
+    return samples;
+  }
+
+  // Smooth multi-point path (same quadratic midpoint scheme as freehand paths).
+  samples.push(vertices[0]);
+  for (let index = 1; index < vertices.length - 2; index += 1) {
+    const from = samples.at(-1)!;
+    const control = vertices[index];
+    const to = {
+      x: (vertices[index].x + vertices[index + 1].x) / 2,
+      y: (vertices[index].y + vertices[index + 1].y) / 2,
+    };
+    for (let i = 1; i <= steps; i += 1) {
+      const t = i / steps;
+      const mt = 1 - t;
+      samples.push({
+        x: mt * mt * from.x + 2 * mt * t * control.x + t * t * to.x,
+        y: mt * mt * from.y + 2 * mt * t * control.y + t * t * to.y,
+      });
+    }
+  }
+  {
+    const from = samples.at(-1)!;
+    const control = vertices[vertices.length - 2];
+    const to = vertices[vertices.length - 1];
+    for (let i = 1; i <= steps; i += 1) {
+      const t = i / steps;
+      const mt = 1 - t;
+      samples.push({
+        x: mt * mt * from.x + 2 * mt * t * control.x + t * t * to.x,
+        y: mt * mt * from.y + 2 * mt * t * control.y + t * t * to.y,
+      });
+    }
+  }
+  return samples;
+}
+
+/**
+ * Closest sampled point on the arrow path and the control-array index where a
+ * new control should be inserted to land near that spot.
+ */
+export function closestPointOnArrow(
+  element: EditorShapeElement,
+  point: EditorPoint,
+  samplesPerSegment = 24,
+): { point: EditorPoint; insertIndex: number; distance: number } {
+  const samples = sampleArrowPath(element, samplesPerSegment);
+  let best = samples[0] ?? { x: element.x, y: element.y };
+  let bestDistance = Number.POSITIVE_INFINITY;
+  let bestSampleIndex = 0;
+  for (let index = 0; index < samples.length; index += 1) {
+    const sample = samples[index];
+    const distance = Math.hypot(point.x - sample.x, point.y - sample.y);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = sample;
+      bestSampleIndex = index;
+    }
+  }
+
+  // Map sample progress (0..1) onto the control insert index (0..controls.length).
+  const progress = samples.length <= 1
+    ? 0.5
+    : bestSampleIndex / (samples.length - 1);
+  const insertIndex = clamp(
+    Math.floor(progress * (element.controls.length + 1)),
+    0,
+    element.controls.length,
+  );
+
+  return {
+    point: best,
+    insertIndex,
+    distance: bestDistance,
+  };
+}
+
+/**
+ * Single-control bend amount for the Curve slider (−1…1). Zero when straight
+ * or multi-control. Positive/negative curve to opposite sides of the chord.
+ */
+export function arrowBendAmount(
+  element: EditorShapeElement,
+  maximumBend = 1,
+): number {
+  if (element.shape !== "arrow" || element.controls.length !== 1) return 0;
+  return arrowBendFromControlPoint(element, element.controls[0], maximumBend);
+}
+
+/**
+ * Convert a free point into the normalized lateral bend of a single mid control
+ * (perpendicular projection onto the start→end chord).
  */
 export function arrowBendFromControlPoint(
   element: EditorShapeElement,
   point: EditorPoint,
   maximumBend = 1,
 ): number {
-  if (element.shape !== "arrow") return element.bend;
+  if (element.shape !== "arrow") return 0;
   const deltaX = element.endX - element.x;
   const deltaY = element.endY - element.y;
   const lengthSquared = deltaX * deltaX + deltaY * deltaY;
@@ -1100,15 +1264,121 @@ export function arrowBendFromControlPoint(
   return clamp(projected, -limit, limit);
 }
 
+/** Build a single mid control from a normalized bend amount (Curve slider). */
+export function arrowControlFromBend(
+  element: EditorShapeElement,
+  bend: number,
+): EditorPoint {
+  const deltaX = element.endX - element.x;
+  const deltaY = element.endY - element.y;
+  return {
+    x: (element.x + element.endX) / 2 - deltaY * bend,
+    y: (element.y + element.endY) / 2 + deltaX * bend,
+  };
+}
+
+/**
+ * Apply Curve-slider bend: empty/one control becomes a pure perpendicular mid
+ * control; near-zero bend clears controls back to a straight arrow.
+ */
+export function arrowWithBend(
+  element: EditorShapeElement,
+  bend: number,
+): EditorShapeElement {
+  if (element.shape !== "arrow") return element;
+  if (Math.abs(bend) < 0.005) {
+    return { ...element, controls: [] };
+  }
+  return {
+    ...element,
+    controls: [arrowControlFromBend(element, bend)],
+  };
+}
+
+/** Insert a free control at `point` (capped). Returns null when at the max. */
+export function insertArrowControl(
+  element: EditorShapeElement,
+  point: EditorPoint,
+): EditorShapeElement | null {
+  if (element.shape !== "arrow") return null;
+  if (element.controls.length >= MAX_ARROW_CONTROLS) return null;
+  const { insertIndex } = closestPointOnArrow(element, point);
+  const controls = [
+    ...element.controls.slice(0, insertIndex),
+    { x: point.x, y: point.y },
+    ...element.controls.slice(insertIndex),
+  ];
+  return { ...element, controls };
+}
+
+export function removeArrowControl(
+  element: EditorShapeElement,
+  index: number,
+): EditorShapeElement {
+  if (element.shape !== "arrow") return element;
+  if (index < 0 || index >= element.controls.length) return element;
+  return {
+    ...element,
+    controls: element.controls.filter((_, i) => i !== index),
+  };
+}
+
+/**
+ * Hit-test arrow edit handles. Order: free controls → endpoints → default mid.
+ * Returns null when the pointer is not on a handle.
+ */
+export function hitTestArrowHandle(
+  element: EditorShapeElement,
+  point: EditorPoint,
+  handleRadius: number,
+): ArrowHandle | null {
+  if (element.shape !== "arrow") return null;
+  const radius = Math.max(4, handleRadius);
+
+  for (let index = 0; index < element.controls.length; index += 1) {
+    const control = element.controls[index];
+    if (Math.hypot(point.x - control.x, point.y - control.y) <= radius) {
+      return { kind: "control", index };
+    }
+  }
+
+  if (Math.hypot(point.x - element.x, point.y - element.y) <= radius) {
+    return { kind: "start" };
+  }
+  if (Math.hypot(point.x - element.endX, point.y - element.endY) <= radius) {
+    return { kind: "end" };
+  }
+
+  if (element.controls.length === 0) {
+    const mid = arrowDefaultMidHandle(element);
+    // Slightly larger hit target so the on-path mid handle is easy to grab.
+    if (Math.hypot(point.x - mid.x, point.y - mid.y) <= radius * 1.15) {
+      return { kind: "mid" };
+    }
+  }
+
+  return null;
+}
+
+/** @deprecated Prefer `hitTestArrowHandle`; kept for call sites that only need mid/control. */
 export function hitTestArrowControlPoint(
   element: EditorShapeElement,
   point: EditorPoint,
   handleRadius: number,
 ): boolean {
-  const control = arrowControlPoint(element);
-  if (!control) return false;
-  const radius = Math.max(4, handleRadius);
-  return Math.hypot(point.x - control.x, point.y - control.y) <= radius;
+  const handle = hitTestArrowHandle(element, point, handleRadius);
+  return handle?.kind === "control" || handle?.kind === "mid";
+}
+
+/**
+ * Legacy single control-point position for one free control, or the default mid
+ * when the arrow is straight. Prefer `arrowVertices` / free controls for new UI.
+ */
+export function arrowControlPoint(element: EditorShapeElement): EditorPoint | null {
+  if (element.shape !== "arrow") return null;
+  if (element.controls.length === 1) return element.controls[0];
+  if (element.controls.length === 0) return arrowDefaultMidHandle(element);
+  return null;
 }
 
 /** Corner handles drawn around a selected annotation. */
@@ -1224,6 +1494,7 @@ export function resizeElement(
       y: start.y,
       endX: end.x,
       endY: end.y,
+      controls: element.controls.map(mapPoint),
     };
   }
 
@@ -1261,19 +1532,43 @@ export function elementBounds(element: ScreenshotElement): EditorRect {
     };
   }
   if (element.kind === "shape") {
+    const strokePadding = Math.max(8, element.style.strokeWidth * 3);
+    if (element.shape === "arrow") {
+      const xs = [
+        element.x,
+        element.endX,
+        ...element.controls.map((point) => point.x),
+      ];
+      const ys = [
+        element.y,
+        element.endY,
+        ...element.controls.map((point) => point.y),
+      ];
+      // Sample the curved shaft so large bows expand the selection box.
+      for (const sample of sampleArrowPath(element, 12)) {
+        xs.push(sample.x);
+        ys.push(sample.y);
+      }
+      const left = Math.min(...xs);
+      const top = Math.min(...ys);
+      const right = Math.max(...xs);
+      const bottom = Math.max(...ys);
+      return {
+        x: left - strokePadding,
+        y: top - strokePadding,
+        width: Math.max(1, right - left) + strokePadding * 2,
+        height: Math.max(1, bottom - top) + strokePadding * 2,
+      };
+    }
     const rect = normalizeRect(
       { x: element.x, y: element.y },
       { x: element.endX, y: element.endY },
     );
-    const curvePadding = element.shape === "arrow"
-      ? Math.hypot(rect.width, rect.height) * Math.abs(element.bend)
-      : 0;
-    const strokePadding = Math.max(8, element.style.strokeWidth * 3);
     return {
-      x: rect.x - strokePadding - curvePadding,
-      y: rect.y - strokePadding - curvePadding,
-      width: Math.max(1, rect.width) + (strokePadding + curvePadding) * 2,
-      height: Math.max(1, rect.height) + (strokePadding + curvePadding) * 2,
+      x: rect.x - strokePadding,
+      y: rect.y - strokePadding,
+      width: Math.max(1, rect.width) + strokePadding * 2,
+      height: Math.max(1, rect.height) + strokePadding * 2,
     };
   }
   if (element.points.length === 0) {
