@@ -30,6 +30,7 @@ const artifact: RecordingArtifact = {
   id: "recording-1",
   kind: "video",
   path: "/Users/josevalerio/Captures/Captures_1140x692.mp4",
+  saved_path: "/Users/josevalerio/Captures/Captures_1140x692.mp4",
   media_url: "captures-capture://localhost/media/recording-1",
   poster_url: "captures-capture://localhost/poster/recording-1",
   mime_type: "video/mp4",
@@ -43,6 +44,14 @@ const artifact: RecordingArtifact = {
   created_at: "2026-07-26T16:45:01Z",
   target: { type: "display", display_id: "display-1" },
   missing: false,
+};
+
+const historyOnlyArtifact: RecordingArtifact = {
+  ...artifact,
+  id: "recording-history-only",
+  path: "/Users/josevalerio/Library/Application Support/app.captures.desktop/history/recording-history-only/media.mp4",
+  saved_path: null,
+  created_at: "2026-07-26T16:45:01.250Z",
 };
 
 const timeline: RecordingTimelinePreview = {
@@ -383,7 +392,10 @@ describe("RecordingEditor", () => {
       artifactId: artifact.id,
     });
 
+    // Reset to the original name so Make a copy can apply the -edited suffix.
+    fireEvent.change(filename, { target: { value: "Captures_1140x692" } });
     fireEvent.click(screen.getByRole("checkbox", { name: "Make a copy" }));
+    expect(filename).toHaveValue("Captures_1140x692-edited");
     expect(filename).toBeEnabled();
     expect(screen.queryByRole("button", { name: "Show in Folder" })).not.toBeInTheDocument();
     fireEvent.change(filename, { target: { value: "Demo recording" } });
@@ -398,6 +410,45 @@ describe("RecordingEditor", () => {
           overwrite_source: false,
           edit: expect.objectContaining({ trim_start_ms: 0, trim_end_ms: null }),
           export: expect.objectContaining({ format: "mp4", quality: "preserve" }),
+        }),
+      });
+    });
+  });
+
+  it("defaults history-only recordings to the Captures folder, not media.mp4 recovery paths", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/?view=recording-editor&artifact_id=recording-history-only",
+    );
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_recording_artifact") return historyOnlyArtifact;
+      if (command === "get_settings") return settings;
+      if (command === "prepare_recording_timeline_preview") return timeline;
+      if (command === "start_recording_export") return "export-1";
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<RecordingEditor />);
+
+    const filename = await screen.findByRole("textbox", { name: "Saved filename" });
+    const stem = (filename as HTMLInputElement).value;
+    expect(stem).toMatch(/^Captures_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_\d{3}$/);
+    expect(stem).not.toBe("media");
+    expect(screen.getByLabelText("Save location")).toHaveTextContent(
+      "/Users/josevalerio/Captures",
+    );
+    expect(screen.getByLabelText("Save location")).not.toHaveTextContent("history");
+    expect(screen.getByRole("checkbox", { name: "Make a copy" })).not.toBeChecked();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("start_recording_export", {
+        request: expect.objectContaining({
+          artifact_id: historyOnlyArtifact.id,
+          destination_directory: "/Users/josevalerio/Captures",
+          file_stem: stem,
+          overwrite_source: true,
         }),
       });
     });

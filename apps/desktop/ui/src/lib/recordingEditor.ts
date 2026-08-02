@@ -84,6 +84,90 @@ export function recordingFileStem(path: string): string {
   return filename.replace(/\.[^.]+$/, "") || "Captures_recording";
 }
 
+export function recordingParentDirectory(path: string): string {
+  const separator = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  if (separator < 0) return ".";
+  if (separator === 0) return path.slice(0, 1);
+  return path.slice(0, separator);
+}
+
+/** True for private Capture History recovery media (`media.mp4` / `media.gif`). */
+export function isHistoryRecoveryMediaPath(path: string): boolean {
+  const filename = path.split(/[\\/]/).at(-1)?.toLowerCase() ?? "";
+  return filename === "media.mp4"
+    || filename === "media.gif"
+    || filename === "media.webm"
+    || /^media\./.test(filename);
+}
+
+/**
+ * Match the desktop capture naming convention:
+ * `Captures_YYYY-MM-DD_HH-MM-SS_mmm` in local time.
+ */
+export function capturesTimestampStem(
+  createdAt: string,
+  now: Date = new Date(),
+): string {
+  const parsed = new Date(createdAt);
+  const value = Number.isNaN(parsed.getTime()) ? now : parsed;
+  const pad = (part: number, width = 2) => String(part).padStart(width, "0");
+  return [
+    "Captures_",
+    value.getFullYear(),
+    "-",
+    pad(value.getMonth() + 1),
+    "-",
+    pad(value.getDate()),
+    "_",
+    pad(value.getHours()),
+    "-",
+    pad(value.getMinutes()),
+    "-",
+    pad(value.getSeconds()),
+    "_",
+    pad(value.getMilliseconds(), 3),
+  ].join("");
+}
+
+/**
+ * User-facing save defaults for the recording editor.
+ * Prefer a permanent Captures-folder save; never surface private recovery
+ * media names like `media.mp4` or the history recovery directory.
+ */
+export function recordingUserFacingDefaults(options: {
+  path: string;
+  savedPath?: string | null;
+  createdAt: string;
+  outputDirectory: string;
+}): { directory: string; stem: string } {
+  const saved = options.savedPath?.trim();
+  if (saved) {
+    return {
+      directory: recordingParentDirectory(saved),
+      stem: recordingFileStem(saved),
+    };
+  }
+  // Legacy entries may still point `path` at a Captures-folder file.
+  if (options.path && !isHistoryRecoveryMediaPath(options.path)) {
+    return {
+      directory: recordingParentDirectory(options.path),
+      stem: recordingFileStem(options.path),
+    };
+  }
+  return {
+    directory: options.outputDirectory.trim() || recordingParentDirectory(options.path),
+    stem: capturesTimestampStem(options.createdAt),
+  };
+}
+
+/** Non-destructive save name, matching the photo editor's `-edited` suffix. */
+export function recordingEditedFileStem(stem: string): string {
+  const trimmed = stem.trim();
+  if (!trimmed) return "Captures_recording-edited";
+  if (trimmed.endsWith("-edited") || trimmed.endsWith("-copy")) return trimmed;
+  return `${trimmed}-edited`;
+}
+
 export function recordingFilenameError(fileStem: string): string {
   const trimmed = fileStem.trim();
   const reserved = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i;
