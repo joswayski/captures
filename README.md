@@ -73,9 +73,12 @@ All five global capture shortcuts can be changed in Preferences.
 
 In the screenshot editor, pinch on a trackpad or hold `Command`/`Ctrl` while
 scrolling to zoom around the pointer. Use `Command`/`Ctrl` + `+` or `-` to zoom
-from the keyboard, and `Command`/`Ctrl` + `0` to return to 100%. Hold `Space`,
-`Command`, or `Ctrl` while dragging to pan. Duplicate the selected layer with
-`Command`/`Ctrl` + `D`, or use `Command`/`Ctrl` + `C` and `V` to copy and paste it.
+from the keyboard, and `Command`/`Ctrl` + `0` to return to 100%. Hold `Command`
+(macOS) or `Ctrl` (Windows/Linux) while dragging anywhere on the canvas or
+viewport to pan; middle-click drag also pans. If you pan so far that the canvas
+leaves the view, a Recenter control fades in at the top of the viewport.
+Duplicate the selected layer with `Command`/`Ctrl` + `D`, or use
+`Command`/`Ctrl` + `C` and `V` to copy and paste it.
 
 ## Development
 

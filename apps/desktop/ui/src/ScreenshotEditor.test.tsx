@@ -284,34 +284,39 @@ describe("ScreenshotEditor", () => {
     expect(end.defaultPrevented).toBe(true);
   });
 
-  it("pans the viewport with Space-drag and Command/Ctrl-drag", async () => {
+  it("pans the canvas with Command/Ctrl-drag from the canvas surface", async () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
 
     const viewport = screen.getByLabelText("Screenshot editing canvas");
     const canvas = viewport.querySelector("canvas")!;
+    const surface = viewport.querySelector(".screenshot-canvas-surface") as HTMLElement;
     viewport.setPointerCapture = vi.fn();
     viewport.hasPointerCapture = vi.fn(() => true);
     viewport.releasePointerCapture = vi.fn();
-    viewport.scrollLeft = 200;
-    viewport.scrollTop = 120;
 
-    const spaceDown = new KeyboardEvent("keydown", {
-      code: "Space",
-      key: " ",
+    // Space no longer arms pan mode.
+    fireEvent.keyDown(document.body, { code: "Space", key: " " });
+    expect(viewport).not.toHaveClass("is-pan-ready");
+
+    const metaDown = new KeyboardEvent("keydown", {
+      code: "MetaLeft",
+      key: "Meta",
+      metaKey: true,
       bubbles: true,
       cancelable: true,
     });
-    fireEvent(document.body, spaceDown);
-    expect(spaceDown.defaultPrevented).toBe(true);
+    fireEvent(document.body, metaDown);
     expect(viewport).toHaveClass("is-pan-ready");
 
+    // Drag starting on the canvas (not only empty viewport chrome).
     fireEvent.pointerDown(canvas, {
       button: 0,
       buttons: 1,
       pointerId: 10,
       clientX: 400,
       clientY: 300,
+      metaKey: true,
     });
     expect(viewport).toHaveClass("is-panning");
     fireEvent.pointerMove(viewport, {
@@ -319,34 +324,122 @@ describe("ScreenshotEditor", () => {
       pointerId: 10,
       clientX: 350,
       clientY: 260,
+      metaKey: true,
     });
-    expect(viewport.scrollLeft).toBe(250);
-    expect(viewport.scrollTop).toBe(160);
-    fireEvent.pointerUp(viewport, { button: 0, pointerId: 10 });
+    expect(surface.style.transform).toBe("translate(-50px, -40px)");
+    fireEvent.pointerUp(viewport, { button: 0, pointerId: 10, metaKey: true });
     expect(viewport).not.toHaveClass("is-panning");
-    fireEvent.keyUp(document.body, { code: "Space", key: " " });
+    fireEvent.keyUp(document.body, { code: "MetaLeft", key: "Meta" });
     expect(viewport).not.toHaveClass("is-pan-ready");
 
-    viewport.scrollLeft = 90;
-    viewport.scrollTop = 70;
+    // Ctrl-drag continues panning from the current free-pan offset (Windows/Linux).
     fireEvent.pointerDown(canvas, {
       button: 0,
       buttons: 1,
       pointerId: 11,
       clientX: 300,
       clientY: 220,
-      metaKey: true,
+      ctrlKey: true,
     });
     fireEvent.pointerMove(viewport, {
       buttons: 1,
       pointerId: 11,
       clientX: 270,
       clientY: 200,
+      ctrlKey: true,
+    });
+    expect(surface.style.transform).toBe("translate(-80px, -60px)");
+    fireEvent.pointerUp(viewport, { button: 0, pointerId: 11, ctrlKey: true });
+  });
+
+  it("fades in Recenter when the canvas is off-screen and restores it", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Width");
+
+    const viewport = screen.getByLabelText("Screenshot editing canvas");
+    const canvas = viewport.querySelector("canvas")!;
+    const surface = viewport.querySelector(".screenshot-canvas-surface") as HTMLElement;
+    viewport.setPointerCapture = vi.fn();
+    viewport.hasPointerCapture = vi.fn(() => true);
+    viewport.releasePointerCapture = vi.fn();
+
+    vi.spyOn(viewport, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 800,
+      bottom: 600,
+      width: 800,
+      height: 600,
+      toJSON: () => ({}),
+    });
+    const surfaceBounds = vi.spyOn(surface, "getBoundingClientRect");
+    surfaceBounds.mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 400,
+      bottom: 300,
+      width: 400,
+      height: 300,
+      toJSON: () => ({}),
+    });
+
+    // Still mostly on-screen — no cue.
+    fireEvent.scroll(viewport);
+    expect(screen.queryByRole("button", { name: "Recenter" })).toBeNull();
+
+    // Pan far enough that the surface no longer intersects the viewport.
+    surfaceBounds.mockReturnValue({
+      x: 2_000,
+      y: 2_000,
+      top: 2_000,
+      left: 2_000,
+      right: 2_400,
+      bottom: 2_300,
+      width: 400,
+      height: 300,
+      toJSON: () => ({}),
+    });
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      buttons: 1,
+      pointerId: 20,
+      clientX: 100,
+      clientY: 100,
       metaKey: true,
     });
-    expect(viewport.scrollLeft).toBe(120);
-    expect(viewport.scrollTop).toBe(90);
-    fireEvent.pointerUp(viewport, { button: 0, pointerId: 11, metaKey: true });
+    fireEvent.pointerMove(viewport, {
+      buttons: 1,
+      pointerId: 20,
+      clientX: 100 + 2_000,
+      clientY: 100 + 2_000,
+      metaKey: true,
+    });
+    fireEvent.pointerUp(viewport, { button: 0, pointerId: 20, metaKey: true });
+
+    const recenter = await screen.findByRole("button", { name: "Recenter" });
+    expect(recenter).toHaveClass("is-visible");
+    expect(surface.style.transform).toBe("translate(2000px, 2000px)");
+
+    surfaceBounds.mockReturnValue({
+      x: 200,
+      y: 150,
+      top: 150,
+      left: 200,
+      right: 600,
+      bottom: 450,
+      width: 400,
+      height: 300,
+      toJSON: () => ({}),
+    });
+    fireEvent.click(recenter);
+    expect(surface.style.transform).toBe("translate(0px, 0px)");
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Recenter" })).toBeNull();
+    });
   });
 
   it("creates selectable formatted text directly on the canvas", async () => {
