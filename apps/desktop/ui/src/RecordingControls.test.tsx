@@ -198,6 +198,7 @@ describe("ScreenshotCountdown", () => {
       return () => undefined;
     });
     vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_screenshot_countdown") return { remaining_seconds: 3 };
       if (command === "cancel_screenshot_countdown") return undefined;
       throw new Error(`unexpected command: ${command}`);
     });
@@ -211,6 +212,7 @@ describe("ScreenshotCountdown", () => {
     render(<ScreenshotCountdown />);
 
     expect(await screen.findByText("Screenshot in")).toBeInTheDocument();
+    expect(await screen.findByText("3", { selector: "strong" })).toBeInTheDocument();
     await act(async () => {
       handlers.get("screenshot-countdown")?.({
         payload: { remaining_seconds: 3 },

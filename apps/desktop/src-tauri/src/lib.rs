@@ -187,6 +187,7 @@ pub fn run() {
             commit_window,
             cancel_capture,
             cancel_screenshot_countdown,
+            get_screenshot_countdown,
             get_active_session,
             get_pending_session,
             get_settings,
@@ -406,38 +407,6 @@ async fn start_capture_inner(
     let thumbnail_capture_generation = begin_thumbnail_capture(&state)?;
     hide_capture_huds_before_snapshot(&app).await;
 
-    let countdown_seconds = state.settings().screenshot_countdown_seconds;
-    if countdown_seconds > 0 {
-        let display = match display_under_pointer(&state) {
-            Ok(display) => display,
-            Err(error) => {
-                set_capture_huds_protected(&app, false);
-                restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
-                return Err(error);
-            }
-        };
-        match run_screenshot_countdown(
-            app.clone(),
-            state.clone(),
-            &display,
-            countdown_seconds,
-            thumbnail_capture_generation,
-        )
-        .await
-        {
-            Ok(true) => {}
-            Ok(false) => {
-                // Cancel already restored the stack and cleared HUD protection.
-                return Ok(None);
-            }
-            Err(error) => {
-                set_capture_huds_protected(&app, false);
-                restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
-                return Err(error);
-            }
-        }
-    }
-
     let result = prepare_capture(
         app.clone(),
         state.clone(),
@@ -468,6 +437,22 @@ async fn prepare_capture(
         return Err(error.into());
     }
     let display = display_under_pointer(&state)?;
+    if mode == CaptureMode::Display {
+        let countdown_seconds = state.settings().screenshot_countdown_seconds;
+        if countdown_seconds > 0
+            && !run_screenshot_countdown(
+                app.clone(),
+                state.clone(),
+                &display,
+                countdown_seconds,
+                thumbnail_capture_generation,
+            )
+            .await?
+        {
+            // Cancel already restored the stack and cleared HUD protection.
+            return Ok(None);
+        }
+    }
     let frame = state.backend.capture_display(&display.id)?;
     // The background frame is frozen now, so this capture no longer needs HUD
     // exclusion. Release it before encoding can emit a new preview and allow a
@@ -536,7 +521,7 @@ async fn commit_region(
     state: tauri::State<'_, Arc<AppState>>,
     session_id: String,
     rect: LogicalRect,
-) -> CommandResult<CaptureArtifact> {
+) -> CommandResult<Option<CaptureArtifact>> {
     hide_capture_overlay(&app);
     let state = state.inner().clone();
     let id = Uuid::parse_str(&session_id).map_err(|error| error.to_string())?;
@@ -546,16 +531,52 @@ async fn commit_region(
         .remove(&id)
         .ok_or_else(|| AppError::SessionUnavailable.to_string())?;
     let thumbnail_capture_generation = session.thumbnail_capture_generation;
-    // Map overlay/CSS DIPs onto the capture buffer. On Windows the display
-    // descriptor is physical while the overlay is logical, so do not use the
-    // native-geometry scale used for window crops.
-    let scale = session
-        .display
-        .overlay_to_buffer_scale(session.image.width(), session.image.height());
-    let physical = rect.to_physical(scale, session.image.width(), session.image.height());
-    let Some(image) = session.view(physical) else {
-        restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
-        return Err(AppError::InvalidSelection.to_string());
+    let countdown_seconds = state.settings().screenshot_countdown_seconds;
+    let image = if countdown_seconds > 0 {
+        set_capture_huds_protected(&app, true);
+        let completed = match run_screenshot_countdown(
+            app.clone(),
+            state.clone(),
+            &session.display,
+            countdown_seconds,
+            thumbnail_capture_generation,
+        )
+        .await
+        {
+            Ok(completed) => completed,
+            Err(error) => {
+                set_capture_huds_protected(&app, false);
+                restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
+                return Err(error.to_string());
+            }
+        };
+        if !completed {
+            // Cancel already restored the stack and cleared HUD protection.
+            return Ok(None);
+        }
+        let live_image = (|| -> Result<RgbaImage, AppError> {
+            let frame = state.backend.capture_display(&session.display.id)?;
+            crop_region_from_display(&frame.descriptor, &frame.image, rect)
+        })();
+        set_capture_huds_protected(&app, false);
+        match live_image {
+            Ok(image) => image,
+            Err(error) => {
+                restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
+                return Err(error.to_string());
+            }
+        }
+    } else {
+        // Map overlay/CSS DIPs onto the capture buffer. On Windows the display
+        // descriptor is physical while the overlay is logical, so do not use the
+        // native-geometry scale used for window crops.
+        match crop_region_from_display(&session.display, &session.image, rect) {
+            Ok(image) => image,
+            Err(error) => {
+                restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
+                return Err(error.to_string());
+            }
+        }
     };
 
     let result = finish_capture(
@@ -569,7 +590,7 @@ async fn commit_region(
     if result.is_err() {
         restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
     }
-    result.map_err(|error| error.to_string())
+    result.map(Some).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -578,7 +599,7 @@ async fn commit_window(
     state: tauri::State<'_, Arc<AppState>>,
     session_id: String,
     window_id: String,
-) -> CommandResult<CaptureArtifact> {
+) -> CommandResult<Option<CaptureArtifact>> {
     hide_capture_overlay(&app);
     let state = state.inner().clone();
     let id = Uuid::parse_str(&session_id).map_err(|error| error.to_string())?;
@@ -589,23 +610,70 @@ async fn commit_window(
         .ok_or_else(|| AppError::SessionUnavailable.to_string())?;
     let thumbnail_capture_generation = session.thumbnail_capture_generation;
 
-    // Prefer cropping the freeze-frame (sharp, matches what the user saw). Live
-    // CGWindow capture often returns black/empty frames for some windows on macOS.
-    let image = match crop_window_from_session(&session, &window_id) {
-        Some(image) if !image_is_effectively_blank(&image) => image,
-        _ => match state.backend.capture_window(&window_id) {
-            Ok(image) if !image_is_effectively_blank(&image) => image,
-            Ok(_) => {
+    let selected_window = match session
+        .windows
+        .iter()
+        .find(|window| window.id == window_id)
+        .cloned()
+    {
+        Some(window) => window,
+        None => {
+            restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
+            return Err(AppError::InvalidSelection.to_string());
+        }
+    };
+    let countdown_seconds = state.settings().screenshot_countdown_seconds;
+    let image = if countdown_seconds > 0 {
+        set_capture_huds_protected(&app, true);
+        let completed = match run_screenshot_countdown(
+            app.clone(),
+            state.clone(),
+            &session.display,
+            countdown_seconds,
+            thumbnail_capture_generation,
+        )
+        .await
+        {
+            Ok(completed) => completed,
+            Err(error) => {
+                set_capture_huds_protected(&app, false);
                 restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
-                return Err(
-                    "Could not capture that window (empty frame). Try Region capture.".to_owned(),
-                );
+                return Err(error.to_string());
             }
+        };
+        if !completed {
+            // Cancel already restored the stack and cleared HUD protection.
+            return Ok(None);
+        }
+        let live_image = capture_live_window(&state, &selected_window);
+        set_capture_huds_protected(&app, false);
+        match live_image {
+            Ok(image) => image,
             Err(error) => {
                 restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
                 return Err(error.to_string());
             }
-        },
+        }
+    } else {
+        // Prefer cropping the freeze-frame (sharp, matches what the user saw). Live
+        // CGWindow capture often returns black/empty frames for some windows on macOS.
+        match crop_window_from_session(&session, &window_id) {
+            Some(image) if !image_is_effectively_blank(&image) => image,
+            _ => match state.backend.capture_window(&window_id) {
+                Ok(image) if !image_is_effectively_blank(&image) => image,
+                Ok(_) => {
+                    restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
+                    return Err(
+                        "Could not capture that window (empty frame). Try Region capture."
+                            .to_owned(),
+                    );
+                }
+                Err(error) => {
+                    restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
+                    return Err(error.to_string());
+                }
+            },
+        }
     };
 
     let result = finish_capture(
@@ -619,7 +687,7 @@ async fn commit_window(
     if result.is_err() {
         restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
     }
-    result.map_err(|error| error.to_string())
+    result.map(Some).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -650,6 +718,16 @@ fn cancel_screenshot_countdown(
     Ok(())
 }
 
+#[tauri::command]
+fn get_screenshot_countdown(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Option<ScreenshotCountdownTick> {
+    let runtime = state.screenshot_countdown.lock();
+    runtime.active.then_some(ScreenshotCountdownTick {
+        remaining_seconds: runtime.remaining_seconds,
+    })
+}
+
 pub(crate) fn screenshot_countdown_is_active(state: &AppState) -> bool {
     state.screenshot_countdown.lock().active
 }
@@ -675,6 +753,7 @@ pub(crate) async fn run_screenshot_countdown(
         runtime.generation = runtime.generation.wrapping_add(1);
         runtime.active = true;
         runtime.thumbnail_capture_generation = Some(thumbnail_capture_generation);
+        runtime.remaining_seconds = seconds;
         runtime.generation
     };
 
@@ -683,14 +762,20 @@ pub(crate) async fn run_screenshot_countdown(
         if runtime.generation == generation {
             runtime.active = false;
             runtime.thumbnail_capture_generation = None;
+            runtime.remaining_seconds = 0;
         }
         return Err(error);
     }
 
     for remaining in (1..=seconds).rev() {
-        if !screenshot_countdown_is_current(&state, generation) {
-            destroy_screenshot_countdown(&app);
-            return Ok(false);
+        {
+            let mut runtime = state.screenshot_countdown.lock();
+            if !runtime.active || runtime.generation != generation {
+                drop(runtime);
+                destroy_screenshot_countdown(&app);
+                return Ok(false);
+            }
+            runtime.remaining_seconds = remaining;
         }
         let _ = app.emit(
             "screenshot-countdown",
@@ -707,6 +792,7 @@ pub(crate) async fn run_screenshot_countdown(
         if runtime.generation == generation {
             runtime.active = false;
             runtime.thumbnail_capture_generation = None;
+            runtime.remaining_seconds = 0;
         }
     }
     destroy_screenshot_countdown(&app);
@@ -730,6 +816,7 @@ pub(crate) fn cancel_screenshot_countdown_inner(app: &AppHandle, state: Arc<AppS
         }
         runtime.generation = runtime.generation.wrapping_add(1);
         runtime.active = false;
+        runtime.remaining_seconds = 0;
         runtime.thumbnail_capture_generation.take()
     };
     destroy_screenshot_countdown(app);
@@ -787,6 +874,10 @@ fn destroy_screenshot_countdown(app: &AppHandle) {
     {
         eprintln!("failed to close screenshot countdown: {error}");
     }
+    // Match recording countdowns: the full-screen timer briefly activates
+    // Captures, then returns focus before the live frame is read.
+    #[cfg(target_os = "macos")]
+    captures_macos_window::restore_frontmost_app_after_capture();
 }
 
 #[tauri::command]
@@ -3625,23 +3716,6 @@ fn resolve_asset(state: &AppState, path: &str) -> Option<Vec<u8>> {
     }
 }
 
-impl CaptureSession {
-    fn view(&self, rect: captures_capture::PhysicalRect) -> Option<RgbaImage> {
-        if rect.width == 0 || rect.height == 0 {
-            return None;
-        }
-        let right = rect.x.checked_add(rect.width)?;
-        let bottom = rect.y.checked_add(rect.height)?;
-        if right > self.image.width() || bottom > self.image.height() {
-            return None;
-        }
-        Some(
-            image::imageops::crop_imm(&self.image, rect.x, rect.y, rect.width, rect.height)
-                .to_image(),
-        )
-    }
-}
-
 /// Map native window/display geometry onto the capture buffer.
 ///
 /// Coordinates come from the capture backend in the same units as
@@ -3661,27 +3735,98 @@ fn capture_buffer_scale(display: &captures_capture::DisplayDescriptor, image: &R
     display.scale_factor.max(1.0).max(derived)
 }
 
+fn crop_region_from_display(
+    display: &captures_capture::DisplayDescriptor,
+    image: &RgbaImage,
+    rect: LogicalRect,
+) -> Result<RgbaImage, AppError> {
+    let scale = display.overlay_to_buffer_scale(image.width(), image.height());
+    let physical = rect.to_physical(scale, image.width(), image.height());
+    if physical.width == 0 || physical.height == 0 {
+        return Err(AppError::InvalidSelection);
+    }
+    Ok(image::imageops::crop_imm(
+        image,
+        physical.x,
+        physical.y,
+        physical.width,
+        physical.height,
+    )
+    .to_image())
+}
+
+fn capture_live_window(
+    state: &AppState,
+    selected_window: &captures_capture::WindowDescriptor,
+) -> Result<RgbaImage, AppError> {
+    let current_window = state
+        .windows()
+        .ok()
+        .and_then(|windows| {
+            windows
+                .into_iter()
+                .find(|window| window.id == selected_window.id)
+        })
+        .unwrap_or_else(|| selected_window.clone());
+
+    // Capture the live display first so menus, popovers, and hover states that
+    // appeared during the countdown are included inside the selected bounds.
+    if let Ok(frame) = state.backend.capture_display(&current_window.display_id)
+        && let Some(image) =
+            crop_window_from_display(&frame.descriptor, &frame.image, &current_window)
+        && !image_is_effectively_blank(&image)
+    {
+        return Ok(image);
+    }
+
+    match state.backend.capture_window(&selected_window.id) {
+        Ok(image) if !image_is_effectively_blank(&image) => Ok(image),
+        Ok(_) => Err(AppError::Task(
+            "Could not capture that window (empty frame). Try Region capture.".to_owned(),
+        )),
+        Err(error) => Err(error.into()),
+    }
+}
+
 fn crop_window_from_session(session: &CaptureSession, window_id: &str) -> Option<RgbaImage> {
     let window = session
         .windows
         .iter()
         .find(|window| window.id == window_id)?;
-    let scale = capture_buffer_scale(&session.display, &session.image);
+    crop_window_from_display(&session.display, &session.image, window)
+}
+
+fn crop_window_from_display(
+    display: &captures_capture::DisplayDescriptor,
+    image: &RgbaImage,
+    window: &captures_capture::WindowDescriptor,
+) -> Option<RgbaImage> {
+    let scale = capture_buffer_scale(display, image);
     let rect = LogicalRect {
-        x: f64::from(window.x - session.display.x),
-        y: f64::from(window.y - session.display.y),
+        x: f64::from(window.x - display.x),
+        y: f64::from(window.y - display.y),
         width: f64::from(window.width),
         height: f64::from(window.height),
     };
-    let physical = rect.to_physical(scale, session.image.width(), session.image.height());
-    let image = session.view(physical)?;
+    let physical = rect.to_physical(scale, image.width(), image.height());
+    if physical.width == 0 || physical.height == 0 {
+        return None;
+    }
+    let image = image::imageops::crop_imm(
+        image,
+        physical.x,
+        physical.y,
+        physical.width,
+        physical.height,
+    )
+    .to_image();
     #[cfg(target_os = "macos")]
     let image = {
         let mut image = image;
         mask_macos_window_corners(
             &mut image,
             window,
-            &session.display,
+            display,
             scale,
             window_visible_corner_radius(window),
         );

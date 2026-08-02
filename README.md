@@ -16,7 +16,7 @@ may contain bugs or incomplete features.
 ## Features
 
 - Capture regions, windows, or full displays.
-- Optional countdown before screenshots so you can set up menus and hover states.
+- Optional screenshot countdown after target selection so you can set up menus and hover states.
 - Record regions, windows, or full displays as H.264 video or GIF.
 - Record desktop audio and a microphone with pause, resume, restart, and mute controls.
 - Configurable countdown before recordings start.
