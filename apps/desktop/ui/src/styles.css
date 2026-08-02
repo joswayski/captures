@@ -199,7 +199,9 @@ html.capture-window-cursor, html.capture-window-cursor * { cursor: var(--capture
    user-select:none keeps click-drag from painting the blue text/image selection highlight. */
 .thumbnail-card { position: relative; isolation: isolate; overflow: visible; flex: 0 0 160px; width: 100%; height: 160px; margin-bottom: 0; background: transparent; border-radius: 12px; box-shadow: 0 8px 16px rgba(0,0,0,.34), 0 2px 5px rgba(0,0,0,.22); cursor: grab; transition: flex-basis .26s ease, height .26s ease, margin-bottom .26s ease, opacity .2s ease, transform .2s ease, filter .2s ease, box-shadow .22s ease; will-change: flex-basis, height, opacity, transform; -webkit-user-select: none; user-select: none; }
 .thumbnail-card.thumbnail-pending { flex-basis: 0; height: 0; min-height: 0; opacity: 0; pointer-events: none; transform: translateY(18px) scale(.985); }
-.thumbnail-card.thumbnail-ready { animation: thumbnail-arrive .28s cubic-bezier(.2,.8,.2,1) both; }
+/* Release arrival's transform after it finishes and stop it as soon as exit
+   starts, so survivor shifts and the exit completion animation can take over. */
+.thumbnail-card.thumbnail-ready:not(.thumbnail-exiting) { animation: thumbnail-arrive .28s cubic-bezier(.2,.8,.2,1); }
 @keyframes thumbnail-arrive { from { flex-basis: 0; height: 0; opacity: 0; transform: translateY(18px) scale(.985); } to { flex-basis: 160px; height: 160px; opacity: 1; transform: translateY(0) scale(1); } }
 .thumbnail-card.thumbnail-file-dragging { cursor: grabbing; }
 .thumbnail-card.thumbnail-file-dragging, .thumbnail-card.thumbnail-file-dragging * { cursor: grabbing !important; }
