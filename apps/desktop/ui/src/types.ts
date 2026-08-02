@@ -294,6 +294,12 @@ export interface ViewerActivationState {
   active: boolean;
 }
 
+/** Which capture artifacts still appear as layers in a given editor window. */
+export interface EditorLayerPresence {
+  editor_id: string;
+  artifact_ids: string[];
+}
+
 export interface ThumbnailPointerPosition {
   x: number;
   y: number;

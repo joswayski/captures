@@ -3,6 +3,7 @@ import {
   canvasOverflowEdges,
   closestImageSnapEdge,
   collectAlignmentSnapLines,
+  collectEditorSourceArtifactIds,
   createScreenshotDocument,
   cropDocument,
   duplicateScreenshotElement,
@@ -36,11 +37,17 @@ const editableLayer = {
   visible: true,
   opacity: 100,
   blendMode: "source-over" as const,
+  sourceArtifactId: null as string | null,
 };
 
 describe("screenshot editor geometry", () => {
   it("creates a lossless full-resolution document", () => {
-    const document = createScreenshotDocument("captures-capture://full/capture-1", 2_560, 1_440);
+    const document = createScreenshotDocument(
+      "captures-capture://full/capture-1",
+      2_560,
+      1_440,
+      "capture-1",
+    );
 
     expect(document).toMatchObject({
       width: 2_560,
@@ -49,10 +56,45 @@ describe("screenshot editor geometry", () => {
       elements: [{
         kind: "image",
         source: "background",
+        sourceArtifactId: "capture-1",
         width: 2_560,
         height: 1_440,
       }],
     });
+    expect(collectEditorSourceArtifactIds(document.elements)).toEqual(["capture-1"]);
+  });
+
+  it("collects unique source artifact ids from image layers", () => {
+    const document = createScreenshotDocument("capture.png", 100, 100, "base");
+    const imported: EditorImageElement = {
+      ...editableLayer,
+      id: "imported",
+      kind: "image",
+      source: "imported",
+      src: "blob:other",
+      name: "other.png",
+      sourceArtifactId: "other",
+      x: 0,
+      y: 0,
+      width: 50,
+      height: 50,
+      naturalWidth: 50,
+      naturalHeight: 50,
+    };
+    const orphan: EditorImageElement = {
+      ...imported,
+      id: "disk",
+      sourceArtifactId: null,
+      name: "from-disk.png",
+    };
+    const combined = {
+      ...document,
+      elements: [...document.elements, imported, orphan, { ...imported, id: "dup" }],
+    };
+    expect(collectEditorSourceArtifactIds(combined.elements)).toEqual(["base", "other"]);
+    expect(collectEditorSourceArtifactIds(
+      combined.elements.filter((element) => element.id !== "imported" && element.id !== "dup"),
+    )).toEqual(["base"]);
   });
 
   it("allows a transparent document canvas background", () => {

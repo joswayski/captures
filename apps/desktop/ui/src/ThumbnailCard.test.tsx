@@ -462,6 +462,51 @@ describe("ThumbnailCard", () => {
     expect(screen.getByRole("article")).toHaveClass("thumbnail-viewer-active");
   });
 
+  it("marks previews that still have a layer in an open editor", () => {
+    render(
+      <ThumbnailCard
+        artifact={artifact(null)}
+        clipboardCurrent={false}
+        viewerActive={false}
+        editorActive
+        onRemoved={() => undefined}
+      />,
+    );
+
+    const card = screen.getByRole("article");
+    expect(card).toHaveClass("thumbnail-editor-active");
+    expect(screen.getByText("In editor")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open editor" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("hides the in-editor chip when the capture is no longer in the editor", () => {
+    const { rerender } = render(
+      <ThumbnailCard
+        artifact={artifact(null)}
+        clipboardCurrent={false}
+        viewerActive={false}
+        editorActive
+        onRemoved={() => undefined}
+      />,
+    );
+    expect(screen.getByText("In editor")).toBeInTheDocument();
+
+    rerender(
+      <ThumbnailCard
+        artifact={artifact(null)}
+        clipboardCurrent={false}
+        viewerActive={false}
+        editorActive={false}
+        onRemoved={() => undefined}
+      />,
+    );
+    expect(screen.queryByText("In editor")).not.toBeInTheDocument();
+    expect(screen.getByRole("article")).not.toHaveClass("thumbnail-editor-active");
+  });
+
   it("deletes an unsaved preview with the dissolve animation", () => {
     render(
       <ThumbnailCard

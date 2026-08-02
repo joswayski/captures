@@ -198,6 +198,7 @@ pub fn run() {
             mark_internal_file_drop,
             should_keep_preview_after_file_drop,
             read_prepared_drag_image,
+            prepared_drag_artifact_id,
             get_capture_history,
             restore_history_artifact,
             delete_history_artifact,
@@ -1267,6 +1268,7 @@ async fn prepare_artifact_drag(
         .unwrap_or("capture.png")
         .to_owned();
     *state.prepared_artifact_drag.lock() = Some(state::PreparedArtifactDrag {
+        artifact_id,
         path: files.path.clone(),
         file_name,
     });
@@ -1323,6 +1325,19 @@ fn read_prepared_drag_image(
         return Err("the prepared drag image is no longer available".to_owned());
     }
     fs::read(&prepared.path).map_err(|error| error.to_string())
+}
+
+/// Artifact id for the staged preview drag, when the drop is from a mini preview.
+#[tauri::command]
+fn prepared_drag_artifact_id(
+    state: tauri::State<'_, Arc<AppState>>,
+    file_name: String,
+) -> Option<String> {
+    let prepared = state.prepared_artifact_drag.lock().clone()?;
+    if prepared.file_name != file_name {
+        return None;
+    }
+    Some(prepared.artifact_id)
 }
 
 /// Screen-space hit test: is `(x, y)` over any visible Captures window?

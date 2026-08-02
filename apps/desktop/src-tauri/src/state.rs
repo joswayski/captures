@@ -24,6 +24,7 @@ use crate::{
 /// Full-resolution file staged for a native OS file drag from a preview card.
 #[derive(Clone, Debug)]
 pub struct PreparedArtifactDrag {
+    pub artifact_id: String,
     pub path: PathBuf,
     pub file_name: String,
 }

@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   useCallback,
@@ -10,12 +10,14 @@ import {
   useState,
 } from "react";
 
+import { sameSortedIds } from "./lib/editorPresence";
 import { formatFileSize } from "./lib/format";
 import {
   ALIGNMENT_SNAP_SCREEN_PX,
   boundedCropRect,
   canvasOverflowEdges,
   collectAlignmentSnapLines,
+  collectEditorSourceArtifactIds,
   createScreenshotDocument,
   cropDocument,
   duplicateScreenshotElement,
@@ -55,7 +57,7 @@ import {
   type ShapeKind,
 } from "./lib/screenshotEditor";
 import { NotchedSlider, RangeSlider } from "./RangeSlider";
-import type { CaptureArtifact } from "./types";
+import type { CaptureArtifact, EditorLayerPresence } from "./types";
 
 type ExportFormat = "png" | "jpeg" | "webp";
 type ExportSize = "original" | "75" | "50" | "custom";
@@ -769,6 +771,24 @@ export function ScreenshotEditor() {
     return cached;
   }, []);
 
+  const editorPresenceId = artifactId ? `screenshot-editor-${artifactId}` : null;
+  const lastEmittedPresenceRef = useRef<string[] | null>(null);
+
+  const emitEditorPresence = useCallback((artifactIds: string[]) => {
+    if (!editorPresenceId) return;
+    if (
+      lastEmittedPresenceRef.current
+      && sameSortedIds(lastEmittedPresenceRef.current, artifactIds)
+    ) {
+      return;
+    }
+    lastEmittedPresenceRef.current = artifactIds;
+    void Promise.resolve(emit<EditorLayerPresence>("editor-layers-changed", {
+      editor_id: editorPresenceId,
+      artifact_ids: artifactIds,
+    })).catch(() => undefined);
+  }, [editorPresenceId]);
+
   useEffect(() => {
     let active = true;
     let unlisten: (() => void) | undefined;
@@ -795,6 +815,7 @@ export function ScreenshotEditor() {
         loaded.full_url,
         loaded.width,
         loaded.height,
+        loaded.id,
       );
       ensureImage(loaded.full_url);
       setArtifact(loaded);
@@ -819,6 +840,27 @@ export function ScreenshotEditor() {
       objectUrls.clear();
     };
   }, [artifactId, clearSuccess, ensureImage, replaceDocument]);
+
+  // Keep mini-previews in sync with image layers still present in this editor.
+  // Deleting a layer drops that capture; closing the window clears them all.
+  useEffect(() => {
+    if (!editorPresenceId) return;
+    const artifactIds = editorDocument
+      ? collectEditorSourceArtifactIds(editorDocument.elements)
+      : [];
+    emitEditorPresence(artifactIds);
+  }, [editorDocument, editorPresenceId, emitEditorPresence]);
+
+  useEffect(() => {
+    if (!editorPresenceId) return;
+    return () => {
+      lastEmittedPresenceRef.current = null;
+      void Promise.resolve(emit<EditorLayerPresence>("editor-layers-changed", {
+        editor_id: editorPresenceId,
+        artifact_ids: [],
+      })).catch(() => undefined);
+    };
+  }, [editorPresenceId]);
 
   const selected = useMemo(() => (
     editorDocument?.elements.find((element) => element.id === selectedId) ?? null
@@ -1565,6 +1607,9 @@ export function ScreenshotEditor() {
             fileName: file.name,
           }),
         });
+        const sourceArtifactId = await invoke<string | null>("prepared_drag_artifact_id", {
+          fileName: file.name,
+        }).catch(() => null);
         createdUrls.push(image.src);
         if (image.src.startsWith("blob:")) {
           objectUrlsRef.current.add(image.src);
@@ -1583,6 +1628,7 @@ export function ScreenshotEditor() {
           source: "imported",
           src: image.src,
           name: file.name,
+          sourceArtifactId,
           x: position.x,
           y: position.y,
           width: position.width,
