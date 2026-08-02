@@ -50,6 +50,19 @@ export type ImageDropPlacement = ImageSnapEdge | "stack";
  */
 export const IMAGE_DROP_EDGE_BAND_FRACTION = 0.22;
 
+/** Live drop-guide returned while dragging an image over the canvas. */
+export type ImageDropGuideInfo = {
+  edge: ImageDropPlacement;
+  target: EditorRect;
+  /** Document-space pointer sample used for stack plate tracking. */
+  point: EditorPoint;
+  /**
+   * Floating “drag ghost” silhouette for stack-on-top feedback. Tracks the
+   * pointer so under-light / rays follow the OS drag preview, not a fixed box.
+   */
+  plate: EditorRect;
+};
+
 type EditorElementBase = {
   id: string;
   x: number;
@@ -364,22 +377,59 @@ export function resolveImageDropTarget(
   return { x: 0, y: 0, width: document.width, height: document.height };
 }
 
+/**
+ * Size + place a compact stack plate under the drag pointer (approx OS ghost).
+ * Smaller than the target so the silhouette tracks the floating preview instead
+ * of framing the whole layer.
+ */
+export function stackDropPlateAtPoint(
+  point: EditorPoint,
+  target: EditorRect,
+): EditorRect {
+  const shortSide = Math.max(1, Math.min(target.width, target.height));
+  const width = Math.max(
+    72,
+    Math.min(shortSide * 0.32, target.width * 0.36, 260),
+  );
+  const height = Math.max(
+    54,
+    Math.min(width * 0.78, target.height * 0.36, 200),
+  );
+  const rawX = point.x - width / 2;
+  const rawY = point.y - height / 2;
+  // Allow a little overhang so the plate can sit on the pointer near edges.
+  // When the plate is larger than the target, center instead of inverting clamp.
+  const minX = target.x - width * 0.2;
+  const maxX = target.x + target.width - width * 0.8;
+  const minY = target.y - height * 0.2;
+  const maxY = target.y + target.height - height * 0.8;
+  const x = minX <= maxX
+    ? clamp(rawX, minX, maxX)
+    : target.x + (target.width - width) / 2;
+  const y = minY <= maxY
+    ? clamp(rawY, minY, maxY)
+    : target.y + (target.height - height) / 2;
+  return { x, y, width, height };
+}
+
 /** Live drop-guide for an image import at a document-space pointer position. */
 export function imageDropGuideAtPoint(
   document: Pick<ScreenshotDocument, "width" | "height" | "elements">,
   selectedId: string | null,
   point: EditorPoint,
-): { edge: ImageDropPlacement; target: EditorRect } {
+): ImageDropGuideInfo {
   const target = resolveImageDropTarget(document, selectedId);
   return {
     edge: imageDropPlacementAtPoint(point, target),
     target,
+    point,
+    plate: stackDropPlateAtPoint(point, target),
   };
 }
 
 /**
  * Position an imported image relative to a drop target: flush to an edge, or
- * centered on top of the layer when placement is `stack`.
+ * centered on the pointer when stacking on top (`stack` + optional `point`).
  */
 export function positionImportedImageAtEdge(
   naturalWidth: number,
@@ -387,18 +437,25 @@ export function positionImportedImageAtEdge(
   document: Pick<ScreenshotDocument, "width" | "height">,
   target: EditorRect,
   edge: ImageDropPlacement,
+  point?: EditorPoint,
 ): EditorRect {
+  const stackCenter = point ?? {
+    x: target.x + target.width / 2,
+    y: target.y + target.height / 2,
+  };
   const centered = positionImportedImage(
     naturalWidth,
     naturalHeight,
     document,
-    { x: target.x + target.width / 2, y: target.y + target.height / 2 },
+    edge === "stack"
+      ? stackCenter
+      : { x: target.x + target.width / 2, y: target.y + target.height / 2 },
   );
   if (edge === "stack") {
     return {
       ...centered,
-      x: Math.round(target.x + (target.width - centered.width) / 2),
-      y: Math.round(target.y + (target.height - centered.height) / 2),
+      x: Math.round(stackCenter.x - centered.width / 2),
+      y: Math.round(stackCenter.y - centered.height / 2),
     };
   }
   if (edge === "top") {
