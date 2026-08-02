@@ -27,6 +27,7 @@ const settings: AppSettings = {
   window_shortcut: "Ctrl+Shift+W",
   display_shortcut: "Ctrl+Shift+3",
   auto_copy_to_clipboard: true,
+  show_mini_previews: true,
   launch_at_login: false,
   last_screen_permission_request_id: null,
   pending_capture_after_restart: null,

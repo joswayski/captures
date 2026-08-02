@@ -5569,6 +5569,17 @@ export function Preferences() {
             <small>Turn this off to preserve existing text or other clipboard contents.</small>
           </span>
         </label>
+        <label className="check-row capture-option">
+          <input
+            type="checkbox"
+            checked={settings.show_mini_previews}
+            onChange={(event) => update("show_mini_previews", event.target.checked)}
+          />
+          <span>
+            Show mini previews after screenshots
+            <small>Turn this off to keep the quick-access preview stack hidden.</small>
+          </span>
+        </label>
         <div className="settings-select-field field-label"><span>Screenshot countdown</span>
           <CustomSelect
             value={String(settings.screenshot_countdown_seconds)}

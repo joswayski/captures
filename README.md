@@ -24,7 +24,7 @@ may contain bugs or incomplete features.
 - Edit screenshots with text, shapes, arrows, drawing, crop, resize, zoom, and image layers that snap to edges while moving or resizing (release past a canvas edge to expand it). Dropped images can snap to a layer edge or stack on top.
 - Trim, crop, resize, and adjust audio in recordings.
 - Save PNGs by default, or export as JPEG or WebP. Compress and maximum-file-size modes keep the selected format (JPEG quality slider for JPEG; stronger packing for PNG).
-- Copy, save, preview, or drag recent captures into other apps.
+- Use optional quick-access mini previews to copy, save, preview, or drag recent screenshots into other apps.
 - Take screenshots without stopping an active recording.
 - Restore recent screenshots and recordings from a 30-day Capture History.
 - Customize global shortcuts and color themes.

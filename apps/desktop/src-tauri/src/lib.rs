@@ -386,19 +386,25 @@ async fn start_capture_inner(
     // A failed overlay (image never loaded, webview stuck, etc.) leaves a session
     // behind. CaptureInProgress was silent on the shortcut path, so region mode
     // appeared completely dead until restart. Drop the stale session and retry.
-    if !state.sessions.lock().is_empty() {
+    let stale_capture_generations = {
+        let mut sessions = state.sessions.lock();
+        sessions
+            .drain()
+            .map(|(_, session)| session.thumbnail_capture_generation)
+            .collect::<Vec<_>>()
+    };
+    if !stale_capture_generations.is_empty() {
         eprintln!("clearing stuck capture session before starting {mode:?}");
-        state.sessions.lock().clear();
+        let mut visibility = state.thumbnail_visibility.lock();
+        for capture_generation in stale_capture_generations {
+            visibility.restore_capture(capture_generation);
+        }
+        drop(visibility);
         hide_capture_overlay(&app);
     }
 
-    begin_thumbnail_capture(&state)?;
-    set_capture_huds_protected(&app, true);
-    hide_window(&app, "thumbnail");
-    hide_window(&app, "startup");
-    hide_recording_saved_notices(&app);
-    updates::defer_visible_notice(&app);
-    hide_window(&app, "update");
+    let thumbnail_capture_generation = begin_thumbnail_capture(&state)?;
+    hide_capture_huds_before_snapshot(&app).await;
 
     let countdown_seconds = state.settings().screenshot_countdown_seconds;
     if countdown_seconds > 0 {
@@ -406,12 +412,18 @@ async fn start_capture_inner(
             Ok(display) => display,
             Err(error) => {
                 set_capture_huds_protected(&app, false);
-                restore_thumbnail_stack(&app, &state);
+                restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
                 return Err(error);
             }
         };
-        match run_screenshot_countdown(app.clone(), state.clone(), &display, countdown_seconds)
-            .await
+        match run_screenshot_countdown(
+            app.clone(),
+            state.clone(),
+            &display,
+            countdown_seconds,
+            thumbnail_capture_generation,
+        )
+        .await
         {
             Ok(true) => {}
             Ok(false) => {
@@ -420,18 +432,24 @@ async fn start_capture_inner(
             }
             Err(error) => {
                 set_capture_huds_protected(&app, false);
-                restore_thumbnail_stack(&app, &state);
+                restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
                 return Err(error);
             }
         }
     }
 
-    let result = prepare_capture(app.clone(), state.clone(), mode).await;
-    set_capture_huds_protected(&app, false);
+    let result = prepare_capture(
+        app.clone(),
+        state.clone(),
+        mode,
+        thumbnail_capture_generation,
+    )
+    .await;
     if result.is_err() {
+        set_capture_huds_protected(&app, false);
         state.sessions.lock().clear();
         hide_capture_overlay(&app);
-        restore_thumbnail_stack(&app, &state);
+        restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
     }
     result
 }
@@ -440,6 +458,7 @@ async fn prepare_capture(
     app: AppHandle,
     state: Arc<AppState>,
     mode: CaptureMode,
+    thumbnail_capture_generation: u64,
 ) -> Result<Option<ActiveSession>, AppError> {
     let request_permission = mark_screen_permission_request(&state)?;
     if let Err(error) = state.backend.ensure_permission(request_permission) {
@@ -450,9 +469,20 @@ async fn prepare_capture(
     }
     let display = display_under_pointer(&state)?;
     let frame = state.backend.capture_display(&display.id)?;
+    // The background frame is frozen now, so this capture no longer needs HUD
+    // exclusion. Release it before encoding can emit a new preview and allow a
+    // rapid follow-up capture to start with its own protection generation.
+    set_capture_huds_protected(&app, false);
 
     if mode == CaptureMode::Display {
-        let _ = finish_capture(&app, &state, mode, frame.image).await?;
+        let _ = finish_capture(
+            &app,
+            &state,
+            mode,
+            frame.image,
+            thumbnail_capture_generation,
+        )
+        .await?;
         return Ok(None);
     }
 
@@ -480,6 +510,7 @@ async fn prepare_capture(
     let session = CaptureSession {
         id,
         mode,
+        thumbnail_capture_generation,
         display: frame.descriptor,
         image: frame.image,
         snapshot_png,
@@ -514,6 +545,7 @@ async fn commit_region(
         .lock()
         .remove(&id)
         .ok_or_else(|| AppError::SessionUnavailable.to_string())?;
+    let thumbnail_capture_generation = session.thumbnail_capture_generation;
     // Map overlay/CSS DIPs onto the capture buffer. On Windows the display
     // descriptor is physical while the overlay is logical, so do not use the
     // native-geometry scale used for window crops.
@@ -522,13 +554,20 @@ async fn commit_region(
         .overlay_to_buffer_scale(session.image.width(), session.image.height());
     let physical = rect.to_physical(scale, session.image.width(), session.image.height());
     let Some(image) = session.view(physical) else {
-        restore_thumbnail_stack(&app, &state);
+        restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
         return Err(AppError::InvalidSelection.to_string());
     };
 
-    let result = finish_capture(&app, &state, CaptureMode::Region, image).await;
+    let result = finish_capture(
+        &app,
+        &state,
+        CaptureMode::Region,
+        image,
+        thumbnail_capture_generation,
+    )
+    .await;
     if result.is_err() {
-        restore_thumbnail_stack(&app, &state);
+        restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
     }
     result.map_err(|error| error.to_string())
 }
@@ -548,6 +587,7 @@ async fn commit_window(
         .lock()
         .remove(&id)
         .ok_or_else(|| AppError::SessionUnavailable.to_string())?;
+    let thumbnail_capture_generation = session.thumbnail_capture_generation;
 
     // Prefer cropping the freeze-frame (sharp, matches what the user saw). Live
     // CGWindow capture often returns black/empty frames for some windows on macOS.
@@ -556,21 +596,28 @@ async fn commit_window(
         _ => match state.backend.capture_window(&window_id) {
             Ok(image) if !image_is_effectively_blank(&image) => image,
             Ok(_) => {
-                restore_thumbnail_stack(&app, &state);
+                restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
                 return Err(
                     "Could not capture that window (empty frame). Try Region capture.".to_owned(),
                 );
             }
             Err(error) => {
-                restore_thumbnail_stack(&app, &state);
+                restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
                 return Err(error.to_string());
             }
         },
     };
 
-    let result = finish_capture(&app, &state, CaptureMode::Window, image).await;
+    let result = finish_capture(
+        &app,
+        &state,
+        CaptureMode::Window,
+        image,
+        thumbnail_capture_generation,
+    )
+    .await;
     if result.is_err() {
-        restore_thumbnail_stack(&app, &state);
+        restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
     }
     result.map_err(|error| error.to_string())
 }
@@ -583,8 +630,9 @@ fn cancel_capture(
 ) -> CommandResult<()> {
     hide_capture_overlay(&app);
     let id = Uuid::parse_str(&session_id).map_err(|error| error.to_string())?;
-    state.sessions.lock().remove(&id);
-    restore_thumbnail_stack(&app, state.inner());
+    if let Some(session) = state.sessions.lock().remove(&id) {
+        restore_thumbnail_capture(&app, state.inner(), session.thumbnail_capture_generation);
+    }
     Ok(())
 }
 
@@ -613,6 +661,7 @@ pub(crate) async fn run_screenshot_countdown(
     state: Arc<AppState>,
     display: &captures_capture::DisplayDescriptor,
     seconds: u8,
+    thumbnail_capture_generation: u64,
 ) -> Result<bool, AppError> {
     if seconds == 0 {
         return Ok(true);
@@ -625,6 +674,7 @@ pub(crate) async fn run_screenshot_countdown(
         }
         runtime.generation = runtime.generation.wrapping_add(1);
         runtime.active = true;
+        runtime.thumbnail_capture_generation = Some(thumbnail_capture_generation);
         runtime.generation
     };
 
@@ -632,6 +682,7 @@ pub(crate) async fn run_screenshot_countdown(
         let mut runtime = state.screenshot_countdown.lock();
         if runtime.generation == generation {
             runtime.active = false;
+            runtime.thumbnail_capture_generation = None;
         }
         return Err(error);
     }
@@ -655,6 +706,7 @@ pub(crate) async fn run_screenshot_countdown(
         let mut runtime = state.screenshot_countdown.lock();
         if runtime.generation == generation {
             runtime.active = false;
+            runtime.thumbnail_capture_generation = None;
         }
     }
     destroy_screenshot_countdown(&app);
@@ -671,17 +723,20 @@ fn screenshot_countdown_is_current(state: &AppState, generation: u64) -> bool {
 }
 
 pub(crate) fn cancel_screenshot_countdown_inner(app: &AppHandle, state: Arc<AppState>) {
-    {
+    let thumbnail_capture_generation = {
         let mut runtime = state.screenshot_countdown.lock();
         if !runtime.active {
             return;
         }
         runtime.generation = runtime.generation.wrapping_add(1);
         runtime.active = false;
-    }
+        runtime.thumbnail_capture_generation.take()
+    };
     destroy_screenshot_countdown(app);
     set_capture_huds_protected(app, false);
-    restore_thumbnail_stack(app, &state);
+    if let Some(thumbnail_capture_generation) = thumbnail_capture_generation {
+        restore_thumbnail_capture(app, &state, thumbnail_capture_generation);
+    }
 }
 
 fn show_screenshot_countdown(
@@ -1213,7 +1268,18 @@ fn update_settings(
         }
     }
     storage::save_settings(&settings).map_err(|error| error.to_string())?;
+    let mini_preview_setting_changed =
+        settings.show_mini_previews != previous_settings.show_mini_previews;
     *state.settings.write() = settings.clone();
+    if mini_preview_setting_changed {
+        if !settings.show_mini_previews {
+            state
+                .thumbnail_visibility
+                .lock()
+                .stop_waiting_for_artifact();
+        }
+        update_thumbnail_stack(&app);
+    }
     if let Err(error) = app.emit("settings-changed", &settings) {
         eprintln!("failed to broadcast updated settings: {error}");
     }
@@ -1468,7 +1534,7 @@ async fn restore_history_artifact(
 
     app.emit("capture-completed", &artifact)
         .map_err(|error| error.to_string())?;
-    restore_thumbnail_stack(&app, state.inner());
+    refresh_thumbnail_stack(&app);
     Ok(artifact)
 }
 
@@ -1827,6 +1893,7 @@ async fn finish_capture(
     state: &Arc<AppState>,
     mode: CaptureMode,
     image: RgbaImage,
+    thumbnail_capture_generation: u64,
 ) -> Result<CaptureArtifact, AppError> {
     #[cfg(target_os = "macos")]
     if let Err(error) = app.run_on_main_thread(|| {
@@ -1908,11 +1975,27 @@ async fn finish_capture(
         state.history.lock().insert(0, history_entry);
     }
     state.artifacts.lock().push(artifact.clone());
-    {
-        let mut visibility = state.thumbnail_visibility.lock();
-        visibility.wait_for_artifact(artifact.id.clone());
+    if state.settings().show_mini_previews {
+        let waiting = state
+            .thumbnail_visibility
+            .lock()
+            .wait_for_artifact(thumbnail_capture_generation, artifact.id.clone());
+        if !waiting {
+            eprintln!(
+                "capture preview {} arrived after its visibility generation was replaced",
+                artifact.id
+            );
+        }
+    } else {
+        state
+            .thumbnail_visibility
+            .lock()
+            .restore_capture(thumbnail_capture_generation);
     }
     app.emit("capture-completed", &artifact)?;
+    if !state.settings().show_mini_previews {
+        update_thumbnail_stack(app);
+    }
     if history_saved {
         app.emit("capture-history-changed", ())?;
     }
@@ -2847,13 +2930,17 @@ fn update_thumbnail_stack(app: &AppHandle) {
         let state = handle.state::<Arc<AppState>>().inner().clone();
         let count = state.artifacts.lock().len();
         let suppressed = state.thumbnail_visibility.lock().is_suppressed();
+        let show_mini_previews = state.settings().show_mini_previews;
         let Some(window) = handle.get_webview_window("thumbnail") else {
-            if let Err(error) = create_thumbnail_window(&handle, count > 0 && !suppressed) {
+            if let Err(error) = create_thumbnail_window(
+                &handle,
+                thumbnail_stack_should_be_visible(count, suppressed, show_mini_previews),
+            ) {
                 eprintln!("failed to create capture thumbnail stack: {error}");
             }
             return;
         };
-        if count == 0 || suppressed {
+        if !thumbnail_stack_should_be_visible(count, suppressed, show_mini_previews) {
             let _ = window.hide();
             return;
         }
@@ -2891,6 +2978,14 @@ fn update_thumbnail_stack(app: &AppHandle) {
             show_thumbnail_window(&window);
         }
     });
+}
+
+fn thumbnail_stack_should_be_visible(
+    count: usize,
+    suppressed: bool,
+    show_mini_previews: bool,
+) -> bool {
+    count > 0 && !suppressed && show_mini_previews
 }
 
 fn thumbnail_window_logical_height(window: &tauri::WebviewWindow) -> Option<f64> {
@@ -2937,18 +3032,35 @@ fn show_thumbnail_window(window: &tauri::WebviewWindow) {
     let _ = window.eval("window.dispatchEvent(new Event('captures-thumbnail-resumed'))");
 }
 
-fn restore_thumbnail_stack(app: &AppHandle, state: &Arc<AppState>) {
-    {
-        state.thumbnail_visibility.lock().restore();
-    }
+fn refresh_thumbnail_stack(app: &AppHandle) {
     update_thumbnail_stack(app);
 }
 
-fn begin_thumbnail_capture(state: &Arc<AppState>) -> Result<(), AppError> {
-    if !state.thumbnail_visibility.lock().begin_capture() {
-        return Err(AppError::CaptureInProgress);
+fn suppress_thumbnail_capture_ui(state: &Arc<AppState>) {
+    state.thumbnail_visibility.lock().suppress_for_capture_ui();
+}
+
+fn restore_thumbnail_capture_ui(app: &AppHandle, state: &Arc<AppState>) {
+    state.thumbnail_visibility.lock().restore_capture_ui();
+    update_thumbnail_stack(app);
+}
+
+fn restore_thumbnail_capture(app: &AppHandle, state: &Arc<AppState>, capture_generation: u64) {
+    if state
+        .thumbnail_visibility
+        .lock()
+        .restore_capture(capture_generation)
+    {
+        update_thumbnail_stack(app);
     }
-    Ok(())
+}
+
+fn begin_thumbnail_capture(state: &Arc<AppState>) -> Result<u64, AppError> {
+    state
+        .thumbnail_visibility
+        .lock()
+        .begin_capture()
+        .ok_or(AppError::CaptureInProgress)
 }
 
 #[tauri::command]
@@ -3399,6 +3511,35 @@ fn show_preferences(app: &AppHandle) {
 fn hide_window(app: &AppHandle, label: &str) {
     if let Some(window) = app.get_webview_window(label) {
         let _ = window.hide();
+    }
+}
+
+const CAPTURE_HUD_HIDE_SETTLE_MS: u64 = 40;
+
+pub(crate) async fn hide_capture_huds_before_snapshot(app: &AppHandle) {
+    set_capture_huds_protected(app, true);
+    let had_visible_hud = [
+        "thumbnail",
+        "startup",
+        "update",
+        RECORDING_SAVED_NOTICE_LABEL,
+    ]
+    .into_iter()
+    .any(|label| {
+        app.get_webview_window(label)
+            .is_some_and(|window| window.is_visible().unwrap_or(false))
+    });
+    hide_window(app, "thumbnail");
+    hide_window(app, "startup");
+    hide_recording_saved_notices(app);
+    updates::defer_visible_notice(app);
+    hide_window(app, "update");
+
+    // Native hide/content-protection calls return before every compositor has
+    // necessarily presented the new window state. Give a previously visible
+    // HUD two frames to disappear before freezing the desktop background.
+    if had_visible_hud {
+        tokio::time::sleep(std::time::Duration::from_millis(CAPTURE_HUD_HIDE_SETTLE_MS)).await;
     }
 }
 
@@ -3944,8 +4085,9 @@ mod tests {
         primary_app_window_priority, refine_window_chrome_from_snapshot,
         should_activate_capture_cursor_before_reveal, should_trigger_shortcut,
         thumbnail_cursor_action, thumbnail_geometry, thumbnail_pointer_position,
-        thumbnail_visible_window_height, track_shortcut_suppression, viewer_window_label,
-        window_is_capturable, windows_window_is_capture_overlay,
+        thumbnail_stack_should_be_visible, thumbnail_visible_window_height,
+        track_shortcut_suppression, viewer_window_label, window_is_capturable,
+        windows_window_is_capture_overlay,
     };
 
     fn bounds(
@@ -4442,6 +4584,14 @@ mod tests {
             584.0
         );
         assert_eq!(thumbnail_visible_window_height(216.0, None, true), 216.0);
+    }
+
+    #[test]
+    fn keeps_mini_previews_hidden_when_the_preference_is_disabled() {
+        assert!(thumbnail_stack_should_be_visible(1, false, true));
+        assert!(!thumbnail_stack_should_be_visible(1, true, true));
+        assert!(!thumbnail_stack_should_be_visible(1, false, false));
+        assert!(!thumbnail_stack_should_be_visible(0, false, true));
     }
 
     #[test]

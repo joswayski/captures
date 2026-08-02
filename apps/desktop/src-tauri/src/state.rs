@@ -31,23 +31,29 @@ pub struct PreparedArtifactDrag {
 
 #[derive(Default)]
 pub struct ThumbnailVisibility {
-    suppressed: bool,
+    next_capture_generation: u64,
+    suppressed_capture_generation: Option<u64>,
     pending_artifact_id: Option<String>,
+    capture_ui_suppressed: bool,
 }
 
 impl ThumbnailVisibility {
-    pub fn begin_capture(&mut self) -> bool {
-        if self.suppressed && self.pending_artifact_id.is_none() {
-            return false;
+    pub fn begin_capture(&mut self) -> Option<u64> {
+        if self.suppressed_capture_generation.is_some() && self.pending_artifact_id.is_none() {
+            return None;
         }
-        self.suppressed = true;
+        self.next_capture_generation = self.next_capture_generation.wrapping_add(1);
+        self.suppressed_capture_generation = Some(self.next_capture_generation);
         self.pending_artifact_id = None;
-        true
+        Some(self.next_capture_generation)
     }
 
-    pub fn wait_for_artifact(&mut self, artifact_id: String) {
-        self.suppressed = true;
+    pub fn wait_for_artifact(&mut self, capture_generation: u64, artifact_id: String) -> bool {
+        if self.suppressed_capture_generation != Some(capture_generation) {
+            return false;
+        }
         self.pending_artifact_id = Some(artifact_id);
+        true
     }
 
     pub fn mark_artifact_ready(&mut self, artifact_id: &str) -> bool {
@@ -55,17 +61,38 @@ impl ThumbnailVisibility {
             return false;
         }
         self.pending_artifact_id = None;
-        self.suppressed = false;
+        self.suppressed_capture_generation = None;
         true
     }
 
-    pub fn restore(&mut self) {
-        self.suppressed = false;
+    pub fn restore_capture(&mut self, capture_generation: u64) -> bool {
+        if self.suppressed_capture_generation != Some(capture_generation) {
+            return false;
+        }
+        self.suppressed_capture_generation = None;
         self.pending_artifact_id = None;
+        true
+    }
+
+    pub fn stop_waiting_for_artifact(&mut self) -> bool {
+        if self.pending_artifact_id.is_none() {
+            return false;
+        }
+        self.suppressed_capture_generation = None;
+        self.pending_artifact_id = None;
+        true
+    }
+
+    pub fn suppress_for_capture_ui(&mut self) {
+        self.capture_ui_suppressed = true;
+    }
+
+    pub fn restore_capture_ui(&mut self) {
+        self.capture_ui_suppressed = false;
     }
 
     pub fn is_suppressed(&self) -> bool {
-        self.suppressed
+        self.suppressed_capture_generation.is_some() || self.capture_ui_suppressed
     }
 }
 
@@ -167,6 +194,7 @@ impl ClipboardOwnership {
 pub struct ScreenshotCountdownRuntime {
     pub generation: u64,
     pub active: bool,
+    pub thumbnail_capture_generation: Option<u64>,
 }
 
 pub struct AppState {
@@ -256,27 +284,63 @@ mod tests {
     fn blocks_overlapping_capture_preparation() {
         let mut visibility = ThumbnailVisibility::default();
 
-        assert!(visibility.begin_capture());
-        assert!(!visibility.begin_capture());
+        let first = visibility
+            .begin_capture()
+            .expect("first capture should start");
+        assert!(visibility.begin_capture().is_none());
         assert!(visibility.is_suppressed());
 
-        visibility.restore();
+        assert!(visibility.restore_capture(first));
         assert!(!visibility.is_suppressed());
-        assert!(visibility.begin_capture());
+        assert!(visibility.begin_capture().is_some());
     }
 
     #[test]
-    fn ignores_a_stale_image_ready_event_after_the_next_capture_starts() {
+    fn ignores_stale_restore_and_image_ready_events_after_the_next_capture_starts() {
         let mut visibility = ThumbnailVisibility::default();
 
-        assert!(visibility.begin_capture());
-        visibility.wait_for_artifact("first".to_owned());
-        assert!(visibility.begin_capture());
-        visibility.wait_for_artifact("second".to_owned());
+        let first = visibility
+            .begin_capture()
+            .expect("first capture should start");
+        assert!(visibility.wait_for_artifact(first, "first".to_owned()));
+        let second = visibility
+            .begin_capture()
+            .expect("second capture should start");
+
+        assert!(!visibility.restore_capture(first));
+        assert!(visibility.is_suppressed());
+        assert!(visibility.wait_for_artifact(second, "second".to_owned()));
 
         assert!(!visibility.mark_artifact_ready("first"));
         assert!(visibility.is_suppressed());
         assert!(visibility.mark_artifact_ready("second"));
+        assert!(!visibility.is_suppressed());
+    }
+
+    #[test]
+    fn disabling_previews_releases_only_an_artifact_wait() {
+        let mut visibility = ThumbnailVisibility::default();
+
+        let capture = visibility.begin_capture().expect("capture should start");
+        assert!(!visibility.stop_waiting_for_artifact());
+        assert!(visibility.is_suppressed());
+
+        assert!(visibility.wait_for_artifact(capture, "artifact".to_owned()));
+        assert!(visibility.stop_waiting_for_artifact());
+        assert!(!visibility.is_suppressed());
+    }
+
+    #[test]
+    fn capture_ui_suppression_stays_active_across_a_screenshot_preview() {
+        let mut visibility = ThumbnailVisibility::default();
+        visibility.suppress_for_capture_ui();
+
+        let capture = visibility.begin_capture().expect("capture should start");
+        assert!(visibility.wait_for_artifact(capture, "artifact".to_owned()));
+        assert!(visibility.mark_artifact_ready("artifact"));
+        assert!(visibility.is_suppressed());
+
+        visibility.restore_capture_ui();
         assert!(!visibility.is_suppressed());
     }
 

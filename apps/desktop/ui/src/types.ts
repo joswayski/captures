@@ -62,6 +62,7 @@ export interface AppSettings {
   window_shortcut: string;
   display_shortcut: string;
   auto_copy_to_clipboard: boolean;
+  show_mini_previews: boolean;
   launch_at_login: boolean;
   last_screen_permission_request_id: string | null;
   pending_capture_after_restart: CaptureMode | null;
