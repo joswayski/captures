@@ -21,7 +21,7 @@
 - Do not overwrite, stage, or publish unrelated work already present in the checkout.
 - Assume other agents may be working in this repository concurrently. Do new work in a dedicated Git worktree, and never stash, switch, or overwrite another agent's checkout.
 - Reuse established patterns in the repository before introducing a new abstraction or dependency.
-- Treat macOS, Windows, and Linux parity as the default: implement shared behavior on every supported platform, gate platform-specific code explicitly, and document any unavoidable limitation.
+- Treat macOS, Windows, and Linux parity as the default. Prefer shared UI and logic that works on every supported platform; when a fix or feature must be platform-specific, implement or stub the equivalent path on the others (or explicitly gate with `cfg` / runtime checks), and document any unavoidable limitation in the PR and README if user-facing. Do not assume “works on my Mac” is enough—call out what was and was not verified on other platforms.
 - Keep this file concise and update it when a recurring repository convention or correction should persist across future work.
 
 ## Visual design
