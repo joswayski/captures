@@ -1796,6 +1796,24 @@ export function ScreenshotEditor() {
               }}
               aria-hidden="true"
             >
+              <div className="screenshot-drop-snap-bloom" />
+              <div className="screenshot-drop-snap-particles">
+                {DROP_SNAP_PARTICLES.map((particle) => (
+                  <i
+                    key={particle.id}
+                    className="screenshot-drop-snap-particle"
+                    style={{
+                      // Stagger along the edge, travel distance, and timing for a
+                      // continuous stream toward the drop side without JS loops.
+                      ["--snap-along" as string]: particle.along,
+                      ["--snap-travel" as string]: particle.travel,
+                      ["--snap-delay" as string]: particle.delay,
+                      ["--snap-duration" as string]: particle.duration,
+                      ["--snap-size" as string]: particle.size,
+                    }}
+                  />
+                ))}
+              </div>
               <span>{imageDropLabel(imageDropGuide.edge)}</span>
             </div>
           )}
@@ -2755,6 +2773,33 @@ function imageDropLabel(edge: ImageSnapEdge): string {
   if (edge === "left") return "Place to the left";
   return "Place below layer";
 }
+
+/** Fixed particle seeds for the image-drop edge snap stream (CSS-driven). */
+const DROP_SNAP_PARTICLES: Array<{
+  id: string;
+  /** 0–1 position along the glowing edge. */
+  along: number;
+  /** Relative travel multiplier for how far outward the particle flies. */
+  travel: number;
+  delay: string;
+  duration: string;
+  size: string;
+}> = [
+  { id: "p0", along: 0.08, travel: 0.72, delay: "0s", duration: "1.15s", size: "3px" },
+  { id: "p1", along: 0.18, travel: 1.05, delay: "0.18s", duration: "1.35s", size: "2px" },
+  { id: "p2", along: 0.28, travel: 0.88, delay: "0.42s", duration: "1.05s", size: "4px" },
+  { id: "p3", along: 0.38, travel: 1.2, delay: "0.08s", duration: "1.45s", size: "2px" },
+  { id: "p4", along: 0.48, travel: 0.95, delay: "0.55s", duration: "1.2s", size: "3px" },
+  { id: "p5", along: 0.55, travel: 0.7, delay: "0.28s", duration: "0.95s", size: "2px" },
+  { id: "p6", along: 0.62, travel: 1.12, delay: "0.7s", duration: "1.3s", size: "3px" },
+  { id: "p7", along: 0.72, travel: 0.82, delay: "0.12s", duration: "1.1s", size: "2px" },
+  { id: "p8", along: 0.8, travel: 1.28, delay: "0.48s", duration: "1.5s", size: "4px" },
+  { id: "p9", along: 0.88, travel: 0.9, delay: "0.32s", duration: "1.18s", size: "2px" },
+  { id: "p10", along: 0.94, travel: 0.78, delay: "0.62s", duration: "1.02s", size: "3px" },
+  { id: "p11", along: 0.42, travel: 1.35, delay: "0.85s", duration: "1.4s", size: "2px" },
+  { id: "p12", along: 0.15, travel: 0.65, delay: "0.95s", duration: "0.9s", size: "2px" },
+  { id: "p13", along: 0.68, travel: 1.08, delay: "1.05s", duration: "1.25s", size: "3px" },
+];
 
 function elementLayerName(element: ScreenshotElement): string {
   if (element.kind === "text") {

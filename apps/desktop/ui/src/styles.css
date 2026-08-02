@@ -1012,11 +1012,254 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 .screenshot-drop-overlay { position: fixed; z-index: 80; top: 72px; left: 50%; display: grid; min-width: 250px; padding: 10px 14px 10px 45px; border: 1px solid rgba(var(--theme-accent-rgb),.72); border-radius: 10px; color: white; background: rgba(17,18,22,.94); box-shadow: 0 12px 34px rgba(0,0,0,.42); backdrop-filter: blur(16px); pointer-events: none; transform: translateX(-50%); }
 .screenshot-drop-overlay svg { position: absolute; top: 50%; left: 13px; width: 23px; height: 23px; fill: none; stroke: var(--editing-accent); stroke-width: 1.7; transform: translateY(-50%); }
 .screenshot-drop-overlay strong { font-size: 11px; }.screenshot-drop-overlay span { margin-top: 3px; color: #aaaab0; font-size: 9px; }
-.screenshot-drop-snap-guide { position: absolute; z-index: 4; border: 1px solid rgba(var(--theme-accent-rgb),.72); border-radius: 3px; background: rgba(var(--theme-accent-rgb),.08); box-shadow: 0 0 0 1px rgba(0,0,0,.35), 0 0 18px rgba(var(--theme-accent-rgb),.2); pointer-events: none; }
-.screenshot-drop-snap-guide::after { position: absolute; border-radius: 999px; background: var(--editing-accent); box-shadow: 0 0 10px rgba(var(--theme-accent-rgb),.75); content: ""; }
-.screenshot-drop-snap-guide.edge-top::after, .screenshot-drop-snap-guide.edge-bottom::after { right: 0; left: 0; height: 4px; }.screenshot-drop-snap-guide.edge-top::after { top: -2px; }.screenshot-drop-snap-guide.edge-bottom::after { bottom: -2px; }
-.screenshot-drop-snap-guide.edge-left::after, .screenshot-drop-snap-guide.edge-right::after { top: 0; bottom: 0; width: 4px; }.screenshot-drop-snap-guide.edge-left::after { left: -2px; }.screenshot-drop-snap-guide.edge-right::after { right: -2px; }
-.screenshot-drop-snap-guide > span { position: absolute; top: 50%; left: 50%; padding: 5px 8px; border-radius: 6px; color: var(--theme-accent-ink); background: var(--editing-accent); box-shadow: 0 5px 16px rgba(0,0,0,.34); font-size: 9px; font-weight: 800; white-space: nowrap; transform: translate(-50%,-50%); }
+/* Image-drop edge snap: bright edge bar + outward bloom + particles toward the drop side. */
+.screenshot-drop-snap-guide {
+  position: absolute;
+  z-index: 4;
+  overflow: visible;
+  border: 1px solid rgba(var(--theme-accent-rgb),.78);
+  border-radius: 3px;
+  background: rgba(var(--theme-accent-rgb),.1);
+  box-shadow:
+    0 0 0 1px rgba(0,0,0,.35),
+    0 0 22px rgba(var(--theme-accent-rgb),.28),
+    inset 0 0 28px rgba(var(--theme-accent-rgb),.08);
+  pointer-events: none;
+}
+/* Solid edge bar on the active snap side. */
+.screenshot-drop-snap-guide::after {
+  position: absolute;
+  z-index: 2;
+  border-radius: 999px;
+  background: var(--editing-accent);
+  box-shadow:
+    0 0 8px rgba(var(--theme-accent-rgb),.95),
+    0 0 20px rgba(var(--theme-accent-rgb),.65),
+    0 0 36px rgba(var(--theme-accent-rgb),.4);
+  content: "";
+  animation: drop-snap-edge-pulse 1.4s ease-in-out infinite;
+}
+.screenshot-drop-snap-guide.edge-top::after,
+.screenshot-drop-snap-guide.edge-bottom::after { right: -1px; left: -1px; height: 5px; }
+.screenshot-drop-snap-guide.edge-top::after { top: -2px; }
+.screenshot-drop-snap-guide.edge-bottom::after { bottom: -2px; }
+.screenshot-drop-snap-guide.edge-left::after,
+.screenshot-drop-snap-guide.edge-right::after { top: -1px; bottom: -1px; width: 5px; }
+.screenshot-drop-snap-guide.edge-left::after { left: -2px; }
+.screenshot-drop-snap-guide.edge-right::after { right: -2px; }
+/* Soft gradient field that extends outward into where the image will land. */
+.screenshot-drop-snap-bloom {
+  position: absolute;
+  z-index: 1;
+  pointer-events: none;
+  opacity: .95;
+  filter: blur(.5px);
+  animation: drop-snap-bloom-breathe 1.6s ease-in-out infinite;
+}
+.screenshot-drop-snap-guide.edge-top .screenshot-drop-snap-bloom {
+  right: -8%;
+  bottom: 100%;
+  left: -8%;
+  height: min(96px, 42%);
+  background:
+    linear-gradient(
+      to top,
+      rgba(var(--theme-accent-rgb),.55) 0%,
+      rgba(var(--theme-accent-rgb),.22) 38%,
+      rgba(var(--theme-accent-rgb),.06) 72%,
+      transparent 100%
+    );
+  mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 88%, transparent 100%);
+}
+.screenshot-drop-snap-guide.edge-bottom .screenshot-drop-snap-bloom {
+  top: 100%;
+  right: -8%;
+  left: -8%;
+  height: min(96px, 42%);
+  background:
+    linear-gradient(
+      to bottom,
+      rgba(var(--theme-accent-rgb),.55) 0%,
+      rgba(var(--theme-accent-rgb),.22) 38%,
+      rgba(var(--theme-accent-rgb),.06) 72%,
+      transparent 100%
+    );
+  mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 88%, transparent 100%);
+}
+.screenshot-drop-snap-guide.edge-left .screenshot-drop-snap-bloom {
+  top: -8%;
+  right: 100%;
+  bottom: -8%;
+  width: min(96px, 42%);
+  background:
+    linear-gradient(
+      to left,
+      rgba(var(--theme-accent-rgb),.55) 0%,
+      rgba(var(--theme-accent-rgb),.22) 38%,
+      rgba(var(--theme-accent-rgb),.06) 72%,
+      transparent 100%
+    );
+  mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%);
+}
+.screenshot-drop-snap-guide.edge-right .screenshot-drop-snap-bloom {
+  top: -8%;
+  bottom: -8%;
+  left: 100%;
+  width: min(96px, 42%);
+  background:
+    linear-gradient(
+      to right,
+      rgba(var(--theme-accent-rgb),.55) 0%,
+      rgba(var(--theme-accent-rgb),.22) 38%,
+      rgba(var(--theme-accent-rgb),.06) 72%,
+      transparent 100%
+    );
+  mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%);
+}
+/* Particle stream extruded from the glowing edge toward the drop zone. */
+.screenshot-drop-snap-particles {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+.screenshot-drop-snap-particle {
+  position: absolute;
+  width: var(--snap-size, 3px);
+  height: var(--snap-size, 3px);
+  border-radius: 999px;
+  background: var(--editing-accent);
+  box-shadow:
+    0 0 4px rgba(var(--theme-accent-rgb),.95),
+    0 0 10px rgba(var(--theme-accent-rgb),.55);
+  opacity: 0;
+  will-change: transform, opacity;
+  animation-name: drop-snap-particle-right;
+  animation-duration: var(--snap-duration, 1.2s);
+  animation-delay: var(--snap-delay, 0s);
+  animation-timing-function: cubic-bezier(.2,.65,.25,1);
+  animation-iteration-count: infinite;
+}
+/* Seed position along the edge; travel is driven by edge-specific keyframes. */
+.screenshot-drop-snap-guide.edge-top .screenshot-drop-snap-particle {
+  left: calc(var(--snap-along, .5) * 100%);
+  top: 0;
+  animation-name: drop-snap-particle-top;
+}
+.screenshot-drop-snap-guide.edge-bottom .screenshot-drop-snap-particle {
+  left: calc(var(--snap-along, .5) * 100%);
+  bottom: 0;
+  animation-name: drop-snap-particle-bottom;
+}
+.screenshot-drop-snap-guide.edge-left .screenshot-drop-snap-particle {
+  top: calc(var(--snap-along, .5) * 100%);
+  left: 0;
+  animation-name: drop-snap-particle-left;
+}
+.screenshot-drop-snap-guide.edge-right .screenshot-drop-snap-particle {
+  top: calc(var(--snap-along, .5) * 100%);
+  right: 0;
+  animation-name: drop-snap-particle-right;
+}
+@keyframes drop-snap-edge-pulse {
+  0%, 100% {
+    opacity: 1;
+    filter: brightness(1);
+    box-shadow:
+      0 0 8px rgba(var(--theme-accent-rgb),.95),
+      0 0 20px rgba(var(--theme-accent-rgb),.65),
+      0 0 36px rgba(var(--theme-accent-rgb),.4);
+  }
+  50% {
+    opacity: .88;
+    filter: brightness(1.15);
+    box-shadow:
+      0 0 12px rgba(var(--theme-accent-rgb),1),
+      0 0 28px rgba(var(--theme-accent-rgb),.78),
+      0 0 48px rgba(var(--theme-accent-rgb),.5);
+  }
+}
+@keyframes drop-snap-bloom-breathe {
+  0%, 100% { opacity: .82; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.04); }
+}
+@keyframes drop-snap-particle-right {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, -50%, 0) scale(.55);
+  }
+  12% { opacity: 1; }
+  70% { opacity: .55; }
+  100% {
+    opacity: 0;
+    transform: translate3d(calc(var(--snap-travel, 1) * 72px), -50%, 0) scale(.2);
+  }
+}
+@keyframes drop-snap-particle-left {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, -50%, 0) scale(.55);
+  }
+  12% { opacity: 1; }
+  70% { opacity: .55; }
+  100% {
+    opacity: 0;
+    transform: translate3d(calc(var(--snap-travel, 1) * -72px), -50%, 0) scale(.2);
+  }
+}
+@keyframes drop-snap-particle-top {
+  0% {
+    opacity: 0;
+    transform: translate3d(-50%, 0, 0) scale(.55);
+  }
+  12% { opacity: 1; }
+  70% { opacity: .55; }
+  100% {
+    opacity: 0;
+    transform: translate3d(-50%, calc(var(--snap-travel, 1) * -72px), 0) scale(.2);
+  }
+}
+@keyframes drop-snap-particle-bottom {
+  0% {
+    opacity: 0;
+    transform: translate3d(-50%, 0, 0) scale(.55);
+  }
+  12% { opacity: 1; }
+  70% { opacity: .55; }
+  100% {
+    opacity: 0;
+    transform: translate3d(-50%, calc(var(--snap-travel, 1) * 72px), 0) scale(.2);
+  }
+}
+.screenshot-drop-snap-guide > span {
+  position: absolute;
+  z-index: 4;
+  top: 50%;
+  left: 50%;
+  padding: 5px 8px;
+  border-radius: 6px;
+  color: var(--theme-accent-ink);
+  background: var(--editing-accent);
+  box-shadow: 0 5px 16px rgba(0,0,0,.34), 0 0 18px rgba(var(--theme-accent-rgb),.35);
+  font-size: 9px;
+  font-weight: 800;
+  white-space: nowrap;
+  transform: translate(-50%,-50%);
+}
+@media (prefers-reduced-motion: reduce) {
+  .screenshot-drop-snap-guide::after,
+  .screenshot-drop-snap-bloom,
+  .screenshot-drop-snap-particle {
+    animation: none !important;
+  }
+  .screenshot-drop-snap-bloom { opacity: .7; }
+  .screenshot-drop-snap-particle { opacity: 0; }
+}
 /* Alignment guides while moving/resizing a selected layer (same accent language as drop snap). */
 .screenshot-align-snap-guide { position: absolute; z-index: 5; pointer-events: none; background: var(--editing-accent); box-shadow: 0 0 10px rgba(var(--theme-accent-rgb),.75); }
 .screenshot-align-snap-guide.vertical { top: 0; width: 2px; transform: translateX(-1px); }
