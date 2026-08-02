@@ -181,6 +181,17 @@ describe("ScreenshotEditor", () => {
     render(<ScreenshotEditor />);
     await screen.findAllByText("1440 × 900");
 
+    const layers = screen.getByRole("region", { name: "Layers" });
+    // One lock control on the layer row (status is the control's pressed state, not a second icon).
+    const layerLock = within(layers).getByRole("button", {
+      name: "Unlock Original screenshot",
+    });
+    expect(layerLock).toHaveAttribute("aria-pressed", "true");
+    expect(layerLock).toHaveClass("active");
+    expect(
+      within(layers).queryByRole("button", { name: "Lock Original screenshot" }),
+    ).not.toBeInTheDocument();
+
     fireEvent.click(screen.getByRole("button", { name: /Original screenshotLocked background/ }));
     expect(screen.getByRole("slider", { name: "Layer opacity" })).toHaveValue("100");
     expect(screen.getByLabelText("Blend mode")).toHaveValue("source-over");
@@ -197,6 +208,10 @@ describe("ScreenshotEditor", () => {
     expect(screen.getByRole("button", { name: "Unlocked" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Duplicate" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Delete" })).toBeEnabled();
+    expect(
+      within(layers).getByRole("button", { name: "Lock Original screenshot" }),
+    ).toHaveAttribute("aria-pressed", "false");
+    expect(within(layers).getByText("Background")).toBeInTheDocument();
   });
 
   it("can clear the solid canvas background for transparent PNG/WebP exports", async () => {
