@@ -193,16 +193,26 @@ html.capture-window-cursor, html.capture-window-cursor * { cursor: var(--capture
    A full-height column + margin-top:auto reflows the top card when the native
    window shrinks after a dismiss, which makes that card flicker. Auto height
    keeps surviving cards stable while only empty window space is cropped. */
-.thumbnail-stack { position: absolute; bottom: 0; left: 0; right: 0; display: flex; flex-direction: column; gap: 24px; width: 100%; height: auto; max-height: 100%; padding: 28px; overflow-y: auto; overflow-anchor: none; background: transparent; scrollbar-width: none; -webkit-user-select: none; user-select: none; }
+.thumbnail-stack { position: absolute; bottom: 0; left: 0; right: 0; display: flex; flex-direction: column; gap: 24px; width: 100%; height: auto; max-height: 100%; padding: 28px; overflow-y: auto; overscroll-behavior: contain; overflow-anchor: none; background: transparent; scrollbar-width: none; -webkit-user-select: none; user-select: none; }
 .thumbnail-stack::-webkit-scrollbar { display: none; }
+.thumbnail-overflow-cue { position: absolute; z-index: 12; left: 50%; display: grid; width: 46px; height: 22px; padding: 0; place-items: center; border: 1px solid rgba(255,255,255,.2); color: rgba(255,255,255,.94); background: rgba(23,24,31,.9); box-shadow: 0 7px 20px rgba(0,0,0,.46), 0 0 0 1px rgba(0,0,0,.16); backdrop-filter: blur(12px); cursor: pointer; transform: translateX(-50%); animation: thumbnail-overflow-cue-in .2s ease-out both; }
+.thumbnail-overflow-cue-older { top: 6px; border-radius: 0 0 10px 10px; box-shadow: 0 8px 22px rgba(0,0,0,.5), 0 12px 22px -13px rgba(0,0,0,.95); }
+.thumbnail-overflow-cue-newer { bottom: 6px; border-radius: 10px 10px 0 0; box-shadow: 0 -8px 22px rgba(0,0,0,.5), 0 -12px 22px -13px rgba(0,0,0,.95); }
+.thumbnail-overflow-cue:hover, .thumbnail-overflow-cue[data-native-pointer-hover="true"] { color: white; background: rgba(38,40,50,.96); transform: translateX(-50%) scale(1.05); }
+.thumbnail-overflow-cue:active { transform: translateX(-50%) scale(.95); }
+.thumbnail-overflow-cue:focus-visible { outline: 2px solid var(--theme-accent); outline-offset: 2px; }
+.thumbnail-overflow-cue svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+@keyframes thumbnail-overflow-cue-in { from { opacity: 0; transform: translateX(-50%) scale(.86); } to { opacity: 1; transform: translateX(-50%) scale(1); } }
 /* overflow:visible so preview-action tooltips are not clipped by the card edge.
    user-select:none keeps click-drag from painting the blue text/image selection highlight. */
 .thumbnail-card { position: relative; isolation: isolate; overflow: visible; flex: 0 0 160px; width: 100%; height: 160px; margin-bottom: 0; background: transparent; border-radius: 12px; box-shadow: 0 8px 16px rgba(0,0,0,.34), 0 2px 5px rgba(0,0,0,.22); cursor: grab; transition: flex-basis .26s ease, height .26s ease, margin-bottom .26s ease, opacity .2s ease, transform .2s ease, filter .2s ease, box-shadow .22s ease; will-change: flex-basis, height, opacity, transform; -webkit-user-select: none; user-select: none; }
-.thumbnail-card.thumbnail-pending { flex-basis: 0; height: 0; min-height: 0; opacity: 0; pointer-events: none; transform: translateY(18px) scale(.985); }
+/* Reserve the final slot while hidden so scroll-to-end sees the new card's
+   real height before the native window appears. Only the card itself rises in. */
+.thumbnail-card.thumbnail-pending { opacity: 0; pointer-events: none; transform: translateY(24px) scale(.975); filter: blur(3px); }
 /* Release arrival's transform after it finishes and stop it as soon as exit
    starts, so survivor shifts and the exit completion animation can take over. */
-.thumbnail-card.thumbnail-ready:not(.thumbnail-exiting) { animation: thumbnail-arrive .28s cubic-bezier(.2,.8,.2,1); }
-@keyframes thumbnail-arrive { from { flex-basis: 0; height: 0; opacity: 0; transform: translateY(18px) scale(.985); } to { flex-basis: 160px; height: 160px; opacity: 1; transform: translateY(0) scale(1); } }
+.thumbnail-card.thumbnail-ready:not(.thumbnail-exiting) { animation: thumbnail-arrive .52s cubic-bezier(.22,.65,.28,1); }
+@keyframes thumbnail-arrive { from { opacity: 0; transform: translateY(24px) scale(.975); filter: blur(3px); } to { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); } }
 .thumbnail-card.thumbnail-file-dragging { cursor: grabbing; }
 .thumbnail-card.thumbnail-file-dragging, .thumbnail-card.thumbnail-file-dragging * { cursor: grabbing !important; }
 .thumbnail-card.thumbnail-viewer-active { box-shadow: 0 8px 16px rgba(0,0,0,.34), 0 2px 5px rgba(0,0,0,.22), 0 0 0 1px rgba(var(--theme-accent-rgb),.82), 0 0 17px rgba(var(--theme-accent-rgb),.24); }
@@ -520,7 +530,7 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging img { cur
 /* Dust chip flight keyframes live in playThumbnailDustAnimations (WAAPI). */
 @keyframes thumbnail-action-pop { from { opacity: .25; transform: scale(.65); } to { opacity: 1; transform: scale(1); } }
 @media (prefers-reduced-motion: reduce) {
-  .capture-surface, .capture-shade, .capture-guidance, .window-targets, .recording-countdown, .recording-countdown-content, .thumbnail-card, .thumbnail-card::after, .thumbnail-card img, .clipboard-confirmation, .thumbnail-top-actions, .thumbnail-main-actions, .thumbnail-main-actions svg, .thumbnail-dust, .thumbnail-dust-layer { animation-duration: .01ms !important; transition-duration: .01ms; }
+  .capture-surface, .capture-shade, .capture-guidance, .window-targets, .recording-countdown, .recording-countdown-content, .thumbnail-card, .thumbnail-card::after, .thumbnail-card img, .thumbnail-overflow-cue, .clipboard-confirmation, .thumbnail-top-actions, .thumbnail-main-actions, .thumbnail-main-actions svg, .thumbnail-dust, .thumbnail-dust-layer { animation-duration: .01ms !important; transition-duration: .01ms; }
   .thumbnail-card.thumbnail-exit-dismiss img { animation: none; filter: blur(2px) brightness(.56); transform: scale(1.015); }
   .thumbnail-dust { opacity: 0; }
 }

@@ -224,6 +224,36 @@ describe("Thumbnail", () => {
     }
   });
 
+  it("shows scroll cues for clipped previews and moves one card per click", async () => {
+    render(<Thumbnail />);
+    await screen.findByRole("article");
+    const stack = document.querySelector<HTMLElement>(".thumbnail-stack")!;
+    Object.defineProperties(stack, {
+      clientHeight: { configurable: true, value: 400 },
+      scrollHeight: { configurable: true, value: 1_000 },
+    });
+    stack.scrollTop = 600;
+
+    fireEvent.scroll(stack);
+
+    const older = await screen.findByRole("button", { name: "Show older captures" });
+    expect(screen.queryByRole("button", { name: "Show newer captures" })).toBeNull();
+    const scrollTo = vi.fn();
+    Object.defineProperty(stack, "scrollTo", {
+      configurable: true,
+      value: scrollTo,
+    });
+
+    fireEvent.click(older);
+
+    expect(scrollTo).toHaveBeenCalledWith({ top: 416, behavior: "smooth" });
+
+    stack.scrollTop = 300;
+    fireEvent.scroll(stack);
+    expect(await screen.findByRole("button", { name: "Show newer captures" }))
+      .toBeInTheDocument();
+  });
+
   it("keeps other previews interactive while a deleted slot passes clicks through", async () => {
     let pointerReady = false;
     let pointerTarget: Element | null = null;

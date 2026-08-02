@@ -97,10 +97,11 @@ export function thumbnailCssCursor(kind: ThumbnailCursorKind): string {
 }
 
 /**
- * Keep the native window interactive only over a live preview card. After a
- * dismiss it may stay tall (shrinking blanks WKWebView), and a deleting card
- * keeps its layout slot while its particles finish. Empty space and exiting
- * slots must pass clicks through without disabling the remaining cards.
+ * Keep the native window interactive only over a live preview card or stack
+ * overflow control. After a dismiss it may stay tall (shrinking blanks
+ * WKWebView), and a deleting card keeps its layout slot while its particles
+ * finish. Empty space and exiting slots must pass clicks through without
+ * disabling the remaining cards.
  */
 export function shouldIgnoreThumbnailCursorEvents(
   position: ThumbnailPointerPosition,
@@ -109,6 +110,7 @@ export function shouldIgnoreThumbnailCursorEvents(
   if (!position.inside) return false;
   const target = root.elementFromPoint(position.x, position.y);
   if (!target) return true;
+  if (target.closest(".thumbnail-overflow-cue")) return false;
   const card = target.closest(".thumbnail-card");
   return !card || card.classList.contains("thumbnail-exiting");
 }
@@ -167,6 +169,26 @@ export function applyThumbnailNativeHover(
   );
   const currentCard = root.querySelector<HTMLElement>(THUMBNAIL_NATIVE_ACTIVE_SELECTOR);
   const directTarget = root.elementFromPoint(position.x, position.y);
+  const directOverflowCue = directTarget?.closest(".thumbnail-overflow-cue");
+  const overflowCue = directOverflowCue
+    ?? (
+      currentButton?.classList.contains("thumbnail-overflow-cue")
+      && containsPoint(currentButton, position.x, position.y)
+        ? currentButton
+        : null
+    );
+  if (overflowCue) {
+    root.querySelectorAll(THUMBNAIL_NATIVE_ACTIVE_SELECTOR)
+      .forEach((element) => element.removeAttribute(THUMBNAIL_NATIVE_ACTIVE_ATTRIBUTE));
+    root.querySelectorAll(THUMBNAIL_NATIVE_POINTER_HOVER_SELECTOR)
+      .forEach((element) => {
+        if (element !== overflowCue) {
+          element.removeAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE);
+        }
+      });
+    overflowCue.setAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE, "true");
+    return "pointer";
+  }
   const card = directTarget?.closest(".thumbnail-card")
     ?? (
       currentCard && containsPoint(currentCard, position.x, position.y)

@@ -162,6 +162,27 @@ describe("applyThumbnailNativeHover", () => {
     expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe("pointer");
   });
 
+  it("keeps overflow cues clickable without activating a preview card", () => {
+    document.body.innerHTML = `
+      <button class="thumbnail-overflow-cue">Older captures</button>
+      <article class="thumbnail-card" data-thumbnail-native-active="true">
+        <button>Copy</button>
+      </article>
+    `;
+    const overflowCue = document.querySelector<HTMLButtonElement>(
+      ".thumbnail-overflow-cue",
+    )!;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => overflowCue),
+    });
+
+    expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe("pointer");
+    expectNativePointerHover(overflowCue, true);
+    expect(document.querySelector(".thumbnail-card"))
+      .not.toHaveAttribute("data-thumbnail-native-active");
+  });
+
   it("moves hover directly to a remaining card after the stack changes", () => {
     document.body.innerHTML = `
       <article id="removed" class="thumbnail-card"><button>Delete</button></article>
@@ -207,6 +228,7 @@ describe("shouldIgnoreThumbnailCursorEvents", () => {
   it("keeps live cards interactive and passes through empty or exiting regions", () => {
     document.body.innerHTML = `
       <main class="thumbnail-stack">
+        <button class="thumbnail-overflow-cue">Older captures</button>
         <article id="live" class="thumbnail-card"><button>Copy</button></article>
         <article id="exiting" class="thumbnail-card thumbnail-exiting">
           <button>Delete</button>
@@ -214,6 +236,7 @@ describe("shouldIgnoreThumbnailCursorEvents", () => {
       </main>
     `;
     const stack = document.querySelector(".thumbnail-stack")!;
+    const overflowCue = document.querySelector(".thumbnail-overflow-cue")!;
     const live = document.querySelector("#live")!;
     const exiting = document.querySelector("#exiting")!;
     Object.defineProperty(document, "elementFromPoint", {
@@ -233,6 +256,12 @@ describe("shouldIgnoreThumbnailCursorEvents", () => {
       value: vi.fn(() => stack),
     });
     expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: true })).toBe(true);
+
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => overflowCue),
+    });
+    expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: true })).toBe(false);
     expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: false })).toBe(false);
   });
 });
