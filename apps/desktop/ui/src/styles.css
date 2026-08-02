@@ -944,6 +944,20 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging img { cur
 .screenshot-editor { display: grid; width: 100%; height: 100%; min-width: 860px; min-height: 600px; grid-template: 54px minmax(0,1fr) minmax(154px,auto) / 70px minmax(0,1fr) 310px; overflow: hidden; color: #f2f2f1; background: #151619; -webkit-user-select: none; user-select: none; }
 .screenshot-editor-loading { min-width: 0; min-height: 100%; place-items: center; color: #a7a8ad; }
 .screenshot-editor button, .screenshot-editor input, .screenshot-editor select, .screenshot-editor textarea { font: inherit; }
+/* Explicit pointer so tool/layer/export controls stay clickable-looking even when a
+   parent sets grab/default (layer rows) or WebView inherits an unexpected cursor. */
+.screenshot-editor button:not(:disabled),
+.screenshot-editor select:not(:disabled),
+.screenshot-editor summary,
+.screenshot-editor label.screenshot-check-row,
+.screenshot-editor .screenshot-custom-color,
+.screenshot-editor .screenshot-make-copy:not(:has(input:disabled)) {
+  cursor: pointer;
+}
+.screenshot-editor button:disabled,
+.screenshot-editor select:disabled {
+  cursor: default;
+}
 .screenshot-editor input, .screenshot-editor textarea { -webkit-user-select: text; user-select: text; }
 .screenshot-editor-header { z-index: 10; display: flex; grid-column: 1 / -1; padding: 0 14px 0 18px; align-items: center; justify-content: space-between; gap: 18px; border-bottom: 1px solid #34353a; background: #202126; box-shadow: 0 4px 14px rgba(0,0,0,.2); }
 .screenshot-editor-header > div { display: flex; min-width: 0; align-items: baseline; gap: 10px; }
