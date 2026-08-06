@@ -71,3 +71,22 @@ Windows builds produce an NSIS installer, MSI package, and unpackaged executable
 - macOS recording uses ScreenCaptureKit and VideoToolbox.
 - Windows and Linux recording use `xcap` and OpenH264.
 - Bundled FFmpeg sidecars handle media synchronization, editing, and GIF conversion.
+
+## Feedback API
+
+Early user feedback is posted to Discord by a small Rust service under `apps/api`
+(no database). Create a channel webhook in Discord, then:
+
+```sh
+export DISCORD_WEBHOOK_URL='https://discord.com/api/webhooks/...'
+cargo run -p captures-api
+```
+
+Point a local desktop build at that service:
+
+```sh
+export CAPTURES_FEEDBACK_URL=http://127.0.0.1:8080/api/feedback
+npm run dev
+```
+
+Packaged builds default to `https://api.captur.es/api/feedback`. Docker notes live in [apps/api/README.md](apps/api/README.md).

@@ -33,6 +33,7 @@ Preview builds update after every successful merge to `main` and may contain bug
 - Take screenshots without stopping an active recording.
 - Restore recent screenshots and recordings from a 30-day Capture History.
 - Customize global shortcuts and color themes.
+- Send optional product feedback from the app (tray menu, Preferences, or shortcut). Feedback includes your message, optional contact handle, category, and app/system details only — never your screenshots or recordings. Submissions go to the Captures feedback service (not stored as captures on your machine).
 
 ## Wishlist
 
@@ -72,9 +73,10 @@ Captures is ready for launch.
 | `Ctrl+Shift+W` | Capture a window |
 | `Ctrl+Shift+3` | Capture the display under the pointer |
 | `Ctrl+Shift+5` | Record the screen, then save video or GIF |
+| `Ctrl+Shift+F` | Open Send Feedback |
 | `Esc` | Cancel an active capture, screenshot countdown, or recording countdown |
 
-All five global capture shortcuts can be changed in Preferences.
+Global capture and feedback shortcuts can be changed in Preferences.
 
 In the screenshot editor, pinch on a trackpad or hold `Command`/`Ctrl` while
 scrolling to zoom around the pointer. Use `Command`/`Ctrl` + `+` or `-` to zoom
