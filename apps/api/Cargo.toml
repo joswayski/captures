@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "HTTP API for Captures (feedback and future hosted services)"
+description = "HTTP API for Captures (feedback delivery and future hosted services)"
 
 [[bin]]
 name = "captures-api"
@@ -12,16 +12,10 @@ path = "src/main.rs"
 
 [dependencies]
 axum = { version = "0.8", features = ["macros"] }
-chrono = { workspace = true }
 parking_lot = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sqlx = { version = "0.8", default-features = false, features = [
-    "runtime-tokio",
-    "postgres",
-    "chrono",
-    "tls-rustls-ring",
-] }
 thiserror = { workspace = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "net"] }
 tower-http = { version = "0.6", features = ["cors", "trace", "limit"] }

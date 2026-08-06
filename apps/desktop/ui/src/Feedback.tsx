@@ -11,7 +11,7 @@ export interface FeedbackContext {
 }
 
 export interface FeedbackSubmitResult {
-  id: number;
+  ok: boolean;
 }
 
 const CATEGORIES: Array<{ id: FeedbackCategory; label: string; description: string }> = [
@@ -32,7 +32,6 @@ export function Feedback() {
   const [contact, setContact] = useState("");
   const [status, setStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
   const [error, setError] = useState("");
-  const [submittedId, setSubmittedId] = useState<number | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -65,14 +64,13 @@ export function Feedback() {
     setStatus("sending");
     setError("");
     try {
-      const result = await invoke<FeedbackSubmitResult>("submit_feedback", {
+      await invoke<FeedbackSubmitResult>("submit_feedback", {
         draft: {
           message: message.trim(),
           contact: contact.trim() || null,
           category,
         },
       });
-      setSubmittedId(result.id);
       setStatus("sent");
       setMessage("");
     } catch (submitError) {
@@ -173,7 +171,7 @@ export function Feedback() {
       )}
       {status === "sent" && (
         <p className="feedback-status feedback-status-ok" role="status">
-          Thanks — feedback received{submittedId != null ? ` (#${submittedId})` : ""}.
+          Thanks — feedback sent.
         </p>
       )}
 

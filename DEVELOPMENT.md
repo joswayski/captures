@@ -74,10 +74,11 @@ Windows builds produce an NSIS installer, MSI package, and unpackaged executable
 
 ## Feedback API
 
-Early user feedback is collected by a small Rust service under `apps/api`.
+Early user feedback is posted to Discord by a small Rust service under `apps/api`
+(no database). Create a channel webhook in Discord, then:
 
 ```sh
-export DATABASE_URL=postgres://postgres:postgres@localhost:5432/captures
+export DISCORD_WEBHOOK_URL='https://discord.com/api/webhooks/...'
 cargo run -p captures-api
 ```
 

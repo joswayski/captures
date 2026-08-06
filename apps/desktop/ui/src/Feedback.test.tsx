@@ -24,7 +24,7 @@ describe("Feedback", () => {
           .draft;
         expect(draft.category).toBe("bug");
         expect(draft.message).toContain("freeze");
-        return { id: 42 };
+        return { ok: true };
       }
       throw new Error(`unexpected command: ${command}`);
     });
@@ -65,6 +65,6 @@ describe("Feedback", () => {
         },
       });
     });
-    expect(await screen.findByText(/feedback received \(#42\)/i)).toBeInTheDocument();
+    expect(await screen.findByText(/feedback sent/i)).toBeInTheDocument();
   });
 });

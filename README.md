@@ -28,7 +28,7 @@ may contain bugs or incomplete features.
 - Take screenshots without stopping an active recording.
 - Restore recent screenshots and recordings from a 30-day Capture History.
 - Customize global shortcuts and color themes.
-- Send optional product feedback from the app (tray menu, Preferences, or shortcut). Feedback includes your message, optional contact handle, category, and app/system details only — never your screenshots or recordings.
+- Send optional product feedback from the app (tray menu, Preferences, or shortcut). Feedback includes your message, optional contact handle, category, and app/system details only — never your screenshots or recordings. Submissions go to the Captures feedback service (not stored as captures on your machine).
 
 ## Wishlist
 

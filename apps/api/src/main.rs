@@ -9,9 +9,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::{PgPool, postgres::PgPoolOptions};
 use tower_http::{
     cors::{Any, CorsLayer},
     limit::RequestBodyLimitLayer,
@@ -24,17 +22,21 @@ const MAX_MESSAGE_LEN: usize = 8_000;
 const MAX_CONTACT_LEN: usize = 200;
 const MAX_META_LEN: usize = 128;
 const MAX_BODY_BYTES: usize = 32 * 1024;
-/// One accepted submission per client key per minute.
+/// Discord embed description limit.
+const DISCORD_DESCRIPTION_MAX: usize = 4_000;
+/// One accepted submission per client IP per minute (in-memory; fine for a single pod).
 const RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60);
+const DISCORD_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone)]
 struct AppState {
-    pool: PgPool,
+    discord_webhook_url: String,
+    http: reqwest::Client,
     rate_limiter: Arc<parking_lot::Mutex<RateLimiter>>,
 }
 
 struct RateLimiter {
-    /// Last accepted submission time per client key (IP / forwarded-for).
+    /// Last accepted submission time per client key (IP / X-Forwarded-For).
     last_accepted: std::collections::HashMap<String, std::time::Instant>,
 }
 
@@ -103,8 +105,7 @@ fn default_source() -> String {
 
 #[derive(Debug, Serialize)]
 struct FeedbackResponse {
-    id: i64,
-    created_at: DateTime<Utc>,
+    ok: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -117,14 +118,34 @@ struct ErrorBody {
     error: String,
 }
 
+#[derive(Debug, Serialize)]
+struct DiscordWebhookPayload {
+    embeds: Vec<DiscordEmbed>,
+}
+
+#[derive(Debug, Serialize)]
+struct DiscordEmbed {
+    title: String,
+    description: String,
+    color: u32,
+    fields: Vec<DiscordField>,
+}
+
+#[derive(Debug, Serialize)]
+struct DiscordField {
+    name: String,
+    value: String,
+    inline: bool,
+}
+
 #[derive(Debug, thiserror::Error)]
 enum ApiError {
     #[error("{0}")]
     BadRequest(String),
     #[error("please wait a minute before sending more feedback")]
     RateLimited,
-    #[error("failed to store feedback")]
-    Database,
+    #[error("failed to deliver feedback")]
+    Delivery,
 }
 
 impl IntoResponse for ApiError {
@@ -132,7 +153,7 @@ impl IntoResponse for ApiError {
         let status = match &self {
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
-            Self::Database => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Delivery => StatusCode::BAD_GATEWAY,
         };
         (
             status,
@@ -151,24 +172,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let database_url = std::env::var("DATABASE_URL")
-        .map_err(|_| "DATABASE_URL is required (Postgres connection string)")?;
+    let discord_webhook_url = std::env::var("DISCORD_WEBHOOK_URL").map_err(
+        |_| "DISCORD_WEBHOOK_URL is required (Discord channel webhook for feedback posts)",
+    )?;
+    if !discord_webhook_url.starts_with("https://discord.com/api/webhooks/")
+        && !discord_webhook_url.starts_with("https://discordapp.com/api/webhooks/")
+    {
+        return Err("DISCORD_WEBHOOK_URL must be a Discord webhook URL".into());
+    }
+
     let port = std::env::var("PORT")
         .ok()
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(8080);
     let bind = std::env::var("BIND_ADDR").unwrap_or_else(|_| format!("0.0.0.0:{port}"));
 
-    let pool = PgPoolOptions::new()
-        .max_connections(5)
-        .acquire_timeout(Duration::from_secs(10))
-        .connect(&database_url)
-        .await?;
-
-    run_migrations(&pool).await?;
+    let http = reqwest::Client::builder()
+        .timeout(DISCORD_TIMEOUT)
+        .user_agent(format!("captures-api/{}", env!("CARGO_PKG_VERSION")))
+        .build()?;
 
     let state = AppState {
-        pool,
+        discord_webhook_url,
+        http,
         rate_limiter: Arc::new(parking_lot::Mutex::new(RateLimiter::new())),
     };
 
@@ -223,38 +249,127 @@ async fn create_feedback(
         return Err(ApiError::RateLimited);
     }
 
-    let row = sqlx::query_as::<_, (i64, DateTime<Utc>)>(
-        r#"
-        INSERT INTO feedback (
-            message, contact, category, app_version, os, os_version, arch, source
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        RETURNING id, created_at
-        "#,
-    )
-    .bind(&message)
-    .bind(contact.as_deref())
-    .bind(&category)
-    .bind(app_version.as_deref())
-    .bind(os.as_deref())
-    .bind(os_version.as_deref())
-    .bind(arch.as_deref())
-    .bind(&source)
-    .fetch_one(&state.pool)
-    .await
-    .map_err(|error| {
-        warn!(%error, "failed to insert feedback");
-        ApiError::Database
-    })?;
+    let discord_payload = build_discord_payload(&DeliveredFeedback {
+        category: &category,
+        message: &message,
+        contact: contact.as_deref(),
+        app_version: app_version.as_deref(),
+        os: os.as_deref(),
+        os_version: os_version.as_deref(),
+        arch: arch.as_deref(),
+        source: &source,
+        client_key: &rate_key,
+    });
 
-    info!(id = row.0, category = %category, source = %source, "feedback stored");
-    Ok((
-        StatusCode::CREATED,
-        Json(FeedbackResponse {
-            id: row.0,
-            created_at: row.1,
-        }),
-    ))
+    let response = state
+        .http
+        .post(&state.discord_webhook_url)
+        .json(&discord_payload)
+        .send()
+        .await
+        .map_err(|error| {
+            warn!(%error, "discord webhook request failed");
+            ApiError::Delivery
+        })?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        warn!(%status, body = %body.chars().take(300).collect::<String>(), "discord webhook rejected feedback");
+        return Err(ApiError::Delivery);
+    }
+
+    info!(category = %category, source = %source, "feedback delivered to discord");
+    Ok((StatusCode::CREATED, Json(FeedbackResponse { ok: true })))
+}
+
+struct DeliveredFeedback<'a> {
+    category: &'a str,
+    message: &'a str,
+    contact: Option<&'a str>,
+    app_version: Option<&'a str>,
+    os: Option<&'a str>,
+    os_version: Option<&'a str>,
+    arch: Option<&'a str>,
+    source: &'a str,
+    client_key: &'a str,
+}
+
+fn build_discord_payload(feedback: &DeliveredFeedback<'_>) -> DiscordWebhookPayload {
+    let title = match feedback.category {
+        "idea" => "Idea",
+        "other" => "Other feedback",
+        _ => "Bug report",
+    }
+    .to_owned();
+    let color = match feedback.category {
+        "idea" => 0x58_a6_ff,  // blue
+        "other" => 0x8b_94_9e, // gray
+        _ => 0xef_46_50,       // red-ish
+    };
+
+    let mut fields = Vec::new();
+    fields.push(DiscordField {
+        name: "Category".to_owned(),
+        value: feedback.category.to_owned(),
+        inline: true,
+    });
+    fields.push(DiscordField {
+        name: "Source".to_owned(),
+        value: feedback.source.to_owned(),
+        inline: true,
+    });
+    if let Some(version) = feedback.app_version {
+        fields.push(DiscordField {
+            name: "App".to_owned(),
+            value: version.to_owned(),
+            inline: true,
+        });
+    }
+    let system = [feedback.os, feedback.os_version, feedback.arch]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" · ");
+    if !system.is_empty() {
+        fields.push(DiscordField {
+            name: "System".to_owned(),
+            value: system,
+            inline: true,
+        });
+    }
+    if let Some(contact) = feedback.contact {
+        fields.push(DiscordField {
+            name: "Contact".to_owned(),
+            value: contact.to_owned(),
+            inline: true,
+        });
+    }
+    fields.push(DiscordField {
+        name: "Client".to_owned(),
+        value: truncate(feedback.client_key, 64),
+        inline: true,
+    });
+
+    DiscordWebhookPayload {
+        embeds: vec![DiscordEmbed {
+            title,
+            description: truncate(feedback.message, DISCORD_DESCRIPTION_MAX),
+            color,
+            fields,
+        }],
+    }
+}
+
+fn truncate(value: &str, max_chars: usize) -> String {
+    let count = value.chars().count();
+    if count <= max_chars {
+        return value.to_owned();
+    }
+    let keep = max_chars.saturating_sub(1);
+    let mut out: String = value.chars().take(keep).collect();
+    out.push('…');
+    out
 }
 
 fn client_key(headers: &HeaderMap, addr: SocketAddr) -> String {
@@ -325,35 +440,6 @@ fn normalize_source(value: &str) -> Result<String, ApiError> {
     }
 }
 
-async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
-    // Keep bootstrap simple: apply the checked-in SQL without a migration tool.
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS feedback (
-            id BIGSERIAL PRIMARY KEY,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            message TEXT NOT NULL,
-            contact TEXT,
-            category TEXT NOT NULL DEFAULT 'bug',
-            app_version TEXT,
-            os TEXT,
-            os_version TEXT,
-            arch TEXT,
-            source TEXT NOT NULL DEFAULT 'desktop'
-        )
-        "#,
-    )
-    .execute(pool)
-    .await?;
-    sqlx::query("CREATE INDEX IF NOT EXISTS feedback_created_at_idx ON feedback (created_at DESC)")
-        .execute(pool)
-        .await?;
-    sqlx::query("CREATE INDEX IF NOT EXISTS feedback_category_idx ON feedback (category)")
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-
 async fn shutdown_signal() {
     let ctrl_c = async {
         if let Err(error) = tokio::signal::ctrl_c().await {
@@ -389,16 +475,16 @@ mod tests {
     use std::thread;
 
     #[test]
-    fn rate_limiter_allows_one_per_minute() {
+    fn rate_limiter_allows_one_per_minute_per_key() {
         let mut limiter = RateLimiter::new();
         assert!(limiter.try_accept("1.2.3.4"));
         assert!(!limiter.try_accept("1.2.3.4"));
+        // Different IP is independent.
         assert!(limiter.try_accept("5.6.7.8"));
     }
 
     #[test]
     fn rate_limiter_recovers_after_cooldown() {
-        // Use a tiny local window by recording then manually aging the entry.
         let mut limiter = RateLimiter::new();
         limiter.record("client");
         assert!(!limiter.can_accept("client"));
@@ -407,8 +493,38 @@ mod tests {
                 .checked_sub(RATE_LIMIT_COOLDOWN + Duration::from_millis(5))
                 .expect("instant should support subtraction");
         }
-        // Give the clock a beat so duration_since is clearly past the cooldown.
         thread::sleep(Duration::from_millis(2));
         assert!(limiter.can_accept("client"));
+    }
+
+    #[test]
+    fn truncate_preserves_short_strings() {
+        assert_eq!(truncate("hello", 10), "hello");
+        assert_eq!(truncate("abcdefghij", 5).chars().count(), 5);
+        assert!(truncate("abcdefghij", 5).ends_with('…'));
+    }
+
+    #[test]
+    fn discord_payload_includes_message_and_meta() {
+        let payload = build_discord_payload(&DeliveredFeedback {
+            category: "bug",
+            message: "Recording freezes",
+            contact: Some("@jose"),
+            app_version: Some("0.1.0"),
+            os: Some("macos"),
+            os_version: Some("15.5"),
+            arch: Some("aarch64"),
+            source: "desktop",
+            client_key: "203.0.113.10",
+        });
+        assert_eq!(payload.embeds.len(), 1);
+        assert_eq!(payload.embeds[0].title, "Bug report");
+        assert_eq!(payload.embeds[0].description, "Recording freezes");
+        assert!(
+            payload.embeds[0]
+                .fields
+                .iter()
+                .any(|field| field.name == "Contact" && field.value == "@jose")
+        );
     }
 }

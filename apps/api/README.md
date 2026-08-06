@@ -1,13 +1,14 @@
 # Captures API
 
-Small Rust HTTP service for early product feedback (and a foundation for later hosted features).
+Tiny Rust HTTP service that receives product feedback from the desktop app and
+posts it to a Discord channel webhook. No database.
 
 ## Endpoints
 
 | Method | Path | Description |
 | --- | --- | --- |
 | `GET` | `/health` | Liveness check |
-| `POST` | `/api/feedback` | Store a feedback submission |
+| `POST` | `/api/feedback` | Validate feedback and post it to Discord |
 
 ### `POST /api/feedback`
 
@@ -24,35 +25,46 @@ Small Rust HTTP service for early product feedback (and a foundation for later h
 }
 ```
 
-- `message` is required (max 8,000 characters).
+- `message` is required (max 8,000 characters; Discord embed truncates longer text).
 - `contact` is optional free text (X handle, GitHub username, email, etc.).
 - `category` defaults to `bug` and accepts `bug`, `idea`, or `other`.
-- Rows use a `BIGSERIAL` primary key.
-- Rate limit: **one accepted submission per client IP per minute** (HTTP 429). Invalid payloads do not consume the cooldown.
+- Rate limit: **one accepted submission per client IP per minute** (HTTP 429).
+  Invalid payloads do not consume the cooldown. Limits are in-memory (one pod).
+
+Successful response:
+
+```json
+{ "ok": true }
+```
+
+## Why keep an API at all?
+
+The Discord webhook URL is a secret. The desktop app should not embed it.
+This service is a thin validated proxy: rate limit → format → Discord.
 
 ## Local development
 
+1. In Discord: channel settings → Integrations → Webhooks → New Webhook → copy URL.
+2. Run:
+
 ```sh
-export DATABASE_URL=postgres://postgres:postgres@localhost:5432/captures
+export DISCORD_WEBHOOK_URL='https://discord.com/api/webhooks/...'
 cargo run -p captures-api
 ```
 
-The process applies `migrations/001_feedback.sql` on startup.
+Point a local desktop build at it:
+
+```sh
+export CAPTURES_FEEDBACK_URL=http://127.0.0.1:8080/api/feedback
+npm run dev
+```
 
 ## Docker / Railway
 
 ```sh
 docker build -f apps/api/Dockerfile -t captures-api .
-docker run --rm -p 8080:8080 -e DATABASE_URL="$DATABASE_URL" captures-api
+docker run --rm -p 8080:8080 -e DISCORD_WEBHOOK_URL="$DISCORD_WEBHOOK_URL" captures-api
 ```
 
-Set `DATABASE_URL` (required) and optionally `PORT` (default `8080`) / `BIND_ADDR`.
-
-## Reading feedback
-
-```sql
-SELECT id, created_at, category, app_version, os, contact, left(message, 120)
-FROM feedback
-ORDER BY id DESC
-LIMIT 50;
-```
+Required: `DISCORD_WEBHOOK_URL`  
+Optional: `PORT` (default `8080`), `BIND_ADDR`, `RUST_LOG`

@@ -56,10 +56,10 @@ struct FeedbackPayload {
     source: &'static str,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct FeedbackSubmitResult {
-    pub id: i64,
+    pub ok: bool,
 }
 
 #[tauri::command]
@@ -148,19 +148,18 @@ pub async fn submit_feedback(
         })?;
 
     let status = response.status();
+    let body = response.text().await.unwrap_or_default();
     if status.is_success() {
-        #[derive(Deserialize)]
-        struct ApiOk {
-            id: i64,
+        // Prefer structured `{ ok: true }`, but accept any 2xx so a bare proxy still works.
+        if let Ok(parsed) = serde_json::from_str::<FeedbackSubmitResult>(&body)
+            && !parsed.ok
+        {
+            return Err("Feedback was not accepted. Please try again.".to_owned());
         }
-        let body = response.json::<ApiOk>().await.map_err(|error| {
-            format!("Feedback was accepted, but the reply was unreadable: {error}")
-        })?;
         mark_local_rate_limit();
-        return Ok(FeedbackSubmitResult { id: body.id });
+        return Ok(FeedbackSubmitResult { ok: true });
     }
 
-    let body = response.text().await.unwrap_or_default();
     let detail = parse_api_error(&body).unwrap_or_else(|| {
         if body.trim().is_empty() {
             format!("Feedback service returned HTTP {status}")

@@ -1,7 +1,7 @@
-# Captures API (feedback and future hosted services).
+# Captures API (Discord-backed feedback).
 # Build from the monorepo root:
 #   docker build -f apps/api/Dockerfile -t captures-api .
-#   docker run --rm -p 8080:8080 -e DATABASE_URL=postgres://... captures-api
+#   docker run --rm -p 8080:8080 -e DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/... captures-api
 
 FROM rust:1.94-bookworm AS build
 
