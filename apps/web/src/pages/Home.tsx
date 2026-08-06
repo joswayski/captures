@@ -7,7 +7,8 @@ const X_URL = "https://x.com/josevalerio";
 const CONTACT_EMAIL = "contact@josevalerio.com";
 const PREVIEW_DOWNLOAD_BASE = `${REPO_URL}/releases/download/preview`;
 const PREVIEW_TAG = /^v(\d{4})\.(\d{2})\.(\d{2})\.([1-9]\d?)$/u;
-const PREVIEW_STATUS_POLL_MS = 60_000;
+/** How often the homepage re-checks Preview build status (and the API cache TTL). */
+const PREVIEW_STATUS_POLL_MS = 10 * 60 * 1_000;
 
 const PREVIEW_DOWNLOADS = [
   {
@@ -333,10 +334,28 @@ function releaseRunBuckets(runs: GitHubWorkflowRun[]) {
   return { building, failed, succeeded };
 }
 
+type CookingPreviewCache = {
+  key: string;
+  expiresAt: number;
+  value: ReadonlySet<string>;
+};
+
+let cookingPreviewCache: CookingPreviewCache | null = null;
+
 async function resolveCookingPreviewShas(
   changes: readonly LatestChange[],
 ): Promise<Set<string>> {
   if (changes.length === 0) return new Set();
+
+  const cacheKey = changes.map((change) => change.sha).join(",");
+  const now = Date.now();
+  if (
+    cookingPreviewCache &&
+    cookingPreviewCache.key === cacheKey &&
+    now < cookingPreviewCache.expiresAt
+  ) {
+    return new Set(cookingPreviewCache.value);
+  }
 
   const [publishedCommit, runs] = await Promise.all([
     latestPublishedPreviewCommit(),
@@ -369,6 +388,12 @@ async function resolveCookingPreviewShas(
       }
     }
   }
+
+  cookingPreviewCache = {
+    key: cacheKey,
+    expiresAt: now + PREVIEW_STATUS_POLL_MS,
+    value: cooking,
+  };
 
   return cooking;
 }
