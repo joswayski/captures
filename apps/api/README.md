@@ -64,10 +64,37 @@ npm run dev
 
 ## Docker / Railway
 
+Build from the **monorepo root** (the Dockerfile copies the workspace):
+
 ```sh
 docker build -f apps/api/Dockerfile -t captures-api .
 docker run --rm -p 8080:8080 -e DISCORD_WEBHOOK_URL="$DISCORD_WEBHOOK_URL" captures-api
 ```
 
-Required: `DISCORD_WEBHOOK_URL`  
-Optional: `PORT` (default `8080`), `BIND_ADDR`, `RUST_LOG`
+Railway service settings:
+
+| Setting | Value |
+| --- | --- |
+| Builder | Dockerfile |
+| Dockerfile path | `apps/api/Dockerfile` (or `/apps/api/Dockerfile`) |
+| Root directory | repo root (empty / `.`) — not `apps/api` |
+| Public port | `8080` |
+
+Required env on the **API** service: `DISCORD_WEBHOOK_URL` (Discord channel webhook).  
+Do **not** set `CAPTURES_FEEDBACK_URL` on the API — that variable is only for the desktop app, pointing at this service (e.g. `https://api.captur.es/api/feedback`).
+
+Optional: `PORT` (default `8080`), `BIND_ADDR`, `RUST_LOG`.
+
+Sanity checks after deploy:
+
+```sh
+curl -sS https://<api-host>/health
+# {"status":"ok"}
+
+curl -sS -i -X POST https://<api-host>/api/feedback \
+  -H "Content-Type: application/json" \
+  -d '{"message":"test","category":"other"}'
+# HTTP 201  {"ok":true}
+```
+
+If `/health` returns HTML for the marketing site, the public domain is attached to the **web** service, not this API.
