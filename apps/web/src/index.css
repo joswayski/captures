@@ -72,9 +72,10 @@
     @apply outline-2 outline-offset-2 outline-accent;
   }
 
+  /* Match the desktop app mark: dark tile, light glyph. Blue is only an accent. */
   .brand-mark {
-    @apply grid h-8 w-8 shrink-0 place-items-center rounded-md bg-accent text-accent-ink;
-    box-shadow: 0 6px 16px rgba(var(--theme-accent-rgb), .18);
+    @apply grid h-8 w-8 shrink-0 place-items-center rounded-md bg-ink text-surface;
+    box-shadow: 0 4px 12px rgba(24, 24, 27, 0.12);
   }
 
   .brand-mark svg {

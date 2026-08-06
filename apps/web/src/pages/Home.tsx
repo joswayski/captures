@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 const REPO_URL = "https://github.com/joswayski/captures";
+const RELEASES_URL = `${REPO_URL}/releases`;
 const X_URL = "https://x.com/josevalerio";
 const CONTACT_EMAIL = "contact@josevalerio.com";
 const PREVIEW_DOWNLOAD_BASE = `${REPO_URL}/releases/download/preview`;
@@ -119,6 +120,17 @@ export default function Home() {
                 </li>
               ))}
             </ul>
+            <p className="mt-2.5 text-right text-xs text-ink-soft">
+              …or{" "}
+              <a
+                href={RELEASES_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="font-medium text-ink-muted no-underline underline-offset-2 transition-colors duration-200 ease-out hover:text-accent-readable hover:underline"
+              >
+                view all releases on GitHub
+              </a>
+            </p>
           </div>
         </section>
 
