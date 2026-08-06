@@ -1318,9 +1318,37 @@ export function arrowHeadLength(strokeWidth: number): number {
   return Math.max(14, strokeWidth * 4.2);
 }
 
-/** Outward extent of a stroked path (half width + round cap/join slop). */
+/**
+ * Arrowhead wing tip positions (matches the canvas renderer).
+ * Used so content bounds expand only near the tip, not isotropically around the
+ * whole shaft (which left large empty margins for trim / selection boxes).
+ */
+export function arrowHeadWingTips(
+  end: EditorPoint,
+  tangent: EditorPoint,
+  strokeWidth: number,
+): [EditorPoint, EditorPoint] {
+  const angle = Math.atan2(end.y - tangent.y, end.x - tangent.x);
+  const length = arrowHeadLength(strokeWidth);
+  return [
+    {
+      x: end.x - length * Math.cos(angle - Math.PI / 6),
+      y: end.y - length * Math.sin(angle - Math.PI / 6),
+    },
+    {
+      x: end.x - length * Math.cos(angle + Math.PI / 6),
+      y: end.y - length * Math.sin(angle + Math.PI / 6),
+    },
+  ];
+}
+
+/**
+ * Outward extent of a stroked path (half width + small AA slop).
+ * Kept tight so selection boxes and Trim edges sit near the paint, not in a
+ * large empty margin around thin strokes.
+ */
 function strokeExtent(strokeWidth: number): number {
-  return Math.max(2, Math.ceil(strokeWidth / 2) + 1);
+  return Math.max(1, Math.ceil(strokeWidth / 2) + 1);
 }
 
 /** Axis-aligned box around points, expanded by uniform padding. */
@@ -1347,8 +1375,11 @@ function boundsFromPoints(points: EditorPoint[], padding: number): EditorRect {
  * Free Bezier control points sit off the stroke (the path only approaches
  * them). Including them in content bounds used to expand the canvas and block
  * **Trim edges** whenever a handle sat past an edge even though the painted
- * shaft stayed inside. Bounds therefore follow path samples for arrows, not
- * the control handles.
+ * shaft stayed inside. Bounds therefore follow path samples for lines/arrows,
+ * not the control handles.
+ *
+ * Arrowhead wings are measured at the tip only — never as an isotropic pad on
+ * every side of the shaft (that left large empty selection / trim margins).
  */
 function shapeElementBounds(element: EditorShapeElement): EditorRect {
   const strokePad = strokeExtent(element.style.strokeWidth);
@@ -1367,19 +1398,24 @@ function shapeElementBounds(element: EditorShapeElement): EditorRect {
   }
 
   if (isCurveableStrokeShape(element)) {
-    // Sample the same quadratic / multi-point path the canvas draws.
-    const samples = sampleArrowPath(element, 24);
-    const points = samples.length > 0
-      ? samples
+    // Dense samples so tight multi-point loops don't miss extrema.
+    const samples = sampleArrowPath(element, 48);
+    const points: EditorPoint[] = samples.length > 0
+      ? [...samples]
       : [
         { x: element.x, y: element.y },
         { x: element.endX, y: element.endY },
       ];
-    // Arrow wings leave the tip at ±30°; lateral extent ≈ sin(30°) * length.
-    const headPad = element.shape === "arrow"
-      ? Math.ceil(arrowHeadLength(element.style.strokeWidth) * 0.55)
-      : 0;
-    return boundsFromPoints(points, strokePad + headPad);
+    if (element.shape === "arrow") {
+      const tip = { x: element.endX, y: element.endY };
+      const wings = arrowHeadWingTips(
+        tip,
+        arrowHeadTangentPoint(element),
+        element.style.strokeWidth,
+      );
+      points.push(tip, wings[0], wings[1]);
+    }
+    return boundsFromPoints(points, strokePad);
   }
 
   // Fallback for any future open stroke without the curve model.

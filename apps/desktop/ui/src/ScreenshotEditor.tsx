@@ -16,8 +16,8 @@ import {
   ALIGNMENT_SNAP_SCREEN_PX,
   arrowBendAmount,
   arrowDefaultMidHandle,
-  arrowHeadLength,
   arrowHeadTangentPoint,
+  arrowHeadWingTips,
   arrowVertices,
   arrowWithBend,
   boundedCropRect,
@@ -429,19 +429,12 @@ function arrowHead(
   tangent: EditorPoint,
   strokeWidth: number,
 ): void {
-  const angle = Math.atan2(end.y - tangent.y, end.x - tangent.x);
-  const length = arrowHeadLength(strokeWidth);
+  const [wingA, wingB] = arrowHeadWingTips(end, tangent, strokeWidth);
   context.beginPath();
   context.moveTo(end.x, end.y);
-  context.lineTo(
-    end.x - length * Math.cos(angle - Math.PI / 6),
-    end.y - length * Math.sin(angle - Math.PI / 6),
-  );
+  context.lineTo(wingA.x, wingA.y);
   context.moveTo(end.x, end.y);
-  context.lineTo(
-    end.x - length * Math.cos(angle + Math.PI / 6),
-    end.y - length * Math.sin(angle + Math.PI / 6),
-  );
+  context.lineTo(wingB.x, wingB.y);
   context.stroke();
 }
 
