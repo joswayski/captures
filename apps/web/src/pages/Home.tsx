@@ -43,7 +43,6 @@ const relativeTimeFormatter = new Intl.RelativeTimeFormat("en", {
 export default function Home() {
   const [now, setNow] = useState(() => Date.now());
   const cookingShas = useCookingPreviewShas(__LATEST_CHANGES__);
-  const anyCooking = cookingShas.size > 0;
 
   useEffect(() => {
     const interval = window.setInterval(() => setNow(Date.now()), 60_000);
@@ -142,19 +141,9 @@ export default function Home() {
         <section aria-labelledby="latest-changes-heading" className="mt-14 border-t border-border pt-10">
           <h2
             id="latest-changes-heading"
-            className="inline-flex items-center gap-2 text-[0.6875rem] font-medium uppercase tracking-[0.14em] text-accent-readable"
+            className="text-[0.6875rem] font-medium uppercase tracking-[0.14em] text-accent-readable"
           >
             Latest changes
-            {anyCooking ? (
-              <span
-                className="cooking-emoji text-sm normal-case tracking-normal"
-                title="A Preview build is still cooking"
-                aria-label="Preview build in progress"
-                role="img"
-              >
-                🍳
-              </span>
-            ) : null}
           </h2>
 
           <ol className="mt-6 space-y-5">
@@ -166,23 +155,21 @@ export default function Home() {
                     href={change.url}
                     target="_blank"
                     rel="noreferrer"
-                    className="inline text-sm font-medium leading-snug text-ink no-underline underline-offset-4 transition-colors duration-200 ease-out hover:underline"
+                    className="text-sm font-medium leading-snug text-ink no-underline underline-offset-4 transition-colors duration-200 ease-out hover:underline"
                   >
                     {change.title}
                   </a>
-                  {cooking ? (
-                    <span
-                      className="cooking-emoji ml-1.5 align-middle text-sm"
-                      title="Preview build still cooking for this change"
-                      aria-label="Preview build in progress"
-                      role="img"
-                    >
-                      🍳
-                    </span>
-                  ) : null}
                   <p className="mt-1.5 text-xs text-ink-soft">
                     <time dateTime={change.committedAt}>{formatRelativeTime(change.committedAt, now)}</time>
                   </p>
+                  {cooking ? (
+                    <p className="mt-1 flex items-center gap-1.5 text-[0.625rem] leading-none text-ink-soft">
+                      <span className="cooking-emoji" aria-hidden="true">
+                        🥚
+                      </span>
+                      <span>preview still building</span>
+                    </p>
+                  ) : null}
                 </li>
               );
             })}
@@ -227,8 +214,14 @@ type GitHubRelease = {
   target_commitish: string;
 };
 
+type GitHubWorkflowRun = {
+  head_sha: string;
+  status: string;
+  conclusion: string | null;
+};
+
 type GitHubWorkflowRuns = {
-  workflow_runs?: Array<{ head_sha: string; status: string }>;
+  workflow_runs?: GitHubWorkflowRun[];
 };
 
 function previewVersion(tag: string) {
@@ -293,20 +286,51 @@ async function latestPublishedPreviewCommit(): Promise<string | null> {
   }
 }
 
-async function inProgressReleaseHeadShas(): Promise<Set<string>> {
+async function recentReleaseRuns(): Promise<GitHubWorkflowRun[]> {
   try {
     const payload = await githubJson<GitHubWorkflowRuns>(
-      "/actions/workflows/release.yml/runs?status=in_progress&per_page=10",
+      "/actions/workflows/release.yml/runs?per_page=30",
     );
-    return new Set(
-      (payload.workflow_runs ?? [])
-        .map((run) => run.head_sha?.toLowerCase())
-        .filter((sha): sha is string => Boolean(sha)),
-    );
+    return payload.workflow_runs ?? [];
   } catch {
     // Actions API can be picky unauthenticated; releases alone still cover lagging publishes.
-    return new Set();
+    return [];
   }
+}
+
+function releaseRunBuckets(runs: GitHubWorkflowRun[]) {
+  const building = new Set<string>();
+  const failed = new Set<string>();
+  const succeeded = new Set<string>();
+
+  for (const run of runs) {
+    const sha = run.head_sha?.toLowerCase();
+    if (!sha) continue;
+
+    if (run.status === "in_progress" || run.status === "queued" || run.status === "pending") {
+      building.add(sha);
+      continue;
+    }
+
+    if (run.status !== "completed") continue;
+
+    if (run.conclusion === "success") {
+      succeeded.add(sha);
+    } else if (
+      run.conclusion === "failure" ||
+      run.conclusion === "cancelled" ||
+      run.conclusion === "timed_out" ||
+      run.conclusion === "startup_failure"
+    ) {
+      // Only mark failed if this SHA never also succeeded (retries).
+      if (!succeeded.has(sha)) failed.add(sha);
+    }
+  }
+
+  // A later success for the same SHA clears failure.
+  for (const sha of succeeded) failed.delete(sha);
+
+  return { building, failed, succeeded };
 }
 
 async function resolveCookingPreviewShas(
@@ -314,24 +338,33 @@ async function resolveCookingPreviewShas(
 ): Promise<Set<string>> {
   if (changes.length === 0) return new Set();
 
-  const [publishedCommit, buildingHeads] = await Promise.all([
+  const [publishedCommit, runs] = await Promise.all([
     latestPublishedPreviewCommit(),
-    inProgressReleaseHeadShas(),
+    recentReleaseRuns(),
   ]);
+  const { building, failed, succeeded } = releaseRunBuckets(runs);
 
   const cooking = new Set<string>();
   let seenPublished = publishedCommit === null;
 
   for (const change of changes) {
     const sha = change.sha.toLowerCase();
-    if (buildingHeads.has(sha)) {
+
+    // Never show cooking for finished failures/cancels.
+    if (failed.has(sha) && !building.has(sha) && !succeeded.has(sha)) {
+      if (publishedCommit && sha === publishedCommit) seenPublished = true;
+      continue;
+    }
+
+    if (building.has(sha)) {
       cooking.add(change.sha);
     }
 
     if (!seenPublished) {
       if (publishedCommit && sha === publishedCommit) {
         seenPublished = true;
-      } else {
+      } else if (!failed.has(sha)) {
+        // Newer than the latest published Preview and not a known failed build.
         cooking.add(change.sha);
       }
     }
