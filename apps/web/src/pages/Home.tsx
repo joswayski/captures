@@ -97,7 +97,7 @@ export default function Home() {
                 <GitHubIcon className="h-3 w-3" />
                 GitHub
               </a>
-              , or by email at{" "}
+              , or{" "}
               <CopyEmailButton email={CONTACT_EMAIL} />.
             </p>
 
