@@ -4,14 +4,17 @@ import tailwindcss from "@tailwindcss/vite";
 
 const REPOSITORY = "joswayski/captures";
 const CHANGE_COUNT = 6;
+/** Fetch extra commits so Dependabot merges can be dropped without under-filling the list. */
+const FETCH_COUNT = 30;
 
 type GitHubCommit = {
   sha: string;
   html_url: string;
+  author: { login: string } | null;
   commit: {
     message: string;
     committer: { date: string } | null;
-    author: { date: string } | null;
+    author: { name?: string; date: string } | null;
   };
 };
 
@@ -29,6 +32,16 @@ function pullRequestNumber(title: string) {
     title.match(/^Merge pull request #(\d+)/u)?.[1] ??
     null
   );
+}
+
+function isDependabotCommit(entry: GitHubCommit): boolean {
+  const login = entry.author?.login?.toLowerCase() ?? "";
+  if (login === "dependabot[bot]" || login.startsWith("dependabot")) {
+    return true;
+  }
+
+  const authorName = entry.commit.author?.name?.toLowerCase() ?? "";
+  return authorName === "dependabot[bot]" || authorName.startsWith("dependabot");
 }
 
 function toLatestChange(entry: GitHubCommit): LatestChange {
@@ -55,7 +68,7 @@ function toLatestChange(entry: GitHubCommit): LatestChange {
 async function fetchLatestChanges(): Promise<LatestChange[]> {
   const url = new URL(`https://api.github.com/repos/${REPOSITORY}/commits`);
   url.searchParams.set("sha", "main");
-  url.searchParams.set("per_page", String(CHANGE_COUNT));
+  url.searchParams.set("per_page", String(FETCH_COUNT));
 
   const response = await fetch(url, {
     headers: {
@@ -74,7 +87,16 @@ async function fetchLatestChanges(): Promise<LatestChange[]> {
     throw new Error("GitHub returned no commits for main");
   }
 
-  return entries.map(toLatestChange);
+  const productChanges = entries
+    .filter((entry) => !isDependabotCommit(entry))
+    .map(toLatestChange)
+    .slice(0, CHANGE_COUNT);
+
+  if (productChanges.length === 0) {
+    throw new Error("GitHub returned no non-Dependabot commits for main");
+  }
+
+  return productChanges;
 }
 
 export default defineConfig(async () => {
