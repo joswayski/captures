@@ -25,7 +25,7 @@ Site runs at [http://localhost:5174](http://localhost:5174).
 npm run build:web
 ```
 
-Output lands in `apps/web/dist/` — deploy those static files as-is. Vite fetches the latest six `main` commits from the GitHub API during the build and embeds them in the static JavaScript bundle. The browser does not call GitHub at runtime.
+Output lands in `apps/web/dist/` — deploy those static files as-is. Vite fetches recent `main` commits from the GitHub API during the build, drops Dependabot dependency bumps, and embeds the latest six product changes in the static JavaScript bundle. The browser does not call GitHub at runtime.
 
 ## Docker
 

@@ -14,7 +14,7 @@
 - `crates` contains the shared Rust capture and platform-integration crates.
 - `DEVELOPMENT.md` contains local setup, validation, and packaging instructions.
 - `docs/releases.md` contains maintainer release and recovery procedures.
-- `apps/web/vite.config.ts` fetches homepage history from the GitHub API at build time. Do not check in hardcoded or generated commit history.
+- `apps/web/vite.config.ts` fetches homepage history from the GitHub API at build time and excludes Dependabot commits from Latest changes. Do not check in hardcoded or generated commit history.
 
 ## Working conventions
 
