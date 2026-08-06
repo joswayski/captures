@@ -24,6 +24,8 @@ pub struct AppSettings {
     pub region_shortcut: String,
     pub window_shortcut: String,
     pub display_shortcut: String,
+    #[serde(default = "default_feedback_shortcut")]
+    pub feedback_shortcut: String,
     #[serde(default = "default_auto_copy_to_clipboard")]
     pub auto_copy_to_clipboard: bool,
     #[serde(default = "default_true")]
@@ -146,6 +148,7 @@ impl Default for AppSettings {
             region_shortcut: "Ctrl+Shift+4".to_owned(),
             window_shortcut: "Ctrl+Shift+W".to_owned(),
             display_shortcut: "Ctrl+Shift+3".to_owned(),
+            feedback_shortcut: default_feedback_shortcut(),
             auto_copy_to_clipboard: true,
             show_mini_previews: true,
             launch_at_login: false,
@@ -563,6 +566,10 @@ fn default_new_capture_shortcut() -> String {
     "Ctrl+Shift+Space".to_owned()
 }
 
+fn default_feedback_shortcut() -> String {
+    "Ctrl+Shift+F".to_owned()
+}
+
 fn default_video_shortcut() -> String {
     "Ctrl+Shift+5".to_owned()
 }
@@ -815,6 +822,7 @@ mod tests {
         assert_eq!(settings.theme, ColorTheme::Mustard);
         assert_eq!(settings.custom_theme, CustomThemeSettings::default());
         assert_eq!(settings.new_capture_shortcut, "Ctrl+Shift+Space");
+        assert_eq!(settings.feedback_shortcut, "Ctrl+Shift+F");
         assert_eq!(settings.recording.video_fps, 60);
         assert_eq!(
             settings.recording.video_max_resolution,

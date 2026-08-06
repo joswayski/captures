@@ -61,6 +61,7 @@ export interface AppSettings {
   region_shortcut: string;
   window_shortcut: string;
   display_shortcut: string;
+  feedback_shortcut: string;
   auto_copy_to_clipboard: boolean;
   show_mini_previews: boolean;
   launch_at_login: boolean;

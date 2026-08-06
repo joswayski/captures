@@ -40,6 +40,7 @@ use tauri_plugin_opener::OpenerExt;
 use thiserror::Error;
 use uuid::Uuid;
 
+mod feedback;
 mod models;
 mod recording;
 mod screenshot_editor;
@@ -228,6 +229,9 @@ pub fn run() {
             open_captures_folder,
             open_capture_history,
             open_preferences,
+            feedback::open_feedback,
+            feedback::get_feedback_context,
+            feedback::submit_feedback,
             dismiss_recording_saved_notice,
             updates::get_update_status,
             updates::check_for_updates,
@@ -1289,6 +1293,7 @@ fn update_settings(
         || settings.region_shortcut.trim().is_empty()
         || settings.window_shortcut.trim().is_empty()
         || settings.display_shortcut.trim().is_empty()
+        || settings.feedback_shortcut.trim().is_empty()
         || settings.recording.video_shortcut.trim().is_empty()
     {
         return Err("all shortcuts must be set".to_owned());
@@ -1301,6 +1306,8 @@ fn update_settings(
         parse_shortcut(&settings.window_shortcut).map_err(|error| error.to_string())?;
     let display_shortcut =
         parse_shortcut(&settings.display_shortcut).map_err(|error| error.to_string())?;
+    let feedback_shortcut =
+        parse_shortcut(&settings.feedback_shortcut).map_err(|error| error.to_string())?;
     let video_shortcut =
         parse_shortcut(&settings.recording.video_shortcut).map_err(|error| error.to_string())?;
     let shortcuts = [
@@ -1308,6 +1315,7 @@ fn update_settings(
         region_shortcut,
         window_shortcut,
         display_shortcut,
+        feedback_shortcut,
         video_shortcut,
     ];
     if shortcuts
@@ -1342,6 +1350,7 @@ fn update_settings(
         || settings.region_shortcut != previous_settings.region_shortcut
         || settings.window_shortcut != previous_settings.window_shortcut
         || settings.display_shortcut != previous_settings.display_shortcut
+        || settings.feedback_shortcut != previous_settings.feedback_shortcut
         || settings.recording.video_shortcut != previous_settings.recording.video_shortcut;
     if shortcuts_changed && let Err(error) = register_shortcuts_with(&app, &settings) {
         let _ = register_shortcuts_with(&app, &previous_settings);
@@ -2414,8 +2423,31 @@ fn register_shortcuts_with(app: &AppHandle, settings: &AppSettings) -> Result<()
     register_shortcut(app, &settings.region_shortcut, CaptureMode::Region)?;
     register_shortcut(app, &settings.window_shortcut, CaptureMode::Window)?;
     register_shortcut(app, &settings.display_shortcut, CaptureMode::Display)?;
+    register_feedback_shortcut(app, &settings.feedback_shortcut)?;
     register_recording_shortcut(app, &settings.recording.video_shortcut)?;
     Ok(())
+}
+
+fn register_feedback_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), AppError> {
+    let parsed = parse_shortcut(shortcut)?;
+    let armed = AtomicBool::new(false);
+    app.global_shortcut()
+        .on_shortcut(parsed, move |app, _shortcut, event| {
+            if !should_trigger_shortcut(&armed, event.state()) {
+                return;
+            }
+            if app
+                .get_webview_window("preferences")
+                .is_some_and(|window| window.is_focused().unwrap_or(false))
+                || app
+                    .get_webview_window("feedback")
+                    .is_some_and(|window| window.is_focused().unwrap_or(false))
+            {
+                return;
+            }
+            feedback::show_feedback(app);
+        })
+        .map_err(|error| AppError::Shortcut(error.to_string()))
 }
 
 fn register_new_capture_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), AppError> {
@@ -2567,6 +2599,8 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let open_folder =
         MenuItem::with_id(app, "open-folder", "Open Save Location", true, None::<&str>)?;
     let preferences = MenuItem::with_id(app, "preferences", "Preferences", true, None::<&str>)?;
+    let send_feedback =
+        MenuItem::with_id(app, "send-feedback", "Send Feedback…", true, None::<&str>)?;
     let update_item = MenuItem::with_id(
         app,
         "check-updates",
@@ -2585,6 +2619,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             &capture_history,
             &open_folder,
             &preferences,
+            &send_feedback,
             &update_item,
             &separator_2,
             &quit,
@@ -2620,6 +2655,9 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         }
         "preferences" => {
             show_preferences(app);
+        }
+        "send-feedback" => {
+            feedback::show_feedback(app);
         }
         "check-updates" => {
             updates::handle_tray_action(app);

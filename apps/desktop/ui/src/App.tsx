@@ -15,6 +15,7 @@ import {
   useState,
 } from "react";
 
+import { Feedback } from "./Feedback";
 import { ScreenshotEditor } from "./ScreenshotEditor";
 import { NotchedSlider } from "./RangeSlider";
 import {
@@ -363,6 +364,7 @@ export function App() {
   if (view === "viewer") return <ArtifactViewer />;
   if (view === "history") return <CaptureHistory />;
   if (view === "preferences") return <Preferences />;
+  if (view === "feedback") return <Feedback />;
   if (view === "startup") return <StartupNotice />;
   if (view === "update") return <UpdateNotice />;
   return <IdleView />;
@@ -5715,6 +5717,14 @@ export function Preferences() {
           onRecordingChange={(recording) => setShortcutRecording("video-shortcut", recording)}
           onChange={(value) => updateRecording("video_shortcut", value)}
         />
+        <ShortcutInput
+          id="feedback-shortcut"
+          label="Send Feedback"
+          value={settings.feedback_shortcut}
+          recording={recordingShortcut === "feedback-shortcut"}
+          onRecordingChange={(recording) => setShortcutRecording("feedback-shortcut", recording)}
+          onChange={(value) => update("feedback_shortcut", value)}
+        />
         <p className="help-text">Select a shortcut, then press the key combination you want. Press Esc to cancel recording. Changes save automatically.</p>
       </section>
 
@@ -5788,6 +5798,22 @@ export function Preferences() {
       </section>
 
       <UpdatePreferences />
+
+      <section className="settings-section">
+        <h2>Feedback</h2>
+        <div className="update-settings-row">
+          <div>
+            <strong>Send feedback</strong>
+            <small>
+              Report a bug or share an idea. Captures includes app version and system details only —
+              never your captures.
+            </small>
+          </div>
+          <button type="button" onClick={() => void invoke("open_feedback")}>
+            Open
+          </button>
+        </div>
+      </section>
 
       <label className="check-row">
         <input type="checkbox" checked={settings.launch_at_login} onChange={(event) => update("launch_at_login", event.target.checked)} />
