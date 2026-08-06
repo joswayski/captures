@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 const REPO_URL = "https://github.com/joswayski/captures";
+const RELEASES_URL = `${REPO_URL}/releases`;
 const X_URL = "https://x.com/josevalerio";
 const CONTACT_EMAIL = "contact@josevalerio.com";
 const PREVIEW_DOWNLOAD_BASE = `${REPO_URL}/releases/download/preview`;
@@ -69,11 +70,9 @@ export default function Home() {
           </p>
 
           <div className="mt-12 border-t border-border pt-10">
-            <p className="text-[0.6875rem] font-medium uppercase tracking-[0.14em] text-ink-soft">
-              Experimental preview
-            </p>
-            <h2 className="mt-2 text-base font-medium tracking-tight text-ink sm:text-lg">
-              Download Captures
+            <h2 className="text-base font-medium tracking-tight text-ink sm:text-lg">
+              Download Captures{" "}
+              <span className="text-xs font-normal text-ink-soft">(experimental)</span>
             </h2>
             <p className="mt-3 max-w-xl text-sm leading-relaxed text-ink-muted">
               Builds are available after every merge and may contain bugs or incomplete features.
@@ -86,7 +85,6 @@ export default function Home() {
                 aria-label="Give feedback on X"
               >
                 <XIcon className="h-3 w-3" />
-                X
               </a>
               ,{" "}
               <a
@@ -99,7 +97,7 @@ export default function Home() {
                 <GitHubIcon className="h-3 w-3" />
                 GitHub
               </a>
-              , or by{" "}
+              , or{" "}
               <CopyEmailButton email={CONTACT_EMAIL} />.
             </p>
 
@@ -114,7 +112,7 @@ export default function Home() {
                       <span className="block text-sm font-medium text-ink">{download.platform}</span>
                       <span className="mt-0.5 block text-xs text-ink-soft">{download.detail}</span>
                     </span>
-                    <span className="shrink-0 text-xs font-medium text-ink-muted transition-colors duration-200 ease-out group-hover:text-ink">
+                    <span className="shrink-0 text-xs font-medium text-ink-muted transition-colors duration-200 ease-out group-hover:text-accent-readable">
                       Download
                       <span className="sr-only"> {download.fileName}</span>
                     </span>
@@ -122,13 +120,24 @@ export default function Home() {
                 </li>
               ))}
             </ul>
+            <p className="mt-2.5 text-right text-xs text-ink-soft">
+              …or{" "}
+              <a
+                href={RELEASES_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="font-medium text-ink-muted no-underline underline-offset-2 transition-colors duration-200 ease-out hover:text-accent-readable hover:underline"
+              >
+                view all releases on GitHub
+              </a>
+            </p>
           </div>
         </section>
 
         <section aria-labelledby="latest-changes-heading" className="mt-14 border-t border-border pt-10">
           <h2
             id="latest-changes-heading"
-            className="text-[0.6875rem] font-medium uppercase tracking-[0.14em] text-ink-soft"
+            className="text-[0.6875rem] font-medium uppercase tracking-[0.14em] text-accent-readable"
           >
             Latest changes
           </h2>
@@ -192,21 +201,19 @@ function CopyEmailButton({ email }: { email: string }) {
   return (
     <button
       type="button"
-      className="inline-chip relative"
+      className="group/email inline-flex max-w-full translate-y-px cursor-pointer flex-col items-start rounded border border-border bg-surface px-2 py-1 text-left no-underline transition-colors duration-200 ease-out hover:border-accent/30 hover:bg-accent-soft focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
       onClick={handleCopy}
-      title={copied ? "Copied!" : "Click to copy"}
       aria-label={copied ? `Copied ${email}` : `Copy email ${email}`}
     >
-      <MailIcon className="h-3 w-3" />
-      email
+      <span className="inline-flex min-w-0 items-center gap-1.5 text-[0.8125rem] font-medium leading-none text-ink transition-colors duration-200 ease-out group-hover/email:text-accent-readable">
+        <MailIcon className="h-3 w-3 shrink-0" />
+        <span className="break-all">{email}</span>
+      </span>
       <span
         role="status"
-        className={[
-          "pointer-events-none absolute bottom-full left-1/2 z-10 mb-1.5 -translate-x-1/2 whitespace-nowrap rounded border border-border bg-ink px-2 py-1 text-[0.6875rem] font-medium text-accent-ink shadow-sm transition-opacity duration-150 ease-out",
-          copied ? "opacity-100" : "opacity-0",
-        ].join(" ")}
+        className="mt-1 text-[0.625rem] font-normal leading-none text-ink-soft transition-colors duration-200 ease-out group-hover/email:text-accent-readable/70"
       >
-        Copied!
+        {copied ? "copied!" : "click to copy"}
       </span>
     </button>
   );
