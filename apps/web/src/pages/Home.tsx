@@ -70,9 +70,9 @@ export default function Home() {
 
           <div className="mt-12 border-t border-border pt-10">
             <h2 className="text-base font-medium tracking-tight text-ink sm:text-lg">
-              Download Captures
+              Download Captures{" "}
+              <span className="text-xs font-normal text-ink-soft">(experimental)</span>
             </h2>
-            <p className="mt-1 text-xs text-ink-soft">experimental</p>
             <p className="mt-3 max-w-xl text-sm leading-relaxed text-ink-muted">
               Builds are available after every merge and may contain bugs or incomplete features.
               Please give feedback on{" "}
