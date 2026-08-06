@@ -71,6 +71,11 @@ export function roundedRectPath(rect: SelectionRect, cornerRadius: number): stri
  * the hole is square: on Windows, theoretical display DIPs can disagree with
  * the live WebView client size, which misaligned SVG path units against the
  * marquee.
+ *
+ * The hole ring must close back to its start. CSS `polygon()` auto-closes the
+ * whole path to the first point; without an explicit hole close, that edge
+ * runs from the hole's last corner to the screen origin and evenodd leaves a
+ * bright diagonal "spotlight" from the top-left into the selection.
  */
 export function captureDimClipPath(rect: SelectionRect): string {
   const left = Math.max(0, rect.x);
@@ -80,7 +85,7 @@ export function captureDimClipPath(rect: SelectionRect): string {
   return [
     "polygon(evenodd,",
     "0% 0%, 100% 0%, 100% 100%, 0% 100%, 0% 0%,",
-    `${left}px ${top}px, ${left}px ${bottom}px, ${right}px ${bottom}px, ${right}px ${top}px)`,
+    `${left}px ${top}px, ${left}px ${bottom}px, ${right}px ${bottom}px, ${right}px ${top}px, ${left}px ${top}px)`,
   ].join(" ");
 }
 

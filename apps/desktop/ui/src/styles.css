@@ -161,8 +161,10 @@ html.capture-window-cursor, html.capture-window-cursor * { cursor: var(--capture
 /*
  * Soft dim only — never blur. In region mode the shade itself fades over the
  * stable frozen snapshot; window mode continues using the surface transition.
- * The cutout is one even-odd SVG path so rapid geometry updates are committed
- * as a single compositor layer without seams between independently sized sides.
+ * Square region holes use a closed evenodd CSS clip-path (same CSS pixels as
+ * the marquee). Rounded window holes use one evenodd SVG path. Closing the
+ * hole ring matters: an open polygon auto-closes to the origin and WebKit
+ * paints a bright diagonal "spotlight" from the top-left into the selection.
  */
 .capture-shade-cutout { position: absolute; z-index: 1; inset: 0; display: block; width: 100%; height: 100%; overflow: hidden; pointer-events: none; }
 .capture-shade { position: absolute; fill: rgba(8, 8, 14, .16); background: rgba(8, 8, 14, .16); pointer-events: none; }
