@@ -1,6 +1,8 @@
 # Captures website
 
-Minimal static work-in-progress page that points to [the repo](https://github.com/joswayski/captures) and shows recent changes from `main`.
+Minimal static work-in-progress page with direct Preview download links (same stable
+`preview` release assets as the root README), a link to [the repo](https://github.com/joswayski/captures),
+and recent changes from `main`.
 
 ## Stack
 

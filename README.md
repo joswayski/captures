@@ -7,11 +7,16 @@ Captures is a cross-platform screen capture utility built for quick captures and
 
 ## Download Captures Preview
 
-[**Download the latest Captures Preview**](https://github.com/joswayski/captures/releases/tag/preview)
+These links always download the **latest** validated Preview. Pick your platform:
 
-Choose the macOS `.dmg`, Windows `.exe`, Ubuntu/Debian `.deb`, or Linux
-AppImage from that page. The Preview updates after every successful merge and
-may contain bugs or incomplete features.
+| Platform | Download |
+| --- | --- |
+| macOS 13+ (Apple silicon) | [Captures-macOS-Apple-Silicon.dmg](https://github.com/joswayski/captures/releases/download/preview/Captures-macOS-Apple-Silicon.dmg) |
+| Windows 11 (x64) | [Captures-Windows-x64-setup.exe](https://github.com/joswayski/captures/releases/download/preview/Captures-Windows-x64-setup.exe) |
+| Ubuntu / Debian (x64) | [Captures-Linux-x64.deb](https://github.com/joswayski/captures/releases/download/preview/Captures-Linux-x64.deb) |
+| Other Linux (x64 AppImage) | [Captures-Linux-x64.AppImage](https://github.com/joswayski/captures/releases/download/preview/Captures-Linux-x64.AppImage) |
+
+Preview builds update after every successful merge to `main` and may contain bugs or incomplete features. You can also open the [Captures Preview — Latest](https://github.com/joswayski/captures/releases/tag/preview) release page, or browse older dated builds in the [build archive](https://github.com/joswayski/captures/releases).
 
 ## Features
 

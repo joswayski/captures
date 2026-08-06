@@ -33,11 +33,15 @@ not mean the release is complete.
 The fixed `preview` pre-release is the permanent **Captures Preview — Latest**
 download page, not a historical build. It holds the macOS, Windows, Debian, and
 AppImage installers plus the `latest.json` updater manifest for the greatest
-published CalVer version. It links to the corresponding immutable Preview, while
-the Releases page remains the dated build archive. Selection uses the version,
-not publication time, so publishing an older backfill cannot downgrade the
-download page. Future stable releases can use normal GitHub release metadata and
-their own updater endpoint without replacing the Preview archive.
+published CalVer version. Installers on this channel use **stable filenames**
+(`Captures-macOS-Apple-Silicon.dmg`, `Captures-Windows-x64-setup.exe`,
+`Captures-Linux-x64.deb`, `Captures-Linux-x64.AppImage`) so the root README can
+link directly without updating URLs on every merge. Dated immutable Previews keep
+versioned package names. The channel page links to the corresponding immutable
+Preview, while the Releases page remains the dated build archive. Selection uses
+the version, not publication time, so publishing an older backfill cannot
+downgrade the download page. Future stable releases can use normal GitHub release
+metadata and their own updater endpoint without replacing the Preview archive.
 
 The first successful Preview publication removes the obsolete `nightly` rolling
 release and tag after the new `preview` page and its installer set are verified.

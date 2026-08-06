@@ -1,5 +1,5 @@
-import { readdirSync } from "node:fs";
-import { resolve } from "node:path";
+import { readdirSync, renameSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const REQUIRED_ASSETS = {
@@ -8,6 +8,15 @@ const REQUIRED_ASSETS = {
   linuxDeb: (name) => name.endsWith(".deb"),
   linuxAppImage: (name) => name.endsWith(".AppImage"),
   updater: (name) => name === "latest.json",
+};
+
+/** Stable filenames on the permanent `preview` channel so README links never go stale. */
+export const PREVIEW_CHANNEL_ASSET_NAMES = {
+  macos: "Captures-macOS-Apple-Silicon.dmg",
+  windows: "Captures-Windows-x64-setup.exe",
+  linuxDeb: "Captures-Linux-x64.deb",
+  linuxAppImage: "Captures-Linux-x64.AppImage",
+  updater: "latest.json",
 };
 
 export function previewReleaseAssets(names) {
@@ -46,10 +55,40 @@ export function previewReleaseAssetsIn(directory) {
   return previewReleaseAssets(entries.map((entry) => entry.name));
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const [directory] = process.argv.slice(2);
-  if (!directory) {
-    throw new Error("usage: node scripts/preview-release-assets.mjs <directory>");
+/**
+ * Validate installer assets in `directory`, then rename them to the stable
+ * Preview channel names used by the README and permanent `preview` release.
+ * Accepts either versioned Tauri package names or names that are already stable.
+ */
+export function preparePreviewChannelAssets(directory) {
+  const root = resolve(directory);
+  const selected = previewReleaseAssetsIn(root);
+  const prepared = {};
+
+  for (const [platform, sourceName] of Object.entries(selected)) {
+    const targetName = PREVIEW_CHANNEL_ASSET_NAMES[platform];
+    if (!targetName) {
+      throw new Error(`No stable Preview channel name for ${platform}`);
+    }
+    if (sourceName !== targetName) {
+      renameSync(join(root, sourceName), join(root, targetName));
+    }
+    prepared[platform] = targetName;
   }
-  process.stdout.write(`${JSON.stringify(previewReleaseAssetsIn(directory))}\n`);
+
+  return prepared;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const [command, directory] = process.argv.slice(2);
+  if (!directory || (command !== "select" && command !== "prepare")) {
+    throw new Error(
+      "usage: node scripts/preview-release-assets.mjs <select|prepare> <directory>",
+    );
+  }
+  const result =
+    command === "prepare"
+      ? preparePreviewChannelAssets(directory)
+      : previewReleaseAssetsIn(directory);
+  process.stdout.write(`${JSON.stringify(result)}\n`);
 }
