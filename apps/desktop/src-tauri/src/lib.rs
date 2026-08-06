@@ -3137,9 +3137,7 @@ fn thumbnail_stack_should_be_visible(
 ) -> bool {
     // Capture flows suppress the stack so it does not appear in screenshots or
     // recordings. Opting in keeps it visible for self-capture / feedback.
-    count > 0
-        && show_mini_previews
-        && (!suppressed || include_mini_previews_in_captures)
+    count > 0 && show_mini_previews && (!suppressed || include_mini_previews_in_captures)
 }
 
 fn thumbnail_window_logical_height(window: &tauri::WebviewWindow) -> Option<f64> {
