@@ -729,14 +729,18 @@ describe("ScreenshotEditor", () => {
     });
     expect(screen.getByRole("slider", { name: "Curve" })).toHaveValue("50");
 
-    // Hover the path → discovery tooltip.
+    // Hover the path → discovery tooltip (fixed to viewport, not the panned surface).
     fireEvent.pointerMove(canvas, {
       clientX: 320,
       clientY: 360,
     });
-    expect(screen.getByRole("tooltip", {
+    const tip = screen.getByRole("tooltip", {
       name: /Double-click to add a curve point/,
-    })).toBeInTheDocument();
+    });
+    expect(tip).toBeInTheDocument();
+    expect(tip).toHaveClass("screenshot-curve-hover-tip");
+    expect(tip).toHaveStyle({ left: "320px", top: "360px" });
+    expect(tip.closest(".screenshot-canvas-surface")).toBeNull();
 
     fireEvent.doubleClick(canvas, {
       button: 0,
@@ -1064,14 +1068,18 @@ describe("ScreenshotEditor", () => {
     Object.defineProperty(topOver, "clientY", { configurable: true, value: 40 });
     fireEvent(editor!, topOver);
     await waitFor(() => {
-      expect(screen.getAllByText("Place above").length).toBeGreaterThan(0);
+      // Top toast is the only placement label (no center-of-canvas badge).
+      expect(screen.getAllByText("Place above")).toHaveLength(1);
     });
     expect(screen.queryByText("Place below")).not.toBeInTheDocument();
+    expect(screen.getByText("Place above").closest(".screenshot-drop-overlay")).not.toBeNull();
 
     const guide = document.querySelector(".screenshot-drop-snap-guide.edge-top");
     expect(guide).not.toBeNull();
     expect(guide?.querySelector(".screenshot-drop-snap-bloom")).not.toBeNull();
     expect(guide?.querySelectorAll(".screenshot-drop-snap-particle").length).toBeGreaterThan(0);
+    // Edge guides keep the snap visuals only — no second label badge on the canvas.
+    expect(guide?.querySelector(":scope > span")).toBeNull();
   });
 
   it("emits soft stack light from the drag preview and centers its toast on the viewport", async () => {
@@ -1124,7 +1132,7 @@ describe("ScreenshotEditor", () => {
       // Toast is the only "Place on top" label (no canvas badge for stack).
       expect(screen.getAllByText("Place on top")).toHaveLength(1);
     });
-    expect(screen.getByText("Drop to place — stays editable as a layer.")).toBeInTheDocument();
+    expect(screen.queryByText(/stays editable as a layer/i)).not.toBeInTheDocument();
     const toast = screen.getByText("Place on top").closest(".screenshot-drop-overlay");
     // 70 + 820 / 2 = 480: centered in the visible canvas viewport, not the window.
     expect(toast).toHaveStyle({ left: "480px", top: "72px" });

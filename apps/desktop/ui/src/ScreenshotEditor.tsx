@@ -3119,18 +3119,6 @@ export function ScreenshotEditor() {
             onPointerLeave={() => setCurveHoverTip(null)}
             onDoubleClick={handleCanvasDoubleClick}
           />
-          {curveHoverTip && !panActive && !panReady && (
-            <div
-              className="screenshot-curve-hover-tip"
-              role="tooltip"
-              style={{
-                left: curveHoverTip.clientX,
-                top: curveHoverTip.clientY,
-              }}
-            >
-              {curveHoverTip.text}
-            </div>
-          )}
           {editingText && inlineTextLayout && (
             <textarea
               ref={inlineTextRef}
@@ -3200,8 +3188,6 @@ export function ScreenshotEditor() {
                       />
                     ))}
                   </div>
-                  {/* Edge modes keep an on-canvas cue; stack relies on the top toast only. */}
-                  <span>{imageDropLabel(imageDropGuide.edge)}</span>
                 </>
               )}
             </div>
@@ -3393,9 +3379,21 @@ export function ScreenshotEditor() {
             aria-hidden="true"
           >
             <EditorIcon name="image" />
-            {/* Fixed title slot + shared subtitle keep the toast from shifting when the edge changes. */}
+            {/* Single-line toast; label length stays similar across edges so it does not reflow. */}
             <strong>{imageDropGuide ? imageDropLabel(imageDropGuide.edge) : "Drop image"}</strong>
-            <span>Drop to place — stays editable as a layer.</span>
+          </div>
+        )}
+        {/* Outside the panned surface so position:fixed tracks the real pointer (client coords). */}
+        {curveHoverTip && !panActive && !panReady && (
+          <div
+            className="screenshot-curve-hover-tip"
+            role="tooltip"
+            style={{
+              left: curveHoverTip.clientX,
+              top: curveHoverTip.clientY,
+            }}
+          >
+            {curveHoverTip.text}
           </div>
         )}
       </section>
