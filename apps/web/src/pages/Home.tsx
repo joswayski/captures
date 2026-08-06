@@ -182,8 +182,6 @@ export default function Home() {
                   ) : null}
                   <p className="mt-1.5 text-xs text-ink-soft">
                     <time dateTime={change.committedAt}>{formatRelativeTime(change.committedAt, now)}</time>
-                    <span aria-hidden="true"> · </span>
-                    {change.pullRequest ? `PR #${change.pullRequest}` : change.sha.slice(0, 7)}
                   </p>
                 </li>
               );
