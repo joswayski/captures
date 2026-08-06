@@ -9,25 +9,29 @@ const PREVIEW_DOWNLOAD_BASE = `${REPO_URL}/releases/download/preview`;
 const PREVIEW_DOWNLOADS = [
   {
     platform: "macOS 13+",
-    detail: "Apple silicon · .dmg",
+    arch: "Apple silicon",
+    format: "dmg",
     href: `${PREVIEW_DOWNLOAD_BASE}/Captures-macOS-Apple-Silicon.dmg`,
     fileName: "Captures-macOS-Apple-Silicon.dmg",
   },
   {
     platform: "Windows 11",
-    detail: "x64 · .exe",
+    arch: "x64",
+    format: "exe",
     href: `${PREVIEW_DOWNLOAD_BASE}/Captures-Windows-x64-setup.exe`,
     fileName: "Captures-Windows-x64-setup.exe",
   },
   {
     platform: "Ubuntu / Debian",
-    detail: "x64 · .deb",
+    arch: "x64",
+    format: "deb",
     href: `${PREVIEW_DOWNLOAD_BASE}/Captures-Linux-x64.deb`,
     fileName: "Captures-Linux-x64.deb",
   },
   {
     platform: "Other Linux",
-    detail: "x64 · AppImage",
+    arch: "x64",
+    format: "AppImage",
     href: `${PREVIEW_DOWNLOAD_BASE}/Captures-Linux-x64.AppImage`,
     fileName: "Captures-Linux-x64.AppImage",
   },
@@ -110,10 +114,13 @@ export default function Home() {
                   >
                     <span className="min-w-0">
                       <span className="block text-sm font-medium text-ink">{download.platform}</span>
-                      <span className="mt-0.5 block text-xs text-ink-soft">{download.detail}</span>
+                      <span className="mt-0.5 block text-xs text-ink-soft">{download.arch}</span>
                     </span>
-                    <span className="shrink-0 text-xs font-medium text-ink-muted transition-colors duration-200 ease-out group-hover:text-accent-readable">
-                      Download
+                    <span className="shrink-0 text-right">
+                      <span className="block text-xs font-medium text-ink-muted transition-colors duration-200 ease-out group-hover:text-accent-readable">
+                        Download
+                      </span>
+                      <span className="mt-0.5 block text-xs text-ink-soft">{download.format}</span>
                       <span className="sr-only"> {download.fileName}</span>
                     </span>
                   </a>
