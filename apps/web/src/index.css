@@ -88,4 +88,26 @@
     fill: currentColor;
     stroke: none;
   }
+
+  .cooking-emoji {
+    display: inline-block;
+    transform-origin: 50% 70%;
+    animation: cooking-wiggle 1.1s ease-in-out infinite;
+  }
+
+  @keyframes cooking-wiggle {
+    0%,
+    100% {
+      transform: rotate(-10deg) translateY(0);
+    }
+    50% {
+      transform: rotate(12deg) translateY(-2px);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .cooking-emoji {
+      animation: none;
+    }
+  }
 }

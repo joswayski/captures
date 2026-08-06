@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 
 const REPO_URL = "https://github.com/joswayski/captures";
+const REPO_API = "https://api.github.com/repos/joswayski/captures";
 const RELEASES_URL = `${REPO_URL}/releases`;
 const X_URL = "https://x.com/josevalerio";
 const CONTACT_EMAIL = "contact@josevalerio.com";
 const PREVIEW_DOWNLOAD_BASE = `${REPO_URL}/releases/download/preview`;
+const PREVIEW_TAG = /^v(\d{4})\.(\d{2})\.(\d{2})\.([1-9]\d?)$/u;
+const PREVIEW_STATUS_POLL_MS = 60_000;
 
 const PREVIEW_DOWNLOADS = [
   {
@@ -39,6 +42,8 @@ const relativeTimeFormatter = new Intl.RelativeTimeFormat("en", {
 
 export default function Home() {
   const [now, setNow] = useState(() => Date.now());
+  const cookingShas = useCookingPreviewShas(__LATEST_CHANGES__);
+  const anyCooking = cookingShas.size > 0;
 
   useEffect(() => {
     const interval = window.setInterval(() => setNow(Date.now()), 60_000);
@@ -137,34 +142,204 @@ export default function Home() {
         <section aria-labelledby="latest-changes-heading" className="mt-14 border-t border-border pt-10">
           <h2
             id="latest-changes-heading"
-            className="text-[0.6875rem] font-medium uppercase tracking-[0.14em] text-accent-readable"
+            className="inline-flex items-center gap-2 text-[0.6875rem] font-medium uppercase tracking-[0.14em] text-accent-readable"
           >
             Latest changes
+            {anyCooking ? (
+              <span
+                className="cooking-emoji text-sm normal-case tracking-normal"
+                title="A Preview build is still cooking"
+                aria-label="Preview build in progress"
+                role="img"
+              >
+                🍳
+              </span>
+            ) : null}
           </h2>
 
           <ol className="mt-6 space-y-5">
-            {__LATEST_CHANGES__.map((change) => (
-              <li key={change.sha}>
-                <a
-                  href={change.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-sm font-medium leading-snug text-ink no-underline underline-offset-4 transition-colors duration-200 ease-out hover:underline"
-                >
-                  {change.title}
-                </a>
-                <p className="mt-1.5 text-xs text-ink-soft">
-                  <time dateTime={change.committedAt}>{formatRelativeTime(change.committedAt, now)}</time>
-                  <span aria-hidden="true"> · </span>
-                  {change.pullRequest ? `PR #${change.pullRequest}` : change.sha}
-                </p>
-              </li>
-            ))}
+            {__LATEST_CHANGES__.map((change) => {
+              const cooking = cookingShas.has(change.sha);
+              return (
+                <li key={change.sha}>
+                  <a
+                    href={change.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline text-sm font-medium leading-snug text-ink no-underline underline-offset-4 transition-colors duration-200 ease-out hover:underline"
+                  >
+                    {change.title}
+                  </a>
+                  {cooking ? (
+                    <span
+                      className="cooking-emoji ml-1.5 align-middle text-sm"
+                      title="Preview build still cooking for this change"
+                      aria-label="Preview build in progress"
+                      role="img"
+                    >
+                      🍳
+                    </span>
+                  ) : null}
+                  <p className="mt-1.5 text-xs text-ink-soft">
+                    <time dateTime={change.committedAt}>{formatRelativeTime(change.committedAt, now)}</time>
+                    <span aria-hidden="true"> · </span>
+                    {change.pullRequest ? `PR #${change.pullRequest}` : change.sha.slice(0, 7)}
+                  </p>
+                </li>
+              );
+            })}
           </ol>
         </section>
       </main>
     </div>
   );
+}
+
+/** Commits still waiting on a finished Preview publish (newer than the latest release, or actively building). */
+function useCookingPreviewShas(changes: readonly LatestChange[]) {
+  const [cookingShas, setCookingShas] = useState<ReadonlySet<string>>(() => new Set());
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function refresh() {
+      try {
+        const next = await resolveCookingPreviewShas(changes);
+        if (!cancelled) setCookingShas(next);
+      } catch {
+        if (!cancelled) setCookingShas(new Set());
+      }
+    }
+
+    void refresh();
+    const interval = window.setInterval(() => void refresh(), PREVIEW_STATUS_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [changes]);
+
+  return cookingShas;
+}
+
+type GitHubRelease = {
+  draft: boolean;
+  prerelease: boolean;
+  tag_name: string;
+  target_commitish: string;
+};
+
+type GitHubWorkflowRuns = {
+  workflow_runs?: Array<{ head_sha: string; status: string }>;
+};
+
+function previewVersion(tag: string) {
+  const match = PREVIEW_TAG.exec(tag);
+  if (!match) return null;
+  return match.slice(1).map(Number);
+}
+
+function comparePreviewVersions(left: number[], right: number[]) {
+  for (let index = 0; index < left.length; index += 1) {
+    const order = left[index] - right[index];
+    if (order !== 0) return order;
+  }
+  return 0;
+}
+
+async function githubJson<T>(path: string): Promise<T> {
+  const response = await fetch(`${REPO_API}${path}`, {
+    headers: {
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`GitHub request failed (${response.status})`);
+  }
+  return (await response.json()) as T;
+}
+
+async function latestPublishedPreviewCommit(): Promise<string | null> {
+  const releases = await githubJson<GitHubRelease[]>("/releases?per_page=40");
+  let best: { version: number[]; tag: string; commitish: string } | null = null;
+
+  for (const release of releases) {
+    if (release.draft || !release.prerelease) continue;
+    const version = previewVersion(release.tag_name);
+    if (!version) continue;
+    if (!best || comparePreviewVersions(version, best.version) > 0) {
+      best = {
+        version,
+        tag: release.tag_name,
+        commitish: release.target_commitish,
+      };
+    }
+  }
+
+  if (!best) return null;
+  // Releases usually pin the full SHA; fall back if CI used a branch name.
+  if (/^[0-9a-f]{40}$/iu.test(best.commitish)) return best.commitish.toLowerCase();
+
+  try {
+    const ref = await githubJson<{ object: { sha: string; type: string } }>(
+      `/git/ref/tags/${encodeURIComponent(best.tag)}`,
+    );
+    if (ref.object.type === "commit") return ref.object.sha.toLowerCase();
+    const tagObject = await githubJson<{ object: { sha: string } }>(
+      `/git/tags/${ref.object.sha}`,
+    );
+    return tagObject.object.sha.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+async function inProgressReleaseHeadShas(): Promise<Set<string>> {
+  try {
+    const payload = await githubJson<GitHubWorkflowRuns>(
+      "/actions/workflows/release.yml/runs?status=in_progress&per_page=10",
+    );
+    return new Set(
+      (payload.workflow_runs ?? [])
+        .map((run) => run.head_sha?.toLowerCase())
+        .filter((sha): sha is string => Boolean(sha)),
+    );
+  } catch {
+    // Actions API can be picky unauthenticated; releases alone still cover lagging publishes.
+    return new Set();
+  }
+}
+
+async function resolveCookingPreviewShas(
+  changes: readonly LatestChange[],
+): Promise<Set<string>> {
+  if (changes.length === 0) return new Set();
+
+  const [publishedCommit, buildingHeads] = await Promise.all([
+    latestPublishedPreviewCommit(),
+    inProgressReleaseHeadShas(),
+  ]);
+
+  const cooking = new Set<string>();
+  let seenPublished = publishedCommit === null;
+
+  for (const change of changes) {
+    const sha = change.sha.toLowerCase();
+    if (buildingHeads.has(sha)) {
+      cooking.add(change.sha);
+    }
+
+    if (!seenPublished) {
+      if (publishedCommit && sha === publishedCommit) {
+        seenPublished = true;
+      } else {
+        cooking.add(change.sha);
+      }
+    }
+  }
+
+  return cooking;
 }
 
 function CopyEmailButton({ email }: { email: string }) {
