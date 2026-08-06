@@ -5659,6 +5659,21 @@ export function Preferences() {
             <small>Turn this off to keep the quick-access preview stack hidden.</small>
           </span>
         </label>
+        <label className="check-row capture-option">
+          <input
+            type="checkbox"
+            checked={settings.include_mini_previews_in_captures}
+            onChange={(event) => update("include_mini_previews_in_captures", event.target.checked)}
+            disabled={!settings.show_mini_previews}
+          />
+          <span>
+            Include mini previews in screenshots and recordings
+            <small>
+              Off by default so Captures chrome stays out of captures. Turn on to
+              screenshot or record the preview stack (for feedback or demos).
+            </small>
+          </span>
+        </label>
         <div className="settings-select-field field-label"><span>Screenshot countdown</span>
           <CustomSelect
             value={String(settings.screenshot_countdown_seconds)}

@@ -30,6 +30,10 @@ pub struct AppSettings {
     pub auto_copy_to_clipboard: bool,
     #[serde(default = "default_true")]
     pub show_mini_previews: bool,
+    /// When true, keep the quick-access mini preview stack visible during
+    /// screenshots and recordings so Captures UI can be captured for feedback.
+    #[serde(default)]
+    pub include_mini_previews_in_captures: bool,
     pub launch_at_login: bool,
     #[serde(default)]
     pub last_screen_permission_request_id: Option<String>,
@@ -151,6 +155,7 @@ impl Default for AppSettings {
             feedback_shortcut: default_feedback_shortcut(),
             auto_copy_to_clipboard: true,
             show_mini_previews: true,
+            include_mini_previews_in_captures: false,
             launch_at_login: false,
             last_screen_permission_request_id: None,
             pending_capture_after_restart: None,
@@ -819,6 +824,7 @@ mod tests {
         assert!(settings.pending_capture_after_restart.is_none());
         assert!(settings.auto_copy_to_clipboard);
         assert!(settings.show_mini_previews);
+        assert!(!settings.include_mini_previews_in_captures);
         assert_eq!(settings.theme, ColorTheme::Mustard);
         assert_eq!(settings.custom_theme, CustomThemeSettings::default());
         assert_eq!(settings.new_capture_shortcut, "Ctrl+Shift+Space");
@@ -948,6 +954,20 @@ mod tests {
             serde_json::from_str(&json).expect("settings should deserialize");
 
         assert!(!restored.show_mini_previews);
+    }
+
+    #[test]
+    fn persists_including_mini_previews_in_captures() {
+        let settings = AppSettings {
+            include_mini_previews_in_captures: true,
+            ..AppSettings::default()
+        };
+
+        let json = serde_json::to_string(&settings).expect("settings should serialize");
+        let restored: AppSettings =
+            serde_json::from_str(&json).expect("settings should deserialize");
+
+        assert!(restored.include_mini_previews_in_captures);
     }
 
     #[test]

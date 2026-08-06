@@ -28,6 +28,7 @@ const settings: AppSettings = {
   feedback_shortcut: "Ctrl+Shift+F",
   auto_copy_to_clipboard: true,
   show_mini_previews: true,
+  include_mini_previews_in_captures: false,
   launch_at_login: false,
   last_screen_permission_request_id: null,
   pending_capture_after_restart: null,
@@ -133,6 +134,23 @@ describe("Preferences", () => {
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("update_settings", {
         settings: expect.objectContaining({ show_mini_previews: false }),
+      });
+    });
+  });
+
+  it("can include mini previews in screenshots and recordings", async () => {
+    render(<Preferences />);
+
+    const includePreviews = await screen.findByRole("checkbox", {
+      name: /Include mini previews in screenshots and recordings/,
+    });
+    expect(includePreviews).not.toBeChecked();
+    expect(includePreviews).toBeEnabled();
+    fireEvent.click(includePreviews);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("update_settings", {
+        settings: expect.objectContaining({ include_mini_previews_in_captures: true }),
       });
     });
   });
