@@ -228,9 +228,12 @@ pub(crate) async fn prepare_capture_selector_inner(
         })
     };
     if let Some(summary) = pending_selection {
+        let include_mini_previews = state.settings().include_mini_previews_in_captures;
         crate::suppress_thumbnail_capture_ui(&state);
         crate::set_capture_huds_protected(&app, true);
-        crate::hide_window(&app, "thumbnail");
+        if !include_mini_previews {
+            crate::hide_window(&app, "thumbnail");
+        }
         crate::hide_window(&app, "startup");
         crate::hide_recording_saved_notices(&app);
         crate::hide_window(&app, "update");

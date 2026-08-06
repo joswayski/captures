@@ -29,6 +29,7 @@ const settings: AppSettings = {
   feedback_shortcut: "Ctrl+Shift+F",
   auto_copy_to_clipboard: true,
   show_mini_previews: true,
+  include_mini_previews_in_captures: false,
   launch_at_login: false,
   last_screen_permission_request_id: null,
   pending_capture_after_restart: null,

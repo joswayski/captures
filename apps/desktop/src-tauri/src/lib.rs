@@ -1368,8 +1368,10 @@ fn update_settings(
         }
     }
     storage::save_settings(&settings).map_err(|error| error.to_string())?;
-    let mini_preview_setting_changed =
-        settings.show_mini_previews != previous_settings.show_mini_previews;
+    let mini_preview_setting_changed = settings.show_mini_previews
+        != previous_settings.show_mini_previews
+        || settings.include_mini_previews_in_captures
+            != previous_settings.include_mini_previews_in_captures;
     *state.settings.write() = settings.clone();
     if mini_preview_setting_changed {
         if !settings.show_mini_previews {
@@ -1377,6 +1379,12 @@ fn update_settings(
                 .thumbnail_visibility
                 .lock()
                 .stop_waiting_for_artifact();
+        }
+        // When including mini previews in captures, keep the stack shareable.
+        if settings.include_mini_previews_in_captures
+            && let Some(window) = app.get_webview_window("thumbnail")
+        {
+            let _ = window.set_content_protected(false);
         }
         update_thumbnail_stack(&app);
     }
@@ -3059,17 +3067,29 @@ fn update_thumbnail_stack(app: &AppHandle) {
         let state = handle.state::<Arc<AppState>>().inner().clone();
         let count = state.artifacts.lock().len();
         let suppressed = state.thumbnail_visibility.lock().is_suppressed();
-        let show_mini_previews = state.settings().show_mini_previews;
+        let settings = state.settings();
+        let show_mini_previews = settings.show_mini_previews;
+        let include_mini_previews_in_captures = settings.include_mini_previews_in_captures;
         let Some(window) = handle.get_webview_window("thumbnail") else {
             if let Err(error) = create_thumbnail_window(
                 &handle,
-                thumbnail_stack_should_be_visible(count, suppressed, show_mini_previews),
+                thumbnail_stack_should_be_visible(
+                    count,
+                    suppressed,
+                    show_mini_previews,
+                    include_mini_previews_in_captures,
+                ),
             ) {
                 eprintln!("failed to create capture thumbnail stack: {error}");
             }
             return;
         };
-        if !thumbnail_stack_should_be_visible(count, suppressed, show_mini_previews) {
+        if !thumbnail_stack_should_be_visible(
+            count,
+            suppressed,
+            show_mini_previews,
+            include_mini_previews_in_captures,
+        ) {
             let _ = window.hide();
             return;
         }
@@ -3113,8 +3133,13 @@ fn thumbnail_stack_should_be_visible(
     count: usize,
     suppressed: bool,
     show_mini_previews: bool,
+    include_mini_previews_in_captures: bool,
 ) -> bool {
-    count > 0 && !suppressed && show_mini_previews
+    // Capture flows suppress the stack so it does not appear in screenshots or
+    // recordings. Opting in keeps it visible for self-capture / feedback.
+    count > 0
+        && show_mini_previews
+        && (!suppressed || include_mini_previews_in_captures)
 }
 
 fn thumbnail_window_logical_height(window: &tauri::WebviewWindow) -> Option<f64> {
@@ -3646,19 +3671,25 @@ fn hide_window(app: &AppHandle, label: &str) {
 const CAPTURE_HUD_HIDE_SETTLE_MS: u64 = 40;
 
 pub(crate) async fn hide_capture_huds_before_snapshot(app: &AppHandle) {
+    let include_mini_previews = include_mini_previews_in_captures(app);
     set_capture_huds_protected(app, true);
-    let had_visible_hud = [
-        "thumbnail",
-        "startup",
-        "update",
-        RECORDING_SAVED_NOTICE_LABEL,
-    ]
-    .into_iter()
-    .any(|label| {
+    let hud_labels: &[&str] = if include_mini_previews {
+        &["startup", "update", RECORDING_SAVED_NOTICE_LABEL]
+    } else {
+        &[
+            "thumbnail",
+            "startup",
+            "update",
+            RECORDING_SAVED_NOTICE_LABEL,
+        ]
+    };
+    let had_visible_hud = hud_labels.iter().any(|label| {
         app.get_webview_window(label)
             .is_some_and(|window| window.is_visible().unwrap_or(false))
     });
-    hide_window(app, "thumbnail");
+    if !include_mini_previews {
+        hide_window(app, "thumbnail");
+    }
     hide_window(app, "startup");
     hide_recording_saved_notices(app);
     updates::defer_visible_notice(app);
@@ -3670,6 +3701,11 @@ pub(crate) async fn hide_capture_huds_before_snapshot(app: &AppHandle) {
     if had_visible_hud {
         tokio::time::sleep(std::time::Duration::from_millis(CAPTURE_HUD_HIDE_SETTLE_MS)).await;
     }
+}
+
+fn include_mini_previews_in_captures(app: &AppHandle) -> bool {
+    app.try_state::<Arc<AppState>>()
+        .is_some_and(|state| state.settings().include_mini_previews_in_captures)
 }
 
 fn hide_recording_saved_notices(app: &AppHandle) {
@@ -3690,12 +3726,21 @@ fn set_capture_huds_protected(app: &AppHandle, protected: bool) {
     // The window server may still composite a just-hidden HUD into an
     // immediate display capture. Exclude Captures HUDs until the frozen background
     // frame has been read so they cannot reappear as pixels during fade-in.
+    let include_mini_previews = include_mini_previews_in_captures(app);
     for (label, window) in app.webview_windows() {
-        if (matches!(
+        if !matches!(
             label.as_str(),
             "thumbnail" | "startup" | "update" | "recording-hud" | RECORDING_SAVED_NOTICE_LABEL
-        )) && let Err(error) = window.set_content_protected(protected)
-        {
+        ) {
+            continue;
+        }
+        // Keep the mini-preview stack capturable when the preference is on.
+        let next_protected = if label == "thumbnail" && include_mini_previews {
+            false
+        } else {
+            protected
+        };
+        if let Err(error) = window.set_content_protected(next_protected) {
             eprintln!("failed to update {label} capture protection: {error}");
         }
     }
@@ -4771,10 +4816,17 @@ mod tests {
 
     #[test]
     fn keeps_mini_previews_hidden_when_the_preference_is_disabled() {
-        assert!(thumbnail_stack_should_be_visible(1, false, true));
-        assert!(!thumbnail_stack_should_be_visible(1, true, true));
-        assert!(!thumbnail_stack_should_be_visible(1, false, false));
-        assert!(!thumbnail_stack_should_be_visible(0, false, true));
+        assert!(thumbnail_stack_should_be_visible(1, false, true, false));
+        assert!(!thumbnail_stack_should_be_visible(1, true, true, false));
+        assert!(!thumbnail_stack_should_be_visible(1, false, false, false));
+        assert!(!thumbnail_stack_should_be_visible(0, false, true, false));
+    }
+
+    #[test]
+    fn keeps_mini_previews_visible_during_capture_when_included() {
+        assert!(thumbnail_stack_should_be_visible(1, true, true, true));
+        assert!(!thumbnail_stack_should_be_visible(1, true, false, true));
+        assert!(!thumbnail_stack_should_be_visible(0, true, true, true));
     }
 
     #[test]
