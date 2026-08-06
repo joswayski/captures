@@ -1,7 +1,37 @@
 import { useEffect, useState } from "react";
 
 const REPO_URL = "https://github.com/joswayski/captures";
+const PREVIEW_RELEASE_URL = `${REPO_URL}/releases/tag/preview`;
+const BUILD_ARCHIVE_URL = `${REPO_URL}/releases`;
 const X_URL = "https://x.com/josevalerio";
+const PREVIEW_DOWNLOAD_BASE = `${REPO_URL}/releases/download/preview`;
+
+const PREVIEW_DOWNLOADS = [
+  {
+    platform: "macOS 13+",
+    detail: "Apple silicon · .dmg",
+    href: `${PREVIEW_DOWNLOAD_BASE}/Captures-macOS-Apple-Silicon.dmg`,
+    fileName: "Captures-macOS-Apple-Silicon.dmg",
+  },
+  {
+    platform: "Windows 11",
+    detail: "x64 · .exe",
+    href: `${PREVIEW_DOWNLOAD_BASE}/Captures-Windows-x64-setup.exe`,
+    fileName: "Captures-Windows-x64-setup.exe",
+  },
+  {
+    platform: "Ubuntu / Debian",
+    detail: "x64 · .deb",
+    href: `${PREVIEW_DOWNLOAD_BASE}/Captures-Linux-x64.deb`,
+    fileName: "Captures-Linux-x64.deb",
+  },
+  {
+    platform: "Other Linux",
+    detail: "x64 · AppImage",
+    href: `${PREVIEW_DOWNLOAD_BASE}/Captures-Linux-x64.AppImage`,
+    fileName: "Captures-Linux-x64.AppImage",
+  },
+] as const;
 
 const relativeTimeFormatter = new Intl.RelativeTimeFormat("en", {
   numeric: "always",
@@ -43,16 +73,78 @@ export default function Home() {
             </a>
             .
           </p>
-          <div className="mt-8">
-            <a
-              href={REPO_URL}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex cursor-pointer items-center gap-2 rounded-md bg-accent px-4 py-2.5 text-sm font-medium text-accent-ink no-underline transition-colors duration-300 ease-out hover:bg-accent-hover"
-            >
-              <GitHubIcon className="h-4 w-4" />
-              View on GitHub
-            </a>
+
+          <div
+            role="note"
+            className="mt-8 max-w-xl rounded-lg border border-border bg-surface px-4 py-3 text-sm leading-relaxed text-ink-muted"
+          >
+            <p className="font-medium text-ink">Experimental Preview</p>
+            <p className="mt-1">
+              Captures is functional, but still experimental and under active development. macOS is
+              the primary development target; Windows and Linux builds are available but may be less
+              polished.
+            </p>
+          </div>
+
+          <div className="mt-10">
+            <h2 className="text-lg font-semibold tracking-tight text-ink">
+              Download Captures Preview
+            </h2>
+            <p className="mt-2 max-w-xl text-sm leading-relaxed text-ink-muted">
+              These links always download the latest validated Preview. Builds update after every
+              successful merge and may contain bugs or incomplete features.
+            </p>
+
+            <ul className="mt-5 grid gap-3 sm:grid-cols-2">
+              {PREVIEW_DOWNLOADS.map((download) => (
+                <li key={download.href}>
+                  <a
+                    href={download.href}
+                    className="group flex h-full cursor-pointer flex-col rounded-lg border border-border bg-surface px-4 py-3.5 no-underline shadow-[0_1px_0_rgba(29,28,24,0.03)] transition-colors duration-300 ease-out hover:border-border-strong hover:bg-canvas"
+                  >
+                    <span className="text-sm font-medium text-ink transition-colors duration-300 ease-out group-hover:text-accent-readable">
+                      {download.platform}
+                    </span>
+                    <span className="mt-1 text-xs text-ink-soft">{download.detail}</span>
+                    <span className="mt-3 text-xs font-medium text-accent-readable">
+                      Download
+                      <span className="sr-only"> {download.fileName}</span>
+                    </span>
+                  </a>
+                </li>
+              ))}
+            </ul>
+
+            <p className="mt-4 text-xs leading-relaxed text-ink-soft">
+              Or open the{" "}
+              <a
+                href={PREVIEW_RELEASE_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="font-medium text-ink-muted no-underline underline-offset-2 transition-colors duration-300 ease-out hover:text-accent-readable hover:underline"
+              >
+                latest Preview release
+              </a>
+              , browse the{" "}
+              <a
+                href={BUILD_ARCHIVE_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="font-medium text-ink-muted no-underline underline-offset-2 transition-colors duration-300 ease-out hover:text-accent-readable hover:underline"
+              >
+                build archive
+              </a>
+              , or{" "}
+              <a
+                href={REPO_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="font-medium text-ink-muted no-underline underline-offset-2 transition-colors duration-300 ease-out hover:text-accent-readable hover:underline"
+              >
+                view the project on GitHub
+              </a>
+              .
+            </p>
           </div>
         </section>
 
@@ -128,10 +220,4 @@ function CaptureIcon({ className }: { className?: string }) {
   );
 }
 
-function GitHubIcon({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" className={className}>
-      <path d="M12 2C6.477 2 2 6.486 2 12.021c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.009-.866-.013-1.7-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.467-1.11-1.467-.908-.621.069-.609.069-.609 1.004.071 1.532 1.032 1.532 1.032.892 1.53 2.341 1.088 2.91.833.091-.647.35-1.088.636-1.339-2.22-.253-4.555-1.113-4.555-4.952 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0 1 12 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.944.359.31.678.92.678 1.855 0 1.338-.012 2.419-.012 2.748 0 .268.18.58.688.481A10.02 10.02 0 0 0 22 12.021C22 6.486 17.523 2 12 2Z" />
-    </svg>
-  );
-}
+
