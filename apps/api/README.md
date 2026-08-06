@@ -8,9 +8,11 @@ posts it to a Discord channel webhook. No database.
 | Method | Path | Description |
 | --- | --- | --- |
 | `GET` | `/health` | Liveness check |
-| `POST` | `/api/feedback` | Validate feedback and post it to Discord |
+| `POST` | `/feedback` | Validate feedback and post it to Discord |
 
-### `POST /api/feedback`
+Production base URL: `https://api.captur.es` (custom domain on the Railway API service).
+
+### `POST /feedback`
 
 ```json
 {
@@ -58,7 +60,7 @@ cargo run -p captures-api
 Point a local desktop build at it:
 
 ```sh
-export CAPTURES_FEEDBACK_URL=http://127.0.0.1:8080/api/feedback
+export CAPTURES_FEEDBACK_URL=http://127.0.0.1:8080/feedback
 npm run dev
 ```
 
@@ -81,17 +83,19 @@ Railway service settings:
 | Public port | `8080` |
 
 Required env on the **API** service: `DISCORD_WEBHOOK_URL` (Discord channel webhook).  
-Do **not** set `CAPTURES_FEEDBACK_URL` on the API — that variable is only for the desktop app, pointing at this service (e.g. `https://api.captur.es/api/feedback`).
+Do **not** set `CAPTURES_FEEDBACK_URL` on the API — that variable is only for the desktop app, pointing at this service (`https://api.captur.es/feedback`).
 
 Optional: `PORT` (default `8080`), `BIND_ADDR`, `RUST_LOG`.
+
+Custom domain: attach **`api.captur.es`** to the Railway API service (Cloudflare DNS CNAME → Railway, proxied). The marketing site stays on `captur.es`.
 
 Sanity checks after deploy:
 
 ```sh
-curl -sS https://<api-host>/health
+curl -sS https://api.captur.es/health
 # {"status":"ok"}
 
-curl -sS -i -X POST https://<api-host>/api/feedback \
+curl -sS -i -X POST https://api.captur.es/feedback \
   -H "Content-Type: application/json" \
   -d '{"message":"test","category":"other"}'
 # HTTP 201  {"ok":true}
