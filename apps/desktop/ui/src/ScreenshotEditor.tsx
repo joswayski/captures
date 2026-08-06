@@ -4128,102 +4128,42 @@ function elementLabel(element: ScreenshotElement): string {
 }
 
 /**
- * Stack placement treats the target layer as a luminous window. Four broad
- * perspective planes and a handful of softer shafts converge on an invisible
- * opening beneath the native drag preview; no synthetic preview tile is drawn.
+ * The native drag preview is the light source. This element follows its
+ * estimated footprint and lets soft atmosphere/ray layers bloom from behind
+ * the OS-provided image without painting a second preview rectangle.
  */
 function StackDropLight({ guide }: { guide: ImageDropGuide }) {
   const width = Math.max(1, guide.target.width);
   const height = Math.max(1, guide.target.height);
-  const focusWidth = Math.min(width * 0.32, Math.max(1, guide.focus.width * 0.74));
-  const focusHeight = Math.min(height * 0.32, Math.max(1, guide.focus.height * 0.74));
-  const rawFocusX = guide.point.x - guide.target.x;
-  const rawFocusY = guide.point.y - guide.target.y;
-  const focusX = Math.min(
-    width - focusWidth / 2,
-    Math.max(focusWidth / 2, rawFocusX),
-  );
-  const focusY = Math.min(
-    height - focusHeight / 2,
-    Math.max(focusHeight / 2, rawFocusY),
-  );
-  const focusLeft = focusX - focusWidth / 2;
-  const focusRight = focusX + focusWidth / 2;
-  const focusTop = focusY - focusHeight / 2;
-  const focusBottom = focusY + focusHeight / 2;
-  const falloffRadius = Math.max(width, height) * 0.72;
-  const rimInset = Math.min(1, width / 4, height / 4);
-
-  const volumePlanes = [
-    `0,0 ${width},0 ${focusRight},${focusTop} ${focusLeft},${focusTop}`,
-    `${width},0 ${width},${height} ${focusRight},${focusBottom} ${focusRight},${focusTop}`,
-    `${width},${height} 0,${height} ${focusLeft},${focusBottom} ${focusRight},${focusBottom}`,
-    `0,${height} 0,0 ${focusLeft},${focusTop} ${focusLeft},${focusBottom}`,
-  ];
-  const lightShafts = [
-    `${width * 0.04},0 ${width * 0.22},0 ${focusLeft + focusWidth * 0.36},${focusTop} ${focusLeft + focusWidth * 0.12},${focusTop}`,
-    `${width * 0.58},0 ${width * 0.78},0 ${focusLeft + focusWidth * 0.82},${focusTop} ${focusLeft + focusWidth * 0.55},${focusTop}`,
-    `${width},${height * 0.12} ${width},${height * 0.32} ${focusRight},${focusTop + focusHeight * 0.38} ${focusRight},${focusTop + focusHeight * 0.1}`,
-    `${width},${height * 0.64} ${width},${height * 0.82} ${focusRight},${focusTop + focusHeight * 0.88} ${focusRight},${focusTop + focusHeight * 0.62}`,
-    `${width * 0.14},${height} ${width * 0.32},${height} ${focusLeft + focusWidth * 0.4},${focusBottom} ${focusLeft + focusWidth * 0.16},${focusBottom}`,
-    `${width * 0.68},${height} ${width * 0.9},${height} ${focusLeft + focusWidth * 0.9},${focusBottom} ${focusLeft + focusWidth * 0.62},${focusBottom}`,
-    `0,${height * 0.22} 0,${height * 0.42} ${focusLeft},${focusTop + focusHeight * 0.5} ${focusLeft},${focusTop + focusHeight * 0.22}`,
-    `0,${height * 0.7} 0,${height * 0.9} ${focusLeft},${focusTop + focusHeight * 0.92} ${focusLeft},${focusTop + focusHeight * 0.65}`,
-  ];
+  const focusX = guide.focus.x - guide.target.x;
+  const focusY = guide.focus.y - guide.target.y;
+  const focusCenterX = focusX + guide.focus.width / 2;
+  const focusCenterY = focusY + guide.focus.height / 2;
 
   return (
-    <svg
+    <div
       className="screenshot-drop-snap-stack-light"
-      viewBox={`0 0 ${width} ${height}`}
-      preserveAspectRatio="none"
-      data-focus-x={focusX}
-      data-focus-y={focusY}
+      style={{
+        left: `${(focusX / width) * 100}%`,
+        top: `${(focusY / height) * 100}%`,
+        width: `${(guide.focus.width / width) * 100}%`,
+        height: `${(guide.focus.height / height) * 100}%`,
+      }}
+      data-focus-x={focusCenterX}
+      data-focus-y={focusCenterY}
       aria-hidden="true"
     >
-      <defs>
-        <radialGradient
-          id="screenshot-stack-light-volume"
-          gradientUnits="userSpaceOnUse"
-          cx={focusX}
-          cy={focusY}
-          r={falloffRadius}
-        >
-          <stop offset="0" stopColor="currentColor" stopOpacity=".015" />
-          <stop offset=".28" stopColor="currentColor" stopOpacity=".035" />
-          <stop offset=".65" stopColor="currentColor" stopOpacity=".14" />
-          <stop offset="1" stopColor="currentColor" stopOpacity=".32" />
-        </radialGradient>
-      </defs>
-      <rect
-        className="screenshot-drop-snap-stack-window-wash"
-        x={rimInset}
-        y={rimInset}
-        width={Math.max(0, width - rimInset * 2)}
-        height={Math.max(0, height - rimInset * 2)}
-      />
-      <g className="screenshot-drop-snap-stack-volume soft">
-        {volumePlanes.map((points, index) => (
-          <polygon key={`soft-${index}`} points={points} />
-        ))}
-      </g>
-      <g className="screenshot-drop-snap-stack-volume core">
-        {volumePlanes.map((points, index) => (
-          <polygon key={`core-${index}`} points={points} />
-        ))}
-      </g>
-      <g className="screenshot-drop-snap-stack-shafts">
-        {lightShafts.map((points, index) => (
-          <polygon key={index} points={points} />
-        ))}
-      </g>
-      <rect
-        className="screenshot-drop-snap-stack-window-rim"
-        x={rimInset}
-        y={rimInset}
-        width={Math.max(0, width - rimInset * 2)}
-        height={Math.max(0, height - rimInset * 2)}
-      />
-    </svg>
+      <i className="screenshot-drop-snap-stack-atmosphere" />
+      <i className="screenshot-drop-snap-stack-rays far" />
+      <i className="screenshot-drop-snap-stack-rays near" />
+      <i className="screenshot-drop-snap-stack-ray from-left upper" />
+      <i className="screenshot-drop-snap-stack-ray from-left lower" />
+      <i className="screenshot-drop-snap-stack-ray from-right upper" />
+      <i className="screenshot-drop-snap-stack-ray from-right lower" />
+      <i className="screenshot-drop-snap-stack-ray from-top" />
+      <i className="screenshot-drop-snap-stack-ray from-bottom" />
+      <i className="screenshot-drop-snap-stack-edge-glow" />
+    </div>
   );
 }
 

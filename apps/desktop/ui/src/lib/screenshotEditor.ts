@@ -56,8 +56,8 @@ export type ImageDropGuideInfo = {
   /** Document-space pointer sample used for stack-light focus tracking. */
   point: EditorPoint;
   /**
-   * Invisible focal opening for the stack-on-top light volume. It follows the
-   * pointer without drawing a synthetic rectangle beneath the OS drag preview.
+   * Estimated native drag-preview footprint used as the stack-light emitter.
+   * It follows the pointer without drawing a synthetic preview rectangle.
    */
   focus: EditorRect;
 };
@@ -636,9 +636,8 @@ export function resolveImageDropTarget(
 }
 
 /**
- * Size + place the invisible opening under the native drag preview. It stays
- * smaller than the target so the light volume follows the pointer instead of
- * collapsing into the layer bounds.
+ * Estimate the native drag-preview footprint under the pointer. It stays
+ * smaller than the target so the light remains local to the floating preview.
  */
 export function stackDropLightFocusAtPoint(
   point: EditorPoint,
@@ -655,8 +654,8 @@ export function stackDropLightFocusAtPoint(
   );
   const rawX = point.x - width / 2;
   const rawY = point.y - height / 2;
-  // Allow a little overhang so the plate can sit on the pointer near edges.
-  // When the plate is larger than the target, center instead of inverting clamp.
+  // Allow a little overhang so the preview emitter stays on the pointer near
+  // edges. When it is larger than the target, center instead of inverting clamp.
   const minX = target.x - width * 0.2;
   const maxX = target.x + target.width - width * 0.8;
   const minY = target.y - height * 0.2;
