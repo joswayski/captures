@@ -86,7 +86,6 @@ export default function Home() {
                 aria-label="Give feedback on X"
               >
                 <XIcon className="h-3 w-3" />
-                X
               </a>
               ,{" "}
               <a
