@@ -85,8 +85,8 @@ cargo run -p captures-api
 Point a local desktop build at that service:
 
 ```sh
-export CAPTURES_FEEDBACK_URL=http://127.0.0.1:8080/api/feedback
+export CAPTURES_FEEDBACK_URL=http://127.0.0.1:8080/feedback
 npm run dev
 ```
 
-Packaged builds default to `https://api.captur.es/api/feedback`. Docker notes live in [apps/api/README.md](apps/api/README.md).
+Packaged builds default to `https://api.captur.es/feedback`. Docker notes live in [apps/api/README.md](apps/api/README.md).

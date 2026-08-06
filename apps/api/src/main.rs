@@ -205,7 +205,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = Router::new()
         .route("/health", get(health))
-        .route("/api/feedback", post(create_feedback))
+        // Host is already the API (`api.captur.es`); no redundant `/api` prefix.
+        .route("/feedback", post(create_feedback))
         .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
         .layer(TraceLayer::new_for_http())
         .layer(cors)
