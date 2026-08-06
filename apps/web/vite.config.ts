@@ -42,7 +42,7 @@ function toLatestChange(entry: GitHubCommit): LatestChange {
   const prNumber = pullRequestNumber(title);
 
   return {
-    sha: entry.sha.slice(0, 7),
+    sha: entry.sha,
     title: prNumber ? title.replace(/\s+\(#\d+\)$/u, "") : title,
     url: prNumber
       ? `https://github.com/${REPOSITORY}/pull/${prNumber}`
