@@ -197,6 +197,10 @@ type CanvasExpandPreview = {
   edges: ImageSnapEdge[];
   /** Expanded canvas in current document coordinates (may have negative origin). */
   rect: EditorRect;
+  /** Element whose overflow is painted faded outside the current canvas. */
+  element: ScreenshotElement;
+  /** Pre-expand canvas size used to punch out the solid on-canvas region. */
+  canvas: Pick<ScreenshotDocument, "width" | "height">;
 };
 
 type MagnifyGestureEvent = Event & {
@@ -539,6 +543,42 @@ function drawText(
   context.restore();
 }
 
+/** Paint a single layer into an existing context (caller owns alpha / transform). */
+function paintScreenshotElement(
+  context: CanvasRenderingContext2D,
+  element: ScreenshotElement,
+  imageCache: Map<string, CachedImage>,
+): void {
+  if (element.kind === "image") {
+    const cached = imageCache.get(element.src);
+    if (cached?.status === "loaded") {
+      context.drawImage(
+        cached.image,
+        element.x,
+        element.y,
+        element.width,
+        element.height,
+      );
+    }
+    return;
+  }
+  if (element.kind === "text") {
+    drawText(context, element);
+    return;
+  }
+  if (element.kind === "shape") {
+    drawShape(context, element);
+    return;
+  }
+  context.save();
+  context.strokeStyle = element.style.color;
+  context.lineWidth = element.style.strokeWidth;
+  context.lineCap = "round";
+  context.lineJoin = "round";
+  drawSmoothPath(context, element.points);
+  context.restore();
+}
+
 function renderScreenshot(
   context: CanvasRenderingContext2D,
   document: ScreenshotDocument,
@@ -557,32 +597,41 @@ function renderScreenshot(
     context.save();
     context.globalAlpha = Math.max(0, Math.min(1, element.opacity / 100));
     context.globalCompositeOperation = element.blendMode;
-    if (element.kind === "image") {
-      const cached = imageCache.get(element.src);
-      if (cached?.status === "loaded") {
-        context.drawImage(
-          cached.image,
-          element.x,
-          element.y,
-          element.width,
-          element.height,
-        );
-      }
-    } else if (element.kind === "text") {
-      drawText(context, element);
-    } else if (element.kind === "shape") {
-      drawShape(context, element);
-    } else {
-      context.save();
-      context.strokeStyle = element.style.color;
-      context.lineWidth = element.style.strokeWidth;
-      context.lineCap = "round";
-      context.lineJoin = "round";
-      drawSmoothPath(context, element.points);
-      context.restore();
-    }
+    paintScreenshotElement(context, element, imageCache);
     context.restore();
   }
+}
+
+/**
+ * Faded preview of the parts of an element that sit outside the current canvas,
+ * painted into an overlay sized to the post-release expand rect.
+ */
+function paintCanvasExpandOverflow(
+  context: CanvasRenderingContext2D,
+  preview: CanvasExpandPreview,
+  imageCache: Map<string, CachedImage>,
+  opacity = 0.42,
+): void {
+  const { rect, element, canvas } = preview;
+  context.clearRect(0, 0, rect.width, rect.height);
+  if (!element.visible) return;
+
+  context.save();
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  // Document → expand-overlay: expand origin may be negative when growing left/top.
+  context.translate(-rect.x, -rect.y);
+  context.globalAlpha = Math.max(0, Math.min(1, (element.opacity / 100) * opacity));
+  context.globalCompositeOperation = element.blendMode;
+  paintScreenshotElement(context, element, imageCache);
+  context.restore();
+
+  // Keep only the off-canvas remainder so it abuts the solid on-canvas paint.
+  context.save();
+  context.globalCompositeOperation = "destination-out";
+  context.fillStyle = "#000";
+  context.fillRect(-rect.x, -rect.y, canvas.width, canvas.height);
+  context.restore();
 }
 
 function drawEditorOverlays(
@@ -878,6 +927,7 @@ export function ScreenshotEditor() {
   const viewportRef = useRef<HTMLDivElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const expandOverflowCanvasRef = useRef<HTMLCanvasElement>(null);
   const inlineTextRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageCacheRef = useRef(new Map<string, CachedImage>());
@@ -1294,6 +1344,19 @@ export function ScreenshotEditor() {
     imageRevision,
     selected,
   ]);
+
+  // Faded off-canvas remainder of the active layer while expanding.
+  useLayoutEffect(() => {
+    const canvas = expandOverflowCanvasRef.current;
+    if (!canvas || !canvasExpandPreview) return;
+    const { rect, element } = canvasExpandPreview;
+    if (element.kind === "image") ensureImage(element.src);
+    if (canvas.width !== rect.width) canvas.width = Math.max(1, Math.ceil(rect.width));
+    if (canvas.height !== rect.height) canvas.height = Math.max(1, Math.ceil(rect.height));
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    paintCanvasExpandOverflow(context, canvasExpandPreview, imageCacheRef.current);
+  }, [canvasExpandPreview, ensureImage, imageRevision]);
 
   const undo = useCallback(() => {
     const current = documentRef.current;
@@ -1988,6 +2051,7 @@ export function ScreenshotEditor() {
       setCanvasExpandPreview(canvasExpandPreviewForBounds(
         elementBounds(next),
         gesture.initialDocument,
+        next,
       ));
       replaceDocument(replaceElement(
         gesture.initialDocument,
@@ -2033,6 +2097,7 @@ export function ScreenshotEditor() {
       setCanvasExpandPreview(canvasExpandPreviewForBounds(
         elementBounds(moved),
         gesture.initialDocument,
+        moved,
       ));
       replaceDocument(nextDocument);
       return;
@@ -2070,6 +2135,7 @@ export function ScreenshotEditor() {
       setCanvasExpandPreview(canvasExpandPreviewForBounds(
         snapped.bounds,
         gesture.initialDocument,
+        resized,
       ));
       replaceDocument(replaceElement(
         gesture.initialDocument,
@@ -2108,6 +2174,7 @@ export function ScreenshotEditor() {
     setCanvasExpandPreview(canvasExpandPreviewForBounds(
       elementBounds(updated),
       gesture.initialDocument,
+      updated,
     ));
   };
 
@@ -3073,7 +3140,24 @@ export function ScreenshotEditor() {
           {canvasExpandPreview && (
             <>
               <div
-                className="screenshot-canvas-expand-ghost"
+                className={[
+                  "screenshot-canvas-expand-ghost",
+                  ...canvasExpandPreview.edges.map((edge) => `edge-${edge}`),
+                ].join(" ")}
+                style={{
+                  left: canvasExpandPreview.rect.x * displayScale,
+                  top: canvasExpandPreview.rect.y * displayScale,
+                  width: canvasExpandPreview.rect.width * displayScale,
+                  height: canvasExpandPreview.rect.height * displayScale,
+                  boxShadow: canvasExpandGhostBoxShadow(canvasExpandPreview.edges),
+                }}
+                aria-hidden="true"
+              />
+              <canvas
+                ref={expandOverflowCanvasRef}
+                className="screenshot-canvas-expand-overflow"
+                width={Math.max(1, Math.ceil(canvasExpandPreview.rect.width))}
+                height={Math.max(1, Math.ceil(canvasExpandPreview.rect.height))}
                 style={{
                   left: canvasExpandPreview.rect.x * displayScale,
                   top: canvasExpandPreview.rect.y * displayScale,
@@ -4179,12 +4263,34 @@ function imageDropLabel(edge: ImageDropPlacement): string {
 function canvasExpandPreviewForBounds(
   bounds: EditorRect,
   canvas: Pick<ScreenshotDocument, "width" | "height">,
+  element: ScreenshotElement,
 ): CanvasExpandPreview | null {
   const edges = canvasOverflowEdges(bounds, canvas);
   if (edges.length === 0) return null;
   const rect = previewExpandedCanvasRect(bounds, canvas);
   if (!rect) return null;
-  return { edges, rect };
+  return { edges, rect, element, canvas: { width: canvas.width, height: canvas.height } };
+}
+
+/**
+ * Ghost outline glow scaled per edge: full bloom toward sides that will grow,
+ * near-zero on sides that stay put (expanding edges already carry bars/particles).
+ */
+function canvasExpandGhostBoxShadow(edges: readonly ImageSnapEdge[]): string {
+  const active = new Set(edges);
+  const intensity = (edge: ImageSnapEdge): number => (active.has(edge) ? 1 : 0.08);
+  const top = intensity("top");
+  const bottom = intensity("bottom");
+  const left = intensity("left");
+  const right = intensity("right");
+  return [
+    "0 0 0 1px rgba(var(--theme-accent-rgb), .1)",
+    // Directional glows — strength follows edge intensity (0.08 quiet → 1 full).
+    `0 ${(-10 * top).toFixed(1)}px ${(18 + 22 * top).toFixed(1)}px rgba(var(--theme-accent-rgb), ${(0.04 + 0.3 * top).toFixed(3)})`,
+    `0 ${(10 * bottom).toFixed(1)}px ${(18 + 22 * bottom).toFixed(1)}px rgba(var(--theme-accent-rgb), ${(0.04 + 0.3 * bottom).toFixed(3)})`,
+    `${(-10 * left).toFixed(1)}px 0 ${(18 + 22 * left).toFixed(1)}px rgba(var(--theme-accent-rgb), ${(0.04 + 0.3 * left).toFixed(3)})`,
+    `${(10 * right).toFixed(1)}px 0 ${(18 + 22 * right).toFixed(1)}px rgba(var(--theme-accent-rgb), ${(0.04 + 0.3 * right).toFixed(3)})`,
+  ].join(", ");
 }
 
 /** Fixed particle seeds for the image-drop edge snap stream (CSS-driven). */
