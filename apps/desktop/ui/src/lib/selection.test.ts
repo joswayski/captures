@@ -113,14 +113,21 @@ describe("captureDimClipPath", () => {
   it("cuts a hole using the same CSS pixel coords as the marquee", () => {
     expect(captureDimClipPath({ x: 100, y: 120, width: 313, height: 415 })).toBe(
       "polygon(evenodd, 0% 0%, 100% 0%, 100% 100%, 0% 100%, 0% 0%, "
-      + "100px 120px, 100px 535px, 413px 535px, 413px 120px)",
+      + "100px 120px, 100px 535px, 413px 535px, 413px 120px, 100px 120px)",
     );
   });
 
   it("clamps negative origins so the hole stays on-screen", () => {
     expect(captureDimClipPath({ x: -10, y: -4, width: 40, height: 20 })).toBe(
       "polygon(evenodd, 0% 0%, 100% 0%, 100% 100%, 0% 100%, 0% 0%, "
-      + "0px 0px, 0px 20px, 40px 20px, 40px 0px)",
+      + "0px 0px, 0px 20px, 40px 20px, 40px 0px, 0px 0px)",
     );
+  });
+
+  it("closes the hole ring so polygon auto-close cannot fan from the origin", () => {
+    // Without the final return to the hole start, CSS polygon() draws an edge
+    // from the hole's last corner back to 0% 0% — the top-left "spotlight".
+    const path = captureDimClipPath({ x: 40, y: 30, width: 200, height: 120 });
+    expect(path.endsWith("40px 30px, 40px 150px, 240px 150px, 240px 30px, 40px 30px)")).toBe(true);
   });
 });
