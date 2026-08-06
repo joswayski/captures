@@ -98,7 +98,7 @@ export default function Home() {
                 <GitHubIcon className="h-3 w-3" />
                 GitHub
               </a>
-              , or by{" "}
+              , or by email at{" "}
               <CopyEmailButton email={CONTACT_EMAIL} />.
             </p>
 
@@ -191,20 +191,19 @@ function CopyEmailButton({ email }: { email: string }) {
   return (
     <button
       type="button"
-      className="group/email inline-chip relative"
+      className="group/email inline-flex max-w-full translate-y-px cursor-pointer flex-col items-start rounded border border-border bg-surface px-2 py-1 text-left no-underline transition-colors duration-200 ease-out hover:border-accent/30 hover:bg-accent-soft focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
       onClick={handleCopy}
       aria-label={copied ? `Copied ${email}` : `Copy email ${email}`}
     >
-      <MailIcon className="h-3 w-3" />
-      email
+      <span className="inline-flex min-w-0 items-center gap-1.5 text-[0.8125rem] font-medium leading-none text-ink transition-colors duration-200 ease-out group-hover/email:text-accent-readable">
+        <MailIcon className="h-3 w-3 shrink-0" />
+        <span className="break-all">{email}</span>
+      </span>
       <span
         role="status"
-        className={[
-          "pointer-events-none absolute bottom-full left-1/2 z-10 mb-1.5 -translate-x-1/2 whitespace-nowrap rounded bg-ink px-2 py-1 text-[0.6875rem] font-medium text-accent-ink shadow-sm transition-opacity duration-150 ease-out",
-          copied ? "opacity-100" : "opacity-0 group-hover/email:opacity-100 group-focus-visible/email:opacity-100",
-        ].join(" ")}
+        className="mt-1 text-[0.625rem] font-normal leading-none text-ink-soft transition-colors duration-200 ease-out group-hover/email:text-accent-readable/70"
       >
-        {copied ? "Copied!" : "Click to copy"}
+        {copied ? "copied!" : "click to copy"}
       </span>
     </button>
   );
