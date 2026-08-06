@@ -13,6 +13,7 @@ import {
   collectEditorSourceArtifactIds,
   createScreenshotDocument,
   cropDocument,
+  curveStrokeHoverHint,
   duplicateScreenshotElement,
   elementBounds,
   estimateCanvasExportBytes,
@@ -26,6 +27,7 @@ import {
   imageDropPlacementAtPoint,
   imageSizeAtWidth,
   insertArrowControl,
+  isCurveableStrokeShape,
   isSupportedImageFile,
   loadImageFile,
   MAX_ARROW_CONTROLS,
@@ -652,6 +654,41 @@ describe("screenshot editor geometry", () => {
     expect(near.point.x).toBeCloseTo(200, 0);
   });
 
+  it("shares multi-point curve controls with lines", () => {
+    expect(isCurveableStrokeShape("line")).toBe(true);
+    expect(isCurveableStrokeShape("arrow")).toBe(true);
+    expect(isCurveableStrokeShape("ellipse")).toBe(false);
+    expect(isCurveableStrokeShape("rectangle")).toBe(false);
+
+    const line: EditorShapeElement = {
+      ...editableLayer,
+      id: "line",
+      kind: "shape",
+      shape: "line",
+      x: 50,
+      y: 80,
+      endX: 250,
+      endY: 80,
+      controls: [],
+      style: { color: "#0af", fill: null, strokeWidth: 4 },
+    };
+
+    expect(hitTestArrowHandle(line, { x: 150, y: 80 }, 8)).toEqual({ kind: "mid" });
+    const bent = arrowWithBend(line, 0.25);
+    expect(bent.controls).toHaveLength(1);
+    expect(arrowBendAmount(bent)).toBeCloseTo(0.25);
+    expect(elementBounds(bent).height).toBeGreaterThan(elementBounds(line).height);
+
+    const withPoint = insertArrowControl(bent, { x: 200, y: 100 });
+    expect(withPoint?.controls).toHaveLength(2);
+    expect(removeArrowControl(withPoint!, 1).controls).toHaveLength(1);
+
+    expect(curveStrokeHoverHint(line, { x: 150, y: 80 }, 8)).toMatch(/Drag to curve/);
+    expect(curveStrokeHoverHint(bent, { x: 150, y: 130 }, 8)).toMatch(/Double-click to remove/);
+    expect(curveStrokeHoverHint(bent, { x: 200, y: 95 }, 8)).toMatch(/Double-click to add a curve point/);
+    expect(curveStrokeHoverHint(line, { x: 10, y: 10 }, 8)).toBeNull();
+  });
+
   it("bounds arrows by path geometry so empty curve sides do not block trim", () => {
     // Horizontal shaft, single free control only downward.
     // Quadratic apex is at t=0.5 → y = 0.25*200 + 0.5*300 + 0.25*200 = 250,
@@ -793,6 +830,52 @@ describe("screenshot editor geometry", () => {
     const rectBounds = elementBounds(rect);
     // strokeExtent(4) = ceil(2) + 1 = 3
     expect(rectBounds).toMatchObject({ x: 47, y: 47, width: 106, height: 76 });
+  });
+
+  it("pads arrow heads at the tip only so empty shaft sides stay tight for trim", () => {
+    // Tall vertical arrow: isotropic head pad used to inflate the start end
+    // (bottom) by ~half the wing length even though wings only sit near the tip.
+    const vertical: EditorShapeElement = {
+      ...editableLayer,
+      id: "arrow-v",
+      kind: "shape",
+      shape: "arrow",
+      x: 200,
+      y: 300,
+      endX: 200,
+      endY: 80,
+      controls: [],
+      style: { color: "#f00", fill: null, strokeWidth: 8 },
+    };
+    const verticalBounds = elementBounds(vertical);
+    // Bottom of the shaft stays near y=300; old isotropic pad pushed it to ~325+.
+    expect(verticalBounds.y + verticalBounds.height).toBeLessThan(310);
+    // Tip + wings still expand past the endpoint (and laterally near the tip).
+    expect(verticalBounds.y).toBeLessThan(80);
+    expect(verticalBounds.width).toBeGreaterThan(20);
+
+    // Horizontal shaft, tip on the right: left (start) must not get head pad.
+    const horizontal: EditorShapeElement = {
+      ...vertical,
+      id: "arrow-h",
+      x: 80,
+      y: 200,
+      endX: 320,
+      endY: 200,
+    };
+    const horizontalBounds = elementBounds(horizontal);
+    // strokeExtent(8) = 5 → left edge ≈ 75. Old isotropic head pad ≈ 24 → ~56.
+    expect(horizontalBounds.x).toBeGreaterThan(70);
+    expect(horizontalBounds.x).toBeLessThan(80);
+    // Right edge still includes the tip and wings.
+    expect(horizontalBounds.x + horizontalBounds.width).toBeGreaterThan(320);
+
+    const line: EditorShapeElement = { ...vertical, id: "line", shape: "line" };
+    const lineBounds = elementBounds(line);
+    // Lines have no head: box is shaft + stroke only.
+    expect(lineBounds.y).toBeGreaterThan(70);
+    expect(lineBounds.y + lineBounds.height).toBeLessThan(310);
+    expect(lineBounds.width).toBeLessThan(15);
   });
 
   it("hit-tests corner resize handles and resizes bounds from the opposite corner", () => {

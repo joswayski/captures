@@ -577,7 +577,7 @@ describe("ScreenshotEditor", () => {
     fireEvent.click(within(layers).getByRole("button", { name: /ArrowShape/ }));
     const curve = screen.getByRole("slider", { name: "Curve" });
     expect(curve).toHaveValue("0");
-    expect(screen.getByText(/Double-click the shaft to add a point/)).toBeInTheDocument();
+    expect(screen.getByText(/Double-click the path to add a point/)).toBeInTheDocument();
 
     fireEvent.pointerDown(canvas, {
       button: 0,
@@ -671,6 +671,80 @@ describe("ScreenshotEditor", () => {
     });
     expect(screen.getByText(/\(1\/4\)/)).toBeInTheDocument();
     expect(screen.getByRole("slider", { name: "Curve" })).toBeInTheDocument();
+  });
+
+  it("curves lines with the same handles, double-click points, and hover tip", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findAllByText("1440 × 900");
+
+    fireEvent.change(screen.getByRole("combobox", { name: "Canvas zoom" }), {
+      target: { value: "100" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Line (L)" }));
+    const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
+    canvas.setPointerCapture = vi.fn();
+    canvas.hasPointerCapture = vi.fn(() => true);
+    canvas.releasePointerCapture = vi.fn();
+    setCanvasBounds(canvas);
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 50,
+      clientX: 100,
+      clientY: 300,
+    });
+    fireEvent.pointerMove(canvas, {
+      pointerId: 50,
+      clientX: 400,
+      clientY: 300,
+    });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 50,
+      clientX: 400,
+      clientY: 300,
+    });
+
+    const layers = screen.getByRole("region", { name: "Layers" });
+    fireEvent.click(within(layers).getByRole("button", { name: /LineShape/ }));
+    expect(screen.getByRole("slider", { name: "Curve" })).toBeInTheDocument();
+    expect(screen.getByText(/Double-click the path to add a point/)).toBeInTheDocument();
+
+    // Mid handle bend (chord length 300 → 150px lateral = 50% curve).
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 51,
+      clientX: 250,
+      clientY: 300,
+    });
+    fireEvent.pointerMove(canvas, {
+      pointerId: 51,
+      clientX: 250,
+      clientY: 450,
+    });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 51,
+      clientX: 250,
+      clientY: 450,
+    });
+    expect(screen.getByRole("slider", { name: "Curve" })).toHaveValue("50");
+
+    // Hover the path → discovery tooltip.
+    fireEvent.pointerMove(canvas, {
+      clientX: 320,
+      clientY: 360,
+    });
+    expect(screen.getByRole("tooltip", {
+      name: /Double-click to add a curve point/,
+    })).toBeInTheDocument();
+
+    fireEvent.doubleClick(canvas, {
+      button: 0,
+      clientX: 340,
+      clientY: 360,
+    });
+    expect(screen.getByText(/\(2\/4\)/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Straighten line" })).toBeInTheDocument();
   });
 
   it("lets the original layer be unlocked and exposes layer appearance controls", async () => {

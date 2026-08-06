@@ -16,8 +16,8 @@ import {
   ALIGNMENT_SNAP_SCREEN_PX,
   arrowBendAmount,
   arrowDefaultMidHandle,
-  arrowHeadLength,
   arrowHeadTangentPoint,
+  arrowHeadWingTips,
   arrowVertices,
   arrowWithBend,
   boundedCropRect,
@@ -32,6 +32,7 @@ import {
   estimateCanvasExportBytes,
   expandDocumentForElement,
   expandDocumentToFitBounds,
+  curveStrokeHoverHint,
   hitTestArrowHandle,
   hitTestElement,
   insertArrowControl,
@@ -39,6 +40,7 @@ import {
   hitTestResizeHandle,
   imageDropGuideAtPoint,
   imageSizeAtWidth,
+  isCurveableStrokeShape,
   isSupportedImageFile,
   loadImageFile,
   MAX_ARROW_CONTROLS,
@@ -431,19 +433,12 @@ function arrowHead(
   tangent: EditorPoint,
   strokeWidth: number,
 ): void {
-  const angle = Math.atan2(end.y - tangent.y, end.x - tangent.x);
-  const length = arrowHeadLength(strokeWidth);
+  const [wingA, wingB] = arrowHeadWingTips(end, tangent, strokeWidth);
   context.beginPath();
   context.moveTo(end.x, end.y);
-  context.lineTo(
-    end.x - length * Math.cos(angle - Math.PI / 6),
-    end.y - length * Math.sin(angle - Math.PI / 6),
-  );
+  context.lineTo(wingA.x, wingA.y);
   context.moveTo(end.x, end.y);
-  context.lineTo(
-    end.x - length * Math.cos(angle + Math.PI / 6),
-    end.y - length * Math.sin(angle + Math.PI / 6),
-  );
+  context.lineTo(wingB.x, wingB.y);
   context.stroke();
 }
 
@@ -484,14 +479,16 @@ function drawShape(
     return;
   }
 
-  if (shape === "arrow") {
+  if (isCurveableStrokeShape(element)) {
     strokeArrowPath(context, arrowVertices(element));
-    arrowHead(
-      context,
-      { x: endX, y: endY },
-      arrowHeadTangentPoint(element),
-      style.strokeWidth,
-    );
+    if (shape === "arrow") {
+      arrowHead(
+        context,
+        { x: endX, y: endY },
+        arrowHeadTangentPoint(element),
+        style.strokeWidth,
+      );
+    }
     context.restore();
     return;
   }
@@ -663,7 +660,7 @@ function drawEditorOverlays(
       ]) {
         context.fillRect(point[0] - 4 * unit, point[1] - 4 * unit, 8 * unit, 8 * unit);
       }
-      if (selected?.kind === "shape" && selected.shape === "arrow") {
+      if (selected?.kind === "shape" && isCurveableStrokeShape(selected)) {
         const start = { x: selected.x, y: selected.y };
         const end = { x: selected.endX, y: selected.endY };
         drawArrowEndpointHandle(context, start, unit, accentColor);
@@ -893,6 +890,12 @@ export function ScreenshotEditor() {
   const [canvasExpandPreview, setCanvasExpandPreview] = useState<CanvasExpandPreview | null>(null);
   const [trimEdgesHover, setTrimEdgesHover] = useState(false);
   const [canvasCursor, setCanvasCursor] = useState<string | undefined>(undefined);
+  /** Floating tip while hovering a line/arrow path or its curve handles. */
+  const [curveHoverTip, setCurveHoverTip] = useState<{
+    text: string;
+    clientX: number;
+    clientY: number;
+  } | null>(null);
   /** Command/Ctrl held — pan-ready grab cursor over the viewport. */
   const [panReady, setPanReady] = useState(false);
   const [panActive, setPanActive] = useState(false);
@@ -1820,22 +1823,23 @@ export function ScreenshotEditor() {
         }
         if (
           selectedElement.kind === "shape"
-          && selectedElement.shape === "arrow"
+          && isCurveableStrokeShape(selectedElement)
         ) {
-          const arrowHandle = hitTestArrowHandle(
+          const strokeHandle = hitTestArrowHandle(
             selectedElement,
             point,
             interactionRadius,
           );
-          if (arrowHandle) {
+          if (strokeHandle) {
             gestureRef.current = {
               kind: "arrow-handle",
               pointerId: event.pointerId,
-              handle: arrowHandle,
+              handle: strokeHandle,
               element: selectedElement,
               initialDocument: current,
             };
             setCanvasCursor("grabbing");
+            setCurveHoverTip(null);
             capturePointerTarget(event.currentTarget, event.pointerId);
             return;
           }
@@ -1844,6 +1848,7 @@ export function ScreenshotEditor() {
 
       const element = hitTestElement(current.elements, point, interactionRadius);
       setSelectedId(element?.id ?? null);
+      setCurveHoverTip(null);
       if (element) {
         gestureRef.current = {
           kind: "move",
@@ -1975,6 +1980,7 @@ export function ScreenshotEditor() {
     if (!gesture || gesture.pointerId !== event.pointerId) {
       if (tool === "select") {
         const current = documentRef.current;
+        const interactionRadius = 10 / Math.max(0.01, displayScale);
         const selectedElement = selectedId && current
           ? current.elements.find((element) => element.id === selectedId) ?? null
           : null;
@@ -1984,41 +1990,82 @@ export function ScreenshotEditor() {
         ) {
           if (
             selectedElement.kind === "shape"
-            && selectedElement.shape === "arrow"
+            && isCurveableStrokeShape(selectedElement)
           ) {
-            const arrowHandle = hitTestArrowHandle(
+            const strokeHandle = hitTestArrowHandle(
               selectedElement,
               point,
-              10 / Math.max(0.01, displayScale),
+              interactionRadius,
             );
-            if (arrowHandle) {
+            const hint = curveStrokeHoverHint(
+              selectedElement,
+              point,
+              interactionRadius,
+            );
+            setCurveHoverTip(
+              hint
+                ? { text: hint, clientX: event.clientX, clientY: event.clientY }
+                : null,
+            );
+            if (strokeHandle) {
               setCanvasCursor(
-                arrowHandle.kind === "start" || arrowHandle.kind === "end"
+                strokeHandle.kind === "start" || strokeHandle.kind === "end"
                   ? "move"
                   : "grab",
               );
               return;
             }
+            if (hint) {
+              setCanvasCursor("pointer");
+              return;
+            }
+          } else {
+            setCurveHoverTip(null);
           }
           const handle = hitTestResizeHandle(
             elementBounds(selectedElement),
             point,
-            10 / Math.max(0.01, displayScale),
+            interactionRadius,
           );
           if (handle) {
             setCanvasCursor(resizeCursor(handle));
             return;
           }
+        } else {
+          setCurveHoverTip(null);
         }
         const hovered = current
-          ? hitTestElement(current.elements, point, 10 / Math.max(0.01, displayScale))
+          ? hitTestElement(current.elements, point, interactionRadius)
           : null;
+        // Unselected curveable strokes: light discovery tip when hovering the path.
+        if (
+          hovered
+          && hovered.kind === "shape"
+          && isCurveableStrokeShape(hovered)
+          && hovered.id !== selectedId
+          && !hovered.locked
+        ) {
+          const closest = closestPointOnArrow(hovered, point);
+          const pathHitRadius = Math.max(
+            interactionRadius,
+            hovered.style.strokeWidth * 2 + interactionRadius * 0.6,
+          );
+          if (closest.distance <= pathHitRadius) {
+            setCurveHoverTip({
+              text: "Click to select · double-click path to add curve points",
+              clientX: event.clientX,
+              clientY: event.clientY,
+            });
+          }
+        }
         setCanvasCursor(hovered ? "move" : undefined);
         return;
       }
+      setCurveHoverTip(null);
       setCanvasCursor(undefined);
       return;
     }
+    setCurveHoverTip(null);
     if (gesture.kind === "crop") {
       const aspectRatio = cropAspect === "free"
         ? null
@@ -2236,14 +2283,14 @@ export function ScreenshotEditor() {
     const point = clientToDocumentPoint(event.clientX, event.clientY);
     const interactionRadius = 10 / Math.max(0.01, displayScale);
 
-    // Prefer the selected arrow so double-click on its shaft adds a control.
+    // Prefer the selected line/arrow so double-click on its path adds a control.
     const selectedElement = selectedId
       ? current.elements.find((element) => element.id === selectedId) ?? null
       : null;
     if (
       selectedElement
       && selectedElement.kind === "shape"
-      && selectedElement.shape === "arrow"
+      && isCurveableStrokeShape(selectedElement)
       && !selectedElement.locked
     ) {
       const handle = hitTestArrowHandle(selectedElement, point, interactionRadius);
@@ -2278,10 +2325,37 @@ export function ScreenshotEditor() {
       }
     }
 
-    const element = hitTestElement(current.elements, point, interactionRadius);
-    if (element?.kind === "text") {
+    // Double-click an unselected line/arrow path: select it and add a curve point.
+    const hit = hitTestElement(current.elements, point, interactionRadius);
+    if (
+      hit
+      && hit.kind === "shape"
+      && isCurveableStrokeShape(hit)
+      && !hit.locked
+      && hit.id !== selectedId
+    ) {
+      const closest = closestPointOnArrow(hit, point);
+      const pathHitRadius = Math.max(
+        interactionRadius,
+        hit.style.strokeWidth * 2 + 6 / Math.max(0.01, displayScale),
+      );
+      if (closest.distance <= pathHitRadius) {
+        event.preventDefault();
+        setSelectedId(hit.id);
+        if (hit.controls.length < MAX_ARROW_CONTROLS) {
+          const updated = insertArrowControl(hit, closest.point);
+          if (updated) {
+            commitDocument(replaceElement(current, hit.id, updated));
+            return;
+          }
+        }
+        return;
+      }
+    }
+
+    if (hit?.kind === "text") {
       event.preventDefault();
-      beginTextEditing(element.id);
+      beginTextEditing(hit.id);
     }
   };
 
@@ -3042,8 +3116,21 @@ export function ScreenshotEditor() {
             onPointerMove={movePointer}
             onPointerUp={finishPointer}
             onPointerCancel={finishPointer}
+            onPointerLeave={() => setCurveHoverTip(null)}
             onDoubleClick={handleCanvasDoubleClick}
           />
+          {curveHoverTip && !panActive && !panReady && (
+            <div
+              className="screenshot-curve-hover-tip"
+              role="tooltip"
+              style={{
+                left: curveHoverTip.clientX,
+                top: curveHoverTip.clientY,
+              }}
+            >
+              {curveHoverTip.text}
+            </div>
+          )}
           {editingText && inlineTextLayout && (
             <textarea
               ref={inlineTextRef}
@@ -3796,7 +3883,7 @@ export function ScreenshotEditor() {
                 )}
               </>
             )}
-            {selected.kind === "shape" && selected.shape === "arrow" && (
+            {selected.kind === "shape" && isCurveableStrokeShape(selected) && (
               <>
                 {selected.controls.length <= 1 ? (
                   <label>
@@ -3829,12 +3916,12 @@ export function ScreenshotEditor() {
                           : element
                       ))}
                     >
-                      Straighten arrow
+                      {selected.shape === "arrow" ? "Straighten arrow" : "Straighten line"}
                     </button>
                   </div>
                 )}
                 <p>
-                  Drag handles to curve. Double-click the shaft to add a point
+                  Drag handles to curve. Double-click the path to add a point
                   ({selected.controls.length}/{MAX_ARROW_CONTROLS}); double-click a
                   point to remove it.
                 </p>
