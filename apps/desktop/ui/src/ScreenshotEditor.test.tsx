@@ -919,6 +919,15 @@ describe("ScreenshotEditor", () => {
       clientX: 280,
       clientY: 260,
     });
+
+    // While past the edge: faded overflow paint + quiet ghost with stronger left edge.
+    const overflow = viewport.querySelector(".screenshot-canvas-expand-overflow");
+    const ghost = viewport.querySelector(".screenshot-canvas-expand-ghost");
+    expect(overflow).toBeTruthy();
+    expect(ghost).toBeTruthy();
+    expect(ghost?.classList.contains("edge-left")).toBe(true);
+    expect(screen.getByText("Release to expand canvas")).toBeInTheDocument();
+
     fireEvent.pointerUp(viewport, {
       button: 0,
       pointerId: 50,
@@ -929,6 +938,8 @@ describe("ScreenshotEditor", () => {
     expect(
       within(screen.getByRole("region", { name: "Layers" })).getByText("Arrow"),
     ).toBeInTheDocument();
+    // Preview chrome clears after release.
+    expect(viewport.querySelector(".screenshot-canvas-expand-overflow")).toBeNull();
     // Start was ~40px left of the canvas; stroke padding expands further.
     await waitFor(() => {
       const sizeLabels = screen.getAllByText(/\d+\s*×\s*\d+/);

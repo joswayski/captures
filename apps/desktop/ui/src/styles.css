@@ -1822,16 +1822,28 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 .screenshot-canvas-expand-ghost {
   position: absolute;
   z-index: 4;
-  border: 2px dashed rgba(var(--theme-accent-rgb),.78);
+  /* Quieter dashed frame; directional glow strength is set inline per expanding edge. */
+  border: 1.5px dashed rgba(var(--theme-accent-rgb),.42);
   border-radius: 3px;
   /* Transparent fill keeps current canvas readable; outline shows post-release bounds. */
   background: transparent;
-  box-shadow:
-    0 0 0 1px rgba(var(--theme-accent-rgb),.14),
-    0 0 28px rgba(var(--theme-accent-rgb),.3),
-    0 0 56px rgba(var(--theme-accent-rgb),.14);
+  box-shadow: 0 0 0 1px rgba(var(--theme-accent-rgb),.08);
   pointer-events: none;
   animation: canvas-expand-ghost-breathe 1.7s ease-in-out infinite;
+}
+/* Expanding sides get a stronger dashed stroke so the quiet frame still reads directionally. */
+.screenshot-canvas-expand-ghost.edge-top { border-top-color: rgba(var(--theme-accent-rgb),.82); border-top-width: 2px; }
+.screenshot-canvas-expand-ghost.edge-bottom { border-bottom-color: rgba(var(--theme-accent-rgb),.82); border-bottom-width: 2px; }
+.screenshot-canvas-expand-ghost.edge-left { border-left-color: rgba(var(--theme-accent-rgb),.82); border-left-width: 2px; }
+.screenshot-canvas-expand-ghost.edge-right { border-right-color: rgba(var(--theme-accent-rgb),.82); border-right-width: 2px; }
+/* Faded paint of the active layer where it sticks past the current canvas. */
+.screenshot-canvas-expand-overflow {
+  position: absolute;
+  z-index: 4;
+  display: block;
+  pointer-events: none;
+  /* Slightly soft so the preview reads as a hint, not committed paint. */
+  filter: saturate(.92);
 }
 .screenshot-canvas-expand-hint {
   position: absolute;
@@ -2008,21 +2020,10 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   white-space: nowrap;
   transform: translate(-50%,-50%);
 }
+/* Opacity-only breathe so directional inline box-shadows are not overridden. */
 @keyframes canvas-expand-ghost-breathe {
-  0%, 100% {
-    opacity: .9;
-    box-shadow:
-      0 0 0 1px rgba(var(--theme-accent-rgb),.12),
-      0 0 24px rgba(var(--theme-accent-rgb),.26),
-      0 0 48px rgba(var(--theme-accent-rgb),.12);
-  }
-  50% {
-    opacity: 1;
-    box-shadow:
-      0 0 0 1px rgba(var(--theme-accent-rgb),.2),
-      0 0 34px rgba(var(--theme-accent-rgb),.38),
-      0 0 64px rgba(var(--theme-accent-rgb),.18);
-  }
+  0%, 100% { opacity: .88; }
+  50% { opacity: 1; }
 }
 @media (prefers-reduced-motion: reduce) {
   .screenshot-canvas-expand-ghost,
@@ -2031,9 +2032,10 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   .screenshot-canvas-expand-particle {
     animation: none !important;
   }
-  .screenshot-canvas-expand-ghost { opacity: .92; }
+  .screenshot-canvas-expand-ghost { opacity: .94; }
   .screenshot-canvas-expand-bloom { opacity: .7; }
   .screenshot-canvas-expand-particle { opacity: 0; }
+  .screenshot-canvas-expand-overflow { filter: none; }
 }
 
 /*
