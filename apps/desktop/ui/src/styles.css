@@ -235,6 +235,10 @@ html.capture-window-cursor, html.capture-window-cursor * { cursor: var(--capture
     0 0 0 5px rgba(var(--theme-accent-rgb),.22),
     0 0 24px rgba(var(--theme-accent-rgb),.38);
 }
+/* Longer box-shadow ease when the open-editor ring drops after the window closes. */
+.thumbnail-card.thumbnail-editor-leaving {
+  transition: box-shadow .55s cubic-bezier(.2,.8,.2,1);
+}
 .thumbnail-card::after { position: absolute; z-index: 8; inset: 0; border-radius: inherit; box-shadow: 0 0 0 1px rgba(var(--theme-accent-rgb),.82), 0 0 17px rgba(var(--theme-accent-rgb),.24); content: ""; opacity: 0; pointer-events: none; }
 .thumbnail-card.thumbnail-capture-highlight::after { animation: thumbnail-capture-highlight 4.5s linear; }
 @keyframes thumbnail-capture-highlight {
@@ -289,6 +293,10 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-meta, .thu
   line-height: 1.3;
   animation: editor-presence-arrive .85s cubic-bezier(.2,.8,.2,1) both;
 }
+.editor-presence-chip.leaving {
+  pointer-events: none;
+  animation: editor-presence-leave .55s cubic-bezier(.2,.8,.2,1) both;
+}
 .editor-presence-chip svg {
   width: 11px;
   height: 11px;
@@ -302,6 +310,10 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-meta, .thu
 @keyframes editor-presence-arrive {
   0% { opacity: 0; transform: translateY(3px) scale(.94); }
   100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes editor-presence-leave {
+  0% { opacity: 1; transform: translateY(0) scale(1); }
+  100% { opacity: 0; transform: translateY(3px) scale(.94); }
 }
 .icon-button.active {
   color: var(--theme-accent-ink, #120f1c);

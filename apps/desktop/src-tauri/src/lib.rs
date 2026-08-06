@@ -24,6 +24,7 @@ use captures_capture::{CaptureError, CaptureMode, LogicalRect};
 use chrono::{DateTime, Utc};
 use image::RgbaImage;
 use mouse_position::mouse_position::Mouse;
+use serde::Serialize;
 use tauri::{
     AppHandle, Emitter, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder,
     image::Image,
@@ -94,8 +95,17 @@ const RECORDING_EDITOR_WINDOW_PREFIX: &str = "recording-editor-";
 const RECORDING_SAVED_NOTICE_LABEL: &str = "recording-saved";
 const RECORDING_SAVED_NOTICE_EVENT: &str = "recording-saved-artifact";
 const RECORDING_CONTROLS_HIDDEN_NOTICE_PREFIX: &str = "recording-controls-hidden-";
+/// Mini-preview stack listens for this to clear “In editor” when a window dies.
+const EDITOR_LAYERS_CHANGED_EVENT: &str = "editor-layers-changed";
 #[cfg(any(target_os = "macos", test))]
 const WINDOW_CORNER_MASK_SAMPLES_PER_AXIS: u32 = 4;
+
+/// Payload for `editor-layers-changed` (matches the frontend `EditorLayerPresence`).
+#[derive(Clone, Debug, Serialize)]
+struct EditorLayerPresenceEvent {
+    editor_id: String,
+    artifact_ids: Vec<String>,
+}
 
 struct ClipboardWrite {
     revision: isize,
@@ -128,15 +138,27 @@ pub fn run() {
 
     builder
         .on_window_event(|window, event| {
-            if !matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
-                return;
-            }
-            let Some(artifact_id) = window.label().strip_prefix(RECORDING_EDITOR_WINDOW_PREFIX)
-            else {
-                return;
-            };
-            if let Err(error) = show_recording_saved_notice(window.app_handle(), artifact_id) {
-                eprintln!("failed to show recording saved notice: {error}");
+            match event {
+                // Clear mini-preview “In editor” before the webview is torn down.
+                // React unmount emit is best-effort; native close often skips it.
+                tauri::WindowEvent::CloseRequested { .. } => {
+                    clear_editor_layer_presence_for_window(window);
+                    let Some(artifact_id) =
+                        window.label().strip_prefix(RECORDING_EDITOR_WINDOW_PREFIX)
+                    else {
+                        return;
+                    };
+                    if let Err(error) =
+                        show_recording_saved_notice(window.app_handle(), artifact_id)
+                    {
+                        eprintln!("failed to show recording saved notice: {error}");
+                    }
+                }
+                // Belt-and-suspenders if CloseRequested was prevented or skipped.
+                tauri::WindowEvent::Destroyed => {
+                    clear_editor_layer_presence_for_window(window);
+                }
+                _ => {}
             }
         })
         .manage(state)
@@ -3555,6 +3577,33 @@ fn show_capture_history(app: &AppHandle) {
     });
 }
 
+/// True when the window label belongs to a screenshot or recording editor.
+fn is_editor_window_label(label: &str) -> bool {
+    label.starts_with(SCREENSHOT_EDITOR_WINDOW_PREFIX)
+        || label.starts_with(RECORDING_EDITOR_WINDOW_PREFIX)
+}
+
+/// Tell mini-previews this editor no longer holds any layers (window closed).
+///
+/// `editor_id` matches the Tauri window label and the frontend presence id
+/// (`screenshot-editor-{id}` / `recording-editor-{id}`).
+fn clear_editor_layer_presence_for_window(window: &tauri::Window) {
+    let label = window.label();
+    if !is_editor_window_label(label) {
+        return;
+    }
+    let payload = EditorLayerPresenceEvent {
+        editor_id: label.to_owned(),
+        artifact_ids: Vec::new(),
+    };
+    if let Err(error) = window
+        .app_handle()
+        .emit(EDITOR_LAYERS_CHANGED_EVENT, payload)
+    {
+        eprintln!("failed to clear editor layer presence for {label}: {error}");
+    }
+}
+
 fn primary_app_window_priority(label: &str) -> Option<u8> {
     if matches!(
         label,
@@ -4889,6 +4938,15 @@ mod tests {
         assert_eq!(primary_app_window_priority("history"), Some(2));
         assert_eq!(primary_app_window_priority("recording-hud"), Some(4));
         assert_eq!(primary_app_window_priority("thumbnail"), None);
+    }
+
+    #[test]
+    fn identifies_editor_windows_for_presence_clear() {
+        assert!(super::is_editor_window_label("screenshot-editor-capture-1"));
+        assert!(super::is_editor_window_label("recording-editor-vid-9"));
+        assert!(!super::is_editor_window_label("thumbnail"));
+        assert!(!super::is_editor_window_label("history"));
+        assert!(!super::is_editor_window_label("screenshot-countdown"));
     }
 
     #[test]
