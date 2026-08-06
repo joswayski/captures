@@ -8,7 +8,7 @@ const CONTACT_EMAIL = "contact@josevalerio.com";
 const PREVIEW_DOWNLOAD_BASE = `${REPO_URL}/releases/download/preview`;
 const PREVIEW_TAG = /^v(\d{4})\.(\d{2})\.(\d{2})\.([1-9]\d?)$/u;
 /** How often the homepage re-checks Preview build status (and the API cache TTL). */
-const PREVIEW_STATUS_POLL_MS = 10 * 60 * 1_000;
+const PREVIEW_STATUS_POLL_MS = 60 * 60 * 1_000;
 
 const PREVIEW_DOWNLOADS = [
   {
