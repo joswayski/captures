@@ -1,4 +1,7 @@
-use std::time::Duration;
+use std::{
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 
 use serde::{Deserialize, Serialize};
 use tauri::{
@@ -11,8 +14,11 @@ use crate::CommandResult;
 /// (useful for local API development).
 const DEFAULT_FEEDBACK_URL: &str = "https://api.captur.es/api/feedback";
 const FEEDBACK_TIMEOUT: Duration = Duration::from_secs(20);
+const LOCAL_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60);
 const MAX_MESSAGE_LEN: usize = 8_000;
 const MAX_CONTACT_LEN: usize = 200;
+
+static LAST_SUCCESSFUL_SUBMIT: Mutex<Option<Instant>> = Mutex::new(None);
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -72,6 +78,10 @@ pub async fn submit_feedback(
     app: AppHandle,
     draft: FeedbackDraft,
 ) -> CommandResult<FeedbackSubmitResult> {
+    if let Some(message) = local_rate_limit_message() {
+        return Err(message);
+    }
+
     let message = draft.message.trim();
     if message.is_empty() {
         return Err("Please enter a short description of the issue or idea.".to_owned());
@@ -146,6 +156,7 @@ pub async fn submit_feedback(
         let body = response.json::<ApiOk>().await.map_err(|error| {
             format!("Feedback was accepted, but the reply was unreadable: {error}")
         })?;
+        mark_local_rate_limit();
         return Ok(FeedbackSubmitResult { id: body.id });
     }
 
@@ -158,10 +169,32 @@ pub async fn submit_feedback(
         }
     });
     Err(match status.as_u16() {
-        429 => "Too many feedback submissions. Please wait a minute and try again.".to_owned(),
+        429 => "Please wait a minute before sending more feedback.".to_owned(),
         400 => detail,
         _ => format!("Couldn’t send feedback ({status}): {detail}"),
     })
+}
+
+fn local_rate_limit_message() -> Option<String> {
+    let guard = LAST_SUCCESSFUL_SUBMIT.lock().ok()?;
+    let last = (*guard)?;
+    let elapsed = last.elapsed();
+    if elapsed >= LOCAL_RATE_LIMIT_COOLDOWN {
+        return None;
+    }
+    let remaining = LOCAL_RATE_LIMIT_COOLDOWN
+        .saturating_sub(elapsed)
+        .as_secs()
+        .max(1);
+    Some(format!(
+        "Please wait {remaining}s before sending more feedback."
+    ))
+}
+
+fn mark_local_rate_limit() {
+    if let Ok(mut guard) = LAST_SUCCESSFUL_SUBMIT.lock() {
+        *guard = Some(Instant::now());
+    }
 }
 
 pub fn show_feedback(app: &AppHandle) {

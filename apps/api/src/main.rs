@@ -24,8 +24,8 @@ const MAX_MESSAGE_LEN: usize = 8_000;
 const MAX_CONTACT_LEN: usize = 200;
 const MAX_META_LEN: usize = 128;
 const MAX_BODY_BYTES: usize = 32 * 1024;
-const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
-const RATE_LIMIT_MAX: u32 = 8;
+/// One accepted submission per client key per minute.
+const RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 struct AppState {
@@ -34,39 +34,43 @@ struct AppState {
 }
 
 struct RateLimiter {
-    entries: std::collections::HashMap<String, RateBucket>,
-}
-
-struct RateBucket {
-    window_start: std::time::Instant,
-    count: u32,
+    /// Last accepted submission time per client key (IP / forwarded-for).
+    last_accepted: std::collections::HashMap<String, std::time::Instant>,
 }
 
 impl RateLimiter {
     fn new() -> Self {
         Self {
-            entries: std::collections::HashMap::new(),
+            last_accepted: std::collections::HashMap::new(),
         }
     }
 
-    fn allow(&mut self, key: &str) -> bool {
+    fn can_accept(&mut self, key: &str) -> bool {
         let now = std::time::Instant::now();
-        self.entries.retain(|_, bucket| {
-            now.duration_since(bucket.window_start) < RATE_LIMIT_WINDOW.saturating_mul(2)
-        });
-        let bucket = self.entries.entry(key.to_owned()).or_insert(RateBucket {
-            window_start: now,
-            count: 0,
-        });
-        if now.duration_since(bucket.window_start) >= RATE_LIMIT_WINDOW {
-            bucket.window_start = now;
-            bucket.count = 0;
-        }
-        if bucket.count >= RATE_LIMIT_MAX {
+        self.prune(now);
+        self.last_accepted
+            .get(key)
+            .is_none_or(|last| now.duration_since(*last) >= RATE_LIMIT_COOLDOWN)
+    }
+
+    /// Atomically check and reserve a cooldown slot to close concurrent races.
+    fn try_accept(&mut self, key: &str) -> bool {
+        if !self.can_accept(key) {
             return false;
         }
-        bucket.count += 1;
+        self.record(key);
         true
+    }
+
+    fn record(&mut self, key: &str) {
+        let now = std::time::Instant::now();
+        self.prune(now);
+        self.last_accepted.insert(key.to_owned(), now);
+    }
+
+    fn prune(&mut self, now: std::time::Instant) {
+        self.last_accepted
+            .retain(|_, at| now.duration_since(*at) < RATE_LIMIT_COOLDOWN.saturating_mul(2));
     }
 }
 
@@ -117,7 +121,7 @@ struct ErrorBody {
 enum ApiError {
     #[error("{0}")]
     BadRequest(String),
-    #[error("too many feedback submissions; try again shortly")]
+    #[error("please wait a minute before sending more feedback")]
     RateLimited,
     #[error("failed to store feedback")]
     Database,
@@ -204,11 +208,7 @@ async fn create_feedback(
     headers: HeaderMap,
     Json(payload): Json<FeedbackRequest>,
 ) -> Result<(StatusCode, Json<FeedbackResponse>), ApiError> {
-    let rate_key = client_key(&headers, addr);
-    if !state.rate_limiter.lock().allow(&rate_key) {
-        return Err(ApiError::RateLimited);
-    }
-
+    // Validate first so empty/invalid payloads do not consume the cooldown.
     let message = normalize_required(&payload.message, "message", 1, MAX_MESSAGE_LEN)?;
     let contact = normalize_optional(payload.contact.as_deref(), MAX_CONTACT_LEN)?;
     let category = normalize_category(&payload.category)?;
@@ -217,6 +217,11 @@ async fn create_feedback(
     let os_version = normalize_optional(payload.os_version.as_deref(), MAX_META_LEN)?;
     let arch = normalize_optional(payload.arch.as_deref(), MAX_META_LEN)?;
     let source = normalize_source(&payload.source)?;
+
+    let rate_key = client_key(&headers, addr);
+    if !state.rate_limiter.lock().try_accept(&rate_key) {
+        return Err(ApiError::RateLimited);
+    }
 
     let row = sqlx::query_as::<_, (i64, DateTime<Utc>)>(
         r#"
@@ -376,4 +381,34 @@ async fn shutdown_signal() {
         () = terminate => {},
     }
     info!("shutdown signal received");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::thread;
+
+    #[test]
+    fn rate_limiter_allows_one_per_minute() {
+        let mut limiter = RateLimiter::new();
+        assert!(limiter.try_accept("1.2.3.4"));
+        assert!(!limiter.try_accept("1.2.3.4"));
+        assert!(limiter.try_accept("5.6.7.8"));
+    }
+
+    #[test]
+    fn rate_limiter_recovers_after_cooldown() {
+        // Use a tiny local window by recording then manually aging the entry.
+        let mut limiter = RateLimiter::new();
+        limiter.record("client");
+        assert!(!limiter.can_accept("client"));
+        if let Some(at) = limiter.last_accepted.get_mut("client") {
+            *at = std::time::Instant::now()
+                .checked_sub(RATE_LIMIT_COOLDOWN + Duration::from_millis(5))
+                .expect("instant should support subtraction");
+        }
+        // Give the clock a beat so duration_since is clearly past the cooldown.
+        thread::sleep(Duration::from_millis(2));
+        assert!(limiter.can_accept("client"));
+    }
 }

@@ -28,6 +28,7 @@ Small Rust HTTP service for early product feedback (and a foundation for later h
 - `contact` is optional free text (X handle, GitHub username, email, etc.).
 - `category` defaults to `bug` and accepts `bug`, `idea`, or `other`.
 - Rows use a `BIGSERIAL` primary key.
+- Rate limit: **one accepted submission per client IP per minute** (HTTP 429). Invalid payloads do not consume the cooldown.
 
 ## Local development
 
