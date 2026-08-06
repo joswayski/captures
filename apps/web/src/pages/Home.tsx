@@ -162,15 +162,16 @@ export default function Home() {
                   </a>
                   <p className="mt-1.5 text-xs text-ink-soft">
                     <time dateTime={change.committedAt}>{formatRelativeTime(change.committedAt, now)}</time>
+                    {cooking ? (
+                      <>
+                        <span aria-hidden="true"> · </span>
+                        <span className="cooking-emoji" aria-hidden="true">
+                          🍳
+                        </span>{" "}
+                        <span>preview still building</span>
+                      </>
+                    ) : null}
                   </p>
-                  {cooking ? (
-                    <p className="mt-1 flex items-center gap-1.5 text-[0.625rem] leading-none text-ink-soft">
-                      <span className="cooking-emoji" aria-hidden="true">
-                        🥚
-                      </span>
-                      <span>preview still building</span>
-                    </p>
-                  ) : null}
                 </li>
               );
             })}
