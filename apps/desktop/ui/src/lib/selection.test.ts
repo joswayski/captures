@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  captureDimClipPath,
   dragSelectionRect,
   frontToBackWindows,
   isCapturableSelection,
@@ -105,5 +106,21 @@ describe("dragSelectionRect", () => {
       width: 700,
       height: 520,
     });
+  });
+});
+
+describe("captureDimClipPath", () => {
+  it("cuts a hole using the same CSS pixel coords as the marquee", () => {
+    expect(captureDimClipPath({ x: 100, y: 120, width: 313, height: 415 })).toBe(
+      "polygon(evenodd, 0% 0%, 100% 0%, 100% 100%, 0% 100%, 0% 0%, "
+      + "100px 120px, 100px 535px, 413px 535px, 413px 120px)",
+    );
+  });
+
+  it("clamps negative origins so the hole stays on-screen", () => {
+    expect(captureDimClipPath({ x: -10, y: -4, width: 40, height: 20 })).toBe(
+      "polygon(evenodd, 0% 0%, 100% 0%, 100% 100%, 0% 100%, 0% 0%, "
+      + "0px 0px, 0px 20px, 40px 20px, 40px 0px)",
+    );
   });
 });

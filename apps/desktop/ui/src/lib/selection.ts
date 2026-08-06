@@ -63,6 +63,27 @@ export function roundedRectPath(rect: SelectionRect, cornerRadius: number): stri
   ].join("");
 }
 
+/**
+ * CSS clip-path for a full-surface shade with a rectangular hole.
+ *
+ * Uses the same CSS pixel space as the selection marquee (`left`/`top`/`width`/
+ * `height` on a positioned box). Prefer this over an SVG viewBox cutout when
+ * the hole is square: on Windows, theoretical display DIPs can disagree with
+ * the live WebView client size, which misaligned SVG path units against the
+ * marquee.
+ */
+export function captureDimClipPath(rect: SelectionRect): string {
+  const left = Math.max(0, rect.x);
+  const top = Math.max(0, rect.y);
+  const right = left + Math.max(0, rect.width);
+  const bottom = top + Math.max(0, rect.height);
+  return [
+    "polygon(evenodd,",
+    "0% 0%, 100% 0%, 100% 100%, 0% 100%, 0% 0%,",
+    `${left}px ${top}px, ${left}px ${bottom}px, ${right}px ${bottom}px, ${right}px ${top}px)`,
+  ].join(" ");
+}
+
 export function dragSelectionRect(
   mode: SelectionDragMode,
   origin: SelectionPoint,

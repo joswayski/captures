@@ -684,11 +684,12 @@ describe("RecordingSelector", () => {
         width: "300px",
         height: "220px",
       });
-      expect(container.querySelectorAll(".capture-shade-path")).toHaveLength(1);
-      expect(container.querySelector(".capture-shade-path")).toHaveAttribute(
-        "d",
-        expect.stringContaining("M100 120H400V340H100Z"),
-      );
+      // Region cutouts use CSS clip-path in marquee CSS pixels (not SVG viewBox).
+      expect(container.querySelector(".capture-shade-path")).not.toBeInTheDocument();
+      expect(container.querySelector(".capture-shade-full")).toHaveStyle({
+        clipPath: "polygon(evenodd, 0% 0%, 100% 0%, 100% 100%, 0% 100%, 0% 0%, "
+          + "100px 120px, 100px 340px, 400px 340px, 400px 120px)",
+      });
     });
   });
 
