@@ -4299,9 +4299,9 @@ function elementLabel(element: ScreenshotElement): string {
 }
 
 /**
- * The native drag preview is the light source. This element follows its
- * estimated footprint and lets soft atmosphere/ray layers bloom from behind
- * the OS-provided image without painting a second preview rectangle.
+ * Elevated spill under the native drag preview. The OS image stays the only
+ * floating plate; this footprint sells depth with a warm surface pool, contact
+ * shadow, and thin white rim — no neon accent rays or second preview rectangle.
  */
 function StackDropLight({ guide }: { guide: ImageDropGuide }) {
   const width = Math.max(1, guide.target.width);
@@ -4324,16 +4324,9 @@ function StackDropLight({ guide }: { guide: ImageDropGuide }) {
       data-focus-y={focusCenterY}
       aria-hidden="true"
     >
-      <i className="screenshot-drop-snap-stack-atmosphere" />
-      <i className="screenshot-drop-snap-stack-rays far" />
-      <i className="screenshot-drop-snap-stack-rays near" />
-      <i className="screenshot-drop-snap-stack-ray from-left upper" />
-      <i className="screenshot-drop-snap-stack-ray from-left lower" />
-      <i className="screenshot-drop-snap-stack-ray from-right upper" />
-      <i className="screenshot-drop-snap-stack-ray from-right lower" />
-      <i className="screenshot-drop-snap-stack-ray from-top" />
-      <i className="screenshot-drop-snap-stack-ray from-bottom" />
-      <i className="screenshot-drop-snap-stack-edge-glow" />
+      <i className="screenshot-drop-snap-stack-pool" />
+      <i className="screenshot-drop-snap-stack-shadow" />
+      <i className="screenshot-drop-snap-stack-rim" />
     </div>
   );
 }

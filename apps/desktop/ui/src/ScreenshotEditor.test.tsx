@@ -1133,19 +1133,22 @@ describe("ScreenshotEditor", () => {
     expect(guide).not.toBeNull();
     const light = guide?.querySelector(".screenshot-drop-snap-stack-light") as HTMLElement | null;
     expect(light).not.toBeNull();
-    expect(light?.querySelector(".screenshot-drop-snap-stack-atmosphere")).not.toBeNull();
-    expect(light?.querySelectorAll(".screenshot-drop-snap-stack-rays")).toHaveLength(2);
-    expect(light?.querySelectorAll(".screenshot-drop-snap-stack-ray")).toHaveLength(6);
-    expect(light?.querySelector(".screenshot-drop-snap-stack-edge-glow")).not.toBeNull();
+    // Elevated spill: warm pool + contact shadow + thin rim (no ray/neon layers).
+    expect(light?.querySelector(".screenshot-drop-snap-stack-pool")).not.toBeNull();
+    expect(light?.querySelector(".screenshot-drop-snap-stack-shadow")).not.toBeNull();
+    expect(light?.querySelector(".screenshot-drop-snap-stack-rim")).not.toBeNull();
+    expect(light?.querySelector(".screenshot-drop-snap-stack-atmosphere")).toBeNull();
+    expect(light?.querySelectorAll(".screenshot-drop-snap-stack-rays")).toHaveLength(0);
+    expect(light?.querySelectorAll(".screenshot-drop-snap-stack-ray")).toHaveLength(0);
+    expect(light?.querySelector(".screenshot-drop-snap-stack-edge-glow")).toBeNull();
     // The emitter is the compact native-preview footprint, not the target layer.
     expect(Number.parseFloat(light?.style.width ?? "100")).toBeLessThan(50);
     expect(Number.parseFloat(light?.style.height ?? "100")).toBeLessThan(50);
     expect(light?.querySelector("svg, polygon")).toBeNull();
     // The real native drag preview is the only floating rectangle: no detached
-    // target-wide bloom, opaque backing plate, shadow, or decorative particles.
+    // target-wide bloom, opaque backing plate, or decorative particles.
     expect(guide?.querySelector(".screenshot-drop-snap-bloom")).toBeNull();
     expect(guide?.querySelector(".screenshot-drop-snap-stack-plate")).toBeNull();
-    expect(guide?.querySelector(".screenshot-drop-snap-stack-shadow")).toBeNull();
     expect(guide?.querySelectorAll(".screenshot-drop-snap-particle")).toHaveLength(0);
     // Stack mode does not render a second on-canvas label badge.
     expect(guide?.querySelector(":scope > span")).toBeNull();
