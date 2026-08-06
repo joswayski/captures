@@ -5,6 +5,7 @@ import { message, open } from "@tauri-apps/plugin-dialog";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import {
   type CSSProperties,
+  type RefObject,
   useCallback,
   useEffect,
   useId,
@@ -37,6 +38,7 @@ import {
   type EditorCropHandle,
 } from "./lib/recordingEditor";
 import {
+  captureDimClipPath,
   dragSelectionRect,
   frontToBackWindows,
   isCapturableSelection,
@@ -1732,6 +1734,12 @@ export function RecordingSelector() {
     panelResizeAnimationRef.current?.cancel();
   }, []);
 
+  // Keep hooks above the idle early-return so session load never changes hook order.
+  const overlaySize = session
+    ? displayOverlaySize(session.display, session.window_coordinate_scale)
+    : { width: 0, height: 0 };
+  const surfaceSize = useElementCssSize(surfaceRef, overlaySize);
+
   if (!session || !settings) {
     return <main className="recording-selector-idle" aria-hidden="true" />;
   }
@@ -1761,7 +1769,6 @@ export function RecordingSelector() {
     };
     if (mode === "create") setRegion({ x: start.x, y: start.y, width: 0, height: 0 });
   };
-  const overlaySize = displayOverlaySize(session.display, session.window_coordinate_scale);
   const onPointerMove = (event: React.PointerEvent) => {
     if (!regionDragRef.current || targetMode !== "region") return;
     event.preventDefault();
@@ -1777,7 +1784,7 @@ export function RecordingSelector() {
         drag.origin,
         current,
         drag.initial,
-        overlaySize,
+        surfaceSize,
       ));
     });
   };
@@ -1790,7 +1797,7 @@ export function RecordingSelector() {
         drag.origin,
         current,
         drag.initial,
-        overlaySize,
+        surfaceSize,
       ));
     }
     if (
@@ -1818,7 +1825,7 @@ export function RecordingSelector() {
   const activeWindow = hoveredWindow ?? selectedWindow;
   const activeWindowLayout = windowLayouts.find(({ window }) => window.id === activeWindow);
   const selectedRect = targetMode === "display"
-    ? { x: 0, y: 0, width: overlaySize.width, height: overlaySize.height }
+    ? { x: 0, y: 0, width: surfaceSize.width, height: surfaceSize.height }
     : targetMode === "window"
       ? activeWindowLayout ? {
           x: activeWindowLayout.left,
@@ -1842,7 +1849,7 @@ export function RecordingSelector() {
       target = {
         type: "region",
         display_id: session.display.id,
-        rect: roundRecordingRect(region, overlaySize.width, overlaySize.height),
+        rect: roundRecordingRect(region, surfaceSize.width, surfaceSize.height),
       };
     } else {
       return null;
@@ -1991,7 +1998,7 @@ export function RecordingSelector() {
       <CaptureDim
         mode={targetMode}
         hole={selectedRect}
-        bounds={overlaySize}
+        bounds={surfaceSize}
         dimWithoutHole={targetMode === "window"}
         windowCornerRadius={activeWindowCornerRadius}
       />
@@ -3851,6 +3858,11 @@ function CaptureOverlay() {
       }));
   }, [mode, session]);
 
+  const displayOverlay = session
+    ? displayOverlaySize(session.display, session.window_coordinate_scale)
+    : { width: 0, height: 0 };
+  const surfaceSize = useElementCssSize(surfaceRef, displayOverlay);
+
   const revealOverlay = useCallback(async () => {
     if (!sessionId) return;
     if (revealingSessionIdRef.current === sessionId) return;
@@ -3997,7 +4009,7 @@ function CaptureOverlay() {
       <CaptureDim
         mode={mode}
         hole={dimHole}
-        bounds={displayOverlaySize(session.display, session.window_coordinate_scale)}
+        bounds={surfaceSize}
         windowCornerRadius={hoveredWindowLayout?.cornerRadius ?? session.window_corner_radius}
       />
       <CaptureGuidance
@@ -4051,6 +4063,11 @@ function CaptureOverlay() {
  * Region mode reveals the already-painted snapshot cleanly, then fades this
  * shade on top. Window mode can stay clear until hover for screenshot capture,
  * or dim immediately while the recording selector waits for a window choice.
+ *
+ * Square holes use a CSS clip-path in the same CSS pixel space as the marquee
+ * so Windows DPI cannot desync SVG viewBox units from pointer coordinates.
+ * Rounded window holes still use an SVG path; `bounds` should be the live
+ * surface client size so path units stay aligned.
  */
 function CaptureDim({
   mode,
@@ -4074,27 +4091,73 @@ function CaptureDim({
   }
 
   const { x, y, width, height } = hole;
-  const left = Math.max(0, Math.min(bounds.width, x));
-  const top = Math.max(0, Math.min(bounds.height, y));
-  const right = Math.max(left, Math.min(bounds.width, x + width));
-  const bottom = Math.max(top, Math.min(bounds.height, y + height));
+  const left = Math.max(0, x);
+  const top = Math.max(0, y);
+  const right = left + Math.max(0, width);
+  const bottom = top + Math.max(0, height);
+  const radius = mode === "window" ? Math.max(0, windowCornerRadius) : 0;
+
+  if (radius === 0) {
+    return (
+      <div
+        className="capture-shade capture-shade-full"
+        style={{ clipPath: captureDimClipPath({ x: left, y: top, width: right - left, height: bottom - top }) }}
+        aria-hidden="true"
+      />
+    );
+  }
+
+  const boxWidth = Math.max(bounds.width, right, 1);
+  const boxHeight = Math.max(bounds.height, bottom, 1);
   const path = [
-    `M0 0H${bounds.width}V${bounds.height}H0Z`,
+    `M0 0H${boxWidth}V${boxHeight}H0Z`,
     roundedRectPath(
       { x: left, y: top, width: right - left, height: bottom - top },
-      mode === "window" ? windowCornerRadius : 0,
+      radius,
     ),
   ].join(" ");
   return (
     <svg
       className="capture-shade-cutout"
-      viewBox={`0 0 ${bounds.width} ${bounds.height}`}
+      viewBox={`0 0 ${boxWidth} ${boxHeight}`}
       preserveAspectRatio="none"
       aria-hidden="true"
     >
       <path className="capture-shade capture-shade-path" d={path} fillRule="evenodd" />
     </svg>
   );
+}
+
+/** Live CSS client size of an element; falls back until layout is available. */
+function useElementCssSize(
+  ref: RefObject<HTMLElement | null>,
+  fallback: { width: number; height: number },
+): { width: number; height: number } {
+  const [measured, setMeasured] = useState<{ width: number; height: number } | null>(null);
+
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+
+    const update = () => {
+      const width = element.clientWidth;
+      const height = element.clientHeight;
+      if (width <= 0 || height <= 0) return;
+      setMeasured((current) => (
+        current && current.width === width && current.height === height
+          ? current
+          : { width, height }
+      ));
+    };
+
+    update();
+    if (typeof ResizeObserver !== "function") return;
+    const observer = new ResizeObserver(update);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [ref]);
+
+  return measured ?? fallback;
 }
 
 export function Thumbnail() {
