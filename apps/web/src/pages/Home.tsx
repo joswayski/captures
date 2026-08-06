@@ -69,7 +69,7 @@ export default function Home() {
           </p>
 
           <div className="mt-12 border-t border-border pt-10">
-            <p className="text-[0.6875rem] font-medium uppercase tracking-[0.14em] text-ink-soft">
+            <p className="text-[0.6875rem] font-medium uppercase tracking-[0.14em] text-accent-readable">
               Experimental preview
             </p>
             <h2 className="mt-2 text-base font-medium tracking-tight text-ink sm:text-lg">
@@ -114,7 +114,7 @@ export default function Home() {
                       <span className="block text-sm font-medium text-ink">{download.platform}</span>
                       <span className="mt-0.5 block text-xs text-ink-soft">{download.detail}</span>
                     </span>
-                    <span className="shrink-0 text-xs font-medium text-ink-muted transition-colors duration-200 ease-out group-hover:text-ink">
+                    <span className="shrink-0 text-xs font-medium text-ink-muted transition-colors duration-200 ease-out group-hover:text-accent-readable">
                       Download
                       <span className="sr-only"> {download.fileName}</span>
                     </span>
@@ -128,7 +128,7 @@ export default function Home() {
         <section aria-labelledby="latest-changes-heading" className="mt-14 border-t border-border pt-10">
           <h2
             id="latest-changes-heading"
-            className="text-[0.6875rem] font-medium uppercase tracking-[0.14em] text-ink-soft"
+            className="text-[0.6875rem] font-medium uppercase tracking-[0.14em] text-accent-readable"
           >
             Latest changes
           </h2>
@@ -192,9 +192,8 @@ function CopyEmailButton({ email }: { email: string }) {
   return (
     <button
       type="button"
-      className="inline-chip relative"
+      className="group/email inline-chip relative"
       onClick={handleCopy}
-      title={copied ? "Copied!" : "Click to copy"}
       aria-label={copied ? `Copied ${email}` : `Copy email ${email}`}
     >
       <MailIcon className="h-3 w-3" />
@@ -202,11 +201,11 @@ function CopyEmailButton({ email }: { email: string }) {
       <span
         role="status"
         className={[
-          "pointer-events-none absolute bottom-full left-1/2 z-10 mb-1.5 -translate-x-1/2 whitespace-nowrap rounded border border-border bg-ink px-2 py-1 text-[0.6875rem] font-medium text-accent-ink shadow-sm transition-opacity duration-150 ease-out",
-          copied ? "opacity-100" : "opacity-0",
+          "pointer-events-none absolute bottom-full left-1/2 z-10 mb-1.5 -translate-x-1/2 whitespace-nowrap rounded bg-ink px-2 py-1 text-[0.6875rem] font-medium text-accent-ink shadow-sm transition-opacity duration-150 ease-out",
+          copied ? "opacity-100" : "opacity-0 group-hover/email:opacity-100 group-focus-visible/email:opacity-100",
         ].join(" ")}
       >
-        Copied!
+        {copied ? "Copied!" : "Click to copy"}
       </span>
     </button>
   );
