@@ -649,7 +649,11 @@ jobs:
             --pattern '*.deb' \
             --pattern latest.json \
             --dir "$channel_assets"
-          preview_assets="$(node scripts/preview-release-assets.mjs "$channel_assets")"
+          # Rename versioned packages to stable channel names so README and
+          # release-page download links always point at the latest Preview.
+          preview_assets="$(
+            node scripts/preview-release-assets.mjs prepare "$channel_assets"
+          )"
           macos_asset="$(jq -er .macos <<< "$preview_assets")"
           windows_asset="$(jq -er .windows <<< "$preview_assets")"
           linux_deb_asset="$(jq -er .linuxDeb <<< "$preview_assets")"
@@ -668,7 +672,7 @@ jobs:
             echo "> [!WARNING]"
             echo "> Captures Preview is functional, but experimental. Expect bugs and incomplete features; macOS is the primary development target, while Windows and Linux may be less polished."
             echo
-            echo "Download the latest validated build:"
+            echo "Download the latest validated build (these links always track the newest Preview):"
             echo
             echo "- [macOS 13+ — Apple silicon (.dmg)]($(asset_url "$macos_asset"))"
             echo "- [Windows 11 — x64 installer (.exe)]($(asset_url "$windows_asset"))"
