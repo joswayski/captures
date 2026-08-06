@@ -372,20 +372,45 @@ fn truncate(value: &str, max_chars: usize) -> String {
     out
 }
 
+/// Pick a rate-limit key for this request.
+///
+/// Do **not** trust raw `X-Forwarded-For`: clients can send anything there.
+/// Behind Cloudflare → Railway, prefer `CF-Connecting-IP` (set by Cloudflare).
+/// Fall back to the TCP peer address (usually Cloudflare or Railway, not the end user).
 fn client_key(headers: &HeaderMap, addr: SocketAddr) -> String {
-    forwarded_for(headers).unwrap_or_else(|| addr.ip().to_string())
+    if let Some(ip) = trusted_client_ip(headers) {
+        return ip;
+    }
+    addr.ip().to_string()
 }
 
-fn forwarded_for(headers: &HeaderMap) -> Option<String> {
-    let value = headers
-        .get("x-forwarded-for")
-        .and_then(|value| value.to_str().ok())?;
-    let first = value.split(',').next()?.trim();
-    if first.is_empty() {
-        None
-    } else {
-        Some(first.to_owned())
+fn trusted_client_ip(headers: &HeaderMap) -> Option<String> {
+    // Cloudflare overwrites/sets this at the edge. Safe when origin traffic is
+    // forced through Cloudflare (orange-cloud / authenticated origin pulls).
+    // Spoofable only if an attacker can hit Railway *directly* while sending
+    // this header — lock the origin down if that matters for you.
+    single_ip_header(headers, "cf-connecting-ip")
+        // Railway / some proxies set this from the trusted hop only.
+        .or_else(|| single_ip_header(headers, "x-real-ip"))
+}
+
+fn single_ip_header(headers: &HeaderMap, name: &str) -> Option<String> {
+    let value = headers.get(name)?.to_str().ok()?.trim();
+    if value.is_empty() || value.contains(',') {
+        return None;
     }
+    // Basic shape check: reject obvious garbage / header injection attempts.
+    if value.split('.').count() == 4 && value.chars().all(|c| c.is_ascii_digit() || c == '.') {
+        return Some(value.to_owned());
+    }
+    if value.contains(':')
+        && value
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() || c == ':' || c == '.')
+    {
+        return Some(value.to_owned());
+    }
+    None
 }
 
 fn normalize_required(
@@ -502,6 +527,17 @@ mod tests {
         assert_eq!(truncate("hello", 10), "hello");
         assert_eq!(truncate("abcdefghij", 5).chars().count(), 5);
         assert!(truncate("abcdefghij", 5).ends_with('…'));
+    }
+
+    #[test]
+    fn trusted_client_ip_prefers_cloudflare_over_xff() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "1.2.3.4, 5.6.7.8".parse().unwrap());
+        headers.insert("cf-connecting-ip", "203.0.113.9".parse().unwrap());
+        assert_eq!(trusted_client_ip(&headers).as_deref(), Some("203.0.113.9"));
+        // Spoofed XFF alone is ignored.
+        headers.remove("cf-connecting-ip");
+        assert_eq!(trusted_client_ip(&headers), None);
     }
 
     #[test]

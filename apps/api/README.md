@@ -30,6 +30,9 @@ posts it to a Discord channel webhook. No database.
 - `category` defaults to `bug` and accepts `bug`, `idea`, or `other`.
 - Rate limit: **one accepted submission per client IP per minute** (HTTP 429).
   Invalid payloads do not consume the cooldown. Limits are in-memory (one pod).
+  Client IP prefers Cloudflare’s `CF-Connecting-IP` (then `X-Real-IP`), never a
+  client-spoofable `X-Forwarded-For` value. If you terminate TLS at Cloudflare,
+  keep Railway unreachable except via Cloudflare so that header stays trustworthy.
 
 Successful response:
 
