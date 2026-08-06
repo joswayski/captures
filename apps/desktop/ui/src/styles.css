@@ -1232,6 +1232,26 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 /* Checkerboard preview when the document background is transparent (PNG/WebP alpha). */
 .screenshot-canvas-surface.transparent { background-color: #c8c9cc; background-image: linear-gradient(45deg,#e8e8ea 25%,transparent 25%),linear-gradient(-45deg,#e8e8ea 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#e8e8ea 75%),linear-gradient(-45deg,transparent 75%,#e8e8ea 75%); background-position: 0 0,0 8px,8px -8px,-8px 0; background-size: 16px 16px; }
 .screenshot-canvas { display: block; width: 100%; height: 100%; -webkit-user-select: none; user-select: none; touch-action: none; }
+/* Follows the pointer while hovering a line/arrow path (curve-point discovery). */
+.screenshot-curve-hover-tip {
+  position: fixed;
+  z-index: 40;
+  max-width: 240px;
+  margin: 0;
+  padding: 6px 9px;
+  border: 1px solid rgba(255, 255, 255, .14);
+  border-radius: 6px;
+  color: #f4f4f5;
+  background: rgba(17, 18, 22, .96);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, .45);
+  pointer-events: none;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: .01em;
+  white-space: normal;
+  transform: translate(14px, 18px);
+}
 .screenshot-canvas.tool-select { cursor: default; }
 .screenshot-canvas.tool-crop, .screenshot-canvas.tool-text, .screenshot-canvas.tool-rectangle, .screenshot-canvas.tool-ellipse, .screenshot-canvas.tool-line, .screenshot-canvas.tool-arrow, .screenshot-canvas.tool-pen { cursor: crosshair; }
 /* Match canvas tool cursors on the empty viewport chrome so off-canvas draws feel continuous. */

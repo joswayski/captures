@@ -213,17 +213,34 @@ export type EditorShapeElement = EditorElementBase & {
   endY: number;
   /**
    * Intermediate free control points between start `(x, y)` and end `(endX, endY)`.
-   * Meaningful for arrows only (other shapes keep this empty).
+   * Used by open stroke shapes (line and arrow); closed shapes keep this empty.
    * Empty = straight shaft; one point = quadratic curve; more = smooth multi-segment path.
    */
   controls: EditorPoint[];
   style: ElementStyle;
 };
 
-/** Maximum intermediate control points on a single arrow. */
+/**
+ * Open stroke shapes that support multi-point Bezier curve controls
+ * (start → free controls → end), same path model for line and arrow.
+ */
+export type CurveableStrokeShape = Extract<ShapeKind, "line" | "arrow">;
+
+/** True for line and arrow shapes that accept free curve control points. */
+export function isCurveableStrokeShape(
+  element: Pick<EditorShapeElement, "shape"> | ShapeKind,
+): boolean {
+  const shape = typeof element === "string" ? element : element.shape;
+  return shape === "line" || shape === "arrow";
+}
+
+/** Maximum intermediate control points on a single line or arrow. */
 export const MAX_ARROW_CONTROLS = 4;
 
-/** Editable handle on a selected arrow (endpoints, free controls, or the default mid). */
+/** Alias kept for call sites that refer to stroke curve caps generically. */
+export const MAX_STROKE_CONTROLS = MAX_ARROW_CONTROLS;
+
+/** Editable handle on a selected line/arrow (endpoints, free controls, or the default mid). */
 export type ArrowHandle =
   | { kind: "start" }
   | { kind: "end" }
@@ -1149,7 +1166,7 @@ export function translateElement(
   };
 }
 
-/** Ordered vertices for an arrow: start → free controls → end. */
+/** Ordered vertices for a line/arrow stroke: start → free controls → end. */
 export function arrowVertices(element: EditorShapeElement): EditorPoint[] {
   return [
     { x: element.x, y: element.y },
@@ -1158,7 +1175,7 @@ export function arrowVertices(element: EditorShapeElement): EditorPoint[] {
   ];
 }
 
-/** Midpoint of the start→end chord (default mid handle when the arrow is straight). */
+/** Midpoint of the start→end chord (default mid handle when the stroke is straight). */
 export function arrowDefaultMidHandle(element: EditorShapeElement): EditorPoint {
   return {
     x: (element.x + element.endX) / 2,
@@ -1182,7 +1199,7 @@ export function arrowHeadTangentPoint(element: EditorShapeElement): EditorPoint 
 }
 
 /**
- * Sample points along the arrow shaft for hit-testing and closest-point queries.
+ * Sample points along a line/arrow shaft for hit-testing and closest-point queries.
  * Matches the canvas stroke: straight, single quadratic, or smooth multi-segment.
  */
 export function sampleArrowPath(
@@ -1254,7 +1271,7 @@ export function sampleArrowPath(
 }
 
 /**
- * Closest sampled point on the arrow path and the control-array index where a
+ * Closest sampled point on a line/arrow path and the control-array index where a
  * new control should be inserted to land near that spot.
  */
 export function closestPointOnArrow(
@@ -1349,7 +1366,7 @@ function shapeElementBounds(element: EditorShapeElement): EditorRect {
     };
   }
 
-  if (element.shape === "arrow") {
+  if (isCurveableStrokeShape(element)) {
     // Sample the same quadratic / multi-point path the canvas draws.
     const samples = sampleArrowPath(element, 24);
     const points = samples.length > 0
@@ -1358,12 +1375,14 @@ function shapeElementBounds(element: EditorShapeElement): EditorRect {
         { x: element.x, y: element.y },
         { x: element.endX, y: element.endY },
       ];
-    // Wings leave the tip at ±30°; lateral extent ≈ sin(30°) * length.
-    const headPad = Math.ceil(arrowHeadLength(element.style.strokeWidth) * 0.55);
+    // Arrow wings leave the tip at ±30°; lateral extent ≈ sin(30°) * length.
+    const headPad = element.shape === "arrow"
+      ? Math.ceil(arrowHeadLength(element.style.strokeWidth) * 0.55)
+      : 0;
     return boundsFromPoints(points, strokePad + headPad);
   }
 
-  // Line: hull of endpoints + stroke extent.
+  // Fallback for any future open stroke without the curve model.
   return boundsFromPoints(
     [
       { x: element.x, y: element.y },
@@ -1381,7 +1400,7 @@ export function arrowBendAmount(
   element: EditorShapeElement,
   maximumBend = 1,
 ): number {
-  if (element.shape !== "arrow" || element.controls.length !== 1) return 0;
+  if (!isCurveableStrokeShape(element) || element.controls.length !== 1) return 0;
   return arrowBendFromControlPoint(element, element.controls[0], maximumBend);
 }
 
@@ -1394,7 +1413,7 @@ export function arrowBendFromControlPoint(
   point: EditorPoint,
   maximumBend = 1,
 ): number {
-  if (element.shape !== "arrow") return 0;
+  if (!isCurveableStrokeShape(element)) return 0;
   const deltaX = element.endX - element.x;
   const deltaY = element.endY - element.y;
   const lengthSquared = deltaX * deltaX + deltaY * deltaY;
@@ -1424,13 +1443,13 @@ export function arrowControlFromBend(
 
 /**
  * Apply Curve-slider bend: empty/one control becomes a pure perpendicular mid
- * control; near-zero bend clears controls back to a straight arrow.
+ * control; near-zero bend clears controls back to a straight stroke.
  */
 export function arrowWithBend(
   element: EditorShapeElement,
   bend: number,
 ): EditorShapeElement {
-  if (element.shape !== "arrow") return element;
+  if (!isCurveableStrokeShape(element)) return element;
   if (Math.abs(bend) < 0.005) {
     return { ...element, controls: [] };
   }
@@ -1445,7 +1464,7 @@ export function insertArrowControl(
   element: EditorShapeElement,
   point: EditorPoint,
 ): EditorShapeElement | null {
-  if (element.shape !== "arrow") return null;
+  if (!isCurveableStrokeShape(element)) return null;
   if (element.controls.length >= MAX_ARROW_CONTROLS) return null;
   const { insertIndex } = closestPointOnArrow(element, point);
   const controls = [
@@ -1460,7 +1479,7 @@ export function removeArrowControl(
   element: EditorShapeElement,
   index: number,
 ): EditorShapeElement {
-  if (element.shape !== "arrow") return element;
+  if (!isCurveableStrokeShape(element)) return element;
   if (index < 0 || index >= element.controls.length) return element;
   return {
     ...element,
@@ -1469,7 +1488,7 @@ export function removeArrowControl(
 }
 
 /**
- * Hit-test arrow edit handles. Order: free controls → endpoints → default mid.
+ * Hit-test line/arrow edit handles. Order: free controls → endpoints → default mid.
  * Returns null when the pointer is not on a handle.
  */
 export function hitTestArrowHandle(
@@ -1477,7 +1496,7 @@ export function hitTestArrowHandle(
   point: EditorPoint,
   handleRadius: number,
 ): ArrowHandle | null {
-  if (element.shape !== "arrow") return null;
+  if (!isCurveableStrokeShape(element)) return null;
   const radius = Math.max(4, handleRadius);
 
   for (let index = 0; index < element.controls.length; index += 1) {
@@ -1517,13 +1536,46 @@ export function hitTestArrowControlPoint(
 
 /**
  * Legacy single control-point position for one free control, or the default mid
- * when the arrow is straight. Prefer `arrowVertices` / free controls for new UI.
+ * when the stroke is straight. Prefer `arrowVertices` / free controls for new UI.
  */
 export function arrowControlPoint(element: EditorShapeElement): EditorPoint | null {
-  if (element.shape !== "arrow") return null;
+  if (!isCurveableStrokeShape(element)) return null;
   if (element.controls.length === 1) return element.controls[0];
   if (element.controls.length === 0) return arrowDefaultMidHandle(element);
   return null;
+}
+
+/**
+ * Hover/help copy for curve editing on a selected line or arrow.
+ * Returns null when the pointer is not near a handle or the stroke path.
+ */
+export function curveStrokeHoverHint(
+  element: EditorShapeElement,
+  point: EditorPoint,
+  handleRadius: number,
+): string | null {
+  if (!isCurveableStrokeShape(element) || element.locked) return null;
+  const handle = hitTestArrowHandle(element, point, handleRadius);
+  if (handle?.kind === "control") {
+    return "Double-click to remove curve point";
+  }
+  if (handle?.kind === "mid") {
+    return "Drag to curve · Double-click the path to add points";
+  }
+  if (handle?.kind === "start" || handle?.kind === "end") {
+    return "Drag to move endpoint";
+  }
+
+  const closest = closestPointOnArrow(element, point);
+  const pathHitRadius = Math.max(
+    handleRadius,
+    element.style.strokeWidth * 2 + handleRadius * 0.6,
+  );
+  if (closest.distance > pathHitRadius) return null;
+  if (element.controls.length >= MAX_ARROW_CONTROLS) {
+    return `Curve points full (${element.controls.length}/${MAX_ARROW_CONTROLS}) · Double-click a point to remove`;
+  }
+  return `Double-click to add a curve point (${element.controls.length}/${MAX_ARROW_CONTROLS})`;
 }
 
 /** Corner handles drawn around a selected annotation. */

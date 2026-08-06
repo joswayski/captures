@@ -13,6 +13,7 @@ import {
   collectEditorSourceArtifactIds,
   createScreenshotDocument,
   cropDocument,
+  curveStrokeHoverHint,
   duplicateScreenshotElement,
   elementBounds,
   estimateCanvasExportBytes,
@@ -26,6 +27,7 @@ import {
   imageDropPlacementAtPoint,
   imageSizeAtWidth,
   insertArrowControl,
+  isCurveableStrokeShape,
   isSupportedImageFile,
   loadImageFile,
   MAX_ARROW_CONTROLS,
@@ -650,6 +652,41 @@ describe("screenshot editor geometry", () => {
     const near = closestPointOnArrow(arrow, { x: 200, y: 108 });
     expect(near.distance).toBeLessThan(10);
     expect(near.point.x).toBeCloseTo(200, 0);
+  });
+
+  it("shares multi-point curve controls with lines", () => {
+    expect(isCurveableStrokeShape("line")).toBe(true);
+    expect(isCurveableStrokeShape("arrow")).toBe(true);
+    expect(isCurveableStrokeShape("ellipse")).toBe(false);
+    expect(isCurveableStrokeShape("rectangle")).toBe(false);
+
+    const line: EditorShapeElement = {
+      ...editableLayer,
+      id: "line",
+      kind: "shape",
+      shape: "line",
+      x: 50,
+      y: 80,
+      endX: 250,
+      endY: 80,
+      controls: [],
+      style: { color: "#0af", fill: null, strokeWidth: 4 },
+    };
+
+    expect(hitTestArrowHandle(line, { x: 150, y: 80 }, 8)).toEqual({ kind: "mid" });
+    const bent = arrowWithBend(line, 0.25);
+    expect(bent.controls).toHaveLength(1);
+    expect(arrowBendAmount(bent)).toBeCloseTo(0.25);
+    expect(elementBounds(bent).height).toBeGreaterThan(elementBounds(line).height);
+
+    const withPoint = insertArrowControl(bent, { x: 200, y: 100 });
+    expect(withPoint?.controls).toHaveLength(2);
+    expect(removeArrowControl(withPoint!, 1).controls).toHaveLength(1);
+
+    expect(curveStrokeHoverHint(line, { x: 150, y: 80 }, 8)).toMatch(/Drag to curve/);
+    expect(curveStrokeHoverHint(bent, { x: 150, y: 130 }, 8)).toMatch(/Double-click to remove/);
+    expect(curveStrokeHoverHint(bent, { x: 200, y: 95 }, 8)).toMatch(/Double-click to add a curve point/);
+    expect(curveStrokeHoverHint(line, { x: 10, y: 10 }, 8)).toBeNull();
   });
 
   it("bounds arrows by path geometry so empty curve sides do not block trim", () => {
