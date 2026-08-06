@@ -482,7 +482,8 @@ describe("ThumbnailCard", () => {
     );
   });
 
-  it("hides the in-editor chip when the capture is no longer in the editor", () => {
+  it("fades out the in-editor chip when the capture is no longer in the editor", () => {
+    vi.useFakeTimers();
     const { rerender } = render(
       <ThumbnailCard
         artifact={artifact(null)}
@@ -503,8 +504,70 @@ describe("ThumbnailCard", () => {
         onRemoved={() => undefined}
       />,
     );
+    // Chip stays mounted for the leave animation; ring eases off via leaving class.
+    expect(screen.getByText("In editor")).toBeInTheDocument();
+    const card = screen.getByRole("article");
+    expect(card).not.toHaveClass("thumbnail-editor-active");
+    expect(card).toHaveClass("thumbnail-editor-leaving");
+    expect(card.querySelector(".editor-presence-chip")).toHaveClass("leaving");
+    expect(screen.getByRole("button", { name: "Edit" })).not.toHaveAttribute(
+      "aria-pressed",
+    );
+
+    act(() => {
+      vi.advanceTimersByTime(550);
+    });
     expect(screen.queryByText("In editor")).not.toBeInTheDocument();
-    expect(screen.getByRole("article")).not.toHaveClass("thumbnail-editor-active");
+    expect(card).not.toHaveClass("thumbnail-editor-leaving");
+    vi.useRealTimers();
+  });
+
+  it("cancels the in-editor leave animation if the editor reopens", () => {
+    vi.useFakeTimers();
+    const { rerender } = render(
+      <ThumbnailCard
+        artifact={artifact(null)}
+        clipboardCurrent={false}
+        viewerActive={false}
+        editorActive
+        onRemoved={() => undefined}
+      />,
+    );
+
+    rerender(
+      <ThumbnailCard
+        artifact={artifact(null)}
+        clipboardCurrent={false}
+        viewerActive={false}
+        editorActive={false}
+        onRemoved={() => undefined}
+      />,
+    );
+    expect(screen.getByRole("article").querySelector(".editor-presence-chip")).toHaveClass(
+      "leaving",
+    );
+
+    rerender(
+      <ThumbnailCard
+        artifact={artifact(null)}
+        clipboardCurrent={false}
+        viewerActive={false}
+        editorActive
+        onRemoved={() => undefined}
+      />,
+    );
+    const card = screen.getByRole("article");
+    expect(screen.getByText("In editor")).toBeInTheDocument();
+    expect(card.querySelector(".editor-presence-chip")).not.toHaveClass("leaving");
+    expect(card).toHaveClass("thumbnail-editor-active");
+    expect(card).not.toHaveClass("thumbnail-editor-leaving");
+
+    act(() => {
+      vi.advanceTimersByTime(550);
+    });
+    // Leave timer must not unmount after cancel.
+    expect(screen.getByText("In editor")).toBeInTheDocument();
+    vi.useRealTimers();
   });
 
   it("deletes an unsaved preview with the dissolve animation", () => {

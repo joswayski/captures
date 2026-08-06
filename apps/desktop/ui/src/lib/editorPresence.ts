@@ -4,6 +4,12 @@ export type EditorLayerPresence = {
   artifact_ids: string[];
 };
 
+/**
+ * Keep the “In editor” chip mounted this long after presence clears so the
+ * leave animation can finish (must match `editor-presence-leave` in CSS).
+ */
+export const EDITOR_PRESENCE_LEAVE_MS = 550;
+
 export function reconcileEditorPresence(
   current: ReadonlyMap<string, readonly string[]>,
   next: EditorLayerPresence,

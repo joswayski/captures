@@ -1,10 +1,15 @@
 import {
+  EDITOR_PRESENCE_LEAVE_MS,
   artifactIdsInEditors,
   reconcileEditorPresence,
   sameSortedIds,
 } from "./editorPresence";
 
 describe("editor presence reconciliation", () => {
+  it("exposes a leave duration for the mini-preview chip animation", () => {
+    expect(EDITOR_PRESENCE_LEAVE_MS).toBeGreaterThan(0);
+  });
+
   it("records layers for an open editor", () => {
     const next = reconcileEditorPresence(new Map(), {
       editor_id: "screenshot-editor-a",

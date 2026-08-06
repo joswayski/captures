@@ -88,6 +88,7 @@ import {
   waitForThumbnailStackSettle,
 } from "./lib/thumbnailLayout";
 import {
+  EDITOR_PRESENCE_LEAVE_MS,
   artifactIdsInEditors,
   reconcileEditorPresence,
 } from "./lib/editorPresence";
@@ -4781,6 +4782,29 @@ export function ThumbnailCard({
   const [exit, setExit] = useState<"dismiss" | "delete" | null>(null);
   const [dustParticles, setDustParticles] = useState<ThumbnailDustParticle[] | null>(null);
   /**
+   * Chip/ring stay mounted through leave so they can fade when the editor closes.
+   * `trackedActive` mirrors the last `editorActive` prop we adjusted for, so we
+   * can update presence during render (avoids setState-in-effect).
+   */
+  const [editorPresence, setEditorPresence] = useState({
+    visible: editorActive,
+    leaving: false,
+    trackedActive: editorActive,
+  });
+  if (editorActive !== editorPresence.trackedActive) {
+    if (editorActive) {
+      setEditorPresence({ visible: true, leaving: false, trackedActive: true });
+    } else {
+      setEditorPresence({
+        visible: editorPresence.visible,
+        leaving: editorPresence.visible,
+        trackedActive: false,
+      });
+    }
+  }
+  const editorPresenceVisible = editorPresence.visible;
+  const editorPresenceLeaving = editorPresence.leaving;
+  /**
    * Snapshot of chrome labels taken the moment exit starts.
    * While `isExiting`, UI is frozen on this snapshot — no “Saved to Folder!”→
    * “Show in Folder” flips, clipboard badge changes, or other prop-driven transitions.
@@ -4827,6 +4851,20 @@ export function ThumbnailCard({
       if (exitFallbackTimer.current) clearTimeout(exitFallbackTimer.current);
     };
   }, []);
+
+  // After presence leaves, unmount the chip once the leave animation finishes.
+  useEffect(() => {
+    if (!editorPresenceLeaving) return;
+    const leaveMs = prefersReducedMotion() ? 0 : EDITOR_PRESENCE_LEAVE_MS;
+    const timer = window.setTimeout(() => {
+      setEditorPresence((current) => (
+        current.leaving
+          ? { visible: false, leaving: false, trackedActive: current.trackedActive }
+          : current
+      ));
+    }, leaveMs);
+    return () => window.clearTimeout(timer);
+  }, [editorPresenceLeaving]);
 
   // WAAPI chip flight — avoids CSS custom-property keyframes that WebView2 drops.
   // Depend on `exit` too so the layer is mounted before we query chips.
@@ -4979,13 +5017,14 @@ export function ThumbnailCard({
       feedbackTimer.current = null;
     }
     // Freeze chrome *as rendered now* — never flip “Saved to Folder!” into Show in Folder.
+    // Keep the in-editor chip if presence is still fading out after the editor closed.
     setExitChrome({
       feedback,
       hasPath: Boolean(artifact.path),
       clipboardCurrent,
       historySaved: artifact.history_saved,
       copyFailed: artifact.clipboard_copy_status === "failed",
-      editorActive,
+      editorActive: editorActive || editorPresenceVisible,
     });
     setBusy(null);
     setError("");
@@ -5038,8 +5077,11 @@ export function ThumbnailCard({
     clipboardCurrent,
     historySaved: artifact.history_saved,
     copyFailed: artifact.clipboard_copy_status === "failed",
-    editorActive,
+    editorActive: editorActive || editorPresenceVisible,
   };
+  // Live presence drives the Edit button; chip/ring may linger for leave animation.
+  const showEditorChip = isExiting ? chrome.editorActive : editorPresenceVisible;
+  const editorChipLeaving = !isExiting && editorPresenceLeaving;
   // Before a folder save: trash discards the preview (dissolve). After: trash deletes the file.
   // Close only appears once a file exists so you can hide the preview without trashing it.
   const usingDust = exit === "delete" && dustParticles !== null && dustParticles.length > 0;
@@ -5053,6 +5095,7 @@ export function ThumbnailCard({
         thumbnailReady ? "thumbnail-capture-highlight" : "",
         viewerActive && !isExiting ? "thumbnail-viewer-active" : "",
         editorActive && !isExiting ? "thumbnail-editor-active" : "",
+        editorChipLeaving ? "thumbnail-editor-leaving" : "",
         fileDragging ? "thumbnail-file-dragging" : "",
         exit ? `thumbnail-exit-${exit}` : "",
         usingDust ? "thumbnail-exit-dust" : "",
@@ -5167,8 +5210,13 @@ export function ThumbnailCard({
               : null}
         </div>
         <div className="thumbnail-status-chips">
-          {chrome.editorActive && (
-            <div className="editor-presence-chip" role="status">
+          {showEditorChip && (
+            <div
+              className={["editor-presence-chip", editorChipLeaving ? "leaving" : ""]
+                .filter(Boolean)
+                .join(" ")}
+              role="status"
+            >
               <EditIcon />
               <span>In editor</span>
             </div>
