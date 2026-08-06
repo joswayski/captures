@@ -168,7 +168,7 @@ export default function Home() {
                         <span className="cooking-emoji" aria-hidden="true">
                           🍳
                         </span>{" "}
-                        <span>preview still building</span>
+                        <span>preview still cooking</span>
                       </>
                     ) : null}
                   </p>
