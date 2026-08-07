@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
 const REPOSITORY = "joswayski/captures";
-const CHANGE_COUNT = 6;
+const CHANGE_COUNT = 10;
 /** Fetch extra commits so Dependabot merges can be dropped without under-filling the list. */
 const FETCH_COUNT = 30;
 
