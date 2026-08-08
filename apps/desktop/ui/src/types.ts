@@ -133,6 +133,7 @@ export interface RecordingSelectionSession {
   id: string;
   kind: RecordingKind;
   initial_mode: "screenshot" | "recording";
+  initial_target: CaptureMode;
   recording_available: boolean;
   recording_capabilities: {
     system_audio: boolean;
@@ -142,6 +143,7 @@ export interface RecordingSelectionSession {
     controls_excluded: boolean;
   };
   display: DisplayDescriptor;
+  displays: DisplayDescriptor[];
   window_coordinate_scale: number;
   window_corner_radius: number;
   snapshot_url: string;

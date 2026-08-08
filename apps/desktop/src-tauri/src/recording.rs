@@ -204,13 +204,20 @@ pub async fn prepare_recording_inner(
     app: AppHandle,
     state: Arc<AppState>,
 ) -> Result<RecordingSelectionSession, AppError> {
-    prepare_capture_selector_inner(app, state, CaptureSelectorMode::Recording).await
+    prepare_capture_selector_inner(
+        app,
+        state,
+        CaptureSelectorMode::Recording,
+        CaptureMode::Region,
+    )
+    .await
 }
 
 pub(crate) async fn prepare_capture_selector_inner(
     app: AppHandle,
     state: Arc<AppState>,
     initial_mode: CaptureSelectorMode,
+    initial_target: CaptureMode,
 ) -> Result<RecordingSelectionSession, AppError> {
     if crate::updates::install_is_active(&app) {
         return Err(AppError::UpdateInstalling);
@@ -225,6 +232,7 @@ pub(crate) async fn prepare_capture_selector_inner(
         let mut pending = state.recording_selection.lock();
         pending.as_mut().map(|selection| {
             selection.summary.initial_mode = initial_mode;
+            selection.summary.initial_target = initial_target;
             selection.summary.clone()
         })
     };
@@ -238,7 +246,7 @@ pub(crate) async fn prepare_capture_selector_inner(
         crate::hide_window(&app, "startup");
         crate::hide_recording_saved_notices(&app);
         crate::hide_window(&app, "update");
-        if let Err(error) = prepare_recording_selector(&app, &summary).await {
+        if let Err(error) = prepare_recording_selector(&app, &summary, true).await {
             *state.recording_selection.lock() = None;
             restore_recording_ui(&app, &state);
             return Err(error);
@@ -261,6 +269,10 @@ pub(crate) async fn prepare_capture_selector_inner(
     crate::hide_capture_huds_before_snapshot(&app).await;
     let prepared = (|| {
         let display = crate::display_under_pointer(&state)?;
+        let mut displays = state.monitors()?;
+        if !displays.iter().any(|candidate| candidate.id == display.id) {
+            displays.push(display.clone());
+        }
         let frame = state.backend.capture_display(&display.id)?;
         let snapshot_png = storage::encode_png(&frame.image)?;
         let mut windows = state
@@ -285,6 +297,7 @@ pub(crate) async fn prepare_capture_selector_inner(
             // decides whether the final copy is video or GIF.
             kind: RecordingKind::Video,
             initial_mode,
+            initial_target,
             recording_available: cfg!(any(
                 target_os = "macos",
                 target_os = "windows",
@@ -296,6 +309,7 @@ pub(crate) async fn prepare_capture_selector_inner(
             window_coordinate_scale: crate::window_coordinate_scale(&frame.descriptor),
             window_corner_radius: crate::window_corner_radius_points(),
             display: frame.descriptor,
+            displays,
             snapshot_url: recording_selection_url(&id),
             windows,
         };
@@ -308,7 +322,7 @@ pub(crate) async fn prepare_capture_selector_inner(
     })();
     match prepared {
         Ok(summary) => {
-            if let Err(error) = prepare_recording_selector(&app, &summary).await {
+            if let Err(error) = prepare_recording_selector(&app, &summary, true).await {
                 *state.recording_selection.lock() = None;
                 restore_recording_ui(&app, &state);
                 return Err(error);
@@ -332,6 +346,101 @@ pub fn get_recording_selection(
         .lock()
         .as_ref()
         .map(|selection| selection.summary.clone())
+}
+
+#[tauri::command]
+pub async fn select_capture_display(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    selection_id: String,
+    display_id: String,
+) -> Result<RecordingSelectionSession, String> {
+    select_capture_display_inner(app, state.inner().clone(), &selection_id, &display_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+async fn select_capture_display_inner(
+    app: AppHandle,
+    state: Arc<AppState>,
+    selection_id: &str,
+    display_id: &str,
+) -> Result<RecordingSelectionSession, AppError> {
+    let current = state
+        .recording_selection
+        .lock()
+        .as_ref()
+        .filter(|selection| selection.summary.id == selection_id)
+        .map(|selection| selection.summary.clone())
+        .ok_or(AppError::SessionUnavailable)?;
+    if current.display.id == display_id {
+        return Ok(current);
+    }
+
+    let mut displays = state.monitors()?;
+    let requested_display = displays
+        .iter()
+        .find(|display| display.id == display_id)
+        .cloned()
+        .ok_or(AppError::InvalidSelection)?;
+    let frame = state.backend.capture_display(&requested_display.id)?;
+    let snapshot_png = storage::encode_png(&frame.image)?;
+    let mut windows = state
+        .windows()
+        .unwrap_or_else(|error| {
+            eprintln!("window targets are unavailable for this display: {error}");
+            Vec::new()
+        })
+        .into_iter()
+        .filter(|window| crate::window_is_capturable(window, &frame.descriptor))
+        .collect::<Vec<_>>();
+    crate::refine_window_chrome_from_snapshot(
+        &mut windows,
+        &frame.descriptor,
+        &frame.image,
+        crate::window_corner_radius_points(),
+    );
+    if let Some(display) = displays
+        .iter_mut()
+        .find(|display| display.id == frame.descriptor.id)
+    {
+        *display = frame.descriptor.clone();
+    }
+
+    let mut summary = current;
+    summary.display = frame.descriptor;
+    summary.displays = displays;
+    summary.window_coordinate_scale = crate::window_coordinate_scale(&summary.display);
+    summary.snapshot_url = format!(
+        "{}?refresh={}",
+        recording_selection_url(&summary.id),
+        Uuid::new_v4()
+    );
+    summary.windows = windows;
+    let replacement = RecordingSelection {
+        summary: summary.clone(),
+        image: frame.image,
+        snapshot_png,
+    };
+    let previous = {
+        let mut pending = state.recording_selection.lock();
+        if pending
+            .as_ref()
+            .is_none_or(|selection| selection.summary.id != selection_id)
+        {
+            return Err(AppError::SessionUnavailable);
+        }
+        pending
+            .replace(replacement)
+            .ok_or(AppError::SessionUnavailable)?
+    };
+    if let Err(error) = prepare_recording_selector(&app, &summary, false).await {
+        let previous_summary = previous.summary.clone();
+        *state.recording_selection.lock() = Some(previous);
+        let _ = prepare_recording_selector(&app, &previous_summary, false).await;
+        return Err(error);
+    }
+    Ok(summary)
 }
 
 #[tauri::command]
@@ -3039,6 +3148,7 @@ fn create_recording_selector_window(app: &AppHandle) -> Result<(), AppError> {
 async fn prepare_recording_selector(
     app: &AppHandle,
     selection: &RecordingSelectionSession,
+    wake_webview: bool,
 ) -> Result<(), AppError> {
     create_recording_selector_window(app)?;
     let handle = app.clone();
@@ -3051,6 +3161,8 @@ async fn prepare_recording_selector(
             let window = handle
                 .get_webview_window("recording-selector")
                 .ok_or_else(|| "recording selector is unavailable".to_owned())?;
+            #[cfg(target_os = "macos")]
+            captures_macos_window::configure_capture_selector(&window).map_err(str::to_owned)?;
             // Match the screenshot overlay: on Windows xcap geometry is physical,
             // while Tauri LogicalSize/Position expect CSS DIPs.
             let (x, y, width, height) = display.overlay_geometry();
@@ -3088,7 +3200,9 @@ async fn prepare_recording_selector(
         .await
         .map_err(|_| AppError::Task("recording selector setup was interrupted".to_owned()))?
         .map_err(AppError::Task)?;
-    schedule_recording_selector_webview_wake(app, wake_selection);
+    if wake_webview {
+        schedule_recording_selector_webview_wake(app, wake_selection);
+    }
     Ok(())
 }
 
@@ -3100,12 +3214,16 @@ fn schedule_recording_selector_webview_wake(app: &AppHandle, selection: Recordin
         // the native window independently while it is still click-through.
         tokio::time::sleep(Duration::from_millis(200)).await;
         let selection_id = selection.id.clone();
+        let snapshot_url = selection.snapshot_url.clone();
         let still_pending = app
             .state::<Arc<AppState>>()
             .recording_selection
             .lock()
             .as_ref()
-            .is_some_and(|selection| selection.summary.id == selection_id);
+            .is_some_and(|selection| {
+                selection.summary.id == selection_id
+                    && selection.summary.snapshot_url == snapshot_url
+            });
         if !still_pending {
             return;
         }
@@ -3130,7 +3248,10 @@ fn schedule_recording_selector_webview_wake(app: &AppHandle, selection: Recordin
             .recording_selection
             .lock()
             .as_ref()
-            .is_some_and(|pending| pending.summary.id == selection.id);
+            .is_some_and(|pending| {
+                pending.summary.id == selection.id
+                    && pending.summary.snapshot_url == selection.snapshot_url
+            });
         if !still_pending {
             return;
         }
