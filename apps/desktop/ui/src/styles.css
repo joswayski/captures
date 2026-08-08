@@ -563,6 +563,16 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   border-radius: 12px;
 }
 /*
+ * While dust is still assembled as a card, clip to the same rounded rect as the
+ * live preview. Overflow opens once chips begin flying (see .thumbnail-dust-open).
+ * This is more reliable than clip-path alone on some WebViews that drop `round`
+ * when the dissolve animation starts.
+ */
+.thumbnail-exit-delete.thumbnail-exit-dust:not(.thumbnail-dust-open) {
+  overflow: hidden;
+  border-radius: 12px;
+}
+/*
  * Multi-slot stack settle is driven in JS (see createThumbnailStackShiftController).
  * Delete and dismiss both hold layout; survivors ease by N × slot with the same
  * transition. Finished holes snap the transform down with layout reflow.
@@ -689,7 +699,10 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
  * instead; flight is driven by the Web Animations API (see playThumbnailDustAnimations).
  */
 .thumbnail-dust-layer {
+  /* Keep pad/radius in sync with thumbnailExit.ts (THUMBNAIL_DUST_LAYER_PAD_PX /
+     THUMBNAIL_CARD_BORDER_RADIUS_PX) and .thumbnail-card border-radius. */
   --dust-pad: 120px;
+  --dust-radius: 12px;
   position: absolute;
   z-index: 7;
   top: calc(-1 * var(--dust-pad));
@@ -699,8 +712,8 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   pointer-events: none;
   border-radius: 0;
   overflow: visible;
-  /* Clip to the card (inset by pad) while intact, then open fully for fly-out. */
-  clip-path: inset(var(--dust-pad) round 12px);
+  /* Clip to the rounded card (inset by pad) while intact, then open for fly-out. */
+  clip-path: inset(var(--dust-pad) round var(--dust-radius));
   animation: thumbnail-dust-clip 2.55s cubic-bezier(.33,0,.2,1) forwards;
 }
 .thumbnail-dust {
@@ -755,19 +768,22 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   55% { flex-basis: 160px; height: 160px; margin-bottom: 0; opacity: .2; transform: scale(.9); filter: blur(3px) brightness(.56); }
   100% { flex-basis: 0; height: 0; margin-bottom: -24px; opacity: 0; transform: scale(.8); filter: blur(5px) brightness(.56); }
 }
-/* Open clip from the padded card rect so ash can float outside freely. */
+/* Open clip from the padded card rect so ash can float outside freely.
+ * Every keyframe keeps the `round` keyword — mixing rounded and unrounded
+ * inset() values makes some WebViews drop the radius on the first frame,
+ * so delete briefly flashes a sharp rectangle instead of the rounded preview. */
 @keyframes thumbnail-dust-clip {
-  0%, 6% {
-    clip-path: inset(var(--dust-pad, 120px) round 12px);
+  0%, 8% {
+    clip-path: inset(var(--dust-pad, 120px) round var(--dust-radius, 12px));
     opacity: 1;
   }
-  /* Fully open for fly-out; hide the layer before the card layout collapses. */
+  /* Fully open (outer padded bounds) while chips are in flight. */
   70% {
-    clip-path: inset(0);
+    clip-path: inset(0 round 0px);
     opacity: 1;
   }
   90%, 100% {
-    clip-path: inset(0);
+    clip-path: inset(0 round 0px);
     opacity: 0;
   }
 }
