@@ -36,9 +36,16 @@ export function RangeSlider({
   const progress = Math.min(100, Math.max(0, (value - min) / span * 100));
   const style = { "--range-progress": `${progress}%` } as CSSProperties;
 
+  const hasMarks = marks.length > 0;
+
   return (
     <div
-      className={`range-slider${disabled ? " disabled" : ""}${className ? ` ${className}` : ""}`}
+      className={[
+        "range-slider",
+        hasMarks ? "has-marks" : "",
+        disabled ? "disabled" : "",
+        className,
+      ].filter(Boolean).join(" ")}
       style={style}
     >
       <div className="range-slider-value">
@@ -57,7 +64,7 @@ export function RangeSlider({
           aria-valuetext={valueText}
           onChange={(event) => onChange(Number(event.target.value))}
         />
-        {marks.length > 0 && (
+        {hasMarks && (
           <span className="range-slider-ticks" aria-hidden="true">
             {marks.map((mark) => (
               <i
@@ -68,7 +75,7 @@ export function RangeSlider({
           </span>
         )}
       </div>
-      {marks.length > 0 && (
+      {hasMarks && (
         <span className="range-slider-labels" aria-hidden="true">
           {marks.map((mark) => (
             <small

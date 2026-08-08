@@ -3589,11 +3589,6 @@ export function ScreenshotEditor() {
                 max={100}
                 value={selected.opacity}
                 valueText={`${selected.opacity}%`}
-                marks={[
-                  { value: 0, label: "0" },
-                  { value: 50, label: "50" },
-                  { value: 100, label: "100" },
-                ]}
                 onChange={(opacity) => updateSelected((element) => ({ ...element, opacity }))}
               />
             </label>
@@ -3832,12 +3827,6 @@ export function ScreenshotEditor() {
                 max={40}
                 value={selected.style.strokeWidth}
                 valueText={`${selected.style.strokeWidth} px`}
-                marks={[
-                  { value: 2, label: "2" },
-                  { value: 12, label: "12" },
-                  { value: 24, label: "24" },
-                  { value: 40, label: "40" },
-                ]}
                 onChange={(strokeWidth) => updateSelected((element) => (
                   element.kind === "shape" || element.kind === "path"
                     ? {
@@ -3956,12 +3945,6 @@ export function ScreenshotEditor() {
                     max={40}
                     value={defaultStyle.strokeWidth}
                     valueText={`${defaultStyle.strokeWidth} px`}
-                    marks={[
-                      { value: 2, label: "2" },
-                      { value: 12, label: "12" },
-                      { value: 24, label: "24" },
-                      { value: 40, label: "40" },
-                    ]}
                     onChange={(strokeWidth) => setDefaultStyle((style) => ({
                       ...style,
                       strokeWidth,
