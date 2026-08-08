@@ -469,9 +469,9 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-editor-con
   stroke-width: 2.2;
 }
 /* Hover while present: fill accent + action label (“Show in editor”). */
-.thumbnail-editor-control.is-present:hover,
-.thumbnail-editor-control.is-present[data-native-pointer-hover="true"],
-.thumbnail-editor-control.is-present:focus-visible {
+.thumbnail-editor-control.is-present:not([data-editor-just-opened="true"]):hover,
+.thumbnail-editor-control.is-present:not([data-editor-just-opened="true"])[data-native-pointer-hover="true"],
+.thumbnail-editor-control.is-present:not([data-editor-just-opened="true"]):focus-visible {
   color: var(--theme-accent-ink, #120f1c);
   background: var(--theme-accent);
   border-color: rgba(var(--theme-accent-rgb), .9);
@@ -506,14 +506,14 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-editor-con
 .thumbnail-editor-control-label .label-hover {
   opacity: 0;
 }
-.thumbnail-editor-control.is-present:hover .label-rest,
-.thumbnail-editor-control.is-present[data-native-pointer-hover="true"] .label-rest,
-.thumbnail-editor-control.is-present:focus-visible .label-rest {
+.thumbnail-editor-control.is-present:not([data-editor-just-opened="true"]):hover .label-rest,
+.thumbnail-editor-control.is-present:not([data-editor-just-opened="true"])[data-native-pointer-hover="true"] .label-rest,
+.thumbnail-editor-control.is-present:not([data-editor-just-opened="true"]):focus-visible .label-rest {
   opacity: 0;
 }
-.thumbnail-editor-control.is-present:hover .label-hover,
-.thumbnail-editor-control.is-present[data-native-pointer-hover="true"] .label-hover,
-.thumbnail-editor-control.is-present:focus-visible .label-hover {
+.thumbnail-editor-control.is-present:not([data-editor-just-opened="true"]):hover .label-hover,
+.thumbnail-editor-control.is-present:not([data-editor-just-opened="true"])[data-native-pointer-hover="true"] .label-hover,
+.thumbnail-editor-control.is-present:not([data-editor-just-opened="true"]):focus-visible .label-hover {
   opacity: 1;
 }
 .thumbnail-editor-control.leaving {
@@ -595,16 +595,6 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   animation: thumbnail-delete 2.9s linear forwards;
   pointer-events: none;
   box-shadow: none;
-  border-radius: 12px;
-}
-/*
- * While dust is still assembled as a card, clip to the same rounded rect as the
- * live preview. Overflow opens once chips begin flying (see .thumbnail-dust-open).
- * This is more reliable than clip-path alone on some WebViews that drop `round`
- * when the dissolve animation starts.
- */
-.thumbnail-exit-delete.thumbnail-exit-dust:not(.thumbnail-dust-open) {
-  overflow: hidden;
   border-radius: 12px;
 }
 /*
@@ -755,7 +745,7 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   position: absolute;
   display: block;
   border-radius: 0;
-  background-repeat: no-repeat;
+  overflow: hidden;
   /* Match the hovered preview dim without a parent filter that cages motion. */
   filter: brightness(.56);
   opacity: 1;
@@ -763,6 +753,14 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   box-shadow: none;
   will-change: transform, opacity;
   backface-visibility: hidden;
+}
+.thumbnail-dust-surface {
+  position: absolute;
+  display: block;
+  overflow: hidden;
+  border-radius: var(--dust-radius, 12px);
+  background-repeat: no-repeat;
+  pointer-events: none;
 }
 @keyframes thumbnail-dismiss {
   /*

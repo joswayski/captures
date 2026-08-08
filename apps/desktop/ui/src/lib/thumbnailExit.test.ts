@@ -1,11 +1,8 @@
 import {
   buildThumbnailDustParticles,
-  chipInRoundedRect,
   coverBackgroundLayout,
   playThumbnailDustAnimations,
-  pointInRoundedRect,
   prefersReducedMotion,
-  THUMBNAIL_CARD_BORDER_RADIUS_PX,
   THUMBNAIL_CARD_FALLBACK_HEIGHT,
   THUMBNAIL_CARD_FALLBACK_WIDTH,
   THUMBNAIL_DELETE_ORIGIN_X,
@@ -18,13 +15,11 @@ const pad = THUMBNAIL_DUST_LAYER_PAD_PX;
 
 describe("thumbnail exit effects", () => {
   it("builds a grid of dust chips covering the card surface", () => {
-    // radius 0 keeps the full rectangular grid for layout assertions.
     const particles = buildThumbnailDustParticles(140, 90, {
       cols: 4,
       rows: 3,
       random: () => 0.25,
       chromeLeadMs: 0,
-      borderRadiusPx: 0,
     });
 
     expect(particles).toHaveLength(12);
@@ -32,10 +27,14 @@ describe("thumbnail exit effects", () => {
       id: 0,
       left: pad,
       top: pad,
+      cardWidth: 140,
+      cardHeight: 90,
+      sourceLeft: 0,
+      sourceTop: 0,
       surfaceWidth: 140,
       surfaceHeight: 90,
-      bgX: 0,
-      bgY: 0,
+      surfaceOffsetX: 0,
+      surfaceOffsetY: 0,
     });
     expect(particles[particles.length - 1].left).toBeCloseTo(105 + pad);
     expect(particles[particles.length - 1].top).toBeCloseTo(60 + pad);
@@ -54,8 +53,6 @@ describe("thumbnail exit effects", () => {
     );
 
     // Fine enough to read as dust, capped so WKWebView stays smooth.
-    // Corner chips outside the rounded silhouette are omitted, so count is
-    // slightly under the raw cols×rows grid.
     expect(particles.length).toBeGreaterThan(90);
     expect(particles.length).toBeLessThanOrEqual(220);
     const sample = particles[0];
@@ -63,38 +60,9 @@ describe("thumbnail exit effects", () => {
     expect(sample.height).toBeLessThan(20);
   });
 
-  it("classifies points against the card's rounded rectangle", () => {
-    const width = 100;
-    const height = 80;
-    const radius = 12;
-    expect(pointInRoundedRect(50, 40, width, height, radius)).toBe(true);
-    expect(pointInRoundedRect(0, 40, width, height, radius)).toBe(true);
-    expect(pointInRoundedRect(50, 0, width, height, radius)).toBe(true);
-    // Far outside the corner arc (the square stub that makes a sharp rect).
-    expect(pointInRoundedRect(0.5, 0.5, width, height, radius)).toBe(false);
-    expect(pointInRoundedRect(width - 0.5, height - 0.5, width, height, radius)).toBe(false);
-    // On the corner arc itself (center of the top-left radius).
-    expect(pointInRoundedRect(radius, radius, width, height, radius)).toBe(true);
-    expect(pointInRoundedRect(-1, 40, width, height, radius)).toBe(false);
-  });
-
-  it("rejects chips that poke into the square corner stubs", () => {
-    const width = 100;
-    const height = 80;
-    const radius = 12;
-    // Top-left cell covering the sharp corner stub.
-    expect(chipInRoundedRect(0, 0, 11, 11, width, height, radius)).toBe(false);
-    // Interior cell fully inside.
-    expect(chipInRoundedRect(40, 30, 11, 11, width, height, radius)).toBe(true);
-    // Edge band (not in a corner arc) stays.
-    expect(chipInRoundedRect(40, 0, 11, 11, width, height, radius)).toBe(true);
-  });
-
-  it("omits dust chips that poke into the square corner stubs outside the rounded preview", () => {
+  it("keeps every corner cell as a slice of one full rounded card surface", () => {
     const width = 200;
     const height = 160;
-    const radius = THUMBNAIL_CARD_BORDER_RADIUS_PX;
-    // Stay under the soft particle cap so cols/rows are not rescaled.
     const cols = 14;
     const rows = 12;
     const particles = buildThumbnailDustParticles(width, height, {
@@ -102,33 +70,21 @@ describe("thumbnail exit effects", () => {
       rows,
       random: () => 0.5,
       chromeLeadMs: 0,
-      borderRadiusPx: radius,
     });
 
-    // Full rectangular grid would be cols×rows; rounded corners drop corner stubs.
-    expect(particles.length).toBeLessThan(cols * rows);
-    expect(particles.length).toBeGreaterThan(cols * rows - 30);
-
-    // Every kept chip's grid cell lies inside the rounded card silhouette.
-    const cellW = width / cols;
-    const cellH = height / rows;
-    for (const particle of particles) {
-      const left = particle.left - pad;
-      const top = particle.top - pad;
-      const col = Math.round(left / cellW);
-      const row = Math.round(top / cellH);
-      expect(chipInRoundedRect(col * cellW, row * cellH, cellW, cellH, width, height, radius)).toBe(true);
-    }
-
-    // Sharp-corner square: with radius 0 every cell is kept.
-    const sharp = buildThumbnailDustParticles(width, height, {
-      cols,
-      rows,
-      random: () => 0.5,
-      chromeLeadMs: 0,
-      borderRadiusPx: 0,
+    expect(particles).toHaveLength(cols * rows);
+    expect(particles[0]).toMatchObject({
+      cardWidth: width,
+      cardHeight: height,
+      sourceLeft: 0,
+      sourceTop: 0,
     });
-    expect(sharp).toHaveLength(cols * rows);
+    expect(particles.at(-1)).toMatchObject({
+      cardWidth: width,
+      cardHeight: height,
+      sourceLeft: (cols - 1) * (width / cols),
+      sourceTop: (rows - 1) * (height / rows),
+    });
   });
 
   it("matches object-fit: cover when sampling the preview into chips", () => {
@@ -146,11 +102,10 @@ describe("thumbnail exit effects", () => {
       chromeLeadMs: 0,
       imageWidth: 100,
       imageHeight: 200,
-      borderRadiusPx: 0,
     });
     expect(particles[0].surfaceWidth).toBeCloseTo(200);
     expect(particles[0].surfaceHeight).toBeCloseTo(400);
-    expect(particles[0].bgY).toBeCloseTo(-150);
+    expect(particles[0].surfaceOffsetY).toBeCloseTo(-150);
   });
 
   it("cascades particles radially from the trash button origin", () => {
@@ -278,8 +233,6 @@ describe("thumbnail exit effects", () => {
       random: () => 0,
       originX: 0,
       originY: 0,
-      // Keep the full grid so a chip can sit on the trash origin.
-      borderRadiusPx: 0,
     });
     const delays = particles.map((p) => p.delayMs);
     expect(Math.min(...delays)).toBeLessThan(50);
@@ -300,7 +253,6 @@ describe("thumbnail exit effects", () => {
       rows: 1,
       random: () => 0.5,
       chromeLeadMs: 0,
-      borderRadiusPx: 0,
     });
     const animateCalls: Array<{ keyframes: Keyframe[]; options: KeyframeAnimationOptions }> = [];
     const chips = particles.map((particle) => {

@@ -41,6 +41,16 @@ export const THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE = "data-native-pointer-hov
 const THUMBNAIL_NATIVE_POINTER_HOVER_SELECTOR =
   `[${THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE}="true"]`;
 
+/**
+ * Keeps a freshly opened editor control in its passive “In editor” state until
+ * the pointer actually leaves it. Without this latch, the stationary click
+ * immediately counts as hover and the new status morphs straight into the
+ * redundant “Show in editor” action label.
+ */
+export const THUMBNAIL_EDITOR_JUST_OPENED_ATTRIBUTE = "data-editor-just-opened";
+const THUMBNAIL_EDITOR_JUST_OPENED_SELECTOR =
+  `[${THUMBNAIL_EDITOR_JUST_OPENED_ATTRIBUTE}="true"]`;
+
 /** Cursor kind for the always-on-top capture previews. */
 export type ThumbnailCursorKind = "default" | "pointer" | "grab";
 
@@ -183,6 +193,14 @@ export function setThumbnailNativeActiveCard(
   card.setAttribute(THUMBNAIL_NATIVE_ACTIVE_ATTRIBUTE, "true");
 }
 
+export function markThumbnailEditorControlOpened(control: HTMLElement) {
+  control.setAttribute(THUMBNAIL_EDITOR_JUST_OPENED_ATTRIBUTE, "true");
+}
+
+export function rearmThumbnailEditorControlHover(control: HTMLElement) {
+  control.removeAttribute(THUMBNAIL_EDITOR_JUST_OPENED_ATTRIBUTE);
+}
+
 function containsPoint(element: Element, x: number, y: number): boolean {
   const bounds = element.getBoundingClientRect();
   return x >= bounds.left && x <= bounds.right && y >= bounds.top && y <= bounds.bottom;
@@ -200,9 +218,21 @@ export function applyThumbnailNativeHover(
   root: Document = document,
 ): ThumbnailCursorKind {
   if (!position.inside) {
+    root.querySelectorAll<HTMLElement>(THUMBNAIL_EDITOR_JUST_OPENED_SELECTOR)
+      .forEach(rearmThumbnailEditorControlHover);
     clearThumbnailNativeHover(root);
     return "default";
   }
+
+  // React pointerleave covers Windows/Linux and an active WebView. The native
+  // poll owns this re-arm path for a non-key macOS preview, where WebKit may not
+  // dispatch hover transitions while another application stays active.
+  root.querySelectorAll<HTMLElement>(THUMBNAIL_EDITOR_JUST_OPENED_SELECTOR)
+    .forEach((control) => {
+      if (!containsPoint(control, position.x, position.y)) {
+        rearmThumbnailEditorControlHover(control);
+      }
+    });
 
   const currentButton = root.querySelector<HTMLElement>(
     THUMBNAIL_NATIVE_POINTER_HOVER_SELECTOR,

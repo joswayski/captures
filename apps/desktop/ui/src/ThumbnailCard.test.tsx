@@ -116,7 +116,7 @@ describe("ThumbnailCard", () => {
     expect(screen.getByRole("button", { name: "Save file" })).toBeInTheDocument();
   });
 
-  it("opens the cross-platform screenshot editor from quick access", () => {
+  it("shows In editor immediately after opening, then rearms the hover action on leave", () => {
     render(<ThumbnailCard artifact={artifact(null)} clipboardCurrent viewerActive={false} onRemoved={() => undefined} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
@@ -124,6 +124,13 @@ describe("ThumbnailCard", () => {
     expect(invoke).toHaveBeenCalledWith("open_screenshot_editor", {
       artifactId: "capture-1",
     });
+    const editorControl = screen.getByRole("button", { name: "Show in editor" });
+    expect(editorControl).toHaveClass("is-present");
+    expect(editorControl).toHaveAttribute("data-editor-just-opened", "true");
+    expect(within(editorControl).getByText("In editor")).toBeInTheDocument();
+
+    fireEvent.pointerLeave(editorControl);
+    expect(editorControl).not.toHaveAttribute("data-editor-just-opened");
   });
 
   it("after a folder save: Close keeps the file, Delete removes it", () => {
@@ -649,8 +656,7 @@ describe("ThumbnailCard", () => {
     expect(card.querySelector(".thumbnail-dust-layer")).not.toBeNull();
   });
 
-  it("holds the rounded card clip before opening dust fly-out overflow", () => {
-    vi.useFakeTimers();
+  it("keeps corner particles as clipped slices of the full rounded surface", () => {
     render(
       <ThumbnailCard
         artifact={artifact(null)}
@@ -665,14 +671,15 @@ describe("ThumbnailCard", () => {
     });
     const card = screen.getByRole("article");
     expect(card).toHaveClass("thumbnail-exit-dust");
-    // First frames keep overflow:hidden + radius so delete doesn't flash a sharp rect.
-    expect(card).not.toHaveClass("thumbnail-dust-open");
-
-    act(() => {
-      vi.advanceTimersByTime(140);
+    const particles = card.querySelectorAll(".thumbnail-dust");
+    const surfaces = card.querySelectorAll(".thumbnail-dust-surface");
+    expect(surfaces).toHaveLength(particles.length);
+    expect(surfaces[0]).toHaveStyle({
+      left: "0px",
+      top: "0px",
+      width: "284px",
+      height: "160px",
     });
-    expect(card).toHaveClass("thumbnail-dust-open");
-    vi.useRealTimers();
   });
 
   it("finishes deletion if the webview never dispatches animationend", async () => {
