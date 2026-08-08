@@ -543,7 +543,7 @@ describe("ScreenshotEditor", () => {
     expect(layerList.children).toHaveLength(4);
   });
 
-  it("draws one straight Arrow and bends it from its canvas control handle", async () => {
+  it("draws one straight Arrow and bends it from one of three starter dots", async () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
 
@@ -578,7 +578,7 @@ describe("ScreenshotEditor", () => {
     fireEvent.click(within(layers).getByRole("button", { name: /ArrowShape/ }));
     const curve = screen.getByRole("slider", { name: "Curve" });
     expect(curve).toHaveValue("0");
-    expect(screen.getByText(/Double-click the path to add a point/)).toBeInTheDocument();
+    expect(screen.getByText(/Drag the curve dots to reshape/)).toBeInTheDocument();
 
     fireEvent.pointerDown(canvas, {
       button: 0,
@@ -597,7 +597,7 @@ describe("ScreenshotEditor", () => {
       clientX: 200,
       clientY: 200,
     });
-    expect(curve).toHaveValue("50");
+    expect(screen.getByRole("button", { name: "Straighten arrow" })).toBeInTheDocument();
   });
 
   it("shows curve handles after placing a stroke and bends without leaving the shape tool", async () => {
@@ -644,7 +644,7 @@ describe("ScreenshotEditor", () => {
       "true",
     );
 
-    // Drag the mid handle without switching to Select & move.
+    // Drag the middle starter dot without switching to Select & move.
     fireEvent.pointerDown(canvas, {
       button: 0,
       pointerId: 61,
@@ -662,7 +662,7 @@ describe("ScreenshotEditor", () => {
       clientX: 200,
       clientY: 250,
     });
-    expect(curve).toHaveValue("50");
+    expect(screen.getByRole("button", { name: "Straighten arrow" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Arrow (A)" })).toHaveAttribute(
       "aria-pressed",
       "true",
@@ -690,7 +690,7 @@ describe("ScreenshotEditor", () => {
     expect(within(layers).getAllByRole("button", { name: /ArrowShape/ })).toHaveLength(2);
   });
 
-  it("adds and removes arrow curve points with double-click", async () => {
+  it("adds and removes uncapped arrow curve points without creating arrows on double-click", async () => {
     render(<ScreenshotEditor />);
     await screen.findAllByText("1440 × 900");
 
@@ -722,46 +722,62 @@ describe("ScreenshotEditor", () => {
     });
 
     const layers = screen.getByRole("region", { name: "Layers" });
-    fireEvent.click(within(layers).getByRole("button", { name: /ArrowShape/ }));
-    expect(screen.getByText(/\(0\/4\)/)).toBeInTheDocument();
+    expect(within(layers).getAllByRole("button", { name: /ArrowShape/ })).toHaveLength(1);
+    expect(screen.getByText(/Double-click the path to add more points/)).toBeInTheDocument();
+    expect(screen.queryByText(/\d+\/4/)).not.toBeInTheDocument();
 
-    // Create a first bend so the path has room for another point.
-    fireEvent.pointerDown(canvas, {
+    const clickBeforeDoubleClick = (pointerId: number, clientX: number) => {
+      fireEvent.pointerDown(canvas, {
+        button: 0,
+        pointerId,
+        clientX,
+        clientY: 200,
+      });
+      fireEvent.pointerUp(canvas, {
+        button: 0,
+        pointerId,
+        clientX,
+        clientY: 200,
+      });
+    };
+
+    // Reproduce the browser's two pointer click cycles before `dblclick`.
+    // These used to create two tiny arrows before the curve point was inserted.
+    clickBeforeDoubleClick(41, 210);
+    clickBeforeDoubleClick(42, 210);
+    fireEvent.doubleClick(canvas, {
       button: 0,
-      pointerId: 41,
-      clientX: 250,
+      clientX: 210,
       clientY: 200,
     });
-    fireEvent.pointerMove(canvas, {
-      pointerId: 41,
-      clientX: 250,
-      clientY: 280,
-    });
-    fireEvent.pointerUp(canvas, {
-      button: 0,
-      pointerId: 41,
-      clientX: 250,
-      clientY: 280,
-    });
-    expect(screen.getByText(/\(1\/4\)/)).toBeInTheDocument();
+    expect(within(layers).getAllByRole("button", { name: /ArrowShape/ })).toHaveLength(1);
+    expect(screen.getByRole("slider", { name: "Curve" })).toBeInTheDocument();
 
-    // Double-click farther along the shaft to insert a second control.
+    // A second point is inserted with the Arrow tool still active and no cap copy.
+    clickBeforeDoubleClick(43, 340);
+    clickBeforeDoubleClick(44, 340);
     fireEvent.doubleClick(canvas, {
       button: 0,
       clientX: 340,
-      clientY: 230,
+      clientY: 200,
     });
-    expect(screen.getByText(/\(2\/4\)/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Straighten arrow" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Arrow (A)" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(within(layers).getAllByRole("button", { name: /ArrowShape/ })).toHaveLength(1);
 
-    // Double-click the first control handle to remove it.
+    // Double-click an existing point to remove it, still without switching tools.
+    clickBeforeDoubleClick(45, 210);
+    clickBeforeDoubleClick(46, 210);
     fireEvent.doubleClick(canvas, {
       button: 0,
-      clientX: 250,
-      clientY: 280,
+      clientX: 210,
+      clientY: 200,
     });
-    expect(screen.getByText(/\(1\/4\)/)).toBeInTheDocument();
     expect(screen.getByRole("slider", { name: "Curve" })).toBeInTheDocument();
+    expect(within(layers).getAllByRole("button", { name: /ArrowShape/ })).toHaveLength(1);
   });
 
   it("curves lines with the same handles, double-click points, and hover tip", async () => {
@@ -798,9 +814,9 @@ describe("ScreenshotEditor", () => {
     const layers = screen.getByRole("region", { name: "Layers" });
     fireEvent.click(within(layers).getByRole("button", { name: /LineShape/ }));
     expect(screen.getByRole("slider", { name: "Curve" })).toBeInTheDocument();
-    expect(screen.getByText(/Double-click the path to add a point/)).toBeInTheDocument();
+    expect(screen.getByText(/Double-click the path to add more points/)).toBeInTheDocument();
 
-    // Mid handle bend (chord length 300 → 150px lateral = 50% curve).
+    // Middle starter-dot bend materializes the three editable curve points.
     fireEvent.pointerDown(canvas, {
       button: 0,
       pointerId: 51,
@@ -818,7 +834,7 @@ describe("ScreenshotEditor", () => {
       clientX: 250,
       clientY: 450,
     });
-    expect(screen.getByRole("slider", { name: "Curve" })).toHaveValue("50");
+    expect(screen.getByRole("button", { name: "Straighten line" })).toBeInTheDocument();
 
     // Hover the path → discovery tooltip (fixed to viewport, not the panned surface).
     fireEvent.pointerMove(canvas, {
@@ -838,7 +854,6 @@ describe("ScreenshotEditor", () => {
       clientX: 340,
       clientY: 360,
     });
-    expect(screen.getByText(/\(2\/4\)/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Straighten line" })).toBeInTheDocument();
   });
 
