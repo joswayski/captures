@@ -53,7 +53,11 @@ struct CaptureSource {
 }
 
 impl NativeRecordingSegment {
-    pub fn start(options: &RecordingOptions, output_path: &Path) -> MacRecordingResult<Self> {
+    pub fn start(
+        options: &RecordingOptions,
+        output_path: &Path,
+        exclude_captures_app: bool,
+    ) -> MacRecordingResult<Self> {
         if output_path.to_str().is_none() {
             return Err(MacRecordingError::InvalidOutputPath);
         }
@@ -66,7 +70,7 @@ impl NativeRecordingSegment {
 
         let content = SCShareableContent::get()
             .map_err(|error| MacRecordingError::ScreenCaptureKit(error.to_string()))?;
-        let source = filter_for_target(&content, &options.target)?;
+        let source = filter_for_target(&content, &options.target, exclude_captures_app)?;
         let source_width_pixels = source.pixel_width.round().max(2.0) as u32;
         let source_height_pixels = source.pixel_height.round().max(2.0) as u32;
         let (width, height) = options
@@ -404,18 +408,14 @@ pub fn microphone_name_for_id(device_id: &str) -> Option<String> {
 fn filter_for_target(
     content: &SCShareableContent,
     target: &RecordingTarget,
+    exclude_captures_app: bool,
 ) -> MacRecordingResult<CaptureSource> {
     match target {
         RecordingTarget::Display { display_id } => {
             let display = find_display(content, display_id)?;
             let scale = display_pixel_scale(&display);
             let frame = display.frame();
-            let applications = current_process_applications(content);
-            let application_refs = applications.iter().collect::<Vec<_>>();
-            let filter = SCContentFilter::create()
-                .with_display(&display)
-                .with_excluding_applications(&application_refs, &[])
-                .build();
+            let filter = display_content_filter(&display, content, exclude_captures_app);
             Ok(CaptureSource {
                 filter,
                 pixel_width: f64::from(display.width()) * scale,
@@ -429,12 +429,7 @@ fn filter_for_target(
             let display = find_display(content, display_id)?;
             let scale = display_pixel_scale(&display);
             let display_frame = display.frame();
-            let applications = current_process_applications(content);
-            let application_refs = applications.iter().collect::<Vec<_>>();
-            let filter = SCContentFilter::create()
-                .with_display(&display)
-                .with_excluding_applications(&application_refs, &[])
-                .build();
+            let filter = display_content_filter(&display, content, exclude_captures_app);
             Ok(CaptureSource {
                 filter,
                 pixel_width: f64::from(rect.width) * scale,
@@ -459,6 +454,28 @@ fn filter_for_target(
                 frame,
             })
         }
+    }
+}
+
+fn display_content_filter(
+    display: &SCDisplay,
+    content: &SCShareableContent,
+    exclude_captures_app: bool,
+) -> SCContentFilter {
+    if exclude_captures_app {
+        let applications = current_process_applications(content);
+        let application_refs = applications.iter().collect::<Vec<_>>();
+        SCContentFilter::create()
+            .with_display(display)
+            .with_excluding_applications(&application_refs, &[])
+            .build()
+    } else {
+        // Keep Captures (and its recording controls) in the stream for demos
+        // and product feedback when the preference is enabled.
+        SCContentFilter::create()
+            .with_display(display)
+            .with_excluding_windows(&[])
+            .build()
     }
 }
 

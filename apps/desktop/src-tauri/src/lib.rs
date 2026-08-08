@@ -1394,6 +1394,8 @@ fn update_settings(
         != previous_settings.show_mini_previews
         || settings.include_mini_previews_in_captures
             != previous_settings.include_mini_previews_in_captures;
+    let recording_controls_setting_changed = settings.include_recording_controls_in_captures
+        != previous_settings.include_recording_controls_in_captures;
     *state.settings.write() = settings.clone();
     if mini_preview_setting_changed {
         if !settings.show_mini_previews {
@@ -1409,6 +1411,14 @@ fn update_settings(
             let _ = window.set_content_protected(false);
         }
         update_thumbnail_stack(&app);
+    }
+    if recording_controls_setting_changed
+        && let Some(window) = app.get_webview_window("recording-hud")
+    {
+        // Keep or restore content protection for the live control bar.
+        let protected =
+            cfg!(target_os = "windows") && !settings.include_recording_controls_in_captures;
+        let _ = window.set_content_protected(protected);
     }
     if let Err(error) = app.emit("settings-changed", &settings) {
         eprintln!("failed to broadcast updated settings: {error}");
@@ -3755,6 +3765,11 @@ fn include_mini_previews_in_captures(app: &AppHandle) -> bool {
         .is_some_and(|state| state.settings().include_mini_previews_in_captures)
 }
 
+fn include_recording_controls_in_captures(app: &AppHandle) -> bool {
+    app.try_state::<Arc<AppState>>()
+        .is_some_and(|state| state.settings().include_recording_controls_in_captures)
+}
+
 fn hide_recording_saved_notices(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(RECORDING_SAVED_NOTICE_LABEL) {
         let _ = window.hide();
@@ -3774,6 +3789,7 @@ fn set_capture_huds_protected(app: &AppHandle, protected: bool) {
     // immediate display capture. Exclude Captures HUDs until the frozen background
     // frame has been read so they cannot reappear as pixels during fade-in.
     let include_mini_previews = include_mini_previews_in_captures(app);
+    let include_recording_controls = include_recording_controls_in_captures(app);
     for (label, window) in app.webview_windows() {
         if !matches!(
             label.as_str(),
@@ -3781,8 +3797,10 @@ fn set_capture_huds_protected(app: &AppHandle, protected: bool) {
         ) {
             continue;
         }
-        // Keep the mini-preview stack capturable when the preference is on.
-        let next_protected = if label == "thumbnail" && include_mini_previews {
+        // Keep opted-in chrome capturable when the matching preference is on.
+        let next_protected = if (label == "thumbnail" && include_mini_previews)
+            || (label == "recording-hud" && include_recording_controls)
+        {
             false
         } else {
             protected
