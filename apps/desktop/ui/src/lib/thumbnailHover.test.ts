@@ -5,6 +5,7 @@ import {
   applyThumbnailNativeHover,
   clearThumbnailCssCursor,
   clearThumbnailNativeHover,
+  markThumbnailEditorControlOpened,
   shouldIgnoreThumbnailCursorEvents,
   shouldRecoverThumbnailAfterNullPolls,
   thumbnailCssCursor,
@@ -12,6 +13,7 @@ import {
   THUMBNAIL_CURSOR_HANDOFF_REASSERT_DELAYS_MS,
   THUMBNAIL_CURSOR_KIND_ATTRIBUTE,
   THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS,
+  THUMBNAIL_EDITOR_JUST_OPENED_ATTRIBUTE,
   THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE,
   THUMBNAIL_NULL_POLL_RECOVER_COUNT,
   withThumbnailPointerTimeout,
@@ -192,6 +194,41 @@ describe("applyThumbnailNativeHover", () => {
     button.className = "icon-button";
     expectNativePointerHover(button, true);
     expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe("pointer");
+  });
+
+  it("rearms a freshly opened editor action only after the native pointer leaves it", () => {
+    document.body.innerHTML = `
+      <article class="thumbnail-card">
+        <img alt="Screenshot preview">
+        <button class="thumbnail-editor-control">In editor</button>
+      </article>
+    `;
+    const image = document.querySelector<HTMLImageElement>("img")!;
+    const button = document.querySelector<HTMLButtonElement>("button")!;
+    vi.spyOn(button, "getBoundingClientRect").mockReturnValue({
+      x: 20,
+      y: 10,
+      top: 10,
+      left: 20,
+      right: 80,
+      bottom: 50,
+      width: 60,
+      height: 40,
+      toJSON: () => ({}),
+    });
+    let target: Element = button;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => target),
+    });
+
+    markThumbnailEditorControlOpened(button);
+    expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe("pointer");
+    expect(button).toHaveAttribute(THUMBNAIL_EDITOR_JUST_OPENED_ATTRIBUTE, "true");
+
+    target = image;
+    expect(applyThumbnailNativeHover({ x: 100, y: 80, inside: true })).toBe("grab");
+    expect(button).not.toHaveAttribute(THUMBNAIL_EDITOR_JUST_OPENED_ATTRIBUTE);
   });
 
   it("keeps overflow cues clickable without activating a preview card", () => {

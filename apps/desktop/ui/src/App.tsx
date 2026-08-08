@@ -59,6 +59,8 @@ import {
   applyThumbnailNativeHover,
   clearThumbnailCssCursor,
   clearThumbnailNativeHover,
+  markThumbnailEditorControlOpened,
+  rearmThumbnailEditorControlHover,
   setThumbnailNativeActiveCard,
   shouldIgnoreThumbnailCursorEvents,
   shouldRecoverThumbnailAfterNullPolls,
@@ -76,7 +78,6 @@ import {
   THUMBNAIL_DELETE_ORIGIN_AFTER_CLOSE_X,
   THUMBNAIL_DELETE_ORIGIN_FIRST_X,
   THUMBNAIL_DELETE_ORIGIN_Y,
-  THUMBNAIL_DUST_OPEN_MS,
   type ThumbnailDustParticle,
 } from "./lib/thumbnailExit";
 import {
@@ -4479,7 +4480,7 @@ export function Thumbnail() {
     /**
      * Clicks and document-window handoffs can make macOS restore the frontmost
      * app's arrow for a frame. Reassert the current interactive cursor
-     * immediately without making the thumbnail panel key.
+     * immediately while keeping the thumbnail panel nonactivating.
      */
     const reassertInteractiveCursor = () => {
       if (cursorKind === "default") return;
@@ -4716,7 +4717,7 @@ export function Thumbnail() {
 
     document.addEventListener("visibilitychange", resumeFromSuspension);
     // Keep this recovery path for runtime/platform focus notifications. The
-    // thumbnail is non-focusable, but a full-size viewer or resumed WebView can
+    // thumbnail is nonactivating, but a full-size viewer or resumed WebView can
     // still trigger reconciliation without flashing the last hover state.
     window.addEventListener("focus", pollImmediately);
     // Opening an editor, dialog, or external folder moves key-window focus
@@ -4878,8 +4879,8 @@ export function ThumbnailCard({
   const [fileDragging, setFileDragging] = useState(false);
   const [exit, setExit] = useState<"dismiss" | "delete" | null>(null);
   const [dustParticles, setDustParticles] = useState<ThumbnailDustParticle[] | null>(null);
-  /** After a short hold, open overflow so ash chips can fly outside the rounded card. */
-  const [dustOpen, setDustOpen] = useState(false);
+  /** Optimistically morph Edit into In editor while the native window opens. */
+  const [editorOpening, setEditorOpening] = useState(false);
   /**
    * Editor control labels + card ring stay in the leave path so width/ring can
    * ease when the editor closes. `trackedActive` mirrors the last `editorActive`
@@ -4901,6 +4902,9 @@ export function ThumbnailCard({
         trackedActive: false,
       });
     }
+  }
+  if (editorActive && editorOpening) {
+    setEditorOpening(false);
   }
   const editorPresenceVisible = editorPresence.visible;
   const editorPresenceLeaving = editorPresence.leaving;
@@ -4973,16 +4977,7 @@ export function ThumbnailCard({
     const layer = dustLayerRef.current;
     if (!layer) return;
     const chips = layer.querySelectorAll(".thumbnail-dust");
-    const stop = playThumbnailDustAnimations(chips, dustParticles);
-    // Hold the rounded card clip for the first paint frames, then open so ash
-    // can drift outside the preview bounds.
-    const openTimer = window.setTimeout(() => {
-      setDustOpen(true);
-    }, THUMBNAIL_DUST_OPEN_MS);
-    return () => {
-      window.clearTimeout(openTimer);
-      stop();
-    };
+    return playThumbnailDustAnimations(chips, dustParticles);
   }, [dustParticles, exit]);
 
   const showSavedFeedback = () => {
@@ -4995,27 +4990,38 @@ export function ThumbnailCard({
     }, THUMBNAIL_SAVED_FEEDBACK_MS);
   };
 
-  const runAction = async (action: string, success?: "copied" | "saved") => {
-    if (isExitLocked() || isExiting) return;
-    if (success && busy) return;
+  const runAction = async (
+    action: string,
+    success?: "copied" | "saved",
+  ): Promise<boolean> => {
+    if (isExitLocked() || isExiting) return false;
+    if (success && busy) return false;
     setError("");
     if (success) setBusy(success);
     try {
       await invoke(action, { artifactId: artifact.id });
-      if (isExitLocked()) return;
+      if (isExitLocked()) return false;
       if (success === "saved") showSavedFeedback();
+      return true;
     } catch (error) {
-      if (isExitLocked()) return;
-      setError(String(error));
+      if (!isExitLocked()) setError(String(error));
+      return false;
     } finally {
       if (success && !isExitLocked()) setBusy(null);
     }
   };
 
-  const openEditor = () => {
+  const openEditor = (event: React.MouseEvent<HTMLButtonElement>) => {
     if (isExitLocked() || isExiting) return;
+    const control = event.currentTarget;
+    markThumbnailEditorControlOpened(control);
+    setEditorOpening(true);
     if (cardRef.current) setThumbnailNativeActiveCard(cardRef.current);
-    void runAction("open_screenshot_editor");
+    void runAction("open_screenshot_editor").then((opened) => {
+      if (opened || isExitLocked()) return;
+      setEditorOpening(false);
+      rearmThumbnailEditorControlHover(control);
+    });
   };
 
   const finishFileDrag = (
@@ -5110,7 +5116,6 @@ export function ThumbnailCard({
         setExit(null);
         setExitChrome(null);
         setDustParticles(null);
-        setDustOpen(false);
         setError(String(error));
         window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
         void invoke("refresh_thumbnail_interactivity").catch(() => undefined);
@@ -5134,7 +5139,7 @@ export function ThumbnailCard({
       clipboardCurrent,
       historySaved: artifact.history_saved,
       copyFailed: artifact.clipboard_copy_status === "failed",
-      editorActive: editorActive || editorPresenceVisible,
+      editorActive: editorActive || editorOpening || editorPresenceVisible,
     });
     setBusy(null);
     setError("");
@@ -5156,7 +5161,6 @@ export function ThumbnailCard({
     } else {
       setDustParticles(null);
     }
-    setDustOpen(false);
     setExit(kind);
     // Re-run the native hit test after React marks this card non-interactive.
     // Only the outgoing slot should pass clicks through; sibling cards remain usable.
@@ -5188,14 +5192,16 @@ export function ThumbnailCard({
     clipboardCurrent,
     historySaved: artifact.history_saved,
     copyFailed: artifact.clipboard_copy_status === "failed",
-    editorActive: editorActive || editorPresenceVisible,
+    editorActive: editorActive || editorOpening || editorPresenceVisible,
   };
   // One top-right control: compact Edit ↔ present “In editor” pill.
   // Live `editorActive` drives the expanded style; leave keeps labels mounted
   // briefly so width can ease back, and the card ring uses the leaving class.
-  const editorControlPresent = isExiting ? chrome.editorActive : editorActive;
+  const editorControlPresent = isExiting ? chrome.editorActive : editorActive || editorOpening;
   const editorControlLeaving = !isExiting && editorPresenceLeaving;
-  const mountEditorLabels = isExiting ? chrome.editorActive : editorPresenceVisible;
+  const mountEditorLabels = isExiting
+    ? chrome.editorActive
+    : editorOpening || editorPresenceVisible;
   const editorControlAriaLabel = editorControlPresent ? "Show in editor" : "Edit";
   // Before a folder save: trash discards the preview (dissolve). After: trash deletes the file.
   // Close only appears once a file exists so you can hide the preview without trashing it.
@@ -5209,12 +5215,11 @@ export function ThumbnailCard({
         thumbnailReady ? "thumbnail-ready" : "thumbnail-pending",
         thumbnailReady ? "thumbnail-capture-highlight" : "",
         viewerActive && !isExiting ? "thumbnail-viewer-active" : "",
-        editorActive && !isExiting ? "thumbnail-editor-active" : "",
+        editorControlPresent && !isExiting ? "thumbnail-editor-active" : "",
         editorControlLeaving ? "thumbnail-editor-leaving" : "",
         fileDragging ? "thumbnail-file-dragging" : "",
         exit ? `thumbnail-exit-${exit}` : "",
         usingDust ? "thumbnail-exit-dust" : "",
-        usingDust && dustOpen ? "thumbnail-dust-open" : "",
         isExiting ? "thumbnail-exiting" : "",
       ].filter(Boolean).join(" ")}
       // HTML inert disables all descendant input/focus for the whole exit animation.
@@ -5247,11 +5252,21 @@ export function ThumbnailCard({
                 top: particle.top,
                 width: particle.width,
                 height: particle.height,
-                backgroundImage: `url(${JSON.stringify(artifact.preview_url).slice(1, -1)})`,
-                backgroundSize: `${particle.surfaceWidth}px ${particle.surfaceHeight}px`,
-                backgroundPosition: `${particle.bgX}px ${particle.bgY}px`,
               }}
-            />
+            >
+              <span
+                className="thumbnail-dust-surface"
+                style={{
+                  left: -particle.sourceLeft,
+                  top: -particle.sourceTop,
+                  width: particle.cardWidth,
+                  height: particle.cardHeight,
+                  backgroundImage: `url(${JSON.stringify(artifact.preview_url).slice(1, -1)})`,
+                  backgroundSize: `${particle.surfaceWidth}px ${particle.surfaceHeight}px`,
+                  backgroundPosition: `${particle.surfaceOffsetX}px ${particle.surfaceOffsetY}px`,
+                }}
+              />
+            </span>
           ))}
         </div>
       )}
@@ -5300,6 +5315,7 @@ export function ThumbnailCard({
         data-tooltip={editorControlPresent ? undefined : "Edit"}
         disabled={isExiting}
         onClick={isExiting ? undefined : openEditor}
+        onPointerLeave={(event) => rearmThumbnailEditorControlHover(event.currentTarget)}
       >
         <EditIcon />
         {mountEditorLabels && (
