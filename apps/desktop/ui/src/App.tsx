@@ -4433,9 +4433,9 @@ export function Thumbnail() {
     let consecutiveNullPolls = 0;
     let cursorHandoffTimers: ReturnType<typeof setTimeout>[] = [];
     /**
-     * Clicks (and the key-window handoff they trigger) make macOS restore the
-     * frontmost app's arrow for a frame. Reassert the current interactive
-     * cursor immediately instead of waiting for the next pointer poll.
+     * Clicks and document-window handoffs can make macOS restore the frontmost
+     * app's arrow for a frame. Reassert the current interactive cursor
+     * immediately without making the thumbnail panel key.
      */
     const reassertInteractiveCursor = () => {
       if (cursorKind === "default") return;
@@ -4449,8 +4449,8 @@ export function Thumbnail() {
 
     /**
      * AppKit and WebKit install the arrow during mouse up/down and again when
-     * Edit steals key-window focus. Reassert now and on a short delay schedule
-     * so the hand wins both the click and the editor handoff without a poll.
+     * Edit moves key-window focus to the editor. Reassert now and on a short
+     * delay schedule so the hand wins both transitions without a pointer poll.
      */
     const preserveInteractiveCursorAcrossHandoff = () => {
       reassertInteractiveCursor();
@@ -4488,10 +4488,9 @@ export function Thumbnail() {
       } else {
         void invoke("set_thumbnail_cursor", { kind });
       }
-      // First entry onto the drag source often has a stationary pointer after
-      // the nonactivating panel becomes key. Reassert on the next task so
-      // grab/pointer survive that handoff without requiring a detour over a
-      // button (which generates mouseMoved and accidentally fixed it before).
+      // First entry onto the drag source often leaves the pointer stationary.
+      // Reassert on the next task so grab/pointer survive WebKit's cursor-rect
+      // update without requiring a detour over a button.
       if (becameInteractive) {
         preserveInteractiveCursorAcrossHandoff();
       }
@@ -4672,10 +4671,9 @@ export function Thumbnail() {
     };
 
     document.addEventListener("visibilitychange", resumeFromSuspension);
-    // Clicking an inactive thumbnail briefly makes its panel key before a
-    // full-size viewer takes focus. Keep the last native hover presentation
-    // during that transfer; the immediate poll will reconcile it without
-    // flashing the metadata and unblurred image in between.
+    // Keep this recovery path for runtime/platform focus notifications. The
+    // thumbnail is non-focusable, but a full-size viewer or resumed WebView can
+    // still trigger reconciliation without flashing the last hover state.
     window.addEventListener("focus", pollImmediately);
     // Opening an editor, dialog, or external folder moves key-window focus
     // away after the click handlers run. Preserve the hovered button's cursor

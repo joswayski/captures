@@ -3073,12 +3073,16 @@ fn create_thumbnail_window(app: &AppHandle, visible: bool) -> Result<(), tauri::
     .background_color(Color(0, 0, 0, 0))
     .accept_first_mouse(true)
     .disable_drag_drop_handler()
+    // Keep the browser or desktop app underneath active while the user hovers,
+    // clicks actions, or starts a file drag from a mini preview. Mouse events
+    // still reach the WebView; this only prevents native window activation.
+    .focusable(false)
     .focused(false)
     .visible(false)
     .build()?;
 
     #[cfg(target_os = "macos")]
-    captures_macos_window::configure_inactive_hover(&window)
+    captures_macos_window::configure_thumbnail_inactive_hover(&window)
         .map_err(|error| tauri::Error::Anyhow(anyhow::anyhow!(error)))?;
 
     if visible {
