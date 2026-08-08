@@ -5233,6 +5233,7 @@ export function ThumbnailCard({
           Dust stays outside this shell so dissolve chips can fly past the edge. */}
       <div className="thumbnail-media">
         <img
+          className={usingDust ? "thumbnail-dust-source" : undefined}
           src={artifact.full_url}
           alt="Screenshot preview"
           draggable={!isExiting}
