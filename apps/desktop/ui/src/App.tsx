@@ -125,6 +125,8 @@ const currentWindow = isTauri() ? getCurrentWindow() : null;
 // remains the primary completion path; fallback only covers missed events.
 const THUMBNAIL_DISMISS_FALLBACK_MS = 1_250;
 const THUMBNAIL_DELETE_FALLBACK_MS = 3_200;
+/** How long the mini-preview shows “Saved” before flipping to “Show in Folder”. */
+const THUMBNAIL_SAVED_FEEDBACK_MS = 1_000;
 const THUMBNAIL_HIT_TEST_CHANGED_EVENT = "captures-thumbnail-hit-test-changed";
 const RECORDING_SELECTOR_REVEAL_FALLBACK_MS = 200;
 const RECORDING_COUNTDOWN_FADE_OUT_MS = 180;
@@ -4883,7 +4885,7 @@ export function ThumbnailCard({
     feedbackTimer.current = setTimeout(() => {
       if (isExitLocked()) return;
       setFeedback(null);
-    }, 2_000);
+    }, THUMBNAIL_SAVED_FEEDBACK_MS);
   };
 
   const runAction = async (action: string, success?: "copied" | "saved") => {
