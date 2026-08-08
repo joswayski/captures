@@ -361,6 +361,7 @@ fn cancel_recording_selection_inner(
     destroy_recording_selector(app);
     #[cfg(target_os = "macos")]
     captures_macos_window::restore_frontmost_app_after_capture();
+    crate::reveal_document_windows_after_capture(app);
     crate::set_capture_huds_protected(app, false);
     crate::restore_thumbnail_capture_ui(app, state);
     Ok(())
@@ -414,8 +415,10 @@ async fn capture_selection_screenshot_inner(
     destroy_recording_selector(&app);
     // Screenshot-from-controls is done with the selector; hand focus back so an
     // already-open editor does not stay covering the app the user was using.
+    // Document windows stay ordered out until this path finishes or fails.
     #[cfg(target_os = "macos")]
     captures_macos_window::restore_frontmost_app_after_capture();
+    let _reveal_documents = crate::RevealDocumentWindowsOnDrop::new(&app);
     crate::restore_thumbnail_capture_ui(&app, &state);
     crate::set_capture_huds_protected(&app, false);
 
@@ -953,6 +956,7 @@ async fn start_segment(
             if !recording_segment_is_current(&state, session_id, generation) {
                 destroy_recording_countdown(&app);
                 captures_macos_window::restore_frontmost_app_after_capture();
+                crate::reveal_document_windows_after_capture(&app);
                 return Ok(());
             }
         }
@@ -962,6 +966,7 @@ async fn start_segment(
     // HUD is non-activating, so hand focus back while the user records.
     #[cfg(target_os = "macos")]
     captures_macos_window::restore_frontmost_app_after_capture();
+    crate::reveal_document_windows_after_capture(&app);
     show_recording_hud(&app).await?;
     schedule_segment_monitor(app, state, session_id.to_owned(), generation);
     Ok(())
@@ -2761,6 +2766,7 @@ fn restore_recording_ui(app: &AppHandle, state: &Arc<AppState>) {
     crate::hide_window(app, "recording-hud");
     #[cfg(target_os = "macos")]
     captures_macos_window::restore_frontmost_app_after_capture();
+    crate::reveal_document_windows_after_capture(app);
     crate::set_capture_huds_protected(app, false);
     crate::restore_thumbnail_capture_ui(app, state);
 }

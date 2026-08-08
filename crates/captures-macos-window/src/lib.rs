@@ -1,7 +1,7 @@
 #![cfg(target_os = "macos")]
 
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     ffi::c_void,
     ptr,
     sync::{
@@ -353,6 +353,16 @@ static CAPTURE_OVERLAY_OWNS_CURSOR: AtomicBool = AtomicBool::new(false);
 // previous frontmost app so we can hand focus back after the surface dismisses.
 static FRONTMOST_APP_BEFORE_CAPTURE: Mutex<Option<Retained<NSRunningApplication>>> =
     Mutex::new(None);
+// Titled document windows ordered out for the duration of a capture UI session.
+// Kept separate from frontmost-app restore so intermediate restores (overlay →
+// countdown) do not put editors back on screen for a frame.
+//
+// Main-thread only: `NSWindow` is not `Send`, and every conceal/reveal path
+// already requires the AppKit main thread.
+thread_local! {
+    static CONCEALED_DOCUMENT_WINDOWS: RefCell<Vec<Retained<NSWindow>>> =
+        const { RefCell::new(Vec::new()) };
+}
 
 /// Returns whether a standard shortcut modifier is still physically held.
 ///
@@ -643,10 +653,16 @@ fn make_key_and_activate(window: &WebviewWindow) -> Result<(), &'static str> {
 /// session already recorded an anchor (selector → countdown should not clobber
 /// the original frontmost app).
 ///
+/// Also conceals open titled document windows (editors, history, preferences)
+/// so app activation cannot flash them above the user's work. Call
+/// [`reveal_concealed_document_windows`] only when the full capture UI session
+/// ends — not on intermediate frontmost restores (for example overlay →
+/// countdown).
+///
 /// Call this immediately before focusing the screenshot overlay or another
-/// capture UI so document windows (editors, history, preferences) can be
-/// returned to the background afterward.
+/// capture UI so document windows can be returned to the background afterward.
 pub fn remember_frontmost_app_before_activation() {
+    conceal_document_windows_for_capture();
     let mut slot = FRONTMOST_APP_BEFORE_CAPTURE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -664,17 +680,31 @@ pub fn remember_frontmost_app_before_activation() {
 /// Drops a remembered frontmost app without restoring it.
 ///
 /// Use when Captures intentionally keeps focus (for example opening an editor
-/// after a recording finishes).
+/// after a recording finishes). Also reveals any capture-concealed documents so
+/// an intentional open cannot leave a previous editor ordered out.
 pub fn clear_frontmost_app_anchor() {
     let mut slot = FRONTMOST_APP_BEFORE_CAPTURE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     *slot = None;
+    // Editor open can arrive off the main thread; still clear concealment.
+    if MainThreadMarker::new().is_some() {
+        reveal_concealed_document_windows();
+    } else {
+        DispatchQueue::main().exec_async(|| {
+            reveal_concealed_document_windows();
+        });
+    }
 }
 
 /// Hands activation back to the app that was frontmost before a transient
 /// capture surface. Prevents open editors from remaining key after a screenshot
 /// or cancelled selection while the user was working in another app.
+///
+/// Does **not** re-show concealed document windows — intermediate restores
+/// (region overlay hide before a countdown) would otherwise flash editors for a
+/// few frames. Call [`reveal_concealed_document_windows`] when the capture UI
+/// session fully ends.
 pub fn restore_frontmost_app_after_capture() {
     let previous = {
         let mut slot = FRONTMOST_APP_BEFORE_CAPTURE
@@ -693,6 +723,64 @@ pub fn restore_frontmost_app_after_capture() {
         app.yieldActivationToApplication(&previous);
     }
     let _ = previous.activateWithOptions(NSApplicationActivationOptions::empty());
+}
+
+/// Orders out titled document windows so capture activation cannot flash them.
+///
+/// Borderless capture surfaces and nonactivating HUD panels are left alone.
+/// Idempotent while a concealment session is already active.
+pub fn conceal_document_windows_for_capture() {
+    let Some(main_thread) = MainThreadMarker::new() else {
+        return;
+    };
+    CONCEALED_DOCUMENT_WINDOWS.with(|concealed| {
+        let mut concealed = concealed.borrow_mut();
+        if !concealed.is_empty() {
+            return;
+        }
+        let app = NSApplication::sharedApplication(main_thread);
+        for window in app.windows().iter() {
+            if !is_titled_document_window(&window) || !window.isVisible() {
+                continue;
+            }
+            window.orderOut(None);
+            concealed.push(window);
+        }
+    });
+}
+
+/// Restores document windows ordered out for capture without activating Captures.
+///
+/// When another app is frontmost, windows rejoin this app's inactive window list
+/// and stay behind the active app. When Captures is frontmost, they reappear with
+/// the rest of the app's documents.
+pub fn reveal_concealed_document_windows() {
+    if MainThreadMarker::new().is_none() {
+        return;
+    }
+    let windows =
+        CONCEALED_DOCUMENT_WINDOWS.with(|concealed| std::mem::take(&mut *concealed.borrow_mut()));
+    for window in windows {
+        // Destroyed webviews drop their NSWindow; skip anything already gone or
+        // already visible from another path.
+        if window.isVisible() {
+            continue;
+        }
+        // orderFront (not orderFrontRegardless) keeps an inactive Captures
+        // behind the restored frontmost app instead of floating above it.
+        window.orderFront(None);
+    }
+}
+
+fn is_titled_document_window(window: &NSWindow) -> bool {
+    // Editors, history, preferences, and similar document surfaces use a title
+    // bar. Capture overlays, countdowns, and floating HUD panels do not.
+    style_mask_is_titled_document(window.styleMask())
+}
+
+fn style_mask_is_titled_document(mask: NSWindowStyleMask) -> bool {
+    mask.contains(NSWindowStyleMask::Titled)
+        && !mask.contains(NSWindowStyleMask::NonactivatingPanel)
 }
 
 /// Restores native overlay state after a capture ends.
@@ -966,12 +1054,31 @@ mod tests {
 
     use objc2_app_kit::NSEventModifierFlags;
 
+    use objc2_app_kit::NSWindowStyleMask;
+
     use super::{
         CAPTURE_OVERLAY_OWNS_CURSOR, CursorMode, CursorSurface, THUMBNAIL_CURSOR_MODE,
         cursor_mode_is_interactive, cursor_surface_can_apply, cursor_surface_uses_key_window,
         reassert_thumbnail_cursor_after_click, shortcut_modifiers_pressed,
-        should_reset_cursor_on_exit, window_corner_radius_for_major_version,
+        should_reset_cursor_on_exit, style_mask_is_titled_document,
+        window_corner_radius_for_major_version,
     };
+
+    #[test]
+    fn titled_document_mask_matches_editors_not_capture_surfaces() {
+        assert!(style_mask_is_titled_document(
+            NSWindowStyleMask::Titled | NSWindowStyleMask::Closable | NSWindowStyleMask::Resizable
+        ));
+        assert!(!style_mask_is_titled_document(
+            NSWindowStyleMask::Borderless
+        ));
+        assert!(!style_mask_is_titled_document(
+            NSWindowStyleMask::Titled | NSWindowStyleMask::NonactivatingPanel
+        ));
+        assert!(!style_mask_is_titled_document(
+            NSWindowStyleMask::NonactivatingPanel
+        ));
+    }
 
     #[test]
     fn waits_for_shortcut_modifiers_but_not_lock_keys() {
