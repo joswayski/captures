@@ -1212,6 +1212,7 @@ export function ScreenshotEditor() {
   const [maximumFileSize, setMaximumFileSize] = useState("10");
   const [maximumFileSizeUnit, setMaximumFileSizeUnit] =
     useState<ScreenshotFileSizeUnit>("mb");
+  const [exportSettingsOpen, setExportSettingsOpen] = useState(false);
   const [filenameStem, setFilenameStem] = useState("");
   const [destinationDirectory, setDestinationDirectory] = useState("");
   const [estimatedBytes, setEstimatedBytes] = useState<number | null>(null);
@@ -3802,9 +3803,11 @@ export function ScreenshotEditor() {
             <button
               type="button"
               className={zoomMode === "fit" ? "active" : ""}
+              aria-label="Fit canvas"
+              title="Fit canvas to window"
               onClick={activateFitZoom}
             >
-              Fit
+              <EditorIcon name="fit" />
             </button>
             <select
               aria-label="Canvas zoom"
@@ -5073,7 +5076,8 @@ export function ScreenshotEditor() {
       </aside>
 
       <footer className="screenshot-export-bar">
-        <div className="screenshot-export-settings">
+        <div className={`screenshot-export-options${exportSettingsOpen ? " is-open" : ""}`}>
+          <div id="screenshot-export-settings" className="screenshot-export-settings">
           <label>
             Format
             <select
@@ -5212,8 +5216,22 @@ export function ScreenshotEditor() {
               {estimatedSizeLabel}
             </strong>
           </div>
+          </div>
         </div>
         <div className="screenshot-save-row">
+          <button
+            type="button"
+            className="screenshot-export-disclosure"
+            aria-controls="screenshot-export-settings"
+            aria-expanded={exportSettingsOpen}
+            onClick={() => setExportSettingsOpen((open) => !open)}
+          >
+            <span className="screenshot-export-disclosure-label">Export settings</span>
+            <span className="screenshot-export-summary">
+              {formatLabel} · {output.width} × {output.height} · {estimatedSizeLabel}
+            </span>
+            <EditorIcon name="chevron-down" />
+          </button>
           <div className="recording-filename screenshot-filename">
             <div className="recording-filename-heading">
               <label htmlFor="screenshot-save-filename">Filename</label>
@@ -5708,6 +5726,7 @@ function EditorIcon({ name }: { name: string }) {
   }
   if (name === "undo") return <svg viewBox="0 0 24 24"><path d="m9 7-5 5 5 5M5 12h8a6 6 0 0 1 6 6" /></svg>;
   if (name === "redo") return <svg viewBox="0 0 24 24"><path d="m15 7 5 5-5 5M19 12h-8a6 6 0 0 0-6 6" /></svg>;
+  if (name === "fit") return <svg viewBox="0 0 24 24"><path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5" /></svg>;
   if (name === "image") return <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="8" cy="9" r="1.5" /><path d="m5 18 5-5 3 3 2-2 4 4" /></svg>;
   if (name === "trash") return <svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" /></svg>;
   if (name === "copy") return <svg viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2" /><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3" /></svg>;

@@ -168,6 +168,20 @@ describe("ScreenshotEditor", () => {
     });
   });
 
+  it("keeps advanced export controls behind a compact disclosure", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Width");
+
+    const disclosure = screen.getByRole("button", { name: /Export settings/ });
+    expect(disclosure).toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.click(disclosure);
+
+    expect(disclosure).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByLabelText("Format")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Save quality" })).toBeInTheDocument();
+  });
+
   it("clears editor presence when the original layer is deleted", async () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
@@ -1616,7 +1630,8 @@ describe("ScreenshotEditor", () => {
       await screen.findByLabelText("Width");
 
       await waitFor(() => {
-        expect(screen.getByText(/≈/)).toBeInTheDocument();
+        expect(screen.getByTitle("Estimated export file size for the current format, quality, and output size"))
+          .toHaveTextContent(/≈/);
       }, { timeout: 2_000 });
 
       fireEvent.change(screen.getByRole("combobox", { name: "Save quality" }), {
@@ -1635,7 +1650,8 @@ describe("ScreenshotEditor", () => {
 
       await waitFor(() => {
         expect(toBlob.mock.calls.some((call) => call[1] === "image/jpeg")).toBe(true);
-        expect(screen.getByText(/≈/)).toBeInTheDocument();
+        expect(screen.getByTitle("Estimated export file size for the current format, quality, and output size"))
+          .toHaveTextContent(/≈/);
       }, { timeout: 2_000 });
     } finally {
       window.Image = originalImage;
