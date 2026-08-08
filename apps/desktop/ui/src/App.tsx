@@ -5224,14 +5224,18 @@ export function ThumbnailCard({
       data-file-dragging={fileDragging ? "true" : undefined}
       onAnimationEnd={finishExit}
     >
-      <img
-        src={artifact.full_url}
-        alt="Screenshot preview"
-        draggable={!isExiting}
-        onDragStart={(event) => void beginFileDrag(event)}
-        onLoad={markThumbnailReady}
-        onError={markThumbnailReady}
-      />
+      {/* Media shell clips hover blur/scale so it never bleeds into the card ring.
+          Dust stays outside this shell so dissolve chips can fly past the edge. */}
+      <div className="thumbnail-media">
+        <img
+          src={artifact.full_url}
+          alt="Screenshot preview"
+          draggable={!isExiting}
+          onDragStart={(event) => void beginFileDrag(event)}
+          onLoad={markThumbnailReady}
+          onError={markThumbnailReady}
+        />
+      </div>
       {usingDust && (
         <div ref={dustLayerRef} className="thumbnail-dust-layer" aria-hidden="true">
           {dustParticles.map((particle) => (

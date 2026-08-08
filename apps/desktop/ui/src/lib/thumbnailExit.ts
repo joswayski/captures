@@ -4,7 +4,7 @@ export const THUMBNAIL_CARD_FALLBACK_HEIGHT = 160;
 
 /**
  * Card / preview corner radius in CSS pixels.
- * Must match `.thumbnail-card` / `.thumbnail-card img` / dust clip in styles.css.
+ * Must match `.thumbnail-card` / `.thumbnail-media` / dust clip in styles.css.
  */
 export const THUMBNAIL_CARD_BORDER_RADIUS_PX = 12;
 

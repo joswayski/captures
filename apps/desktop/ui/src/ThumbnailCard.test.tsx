@@ -51,6 +51,8 @@ describe("ThumbnailCard", () => {
     const image = screen.getByRole("img", { name: "Screenshot preview" });
     expect(image)
       .toHaveAttribute("src", "captures-capture://artifact-full/capture-1");
+    // Clip shell keeps hover blur inside the rounded preview edge.
+    expect(image.parentElement).toHaveClass("thumbnail-media");
     expect(screen.getByRole("article")).toHaveClass("thumbnail-pending");
     expect(screen.getByRole("article")).not.toHaveClass("thumbnail-capture-highlight");
 

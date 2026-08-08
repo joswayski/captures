@@ -223,13 +223,13 @@ html.capture-window-cursor, html.capture-window-cursor * { cursor: var(--capture
 .thumbnail-card.thumbnail-file-dragging { cursor: -webkit-grabbing; cursor: grabbing; }
 .thumbnail-card.thumbnail-file-dragging, .thumbnail-card.thumbnail-file-dragging * { cursor: -webkit-grabbing !important; cursor: grabbing !important; }
 .thumbnail-card.thumbnail-viewer-active { box-shadow: 0 8px 16px rgba(0,0,0,.34), 0 2px 5px rgba(0,0,0,.22), 0 0 0 1px rgba(var(--theme-accent-rgb),.82), 0 0 17px rgba(var(--theme-accent-rgb),.24); }
-/* Distinct from full-size viewer: slightly stronger ring + soft fill so open editor layers read clearly. */
+/* Distinct from full-size viewer: single solid ring + glow (no faded outer stroke —
+   a second ring stacked with hover blur made the edge flash/darken). */
 .thumbnail-card.thumbnail-editor-active {
   box-shadow:
     0 8px 16px rgba(0,0,0,.34),
     0 2px 5px rgba(0,0,0,.22),
     0 0 0 2px rgba(var(--theme-accent-rgb),.9),
-    0 0 0 5px rgba(var(--theme-accent-rgb),.18),
     0 0 22px rgba(var(--theme-accent-rgb),.32);
 }
 .thumbnail-card.thumbnail-editor-active.thumbnail-viewer-active {
@@ -237,7 +237,6 @@ html.capture-window-cursor, html.capture-window-cursor * { cursor: var(--capture
     0 8px 16px rgba(0,0,0,.34),
     0 2px 5px rgba(0,0,0,.22),
     0 0 0 2px rgba(var(--theme-accent-rgb),.95),
-    0 0 0 5px rgba(var(--theme-accent-rgb),.22),
     0 0 24px rgba(var(--theme-accent-rgb),.38);
 }
 /* Longer box-shadow ease when the open-editor ring drops after the window closes. */
@@ -258,8 +257,41 @@ html.capture-window-cursor, html.capture-window-cursor * { cursor: var(--capture
   will-change: auto;
 }
 .thumbnail-svg-defs { position: absolute; width: 0; height: 0; overflow: hidden; pointer-events: none; }
+/*
+ * Clip shell keeps hover blur/scale inside the rounded card. The card itself stays
+ * overflow:visible so action tooltips can paint outside the edge. The shell is the
+ * innermost edge of the preview — blur must never paint past it into the ring.
+ * clip-path + overflow both apply: WebKit can let filter blur escape overflow alone.
+ */
+.thumbnail-media {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  /* Keep in sync with THUMBNAIL_CARD_BORDER_RADIUS_PX / .thumbnail-card. */
+  clip-path: inset(0 round 12px);
+  background: transparent;
+  pointer-events: none;
+  isolation: isolate;
+}
 /* Cover fills the card (no letterbox bars). Full-res fidelity lives in the viewer. */
-.thumbnail-card img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: center; border: 0; border-radius: 12px; background: transparent; cursor: -webkit-grab; cursor: grab; transition: filter .18s ease, transform .22s ease; -webkit-user-select: none; user-select: none; }
+.thumbnail-card img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  cursor: -webkit-grab;
+  cursor: grab;
+  pointer-events: auto;
+  transition: filter .18s ease, transform .22s ease;
+  -webkit-user-select: none;
+  user-select: none;
+}
 html:not(.thumbnail-native-tracking) .thumbnail-card:hover img, .thumbnail-card:focus-within img, .thumbnail-card[data-thumbnail-native-active="true"] img { filter: blur(2px) brightness(.56); transform: scale(1.015); }
 /* Lock the hovered look on exit so clearing :hover / native-active never flashes a sharp preview. */
 .thumbnail-card[class*="thumbnail-exit-"] img {
@@ -703,7 +735,7 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
  */
 .thumbnail-dust-layer {
   /* Keep pad/radius in sync with thumbnailExit.ts (THUMBNAIL_DUST_LAYER_PAD_PX /
-     THUMBNAIL_CARD_BORDER_RADIUS_PX) and .thumbnail-card border-radius. */
+     THUMBNAIL_CARD_BORDER_RADIUS_PX) and .thumbnail-card / .thumbnail-media. */
   --dust-pad: 120px;
   --dust-radius: 12px;
   position: absolute;
