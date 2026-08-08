@@ -871,14 +871,29 @@ describe("ScreenshotEditor", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Locked" }));
     expect(screen.getByRole("button", { name: "Unlocked" })).toBeInTheDocument();
-    const layerTools = screen.getByRole("toolbar", { name: "Layer actions" });
-    expect(within(layerTools).getByRole("button", { name: "Duplicate" })).toBeEnabled();
-    expect(within(layerTools).getByRole("button", { name: "Delete" })).toBeEnabled();
+    // Stack/merge tools live on the layer row ⋯ menu so the properties panel
+    // does not permanently reserve space for them.
+    expect(screen.queryByRole("toolbar", { name: "Layer actions" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Bring to front" })).not.toBeInTheDocument();
+    const layerActionsTrigger = within(layers).getByRole("button", {
+      name: "Layer actions for Original screenshot",
+    });
+    fireEvent.click(layerActionsTrigger);
+    const layerMenu = screen.getByRole("menu", {
+      name: "Layer actions for Original screenshot",
+    });
+    expect(within(layerMenu).getByRole("menuitem", { name: /Duplicate/ })).toBeEnabled();
+    expect(within(layerMenu).getByRole("menuitem", { name: /Delete/ })).toBeEnabled();
     // Single-layer document: nothing to merge into, and flatten only bakes when
     // a solid canvas background remains (it does by default).
-    expect(within(layerTools).getByRole("button", { name: "Merge down" })).toBeDisabled();
-    expect(within(layerTools).getByRole("button", { name: "Merge visible" })).toBeDisabled();
-    expect(within(layerTools).getByRole("button", { name: "Flatten image" })).toBeEnabled();
+    expect(within(layerMenu).getByRole("menuitem", { name: /Merge down/ })).toBeDisabled();
+    expect(within(layerMenu).getByRole("menuitem", { name: /Merge visible/ })).toBeDisabled();
+    expect(within(layerMenu).getByRole("menuitem", { name: /Flatten image/ })).toBeEnabled();
+    expect(within(layerMenu).getByRole("menuitem", { name: /Bring to front/ })).toBeDisabled();
+    expect(within(layerMenu).getByRole("menuitem", { name: /Send to back/ })).toBeDisabled();
+    // Descriptions act as always-visible tooltips for each stack action.
+    expect(within(layerMenu).getByText("Combine with the layer below")).toBeInTheDocument();
+    expect(within(layerMenu).getByText("Bake into one locked layer")).toBeInTheDocument();
     expect(
       within(layers).getByRole("button", { name: "Lock Original screenshot" }),
     ).toHaveAttribute("aria-pressed", "false");

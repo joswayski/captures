@@ -1098,6 +1098,15 @@ export function ScreenshotEditor() {
   const [viewPan, setViewPan] = useState({ x: 0, y: 0 });
   const [canvasOffscreen, setCanvasOffscreen] = useState(false);
   const [layerDropTarget, setLayerDropTarget] = useState<LayerDropTarget | null>(null);
+  /** Which layer row's stack-actions dropdown is open (⋯ menu). */
+  const [layerMenuId, setLayerMenuId] = useState<string | null>(null);
+  const layerMenuRootRef = useRef<HTMLElement | null>(null);
+  const layerMenuTriggerRefs = useRef(new Map<string, HTMLButtonElement>());
+  const [layerMenuPlacement, setLayerMenuPlacement] = useState<{
+    top: number | "auto";
+    bottom: number | "auto";
+    left: number;
+  } | null>(null);
   const [exportFormat, setExportFormat] = useState<ExportFormat>("png");
   const [exportSize, setExportSize] = useState<ExportSize>("original");
   const [customExportWidth, setCustomExportWidth] = useState(1_920);
@@ -1219,6 +1228,73 @@ export function ScreenshotEditor() {
       window.cancelAnimationFrame(zoomAnchorFrameRef.current);
     }
   }, []);
+
+  // Position the per-layer stack menu with fixed coords so overflow:auto on the
+  // layer list does not clip it; flip above the trigger near the bottom edge.
+  useLayoutEffect(() => {
+    if (!layerMenuId) {
+      setLayerMenuPlacement(null);
+      return;
+    }
+    const trigger = layerMenuTriggerRefs.current.get(layerMenuId);
+    if (!trigger) {
+      setLayerMenuPlacement(null);
+      return;
+    }
+    const place = () => {
+      const bounds = trigger.getBoundingClientRect();
+      const menuWidth = 248;
+      const menuHeight = 320;
+      const gap = 4;
+      const openUp = bounds.bottom + gap + menuHeight > window.innerHeight
+        && bounds.top > window.innerHeight - bounds.bottom;
+      const left = Math.min(
+        Math.max(8, bounds.right - menuWidth),
+        Math.max(8, window.innerWidth - menuWidth - 8),
+      );
+      setLayerMenuPlacement(openUp
+        ? {
+          top: "auto",
+          bottom: Math.max(8, window.innerHeight - bounds.top + gap),
+          left,
+        }
+        : {
+          top: Math.min(window.innerHeight - 8, bounds.bottom + gap),
+          bottom: "auto",
+          left,
+        });
+    };
+    place();
+    window.addEventListener("resize", place);
+    // Capture scroll from the layer list and nested scroll parents.
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [layerMenuId]);
+
+  // Close the per-layer stack menu on outside click or Escape.
+  useEffect(() => {
+    if (!layerMenuId) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (target && layerMenuRootRef.current?.contains(target)) return;
+      setLayerMenuId(null);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setLayerMenuId(null);
+      }
+    };
+    window.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [layerMenuId]);
 
   const commitDocument = useCallback((next: ScreenshotDocument) => {
     const current = documentRef.current;
@@ -1612,16 +1688,21 @@ export function ScreenshotEditor() {
     });
   }, [replaceDocument]);
 
-  const deleteSelected = useCallback(() => {
+  const deleteLayer = useCallback((elementId: string | null) => {
     const current = documentRef.current;
-    const element = current?.elements.find(({ id }) => id === selectedId);
+    const element = current?.elements.find(({ id }) => id === elementId);
     if (!current || !element || element.locked) return;
     commitDocument({
       ...current,
-      elements: current.elements.filter(({ id }) => id !== selectedId),
+      elements: current.elements.filter(({ id }) => id !== elementId),
     });
-    setSelectedId(null);
-  }, [commitDocument, selectedId]);
+    setSelectedId((currentId) => (currentId === elementId ? null : currentId));
+    setLayerMenuId(null);
+  }, [commitDocument]);
+
+  const deleteSelected = useCallback(() => {
+    deleteLayer(selectedId);
+  }, [deleteLayer, selectedId]);
 
   const nudgeSelected = useCallback((deltaX: number, deltaY: number) => {
     const current = documentRef.current;
@@ -1634,9 +1715,9 @@ export function ScreenshotEditor() {
     ));
   }, [commitDocument, selectedId]);
 
-  const duplicateSelected = useCallback(() => {
+  const duplicateLayer = useCallback((elementId: string | null) => {
     const current = documentRef.current;
-    const index = current?.elements.findIndex(({ id }) => id === selectedId) ?? -1;
+    const index = current?.elements.findIndex(({ id }) => id === elementId) ?? -1;
     if (!current || index < 0) return false;
     const duplicate = duplicateScreenshotElement(current.elements[index], editorId());
     const elements = [...current.elements];
@@ -1645,13 +1726,18 @@ export function ScreenshotEditor() {
     setSelectedId(duplicate.id);
     setEditingTextId(null);
     setTool("select");
+    setLayerMenuId(null);
     return true;
-  }, [commitDocument, selectedId]);
+  }, [commitDocument]);
 
-  const mergeSelectedDown = useCallback(() => {
+  const duplicateSelected = useCallback(() => {
+    return duplicateLayer(selectedId);
+  }, [duplicateLayer, selectedId]);
+
+  const mergeLayerDown = useCallback((elementId: string | null) => {
     const current = documentRef.current;
-    if (!current || !canMergeLayerDown(current.elements, selectedId)) return false;
-    const index = current.elements.findIndex(({ id }) => id === selectedId);
+    if (!current || !elementId || !canMergeLayerDown(current.elements, elementId)) return false;
+    const index = current.elements.findIndex(({ id }) => id === elementId);
     if (index <= 0) return false;
     const below = current.elements[index - 1];
     const selected = current.elements[index];
@@ -1669,13 +1755,14 @@ export function ScreenshotEditor() {
       setEditingTextId(null);
       setTool("select");
       setImageRevision((revision) => revision + 1);
+      setLayerMenuId(null);
       setError("");
       return true;
     } catch (reason) {
       setError(String(reason));
       return false;
     }
-  }, [commitDocument, ensureImage, selectedId]);
+  }, [commitDocument, ensureImage]);
 
   const mergeVisibleLayers = useCallback(() => {
     const current = documentRef.current;
@@ -1690,6 +1777,7 @@ export function ScreenshotEditor() {
       setEditingTextId(null);
       setTool("select");
       setImageRevision((revision) => revision + 1);
+      setLayerMenuId(null);
       setError("");
       return true;
     } catch (reason) {
@@ -1719,6 +1807,7 @@ export function ScreenshotEditor() {
       setEditingTextId(null);
       setTool("select");
       setImageRevision((revision) => revision + 1);
+      setLayerMenuId(null);
       setError("");
       return true;
     } catch (reason) {
@@ -2954,23 +3043,25 @@ export function ScreenshotEditor() {
     commitDocument(replaceElement(current, element.id, updater(element)));
   };
 
-  const moveLayer = (direction: "front" | "back") => {
+  const moveLayer = (elementId: string, direction: "front" | "back") => {
     const current = documentRef.current;
-    if (!current || !selectedId) return;
-    const index = current.elements.findIndex(({ id }) => id === selectedId);
+    if (!current) return;
+    const index = current.elements.findIndex(({ id }) => id === elementId);
     if (index < 0 || current.elements[index].locked) return;
     const target = direction === "front"
       ? current.elements.at(-1)
       : current.elements[0];
-    if (!target || target.id === selectedId) return;
+    if (!target || target.id === elementId) return;
     const elements = reorderScreenshotLayers(
       current.elements,
-      selectedId,
+      elementId,
       target.id,
       direction === "front" ? "before" : "after",
     );
     if (elements === current.elements) return;
     commitDocument({ ...current, elements });
+    setSelectedId(elementId);
+    setLayerMenuId(null);
   };
 
   const dropLayer = (
@@ -3996,6 +4087,7 @@ export function ScreenshotEditor() {
                       event.preventDefault();
                       return;
                     }
+                    setLayerMenuId(null);
                     setDraggedLayerId(element.id);
                     event.dataTransfer.effectAllowed = "move";
                     event.dataTransfer.setData("application/x-captures-layer", element.id);
@@ -4097,6 +4189,144 @@ export function ScreenshotEditor() {
                     >
                       <EditorIcon name={locked ? "lock" : "unlock"} />
                     </button>
+                    <span
+                      className="screenshot-layer-menu"
+                      ref={layerMenuId === element.id
+                        ? (node) => { layerMenuRootRef.current = node; }
+                        : undefined}
+                    >
+                      <button
+                        type="button"
+                        className={layerMenuId === element.id ? "active" : ""}
+                        aria-label={`Layer actions for ${elementLayerName(element)}`}
+                        aria-haspopup="menu"
+                        aria-expanded={layerMenuId === element.id}
+                        title="Layer actions — stack order, merge, duplicate, delete"
+                        ref={(node) => {
+                          if (node) layerMenuTriggerRefs.current.set(element.id, node);
+                          else layerMenuTriggerRefs.current.delete(element.id);
+                        }}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setEditingTextId(null);
+                          setTool("select");
+                          setCropSelection(null);
+                          setSelectedId(element.id);
+                          setLayerMenuId((openId) => (
+                            openId === element.id ? null : element.id
+                          ));
+                        }}
+                      >
+                        <EditorIcon name="more" />
+                      </button>
+                      {layerMenuId === element.id && layerMenuPlacement && (
+                        <div
+                          className={`screenshot-layer-menu-panel${layerMenuPlacement.bottom === "auto" ? "" : " open-up"}`}
+                          role="menu"
+                          aria-label={`Layer actions for ${elementLayerName(element)}`}
+                          style={{
+                            top: layerMenuPlacement.top,
+                            bottom: layerMenuPlacement.bottom,
+                            left: layerMenuPlacement.left,
+                          }}
+                          onClick={(event) => event.stopPropagation()}
+                        >
+                          <button
+                            type="button"
+                            role="menuitem"
+                            disabled={locked || element.id === editorDocument.elements.at(-1)?.id}
+                            title="Move this layer above every other layer"
+                            onClick={() => moveLayer(element.id, "front")}
+                          >
+                            <EditorIcon name="bring-front" />
+                            <span className="screenshot-layer-menu-copy">
+                              <span>Bring to front</span>
+                              <small>Stack above every other layer</small>
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            disabled={locked || element.id === editorDocument.elements[0]?.id}
+                            title="Move this layer below every other layer"
+                            onClick={() => moveLayer(element.id, "back")}
+                          >
+                            <EditorIcon name="send-back" />
+                            <span className="screenshot-layer-menu-copy">
+                              <span>Send to back</span>
+                              <small>Stack below every other layer</small>
+                            </span>
+                          </button>
+                          <div className="screenshot-layer-menu-separator" role="separator" />
+                          <button
+                            type="button"
+                            role="menuitem"
+                            disabled={!canMergeLayerDown(editorDocument.elements, element.id)}
+                            title="Rasterize this layer together with the unlocked layer directly under it"
+                            onClick={() => { mergeLayerDown(element.id); }}
+                          >
+                            <EditorIcon name="merge-down" />
+                            <span className="screenshot-layer-menu-copy">
+                              <span>Merge down</span>
+                              <small>Combine with the layer below</small>
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            disabled={!canMergeVisibleLayers(editorDocument.elements)}
+                            title="Rasterize every visible layer into one image; hidden layers stay"
+                            onClick={() => { mergeVisibleLayers(); }}
+                          >
+                            <EditorIcon name="merge-visible" />
+                            <span className="screenshot-layer-menu-copy">
+                              <span>Merge visible</span>
+                              <small>Combine all visible layers</small>
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            disabled={!canFlattenLayers(editorDocument.elements, editorDocument.background)}
+                            title="Bake the canvas background and visible layers into one locked background layer; discard hidden layers"
+                            onClick={() => { flattenImage(); }}
+                          >
+                            <EditorIcon name="flatten" />
+                            <span className="screenshot-layer-menu-copy">
+                              <span>Flatten image</span>
+                              <small>Bake into one locked layer</small>
+                            </span>
+                          </button>
+                          <div className="screenshot-layer-menu-separator" role="separator" />
+                          <button
+                            type="button"
+                            role="menuitem"
+                            title="Duplicate this layer (Command/Ctrl+D)"
+                            onClick={() => { duplicateLayer(element.id); }}
+                          >
+                            <EditorIcon name="duplicate" />
+                            <span className="screenshot-layer-menu-copy">
+                              <span>Duplicate</span>
+                              <small>Copy this layer (⌘/Ctrl+D)</small>
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="danger"
+                            disabled={locked}
+                            title="Delete this layer"
+                            onClick={() => { deleteLayer(element.id); }}
+                          >
+                            <EditorIcon name="trash" />
+                            <span className="screenshot-layer-menu-copy">
+                              <span>Delete</span>
+                              <small>Remove this layer</small>
+                            </span>
+                          </button>
+                        </div>
+                      )}
+                    </span>
                   </span>
                 </li>
               );
@@ -4176,58 +4406,6 @@ export function ScreenshotEditor() {
               >
                 <EditorIcon name={selected.visible ? "eye" : "eye-off"} />
                 {selected.visible ? "Visible" : "Hidden"}
-              </button>
-            </div>
-            {/* Pixlr-style compact tools: merge family + duplicate + delete */}
-            <div
-              className="screenshot-layer-tools"
-              role="toolbar"
-              aria-label="Layer actions"
-            >
-              <button
-                type="button"
-                title="Merge down — combine with the layer below"
-                aria-label="Merge down"
-                disabled={!canMergeLayerDown(editorDocument.elements, selected.id)}
-                onClick={() => { mergeSelectedDown(); }}
-              >
-                <EditorIcon name="merge-down" />
-              </button>
-              <button
-                type="button"
-                title="Merge visible — combine all visible layers"
-                aria-label="Merge visible"
-                disabled={!canMergeVisibleLayers(editorDocument.elements)}
-                onClick={() => { mergeVisibleLayers(); }}
-              >
-                <EditorIcon name="merge-visible" />
-              </button>
-              <button
-                type="button"
-                title="Flatten image — bake everything into one locked layer"
-                aria-label="Flatten image"
-                disabled={!canFlattenLayers(editorDocument.elements, editorDocument.background)}
-                onClick={() => { flattenImage(); }}
-              >
-                <EditorIcon name="flatten" />
-              </button>
-              <button
-                type="button"
-                title="Duplicate (Command/Ctrl+D)"
-                aria-label="Duplicate"
-                onClick={duplicateSelected}
-              >
-                <EditorIcon name="duplicate" />
-              </button>
-              <button
-                type="button"
-                className="danger"
-                title="Delete layer"
-                aria-label="Delete"
-                disabled={selected.locked}
-                onClick={deleteSelected}
-              >
-                <EditorIcon name="trash" />
               </button>
             </div>
           </section>
@@ -4644,12 +4822,6 @@ export function ScreenshotEditor() {
           </section>
         )}
 
-        {selected && !selected.locked && (
-          <section className="screenshot-property-section screenshot-layer-actions">
-            <button type="button" onClick={() => moveLayer("front")}>Bring to front</button>
-            <button type="button" onClick={() => moveLayer("back")}>Send to back</button>
-          </section>
-        )}
         </section>
       </aside>
 
@@ -5126,7 +5298,32 @@ function EditorIcon({ name }: { name: string }) {
   if (name === "eye") return <svg viewBox="0 0 24 24"><path d="M3 12s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6Z" /><circle cx="12" cy="12" r="2.5" /></svg>;
   if (name === "eye-off") return <svg viewBox="0 0 24 24"><path d="m4 4 16 16M9.5 6.4A9 9 0 0 1 12 6c5.5 0 9 6 9 6a15 15 0 0 1-2.2 2.9M14.4 17.6A9 9 0 0 1 12 18c-5.5 0-9-6-9-6a15 15 0 0 1 2.1-2.8" /></svg>;
   if (name === "duplicate") return <svg viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2" /><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3M13.5 11v5M11 13.5h5" /></svg>;
-  // Layer stack tools (Pixlr-style merge family).
+  if (name === "more") {
+    return (
+      <svg viewBox="0 0 24 24">
+        <circle cx="12" cy="5" r="1.4" />
+        <circle cx="12" cy="12" r="1.4" />
+        <circle cx="12" cy="19" r="1.4" />
+      </svg>
+    );
+  }
+  if (name === "bring-front") {
+    return (
+      <svg viewBox="0 0 24 24">
+        <rect x="5" y="12" width="10" height="8" rx="1.2" opacity=".55" />
+        <rect x="9" y="4" width="10" height="8" rx="1.2" />
+      </svg>
+    );
+  }
+  if (name === "send-back") {
+    return (
+      <svg viewBox="0 0 24 24">
+        <rect x="9" y="4" width="10" height="8" rx="1.2" opacity=".55" />
+        <rect x="5" y="12" width="10" height="8" rx="1.2" />
+      </svg>
+    );
+  }
+  // Layer stack tools (merge family).
   if (name === "merge-down") {
     return (
       <svg viewBox="0 0 24 24">
