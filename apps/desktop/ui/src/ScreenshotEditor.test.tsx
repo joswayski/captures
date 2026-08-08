@@ -1382,6 +1382,33 @@ describe("ScreenshotEditor", () => {
     }
   });
 
+  it("defaults path-less captures to a plain filename without an -edited suffix", async () => {
+    const pathless: CaptureArtifact = {
+      ...artifact,
+      path: null,
+    };
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifact") return pathless;
+      if (command === "default_screenshot_edit_path") {
+        return "/Users/example/Captures/Captures_2026-08-08_12-00-00_000.png";
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<ScreenshotEditor />);
+    expect(await screen.findByRole("textbox", { name: "Saved filename" }))
+      .toHaveValue("Captures_2026-08-08_12-00-00_000");
+    expect(screen.getByLabelText("Save location"))
+      .toHaveTextContent("/Users/example/Captures");
+    // No permanent original yet — Make a copy is hidden until the first save.
+    expect(screen.queryByRole("checkbox", { name: "Make a copy" }))
+      .not.toBeInTheDocument();
+    expect(invoke).toHaveBeenCalledWith("default_screenshot_edit_path", {
+      artifactId: pathless.id,
+      format: "png",
+    });
+  });
+
   it("names the destination before saving, honors the size mode, and reveals the result", async () => {
     const restoreCanvas = installExportableCanvas();
     const savedArtifact = {

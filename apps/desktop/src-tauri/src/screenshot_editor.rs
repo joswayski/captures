@@ -159,18 +159,27 @@ pub fn default_screenshot_edit_path(
     artifact_id: String,
     format: ScreenshotEditFormat,
 ) -> CommandResult<String> {
-    // The editor keeps the image in memory, so export still works after the
-    // original capture is removed from history. Fall back to the output folder.
+    // First permanent save for a path-less capture (fresh screenshot / history
+    // restore). Suggest a normal Captures name — not an `-edited` copy suffix.
+    // The frontend only appends `-edited` when Make a copy is turned on for an
+    // already-saved original.
     let artifact = state
         .artifacts
         .lock()
         .iter()
         .find(|artifact| artifact.id == artifact_id)
         .cloned();
-    let source = artifact
+    let history_saved_path = state
+        .history
+        .lock()
+        .iter()
+        .find(|entry| entry.id == artifact_id)
+        .and_then(|entry| entry.saved_path.clone());
+    let source_owned = artifact
         .as_ref()
-        .and_then(|artifact| artifact.path.as_deref())
-        .map(Path::new);
+        .and_then(|artifact| artifact.path.clone())
+        .or(history_saved_path);
+    let source = source_owned.as_deref().map(Path::new);
     let directory = source
         .and_then(Path::parent)
         .map(Path::to_path_buf)
@@ -183,9 +192,14 @@ pub fn default_screenshot_edit_path(
             || format!("Captures_{}", Local::now().format("%Y-%m-%d_%H-%M-%S_%3f")),
             str::to_owned,
         );
-    Ok(unique_edit_path(&directory, &stem, format.extension())
-        .to_string_lossy()
-        .into_owned())
+    // When a permanent path already exists, keep that stem so Save can overwrite
+    // the original. Only mint a collision-safe name for brand-new first saves.
+    let path = if source.is_some_and(Path::is_file) {
+        directory.join(format!("{stem}.{}", format.extension()))
+    } else {
+        unique_export_path(&directory, &stem, format.extension())
+    };
+    Ok(path.to_string_lossy().into_owned())
 }
 
 #[tauri::command]
@@ -567,16 +581,18 @@ fn validated_destination(
     Ok(path)
 }
 
-fn unique_edit_path(directory: &Path, stem: &str, extension: &str) -> PathBuf {
-    let base = format!("{stem}-edited");
-    let initial = directory.join(format!("{base}.{extension}"));
+/// First-available `{stem}.{extension}` in `directory`, with numeric suffixes
+/// only when that name is already taken. Does not invent an `-edited` stem —
+/// copy naming is a frontend “Make a copy” concern.
+fn unique_export_path(directory: &Path, stem: &str, extension: &str) -> PathBuf {
+    let initial = directory.join(format!("{stem}.{extension}"));
     if !initial.exists() {
         return initial;
     }
     (1_u32..)
-        .map(|suffix| directory.join(format!("{base}-{suffix}.{extension}")))
+        .map(|suffix| directory.join(format!("{stem}-{suffix}.{extension}")))
         .find(|candidate| !candidate.exists())
-        .unwrap_or_else(|| directory.join(format!("{base}-{}.{}", Uuid::new_v4(), extension)))
+        .unwrap_or_else(|| directory.join(format!("{stem}-{}.{}", Uuid::new_v4(), extension)))
 }
 
 fn write_export_atomically(path: &Path, bytes: &[u8]) -> Result<(), AppError> {
@@ -600,7 +616,8 @@ mod tests {
 
     use super::{
         ScreenshotEditFormat, ScreenshotExportQualityMode, composite_onto_white, encode_export,
-        encode_export_with_limit, unique_edit_path, validated_destination, write_export_atomically,
+        encode_export_with_limit, unique_export_path, validated_destination,
+        write_export_atomically,
     };
 
     fn sample() -> RgbaImage {
@@ -728,14 +745,14 @@ mod tests {
     }
 
     #[test]
-    fn suggests_a_non_destructive_unique_edit_name() {
+    fn suggests_a_unique_export_name_without_edited_suffix() {
         let directory = tempdir().expect("temporary directory");
-        let first = unique_edit_path(directory.path(), "capture", "png");
-        assert_eq!(first, directory.path().join("capture-edited.png"));
-        std::fs::write(&first, b"existing").expect("existing edit");
+        let first = unique_export_path(directory.path(), "capture", "png");
+        assert_eq!(first, directory.path().join("capture.png"));
+        std::fs::write(&first, b"existing").expect("existing export");
         assert_eq!(
-            unique_edit_path(directory.path(), "capture", "png"),
-            directory.path().join("capture-edited-1.png")
+            unique_export_path(directory.path(), "capture", "png"),
+            directory.path().join("capture-1.png")
         );
     }
 

@@ -4,7 +4,7 @@ use std::{
     collections::hash_map::DefaultHasher,
     fs,
     hash::{Hash, Hasher},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -1653,9 +1653,17 @@ async fn restore_history_artifact(
         .await
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())?;
+        // Prefer a permanent Captures-folder save when history still knows it.
+        // That keeps editor overwrite / filename defaults aligned with the
+        // original export instead of forcing a fresh “-edited” name.
+        let path = entry
+            .saved_path
+            .as_ref()
+            .filter(|saved| Path::new(saved).is_file())
+            .cloned();
         let artifact = CaptureArtifact {
             id: entry.id,
-            path: None,
+            path,
             preview_url: models::artifact_url(&artifact_id),
             full_url: models::artifact_full_url(&artifact_id),
             width: entry.width,
