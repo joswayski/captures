@@ -76,6 +76,7 @@ import {
   THUMBNAIL_DELETE_ORIGIN_AFTER_CLOSE_X,
   THUMBNAIL_DELETE_ORIGIN_FIRST_X,
   THUMBNAIL_DELETE_ORIGIN_Y,
+  THUMBNAIL_DUST_OPEN_MS,
   type ThumbnailDustParticle,
 } from "./lib/thumbnailExit";
 import {
@@ -4834,6 +4835,8 @@ export function ThumbnailCard({
   const [fileDragging, setFileDragging] = useState(false);
   const [exit, setExit] = useState<"dismiss" | "delete" | null>(null);
   const [dustParticles, setDustParticles] = useState<ThumbnailDustParticle[] | null>(null);
+  /** After a short hold, open overflow so ash chips can fly outside the rounded card. */
+  const [dustOpen, setDustOpen] = useState(false);
   /**
    * Editor control labels + card ring stay in the leave path so width/ring can
    * ease when the editor closes. `trackedActive` mirrors the last `editorActive`
@@ -4927,7 +4930,16 @@ export function ThumbnailCard({
     const layer = dustLayerRef.current;
     if (!layer) return;
     const chips = layer.querySelectorAll(".thumbnail-dust");
-    return playThumbnailDustAnimations(chips, dustParticles);
+    const stop = playThumbnailDustAnimations(chips, dustParticles);
+    // Hold the rounded card clip for the first paint frames, then open so ash
+    // can drift outside the preview bounds.
+    const openTimer = window.setTimeout(() => {
+      setDustOpen(true);
+    }, THUMBNAIL_DUST_OPEN_MS);
+    return () => {
+      window.clearTimeout(openTimer);
+      stop();
+    };
   }, [dustParticles, exit]);
 
   const showSavedFeedback = () => {
@@ -5055,6 +5067,7 @@ export function ThumbnailCard({
         setExit(null);
         setExitChrome(null);
         setDustParticles(null);
+        setDustOpen(false);
         setError(String(error));
         window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
         void invoke("refresh_thumbnail_interactivity").catch(() => undefined);
@@ -5100,6 +5113,7 @@ export function ThumbnailCard({
     } else {
       setDustParticles(null);
     }
+    setDustOpen(false);
     setExit(kind);
     // Re-run the native hit test after React marks this card non-interactive.
     // Only the outgoing slot should pass clicks through; sibling cards remain usable.
@@ -5157,6 +5171,7 @@ export function ThumbnailCard({
         fileDragging ? "thumbnail-file-dragging" : "",
         exit ? `thumbnail-exit-${exit}` : "",
         usingDust ? "thumbnail-exit-dust" : "",
+        usingDust && dustOpen ? "thumbnail-dust-open" : "",
         isExiting ? "thumbnail-exiting" : "",
       ].filter(Boolean).join(" ")}
       // HTML inert disables all descendant input/focus for the whole exit animation.

@@ -647,6 +647,32 @@ describe("ThumbnailCard", () => {
     expect(card.querySelector(".thumbnail-dust-layer")).not.toBeNull();
   });
 
+  it("holds the rounded card clip before opening dust fly-out overflow", () => {
+    vi.useFakeTimers();
+    render(
+      <ThumbnailCard
+        artifact={artifact(null)}
+        clipboardCurrent={false}
+        viewerActive={false}
+        onRemoved={() => undefined}
+      />,
+    );
+
+    act(() => {
+      screen.getByRole("button", { name: "Delete" }).click();
+    });
+    const card = screen.getByRole("article");
+    expect(card).toHaveClass("thumbnail-exit-dust");
+    // First frames keep overflow:hidden + radius so delete doesn't flash a sharp rect.
+    expect(card).not.toHaveClass("thumbnail-dust-open");
+
+    act(() => {
+      vi.advanceTimersByTime(140);
+    });
+    expect(card).toHaveClass("thumbnail-dust-open");
+    vi.useRealTimers();
+  });
+
   it("finishes deletion if the webview never dispatches animationend", async () => {
     vi.useFakeTimers();
     const onRemoved = vi.fn();

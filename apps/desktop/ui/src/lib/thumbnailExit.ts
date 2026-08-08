@@ -3,6 +3,12 @@ export const THUMBNAIL_CARD_FALLBACK_WIDTH = 284;
 export const THUMBNAIL_CARD_FALLBACK_HEIGHT = 160;
 
 /**
+ * Card / preview corner radius in CSS pixels.
+ * Must match `.thumbnail-card` / `.thumbnail-card img` / dust clip in styles.css.
+ */
+export const THUMBNAIL_CARD_BORDER_RADIUS_PX = 12;
+
+/**
  * How long the disintegration front takes to travel from the trash control
  * to the farthest corner of the card.
  */
@@ -13,6 +19,12 @@ export const THUMBNAIL_DISSOLVE_WAVE_MS = 720;
  * with the ash wave instead of a slow "wait for buttons" phase.
  */
 export const THUMBNAIL_CHROME_LEAD_MS = 0;
+
+/**
+ * How long the card keeps `overflow: hidden` + rounded clip at the start of
+ * delete so the assembled dust reads as a rounded preview before chips fly out.
+ */
+export const THUMBNAIL_DUST_OPEN_MS = 140;
 
 /**
  * Center of the delete control relative to the card origin.
@@ -105,12 +117,77 @@ export function coverBackgroundLayout(
 }
 
 /**
+ * True when `(x, y)` lies inside a width×height rectangle with the same corner
+ * radius as the live preview card. Used so dust chips never paint the square
+ * corner stubs that make delete start look like a sharp rectangle.
+ *
+ * Coordinates on the exact outer edge count as inside. A small epsilon absorbs
+ * floating-point error from `col * (width / cols)` on the last grid line.
+ */
+export function pointInRoundedRect(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+): boolean {
+  const epsilon = 1e-6;
+  if (x < -epsilon || y < -epsilon || x > width + epsilon || y > height + epsilon) {
+    return false;
+  }
+  const r = Math.max(0, Math.min(radius, width / 2, height / 2));
+  if (r === 0) return true;
+  // Interior bands away from the four corner arcs.
+  if (x >= r - epsilon && x <= width - r + epsilon) return true;
+  if (y >= r - epsilon && y <= height - r + epsilon) return true;
+  const cx = x < r ? r : width - r;
+  const cy = y < r ? r : height - r;
+  const dx = x - cx;
+  const dy = y - cy;
+  return dx * dx + dy * dy <= r * r + epsilon;
+}
+
+/**
+ * True when the full chip rectangle lies inside the rounded card silhouette.
+ * Chips that only poke a corner into the square stub outside the radius are
+ * rejected so the dissolve never paints a sharp rectangular tip.
+ */
+export function chipInRoundedRect(
+  left: number,
+  top: number,
+  chipWidth: number,
+  chipHeight: number,
+  cardWidth: number,
+  cardHeight: number,
+  radius: number,
+): boolean {
+  // Clamp to the card bounds so the last grid line's float error (e.g. 200.0000002)
+  // does not reject an otherwise valid edge chip when radius is 0.
+  const right = Math.min(cardWidth, left + chipWidth);
+  const bottom = Math.min(cardHeight, top + chipHeight);
+  const clampedLeft = Math.max(0, left);
+  const clampedTop = Math.max(0, top);
+  return (
+    [
+      [clampedLeft, clampedTop],
+      [right, clampedTop],
+      [clampedLeft, bottom],
+      [right, bottom],
+    ] as const
+  ).every(([x, y]) => pointInRoundedRect(x, y, cardWidth, cardHeight, radius));
+}
+
+/**
  * Slice a card into a fine grid of image chips that dissolve as ash/dust.
  * Delay starts at the trash button and expands radially; after the front
  * leaves the origin, delays get progressively more irregular so the wave
  * reads organic instead of a perfect circle.
  * Uses CSS background-position (not canvas) so custom-protocol previews work
  * without tainting or pixel-read restrictions.
+ *
+ * Chips whose centers fall outside the rounded card silhouette are omitted so
+ * the dissolve starts as a rounded preview rather than a sharp rectangle
+ * (clip-path alone is not always reliable across WebViews).
  */
 export function buildThumbnailDustParticles(
   cardWidth: number,
@@ -126,6 +203,7 @@ export function buildThumbnailDustParticles(
     imageWidth?: number;
     imageHeight?: number;
     chromeLeadMs?: number;
+    borderRadiusPx?: number;
   },
 ): ThumbnailDustParticle[] {
   const width = Math.max(1, cardWidth);
@@ -144,6 +222,7 @@ export function buildThumbnailDustParticles(
   const chromeLeadMs = options?.chromeLeadMs ?? THUMBNAIL_CHROME_LEAD_MS;
   const originX = options?.originX ?? Math.min(THUMBNAIL_DELETE_ORIGIN_X, width * 0.35);
   const originY = options?.originY ?? Math.min(THUMBNAIL_DELETE_ORIGIN_Y, height * 0.3);
+  const borderRadius = options?.borderRadiusPx ?? THUMBNAIL_CARD_BORDER_RADIUS_PX;
   const cover = coverBackgroundLayout(
     width,
     height,
@@ -170,6 +249,11 @@ export function buildThumbnailDustParticles(
       const top = row * cellH;
       const cx = left + cellW / 2;
       const cy = top + cellH / 2;
+      // Drop chips that poke into the square corner stubs outside the rounded
+      // preview (center-only checks miss ~11px cells with a sharp outer tip).
+      if (!chipInRoundedRect(left, top, cellW, cellH, width, height, borderRadius)) {
+        continue;
+      }
       const dist = Math.hypot(cx - originX, cy - originY);
       // 0 at trash → 1 at the farthest corner.
       const wave = dist / maxDist;
