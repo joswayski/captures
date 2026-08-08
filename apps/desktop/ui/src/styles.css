@@ -2525,10 +2525,51 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 .screenshot-custom-color input { position: absolute; inset: -8px; width: 40px; height: 40px; opacity: 0; cursor: pointer; }
 .screenshot-layer-actions { display: grid; grid-template-columns: 1fr 1fr; }
 .screenshot-layer-inspector .range-slider-value output { color: var(--theme-accent-text); }
-.screenshot-layer-state-grid, .screenshot-layer-action-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
-.screenshot-layer-state-grid button, .screenshot-layer-action-grid button { display: inline-flex; min-height: 32px; padding: 6px 8px; align-items: center; justify-content: center; gap: 6px; border: 1px solid #414247; border-radius: 6px; color: #b9bac0; background: #292a2f; font-size: 9px; font-weight: 750; }
-.screenshot-layer-state-grid button:hover:not(:disabled), .screenshot-layer-action-grid button:hover:not(:disabled) { color: #ededee; background: #37383e; }.screenshot-layer-state-grid button.active { border-color: rgba(var(--theme-accent-rgb),.45); color: var(--theme-accent-text); background: rgba(var(--theme-accent-rgb),.12); }.screenshot-layer-state-grid button:disabled, .screenshot-layer-action-grid button:disabled { cursor: default; opacity: .4; }
-.screenshot-layer-state-grid svg, .screenshot-layer-action-grid svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.screenshot-layer-state-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.screenshot-layer-state-grid button { display: inline-flex; min-height: 32px; padding: 6px 8px; align-items: center; justify-content: center; gap: 6px; border: 1px solid #414247; border-radius: 6px; color: #b9bac0; background: #292a2f; font-size: 9px; font-weight: 750; }
+.screenshot-layer-state-grid button:hover:not(:disabled) { color: #ededee; background: #37383e; }
+.screenshot-layer-state-grid button.active { border-color: rgba(var(--theme-accent-rgb),.45); color: var(--theme-accent-text); background: rgba(var(--theme-accent-rgb),.12); }
+.screenshot-layer-state-grid button:disabled { cursor: default; opacity: .4; }
+.screenshot-layer-state-grid svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+/* Compact Pixlr-style layer tools under opacity (merge / duplicate / delete). */
+.screenshot-layer-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.screenshot-layer-tools button {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid #414247;
+  border-radius: 6px;
+  color: #b9bac0;
+  background: #292a2f;
+}
+.screenshot-layer-tools button:hover:not(:disabled) {
+  color: #ededee;
+  background: #37383e;
+}
+.screenshot-layer-tools button.danger:hover:not(:disabled) {
+  color: #ff9da6;
+  border-color: rgba(255, 90, 105, .35);
+  background: rgba(255, 90, 105, .12);
+}
+.screenshot-layer-tools button:disabled {
+  cursor: default;
+  opacity: .4;
+}
+.screenshot-layer-tools svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
 .screenshot-file-name { overflow: hidden; color: #d5d6d8 !important; text-overflow: ellipsis; white-space: nowrap; }
 /* Labels sit above a shared 34px control row. Settings and action buttons
    bottom-align so Copy/Save share that control baseline. */

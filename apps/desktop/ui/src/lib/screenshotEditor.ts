@@ -1138,6 +1138,99 @@ export function duplicateScreenshotElement(
   return copy;
 }
 
+/** Whether the selected layer can merge into the layer immediately below it. */
+export function canMergeLayerDown(
+  elements: readonly ScreenshotElement[],
+  selectedId: string | null | undefined,
+): boolean {
+  if (!selectedId) return false;
+  const index = elements.findIndex((element) => element.id === selectedId);
+  if (index <= 0) return false;
+  const selected = elements[index];
+  const below = elements[index - 1];
+  return !selected.locked && !below.locked;
+}
+
+/** Merge Visible needs at least two currently visible layers. */
+export function canMergeVisibleLayers(elements: readonly ScreenshotElement[]): boolean {
+  return elements.filter((element) => element.visible).length >= 2;
+}
+
+/**
+ * Flatten needs more than one layer, or a single unlocked layer with a solid
+ * canvas background still worth baking in.
+ */
+export function canFlattenLayers(
+  elements: readonly ScreenshotElement[],
+  background: string | null = null,
+): boolean {
+  if (elements.length >= 2) return true;
+  return elements.length === 1 && background != null;
+}
+
+/**
+ * Replace the selected layer and the layer below it with a pre-rasterized image.
+ * Caller paints selected + below in stack order before invoking this.
+ */
+export function applyMergeLayerDown(
+  document: ScreenshotDocument,
+  selectedId: string,
+  merged: EditorImageElement,
+): ScreenshotDocument {
+  const index = document.elements.findIndex((element) => element.id === selectedId);
+  if (index <= 0) return document;
+  const elements = [...document.elements];
+  elements.splice(index - 1, 2, merged);
+  return { ...document, elements };
+}
+
+/**
+ * Collapse every visible layer into `merged`, keeping hidden layers in place.
+ * The merged image sits where the bottom-most visible layer was.
+ */
+export function applyMergeVisibleLayers(
+  document: ScreenshotDocument,
+  merged: EditorImageElement,
+): ScreenshotDocument {
+  const elements: ScreenshotElement[] = [];
+  let inserted = false;
+  for (const element of document.elements) {
+    if (!element.visible) {
+      elements.push(element);
+      continue;
+    }
+    if (!inserted) {
+      elements.push(merged);
+      inserted = true;
+    }
+  }
+  if (!inserted) return document;
+  return { ...document, elements };
+}
+
+/**
+ * Bake the canvas background and all visible layers into a single locked
+ * background image. Hidden layers are discarded (Photoshop-style flatten).
+ */
+export function applyFlattenLayers(
+  document: ScreenshotDocument,
+  merged: EditorImageElement,
+): ScreenshotDocument {
+  return {
+    ...document,
+    // Background is already painted into `merged` when provided by the caller.
+    background: null,
+    elements: [{ ...merged, locked: true, source: "background" }],
+  };
+}
+
+/** Default name for a rasterized merge of the given layers. */
+export function mergedLayerName(layers: readonly ScreenshotElement[]): string {
+  const image = layers.find((layer): layer is EditorImageElement => layer.kind === "image");
+  if (image) return image.name;
+  return "Merged";
+}
+
 export function translateElement(
   element: ScreenshotElement,
   deltaX: number,

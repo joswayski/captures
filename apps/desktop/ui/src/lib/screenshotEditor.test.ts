@@ -11,11 +11,18 @@ import {
   closestPointOnArrow,
   collectAlignmentSnapLines,
   collectEditorSourceArtifactIds,
+  applyFlattenLayers,
+  applyMergeLayerDown,
+  applyMergeVisibleLayers,
+  canFlattenLayers,
+  canMergeLayerDown,
+  canMergeVisibleLayers,
   createScreenshotDocument,
   cropDocument,
   curveStrokeHoverHint,
   duplicateScreenshotElement,
   elementBounds,
+  mergedLayerName,
   estimateCanvasExportBytes,
   expandDocumentForElement,
   expandDocumentToFitBounds,
@@ -1209,5 +1216,130 @@ describe("screenshot editor geometry", () => {
       window.Image = originalImage;
       createObjectURL.mockRestore();
     }
+  });
+});
+
+describe("layer merge and flatten helpers", () => {
+  const baseImage = (id: string, name: string, overrides: Partial<EditorImageElement> = {}): EditorImageElement => ({
+    id,
+    kind: "image",
+    source: "imported",
+    src: `data:${id}`,
+    name,
+    x: 0,
+    y: 0,
+    width: 100,
+    height: 80,
+    naturalWidth: 100,
+    naturalHeight: 80,
+    ...editableLayer,
+    ...overrides,
+  });
+
+  const textLayer = (id: string, text: string, overrides: Partial<EditorTextElement> = {}): EditorTextElement => ({
+    id,
+    kind: "text",
+    text,
+    fontSize: 18,
+    width: 120,
+    fontFamily: "sans",
+    bold: false,
+    italic: false,
+    align: "left",
+    color: "#ffffff",
+    background: null,
+    x: 10,
+    y: 10,
+    ...editableLayer,
+    ...overrides,
+  });
+
+  it("gates merge down on an unlocked layer with an unlocked neighbor below", () => {
+    const layers = [
+      baseImage("bg", "Background", { locked: true, source: "background" }),
+      textLayer("t1", "Hello"),
+      textLayer("t2", "World"),
+    ];
+    expect(canMergeLayerDown(layers, "bg")).toBe(false);
+    expect(canMergeLayerDown(layers, "t1")).toBe(false); // below is locked
+    expect(canMergeLayerDown(layers, "t2")).toBe(true);
+    expect(canMergeLayerDown(layers, null)).toBe(false);
+  });
+
+  it("gates merge visible and flatten on stack size", () => {
+    const single = [baseImage("a", "A")];
+    const two = [baseImage("a", "A"), textLayer("b", "B")];
+    const withHidden = [
+      baseImage("a", "A"),
+      textLayer("b", "B", { visible: false }),
+      textLayer("c", "C"),
+    ];
+    expect(canMergeVisibleLayers(single)).toBe(false);
+    expect(canMergeVisibleLayers(two)).toBe(true);
+    expect(canMergeVisibleLayers(withHidden)).toBe(true); // two visible
+    expect(canFlattenLayers(single, null)).toBe(false);
+    expect(canFlattenLayers(single, "#fff")).toBe(true);
+    expect(canFlattenLayers(two, null)).toBe(true);
+  });
+
+  it("merges the selected layer into the one below", () => {
+    const document = {
+      width: 200,
+      height: 100,
+      background: "#111",
+      elements: [
+        baseImage("bg", "Background"),
+        textLayer("t1", "Hello"),
+        textLayer("t2", "World"),
+      ],
+    };
+    const merged = baseImage("merged", "Merged");
+    const next = applyMergeLayerDown(document, "t2", merged);
+    expect(next.elements.map((element) => element.id)).toEqual(["bg", "merged"]);
+    expect(next.background).toBe("#111");
+  });
+
+  it("merges only visible layers and keeps hidden ones", () => {
+    const document = {
+      width: 200,
+      height: 100,
+      background: null,
+      elements: [
+        baseImage("bg", "Background"),
+        textLayer("hidden", "Secret", { visible: false }),
+        textLayer("top", "Hi"),
+      ],
+    };
+    const merged = baseImage("merged", "Merged");
+    const next = applyMergeVisibleLayers(document, merged);
+    expect(next.elements.map((element) => element.id)).toEqual(["merged", "hidden"]);
+  });
+
+  it("flattens into a single locked background layer and clears the canvas fill", () => {
+    const document = {
+      width: 200,
+      height: 100,
+      background: "#f7f7f5",
+      elements: [
+        baseImage("bg", "Background"),
+        textLayer("t1", "Hello"),
+        textLayer("hidden", "Secret", { visible: false }),
+      ],
+    };
+    const merged = baseImage("flat", "Flattened", { locked: true, source: "background" });
+    const next = applyFlattenLayers(document, merged);
+    expect(next.background).toBeNull();
+    expect(next.elements).toHaveLength(1);
+    expect(next.elements[0]).toMatchObject({
+      id: "flat",
+      locked: true,
+      source: "background",
+      name: "Flattened",
+    });
+  });
+
+  it("names merged layers from the first image when present", () => {
+    expect(mergedLayerName([textLayer("t", "Hi"), baseImage("i", "Photo")])).toBe("Photo");
+    expect(mergedLayerName([textLayer("t", "Hi")])).toBe("Merged");
   });
 });
