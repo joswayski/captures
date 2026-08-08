@@ -89,6 +89,93 @@ describe("CaptureOverlay guidance", () => {
     expect(screen.queryByText("Select a window · Esc to cancel")).not.toBeInTheDocument();
   });
 
+  it("fades region guidance when the cursor enters its bounds and restores on leave", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/?view=overlay&mode=region&session_id=capture-1",
+    );
+    render(<App />);
+
+    const guidance = (await screen.findByText("Drag to select a region"))
+      .closest(".capture-guidance") as HTMLElement;
+    expect(guidance).not.toHaveAttribute("data-faded");
+    vi.spyOn(guidance, "getBoundingClientRect").mockReturnValue({
+      x: 500,
+      y: 120,
+      top: 120,
+      left: 500,
+      right: 760,
+      bottom: 180,
+      width: 260,
+      height: 60,
+      toJSON: () => undefined,
+    });
+
+    fireEvent.pointerMove(window, { clientX: 620, clientY: 150 });
+    expect(guidance).toHaveAttribute("data-faded", "true");
+
+    fireEvent.pointerMove(window, { clientX: 20, clientY: 20 });
+    expect(guidance).not.toHaveAttribute("data-faded");
+  });
+
+  it("fades window guidance when the cursor enters its bounds", async () => {
+    activeSession = { ...session, mode: "window" };
+    window.history.replaceState(
+      {},
+      "",
+      "/?view=overlay&mode=window&session_id=capture-1",
+    );
+    render(<App />);
+
+    const guidance = (await screen.findByText("Select a window to continue"))
+      .closest(".capture-guidance") as HTMLElement;
+    vi.spyOn(guidance, "getBoundingClientRect").mockReturnValue({
+      x: 500,
+      y: 120,
+      top: 120,
+      left: 500,
+      right: 760,
+      bottom: 180,
+      width: 260,
+      height: 60,
+      toJSON: () => undefined,
+    });
+
+    fireEvent.pointerMove(window, { clientX: 620, clientY: 150 });
+    expect(guidance).toHaveAttribute("data-faded", "true");
+  });
+
+  it("hides region guidance while the user is dragging a selection", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/?view=overlay&mode=region&session_id=capture-1",
+    );
+    const { container } = render(<App />);
+    const guidance = (await screen.findByText("Drag to select a region"))
+      .closest(".capture-guidance");
+    expect(guidance).not.toHaveAttribute("data-faded");
+
+    const surface = container.querySelector<HTMLElement>(".capture-surface");
+    expect(surface).not.toBeNull();
+    surface!.setPointerCapture = vi.fn();
+    vi.spyOn(surface!, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 1440,
+      bottom: 900,
+      width: 1440,
+      height: 900,
+      toJSON: () => undefined,
+    });
+
+    fireEvent.pointerDown(surface!, { pointerId: 1, clientX: 200, clientY: 150 });
+    expect(guidance).toHaveAttribute("data-faded", "true");
+  });
+
   it("keeps the region dim hole aligned with the marquee under Windows DPI scale", async () => {
     // Physical 1920×1080 @ 150% → logical overlay DIPs 1280×720. A mismatched
     // SVG viewBox used to scale the cutout away from the CSS marquee.

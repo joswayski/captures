@@ -557,6 +557,71 @@ describe("RecordingSelector", () => {
     expect(screen.getByRole("button", { name: "Start recording" })).toBeEnabled();
   });
 
+  it("hides region guidance while creating a new region selection", async () => {
+    preparedSession = {
+      ...session,
+      initial_mode: "screenshot",
+    };
+    const { container } = render(<RecordingSelector />);
+    await screen.findByRole("button", { name: "Screenshot", pressed: true });
+    const guidance = screen.getByText("Drag to select a region").closest(".capture-guidance");
+    expect(guidance).not.toHaveAttribute("data-faded");
+
+    const surface = container.querySelector<HTMLElement>(".recording-selector");
+    expect(surface).not.toBeNull();
+    surface!.setPointerCapture = vi.fn();
+    surface!.hasPointerCapture = vi.fn(() => true);
+    surface!.releasePointerCapture = vi.fn();
+    vi.spyOn(surface!, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 1440,
+      bottom: 900,
+      width: 1440,
+      height: 900,
+      toJSON: () => undefined,
+    });
+
+    // Click outside the default selection frame to start a create drag.
+    fireEvent.pointerDown(surface!, { pointerId: 9, clientX: 20, clientY: 20 });
+    expect(guidance).toHaveAttribute("data-faded", "true");
+
+    fireEvent.pointerMove(surface!, { pointerId: 9, clientX: 120, clientY: 140 });
+    fireEvent.pointerUp(surface!, { pointerId: 9, clientX: 120, clientY: 140 });
+    expect(guidance).not.toHaveAttribute("data-faded");
+  });
+
+  it("fades window guidance when the cursor enters its bounds", async () => {
+    preparedSession = {
+      ...session,
+      initial_mode: "screenshot",
+    };
+    render(<RecordingSelector />);
+    fireEvent.click(await screen.findByRole("button", { name: "Window" }));
+
+    const guidance = screen.getByText("Select a window to continue")
+      .closest(".capture-guidance") as HTMLElement;
+    vi.spyOn(guidance, "getBoundingClientRect").mockReturnValue({
+      x: 500,
+      y: 120,
+      top: 120,
+      left: 500,
+      right: 760,
+      bottom: 180,
+      width: 260,
+      height: 60,
+      toJSON: () => undefined,
+    });
+
+    fireEvent.pointerMove(window, { clientX: 620, clientY: 150 });
+    expect(guidance).toHaveAttribute("data-faded", "true");
+
+    fireEvent.pointerMove(window, { clientX: 10, clientY: 10 });
+    expect(guidance).not.toHaveAttribute("data-faded");
+  });
+
   it("lets one Escape close an open control and cancel the selector exactly once", async () => {
     render(<RecordingSelector />);
     const microphone = await screen.findByRole("combobox", { name: "Microphone" });
