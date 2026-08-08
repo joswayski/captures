@@ -130,13 +130,112 @@ export type EditorTextElement = EditorElementBase & {
    * so the selection box tracks content rather than a free-form tall empty area.
    */
   width: number;
-  fontFamily: "sans" | "serif" | "mono";
+  fontFamily: "sans" | "serif" | "mono" | "rounded";
   bold: boolean;
   italic: boolean;
   align: "left" | "center" | "right";
   color: string;
   background: string | null;
+  /** Hollow text whose glyph edges use `color` instead of a solid fill. */
+  outlined: boolean;
+  /** Capsule-like background used by the Rounded Box preset. */
+  roundedBackground: boolean;
 };
+
+export type TextStylePreset =
+  | "standard"
+  | "rounded"
+  | "outlined"
+  | "mono"
+  | "box"
+  | "mono-box"
+  | "rounded-box";
+
+export const DEFAULT_TEXT_BOX_BACKGROUND = "#111318";
+
+/** Identify the closest named style represented by a text layer. */
+export function textStylePreset(element: EditorTextElement): TextStylePreset {
+  if (element.outlined && element.background === null) return "outlined";
+  if (element.background !== null) {
+    if (element.fontFamily === "rounded" && element.roundedBackground) {
+      return "rounded-box";
+    }
+    if (element.fontFamily === "mono") return "mono-box";
+    return "box";
+  }
+  if (element.fontFamily === "rounded") return "rounded";
+  if (element.fontFamily === "mono") return "mono";
+  return "standard";
+}
+
+/** Apply one of the named text treatments without changing content or colors. */
+export function applyTextStylePreset(
+  element: EditorTextElement,
+  preset: TextStylePreset,
+): EditorTextElement {
+  const boxBackground = element.background ?? DEFAULT_TEXT_BOX_BACKGROUND;
+  if (preset === "rounded") {
+    return {
+      ...element,
+      fontFamily: "rounded",
+      background: null,
+      outlined: false,
+      roundedBackground: false,
+    };
+  }
+  if (preset === "outlined") {
+    return {
+      ...element,
+      fontFamily: "sans",
+      background: null,
+      outlined: true,
+      roundedBackground: false,
+    };
+  }
+  if (preset === "mono") {
+    return {
+      ...element,
+      fontFamily: "mono",
+      background: null,
+      outlined: false,
+      roundedBackground: false,
+    };
+  }
+  if (preset === "box") {
+    return {
+      ...element,
+      fontFamily: "sans",
+      background: boxBackground,
+      outlined: false,
+      roundedBackground: false,
+    };
+  }
+  if (preset === "mono-box") {
+    return {
+      ...element,
+      fontFamily: "mono",
+      background: boxBackground,
+      outlined: false,
+      roundedBackground: false,
+    };
+  }
+  if (preset === "rounded-box") {
+    return {
+      ...element,
+      fontFamily: "rounded",
+      background: boxBackground,
+      outlined: false,
+      roundedBackground: true,
+    };
+  }
+  return {
+    ...element,
+    fontFamily: "sans",
+    background: null,
+    outlined: false,
+    roundedBackground: false,
+  };
+}
 
 /** Line box height as a multiple of fontSize (matches canvas + inline editor). */
 export const TEXT_LINE_HEIGHT_RATIO = 1.25;
