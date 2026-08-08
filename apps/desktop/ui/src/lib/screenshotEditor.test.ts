@@ -33,6 +33,7 @@ import {
   hitTestResizeHandle,
   imageDropGuideAtPoint,
   imageDropPlacementAtPoint,
+  imageOrientationMatrix,
   imageSizeAtWidth,
   insertArrowControl,
   isCurveableStrokeShape,
@@ -52,6 +53,7 @@ import {
   translateElement,
   canvasTrimMarginPreview,
   trimDocumentToContent,
+  transformImageElement,
   visibleContentBounds,
   wrapTextLines,
   type EditorImageElement,
@@ -580,6 +582,58 @@ describe("screenshot editor geometry", () => {
       naturalHeight: 800,
     };
     expect(imageSizeAtWidth(image, 800)).toEqual({ width: 800, height: 400 });
+  });
+
+  it("rotates and flips image layers losslessly around their center", () => {
+    const image: EditorImageElement = {
+      ...editableLayer,
+      id: "image",
+      kind: "image",
+      source: "imported",
+      src: "blob:image",
+      name: "image.png",
+      x: 0,
+      y: 0,
+      width: 400,
+      height: 200,
+      naturalWidth: 1_600,
+      naturalHeight: 800,
+    };
+
+    const clockwise = transformImageElement(image, "rotate-clockwise");
+    expect(clockwise).toMatchObject({
+      x: 100,
+      y: -100,
+      width: 200,
+      height: 400,
+    });
+    expect(imageOrientationMatrix(clockwise.orientation)).toEqual({
+      a: 0,
+      b: 1,
+      c: -1,
+      d: 0,
+    });
+    expect(imageSizeAtWidth(clockwise, 200)).toEqual({ width: 200, height: 400 });
+
+    const mirrored = transformImageElement(clockwise, "flip-horizontal");
+    expect(imageOrientationMatrix(mirrored.orientation)).toEqual({
+      a: 0,
+      b: 1,
+      c: 1,
+      d: 0,
+    });
+
+    const restored = [0, 1, 2, 3].reduce(
+      (current) => transformImageElement(current, "rotate-clockwise"),
+      image,
+    );
+    expect(restored).toMatchObject({
+      x: 0,
+      y: 0,
+      width: 400,
+      height: 200,
+    });
+    expect(restored.orientation).toBeUndefined();
   });
 
   it("moves paths and shapes without changing their geometry", () => {

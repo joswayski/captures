@@ -11,7 +11,12 @@ import {
   stampRemoveBackgroundBrush,
   strokeRemoveBackgroundBrush,
 } from "./imageBackground";
-import { createScreenshotDocument, type EditorImageElement, type ScreenshotElement } from "./screenshotEditor";
+import {
+  createScreenshotDocument,
+  transformImageElement,
+  type EditorImageElement,
+  type ScreenshotElement,
+} from "./screenshotEditor";
 
 /** Minimal ImageData stand-in (happy-dom may not define ImageData). */
 function solidImageData(
@@ -93,6 +98,32 @@ describe("documentPointToImagePixel", () => {
       y: 99,
     });
     expect(documentPointToImagePixel(element, { x: -1, y: 0 })).toBeNull();
+  });
+
+  it("maps rotated and mirrored display coordinates back to source pixels", () => {
+    const rotated = transformImageElement(imageElement(), "rotate-clockwise");
+    expect(documentPointToImagePixel(rotated, { x: 25, y: -25 })).toEqual({
+      x: 0,
+      y: 99,
+    });
+    expect(documentPointToImagePixel(rotated, { x: 50, y: 25 })).toEqual({
+      x: 100,
+      y: 50,
+    });
+    expect(documentPointToImagePixel(rotated, { x: 74.9, y: 74.9 })).toEqual({
+      x: 199,
+      y: 0,
+    });
+
+    const mirrored = transformImageElement(imageElement(), "flip-horizontal");
+    expect(documentPointToImagePixel(mirrored, { x: 0, y: 0 })).toEqual({
+      x: 199,
+      y: 0,
+    });
+    expect(documentPointToImagePixel(mirrored, { x: 99.9, y: 49.9 })).toEqual({
+      x: 0,
+      y: 99,
+    });
   });
 });
 

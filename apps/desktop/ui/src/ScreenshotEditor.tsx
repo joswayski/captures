@@ -62,6 +62,8 @@ import {
   previewExpandedCanvasRect,
   hitTestResizeHandle,
   imageDropGuideAtPoint,
+  imageOrientationMatrix,
+  imageSourceDisplaySize,
   imageSizeAtWidth,
   isCurveableStrokeShape,
   isSupportedImageFile,
@@ -84,12 +86,14 @@ import {
   translateElement,
   canvasTrimMarginPreview,
   trimDocumentToContent,
+  transformImageElement,
   visibleContentBounds,
   type AlignmentSnapGuide,
   type CanvasTrimMarginPreview,
   type ArrowHandle,
   type EditorImageElement,
   type ImageDropPlacement,
+  type ImageTransformAction,
   type ImageSnapEdge,
   type LayerBlendMode,
   type LayerDropPlacement,
@@ -652,6 +656,30 @@ function drawText(
   context.restore();
 }
 
+/** Paint one oriented bitmap into its axis-aligned layer bounds. */
+function paintImageElementSource(
+  context: CanvasRenderingContext2D,
+  element: EditorImageElement,
+  source: CanvasImageSource,
+): void {
+  const matrix = imageOrientationMatrix(element.orientation);
+  const sourceSize = imageSourceDisplaySize(element);
+  context.save();
+  context.translate(
+    element.x + element.width / 2,
+    element.y + element.height / 2,
+  );
+  context.transform(matrix.a, matrix.b, matrix.c, matrix.d, 0, 0);
+  context.drawImage(
+    source,
+    -sourceSize.width / 2,
+    -sourceSize.height / 2,
+    sourceSize.width,
+    sourceSize.height,
+  );
+  context.restore();
+}
+
 /** Paint a single layer into an existing context (caller owns alpha / transform). */
 function paintScreenshotElement(
   context: CanvasRenderingContext2D,
@@ -661,13 +689,7 @@ function paintScreenshotElement(
   if (element.kind === "image") {
     const cached = imageCache.get(element.src);
     if (cached?.status === "loaded") {
-      context.drawImage(
-        cached.image,
-        element.x,
-        element.y,
-        element.width,
-        element.height,
-      );
+      paintImageElementSource(context, element, cached.image);
     }
     return;
   }
@@ -1253,15 +1275,9 @@ export function ScreenshotEditor() {
   // Position the per-layer stack menu with fixed coords so overflow:auto on the
   // layer list does not clip it; flip above the trigger near the bottom edge.
   useLayoutEffect(() => {
-    if (!layerMenuId) {
-      setLayerMenuPlacement(null);
-      return;
-    }
+    if (!layerMenuId) return;
     const trigger = layerMenuTriggerRefs.current.get(layerMenuId);
-    if (!trigger) {
-      setLayerMenuPlacement(null);
-      return;
-    }
+    if (!trigger) return;
     const place = () => {
       const bounds = trigger.getBoundingClientRect();
       const menuWidth = 248;
@@ -1632,13 +1648,7 @@ export function ScreenshotEditor() {
         context.save();
         context.globalAlpha = Math.max(0, Math.min(1, liveElement.opacity / 100));
         context.globalCompositeOperation = liveElement.blendMode;
-        context.drawImage(
-          live.canvas,
-          liveElement.x,
-          liveElement.y,
-          liveElement.width,
-          liveElement.height,
-        );
+        paintImageElementSource(context, liveElement, live.canvas);
         context.restore();
       }
     }
@@ -2962,6 +2972,40 @@ export function ScreenshotEditor() {
     setTrimEdgesHover(false);
   };
 
+  const transformSelectedImageLayer = useCallback((action: ImageTransformAction) => {
+    const current = documentRef.current;
+    const element = current?.elements.find(({ id }) => id === selectedId);
+    if (!current || element?.kind !== "image") return;
+
+    const rotates = action === "rotate-clockwise" || action === "rotate-counterclockwise";
+    const visibleElements = current.elements.filter((candidate) => candidate.visible);
+    const fillsCanvas = element.visible
+      && visibleElements.length === 1
+      && visibleElements[0].id === element.id
+      && Math.abs(element.x) < 0.01
+      && Math.abs(element.y) < 0.01
+      && Math.abs(element.width - current.width) < 0.01
+      && Math.abs(element.height - current.height) < 0.01;
+    const transformed = transformImageElement(element, action);
+    let next = replaceElement(current, element.id, transformed);
+
+    // The common fresh-photo case should become portrait/landscape in one click.
+    // In layered compositions, preserve the canvas and expand only if this layer
+    // would otherwise be clipped; other annotations remain independent layers.
+    if (rotates && fillsCanvas) {
+      next = trimDocumentToContent(next);
+    } else {
+      next = expandDocumentToFitBounds(next, elementBounds(transformed), 0);
+    }
+
+    commitDocument(next);
+    setEditingTextId(null);
+    setCropSelection(null);
+    setTrimEdgesHover(false);
+    setTool("select");
+    setError("");
+  }, [commitDocument, selectedId]);
+
   /** Decode a cached layer image into natural-resolution pixels. */
   const readLayerImageData = (src: string): ImageData => {
     const cached = imageCacheRef.current.get(src);
@@ -4122,6 +4166,9 @@ export function ScreenshotEditor() {
           <ol className="screenshot-layer-list">
             {[...editorDocument.elements].reverse().map((element) => {
               const locked = element.locked;
+              const previewOrientation = element.kind === "image"
+                ? imageOrientationMatrix(element.orientation)
+                : null;
               const dropPlacement = layerDropTarget?.id === element.id
                 ? layerDropTarget.placement
                 : null;
@@ -4200,7 +4247,18 @@ export function ScreenshotEditor() {
                     </span>
                     <span className="screenshot-layer-preview" aria-hidden="true">
                       {element.kind === "image"
-                        ? <img src={element.src} alt="" draggable={false} />
+                        ? (
+                          <img
+                            src={element.src}
+                            alt=""
+                            draggable={false}
+                            style={{
+                              transform: previewOrientation
+                                ? `matrix(${previewOrientation.a}, ${previewOrientation.b}, ${previewOrientation.c}, ${previewOrientation.d}, 0, 0)`
+                                : undefined,
+                            }}
+                          />
+                        )
                         : <EditorIcon name={layerIconName(element)} />}
                     </span>
                     <span className="screenshot-layer-copy">
@@ -4683,6 +4741,48 @@ export function ScreenshotEditor() {
 
         {selected?.kind === "image" && (
           <section className="screenshot-property-section">
+            <div
+              className="screenshot-image-transform-actions"
+              role="group"
+              aria-label="Image transforms"
+            >
+              <button
+                type="button"
+                aria-label="Rotate image counterclockwise"
+                title="Rotate this image layer 90° counterclockwise"
+                onClick={() => transformSelectedImageLayer("rotate-counterclockwise")}
+              >
+                <EditorIcon name="rotate-counterclockwise" />
+                <span>Rotate left</span>
+              </button>
+              <button
+                type="button"
+                aria-label="Rotate image clockwise"
+                title="Rotate this image layer 90° clockwise"
+                onClick={() => transformSelectedImageLayer("rotate-clockwise")}
+              >
+                <EditorIcon name="rotate-clockwise" />
+                <span>Rotate right</span>
+              </button>
+              <button
+                type="button"
+                aria-label="Flip image horizontally"
+                title="Mirror this image layer from left to right"
+                onClick={() => transformSelectedImageLayer("flip-horizontal")}
+              >
+                <EditorIcon name="flip-horizontal" />
+                <span>Flip horizontal</span>
+              </button>
+              <button
+                type="button"
+                aria-label="Flip image vertically"
+                title="Mirror this image layer from top to bottom"
+                onClick={() => transformSelectedImageLayer("flip-vertical")}
+              >
+                <EditorIcon name="flip-vertical" />
+                <span>Flip vertical</span>
+              </button>
+            </div>
             <div className="screenshot-number-pair">
               <label>
                 Width
@@ -5335,6 +5435,36 @@ function EditorIcon({ name }: { name: string }) {
         <path d="M4 20c2-6 5-9 8-9s4 2 8 9" />
         <path d="M9 7.5a2.5 2.5 0 1 0 5 0 2.5 2.5 0 0 0-5 0Z" />
         <path d="M12 10v3" />
+      </svg>
+    );
+  }
+  if (name === "rotate-counterclockwise") {
+    return (
+      <svg viewBox="0 0 24 24">
+        <path d="M8 7H4V3" />
+        <path d="M4.7 7.2A8 8 0 1 1 4 14" />
+      </svg>
+    );
+  }
+  if (name === "rotate-clockwise") {
+    return (
+      <svg viewBox="0 0 24 24">
+        <path d="M16 7h4V3" />
+        <path d="M19.3 7.2A8 8 0 1 0 20 14" />
+      </svg>
+    );
+  }
+  if (name === "flip-horizontal") {
+    return (
+      <svg viewBox="0 0 24 24">
+        <path d="M12 3v18M9 5 4 12l5 7ZM15 5l5 7-5 7Z" />
+      </svg>
+    );
+  }
+  if (name === "flip-vertical") {
+    return (
+      <svg viewBox="0 0 24 24">
+        <path d="M3 12h18M5 9l7-5 7 5ZM5 15l7 5 7-5Z" />
       </svg>
     );
   }
