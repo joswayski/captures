@@ -29,7 +29,7 @@ Preview builds update after every successful merge to `main` and may contain bug
 - Edit screenshots with inline text, shapes, multi-point bendable lines and arrows, drawing, crop, resize, zoom, and image layers that snap to edges while moving or resizing. Drag a line or arrow mid handle to curve it; double-click the path to add more curve points (hover shows a tip). Start annotations outside the canvas or release past an edge to expand it; empty chrome around the canvas deselects. Dropped images can snap to a layer edge or stack on top. Trim edges shrinks the canvas to the bounds of visible layers.
 - Trim, crop, resize, and adjust audio in recordings.
 - Save PNGs by default, or export as JPEG or WebP. Compress and maximum-file-size modes keep the selected format (JPEG quality slider for JPEG; stronger packing for PNG).
-- Use optional quick-access mini previews to copy, save, preview, or drag recent screenshots into other apps. Mini previews stay out of captures by default; Preferences can include them when you need to screenshot Captures itself.
+- Use optional quick-access mini previews to copy, save, preview, or drag recent screenshots into other apps. Mini previews and the recording control bar stay out of captures by default; Preferences can include either when you need to screenshot or record Captures itself.
 - Take screenshots without stopping an active recording.
 - Restore recent screenshots and recordings from a 30-day Capture History.
 - Customize global shortcuts and color themes.

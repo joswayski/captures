@@ -34,9 +34,10 @@ use crate::{
     models::{
         CaptureArtifact, CaptureSelectorMode, HistoryEntry, RecordingArtifact,
         RecordingArtifactData, RecordingCapabilities, RecordingSelection,
-        RecordingSelectionSession, recording_controls_are_excluded as platform_controls_excluded,
-        recording_media_url, recording_poster_url, recording_recovery_directory,
-        recording_selection_url, recording_timeline_url,
+        RecordingSelectionSession,
+        recording_controls_are_excluded as controls_excluded_for_preference, recording_media_url,
+        recording_poster_url, recording_recovery_directory, recording_selection_url,
+        recording_timeline_url,
     },
     state::AppState,
     storage,
@@ -289,7 +290,9 @@ pub(crate) async fn prepare_capture_selector_inner(
                 target_os = "windows",
                 target_os = "linux"
             )),
-            recording_capabilities: RecordingCapabilities::current(),
+            recording_capabilities: RecordingCapabilities::current(
+                state.settings().include_recording_controls_in_captures,
+            ),
             window_coordinate_scale: crate::window_coordinate_scale(&frame.descriptor),
             window_corner_radius: crate::window_corner_radius_points(),
             display: frame.descriptor,
@@ -549,8 +552,14 @@ pub fn list_recording_audio_devices() -> Vec<captures_recording::AudioDevice> {
 }
 
 #[tauri::command]
-pub const fn recording_controls_are_excluded() -> bool {
-    platform_controls_excluded()
+pub fn recording_controls_are_excluded(state: tauri::State<'_, Arc<AppState>>) -> bool {
+    controls_excluded_for_preference(state.settings().include_recording_controls_in_captures)
+}
+
+/// Whether this session should keep Captures recording chrome out of the
+/// native recorder (macOS ScreenCaptureKit application exclusion).
+pub(crate) fn should_exclude_captures_app_from_recording(state: &AppState) -> bool {
+    controls_excluded_for_preference(state.settings().include_recording_controls_in_captures)
 }
 
 #[tauri::command]
@@ -759,14 +768,17 @@ fn start_native_segment(
     options: &RecordingOptions,
     path: &Path,
     display: &DisplayDescriptor,
+    exclude_captures_app: bool,
 ) -> Result<NativeRecordingSegment, String> {
     #[cfg(target_os = "macos")]
     {
         let _ = display;
-        NativeRecordingSegment::start(options, path).map_err(|error| error.to_string())
+        NativeRecordingSegment::start(options, path, exclude_captures_app)
+            .map_err(|error| error.to_string())
     }
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     {
+        let _ = exclude_captures_app;
         NativeRecordingSegment::start(options, path, display).map_err(|error| error.to_string())
     }
 }
@@ -813,8 +825,9 @@ async fn start_segment(
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     destroy_recording_countdown(&app);
     let path_for_start = path.clone();
+    let exclude_captures_app = should_exclude_captures_app_from_recording(&state);
     let started = tauri::async_runtime::spawn_blocking(move || {
-        start_native_segment(&options, &path_for_start, &display)
+        start_native_segment(&options, &path_for_start, &display, exclude_captures_app)
     })
     .await
     .map_err(|error| AppError::Task(error.to_string()))?;
@@ -3012,7 +3025,8 @@ fn create_recording_selector_window(app: &AppHandle) -> Result<(), AppError> {
     .focused(false)
     .visible(true)
     .build()?;
-    window.set_content_protected(recording_overlay_content_protected())?;
+    // Selector always sits on a frozen snapshot; keep it out of secondary captures.
+    window.set_content_protected(cfg!(target_os = "windows"))?;
     Ok(())
 }
 
@@ -3044,7 +3058,7 @@ async fn prepare_recording_selector(
                 .set_position(tauri::LogicalPosition::new(x, y))
                 .map_err(|error| error.to_string())?;
             window
-                .set_content_protected(recording_overlay_content_protected())
+                .set_content_protected(cfg!(target_os = "windows"))
                 .map_err(|error| error.to_string())?;
             // A hidden or zero-alpha WKWebView can be suspended before React
             // installs its recording-selection listener. Wake it at a tiny,
@@ -3237,7 +3251,7 @@ async fn prepare_recording_hud(
                 .set_position(tauri::LogicalPosition::new(x, y))
                 .map_err(|error| error.to_string())?;
             window
-                .set_content_protected(recording_overlay_content_protected())
+                .set_content_protected(recording_overlay_content_protected(&handle))
                 .map_err(|error| error.to_string())?;
             window.hide().map_err(|error| error.to_string())?;
             Ok(())
@@ -3299,7 +3313,7 @@ async fn show_recording_hud(app: &AppHandle) -> Result<(), AppError> {
                 .get_webview_window("recording-hud")
                 .ok_or_else(|| "recording controls are unavailable".to_owned())?;
             window
-                .set_content_protected(recording_overlay_content_protected())
+                .set_content_protected(recording_overlay_content_protected(&handle))
                 .map_err(|error| error.to_string())?;
             #[cfg(target_os = "macos")]
             captures_macos_window::show_without_activating(&window).map_err(str::to_owned)?;
@@ -3343,7 +3357,7 @@ fn show_recording_countdown(app: &AppHandle, display: &DisplayDescriptor) -> Res
         .ok_or_else(|| AppError::Task("recording countdown is unavailable".to_owned()))?;
     window.set_size(tauri::LogicalSize::new(width, height))?;
     window.set_position(tauri::LogicalPosition::new(x, y))?;
-    window.set_content_protected(recording_overlay_content_protected())?;
+    window.set_content_protected(recording_overlay_content_protected(app))?;
     window.show()?;
     #[cfg(target_os = "macos")]
     focus_recording_window(app, "recording-countdown");
@@ -3361,8 +3375,15 @@ fn destroy_recording_countdown(app: &AppHandle) {
     }
 }
 
-const fn recording_overlay_content_protected() -> bool {
-    cfg!(target_os = "windows")
+fn recording_overlay_content_protected(app: &AppHandle) -> bool {
+    // Windows content protection is the exclusion mechanism for recording chrome.
+    // When the user opts into including recording controls, leave them capturable.
+    if !cfg!(target_os = "windows") {
+        return false;
+    }
+    app.try_state::<Arc<AppState>>().is_none_or(|state| {
+        controls_excluded_for_preference(state.settings().include_recording_controls_in_captures)
+    })
 }
 
 fn show_recording_editor(app: &AppHandle, artifact_id: &str) -> Result<(), AppError> {

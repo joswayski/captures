@@ -1438,6 +1438,7 @@ export function RecordingSelector() {
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState("");
   const [focusVisibleSessionId, setFocusVisibleSessionId] = useState<string | null>(null);
+  const [controlsExcluded, setControlsExcluded] = useState<boolean | null>(null);
   const surfaceRef = useRef<HTMLElement>(null);
   const panelRef = useRef<HTMLElement>(null);
   const panelDragRef = useRef<RecordingPanelDrag | null>(null);
@@ -1544,7 +1545,7 @@ export function RecordingSelector() {
 
   useEffect(() => {
     let active = true;
-    let dispose: (() => void) | undefined;
+    const disposers: Array<() => void> = [];
     const applySelection = (selection: RecordingSelectionSession, currentSettings: AppSettings) => {
       // A newly-created selector asks for the pending session while also
       // subscribing to the ready event. Both can resolve with the same
@@ -1618,7 +1619,7 @@ export function RecordingSelector() {
     void listen<RecordingSelectionSession>("recording-selection-ready", onSelectionReady)
       .then((unlisten) => {
         if (active) {
-          dispose = unlisten;
+          disposers.push(unlisten);
         } else {
           unlisten();
         }
@@ -1630,11 +1631,13 @@ export function RecordingSelector() {
     void Promise.all([
       invoke<RecordingSelectionSession | null>("get_recording_selection"),
       invoke<AppSettings>("get_settings"),
+      invoke<boolean>("recording_controls_are_excluded").catch(() => false),
     ])
-      .then(([pending, loadedSettings]) => {
+      .then(([pending, loadedSettings, excluded]) => {
         if (!active) return;
         settingsRef.current = loadedSettings;
         setSettings(loadedSettings);
+        setControlsExcluded(excluded);
         if (pending) {
           applySelection(pending, loadedSettings);
         }
@@ -1642,12 +1645,33 @@ export function RecordingSelector() {
       .catch((error) => {
         if (active) setError(String(error));
       });
+
+    void listen<AppSettings>("settings-changed", ({ payload }) => {
+      if (!active) return;
+      settingsRef.current = payload;
+      setSettings(payload);
+      // Keep the selector privacy line in sync when the include preference flips.
+      void invoke<boolean>("recording_controls_are_excluded")
+        .then((excluded) => {
+          if (active) setControlsExcluded(excluded);
+        })
+        .catch(() => {
+          if (active) setControlsExcluded(false);
+        });
+    }).then((unlisten) => {
+      if (active) {
+        disposers.push(unlisten);
+      } else {
+        unlisten();
+      }
+    }).catch(() => undefined);
+
     return () => {
       active = false;
       activeSessionIdRef.current = null;
       sessionRef.current = null;
       clearRegionDrag();
-      dispose?.();
+      disposers.forEach((dispose) => dispose());
     };
   }, [clearRegionDrag]);
 
@@ -2273,9 +2297,9 @@ export function RecordingSelector() {
           </div>
         )}
         <p className="capture-selector-note">
-          {session.recording_capabilities.controls_excluded
-            ? "These controls won’t appear in the output"
-            : "Hide these controls to keep them out of the recording"}{" "}
+          {recordingControlsPrivacyText(
+            controlsExcluded ?? session.recording_capabilities.controls_excluded,
+          )}{" "}
           <span aria-hidden="true">·</span> Press <kbd>Enter</kbd> to confirm
         </p>
         {error && <p className="recording-selector-error" role="alert">{error}</p>}
@@ -2334,6 +2358,12 @@ function roundRecordingRect(rect: RecordingRect, maxWidth: number, maxHeight: nu
   };
 }
 
+function recordingControlsPrivacyText(controlsExcluded: boolean | null): string {
+  if (controlsExcluded === true) return "These controls won’t appear in the output";
+  if (controlsExcluded === false) return "Hide these controls to keep them out of the recording";
+  return "Checking whether controls are excluded…";
+}
+
 export function RecordingHud() {
   const [snapshot, setSnapshot] = useState<RecordingSessionSnapshot | null>(null);
   const [controlsExcluded, setControlsExcluded] = useState<boolean | null>(null);
@@ -2345,6 +2375,15 @@ export function RecordingHud() {
   useEffect(() => {
     let active = true;
     const dispose: (() => void)[] = [];
+    const refreshControlsExcluded = () => {
+      void invoke<boolean>("recording_controls_are_excluded")
+        .then((excluded) => {
+          if (active) setControlsExcluded(excluded);
+        })
+        .catch(() => {
+          if (active) setControlsExcluded(false);
+        });
+    };
     const applySnapshot = (next: RecordingSessionSnapshot) => {
       if (!active) return;
       if (sessionIdRef.current !== next.id) {
@@ -2369,6 +2408,10 @@ export function RecordingHud() {
             setMicrophonePeak(Math.max(0, Math.min(1, payload.microphone_peak)));
           }
         }),
+        // Update the privacy menu text as soon as the include preference changes.
+        listen<AppSettings>("settings-changed", () => {
+          refreshControlsExcluded();
+        }),
       ]);
       void listeners.then((results) => {
         const unlisteners = results.flatMap((listener) => listener.status === "fulfilled" ? [listener.value] : []);
@@ -2381,13 +2424,7 @@ export function RecordingHud() {
       const current = await invoke<RecordingSessionSnapshot | null>("get_recording_snapshot");
       if (current) applySnapshot(current);
     })();
-    void invoke<boolean>("recording_controls_are_excluded")
-      .then((excluded) => {
-        if (active) setControlsExcluded(excluded);
-      })
-      .catch(() => {
-        if (active) setControlsExcluded(false);
-      });
+    refreshControlsExcluded();
     const timer = window.setInterval(() => {
       void invoke<RecordingSessionSnapshot | null>("get_recording_snapshot").then((current) => {
         if (current) applySnapshot(current);
@@ -2496,11 +2533,7 @@ export function RecordingHud() {
       onPointerDown={startHudDrag}
     >
       <span className="recording-hud-privacy">
-        {controlsExcluded === true
-          ? "These controls won’t appear in the output"
-          : controlsExcluded === false
-            ? "Hide these controls to keep them out of the recording"
-            : "Checking whether controls are excluded…"}
+        {recordingControlsPrivacyText(controlsExcluded)}
       </span>
       <div className="recording-hud-main">
         <div className="recording-hud-status">
@@ -5746,6 +5779,20 @@ export function Preferences() {
             <small>
               Off by default so Captures chrome stays out of captures. Turn on to
               screenshot or record the preview stack (for feedback or demos).
+            </small>
+          </span>
+        </label>
+        <label className="check-row capture-option">
+          <input
+            type="checkbox"
+            checked={settings.include_recording_controls_in_captures}
+            onChange={(event) => update("include_recording_controls_in_captures", event.target.checked)}
+          />
+          <span>
+            Include recording controls in screenshots and recordings
+            <small>
+              Off by default so the control bar stays out of captures. Turn on to
+              screenshot or record the menus that appear while recording (for feedback or demos).
             </small>
           </span>
         </label>

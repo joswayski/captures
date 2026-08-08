@@ -50,7 +50,11 @@ pub struct MacRecordingSegment {
 }
 
 impl MacRecordingSegment {
-    pub fn start(options: &RecordingOptions, output_path: &Path) -> MacRecordingResult<Self> {
+    pub fn start(
+        options: &RecordingOptions,
+        output_path: &Path,
+        exclude_captures_app: bool,
+    ) -> MacRecordingResult<Self> {
         options
             .validate()
             .map_err(|error| MacRecordingError::InvalidOptions(error.to_owned()))?;
@@ -59,7 +63,11 @@ impl MacRecordingSegment {
             let mut screen_options = options.clone();
             screen_options.audio.microphone_device_id = None;
             screen_options.audio.microphone_muted = true;
-            let inner = native::NativeRecordingSegment::start(&screen_options, output_path)?;
+            let inner = native::NativeRecordingSegment::start(
+                &screen_options,
+                output_path,
+                exclude_captures_app,
+            )?;
             let microphone = if options.audio.microphone_muted {
                 None
             } else if let Some(device_id) = options.audio.microphone_device_id.as_deref() {
@@ -79,7 +87,7 @@ impl MacRecordingSegment {
         }
         #[cfg(not(target_os = "macos"))]
         {
-            let _ = output_path;
+            let _ = (output_path, exclude_captures_app);
             Err(MacRecordingError::RecordingOutputUnavailable)
         }
     }

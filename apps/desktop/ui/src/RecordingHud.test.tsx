@@ -247,6 +247,35 @@ describe("RecordingHud", () => {
       .not.toBeInTheDocument();
   });
 
+  it("updates the privacy menu text when the include preference changes", async () => {
+    const handlers = new Map<string, (event: { payload: unknown }) => void>();
+    let controlsExcluded = true;
+    vi.mocked(listen).mockImplementation(async (event, handler) => {
+      handlers.set(event, handler as (event: { payload: unknown }) => void);
+      return () => undefined;
+    });
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_recording_snapshot") return snapshot;
+      if (command === "recording_controls_are_excluded") return controlsExcluded;
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<RecordingHud />);
+
+    expect(await screen.findByText("These controls won’t appear in the output"))
+      .toBeInTheDocument();
+
+    controlsExcluded = false;
+    await act(async () => {
+      handlers.get("settings-changed")?.({
+        payload: { include_recording_controls_in_captures: true },
+      });
+    });
+
+    expect(await screen.findByText("Hide these controls to keep them out of the recording"))
+      .toBeInTheDocument();
+  });
+
   it("uses a native Delete recording dialog before discarding", async () => {
     snapshot = {
       ...baseSnapshot,

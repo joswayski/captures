@@ -65,6 +65,7 @@ export interface AppSettings {
   auto_copy_to_clipboard: boolean;
   show_mini_previews: boolean;
   include_mini_previews_in_captures: boolean;
+  include_recording_controls_in_captures: boolean;
   launch_at_login: boolean;
   last_screen_permission_request_id: string | null;
   pending_capture_after_restart: CaptureMode | null;

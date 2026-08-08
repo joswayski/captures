@@ -34,6 +34,10 @@ pub struct AppSettings {
     /// screenshots and recordings so Captures UI can be captured for feedback.
     #[serde(default)]
     pub include_mini_previews_in_captures: bool,
+    /// When true, keep the recording controls bar capturable during screenshots
+    /// and recordings so Captures UI can be captured for feedback or demos.
+    #[serde(default)]
+    pub include_recording_controls_in_captures: bool,
     pub launch_at_login: bool,
     #[serde(default)]
     pub last_screen_permission_request_id: Option<String>,
@@ -156,6 +160,7 @@ impl Default for AppSettings {
             auto_copy_to_clipboard: true,
             show_mini_previews: true,
             include_mini_previews_in_captures: false,
+            include_recording_controls_in_captures: false,
             launch_at_login: false,
             last_screen_permission_request_id: None,
             pending_capture_after_restart: None,
@@ -195,12 +200,21 @@ pub struct RecordingCapabilities {
     pub controls_excluded: bool,
 }
 
-pub const fn recording_controls_are_excluded() -> bool {
+/// Platforms that can keep the recording control bar out of the output.
+pub const fn platform_can_exclude_recording_controls() -> bool {
     cfg!(any(target_os = "macos", target_os = "windows"))
 }
 
+/// Whether recording controls will be excluded from the next capture/recording
+/// given the user's include preference.
+pub const fn recording_controls_are_excluded(include_in_captures: bool) -> bool {
+    platform_can_exclude_recording_controls() && !include_in_captures
+}
+
 impl RecordingCapabilities {
-    pub fn current() -> Self {
+    pub fn current(include_recording_controls_in_captures: bool) -> Self {
+        let controls_excluded =
+            recording_controls_are_excluded(include_recording_controls_in_captures);
         #[cfg(target_os = "macos")]
         {
             Self {
@@ -208,7 +222,7 @@ impl RecordingCapabilities {
                 microphone: true,
                 cursor_control: true,
                 click_highlights: true,
-                controls_excluded: recording_controls_are_excluded(),
+                controls_excluded,
             }
         }
         #[cfg(any(target_os = "windows", target_os = "linux"))]
@@ -222,7 +236,7 @@ impl RecordingCapabilities {
                 microphone: true,
                 cursor_control: pointer_features,
                 click_highlights: pointer_features,
-                controls_excluded: recording_controls_are_excluded(),
+                controls_excluded,
             }
         }
     }
@@ -756,15 +770,20 @@ mod tests {
 
     use super::{
         AppSettings, ColorTheme, CustomThemeSettings, HistoryEntry, RecordingArtifact,
-        migrate_output_directory, migrate_settings, recording_controls_are_excluded,
-        recording_media_url, recording_poster_url, recording_selection_url, snapshot_url,
+        migrate_output_directory, migrate_settings, platform_can_exclude_recording_controls,
+        recording_controls_are_excluded, recording_media_url, recording_poster_url,
+        recording_selection_url, snapshot_url,
     };
 
     #[test]
     fn reports_recording_control_exclusion_for_supported_platforms() {
         assert_eq!(
-            recording_controls_are_excluded(),
+            platform_can_exclude_recording_controls(),
             cfg!(any(target_os = "macos", target_os = "windows"))
+        );
+        assert_eq!(
+            recording_controls_are_excluded(false),
+            platform_can_exclude_recording_controls()
         );
     }
 
@@ -825,6 +844,7 @@ mod tests {
         assert!(settings.auto_copy_to_clipboard);
         assert!(settings.show_mini_previews);
         assert!(!settings.include_mini_previews_in_captures);
+        assert!(!settings.include_recording_controls_in_captures);
         assert_eq!(settings.theme, ColorTheme::Mustard);
         assert_eq!(settings.custom_theme, CustomThemeSettings::default());
         assert_eq!(settings.new_capture_shortcut, "Ctrl+Shift+Space");
@@ -968,6 +988,29 @@ mod tests {
             serde_json::from_str(&json).expect("settings should deserialize");
 
         assert!(restored.include_mini_previews_in_captures);
+    }
+
+    #[test]
+    fn persists_including_recording_controls_in_captures() {
+        let settings = AppSettings {
+            include_recording_controls_in_captures: true,
+            ..AppSettings::default()
+        };
+
+        let json = serde_json::to_string(&settings).expect("settings should serialize");
+        let restored: AppSettings =
+            serde_json::from_str(&json).expect("settings should deserialize");
+
+        assert!(restored.include_recording_controls_in_captures);
+    }
+
+    #[test]
+    fn recording_controls_exclusion_respects_the_include_preference() {
+        assert_eq!(
+            recording_controls_are_excluded(false),
+            platform_can_exclude_recording_controls()
+        );
+        assert!(!recording_controls_are_excluded(true));
     }
 
     #[test]
