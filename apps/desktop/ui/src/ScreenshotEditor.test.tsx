@@ -496,6 +496,66 @@ describe("ScreenshotEditor", () => {
       .toHaveValue("Inline text");
   });
 
+  it("creates text with any of the seven visual style presets", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Width");
+
+    fireEvent.change(screen.getByRole("combobox", { name: "Canvas zoom" }), {
+      target: { value: "100" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Text (T)" }));
+    fireEvent.click(screen.getByRole("button", { name: "New text style: Standard" }));
+
+    for (const style of [
+      "Standard",
+      "Rounded",
+      "Outlined",
+      "Mono",
+      "Box",
+      "Mono Box",
+      "Rounded Box",
+    ]) {
+      expect(screen.getByRole("menuitemradio", { name: style }))
+        .toBeInTheDocument();
+    }
+
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Rounded Box" }));
+    expect(screen.getByRole("button", { name: "New text style: Rounded Box" }))
+      .toHaveAttribute("aria-expanded", "false");
+
+    const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
+    setCanvasBounds(canvas);
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 31,
+      clientX: 120,
+      clientY: 80,
+    });
+
+    const inlineEditor = await screen.findByRole("textbox", {
+      name: "Edit text on canvas",
+    });
+    expect(inlineEditor.style.fontFamily).toContain("ui-rounded");
+    expect(inlineEditor).toHaveStyle({ backgroundColor: "#111318" });
+    expect(Number.parseFloat(inlineEditor.style.borderRadius)).toBeGreaterThan(20);
+    expect(screen.getByRole("button", { name: "Text style: Rounded Box" }))
+      .toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.click(screen.getByRole("button", { name: "Text style: Rounded Box" }));
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("menu", { name: "Text style" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Text style: Rounded Box" }))
+      .toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Text style: Rounded Box" }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Outlined" }));
+    expect(screen.getByRole("button", { name: "Text style: Outlined" }))
+      .toHaveAttribute("aria-expanded", "false");
+    expect(inlineEditor.style.color).toBe("transparent");
+    expect(inlineEditor.style.backgroundColor).toBe("transparent");
+    expect(inlineEditor.style.webkitTextStroke).toContain("#ff3b5c");
+  });
+
   it("copies, pastes, and duplicates the selected layer with standard shortcuts", async () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");

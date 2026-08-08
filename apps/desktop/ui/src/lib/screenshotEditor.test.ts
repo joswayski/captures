@@ -1,4 +1,5 @@
 import {
+  applyTextStylePreset,
   arrowBendAmount,
   arrowBendFromControlPoint,
   arrowControlPoint,
@@ -54,6 +55,7 @@ import {
   canvasTrimMarginPreview,
   trimDocumentToContent,
   transformImageElement,
+  textStylePreset,
   visibleContentBounds,
   wrapTextLines,
   type EditorImageElement,
@@ -1123,6 +1125,8 @@ describe("screenshot editor geometry", () => {
       align: "left",
       color: "#f00",
       background: null,
+      outlined: false,
+      roundedBackground: false,
     };
     const textBounds = elementBounds(text);
     // Stretching taller must not explode the type size — only box origin/width change.
@@ -1165,6 +1169,49 @@ describe("screenshot editor geometry", () => {
     const hard = wrapTextLines("supercalifragilistic", 40, 20);
     expect(hard.length).toBeGreaterThan(1);
     expect(hard.join("")).toBe("supercalifragilistic");
+  });
+
+  it("applies all named text styles without changing content or color", () => {
+    const text: EditorTextElement = {
+      ...editableLayer,
+      id: "text-style",
+      kind: "text",
+      x: 20,
+      y: 30,
+      text: "Keep me",
+      fontSize: 40,
+      width: 180,
+      fontFamily: "serif",
+      bold: true,
+      italic: false,
+      align: "center",
+      color: "#ff3b5c",
+      background: null,
+      outlined: false,
+      roundedBackground: false,
+    };
+
+    const expectations = {
+      standard: { fontFamily: "sans", background: null, outlined: false, roundedBackground: false },
+      rounded: { fontFamily: "rounded", background: null, outlined: false, roundedBackground: false },
+      outlined: { fontFamily: "sans", background: null, outlined: true, roundedBackground: false },
+      mono: { fontFamily: "mono", background: null, outlined: false, roundedBackground: false },
+      box: { fontFamily: "sans", background: "#111318", outlined: false, roundedBackground: false },
+      "mono-box": { fontFamily: "mono", background: "#111318", outlined: false, roundedBackground: false },
+      "rounded-box": { fontFamily: "rounded", background: "#111318", outlined: false, roundedBackground: true },
+    } as const;
+
+    for (const [preset, expected] of Object.entries(expectations)) {
+      const styled = applyTextStylePreset(text, preset as keyof typeof expectations);
+      expect(styled).toMatchObject({
+        ...expected,
+        text: "Keep me",
+        color: "#ff3b5c",
+        fontSize: 40,
+        bold: true,
+      });
+      expect(textStylePreset(styled)).toBe(preset);
+    }
   });
 
   it("calculates proportional output sizes for export", () => {
@@ -1321,6 +1368,8 @@ describe("layer merge and flatten helpers", () => {
     align: "left",
     color: "#ffffff",
     background: null,
+    outlined: false,
+    roundedBackground: false,
     x: 10,
     y: 10,
     ...editableLayer,

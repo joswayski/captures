@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 
 import { sameSortedIds } from "./lib/editorPresence";
 import { formatFileSize } from "./lib/format";
@@ -29,6 +30,7 @@ import {
 } from "./lib/imageBackground";
 import {
   ALIGNMENT_SNAP_SCREEN_PX,
+  applyTextStylePreset,
   arrowBendAmount,
   arrowDefaultMidHandle,
   arrowHeadTangentPoint,
@@ -82,6 +84,7 @@ import {
   stackDropLightFocusAtPoint,
   defaultTextBoxWidth,
   TEXT_LINE_HEIGHT_RATIO,
+  textStylePreset,
   wrapTextLines,
   translateElement,
   canvasTrimMarginPreview,
@@ -105,6 +108,7 @@ import {
   type ScreenshotElement,
   type ScreenshotTool,
   type ShapeKind,
+  type TextStylePreset,
 } from "./lib/screenshotEditor";
 import { NotchedSlider, RangeSlider } from "./RangeSlider";
 import type { CaptureArtifact, EditorLayerPresence } from "./types";
@@ -261,6 +265,16 @@ const TOOL_ITEMS: Array<{ tool: ScreenshotTool; label: string; shortcut: string 
   { tool: "arrow", label: "Arrow", shortcut: "A" },
   { tool: "pen", label: "Freehand", shortcut: "P" },
   { tool: "remove-bg", label: "Remove bg", shortcut: "B" },
+];
+
+const TEXT_STYLE_ITEMS: Array<{ preset: TextStylePreset; label: string }> = [
+  { preset: "standard", label: "Standard" },
+  { preset: "rounded", label: "Rounded" },
+  { preset: "outlined", label: "Outlined" },
+  { preset: "mono", label: "Mono" },
+  { preset: "box", label: "Box" },
+  { preset: "mono-box", label: "Mono Box" },
+  { preset: "rounded-box", label: "Rounded Box" },
 ];
 
 /** Tools that draw closed or open vector shapes (not freehand). */
@@ -423,7 +437,20 @@ function replaceElement(
 function fontFamily(element: Extract<ScreenshotElement, { kind: "text" }>): string {
   if (element.fontFamily === "serif") return "Georgia, 'Times New Roman', serif";
   if (element.fontFamily === "mono") return "'SFMono-Regular', Consolas, monospace";
+  if (element.fontFamily === "rounded") {
+    return "ui-rounded, 'SF Pro Rounded', 'Arial Rounded MT Bold', system-ui, sans-serif";
+  }
   return "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+}
+
+function textOutlineWidth(fontSize: number): number {
+  return Math.max(1.5, fontSize * 0.08);
+}
+
+function textBackgroundRadius(
+  element: Extract<ScreenshotElement, { kind: "text" }>,
+): number {
+  return element.roundedBackground ? element.fontSize * 0.62 : 0;
 }
 
 function drawSmoothPath(
@@ -642,16 +669,39 @@ function drawText(
     : element.align === "right" ? element.x + boxWidth : element.x;
   if (element.background) {
     context.fillStyle = element.background;
-    context.fillRect(
-      element.x - element.fontSize * 0.18,
-      element.y - element.fontSize * 0.12,
-      boxWidth + element.fontSize * 0.36,
-      lines.length * lineHeight + element.fontSize * 0.14,
+    const backgroundX = element.x - element.fontSize * 0.18;
+    const backgroundY = element.y - element.fontSize * 0.12;
+    const backgroundWidth = boxWidth + element.fontSize * 0.36;
+    const backgroundHeight = lines.length * lineHeight + element.fontSize * 0.14;
+    const backgroundRadius = Math.min(
+      textBackgroundRadius(element),
+      backgroundWidth / 2,
+      backgroundHeight / 2,
     );
+    if (backgroundRadius > 0) {
+      context.beginPath();
+      context.roundRect(
+        backgroundX,
+        backgroundY,
+        backgroundWidth,
+        backgroundHeight,
+        backgroundRadius,
+      );
+      context.fill();
+    } else {
+      context.fillRect(backgroundX, backgroundY, backgroundWidth, backgroundHeight);
+    }
   }
   context.fillStyle = element.color;
+  context.strokeStyle = element.color;
+  context.lineWidth = textOutlineWidth(element.fontSize);
+  context.lineJoin = "round";
   lines.forEach((line, index) => {
-    context.fillText(line || " ", anchorX, element.y + index * lineHeight);
+    if (element.outlined) {
+      context.strokeText(line || " ", anchorX, element.y + index * lineHeight);
+    } else {
+      context.fillText(line || " ", anchorX, element.y + index * lineHeight);
+    }
   });
   context.restore();
 }
@@ -1114,6 +1164,7 @@ export function ScreenshotEditor() {
     strokeWidth: 8,
   });
   const [defaultFontSize, setDefaultFontSize] = useState(48);
+  const [defaultTextStyle, setDefaultTextStyle] = useState<TextStylePreset>("standard");
   const [fitScale, setFitScale] = useState(1);
   const [zoomMode, setZoomMode] = useState<"fit" | "manual">("fit");
   const [zoom, setZoom] = useState(100);
@@ -1610,6 +1661,8 @@ export function ScreenshotEditor() {
     setZoomMode("fit");
   }, []);
 
+  const canvasEditingTextId = editingText?.id ?? null;
+
   useLayoutEffect(() => {
     if (!editorDocument || !viewportRef.current) return;
     const viewport = viewportRef.current;
@@ -1639,7 +1692,7 @@ export function ScreenshotEditor() {
     const context = canvas.getContext("2d");
     if (!context) return;
     const live = removeBgLiveRef.current;
-    const hiddenElementId = live?.elementId ?? editingText?.id ?? null;
+    const hiddenElementId = live?.elementId ?? canvasEditingTextId;
     renderScreenshot(context, editorDocument, imageCacheRef.current, hiddenElementId);
     // Live erase/restore: draw the working natural-res canvas in place of the layer.
     if (live) {
@@ -1660,16 +1713,16 @@ export function ScreenshotEditor() {
     drawEditorOverlays(
       context,
       editorDocument,
-      editingText ? null : selected,
+      canvasEditingTextId === null ? selected : null,
       cropSelection,
       displayScale,
       accentColor,
-      editingText ? null : resizePreviewBounds,
+      canvasEditingTextId === null ? resizePreviewBounds : null,
     );
   }, [
     cropSelection,
     displayScale,
-    editingText?.id,
+    canvasEditingTextId,
     editorDocument,
     resizePreviewBounds,
     ensureImage,
@@ -2316,7 +2369,7 @@ export function ScreenshotEditor() {
         beginTextEditing(existing.id);
         return;
       }
-      const element: ScreenshotElement = {
+      const element = applyTextStylePreset({
         id: editorId(),
         kind: "text",
         x: point.x,
@@ -2330,11 +2383,13 @@ export function ScreenshotEditor() {
         align: "left",
         color: defaultStyle.color,
         background: null,
+        outlined: false,
+        roundedBackground: false,
         locked: false,
         visible: true,
         opacity: 100,
         blendMode: "source-over",
-      };
+      }, defaultTextStyle);
       // Expand when text is placed past the canvas edge (e.g. viewport chrome).
       const withText = { ...current, elements: [...current.elements, element] };
       commitDocument(expandDocumentToFitBounds(withText, elementBounds(element), 0));
@@ -3878,14 +3933,21 @@ export function ScreenshotEditor() {
               spellCheck
               style={{
                 ...inlineTextLayout,
-                color: editingText.color,
+                color: editingText.outlined ? "transparent" : editingText.color,
                 backgroundColor: editingText.background ?? "transparent",
+                borderRadius: editingText.roundedBackground
+                  ? textBackgroundRadius(editingText) * displayScale
+                  : undefined,
+                caretColor: editingText.color,
                 fontFamily: fontFamily(editingText),
                 fontSize: editingText.fontSize * displayScale,
                 fontWeight: editingText.bold ? 700 : 400,
                 fontStyle: editingText.italic ? "italic" : "normal",
                 lineHeight: TEXT_LINE_HEIGHT_RATIO,
                 textAlign: editingText.align,
+                WebkitTextStroke: editingText.outlined
+                  ? `${textOutlineWidth(editingText.fontSize) * displayScale}px ${editingText.color}`
+                  : undefined,
                 opacity: editingText.opacity / 100,
                 mixBlendMode: editingText.blendMode === "source-over"
                   ? "normal"
@@ -4636,6 +4698,17 @@ export function ScreenshotEditor() {
 
         {selected?.kind === "text" && (
           <section className="screenshot-property-section">
+            <TextStylePicker
+              value={textStylePreset(selected)}
+              onChange={(preset) => {
+                setDefaultTextStyle(preset);
+                updateSelected((element) => (
+                  element.kind === "text"
+                    ? applyTextStylePreset(element, preset)
+                    : element
+                ));
+              }}
+            />
             <label>
               Text
               <textarea
@@ -4653,13 +4726,20 @@ export function ScreenshotEditor() {
                   value={selected.fontFamily}
                   onChange={(event) => updateSelected((element) => (
                     element.kind === "text"
-                      ? { ...element, fontFamily: event.target.value as typeof element.fontFamily }
+                      ? {
+                        ...element,
+                        fontFamily: event.target.value as typeof element.fontFamily,
+                        roundedBackground: event.target.value === "rounded"
+                          ? element.roundedBackground
+                          : false,
+                      }
                       : element
                   ))}
                 >
                   <option value="sans">Sans serif</option>
                   <option value="serif">Serif</option>
                   <option value="mono">Monospace</option>
+                  <option value="rounded">Rounded</option>
                 </select>
               </label>
               <label>
@@ -4721,7 +4801,14 @@ export function ScreenshotEditor() {
                 checked={selected.background !== null}
                 onChange={(event) => updateSelected((element) => (
                   element.kind === "text"
-                    ? { ...element, background: event.target.checked ? "#111318" : null }
+                    ? {
+                      ...element,
+                      background: event.target.checked ? "#111318" : null,
+                      outlined: event.target.checked ? false : element.outlined,
+                      roundedBackground: event.target.checked
+                        ? false
+                        : element.roundedBackground,
+                    }
                     : element
                 ))}
               />
@@ -4937,16 +5024,23 @@ export function ScreenshotEditor() {
         {!selected && tool !== "crop" && (
           <section className="screenshot-property-section">
             {tool === "text" ? (
-              <label>
-                New text size
-                <input
-                  type="number"
-                  min={8}
-                  max={512}
-                  value={defaultFontSize}
-                  onChange={(event) => setDefaultFontSize(Number(event.target.value))}
+              <>
+                <TextStylePicker
+                  label="New text style"
+                  value={defaultTextStyle}
+                  onChange={setDefaultTextStyle}
                 />
-              </label>
+                <label>
+                  New text size
+                  <input
+                    type="number"
+                    min={8}
+                    max={512}
+                    value={defaultFontSize}
+                    onChange={(event) => setDefaultFontSize(Number(event.target.value))}
+                  />
+                </label>
+              </>
             ) : tool !== "select" ? (
               <>
                 <ColorField
@@ -5247,6 +5341,150 @@ export function ScreenshotEditor() {
   );
 }
 
+function TextStylePicker({
+  label = "Text style",
+  value,
+  onChange,
+}: {
+  label?: string;
+  value: TextStylePreset;
+  onChange: (value: TextStylePreset) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0, width: 0 });
+  const pickerRef = useRef<HTMLFieldSetElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const selectedStyle = TEXT_STYLE_ITEMS.find((item) => item.preset === value)
+    ?? TEXT_STYLE_ITEMS[0];
+
+  const positionMenu = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const triggerBounds = trigger.getBoundingClientRect();
+    const menuHeight = menuRef.current?.getBoundingClientRect().height ?? 296;
+    const gap = 5;
+    const viewportPadding = 8;
+    const roomBelow = window.innerHeight - triggerBounds.bottom - viewportPadding;
+    const roomAbove = triggerBounds.top - viewportPadding;
+    const openAbove = roomBelow < menuHeight && roomAbove > roomBelow;
+    const requestedTop = openAbove
+      ? triggerBounds.top - menuHeight - gap
+      : triggerBounds.bottom + gap;
+    setMenuPosition({
+      top: Math.min(
+        Math.max(viewportPadding, requestedTop),
+        Math.max(viewportPadding, window.innerHeight - menuHeight - viewportPadding),
+      ),
+      left: Math.min(
+        Math.max(viewportPadding, triggerBounds.left),
+        Math.max(viewportPadding, window.innerWidth - triggerBounds.width - viewportPadding),
+      ),
+      width: triggerBounds.width,
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return undefined;
+    positionMenu();
+    window.addEventListener("resize", positionMenu);
+    document.addEventListener("scroll", positionMenu, true);
+    return () => {
+      window.removeEventListener("resize", positionMenu);
+      document.removeEventListener("scroll", positionMenu, true);
+    };
+  }, [open, positionMenu]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const closeOutside = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (
+        !pickerRef.current?.contains(target)
+        && !menuRef.current?.contains(target)
+      ) {
+        setOpen(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      setOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  return (
+    <>
+      <fieldset ref={pickerRef} className="screenshot-text-style-picker">
+        <legend>{label}</legend>
+        <button
+          ref={triggerRef}
+          type="button"
+          className="screenshot-text-style-trigger"
+          aria-label={`${label}: ${selectedStyle.label}`}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          onClick={() => {
+            if (open) setOpen(false);
+            else {
+              positionMenu();
+              setOpen(true);
+            }
+          }}
+        >
+          <span
+            className={`screenshot-text-style-preview style-${selectedStyle.preset}`}
+            aria-hidden="true"
+          >
+            Text
+          </span>
+          <span>{selectedStyle.label}</span>
+          <EditorIcon name="chevron-down" />
+        </button>
+      </fieldset>
+      {open && createPortal(
+        <div
+          ref={menuRef}
+          className="screenshot-text-style-menu"
+          role="menu"
+          aria-label={label}
+          style={menuPosition}
+        >
+          {TEXT_STYLE_ITEMS.map((item) => (
+            <button
+              key={item.preset}
+              type="button"
+              className={value === item.preset ? "active" : ""}
+              role="menuitemradio"
+              aria-checked={value === item.preset}
+              onClick={() => {
+                onChange(item.preset);
+                setOpen(false);
+              }}
+            >
+              <span
+                className={`screenshot-text-style-preview style-${item.preset}`}
+                aria-hidden="true"
+              >
+                Text
+              </span>
+              <span>{item.label}</span>
+            </button>
+          ))}
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
 function ColorField({
   label,
   value,
@@ -5476,6 +5714,7 @@ function EditorIcon({ name }: { name: string }) {
   if (name === "check") return <svg viewBox="0 0 24 24"><path d="m5 12 4.5 4.5L19 7" /></svg>;
   if (name === "save") return <svg viewBox="0 0 24 24"><path d="M5 3h12l2 2v16H5Z M8 3v6h8V3M8 17h8" /></svg>;
   if (name === "plus") return <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>;
+  if (name === "chevron-down") return <svg viewBox="0 0 24 24"><path d="m7 9 5 5 5-5" /></svg>;
   if (name === "lock") return <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></svg>;
   if (name === "unlock") return <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2" /><path d="M9 10V7a4 4 0 0 1 7.5-2" /></svg>;
   if (name === "eye") return <svg viewBox="0 0 24 24"><path d="M3 12s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6Z" /><circle cx="12" cy="12" r="2.5" /></svg>;
