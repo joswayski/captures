@@ -16,7 +16,9 @@ export type ScreenshotTool =
   | "ellipse"
   | "line"
   | "arrow"
-  | "pen";
+  | "pen"
+  /** Magic wand + erase/restore brushes for punching alpha on image layers. */
+  | "remove-bg";
 
 export type ShapeKind = "rectangle" | "ellipse" | "line" | "arrow";
 
@@ -76,6 +78,11 @@ export type EditorImageElement = EditorElementBase & {
   kind: "image";
   source: "background" | "imported";
   src: string;
+  /**
+   * Bitmap frozen at the first remove-background edit. The restore brush
+   * paints from this source; omitted/`null` until the layer has been alpha-edited.
+   */
+  originalSrc?: string | null;
   name: string;
   /**
    * Capture History / mini-preview artifact this layer came from, when known.
@@ -296,6 +303,7 @@ export function createScreenshotDocument(
       kind: "image",
       source: "background",
       src,
+      originalSrc: null,
       name: "Original screenshot",
       sourceArtifactId,
       x: 0,

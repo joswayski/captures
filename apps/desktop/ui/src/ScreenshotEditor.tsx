@@ -13,6 +13,21 @@ import {
 import { sameSortedIds } from "./lib/editorPresence";
 import { formatFileSize } from "./lib/format";
 import {
+  applyImageBackgroundEdit,
+  brushRadiusInNaturalPixels,
+  DEFAULT_BRUSH_HARDNESS,
+  DEFAULT_REMOVE_BG_BRUSH_SIZE,
+  DEFAULT_WAND_TOLERANCE,
+  documentPointToImagePixel,
+  hitTestImageElement,
+  imageDataToCanvas,
+  imageDataToPngDataUrl,
+  imageToImageData,
+  removeColorToTransparent,
+  strokeRemoveBackgroundBrush,
+  type RemoveBackgroundMode,
+} from "./lib/imageBackground";
+import {
   ALIGNMENT_SNAP_SCREEN_PX,
   arrowBendAmount,
   arrowDefaultMidHandle,
@@ -131,6 +146,20 @@ type EditorGesture =
     handle: ArrowHandle;
     element: Extract<ScreenshotElement, { kind: "shape" }>;
     initialDocument: ScreenshotDocument;
+  }
+  | {
+    kind: "remove-bg";
+    pointerId: number;
+    mode: "erase" | "restore";
+    elementId: string;
+    sourceBeforeEdit: string;
+    initialDocument: ScreenshotDocument;
+    workingData: ImageData;
+    workingCanvas: HTMLCanvasElement;
+    originalData: ImageData | null;
+    radius: number;
+    lastPixel: { x: number; y: number } | null;
+    changed: boolean;
   };
 
 type PanGesture = {
@@ -220,6 +249,13 @@ const TOOL_ITEMS: Array<{ tool: ScreenshotTool; label: string; shortcut: string 
   { tool: "line", label: "Line", shortcut: "L" },
   { tool: "arrow", label: "Arrow", shortcut: "A" },
   { tool: "pen", label: "Freehand", shortcut: "P" },
+  { tool: "remove-bg", label: "Remove bg", shortcut: "B" },
+];
+
+const REMOVE_BG_MODE_ITEMS: Array<{ mode: RemoveBackgroundMode; label: string }> = [
+  { mode: "wand", label: "Wand" },
+  { mode: "erase", label: "Erase" },
+  { mode: "restore", label: "Restore" },
 ];
 
 const COLOR_SWATCHES = [
@@ -870,6 +906,13 @@ export function ScreenshotEditor() {
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
   const [cropSelection, setCropSelection] = useState<EditorRect | null>(null);
   const [cropAspect, setCropAspect] = useState("free");
+  const [removeBgMode, setRemoveBgMode] = useState<RemoveBackgroundMode>("wand");
+  const [wandTolerance, setWandTolerance] = useState(DEFAULT_WAND_TOLERANCE);
+  const [wandContiguous, setWandContiguous] = useState(true);
+  const [removeBgBrushSize, setRemoveBgBrushSize] = useState(DEFAULT_REMOVE_BG_BRUSH_SIZE);
+  const [removeBgBusy, setRemoveBgBusy] = useState(false);
+  /** Bumps the canvas paint path while an erase/restore stroke is live. */
+  const [removeBgLiveTick, setRemoveBgLiveTick] = useState(0);
   const [defaultStyle, setDefaultStyle] = useState<ElementStyle>({
     color: "#ff3b5c",
     fill: null,
@@ -937,6 +980,11 @@ export function ScreenshotEditor() {
   const successTimerRef = useRef<number | null>(null);
   const objectUrlsRef = useRef(new Set<string>());
   const gestureRef = useRef<EditorGesture | null>(null);
+  /** Live natural-resolution canvas drawn over the target layer during brush strokes. */
+  const removeBgLiveRef = useRef<{
+    elementId: string;
+    canvas: HTMLCanvasElement;
+  } | null>(null);
   const panGestureRef = useRef<PanGesture | null>(null);
   const modifierPanRef = useRef(false);
   const viewPanRef = useRef({ x: 0, y: 0 });
@@ -1316,13 +1364,35 @@ export function ScreenshotEditor() {
     if (!editorDocument || !canvasRef.current) return;
     editorDocument.elements
       .filter((element): element is EditorImageElement => element.kind === "image")
-      .forEach((element) => ensureImage(element.src));
+      .forEach((element) => {
+        ensureImage(element.src);
+        if (element.originalSrc) ensureImage(element.originalSrc);
+      });
     const canvas = canvasRef.current;
     if (canvas.width !== editorDocument.width) canvas.width = editorDocument.width;
     if (canvas.height !== editorDocument.height) canvas.height = editorDocument.height;
     const context = canvas.getContext("2d");
     if (!context) return;
-    renderScreenshot(context, editorDocument, imageCacheRef.current, editingText?.id ?? null);
+    const live = removeBgLiveRef.current;
+    const hiddenElementId = live?.elementId ?? editingText?.id ?? null;
+    renderScreenshot(context, editorDocument, imageCacheRef.current, hiddenElementId);
+    // Live erase/restore: draw the working natural-res canvas in place of the layer.
+    if (live) {
+      const liveElement = editorDocument.elements.find((element) => element.id === live.elementId);
+      if (liveElement?.kind === "image" && liveElement.visible) {
+        context.save();
+        context.globalAlpha = Math.max(0, Math.min(1, liveElement.opacity / 100));
+        context.globalCompositeOperation = liveElement.blendMode;
+        context.drawImage(
+          live.canvas,
+          liveElement.x,
+          liveElement.y,
+          liveElement.width,
+          liveElement.height,
+        );
+        context.restore();
+      }
+    }
     const accentColor = getComputedStyle(canvas)
       .getPropertyValue("--theme-accent")
       .trim() || "#ffffff";
@@ -1345,6 +1415,7 @@ export function ScreenshotEditor() {
     resizePreviewBounds,
     ensureImage,
     imageRevision,
+    removeBgLiveTick,
     selected,
   ]);
 
@@ -1796,6 +1867,22 @@ export function ScreenshotEditor() {
     clearSuccess();
     setSaved(null);
 
+    if (tool === "remove-bg") {
+      const image = hitTestImageElement(current.elements, point);
+      if (!image) {
+        setError("Click an image layer to remove or restore its background.");
+        setCanvasCursor(undefined);
+        return;
+      }
+      setSelectedId(image.id);
+      if (removeBgMode === "wand") {
+        applyWandRemoveBackground(image, point, current);
+        return;
+      }
+      beginRemoveBgBrush(event, image, point, removeBgMode, current);
+      return;
+    }
+
     if (tool === "select") {
       const selectedElement = selectedId
         ? current.elements.find((element) => element.id === selectedId) ?? null
@@ -1969,8 +2056,8 @@ export function ScreenshotEditor() {
     // Command/Ctrl / middle-button pan is handled in capture phase.
     if (modifierPanRef.current || event.metaKey || event.ctrlKey) return;
     if (panGestureRef.current) return;
-    // Crop is a canvas-relative selection; ignore starts in the chrome.
-    if (tool === "crop") return;
+    // Crop / remove-bg need image pixels; ignore starts in the chrome.
+    if (tool === "crop" || tool === "remove-bg") return;
     startPointerAt(event, canvasPoint(event));
   };
 
@@ -1978,6 +2065,18 @@ export function ScreenshotEditor() {
     const gesture = gestureRef.current;
     const point = canvasPoint(event);
     if (!gesture || gesture.pointerId !== event.pointerId) {
+      if (tool === "remove-bg") {
+        const current = documentRef.current;
+        const image = current ? hitTestImageElement(current.elements, point) : null;
+        setCanvasCursor(
+          image
+            ? removeBgMode === "restore"
+              ? "cell"
+              : "crosshair"
+            : "not-allowed",
+        );
+        return;
+      }
       if (tool === "select") {
         const current = documentRef.current;
         const interactionRadius = 10 / Math.max(0.01, displayScale);
@@ -2149,6 +2248,39 @@ export function ScreenshotEditor() {
       replaceDocument(nextDocument);
       return;
     }
+    if (gesture.kind === "remove-bg") {
+      const current = documentRef.current;
+      const element = current?.elements.find((item) => item.id === gesture.elementId);
+      if (!element || element.kind !== "image") return;
+      const pixel = documentPointToImagePixel(element, point);
+      if (!pixel) return;
+      const from = gesture.lastPixel ?? pixel;
+      const stamped = strokeRemoveBackgroundBrush(
+        gesture.workingData,
+        from.x,
+        from.y,
+        pixel.x,
+        pixel.y,
+        gesture.radius,
+        gesture.mode,
+        gesture.originalData,
+        DEFAULT_BRUSH_HARDNESS,
+      );
+      if (stamped > 0) {
+        imageDataToCanvas(gesture.workingData, gesture.workingCanvas);
+        gestureRef.current = {
+          ...gesture,
+          lastPixel: pixel,
+          changed: true,
+        };
+        setRemoveBgLiveTick((tick) => tick + 1);
+      } else {
+        gestureRef.current = { ...gesture, lastPixel: pixel };
+      }
+      setCanvasCursor(gesture.mode === "restore" ? "cell" : "crosshair");
+      return;
+    }
+
     if (gesture.kind === "resize") {
       setCanvasCursor(resizeCursor(gesture.handle));
       const minSize = 8 / Math.max(0.01, displayScale);
@@ -2235,6 +2367,31 @@ export function ScreenshotEditor() {
     setCanvasCursor(undefined);
     releasePointerTarget(event.currentTarget, event.pointerId);
     if (gesture.kind === "crop") return;
+
+    if (gesture.kind === "remove-bg") {
+      removeBgLiveRef.current = null;
+      setRemoveBgLiveTick((tick) => tick + 1);
+      if (!gesture.changed) return;
+      try {
+        const nextSrc = imageDataToPngDataUrl(gesture.workingData);
+        ensureImage(nextSrc);
+        const next = applyImageBackgroundEdit(
+          gesture.initialDocument,
+          gesture.elementId,
+          nextSrc,
+          gesture.sourceBeforeEdit,
+        );
+        // Commit with undo — initialDocument is the pre-stroke snapshot.
+        commitDocument(next);
+        if (exportFormat === "jpeg") {
+          setExportFormat("png");
+        }
+      } catch (reason) {
+        setError(String(reason));
+      }
+      return;
+    }
+
     let current = documentRef.current;
     if (!current) return;
     const releasePoint = gesture.kind === "move" ? canvasPoint(event) : null;
@@ -2378,6 +2535,124 @@ export function ScreenshotEditor() {
     setTrimEdgesHover(false);
   };
 
+  /** Decode a cached layer image into natural-resolution pixels. */
+  const readLayerImageData = (src: string): ImageData => {
+    const cached = imageCacheRef.current.get(src);
+    if (!cached || cached.status !== "loaded") {
+      throw new Error("That image has not finished loading yet.");
+    }
+    return imageToImageData(cached.image);
+  };
+
+  const applyWandRemoveBackground = (
+    element: EditorImageElement,
+    point: EditorPoint,
+    initialDocument: ScreenshotDocument,
+  ) => {
+    if (removeBgBusy) return;
+    const pixel = documentPointToImagePixel(element, point);
+    if (!pixel) {
+      setError("Click inside an image layer to sample a color.");
+      return;
+    }
+    setRemoveBgBusy(true);
+    setError("");
+    try {
+      const working = readLayerImageData(element.src);
+      const changed = removeColorToTransparent(
+        working,
+        pixel.x,
+        pixel.y,
+        wandTolerance,
+        wandContiguous,
+      );
+      if (changed === 0) {
+        setError("No matching pixels were found. Try a higher tolerance.");
+        return;
+      }
+      const nextSrc = imageDataToPngDataUrl(working);
+      ensureImage(nextSrc);
+      const next = applyImageBackgroundEdit(
+        initialDocument,
+        element.id,
+        nextSrc,
+        element.src,
+      );
+      commitDocument(next);
+      setSelectedId(element.id);
+      // JPEG cannot keep transparency — nudge toward PNG when holes appear.
+      if (exportFormat === "jpeg") {
+        setExportFormat("png");
+      }
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setRemoveBgBusy(false);
+    }
+  };
+
+  const beginRemoveBgBrush = (
+    event: React.PointerEvent<Element>,
+    element: EditorImageElement,
+    point: EditorPoint,
+    mode: "erase" | "restore",
+    initialDocument: ScreenshotDocument,
+  ) => {
+    if (removeBgBusy) return;
+    const pixel = documentPointToImagePixel(element, point);
+    if (!pixel) {
+      setError("Paint on an image layer to edit its background.");
+      return;
+    }
+    try {
+      const workingData = readLayerImageData(element.src);
+      let originalData: ImageData | null = null;
+      if (mode === "restore") {
+        if (!element.originalSrc) {
+          setError("Nothing to restore yet — remove some background first.");
+          return;
+        }
+        originalData = readLayerImageData(element.originalSrc);
+      }
+      const workingCanvas = imageDataToCanvas(workingData);
+      const radius = brushRadiusInNaturalPixels(element, removeBgBrushSize);
+      const stamped = strokeRemoveBackgroundBrush(
+        workingData,
+        pixel.x,
+        pixel.y,
+        pixel.x,
+        pixel.y,
+        radius,
+        mode,
+        originalData,
+        DEFAULT_BRUSH_HARDNESS,
+      );
+      imageDataToCanvas(workingData, workingCanvas);
+      removeBgLiveRef.current = { elementId: element.id, canvas: workingCanvas };
+      gestureRef.current = {
+        kind: "remove-bg",
+        pointerId: event.pointerId,
+        mode,
+        elementId: element.id,
+        sourceBeforeEdit: element.src,
+        initialDocument,
+        workingData,
+        workingCanvas,
+        originalData,
+        radius,
+        lastPixel: pixel,
+        changed: stamped > 0,
+      };
+      setSelectedId(element.id);
+      setRemoveBgLiveTick((tick) => tick + 1);
+      setCanvasCursor(mode === "restore" ? "cell" : "crosshair");
+      capturePointerTarget(event.currentTarget, event.pointerId);
+    } catch (reason) {
+      removeBgLiveRef.current = null;
+      setError(String(reason));
+    }
+  };
+
   const updateSelected = (updater: (element: ScreenshotElement) => ScreenshotElement) => {
     const current = documentRef.current;
     const element = current?.elements.find(({ id }) => id === selectedId);
@@ -2501,6 +2776,7 @@ export function ScreenshotEditor() {
           kind: "image",
           source: "imported",
           src: image.src,
+          originalSrc: null,
           name: file.name,
           sourceArtifactId,
           x: position.x,
@@ -3663,6 +3939,88 @@ export function ScreenshotEditor() {
           </section>
         )}
 
+        {tool === "remove-bg" && (
+          <section className="screenshot-property-section">
+            <p>
+              Punch transparent holes in image layers. Works on the locked
+              background without unlocking. Export as PNG or WebP to keep alpha.
+            </p>
+            <div className="screenshot-format-buttons" role="group" aria-label="Remove background mode">
+              {REMOVE_BG_MODE_ITEMS.map((item) => (
+                <button
+                  key={item.mode}
+                  type="button"
+                  className={removeBgMode === item.mode ? "active" : ""}
+                  aria-pressed={removeBgMode === item.mode}
+                  onClick={() => setRemoveBgMode(item.mode)}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+            {removeBgMode === "wand" ? (
+              <>
+                <label>
+                  Tolerance
+                  <RangeSlider
+                    ariaLabel="Color tolerance"
+                    min={0}
+                    max={120}
+                    value={wandTolerance}
+                    valueText={`${wandTolerance}`}
+                    marks={[
+                      { value: 0, label: "0" },
+                      { value: 36, label: "36" },
+                      { value: 80, label: "80" },
+                      { value: 120, label: "120" },
+                    ]}
+                    onChange={setWandTolerance}
+                  />
+                </label>
+                <label className="screenshot-check-row">
+                  <input
+                    type="checkbox"
+                    checked={wandContiguous}
+                    onChange={(event) => setWandContiguous(event.target.checked)}
+                  />
+                  Contiguous only
+                </label>
+                <p>
+                  {wandContiguous
+                    ? "Click a color region to clear connected matching pixels."
+                    : "Click a color to clear every similar pixel in the layer."}
+                </p>
+              </>
+            ) : (
+              <>
+                <label>
+                  Brush size
+                  <RangeSlider
+                    ariaLabel="Brush size"
+                    min={4}
+                    max={120}
+                    value={removeBgBrushSize}
+                    valueText={`${removeBgBrushSize} px`}
+                    marks={[
+                      { value: 4, label: "4" },
+                      { value: 28, label: "28" },
+                      { value: 64, label: "64" },
+                      { value: 120, label: "120" },
+                    ]}
+                    onChange={setRemoveBgBrushSize}
+                  />
+                </label>
+                <p>
+                  {removeBgMode === "erase"
+                    ? "Paint to erase toward transparency."
+                    : "Paint to restore pixels from before background edits."}
+                </p>
+              </>
+            )}
+            {removeBgBusy && <p>Working…</p>}
+          </section>
+        )}
+
         {selected?.kind === "text" && (
           <section className="screenshot-property-section">
             <label>
@@ -4435,6 +4793,15 @@ function EditorIcon({ name }: { name: string }) {
   if (name === "line") return <svg viewBox="0 0 24 24"><path d="M5 19 19 5" /></svg>;
   if (name === "arrow") return <svg viewBox="0 0 24 24"><path d="M4 20 20 4M12 4h8v8" /></svg>;
   if (name === "pen") return <svg viewBox="0 0 24 24"><path d="M4 16c4-7 6-8 8-3s4 4 8-4M4 20h16" /></svg>;
+  if (name === "remove-bg") {
+    return (
+      <svg viewBox="0 0 24 24">
+        <path d="M4 20c2-6 5-9 8-9s4 2 8 9" />
+        <path d="M9 7.5a2.5 2.5 0 1 0 5 0 2.5 2.5 0 0 0-5 0Z" />
+        <path d="M12 10v3" />
+      </svg>
+    );
+  }
   if (name === "undo") return <svg viewBox="0 0 24 24"><path d="m9 7-5 5 5 5M5 12h8a6 6 0 0 1 6 6" /></svg>;
   if (name === "redo") return <svg viewBox="0 0 24 24"><path d="m15 7 5 5-5 5M19 12h-8a6 6 0 0 0-6 6" /></svg>;
   if (name === "image") return <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="8" cy="9" r="1.5" /><path d="m5 18 5-5 3 3 2-2 4 4" /></svg>;

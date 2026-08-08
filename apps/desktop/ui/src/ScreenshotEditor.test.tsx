@@ -148,6 +148,7 @@ describe("ScreenshotEditor", () => {
       "Line (L)",
       "Arrow (A)",
       "Freehand (P)",
+      "Remove bg (B)",
     ]) {
       expect(screen.getByRole("button", { name })).toBeInTheDocument();
     }
@@ -786,6 +787,25 @@ describe("ScreenshotEditor", () => {
       within(layers).getByRole("button", { name: "Lock Original screenshot" }),
     ).toHaveAttribute("aria-pressed", "false");
     expect(within(layers).getByText("Background")).toBeInTheDocument();
+  });
+
+  it("exposes remove-background modes and wand controls", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Width");
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove bg (B)" }));
+    expect(screen.getByRole("button", { name: "Wand" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByLabelText("Color tolerance")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Contiguous only" })).toBeChecked();
+
+    fireEvent.click(screen.getByRole("button", { name: "Erase" }));
+    expect(screen.getByRole("button", { name: "Erase" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByLabelText("Brush size")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Color tolerance")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+    expect(screen.getByRole("button", { name: "Restore" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByLabelText("Brush size")).toBeInTheDocument();
   });
 
   it("can clear the solid canvas background for transparent PNG/WebP exports", async () => {
