@@ -3,7 +3,14 @@
  * Operates on natural-resolution ImageData; the editor bakes results to PNG.
  */
 
-import type { EditorImageElement, EditorPoint, ScreenshotElement } from "./screenshotEditor";
+import {
+  imageOrientationMatrix,
+  imageOrientationSwapsAxes,
+  imageSourceDisplaySize,
+  type EditorImageElement,
+  type EditorPoint,
+  type ScreenshotElement,
+} from "./screenshotEditor";
 
 export type Rgba = {
   r: number;
@@ -65,13 +72,22 @@ export function documentPointToImagePixel(
   ) {
     return null;
   }
+  const matrix = imageOrientationMatrix(element.orientation);
+  const displayedSource = imageSourceDisplaySize(element);
+  const displayX = localX - element.width / 2;
+  const displayY = localY - element.height / 2;
+  // Orientation matrices are orthonormal, so their inverse is the transpose.
+  const sourceX = matrix.a * displayX + matrix.b * displayY;
+  const sourceY = matrix.c * displayX + matrix.d * displayY;
+  const sourceRatioX = (sourceX + displayedSource.width / 2) / displayedSource.width;
+  const sourceRatioY = (sourceY + displayedSource.height / 2) / displayedSource.height;
   const x = Math.min(
     element.naturalWidth - 1,
-    Math.max(0, Math.floor((localX / element.width) * element.naturalWidth)),
+    Math.max(0, Math.floor(sourceRatioX * element.naturalWidth)),
   );
   const y = Math.min(
     element.naturalHeight - 1,
-    Math.max(0, Math.floor((localY / element.height) * element.naturalHeight)),
+    Math.max(0, Math.floor(sourceRatioY * element.naturalHeight)),
   );
   return { x, y };
 }
@@ -81,7 +97,10 @@ export function brushRadiusInNaturalPixels(
   element: EditorImageElement,
   documentBrushSize: number,
 ): number {
-  const scale = element.naturalWidth / Math.max(1, element.width);
+  const displayedNaturalWidth = imageOrientationSwapsAxes(element.orientation)
+    ? element.naturalHeight
+    : element.naturalWidth;
+  const scale = displayedNaturalWidth / Math.max(1, element.width);
   return Math.max(1, documentBrushSize * scale * 0.5);
 }
 

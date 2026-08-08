@@ -53,6 +53,7 @@ function installExportableCanvas(): () => void {
     fillText: vi.fn(),
     strokeText: vi.fn(),
     translate: vi.fn(),
+    transform: vi.fn(),
     scale: vi.fn(),
     rotate: vi.fn(),
     quadraticCurveTo: vi.fn(),
@@ -915,6 +916,51 @@ describe("ScreenshotEditor", () => {
     expect(within(layers).getByText("Background")).toBeInTheDocument();
   });
 
+  it("rotates and flips a locked image layer with undo support", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Width");
+
+    const layers = screen.getByRole("region", { name: "Layers" });
+    const originalLayer = within(layers).getByRole("button", {
+      name: /Original screenshotLocked background/,
+    });
+    fireEvent.click(originalLayer);
+
+    const transforms = screen.getByRole("group", { name: "Image transforms" });
+    expect(within(transforms).getByRole("button", {
+      name: "Rotate image counterclockwise",
+    })).toBeEnabled();
+    expect(within(transforms).getByRole("button", {
+      name: "Rotate image clockwise",
+    })).toBeEnabled();
+    expect(within(transforms).getByRole("button", {
+      name: "Flip image horizontally",
+    })).toBeEnabled();
+    expect(within(transforms).getByRole("button", {
+      name: "Flip image vertically",
+    })).toBeEnabled();
+
+    const preview = originalLayer.querySelector("img")!;
+    fireEvent.click(within(transforms).getByRole("button", {
+      name: "Flip image horizontally",
+    }));
+    expect(preview.style.transform).toBe("matrix(-1, 0, 0, 1, 0, 0)");
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(preview.style.transform).toBe("matrix(1, 0, 0, 1, 0, 0)");
+
+    fireEvent.click(originalLayer);
+    fireEvent.click(screen.getByRole("button", { name: "Rotate image clockwise" }));
+    const canvasToolbar = screen.getByRole("group", { name: "Canvas" });
+    expect(within(canvasToolbar).getByLabelText("Width")).toHaveValue(900);
+    expect(within(canvasToolbar).getByLabelText("Height")).toHaveValue(1440);
+    expect(preview.style.transform).toBe("matrix(0, 1, -1, 0, 0, 0)");
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(within(canvasToolbar).getByLabelText("Width")).toHaveValue(1440);
+    expect(within(canvasToolbar).getByLabelText("Height")).toHaveValue(900);
+  });
+
   it("exposes remove-background modes and wand controls", async () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
@@ -1474,6 +1520,7 @@ describe("ScreenshotEditor", () => {
       fillText: vi.fn(),
       strokeText: vi.fn(),
       translate: vi.fn(),
+      transform: vi.fn(),
       scale: vi.fn(),
       rotate: vi.fn(),
       quadraticCurveTo: vi.fn(),

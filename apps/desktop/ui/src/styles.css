@@ -2540,6 +2540,11 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 .screenshot-property-section textarea { min-height: 74px; resize: vertical; line-height: 1.4; }
 .screenshot-property-section input:focus, .screenshot-property-section select:focus, .screenshot-property-section textarea:focus { border-color: var(--theme-accent-strong); box-shadow: 0 0 0 2px rgba(var(--theme-accent-rgb),.12); }
 .screenshot-number-pair { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
+.screenshot-image-transform-actions { display: grid; margin-bottom: 1px; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 7px; }
+.screenshot-image-transform-actions button { display: inline-flex; min-height: 34px; padding: 6px 8px; align-items: center; justify-content: flex-start; gap: 7px; border: 1px solid #414247; border-radius: 6px; color: #d9dade; background: #2b2c31; font-size: 9px; font-weight: 750; }
+.screenshot-image-transform-actions button:hover { border-color: #55565c; color: white; background: #37383e; }
+.screenshot-image-transform-actions button:focus-visible { outline: 2px solid var(--theme-accent); outline-offset: 2px; }
+.screenshot-image-transform-actions svg { flex: 0 0 auto; width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .screenshot-range { display: grid; grid-template-columns: minmax(0,1fr) 42px; align-items: center; gap: 8px; }
 .screenshot-range input { width: 100%; accent-color: var(--editing-accent); }
 .screenshot-range output { color: #c6c7ca; font-size: 9px; text-align: right; }

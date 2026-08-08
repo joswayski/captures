@@ -74,10 +74,36 @@ type EditorElementBase = {
   blendMode: LayerBlendMode;
 };
 
+/** The eight lossless right-angle orientations available to an image layer. */
+export type ImageOrientation =
+  | "normal"
+  | "rotate-90"
+  | "rotate-180"
+  | "rotate-270"
+  | "flip-horizontal"
+  | "flip-vertical"
+  | "transpose"
+  | "transverse";
+
+export type ImageTransformAction =
+  | "rotate-clockwise"
+  | "rotate-counterclockwise"
+  | "flip-horizontal"
+  | "flip-vertical";
+
+export type ImageOrientationMatrix = Readonly<{
+  a: number;
+  b: number;
+  c: number;
+  d: number;
+}>;
+
 export type EditorImageElement = EditorElementBase & {
   kind: "image";
   source: "background" | "imported";
   src: string;
+  /** Lossless source-pixel orientation; omitted documents are treated as normal. */
+  orientation?: ImageOrientation;
   /**
    * Bitmap frozen at the first remove-background edit. The restore brush
    * paints from this source; omitted/`null` until the layer has been alpha-edited.
@@ -270,6 +296,99 @@ export type ScreenshotDocument = {
 };
 
 export type LayerDropPlacement = "before" | "after";
+
+const IMAGE_ORIENTATION_MATRICES: Record<ImageOrientation, ImageOrientationMatrix> = {
+  normal: { a: 1, b: 0, c: 0, d: 1 },
+  "rotate-90": { a: 0, b: 1, c: -1, d: 0 },
+  "rotate-180": { a: -1, b: 0, c: 0, d: -1 },
+  "rotate-270": { a: 0, b: -1, c: 1, d: 0 },
+  "flip-horizontal": { a: -1, b: 0, c: 0, d: 1 },
+  "flip-vertical": { a: 1, b: 0, c: 0, d: -1 },
+  transpose: { a: 0, b: 1, c: 1, d: 0 },
+  transverse: { a: 0, b: -1, c: -1, d: 0 },
+};
+
+const IMAGE_TRANSFORM_MATRICES: Record<ImageTransformAction, ImageOrientationMatrix> = {
+  "rotate-clockwise": IMAGE_ORIENTATION_MATRICES["rotate-90"],
+  "rotate-counterclockwise": IMAGE_ORIENTATION_MATRICES["rotate-270"],
+  "flip-horizontal": IMAGE_ORIENTATION_MATRICES["flip-horizontal"],
+  "flip-vertical": IMAGE_ORIENTATION_MATRICES["flip-vertical"],
+};
+
+const IMAGE_ORIENTATION_BY_MATRIX = new Map(
+  Object.entries(IMAGE_ORIENTATION_MATRICES).map(([orientation, matrix]) => [
+    `${matrix.a},${matrix.b},${matrix.c},${matrix.d}`,
+    orientation as ImageOrientation,
+  ]),
+);
+
+export function imageOrientationMatrix(
+  orientation: ImageOrientation | null | undefined,
+): ImageOrientationMatrix {
+  return IMAGE_ORIENTATION_MATRICES[orientation ?? "normal"];
+}
+
+/** True when the oriented bitmap's displayed width/height are source height/width. */
+export function imageOrientationSwapsAxes(
+  orientation: ImageOrientation | null | undefined,
+): boolean {
+  const matrix = imageOrientationMatrix(orientation);
+  return matrix.a === 0 && matrix.d === 0;
+}
+
+/** Source-oriented dimensions inside the image layer's current display bounds. */
+export function imageSourceDisplaySize(
+  element: Pick<EditorImageElement, "width" | "height" | "orientation">,
+): { width: number; height: number } {
+  return imageOrientationSwapsAxes(element.orientation)
+    ? { width: element.height, height: element.width }
+    : { width: element.width, height: element.height };
+}
+
+function composeImageOrientation(
+  operation: ImageOrientationMatrix,
+  current: ImageOrientationMatrix,
+): ImageOrientation {
+  // Canvas matrices represent [[a,c],[b,d]]. New user actions operate in the
+  // currently displayed axes, so compose them on the left: operation × current.
+  const matrix: ImageOrientationMatrix = {
+    a: operation.a * current.a + operation.c * current.b,
+    b: operation.b * current.a + operation.d * current.b,
+    c: operation.a * current.c + operation.c * current.d,
+    d: operation.b * current.c + operation.d * current.d,
+  };
+  const orientation = IMAGE_ORIENTATION_BY_MATRIX.get(
+    `${matrix.a},${matrix.b},${matrix.c},${matrix.d}`,
+  );
+  if (!orientation) throw new Error("Unsupported image orientation.");
+  return orientation;
+}
+
+/** Rotate or mirror an image around its displayed center without resampling pixels. */
+export function transformImageElement(
+  element: EditorImageElement,
+  action: ImageTransformAction,
+): EditorImageElement {
+  const orientation = composeImageOrientation(
+    IMAGE_TRANSFORM_MATRICES[action],
+    imageOrientationMatrix(element.orientation),
+  );
+  const rotates = action === "rotate-clockwise" || action === "rotate-counterclockwise";
+  const width = rotates ? element.height : element.width;
+  const height = rotates ? element.width : element.height;
+  const centerX = element.x + element.width / 2;
+  const centerY = element.y + element.height / 2;
+  return {
+    ...element,
+    // Keep identity transforms JSON-equivalent to documents created before
+    // image orientation existed, so paired flips/four rotations are true no-ops.
+    orientation: orientation === "normal" ? undefined : orientation,
+    x: centerX - width / 2,
+    y: centerY - height / 2,
+    width,
+    height,
+  };
+}
 
 const SUPPORTED_IMAGE_EXTENSIONS = new Set([
   "avif",
@@ -2038,9 +2157,15 @@ export function imageSizeAtWidth(
   width: number,
 ): { width: number; height: number } {
   const nextWidth = Math.max(1, Math.round(width));
+  const naturalWidth = imageOrientationSwapsAxes(element.orientation)
+    ? element.naturalHeight
+    : element.naturalWidth;
+  const naturalHeight = imageOrientationSwapsAxes(element.orientation)
+    ? element.naturalWidth
+    : element.naturalHeight;
   return {
     width: nextWidth,
-    height: Math.max(1, Math.round(nextWidth * element.naturalHeight / element.naturalWidth)),
+    height: Math.max(1, Math.round(nextWidth * naturalHeight / naturalWidth)),
   };
 }
 
