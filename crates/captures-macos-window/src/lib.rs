@@ -28,12 +28,12 @@ use objc2_foundation::{NSObject, NSObjectProtocol, NSProcessInfo, NSRect, NSSize
 use tauri::WebviewWindow;
 use tauri_nspanel::WebviewWindowExt;
 
-mod thumbnail_panel {
+mod interactive_hud_panel {
     use tauri::Manager;
     use tauri_nspanel::tauri_panel;
 
     tauri_panel! {
-        panel!(ThumbnailPanel {
+        panel!(InteractiveHudPanel {
             config: {
                 can_become_key_window: true,
                 can_become_main_window: false,
@@ -46,6 +46,25 @@ mod thumbnail_panel {
     }
 }
 
+mod thumbnail_panel {
+    use tauri::Manager;
+    use tauri_nspanel::tauri_panel;
+
+    tauri_panel! {
+        panel!(ThumbnailPanel {
+            config: {
+                can_become_key_window: false,
+                can_become_main_window: false,
+                is_floating_panel: true,
+                becomes_key_only_if_needed: true,
+                hides_on_deactivate: false,
+                works_when_modal: true,
+            }
+        })
+    }
+}
+
+use interactive_hud_panel::InteractiveHudPanel;
 use thumbnail_panel::ThumbnailPanel;
 
 const LEGACY_WINDOW_CORNER_RADIUS_POINTS: f64 = 10.0;
@@ -85,6 +104,7 @@ pub enum ThumbnailCursorKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CursorSurface {
     CaptureOverlay,
+    InactiveHud,
     Thumbnail,
 }
 
@@ -157,7 +177,7 @@ impl CursorTrackingOwner {
     }
 
     fn activate_window_if_needed(&self, event: &NSEvent) {
-        if self.ivars().surface != CursorSurface::Thumbnail
+        if !cursor_surface_uses_key_window(self.ivars().surface)
             || !cursor_surface_can_apply(self.ivars().surface, capture_overlay_owns_cursor())
         {
             return;
@@ -179,7 +199,7 @@ impl CursorTrackingOwner {
     }
 
     fn resign_window_if_needed(&self, event: &NSEvent) {
-        if self.ivars().surface != CursorSurface::Thumbnail
+        if !cursor_surface_uses_key_window(self.ivars().surface)
             || !cursor_surface_can_apply(self.ivars().surface, capture_overlay_owns_cursor())
         {
             return;
@@ -386,7 +406,11 @@ pub fn init_panel_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
 /// can still become inactive when another application is frontmost. An
 /// `ActiveAlways` tracking area keeps hover and pointer events alive.
 pub fn configure_inactive_hover(window: &WebviewWindow) -> Result<(), &'static str> {
-    configure_inactive_hover_with_cursor(window, CursorMode::Arrow)
+    configure_inactive_hover_with_cursor::<InteractiveHudPanel>(
+        window,
+        CursorMode::Arrow,
+        CursorSurface::InactiveHud,
+    )
 }
 
 /// Configures an inactive HUD whose CSS remains responsible for its cursor.
@@ -394,17 +418,37 @@ pub fn configure_inactive_hover(window: &WebviewWindow) -> Result<(), &'static s
 /// Making the non-activating panel key on hover lets WebKit refresh `:hover`
 /// and cursor rectangles without bringing the Captures application forward.
 pub fn configure_webview_inactive_hover(window: &WebviewWindow) -> Result<(), &'static str> {
-    configure_inactive_hover_with_cursor(window, CursorMode::WebView)
+    configure_inactive_hover_with_cursor::<InteractiveHudPanel>(
+        window,
+        CursorMode::WebView,
+        CursorSurface::InactiveHud,
+    )
 }
 
-fn configure_inactive_hover_with_cursor(
+/// Configures the mini-preview stack as a mouse-interactive panel that can
+/// never become key. Native pointer polling supplies hover state while
+/// `accept_first_mouse` lets WebKit receive button clicks without taking focus
+/// from the application underneath.
+pub fn configure_thumbnail_inactive_hover(window: &WebviewWindow) -> Result<(), &'static str> {
+    configure_inactive_hover_with_cursor::<ThumbnailPanel>(
+        window,
+        CursorMode::Arrow,
+        CursorSurface::Thumbnail,
+    )
+}
+
+fn configure_inactive_hover_with_cursor<P>(
     window: &WebviewWindow,
     initial_cursor: CursorMode,
-) -> Result<(), &'static str> {
+    surface: CursorSurface,
+) -> Result<(), &'static str>
+where
+    P: tauri_nspanel::FromWindow<tauri::Wry> + 'static,
+{
     let _main_thread =
         MainThreadMarker::new().ok_or("inactive HUD setup must run on the main thread")?;
     let panel = window
-        .to_panel::<ThumbnailPanel>()
+        .to_panel::<P>()
         .map_err(|_| "failed to convert the inactive HUD to an NSPanel")?;
     panel.set_style_mask(panel.as_panel().styleMask() | NSWindowStyleMask::NonactivatingPanel);
     panel.set_level(NSStatusWindowLevel as i64);
@@ -452,7 +496,7 @@ fn configure_inactive_hover_with_cursor(
                 )
             };
             webview.addTrackingArea(&area);
-            install_cursor_tracker(webview, initial_cursor, CursorSurface::Thumbnail);
+            install_cursor_tracker(webview, initial_cursor, surface);
         })
         .map_err(|_| "macOS webview handle is unavailable")
 }
@@ -573,11 +617,10 @@ pub fn focus_window(window: &WebviewWindow) -> Result<(), &'static str> {
 /// Activates Captures and makes a document window key without recording a
 /// capture frontmost-app anchor.
 ///
-/// Editors and other intentional document surfaces call this after the
-/// always-on-top thumbnail Edit click. That click briefly makes the preview
-/// panel key; without app activation + `makeKeyAndOrderFront`, WebKit leaves
-/// CSS `:hover` and `cursor` styles inactive until the user clicks again.
-/// Re-asserts on the next main-queue turn so the panel handoff cannot win.
+/// Editors and other intentional document surfaces call this after an Edit
+/// click in the non-key thumbnail panel. Re-asserts on the next main-queue turn
+/// so WebKit's asynchronous window creation cannot leave the document surface
+/// visible but inactive.
 pub fn activate_document_window(window: &WebviewWindow) -> Result<(), &'static str> {
     make_key_and_activate(window)?;
     let window = window.clone();
@@ -723,12 +766,9 @@ pub fn set_thumbnail_cursor(
     }
     let native_window = native_window(window)?;
     let interactive = !matches!(kind, ThumbnailCursorKind::Default);
-    // Becoming key lets WebKit own cursor rectangles. Take key first while
-    // applying grab/pointer so the subsequent disable sticks for a stationary
-    // first hover over the drag source (not only after moving onto a button).
-    if interactive && !native_window.isKeyWindow() {
-        native_window.makeKeyWindow();
-    }
+    // The thumbnail must remain non-key. Disable WebKit cursor rectangles while
+    // AppKit owns grab/pointer so a stationary first hover keeps the native hand
+    // without taking focus from the application underneath.
     set_cursor_rects_enabled(native_window, !interactive);
     let mode = match kind {
         ThumbnailCursorKind::Default => CursorMode::Arrow,
@@ -737,7 +777,7 @@ pub fn set_thumbnail_cursor(
     };
     set_tracked_cursor(window, mode, CursorSurface::Thumbnail)?;
     apply_thumbnail_ns_cursor(kind);
-    // makeKeyWindow can re-enable rectangles asynchronously after this returns.
+    // WebKit can re-enable rectangles asynchronously after this returns.
     // Re-disable and re-set so grab survives a stationary entry onto the image.
     if interactive {
         set_cursor_rects_enabled(native_window, false);
@@ -769,9 +809,6 @@ pub fn reassert_thumbnail_cursor(
         return reset_pointing_cursor_state(window);
     }
     let native_window = native_window(window)?;
-    if !native_window.isKeyWindow() {
-        native_window.makeKeyWindow();
-    }
     set_cursor_rects_enabled(native_window, false);
     let mode = match kind {
         ThumbnailCursorKind::Default => CursorMode::Arrow,
@@ -850,8 +887,9 @@ fn install_cursor_tracker(webview: &NSView, mode: CursorMode, surface: CursorSur
         | NSTrackingAreaOptions::ActiveInKeyWindow
         | NSTrackingAreaOptions::InVisibleRect;
     // Cursor updates cannot share the `ActiveAlways` tracking area above.
-    // Once the non-activating preview becomes key on hover, this second area
-    // gives AppKit a standard cursor-update callback without activating Captures.
+    // Key-capable capture overlays and interactive HUDs use this second area
+    // for standard cursor-update callbacks. The thumbnail remains non-key and
+    // continues through the `ActiveAlways` tracker plus native pointer polling.
     let cursor_area = unsafe {
         NSTrackingArea::initWithRect_options_owner_userInfo(
             NSTrackingArea::alloc(),
@@ -905,8 +943,12 @@ fn cursor_surface_can_apply(surface: CursorSurface, capture_active: bool) -> boo
     surface == CursorSurface::CaptureOverlay || !capture_active
 }
 
+fn cursor_surface_uses_key_window(surface: CursorSurface) -> bool {
+    surface == CursorSurface::InactiveHud
+}
+
 fn should_reset_cursor_on_exit(surface: CursorSurface, capture_active: bool) -> bool {
-    surface == CursorSurface::Thumbnail && !capture_active
+    surface != CursorSurface::CaptureOverlay && !capture_active
 }
 
 fn native_window(window: &WebviewWindow) -> Result<&NSWindow, &'static str> {
@@ -926,7 +968,7 @@ mod tests {
 
     use super::{
         CAPTURE_OVERLAY_OWNS_CURSOR, CursorMode, CursorSurface, THUMBNAIL_CURSOR_MODE,
-        cursor_mode_is_interactive, cursor_surface_can_apply,
+        cursor_mode_is_interactive, cursor_surface_can_apply, cursor_surface_uses_key_window,
         reassert_thumbnail_cursor_after_click, shortcut_modifiers_pressed,
         should_reset_cursor_on_exit, window_corner_radius_for_major_version,
     };
@@ -958,11 +1000,26 @@ mod tests {
         ));
         assert!(!cursor_surface_can_apply(CursorSurface::Thumbnail, true));
         assert!(cursor_surface_can_apply(CursorSurface::Thumbnail, false));
+        assert!(!cursor_surface_can_apply(CursorSurface::InactiveHud, true));
+        assert!(cursor_surface_can_apply(CursorSurface::InactiveHud, false));
     }
 
     #[test]
-    fn only_an_available_thumbnail_resets_the_cursor_on_exit() {
+    fn only_interactive_huds_take_key_window_status_on_hover() {
+        assert!(cursor_surface_uses_key_window(CursorSurface::InactiveHud));
+        assert!(!cursor_surface_uses_key_window(CursorSurface::Thumbnail));
+        assert!(!cursor_surface_uses_key_window(
+            CursorSurface::CaptureOverlay
+        ));
+    }
+
+    #[test]
+    fn inactive_surfaces_reset_the_cursor_when_capture_is_not_active() {
         assert!(should_reset_cursor_on_exit(CursorSurface::Thumbnail, false));
+        assert!(should_reset_cursor_on_exit(
+            CursorSurface::InactiveHud,
+            false
+        ));
         assert!(!should_reset_cursor_on_exit(CursorSurface::Thumbnail, true));
         assert!(!should_reset_cursor_on_exit(
             CursorSurface::CaptureOverlay,
