@@ -1240,6 +1240,45 @@ type RecordingRegionDrag = {
 type RecordingPanelPosition = { left: number; top: number };
 type RecordingPanelDrag = { pointerId: number; offsetX: number; offsetY: number };
 
+/** Inset (px) from the painted edge before the chip starts fading under the cursor. */
+const GUIDANCE_ENTER_INSET_PX = 4;
+/**
+ * Extra slack (px) beyond the chip bounds before a faded chip restores.
+ * Larger leave zone than enter zone prevents edge thrash while the pointer
+ * rests on the border during the opacity transition.
+ */
+const GUIDANCE_LEAVE_SLACK_PX = 20;
+
+/** Hit-test for capture guidance with enter/leave hysteresis. */
+export function isPointerOverCaptureGuidance(
+  clientX: number,
+  clientY: number,
+  bounds: Pick<DOMRect, "left" | "right" | "top" | "bottom">,
+  currentlyOver: boolean,
+  options?: { enterInset?: number; leaveSlack?: number },
+): boolean {
+  const enterInset = options?.enterInset ?? GUIDANCE_ENTER_INSET_PX;
+  const leaveSlack = options?.leaveSlack ?? GUIDANCE_LEAVE_SLACK_PX;
+  if (currentlyOver) {
+    return (
+      clientX >= bounds.left - leaveSlack
+      && clientX <= bounds.right + leaveSlack
+      && clientY >= bounds.top - leaveSlack
+      && clientY <= bounds.bottom + leaveSlack
+    );
+  }
+  const width = bounds.right - bounds.left;
+  const height = bounds.bottom - bounds.top;
+  const insetX = Math.min(enterInset, Math.max(0, width / 2 - 1));
+  const insetY = Math.min(enterInset, Math.max(0, height / 2 - 1));
+  return (
+    clientX >= bounds.left + insetX
+    && clientX <= bounds.right - insetX
+    && clientY >= bounds.top + insetY
+    && clientY <= bounds.bottom - insetY
+  );
+}
+
 export function CaptureGuidance({
   mode,
   feedback = false,
@@ -1252,12 +1291,26 @@ export function CaptureGuidance({
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [cursorOver, setCursorOver] = useState(false);
+  // Mount at opacity 0, then flip data-ready so entrance is the same opacity
+  // transition used for hover ducking (no keyframe fill-mode fighting fade-out).
+  const [ready, setReady] = useState(false);
   const title = mode === "window"
     ? "Select a window to continue"
     : feedback
       ? "Click and drag to select a region"
       : "Drag to select a region";
   const faded = hidden || cursorOver;
+
+  useEffect(() => {
+    let inner = 0;
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => setReady(true));
+    });
+    return () => {
+      cancelAnimationFrame(outer);
+      cancelAnimationFrame(inner);
+    };
+  }, []);
 
   // pointer-events: none so selection works through the label — track the
   // cursor against the label bounds and fade it out of the way when covered.
@@ -1266,11 +1319,15 @@ export function CaptureGuidance({
       const el = rootRef.current;
       if (!el) return;
       const bounds = el.getBoundingClientRect();
-      const over = event.clientX >= bounds.left
-        && event.clientX <= bounds.right
-        && event.clientY >= bounds.top
-        && event.clientY <= bounds.bottom;
-      setCursorOver((current) => (current === over ? current : over));
+      setCursorOver((current) => {
+        const over = isPointerOverCaptureGuidance(
+          event.clientX,
+          event.clientY,
+          bounds,
+          current,
+        );
+        return current === over ? current : over;
+      });
     };
     const onPointerLeave = () => {
       setCursorOver((current) => (current ? false : current));
@@ -1289,6 +1346,7 @@ export function CaptureGuidance({
     <div
       ref={rootRef}
       className={`capture-guidance${feedback ? " capture-guidance-feedback" : ""}`}
+      data-ready={ready ? "true" : undefined}
       data-faded={faded ? "true" : undefined}
       role="status"
       aria-live="polite"

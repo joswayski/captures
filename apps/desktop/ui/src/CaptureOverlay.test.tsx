@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-import { App } from "./App";
+import { App, isPointerOverCaptureGuidance } from "./App";
 import type { ActiveSession } from "./types";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -119,6 +119,70 @@ describe("CaptureOverlay guidance", () => {
     expect(guidance).not.toHaveAttribute("data-faded");
   });
 
+  it("keeps region guidance faded while the cursor rests on the leave slack edge", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/?view=overlay&mode=region&session_id=capture-1",
+    );
+    render(<App />);
+
+    const guidance = (await screen.findByText("Drag to select a region"))
+      .closest(".capture-guidance") as HTMLElement;
+    vi.spyOn(guidance, "getBoundingClientRect").mockReturnValue({
+      x: 500,
+      y: 120,
+      top: 120,
+      left: 500,
+      right: 760,
+      bottom: 180,
+      width: 260,
+      height: 60,
+      toJSON: () => undefined,
+    });
+
+    fireEvent.pointerMove(window, { clientX: 620, clientY: 150 });
+    expect(guidance).toHaveAttribute("data-faded", "true");
+
+    // Just outside the painted box but inside leave slack — stay faded.
+    fireEvent.pointerMove(window, { clientX: 768, clientY: 150 });
+    expect(guidance).toHaveAttribute("data-faded", "true");
+
+    // Clear the slack zone — restore.
+    fireEvent.pointerMove(window, { clientX: 800, clientY: 150 });
+    expect(guidance).not.toHaveAttribute("data-faded");
+  });
+
+  it("ignores the painted border edge until the cursor is clearly inside", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/?view=overlay&mode=region&session_id=capture-1",
+    );
+    render(<App />);
+
+    const guidance = (await screen.findByText("Drag to select a region"))
+      .closest(".capture-guidance") as HTMLElement;
+    vi.spyOn(guidance, "getBoundingClientRect").mockReturnValue({
+      x: 500,
+      y: 120,
+      top: 120,
+      left: 500,
+      right: 760,
+      bottom: 180,
+      width: 260,
+      height: 60,
+      toJSON: () => undefined,
+    });
+
+    // On the exact left edge — enter inset keeps it visible.
+    fireEvent.pointerMove(window, { clientX: 500, clientY: 150 });
+    expect(guidance).not.toHaveAttribute("data-faded");
+
+    fireEvent.pointerMove(window, { clientX: 510, clientY: 150 });
+    expect(guidance).toHaveAttribute("data-faded", "true");
+  });
+
   it("fades window guidance when the cursor enters its bounds", async () => {
     activeSession = { ...session, mode: "window" };
     window.history.replaceState(
@@ -144,6 +208,15 @@ describe("CaptureOverlay guidance", () => {
 
     fireEvent.pointerMove(window, { clientX: 620, clientY: 150 });
     expect(guidance).toHaveAttribute("data-faded", "true");
+  });
+
+  it("uses enter/leave hysteresis for guidance hit testing", () => {
+    const bounds = { left: 500, right: 760, top: 120, bottom: 180 };
+
+    expect(isPointerOverCaptureGuidance(500, 150, bounds, false)).toBe(false);
+    expect(isPointerOverCaptureGuidance(510, 150, bounds, false)).toBe(true);
+    expect(isPointerOverCaptureGuidance(768, 150, bounds, true)).toBe(true);
+    expect(isPointerOverCaptureGuidance(800, 150, bounds, true)).toBe(false);
   });
 
   it("hides region guidance while the user is dragging a selection", async () => {
