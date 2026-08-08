@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "onboarding",
+  "description": "Allow first-run setup to close itself after completion",
+  "windows": ["onboarding"],
+  "permissions": [
+    "core:window:allow-close"
+  ]
+}

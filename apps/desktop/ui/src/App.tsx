@@ -16,6 +16,7 @@ import {
 } from "react";
 
 import { Feedback } from "./Feedback";
+import { Onboarding } from "./Onboarding";
 import { ScreenshotEditor } from "./ScreenshotEditor";
 import { NotchedSlider } from "./RangeSlider";
 import {
@@ -370,6 +371,7 @@ export function App() {
   if (view === "history") return <CaptureHistory />;
   if (view === "preferences") return <Preferences />;
   if (view === "feedback") return <Feedback />;
+  if (view === "onboarding") return <Onboarding />;
   if (view === "startup") return <StartupNotice />;
   if (view === "update") return <UpdateNotice />;
   return <IdleView />;

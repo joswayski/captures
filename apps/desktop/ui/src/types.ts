@@ -69,8 +69,17 @@ export interface AppSettings {
   launch_at_login: boolean;
   last_screen_permission_request_id: string | null;
   pending_capture_after_restart: CaptureMode | null;
+  onboarding_completed: boolean;
   screenshot_countdown_seconds: number;
   recording: RecordingSettings;
+}
+
+export interface OnboardingState {
+  platform: "macos" | "windows" | "linux" | string;
+  screen_recording_required: boolean;
+  screen_recording_granted: boolean;
+  screen_recording_can_request: boolean;
+  screen_recording_requested_this_launch: boolean;
 }
 
 export interface RecordingSettings {

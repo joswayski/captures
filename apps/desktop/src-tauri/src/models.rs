@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub const HISTORY_RETENTION_DAYS: i64 = 30;
-const CURRENT_SETTINGS_SCHEMA_VERSION: u8 = 1;
+const CURRENT_SETTINGS_SCHEMA_VERSION: u8 = 2;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AppSettings {
@@ -43,6 +43,10 @@ pub struct AppSettings {
     pub last_screen_permission_request_id: Option<String>,
     #[serde(default)]
     pub pending_capture_after_restart: Option<CaptureMode>,
+    /// Internal first-run state. Existing installations are migrated to true;
+    /// only a newly created settings file starts with onboarding incomplete.
+    #[serde(default)]
+    pub onboarding_completed: bool,
     #[serde(default = "default_screenshot_countdown_seconds")]
     pub screenshot_countdown_seconds: u8,
     #[serde(default)]
@@ -164,6 +168,7 @@ impl Default for AppSettings {
             launch_at_login: false,
             last_screen_permission_request_id: None,
             pending_capture_after_restart: None,
+            onboarding_completed: false,
             screenshot_countdown_seconds: default_screenshot_countdown_seconds(),
             recording: RecordingSettings::default(),
         }
@@ -678,14 +683,21 @@ pub fn migrate_settings(settings: &mut AppSettings) -> bool {
         return false;
     }
 
-    // Recording originally shipped with 30 FPS / 1080p defaults. Upgrade only
-    // values that still match those defaults so an existing custom downgrade
-    // remains user-owned.
-    if settings.recording.video_fps == 30 {
-        settings.recording.video_fps = 60;
+    if settings.settings_schema_version < 1 {
+        // Recording originally shipped with 30 FPS / 1080p defaults. Upgrade
+        // only during the v1 migration so later user-owned choices remain
+        // untouched when newer settings migrations run.
+        if settings.recording.video_fps == 30 {
+            settings.recording.video_fps = 60;
+        }
+        if settings.recording.video_max_resolution == MaxResolution::P1080 {
+            settings.recording.video_max_resolution = MaxResolution::Original;
+        }
     }
-    if settings.recording.video_max_resolution == MaxResolution::P1080 {
-        settings.recording.video_max_resolution = MaxResolution::Original;
+    if settings.settings_schema_version < 2 {
+        // The welcome flow is for genuine first launches. A settings file from
+        // any earlier build proves this installation has already been used.
+        settings.onboarding_completed = true;
     }
     settings.settings_schema_version = CURRENT_SETTINGS_SCHEMA_VERSION;
     true
@@ -841,6 +853,7 @@ mod tests {
 
         assert!(settings.last_screen_permission_request_id.is_none());
         assert!(settings.pending_capture_after_restart.is_none());
+        assert!(!settings.onboarding_completed);
         assert!(settings.auto_copy_to_clipboard);
         assert!(settings.show_mini_previews);
         assert!(!settings.include_mini_previews_in_captures);
@@ -863,6 +876,35 @@ mod tests {
     #[test]
     fn defaults_screenshot_countdown_to_off() {
         assert_eq!(AppSettings::default().screenshot_countdown_seconds, 0);
+    }
+
+    #[test]
+    fn fresh_settings_require_first_run_onboarding() {
+        let mut settings = AppSettings::default();
+
+        assert_eq!(settings.settings_schema_version, 2);
+        assert!(!settings.onboarding_completed);
+        assert!(!migrate_settings(&mut settings));
+    }
+
+    #[test]
+    fn existing_installations_skip_first_run_onboarding() {
+        let mut settings = AppSettings {
+            settings_schema_version: 1,
+            onboarding_completed: false,
+            ..AppSettings::default()
+        };
+        settings.recording.video_fps = 30;
+        settings.recording.video_max_resolution = captures_recording::MaxResolution::P1080;
+
+        assert!(migrate_settings(&mut settings));
+        assert_eq!(settings.settings_schema_version, 2);
+        assert!(settings.onboarding_completed);
+        assert_eq!(settings.recording.video_fps, 30);
+        assert_eq!(
+            settings.recording.video_max_resolution,
+            captures_recording::MaxResolution::P1080
+        );
     }
 
     #[test]

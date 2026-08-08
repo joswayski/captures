@@ -34,6 +34,7 @@ const settings: AppSettings = {
   launch_at_login: false,
   last_screen_permission_request_id: null,
   pending_capture_after_restart: null,
+  onboarding_completed: true,
   screenshot_countdown_seconds: 0,
   recording: {
     video_shortcut: "Ctrl+Shift+5",

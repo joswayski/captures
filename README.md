@@ -20,6 +20,7 @@ Preview builds update after every successful merge to `main` and may contain bug
 
 ## Features
 
+- Start with a first-run setup that checks required screen-capture access and explains when optional recording-audio access is requested.
 - Capture regions, windows, or full displays.
 - Optional screenshot countdown after target selection so you can set up menus and hover states.
 - Record regions, windows, or full displays as H.264 video or GIF.
