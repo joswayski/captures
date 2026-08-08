@@ -3,6 +3,7 @@ import {
   arrowBendFromControlPoint,
   arrowControlPoint,
   arrowDefaultMidHandle,
+  arrowStarterControls,
   arrowVertices,
   arrowWithBend,
   boundedCropRect,
@@ -37,7 +38,6 @@ import {
   isCurveableStrokeShape,
   isSupportedImageFile,
   loadImageFile,
-  MAX_ARROW_CONTROLS,
   outputDimensions,
   positionImportedImage,
   positionImportedImageAtEdge,
@@ -624,8 +624,24 @@ describe("screenshot editor geometry", () => {
       { x: 300, y: 100 },
     ]);
     expect(arrowDefaultMidHandle(arrow)).toEqual({ x: 200, y: 100 });
+    expect(arrowStarterControls(arrow)).toEqual([
+      { x: 150, y: 100 },
+      { x: 200, y: 100 },
+      { x: 250, y: 100 },
+    ]);
     expect(arrowControlPoint(arrow)).toEqual({ x: 200, y: 100 });
-    expect(hitTestArrowHandle(arrow, { x: 205, y: 104 }, 8)).toEqual({ kind: "mid" });
+    expect(hitTestArrowHandle(arrow, { x: 155, y: 104 }, 8)).toEqual({
+      kind: "starter-control",
+      index: 0,
+    });
+    expect(hitTestArrowHandle(arrow, { x: 205, y: 104 }, 8)).toEqual({
+      kind: "starter-control",
+      index: 1,
+    });
+    expect(hitTestArrowHandle(arrow, { x: 255, y: 104 }, 8)).toEqual({
+      kind: "starter-control",
+      index: 2,
+    });
     expect(hitTestArrowHandle(arrow, { x: 100, y: 100 }, 8)).toEqual({ kind: "start" });
     expect(hitTestArrowHandle(arrow, { x: 300, y: 100 }, 8)).toEqual({ kind: "end" });
     expect(arrowBendFromControlPoint(arrow, { x: 200, y: 200 })).toBeCloseTo(0.5);
@@ -645,16 +661,16 @@ describe("screenshot editor geometry", () => {
     expect(withTwo?.controls).toHaveLength(2);
     expect(removeArrowControl(withTwo!, 0).controls).toHaveLength(1);
 
-    let capped: EditorShapeElement = arrow;
-    for (let i = 0; i < MAX_ARROW_CONTROLS + 2; i += 1) {
-      const next = insertArrowControl(capped, {
+    let manyControls: EditorShapeElement = arrow;
+    for (let i = 0; i < 12; i += 1) {
+      const next = insertArrowControl(manyControls, {
         x: 120 + i * 20,
         y: 140 + i * 5,
       });
-      if (next) capped = next;
+      if (next) manyControls = next;
     }
-    expect(capped.controls).toHaveLength(MAX_ARROW_CONTROLS);
-    expect(insertArrowControl(capped, { x: 200, y: 180 })).toBeNull();
+    expect(manyControls.controls).toHaveLength(12);
+    expect(insertArrowControl(manyControls, { x: 200, y: 180 })?.controls).toHaveLength(13);
 
     const near = closestPointOnArrow(arrow, { x: 200, y: 108 });
     expect(near.distance).toBeLessThan(10);
@@ -680,7 +696,10 @@ describe("screenshot editor geometry", () => {
       style: { color: "#0af", fill: null, strokeWidth: 4 },
     };
 
-    expect(hitTestArrowHandle(line, { x: 150, y: 80 }, 8)).toEqual({ kind: "mid" });
+    expect(hitTestArrowHandle(line, { x: 150, y: 80 }, 8)).toEqual({
+      kind: "starter-control",
+      index: 1,
+    });
     const bent = arrowWithBend(line, 0.25);
     expect(bent.controls).toHaveLength(1);
     expect(arrowBendAmount(bent)).toBeCloseTo(0.25);
@@ -690,7 +709,7 @@ describe("screenshot editor geometry", () => {
     expect(withPoint?.controls).toHaveLength(2);
     expect(removeArrowControl(withPoint!, 1).controls).toHaveLength(1);
 
-    expect(curveStrokeHoverHint(line, { x: 150, y: 80 }, 8)).toMatch(/Drag to curve/);
+    expect(curveStrokeHoverHint(line, { x: 150, y: 80 }, 8)).toMatch(/Drag a dot to curve/);
     expect(curveStrokeHoverHint(bent, { x: 150, y: 130 }, 8)).toMatch(/Double-click to remove/);
     expect(curveStrokeHoverHint(bent, { x: 200, y: 95 }, 8)).toMatch(/Double-click to add a curve point/);
     expect(curveStrokeHoverHint(line, { x: 10, y: 10 }, 8)).toBeNull();

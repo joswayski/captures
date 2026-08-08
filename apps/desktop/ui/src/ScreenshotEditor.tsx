@@ -33,6 +33,7 @@ import {
   arrowDefaultMidHandle,
   arrowHeadTangentPoint,
   arrowHeadWingTips,
+  arrowStarterControls,
   arrowVertices,
   arrowWithBend,
   boundedCropRect,
@@ -65,7 +66,6 @@ import {
   isCurveableStrokeShape,
   isSupportedImageFile,
   loadImageFile,
-  MAX_ARROW_CONTROLS,
   outputDimensions,
   positionImportedImageAtEdge,
   removeArrowControl,
@@ -290,6 +290,30 @@ function hitTestSelectedAnnotation(
   const handle = hitTestResizeHandle(bounds, point, interactionRadius);
   if (handle) return { kind: "resize", handle, bounds };
   return null;
+}
+
+/** Body hit used when the active shape tool keeps manipulating its own shape. */
+function hitTestSelectedShapeBody(
+  selected: ScreenshotElement,
+  point: EditorPoint,
+  interactionRadius: number,
+): boolean {
+  if (
+    selected.kind !== "shape"
+    || selected.locked
+    || !selected.visible
+  ) {
+    return false;
+  }
+  if (isCurveableStrokeShape(selected)) {
+    const closest = closestPointOnArrow(selected, point);
+    const pathHitRadius = Math.max(
+      interactionRadius,
+      selected.style.strokeWidth * 2 + interactionRadius * 0.6,
+    );
+    return closest.distance <= pathHitRadius;
+  }
+  return hitTestElement([selected], point, interactionRadius) !== null;
 }
 
 const REMOVE_BG_MODE_ITEMS: Array<{ mode: RemoveBackgroundMode; label: string }> = [
@@ -854,13 +878,10 @@ function drawEditorOverlays(
         drawArrowEndpointHandle(context, start, unit, accentColor);
         drawArrowEndpointHandle(context, end, unit, accentColor);
         if (selected.controls.length === 0) {
-          // Default mid handle sits on the shaft so curving is discoverable.
-          drawArrowControlHandle(
-            context,
-            arrowDefaultMidHandle(selected),
-            unit,
-            accentColor,
-          );
+          // Three starter dots make local multi-point shaping discoverable.
+          for (const control of arrowStarterControls(selected)) {
+            drawArrowControlHandle(context, control, unit, accentColor);
+          }
         } else {
           for (const control of selected.controls) {
             // Stem from chord midpoint toward each free control for visual cue.
@@ -2354,6 +2375,29 @@ export function ScreenshotEditor() {
           capturePointerTarget(event.currentTarget, event.pointerId);
           return;
         }
+
+        // The active shape tool also manipulates the shape it just created.
+        // Keeping body clicks on that shape out of the draw path prevents a
+        // double-click intended for curve insertion from creating tiny shapes.
+        if (
+          selectedElement.kind === "shape"
+          && selectedElement.shape === tool
+          && hitTestSelectedShapeBody(selectedElement, point, interactionRadius)
+        ) {
+          gestureRef.current = {
+            kind: "move",
+            pointerId: event.pointerId,
+            origin: point,
+            element: selectedElement,
+            wasSelected: true,
+            didMove: false,
+            initialDocument: current,
+          };
+          setCanvasCursor("move");
+          setCurveHoverTip(null);
+          capturePointerTarget(event.currentTarget, event.pointerId);
+          return;
+        }
       }
     }
 
@@ -2482,6 +2526,15 @@ export function ScreenshotEditor() {
             setCanvasCursor(resizeCursor(annotationHit.handle));
             return;
           }
+          if (
+            tool !== "select"
+            && selectedElement.kind === "shape"
+            && selectedElement.shape === tool
+            && hitTestSelectedShapeBody(selectedElement, point, interactionRadius)
+          ) {
+            setCanvasCursor("move");
+            return;
+          }
         } else {
           setCurveHoverTip(null);
         }
@@ -2541,8 +2594,10 @@ export function ScreenshotEditor() {
         next = { ...gesture.element, x: point.x, y: point.y };
       } else if (handle.kind === "end") {
         next = { ...gesture.element, endX: point.x, endY: point.y };
-      } else if (handle.kind === "mid") {
-        next = { ...gesture.element, controls: [{ x: point.x, y: point.y }] };
+      } else if (handle.kind === "starter-control") {
+        const controls = arrowStarterControls(gesture.element);
+        controls[handle.index] = { x: point.x, y: point.y };
+        next = { ...gesture.element, controls };
       } else {
         const controlIndex = handle.index;
         const controls = gesture.element.controls.map((control, index) => (
@@ -2833,8 +2888,12 @@ export function ScreenshotEditor() {
         ));
         return;
       }
-      if (handle?.kind === "start" || handle?.kind === "end" || handle?.kind === "mid") {
-        // Don't open text edit / ignore endpoint double-clicks.
+      if (
+        handle?.kind === "start"
+        || handle?.kind === "end"
+        || handle?.kind === "starter-control"
+      ) {
+        // Starter dots are drag affordances; endpoints are move affordances.
         return;
       }
       const closest = closestPointOnArrow(selectedElement, point);
@@ -2842,10 +2901,7 @@ export function ScreenshotEditor() {
         interactionRadius,
         selectedElement.style.strokeWidth * 2 + 6 / Math.max(0.01, displayScale),
       );
-      if (
-        closest.distance <= pathHitRadius
-        && selectedElement.controls.length < MAX_ARROW_CONTROLS
-      ) {
+      if (closest.distance <= pathHitRadius) {
         const updated = insertArrowControl(selectedElement, closest.point);
         if (updated) {
           event.preventDefault();
@@ -2872,12 +2928,10 @@ export function ScreenshotEditor() {
       if (closest.distance <= pathHitRadius) {
         event.preventDefault();
         setSelectedId(hit.id);
-        if (hit.controls.length < MAX_ARROW_CONTROLS) {
-          const updated = insertArrowControl(hit, closest.point);
-          if (updated) {
-            commitDocument(replaceElement(current, hit.id, updated));
-            return;
-          }
+        const updated = insertArrowControl(hit, closest.point);
+        if (updated) {
+          commitDocument(replaceElement(current, hit.id, updated));
+          return;
         }
         return;
       }
@@ -4772,9 +4826,8 @@ export function ScreenshotEditor() {
                   </div>
                 )}
                 <p>
-                  Drag handles to curve. Double-click the path to add a point
-                  ({selected.controls.length}/{MAX_ARROW_CONTROLS}); double-click a
-                  point to remove it.
+                  Drag the curve dots to reshape. Double-click the path to add more
+                  points; double-click a point to remove it.
                 </p>
               </>
             )}

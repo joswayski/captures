@@ -241,19 +241,13 @@ export function isCurveableStrokeShape(
   return shape === "line" || shape === "arrow";
 }
 
-/** Maximum intermediate control points on a single line or arrow. */
-export const MAX_ARROW_CONTROLS = 4;
-
-/** Alias kept for call sites that refer to stroke curve caps generically. */
-export const MAX_STROKE_CONTROLS = MAX_ARROW_CONTROLS;
-
-/** Editable handle on a selected line/arrow (endpoints, free controls, or the default mid). */
+/** Editable handle on a selected line/arrow (endpoints, controls, or starter dots). */
 export type ArrowHandle =
   | { kind: "start" }
   | { kind: "end" }
   | { kind: "control"; index: number }
-  /** Shown only when `controls` is empty — dragging creates the first control. */
-  | { kind: "mid" };
+  /** One of the three on-stroke starter dots shown before a stroke has controls. */
+  | { kind: "starter-control"; index: number };
 
 export type EditorPathElement = EditorElementBase & {
   kind: "path";
@@ -1285,6 +1279,18 @@ export function arrowDefaultMidHandle(element: EditorShapeElement): EditorPoint 
 }
 
 /**
+ * Three evenly-spaced starter controls for a straight line/arrow. They remain
+ * virtual until one is dragged, keeping the stored stroke straight while making
+ * multi-point shaping immediately discoverable.
+ */
+export function arrowStarterControls(element: EditorShapeElement): EditorPoint[] {
+  return [0.25, 0.5, 0.75].map((progress) => ({
+    x: element.x + (element.endX - element.x) * progress,
+    y: element.y + (element.endY - element.y) * progress,
+  }));
+}
+
+/**
  * Point used for the arrowhead tangent (approximate direction into the tip).
  * For a single free control this is the quadratic control; otherwise the
  * second-to-last vertex.
@@ -1596,13 +1602,12 @@ export function arrowWithBend(
   };
 }
 
-/** Insert a free control at `point` (capped). Returns null when at the max. */
+/** Insert a free control at `point`. */
 export function insertArrowControl(
   element: EditorShapeElement,
   point: EditorPoint,
 ): EditorShapeElement | null {
   if (!isCurveableStrokeShape(element)) return null;
-  if (element.controls.length >= MAX_ARROW_CONTROLS) return null;
   const { insertIndex } = closestPointOnArrow(element, point);
   const controls = [
     ...element.controls.slice(0, insertIndex),
@@ -1625,7 +1630,7 @@ export function removeArrowControl(
 }
 
 /**
- * Hit-test line/arrow edit handles. Order: free controls → endpoints → default mid.
+ * Hit-test line/arrow edit handles. Order: free controls → endpoints → starter dots.
  * Returns null when the pointer is not on a handle.
  */
 export function hitTestArrowHandle(
@@ -1651,10 +1656,13 @@ export function hitTestArrowHandle(
   }
 
   if (element.controls.length === 0) {
-    const mid = arrowDefaultMidHandle(element);
-    // Slightly larger hit target so the on-path mid handle is easy to grab.
-    if (Math.hypot(point.x - mid.x, point.y - mid.y) <= radius * 1.15) {
-      return { kind: "mid" };
+    const starters = arrowStarterControls(element);
+    for (let index = 0; index < starters.length; index += 1) {
+      const starter = starters[index];
+      // Slightly larger hit targets keep the on-path dots easy to grab.
+      if (Math.hypot(point.x - starter.x, point.y - starter.y) <= radius * 1.15) {
+        return { kind: "starter-control", index };
+      }
     }
   }
 
@@ -1668,7 +1676,7 @@ export function hitTestArrowControlPoint(
   handleRadius: number,
 ): boolean {
   const handle = hitTestArrowHandle(element, point, handleRadius);
-  return handle?.kind === "control" || handle?.kind === "mid";
+  return handle?.kind === "control" || handle?.kind === "starter-control";
 }
 
 /**
@@ -1696,8 +1704,8 @@ export function curveStrokeHoverHint(
   if (handle?.kind === "control") {
     return "Double-click to remove curve point";
   }
-  if (handle?.kind === "mid") {
-    return "Drag to curve · Double-click the path to add points";
+  if (handle?.kind === "starter-control") {
+    return "Drag a dot to curve · Double-click the path to add points";
   }
   if (handle?.kind === "start" || handle?.kind === "end") {
     return "Drag to move endpoint";
@@ -1709,10 +1717,7 @@ export function curveStrokeHoverHint(
     element.style.strokeWidth * 2 + handleRadius * 0.6,
   );
   if (closest.distance > pathHitRadius) return null;
-  if (element.controls.length >= MAX_ARROW_CONTROLS) {
-    return `Curve points full (${element.controls.length}/${MAX_ARROW_CONTROLS}) · Double-click a point to remove`;
-  }
-  return `Double-click to add a curve point (${element.controls.length}/${MAX_ARROW_CONTROLS})`;
+  return "Double-click to add a curve point";
 }
 
 /** Corner handles drawn around a selected annotation. */
