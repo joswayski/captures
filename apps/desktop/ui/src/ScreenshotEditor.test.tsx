@@ -600,6 +600,96 @@ describe("ScreenshotEditor", () => {
     expect(curve).toHaveValue("50");
   });
 
+  it("shows curve handles after placing a stroke and bends without leaving the shape tool", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Width");
+
+    fireEvent.change(screen.getByRole("combobox", { name: "Canvas zoom" }), {
+      target: { value: "100" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Arrow (A)" }));
+    const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
+    canvas.setPointerCapture = vi.fn();
+    canvas.hasPointerCapture = vi.fn(() => true);
+    canvas.releasePointerCapture = vi.fn();
+    setCanvasBounds(canvas);
+
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 60,
+      clientX: 100,
+      clientY: 150,
+    });
+    fireEvent.pointerMove(canvas, {
+      pointerId: 60,
+      clientX: 300,
+      clientY: 150,
+    });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 60,
+      clientX: 300,
+      clientY: 150,
+    });
+
+    // Post-place selection: Curve controls appear while Arrow remains active.
+    expect(screen.getByRole("button", { name: "Arrow (A)" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    const curve = screen.getByRole("slider", { name: "Curve" });
+    expect(curve).toHaveValue("0");
+    expect(screen.getByRole("button", { name: /ArrowShape/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    // Drag the mid handle without switching to Select & move.
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 61,
+      clientX: 200,
+      clientY: 150,
+    });
+    fireEvent.pointerMove(canvas, {
+      pointerId: 61,
+      clientX: 200,
+      clientY: 250,
+    });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 61,
+      clientX: 200,
+      clientY: 250,
+    });
+    expect(curve).toHaveValue("50");
+    expect(screen.getByRole("button", { name: "Arrow (A)" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    // Empty canvas still starts a second arrow while the tool stays active.
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 62,
+      clientX: 80,
+      clientY: 400,
+    });
+    fireEvent.pointerMove(canvas, {
+      pointerId: 62,
+      clientX: 220,
+      clientY: 400,
+    });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 62,
+      clientX: 220,
+      clientY: 400,
+    });
+    const layers = screen.getByRole("region", { name: "Layers" });
+    expect(within(layers).getAllByRole("button", { name: /ArrowShape/ })).toHaveLength(2);
+  });
+
   it("adds and removes arrow curve points with double-click", async () => {
     render(<ScreenshotEditor />);
     await screen.findAllByText("1440 × 900");
@@ -887,7 +977,7 @@ describe("ScreenshotEditor", () => {
     });
   });
 
-  it("does not select a new shape until Select & move is used", async () => {
+  it("selects a newly drawn shape so handles are ready without switching tools", async () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
 
@@ -924,11 +1014,18 @@ describe("ScreenshotEditor", () => {
       clientY: 240,
     });
 
-    expect(screen.queryByRole("button", { name: "Delete selected item" }))
-      .not.toBeInTheDocument();
+    // Shape tool stays active, but the new rectangle is selected for post-place edits.
+    expect(screen.getByRole("button", { name: "Rectangle (R)" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Delete selected item" }))
+      .toBeInTheDocument();
     expect(
-      within(screen.getByRole("region", { name: "Layers" })).getByText("Rectangle"),
-    ).toBeInTheDocument();
+      within(screen.getByRole("region", { name: "Layers" })).getByRole("button", {
+        name: /RectangleShape/,
+      }),
+    ).toHaveAttribute("aria-pressed", "true");
   });
 
   it("deselects the active layer when clicking the empty viewport chrome", async () => {

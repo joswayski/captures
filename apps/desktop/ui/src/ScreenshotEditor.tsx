@@ -252,6 +252,39 @@ const TOOL_ITEMS: Array<{ tool: ScreenshotTool; label: string; shortcut: string 
   { tool: "remove-bg", label: "Remove bg", shortcut: "B" },
 ];
 
+/** Tools that draw closed or open vector shapes (not freehand). */
+function isShapeDrawTool(tool: ScreenshotTool): boolean {
+  return tool === "rectangle"
+    || tool === "ellipse"
+    || tool === "line"
+    || tool === "arrow";
+}
+
+/**
+ * Hit-test resize / curve handles on the selected annotation.
+ * Curveable strokes prefer path handles so the mid control stays easy to grab
+ * on thin lines (corner resize boxes sit near the stroke pad).
+ */
+function hitTestSelectedAnnotation(
+  selected: ScreenshotElement,
+  point: EditorPoint,
+  interactionRadius: number,
+): (
+  | { kind: "resize"; handle: ResizeHandle; bounds: EditorRect }
+  | { kind: "arrow-handle"; handle: ArrowHandle }
+  | null
+) {
+  if (selected.locked || !selected.visible) return null;
+  if (selected.kind === "shape" && isCurveableStrokeShape(selected)) {
+    const strokeHandle = hitTestArrowHandle(selected, point, interactionRadius);
+    if (strokeHandle) return { kind: "arrow-handle", handle: strokeHandle };
+  }
+  const bounds = elementBounds(selected);
+  const handle = hitTestResizeHandle(bounds, point, interactionRadius);
+  if (handle) return { kind: "resize", handle, bounds };
+  return null;
+}
+
 const REMOVE_BG_MODE_ITEMS: Array<{ mode: RemoveBackgroundMode; label: string }> = [
   { mode: "wand", label: "Wand" },
   { mode: "erase", label: "Erase" },
@@ -423,20 +456,29 @@ function strokeArrowPath(
   context.stroke();
 }
 
+/** Compact endpoint grip for line/arrow ends (kept smaller than full resize corners). */
 function drawArrowEndpointHandle(
   context: CanvasRenderingContext2D,
   point: EditorPoint,
   unit: number,
   accentColor: string,
 ): void {
-  const size = 8 * unit;
+  const size = 5.5 * unit;
+  context.save();
+  context.globalAlpha = 0.88;
   context.fillStyle = accentColor;
-  context.strokeStyle = "#ffffff";
-  context.lineWidth = 1.5 * unit;
+  context.strokeStyle = "rgba(255, 255, 255, 0.92)";
+  context.lineWidth = 1.15 * unit;
   context.fillRect(point.x - size / 2, point.y - size / 2, size, size);
   context.strokeRect(point.x - size / 2, point.y - size / 2, size, size);
+  context.restore();
 }
 
+/**
+ * Subtle free-control / mid-handle grip for bending lines and arrows.
+ * Drawn smaller and slightly translucent so they read as edit affordances,
+ * not primary chrome, especially right after placing a stroke.
+ */
 function drawArrowControlHandle(
   context: CanvasRenderingContext2D,
   point: EditorPoint,
@@ -445,19 +487,22 @@ function drawArrowControlHandle(
   options?: { stemFrom?: EditorPoint },
 ): void {
   context.save();
+  context.globalAlpha = 0.82;
   context.strokeStyle = accentColor;
-  context.fillStyle = "#ffffff";
-  context.lineWidth = 1.5 * unit;
+  context.fillStyle = "rgba(255, 255, 255, 0.94)";
+  context.lineWidth = 1.15 * unit;
   if (options?.stemFrom) {
-    context.setLineDash([4 * unit, 4 * unit]);
+    context.globalAlpha = 0.45;
+    context.setLineDash([3 * unit, 3 * unit]);
     context.beginPath();
     context.moveTo(options.stemFrom.x, options.stemFrom.y);
     context.lineTo(point.x, point.y);
     context.stroke();
     context.setLineDash([]);
+    context.globalAlpha = 0.82;
   }
   context.beginPath();
-  context.arc(point.x, point.y, 7 * unit, 0, Math.PI * 2);
+  context.arc(point.x, point.y, 4.5 * unit, 0, Math.PI * 2);
   context.fill();
   context.stroke();
   context.restore();
@@ -681,22 +726,45 @@ function drawEditorOverlays(
     const bounds = selectionBoundsOverride
       ?? (selected ? elementBounds(selected) : null);
     if (bounds) {
+      const curveable = selected?.kind === "shape" && isCurveableStrokeShape(selected);
       context.save();
+      // Lighter selection chrome so post-place curve grips stay the focus.
+      context.globalAlpha = curveable ? 0.55 : 0.9;
       context.strokeStyle = accentColor;
-      context.lineWidth = 2 * unit;
-      context.setLineDash([7 * unit, 5 * unit]);
+      context.lineWidth = (curveable ? 1.25 : 2) * unit;
+      context.setLineDash([6 * unit, 4 * unit]);
       context.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
       context.setLineDash([]);
-      context.fillStyle = accentColor;
-      for (const point of [
-        [bounds.x, bounds.y],
-        [bounds.x + bounds.width, bounds.y],
-        [bounds.x + bounds.width, bounds.y + bounds.height],
-        [bounds.x, bounds.y + bounds.height],
-      ]) {
-        context.fillRect(point[0] - 4 * unit, point[1] - 4 * unit, 8 * unit, 8 * unit);
+      // Corner resize grips for closed shapes / non-stroke selections.
+      // Line/arrow use endpoint + mid/control handles instead.
+      if (!curveable) {
+        context.globalAlpha = 0.88;
+        context.fillStyle = accentColor;
+        context.strokeStyle = "rgba(255, 255, 255, 0.9)";
+        context.lineWidth = 1.1 * unit;
+        const corner = 5.5 * unit;
+        for (const point of [
+          [bounds.x, bounds.y],
+          [bounds.x + bounds.width, bounds.y],
+          [bounds.x + bounds.width, bounds.y + bounds.height],
+          [bounds.x, bounds.y + bounds.height],
+        ]) {
+          context.fillRect(
+            point[0] - corner / 2,
+            point[1] - corner / 2,
+            corner,
+            corner,
+          );
+          context.strokeRect(
+            point[0] - corner / 2,
+            point[1] - corner / 2,
+            corner,
+            corner,
+          );
+        }
       }
       if (selected?.kind === "shape" && isCurveableStrokeShape(selected)) {
+        context.globalAlpha = 1;
         const start = { x: selected.x, y: selected.y };
         const end = { x: selected.endX, y: selected.endY };
         drawArrowEndpointHandle(context, start, unit, accentColor);
@@ -1887,49 +1955,42 @@ export function ScreenshotEditor() {
       const selectedElement = selectedId
         ? current.elements.find((element) => element.id === selectedId) ?? null
         : null;
-      if (
-        selectedElement
-        && !selectedElement.locked
-      ) {
-        const bounds = elementBounds(selectedElement);
-        const handle = hitTestResizeHandle(bounds, point, interactionRadius);
-        if (handle) {
+      if (selectedElement) {
+        const annotationHit = hitTestSelectedAnnotation(
+          selectedElement,
+          point,
+          interactionRadius,
+        );
+        if (annotationHit?.kind === "resize") {
           gestureRef.current = {
             kind: "resize",
             pointerId: event.pointerId,
-            handle,
+            handle: annotationHit.handle,
             element: selectedElement,
-            initialBounds: bounds,
-            currentBounds: bounds,
+            initialBounds: annotationHit.bounds,
+            currentBounds: annotationHit.bounds,
             initialDocument: current,
           };
-          setResizePreviewBounds(bounds);
-          setCanvasCursor(resizeCursor(handle));
+          setResizePreviewBounds(annotationHit.bounds);
+          setCanvasCursor(resizeCursor(annotationHit.handle));
           capturePointerTarget(event.currentTarget, event.pointerId);
           return;
         }
         if (
-          selectedElement.kind === "shape"
-          && isCurveableStrokeShape(selectedElement)
+          annotationHit?.kind === "arrow-handle"
+          && selectedElement.kind === "shape"
         ) {
-          const strokeHandle = hitTestArrowHandle(
-            selectedElement,
-            point,
-            interactionRadius,
-          );
-          if (strokeHandle) {
-            gestureRef.current = {
-              kind: "arrow-handle",
-              pointerId: event.pointerId,
-              handle: strokeHandle,
-              element: selectedElement,
-              initialDocument: current,
-            };
-            setCanvasCursor("grabbing");
-            setCurveHoverTip(null);
-            capturePointerTarget(event.currentTarget, event.pointerId);
-            return;
-          }
+          gestureRef.current = {
+            kind: "arrow-handle",
+            pointerId: event.pointerId,
+            handle: annotationHit.handle,
+            element: selectedElement,
+            initialDocument: current,
+          };
+          setCanvasCursor("grabbing");
+          setCurveHoverTip(null);
+          capturePointerTarget(event.currentTarget, event.pointerId);
+          return;
         }
       }
 
@@ -1996,6 +2057,52 @@ export function ScreenshotEditor() {
       commitDocument(expandDocumentToFitBounds(withText, elementBounds(element), 0));
       beginTextEditing(element.id, true);
       return;
+    }
+
+    // Shape tools keep post-place grips live: drag a handle to bend/resize
+    // without switching to Select; empty space still starts a new shape.
+    if (isShapeDrawTool(tool)) {
+      const selectedElement = selectedId
+        ? current.elements.find((element) => element.id === selectedId) ?? null
+        : null;
+      if (selectedElement) {
+        const annotationHit = hitTestSelectedAnnotation(
+          selectedElement,
+          point,
+          interactionRadius,
+        );
+        if (annotationHit?.kind === "resize") {
+          gestureRef.current = {
+            kind: "resize",
+            pointerId: event.pointerId,
+            handle: annotationHit.handle,
+            element: selectedElement,
+            initialBounds: annotationHit.bounds,
+            currentBounds: annotationHit.bounds,
+            initialDocument: current,
+          };
+          setResizePreviewBounds(annotationHit.bounds);
+          setCanvasCursor(resizeCursor(annotationHit.handle));
+          capturePointerTarget(event.currentTarget, event.pointerId);
+          return;
+        }
+        if (
+          annotationHit?.kind === "arrow-handle"
+          && selectedElement.kind === "shape"
+        ) {
+          gestureRef.current = {
+            kind: "arrow-handle",
+            pointerId: event.pointerId,
+            handle: annotationHit.handle,
+            element: selectedElement,
+            initialDocument: current,
+          };
+          setCanvasCursor("grabbing");
+          setCurveHoverTip(null);
+          capturePointerTarget(event.currentTarget, event.pointerId);
+          return;
+        }
+      }
     }
 
     const elementId = editorId();
@@ -2077,25 +2184,22 @@ export function ScreenshotEditor() {
         );
         return;
       }
-      if (tool === "select") {
+      if (tool === "select" || isShapeDrawTool(tool)) {
         const current = documentRef.current;
         const interactionRadius = 10 / Math.max(0.01, displayScale);
         const selectedElement = selectedId && current
           ? current.elements.find((element) => element.id === selectedId) ?? null
           : null;
-        if (
-          selectedElement
-          && !selectedElement.locked
-        ) {
+        if (selectedElement) {
+          const annotationHit = hitTestSelectedAnnotation(
+            selectedElement,
+            point,
+            interactionRadius,
+          );
           if (
             selectedElement.kind === "shape"
             && isCurveableStrokeShape(selectedElement)
           ) {
-            const strokeHandle = hitTestArrowHandle(
-              selectedElement,
-              point,
-              interactionRadius,
-            );
             const hint = curveStrokeHoverHint(
               selectedElement,
               point,
@@ -2106,9 +2210,10 @@ export function ScreenshotEditor() {
                 ? { text: hint, clientX: event.clientX, clientY: event.clientY }
                 : null,
             );
-            if (strokeHandle) {
+            if (annotationHit?.kind === "arrow-handle") {
               setCanvasCursor(
-                strokeHandle.kind === "start" || strokeHandle.kind === "end"
+                annotationHit.handle.kind === "start"
+                  || annotationHit.handle.kind === "end"
                   ? "move"
                   : "grab",
               );
@@ -2121,43 +2226,43 @@ export function ScreenshotEditor() {
           } else {
             setCurveHoverTip(null);
           }
-          const handle = hitTestResizeHandle(
-            elementBounds(selectedElement),
-            point,
-            interactionRadius,
-          );
-          if (handle) {
-            setCanvasCursor(resizeCursor(handle));
+          if (annotationHit?.kind === "resize") {
+            setCanvasCursor(resizeCursor(annotationHit.handle));
             return;
           }
         } else {
           setCurveHoverTip(null);
         }
-        const hovered = current
-          ? hitTestElement(current.elements, point, interactionRadius)
-          : null;
-        // Unselected curveable strokes: light discovery tip when hovering the path.
-        if (
-          hovered
-          && hovered.kind === "shape"
-          && isCurveableStrokeShape(hovered)
-          && hovered.id !== selectedId
-          && !hovered.locked
-        ) {
-          const closest = closestPointOnArrow(hovered, point);
-          const pathHitRadius = Math.max(
-            interactionRadius,
-            hovered.style.strokeWidth * 2 + interactionRadius * 0.6,
-          );
-          if (closest.distance <= pathHitRadius) {
-            setCurveHoverTip({
-              text: "Click to select · double-click path to add curve points",
-              clientX: event.clientX,
-              clientY: event.clientY,
-            });
+        if (tool === "select") {
+          const hovered = current
+            ? hitTestElement(current.elements, point, interactionRadius)
+            : null;
+          // Unselected curveable strokes: light discovery tip when hovering the path.
+          if (
+            hovered
+            && hovered.kind === "shape"
+            && isCurveableStrokeShape(hovered)
+            && hovered.id !== selectedId
+            && !hovered.locked
+          ) {
+            const closest = closestPointOnArrow(hovered, point);
+            const pathHitRadius = Math.max(
+              interactionRadius,
+              hovered.style.strokeWidth * 2 + interactionRadius * 0.6,
+            );
+            if (closest.distance <= pathHitRadius) {
+              setCurveHoverTip({
+                text: "Click to select · double-click path to add curve points",
+                clientX: event.clientX,
+                clientY: event.clientY,
+              });
+            }
           }
+          setCanvasCursor(hovered ? "move" : undefined);
+          return;
         }
-        setCanvasCursor(hovered ? "move" : undefined);
+        // Shape tools: default crosshair for a new draw when not on a grip.
+        setCanvasCursor(undefined);
         return;
       }
       setCurveHoverTip(null);
@@ -2429,6 +2534,15 @@ export function ScreenshotEditor() {
       clearSuccess();
     }
 
+    // Keep the just-drawn shape selected so curve/resize grips show immediately
+    // without switching to Select & move.
+    if (gesture.kind === "draw") {
+      const drawn = current.elements.find(({ id }) => id === gesture.elementId);
+      if (drawn && drawn.kind === "shape") {
+        setSelectedId(drawn.id);
+      }
+    }
+
     if (JSON.stringify(current) === JSON.stringify(gesture.initialDocument)) return;
     setUndoStack((stack) => [...stack.slice(-99), gesture.initialDocument]);
     setRedoStack([]);
@@ -2436,7 +2550,14 @@ export function ScreenshotEditor() {
 
   const handleCanvasDoubleClick = (event: React.MouseEvent<HTMLCanvasElement>) => {
     const current = documentRef.current;
-    if (!current || tool !== "select" || event.button !== 0) return;
+    // Curve point add/remove works with Select or any shape tool while a stroke is selected.
+    if (
+      !current
+      || (tool !== "select" && !isShapeDrawTool(tool))
+      || event.button !== 0
+    ) {
+      return;
+    }
     const point = clientToDocumentPoint(event.clientX, event.clientY);
     const interactionRadius = 10 / Math.max(0.01, displayScale);
 
@@ -2510,7 +2631,7 @@ export function ScreenshotEditor() {
       }
     }
 
-    if (hit?.kind === "text") {
+    if (tool === "select" && hit?.kind === "text") {
       event.preventDefault();
       beginTextEditing(hit.id);
     }
