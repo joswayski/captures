@@ -1083,27 +1083,137 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 .custom-select-listbox button:disabled { color: #707177; }
 
 /* Shared, platform-neutral slider used by photo annotations and video/image
-   export quality. Native range behavior stays intact while the visual track,
-   thumb, and discrete marks match the rest of the editor chrome. */
-.range-slider { --range-progress: 0%; display: grid; min-width: 0; grid-template-rows: 17px 24px 17px; gap: 1px; }
-.range-slider-value { display: flex; min-width: 0; align-items: center; justify-content: flex-end; }
-.range-slider-value output { max-width: 100%; overflow: hidden; color: #d8d9dc; font-size: 9px; font-weight: 800; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
-.range-slider-track { position: relative; min-width: 0; height: 24px; }
-.range-slider input[type="range"] { position: absolute; z-index: 2; inset: 0; width: 100%; height: 24px; margin: 0; appearance: none; background: transparent; cursor: pointer; outline: none; }
-.range-slider input[type="range"]::-webkit-slider-runnable-track { height: 7px; border: 1px solid rgba(255,255,255,.13); border-radius: 999px; background: linear-gradient(90deg,var(--editing-accent) 0 var(--range-progress),#4a4b50 var(--range-progress) 100%); box-shadow: 0 1px 3px rgba(0,0,0,.42) inset; }
-.range-slider input[type="range"]::-webkit-slider-thumb { width: 22px; height: 22px; margin-top: -8px; border: 1px solid rgba(0,0,0,.16); border-radius: 999px; appearance: none; background: #f7f7f7; box-shadow: 0 2px 7px rgba(0,0,0,.48), 0 0 0 1px rgba(255,255,255,.4) inset; transition: box-shadow .14s ease, transform .14s ease; }
-.range-slider input[type="range"]:hover::-webkit-slider-thumb { box-shadow: 0 3px 9px rgba(0,0,0,.55), 0 0 0 3px rgba(var(--theme-accent-rgb),.16); transform: scale(1.04); }
-.range-slider input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 2px 8px rgba(0,0,0,.5), 0 0 0 3px rgba(var(--theme-accent-rgb),.34); }
-.range-slider input[type="range"]::-moz-range-track { height: 7px; border: 1px solid rgba(255,255,255,.13); border-radius: 999px; background: #4a4b50; box-shadow: 0 1px 3px rgba(0,0,0,.42) inset; }
-.range-slider input[type="range"]::-moz-range-progress { height: 7px; border-radius: 999px; background: var(--editing-accent); }
-.range-slider input[type="range"]::-moz-range-thumb { width: 22px; height: 22px; border: 1px solid rgba(0,0,0,.16); border-radius: 999px; background: #f7f7f7; box-shadow: 0 2px 7px rgba(0,0,0,.48); }
-.range-slider-ticks { position: absolute; z-index: 3; top: 0; right: 11px; bottom: 0; left: 11px; pointer-events: none; }
-.range-slider-ticks i { position: absolute; top: 9px; width: 2px; height: 6px; border-radius: 999px; background: rgba(17,18,22,.45); transform: translateX(-50%); }
-.range-slider-labels { position: relative; display: block; height: 17px; margin: 0 11px; pointer-events: none; }
-.range-slider-labels small { position: absolute; top: 1px; color: #77787e; font-size: 7px; font-weight: 700; line-height: 1; transform: translateX(-50%); white-space: nowrap; }
-.range-slider-labels small:first-child { transform: none; }.range-slider-labels small:last-child { transform: translateX(-100%); }
+   export quality. Slim track, compact thumb, and restrained accent fill so it
+   matches the rest of the editor chrome instead of a bulky OS-style control. */
+.range-slider {
+  --range-progress: 0%;
+  --range-thumb-size: 14px;
+  --range-track-height: 4px;
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+.range-slider:not(.has-marks) { grid-template-rows: 14px 20px; }
+.range-slider.has-marks { grid-template-rows: 14px 20px 14px; }
+.range-slider-value { display: flex; min-width: 0; min-height: 14px; align-items: center; justify-content: flex-end; }
+.range-slider-value output {
+  max-width: 100%;
+  overflow: hidden;
+  color: #b8b9be;
+  font-size: 10px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.range-slider-track { position: relative; min-width: 0; height: 20px; }
+.range-slider input[type="range"] {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  width: 100%;
+  height: 20px;
+  margin: 0;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+  outline: none;
+}
+.range-slider input[type="range"]::-webkit-slider-runnable-track {
+  height: var(--range-track-height);
+  border: 0;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    var(--editing-accent) 0 var(--range-progress),
+    #2f3036 var(--range-progress) 100%
+  );
+}
+.range-slider input[type="range"]::-webkit-slider-thumb {
+  width: var(--range-thumb-size);
+  height: var(--range-thumb-size);
+  margin-top: calc((var(--range-track-height) - var(--range-thumb-size)) / 2);
+  border: 2px solid #1a1b20;
+  border-radius: 999px;
+  appearance: none;
+  background: #f0f0f2;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.1), 0 1px 4px rgba(0,0,0,.45);
+  transition: box-shadow .14s ease, transform .14s ease, background .14s ease;
+}
+.range-slider input[type="range"]:hover::-webkit-slider-thumb {
+  background: #fff;
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,.16),
+    0 2px 8px rgba(0,0,0,.5),
+    0 0 0 3px rgba(var(--theme-accent-rgb),.18);
+  transform: scale(1.06);
+}
+.range-slider input[type="range"]:focus-visible::-webkit-slider-thumb {
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,.16),
+    0 1px 5px rgba(0,0,0,.45),
+    0 0 0 3px rgba(var(--theme-accent-rgb),.32);
+}
+.range-slider input[type="range"]::-moz-range-track {
+  height: var(--range-track-height);
+  border: 0;
+  border-radius: 999px;
+  background: #2f3036;
+}
+.range-slider input[type="range"]::-moz-range-progress {
+  height: var(--range-track-height);
+  border-radius: 999px;
+  background: var(--editing-accent);
+}
+.range-slider input[type="range"]::-moz-range-thumb {
+  width: var(--range-thumb-size);
+  height: var(--range-thumb-size);
+  border: 2px solid #1a1b20;
+  border-radius: 999px;
+  background: #f0f0f2;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.1), 0 1px 4px rgba(0,0,0,.45);
+}
+/* Discrete notches stay subtle so continuous sliders stay clean. */
+.range-slider-ticks {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  right: 7px;
+  bottom: 0;
+  left: 7px;
+  pointer-events: none;
+}
+.range-slider-ticks i {
+  position: absolute;
+  top: 50%;
+  width: 2px;
+  height: 2px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.22);
+  transform: translate(-50%, -50%);
+}
+.range-slider-labels {
+  position: relative;
+  display: block;
+  height: 14px;
+  margin: 0 7px;
+  pointer-events: none;
+}
+.range-slider-labels small {
+  position: absolute;
+  top: 1px;
+  color: #7a7b81;
+  font-size: 8px;
+  font-weight: 650;
+  line-height: 1;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+.range-slider-labels small:first-child { transform: none; }
+.range-slider-labels small:last-child { transform: translateX(-100%); }
 .range-slider-description { margin: 4px 0 0; color: #8f9096; font-size: 9px; font-weight: 500; line-height: 1.4; }
-.range-slider.disabled { opacity: .5; }.range-slider.disabled input { cursor: default; }
+.range-slider.disabled { opacity: .5; }
+.range-slider.disabled input { cursor: default; }
 
 .recording-selector .capture-shade { fill: rgba(5,6,8,.34); background: rgba(5,6,8,.34); }
 .recording-selector .capture-shade-cutout { z-index: 1; }
@@ -2437,16 +2547,14 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 .screenshot-quality-mode select { width: 100%; }
 .screenshot-quality { width: 248px; }
 /* Compact quality control: value + track + preset labels, aligned with selects. */
-.screenshot-quality .range-slider { grid-template-rows: 11px 20px 11px; gap: 0; }
+.screenshot-quality .range-slider { gap: 0; }
+.screenshot-quality .range-slider.has-marks { grid-template-rows: 11px 18px 12px; }
 .screenshot-quality .range-slider-value { min-height: 11px; align-items: flex-end; }
 .screenshot-quality .range-slider-value output { color: var(--theme-accent-text); font-size: 8px; line-height: 1; text-transform: none; }
-.screenshot-quality .range-slider-track { height: 20px; }
-.screenshot-quality .range-slider input[type="range"] { height: 20px; }
-.screenshot-quality .range-slider input[type="range"]::-webkit-slider-thumb { width: 18px; height: 18px; margin-top: -6px; }
-.screenshot-quality .range-slider-ticks { top: 0; bottom: 0; }
-.screenshot-quality .range-slider-ticks i { top: 7px; height: 5px; }
-.screenshot-quality .range-slider-labels { height: 11px; margin: 0 10px; }
-.screenshot-quality .range-slider-labels small { max-width: 48px; overflow: hidden; top: 0; font-size: 6px; text-overflow: ellipsis; }
+.screenshot-quality .range-slider-track { height: 18px; }
+.screenshot-quality .range-slider input[type="range"] { height: 18px; }
+.screenshot-quality .range-slider-labels { height: 12px; margin: 0 7px; }
+.screenshot-quality .range-slider-labels small { max-width: 48px; overflow: hidden; top: 0; font-size: 7px; text-overflow: ellipsis; }
 .screenshot-quality > strong { display: flex; height: 34px; padding: 0 10px; align-items: center; border: 1px solid #44454b; border-radius: 6px; color: #d6d7da; background: #111216; font-size: 9px; text-transform: none; white-space: nowrap; }
 .screenshot-maximum-size { width: 164px; }
 .screenshot-maximum-size > span { display: grid; grid-template-columns: minmax(0,1fr) 55px; gap: 5px; align-items: center; }
