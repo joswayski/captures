@@ -2852,8 +2852,8 @@ fn startup_notice_position(app: &AppHandle) -> (f64, f64) {
 
 const RECORDING_SAVED_NOTICE_WIDTH: f64 = 440.0;
 const RECORDING_SAVED_NOTICE_HEIGHT: f64 = 116.0;
-const RECORDING_CONTROLS_HIDDEN_NOTICE_WIDTH: f64 = 390.0;
-const RECORDING_CONTROLS_HIDDEN_NOTICE_HEIGHT: f64 = 82.0;
+const RECORDING_CONTROLS_HIDDEN_NOTICE_WIDTH: f64 = 430.0;
+const RECORDING_CONTROLS_HIDDEN_NOTICE_HEIGHT: f64 = 86.0;
 
 #[derive(Clone, serde::Serialize)]
 struct RecordingSavedNoticePayload {

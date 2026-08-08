@@ -53,11 +53,13 @@ h1, h2, p { margin: 0; }
 .recording-saved-dismiss:hover { color: white; background: rgba(255,255,255,.08); }
 @keyframes recording-saved-lifecycle { 0% { opacity: 0; transform: translateY(-8px) scale(.97); } 2.5%, 86% { opacity: 1; transform: translateY(0) scale(1); } 100% { opacity: 0; transform: translateY(-5px) scale(.985); } }
 
-.recording-controls-hidden-notice { display: flex; width: calc(100% - 12px); height: calc(100% - 12px); margin: 6px; padding: 12px 15px; align-items: center; gap: 11px; border: 0; border-radius: 13px; color: white; background: rgba(18,19,21,.96); box-shadow: 0 10px 28px rgba(0,0,0,.28); backdrop-filter: blur(20px); animation: recording-controls-hidden-lifecycle 6s cubic-bezier(.2,.8,.2,1) forwards; }
+/* Soft shadow kept inside the 6px margin so the transparent window edge stays hidden. */
+.recording-controls-hidden-notice { display: flex; width: calc(100% - 12px); height: calc(100% - 12px); margin: 6px; padding: 12px 15px; align-items: center; gap: 11px; border: 0; border-radius: 13px; color: white; background: rgba(18,19,21,.96); box-shadow: 0 4px 10px rgba(0,0,0,.28); backdrop-filter: blur(20px); animation: recording-controls-hidden-lifecycle 6s cubic-bezier(.2,.8,.2,1) forwards; }
 .recording-controls-hidden-icon { display: grid; width: 36px; height: 36px; flex: 0 0 auto; place-items: center; border-radius: 10px; color: var(--chrome-active-ink); background: var(--chrome-active); }
 .recording-controls-hidden-icon svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .recording-controls-hidden-notice strong { display: block; font-size: 12px; }
-.recording-controls-hidden-notice p { margin-top: 3px; color: #aeb0b5; font-size: 10px; line-height: 1.35; }
+.recording-controls-hidden-notice p { display: flex; margin-top: 4px; flex-wrap: wrap; align-items: center; gap: 4px; color: #aeb0b5; font-size: 10px; line-height: 1.4; }
+.recording-controls-hidden-notice kbd { border: 1px solid #44454b; border-bottom-color: #57585f; border-radius: 4px; padding: 2px 5px; color: #e8e8eb; background: #2a2b30; box-shadow: 0 1px 0 rgba(255,255,255,.05) inset, 0 1px 0 rgba(0,0,0,.42); font-family: inherit; font-size: 9px; font-weight: 800; line-height: 1.1; }
 @keyframes recording-controls-hidden-lifecycle { 0% { opacity: 0; transform: translateY(7px) scale(.97); } 5%, 80% { opacity: 1; transform: translateY(0) scale(1); } 100% { opacity: 0; transform: translateY(5px) scale(.985); } }
 
 .update-notice { display: flex; width: calc(100% - 16px); height: calc(100% - 16px); margin: 8px; padding: 16px; flex-direction: column; gap: 12px; border: 1px solid rgba(255,255,255,.15); border-radius: 14px; color: white; background: rgba(24,25,36,.97); box-shadow: 0 12px 36px rgba(0,0,0,.42); backdrop-filter: blur(18px); animation: startup-arrive .32s cubic-bezier(.2,.8,.2,1); }
@@ -1092,7 +1094,8 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 /* HUD tooltips are rendered by Captures so they are available consistently
    on hover and keyboard focus. */
 .recording-tooltip { position: relative; display: inline-flex; }
-.recording-tooltip > [role="tooltip"] { position: absolute; z-index: 20; top: calc(100% + 6px); left: 50%; width: max-content; max-width: 180px; padding: 6px 8px; border: 1px solid rgba(255,255,255,.15); border-radius: 6px; color: #f5f5f5; background: #111216; box-shadow: 0 7px 20px rgba(0,0,0,.45); opacity: 0; pointer-events: none; font-size: 9px; font-weight: 700; transform: translate(-50%, -3px); transition: opacity .12s ease, transform .12s ease; }
+/* No box-shadow: transparent HUD windows clip shadows and leave a hard rectangular edge. */
+.recording-tooltip > [role="tooltip"] { position: absolute; z-index: 20; top: calc(100% + 6px); left: 50%; width: max-content; max-width: 180px; padding: 6px 8px; border: 1px solid rgba(255,255,255,.18); border-radius: 6px; color: #f5f5f5; background: #111216; box-shadow: none; opacity: 0; pointer-events: none; font-size: 9px; font-weight: 700; transform: translate(-50%, -3px); transition: opacity .12s ease, transform .12s ease; }
 .recording-tooltip:hover > [role="tooltip"], .recording-tooltip:focus-within > [role="tooltip"] { opacity: 1; transform: translate(-50%, 0); }
 .recording-hud-actions > .recording-tooltip > [role="tooltip"] { top: calc(100% + 5px); bottom: auto; }
 .recording-hud-actions > .recording-tooltip:nth-last-child(-n+3) > [role="tooltip"] { right: 0; left: auto; transform: translateY(-3px); }

@@ -507,12 +507,32 @@ export function RecordingSavedNotice() {
 }
 
 export function RecordingControlsHiddenNotice() {
+  const [shortcut, setShortcut] = useState("Ctrl+Shift+Space");
+
+  useEffect(() => {
+    void invoke<AppSettings>("get_settings")
+      .then((settings) => {
+        if (settings.new_capture_shortcut.trim()) {
+          setShortcut(settings.new_capture_shortcut);
+        }
+      })
+      .catch(() => undefined);
+  }, []);
+
+  const keys = shortcutDisplayTokens(shortcut);
+
   return (
     <main className="recording-controls-hidden-notice" role="status">
       <span className="recording-controls-hidden-icon" aria-hidden="true"><CaptureIcon /></span>
       <div>
         <strong>Recording controls hidden</strong>
-        <p>Choose New Capture in the Captures menu or use your shortcut to bring them back.</p>
+        <p>
+          Open Captures from the taskbar, or press{" "}
+          {keys.map((key, index) => (
+            <kbd key={`${key}-${index}`}>{key}</kbd>
+          ))}
+          {" "}to bring them back.
+        </p>
       </div>
     </main>
   );

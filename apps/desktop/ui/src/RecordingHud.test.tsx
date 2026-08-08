@@ -159,14 +159,26 @@ describe("RecordingHud", () => {
     expect(screen.queryByRole("button", { name: "Move recording controls" })).not.toBeInTheDocument();
   });
 
-  it("explains how to restore controls after they are hidden", () => {
+  it("explains how to restore controls after they are hidden", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_settings") {
+        return {
+          new_capture_shortcut: "Ctrl+Shift+Space",
+        };
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
     render(<RecordingControlsHiddenNotice />);
 
     expect(screen.getByText("Recording controls hidden")).toBeInTheDocument();
-    expect(screen.getByText(
-      "Choose New Capture in the Captures menu or use your shortcut to bring them back.",
-    ))
-      .toBeInTheDocument();
+    expect(screen.getByText(/Open Captures from the taskbar, or press/)).toBeInTheDocument();
+    expect(await screen.findByText("Ctrl")).toBeInTheDocument();
+    expect(screen.getByText("Shift")).toBeInTheDocument();
+    expect(screen.getByText("Space")).toBeInTheDocument();
+    expect(screen.getByText(/to bring them back/)).toBeInTheDocument();
+    expect(screen.queryByText(/New Capture/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/your shortcut/)).not.toBeInTheDocument();
   });
 
   it("offers history recovery wording until a recording is permanently saved", () => {
