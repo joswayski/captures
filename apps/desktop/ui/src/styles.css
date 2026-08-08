@@ -44,7 +44,7 @@ h1, h2, p { margin: 0; }
 .recording-saved-icon svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .recording-saved-copy { min-width: 0; }
 .recording-saved-copy strong { display: block; font-size: 13px; }
-.recording-saved-copy p { margin-top: 3px; overflow: hidden; color: #aebbb1; font-size: 10px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.recording-saved-copy p { margin-top: 3px; color: #aebbb1; font-size: 10px; line-height: 1.35; white-space: normal; overflow-wrap: break-word; }
 .recording-saved-reveal { display: inline-flex; min-height: 32px; border: 1px solid rgba(255,255,255,.12); border-radius: 7px; padding: 6px 9px; align-items: center; gap: 6px; color: #ebeeec; background: rgba(255,255,255,.07); font-size: 10px; font-weight: 750; white-space: nowrap; }
 .recording-saved-reveal:hover:not(:disabled) { border-color: rgba(108,213,137,.32); background: rgba(108,213,137,.12); }
 .recording-saved-reveal:disabled { cursor: wait; opacity: .55; }

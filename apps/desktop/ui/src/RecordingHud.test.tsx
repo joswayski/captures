@@ -185,7 +185,9 @@ describe("RecordingHud", () => {
     render(<RecordingSavedNotice />);
 
     expect(screen.getByText("Recording ready")).toBeInTheDocument();
-    expect(screen.getByText(/Kept in Capture History for 30 days/)).toBeInTheDocument();
+    expect(
+      screen.getByText("Kept in Capture History for 30 days. Save a copy anytime."),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save file" })).toBeDisabled();
     expect(screen.queryByText(/Finder|Explorer/)).not.toBeInTheDocument();
   });
