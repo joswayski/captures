@@ -445,6 +445,7 @@ async fn start_capture_inner(
         state.sessions.lock().clear();
         hide_capture_overlay(&app);
         restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
+        reveal_document_windows_after_capture(&app);
     }
     result
 }
@@ -475,7 +476,8 @@ async fn prepare_capture(
             )
             .await?
         {
-            // Cancel already restored the stack and cleared HUD protection.
+            // Cancel already restored the stack, cleared HUD protection, and
+            // re-showed any capture-concealed document windows.
             return Ok(None);
         }
     }
@@ -549,6 +551,9 @@ async fn commit_region(
     rect: LogicalRect,
 ) -> CommandResult<Option<CaptureArtifact>> {
     hide_capture_overlay(&app);
+    // Keep editors ordered out until this commit finishes or fails. Intermediate
+    // frontmost restores (before a countdown) must not re-show them for a frame.
+    let _reveal_documents = RevealDocumentWindowsOnDrop::new(&app);
     let state = state.inner().clone();
     let id = Uuid::parse_str(&session_id).map_err(|error| error.to_string())?;
     let session = state
@@ -627,6 +632,9 @@ async fn commit_window(
     window_id: String,
 ) -> CommandResult<Option<CaptureArtifact>> {
     hide_capture_overlay(&app);
+    // Keep editors ordered out until this commit finishes or fails. Intermediate
+    // frontmost restores (before a countdown) must not re-show them for a frame.
+    let _reveal_documents = RevealDocumentWindowsOnDrop::new(&app);
     let state = state.inner().clone();
     let id = Uuid::parse_str(&session_id).map_err(|error| error.to_string())?;
     let session = state
@@ -727,6 +735,7 @@ fn cancel_capture(
     if let Some(session) = state.sessions.lock().remove(&id) {
         restore_thumbnail_capture(&app, state.inner(), session.thumbnail_capture_generation);
     }
+    reveal_document_windows_after_capture(&app);
     Ok(())
 }
 
@@ -850,6 +859,7 @@ pub(crate) fn cancel_screenshot_countdown_inner(app: &AppHandle, state: Arc<AppS
     if let Some(thumbnail_capture_generation) = thumbnail_capture_generation {
         restore_thumbnail_capture(app, &state, thumbnail_capture_generation);
     }
+    reveal_document_windows_after_capture(app);
 }
 
 fn show_screenshot_countdown(
@@ -895,15 +905,17 @@ fn show_screenshot_countdown(
 }
 
 fn destroy_screenshot_countdown(app: &AppHandle) {
+    // Restore the previous app while the countdown still covers the display so
+    // sibling document windows cannot flash above it for a frame when the timer
+    // webview is torn down. Document windows stay ordered out until
+    // reveal_document_windows_after_capture runs at session end.
+    #[cfg(target_os = "macos")]
+    captures_macos_window::restore_frontmost_app_after_capture();
     if let Some(window) = app.get_webview_window("screenshot-countdown")
         && let Err(error) = window.destroy()
     {
         eprintln!("failed to close screenshot countdown: {error}");
     }
-    // Match recording countdowns: the full-screen timer briefly activates
-    // Captures, then returns focus before the live frame is read.
-    #[cfg(target_os = "macos")]
-    captures_macos_window::restore_frontmost_app_after_capture();
 }
 
 #[tauri::command]
@@ -2035,6 +2047,9 @@ async fn finish_capture(
     image: RgbaImage,
     thumbnail_capture_generation: u64,
 ) -> Result<CaptureArtifact, AppError> {
+    // Re-show capture-concealed editors only after the capture session ends so
+    // they cannot flash above the restored frontmost app for a few frames.
+    let _reveal_documents = RevealDocumentWindowsOnDrop::new(app);
     #[cfg(target_os = "macos")]
     if let Err(error) = app.run_on_main_thread(|| {
         if let Err(error) = captures_macos_window::play_capture_sound() {
@@ -3817,7 +3832,9 @@ fn set_capture_huds_protected(app: &AppHandle, protected: bool) {
 
 fn hide_capture_overlay(app: &AppHandle) {
     // Restore the previous frontmost app while the overlay is still covering
-    // the screen so open editors cannot flash above Chrome/Discord for a frame.
+    // the screen. Titled document windows stay ordered out until
+    // reveal_document_windows_after_capture so they cannot flash for a frame
+    // when the overlay hides (including the overlay → countdown handoff).
     #[cfg(target_os = "macos")]
     captures_macos_window::restore_frontmost_app_after_capture();
     if let Some(window) = app.get_webview_window("overlay") {
@@ -3827,6 +3844,41 @@ fn hide_capture_overlay(app: &AppHandle) {
         if let Err(error) = captures_macos_window::reset_capture_overlay(&window) {
             eprintln!("failed to reset capture overlay: {error}");
         }
+    }
+}
+
+/// Re-shows document windows ordered out while a capture surface was active.
+///
+/// Safe to call multiple times; a second call is a no-op when nothing is stashed.
+pub(crate) fn reveal_document_windows_after_capture(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    {
+        let app = app.clone();
+        if let Err(error) = app.run_on_main_thread(|| {
+            captures_macos_window::reveal_concealed_document_windows();
+        }) {
+            eprintln!("failed to reveal document windows after capture: {error}");
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
+}
+
+/// Ensures [`reveal_document_windows_after_capture`] runs when a capture commit
+/// path returns (success, cancel, or error).
+pub(crate) struct RevealDocumentWindowsOnDrop {
+    app: AppHandle,
+}
+
+impl RevealDocumentWindowsOnDrop {
+    pub(crate) fn new(app: &AppHandle) -> Self {
+        Self { app: app.clone() }
+    }
+}
+
+impl Drop for RevealDocumentWindowsOnDrop {
+    fn drop(&mut self) {
+        reveal_document_windows_after_capture(&self.app);
     }
 }
 
