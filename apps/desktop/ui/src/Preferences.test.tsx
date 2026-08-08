@@ -137,16 +137,21 @@ describe("Preferences", () => {
         settings: expect.objectContaining({ show_mini_previews: false }),
       });
     });
+    expect(screen.getByText(
+      "Mini previews are off, so they won’t show in screenshots or recordings.",
+    )).toBeInTheDocument();
   });
 
-  it("can include mini previews in screenshots and recordings", async () => {
+  it("explains and updates mini preview visibility in screenshots and recordings", async () => {
     render(<Preferences />);
 
     const includePreviews = await screen.findByRole("checkbox", {
-      name: /Include mini previews in screenshots and recordings/,
+      name: /Show mini previews in screenshots and recordings/,
     });
     expect(includePreviews).not.toBeChecked();
     expect(includePreviews).toBeEnabled();
+    expect(screen.getByText("Mini previews won’t show in screenshots or recordings."))
+      .toBeInTheDocument();
     fireEvent.click(includePreviews);
 
     await waitFor(() => {
@@ -154,15 +159,20 @@ describe("Preferences", () => {
         settings: expect.objectContaining({ include_mini_previews_in_captures: true }),
       });
     });
+    expect(screen.getByText(
+      "Mini previews will show in screenshots and recordings. Turn this off to keep them out.",
+    )).toBeInTheDocument();
   });
 
-  it("can include recording controls in screenshots and recordings", async () => {
+  it("explains and updates recording control visibility in screenshots and recordings", async () => {
     render(<Preferences />);
 
     const includeControls = await screen.findByRole("checkbox", {
-      name: /Include recording controls in screenshots and recordings/,
+      name: /Show recording controls in screenshots and recordings/,
     });
     expect(includeControls).not.toBeChecked();
+    expect(screen.getByText("Recording controls won’t show in screenshots or recordings."))
+      .toBeInTheDocument();
     fireEvent.click(includeControls);
 
     await waitFor(() => {
@@ -170,6 +180,9 @@ describe("Preferences", () => {
         settings: expect.objectContaining({ include_recording_controls_in_captures: true }),
       });
     });
+    expect(screen.getByText(
+      "Recording controls will show in screenshots and recordings. Turn this off to keep them out.",
+    )).toBeInTheDocument();
   });
 
   it("automatically applies a newly recorded shortcut", async () => {

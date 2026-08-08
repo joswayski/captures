@@ -2399,7 +2399,7 @@ export function RecordingSelector() {
           </div>
         )}
         <p className="capture-selector-note">
-          {recordingControlsPrivacyText(
+          {recordingControlsVisibilityText(
             controlsExcluded ?? session.recording_capabilities.controls_excluded,
           )}{" "}
           <span aria-hidden="true">·</span> Press <kbd>Enter</kbd> to confirm
@@ -2460,10 +2460,17 @@ function roundRecordingRect(rect: RecordingRect, maxWidth: number, maxHeight: nu
   };
 }
 
-function recordingControlsPrivacyText(controlsExcluded: boolean | null): string {
-  if (controlsExcluded === true) return "These controls won’t appear in the output";
-  if (controlsExcluded === false) return "Hide these controls to keep them out of the recording";
-  return "Checking whether controls are excluded…";
+function recordingControlsVisibilityText(
+  controlsExcluded: boolean | null,
+  showHideHint = false,
+): string {
+  if (controlsExcluded === true) return "These controls won’t show in screenshots or recordings";
+  if (controlsExcluded === false) {
+    return showHideHint
+      ? "These controls will show in screenshots and recordings · Use Hide controls to keep them out"
+      : "These controls will show in screenshots and recordings";
+  }
+  return "Checking whether these controls will show…";
 }
 
 export function RecordingHud() {
@@ -2635,7 +2642,7 @@ export function RecordingHud() {
       onPointerDown={startHudDrag}
     >
       <span className="recording-hud-privacy">
-        {recordingControlsPrivacyText(controlsExcluded)}
+        {recordingControlsVisibilityText(controlsExcluded, true)}
       </span>
       <div className="recording-hud-main">
         <div className="recording-hud-status">
@@ -5910,10 +5917,13 @@ export function Preferences() {
             disabled={!settings.show_mini_previews}
           />
           <span>
-            Include mini previews in screenshots and recordings
+            Show mini previews in screenshots and recordings
             <small>
-              Off by default so Captures chrome stays out of captures. Turn on to
-              screenshot or record the preview stack (for feedback or demos).
+              {!settings.show_mini_previews
+                ? "Mini previews are off, so they won’t show in screenshots or recordings."
+                : settings.include_mini_previews_in_captures
+                  ? "Mini previews will show in screenshots and recordings. Turn this off to keep them out."
+                  : "Mini previews won’t show in screenshots or recordings."}
             </small>
           </span>
         </label>
@@ -5924,10 +5934,11 @@ export function Preferences() {
             onChange={(event) => update("include_recording_controls_in_captures", event.target.checked)}
           />
           <span>
-            Include recording controls in screenshots and recordings
+            Show recording controls in screenshots and recordings
             <small>
-              Off by default so the control bar stays out of captures. Turn on to
-              screenshot or record the menus that appear while recording (for feedback or demos).
+              {settings.include_recording_controls_in_captures
+                ? "Recording controls will show in screenshots and recordings. Turn this off to keep them out."
+                : "Recording controls won’t show in screenshots or recordings."}
             </small>
           </span>
         </label>

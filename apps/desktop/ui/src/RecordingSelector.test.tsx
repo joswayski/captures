@@ -254,7 +254,7 @@ describe("RecordingSelector", () => {
     expect(audioToggle).toBeDisabled();
     expect(microphone).toBeDisabled();
     expect(container.querySelector(".capture-selector-note")).toHaveTextContent(
-      "Hide these controls to keep them out of the recording",
+      "These controls will show in screenshots and recordings",
     );
     expect(invoke).not.toHaveBeenCalledWith("list_recording_audio_devices");
 
@@ -297,7 +297,7 @@ describe("RecordingSelector", () => {
     const regionGuidance = screen.getByText("Drag to select a region").closest(".capture-guidance");
     expect(regionGuidance).toHaveTextContent("Esc to cancel");
     expect(container.querySelector(".capture-selector-note")).toHaveTextContent(
-      "These controls won’t appear in the output · Press Enter to confirm",
+      "These controls won’t show in screenshots or recordings · Press Enter to confirm",
     );
     expect(screen.getByRole("button", { name: "Take screenshot" }))
       .toHaveAttribute("aria-keyshortcuts", "Enter");
