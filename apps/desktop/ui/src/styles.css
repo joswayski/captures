@@ -174,11 +174,14 @@ html.capture-window-cursor, html.capture-window-cursor * { cursor: var(--capture
 .capture-region .capture-shade { opacity: 0; transition: opacity .32s cubic-bezier(.42,0,.58,1); }
 .capture-region.capture-visible .capture-shade { opacity: 1; }
 .capture-window .capture-shade { fill: rgba(8, 12, 20, .4); background: rgba(8, 12, 20, .4); }
-.capture-guidance { position: absolute; z-index: 10; top: 18%; left: 50%; display: grid; min-width: 220px; padding: 11px 15px; justify-items: center; gap: 3px; border: 1px solid rgba(255,255,255,.3); border-radius: 10px; color: #f7f7f8; background: rgba(20,21,24,.92); box-shadow: 0 12px 34px rgba(0,0,0,.34), 0 0 0 1px rgba(255,255,255,.05) inset; backdrop-filter: blur(18px); pointer-events: none; text-align: center; transform: translateX(-50%); animation: capture-guidance-in .2s ease-out both; }
+.capture-guidance { position: absolute; z-index: 10; top: 18%; left: 50%; display: grid; min-width: 220px; padding: 11px 15px; justify-items: center; gap: 3px; border: 1px solid rgba(255,255,255,.3); border-radius: 10px; color: #f7f7f8; background: rgba(20,21,24,.92); box-shadow: 0 12px 34px rgba(0,0,0,.34), 0 0 0 1px rgba(255,255,255,.05) inset; backdrop-filter: blur(18px); pointer-events: none; text-align: center; opacity: 1; transform: translateX(-50%); transition: opacity .18s ease; animation: capture-guidance-in .2s ease-out both; }
 .capture-guidance strong { font-size: 13px; font-weight: 800; }
 .capture-guidance span { color: rgba(247,247,248,.72); font-size: 11px; font-weight: 650; }
 .capture-guidance-feedback { border-color: rgba(var(--theme-accent-rgb),.72); color: var(--theme-accent-text-strong); background: var(--theme-accent-surface); animation: capture-guidance-nudge .3s ease-out; }
 .capture-guidance-feedback span { color: var(--theme-accent-text); }
+/* Fade out of the way under the cursor (or while dragging a region). Drop the
+   entrance animation so its fill-mode opacity does not fight the transition. */
+.capture-guidance[data-faded="true"] { opacity: 0; animation: none; transform: translateX(-50%); }
 @keyframes capture-guidance-in { from { opacity: 0; transform: translate(-50%, -5px); } to { opacity: 1; transform: translate(-50%, 0); } }
 @keyframes capture-guidance-nudge { 0%, 100% { margin-left: 0; } 25% { margin-left: -8px; } 75% { margin-left: 8px; } }
 /* Marquee only — outside dim comes from the atomic CaptureDim cutout. */
@@ -2465,5 +2468,6 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 @media (max-width: 460px) { .theme-options { grid-template-columns: repeat(3,minmax(0,1fr)); }.custom-theme-fields { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) {
   .recording-start:not(:disabled) > span::after, .capture-guidance, .recording-options-row { animation: none; }
+  .capture-guidance { transition-duration: .01ms; }
   .capture-segmented-indicator.ready { transition-duration: .01ms; }
 }

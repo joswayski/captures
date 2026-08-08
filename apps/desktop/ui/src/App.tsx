@@ -1242,21 +1242,56 @@ type RecordingPanelDrag = { pointerId: number; offsetX: number; offsetY: number 
 export function CaptureGuidance({
   mode,
   feedback = false,
+  hidden = false,
 }: {
   mode: Extract<CaptureMode, "region" | "window">;
   feedback?: boolean;
+  /** Fully hide while the user is dragging out a region selection. */
+  hidden?: boolean;
 }) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [cursorOver, setCursorOver] = useState(false);
   const title = mode === "window"
     ? "Select a window to continue"
     : feedback
       ? "Click and drag to select a region"
       : "Drag to select a region";
+  const faded = hidden || cursorOver;
+
+  // pointer-events: none so selection works through the label — track the
+  // cursor against the label bounds and fade it out of the way when covered.
+  useEffect(() => {
+    const onPointerMove = (event: PointerEvent) => {
+      const el = rootRef.current;
+      if (!el) return;
+      const bounds = el.getBoundingClientRect();
+      const over = event.clientX >= bounds.left
+        && event.clientX <= bounds.right
+        && event.clientY >= bounds.top
+        && event.clientY <= bounds.bottom;
+      setCursorOver((current) => (current === over ? current : over));
+    };
+    const onPointerLeave = () => {
+      setCursorOver((current) => (current ? false : current));
+    };
+    window.addEventListener("pointermove", onPointerMove, { passive: true });
+    document.documentElement.addEventListener("pointerleave", onPointerLeave);
+    window.addEventListener("blur", onPointerLeave);
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      document.documentElement.removeEventListener("pointerleave", onPointerLeave);
+      window.removeEventListener("blur", onPointerLeave);
+    };
+  }, []);
 
   return (
     <div
+      ref={rootRef}
       className={`capture-guidance${feedback ? " capture-guidance-feedback" : ""}`}
+      data-faded={faded ? "true" : undefined}
       role="status"
       aria-live="polite"
+      aria-hidden={faded || undefined}
     >
       <strong>{title}</strong>
       <span>Esc to cancel</span>
@@ -1440,6 +1475,7 @@ export function RecordingSelector() {
   const [error, setError] = useState("");
   const [focusVisibleSessionId, setFocusVisibleSessionId] = useState<string | null>(null);
   const [controlsExcluded, setControlsExcluded] = useState<boolean | null>(null);
+  const [regionSelecting, setRegionSelecting] = useState(false);
   const surfaceRef = useRef<HTMLElement>(null);
   const panelRef = useRef<HTMLElement>(null);
   const panelDragRef = useRef<RecordingPanelDrag | null>(null);
@@ -1460,6 +1496,7 @@ export function RecordingSelector() {
     }
     regionDragRef.current = null;
     pendingRegionPointRef.current = null;
+    setRegionSelecting(false);
   }, []);
 
   const loadAudioDevices = useCallback(() => {
@@ -1817,7 +1854,10 @@ export function RecordingSelector() {
       origin: start,
       initial: region ?? { x: start.x, y: start.y, width: 0, height: 0 },
     };
-    if (mode === "create") setRegion({ x: start.x, y: start.y, width: 0, height: 0 });
+    if (mode === "create") {
+      setRegionSelecting(true);
+      setRegion({ x: start.x, y: start.y, width: 0, height: 0 });
+    }
   };
   const onPointerMove = (event: React.PointerEvent) => {
     if (!regionDragRef.current || targetMode !== "region") return;
@@ -2052,7 +2092,9 @@ export function RecordingSelector() {
         dimWithoutHole={targetMode === "window"}
         windowCornerRadius={activeWindowCornerRadius}
       />
-      {targetMode === "region" && <CaptureGuidance mode="region" />}
+      {targetMode === "region" && (
+        <CaptureGuidance mode="region" hidden={regionSelecting} />
+      )}
       {targetMode === "window" && !selectedWindow && <CaptureGuidance mode="window" />}
       {targetMode !== "window" && selectedRect && selectedRect.width > 0 && selectedRect.height > 0 && (
         <div
@@ -4075,6 +4117,7 @@ function CaptureOverlay() {
         key={`${sessionId}-${selectionFeedback}`}
         mode={mode === "region" ? "region" : "window"}
         feedback={mode === "region" && selectionFeedback > 0}
+        hidden={mode === "region" && Boolean(start)}
       />
       {hasSelection && rect && (
         <div
