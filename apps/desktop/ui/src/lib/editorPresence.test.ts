@@ -6,7 +6,7 @@ import {
 } from "./editorPresence";
 
 describe("editor presence reconciliation", () => {
-  it("exposes a leave duration for the mini-preview chip animation", () => {
+  it("exposes a leave duration for the mini-preview editor-control morph", () => {
     expect(EDITOR_PRESENCE_LEAVE_MS).toBeGreaterThan(0);
   });
 

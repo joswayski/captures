@@ -5,8 +5,9 @@ export type EditorLayerPresence = {
 };
 
 /**
- * Keep the “In editor” chip mounted this long after presence clears so the
- * leave animation can finish (must match `editor-presence-leave` in CSS).
+ * Keep editor-control labels + the mini-preview ring in the leave path this
+ * long after presence clears so the reverse morph / box-shadow ease can finish
+ * (must match `.thumbnail-editor-leaving` / control transitions in CSS).
  */
 export const EDITOR_PRESENCE_LEAVE_MS = 550;
 

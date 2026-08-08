@@ -4782,9 +4782,10 @@ export function ThumbnailCard({
   const [exit, setExit] = useState<"dismiss" | "delete" | null>(null);
   const [dustParticles, setDustParticles] = useState<ThumbnailDustParticle[] | null>(null);
   /**
-   * Chip/ring stay mounted through leave so they can fade when the editor closes.
-   * `trackedActive` mirrors the last `editorActive` prop we adjusted for, so we
-   * can update presence during render (avoids setState-in-effect).
+   * Editor control labels + card ring stay in the leave path so width/ring can
+   * ease when the editor closes. `trackedActive` mirrors the last `editorActive`
+   * prop we adjusted for, so we can update presence during render (avoids
+   * setState-in-effect).
    */
   const [editorPresence, setEditorPresence] = useState({
     visible: editorActive,
@@ -4852,7 +4853,7 @@ export function ThumbnailCard({
     };
   }, []);
 
-  // After presence leaves, unmount the chip once the leave animation finishes.
+  // After presence leaves, drop leave-held labels/ring once the ease finishes.
   useEffect(() => {
     if (!editorPresenceLeaving) return;
     const leaveMs = prefersReducedMotion() ? 0 : EDITOR_PRESENCE_LEAVE_MS;
@@ -5017,7 +5018,7 @@ export function ThumbnailCard({
       feedbackTimer.current = null;
     }
     // Freeze chrome *as rendered now* — never flip “Saved to Folder!” into Show in Folder.
-    // Keep the in-editor chip if presence is still fading out after the editor closed.
+    // Keep the in-editor control expanded if presence is still easing out.
     setExitChrome({
       feedback,
       hasPath: Boolean(artifact.path),
@@ -5079,9 +5080,13 @@ export function ThumbnailCard({
     copyFailed: artifact.clipboard_copy_status === "failed",
     editorActive: editorActive || editorPresenceVisible,
   };
-  // Live presence drives the Edit button; chip/ring may linger for leave animation.
-  const showEditorChip = isExiting ? chrome.editorActive : editorPresenceVisible;
-  const editorChipLeaving = !isExiting && editorPresenceLeaving;
+  // One top-right control: compact Edit ↔ present “In editor” pill.
+  // Live `editorActive` drives the expanded style; leave keeps labels mounted
+  // briefly so width can ease back, and the card ring uses the leaving class.
+  const editorControlPresent = isExiting ? chrome.editorActive : editorActive;
+  const editorControlLeaving = !isExiting && editorPresenceLeaving;
+  const mountEditorLabels = isExiting ? chrome.editorActive : editorPresenceVisible;
+  const editorControlAriaLabel = editorControlPresent ? "Show in editor" : "Edit";
   // Before a folder save: trash discards the preview (dissolve). After: trash deletes the file.
   // Close only appears once a file exists so you can hide the preview without trashing it.
   const usingDust = exit === "delete" && dustParticles !== null && dustParticles.length > 0;
@@ -5095,7 +5100,7 @@ export function ThumbnailCard({
         thumbnailReady ? "thumbnail-capture-highlight" : "",
         viewerActive && !isExiting ? "thumbnail-viewer-active" : "",
         editorActive && !isExiting ? "thumbnail-editor-active" : "",
-        editorChipLeaving ? "thumbnail-editor-leaving" : "",
+        editorControlLeaving ? "thumbnail-editor-leaving" : "",
         fileDragging ? "thumbnail-file-dragging" : "",
         exit ? `thumbnail-exit-${exit}` : "",
         usingDust ? "thumbnail-exit-dust" : "",
@@ -5167,17 +5172,28 @@ export function ThumbnailCard({
             </IconButton>
           )}
         </div>
-        <div className="thumbnail-top-right">
-          <IconButton
-            className={editorActive ? "active" : ""}
-            label={editorActive ? "Open editor" : "Edit"}
-            disabled={isExiting}
-            onClick={openEditor}
-          >
-            <EditIcon />
-          </IconButton>
-        </div>
       </div>
+      <button
+        type="button"
+        className={[
+          "thumbnail-editor-control",
+          editorControlPresent ? "is-present" : "",
+          editorControlLeaving ? "leaving" : "",
+        ].filter(Boolean).join(" ")}
+        aria-label={editorControlAriaLabel}
+        aria-pressed={editorControlPresent || undefined}
+        data-tooltip={editorControlPresent ? undefined : "Edit"}
+        disabled={isExiting}
+        onClick={isExiting ? undefined : openEditor}
+      >
+        <EditIcon />
+        {mountEditorLabels && (
+          <span className="thumbnail-editor-control-label" aria-hidden="true">
+            <span className="label-rest">In editor</span>
+            <span className="label-hover">Show in editor</span>
+          </span>
+        )}
+      </button>
       <div className="thumbnail-main-actions">
         {!chrome.clipboardCurrent && (
           <button
@@ -5210,17 +5226,6 @@ export function ThumbnailCard({
               : null}
         </div>
         <div className="thumbnail-status-chips">
-          {showEditorChip && (
-            <div
-              className={["editor-presence-chip", editorChipLeaving ? "leaving" : ""]
-                .filter(Boolean)
-                .join(" ")}
-              role="status"
-            >
-              <EditIcon />
-              <span>In editor</span>
-            </div>
-          )}
           {chrome.clipboardCurrent && (
             <div className="clipboard-confirmation" role="status">
               <CheckIcon />

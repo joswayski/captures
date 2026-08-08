@@ -474,15 +474,15 @@ describe("ThumbnailCard", () => {
     );
 
     const card = screen.getByRole("article");
+    const editorControl = screen.getByRole("button", { name: "Show in editor" });
     expect(card).toHaveClass("thumbnail-editor-active");
-    expect(screen.getByText("In editor")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Open editor" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    expect(editorControl).toHaveClass("is-present");
+    expect(editorControl).toHaveAttribute("aria-pressed", "true");
+    expect(within(editorControl).getByText("In editor")).toBeInTheDocument();
+    expect(within(editorControl).getByText("Show in editor")).toBeInTheDocument();
   });
 
-  it("fades out the in-editor chip when the capture is no longer in the editor", () => {
+  it("collapses the in-editor control when the capture leaves the editor", () => {
     vi.useFakeTimers();
     const { rerender } = render(
       <ThumbnailCard
@@ -493,7 +493,7 @@ describe("ThumbnailCard", () => {
         onRemoved={() => undefined}
       />,
     );
-    expect(screen.getByText("In editor")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show in editor" })).toHaveClass("is-present");
 
     rerender(
       <ThumbnailCard
@@ -504,20 +504,22 @@ describe("ThumbnailCard", () => {
         onRemoved={() => undefined}
       />,
     );
-    // Chip stays mounted for the leave animation; ring eases off via leaving class.
-    expect(screen.getByText("In editor")).toBeInTheDocument();
+    // Labels stay mounted for the reverse morph; ring eases via leaving class.
     const card = screen.getByRole("article");
+    const editorControl = screen.getByRole("button", { name: "Edit" });
     expect(card).not.toHaveClass("thumbnail-editor-active");
     expect(card).toHaveClass("thumbnail-editor-leaving");
-    expect(card.querySelector(".editor-presence-chip")).toHaveClass("leaving");
-    expect(screen.getByRole("button", { name: "Edit" })).not.toHaveAttribute(
-      "aria-pressed",
-    );
+    expect(editorControl).toHaveClass("leaving");
+    expect(editorControl).not.toHaveClass("is-present");
+    expect(editorControl).not.toHaveAttribute("aria-pressed");
+    expect(within(editorControl).getByText("In editor")).toBeInTheDocument();
 
     act(() => {
       vi.advanceTimersByTime(550);
     });
-    expect(screen.queryByText("In editor")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit" })).not.toHaveClass("leaving");
+    expect(within(screen.getByRole("button", { name: "Edit" })).queryByText("In editor"))
+      .not.toBeInTheDocument();
     expect(card).not.toHaveClass("thumbnail-editor-leaving");
     vi.useRealTimers();
   });
@@ -543,9 +545,7 @@ describe("ThumbnailCard", () => {
         onRemoved={() => undefined}
       />,
     );
-    expect(screen.getByRole("article").querySelector(".editor-presence-chip")).toHaveClass(
-      "leaving",
-    );
+    expect(screen.getByRole("button", { name: "Edit" })).toHaveClass("leaving");
 
     rerender(
       <ThumbnailCard
@@ -557,16 +557,19 @@ describe("ThumbnailCard", () => {
       />,
     );
     const card = screen.getByRole("article");
-    expect(screen.getByText("In editor")).toBeInTheDocument();
-    expect(card.querySelector(".editor-presence-chip")).not.toHaveClass("leaving");
+    const editorControl = screen.getByRole("button", { name: "Show in editor" });
+    expect(editorControl).toHaveClass("is-present");
+    expect(editorControl).not.toHaveClass("leaving");
     expect(card).toHaveClass("thumbnail-editor-active");
     expect(card).not.toHaveClass("thumbnail-editor-leaving");
+    expect(within(editorControl).getByText("In editor")).toBeInTheDocument();
 
     act(() => {
       vi.advanceTimersByTime(550);
     });
-    // Leave timer must not unmount after cancel.
-    expect(screen.getByText("In editor")).toBeInTheDocument();
+    // Leave timer must not drop labels after cancel.
+    expect(within(screen.getByRole("button", { name: "Show in editor" })).getByText("In editor"))
+      .toBeInTheDocument();
     vi.useRealTimers();
   });
 
@@ -588,7 +591,7 @@ describe("ThumbnailCard", () => {
     expect(card).toHaveClass("thumbnail-exit-dust");
   });
 
-  it("keeps the in-editor chip mounted during delete so it can fade with chrome", () => {
+  it("keeps the in-editor control expanded during delete so it can fade with chrome", () => {
     const { rerender } = render(
       <ThumbnailCard
         artifact={artifact(null)}
@@ -599,7 +602,7 @@ describe("ThumbnailCard", () => {
       />,
     );
 
-    expect(screen.getByText("In editor")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show in editor" })).toHaveClass("is-present");
 
     act(() => {
       screen.getByRole("button", { name: "Delete" }).click();
@@ -607,9 +610,10 @@ describe("ThumbnailCard", () => {
     const card = screen.getByRole("article");
     expect(card).toHaveClass("thumbnail-exit-delete");
     expect(card).toHaveClass("thumbnail-exiting");
-    // Still present for the chrome fade (CSS handles opacity), even if presence flips.
-    expect(screen.getByText("In editor")).toBeInTheDocument();
-    expect(card.querySelector(".editor-presence-chip")).not.toBeNull();
+    // Frozen chrome keeps the expanded control for the exit fade.
+    const editorControl = screen.getByRole("button", { name: "Show in editor" });
+    expect(editorControl).toHaveClass("is-present");
+    expect(within(editorControl).getByText("In editor")).toBeInTheDocument();
 
     rerender(
       <ThumbnailCard
@@ -620,7 +624,7 @@ describe("ThumbnailCard", () => {
         onRemoved={() => undefined}
       />,
     );
-    expect(screen.getByText("In editor")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show in editor" })).toHaveClass("is-present");
   });
 
   it("starts the delete disintegration animation when Delete is clicked after save", () => {
