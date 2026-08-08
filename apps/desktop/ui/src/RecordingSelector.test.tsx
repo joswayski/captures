@@ -59,6 +59,7 @@ const session: RecordingSelectionSession = {
   id: "selection-1",
   kind: "video",
   initial_mode: "recording",
+  initial_target: "region",
   recording_available: true,
   recording_capabilities: {
     system_audio: true,
@@ -69,7 +70,7 @@ const session: RecordingSelectionSession = {
   },
   display: {
     id: "display-1",
-    name: "Display",
+    name: "Built-in Retina Display",
     x: 0,
     y: 0,
     width: 1440,
@@ -77,6 +78,28 @@ const session: RecordingSelectionSession = {
     scale_factor: 2,
     is_primary: true,
   },
+  displays: [
+    {
+      id: "display-1",
+      name: "Built-in Retina Display",
+      x: 0,
+      y: 0,
+      width: 1440,
+      height: 900,
+      scale_factor: 2,
+      is_primary: true,
+    },
+    {
+      id: "display-2",
+      name: "Studio Display",
+      x: 1440,
+      y: 0,
+      width: 2560,
+      height: 1440,
+      scale_factor: 2,
+      is_primary: false,
+    },
+  ],
   window_coordinate_scale: 1,
   window_corner_radius: 25,
   snapshot_url: "capture://recording-selection/selection-1",
@@ -139,7 +162,7 @@ describe("RecordingSelector", () => {
       }
       return () => undefined;
     });
-    vi.mocked(invoke).mockImplementation(async (command) => {
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
       if (command === "get_recording_selection") return preparedSession;
       if (command === "get_settings") return settings;
       if (command === "list_recording_audio_devices") {
@@ -151,6 +174,17 @@ describe("RecordingSelector", () => {
       if (command === "show_recording_selector") {
         if (selectorShowError) throw selectorShowError;
         return undefined;
+      }
+      if (command === "select_capture_display") {
+        const displayId = (args as { displayId: string }).displayId;
+        const display = preparedSession.displays.find((candidate) => candidate.id === displayId);
+        if (!display) throw new Error("display is unavailable");
+        return {
+          ...preparedSession,
+          display,
+          snapshot_url: `${preparedSession.snapshot_url}?display=${display.id}`,
+          windows: [],
+        };
       }
       if (
         command === "reveal_recording_selector"
@@ -329,6 +363,49 @@ describe("RecordingSelector", () => {
         request: {
           selection_id: preparedSession.id,
           target: { type: "window", window_id: "back-window" },
+        },
+      });
+    });
+  });
+
+  it("starts full-screen capture on the current display and can switch displays before capture", async () => {
+    preparedSession = {
+      ...session,
+      initial_mode: "screenshot",
+      initial_target: "display",
+    };
+    const { container } = render(<RecordingSelector />);
+
+    expect(await screen.findByRole("button", { name: "Full screen", pressed: true }))
+      .toBeInTheDocument();
+    expect(container.querySelector(".recording-display-outline")).toBeInTheDocument();
+    expect(container.querySelector(".recording-display-identity")).toHaveTextContent(
+      "Built-in Retina Display1440 × 900",
+    );
+    expect(container.querySelector(".capture-shade-full")).toBeInTheDocument();
+    expect(container.querySelector(".recording-selection-display")).not.toBeInTheDocument();
+
+    const displayPicker = screen.getByRole("combobox", { name: "Display" });
+    expect(displayPicker).toHaveTextContent("Built-in Retina Display");
+    fireEvent.click(displayPicker);
+    fireEvent.click(screen.getByRole("option", { name: /Studio Display/ }));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("select_capture_display", {
+        selectionId: session.id,
+        displayId: "display-2",
+      });
+      expect(container.querySelector(".recording-display-identity")).toHaveTextContent(
+        "Studio Display2560 × 1440",
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Take screenshot" }));
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("capture_selection_screenshot", {
+        request: {
+          selection_id: preparedSession.id,
+          target: { type: "display", display_id: "display-2" },
         },
       });
     });

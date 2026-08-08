@@ -622,6 +622,18 @@ pub fn configure_capture_overlay(window: &WebviewWindow) -> Result<(), &'static 
     set_tracked_cursor(window, CursorMode::Arrow, CursorSurface::CaptureOverlay)
 }
 
+/// Keeps the interactive capture selector above system chrome so a selected
+/// display can be outlined from physical edge to physical edge, including the
+/// menu-bar strip at the top of a macOS display.
+pub fn configure_capture_selector(window: &WebviewWindow) -> Result<(), &'static str> {
+    let _main_thread =
+        MainThreadMarker::new().ok_or("capture selector setup must run on the main thread")?;
+    let native_window = native_window(window)?;
+    native_window.setLevel(NSStatusWindowLevel + 1);
+    native_window.setAcceptsMouseMovedEvents(true);
+    Ok(())
+}
+
 /// Makes a reused capture overlay transparent before bringing it onscreen.
 pub fn prepare_capture_overlay(window: &WebviewWindow) -> Result<(), &'static str> {
     let native_window = native_window(window)?;

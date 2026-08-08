@@ -1051,6 +1051,13 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 .recording-selector ::selection { color: inherit; background: transparent; }
 .recording-selector-snapshot { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; pointer-events: none; }
 .recording-target-region { cursor: crosshair; }
+.recording-target-display .capture-shade-full { background: rgba(9,10,16,.5); }
+.recording-display-outline { position: absolute; z-index: 8; inset: 0; box-shadow: 0 0 0 3px var(--chrome-active) inset, 0 0 28px rgba(var(--theme-accent-rgb),.2) inset; pointer-events: none; }
+.recording-display-identity { position: absolute; z-index: 9; top: 50%; left: 50%; display: grid; min-width: 280px; justify-items: center; gap: 7px; color: white; filter: drop-shadow(0 3px 10px rgba(0,0,0,.45)); pointer-events: none; text-align: center; transform: translate(-50%,-60%); }
+.recording-display-identity strong { font-size: 24px; font-weight: 850; letter-spacing: -.02em; }
+.recording-display-identity > span:last-child { color: rgba(255,255,255,.78); font-size: 12px; font-weight: 700; }
+.recording-display-icon { display: grid; width: 74px; height: 54px; margin-bottom: 3px; place-items: center; border: 1px solid rgba(255,255,255,.38); border-radius: 13px; color: white; background: rgba(18,19,24,.82); box-shadow: 0 12px 30px rgba(0,0,0,.34), 0 0 0 1px rgba(255,255,255,.08) inset; backdrop-filter: blur(18px); }
+.recording-display-icon svg { width: 39px; height: 39px; fill: none; stroke: currentColor; stroke-width: 1.45; stroke-linecap: round; stroke-linejoin: round; }
 .recording-selection-frame { position: absolute; z-index: 3; border: 2px solid var(--chrome-active); border-radius: 3px; background: transparent; box-shadow: 0 0 0 1px rgba(255,255,255,.45) inset; pointer-events: none; }
 .recording-selection-frame.movable { pointer-events: auto; cursor: move; }
 .recording-selection-frame > span { position: absolute; top: -30px; left: 50%; padding: 5px 8px; border: 1px solid rgba(0,0,0,.18); border-radius: 6px; color: var(--chrome-active-ink); background: var(--chrome-active); box-shadow: 0 4px 14px rgba(0,0,0,.28); font-size: 11px; font-weight: 800; transform: translateX(-50%); white-space: nowrap; }
@@ -1090,6 +1097,10 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 .capture-segmented-indicator { position: absolute; z-index: 0; top: 2px; bottom: 2px; left: 0; width: 0; border-radius: 7px; background: #3c3d42; box-shadow: 0 1px 3px rgba(0,0,0,.24); pointer-events: none; will-change: width, transform; }
 .capture-segmented-indicator.ready { transition: width .26s cubic-bezier(.2,.8,.2,1), transform .26s cubic-bezier(.2,.8,.2,1); }
 .recording-target-switch .capture-segmented-indicator { border-radius: 6px; }
+.recording-display-picker { width: 178px; flex: 0 0 178px; }
+.recording-display-picker .custom-select-trigger { width: 100%; min-height: 38px; padding: 7px 9px; }
+.recording-display-picker .custom-select-trigger > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recording-display-picker .custom-select-listbox { min-width: 230px; }
 .recording-cancel { margin-left: auto; color: #d3d3d7; }
 .recording-cancel:hover { background: #333439; }
 .recording-options-row { min-height: 69px; padding: 11px 12px; animation: recording-options-arrive .24s .04s cubic-bezier(.2,.8,.2,1) both; }

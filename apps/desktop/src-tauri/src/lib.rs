@@ -274,6 +274,7 @@ pub fn run() {
             updates::install_update,
             recording::prepare_recording,
             recording::get_recording_selection,
+            recording::select_capture_display,
             recording::show_recording_selector,
             recording::reveal_recording_selector,
             recording::cancel_recording_selection,
@@ -387,6 +388,14 @@ fn refresh_autostart_registration(app: &tauri::App) {
 }
 
 fn open_capture_controls(app: &AppHandle, initial_mode: CaptureSelectorMode) {
+    open_capture_controls_with_target(app, initial_mode, CaptureMode::Region);
+}
+
+fn open_capture_controls_with_target(
+    app: &AppHandle,
+    initial_mode: CaptureSelectorMode,
+    initial_target: CaptureMode,
+) {
     let state = app.state::<Arc<AppState>>().inner().clone();
     if !state.settings().onboarding_completed {
         show_onboarding(app);
@@ -397,8 +406,13 @@ fn open_capture_controls(app: &AppHandle, initial_mode: CaptureSelectorMode) {
     }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        if let Err(error) =
-            recording::prepare_capture_selector_inner(app.clone(), state, initial_mode).await
+        if let Err(error) = recording::prepare_capture_selector_inner(
+            app.clone(),
+            state,
+            initial_mode,
+            initial_target,
+        )
+        .await
         {
             match initial_mode {
                 CaptureSelectorMode::Screenshot => {
@@ -2690,6 +2704,14 @@ fn register_shortcut(app: &AppHandle, shortcut: &str, mode: CaptureMode) -> Resu
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
                 wait_for_capture_shortcut_release().await;
+                if mode == CaptureMode::Display && !recording::recording_session_is_active(&state) {
+                    open_capture_controls_with_target(
+                        &app,
+                        CaptureSelectorMode::Screenshot,
+                        CaptureMode::Display,
+                    );
+                    return;
+                }
                 if let Err(error) = start_capture_inner(app.clone(), state, mode).await
                     && !matches!(&error, AppError::CaptureInProgress)
                 {

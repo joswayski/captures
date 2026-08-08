@@ -1533,6 +1533,7 @@ export function RecordingSelector() {
   const [systemAudio, setSystemAudio] = useState(false);
   const [microphoneId, setMicrophoneId] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+  const [switchingDisplay, setSwitchingDisplay] = useState(false);
   const [error, setError] = useState("");
   const [focusVisibleSessionId, setFocusVisibleSessionId] = useState<string | null>(null);
   const [controlsExcluded, setControlsExcluded] = useState<boolean | null>(null);
@@ -1549,6 +1550,7 @@ export function RecordingSelector() {
   const sessionRef = useRef<RecordingSelectionSession | null>(null);
   const activeSessionIdRef = useRef<string | null>(null);
   const revealingSessionIdRef = useRef<string | null>(null);
+  const visibleSnapshotRef = useRef<string | null>(null);
 
   const clearRegionDrag = useCallback(() => {
     if (regionFrameRef.current !== null) {
@@ -1579,10 +1581,14 @@ export function RecordingSelector() {
       .finally(() => setDevicesLoading(false));
   }, [devicesLoaded, devicesLoading]);
 
-  const revealSelector = useCallback((selectionId: string) => {
+  const revealSelector = useCallback((selectionId: string, snapshotUrl: string) => {
     if (activeSessionIdRef.current !== selectionId) return;
-    if (revealingSessionIdRef.current === selectionId) return;
-    revealingSessionIdRef.current = selectionId;
+    const revealKey = `${selectionId}:${snapshotUrl}`;
+    if (
+      revealingSessionIdRef.current === revealKey
+      || visibleSnapshotRef.current === revealKey
+    ) return;
+    revealingSessionIdRef.current = revealKey;
     void invoke("show_recording_selector", { selectionId }).then(() => {
       let revealStarted = false;
       const finishReveal = () => {
@@ -1592,11 +1598,15 @@ export function RecordingSelector() {
         void invoke("reveal_recording_selector", { selectionId })
           .then(() => {
             if (activeSessionIdRef.current === selectionId) {
+              visibleSnapshotRef.current = revealKey;
+              if (revealingSessionIdRef.current === revealKey) {
+                revealingSessionIdRef.current = null;
+              }
               setFocusVisibleSessionId(selectionId);
             }
           })
           .catch((error) => {
-            if (revealingSessionIdRef.current === selectionId) {
+            if (revealingSessionIdRef.current === revealKey) {
               revealingSessionIdRef.current = null;
               setError(String(error));
             }
@@ -1611,7 +1621,7 @@ export function RecordingSelector() {
         RECORDING_SELECTOR_REVEAL_FALLBACK_MS,
       );
     }).catch((error) => {
-      if (revealingSessionIdRef.current === selectionId) {
+      if (revealingSessionIdRef.current === revealKey) {
         revealingSessionIdRef.current = null;
         setError(String(error));
       }
@@ -1623,12 +1633,14 @@ export function RecordingSelector() {
     activeSessionIdRef.current = null;
     sessionRef.current = null;
     revealingSessionIdRef.current = null;
+    visibleSnapshotRef.current = null;
     setFocusVisibleSessionId(null);
     setSession(null);
     clearRegionDrag();
     panelDragRef.current = null;
     setPanelDragging(false);
     setStarting(false);
+    setSwitchingDisplay(false);
     setError("");
     void invoke("cancel_recording_selection", { selectionId: selection.id }).catch((error) => {
       // A new selector may already be active by the time a stale cancellation
@@ -1638,7 +1650,7 @@ export function RecordingSelector() {
       sessionRef.current = selection;
       setSession(selection);
       setError(String(error));
-      revealSelector(selection.id);
+      revealSelector(selection.id, selection.snapshot_url);
     });
   }, [clearRegionDrag, revealSelector]);
 
@@ -1653,14 +1665,28 @@ export function RecordingSelector() {
         activeSessionIdRef.current === selection.id
         && sessionRef.current?.id === selection.id
       ) {
+        const previous = sessionRef.current;
+        const snapshotChanged = previous.snapshot_url !== selection.snapshot_url;
+        const revealKey = `${selection.id}:${selection.snapshot_url}`;
         sessionRef.current = selection;
         setSession(selection);
-        setActionMode(selection.initial_mode);
+        if (previous.initial_mode !== selection.initial_mode) {
+          setActionMode(selection.initial_mode);
+        }
+        if (previous.initial_target !== selection.initial_target) {
+          setTargetMode(selection.initial_target);
+        }
+        if (!snapshotChanged && visibleSnapshotRef.current === revealKey) {
+          visibleSnapshotRef.current = null;
+          revealSelector(selection.id, selection.snapshot_url);
+        }
+        setSwitchingDisplay(false);
         return;
       }
       activeSessionIdRef.current = selection.id;
       sessionRef.current = selection;
       revealingSessionIdRef.current = null;
+      visibleSnapshotRef.current = null;
       setFocusVisibleSessionId(null);
       setSession(selection);
       setActionMode(selection.initial_mode);
@@ -1679,7 +1705,7 @@ export function RecordingSelector() {
       setMicrophoneId(
         capabilities.microphone ? currentSettings.recording.microphone_device_id : null,
       );
-      setTargetMode("region");
+      setTargetMode(selection.initial_target);
       setSelectedWindow(null);
       setHoveredWindow(null);
       {
@@ -1691,6 +1717,7 @@ export function RecordingSelector() {
       setPanelDragging(false);
       setPanelPosition(null);
       setStarting(false);
+      setSwitchingDisplay(false);
       setError("");
     };
     const onSelectionReady = ({ payload }: { payload: RecordingSelectionSession }) => {
@@ -1769,10 +1796,12 @@ export function RecordingSelector() {
       active = false;
       activeSessionIdRef.current = null;
       sessionRef.current = null;
+      revealingSessionIdRef.current = null;
+      visibleSnapshotRef.current = null;
       clearRegionDrag();
       disposers.forEach((dispose) => dispose());
     };
-  }, [clearRegionDrag]);
+  }, [clearRegionDrag, revealSelector]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1820,10 +1849,10 @@ export function RecordingSelector() {
   useEffect(() => {
     if (!session?.id) return;
     const timer = window.setTimeout(() => {
-      revealSelector(session.id);
+      revealSelector(session.id, session.snapshot_url);
     }, 120);
     return () => window.clearTimeout(timer);
-  }, [session?.id, revealSelector]);
+  }, [session?.id, session?.snapshot_url, revealSelector]);
 
   useEffect(() => {
     if (
@@ -1975,6 +2004,12 @@ export function RecordingSelector() {
   });
   const activeWindow = hoveredWindow ?? selectedWindow;
   const activeWindowLayout = windowLayouts.find(({ window }) => window.id === activeWindow);
+  const displayOptions = (session.displays.length > 0 ? session.displays : [session.display])
+    .map((display, index) => ({
+      value: display.id,
+      label: display.name.trim() || `Display ${index + 1}`,
+      description: `${display.width} × ${display.height}${display.is_primary ? " · Primary" : ""}`,
+    }));
   const selectedRect = targetMode === "display"
     ? { x: 0, y: 0, width: surfaceSize.width, height: surfaceSize.height }
     : targetMode === "window"
@@ -1986,9 +2021,34 @@ export function RecordingSelector() {
         } : null
       : region;
   const activeWindowCornerRadius = activeWindowLayout?.cornerRadius ?? session.window_corner_radius;
-  const canStart = targetMode === "display"
+  const canStart = !switchingDisplay && (
+    targetMode === "display"
     || (targetMode === "window" && Boolean(selectedWindow))
-    || (targetMode === "region" && Boolean(region && region.width >= 2 && region.height >= 2));
+    || (targetMode === "region" && Boolean(region && region.width >= 2 && region.height >= 2))
+  );
+
+  const switchDisplay = async (displayId: string) => {
+    if (displayId === session.display.id || switchingDisplay || starting) return;
+    setSwitchingDisplay(true);
+    setError("");
+    try {
+      const next = await invoke<RecordingSelectionSession>("select_capture_display", {
+        selectionId: session.id,
+        displayId,
+      });
+      if (activeSessionIdRef.current !== next.id) return;
+      sessionRef.current = next;
+      setSession(next);
+      const nextOverlay = displayOverlaySize(next.display, next.window_coordinate_scale);
+      setRegion(defaultRecordingRegion(nextOverlay.width, nextOverlay.height));
+      setSelectedWindow(null);
+      setHoveredWindow(null);
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setSwitchingDisplay(false);
+    }
+  };
 
   const selectedTarget = (): RecordingTarget | null => {
     let target: RecordingTarget;
@@ -2009,7 +2069,7 @@ export function RecordingSelector() {
   };
 
   const start = async () => {
-    if (!canStart || starting) return;
+    if (!canStart || starting || switchingDisplay) return;
     const target = selectedTarget();
     if (!target) return;
     setStarting(true);
@@ -2140,24 +2200,37 @@ export function RecordingSelector() {
         src={session.snapshot_url}
         alt=""
         draggable={false}
-        onLoad={() => revealSelector(session.id)}
+        onLoad={() => revealSelector(session.id, session.snapshot_url)}
         onError={() => {
           setError("The frozen preview could not load. You can still select from the live desktop.");
-          revealSelector(session.id);
+          revealSelector(session.id, session.snapshot_url);
         }}
       />
       <CaptureDim
         mode={targetMode}
-        hole={selectedRect}
+        hole={targetMode === "display" ? null : selectedRect}
         bounds={surfaceSize}
         dimWithoutHole={targetMode === "window"}
         windowCornerRadius={activeWindowCornerRadius}
       />
+      {targetMode === "display" && <>
+        <div className="recording-display-outline" aria-hidden="true" />
+        <div className="recording-display-identity" aria-live="polite">
+          <span className="recording-display-icon" aria-hidden="true">
+            <CaptureTargetIcon mode="display" />
+          </span>
+          <strong>{session.display.name || "Display"}</strong>
+          <span>
+            {session.display.width} × {session.display.height}
+            {actionMode === "recording" ? ` · ${fps} FPS` : ""}
+          </span>
+        </div>
+      </>}
       {targetMode === "region" && (
         <CaptureGuidance mode="region" hidden={regionSelecting} />
       )}
       {targetMode === "window" && !selectedWindow && <CaptureGuidance mode="window" />}
-      {targetMode !== "window" && selectedRect && selectedRect.width > 0 && selectedRect.height > 0 && (
+      {targetMode === "region" && selectedRect && selectedRect.width > 0 && selectedRect.height > 0 && (
         <div
           className={`recording-selection-frame recording-selection-${targetMode}${targetMode === "region" ? " movable" : ""}`}
           style={{
@@ -2274,6 +2347,17 @@ export function RecordingSelector() {
               </button>
             ))}
           </div>
+          {targetMode === "display" && (
+            <div className="recording-display-picker">
+              <CustomSelect
+                value={session.display.id}
+                options={displayOptions}
+                ariaLabel="Display"
+                disabled={switchingDisplay || starting || displayOptions.length < 2}
+                onChange={(displayId) => void switchDisplay(displayId)}
+              />
+            </div>
+          )}
           <button
             className={`recording-start capture-selector-primary capture-selector-primary-${actionMode}`}
             type="button"
@@ -2287,6 +2371,7 @@ export function RecordingSelector() {
               : <span className="capture-record-dot" aria-hidden="true" />}
             {starting
               ? actionMode === "screenshot" ? "Capturing…" : "Starting…"
+              : switchingDisplay ? "Switching…"
               : actionMode === "screenshot" ? "Capture" : "Record"}
           </button>
         </div>

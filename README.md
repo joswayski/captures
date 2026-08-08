@@ -21,7 +21,7 @@ Preview builds update after every successful merge to `main` and may contain bug
 ## Features
 
 - Start with a first-run setup that checks required screen-capture access and explains when optional recording-audio access is requested.
-- Capture regions, windows, or full displays.
+- Capture regions, windows, or full displays. Full-screen selection starts on the display under the pointer and lets you switch displays before capturing.
 - Optional screenshot countdown after target selection so you can set up menus and hover states.
 - Record regions, windows, or full displays as H.264 video or GIF.
 - Record desktop audio and a microphone with pause, resume, restart, and mute controls.
@@ -72,7 +72,7 @@ Captures is ready for launch.
 | `Ctrl+Shift+Space` | Open New Capture |
 | `Ctrl+Shift+4` | Capture a region |
 | `Ctrl+Shift+W` | Capture a window |
-| `Ctrl+Shift+3` | Capture the display under the pointer |
+| `Ctrl+Shift+3` | Choose a display for a full-screen screenshot |
 | `Ctrl+Shift+5` | Record the screen, then save video or GIF |
 | `Ctrl+Shift+F` | Open Send Feedback |
 | `Esc` | Cancel an active capture, screenshot countdown, or recording countdown |
