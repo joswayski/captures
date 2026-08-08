@@ -91,6 +91,7 @@ enum AppError {
 
 type CommandResult<T> = Result<T, String>;
 const AUTOSTART_ARG: &str = "--captures-autostart";
+const ONBOARDING_WINDOW_LABEL: &str = "onboarding";
 const RECORDING_EDITOR_WINDOW_PREFIX: &str = "recording-editor-";
 const RECORDING_SAVED_NOTICE_LABEL: &str = "recording-saved";
 const RECORDING_SAVED_NOTICE_EVENT: &str = "recording-saved-artifact";
@@ -105,6 +106,15 @@ const WINDOW_CORNER_MASK_SAMPLES_PER_AXIS: u32 = 4;
 struct EditorLayerPresenceEvent {
     editor_id: String,
     artifact_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct OnboardingState {
+    platform: String,
+    screen_recording_required: bool,
+    screen_recording_granted: bool,
+    screen_recording_can_request: bool,
+    screen_recording_requested_this_launch: bool,
 }
 
 struct ClipboardWrite {
@@ -214,6 +224,10 @@ pub fn run() {
             get_active_session,
             get_pending_session,
             get_settings,
+            get_onboarding_state,
+            request_onboarding_screen_permission,
+            restart_captures_for_permissions,
+            complete_onboarding,
             set_shortcut_capture_suppressed,
             update_settings,
             get_artifacts,
@@ -317,7 +331,11 @@ pub fn run() {
             };
             refresh_autostart_registration(app);
             if pending_capture.is_none() {
-                if launched_from_autostart() {
+                let onboarding_completed =
+                    app.state::<Arc<AppState>>().settings().onboarding_completed;
+                if !onboarding_completed {
+                    show_onboarding(&handle);
+                } else if launched_from_autostart() {
                     if let Err(error) = show_startup_notice(&handle) {
                         eprintln!("failed to show Captures launch notice: {error}");
                     }
@@ -369,10 +387,14 @@ fn refresh_autostart_registration(app: &tauri::App) {
 }
 
 fn open_capture_controls(app: &AppHandle, initial_mode: CaptureSelectorMode) {
+    let state = app.state::<Arc<AppState>>().inner().clone();
+    if !state.settings().onboarding_completed {
+        show_onboarding(app);
+        return;
+    }
     if restore_hidden_recording_controls(app) {
         return;
     }
-    let state = app.state::<Arc<AppState>>().inner().clone();
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         if let Err(error) =
@@ -1054,6 +1076,68 @@ fn get_settings(state: tauri::State<'_, Arc<AppState>>) -> AppSettings {
 }
 
 #[tauri::command]
+fn get_onboarding_state(state: tauri::State<'_, Arc<AppState>>) -> CommandResult<OnboardingState> {
+    onboarding_state(state.inner()).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn request_onboarding_screen_permission(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> CommandResult<OnboardingState> {
+    #[cfg(target_os = "macos")]
+    {
+        let request_access =
+            mark_screen_permission_request(state.inner()).map_err(|error| error.to_string())?;
+        match state.backend.ensure_permission(request_access) {
+            Ok(()) => {}
+            Err(CaptureError::PermissionRequestStarted) => {
+                *state.screen_permission_requested_this_launch.lock() = true;
+            }
+            Err(CaptureError::PermissionDenied) => {
+                open_macos_screen_recording_settings(&app).map_err(|error| error.to_string())?;
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
+
+    onboarding_state(state.inner()).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn restart_captures_for_permissions(app: AppHandle) {
+    app.request_restart();
+}
+
+#[tauri::command]
+fn complete_onboarding(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> CommandResult<()> {
+    let permission = onboarding_state(state.inner()).map_err(|error| error.to_string())?;
+    if permission.screen_recording_required && !permission.screen_recording_granted {
+        return Err("screen recording access is required before setup can finish".to_owned());
+    }
+
+    let settings = {
+        let mut settings = state.settings.write();
+        if !settings.onboarding_completed {
+            settings.onboarding_completed = true;
+            storage::save_settings(&settings).map_err(|error| error.to_string())?;
+        }
+        settings.clone()
+    };
+    if let Err(error) = app.emit("settings-changed", &settings) {
+        eprintln!("failed to broadcast completed onboarding: {error}");
+    }
+    hide_window(&app, ONBOARDING_WINDOW_LABEL);
+    open_capture_controls(&app, CaptureSelectorMode::Screenshot);
+    Ok(())
+}
+
+#[tauri::command]
 fn set_shortcut_capture_suppressed(state: tauri::State<'_, Arc<AppState>>, suppressed: bool) {
     state
         .shortcut_capture_suppressed
@@ -1379,6 +1463,7 @@ fn update_settings(
     settings.last_screen_permission_request_id =
         previous_settings.last_screen_permission_request_id.clone();
     settings.pending_capture_after_restart = previous_settings.pending_capture_after_restart;
+    settings.onboarding_completed = previous_settings.onboarding_completed;
 
     let shortcuts_changed = settings.new_capture_shortcut != previous_settings.new_capture_shortcut
         || settings.region_shortcut != previous_settings.region_shortcut
@@ -2399,21 +2484,65 @@ fn display_contains_pointer(
         && y < top + f64::from(display.height)
 }
 
+fn onboarding_state(state: &AppState) -> Result<OnboardingState, AppError> {
+    #[cfg(target_os = "macos")]
+    {
+        let screen_recording_granted = state.backend.ensure_permission(false).is_ok();
+        return Ok(OnboardingState {
+            platform: std::env::consts::OS.to_owned(),
+            screen_recording_required: true,
+            screen_recording_granted,
+            screen_recording_can_request: !screen_recording_granted
+                && screen_permission_request_available(state)?,
+            screen_recording_requested_this_launch: *state
+                .screen_permission_requested_this_launch
+                .lock(),
+        });
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = state;
+        Ok(OnboardingState {
+            platform: std::env::consts::OS.to_owned(),
+            screen_recording_required: false,
+            screen_recording_granted: true,
+            screen_recording_can_request: false,
+            screen_recording_requested_this_launch: false,
+        })
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn screen_permission_request_id() -> Result<String, AppError> {
+    let executable = std::env::current_exe()?;
+    let metadata = executable.metadata()?;
+    let modified = metadata
+        .modified()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    Ok(format!(
+        "{}:{}:{modified}",
+        executable.to_string_lossy(),
+        metadata.len()
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn screen_permission_request_available(state: &AppState) -> Result<bool, AppError> {
+    let request_id = screen_permission_request_id()?;
+    Ok(state
+        .settings()
+        .last_screen_permission_request_id
+        .as_deref()
+        != Some(&request_id))
+}
+
 fn mark_screen_permission_request(state: &AppState) -> Result<bool, AppError> {
     #[cfg(target_os = "macos")]
     {
-        let executable = std::env::current_exe()?;
-        let metadata = executable.metadata()?;
-        let modified = metadata
-            .modified()?
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let request_id = format!(
-            "{}:{}:{modified}",
-            executable.to_string_lossy(),
-            metadata.len()
-        );
+        let request_id = screen_permission_request_id()?;
         let mut settings = state.settings.write();
         if settings.last_screen_permission_request_id.as_deref() == Some(&request_id) {
             return Ok(false);
@@ -2524,6 +2653,9 @@ fn register_new_capture_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), 
             if app
                 .get_webview_window("preferences")
                 .is_some_and(|window| window.is_focused().unwrap_or(false))
+                || app
+                    .get_webview_window(ONBOARDING_WINDOW_LABEL)
+                    .is_some_and(|window| window.is_focused().unwrap_or(false))
             {
                 return;
             }
@@ -2543,6 +2675,12 @@ fn register_shortcut(app: &AppHandle, shortcut: &str, mode: CaptureMode) -> Resu
     app.global_shortcut()
         .on_shortcut(parsed, move |app, _shortcut, event| {
             let state = app.state::<Arc<AppState>>().inner().clone();
+            if !state.settings().onboarding_completed {
+                if event.state() == ShortcutState::Released {
+                    show_onboarding(app);
+                }
+                return;
+            }
             let suppressed = shortcut_capture_is_suppressed(app, &state);
             let trigger_is_suppressed =
                 track_shortcut_suppression(&suppressed_while_pressed, event.state(), suppressed);
@@ -2569,6 +2707,12 @@ fn register_recording_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), Ap
     app.global_shortcut()
         .on_shortcut(parsed, move |app, _shortcut, event| {
             let state = app.state::<Arc<AppState>>().inner().clone();
+            if !state.settings().onboarding_completed {
+                if event.state() == ShortcutState::Released {
+                    show_onboarding(app);
+                }
+                return;
+            }
             let suppressed = shortcut_capture_is_suppressed(app, &state);
             let trigger_is_suppressed =
                 track_shortcut_suppression(&suppressed_while_pressed, event.state(), suppressed);
@@ -2589,6 +2733,13 @@ fn register_recording_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), Ap
 }
 
 fn shortcut_capture_is_suppressed(app: &AppHandle, state: &AppState) -> bool {
+    if !state.settings().onboarding_completed
+        && app
+            .get_webview_window(ONBOARDING_WINDOW_LABEL)
+            .is_some_and(|window| window.is_focused().unwrap_or(false))
+    {
+        return true;
+    }
     state.shortcut_capture_suppressed.load(Ordering::Acquire)
         && app
             .get_webview_window("preferences")
@@ -2823,6 +2974,48 @@ fn create_overlay_window(app: &AppHandle) -> Result<(), tauri::Error> {
 
 const STARTUP_NOTICE_WIDTH: f64 = 356.0;
 const STARTUP_NOTICE_HEIGHT: f64 = 112.0;
+const ONBOARDING_WINDOW_WIDTH: f64 = 860.0;
+const ONBOARDING_WINDOW_HEIGHT: f64 = 610.0;
+
+fn show_onboarding(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(ONBOARDING_WINDOW_LABEL) {
+        if let Err(error) = reveal_and_focus_document_window(&window) {
+            eprintln!("failed to reveal onboarding window: {error}");
+        }
+        return;
+    }
+
+    let app = app.clone();
+    let handle = app.clone();
+    if let Err(error) = app.run_on_main_thread(move || {
+        let result = WebviewWindowBuilder::new(
+            &handle,
+            ONBOARDING_WINDOW_LABEL,
+            WebviewUrl::App("index.html?view=onboarding".into()),
+        )
+        .title("Welcome to Captures")
+        .inner_size(ONBOARDING_WINDOW_WIDTH, ONBOARDING_WINDOW_HEIGHT)
+        .min_inner_size(720.0, 540.0)
+        .center()
+        .resizable(true)
+        .background_color(Color(244, 242, 236, 255))
+        .focused(false)
+        .visible(false)
+        .on_page_load(|window, payload| {
+            if payload.event() == PageLoadEvent::Finished
+                && let Err(error) = reveal_and_focus_document_window(&window)
+            {
+                eprintln!("failed to reveal onboarding window: {error}");
+            }
+        })
+        .build();
+        if let Err(error) = result {
+            eprintln!("failed to show onboarding window: {error}");
+        }
+    }) {
+        eprintln!("failed to schedule onboarding window: {error}");
+    }
+}
 
 fn show_startup_notice(app: &AppHandle) -> Result<(), tauri::Error> {
     let (x, y) = startup_notice_position(app);
@@ -3508,6 +3701,16 @@ fn capture_error_message(error: &AppError) -> String {
 }
 
 #[cfg(target_os = "macos")]
+fn open_macos_screen_recording_settings(app: &AppHandle) -> Result<(), AppError> {
+    app.opener()
+        .open_url(
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+            None::<&str>,
+        )
+        .map_err(|error| AppError::Task(error.to_string()))
+}
+
+#[cfg(target_os = "macos")]
 fn reset_macos_screen_capture_permission(app: &AppHandle) -> Result<(), AppError> {
     let status = Command::new("/usr/bin/tccutil")
         .args(["reset", "ScreenCapture", app.config().identifier.as_str()])
@@ -3642,6 +3845,9 @@ fn clear_editor_layer_presence_for_window(window: &tauri::Window) {
 }
 
 fn primary_app_window_priority(label: &str) -> Option<u8> {
+    if label == ONBOARDING_WINDOW_LABEL {
+        return Some(0);
+    }
     if matches!(
         label,
         "recording-selector" | "recording-countdown" | "screenshot-countdown"
@@ -3667,6 +3873,13 @@ fn focus_or_show_primary_app_window(app: &AppHandle) {
 }
 
 fn focus_primary_app_window(app: &AppHandle) {
+    if app
+        .try_state::<Arc<AppState>>()
+        .is_some_and(|state| !state.settings().onboarding_completed)
+    {
+        show_onboarding(app);
+        return;
+    }
     if restore_hidden_recording_controls(app) {
         return;
     }
@@ -4403,6 +4616,7 @@ fn captures_window_is_internal(window: &captures_capture::WindowDescriptor) -> b
     const INTERNAL_WINDOW_TITLES: &[&str] = &[
         "Captures",
         "Captures is running",
+        "Welcome to Captures",
         "Captures Recording Controls",
         "Captures Recording Countdown",
         "Captures Update",
@@ -4762,6 +4976,7 @@ mod tests {
         for title in [
             "Captures",
             "Captures is running",
+            "Welcome to Captures",
             "Captures Recording Controls",
             "Captures Recording Countdown",
             "Captures Update",
@@ -4804,6 +5019,22 @@ mod tests {
                 "viewer capability should grant {permission}"
             );
         }
+    }
+
+    #[test]
+    fn onboarding_window_can_close_after_setup() {
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/onboarding.json"))
+                .expect("onboarding capability should be valid JSON");
+
+        assert_eq!(capability["windows"], serde_json::json!(["onboarding"]));
+        assert!(
+            capability["permissions"]
+                .as_array()
+                .is_some_and(|permissions| permissions
+                    .iter()
+                    .any(|permission| permission == "core:window:allow-close"))
+        );
     }
 
     #[test]
@@ -5011,7 +5242,8 @@ mod tests {
     }
 
     #[test]
-    fn app_reopen_prefers_editors_over_utility_windows() {
+    fn app_reopen_prioritizes_onboarding_then_editors_over_utility_windows() {
+        assert_eq!(primary_app_window_priority("onboarding"), Some(0));
         assert_eq!(primary_app_window_priority("recording-editor-abc"), Some(1));
         assert_eq!(
             primary_app_window_priority("screenshot-editor-abc"),
