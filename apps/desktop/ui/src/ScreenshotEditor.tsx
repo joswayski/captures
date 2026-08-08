@@ -40,10 +40,17 @@ import {
   closestPointOnArrow,
   collectAlignmentSnapLines,
   collectEditorSourceArtifactIds,
+  applyFlattenLayers,
+  applyMergeLayerDown,
+  applyMergeVisibleLayers,
+  canFlattenLayers,
+  canMergeLayerDown,
+  canMergeVisibleLayers,
   createScreenshotDocument,
   cropDocument,
   duplicateScreenshotElement,
   elementBounds,
+  mergedLayerName,
   estimateCanvasExportBytes,
   expandDocumentForElement,
   expandDocumentToFitBounds,
@@ -678,6 +685,83 @@ function renderScreenshot(
     paintScreenshotElement(context, element, imageCache);
     context.restore();
   }
+}
+
+/** Paint a stack of layers (opacity + blend) in storage order onto a context. */
+function paintLayerStack(
+  context: CanvasRenderingContext2D,
+  layers: readonly ScreenshotElement[],
+  imageCache: Map<string, CachedImage>,
+): void {
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  for (const element of layers) {
+    context.save();
+    context.globalAlpha = Math.max(0, Math.min(1, element.opacity / 100));
+    context.globalCompositeOperation = element.blendMode;
+    paintScreenshotElement(context, element, imageCache);
+    context.restore();
+  }
+}
+
+/**
+ * Rasterize layers (optionally over a solid canvas background) into a PNG data
+ * URL covering the full document. Used by merge down / merge visible / flatten.
+ */
+function rasterizeLayersToImage(
+  document: Pick<ScreenshotDocument, "width" | "height">,
+  layers: readonly ScreenshotElement[],
+  imageCache: Map<string, CachedImage>,
+  background: string | null = null,
+): { src: string; width: number; height: number } {
+  const missing = layers
+    .filter((element): element is EditorImageElement => element.kind === "image")
+    .find((element) => imageCache.get(element.src)?.status !== "loaded");
+  if (missing) {
+    throw new Error(`${missing.name} has not finished loading.`);
+  }
+  const canvas = window.document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(document.width));
+  canvas.height = Math.max(1, Math.round(document.height));
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Canvas rendering is unavailable.");
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  if (background) {
+    context.fillStyle = background;
+    context.fillRect(0, 0, canvas.width, canvas.height);
+  }
+  paintLayerStack(context, layers, imageCache);
+  return {
+    src: canvas.toDataURL("image/png"),
+    width: canvas.width,
+    height: canvas.height,
+  };
+}
+
+function createMergedImageLayer(
+  id: string,
+  raster: { src: string; width: number; height: number },
+  name: string,
+  options: { locked?: boolean; source?: EditorImageElement["source"] } = {},
+): EditorImageElement {
+  return {
+    id,
+    kind: "image",
+    source: options.source ?? "imported",
+    src: raster.src,
+    name,
+    sourceArtifactId: null,
+    x: 0,
+    y: 0,
+    width: raster.width,
+    height: raster.height,
+    naturalWidth: raster.width,
+    naturalHeight: raster.height,
+    locked: options.locked ?? false,
+    visible: true,
+    opacity: 100,
+    blendMode: "source-over",
+  };
 }
 
 /**
@@ -1563,6 +1647,85 @@ export function ScreenshotEditor() {
     setTool("select");
     return true;
   }, [commitDocument, selectedId]);
+
+  const mergeSelectedDown = useCallback(() => {
+    const current = documentRef.current;
+    if (!current || !canMergeLayerDown(current.elements, selectedId)) return false;
+    const index = current.elements.findIndex(({ id }) => id === selectedId);
+    if (index <= 0) return false;
+    const below = current.elements[index - 1];
+    const selected = current.elements[index];
+    try {
+      const layers = [below, selected];
+      const raster = rasterizeLayersToImage(current, layers, imageCacheRef.current);
+      const merged = createMergedImageLayer(
+        editorId(),
+        raster,
+        mergedLayerName(layers),
+      );
+      ensureImage(merged.src);
+      commitDocument(applyMergeLayerDown(current, selected.id, merged));
+      setSelectedId(merged.id);
+      setEditingTextId(null);
+      setTool("select");
+      setImageRevision((revision) => revision + 1);
+      setError("");
+      return true;
+    } catch (reason) {
+      setError(String(reason));
+      return false;
+    }
+  }, [commitDocument, ensureImage, selectedId]);
+
+  const mergeVisibleLayers = useCallback(() => {
+    const current = documentRef.current;
+    if (!current || !canMergeVisibleLayers(current.elements)) return false;
+    const layers = current.elements.filter((element) => element.visible);
+    try {
+      const raster = rasterizeLayersToImage(current, layers, imageCacheRef.current);
+      const merged = createMergedImageLayer(editorId(), raster, "Merged");
+      ensureImage(merged.src);
+      commitDocument(applyMergeVisibleLayers(current, merged));
+      setSelectedId(merged.id);
+      setEditingTextId(null);
+      setTool("select");
+      setImageRevision((revision) => revision + 1);
+      setError("");
+      return true;
+    } catch (reason) {
+      setError(String(reason));
+      return false;
+    }
+  }, [commitDocument, ensureImage]);
+
+  const flattenImage = useCallback(() => {
+    const current = documentRef.current;
+    if (!current || !canFlattenLayers(current.elements, current.background)) return false;
+    const layers = current.elements.filter((element) => element.visible);
+    try {
+      const raster = rasterizeLayersToImage(
+        current,
+        layers,
+        imageCacheRef.current,
+        current.background,
+      );
+      const merged = createMergedImageLayer(editorId(), raster, "Flattened", {
+        locked: true,
+        source: "background",
+      });
+      ensureImage(merged.src);
+      commitDocument(applyFlattenLayers(current, merged));
+      setSelectedId(merged.id);
+      setEditingTextId(null);
+      setTool("select");
+      setImageRevision((revision) => revision + 1);
+      setError("");
+      return true;
+    } catch (reason) {
+      setError(String(reason));
+      return false;
+    }
+  }, [commitDocument, ensureImage]);
 
   const copySelectedLayer = useCallback(() => {
     const current = documentRef.current;
@@ -4015,12 +4178,56 @@ export function ScreenshotEditor() {
                 {selected.visible ? "Visible" : "Hidden"}
               </button>
             </div>
-            <div className="screenshot-layer-action-grid">
-              <button type="button" title="Duplicate (Command/Ctrl+D)" onClick={duplicateSelected}>
-                <EditorIcon name="duplicate" />Duplicate
+            {/* Pixlr-style compact tools: merge family + duplicate + delete */}
+            <div
+              className="screenshot-layer-tools"
+              role="toolbar"
+              aria-label="Layer actions"
+            >
+              <button
+                type="button"
+                title="Merge down — combine with the layer below"
+                aria-label="Merge down"
+                disabled={!canMergeLayerDown(editorDocument.elements, selected.id)}
+                onClick={() => { mergeSelectedDown(); }}
+              >
+                <EditorIcon name="merge-down" />
               </button>
-              <button type="button" disabled={selected.locked} onClick={deleteSelected}>
-                <EditorIcon name="trash" />Delete
+              <button
+                type="button"
+                title="Merge visible — combine all visible layers"
+                aria-label="Merge visible"
+                disabled={!canMergeVisibleLayers(editorDocument.elements)}
+                onClick={() => { mergeVisibleLayers(); }}
+              >
+                <EditorIcon name="merge-visible" />
+              </button>
+              <button
+                type="button"
+                title="Flatten image — bake everything into one locked layer"
+                aria-label="Flatten image"
+                disabled={!canFlattenLayers(editorDocument.elements, editorDocument.background)}
+                onClick={() => { flattenImage(); }}
+              >
+                <EditorIcon name="flatten" />
+              </button>
+              <button
+                type="button"
+                title="Duplicate (Command/Ctrl+D)"
+                aria-label="Duplicate"
+                onClick={duplicateSelected}
+              >
+                <EditorIcon name="duplicate" />
+              </button>
+              <button
+                type="button"
+                className="danger"
+                title="Delete layer"
+                aria-label="Delete"
+                disabled={selected.locked}
+                onClick={deleteSelected}
+              >
+                <EditorIcon name="trash" />
               </button>
             </div>
           </section>
@@ -4919,6 +5126,38 @@ function EditorIcon({ name }: { name: string }) {
   if (name === "eye") return <svg viewBox="0 0 24 24"><path d="M3 12s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6Z" /><circle cx="12" cy="12" r="2.5" /></svg>;
   if (name === "eye-off") return <svg viewBox="0 0 24 24"><path d="m4 4 16 16M9.5 6.4A9 9 0 0 1 12 6c5.5 0 9 6 9 6a15 15 0 0 1-2.2 2.9M14.4 17.6A9 9 0 0 1 12 18c-5.5 0-9-6-9-6a15 15 0 0 1 2.1-2.8" /></svg>;
   if (name === "duplicate") return <svg viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2" /><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3M13.5 11v5M11 13.5h5" /></svg>;
+  // Layer stack tools (Pixlr-style merge family).
+  if (name === "merge-down") {
+    return (
+      <svg viewBox="0 0 24 24">
+        <path d="M7 4h10v4H7z" />
+        <path d="M12 9v5" />
+        <path d="m9 12 3 3 3-3" />
+        <path d="M5 17h14v3H5z" />
+      </svg>
+    );
+  }
+  if (name === "merge-visible") {
+    return (
+      <svg viewBox="0 0 24 24">
+        <path d="M7 3h10v3H7z" />
+        <path d="M7 8h10v3H7z" />
+        <path d="M12 12v3" />
+        <path d="m9 13.5 3 3 3-3" />
+        <path d="M5 18h14v3H5z" />
+      </svg>
+    );
+  }
+  if (name === "flatten") {
+    return (
+      <svg viewBox="0 0 24 24">
+        <path d="M6 4h12v2.5H6z" />
+        <path d="M6 8.5h12v2.5H6z" />
+        <path d="M6 13h12v2.5H6z" />
+        <path d="M4 18h16v2.5H4z" />
+      </svg>
+    );
+  }
   if (name === "grip") return <svg viewBox="0 0 24 24"><circle cx="9" cy="7" r=".8" /><circle cx="15" cy="7" r=".8" /><circle cx="9" cy="12" r=".8" /><circle cx="15" cy="12" r=".8" /><circle cx="9" cy="17" r=".8" /><circle cx="15" cy="17" r=".8" /></svg>;
   if (name === "align-center") return <svg viewBox="0 0 24 24"><path d="M5 6h14M8 10h8M5 14h14M8 18h8" /></svg>;
   if (name === "align-right") return <svg viewBox="0 0 24 24"><path d="M5 6h14M9 10h10M5 14h14M9 18h10" /></svg>;

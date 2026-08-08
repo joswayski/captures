@@ -871,8 +871,14 @@ describe("ScreenshotEditor", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Locked" }));
     expect(screen.getByRole("button", { name: "Unlocked" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Duplicate" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Delete" })).toBeEnabled();
+    const layerTools = screen.getByRole("toolbar", { name: "Layer actions" });
+    expect(within(layerTools).getByRole("button", { name: "Duplicate" })).toBeEnabled();
+    expect(within(layerTools).getByRole("button", { name: "Delete" })).toBeEnabled();
+    // Single-layer document: nothing to merge into, and flatten only bakes when
+    // a solid canvas background remains (it does by default).
+    expect(within(layerTools).getByRole("button", { name: "Merge down" })).toBeDisabled();
+    expect(within(layerTools).getByRole("button", { name: "Merge visible" })).toBeDisabled();
+    expect(within(layerTools).getByRole("button", { name: "Flatten image" })).toBeEnabled();
     expect(
       within(layers).getByRole("button", { name: "Lock Original screenshot" }),
     ).toHaveAttribute("aria-pressed", "false");
