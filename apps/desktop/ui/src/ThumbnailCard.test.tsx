@@ -582,7 +582,7 @@ describe("ThumbnailCard", () => {
     vi.useRealTimers();
   });
 
-  it("deletes an unsaved preview with the dissolve animation", () => {
+  it("fades the wrapped source image beneath the delete dissolve", () => {
     render(
       <ThumbnailCard
         artifact={artifact(null)}
@@ -598,6 +598,9 @@ describe("ThumbnailCard", () => {
     const card = screen.getByRole("article");
     expect(card).toHaveClass("thumbnail-exit-delete");
     expect(card).toHaveClass("thumbnail-exit-dust");
+    const source = screen.getByRole("img", { name: "Screenshot preview" });
+    expect(source.parentElement).toHaveClass("thumbnail-media");
+    expect(source).toHaveClass("thumbnail-dust-source");
   });
 
   it("keeps the in-editor control expanded during delete so it can fade with chrome", () => {

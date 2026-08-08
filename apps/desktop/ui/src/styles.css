@@ -692,8 +692,9 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   opacity: 0 !important;
   transition: none !important;
 }
-.thumbnail-exit-delete.thumbnail-exit-dust > img {
-  /* Soft handoff — same hover blur/dim the whole time, only opacity eases out. */
+.thumbnail-exit-delete.thumbnail-exit-dust .thumbnail-dust-source {
+  /* Soft handoff — fade the live image beneath the generated dust chips.
+     The explicit source class survives media-shell or other DOM wrappers. */
   animation: thumbnail-delete-img-fade .55s cubic-bezier(.22, .1, .25, 1) both !important;
   pointer-events: none !important;
 }
