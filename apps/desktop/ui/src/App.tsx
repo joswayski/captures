@@ -16,6 +16,7 @@ import {
 } from "react";
 
 import { Feedback } from "./Feedback";
+import { NumberInput } from "./NumberInput";
 import { Onboarding } from "./Onboarding";
 import { ScreenshotEditor } from "./ScreenshotEditor";
 import { NotchedSlider } from "./RangeSlider";
@@ -3728,10 +3729,42 @@ export function RecordingEditor() {
           <h2>Crop & size</h2>
           <label className="check-row"><input type="checkbox" checked={cropEnabled} onChange={(event) => setCropEnabled(event.target.checked)} /><span>Crop recording</span></label>
           <div className="editor-number-grid">
-            <label>X<input type="number" min={0} max={Math.max(0, artifact.width - crop.width)} value={crop.x} disabled={!cropEnabled} onChange={(event) => updateCropOrigin("x", Number(event.target.value))} /></label>
-            <label>Y<input type="number" min={0} max={Math.max(0, artifact.height - crop.height)} value={crop.y} disabled={!cropEnabled} onChange={(event) => updateCropOrigin("y", Number(event.target.value))} /></label>
-            <label>Width<input type="number" min={2} max={Math.max(2, artifact.width - crop.x)} value={crop.width} disabled={!cropEnabled} onChange={(event) => updateCropDimension("width", Number(event.target.value))} /></label>
-            <label>Height<input type="number" min={2} max={Math.max(2, artifact.height - crop.y)} value={crop.height} disabled={!cropEnabled} onChange={(event) => updateCropDimension("height", Number(event.target.value))} /></label>
+            <label>X
+              <NumberInput
+                min={0}
+                max={Math.max(0, artifact.width - crop.width)}
+                value={crop.x}
+                disabled={!cropEnabled}
+                onChange={(value) => updateCropOrigin("x", value)}
+              />
+            </label>
+            <label>Y
+              <NumberInput
+                min={0}
+                max={Math.max(0, artifact.height - crop.height)}
+                value={crop.y}
+                disabled={!cropEnabled}
+                onChange={(value) => updateCropOrigin("y", value)}
+              />
+            </label>
+            <label>Width
+              <NumberInput
+                min={2}
+                max={Math.max(2, artifact.width - crop.x)}
+                value={crop.width}
+                disabled={!cropEnabled}
+                onChange={(value) => updateCropDimension("width", value)}
+              />
+            </label>
+            <label>Height
+              <NumberInput
+                min={2}
+                max={Math.max(2, artifact.height - crop.y)}
+                value={crop.height}
+                disabled={!cropEnabled}
+                onChange={(value) => updateCropDimension("height", value)}
+              />
+            </label>
           </div>
           <label className="check-row compact editor-aspect-lock"><input type="checkbox" checked={aspectLocked} onChange={(event) => setAspectLocked(event.target.checked)} /><span>Lock aspect ratio</span></label>
           <div className="editor-field editor-resolution-field"><span>Output resolution</span>
@@ -3750,7 +3783,16 @@ export function RecordingEditor() {
               onChange={(value) => setResolution(value as typeof resolution)}
             />
           </div>
-          {resolution === "custom" && <div className="editor-number-grid dimensions"><label>Width<input type="number" min={2} value={customWidth} onChange={(event) => setCustomWidth(Number(event.target.value))} /></label><label>Height<input type="number" min={2} value={customHeight} onChange={(event) => setCustomHeight(Number(event.target.value))} /></label></div>}
+          {resolution === "custom" && (
+            <div className="editor-number-grid dimensions">
+              <label>Width
+                <NumberInput min={2} value={customWidth} onChange={setCustomWidth} />
+              </label>
+              <label>Height
+                <NumberInput min={2} value={customHeight} onChange={setCustomHeight} />
+              </label>
+            </div>
+          )}
         </section>
 
         <section className="editor-card editor-quality-card">
@@ -3800,13 +3842,12 @@ export function RecordingEditor() {
           {sizeMode === "maximum" && (
             <div className="editor-field"><span>Maximum file size</span>
               <div className="editor-size-limit">
-                <input
-                  type="number"
+                <NumberInput
                   min={maximumUnit === "kb" ? 100 : maximumUnit === "mb" ? 0.1 : 0.0001}
                   step={maximumUnit === "kb" ? 1 : maximumUnit === "mb" ? 0.1 : 0.0001}
                   value={maximumSize}
-                  aria-label="Maximum file size"
-                  onChange={(event) => setMaximumSize(event.target.value)}
+                  ariaLabel="Maximum file size"
+                  onTextChange={setMaximumSize}
                 />
                 <CustomSelect
                   value={maximumUnit}
