@@ -650,7 +650,12 @@ describe("ScreenshotEditor", () => {
     });
 
     const layers = screen.getByRole("region", { name: "Layers" });
-    fireEvent.click(within(layers).getByRole("button", { name: /ArrowShape/ }));
+    const arrowLayer = within(layers).getByRole("button", { name: /ArrowShape/ });
+    // Shape layers paint a live canvas thumbnail (color/geometry), not a static icon.
+    expect(
+      arrowLayer.querySelector("canvas.screenshot-layer-preview-canvas"),
+    ).toBeTruthy();
+    fireEvent.click(arrowLayer);
     const curve = screen.getByRole("slider", { name: "Curve" });
     expect(curve).toHaveValue("0");
     expect(screen.getByText(/Drag the curve dots to reshape/)).toBeInTheDocument();

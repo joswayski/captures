@@ -24,7 +24,9 @@ import {
   curveStrokeHoverHint,
   duplicateScreenshotElement,
   elementBounds,
+  LAYER_PREVIEW_SIZE,
   mergedLayerName,
+  previewTransformForBounds,
   estimateCanvasExportBytes,
   expandDocumentForElement,
   expandDocumentToFitBounds,
@@ -1463,5 +1465,42 @@ describe("layer merge and flatten helpers", () => {
   it("names merged layers from the first image when present", () => {
     expect(mergedLayerName([textLayer("t", "Hi"), baseImage("i", "Photo")])).toBe("Photo");
     expect(mergedLayerName([textLayer("t", "Hi")])).toBe("Merged");
+  });
+});
+
+describe("layer preview transform", () => {
+  it("fits content bounds into the layers thumbnail with padding and centering", () => {
+    const bounds = { x: 100, y: 50, width: 200, height: 100 };
+    const { scale, translateX, translateY } = previewTransformForBounds(bounds);
+
+    // 46×34 box, 3px padding → 40×28 inner; 200×100 is width-limited (40/200).
+    expect(scale).toBeCloseTo(40 / 200, 5);
+
+    const left = translateX + bounds.x * scale;
+    const top = translateY + bounds.y * scale;
+    const right = left + bounds.width * scale;
+    const bottom = top + bounds.height * scale;
+
+    expect(left).toBeGreaterThanOrEqual(3 - 0.01);
+    expect(top).toBeGreaterThanOrEqual(3 - 0.01);
+    expect(right).toBeLessThanOrEqual(LAYER_PREVIEW_SIZE.width - 3 + 0.01);
+    expect(bottom).toBeLessThanOrEqual(LAYER_PREVIEW_SIZE.height - 3 + 0.01);
+
+    // Flush on the horizontal padding edges; centered vertically.
+    expect(left).toBeCloseTo(3, 5);
+    expect(right).toBeCloseTo(LAYER_PREVIEW_SIZE.width - 3, 5);
+    const centerY = (top + bottom) / 2;
+    expect(centerY).toBeCloseTo(LAYER_PREVIEW_SIZE.height / 2, 5);
+  });
+
+  it("handles tall thin bounds without exceeding the preview box", () => {
+    const bounds = { x: 0, y: 0, width: 4, height: 400 };
+    const { scale, translateX, translateY } = previewTransformForBounds(bounds);
+    expect(scale).toBeCloseTo(28 / 400, 5);
+
+    const left = translateX + bounds.x * scale;
+    const right = left + bounds.width * scale;
+    expect(right - left).toBeLessThan(LAYER_PREVIEW_SIZE.width);
+    expect(translateY + bounds.y * scale).toBeCloseTo(3, 5);
   });
 });
