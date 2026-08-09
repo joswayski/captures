@@ -21,6 +21,13 @@ export type Rgba = {
 
 export type RemoveBackgroundMode = "wand" | "erase" | "restore";
 
+export type ImageDataDirtyRect = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
 /** Default magic-wand tolerance (0–255 max channel delta). */
 export const DEFAULT_WAND_TOLERANCE = 36;
 
@@ -113,6 +120,30 @@ export function removeBgBrushScreenDiameter(
   displayScale: number,
 ): number {
   return Math.max(1, documentBrushSize * Math.max(0.01, displayScale));
+}
+
+/** Smallest natural-image rectangle that can be touched by a brush segment. */
+export function brushStrokeDirtyRect(
+  imageWidth: number,
+  imageHeight: number,
+  fromX: number,
+  fromY: number,
+  toX: number,
+  toY: number,
+  radius: number,
+): ImageDataDirtyRect | null {
+  if (imageWidth <= 0 || imageHeight <= 0 || radius <= 0) return null;
+  const minX = Math.max(0, Math.floor(Math.min(fromX, toX) - radius));
+  const minY = Math.max(0, Math.floor(Math.min(fromY, toY) - radius));
+  const maxX = Math.min(imageWidth - 1, Math.ceil(Math.max(fromX, toX) + radius));
+  const maxY = Math.min(imageHeight - 1, Math.ceil(Math.max(fromY, toY) + radius));
+  if (maxX < minX || maxY < minY) return null;
+  return {
+    x: minX,
+    y: minY,
+    width: maxX - minX + 1,
+    height: maxY - minY + 1,
+  };
 }
 
 export function samplePixel(data: ImageData, x: number, y: number): Rgba | null {
@@ -603,13 +634,25 @@ export function imageToImageData(image: CanvasImageSource & {
 export function imageDataToCanvas(
   imageData: ImageData,
   canvas?: HTMLCanvasElement,
+  dirtyRect?: ImageDataDirtyRect | null,
 ): HTMLCanvasElement {
   const target = canvas ?? document.createElement("canvas");
+  const resized = target.width !== imageData.width || target.height !== imageData.height;
   if (target.width !== imageData.width) target.width = imageData.width;
   if (target.height !== imageData.height) target.height = imageData.height;
   const context = target.getContext("2d");
   if (!context) {
     throw new Error("Could not write image pixels for the eraser.");
+  }
+  if (dirtyRect && !resized) {
+    const x = Math.max(0, Math.floor(dirtyRect.x));
+    const y = Math.max(0, Math.floor(dirtyRect.y));
+    const right = Math.min(imageData.width, Math.ceil(dirtyRect.x + dirtyRect.width));
+    const bottom = Math.min(imageData.height, Math.ceil(dirtyRect.y + dirtyRect.height));
+    if (right > x && bottom > y) {
+      context.putImageData(imageData, 0, 0, x, y, right - x, bottom - y);
+      return target;
+    }
   }
   context.putImageData(imageData, 0, 0);
   return target;

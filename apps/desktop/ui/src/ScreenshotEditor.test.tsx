@@ -1185,6 +1185,109 @@ describe("ScreenshotEditor", () => {
     });
   });
 
+  it("coalesces erase paints and keeps the committed bitmap decoded on release", async () => {
+    const brushArtifact = { ...artifact, width: 20, height: 10 };
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifact") return brushArtifact;
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    const operations: string[] = [];
+    const putImageData = vi.fn();
+    const context = {
+      clearRect: vi.fn(() => operations.push("clear")),
+      fillRect: vi.fn(),
+      drawImage: vi.fn((source: CanvasImageSource) => {
+        operations.push(source instanceof HTMLCanvasElement ? "draw-canvas" : "draw-image");
+      }),
+      getImageData: vi.fn((_x: number, _y: number, width: number, height: number) => {
+        const data = new Uint8ClampedArray(width * height * 4);
+        for (let index = 3; index < data.length; index += 4) data[index] = 255;
+        return { data, width, height, colorSpace: "srgb" } as ImageData;
+      }),
+      putImageData,
+      save: vi.fn(),
+      restore: vi.fn(),
+      translate: vi.fn(),
+      transform: vi.fn(),
+      setLineDash: vi.fn(),
+      strokeRect: vi.fn(),
+      imageSmoothingEnabled: true,
+      imageSmoothingQuality: "high",
+    } as unknown as CanvasRenderingContext2D;
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(context);
+    vi.spyOn(HTMLCanvasElement.prototype, "toDataURL")
+      .mockReturnValue("data:image/png;base64,edited");
+
+    const imageSources: string[] = [];
+    const originalImage = window.Image;
+    class LoadedImage {
+      onload: ((event: Event) => void) | null = null;
+      onerror: ((event: Event) => void) | null = null;
+      naturalWidth = brushArtifact.width;
+      naturalHeight = brushArtifact.height;
+      width = brushArtifact.width;
+      height = brushArtifact.height;
+      crossOrigin = "";
+      set src(value: string) {
+        imageSources.push(value);
+        if (!value.startsWith("data:")) {
+          queueMicrotask(() => this.onload?.(new Event("load")));
+        }
+      }
+    }
+    // @ts-expect-error focused Image decode stub
+    window.Image = LoadedImage;
+
+    try {
+      render(<ScreenshotEditor />);
+      await screen.findByLabelText("Width");
+      fireEvent.click(screen.getByRole("button", { name: "Eraser (B)" }));
+      fireEvent.click(screen.getByRole("button", { name: "Erase" }));
+      fireEvent.change(screen.getByLabelText("Brush size"), { target: { value: "4" } });
+
+      const canvas = document.querySelector("canvas.screenshot-canvas") as HTMLCanvasElement;
+      setCanvasBounds(canvas, brushArtifact.width, brushArtifact.height);
+      fireEvent.pointerDown(canvas, {
+        button: 0,
+        clientX: 2,
+        clientY: 5,
+        pointerId: 7,
+      });
+
+      const frames: FrameRequestCallback[] = [];
+      vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+        frames.push(callback);
+        return frames.length;
+      });
+      putImageData.mockClear();
+      fireEvent.pointerMove(canvas, { clientX: 4, clientY: 5, pointerId: 7 });
+      fireEvent.pointerMove(canvas, { clientX: 8, clientY: 5, pointerId: 7 });
+
+      expect(frames).toHaveLength(1);
+      expect(putImageData).not.toHaveBeenCalled();
+      act(() => frames.shift()?.(0));
+      expect(putImageData).toHaveBeenCalledOnce();
+      expect(putImageData.mock.calls[0]).toHaveLength(7);
+      expect(putImageData.mock.calls[0]?.slice(3)).toEqual([0, 3, 11, 5]);
+
+      operations.length = 0;
+      fireEvent.pointerUp(canvas, { clientX: 8, clientY: 5, pointerId: 7 });
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: "Undo" })).toBeEnabled();
+      });
+
+      // The committed data URL is backed by the working canvas immediately;
+      // no second Image decode can clear the editor while it is still loading.
+      expect(imageSources).not.toContain("data:image/png;base64,edited");
+      const lastClear = operations.lastIndexOf("clear");
+      expect(lastClear).toBeGreaterThanOrEqual(0);
+      expect(operations.slice(lastClear + 1)).toContain("draw-canvas");
+    } finally {
+      window.Image = originalImage;
+    }
+  });
+
   it("can clear the solid canvas background for transparent PNG/WebP exports", async () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");

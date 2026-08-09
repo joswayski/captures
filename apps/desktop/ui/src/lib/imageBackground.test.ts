@@ -3,9 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   applyImageBackgroundEdit,
   brushRadiusInNaturalPixels,
+  brushStrokeDirtyRect,
   colorDistanceRgb,
   documentPointToImagePixel,
   hitTestImageElement,
+  imageDataToCanvas,
   removeBgBrushScreenDiameter,
   removeColorToTransparent,
   rgbaToCss,
@@ -149,6 +151,24 @@ describe("removeBgBrushScreenDiameter", () => {
   });
 });
 
+describe("brushStrokeDirtyRect", () => {
+  it("bounds a segment and clamps it to the natural image", () => {
+    expect(brushStrokeDirtyRect(100, 80, 10, 12, 30, 40, 5)).toEqual({
+      x: 5,
+      y: 7,
+      width: 31,
+      height: 39,
+    });
+    expect(brushStrokeDirtyRect(100, 80, 1, 1, 2, 2, 5)).toEqual({
+      x: 0,
+      y: 0,
+      width: 8,
+      height: 8,
+    });
+    expect(brushStrokeDirtyRect(100, 80, 10, 10, 20, 20, 0)).toBeNull();
+  });
+});
+
 describe("colorDistanceRgb", () => {
   it("uses max channel delta", () => {
     expect(colorDistanceRgb(
@@ -281,6 +301,42 @@ describe("wand loupe helpers", () => {
     expect(nearCorner.top).toBeLessThan(590);
     expect(nearCorner.left + WAND_LOUPE_SIZE_PX).toBeLessThanOrEqual(800 - 8);
     expect(nearCorner.top + WAND_LOUPE_SIZE_PX).toBeLessThanOrEqual(600 - 8);
+  });
+});
+
+describe("imageDataToCanvas", () => {
+  it("uploads only the dirty brush rectangle when reusing a canvas", () => {
+    const image = solidImageData(20, 10, [20, 40, 60, 255]);
+    const canvas = document.createElement("canvas");
+    canvas.width = image.width;
+    canvas.height = image.height;
+    const putImageData = vi.fn();
+    const getContext = vi.spyOn(canvas, "getContext").mockReturnValue({
+      putImageData,
+    } as unknown as CanvasRenderingContext2D);
+
+    imageDataToCanvas(image, canvas, { x: 2, y: 3, width: 5, height: 4 });
+
+    expect(putImageData).toHaveBeenCalledOnce();
+    expect(putImageData).toHaveBeenCalledWith(image, 0, 0, 2, 3, 5, 4);
+    getContext.mockRestore();
+  });
+
+  it("uploads the full image when the target canvas must be resized", () => {
+    const image = solidImageData(20, 10, [20, 40, 60, 255]);
+    const canvas = document.createElement("canvas");
+    const putImageData = vi.fn();
+    const getContext = vi.spyOn(canvas, "getContext").mockReturnValue({
+      putImageData,
+    } as unknown as CanvasRenderingContext2D);
+
+    imageDataToCanvas(image, canvas, { x: 2, y: 3, width: 5, height: 4 });
+
+    expect(canvas.width).toBe(20);
+    expect(canvas.height).toBe(10);
+    expect(putImageData).toHaveBeenCalledOnce();
+    expect(putImageData).toHaveBeenCalledWith(image, 0, 0);
+    getContext.mockRestore();
   });
 });
 
