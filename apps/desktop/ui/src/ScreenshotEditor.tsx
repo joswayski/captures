@@ -18,13 +18,13 @@ import { formatFileSize } from "./lib/format";
 import {
   applyImageBackgroundEdit,
   brushRadiusInNaturalPixels,
+  brushStrokeDirtyRect,
   DEFAULT_BRUSH_HARDNESS,
   DEFAULT_REMOVE_BG_BRUSH_SIZE,
   DEFAULT_WAND_TOLERANCE,
   documentPointToImagePixel,
   hitTestImageElement,
   imageDataToCanvas,
-  imageDataToPngDataUrl,
   imageToImageData,
   paintWandColorLoupe,
   removeBgBrushScreenDiameter,
@@ -139,7 +139,7 @@ type ScreenshotQualityMode = "preserve" | "compress" | "maximum";
 type ScreenshotFileSizeUnit = "kb" | "mb" | "gb";
 
 type CachedImage = {
-  image: HTMLImageElement;
+  image: HTMLImageElement | HTMLCanvasElement;
   status: "loading" | "loaded" | "error";
 };
 
@@ -192,8 +192,11 @@ type EditorGesture =
     originalData: ImageData | null;
     radius: number;
     lastPixel: { x: number; y: number } | null;
+    pendingPixel: { x: number; y: number } | null;
     changed: boolean;
   };
+
+type RemoveBackgroundGesture = Extract<EditorGesture, { kind: "remove-bg" }>;
 
 type PanGesture = {
   pointerId: number;
@@ -1337,8 +1340,6 @@ export function ScreenshotEditor() {
   const [wandContiguous, setWandContiguous] = useState(true);
   const [removeBgBrushSize, setRemoveBgBrushSize] = useState(DEFAULT_REMOVE_BG_BRUSH_SIZE);
   const [removeBgBusy, setRemoveBgBusy] = useState(false);
-  /** Bumps the canvas paint path while an erase/restore stroke is live. */
-  const [removeBgLiveTick, setRemoveBgLiveTick] = useState(0);
   const [defaultStyle, setDefaultStyle] = useState<ElementStyle>({
     color: "#ff3b5c",
     fill: null,
@@ -1432,6 +1433,8 @@ export function ScreenshotEditor() {
   const surfaceRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const expandOverflowCanvasRef = useRef<HTMLCanvasElement>(null);
+  const brushCursorElementRef = useRef<HTMLDivElement>(null);
+  const brushCursorPositionRef = useRef({ clientX: 0, clientY: 0 });
   const inlineTextRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageCacheRef = useRef(new Map<string, CachedImage>());
@@ -1458,11 +1461,20 @@ export function ScreenshotEditor() {
   const dropDepthRef = useRef(0);
   const displayedZoomPercentRef = useRef(100);
   const zoomAnchorFrameRef = useRef<number | null>(null);
+  const removeBgPreviewFrameRef = useRef<number | null>(null);
   const magnifyGestureRef = useRef<{
     initialZoomPercent: number;
     clientX: number;
     clientY: number;
   } | null>(null);
+
+  const attachBrushCursor = useCallback((element: HTMLDivElement | null) => {
+    brushCursorElementRef.current = element;
+    if (!element) return;
+    const { clientX, clientY } = brushCursorPositionRef.current;
+    element.style.left = `${clientX}px`;
+    element.style.top = `${clientY}px`;
+  }, []);
 
   const refreshDropToastAnchor = useCallback(() => {
     const viewport = viewportRef.current;
@@ -1527,6 +1539,9 @@ export function ScreenshotEditor() {
     }
     if (zoomAnchorFrameRef.current !== null) {
       window.cancelAnimationFrame(zoomAnchorFrameRef.current);
+    }
+    if (removeBgPreviewFrameRef.current !== null) {
+      window.cancelAnimationFrame(removeBgPreviewFrameRef.current);
     }
   }, []);
 
@@ -1887,7 +1902,7 @@ export function ScreenshotEditor() {
     return () => observer.disconnect();
   }, [editorDocument]);
 
-  useEffect(() => {
+  const paintEditorCanvas = useCallback(() => {
     if (!editorDocument || !canvasRef.current) return;
     editorDocument.elements
       .filter((element): element is EditorImageElement => element.kind === "image")
@@ -1935,10 +1950,12 @@ export function ScreenshotEditor() {
     editorDocument,
     resizePreviewBounds,
     ensureImage,
-    imageRevision,
-    removeBgLiveTick,
     selected,
   ]);
+
+  useEffect(() => {
+    paintEditorCanvas();
+  }, [imageRevision, paintEditorCanvas]);
 
   // Paint the wand's magnified color loupe whenever the sample pixel moves.
   useLayoutEffect(() => {
@@ -2451,6 +2468,23 @@ export function ScreenshotEditor() {
     event: Pick<React.PointerEvent, "clientX" | "clientY">,
   ): EditorPoint => clientToDocumentPoint(event.clientX, event.clientY);
 
+  /** Move an already-visible brush ring without rerendering the full editor. */
+  const showBrushCursor = (
+    clientX: number,
+    clientY: number,
+    mode: "erase" | "restore",
+  ) => {
+    brushCursorPositionRef.current = { clientX, clientY };
+    const cursor = brushCursorElementRef.current;
+    if (cursor) {
+      cursor.style.left = `${clientX}px`;
+      cursor.style.top = `${clientY}px`;
+    }
+    if (!brushCursor || brushCursor.mode !== mode) {
+      setBrushCursor({ clientX, clientY, mode });
+    }
+  };
+
   /**
    * Erase/restore: hide the system cursor and show a ring sized to the brush.
    * Wand: crosshair + magnified color loupe beside the sample pixel.
@@ -2513,11 +2547,7 @@ export function ScreenshotEditor() {
       || Boolean(current && hitTestImageElement(current.elements, point));
     if (overImage) {
       setCanvasCursor("none");
-      setBrushCursor({
-        clientX: event.clientX,
-        clientY: event.clientY,
-        mode,
-      });
+      showBrushCursor(event.clientX, event.clientY, mode);
     } else {
       setCanvasCursor("not-allowed");
       setBrushCursor(null);
@@ -2547,6 +2577,60 @@ export function ScreenshotEditor() {
     ) {
       target.releasePointerCapture(pointerId);
     }
+  };
+
+  /** Apply the latest queued brush point and repaint once for this animation frame. */
+  const flushRemoveBgBrushPreview = (): RemoveBackgroundGesture | null => {
+    const gesture = gestureRef.current;
+    if (!gesture || gesture.kind !== "remove-bg" || !gesture.pendingPixel) {
+      return gesture?.kind === "remove-bg" ? gesture : null;
+    }
+    const from = gesture.lastPixel ?? gesture.pendingPixel;
+    const to = gesture.pendingPixel;
+    const stamped = strokeRemoveBackgroundBrush(
+      gesture.workingData,
+      from.x,
+      from.y,
+      to.x,
+      to.y,
+      gesture.radius,
+      gesture.mode,
+      gesture.originalData,
+      DEFAULT_BRUSH_HARDNESS,
+    );
+    const next: RemoveBackgroundGesture = {
+      ...gesture,
+      lastPixel: to,
+      pendingPixel: null,
+      changed: gesture.changed || stamped > 0,
+    };
+    gestureRef.current = next;
+    if (stamped > 0) {
+      imageDataToCanvas(
+        gesture.workingData,
+        gesture.workingCanvas,
+        brushStrokeDirtyRect(
+          gesture.workingData.width,
+          gesture.workingData.height,
+          from.x,
+          from.y,
+          to.x,
+          to.y,
+          gesture.radius,
+        ),
+      );
+      paintEditorCanvas();
+    }
+    return next;
+  };
+
+  /** Coalesce high-frequency pointer events into at most one bitmap paint per frame. */
+  const scheduleRemoveBgBrushPreview = () => {
+    if (removeBgPreviewFrameRef.current !== null) return;
+    removeBgPreviewFrameRef.current = window.requestAnimationFrame(() => {
+      removeBgPreviewFrameRef.current = null;
+      flushRemoveBgBrushPreview();
+    });
   };
 
   /**
@@ -3018,38 +3102,12 @@ export function ScreenshotEditor() {
       const current = documentRef.current;
       const element = current?.elements.find((item) => item.id === gesture.elementId);
       // Keep the size-matched ring under the pointer for the whole stroke.
-      setCanvasCursor("none");
-      setBrushCursor({
-        clientX: event.clientX,
-        clientY: event.clientY,
-        mode: gesture.mode,
-      });
+      showBrushCursor(event.clientX, event.clientY, gesture.mode);
       if (!element || element.kind !== "image") return;
       const pixel = documentPointToImagePixel(element, point);
       if (!pixel) return;
-      const from = gesture.lastPixel ?? pixel;
-      const stamped = strokeRemoveBackgroundBrush(
-        gesture.workingData,
-        from.x,
-        from.y,
-        pixel.x,
-        pixel.y,
-        gesture.radius,
-        gesture.mode,
-        gesture.originalData,
-        DEFAULT_BRUSH_HARDNESS,
-      );
-      if (stamped > 0) {
-        imageDataToCanvas(gesture.workingData, gesture.workingCanvas);
-        gestureRef.current = {
-          ...gesture,
-          lastPixel: pixel,
-          changed: true,
-        };
-        setRemoveBgLiveTick((tick) => tick + 1);
-      } else {
-        gestureRef.current = { ...gesture, lastPixel: pixel };
-      }
+      gestureRef.current = { ...gesture, pendingPixel: pixel };
+      scheduleRemoveBgBrushPreview();
       return;
     }
 
@@ -3132,42 +3190,68 @@ export function ScreenshotEditor() {
   const finishPointer = (event: React.PointerEvent<Element>) => {
     const gesture = gestureRef.current;
     if (!gesture || gesture.pointerId !== event.pointerId) return;
-    gestureRef.current = null;
     setResizePreviewBounds(null);
     setAlignmentGuides([]);
     setCanvasExpandPreview(null);
     releasePointerTarget(event.currentTarget, event.pointerId);
-    if (gesture.kind === "crop") {
-      setCanvasCursor(undefined);
-      return;
-    }
 
     if (gesture.kind === "remove-bg") {
-      removeBgLiveRef.current = null;
-      setRemoveBgLiveTick((tick) => tick + 1);
+      const element = gesture.initialDocument.elements.find(
+        (item) => item.id === gesture.elementId,
+      );
+      const releasePixel = event.type === "pointerup" && element?.kind === "image"
+        ? documentPointToImagePixel(element, canvasPoint(event))
+        : null;
+      if (releasePixel) {
+        gestureRef.current = { ...gesture, pendingPixel: releasePixel };
+      }
+      if (removeBgPreviewFrameRef.current !== null) {
+        window.cancelAnimationFrame(removeBgPreviewFrameRef.current);
+        removeBgPreviewFrameRef.current = null;
+      }
+      const finishedGesture = flushRemoveBgBrushPreview() ?? gesture;
+      gestureRef.current = null;
       // Stay on the brush ring after a stroke ends (size still tracks the slider).
       syncRemoveBgHoverCursor(event, canvasPoint(event), {
-        mode: gesture.mode,
+        mode: finishedGesture.mode,
         forceOverImage: true,
       });
-      if (!gesture.changed) return;
+      if (!finishedGesture.changed) {
+        removeBgLiveRef.current = null;
+        paintEditorCanvas();
+        return;
+      }
       try {
-        const nextSrc = imageDataToPngDataUrl(gesture.workingData);
-        ensureImage(nextSrc);
+        // Reuse the already-painted canvas as the decoded cache entry. Waiting
+        // for a new data-URL Image to decode left the editor blank for a frame.
+        const nextSrc = finishedGesture.workingCanvas.toDataURL("image/png");
+        imageCacheRef.current.set(nextSrc, {
+          image: finishedGesture.workingCanvas,
+          status: "loaded",
+        });
         const next = applyImageBackgroundEdit(
-          gesture.initialDocument,
-          gesture.elementId,
+          finishedGesture.initialDocument,
+          finishedGesture.elementId,
           nextSrc,
-          gesture.sourceBeforeEdit,
+          finishedGesture.sourceBeforeEdit,
         );
+        removeBgLiveRef.current = null;
         // Commit with undo — initialDocument is the pre-stroke snapshot.
         commitDocument(next);
         if (exportFormat === "jpeg") {
           setExportFormat("png");
         }
       } catch (reason) {
+        removeBgLiveRef.current = null;
+        paintEditorCanvas();
         setError(String(reason));
       }
+      return;
+    }
+
+    gestureRef.current = null;
+    if (gesture.kind === "crop") {
+      setCanvasCursor(undefined);
       return;
     }
 
@@ -3402,8 +3486,12 @@ export function ScreenshotEditor() {
         setError("No matching pixels were found. Try a higher tolerance.");
         return;
       }
-      const nextSrc = imageDataToPngDataUrl(working);
-      ensureImage(nextSrc);
+      const workingCanvas = imageDataToCanvas(working);
+      const nextSrc = workingCanvas.toDataURL("image/png");
+      imageCacheRef.current.set(nextSrc, {
+        image: workingCanvas,
+        status: "loaded",
+      });
       const next = applyImageBackgroundEdit(
         initialDocument,
         element.id,
@@ -3446,7 +3534,6 @@ export function ScreenshotEditor() {
         }
         originalData = readLayerImageData(element.originalSrc);
       }
-      const workingCanvas = imageDataToCanvas(workingData);
       const radius = brushRadiusInNaturalPixels(element, removeBgBrushSize);
       const stamped = strokeRemoveBackgroundBrush(
         workingData,
@@ -3459,7 +3546,9 @@ export function ScreenshotEditor() {
         originalData,
         DEFAULT_BRUSH_HARDNESS,
       );
-      imageDataToCanvas(workingData, workingCanvas);
+      // Seed the live canvas once after the initial stamp. Pointer moves only
+      // upload the small dirty rectangle touched by the next brush segment.
+      const workingCanvas = imageDataToCanvas(workingData);
       removeBgLiveRef.current = { elementId: element.id, canvas: workingCanvas };
       gestureRef.current = {
         kind: "remove-bg",
@@ -3473,19 +3562,17 @@ export function ScreenshotEditor() {
         originalData,
         radius,
         lastPixel: pixel,
+        pendingPixel: null,
         changed: stamped > 0,
       };
       setSelectedId(element.id);
-      setRemoveBgLiveTick((tick) => tick + 1);
+      paintEditorCanvas();
       setCanvasCursor("none");
-      setBrushCursor({
-        clientX: event.clientX,
-        clientY: event.clientY,
-        mode,
-      });
+      showBrushCursor(event.clientX, event.clientY, mode);
       capturePointerTarget(event.currentTarget, event.pointerId);
     } catch (reason) {
       removeBgLiveRef.current = null;
+      paintEditorCanvas();
       setError(String(reason));
     }
   };
@@ -4584,14 +4671,13 @@ export function ScreenshotEditor() {
           && !panActive
           && !panReady && (
           <div
+            ref={attachBrushCursor}
             className={[
               "screenshot-brush-cursor",
               brushCursor.mode === "restore" ? "is-restore" : "is-erase",
             ].join(" ")}
             aria-hidden="true"
             style={{
-              left: brushCursor.clientX,
-              top: brushCursor.clientY,
               width: removeBgBrushScreenDiameter(removeBgBrushSize, displayScale),
               height: removeBgBrushScreenDiameter(removeBgBrushSize, displayScale),
             }}
