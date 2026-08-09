@@ -1771,13 +1771,6 @@ export function ScreenshotEditor() {
     return () => observer.disconnect();
   }, [editorDocument]);
 
-  // Drop the brush ring when leaving erase/restore so it never sticks after a tool switch.
-  useEffect(() => {
-    if (tool !== "remove-bg" || removeBgMode === "wand") {
-      setBrushCursor(null);
-    }
-  }, [tool, removeBgMode]);
-
   useEffect(() => {
     if (!editorDocument || !canvasRef.current) return;
     editorDocument.elements
@@ -4368,8 +4361,13 @@ export function ScreenshotEditor() {
             {curveHoverTip.text}
           </div>
         )}
-        {/* Circular brush preview for erase/restore — diameter tracks brush size × zoom. */}
-        {brushCursor && !panActive && !panReady && (
+        {/* Circular brush preview for erase/restore — diameter tracks brush size × zoom.
+            Visibility is derived from tool/mode so we never need a setState-in-effect to clear it. */}
+        {brushCursor
+          && tool === "remove-bg"
+          && removeBgMode !== "wand"
+          && !panActive
+          && !panReady && (
           <div
             className={[
               "screenshot-brush-cursor",
