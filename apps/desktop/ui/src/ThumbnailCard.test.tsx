@@ -116,6 +116,48 @@ describe("ThumbnailCard", () => {
     expect(screen.getByRole("button", { name: "Save file" })).toBeInTheDocument();
   });
 
+  it("exposes a stable Edit tooltip on the compact icon and drops it when present", () => {
+    const { rerender } = render(
+      <ThumbnailCard
+        artifact={artifact(null)}
+        clipboardCurrent={false}
+        viewerActive={false}
+        onRemoved={() => undefined}
+      />,
+    );
+
+    const compact = screen.getByRole("button", { name: "Edit" });
+    expect(compact).toHaveAttribute("data-tooltip", "Edit");
+    expect(compact).not.toHaveClass("is-present");
+
+    rerender(
+      <ThumbnailCard
+        artifact={artifact(null)}
+        clipboardCurrent={false}
+        viewerActive={false}
+        editorActive
+        onRemoved={() => undefined}
+      />,
+    );
+    const present = screen.getByRole("button", { name: "Show in editor" });
+    expect(present).toHaveClass("is-present");
+    expect(present).not.toHaveAttribute("data-tooltip");
+
+    rerender(
+      <ThumbnailCard
+        artifact={artifact(null)}
+        clipboardCurrent={false}
+        viewerActive={false}
+        editorActive={false}
+        onRemoved={() => undefined}
+      />,
+    );
+    // Reverse morph: labels still mounted; tooltip must stay off so it does not flash.
+    const leaving = screen.getByRole("button", { name: "Edit" });
+    expect(leaving).toHaveClass("leaving");
+    expect(leaving).not.toHaveAttribute("data-tooltip");
+  });
+
   it("shows In editor immediately after opening, then rearms the hover action on leave", () => {
     render(<ThumbnailCard artifact={artifact(null)} clipboardCurrent viewerActive={false} onRemoved={() => undefined} />);
 

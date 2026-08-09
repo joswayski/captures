@@ -449,7 +449,9 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-top-action
   align-items: center;
   justify-content: center;
   gap: 0;
-  overflow: hidden;
+  /* Compact state stays visible so the Edit tooltip can paint above the icon.
+     overflow:hidden on the always-on control clips that ::after for a flash-then-gone. */
+  overflow: visible;
   border: 1px solid rgba(255, 255, 255, .14);
   border-radius: 7px;
   color: #f8f8fb;
@@ -508,7 +510,7 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-editor-con
 .thumbnail-editor-control:focus-visible {
   box-shadow: 0 3px 12px rgba(0, 0, 0, .3), 0 0 0 2px rgba(var(--theme-accent-rgb), .65);
 }
-/* Compact Edit tooltip (hidden when the pill label is visible). */
+/* Compact Edit tooltip (hidden when the pill label is visible or morphing). */
 .thumbnail-editor-control::after {
   position: absolute;
   bottom: calc(100% + 6px);
@@ -535,9 +537,16 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-editor-con
   transform: translateY(0);
 }
 .thumbnail-editor-control.is-present::after,
+.thumbnail-editor-control.leaving::after,
 .thumbnail-editor-control:not([data-tooltip])::after {
   content: none;
   opacity: 0;
+}
+/* Clip the expanding/collapsing label to the rounded pill; keep compact
+   overflow:visible so the Edit tooltip is not swallowed. */
+.thumbnail-editor-control.is-present,
+.thumbnail-editor-control.leaving {
+  overflow: hidden;
 }
 .thumbnail-editor-control svg {
   width: 17px;
