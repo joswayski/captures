@@ -5,6 +5,27 @@ Captures is a cross-platform screen capture utility built for quick captures and
 > [!WARNING]
 > Experimental and under active development. See platform status below.
 
+## A quick look
+
+Choose a screenshot or recording, then target a region, window, or full display from one compact panel.
+
+![Captures capture controls showing screenshot and recording options over a selected region](docs/images/capture-controls.jpg)
+
+<table>
+  <tr>
+    <td width="68%">
+      <img src="docs/images/screenshot-editor.jpg" alt="Captures screenshot editor with annotation tools, layers, and export controls" width="100%">
+      <br>
+      <sub><strong>Edit screenshots</strong> with annotations, layers, canvas controls, and flexible export options.</sub>
+    </td>
+    <td width="32%">
+      <img src="docs/images/preferences.jpg" alt="Captures Preferences showing color themes and capture options" width="100%">
+      <br>
+      <sub><strong>Make it yours</strong> with themes, shortcuts, and capture and recording defaults.</sub>
+    </td>
+  </tr>
+</table>
+
 ## Download Captures Preview
 
 These links always download the **latest** validated Preview:
