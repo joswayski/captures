@@ -34,6 +34,43 @@ const session: ActiveSession = {
   windows: [],
 };
 
+const guidanceBounds = {
+  x: 500,
+  y: 120,
+  top: 120,
+  left: 500,
+  right: 760,
+  bottom: 180,
+  width: 260,
+  height: 60,
+  toJSON: () => undefined,
+} as DOMRect;
+
+/**
+ * Mock guidance geometry on the prototype so React remounts / Strict Mode
+ * cannot drop a per-element spy before pointer handlers read bounds.
+ */
+function mockGuidanceBounds(rect: DOMRect = guidanceBounds) {
+  return vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+    function mockRect(this: HTMLElement) {
+      if (this.classList?.contains("capture-guidance")) {
+        return rect;
+      }
+      return {
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        width: 0,
+        height: 0,
+        toJSON: () => undefined,
+      } as DOMRect;
+    },
+  );
+}
+
 describe("CaptureOverlay guidance", () => {
   let activeSession: ActiveSession;
 
@@ -57,6 +94,7 @@ describe("CaptureOverlay guidance", () => {
 
   afterEach(() => {
     window.history.replaceState({}, "", "/");
+    vi.restoreAllMocks();
     vi.clearAllMocks();
   });
 
@@ -95,28 +133,22 @@ describe("CaptureOverlay guidance", () => {
       "",
       "/?view=overlay&mode=region&session_id=capture-1",
     );
+    mockGuidanceBounds();
     render(<App />);
 
     const guidance = (await screen.findByText("Drag to select a region"))
       .closest(".capture-guidance") as HTMLElement;
     expect(guidance).not.toHaveAttribute("data-faded");
-    vi.spyOn(guidance, "getBoundingClientRect").mockReturnValue({
-      x: 500,
-      y: 120,
-      top: 120,
-      left: 500,
-      right: 760,
-      bottom: 180,
-      width: 260,
-      height: 60,
-      toJSON: () => undefined,
-    });
 
     fireEvent.pointerMove(window, { clientX: 620, clientY: 150 });
-    expect(guidance).toHaveAttribute("data-faded", "true");
+    await waitFor(() => {
+      expect(guidance).toHaveAttribute("data-faded", "true");
+    });
 
     fireEvent.pointerMove(window, { clientX: 20, clientY: 20 });
-    expect(guidance).not.toHaveAttribute("data-faded");
+    await waitFor(() => {
+      expect(guidance).not.toHaveAttribute("data-faded");
+    });
   });
 
   it("keeps region guidance faded while the cursor rests on the leave slack edge", async () => {
@@ -125,32 +157,28 @@ describe("CaptureOverlay guidance", () => {
       "",
       "/?view=overlay&mode=region&session_id=capture-1",
     );
+    mockGuidanceBounds();
     render(<App />);
 
     const guidance = (await screen.findByText("Drag to select a region"))
       .closest(".capture-guidance") as HTMLElement;
-    vi.spyOn(guidance, "getBoundingClientRect").mockReturnValue({
-      x: 500,
-      y: 120,
-      top: 120,
-      left: 500,
-      right: 760,
-      bottom: 180,
-      width: 260,
-      height: 60,
-      toJSON: () => undefined,
-    });
 
     fireEvent.pointerMove(window, { clientX: 620, clientY: 150 });
-    expect(guidance).toHaveAttribute("data-faded", "true");
+    await waitFor(() => {
+      expect(guidance).toHaveAttribute("data-faded", "true");
+    });
 
     // Just outside the painted box but inside leave slack — stay faded.
     fireEvent.pointerMove(window, { clientX: 768, clientY: 150 });
-    expect(guidance).toHaveAttribute("data-faded", "true");
+    await waitFor(() => {
+      expect(guidance).toHaveAttribute("data-faded", "true");
+    });
 
     // Clear the slack zone — restore.
     fireEvent.pointerMove(window, { clientX: 800, clientY: 150 });
-    expect(guidance).not.toHaveAttribute("data-faded");
+    await waitFor(() => {
+      expect(guidance).not.toHaveAttribute("data-faded");
+    });
   });
 
   it("ignores the painted border edge until the cursor is clearly inside", async () => {
@@ -159,28 +187,23 @@ describe("CaptureOverlay guidance", () => {
       "",
       "/?view=overlay&mode=region&session_id=capture-1",
     );
+    mockGuidanceBounds();
     render(<App />);
 
     const guidance = (await screen.findByText("Drag to select a region"))
       .closest(".capture-guidance") as HTMLElement;
-    vi.spyOn(guidance, "getBoundingClientRect").mockReturnValue({
-      x: 500,
-      y: 120,
-      top: 120,
-      left: 500,
-      right: 760,
-      bottom: 180,
-      width: 260,
-      height: 60,
-      toJSON: () => undefined,
-    });
 
     // On the exact left edge — enter inset keeps it visible.
     fireEvent.pointerMove(window, { clientX: 500, clientY: 150 });
-    expect(guidance).not.toHaveAttribute("data-faded");
+    await waitFor(() => {
+      expect(guidance).not.toHaveAttribute("data-faded");
+    });
 
+    // Past the 4px enter inset — fade out of the way.
     fireEvent.pointerMove(window, { clientX: 510, clientY: 150 });
-    expect(guidance).toHaveAttribute("data-faded", "true");
+    await waitFor(() => {
+      expect(guidance).toHaveAttribute("data-faded", "true");
+    });
   });
 
   it("fades window guidance when the cursor enters its bounds", async () => {
@@ -190,31 +213,27 @@ describe("CaptureOverlay guidance", () => {
       "",
       "/?view=overlay&mode=window&session_id=capture-1",
     );
+    mockGuidanceBounds();
     render(<App />);
 
     const guidance = (await screen.findByText("Select a window to continue"))
       .closest(".capture-guidance") as HTMLElement;
-    vi.spyOn(guidance, "getBoundingClientRect").mockReturnValue({
-      x: 500,
-      y: 120,
-      top: 120,
-      left: 500,
-      right: 760,
-      bottom: 180,
-      width: 260,
-      height: 60,
-      toJSON: () => undefined,
-    });
 
     fireEvent.pointerMove(window, { clientX: 620, clientY: 150 });
-    expect(guidance).toHaveAttribute("data-faded", "true");
+    await waitFor(() => {
+      expect(guidance).toHaveAttribute("data-faded", "true");
+    });
   });
 
   it("uses enter/leave hysteresis for guidance hit testing", () => {
     const bounds = { left: 500, right: 760, top: 120, bottom: 180 };
 
+    // Enter inset is 4px; edge stays visible, past inset fades.
     expect(isPointerOverCaptureGuidance(500, 150, bounds, false)).toBe(false);
+    expect(isPointerOverCaptureGuidance(503, 150, bounds, false)).toBe(false);
+    expect(isPointerOverCaptureGuidance(504, 150, bounds, false)).toBe(true);
     expect(isPointerOverCaptureGuidance(510, 150, bounds, false)).toBe(true);
+    // Leave slack is 20px beyond the painted box while already faded.
     expect(isPointerOverCaptureGuidance(768, 150, bounds, true)).toBe(true);
     expect(isPointerOverCaptureGuidance(800, 150, bounds, true)).toBe(false);
   });
