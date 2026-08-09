@@ -8,9 +8,14 @@ import {
   hitTestImageElement,
   removeBgBrushScreenDiameter,
   removeColorToTransparent,
+  rgbaToCss,
+  rgbaToHex,
   samplePixel,
   stampRemoveBackgroundBrush,
   strokeRemoveBackgroundBrush,
+  wandLoupeScreenPosition,
+  WAND_LOUPE_OFFSET_PX,
+  WAND_LOUPE_SIZE_PX,
 } from "./imageBackground";
 import {
   createScreenshotDocument,
@@ -249,6 +254,33 @@ describe("strokeRemoveBackgroundBrush", () => {
     expect(samplePixel(image, 10, 2)?.a).toBe(0);
     expect(samplePixel(image, 18, 2)?.a).toBe(0);
     expect(samplePixel(image, 10, 0)?.a).toBe(255);
+  });
+});
+
+describe("wand loupe helpers", () => {
+  it("formats sampled colors for the loupe chrome", () => {
+    expect(rgbaToHex({ r: 15, g: 160, b: 255, a: 255 })).toBe("#0fa0ff");
+    expect(rgbaToCss({ r: 15, g: 160, b: 255, a: 128 })).toBe("rgba(15, 160, 255, 0.502)");
+    expect(rgbaToCss({ r: 0, g: 0, b: 0, a: 0 })).toBe("rgba(0, 0, 0, 0)");
+  });
+
+  it("places the loupe beside the cursor and flips near viewport edges", () => {
+    const open = wandLoupeScreenPosition(40, 50, {
+      viewportWidth: 800,
+      viewportHeight: 600,
+    });
+    expect(open.left).toBe(40 + WAND_LOUPE_OFFSET_PX);
+    expect(open.top).toBe(50 + WAND_LOUPE_OFFSET_PX);
+
+    const nearCorner = wandLoupeScreenPosition(790, 590, {
+      viewportWidth: 800,
+      viewportHeight: 600,
+    });
+    // Flips above/left of the cursor and clamps inside the margin.
+    expect(nearCorner.left).toBeLessThan(790);
+    expect(nearCorner.top).toBeLessThan(590);
+    expect(nearCorner.left + WAND_LOUPE_SIZE_PX).toBeLessThanOrEqual(800 - 8);
+    expect(nearCorner.top + WAND_LOUPE_SIZE_PX).toBeLessThanOrEqual(600 - 8);
   });
 });
 

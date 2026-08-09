@@ -9,6 +9,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
 
@@ -25,10 +26,17 @@ import {
   imageDataToCanvas,
   imageDataToPngDataUrl,
   imageToImageData,
+  paintWandColorLoupe,
   removeBgBrushScreenDiameter,
   removeColorToTransparent,
+  rgbaToCss,
+  rgbaToHex,
+  sampleImagePixel,
   strokeRemoveBackgroundBrush,
+  wandLoupeScreenPosition,
+  WAND_LOUPE_SIZE_PX,
   type RemoveBackgroundMode,
+  type Rgba,
 } from "./lib/imageBackground";
 import {
   ALIGNMENT_SNAP_SCREEN_PX,
@@ -792,6 +800,65 @@ function paintScreenshotElement(
 const EMPTY_LAYER_PREVIEW_IMAGE_CACHE = new Map<string, CachedImage>();
 
 /**
+ * Floating magnified sample for the remove-bg wand (crosshair stays on the pixel).
+ * Position is fixed to client coordinates so pan/zoom of the canvas do not drift it.
+ */
+function WandColorLoupe({
+  clientX,
+  clientY,
+  color,
+  canvasRef,
+}: {
+  clientX: number;
+  clientY: number;
+  color: Rgba | null;
+  canvasRef: RefObject<HTMLCanvasElement | null>;
+}) {
+  const { left, top } = wandLoupeScreenPosition(clientX, clientY);
+  const colorCss = color ? rgbaToCss(color) : null;
+  const colorHex = color ? rgbaToHex(color) : null;
+  const transparent = color != null && color.a === 0;
+  return (
+    <div
+      className="screenshot-wand-loupe"
+      role="tooltip"
+      aria-label={
+        colorHex
+          ? transparent
+            ? "Sample color: transparent"
+            : `Sample color ${colorHex}`
+          : "Sample color preview"
+      }
+      style={{ left, top, width: WAND_LOUPE_SIZE_PX, height: WAND_LOUPE_SIZE_PX }}
+    >
+      <canvas
+        ref={canvasRef}
+        className="screenshot-wand-loupe-canvas"
+        width={WAND_LOUPE_SIZE_PX}
+        height={WAND_LOUPE_SIZE_PX}
+        aria-hidden="true"
+      />
+      <div className="screenshot-wand-loupe-rim" aria-hidden="true" />
+      {(colorCss || colorHex) && (
+        <div className="screenshot-wand-loupe-meta">
+          <span
+            className={[
+              "screenshot-wand-loupe-swatch",
+              transparent ? "is-transparent" : "",
+            ].filter(Boolean).join(" ")}
+            style={transparent || !colorCss ? undefined : { background: colorCss }}
+            aria-hidden="true"
+          />
+          <span className="screenshot-wand-loupe-hex">
+            {transparent ? "empty" : (colorHex ?? "—")}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
  * Keep thin strokes readable in the 46×34 thumbnail without changing geometry
  * or color. Scale is applied after this, so we inflate strokeWidth in document
  * units when it would otherwise paint below ~1.35 CSS px.
@@ -1302,6 +1369,18 @@ export function ScreenshotEditor() {
     clientY: number;
     mode: "erase" | "restore";
   } | null>(null);
+  /**
+   * Wand hover loupe: magnified natural-image pixels + sampled color beside the crosshair.
+   * Visibility is also gated on tool/mode so we never need an effect to clear it.
+   */
+  const [wandLoupe, setWandLoupe] = useState<{
+    clientX: number;
+    clientY: number;
+    src: string;
+    pixelX: number;
+    pixelY: number;
+    color: Rgba | null;
+  } | null>(null);
   /** Floating tip while hovering a line/arrow path or its curve handles. */
   const [curveHoverTip, setCurveHoverTip] = useState<{
     text: string;
@@ -1364,6 +1443,10 @@ export function ScreenshotEditor() {
     elementId: string;
     canvas: HTMLCanvasElement;
   } | null>(null);
+  /** Reused 1×1 canvas for wand hover color sampling (avoids alloc on every move). */
+  const wandSampleCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  /** Magnified-pixel loupe canvas next to the wand crosshair. */
+  const wandLoupeCanvasRef = useRef<HTMLCanvasElement>(null);
   const panGestureRef = useRef<PanGesture | null>(null);
   const modifierPanRef = useRef(false);
   const viewPanRef = useRef({ x: 0, y: 0 });
@@ -1856,6 +1939,18 @@ export function ScreenshotEditor() {
     removeBgLiveTick,
     selected,
   ]);
+
+  // Paint the wand's magnified color loupe whenever the sample pixel moves.
+  useLayoutEffect(() => {
+    if (!wandLoupe) return;
+    const canvas = wandLoupeCanvasRef.current;
+    if (!canvas) return;
+    const cached = imageCacheRef.current.get(wandLoupe.src);
+    if (!cached || cached.status !== "loaded") return;
+    paintWandColorLoupe(canvas, cached.image, wandLoupe.pixelX, wandLoupe.pixelY, {
+      devicePixelRatio: typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1,
+    });
+  }, [wandLoupe, imageRevision]);
 
   // Faded off-canvas remainder of the active layer while expanding.
   useLayoutEffect(() => {
@@ -2358,7 +2453,7 @@ export function ScreenshotEditor() {
 
   /**
    * Erase/restore: hide the system cursor and show a ring sized to the brush.
-   * Wand keeps a simple crosshair (click, not paint).
+   * Wand: crosshair + magnified color loupe beside the sample pixel.
    */
   const syncRemoveBgHoverCursor = (
     event: Pick<React.PointerEvent, "clientX" | "clientY">,
@@ -2367,6 +2462,7 @@ export function ScreenshotEditor() {
   ) => {
     if (panActive || panReady) {
       setBrushCursor(null);
+      setWandLoupe(null);
       return;
     }
     const mode = options?.mode ?? (
@@ -2376,9 +2472,42 @@ export function ScreenshotEditor() {
       setBrushCursor(null);
       const current = documentRef.current;
       const image = current ? hitTestImageElement(current.elements, point) : null;
-      setCanvasCursor(image ? "crosshair" : "not-allowed");
+      if (!image) {
+        setCanvasCursor("not-allowed");
+        setWandLoupe(null);
+        return;
+      }
+      const pixel = documentPointToImagePixel(image, point);
+      if (!pixel) {
+        setCanvasCursor("not-allowed");
+        setWandLoupe(null);
+        return;
+      }
+      setCanvasCursor("crosshair");
+      const cached = imageCacheRef.current.get(image.src);
+      let color: Rgba | null = null;
+      if (cached?.status === "loaded") {
+        if (!wandSampleCanvasRef.current) {
+          wandSampleCanvasRef.current = document.createElement("canvas");
+        }
+        color = sampleImagePixel(
+          cached.image,
+          pixel.x,
+          pixel.y,
+          wandSampleCanvasRef.current,
+        );
+      }
+      setWandLoupe({
+        clientX: event.clientX,
+        clientY: event.clientY,
+        src: image.src,
+        pixelX: pixel.x,
+        pixelY: pixel.y,
+        color,
+      });
       return;
     }
+    setWandLoupe(null);
     const current = documentRef.current;
     const overImage = options?.forceOverImage
       || Boolean(current && hitTestImageElement(current.elements, point));
@@ -2442,6 +2571,7 @@ export function ScreenshotEditor() {
         setError("Click an image layer to remove or restore its background.");
         setCanvasCursor("not-allowed");
         setBrushCursor(null);
+        setWandLoupe(null);
         return;
       }
       setSelectedId(image.id);
@@ -3043,6 +3173,7 @@ export function ScreenshotEditor() {
 
     setCanvasCursor(undefined);
     setBrushCursor(null);
+    setWandLoupe(null);
 
     let current = documentRef.current;
     if (!current) return;
@@ -4108,6 +4239,7 @@ export function ScreenshotEditor() {
             onPointerCancel={finishPointer}
             onPointerLeave={() => {
               setCurveHoverTip(null);
+              setWandLoupe(null);
               // Leaving the canvas hides the brush ring; reappears on next hover.
               if (!gestureRef.current || gestureRef.current.kind !== "remove-bg") {
                 setBrushCursor(null);
@@ -4425,6 +4557,19 @@ export function ScreenshotEditor() {
               width: removeBgBrushScreenDiameter(removeBgBrushSize, displayScale),
               height: removeBgBrushScreenDiameter(removeBgBrushSize, displayScale),
             }}
+          />
+        )}
+        {/* Wand color loupe: zoomed natural pixels + hex so the sample color is obvious. */}
+        {wandLoupe
+          && tool === "remove-bg"
+          && removeBgMode === "wand"
+          && !panActive
+          && !panReady && (
+          <WandColorLoupe
+            clientX={wandLoupe.clientX}
+            clientY={wandLoupe.clientY}
+            color={wandLoupe.color}
+            canvasRef={wandLoupeCanvasRef}
           />
         )}
       </section>
