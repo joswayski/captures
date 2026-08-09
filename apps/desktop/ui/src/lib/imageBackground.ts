@@ -386,7 +386,7 @@ export function imageToImageData(image: CanvasImageSource & {
   canvas.height = height;
   const context = canvas.getContext("2d", { willReadFrequently: true });
   if (!context) {
-    throw new Error("Could not read image pixels for background removal.");
+    throw new Error("Could not read image pixels for the eraser.");
   }
   context.clearRect(0, 0, width, height);
   context.drawImage(image, 0, 0, width, height);
@@ -394,7 +394,7 @@ export function imageToImageData(image: CanvasImageSource & {
     return context.getImageData(0, 0, width, height);
   } catch {
     throw new Error(
-      "This image cannot be edited for background removal (protected or still loading).",
+      "This image cannot be edited with the eraser (protected or still loading).",
     );
   }
 }
@@ -409,7 +409,7 @@ export function imageDataToCanvas(
   if (target.height !== imageData.height) target.height = imageData.height;
   const context = target.getContext("2d");
   if (!context) {
-    throw new Error("Could not write image pixels for background removal.");
+    throw new Error("Could not write image pixels for the eraser.");
   }
   context.putImageData(imageData, 0, 0);
   return target;
