@@ -117,6 +117,7 @@ import {
   type ShapeKind,
   type TextStylePreset,
 } from "./lib/screenshotEditor";
+import { NumberInput } from "./NumberInput";
 import { NotchedSlider, RangeSlider } from "./RangeSlider";
 import type { CaptureArtifact, EditorLayerPresence } from "./types";
 
@@ -3892,15 +3893,15 @@ export function ScreenshotEditor() {
           <div className="screenshot-canvas-toolbar" role="group" aria-label="Canvas">
             <label className="screenshot-canvas-dim">
               <span>W</span>
-              <input
-                type="number"
+              <NumberInput
+                compact
                 min={1}
                 max={16_384}
-                aria-label="Width"
+                ariaLabel="Width"
                 value={editorDocument.width}
-                onChange={(event) => commitDocument(resizeDocumentCanvas(
+                onChange={(width) => commitDocument(resizeDocumentCanvas(
                   editorDocument,
-                  Number(event.target.value),
+                  width,
                   editorDocument.height,
                 ))}
               />
@@ -3908,16 +3909,16 @@ export function ScreenshotEditor() {
             <span className="screenshot-canvas-dim-sep" aria-hidden="true">×</span>
             <label className="screenshot-canvas-dim">
               <span>H</span>
-              <input
-                type="number"
+              <NumberInput
+                compact
                 min={1}
                 max={16_384}
-                aria-label="Height"
+                ariaLabel="Height"
                 value={editorDocument.height}
-                onChange={(event) => commitDocument(resizeDocumentCanvas(
+                onChange={(height) => commitDocument(resizeDocumentCanvas(
                   editorDocument,
                   editorDocument.width,
-                  Number(event.target.value),
+                  height,
                 ))}
               />
             </label>
@@ -4944,14 +4945,13 @@ export function ScreenshotEditor() {
               </label>
               <label>
                 Size
-                <input
-                  type="number"
+                <NumberInput
                   min={8}
                   max={512}
                   value={selected.fontSize}
-                  onChange={(event) => updateSelected((element) => (
+                  onChange={(fontSize) => updateSelected((element) => (
                     element.kind === "text"
-                      ? { ...element, fontSize: Math.max(8, Number(event.target.value)) }
+                      ? { ...element, fontSize: Math.max(8, fontSize) }
                       : element
                   ))}
                 />
@@ -5073,39 +5073,39 @@ export function ScreenshotEditor() {
             <div className="screenshot-number-pair">
               <label>
                 Width
-                <input
-                  type="number"
+                <NumberInput
                   min={1}
                   max={16_384}
                   value={Math.round(selected.width)}
                   disabled={selected.locked}
-                  onChange={(event) => updateSelected((element) => {
+                  onChange={(width) => updateSelected((element) => {
                     if (element.kind !== "image") return element;
-                    const size = imageSizeAtWidth(element, Number(event.target.value));
+                    const size = imageSizeAtWidth(element, width);
                     return { ...element, ...size };
                   })}
                 />
               </label>
-              <label>Height<input value={Math.round(selected.height)} readOnly /></label>
+              <label>
+                Height
+                <NumberInput value={Math.round(selected.height)} readOnly hideSteppers />
+              </label>
               <label>
                 X
-                <input
-                  type="number"
+                <NumberInput
                   value={Math.round(selected.x)}
                   disabled={selected.locked}
-                  onChange={(event) => updateSelected((element) => (
-                    element.kind === "image" ? { ...element, x: Number(event.target.value) } : element
+                  onChange={(x) => updateSelected((element) => (
+                    element.kind === "image" ? { ...element, x } : element
                   ))}
                 />
               </label>
               <label>
                 Y
-                <input
-                  type="number"
+                <NumberInput
                   value={Math.round(selected.y)}
                   disabled={selected.locked}
-                  onChange={(event) => updateSelected((element) => (
-                    element.kind === "image" ? { ...element, y: Number(event.target.value) } : element
+                  onChange={(y) => updateSelected((element) => (
+                    element.kind === "image" ? { ...element, y } : element
                   ))}
                 />
               </label>
@@ -5232,12 +5232,11 @@ export function ScreenshotEditor() {
                 />
                 <label>
                   New text size
-                  <input
-                    type="number"
+                  <NumberInput
                     min={8}
                     max={512}
                     value={defaultFontSize}
-                    onChange={(event) => setDefaultFontSize(Number(event.target.value))}
+                    onChange={setDefaultFontSize}
                   />
                 </label>
               </>
@@ -5311,22 +5310,20 @@ export function ScreenshotEditor() {
             <div className="screenshot-export-control screenshot-custom-dimensions">
               <span>Width × height</span>
               <div>
-                <input
-                  type="number"
+                <NumberInput
                   min={1}
                   max={MAX_SCREENSHOT_OUTPUT_DIMENSION}
                   value={customExportWidth}
-                  aria-label="Custom output width"
-                  onChange={(event) => updateCustomExportDimension("width", Number(event.target.value))}
+                  ariaLabel="Custom output width"
+                  onChange={(width) => updateCustomExportDimension("width", width)}
                 />
                 <span aria-hidden="true">×</span>
-                <input
-                  type="number"
+                <NumberInput
                   min={1}
                   max={MAX_SCREENSHOT_OUTPUT_DIMENSION}
                   value={customExportHeight}
-                  aria-label="Custom output height"
-                  onChange={(event) => updateCustomExportDimension("height", Number(event.target.value))}
+                  ariaLabel="Custom output height"
+                  onChange={(height) => updateCustomExportDimension("height", height)}
                 />
                 <button
                   type="button"
@@ -5375,13 +5372,12 @@ export function ScreenshotEditor() {
             >
               Maximum file size
               <span>
-                <input
-                  type="number"
+                <NumberInput
                   min={maximumFileSizeUnit === "kb" ? 10 : maximumFileSizeUnit === "mb" ? 0.01 : 0.00001}
                   step={maximumFileSizeUnit === "kb" ? 1 : maximumFileSizeUnit === "mb" ? 0.01 : 0.00001}
                   value={maximumFileSize}
-                  aria-label="Maximum file size"
-                  onChange={(event) => setMaximumFileSize(event.target.value)}
+                  ariaLabel="Maximum file size"
+                  onTextChange={setMaximumFileSize}
                 />
                 <select
                   aria-label="Screenshot file size unit"
