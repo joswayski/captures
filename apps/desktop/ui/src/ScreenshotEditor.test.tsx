@@ -1502,56 +1502,73 @@ describe("ScreenshotEditor", () => {
     });
   });
 
-  it("keeps preserve quality by default and compress does not change the format", async () => {
+  it("keeps preserve quality by default and compress shows quality presets without changing format", async () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
 
-    const format = screen.getByLabelText("Format");
-    expect(format).toHaveValue("png");
+    const format = screen.getByRole("combobox", { name: "Format" });
+    expect(format).toHaveTextContent("PNG");
     const saveQuality = screen.getByRole("combobox", { name: "Save quality" });
-    expect(saveQuality).toHaveValue("preserve");
-    expect(screen.queryByRole("slider", { name: "Image quality" })).not.toBeInTheDocument();
+    expect(saveQuality).toHaveTextContent("Preserve quality");
+    expect(screen.queryByRole("slider", { name: "Compression quality" }))
+      .not.toBeInTheDocument();
     expect(screen.queryByRole("spinbutton", { name: "Maximum file size" }))
       .not.toBeInTheDocument();
     expect(
       screen.getByText("Keeps original quality as PNG and replaces the original."),
     ).toBeInTheDocument();
 
-    // Compress keeps PNG; the quality slider is JPEG-only.
-    fireEvent.change(saveQuality, { target: { value: "compress" } });
+    // Compress keeps PNG and shows the same Smaller / Balanced / High presets as video.
+    fireEvent.click(saveQuality);
+    fireEvent.click(screen.getByRole("option", { name: /Compress/ }));
 
     await waitFor(() => {
-      expect(format).toHaveValue("png");
+      expect(format).toHaveTextContent("PNG");
     });
-    expect(screen.queryByRole("slider", { name: "Image quality" })).not.toBeInTheDocument();
+    const quality = screen.getByRole("slider", { name: "Compression quality" });
+    expect(quality).toHaveAttribute("aria-valuetext", "High");
+    expect(screen.getByText("Larger file with the least quality loss.")).toBeInTheDocument();
+    expect(
+      screen.getByText("PNG uses stronger packing. Quality presets apply to JPEG."),
+    ).toBeInTheDocument();
     expect(screen.queryByRole("spinbutton", { name: "Maximum file size" }))
       .not.toBeInTheDocument();
     expect(
       screen.getByText("Compressed PNG replaces the original; turn on Make a copy to keep it."),
     ).toBeInTheDocument();
 
-    fireEvent.change(format, { target: { value: "jpeg" } });
-    expect(screen.getByRole("combobox", { name: "Save quality" })).toHaveValue("compress");
-    expect(screen.getByRole("slider", { name: "Image quality" }))
-      .toHaveAttribute("aria-valuetext", "Maximum");
+    fireEvent.change(quality, { target: { value: "1" } });
+    expect(quality).toHaveAttribute("aria-valuetext", "Balanced");
+
+    fireEvent.click(format);
+    fireEvent.click(screen.getByRole("option", { name: "JPEG" }));
+    expect(screen.getByRole("combobox", { name: "Save quality" }))
+      .toHaveTextContent("Compress");
+    expect(screen.getByRole("slider", { name: "Compression quality" }))
+      .toHaveAttribute("aria-valuetext", "Balanced");
+    expect(
+      screen.queryByText("PNG uses stronger packing. Quality presets apply to JPEG."),
+    ).not.toBeInTheDocument();
     // Source is still a PNG path, so a JPEG save is always a new file.
     expect(
       screen.getByText("Compressed JPEG saves as a new file and leaves the original untouched."),
     ).toBeInTheDocument();
 
-    fireEvent.change(screen.getByRole("combobox", { name: "Save quality" }), {
-      target: { value: "maximum" },
-    });
+    fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
+    fireEvent.click(screen.getByRole("option", { name: /Maximum file size/ }));
 
-    expect(screen.queryByRole("slider", { name: "Image quality" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("slider", { name: "Compression quality" }))
+      .not.toBeInTheDocument();
     expect(screen.getByRole("spinbutton", { name: "Maximum file size" })).toHaveValue(10);
     expect(screen.getByRole("combobox", { name: "Screenshot file size unit" }))
-      .toHaveValue("mb");
-    expect(format).toHaveValue("jpeg");
+      .toHaveTextContent("MB");
+    expect(format).toHaveTextContent("JPEG");
 
     // Switching format keeps the quality mode; maximum works for PNG too.
-    fireEvent.change(format, { target: { value: "png" } });
-    expect(screen.getByRole("combobox", { name: "Save quality" })).toHaveValue("maximum");
+    fireEvent.click(format);
+    fireEvent.click(screen.getByRole("option", { name: "PNG" }));
+    expect(screen.getByRole("combobox", { name: "Save quality" }))
+      .toHaveTextContent("Maximum file size");
     expect(screen.getByRole("spinbutton", { name: "Maximum file size" })).toBeInTheDocument();
   });
 
@@ -1598,9 +1615,8 @@ describe("ScreenshotEditor", () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
 
-    fireEvent.change(screen.getByLabelText(/Output size/), {
-      target: { value: "custom" },
-    });
+    fireEvent.click(screen.getByRole("combobox", { name: "Output size" }));
+    fireEvent.click(screen.getByRole("option", { name: "Custom" }));
     const width = screen.getByRole("spinbutton", { name: "Custom output width" });
     const height = screen.getByRole("spinbutton", { name: "Custom output height" });
     expect(width).toHaveValue(1_440);
@@ -1684,17 +1700,17 @@ describe("ScreenshotEditor", () => {
           .toHaveTextContent(/≈/);
       }, { timeout: 2_000 });
 
-      fireEvent.change(screen.getByRole("combobox", { name: "Save quality" }), {
-        target: { value: "compress" },
-      });
+      fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
+      fireEvent.click(screen.getByRole("option", { name: /Compress/ }));
       // PNG compress keeps PNG; switch to JPEG to exercise the quality estimate path.
-      expect(screen.getByLabelText("Format")).toHaveValue("png");
-      fireEvent.change(screen.getByLabelText("Format"), { target: { value: "jpeg" } });
+      expect(screen.getByRole("combobox", { name: "Format" })).toHaveTextContent("PNG");
+      fireEvent.click(screen.getByRole("combobox", { name: "Format" }));
+      fireEvent.click(screen.getByRole("option", { name: "JPEG" }));
       await waitFor(() => {
-        expect(screen.getByLabelText("Format")).toHaveValue("jpeg");
-        expect(screen.getByRole("slider", { name: "Image quality" })).toBeInTheDocument();
+        expect(screen.getByRole("combobox", { name: "Format" })).toHaveTextContent("JPEG");
+        expect(screen.getByRole("slider", { name: "Compression quality" })).toBeInTheDocument();
       });
-      fireEvent.change(screen.getByRole("slider", { name: "Image quality" }), {
+      fireEvent.change(screen.getByRole("slider", { name: "Compression quality" }), {
         target: { value: "0" },
       });
 
@@ -1779,11 +1795,10 @@ describe("ScreenshotEditor", () => {
       fireEvent.change(screen.getByRole("textbox", { name: "Saved filename" }), {
         target: { value: "edited-photo" },
       });
-      fireEvent.change(screen.getByRole("combobox", { name: "Save quality" }), {
-        target: { value: "maximum" },
-      });
+      fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
+      fireEvent.click(screen.getByRole("option", { name: /Maximum file size/ }));
       // Maximum size keeps the selected PNG format.
-      expect(screen.getByLabelText("Format")).toHaveValue("png");
+      expect(screen.getByRole("combobox", { name: "Format" })).toHaveTextContent("PNG");
       await act(async () => undefined);
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
 

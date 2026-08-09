@@ -3,7 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useState } from "react";
 
-import { CustomSelect, RecordingCountdown, ScreenshotCountdown } from "./App";
+import { RecordingCountdown, ScreenshotCountdown } from "./App";
+import { CustomSelect } from "./CustomSelect";
 import type { RecordingSessionSnapshot } from "./types";
 
 vi.mock("@tauri-apps/api/core", () => ({
