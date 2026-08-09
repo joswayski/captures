@@ -1139,10 +1139,10 @@ describe("ScreenshotEditor", () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
 
-    fireEvent.change(screen.getByRole("combobox", { name: "Canvas zoom" }), {
+    fireEvent.change(screen.getByRole("slider", { name: "Canvas zoom" }), {
       target: { value: "100" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Remove bg (B)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Eraser (B)" }));
     expect(screen.getByRole("button", { name: "Wand" })).toHaveAttribute("aria-pressed", "true");
 
     const canvas = document.querySelector("canvas.screenshot-canvas");
