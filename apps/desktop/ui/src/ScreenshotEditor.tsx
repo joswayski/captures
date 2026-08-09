@@ -4387,10 +4387,10 @@ export function ScreenshotEditor() {
           </div>
         )}
         {/* Circular brush preview for erase/restore — diameter tracks brush size × zoom.
-            Gated by tool/mode so the ring never sticks after switching tools (no effect clear). */}
+            Visibility is derived from tool/mode so we never need a setState-in-effect to clear it. */}
         {brushCursor
           && tool === "remove-bg"
-          && (removeBgMode === "erase" || removeBgMode === "restore")
+          && removeBgMode !== "wand"
           && !panActive
           && !panReady && (
           <div
