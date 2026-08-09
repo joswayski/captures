@@ -3,11 +3,11 @@
 Captures is a cross-platform screen capture utility built for quick captures and a lightweight workflow.
 
 > [!WARNING]
-> Captures is functional, but still experimental and under active development. macOS is the primary development target; Windows and Linux builds are available but may be less polished.
+> Experimental and under active development. See platform status below.
 
 ## Download Captures Preview
 
-These links always download the **latest** validated Preview. Pick your platform:
+These links always download the **latest** validated Preview:
 
 | Platform | Download |
 | --- | --- |
@@ -16,7 +16,7 @@ These links always download the **latest** validated Preview. Pick your platform
 | Ubuntu / Debian (x64) | [Captures-Linux-x64.deb](https://github.com/joswayski/captures/releases/download/preview/Captures-Linux-x64.deb) |
 | Other Linux (x64 AppImage) | [Captures-Linux-x64.AppImage](https://github.com/joswayski/captures/releases/download/preview/Captures-Linux-x64.AppImage) |
 
-Preview builds update after every successful merge to `main` and may contain bugs or incomplete features. You can also open the [Captures Preview — Latest](https://github.com/joswayski/captures/releases/tag/preview) release page, or browse older dated builds in the [build archive](https://github.com/joswayski/captures/releases).
+Preview builds update after every successful merge to `main` and may contain bugs or incomplete features. Older dated builds stay in the [build archive](https://github.com/joswayski/captures/releases).
 
 ## Features
 
@@ -36,15 +36,13 @@ Preview builds update after every successful merge to `main` and may contain bug
 
 ## Wishlist
 
-- Scrolling capture for content larger than the screen.
-- On-device text recognition (OCR).
-- An easy way to repeat the previous capture area.
-- Pinned captures that stay visible above other windows.
-- Editable click highlights and keystroke overlays after recording.
-- Optional hosted sharing for images and recordings with shareable `captur.es/<id>` links.
-- Faster recording on Windows and Linux.
-- Keep recording controls out of Linux recordings.
-- Window, cursor, and click-highlight support on Wayland.
+- Scrolling capture for content larger than the screen
+- On-device text recognition (OCR)
+- Repeat the previous capture area
+- Pinned captures that stay above other windows
+- Editable click highlights and keystroke overlays after recording
+- Hosted sharing with shareable `captur.es/<id>` links
+- Faster recording on Windows and Linux
 
 ## Platform status
 
@@ -52,16 +50,8 @@ Preview builds update after every successful merge to `main` and may contain bug
 | --- | --- |
 | macOS 13+ | Supported; primary development target |
 | Windows 11 | Supported; experimental |
-| Linux X11 | Supported; recording controls must be hidden manually when needed |
+| Linux X11 | Supported; hide recording controls manually when needed |
 | Linux Wayland | Experimental; no window targeting, cursor capture, or click highlights |
-
-## Build archive
-
-Every successful push to `main` publishes a validated **Preview** build
-using [CalVer](https://calver.org/) `YYYY.MM.DD.N`. Each dated version remains
-available in the [build archive](https://github.com/joswayski/captures/releases)
-for historical testing. Stable releases will use a separate channel when
-Captures is ready for launch.
 
 ## Shortcuts
 
