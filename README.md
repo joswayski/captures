@@ -20,21 +20,19 @@ Preview builds update after every successful merge to `main` and may contain bug
 
 ## Features
 
-- Start with a first-run setup that checks required screen-capture access and explains when optional recording-audio access is requested.
-- Capture regions, windows, or full displays. Full-screen selection starts on the display under the pointer and lets you switch displays before capturing.
-- Optional screenshot countdown after target selection so you can set up menus and hover states.
-- Record regions, windows, or full displays as H.264 video or GIF.
-- Record desktop audio and a microphone with pause, resume, restart, and mute controls.
-- Configurable countdown before recordings start.
-- Show the cursor and click highlights in recordings where supported.
-- Edit screenshots with inline text in seven styles (Standard, Rounded, Outlined, Mono, Box, Mono Box, and Rounded Box—the default for new labels), shapes, multi-point bendable lines and arrows, drawing, crop, resize, zoom, and image layers that can rotate, flip, or snap to edges while moving and resizing. After placing a shape, subtle handles stay available so you can edit it without switching tools; lines and arrows start with three curve dots, and you can double-click the path to add as many more as needed. Start annotations outside the canvas or release past an edge to expand it; empty chrome around the canvas deselects. Dropped images can snap to a layer edge or stack on top. Each layer row has lock and visibility toggles plus a ⋯ menu for stack order, merge down, merge visible, flatten, duplicate, and delete (each action is labeled with a short description). Trim edges shrinks the canvas to the bounds of visible layers, including the full painted background on text bubbles. Remove background clears matching colors (magic wand) or lets you erase and restore alpha on image layers—including the locked capture—then export transparent PNG or WebP.
-- Trim, crop, resize, and adjust audio in recordings.
-- Save PNGs by default, or export as JPEG or WebP. Compress mode keeps the selected format and offers Smaller / Balanced / High quality presets (like video export); JPEG uses those quality notches, while PNG and WebP use stronger packing. Maximum-file-size mode sets a hard size cap.
-- Use optional quick-access mini previews to copy, save, preview, or drag recent screenshots into other apps. Mini previews and the recording control bar stay out of screenshots and recordings by default, and each has its own visibility setting in Preferences.
-- Take screenshots without stopping an active recording.
-- Restore recent screenshots and recordings from a 30-day Capture History.
-- Customize global shortcuts and color themes.
-- Send optional product feedback from the app (tray menu, Preferences, or shortcut). Feedback includes your message, optional contact handle, category, and app/system details only — never your screenshots or recordings. Submissions go to the Captures feedback service (not stored as captures on your machine).
+- Capture regions, windows, or full displays
+- Optional countdown before screenshots and recordings
+- Record as H.264 video or GIF, with desktop audio and microphone
+- Pause, resume, restart, and mute while recording
+- Cursor and click highlights in recordings (where supported)
+- Built-in screenshot editor — text, shapes, drawing, crop, layers, background removal
+- Trim, crop, resize, and adjust audio in recordings
+- Export PNG, JPEG, or WebP with compression options
+- Mini previews for quick copy, save, and drag into other apps
+- Screenshots during an active recording
+- 30-day capture history
+- Customizable shortcuts and color themes
+- Optional in-app feedback (never includes your captures)
 
 ## Wishlist
 
@@ -77,16 +75,9 @@ Captures is ready for launch.
 | `Ctrl+Shift+F` | Open Send Feedback |
 | `Esc` | Cancel an active capture, screenshot countdown, or recording countdown |
 
-Global capture and feedback shortcuts can be changed in Preferences.
-
-In the screenshot editor, pinch on a trackpad or hold `Command`/`Ctrl` while
-scrolling to zoom around the pointer. Use `Command`/`Ctrl` + `+` or `-` to zoom
-from the keyboard, and `Command`/`Ctrl` + `0` to return to 100%. Hold `Command`
-(macOS) or `Ctrl` (Windows/Linux) while dragging anywhere on the canvas or
-viewport to pan; middle-click drag also pans. If you pan so far that the canvas
-leaves the view, a Recenter control fades in at the top of the viewport.
-Duplicate the selected layer with `Command`/`Ctrl` + `D`, or use
-`Command`/`Ctrl` + `C` and `V` to copy and paste it.
+Global capture and feedback shortcuts can be changed in Preferences. In the
+screenshot editor, zoom with pinch or `Ctrl`/`Cmd`+scroll, pan with
+`Ctrl`/`Cmd`-drag or middle-click, and duplicate layers with `Ctrl`/`Cmd`+`D`.
 
 ## Development
 
