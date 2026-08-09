@@ -246,6 +246,19 @@ export const TEXT_LINE_HEIGHT_RATIO = 1.25;
  */
 export const TEXT_CHAR_WIDTH_RATIO = 0.56;
 
+/**
+ * Horizontal padding of a solid/rounded text background beyond the layout box.
+ * Kept in lockstep with canvas paint + inline editor chrome so trim/selection
+ * include the full bubble, not just the glyph box.
+ */
+export const TEXT_BACKGROUND_PAD_X_RATIO = 0.22;
+
+/**
+ * Vertical padding of a solid/rounded text background beyond the layout box.
+ * Symmetric so the label sits centered in the bubble.
+ */
+export const TEXT_BACKGROUND_PAD_Y_RATIO = 0.2;
+
 /** Minimum text box width so a single glyph still fits. */
 export function minTextBoxWidth(fontSize: number): number {
   return Math.max(8, Math.round(fontSize * 0.5));
@@ -260,9 +273,42 @@ export function estimateTextWidth(text: string, fontSize: number): number {
 /** Default box width for newly placed text (fits a short sample with room to grow). */
 export function defaultTextBoxWidth(fontSize: number, sample = "Text"): number {
   return Math.max(
-    Math.round(fontSize * 2.5),
-    Math.ceil(estimateTextWidth(sample, fontSize) + fontSize * 0.75),
+    Math.round(fontSize * 2.2),
+    Math.ceil(estimateTextWidth(sample, fontSize) + fontSize * 0.4),
   );
+}
+
+/** Background inset around the text layout box (document pixels). */
+export function textBackgroundPad(fontSize: number): { x: number; y: number } {
+  return {
+    x: fontSize * TEXT_BACKGROUND_PAD_X_RATIO,
+    y: fontSize * TEXT_BACKGROUND_PAD_Y_RATIO,
+  };
+}
+
+/** True when a text style paints a solid plate behind the glyphs. */
+export function textHasBackgroundPlate(element: Pick<EditorTextElement, "background">): boolean {
+  return element.background !== null && element.background !== "";
+}
+
+/**
+ * Layout size of wrapped text (no background padding).
+ * Origin stays at `element.x` / `element.y`.
+ */
+export function textContentSize(
+  element: Pick<EditorTextElement, "text" | "width" | "fontSize">,
+): { width: number; height: number } {
+  const boxWidth = Math.max(minTextBoxWidth(element.fontSize), element.width);
+  const lines = wrapTextLines(element.text, boxWidth, element.fontSize);
+  return {
+    width: boxWidth,
+    height: Math.max(1, lines.length) * element.fontSize * TEXT_LINE_HEIGHT_RATIO,
+  };
+}
+
+/** Whether new text of this preset should default to centered alignment. */
+export function textPresetPrefersCenter(preset: TextStylePreset): boolean {
+  return preset === "rounded-box" || preset === "box" || preset === "mono-box";
 }
 
 function hardBreakToken(
@@ -1938,13 +1984,35 @@ export function curveStrokeHoverHint(
   return "Double-click to add a curve point";
 }
 
-/** Corner handles drawn around a selected annotation. */
-export type ResizeHandle = "nw" | "ne" | "sw" | "se";
+/**
+ * Selection resize grips: four corners plus mid-edge handles so dragging the
+ * dashed selection border resizes, not only the corner squares.
+ */
+export type ResizeHandle =
+  | "nw"
+  | "n"
+  | "ne"
+  | "e"
+  | "se"
+  | "s"
+  | "sw"
+  | "w";
 
-const RESIZE_HANDLES: ResizeHandle[] = ["nw", "ne", "se", "sw"];
+const RESIZE_HANDLES: ResizeHandle[] = [
+  "nw",
+  "n",
+  "ne",
+  "e",
+  "se",
+  "s",
+  "sw",
+  "w",
+];
+
+const RESIZE_CORNER_HANDLES: ResizeHandle[] = ["nw", "ne", "se", "sw"];
 
 /**
- * Hit-test the four corner resize handles of a selection box.
+ * Hit-test corner grips, mid-edge grips, and the dashed selection border itself.
  * `handleRadius` is in document pixels (scale for display zoom before calling).
  */
 export function hitTestResizeHandle(
@@ -1953,7 +2021,8 @@ export function hitTestResizeHandle(
   handleRadius: number,
 ): ResizeHandle | null {
   const radius = Math.max(4, handleRadius);
-  for (const handle of RESIZE_HANDLES) {
+  // Corners first so diagonal grips win over edge strips near the same pixel.
+  for (const handle of RESIZE_CORNER_HANDLES) {
     const corner = resizeHandlePoint(bounds, handle);
     if (
       Math.abs(point.x - corner.x) <= radius
@@ -1962,19 +2031,54 @@ export function hitTestResizeHandle(
       return handle;
     }
   }
+  for (const handle of RESIZE_HANDLES) {
+    if (RESIZE_CORNER_HANDLES.includes(handle)) continue;
+    const mid = resizeHandlePoint(bounds, handle);
+    if (
+      Math.abs(point.x - mid.x) <= radius
+      && Math.abs(point.y - mid.y) <= radius
+    ) {
+      return handle;
+    }
+  }
+
+  // Dragging the dashed outline (not just the grip squares) also resizes.
+  const left = bounds.x;
+  const top = bounds.y;
+  const right = bounds.x + bounds.width;
+  const bottom = bounds.y + bounds.height;
+  const inX = point.x >= left - radius && point.x <= right + radius;
+  const inY = point.y >= top - radius && point.y <= bottom + radius;
+  if (!inX || !inY) return null;
+
+  const nearLeft = Math.abs(point.x - left) <= radius;
+  const nearRight = Math.abs(point.x - right) <= radius;
+  const nearTop = Math.abs(point.y - top) <= radius;
+  const nearBottom = Math.abs(point.y - bottom) <= radius;
+
+  if (nearTop && !nearLeft && !nearRight) return "n";
+  if (nearBottom && !nearLeft && !nearRight) return "s";
+  if (nearLeft && !nearTop && !nearBottom) return "w";
+  if (nearRight && !nearTop && !nearBottom) return "e";
   return null;
 }
 
 export function resizeHandlePoint(bounds: EditorRect, handle: ResizeHandle): EditorPoint {
+  const midX = bounds.x + bounds.width / 2;
+  const midY = bounds.y + bounds.height / 2;
   if (handle === "nw") return { x: bounds.x, y: bounds.y };
+  if (handle === "n") return { x: midX, y: bounds.y };
   if (handle === "ne") return { x: bounds.x + bounds.width, y: bounds.y };
+  if (handle === "e") return { x: bounds.x + bounds.width, y: midY };
   if (handle === "se") return { x: bounds.x + bounds.width, y: bounds.y + bounds.height };
-  return { x: bounds.x, y: bounds.y + bounds.height };
+  if (handle === "s") return { x: midX, y: bounds.y + bounds.height };
+  if (handle === "sw") return { x: bounds.x, y: bounds.y + bounds.height };
+  return { x: bounds.x, y: midY };
 }
 
 /**
- * Compute a new selection rectangle while dragging a corner handle.
- * The opposite corner stays fixed; the dragged corner follows `current`.
+ * Compute a new selection rectangle while dragging a corner or edge handle.
+ * The opposite edge/corner stays fixed; the dragged side follows `current`.
  */
 export function resizeBoundsFromHandle(
   initial: EditorRect,
@@ -1983,25 +2087,67 @@ export function resizeBoundsFromHandle(
   minimumSize = 8,
 ): EditorRect {
   const min = Math.max(1, minimumSize);
-  const anchor = resizeHandlePoint(initial, oppositeResizeHandle(handle));
-  const width = Math.max(min, Math.abs(current.x - anchor.x));
-  const height = Math.max(min, Math.abs(current.y - anchor.y));
-  // Prefer the side the pointer is on when past the anchor so the box can flip.
-  const flippedX = current.x < anchor.x;
-  const flippedY = current.y < anchor.y;
-  return {
-    x: flippedX ? anchor.x - width : anchor.x,
-    y: flippedY ? anchor.y - height : anchor.y,
-    width,
-    height,
-  };
+  const fixedLeft = initial.x;
+  const fixedTop = initial.y;
+  const fixedRight = initial.x + initial.width;
+  const fixedBottom = initial.y + initial.height;
+
+  const moveLeft = handle === "w" || handle === "nw" || handle === "sw";
+  const moveRight = handle === "e" || handle === "ne" || handle === "se";
+  const moveTop = handle === "n" || handle === "nw" || handle === "ne";
+  const moveBottom = handle === "s" || handle === "sw" || handle === "se";
+
+  let left = moveLeft ? current.x : fixedLeft;
+  let right = moveRight ? current.x : fixedRight;
+  let top = moveTop ? current.y : fixedTop;
+  let bottom = moveBottom ? current.y : fixedBottom;
+
+  if (left > right) {
+    const swap = left;
+    left = right;
+    right = swap;
+  }
+  if (top > bottom) {
+    const swap = top;
+    top = bottom;
+    bottom = swap;
+  }
+
+  let width = right - left;
+  let height = bottom - top;
+  if (width < min) {
+    if (moveLeft && !moveRight) left = right - min;
+    else if (moveRight && !moveLeft) right = left + min;
+    else {
+      const center = (left + right) / 2;
+      left = center - min / 2;
+      right = center + min / 2;
+    }
+    width = min;
+  }
+  if (height < min) {
+    if (moveTop && !moveBottom) top = bottom - min;
+    else if (moveBottom && !moveTop) bottom = top + min;
+    else {
+      const center = (top + bottom) / 2;
+      top = center - min / 2;
+      bottom = center + min / 2;
+    }
+    height = min;
+  }
+
+  return { x: left, y: top, width, height };
 }
 
 export function oppositeResizeHandle(handle: ResizeHandle): ResizeHandle {
   if (handle === "nw") return "se";
+  if (handle === "n") return "s";
   if (handle === "ne") return "sw";
+  if (handle === "e") return "w";
   if (handle === "se") return "nw";
-  return "ne";
+  if (handle === "s") return "n";
+  if (handle === "sw") return "ne";
+  return "e";
 }
 
 /**
@@ -2032,13 +2178,33 @@ export function resizeElement(
   }
 
   if (element.kind === "text") {
-    // Text boxes keep font size stable; resize only changes wrap width + origin.
-    // Height of the selection follows wrapped content after the gesture ends.
+    // Width-only drags reflow wrap width. Height (or corner) drags also scale
+    // type size so stretching the yellow selection box visibly resizes the label.
+    const widthOnly = Math.abs(scaleY - 1) < 0.001 && Math.abs(scaleX - 1) >= 0.001;
+    const heightOnly = Math.abs(scaleX - 1) < 0.001 && Math.abs(scaleY - 1) >= 0.001;
+    const fontScale = widthOnly
+      ? 1
+      : heightOnly
+        ? scaleY
+        : Math.min(scaleX, scaleY);
+    const nextFontSize = clamp(
+      Math.round(element.fontSize * Math.max(0.05, fontScale)),
+      8,
+      512,
+    );
+    const pad = textHasBackgroundPlate(element)
+      ? textBackgroundPad(nextFontSize)
+      : { x: 0, y: 0 };
+    const contentWidth = Math.max(
+      minTextBoxWidth(nextFontSize),
+      nextBounds.width - pad.x * 2,
+    );
     return {
       ...element,
-      x: nextBounds.x,
-      y: nextBounds.y,
-      width: Math.max(minTextBoxWidth(element.fontSize), nextBounds.width),
+      fontSize: nextFontSize,
+      x: nextBounds.x + pad.x,
+      y: nextBounds.y + pad.y,
+      width: contentWidth,
     };
   }
 
@@ -2065,6 +2231,8 @@ export function resizeElement(
 }
 
 export function resizeCursor(handle: ResizeHandle): string {
+  if (handle === "n" || handle === "s") return "ns-resize";
+  if (handle === "e" || handle === "w") return "ew-resize";
   if (handle === "nw" || handle === "se") return "nwse-resize";
   return "nesw-resize";
 }
@@ -2079,13 +2247,22 @@ export function elementBounds(element: ScreenshotElement): EditorRect {
     };
   }
   if (element.kind === "text") {
-    const boxWidth = Math.max(minTextBoxWidth(element.fontSize), element.width);
-    const lines = wrapTextLines(element.text, boxWidth, element.fontSize);
+    const content = textContentSize(element);
+    if (!textHasBackgroundPlate(element)) {
+      return {
+        x: element.x,
+        y: element.y,
+        width: content.width,
+        height: content.height,
+      };
+    }
+    // Include the painted bubble so Trim edges / selection hug the plate.
+    const pad = textBackgroundPad(element.fontSize);
     return {
-      x: element.x,
-      y: element.y,
-      width: boxWidth,
-      height: Math.max(1, lines.length) * element.fontSize * TEXT_LINE_HEIGHT_RATIO,
+      x: element.x - pad.x,
+      y: element.y - pad.y,
+      width: content.width + pad.x * 2,
+      height: content.height + pad.y * 2,
     };
   }
   if (element.kind === "shape") {

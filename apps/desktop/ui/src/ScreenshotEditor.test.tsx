@@ -518,7 +518,8 @@ describe("ScreenshotEditor", () => {
       target: { value: "100" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Text (T)" }));
-    fireEvent.click(screen.getByRole("button", { name: "New text style: Standard" }));
+    // Rounded Box is the default for new text (bubbly label style).
+    fireEvent.click(screen.getByRole("button", { name: "New text style: Rounded Box" }));
 
     for (const style of [
       "Standard",
@@ -552,6 +553,7 @@ describe("ScreenshotEditor", () => {
     expect(inlineEditor.style.fontFamily).toContain("ui-rounded");
     expect(inlineEditor).toHaveStyle({ backgroundColor: "#111318" });
     expect(Number.parseFloat(inlineEditor.style.borderRadius)).toBeGreaterThan(20);
+    expect(inlineEditor).toHaveStyle({ textAlign: "center" });
     expect(screen.getByRole("button", { name: "Text style: Rounded Box" }))
       .toHaveAttribute("aria-expanded", "false");
 

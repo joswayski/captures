@@ -88,6 +88,9 @@ import {
   stackDropLightFocusAtPoint,
   defaultTextBoxWidth,
   TEXT_LINE_HEIGHT_RATIO,
+  textBackgroundPad,
+  textHasBackgroundPlate,
+  textPresetPrefersCenter,
   textStylePreset,
   wrapTextLines,
   translateElement,
@@ -453,8 +456,12 @@ function textOutlineWidth(fontSize: number): number {
 
 function textBackgroundRadius(
   element: Extract<ScreenshotElement, { kind: "text" }>,
+  backgroundWidth: number,
+  backgroundHeight: number,
 ): number {
-  return element.roundedBackground ? element.fontSize * 0.62 : 0;
+  if (!element.roundedBackground) return 0;
+  // Full capsule when the plate is wider than tall (the usual bubble label).
+  return Math.min(backgroundWidth / 2, backgroundHeight / 2);
 }
 
 function drawSmoothPath(
@@ -668,19 +675,21 @@ function drawText(
     element.fontSize,
     (line) => context.measureText(line || " ").width,
   );
+  const contentHeight = Math.max(1, lines.length) * lineHeight;
   const anchorX = element.align === "center"
     ? element.x + boxWidth / 2
     : element.align === "right" ? element.x + boxWidth : element.x;
-  if (element.background) {
-    context.fillStyle = element.background;
-    const backgroundX = element.x - element.fontSize * 0.18;
-    const backgroundY = element.y - element.fontSize * 0.12;
-    const backgroundWidth = boxWidth + element.fontSize * 0.36;
-    const backgroundHeight = lines.length * lineHeight + element.fontSize * 0.14;
-    const backgroundRadius = Math.min(
-      textBackgroundRadius(element),
-      backgroundWidth / 2,
-      backgroundHeight / 2,
+  if (textHasBackgroundPlate(element)) {
+    context.fillStyle = element.background!;
+    const pad = textBackgroundPad(element.fontSize);
+    const backgroundX = element.x - pad.x;
+    const backgroundY = element.y - pad.y;
+    const backgroundWidth = boxWidth + pad.x * 2;
+    const backgroundHeight = contentHeight + pad.y * 2;
+    const backgroundRadius = textBackgroundRadius(
+      element,
+      backgroundWidth,
+      backgroundHeight,
     );
     if (backgroundRadius > 0) {
       context.beginPath();
@@ -998,31 +1007,37 @@ function drawEditorOverlays(
       context.setLineDash([6 * unit, 4 * unit]);
       context.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
       context.setLineDash([]);
-      // Corner resize grips for closed shapes / non-stroke selections.
+      // Corner + mid-edge resize grips for closed shapes / non-stroke selections.
       // Line/arrow use endpoint + mid/control handles instead.
       if (!curveable) {
         context.globalAlpha = 0.88;
         context.fillStyle = accentColor;
         context.strokeStyle = "rgba(255, 255, 255, 0.9)";
         context.lineWidth = 1.1 * unit;
-        const corner = 5.5 * unit;
+        const grip = 5.5 * unit;
+        const midX = bounds.x + bounds.width / 2;
+        const midY = bounds.y + bounds.height / 2;
         for (const point of [
           [bounds.x, bounds.y],
+          [midX, bounds.y],
           [bounds.x + bounds.width, bounds.y],
+          [bounds.x + bounds.width, midY],
           [bounds.x + bounds.width, bounds.y + bounds.height],
+          [midX, bounds.y + bounds.height],
           [bounds.x, bounds.y + bounds.height],
+          [bounds.x, midY],
         ]) {
           context.fillRect(
-            point[0] - corner / 2,
-            point[1] - corner / 2,
-            corner,
-            corner,
+            point[0] - grip / 2,
+            point[1] - grip / 2,
+            grip,
+            grip,
           );
           context.strokeRect(
-            point[0] - corner / 2,
-            point[1] - corner / 2,
-            corner,
-            corner,
+            point[0] - grip / 2,
+            point[1] - grip / 2,
+            grip,
+            grip,
           );
         }
       }
@@ -1247,7 +1262,7 @@ export function ScreenshotEditor() {
     strokeWidth: 8,
   });
   const [defaultFontSize, setDefaultFontSize] = useState(48);
-  const [defaultTextStyle, setDefaultTextStyle] = useState<TextStylePreset>("standard");
+  const [defaultTextStyle, setDefaultTextStyle] = useState<TextStylePreset>("rounded-box");
   const [fitScale, setFitScale] = useState(1);
   const [zoomMode, setZoomMode] = useState<"fit" | "manual">("fit");
   const [zoom, setZoom] = useState(100);
@@ -1646,22 +1661,24 @@ export function ScreenshotEditor() {
 
   const inlineTextLayout = useMemo(() => {
     if (!editingText) return null;
-    const bounds = elementBounds(editingText);
-    const horizontalPadding = editingText.fontSize * 0.18;
-    const verticalPadding = editingText.fontSize * 0.12;
-    // Match the layout box so wrapping tracks canvas width (not a second outline).
+    const contentHeight = elementBounds(editingText).height;
+    const pad = textHasBackgroundPlate(editingText)
+      ? textBackgroundPad(editingText.fontSize)
+      : { x: 0, y: 0 };
+    // Match the painted bubble (padding + layout box) so wrapping tracks canvas width.
     return {
-      left: (editingText.x - horizontalPadding) * displayScale,
-      top: (editingText.y - verticalPadding) * displayScale,
+      left: (editingText.x - pad.x) * displayScale,
+      top: (editingText.y - pad.y) * displayScale,
       width: Math.max(
         48,
-        (editingText.width + horizontalPadding * 2) * displayScale,
+        (editingText.width + pad.x * 2) * displayScale,
       ),
       height: Math.max(
         28,
-        (bounds.height + verticalPadding * 2) * displayScale,
+        // elementBounds already includes pad when a plate is present.
+        contentHeight * displayScale,
       ),
-      padding: `${verticalPadding * displayScale}px ${horizontalPadding * displayScale}px`,
+      padding: `${pad.y * displayScale}px ${pad.x * displayScale}px`,
     };
   }, [displayScale, editingText]);
 
@@ -2520,7 +2537,8 @@ export function ScreenshotEditor() {
         fontFamily: "sans",
         bold: false,
         italic: false,
-        align: "left",
+        // Bubble / plate styles look off when left-aligned in a wider box.
+        align: textPresetPrefersCenter(defaultTextStyle) ? "center" : "left",
         color: defaultStyle.color,
         background: null,
         outlined: false,
@@ -4097,7 +4115,14 @@ export function ScreenshotEditor() {
                 color: editingText.outlined ? "transparent" : editingText.color,
                 backgroundColor: editingText.background ?? "transparent",
                 borderRadius: editingText.roundedBackground
-                  ? textBackgroundRadius(editingText) * displayScale
+                  ? textBackgroundRadius(
+                    editingText,
+                    (editingText.width
+                      + (textHasBackgroundPlate(editingText)
+                        ? textBackgroundPad(editingText.fontSize).x * 2
+                        : 0)),
+                    elementBounds(editingText).height,
+                  ) * displayScale
                   : undefined,
                 caretColor: editingText.color,
                 fontFamily: fontFamily(editingText),

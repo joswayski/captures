@@ -57,6 +57,7 @@ import {
   canvasTrimMarginPreview,
   trimDocumentToContent,
   transformImageElement,
+  TEXT_LINE_HEIGHT_RATIO,
   textStylePreset,
   visibleContentBounds,
   wrapTextLines,
@@ -277,6 +278,59 @@ describe("screenshot editor geometry", () => {
     const padded = trimDocumentToContent(document, 10);
     expect(padded).toMatchObject({ width: 120, height: 120 });
     expect(padded.elements[0]).toMatchObject({ x: 10, y: 10 });
+  });
+
+  it("trims to the painted text background bubble, not just the glyph box", () => {
+    const base = createScreenshotDocument("capture.png", 800, 600);
+    const bubble: EditorTextElement = {
+      ...editableLayer,
+      id: "bubble",
+      kind: "text",
+      x: 200,
+      y: 150,
+      text: "Text",
+      fontSize: 48,
+      width: 140,
+      fontFamily: "rounded",
+      bold: false,
+      italic: false,
+      align: "center",
+      color: "#ff3b5c",
+      background: "#111318",
+      outlined: false,
+      roundedBackground: true,
+    };
+    const document = {
+      ...base,
+      elements: [{ ...base.elements[0], visible: false }, bubble],
+    };
+
+    const bounds = elementBounds(bubble);
+    // Bubble pad sits outside the layout box used for wrapping.
+    expect(bounds.x).toBeLessThan(bubble.x);
+    expect(bounds.width).toBeGreaterThan(bubble.width);
+
+    const trimmed = trimDocumentToContent(document);
+    expect(trimmed.width).toBe(
+      Math.ceil(bounds.x + bounds.width) - Math.floor(bounds.x),
+    );
+    expect(trimmed.height).toBe(
+      Math.ceil(bounds.y + bounds.height) - Math.floor(bounds.y),
+    );
+    // Without background pad, trim would be too tight around the glyphs.
+    const glyphOnlyWidth = bubble.width;
+    expect(trimmed.width).toBeGreaterThan(glyphOnlyWidth);
+
+    const shifted = trimmed.elements.find((element) => element.id === "bubble");
+    if (shifted?.kind !== "text") throw new Error("expected text");
+    // Glyph origin stays inset so the plate still has room on every side.
+    expect(shifted.x).toBeGreaterThan(0);
+    expect(shifted.y).toBeGreaterThan(0);
+    const shiftedBounds = elementBounds(shifted);
+    expect(shiftedBounds.x).toBeGreaterThanOrEqual(0);
+    expect(shiftedBounds.y).toBeGreaterThanOrEqual(0);
+    expect(shiftedBounds.x + shiftedBounds.width).toBeLessThanOrEqual(trimmed.width + 0.5);
+    expect(shiftedBounds.y + shiftedBounds.height).toBeLessThanOrEqual(trimmed.height + 0.5);
   });
 
   it("keeps overhanging content when trimming", () => {
@@ -962,11 +1016,16 @@ describe("screenshot editor geometry", () => {
     expect(lineBounds.width).toBeLessThan(15);
   });
 
-  it("hit-tests corner resize handles and resizes bounds from the opposite corner", () => {
+  it("hit-tests corner and edge resize handles and resizes from the opposite side", () => {
     const bounds = { x: 100, y: 50, width: 200, height: 100 };
     expect(hitTestResizeHandle(bounds, { x: 100, y: 50 }, 8)).toBe("nw");
     expect(hitTestResizeHandle(bounds, { x: 300, y: 150 }, 8)).toBe("se");
+    expect(hitTestResizeHandle(bounds, { x: 200, y: 50 }, 8)).toBe("n");
+    expect(hitTestResizeHandle(bounds, { x: 300, y: 100 }, 8)).toBe("e");
+    // Interior of the selection is not a resize grip.
     expect(hitTestResizeHandle(bounds, { x: 200, y: 100 }, 8)).toBeNull();
+    // Dragging the dashed border strip (not just the mid grip) also counts.
+    expect(hitTestResizeHandle(bounds, { x: 180, y: 50 }, 8)).toBe("n");
 
     expect(resizeBoundsFromHandle(bounds, "se", { x: 400, y: 250 }, 8)).toEqual({
       x: 100,
@@ -978,6 +1037,18 @@ describe("screenshot editor geometry", () => {
       x: 50,
       y: 20,
       width: 250,
+      height: 130,
+    });
+    expect(resizeBoundsFromHandle(bounds, "e", { x: 350, y: 90 }, 8)).toEqual({
+      x: 100,
+      y: 50,
+      width: 250,
+      height: 100,
+    });
+    expect(resizeBoundsFromHandle(bounds, "n", { x: 150, y: 20 }, 8)).toEqual({
+      x: 100,
+      y: 20,
+      width: 200,
       height: 130,
     });
   });
@@ -1131,7 +1202,7 @@ describe("screenshot editor geometry", () => {
       roundedBackground: false,
     };
     const textBounds = elementBounds(text);
-    // Stretching taller must not explode the type size — only box origin/width change.
+    // Stretching taller scales type size so the selection box drag is visible.
     const taller = {
       ...textBounds,
       height: textBounds.height * 2,
@@ -1139,7 +1210,7 @@ describe("screenshot editor geometry", () => {
     const resizedTaller = resizeElement(text, textBounds, taller);
     expect(resizedTaller).toMatchObject({
       kind: "text",
-      fontSize: 40,
+      fontSize: 80,
       width: 120,
       x: textBounds.x,
       y: textBounds.y,
@@ -1158,6 +1229,25 @@ describe("screenshot editor geometry", () => {
     // Wider box reflows to fewer lines (or equal when already single-line).
     expect(elementBounds(resizedWider as EditorTextElement).height)
       .toBeLessThanOrEqual(elementBounds(text).height);
+
+    // Background plates expand paint/selection bounds beyond the layout box.
+    const bubble: EditorTextElement = {
+      ...text,
+      id: "bubble",
+      background: "#111318",
+      roundedBackground: true,
+      fontFamily: "rounded",
+      align: "center",
+    };
+    const bubbleBounds = elementBounds(bubble);
+    expect(bubbleBounds.x).toBeLessThan(bubble.x);
+    expect(bubbleBounds.y).toBeLessThan(bubble.y);
+    expect(bubbleBounds.width).toBeGreaterThan(bubble.width);
+    expect(bubbleBounds.height).toBeGreaterThan(
+      Math.max(1, wrapTextLines(bubble.text, bubble.width, bubble.fontSize).length)
+        * bubble.fontSize
+        * TEXT_LINE_HEIGHT_RATIO,
+    );
   });
 
   it("wraps text within the box width without scaling font size", () => {
