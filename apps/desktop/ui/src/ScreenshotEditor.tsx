@@ -274,7 +274,7 @@ const TOOL_ITEMS: Array<{ tool: ScreenshotTool; label: string; shortcut: string 
   { tool: "line", label: "Line", shortcut: "L" },
   { tool: "arrow", label: "Arrow", shortcut: "A" },
   { tool: "pen", label: "Freehand", shortcut: "P" },
-  { tool: "remove-bg", label: "Remove bg", shortcut: "B" },
+  { tool: "remove-bg", label: "Eraser", shortcut: "B" },
 ];
 
 const TEXT_STYLE_ITEMS: Array<{ preset: TextStylePreset; label: string }> = [
@@ -4837,10 +4837,11 @@ export function ScreenshotEditor() {
         {tool === "remove-bg" && (
           <section className="screenshot-property-section">
             <p>
-              Punch transparent holes in image layers. Works on the locked
-              background without unlocking. Export as PNG or WebP to keep alpha.
+              Make pixels transparent on image layers — color match (wand),
+              paint away (erase), or paint back (restore). Not automatic subject
+              cutout. Export as PNG or WebP to keep transparency.
             </p>
-            <div className="screenshot-format-buttons" role="group" aria-label="Remove background mode">
+            <div className="screenshot-format-buttons" role="group" aria-label="Eraser mode">
               {REMOVE_BG_MODE_ITEMS.map((item) => (
                 <button
                   key={item.mode}
@@ -4908,7 +4909,7 @@ export function ScreenshotEditor() {
                 <p>
                   {removeBgMode === "erase"
                     ? "Paint to erase toward transparency."
-                    : "Paint to restore pixels from before background edits."}
+                    : "Paint to restore pixels from before transparency edits."}
                 </p>
               </>
             )}

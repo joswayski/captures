@@ -149,7 +149,7 @@ describe("ScreenshotEditor", () => {
       "Line (L)",
       "Arrow (A)",
       "Freehand (P)",
-      "Remove bg (B)",
+      "Eraser (B)",
     ]) {
       expect(screen.getByRole("button", { name })).toBeInTheDocument();
     }
@@ -1042,14 +1042,18 @@ describe("ScreenshotEditor", () => {
     expect(within(canvasToolbar).getByLabelText("Height")).toHaveValue(900);
   });
 
-  it("exposes remove-background modes and wand controls", async () => {
+  it("exposes eraser modes and wand controls", async () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
 
-    fireEvent.click(screen.getByRole("button", { name: "Remove bg (B)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Eraser (B)" }));
     expect(screen.getByRole("button", { name: "Wand" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByLabelText("Color tolerance")).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "Contiguous only" })).toBeChecked();
+    expect(
+      screen.getByText(/Make pixels transparent on image layers/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Not automatic subject cutout/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Erase" }));
     expect(screen.getByRole("button", { name: "Erase" })).toHaveAttribute("aria-pressed", "true");
@@ -1068,7 +1072,7 @@ describe("ScreenshotEditor", () => {
     fireEvent.change(screen.getByRole("combobox", { name: "Canvas zoom" }), {
       target: { value: "100" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Remove bg (B)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Eraser (B)" }));
     fireEvent.click(screen.getByRole("button", { name: "Erase" }));
 
     const canvas = document.querySelector("canvas.screenshot-canvas");
