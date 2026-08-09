@@ -117,13 +117,15 @@ import {
   type ShapeKind,
   type TextStylePreset,
 } from "./lib/screenshotEditor";
+import { CustomSelect } from "./CustomSelect";
 import { NumberInput } from "./NumberInput";
 import { NotchedSlider, RangeSlider } from "./RangeSlider";
 import type { CaptureArtifact, EditorLayerPresence } from "./types";
 
 type ExportFormat = "png" | "jpeg" | "webp";
 type ExportSize = "original" | "75" | "50" | "custom";
-type ScreenshotQuality = "70" | "85" | "92" | "97" | "100";
+/** JPEG quality notches for Compress mode — same three presets as the recording editor. */
+type ScreenshotQuality = "70" | "85" | "92";
 /** Matches the recording editor: preserve by default, compress with presets, or cap size. */
 type ScreenshotQualityMode = "preserve" | "compress" | "maximum";
 type ScreenshotFileSizeUnit = "kb" | "mb" | "gb";
@@ -359,12 +361,25 @@ const COLOR_SWATCHES = [
   "#ffffff",
 ];
 
+/** Matches the recording editor's compress notches (mapped to JPEG quality). */
 const SCREENSHOT_QUALITY_OPTIONS = [
-  { value: "70", label: "Smaller", shortLabel: "Small" },
-  { value: "85", label: "Balanced", shortLabel: "Medium" },
-  { value: "92", label: "High" },
-  { value: "97", label: "Very high", shortLabel: "V. high" },
-  { value: "100", label: "Maximum", shortLabel: "Max" },
+  {
+    value: "70",
+    label: "Smaller",
+    shortLabel: "Small",
+    description: "Smallest file with more visible compression.",
+  },
+  {
+    value: "85",
+    label: "Balanced",
+    shortLabel: "Medium",
+    description: "Good quality with a meaningfully smaller file.",
+  },
+  {
+    value: "92",
+    label: "High",
+    description: "Larger file with the least quality loss.",
+  },
 ] as const;
 
 const SCREENSHOT_FILE_SIZE_UNIT_BYTES: Record<ScreenshotFileSizeUnit, number> = {
@@ -1314,7 +1329,7 @@ export function ScreenshotEditor() {
   const [customExportWidth, setCustomExportWidth] = useState(1_920);
   const [customExportHeight, setCustomExportHeight] = useState(1_080);
   const [exportAspectLocked, setExportAspectLocked] = useState(true);
-  const [jpegQuality, setJpegQuality] = useState<ScreenshotQuality>("100");
+  const [jpegQuality, setJpegQuality] = useState<ScreenshotQuality>("92");
   const [qualityMode, setQualityMode] =
     useState<ScreenshotQualityMode>("preserve");
   const [maximumFileSize, setMaximumFileSize] = useState("10");
@@ -3678,7 +3693,8 @@ export function ScreenshotEditor() {
       return;
     }
     // Keep the user-selected format. Compress/maximum only change how that format is encoded.
-    const saveQuality = qualityMode === "preserve" ? 100 : Number(jpegQuality);
+    // Maximum mode searches down from full quality; Compress uses the selected preset.
+    const saveQuality = qualityMode === "compress" ? Number(jpegQuality) : 100;
     setBusy("saving");
     setError("");
     clearSuccess();
@@ -3802,7 +3818,10 @@ export function ScreenshotEditor() {
     : exportFormat === "webp"
       ? "WebP"
       : "PNG";
-  const showJpegQualitySlider = qualityMode === "compress" && exportFormat === "jpeg";
+  // Always show compress presets (like the recording editor). JPEG uses the
+  // quality notch; PNG/WebP still use stronger packing while the notch is ready
+  // if the user switches to JPEG.
+  const showCompressQuality = qualityMode === "compress";
 
   const applyExportFormat = (format: ExportFormat) => {
     setExportFormat(format);
@@ -5274,38 +5293,45 @@ export function ScreenshotEditor() {
       <footer className="screenshot-export-bar">
         <div className={`screenshot-export-options${exportSettingsOpen ? " is-open" : ""}`}>
           <div id="screenshot-export-settings" className="screenshot-export-settings">
-          <label>
-            Format
-            <select
+          <div className="screenshot-export-control screenshot-export-format">
+            <span>Format</span>
+            <CustomSelect
               value={exportFormat}
-              onChange={(event) => applyExportFormat(event.target.value as ExportFormat)}
-            >
-              <option value="png">PNG</option>
-              <option value="jpeg">JPEG</option>
-              <option value="webp">WebP</option>
-            </select>
-          </label>
-          <label className="screenshot-export-size">
-            Output size
+              ariaLabel="Format"
+              options={[
+                { value: "png", label: "PNG" },
+                { value: "jpeg", label: "JPEG" },
+                { value: "webp", label: "WebP" },
+              ]}
+              onChange={(value) => applyExportFormat(value as ExportFormat)}
+            />
+          </div>
+          <div className="screenshot-export-control screenshot-export-size">
+            <span>Output size</span>
             <span className="screenshot-export-size-control">
-              <select value={exportSize} onChange={(event) => {
-                const next = event.target.value as ExportSize;
-                if (next === "custom" && exportSize !== "custom") {
-                  setCustomExportWidth(editorDocument.width);
-                  setCustomExportHeight(editorDocument.height);
-                }
-                setExportSize(next);
-              }}>
-                <option value="original">Original</option>
-                <option value="75">75%</option>
-                <option value="50">50%</option>
-                <option value="custom">Custom</option>
-              </select>
+              <CustomSelect
+                value={exportSize}
+                ariaLabel="Output size"
+                options={[
+                  { value: "original", label: "Original" },
+                  { value: "75", label: "75%" },
+                  { value: "50", label: "50%" },
+                  { value: "custom", label: "Custom" },
+                ]}
+                onChange={(value) => {
+                  const next = value as ExportSize;
+                  if (next === "custom" && exportSize !== "custom") {
+                    setCustomExportWidth(editorDocument.width);
+                    setCustomExportHeight(editorDocument.height);
+                  }
+                  setExportSize(next);
+                }}
+              />
               <span className="screenshot-output-dimensions" aria-live="polite">
                 {output.width} × {output.height}
               </span>
             </span>
-          </label>
+          </div>
           {exportSize === "custom" && (
             <div className="screenshot-export-control screenshot-custom-dimensions">
               <span>Width × height</span>
@@ -5338,40 +5364,56 @@ export function ScreenshotEditor() {
               </div>
             </div>
           )}
-          <label className="screenshot-quality-mode">
-            Save quality
-            <select
-              aria-label="Save quality"
+          <div className="screenshot-export-control screenshot-quality-mode">
+            <span>Save quality</span>
+            <CustomSelect
               value={qualityMode}
-              onChange={(event) => {
-                applyQualityMode(event.target.value as ScreenshotQualityMode);
-              }}
-            >
-              <option value="preserve">Preserve quality</option>
-              <option value="compress">Compress</option>
-              <option value="maximum">Maximum file size</option>
-            </select>
-          </label>
-          {showJpegQualitySlider && (
+              ariaLabel="Save quality"
+              options={[
+                {
+                  value: "preserve",
+                  label: "Preserve quality",
+                  description: "Original quality with no extra compression unless an edit requires it.",
+                },
+                {
+                  value: "compress",
+                  label: "Compress",
+                  description: "Choose a smaller file with Smaller, Balanced, or High quality.",
+                },
+                {
+                  value: "maximum",
+                  label: "Maximum file size",
+                  description: "Set a hard size limit for the saved file.",
+                },
+              ]}
+              onChange={(value) => applyQualityMode(value as ScreenshotQualityMode)}
+            />
+          </div>
+          {showCompressQuality && (
             <div className="screenshot-export-control screenshot-quality">
-              <span>Compression quality</span>
+              <span>Quality</span>
               <NotchedSlider
-                ariaLabel="Image quality"
+                ariaLabel="Compression quality"
                 value={jpegQuality}
                 options={SCREENSHOT_QUALITY_OPTIONS}
                 onChange={setJpegQuality}
               />
+              {exportFormat !== "jpeg" && (
+                <p className="screenshot-quality-format-hint">
+                  {formatLabel} uses stronger packing. Quality presets apply to JPEG.
+                </p>
+              )}
             </div>
           )}
           {qualityMode === "maximum" && (
-            <label
-              className="screenshot-maximum-size"
+            <div
+              className="screenshot-export-control screenshot-maximum-size"
               title={exportFormat === "jpeg"
                 ? "JPEG quality is lowered only when needed to meet this limit."
                 : `Uses stronger ${formatLabel} compression. If still over the limit, reduce dimensions or switch format.`}
             >
-              Maximum file size
-              <span>
+              <span>Maximum file size</span>
+              <span className="screenshot-maximum-size-control">
                 <NumberInput
                   min={maximumFileSizeUnit === "kb" ? 10 : maximumFileSizeUnit === "mb" ? 0.01 : 0.00001}
                   step={maximumFileSizeUnit === "kb" ? 1 : maximumFileSizeUnit === "mb" ? 0.01 : 0.00001}
@@ -5379,11 +5421,16 @@ export function ScreenshotEditor() {
                   ariaLabel="Maximum file size"
                   onTextChange={setMaximumFileSize}
                 />
-                <select
-                  aria-label="Screenshot file size unit"
+                <CustomSelect
                   value={maximumFileSizeUnit}
-                  onChange={(event) => {
-                    const nextUnit = event.target.value as ScreenshotFileSizeUnit;
+                  ariaLabel="Screenshot file size unit"
+                  options={[
+                    { value: "kb", label: "KB" },
+                    { value: "mb", label: "MB" },
+                    { value: "gb", label: "GB" },
+                  ]}
+                  onChange={(value) => {
+                    const nextUnit = value as ScreenshotFileSizeUnit;
                     const bytes = Number(maximumFileSize)
                       * SCREENSHOT_FILE_SIZE_UNIT_BYTES[maximumFileSizeUnit];
                     setMaximumFileSizeUnit(nextUnit);
@@ -5391,13 +5438,9 @@ export function ScreenshotEditor() {
                       setMaximumFileSize(formatScreenshotMaximumFileSizeInput(bytes, nextUnit));
                     }
                   }}
-                >
-                  <option value="kb">KB</option>
-                  <option value="mb">MB</option>
-                  <option value="gb">GB</option>
-                </select>
+                />
               </span>
-            </label>
+            </div>
           )}
           <div className="screenshot-export-control screenshot-output-estimate-control" aria-live="polite">
             <span>Est. size</span>
