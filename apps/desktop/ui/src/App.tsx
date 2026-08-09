@@ -5337,7 +5337,7 @@ export function ThumbnailCard({
         ].filter(Boolean).join(" ")}
         aria-label={editorControlAriaLabel}
         aria-pressed={editorControlPresent || undefined}
-        data-tooltip={editorControlPresent ? undefined : "Edit"}
+        data-tooltip={editorControlPresent || editorControlLeaving ? undefined : "Edit"}
         disabled={isExiting}
         onClick={isExiting ? undefined : openEditor}
         onPointerLeave={(event) => rearmThumbnailEditorControlHover(event.currentTarget)}
