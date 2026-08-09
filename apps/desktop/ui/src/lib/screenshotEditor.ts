@@ -2107,6 +2107,34 @@ export function elementBounds(element: ScreenshotElement): EditorRect {
   };
 }
 
+/** CSS size of each Layers-panel thumbnail (matches `.screenshot-layer-preview`). */
+export const LAYER_PREVIEW_SIZE = { width: 46, height: 34 } as const;
+
+/**
+ * Map content bounds into a fixed preview box (contain + center).
+ * Used so shape/path/text layer thumbnails match the painted geometry.
+ */
+export function previewTransformForBounds(
+  bounds: EditorRect,
+  previewWidth: number = LAYER_PREVIEW_SIZE.width,
+  previewHeight: number = LAYER_PREVIEW_SIZE.height,
+  padding = 3,
+): { scale: number; translateX: number; translateY: number } {
+  const innerW = Math.max(1, previewWidth - padding * 2);
+  const innerH = Math.max(1, previewHeight - padding * 2);
+  const scale = Math.min(
+    innerW / Math.max(1, bounds.width),
+    innerH / Math.max(1, bounds.height),
+  );
+  const scaledW = bounds.width * scale;
+  const scaledH = bounds.height * scale;
+  return {
+    scale,
+    translateX: (previewWidth - scaledW) / 2 - bounds.x * scale,
+    translateY: (previewHeight - scaledH) / 2 - bounds.y * scale,
+  };
+}
+
 export function hitTestElement(
   elements: ScreenshotElement[],
   point: EditorPoint,

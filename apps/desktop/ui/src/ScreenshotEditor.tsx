@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -53,6 +54,7 @@ import {
   cropDocument,
   duplicateScreenshotElement,
   elementBounds,
+  LAYER_PREVIEW_SIZE,
   mergedLayerName,
   estimateCanvasExportBytes,
   expandDocumentForElement,
@@ -62,6 +64,7 @@ import {
   hitTestElement,
   insertArrowControl,
   previewExpandedCanvasRect,
+  previewTransformForBounds,
   hitTestResizeHandle,
   imageDropGuideAtPoint,
   imageOrientationMatrix,
@@ -759,6 +762,85 @@ function paintScreenshotElement(
   drawSmoothPath(context, element.points);
   context.restore();
 }
+
+const EMPTY_LAYER_PREVIEW_IMAGE_CACHE = new Map<string, CachedImage>();
+
+/**
+ * Keep thin strokes readable in the 46×34 thumbnail without changing geometry
+ * or color. Scale is applied after this, so we inflate strokeWidth in document
+ * units when it would otherwise paint below ~1.35 CSS px.
+ */
+function withPreviewStrokeFloor(
+  element: ScreenshotElement,
+  scale: number,
+  minStrokeCssPx = 1.35,
+): ScreenshotElement {
+  if (element.kind !== "shape" && element.kind !== "path") return element;
+  if (scale <= 0) return element;
+  const minDocStroke = minStrokeCssPx / scale;
+  if (element.style.strokeWidth >= minDocStroke) return element;
+  return {
+    ...element,
+    style: {
+      ...element.style,
+      strokeWidth: minDocStroke,
+    },
+  };
+}
+
+/**
+ * Live thumbnail for non-image layers: paints the real shape/path/text
+ * (color, curve, fill, stroke) into the Layers panel preview box.
+ */
+const AnnotationLayerPreview = memo(function AnnotationLayerPreview({
+  element,
+}: {
+  element: Exclude<ScreenshotElement, EditorImageElement>;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const cssW = LAYER_PREVIEW_SIZE.width;
+    const cssH = LAYER_PREVIEW_SIZE.height;
+    const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
+    const pixelW = Math.max(1, Math.round(cssW * dpr));
+    const pixelH = Math.max(1, Math.round(cssH * dpr));
+    if (canvas.width !== pixelW) canvas.width = pixelW;
+    if (canvas.height !== pixelH) canvas.height = pixelH;
+
+    const context = canvas.getContext("2d");
+    if (!context) return;
+
+    context.setTransform(dpr, 0, 0, dpr, 0, 0);
+    context.clearRect(0, 0, cssW, cssH);
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+
+    const bounds = elementBounds(element);
+    const { scale, translateX, translateY } = previewTransformForBounds(bounds);
+    const painted = withPreviewStrokeFloor(element, scale);
+
+    context.save();
+    context.globalAlpha = Math.max(0, Math.min(1, element.opacity / 100));
+    context.translate(translateX, translateY);
+    context.scale(scale, scale);
+    paintScreenshotElement(context, painted, EMPTY_LAYER_PREVIEW_IMAGE_CACHE);
+    context.restore();
+  }, [element]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      className="screenshot-layer-preview-canvas"
+      width={LAYER_PREVIEW_SIZE.width}
+      height={LAYER_PREVIEW_SIZE.height}
+      aria-hidden="true"
+    />
+  );
+});
 
 function renderScreenshot(
   context: CanvasRenderingContext2D,
@@ -4324,7 +4406,7 @@ export function ScreenshotEditor() {
                             }}
                           />
                         )
-                        : <EditorIcon name={layerIconName(element)} />}
+                        : <AnnotationLayerPreview element={element} />}
                     </span>
                     <span className="screenshot-layer-copy">
                       <strong>{elementLayerName(element)}</strong>
@@ -5664,12 +5746,6 @@ function elementKindLabel(element: ScreenshotElement): string {
   if (element.kind === "text") return "Text";
   if (element.kind === "path") return "Drawing";
   return "Shape";
-}
-
-function layerIconName(element: ScreenshotElement): string {
-  if (element.kind === "text") return "text";
-  if (element.kind === "path") return "pen";
-  return element.kind === "shape" ? element.shape : "image";
 }
 
 function toolLabel(tool: ScreenshotTool): string {

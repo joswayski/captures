@@ -2590,7 +2590,10 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 /* Keep the grip as a reorder cue only — locked layers dim it instead of swapping in a second lock icon. */
 .screenshot-layer-list li.locked .screenshot-layer-grip { color: #4f5055; opacity: .55; }
 .screenshot-layer-preview { display: grid; width: 46px; height: 34px; place-items: center; overflow: hidden; border: 1px solid var(--editor-border-strong); border-radius: 7px; color: var(--editor-text-muted); background-color: #151619; background-image: linear-gradient(45deg,#24252a 25%,transparent 25%),linear-gradient(-45deg,#24252a 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#24252a 75%),linear-gradient(-45deg,transparent 75%,#24252a 75%); background-position: 0 0,0 5px,5px -5px,-5px 0; background-size: 10px 10px; }
-.screenshot-layer-preview img { display: block; width: 100%; height: 100%; object-fit: cover; -webkit-user-select: none; user-select: none; -webkit-user-drag: none; }.screenshot-layer-preview svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.screenshot-layer-preview img,
+.screenshot-layer-preview-canvas { display: block; width: 100%; height: 100%; -webkit-user-select: none; user-select: none; -webkit-user-drag: none; }
+.screenshot-layer-preview img { object-fit: cover; }
+.screenshot-layer-preview svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .screenshot-layer-copy { display: grid; min-width: 0; gap: 3px; }.screenshot-layer-copy strong, .screenshot-layer-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.screenshot-layer-copy strong { color: var(--editor-text); font-size: 11px; font-weight: 600; }.screenshot-layer-copy small { color: var(--editor-text-subtle); font-size: 9.5px; font-weight: 500; }
 .screenshot-layer-list li.hidden .screenshot-layer-preview, .screenshot-layer-list li.hidden .screenshot-layer-copy { opacity: .42; }
 .screenshot-layer-quick-actions { position: absolute; z-index: 2; top: 50%; right: 6px; display: flex; gap: 2px; transform: translateY(-50%); }
