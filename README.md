@@ -7,19 +7,32 @@ Captures is a cross-platform screen capture utility built for quick captures and
 
 ## A quick look
 
-Choose a screenshot or recording, then target a region, window, or full display from one compact panel.
+Open one compact menu to switch between screenshots and recordings, then choose a region, window, or full display.
 
-![Captures capture controls showing screenshot and recording options over a selected region](docs/images/capture-controls.jpg)
+![Captures selecting a screenshot region over a coastline](docs/images/capture-selection.jpg)
+
+<p align="center">
+  <img src="docs/images/capture-controls.jpg" alt="Close-up of the Captures capture menu with screenshot and recording options" width="728">
+  <br>
+  <sub><strong>Everything in reach</strong> with capture type and target controls together in one compact menu.</sub>
+</p>
 
 <table>
   <tr>
-    <td width="68%">
+    <td width="50%">
       <img src="docs/images/screenshot-editor.jpg" alt="Captures screenshot editor with annotation tools, layers, and export controls" width="100%">
       <br>
       <sub><strong>Edit screenshots</strong> with annotations, layers, canvas controls, and flexible export options.</sub>
     </td>
-    <td width="32%">
-      <img src="docs/images/preferences.jpg" alt="Captures Preferences showing color themes and capture options" width="100%">
+    <td width="50%">
+      <img src="docs/images/video-editor.jpg" alt="Captures video editor with a preview, trimming timeline, and save controls" width="100%">
+      <br>
+      <sub><strong>Polish recordings</strong> with preview, trimming, crop and size controls, and export options.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center">
+      <img src="docs/images/preferences.jpg" alt="Captures Preferences showing color themes and capture options" width="52%">
       <br>
       <sub><strong>Make it yours</strong> with themes, shortcuts, and capture and recording defaults.</sub>
     </td>
