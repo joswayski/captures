@@ -208,7 +208,7 @@ describe("ScreenshotEditor", () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
 
-    const zoom = screen.getByRole("combobox", { name: "Canvas zoom" });
+    const zoom = screen.getByRole("slider", { name: "Canvas zoom" });
     fireEvent.change(zoom, { target: { value: "100" } });
     expect(zoom).toHaveValue("100");
 
@@ -222,7 +222,8 @@ describe("ScreenshotEditor", () => {
     fireEvent(window, zoomIn);
     expect(zoomIn.defaultPrevented).toBe(true);
     expect(zoom).toHaveValue("125");
-    expect(within(zoom).getByRole("option", { name: "125%" })).toBeInTheDocument();
+    const preset = screen.getByRole("combobox", { name: "Canvas zoom preset" });
+    expect(within(preset).getByRole("option", { name: "125%" })).toBeInTheDocument();
 
     fireEvent.keyDown(window, { key: "-", code: "Minus", ctrlKey: true });
     expect(zoom).toHaveValue("100");
@@ -233,12 +234,38 @@ describe("ScreenshotEditor", () => {
     expect(zoom).toHaveValue("100");
   });
 
+  it("zooms with the header slider and zoom buttons", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Width");
+
+    const zoom = screen.getByRole("slider", { name: "Canvas zoom" });
+    fireEvent.change(zoom, { target: { value: "100" } });
+    expect(zoom).toHaveValue("100");
+
+    fireEvent.change(zoom, { target: { value: "175" } });
+    expect(zoom).toHaveValue("175");
+
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    expect(Number((zoom as HTMLInputElement).value)).toBeCloseTo(218.8, 0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Zoom out" }));
+    expect(Number((zoom as HTMLInputElement).value)).toBeCloseTo(175, 0);
+
+    fireEvent.change(screen.getByRole("combobox", { name: "Canvas zoom preset" }), {
+      target: { value: "50" },
+    });
+    expect(zoom).toHaveValue("50");
+
+    fireEvent.click(screen.getByRole("button", { name: "Fit canvas" }));
+    expect(screen.getByRole("combobox", { name: "Canvas zoom preset" })).toHaveValue("fit");
+  });
+
   it("zooms on trackpad pinch or modified mouse wheel without consuming scroll", async () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
 
     const viewport = screen.getByLabelText("Screenshot editing canvas");
-    const zoom = screen.getByRole("combobox", { name: "Canvas zoom" });
+    const zoom = screen.getByRole("slider", { name: "Canvas zoom" });
     fireEvent.change(zoom, { target: { value: "100" } });
 
     const scroll = new WheelEvent("wheel", {
@@ -260,7 +287,7 @@ describe("ScreenshotEditor", () => {
     });
     fireEvent(viewport, zoomIn);
     expect(zoomIn.defaultPrevented).toBe(true);
-    expect(Number((zoom as HTMLSelectElement).value))
+    expect(Number((zoom as HTMLInputElement).value))
       .toBeGreaterThan(100);
 
     const zoomOut = new WheelEvent("wheel", {
@@ -273,7 +300,7 @@ describe("ScreenshotEditor", () => {
     });
     fireEvent(viewport, zoomOut);
     expect(zoomOut.defaultPrevented).toBe(true);
-    expect(Number((zoom as HTMLSelectElement).value)).toBeCloseTo(100, 1);
+    expect(Number((zoom as HTMLInputElement).value)).toBeCloseTo(100, 1);
   });
 
   it("supports the native macOS magnify gesture", async () => {
@@ -281,7 +308,7 @@ describe("ScreenshotEditor", () => {
     await screen.findByLabelText("Width");
 
     const viewport = screen.getByLabelText("Screenshot editing canvas");
-    const zoom = screen.getByRole("combobox", { name: "Canvas zoom" });
+    const zoom = screen.getByRole("slider", { name: "Canvas zoom" });
     fireEvent.change(zoom, { target: { value: "100" } });
 
     const start = new Event("gesturestart", { bubbles: true, cancelable: true });
@@ -462,7 +489,7 @@ describe("ScreenshotEditor", () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
 
-    fireEvent.change(screen.getByRole("combobox", { name: "Canvas zoom" }), {
+    fireEvent.change(screen.getByRole("slider", { name: "Canvas zoom" }), {
       target: { value: "100" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Text (T)" }));
@@ -514,7 +541,7 @@ describe("ScreenshotEditor", () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
 
-    fireEvent.change(screen.getByRole("combobox", { name: "Canvas zoom" }), {
+    fireEvent.change(screen.getByRole("slider", { name: "Canvas zoom" }), {
       target: { value: "100" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Text (T)" }));
@@ -624,7 +651,7 @@ describe("ScreenshotEditor", () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
 
-    fireEvent.change(screen.getByRole("combobox", { name: "Canvas zoom" }), {
+    fireEvent.change(screen.getByRole("slider", { name: "Canvas zoom" }), {
       target: { value: "100" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Arrow (A)" }));
@@ -686,7 +713,7 @@ describe("ScreenshotEditor", () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
 
-    fireEvent.change(screen.getByRole("combobox", { name: "Canvas zoom" }), {
+    fireEvent.change(screen.getByRole("slider", { name: "Canvas zoom" }), {
       target: { value: "100" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Arrow (A)" }));
@@ -776,7 +803,7 @@ describe("ScreenshotEditor", () => {
     render(<ScreenshotEditor />);
     await screen.findAllByText("1440 × 900");
 
-    fireEvent.change(screen.getByRole("combobox", { name: "Canvas zoom" }), {
+    fireEvent.change(screen.getByRole("slider", { name: "Canvas zoom" }), {
       target: { value: "100" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Arrow (A)" }));
@@ -866,7 +893,7 @@ describe("ScreenshotEditor", () => {
     render(<ScreenshotEditor />);
     await screen.findAllByText("1440 × 900");
 
-    fireEvent.change(screen.getByRole("combobox", { name: "Canvas zoom" }), {
+    fireEvent.change(screen.getByRole("slider", { name: "Canvas zoom" }), {
       target: { value: "100" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Line (L)" }));
@@ -1069,7 +1096,7 @@ describe("ScreenshotEditor", () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
 
-    fireEvent.change(screen.getByRole("combobox", { name: "Canvas zoom" }), {
+    fireEvent.change(screen.getByRole("slider", { name: "Canvas zoom" }), {
       target: { value: "100" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Eraser (B)" }));
@@ -1112,10 +1139,10 @@ describe("ScreenshotEditor", () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
 
-    fireEvent.change(screen.getByRole("combobox", { name: "Canvas zoom" }), {
+    fireEvent.change(screen.getByRole("slider", { name: "Canvas zoom" }), {
       target: { value: "100" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Remove bg (B)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Eraser (B)" }));
     expect(screen.getByRole("button", { name: "Wand" })).toHaveAttribute("aria-pressed", "true");
 
     const canvas = document.querySelector("canvas.screenshot-canvas");
@@ -1292,7 +1319,7 @@ describe("ScreenshotEditor", () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
 
-    fireEvent.change(screen.getByRole("combobox", { name: "Canvas zoom" }), {
+    fireEvent.change(screen.getByRole("slider", { name: "Canvas zoom" }), {
       target: { value: "100" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Text (T)" }));
@@ -1339,7 +1366,7 @@ describe("ScreenshotEditor", () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
 
-    fireEvent.change(screen.getByRole("combobox", { name: "Canvas zoom" }), {
+    fireEvent.change(screen.getByRole("slider", { name: "Canvas zoom" }), {
       target: { value: "100" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Arrow (A)" }));

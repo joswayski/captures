@@ -66,8 +66,9 @@ Preview builds update after every successful merge to `main` and may contain bug
 | `Esc` | Cancel an active capture, screenshot countdown, or recording countdown |
 
 Global capture and feedback shortcuts can be changed in Preferences. In the
-screenshot editor, zoom with pinch or `Ctrl`/`Cmd`+scroll, pan with
-`Ctrl`/`Cmd`-drag or middle-click, and duplicate layers with `Ctrl`/`Cmd`+`D`.
+screenshot editor, zoom with the header slider and `+`/`-` controls, pinch or
+`Ctrl`/`Cmd`+scroll, pan with `Ctrl`/`Cmd`-drag or middle-click, and duplicate
+layers with `Ctrl`/`Cmd`+`D`.
 
 ## Development
 

@@ -1836,11 +1836,125 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 .screenshot-editor-history-actions svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .screenshot-editor-history-actions > .screenshot-add-image { width: auto; margin-left: 3px; border-color: var(--editor-border-strong); padding: 7px 12px; color: var(--editor-text); background: rgba(255,255,255,.08); white-space: nowrap; }
 .screenshot-editor-history-actions > .screenshot-add-image:hover { border-color: rgba(255,255,255,.2); color: white; background: rgba(255,255,255,.13); }
-.screenshot-editor-zoom { display: flex; height: 36px; margin-left: 2px; align-items: center; overflow: hidden; border: 1px solid var(--editor-border); border-radius: 10px; background: rgba(255,255,255,.035); }
-.screenshot-editor-zoom button { display: grid; width: 36px; height: 100%; padding: 0; place-items: center; border: 0; border-right: 1px solid var(--editor-border); color: var(--editor-text-muted); background: transparent; }
-.screenshot-editor-zoom button.active { color: var(--theme-accent-text); background: rgba(var(--theme-accent-rgb),.12); }
-.screenshot-editor-zoom button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.screenshot-editor-zoom select { width: 70px; height: 100%; border: 0; padding: 0 22px 0 8px; color: var(--editor-text); background-color: transparent; outline: none; font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-size: 10px; }
+.screenshot-editor-zoom {
+  display: flex;
+  height: 36px;
+  margin-left: 2px;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid var(--editor-border);
+  border-radius: 10px;
+  background: rgba(255,255,255,.035);
+}
+.screenshot-editor-zoom > button {
+  display: grid;
+  width: 30px;
+  height: 100%;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-right: 1px solid var(--editor-border);
+  color: var(--editor-text-muted);
+  background: transparent;
+}
+.screenshot-editor-zoom > button:hover:not(:disabled) {
+  color: var(--editor-text);
+  background: rgba(255,255,255,.06);
+}
+.screenshot-editor-zoom > button:disabled {
+  cursor: default;
+  opacity: .35;
+}
+.screenshot-editor-zoom > button.active {
+  color: var(--theme-accent-text);
+  background: rgba(var(--theme-accent-rgb),.12);
+}
+.screenshot-editor-zoom > button svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+/* Compact continuous zoom: drag instead of relying on pinch / modified scroll. */
+.screenshot-editor-zoom-slider {
+  display: flex;
+  width: 92px;
+  height: 100%;
+  align-items: center;
+  padding: 0 8px;
+  border-right: 1px solid var(--editor-border);
+  background: transparent;
+}
+.screenshot-editor-zoom-slider input[type="range"] {
+  --zoom-track: #2f3036;
+  width: 100%;
+  height: 18px;
+  margin: 0;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+  outline: none;
+}
+.screenshot-editor-zoom-slider input[type="range"]::-webkit-slider-runnable-track {
+  height: 3px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--zoom-track);
+}
+.screenshot-editor-zoom-slider input[type="range"]::-webkit-slider-thumb {
+  width: 12px;
+  height: 12px;
+  margin-top: -4.5px;
+  border: 2px solid #1a1b20;
+  border-radius: 999px;
+  appearance: none;
+  background: #f0f0f2;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.1), 0 1px 3px rgba(0,0,0,.4);
+  transition: box-shadow .12s ease, transform .12s ease, background .12s ease;
+}
+.screenshot-editor-zoom-slider input[type="range"]:hover::-webkit-slider-thumb {
+  background: #fff;
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,.16),
+    0 2px 6px rgba(0,0,0,.45),
+    0 0 0 3px rgba(var(--theme-accent-rgb),.16);
+  transform: scale(1.06);
+}
+.screenshot-editor-zoom-slider input[type="range"]:focus-visible::-webkit-slider-thumb {
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,.16),
+    0 1px 4px rgba(0,0,0,.4),
+    0 0 0 3px rgba(var(--theme-accent-rgb),.32);
+}
+.screenshot-editor-zoom-slider input[type="range"]::-moz-range-track {
+  height: 3px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--zoom-track);
+}
+.screenshot-editor-zoom-slider input[type="range"]::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 2px solid #1a1b20;
+  border-radius: 999px;
+  background: #f0f0f2;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.1), 0 1px 3px rgba(0,0,0,.4);
+}
+.screenshot-editor-zoom-presets {
+  width: 62px;
+  height: 100%;
+  border: 0;
+  padding: 0 18px 0 6px;
+  color: var(--editor-text);
+  background-color: transparent;
+  outline: none;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
 .screenshot-tool-rail { z-index: 5; display: flex; grid-row: 2; grid-column: 1; padding: 9px; flex-direction: column; align-items: center; gap: 4px; overflow: visible; border-right: 1px solid var(--editor-border); background: var(--editor-chrome); }
 .screenshot-tool-rail button { position: relative; display: grid; width: 40px; min-height: 40px; padding: 0; place-items: center; border: 1px solid transparent; border-radius: 10px; color: var(--editor-text-muted); background: transparent; }
 .screenshot-tool-rail button:hover { color: var(--editor-text); background: var(--editor-control); }
@@ -3216,7 +3330,11 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 @media (max-width: 1040px) {
   .screenshot-editor { grid-template-columns: 58px minmax(0,1fr) 280px; }
   .screenshot-editor-title > span { display: none; }
-  .screenshot-editor-history-actions .screenshot-editor-zoom, .screenshot-editor-history-actions > button:first-child, .screenshot-editor-history-actions > button:nth-child(2) { display: none; }
+  /* Keep zoom reachable on narrower editor windows; only drop undo/redo chrome. */
+  .screenshot-editor-history-actions > button:first-child,
+  .screenshot-editor-history-actions > button:nth-child(2) { display: none; }
+  .screenshot-editor-zoom-slider { width: 72px; padding: 0 6px; }
+  .screenshot-editor-zoom-presets { width: 54px; padding-right: 14px; }
   .screenshot-save-row { grid-template-columns: minmax(170px,200px) minmax(230px,1fr) auto; gap: 8px 10px; }
   .screenshot-export-disclosure { grid-row: 1; grid-column: 1; }
   .screenshot-filename { grid-row: 1; grid-column: 2; }
