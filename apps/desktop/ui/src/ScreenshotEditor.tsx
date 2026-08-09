@@ -24,6 +24,7 @@ import {
   imageDataToCanvas,
   imageDataToPngDataUrl,
   imageToImageData,
+  removeBgBrushScreenDiameter,
   removeColorToTransparent,
   strokeRemoveBackgroundBrush,
   type RemoveBackgroundMode,
@@ -1179,6 +1180,15 @@ export function ScreenshotEditor() {
   const [canvasExpandPreview, setCanvasExpandPreview] = useState<CanvasExpandPreview | null>(null);
   const [trimEdgesHover, setTrimEdgesHover] = useState(false);
   const [canvasCursor, setCanvasCursor] = useState<string | undefined>(undefined);
+  /**
+   * Circular brush ring for erase/restore (size matches brush × zoom).
+   * System cursors cannot grow past ~128px, so we hide the cursor and paint a ring.
+   */
+  const [brushCursor, setBrushCursor] = useState<{
+    clientX: number;
+    clientY: number;
+    mode: "erase" | "restore";
+  } | null>(null);
   /** Floating tip while hovering a line/arrow path or its curve handles. */
   const [curveHoverTip, setCurveHoverTip] = useState<{
     text: string;
@@ -1678,6 +1688,13 @@ export function ScreenshotEditor() {
     observer.observe(viewport);
     return () => observer.disconnect();
   }, [editorDocument]);
+
+  // Drop the brush ring when leaving erase/restore so it never sticks after a tool switch.
+  useEffect(() => {
+    if (tool !== "remove-bg" || removeBgMode === "wand") {
+      setBrushCursor(null);
+    }
+  }, [tool, removeBgMode]);
 
   useEffect(() => {
     if (!editorDocument || !canvasRef.current) return;
@@ -2231,6 +2248,45 @@ export function ScreenshotEditor() {
     event: Pick<React.PointerEvent, "clientX" | "clientY">,
   ): EditorPoint => clientToDocumentPoint(event.clientX, event.clientY);
 
+  /**
+   * Erase/restore: hide the system cursor and show a ring sized to the brush.
+   * Wand keeps a simple crosshair (click, not paint).
+   */
+  const syncRemoveBgHoverCursor = (
+    event: Pick<React.PointerEvent, "clientX" | "clientY">,
+    point: EditorPoint,
+    options?: { mode?: "erase" | "restore"; forceOverImage?: boolean },
+  ) => {
+    if (panActive || panReady) {
+      setBrushCursor(null);
+      return;
+    }
+    const mode = options?.mode ?? (
+      removeBgMode === "restore" ? "restore" : removeBgMode === "erase" ? "erase" : null
+    );
+    if (removeBgMode === "wand" || mode == null) {
+      setBrushCursor(null);
+      const current = documentRef.current;
+      const image = current ? hitTestImageElement(current.elements, point) : null;
+      setCanvasCursor(image ? "crosshair" : "not-allowed");
+      return;
+    }
+    const current = documentRef.current;
+    const overImage = options?.forceOverImage
+      || Boolean(current && hitTestImageElement(current.elements, point));
+    if (overImage) {
+      setCanvasCursor("none");
+      setBrushCursor({
+        clientX: event.clientX,
+        clientY: event.clientY,
+        mode,
+      });
+    } else {
+      setCanvasCursor("not-allowed");
+      setBrushCursor(null);
+    }
+  };
+
   const capturePointerTarget = (
     target: EventTarget & { setPointerCapture?: (pointerId: number) => void },
     pointerId: number,
@@ -2276,7 +2332,8 @@ export function ScreenshotEditor() {
       const image = hitTestImageElement(current.elements, point);
       if (!image) {
         setError("Click an image layer to remove or restore its background.");
-        setCanvasCursor(undefined);
+        setCanvasCursor("not-allowed");
+        setBrushCursor(null);
         return;
       }
       setSelectedId(image.id);
@@ -2535,15 +2592,7 @@ export function ScreenshotEditor() {
     const point = canvasPoint(event);
     if (!gesture || gesture.pointerId !== event.pointerId) {
       if (tool === "remove-bg") {
-        const current = documentRef.current;
-        const image = current ? hitTestImageElement(current.elements, point) : null;
-        setCanvasCursor(
-          image
-            ? removeBgMode === "restore"
-              ? "cell"
-              : "crosshair"
-            : "not-allowed",
-        );
+        syncRemoveBgHoverCursor(event, point);
         return;
       }
       if (tool === "select" || isShapeDrawTool(tool)) {
@@ -2729,6 +2778,13 @@ export function ScreenshotEditor() {
     if (gesture.kind === "remove-bg") {
       const current = documentRef.current;
       const element = current?.elements.find((item) => item.id === gesture.elementId);
+      // Keep the size-matched ring under the pointer for the whole stroke.
+      setCanvasCursor("none");
+      setBrushCursor({
+        clientX: event.clientX,
+        clientY: event.clientY,
+        mode: gesture.mode,
+      });
       if (!element || element.kind !== "image") return;
       const pixel = documentPointToImagePixel(element, point);
       if (!pixel) return;
@@ -2755,7 +2811,6 @@ export function ScreenshotEditor() {
       } else {
         gestureRef.current = { ...gesture, lastPixel: pixel };
       }
-      setCanvasCursor(gesture.mode === "restore" ? "cell" : "crosshair");
       return;
     }
 
@@ -2842,13 +2897,20 @@ export function ScreenshotEditor() {
     setResizePreviewBounds(null);
     setAlignmentGuides([]);
     setCanvasExpandPreview(null);
-    setCanvasCursor(undefined);
     releasePointerTarget(event.currentTarget, event.pointerId);
-    if (gesture.kind === "crop") return;
+    if (gesture.kind === "crop") {
+      setCanvasCursor(undefined);
+      return;
+    }
 
     if (gesture.kind === "remove-bg") {
       removeBgLiveRef.current = null;
       setRemoveBgLiveTick((tick) => tick + 1);
+      // Stay on the brush ring after a stroke ends (size still tracks the slider).
+      syncRemoveBgHoverCursor(event, canvasPoint(event), {
+        mode: gesture.mode,
+        forceOverImage: true,
+      });
       if (!gesture.changed) return;
       try {
         const nextSrc = imageDataToPngDataUrl(gesture.workingData);
@@ -2869,6 +2931,9 @@ export function ScreenshotEditor() {
       }
       return;
     }
+
+    setCanvasCursor(undefined);
+    setBrushCursor(null);
 
     let current = documentRef.current;
     if (!current) return;
@@ -3172,7 +3237,12 @@ export function ScreenshotEditor() {
       };
       setSelectedId(element.id);
       setRemoveBgLiveTick((tick) => tick + 1);
-      setCanvasCursor(mode === "restore" ? "cell" : "crosshair");
+      setCanvasCursor("none");
+      setBrushCursor({
+        clientX: event.clientX,
+        clientY: event.clientY,
+        mode,
+      });
       capturePointerTarget(event.currentTarget, event.pointerId);
     } catch (reason) {
       removeBgLiveRef.current = null;
@@ -3923,7 +3993,13 @@ export function ScreenshotEditor() {
             onPointerMove={movePointer}
             onPointerUp={finishPointer}
             onPointerCancel={finishPointer}
-            onPointerLeave={() => setCurveHoverTip(null)}
+            onPointerLeave={() => {
+              setCurveHoverTip(null);
+              // Leaving the canvas hides the brush ring; reappears on next hover.
+              if (!gestureRef.current || gestureRef.current.kind !== "remove-bg") {
+                setBrushCursor(null);
+              }
+            }}
             onDoubleClick={handleCanvasDoubleClick}
           />
           {editingText && inlineTextLayout && (
@@ -4209,6 +4285,22 @@ export function ScreenshotEditor() {
           >
             {curveHoverTip.text}
           </div>
+        )}
+        {/* Circular brush preview for erase/restore — diameter tracks brush size × zoom. */}
+        {brushCursor && !panActive && !panReady && (
+          <div
+            className={[
+              "screenshot-brush-cursor",
+              brushCursor.mode === "restore" ? "is-restore" : "is-erase",
+            ].join(" ")}
+            aria-hidden="true"
+            style={{
+              left: brushCursor.clientX,
+              top: brushCursor.clientY,
+              width: removeBgBrushScreenDiameter(removeBgBrushSize, displayScale),
+              height: removeBgBrushScreenDiameter(removeBgBrushSize, displayScale),
+            }}
+          />
         )}
       </section>
 

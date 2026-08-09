@@ -104,6 +104,17 @@ export function brushRadiusInNaturalPixels(
   return Math.max(1, documentBrushSize * scale * 0.5);
 }
 
+/**
+ * On-screen diameter of the remove-bg erase/restore brush.
+ * `documentBrushSize` is a diameter in document pixels; multiply by zoom.
+ */
+export function removeBgBrushScreenDiameter(
+  documentBrushSize: number,
+  displayScale: number,
+): number {
+  return Math.max(1, documentBrushSize * Math.max(0.01, displayScale));
+}
+
 export function samplePixel(data: ImageData, x: number, y: number): Rgba | null {
   if (x < 0 || y < 0 || x >= data.width || y >= data.height) return null;
   const index = (y * data.width + x) * 4;
