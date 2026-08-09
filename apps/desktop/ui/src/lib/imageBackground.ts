@@ -126,6 +126,206 @@ export function samplePixel(data: ImageData, x: number, y: number): Rgba | null 
   };
 }
 
+/**
+ * Sample one natural-image pixel without decoding the full frame.
+ * Pass a reusable 1×1 canvas via `scratch` to avoid allocating on every hover.
+ */
+export function sampleImagePixel(
+  image: CanvasImageSource & {
+    naturalWidth?: number;
+    naturalHeight?: number;
+    width: number;
+    height: number;
+  },
+  x: number,
+  y: number,
+  scratch?: HTMLCanvasElement,
+): Rgba | null {
+  const width = Math.max(
+    1,
+    Math.round(image.naturalWidth ?? (image as HTMLImageElement).width),
+  );
+  const height = Math.max(
+    1,
+    Math.round(image.naturalHeight ?? (image as HTMLImageElement).height),
+  );
+  if (x < 0 || y < 0 || x >= width || y >= height) return null;
+
+  const canvas = scratch ?? document.createElement("canvas");
+  if (canvas.width !== 1) canvas.width = 1;
+  if (canvas.height !== 1) canvas.height = 1;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) return null;
+  try {
+    context.clearRect(0, 0, 1, 1);
+    context.drawImage(image, x, y, 1, 1, 0, 0, 1, 1);
+    const data = context.getImageData(0, 0, 1, 1).data;
+    return {
+      r: data[0],
+      g: data[1],
+      b: data[2],
+      a: data[3],
+    };
+  } catch {
+    // Tainted canvas (CORS) or incomplete image — loupe still works without hex.
+    return null;
+  }
+}
+
+/** CSS color for loupe fill / swatches (`rgba` so transparency is visible). */
+export function rgbaToCss(color: Rgba): string {
+  const alpha = Math.round((color.a / 255) * 1000) / 1000;
+  return `rgba(${color.r}, ${color.g}, ${color.b}, ${alpha})`;
+}
+
+/** `#rrggbb` (ignores alpha) for compact loupe labels. */
+export function rgbaToHex(color: Rgba): string {
+  const channel = (value: number) => value.toString(16).padStart(2, "0");
+  return `#${channel(color.r)}${channel(color.g)}${channel(color.b)}`;
+}
+
+/**
+ * On-screen loupe for the remove-bg wand: odd natural-pixel neighborhood
+ * drawn nearest-neighbor into a circle so the sampled color is readable.
+ */
+export const WAND_LOUPE_SAMPLE_EXTENT = 11;
+/** CSS diameter of the wand color loupe circle. */
+export const WAND_LOUPE_SIZE_PX = 84;
+/** Offset from the crosshair so the loupe does not cover the sample pixel. */
+export const WAND_LOUPE_OFFSET_PX = 18;
+
+/**
+ * Paint a nearest-neighbor zoom of the pixels around `(pixelX, pixelY)` into
+ * `target`. Returns false when the source image cannot be drawn.
+ */
+export function paintWandColorLoupe(
+  target: HTMLCanvasElement,
+  image: CanvasImageSource & {
+    naturalWidth?: number;
+    naturalHeight?: number;
+    width: number;
+    height: number;
+  },
+  pixelX: number,
+  pixelY: number,
+  options?: {
+    sizePx?: number;
+    sampleExtent?: number;
+    devicePixelRatio?: number;
+  },
+): boolean {
+  const sizePx = options?.sizePx ?? WAND_LOUPE_SIZE_PX;
+  const sampleExtent = options?.sampleExtent ?? WAND_LOUPE_SAMPLE_EXTENT;
+  const dpr = Math.max(1, options?.devicePixelRatio ?? 1);
+  const oddExtent = Math.max(1, sampleExtent | 1); // force odd so a true center pixel exists
+  const half = Math.floor(oddExtent / 2);
+  const width = Math.max(
+    1,
+    Math.round(image.naturalWidth ?? (image as HTMLImageElement).width),
+  );
+  const height = Math.max(
+    1,
+    Math.round(image.naturalHeight ?? (image as HTMLImageElement).height),
+  );
+
+  const pixelSize = Math.max(1, Math.round(sizePx * dpr));
+  if (target.width !== pixelSize) target.width = pixelSize;
+  if (target.height !== pixelSize) target.height = pixelSize;
+  const context = target.getContext("2d");
+  if (!context) return false;
+
+  context.setTransform(dpr, 0, 0, dpr, 0, 0);
+  context.clearRect(0, 0, sizePx, sizePx);
+
+  // Checkerboard so fully transparent samples read as “empty” rather than black.
+  const check = 6;
+  for (let row = 0; row < sizePx; row += check) {
+    for (let col = 0; col < sizePx; col += check) {
+      const dark = ((row / check) + (col / check)) % 2 === 0;
+      context.fillStyle = dark ? "#c4c4c8" : "#ececee";
+      context.fillRect(col, row, check, check);
+    }
+  }
+
+  // Clamp the sample window so edge pixels still fill the loupe.
+  const srcX = Math.min(width - 1, Math.max(0, pixelX)) - half;
+  const srcY = Math.min(height - 1, Math.max(0, pixelY)) - half;
+
+  context.imageSmoothingEnabled = false;
+  try {
+    context.drawImage(
+      image,
+      srcX,
+      srcY,
+      oddExtent,
+      oddExtent,
+      0,
+      0,
+      sizePx,
+      sizePx,
+    );
+  } catch {
+    return false;
+  }
+
+  // Subtle grid so individual source pixels read as tiles.
+  const cell = sizePx / oddExtent;
+  context.strokeStyle = "rgba(0, 0, 0, 0.18)";
+  context.lineWidth = 1 / dpr;
+  context.beginPath();
+  for (let i = 1; i < oddExtent; i += 1) {
+    const edge = i * cell;
+    context.moveTo(edge, 0);
+    context.lineTo(edge, sizePx);
+    context.moveTo(0, edge);
+    context.lineTo(sizePx, edge);
+  }
+  context.stroke();
+
+  // Highlight the exact center sample (what the wand will key on).
+  const center = half * cell;
+  context.strokeStyle = "rgba(255, 255, 255, 0.95)";
+  context.lineWidth = 1.5;
+  context.strokeRect(center + 0.5, center + 0.5, cell - 1, cell - 1);
+  context.strokeStyle = "rgba(0, 0, 0, 0.55)";
+  context.lineWidth = 1;
+  context.strokeRect(center, center, cell, cell);
+
+  return true;
+}
+
+/** Place the loupe beside the cursor, flipping near the viewport edges. */
+export function wandLoupeScreenPosition(
+  clientX: number,
+  clientY: number,
+  options?: {
+    sizePx?: number;
+    offsetPx?: number;
+    viewportWidth?: number;
+    viewportHeight?: number;
+  },
+): { left: number; top: number } {
+  const sizePx = options?.sizePx ?? WAND_LOUPE_SIZE_PX;
+  const offsetPx = options?.offsetPx ?? WAND_LOUPE_OFFSET_PX;
+  const viewportWidth = options?.viewportWidth
+    ?? (typeof window !== "undefined" ? window.innerWidth : clientX + sizePx + offsetPx);
+  const viewportHeight = options?.viewportHeight
+    ?? (typeof window !== "undefined" ? window.innerHeight : clientY + sizePx + offsetPx);
+  const margin = 8;
+
+  let left = clientX + offsetPx;
+  let top = clientY + offsetPx;
+  if (left + sizePx > viewportWidth - margin) {
+    left = clientX - offsetPx - sizePx;
+  }
+  if (top + sizePx > viewportHeight - margin) {
+    top = clientY - offsetPx - sizePx;
+  }
+  left = Math.max(margin, Math.min(left, viewportWidth - sizePx - margin));
+  top = Math.max(margin, Math.min(top, viewportHeight - sizePx - margin));
+  return { left, top };
+}
+
 /** Chebyshev distance on RGB channels (classic magic-wand style). */
 export function colorDistanceRgb(a: Rgba, b: Rgba): number {
   return Math.max(

@@ -1104,6 +1104,56 @@ describe("ScreenshotEditor", () => {
     });
   });
 
+  it("shows a magnified color loupe while hovering with the remove-bg wand", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Width");
+
+    fireEvent.change(screen.getByRole("combobox", { name: "Canvas zoom" }), {
+      target: { value: "100" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Remove bg (B)" }));
+    expect(screen.getByRole("button", { name: "Wand" })).toHaveAttribute("aria-pressed", "true");
+
+    const canvas = document.querySelector("canvas.screenshot-canvas");
+    expect(canvas).toBeInstanceOf(HTMLCanvasElement);
+    setCanvasBounds(canvas as HTMLCanvasElement, 1_440, 900);
+
+    // Hover the center of the original image layer (full-canvas artifact).
+    fireEvent.pointerMove(canvas as HTMLCanvasElement, {
+      clientX: 400,
+      clientY: 300,
+      pointerId: 1,
+    });
+
+    const loupe = await waitFor(() => {
+      const el = document.querySelector(".screenshot-wand-loupe");
+      expect(el).toBeInstanceOf(HTMLElement);
+      return el as HTMLElement;
+    });
+    expect(loupe).toHaveAttribute("role", "tooltip");
+    expect(loupe.querySelector(".screenshot-wand-loupe-canvas")).toBeInstanceOf(HTMLCanvasElement);
+
+    // Leaving the canvas hides the loupe until the next hover.
+    fireEvent.pointerLeave(canvas as HTMLCanvasElement);
+    await waitFor(() => {
+      expect(document.querySelector(".screenshot-wand-loupe")).toBeNull();
+    });
+
+    // Erase mode uses the brush ring, not the wand loupe.
+    fireEvent.pointerMove(canvas as HTMLCanvasElement, {
+      clientX: 400,
+      clientY: 300,
+      pointerId: 1,
+    });
+    await waitFor(() => {
+      expect(document.querySelector(".screenshot-wand-loupe")).toBeInstanceOf(HTMLElement);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Erase" }));
+    await waitFor(() => {
+      expect(document.querySelector(".screenshot-wand-loupe")).toBeNull();
+    });
+  });
+
   it("can clear the solid canvas background for transparent PNG/WebP exports", async () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
