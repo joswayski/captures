@@ -4113,7 +4113,7 @@ export function ScreenshotEditor() {
           <button type="button" disabled={redoStack.length === 0} onClick={redo} aria-label="Redo">
             <EditorIcon name="redo" />
           </button>
-          <span className="screenshot-editor-zoom">
+          <span className="screenshot-editor-zoom" role="group" aria-label="Canvas zoom controls">
             <button
               type="button"
               className={zoomMode === "fit" ? "active" : ""}
@@ -4123,9 +4123,47 @@ export function ScreenshotEditor() {
             >
               <EditorIcon name="fit" />
             </button>
+            <button
+              type="button"
+              aria-label="Zoom out"
+              title="Zoom out"
+              disabled={displayScale * 100 <= MIN_SCREENSHOT_ZOOM_PERCENT + 0.05}
+              onClick={() => zoomBy(1 / KEYBOARD_ZOOM_FACTOR)}
+            >
+              <EditorIcon name="minus" />
+            </button>
+            <label className="screenshot-editor-zoom-slider">
+              <input
+                type="range"
+                min={MIN_SCREENSHOT_ZOOM_PERCENT}
+                max={MAX_SCREENSHOT_ZOOM_PERCENT}
+                step={0.1}
+                aria-label="Canvas zoom"
+                aria-valuetext={
+                  zoomMode === "fit"
+                    ? `Fit (${screenshotZoomLabel(displayScale * 100)})`
+                    : screenshotZoomLabel(zoom)
+                }
+                title="Drag to zoom · Pinch or Command/Ctrl + scroll also work"
+                value={clampScreenshotZoomPercent(
+                  zoomMode === "fit" ? displayScale * 100 : zoom,
+                )}
+                onChange={(event) => setManualZoom(Number(event.target.value))}
+              />
+            </label>
+            <button
+              type="button"
+              aria-label="Zoom in"
+              title="Zoom in"
+              disabled={displayScale * 100 >= MAX_SCREENSHOT_ZOOM_PERCENT - 0.05}
+              onClick={() => zoomBy(KEYBOARD_ZOOM_FACTOR)}
+            >
+              <EditorIcon name="plus" />
+            </button>
             <select
-              aria-label="Canvas zoom"
-              title="Pinch or use Command/Ctrl + or - to zoom"
+              className="screenshot-editor-zoom-presets"
+              aria-label="Canvas zoom preset"
+              title="Zoom presets"
               value={zoomMode === "fit" ? "fit" : String(zoom)}
               onChange={(event) => {
                 if (event.target.value === "fit") activateFitZoom();
@@ -6109,6 +6147,7 @@ function EditorIcon({ name }: { name: string }) {
   if (name === "check") return <svg viewBox="0 0 24 24"><path d="m5 12 4.5 4.5L19 7" /></svg>;
   if (name === "save") return <svg viewBox="0 0 24 24"><path d="M5 3h12l2 2v16H5Z M8 3v6h8V3M8 17h8" /></svg>;
   if (name === "plus") return <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>;
+  if (name === "minus") return <svg viewBox="0 0 24 24"><path d="M5 12h14" /></svg>;
   if (name === "chevron-down") return <svg viewBox="0 0 24 24"><path d="m7 9 5 5 5-5" /></svg>;
   if (name === "lock") return <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></svg>;
   if (name === "unlock") return <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2" /><path d="M9 10V7a4 4 0 0 1 7.5-2" /></svg>;
