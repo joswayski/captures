@@ -6,6 +6,7 @@ import {
   colorDistanceRgb,
   documentPointToImagePixel,
   hitTestImageElement,
+  removeBgBrushScreenDiameter,
   removeColorToTransparent,
   samplePixel,
   stampRemoveBackgroundBrush,
@@ -132,6 +133,14 @@ describe("brushRadiusInNaturalPixels", () => {
     const element = imageElement({ width: 100, naturalWidth: 200 });
     // documentBrushSize is diameter-ish; radius is half after scale.
     expect(brushRadiusInNaturalPixels(element, 20)).toBeCloseTo(20, 5);
+  });
+});
+
+describe("removeBgBrushScreenDiameter", () => {
+  it("maps document brush diameter through zoom", () => {
+    expect(removeBgBrushScreenDiameter(28, 1)).toBe(28);
+    expect(removeBgBrushScreenDiameter(28, 2)).toBe(56);
+    expect(removeBgBrushScreenDiameter(40, 0.5)).toBe(20);
   });
 });
 

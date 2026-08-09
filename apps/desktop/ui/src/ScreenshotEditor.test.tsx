@@ -1059,6 +1059,49 @@ describe("ScreenshotEditor", () => {
     expect(screen.getByLabelText("Brush size")).toBeInTheDocument();
   });
 
+  it("shows a size-matched circular brush cursor for erase mode", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Width");
+
+    fireEvent.change(screen.getByRole("combobox", { name: "Canvas zoom" }), {
+      target: { value: "100" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Remove bg (B)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Erase" }));
+
+    const canvas = document.querySelector("canvas.screenshot-canvas");
+    expect(canvas).toBeInstanceOf(HTMLCanvasElement);
+    setCanvasBounds(canvas as HTMLCanvasElement, 1_440, 900);
+
+    // Hover the center of the original image layer (full-canvas artifact).
+    fireEvent.pointerMove(canvas as HTMLCanvasElement, {
+      clientX: 400,
+      clientY: 300,
+      pointerId: 1,
+    });
+
+    const ring = await waitFor(() => {
+      const el = document.querySelector(".screenshot-brush-cursor");
+      expect(el).toBeInstanceOf(HTMLElement);
+      return el as HTMLElement;
+    });
+    expect(ring).toHaveClass("is-erase");
+    // Default brush size is 28 document px at 100% zoom → 28 CSS px diameter.
+    expect(ring).toHaveStyle({ width: "28px", height: "28px", left: "400px", top: "300px" });
+
+    // Changing brush size resizes the ring without another pointer move.
+    fireEvent.change(screen.getByLabelText("Brush size"), { target: { value: "64" } });
+    await waitFor(() => {
+      const next = document.querySelector(".screenshot-brush-cursor") as HTMLElement;
+      expect(next).toHaveStyle({ width: "64px", height: "64px" });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Wand" }));
+    await waitFor(() => {
+      expect(document.querySelector(".screenshot-brush-cursor")).toBeNull();
+    });
+  });
+
   it("can clear the solid canvas background for transparent PNG/WebP exports", async () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");

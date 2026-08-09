@@ -1735,6 +1735,29 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   white-space: normal;
   transform: translate(14px, 18px);
 }
+/* Remove-bg erase/restore brush outline (size = brush diameter × zoom). */
+.screenshot-brush-cursor {
+  position: fixed;
+  z-index: 41;
+  box-sizing: border-box;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, .92);
+  background: rgba(255, 255, 255, .04);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, .55),
+    inset 0 0 0 1px rgba(0, 0, 0, .28);
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  will-change: left, top, width, height;
+}
+.screenshot-brush-cursor.is-restore {
+  border-style: dashed;
+  border-color: rgba(255, 255, 255, .88);
+  background: rgba(var(--theme-accent-rgb), .08);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, .5),
+    inset 0 0 0 1px rgba(0, 0, 0, .22);
+}
 .screenshot-canvas.tool-select { cursor: default; }
 .screenshot-canvas.tool-crop, .screenshot-canvas.tool-text, .screenshot-canvas.tool-rectangle, .screenshot-canvas.tool-ellipse, .screenshot-canvas.tool-line, .screenshot-canvas.tool-arrow, .screenshot-canvas.tool-pen { cursor: crosshair; }
 /* Match canvas tool cursors on the empty viewport chrome so off-canvas draws feel continuous. */
