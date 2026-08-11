@@ -1,5 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { act, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
@@ -9,7 +10,7 @@ import type { CaptureArtifact } from "./types";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
-  isTauri: () => false,
+  isTauri: vi.fn(() => false),
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -18,10 +19,10 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 vi.mock("@tauri-apps/api/window", () => ({
-  getCurrentWindow: () => ({
+  getCurrentWindow: vi.fn(() => ({
     onCloseRequested: vi.fn(async () => () => undefined),
     destroy: vi.fn(async () => undefined),
-  }),
+  })),
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
@@ -141,6 +142,7 @@ function setCanvasBounds(canvas: HTMLCanvasElement, width = 1_440, height = 900)
 describe("ScreenshotEditor", () => {
   beforeEach(() => {
     window.history.replaceState({}, "", "/?view=screenshot-editor&artifact_id=capture-1");
+    vi.mocked(isTauri).mockReturnValue(false);
     vi.mocked(invoke).mockImplementation(async (command, args) => {
       if (command === "get_artifact") return artifact;
       if (command === "estimate_screenshot_export") {
@@ -225,6 +227,45 @@ describe("ScreenshotEditor", () => {
     expect(screen.queryByText("Draft note")).not.toBeInTheDocument();
     expect(invoke).toHaveBeenCalledWith("discard_screenshot_editor_draft", {
       artifactId: "capture-1",
+    });
+  });
+
+  it("flushes the editor draft on close without preventDefault so the window can close", async () => {
+    // Regression: PR #187 always preventDefault()'d then called destroy() manually.
+    // Tauri only destroys after onCloseRequested when preventDefault was NOT called,
+    // so the first X click cleared mini-preview presence but left the editor open.
+    type CloseHandler = (event: { preventDefault: () => void }) => void | Promise<void>;
+    let closeHandler: CloseHandler | null = null;
+    const destroy = vi.fn(async () => undefined);
+    const onCloseRequested = vi.fn(async (handler: CloseHandler) => {
+      closeHandler = handler;
+      return () => undefined;
+    });
+    vi.mocked(isTauri).mockReturnValue(true);
+    vi.mocked(getCurrentWindow).mockReturnValue({
+      onCloseRequested,
+      destroy,
+    } as unknown as ReturnType<typeof getCurrentWindow>);
+
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Width");
+
+    await waitFor(() => {
+      expect(closeHandler).not.toBeNull();
+    });
+
+    const preventDefault = vi.fn();
+    await act(async () => {
+      await closeHandler!({ preventDefault });
+    });
+
+    expect(preventDefault).not.toHaveBeenCalled();
+    // Let Tauri destroy after the handler; do not force-close from the app.
+    expect(destroy).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("discard_screenshot_editor_draft", {
+        artifactId: "capture-1",
+      });
     });
   });
 
