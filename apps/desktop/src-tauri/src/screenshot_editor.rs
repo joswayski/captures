@@ -468,8 +468,7 @@ pub struct LoadedScreenshotEditorDraft {
 pub fn save_screenshot_editor_draft(
     request: SaveScreenshotEditorDraftRequest,
 ) -> CommandResult<()> {
-    validate_draft_component_id(&request.artifact_id)
-        .map_err(|error| error.to_string())?;
+    validate_draft_component_id(&request.artifact_id).map_err(|error| error.to_string())?;
     if request.assets.len() > MAX_EDITOR_DRAFT_ASSETS {
         return Err("this edit has too many image layers to keep as a draft".to_owned());
     }
@@ -588,13 +587,17 @@ pub(crate) fn resolve_editor_draft_asset(path: &str) -> Option<Vec<u8>> {
 
 fn validate_draft_component_id(id: &str) -> Result<(), AppError> {
     if id.is_empty() || id.len() > 80 {
-        return Err(AppError::Task("invalid screenshot editor draft id".to_owned()));
+        return Err(AppError::Task(
+            "invalid screenshot editor draft id".to_owned(),
+        ));
     }
     if !id
         .chars()
         .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
     {
-        return Err(AppError::Task("invalid screenshot editor draft id".to_owned()));
+        return Err(AppError::Task(
+            "invalid screenshot editor draft id".to_owned(),
+        ));
     }
     Ok(())
 }
@@ -629,7 +632,8 @@ fn rewrite_draft_document_asset_urls(document: &mut serde_json::Value, artifact_
             if !asset_path.is_file() {
                 return false;
             }
-            element[field] = serde_json::Value::String(editor_draft_asset_url(artifact_id, asset_id));
+            element[field] =
+                serde_json::Value::String(editor_draft_asset_url(artifact_id, asset_id));
         }
     }
     true
