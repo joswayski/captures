@@ -1142,6 +1142,9 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 .recording-display-picker .custom-select-trigger { width: 100%; min-height: 38px; padding: 7px 9px; }
 .recording-display-picker .custom-select-trigger > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recording-display-picker .custom-select-listbox { min-width: 230px; }
+.recording-region-aspect-picker { width: 104px; flex: 0 0 104px; }
+.recording-region-aspect-picker .custom-select-trigger { width: 100%; min-height: 38px; padding: 7px 9px; }
+.recording-region-aspect-picker .custom-select-listbox { min-width: 132px; }
 .recording-cancel { margin-left: auto; color: #d3d3d7; }
 .recording-cancel:hover { background: #333439; }
 .recording-options-row { min-height: 69px; padding: 11px 12px; animation: recording-options-arrive .24s .04s cubic-bezier(.2,.8,.2,1) both; }

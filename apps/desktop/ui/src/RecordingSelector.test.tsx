@@ -330,7 +330,8 @@ describe("RecordingSelector", () => {
     expect(targetSwitch).toHaveAttribute("data-active", "region");
     expect(targetSwitch?.querySelector(".capture-segmented-indicator")).not.toBeNull();
     const regionGuidance = screen.getByText("Drag to select a region").closest(".capture-guidance");
-    expect(regionGuidance).toHaveTextContent("Esc to cancel");
+    expect(regionGuidance).toHaveTextContent("Shift for square · Esc to cancel");
+    expect(screen.getByRole("combobox", { name: "Region aspect ratio" })).toBeInTheDocument();
     expect(container.querySelector(".capture-selector-note")).toHaveTextContent(
       "These controls won’t show in screenshots or recordings · Press Enter to confirm",
     );
@@ -341,6 +342,7 @@ describe("RecordingSelector", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Window" }));
     expect(targetSwitch).toHaveAttribute("data-active", "window");
+    expect(screen.queryByRole("combobox", { name: "Region aspect ratio" })).not.toBeInTheDocument();
     const windowGuidance = screen.getByText("Select a window to continue").closest(".capture-guidance");
     expect(windowGuidance).toHaveTextContent("Esc to cancel");
     fireEvent.click(screen.getByRole("button", { name: "Select Front eligible window" }));
@@ -669,6 +671,79 @@ describe("RecordingSelector", () => {
     fireEvent.pointerMove(surface!, { pointerId: 9, clientX: 120, clientY: 140 });
     fireEvent.pointerUp(surface!, { pointerId: 9, clientX: 120, clientY: 140 });
     expect(guidance).not.toHaveAttribute("data-faded");
+  });
+
+  it("locks a create drag to the selected aspect ratio and Shift square", async () => {
+    preparedSession = {
+      ...session,
+      initial_mode: "screenshot",
+    };
+    const { container } = render(<RecordingSelector />);
+    await screen.findByRole("button", { name: "Screenshot", pressed: true });
+
+    const aspect = screen.getByRole("combobox", { name: "Region aspect ratio" });
+    fireEvent.click(aspect);
+    fireEvent.click(screen.getByRole("option", { name: "16 : 9" }));
+    expect(aspect).toHaveTextContent("16 : 9");
+
+    const surface = container.querySelector<HTMLElement>(".recording-selector");
+    expect(surface).not.toBeNull();
+    surface!.setPointerCapture = vi.fn();
+    surface!.hasPointerCapture = vi.fn(() => true);
+    surface!.releasePointerCapture = vi.fn();
+    vi.spyOn(surface!, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 1440,
+      bottom: 900,
+      width: 1440,
+      height: 900,
+      toJSON: () => undefined,
+    });
+
+    // Outside the default frame so this is a create drag, not a move.
+    fireEvent.pointerDown(surface!, { pointerId: 11, clientX: 20, clientY: 20 });
+    fireEvent.pointerMove(surface!, { pointerId: 11, clientX: 340, clientY: 300 });
+    // Flush the rAF used to batch region pointer moves.
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+    });
+    fireEvent.pointerUp(surface!, { pointerId: 11, clientX: 340, clientY: 300 });
+
+    const frame = container.querySelector<HTMLElement>(".recording-selection-frame");
+    expect(frame).not.toBeNull();
+    const width = Number.parseFloat(frame!.style.width);
+    const height = Number.parseFloat(frame!.style.height);
+    expect(width / height).toBeCloseTo(16 / 9, 2);
+
+    fireEvent.pointerDown(surface!, { pointerId: 12, clientX: 20, clientY: 20, shiftKey: true });
+    fireEvent.pointerMove(surface!, {
+      pointerId: 12,
+      clientX: 220,
+      clientY: 300,
+      shiftKey: true,
+    });
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+    });
+    fireEvent.pointerUp(surface!, {
+      pointerId: 12,
+      clientX: 220,
+      clientY: 300,
+      shiftKey: true,
+    });
+
+    const squareFrame = container.querySelector<HTMLElement>(".recording-selection-frame");
+    expect(squareFrame).not.toBeNull();
+    const squareWidth = Number.parseFloat(squareFrame!.style.width);
+    const squareHeight = Number.parseFloat(squareFrame!.style.height);
+    expect(squareWidth).toBeCloseTo(squareHeight, 0);
   });
 
   it("fades window guidance when the cursor enters its bounds", async () => {

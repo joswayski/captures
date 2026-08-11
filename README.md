@@ -55,6 +55,7 @@ Preview builds update after every successful merge to `main` and may contain bug
 ## Features
 
 - Capture regions, windows, or full displays
+- Lock region selection to common aspect ratios, or hold Shift for a square
 - Optional countdown before screenshots and recordings
 - Record as H.264 video or GIF, with desktop audio and microphone
 - Pause, resume, restart, and mute while recording
@@ -99,11 +100,12 @@ Preview builds update after every successful merge to `main` and may contain bug
 | `Ctrl+Shift+F` | Open Send Feedback |
 | `Esc` | Cancel an active capture, screenshot countdown, or recording countdown |
 
-Global capture and feedback shortcuts can be changed in Preferences. In the
-screenshot editor, zoom with the header slider and `+`/`-` controls, pinch or
-`Ctrl`/`Cmd`+scroll, pan with `Ctrl`/`Cmd`-drag or middle-click, hold `Shift`
-while dragging a corner handle to scale proportionally, and duplicate layers
-with `Ctrl`/`Cmd`+`D`.
+Global capture and feedback shortcuts can be changed in Preferences. While
+selecting a capture region, pick an aspect ratio in the capture menu or hold
+`Shift` for a square. In the screenshot editor, zoom with the header slider and
+`+`/`-` controls, pinch or `Ctrl`/`Cmd`+scroll, pan with `Ctrl`/`Cmd`-drag or
+middle-click, hold `Shift` while dragging a corner handle to scale
+proportionally, and duplicate layers with `Ctrl`/`Cmd`+`D`.
 
 ## Development
 
