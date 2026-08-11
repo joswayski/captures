@@ -32,23 +32,28 @@ export function CompressionPreview({
   onClose,
 }: CompressionPreviewProps) {
   const titleId = useId();
-  const [split, setSplit] = useState(50);
+  // Reset the split when the after image identity changes without a setState-in-effect.
+  const splitKey = afterUrl ?? (open ? "open" : "closed");
+  const [splitState, setSplitState] = useState({ key: splitKey, split: 50 });
+  const split = splitState.key === splitKey ? splitState.split : 50;
+  const setSplit = useCallback((value: number) => {
+    setSplitState({ key: splitKey, split: value });
+  }, [splitKey]);
+
   const [frameWidth, setFrameWidth] = useState(0);
   const frameRef = useRef<HTMLDivElement>(null);
   const draggingRef = useRef(false);
-
-  useEffect(() => {
-    if (!open) return;
-    setSplit(50);
-  }, [open, afterUrl]);
 
   useLayoutEffect(() => {
     if (!open) return;
     const frame = frameRef.current;
     if (!frame) return;
     const update = () => setFrameWidth(frame.clientWidth);
-    update();
-    if (typeof ResizeObserver === "undefined") return;
+    if (typeof ResizeObserver === "undefined") {
+      // jsdom / older environments: measure once after layout.
+      queueMicrotask(update);
+      return;
+    }
     const observer = new ResizeObserver(update);
     observer.observe(frame);
     return () => observer.disconnect();
@@ -72,7 +77,7 @@ export function CompressionPreview({
     const bounds = frame.getBoundingClientRect();
     const next = ((clientX - bounds.left) / Math.max(1, bounds.width)) * 100;
     setSplit(Math.min(100, Math.max(0, next)));
-  }, []);
+  }, [setSplit]);
 
   useEffect(() => {
     if (!open) return;

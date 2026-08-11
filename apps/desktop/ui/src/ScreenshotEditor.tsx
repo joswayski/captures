@@ -4334,18 +4334,15 @@ export function ScreenshotEditor() {
   }, [canPreviewCompression]);
 
   useEffect(() => {
-    if (!compressPreviewOpen) return;
-    if (!canPreviewCompression) {
-      closeCompressPreview();
-      return;
-    }
+    // Only refresh an already-open preview. Closing when quality mode leaves
+    // Compress/Maximum is handled in applyQualityMode (event path), not here.
+    if (!compressPreviewOpen || !canPreviewCompression) return;
     const timer = window.setTimeout(() => {
       void loadCompressPreview();
     }, 280);
     return () => window.clearTimeout(timer);
   }, [
     canPreviewCompression,
-    closeCompressPreview,
     compressPreviewOpen,
     exportFormat,
     jpegQuality,
@@ -4413,6 +4410,9 @@ export function ScreenshotEditor() {
 
   const applyQualityMode = (mode: ScreenshotQualityMode) => {
     setQualityMode(mode);
+    if (mode !== "compress" && mode !== "maximum" && compressPreviewOpen) {
+      closeCompressPreview();
+    }
     setSaved(null);
     clearSuccess();
   };
@@ -6267,7 +6267,7 @@ export function ScreenshotEditor() {
         </div>
       </footer>
 
-      {compressPreviewOpen && createPortal(
+      {compressPreviewOpen && canPreviewCompression && createPortal(
         <CompressionPreview
           open={compressPreviewOpen}
           beforeUrl={compressPreviewBeforeUrl}
