@@ -197,8 +197,25 @@ export function markThumbnailEditorControlOpened(control: HTMLElement) {
   control.setAttribute(THUMBNAIL_EDITOR_JUST_OPENED_ATTRIBUTE, "true");
 }
 
-export function rearmThumbnailEditorControlHover(control: HTMLElement) {
+/**
+ * End the just-opened latch so a later hover can show “Show in editor”.
+ *
+ * On leave (`fromLeave`), also drop residual hover/focus chrome in the same
+ * tick. Otherwise pointerleave clears the latch while
+ * `data-native-pointer-hover` (or `:focus-visible` from the click) still
+ * matches for a frame or two, and the action label flashes before the next
+ * poll / editor focus steal settles back to “In editor”.
+ */
+export function rearmThumbnailEditorControlHover(
+  control: HTMLElement,
+  options: { fromLeave?: boolean } = {},
+) {
   control.removeAttribute(THUMBNAIL_EDITOR_JUST_OPENED_ATTRIBUTE);
+  if (!options.fromLeave) return;
+  control.removeAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE);
+  if (document.activeElement === control) {
+    control.blur();
+  }
 }
 
 function containsPoint(element: Element, x: number, y: number): boolean {
@@ -219,7 +236,7 @@ export function applyThumbnailNativeHover(
 ): ThumbnailCursorKind {
   if (!position.inside) {
     root.querySelectorAll<HTMLElement>(THUMBNAIL_EDITOR_JUST_OPENED_SELECTOR)
-      .forEach(rearmThumbnailEditorControlHover);
+      .forEach((control) => rearmThumbnailEditorControlHover(control, { fromLeave: true }));
     clearThumbnailNativeHover(root);
     return "default";
   }
@@ -230,7 +247,7 @@ export function applyThumbnailNativeHover(
   root.querySelectorAll<HTMLElement>(THUMBNAIL_EDITOR_JUST_OPENED_SELECTOR)
     .forEach((control) => {
       if (!containsPoint(control, position.x, position.y)) {
-        rearmThumbnailEditorControlHover(control);
+        rearmThumbnailEditorControlHover(control, { fromLeave: true });
       }
     });
 

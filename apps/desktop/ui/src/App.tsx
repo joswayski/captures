@@ -5369,7 +5369,9 @@ export function ThumbnailCard({
         aria-pressed={editorControlPresent || undefined}
         disabled={isExiting}
         onClick={isExiting ? undefined : openEditor}
-        onPointerLeave={(event) => rearmThumbnailEditorControlHover(event.currentTarget)}
+        onPointerLeave={(event) => {
+          rearmThumbnailEditorControlHover(event.currentTarget, { fromLeave: true });
+        }}
       >
         <span className="thumbnail-editor-control-face">
           <EditIcon />
