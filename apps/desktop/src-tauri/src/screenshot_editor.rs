@@ -237,6 +237,40 @@ pub async fn estimate_screenshot_export(
     .map_err(|error| error.to_string())
 }
 
+/// Encode the flattened editor canvas the same way save does and return the
+/// compressed file bytes for an on-screen before/after preview.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreenshotExportPreview {
+    bytes: Vec<u8>,
+    size_bytes: u64,
+    format: ScreenshotEditFormat,
+}
+
+#[tauri::command]
+pub async fn preview_screenshot_export(
+    image_png: Vec<u8>,
+    format: ScreenshotEditFormat,
+    quality_mode: ScreenshotExportQualityMode,
+    jpeg_quality: u8,
+    max_size_bytes: Option<u64>,
+) -> CommandResult<ScreenshotExportPreview> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let image = decode_editor_png(&image_png)?;
+        let bytes =
+            encode_export_with_limit(&image, format, quality_mode, jpeg_quality, max_size_bytes)?;
+        let size_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        Ok::<_, AppError>(ScreenshotExportPreview {
+            bytes,
+            size_bytes,
+            format,
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 pub async fn save_screenshot_edit(
     app: AppHandle,
@@ -468,8 +502,7 @@ pub struct LoadedScreenshotEditorDraft {
 pub fn save_screenshot_editor_draft(
     request: SaveScreenshotEditorDraftRequest,
 ) -> CommandResult<()> {
-    validate_draft_component_id(&request.artifact_id)
-        .map_err(|error| error.to_string())?;
+    validate_draft_component_id(&request.artifact_id).map_err(|error| error.to_string())?;
     if request.assets.len() > MAX_EDITOR_DRAFT_ASSETS {
         return Err("this edit has too many image layers to keep as a draft".to_owned());
     }
@@ -563,7 +596,7 @@ pub fn discard_screenshot_editor_draft_files(artifact_id: &str) -> Result<(), Ap
     if !root.exists() {
         return Ok(());
     }
-    fs::remove_dir_all(root).map_err(|error| AppError::Io(error))?;
+    fs::remove_dir_all(root).map_err(AppError::Io)?;
     Ok(())
 }
 
@@ -588,13 +621,17 @@ pub(crate) fn resolve_editor_draft_asset(path: &str) -> Option<Vec<u8>> {
 
 fn validate_draft_component_id(id: &str) -> Result<(), AppError> {
     if id.is_empty() || id.len() > 80 {
-        return Err(AppError::Task("invalid screenshot editor draft id".to_owned()));
+        return Err(AppError::Task(
+            "invalid screenshot editor draft id".to_owned(),
+        ));
     }
     if !id
         .chars()
         .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
     {
-        return Err(AppError::Task("invalid screenshot editor draft id".to_owned()));
+        return Err(AppError::Task(
+            "invalid screenshot editor draft id".to_owned(),
+        ));
     }
     Ok(())
 }
@@ -629,7 +666,8 @@ fn rewrite_draft_document_asset_urls(document: &mut serde_json::Value, artifact_
             if !asset_path.is_file() {
                 return false;
             }
-            element[field] = serde_json::Value::String(editor_draft_asset_url(artifact_id, asset_id));
+            element[field] =
+                serde_json::Value::String(editor_draft_asset_url(artifact_id, asset_id));
         }
     }
     true
