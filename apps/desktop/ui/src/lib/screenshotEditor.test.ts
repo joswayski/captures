@@ -29,6 +29,7 @@ import {
   previewTransformForBounds,
   estimateCanvasExportBytes,
   expandDocumentForElement,
+  imageDropExpandPadding,
   expandDocumentToFitBounds,
   previewExpandedCanvasRect,
   hitTestElement,
@@ -512,6 +513,41 @@ describe("screenshot editor geometry", () => {
     const expanded = expandDocumentForElement(document, imported, 0);
     expect(expanded.elements.at(-1)).toMatchObject({ x: 0 });
     expect(expanded.elements[0].x).toBeGreaterThan(0);
+  });
+
+  it("keeps edge-snapped screenshots at natural 1:1 size while stack still caps overlay", () => {
+    // Two captures of nearly the same UI (user's reported case).
+    const document = createScreenshotDocument("capture.png", 1_307, 944);
+    const target = { x: 0, y: 0, width: 1_307, height: 944 };
+
+    const below = positionImportedImageAtEdge(1_296, 920, document, target, "bottom");
+    expect(below.width).toBe(1_296);
+    expect(below.height).toBe(920);
+    expect(below.y).toBe(944);
+    expect(below.x).toBe(Math.round((1_307 - 1_296) / 2));
+
+    // Canvas grows flush to the import — no extra collage margin.
+    const imported: EditorImageElement = {
+      ...editableLayer,
+      id: "below",
+      kind: "image",
+      source: "imported",
+      src: "blob:below",
+      name: "below.png",
+      naturalWidth: 1_296,
+      naturalHeight: 920,
+      ...below,
+    };
+    expect(imageDropExpandPadding("bottom")).toBe(0);
+    expect(imageDropExpandPadding("stack")).toBe(24);
+    const expanded = expandDocumentForElement(document, imported, imageDropExpandPadding("bottom"));
+    expect(expanded.height).toBe(944 + 920);
+    expect(expanded.width).toBe(1_307);
+
+    // Stack-on-top still downscales so a large overlay does not fully cover the canvas.
+    const stacked = positionImportedImageAtEdge(1_296, 920, document, target, "stack");
+    expect(stacked.width).toBeLessThan(1_296);
+    expect(stacked.width).toBeLessThanOrEqual(Math.round(1_307 * 0.65));
   });
 
   it("stacks imports on the pointer and tracks an invisible light focus", () => {

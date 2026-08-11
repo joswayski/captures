@@ -67,6 +67,7 @@ import {
   mergedLayerName,
   estimateCanvasExportBytes,
   expandDocumentForElement,
+  imageDropExpandPadding,
   expandDocumentToFitBounds,
   curveStrokeHoverHint,
   hitTestArrowHandle,
@@ -3716,7 +3717,11 @@ export function ScreenshotEditor() {
           opacity: 100,
           blendMode: "source-over",
         };
-        next = expandDocumentForElement(next, element);
+        next = expandDocumentForElement(
+          next,
+          element,
+          imageDropExpandPadding(placement.edge),
+        );
         lastId = element.id;
         const added = next.elements.find(({ id }) => id === element.id);
         if (added) {
