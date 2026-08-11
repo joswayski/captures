@@ -904,15 +904,79 @@ export function imageDropPlacementAtPoint(
   return closestImageSnapEdge(point, target);
 }
 
+/** Distance from a point to the nearest edge of a rect (0 when inside). */
+function distanceToRect(point: EditorPoint, rect: EditorRect): number {
+  const dx = point.x < rect.x
+    ? rect.x - point.x
+    : point.x > rect.x + rect.width
+      ? point.x - (rect.x + rect.width)
+      : 0;
+  const dy = point.y < rect.y
+    ? rect.y - point.y
+    : point.y > rect.y + rect.height
+      ? point.y - (rect.y + rect.height)
+      : 0;
+  return Math.hypot(dx, dy);
+}
+
 /**
  * Pick the layer bounds that an imported image should snap against.
- * Prefer the selected visible image; otherwise the front-most visible image;
- * otherwise the full canvas.
+ *
+ * When a pointer sample is available (live drag), use the top-most *visible*
+ * image under that point so only one layer highlights at a time — never a
+ * buried layer under an overlapping one, and never a layer the cursor is not
+ * over. Outside every image, snap to the closest visible image (so edge-band
+ * placement still works just outside a layer).
+ *
+ * Without a pointer sample (drop before any dragover), fall back to the
+ * selected visible image, then the front-most visible image, then the canvas.
  */
 export function resolveImageDropTarget(
   document: Pick<ScreenshotDocument, "width" | "height" | "elements">,
   selectedId: string | null,
+  point?: EditorPoint,
 ): EditorRect {
+  const canvas: EditorRect = {
+    x: 0,
+    y: 0,
+    width: document.width,
+    height: document.height,
+  };
+
+  if (point) {
+    // Top-most image whose bounds contain the pointer (z-order = array order).
+    for (let index = document.elements.length - 1; index >= 0; index -= 1) {
+      const element = document.elements[index];
+      if (element.kind !== "image" || !element.visible) continue;
+      const bounds = elementBounds(element);
+      if (
+        point.x >= bounds.x
+        && point.x <= bounds.x + bounds.width
+        && point.y >= bounds.y
+        && point.y <= bounds.y + bounds.height
+      ) {
+        return bounds;
+      }
+    }
+
+    // Outside every image: closest layer (front-most wins ties) so edge snaps
+    // just outside a partially-exposed layer still target that layer.
+    let best: EditorRect | null = null;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (let index = document.elements.length - 1; index >= 0; index -= 1) {
+      const element = document.elements[index];
+      if (element.kind !== "image" || !element.visible) continue;
+      const bounds = elementBounds(element);
+      const distance = distanceToRect(point, bounds);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = bounds;
+      }
+    }
+    if (best) return best;
+    return canvas;
+  }
+
   const selected = document.elements.find((element) => (
     element.id === selectedId
     && element.kind === "image"
@@ -927,7 +991,7 @@ export function resolveImageDropTarget(
     }
   }
 
-  return { x: 0, y: 0, width: document.width, height: document.height };
+  return canvas;
 }
 
 /**
@@ -970,7 +1034,7 @@ export function imageDropGuideAtPoint(
   selectedId: string | null,
   point: EditorPoint,
 ): ImageDropGuideInfo {
-  const target = resolveImageDropTarget(document, selectedId);
+  const target = resolveImageDropTarget(document, selectedId, point);
   return {
     edge: imageDropPlacementAtPoint(point, target),
     target,

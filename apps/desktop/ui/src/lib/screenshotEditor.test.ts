@@ -619,7 +619,7 @@ describe("screenshot editor geometry", () => {
       naturalHeight: 150,
     };
     const layered = { ...document, elements: [...document.elements, imported] };
-    // Prefer the selected image when present.
+    // Without a pointer sample, prefer the selected image when present.
     expect(resolveImageDropTarget(layered, "imported")).toEqual({
       x: 100,
       y: 100,
@@ -633,8 +633,89 @@ describe("screenshot editor geometry", () => {
       width: 200,
       height: 150,
     });
+    // Live drag near the imported layer's left edge / center.
     expect(imageDropGuideAtPoint(layered, "imported", { x: 50, y: 175 }).edge).toBe("left");
     expect(imageDropGuideAtPoint(layered, "imported", { x: 200, y: 175 }).edge).toBe("stack");
+  });
+
+  it("highlights only the visible layer under the pointer during image drop", () => {
+    const document = createScreenshotDocument("capture.png", 1_000, 800);
+    // Background fills the canvas; a smaller overlay sits on top.
+    const overlay: EditorImageElement = {
+      ...editableLayer,
+      id: "overlay",
+      kind: "image",
+      source: "imported",
+      src: "blob:overlay",
+      name: "overlay.png",
+      x: 300,
+      y: 200,
+      width: 400,
+      height: 300,
+      naturalWidth: 400,
+      naturalHeight: 300,
+    };
+    const layered = { ...document, elements: [...document.elements, overlay] };
+    const background = { x: 0, y: 0, width: 1_000, height: 800 };
+    const overlayBounds = { x: 300, y: 200, width: 400, height: 300 };
+
+    // Over the exposed background (not covered by the overlay) → background.
+    expect(resolveImageDropTarget(layered, "overlay", { x: 50, y: 50 }))
+      .toEqual(background);
+    expect(imageDropGuideAtPoint(layered, "overlay", { x: 50, y: 50 }).target)
+      .toEqual(background);
+
+    // Over the overlay → top-most layer only (never both).
+    expect(resolveImageDropTarget(layered, null, { x: 500, y: 350 }))
+      .toEqual(overlayBounds);
+    expect(imageDropGuideAtPoint(layered, null, { x: 500, y: 350 }).target)
+      .toEqual(overlayBounds);
+    expect(imageDropGuideAtPoint(layered, null, { x: 500, y: 350 }).edge)
+      .toBe("stack");
+
+    // Selection must not force a buried/off-pointer layer while hovering another.
+    expect(resolveImageDropTarget(layered, "overlay", { x: 80, y: 700 }))
+      .toEqual(background);
+
+    // Just outside the overlay but still over the background → background (visible).
+    expect(resolveImageDropTarget(layered, null, { x: 500, y: 190 }))
+      .toEqual(background);
+
+    // Non-overlapping layers: outside every image uses the closest one.
+    const left: EditorImageElement = {
+      ...editableLayer,
+      id: "left",
+      kind: "image",
+      source: "imported",
+      src: "blob:left",
+      name: "left.png",
+      x: 0,
+      y: 0,
+      width: 200,
+      height: 200,
+      naturalWidth: 200,
+      naturalHeight: 200,
+    };
+    const right: EditorImageElement = {
+      ...left,
+      id: "right",
+      src: "blob:right",
+      name: "right.png",
+      x: 400,
+      y: 0,
+    };
+    const sideBySide = {
+      ...document,
+      elements: [left, right],
+    };
+    // Midway between them → front-most of the two equidistant layers.
+    expect(resolveImageDropTarget(sideBySide, null, { x: 300, y: 100 }))
+      .toEqual({ x: 400, y: 0, width: 200, height: 200 });
+    // Closer to the left layer's right edge.
+    expect(resolveImageDropTarget(sideBySide, null, { x: 250, y: 100 }))
+      .toEqual({ x: 0, y: 0, width: 200, height: 200 });
+    expect(imageDropGuideAtPoint(sideBySide, null, { x: 250, y: 100 }).edge)
+      .toBe("right");
   });
 
   it("duplicates layers as visible unlocked imports", () => {
