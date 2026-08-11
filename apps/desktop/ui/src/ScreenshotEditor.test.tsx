@@ -37,6 +37,33 @@ function draftCommandResult(command: string): unknown {
   return undefined;
 }
 
+/** Match ScreenshotEditor log-scale slider mapping (5%–800%). */
+const TEST_ZOOM_MIN = 5;
+const TEST_ZOOM_MAX = 800;
+const TEST_ZOOM_LOG_SPAN = Math.log(TEST_ZOOM_MAX / TEST_ZOOM_MIN);
+
+function zoomPercentToSliderPosition(percent: number): number {
+  const clamped = Math.min(TEST_ZOOM_MAX, Math.max(TEST_ZOOM_MIN, percent));
+  return Math.log(clamped / TEST_ZOOM_MIN) / TEST_ZOOM_LOG_SPAN;
+}
+
+function setCanvasZoomPercent(percent: number) {
+  const zoom = screen.getByRole("slider", { name: "Canvas zoom" });
+  fireEvent.change(zoom, {
+    target: { value: String(zoomPercentToSliderPosition(percent)) },
+  });
+  return zoom;
+}
+
+function canvasZoomPercent(zoom: HTMLElement = screen.getByRole("slider", { name: "Canvas zoom" })): number {
+  const text = zoom.getAttribute("aria-valuetext") ?? "";
+  const match = text.match(/([\d.]+)%/);
+  if (!match) {
+    throw new Error(`Expected zoom aria-valuetext with a percent, got "${text}"`);
+  }
+  return Number(match[1]);
+}
+
 const artifact: CaptureArtifact = {
   id: "capture-1",
   path: "/Users/example/Captures/capture.png",
@@ -341,9 +368,8 @@ describe("ScreenshotEditor", () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
 
-    const zoom = screen.getByRole("slider", { name: "Canvas zoom" });
-    fireEvent.change(zoom, { target: { value: "100" } });
-    expect(zoom).toHaveValue("100");
+    const zoom = setCanvasZoomPercent(100);
+    expect(canvasZoomPercent(zoom)).toBeCloseTo(100, 0);
 
     const zoomIn = new KeyboardEvent("keydown", {
       key: "=",
@@ -354,40 +380,42 @@ describe("ScreenshotEditor", () => {
     });
     fireEvent(window, zoomIn);
     expect(zoomIn.defaultPrevented).toBe(true);
-    expect(zoom).toHaveValue("125");
+    expect(canvasZoomPercent(zoom)).toBeCloseTo(125, 0);
     const preset = screen.getByRole("combobox", { name: "Canvas zoom preset" });
     expect(within(preset).getByRole("option", { name: "125%" })).toBeInTheDocument();
 
     fireEvent.keyDown(window, { key: "-", code: "Minus", ctrlKey: true });
-    expect(zoom).toHaveValue("100");
+    expect(canvasZoomPercent(zoom)).toBeCloseTo(100, 0);
 
     fireEvent.keyDown(window, { key: "+", code: "NumpadAdd", ctrlKey: true });
-    expect(zoom).toHaveValue("125");
+    expect(canvasZoomPercent(zoom)).toBeCloseTo(125, 0);
     fireEvent.keyDown(window, { key: "0", code: "Digit0", ctrlKey: true });
-    expect(zoom).toHaveValue("100");
+    expect(canvasZoomPercent(zoom)).toBeCloseTo(100, 0);
   });
 
   it("zooms with the header slider and zoom buttons", async () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
 
-    const zoom = screen.getByRole("slider", { name: "Canvas zoom" });
-    fireEvent.change(zoom, { target: { value: "100" } });
-    expect(zoom).toHaveValue("100");
+    const zoom = setCanvasZoomPercent(100);
+    expect(canvasZoomPercent(zoom)).toBeCloseTo(100, 0);
+    // ~100% sits mid-track on the log scale (not near the left end).
+    expect(Number((zoom as HTMLInputElement).value)).toBeGreaterThan(0.45);
+    expect(Number((zoom as HTMLInputElement).value)).toBeLessThan(0.7);
 
-    fireEvent.change(zoom, { target: { value: "175" } });
-    expect(zoom).toHaveValue("175");
+    setCanvasZoomPercent(175);
+    expect(canvasZoomPercent(zoom)).toBeCloseTo(175, 0);
 
     fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
-    expect(Number((zoom as HTMLInputElement).value)).toBeCloseTo(218.8, 0);
+    expect(canvasZoomPercent(zoom)).toBeCloseTo(218.8, 0);
 
     fireEvent.click(screen.getByRole("button", { name: "Zoom out" }));
-    expect(Number((zoom as HTMLInputElement).value)).toBeCloseTo(175, 0);
+    expect(canvasZoomPercent(zoom)).toBeCloseTo(175, 0);
 
     fireEvent.change(screen.getByRole("combobox", { name: "Canvas zoom preset" }), {
       target: { value: "50" },
     });
-    expect(zoom).toHaveValue("50");
+    expect(canvasZoomPercent(zoom)).toBeCloseTo(50, 0);
 
     fireEvent.click(screen.getByRole("button", { name: "Fit canvas" }));
     expect(screen.getByRole("combobox", { name: "Canvas zoom preset" })).toHaveValue("fit");
@@ -398,8 +426,7 @@ describe("ScreenshotEditor", () => {
     await screen.findByLabelText("Width");
 
     const viewport = screen.getByLabelText("Screenshot editing canvas");
-    const zoom = screen.getByRole("slider", { name: "Canvas zoom" });
-    fireEvent.change(zoom, { target: { value: "100" } });
+    const zoom = setCanvasZoomPercent(100);
 
     const scroll = new WheelEvent("wheel", {
       deltaY: -100,
@@ -408,7 +435,7 @@ describe("ScreenshotEditor", () => {
     });
     fireEvent(viewport, scroll);
     expect(scroll.defaultPrevented).toBe(false);
-    expect(zoom).toHaveValue("100");
+    expect(canvasZoomPercent(zoom)).toBeCloseTo(100, 0);
 
     const zoomIn = new WheelEvent("wheel", {
       deltaY: -100,
@@ -420,8 +447,7 @@ describe("ScreenshotEditor", () => {
     });
     fireEvent(viewport, zoomIn);
     expect(zoomIn.defaultPrevented).toBe(true);
-    expect(Number((zoom as HTMLInputElement).value))
-      .toBeGreaterThan(100);
+    expect(canvasZoomPercent(zoom)).toBeGreaterThan(100);
 
     const zoomOut = new WheelEvent("wheel", {
       deltaY: 100,
@@ -433,7 +459,7 @@ describe("ScreenshotEditor", () => {
     });
     fireEvent(viewport, zoomOut);
     expect(zoomOut.defaultPrevented).toBe(true);
-    expect(Number((zoom as HTMLInputElement).value)).toBeCloseTo(100, 1);
+    expect(canvasZoomPercent(zoom)).toBeCloseTo(100, 1);
   });
 
   it("supports the native macOS magnify gesture", async () => {
@@ -441,8 +467,7 @@ describe("ScreenshotEditor", () => {
     await screen.findByLabelText("Width");
 
     const viewport = screen.getByLabelText("Screenshot editing canvas");
-    const zoom = screen.getByRole("slider", { name: "Canvas zoom" });
-    fireEvent.change(zoom, { target: { value: "100" } });
+    const zoom = setCanvasZoomPercent(100);
 
     const start = new Event("gesturestart", { bubbles: true, cancelable: true });
     Object.assign(start, { clientX: 300, clientY: 200, scale: 1 });
@@ -453,7 +478,7 @@ describe("ScreenshotEditor", () => {
     Object.assign(change, { clientX: 300, clientY: 200, scale: 1.5 });
     fireEvent(viewport, change);
     expect(change.defaultPrevented).toBe(true);
-    expect(zoom).toHaveValue("150");
+    expect(canvasZoomPercent(zoom)).toBeCloseTo(150, 0);
 
     const end = new Event("gestureend", { bubbles: true, cancelable: true });
     fireEvent(viewport, end);
@@ -622,9 +647,7 @@ describe("ScreenshotEditor", () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
 
-    fireEvent.change(screen.getByRole("slider", { name: "Canvas zoom" }), {
-      target: { value: "100" },
-    });
+    setCanvasZoomPercent(100);
     fireEvent.click(screen.getByRole("button", { name: "Text (T)" }));
     const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
     canvas.setPointerCapture = vi.fn();
@@ -674,9 +697,7 @@ describe("ScreenshotEditor", () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
 
-    fireEvent.change(screen.getByRole("slider", { name: "Canvas zoom" }), {
-      target: { value: "100" },
-    });
+    setCanvasZoomPercent(100);
     fireEvent.click(screen.getByRole("button", { name: "Text (T)" }));
     // Rounded Box is the default for new text (bubbly label style).
     fireEvent.click(screen.getByRole("button", { name: "New text style: Rounded Box" }));
@@ -784,9 +805,7 @@ describe("ScreenshotEditor", () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
 
-    fireEvent.change(screen.getByRole("slider", { name: "Canvas zoom" }), {
-      target: { value: "100" },
-    });
+    setCanvasZoomPercent(100);
     fireEvent.click(screen.getByRole("button", { name: "Arrow (A)" }));
     const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
     canvas.setPointerCapture = vi.fn();
@@ -846,9 +865,7 @@ describe("ScreenshotEditor", () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
 
-    fireEvent.change(screen.getByRole("slider", { name: "Canvas zoom" }), {
-      target: { value: "100" },
-    });
+    setCanvasZoomPercent(100);
     fireEvent.click(screen.getByRole("button", { name: "Arrow (A)" }));
     const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
     canvas.setPointerCapture = vi.fn();
@@ -936,9 +953,7 @@ describe("ScreenshotEditor", () => {
     render(<ScreenshotEditor />);
     await screen.findAllByText("1440 × 900");
 
-    fireEvent.change(screen.getByRole("slider", { name: "Canvas zoom" }), {
-      target: { value: "100" },
-    });
+    setCanvasZoomPercent(100);
     fireEvent.click(screen.getByRole("button", { name: "Arrow (A)" }));
     const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
     canvas.setPointerCapture = vi.fn();
@@ -1026,9 +1041,7 @@ describe("ScreenshotEditor", () => {
     render(<ScreenshotEditor />);
     await screen.findAllByText("1440 × 900");
 
-    fireEvent.change(screen.getByRole("slider", { name: "Canvas zoom" }), {
-      target: { value: "100" },
-    });
+    setCanvasZoomPercent(100);
     fireEvent.click(screen.getByRole("button", { name: "Line (L)" }));
     const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
     canvas.setPointerCapture = vi.fn();
@@ -1229,9 +1242,7 @@ describe("ScreenshotEditor", () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
 
-    fireEvent.change(screen.getByRole("slider", { name: "Canvas zoom" }), {
-      target: { value: "100" },
-    });
+    setCanvasZoomPercent(100);
     fireEvent.click(screen.getByRole("button", { name: "Eraser (B)" }));
     fireEvent.click(screen.getByRole("button", { name: "Erase" }));
 
@@ -1272,9 +1283,7 @@ describe("ScreenshotEditor", () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
 
-    fireEvent.change(screen.getByRole("slider", { name: "Canvas zoom" }), {
-      target: { value: "100" },
-    });
+    setCanvasZoomPercent(100);
     fireEvent.click(screen.getByRole("button", { name: "Eraser (B)" }));
     expect(screen.getByRole("button", { name: "Wand" })).toHaveAttribute("aria-pressed", "true");
 
@@ -1559,9 +1568,7 @@ describe("ScreenshotEditor", () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
 
-    fireEvent.change(screen.getByRole("slider", { name: "Canvas zoom" }), {
-      target: { value: "100" },
-    });
+    setCanvasZoomPercent(100);
     fireEvent.click(screen.getByRole("button", { name: "Text (T)" }));
     const viewport = screen.getByLabelText("Screenshot editing canvas");
     const canvas = viewport.querySelector("canvas")!;
@@ -1606,9 +1613,7 @@ describe("ScreenshotEditor", () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
 
-    fireEvent.change(screen.getByRole("slider", { name: "Canvas zoom" }), {
-      target: { value: "100" },
-    });
+    setCanvasZoomPercent(100);
     fireEvent.click(screen.getByRole("button", { name: "Arrow (A)" }));
     const viewport = screen.getByLabelText("Screenshot editing canvas");
     const canvas = viewport.querySelector("canvas")!;

@@ -458,6 +458,27 @@ function screenshotZoomLabel(value: number): string {
   return `${Number.isInteger(value) ? value : value.toFixed(1)}%`;
 }
 
+/**
+ * Map zoom percent ↔ continuous slider position on a log scale.
+ * Linear 5–800% puts ~100% (typical “fills the window”) near the left edge;
+ * log space keeps useful mid-range zooms near the middle of the track.
+ */
+const ZOOM_SLIDER_LOG_SPAN = Math.log(
+  MAX_SCREENSHOT_ZOOM_PERCENT / MIN_SCREENSHOT_ZOOM_PERCENT,
+);
+
+function zoomPercentToSliderPosition(percent: number): number {
+  const clamped = clampScreenshotZoomPercent(percent);
+  return Math.log(clamped / MIN_SCREENSHOT_ZOOM_PERCENT) / ZOOM_SLIDER_LOG_SPAN;
+}
+
+function sliderPositionToZoomPercent(position: number): number {
+  const t = Math.min(1, Math.max(0, position));
+  return clampScreenshotZoomPercent(
+    MIN_SCREENSHOT_ZOOM_PERCENT * Math.exp(t * ZOOM_SLIDER_LOG_SPAN),
+  );
+}
+
 function wheelZoomFactor(
   deltaY: number,
   deltaMode: number,
@@ -4612,20 +4633,27 @@ export function ScreenshotEditor() {
             <label className="screenshot-editor-zoom-slider">
               <input
                 type="range"
-                min={MIN_SCREENSHOT_ZOOM_PERCENT}
-                max={MAX_SCREENSHOT_ZOOM_PERCENT}
-                step={0.1}
+                min={0}
+                max={1}
+                step="any"
                 aria-label="Canvas zoom"
+                aria-valuemin={MIN_SCREENSHOT_ZOOM_PERCENT}
+                aria-valuemax={MAX_SCREENSHOT_ZOOM_PERCENT}
+                aria-valuenow={clampScreenshotZoomPercent(
+                  zoomMode === "fit" ? displayScale * 100 : zoom,
+                )}
                 aria-valuetext={
                   zoomMode === "fit"
                     ? `Fit (${screenshotZoomLabel(displayScale * 100)})`
                     : screenshotZoomLabel(zoom)
                 }
                 title="Drag to zoom · Pinch or Command/Ctrl + scroll also work"
-                value={clampScreenshotZoomPercent(
+                value={zoomPercentToSliderPosition(
                   zoomMode === "fit" ? displayScale * 100 : zoom,
                 )}
-                onChange={(event) => setManualZoom(Number(event.target.value))}
+                onChange={(event) => setManualZoom(
+                  sliderPositionToZoomPercent(Number(event.target.value)),
+                )}
               />
             </label>
             <button
