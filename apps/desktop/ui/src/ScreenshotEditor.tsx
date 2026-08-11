@@ -372,27 +372,34 @@ const COLOR_SWATCHES = [
   "#ffffff",
 ];
 
-/** JPEG quality presets for Compress mode (lossy encode). */
+/**
+ * Shared compress presets. JPEG maps these to encode quality; PNG maps them to
+ * palette size (color quantization), the same idea as compresspng.com.
+ */
 const SCREENSHOT_QUALITY_OPTIONS = [
   {
     value: "55",
     label: "Tiny",
-    description: "Smallest file with the most visible compression.",
+    jpegDescription: "Smallest file with the most visible compression.",
+    pngDescription: "About 32 colors — smallest PNG, most posterization.",
   },
   {
     value: "70",
     label: "Smaller",
-    description: "Very small file with more visible compression.",
+    jpegDescription: "Very small file with more visible compression.",
+    pngDescription: "About 64 colors — strong size reduction with some banding.",
   },
   {
     value: "85",
     label: "Balanced",
-    description: "Good quality with a meaningfully smaller file.",
+    jpegDescription: "Good quality with a meaningfully smaller file.",
+    pngDescription: "About 128 colors — solid savings while staying close to the original.",
   },
   {
     value: "92",
     label: "High",
-    description: "Larger file with the least quality loss.",
+    jpegDescription: "Larger file with the least quality loss.",
+    pngDescription: "Up to 256 colors — lightest quantization, largest compressed PNG.",
   },
 ] as const;
 
@@ -3830,15 +3837,33 @@ export function ScreenshotEditor() {
       void (async () => {
         try {
           const canvas = renderFlattened();
-          // Only JPEG has a quality knob in the browser estimate; PNG/WebP keep format.
-          const estimateQuality = exportFormat === "jpeg" && qualityMode !== "preserve"
-            ? Number(jpegQuality)
-            : 100;
-          const bytes = await estimateCanvasExportBytes(
-            canvas,
-            exportFormat,
-            estimateQuality,
-          );
+          // PNG compress uses Rust color quantization (browser toBlob cannot model it).
+          // JPEG/WebP estimates stay in-browser for snappier feedback.
+          let bytes: number;
+          if (exportFormat === "png" && qualityMode !== "preserve") {
+            const imagePng = await canvasPngBytes(canvas);
+            const maxSizeBytes = qualityMode === "maximum"
+              ? Number(maximumFileSize) * SCREENSHOT_FILE_SIZE_UNIT_BYTES[maximumFileSizeUnit]
+              : null;
+            bytes = await invoke<number>("estimate_screenshot_export", {
+              imagePng,
+              format: exportFormat,
+              qualityMode,
+              jpegQuality: Number(jpegQuality),
+              maxSizeBytes: maxSizeBytes !== null && Number.isFinite(maxSizeBytes)
+                ? Math.round(maxSizeBytes)
+                : null,
+            });
+          } else {
+            const estimateQuality = exportFormat === "jpeg" && qualityMode !== "preserve"
+              ? Number(jpegQuality)
+              : 100;
+            bytes = await estimateCanvasExportBytes(
+              canvas,
+              exportFormat,
+              estimateQuality,
+            );
+          }
           if (!cancelled) {
             setEstimatedBytes(bytes);
             setEstimatePending(false);
@@ -3864,6 +3889,8 @@ export function ScreenshotEditor() {
     exportSize,
     imageRevision,
     jpegQuality,
+    maximumFileSize,
+    maximumFileSizeUnit,
     qualityMode,
     renderFlattened,
   ]);
@@ -4039,10 +4066,11 @@ export function ScreenshotEditor() {
     : exportFormat === "webp"
       ? "WebP"
       : "PNG";
-  // JPEG quality presets only change encode quality (and estimated size). PNG/WebP
-  // compress mode uses stronger packing only — still lossless, so no quality menu.
-  const showCompressQuality = qualityMode === "compress" && exportFormat === "jpeg";
-  const showCompressPackingHint = qualityMode === "compress" && exportFormat !== "jpeg";
+  // Compress quality applies to JPEG (encode quality) and PNG (color count).
+  // WebP stays lossless-only in our encoder, so it only gets packing guidance.
+  const showCompressQuality = qualityMode === "compress"
+    && (exportFormat === "jpeg" || exportFormat === "png");
+  const showCompressPackingHint = qualityMode === "compress" && exportFormat === "webp";
 
   const applyExportFormat = (format: ExportFormat) => {
     setExportFormat(format);
@@ -5650,7 +5678,11 @@ export function ScreenshotEditor() {
                 {
                   value: "compress",
                   label: "Compress",
-                  description: "Smaller file via JPEG quality presets, or stronger PNG/WebP packing.",
+                  description: exportFormat === "png"
+                    ? "Smaller PNG by reducing colors (like compresspng.com), then packing hard."
+                    : exportFormat === "jpeg"
+                      ? "Smaller JPEG with Tiny through High quality presets."
+                      : "Stronger WebP packing (lossless).",
                 },
                 {
                   value: "maximum",
@@ -5670,7 +5702,9 @@ export function ScreenshotEditor() {
                 options={SCREENSHOT_QUALITY_OPTIONS.map((option) => ({
                   value: option.value,
                   label: option.label,
-                  description: option.description,
+                  description: exportFormat === "png"
+                    ? option.pngDescription
+                    : option.jpegDescription,
                 }))}
                 onChange={(value) => setJpegQuality(value as ScreenshotQuality)}
               />
@@ -5680,7 +5714,7 @@ export function ScreenshotEditor() {
             <div className="screenshot-export-control screenshot-quality-packing">
               <span>Quality</span>
               <p className="screenshot-quality-format-hint">
-                {formatLabel} uses stronger packing (lossless). Switch to JPEG for quality presets that shrink estimated size.
+                WebP export is lossless packing only. Switch to PNG for color reduction or JPEG for classic quality presets.
               </p>
             </div>
           )}
@@ -5689,7 +5723,9 @@ export function ScreenshotEditor() {
               className="screenshot-export-control screenshot-maximum-size"
               title={exportFormat === "jpeg"
                 ? "JPEG quality is lowered only when needed to meet this limit."
-                : `Uses stronger ${formatLabel} compression. If still over the limit, reduce dimensions or switch format.`}
+                : exportFormat === "png"
+                  ? "PNG color count is reduced until the file fits this limit."
+                  : `Uses stronger ${formatLabel} compression. If still over the limit, reduce dimensions or switch format.`}
             >
               <span>Maximum file size</span>
               <span className="screenshot-maximum-size-control">

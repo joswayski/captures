@@ -214,6 +214,28 @@ pub async fn copy_screenshot_edit(app: AppHandle, image_png: Vec<u8>) -> Command
         .map_err(|error| error.to_string())
 }
 
+/// Encode the flattened editor canvas the same way save does, and return only the
+/// resulting byte length — used for the live Est. size readout (especially PNG
+/// color quantization, which the browser cannot estimate accurately).
+#[tauri::command]
+pub async fn estimate_screenshot_export(
+    image_png: Vec<u8>,
+    format: ScreenshotEditFormat,
+    quality_mode: ScreenshotExportQualityMode,
+    jpeg_quality: u8,
+    max_size_bytes: Option<u64>,
+) -> CommandResult<u64> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let image = decode_editor_png(&image_png)?;
+        let output =
+            encode_export_with_limit(&image, format, quality_mode, jpeg_quality, max_size_bytes)?;
+        Ok::<_, AppError>(u64::try_from(output.len()).unwrap_or(u64::MAX))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 pub async fn save_screenshot_edit(
     app: AppHandle,
@@ -435,7 +457,16 @@ fn encode_export(
 ) -> Result<Vec<u8>, AppError> {
     match format {
         ScreenshotEditFormat::Png => {
-            storage::encode_png_export(image, quality_mode.uses_compact_encode())
+            let max_colors = match quality_mode {
+                ScreenshotExportQualityMode::Preserve => None,
+                // Compress: reduce colors like compresspng.com, then pack hard.
+                ScreenshotExportQualityMode::Compress => {
+                    Some(storage::png_palette_colors_for_quality(jpeg_quality))
+                }
+                // Maximum without a byte budget still quantizes aggressively.
+                ScreenshotExportQualityMode::Maximum => Some(64),
+            };
+            storage::encode_png_export(image, quality_mode.uses_compact_encode(), max_colors)
         }
         ScreenshotEditFormat::Jpeg => {
             let quality = if matches!(quality_mode, ScreenshotExportQualityMode::Preserve) {
@@ -481,40 +512,70 @@ fn encode_export_with_limit(
     if u64::try_from(output.len()).unwrap_or(u64::MAX) <= maximum {
         return Ok(output);
     }
-    if !matches!(format, ScreenshotEditFormat::Jpeg) {
-        return Err(AppError::Image(format!(
+
+    match format {
+        ScreenshotEditFormat::Jpeg => {
+            let rgb = composite_onto_white(image);
+            let maximum_quality = jpeg_quality.clamp(40, 100);
+            let minimum = encode_jpeg(&rgb, 40)?;
+            if u64::try_from(minimum.len()).unwrap_or(u64::MAX) > maximum {
+                return Err(AppError::Image(
+                    "JPEG cannot meet the requested maximum at the supported quality range; reduce the output size or raise the limit"
+                        .to_owned(),
+                ));
+            }
+
+            let mut best = minimum;
+            let mut low = 41_u8;
+            let mut high = maximum_quality;
+            while low <= high {
+                let quality = low + (high - low) / 2;
+                let candidate = encode_jpeg(&rgb, quality)?;
+                if u64::try_from(candidate.len()).unwrap_or(u64::MAX) <= maximum {
+                    best = candidate;
+                    low = quality.saturating_add(1);
+                } else {
+                    if quality == 0 {
+                        break;
+                    }
+                    high = quality - 1;
+                }
+            }
+            Ok(best)
+        }
+        ScreenshotEditFormat::Png => {
+            // Walk down the color budget until the file fits (same idea as quality notches).
+            let mut best: Option<Vec<u8>> = None;
+            for colors in storage::PNG_MAXIMUM_COLOR_STEPS {
+                let candidate = storage::encode_png_export(image, true, Some(colors))?;
+                if u64::try_from(candidate.len()).unwrap_or(u64::MAX) <= maximum {
+                    best = Some(candidate);
+                    // Keep trying fewer colors? Prefer the highest quality that still fits.
+                    // First success in the descending list is the largest palette that fits.
+                    break;
+                }
+                best = Some(candidate);
+            }
+            let best = best.ok_or_else(|| {
+                AppError::Image(
+                    "PNG cannot meet the requested maximum; reduce the output size or raise the limit"
+                        .to_owned(),
+                )
+            })?;
+            if u64::try_from(best.len()).unwrap_or(u64::MAX) <= maximum {
+                Ok(best)
+            } else {
+                Err(AppError::Image(
+                    "the PNG is larger than the requested maximum even after reducing colors; reduce the output size, raise the limit, or switch to JPEG for more aggressive size control"
+                        .to_owned(),
+                ))
+            }
+        }
+        ScreenshotEditFormat::Webp => Err(AppError::Image(format!(
             "the {} is larger than the requested maximum even with stronger compression; reduce the output size, raise the limit, or switch to JPEG for more aggressive size control",
             format.extension().to_uppercase()
-        )));
+        ))),
     }
-
-    let rgb = composite_onto_white(image);
-    let maximum_quality = jpeg_quality.clamp(40, 100);
-    let minimum = encode_jpeg(&rgb, 40)?;
-    if u64::try_from(minimum.len()).unwrap_or(u64::MAX) > maximum {
-        return Err(AppError::Image(
-            "JPEG cannot meet the requested maximum at the supported quality range; reduce the output size or raise the limit"
-                .to_owned(),
-        ));
-    }
-
-    let mut best = minimum;
-    let mut low = 41_u8;
-    let mut high = maximum_quality;
-    while low <= high {
-        let quality = low + (high - low) / 2;
-        let candidate = encode_jpeg(&rgb, quality)?;
-        if u64::try_from(candidate.len()).unwrap_or(u64::MAX) <= maximum {
-            best = candidate;
-            low = quality.saturating_add(1);
-        } else {
-            if quality == 0 {
-                break;
-            }
-            high = quality - 1;
-        }
-    }
-    Ok(best)
 }
 
 fn encode_jpeg(image: &RgbImage, quality: u8) -> Result<Vec<u8>, AppError> {
@@ -676,6 +737,34 @@ mod tests {
         .unwrap();
         assert_eq!(&compressed[..8], b"\x89PNG\r\n\x1a\n");
         assert!(compressed.len() <= preserve.len());
+    }
+
+    #[test]
+    fn png_compress_quality_reduces_file_size_via_color_quantization() {
+        let image = detailed_sample();
+        let high = encode_export(
+            &image,
+            ScreenshotEditFormat::Png,
+            ScreenshotExportQualityMode::Compress,
+            92,
+        )
+        .unwrap();
+        let tiny = encode_export(
+            &image,
+            ScreenshotEditFormat::Png,
+            ScreenshotExportQualityMode::Compress,
+            55,
+        )
+        .unwrap();
+        assert_eq!(&tiny[..8], b"\x89PNG\r\n\x1a\n");
+        assert!(
+            tiny.len() < high.len(),
+            "fewer palette colors should shrink the PNG (tiny={}, high={})",
+            tiny.len(),
+            high.len()
+        );
+        image::load_from_memory_with_format(&tiny, ImageFormat::Png)
+            .expect("quantized PNG remains readable");
     }
 
     #[test]

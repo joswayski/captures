@@ -251,6 +251,7 @@ pub fn run() {
             screenshot_editor::open_screenshot_editor,
             screenshot_editor::default_screenshot_edit_path,
             screenshot_editor::copy_screenshot_edit,
+            screenshot_editor::estimate_screenshot_export,
             screenshot_editor::save_screenshot_edit,
             show_capture_overlay,
             reveal_capture_overlay,
