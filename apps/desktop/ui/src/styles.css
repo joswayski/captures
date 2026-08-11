@@ -1142,8 +1142,9 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 .recording-display-picker .custom-select-trigger { width: 100%; min-height: 38px; padding: 7px 9px; }
 .recording-display-picker .custom-select-trigger > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recording-display-picker .custom-select-listbox { min-width: 230px; }
-.recording-region-aspect-picker { width: 104px; flex: 0 0 104px; }
-.recording-region-aspect-picker .custom-select-trigger { width: 100%; min-height: 38px; padding: 7px 9px; }
+.recording-region-aspect-picker { display: flex; width: 104px; flex: 0 0 104px; flex-direction: column; justify-content: center; gap: 3px; }
+.recording-region-aspect-label { color: #999a9f; font-size: 9px; font-weight: 750; letter-spacing: .04em; line-height: 1; text-transform: uppercase; }
+.recording-region-aspect-picker .custom-select-trigger { width: 100%; min-height: 32px; padding: 6px 9px; }
 .recording-region-aspect-picker .custom-select-listbox { min-width: 132px; }
 .recording-cancel { margin-left: auto; color: #d3d3d7; }
 .recording-cancel:hover { background: #333439; }

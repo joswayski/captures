@@ -331,7 +331,10 @@ describe("RecordingSelector", () => {
     expect(targetSwitch?.querySelector(".capture-segmented-indicator")).not.toBeNull();
     const regionGuidance = screen.getByText("Drag to select a region").closest(".capture-guidance");
     expect(regionGuidance).toHaveTextContent("Shift for square · Esc to cancel");
-    expect(screen.getByRole("combobox", { name: "Region aspect ratio" })).toBeInTheDocument();
+    const aspectPicker = screen.getByRole("combobox", { name: "Region aspect ratio" });
+    expect(aspectPicker).toBeInTheDocument();
+    expect(aspectPicker.closest(".recording-region-aspect-picker"))
+      .toHaveTextContent(/Aspect/);
     expect(container.querySelector(".capture-selector-note")).toHaveTextContent(
       "These controls won’t show in screenshots or recordings · Press Enter to confirm",
     );
@@ -744,6 +747,51 @@ describe("RecordingSelector", () => {
     const squareWidth = Number.parseFloat(squareFrame!.style.width);
     const squareHeight = Number.parseFloat(squareFrame!.style.height);
     expect(squareWidth).toBeCloseTo(squareHeight, 0);
+  });
+
+  it("snaps an existing region as soon as the aspect preset changes", async () => {
+    preparedSession = {
+      ...session,
+      initial_mode: "screenshot",
+    };
+    const { container } = render(<RecordingSelector />);
+    await screen.findByRole("button", { name: "Screenshot", pressed: true });
+
+    const surface = container.querySelector<HTMLElement>(".recording-selector");
+    expect(surface).not.toBeNull();
+    vi.spyOn(surface!, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 1440,
+      bottom: 900,
+      width: 1440,
+      height: 900,
+      toJSON: () => undefined,
+    });
+
+    const aspect = screen.getByRole("combobox", { name: "Region aspect ratio" });
+    fireEvent.click(aspect);
+    fireEvent.click(screen.getByRole("option", { name: "16 : 9" }));
+
+    const wideFrame = container.querySelector<HTMLElement>(".recording-selection-frame");
+    expect(wideFrame).not.toBeNull();
+    const wideWidth = Number.parseFloat(wideFrame!.style.width);
+    const wideHeight = Number.parseFloat(wideFrame!.style.height);
+    expect(wideWidth / wideHeight).toBeCloseTo(16 / 9, 2);
+
+    fireEvent.click(aspect);
+    fireEvent.click(screen.getByRole("option", { name: "1 : 1" }));
+
+    const squareFrame = container.querySelector<HTMLElement>(".recording-selection-frame");
+    expect(squareFrame).not.toBeNull();
+    const squareWidth = Number.parseFloat(squareFrame!.style.width);
+    const squareHeight = Number.parseFloat(squareFrame!.style.height);
+    expect(squareWidth / squareHeight).toBeCloseTo(1, 2);
+    // Inscribed in the previous 16:9 box — side matches the previous height.
+    expect(squareWidth).toBeCloseTo(wideHeight, 0);
+    expect(squareHeight).toBeCloseTo(wideHeight, 0);
   });
 
   it("fades window guidance when the cursor enters its bounds", async () => {
