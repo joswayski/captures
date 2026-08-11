@@ -63,6 +63,8 @@ export interface AppSettings {
   display_shortcut: string;
   feedback_shortcut: string;
   auto_copy_to_clipboard: boolean;
+  /** Start screenshot/recording as soon as a region is drawn or a window is picked. */
+  auto_start_on_selection: boolean;
   show_mini_previews: boolean;
   include_mini_previews_in_captures: boolean;
   include_recording_controls_in_captures: boolean;

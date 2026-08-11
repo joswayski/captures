@@ -76,6 +76,7 @@ const settings: AppSettings = {
   display_shortcut: "Ctrl+Shift+3",
   feedback_shortcut: "Ctrl+Shift+F",
   auto_copy_to_clipboard: true,
+  auto_start_on_selection: false,
   show_mini_previews: true,
   include_mini_previews_in_captures: false,
   include_recording_controls_in_captures: false,

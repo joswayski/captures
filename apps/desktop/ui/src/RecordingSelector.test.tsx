@@ -28,6 +28,7 @@ const settings: AppSettings = {
   display_shortcut: "Ctrl+Shift+3",
   feedback_shortcut: "Ctrl+Shift+F",
   auto_copy_to_clipboard: true,
+  auto_start_on_selection: false,
   show_mini_previews: true,
   include_mini_previews_in_captures: false,
   include_recording_controls_in_captures: false,
@@ -250,6 +251,8 @@ describe("RecordingSelector", () => {
     expect(clicksToggle).toBeChecked();
     expect(cursorToggle).toBeChecked();
 
+    // Region starts empty — use full screen so the primary action can run.
+    fireEvent.click(screen.getByRole("button", { name: "Full screen" }));
     fireEvent.click(screen.getByRole("button", { name: "Start recording" }));
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("start_recording", {
@@ -293,6 +296,7 @@ describe("RecordingSelector", () => {
     );
     expect(invoke).not.toHaveBeenCalledWith("list_recording_audio_devices");
 
+    fireEvent.click(screen.getByRole("button", { name: "Full screen" }));
     fireEvent.click(screen.getByRole("button", { name: "Start recording" }));
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("start_recording", {
@@ -413,17 +417,59 @@ describe("RecordingSelector", () => {
     });
   });
 
-  it("confirms the default region with Enter without overriding focused controls", async () => {
+  it("starts with no region so the user can draw mid-screen", async () => {
     preparedSession = {
       ...session,
       initial_mode: "screenshot",
     };
-    render(<RecordingSelector />);
+    const { container } = render(<RecordingSelector />);
+    await screen.findByRole("button", { name: "Screenshot", pressed: true });
+
+    expect(container.querySelector(".recording-selection-frame")).not.toBeInTheDocument();
+    const shade = container.querySelector<HTMLElement>(".capture-shade-full");
+    expect(shade).toBeInTheDocument();
+    expect(shade?.style.clipPath || "").toBe("");
+    expect(screen.getByRole("button", { name: "Take screenshot" })).toBeDisabled();
+    expect(screen.getByText("Drag to select a region")).toBeInTheDocument();
+  });
+
+  it("confirms a drawn region with Enter without overriding focused controls", async () => {
+    preparedSession = {
+      ...session,
+      initial_mode: "screenshot",
+    };
+    const { container } = render(<RecordingSelector />);
 
     const screenshotMode = await screen.findByRole("button", {
       name: "Screenshot",
       pressed: true,
     });
+    const surface = container.querySelector<HTMLElement>(".recording-selector");
+    expect(surface).not.toBeNull();
+    surface!.setPointerCapture = vi.fn();
+    surface!.hasPointerCapture = vi.fn(() => true);
+    surface!.releasePointerCapture = vi.fn();
+    vi.spyOn(surface!, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 1440,
+      bottom: 900,
+      width: 1440,
+      height: 900,
+      toJSON: () => undefined,
+    });
+
+    fireEvent.pointerDown(surface!, { pointerId: 21, clientX: 100, clientY: 120 });
+    fireEvent.pointerMove(surface!, { pointerId: 21, clientX: 400, clientY: 340 });
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+    });
+    fireEvent.pointerUp(surface!, { pointerId: 21, clientX: 400, clientY: 340 });
+
     fireEvent.keyDown(screenshotMode, { key: "Enter" });
     expect(invoke).not.toHaveBeenCalledWith("capture_selection_screenshot", expect.anything());
 
@@ -436,8 +482,96 @@ describe("RecordingSelector", () => {
           target: {
             type: "region",
             display_id: "display-1",
-            rect: { x: 245, y: 171, width: 950, height: 558 },
+            rect: { x: 100, y: 120, width: 300, height: 220 },
           },
+        },
+      });
+    });
+  });
+
+  it("auto-starts a screenshot after drawing a region when the preference is on", async () => {
+    preparedSession = {
+      ...session,
+      initial_mode: "screenshot",
+    };
+    const defaultInvoke = vi.mocked(invoke).getMockImplementation();
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "get_settings") {
+        return { ...settings, auto_start_on_selection: true };
+      }
+      return defaultInvoke?.(command, args);
+    });
+
+    const { container } = render(<RecordingSelector />);
+    await screen.findByRole("button", { name: "Screenshot", pressed: true });
+    expect(container.querySelector(".capture-selector-note")).toHaveTextContent(
+      "Region and window captures start when selected",
+    );
+
+    const surface = container.querySelector<HTMLElement>(".recording-selector");
+    expect(surface).not.toBeNull();
+    surface!.setPointerCapture = vi.fn();
+    surface!.hasPointerCapture = vi.fn(() => true);
+    surface!.releasePointerCapture = vi.fn();
+    vi.spyOn(surface!, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 1440,
+      bottom: 900,
+      width: 1440,
+      height: 900,
+      toJSON: () => undefined,
+    });
+
+    fireEvent.pointerDown(surface!, { pointerId: 22, clientX: 80, clientY: 90 });
+    fireEvent.pointerMove(surface!, { pointerId: 22, clientX: 280, clientY: 250 });
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+    });
+    fireEvent.pointerUp(surface!, { pointerId: 22, clientX: 280, clientY: 250 });
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("capture_selection_screenshot", {
+        request: {
+          selection_id: preparedSession.id,
+          target: {
+            type: "region",
+            display_id: "display-1",
+            rect: { x: 80, y: 90, width: 200, height: 160 },
+          },
+        },
+      });
+    });
+  });
+
+  it("auto-starts after picking a window when the preference is on", async () => {
+    preparedSession = {
+      ...session,
+      initial_mode: "screenshot",
+      initial_target: "window",
+    };
+    const defaultInvoke = vi.mocked(invoke).getMockImplementation();
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "get_settings") {
+        return { ...settings, auto_start_on_selection: true };
+      }
+      return defaultInvoke?.(command, args);
+    });
+
+    render(<RecordingSelector />);
+    await screen.findByRole("button", { name: "Window", pressed: true });
+    // Title is "Front eligible window"; id is back-window (mid z-order).
+    fireEvent.click(screen.getByRole("button", { name: "Select Front eligible window" }));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("capture_selection_screenshot", {
+        request: {
+          selection_id: preparedSession.id,
+          target: { type: "window", window_id: "back-window" },
         },
       });
     });
@@ -563,7 +697,8 @@ describe("RecordingSelector", () => {
     expect(await screen.findByRole("button", { name: "Window" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Region" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Full screen" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Start recording" })).toBeEnabled();
+    // Region starts empty — capture waits until the user draws a selection.
+    expect(screen.getByRole("button", { name: "Start recording" })).toBeDisabled();
   });
 
   it("keeps the selector surface fixed while the controls are dragged within the display", async () => {
@@ -664,7 +799,7 @@ describe("RecordingSelector", () => {
       toJSON: () => undefined,
     });
 
-    // Click outside the default selection frame to start a create drag.
+    // Drag anywhere on the empty surface to start a create selection.
     fireEvent.pointerDown(surface!, { pointerId: 9, clientX: 20, clientY: 20 });
     expect(guidance).toHaveAttribute("data-faded", "true");
 
@@ -703,7 +838,7 @@ describe("RecordingSelector", () => {
       toJSON: () => undefined,
     });
 
-    // Outside the default frame so this is a create drag, not a move.
+    // Empty surface: any drag creates a new region.
     fireEvent.pointerDown(surface!, { pointerId: 11, clientX: 20, clientY: 20 });
     fireEvent.pointerMove(surface!, { pointerId: 11, clientX: 340, clientY: 300 });
     // Flush the rAF used to batch region pointer moves.
