@@ -108,7 +108,7 @@ describe("CaptureOverlay guidance", () => {
 
     const guidance = (await screen.findByText("Drag to select a region"))
       .closest(".capture-guidance");
-    expect(guidance).toHaveTextContent("Esc to cancel");
+    expect(guidance).toHaveTextContent("Shift for square · Esc to cancel");
     expect(screen.queryByText("Drag to capture · Esc to cancel")).not.toBeInTheDocument();
   });
 

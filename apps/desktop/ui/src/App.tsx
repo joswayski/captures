@@ -46,8 +46,11 @@ import {
   dragSelectionRect,
   frontToBackWindows,
   isCapturableSelection,
+  parseAspectRatioPreset,
+  REGION_ASPECT_PRESETS,
   roundedRectPath,
   selectionRect,
+  type RegionAspectPreset,
   type SelectionDragMode,
   type SelectionPoint,
 } from "./lib/selection";
@@ -1134,6 +1137,9 @@ export function CaptureGuidance({
     : feedback
       ? "Click and drag to select a region"
       : "Drag to select a region";
+  const hint = mode === "window"
+    ? "Esc to cancel"
+    : "Shift for square · Esc to cancel";
   const faded = hidden || cursorOver;
 
   useEffect(() => {
@@ -1188,7 +1194,7 @@ export function CaptureGuidance({
       aria-hidden={faded || undefined}
     >
       <strong>{title}</strong>
-      <span>Esc to cancel</span>
+      <span>{hint}</span>
     </div>
   );
 }
@@ -1355,6 +1361,7 @@ export function RecordingSelector() {
   const [devicesLoaded, setDevicesLoaded] = useState(false);
   const [targetMode, setTargetMode] = useState<RecordingTargetMode>("region");
   const [region, setRegion] = useState<RecordingRect | null>(null);
+  const [regionAspect, setRegionAspect] = useState<RegionAspectPreset>("free");
   const [panelPosition, setPanelPosition] = useState<RecordingPanelPosition | null>(null);
   const [panelDragging, setPanelDragging] = useState(false);
   const [selectedWindow, setSelectedWindow] = useState<string | null>(null);
@@ -1378,6 +1385,8 @@ export function RecordingSelector() {
   const panelResizeAnimationRef = useRef<Animation | null>(null);
   const regionDragRef = useRef<RecordingRegionDrag | null>(null);
   const pendingRegionPointRef = useRef<SelectionPoint | null>(null);
+  const pendingRegionForceSquareRef = useRef(false);
+  const regionAspectRef = useRef<RegionAspectPreset>("free");
   const regionFrameRef = useRef<number | null>(null);
   const settingsRef = useRef<AppSettings | null>(null);
   const sessionRef = useRef<RecordingSelectionSession | null>(null);
@@ -1392,8 +1401,58 @@ export function RecordingSelector() {
     }
     regionDragRef.current = null;
     pendingRegionPointRef.current = null;
+    pendingRegionForceSquareRef.current = false;
     setRegionSelecting(false);
   }, []);
+
+  const applyRegionDrag = useCallback((
+    point: SelectionPoint,
+    forceSquare: boolean,
+    surface: { width: number; height: number },
+  ) => {
+    const drag = regionDragRef.current;
+    if (!drag) return;
+    setRegion(dragSelectionRect(
+      drag.mode,
+      drag.origin,
+      point,
+      drag.initial,
+      surface,
+      {
+        aspectRatio: parseAspectRatioPreset(regionAspectRef.current),
+        forceSquare,
+      },
+    ));
+  }, []);
+
+  useEffect(() => {
+    regionAspectRef.current = regionAspect;
+  }, [regionAspect]);
+
+  // Re-apply the active region drag when Shift is pressed or released mid-gesture
+  // so the marquee snaps between free/selected aspect and a square without waiting
+  // for another pointer move.
+  useEffect(() => {
+    const onShift = (event: KeyboardEvent) => {
+      if (event.key !== "Shift" || !regionDragRef.current) return;
+      const point = pendingRegionPointRef.current;
+      if (!point) return;
+      const forceSquare = event.type === "keydown";
+      pendingRegionForceSquareRef.current = forceSquare;
+      const bounds = surfaceRef.current?.getBoundingClientRect();
+      const surface = {
+        width: bounds?.width ?? 0,
+        height: bounds?.height ?? 0,
+      };
+      applyRegionDrag(point, forceSquare, surface);
+    };
+    window.addEventListener("keydown", onShift, true);
+    window.addEventListener("keyup", onShift, true);
+    return () => {
+      window.removeEventListener("keydown", onShift, true);
+      window.removeEventListener("keyup", onShift, true);
+    };
+  }, [applyRegionDrag]);
 
   const loadAudioDevices = useCallback(() => {
     if (
@@ -1772,6 +1831,8 @@ export function RecordingSelector() {
     if (mode !== "create" && !region) return;
     event.currentTarget.setPointerCapture(event.pointerId);
     clearRegionDrag();
+    pendingRegionForceSquareRef.current = event.shiftKey;
+    pendingRegionPointRef.current = start;
     regionDragRef.current = {
       mode,
       origin: start,
@@ -1786,32 +1847,20 @@ export function RecordingSelector() {
     if (!regionDragRef.current || targetMode !== "region") return;
     event.preventDefault();
     pendingRegionPointRef.current = point(event);
+    pendingRegionForceSquareRef.current = event.shiftKey;
     if (regionFrameRef.current !== null) return;
     regionFrameRef.current = window.requestAnimationFrame(() => {
       regionFrameRef.current = null;
-      const drag = regionDragRef.current;
       const current = pendingRegionPointRef.current;
-      if (!drag || !current) return;
-      setRegion(dragSelectionRect(
-        drag.mode,
-        drag.origin,
-        current,
-        drag.initial,
-        surfaceSize,
-      ));
+      if (!current || !regionDragRef.current) return;
+      applyRegionDrag(current, pendingRegionForceSquareRef.current, surfaceSize);
     });
   };
   const onPointerUp = (event: React.PointerEvent) => {
     const drag = regionDragRef.current;
     const current = pendingRegionPointRef.current;
     if (drag && current) {
-      setRegion(dragSelectionRect(
-        drag.mode,
-        drag.origin,
-        current,
-        drag.initial,
-        surfaceSize,
-      ));
+      applyRegionDrag(current, event.shiftKey || pendingRegionForceSquareRef.current, surfaceSize);
     }
     if (
       typeof event.currentTarget.hasPointerCapture === "function"
@@ -2188,6 +2237,20 @@ export function RecordingSelector() {
                 ariaLabel="Display"
                 disabled={switchingDisplay || starting || displayOptions.length < 2}
                 onChange={(displayId) => void switchDisplay(displayId)}
+              />
+            </div>
+          )}
+          {targetMode === "region" && (
+            <div className="recording-region-aspect-picker">
+              <CustomSelect
+                value={regionAspect}
+                options={REGION_ASPECT_PRESETS.map((preset) => ({
+                  value: preset.value,
+                  label: preset.label,
+                }))}
+                ariaLabel="Region aspect ratio"
+                disabled={starting}
+                onChange={(value) => setRegionAspect(value as RegionAspectPreset)}
               />
             </div>
           )}

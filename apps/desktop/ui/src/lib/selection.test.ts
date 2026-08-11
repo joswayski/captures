@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   captureDimClipPath,
   dragSelectionRect,
+  effectiveDragAspectRatio,
   frontToBackWindows,
   isCapturableSelection,
+  parseAspectRatioPreset,
   roundedRectPath,
   selectionRect,
 } from "./selection";
@@ -80,6 +82,25 @@ describe("roundedRectPath", () => {
   });
 });
 
+describe("parseAspectRatioPreset", () => {
+  it("parses common ratios and treats free as null", () => {
+    expect(parseAspectRatioPreset("free")).toBeNull();
+    expect(parseAspectRatioPreset("1:1")).toBe(1);
+    expect(parseAspectRatioPreset("16:9")).toBeCloseTo(16 / 9);
+    expect(parseAspectRatioPreset("9:16")).toBeCloseTo(9 / 16);
+    expect(parseAspectRatioPreset("nope")).toBeNull();
+  });
+});
+
+describe("effectiveDragAspectRatio", () => {
+  it("lets Shift force a square over the selector ratio", () => {
+    expect(effectiveDragAspectRatio(16 / 9, true)).toBe(1);
+    expect(effectiveDragAspectRatio(null, true)).toBe(1);
+    expect(effectiveDragAspectRatio(16 / 9, false)).toBeCloseTo(16 / 9);
+    expect(effectiveDragAspectRatio(null, false)).toBeNull();
+  });
+});
+
 describe("dragSelectionRect", () => {
   const initial = { x: 100, y: 80, width: 400, height: 240 };
   const bounds = { width: 800, height: 600 };
@@ -106,6 +127,107 @@ describe("dragSelectionRect", () => {
       width: 700,
       height: 520,
     });
+  });
+
+  it("creates a freeform region from a reverse drag", () => {
+    expect(dragSelectionRect(
+      "create",
+      { x: 300, y: 200 },
+      { x: 100, y: 50 },
+      { x: 300, y: 200, width: 0, height: 0 },
+      bounds,
+    )).toEqual({ x: 100, y: 50, width: 200, height: 150 });
+  });
+
+  it("creates a square when Shift forces 1:1", () => {
+    const rect = dragSelectionRect(
+      "create",
+      { x: 100, y: 100 },
+      { x: 300, y: 180 },
+      { x: 100, y: 100, width: 0, height: 0 },
+      bounds,
+      { forceSquare: true },
+    );
+    expect(rect.width).toBeCloseTo(rect.height);
+    expect(rect.width).toBeCloseTo(200);
+    expect(rect.x).toBe(100);
+    expect(rect.y).toBe(100);
+  });
+
+  it("creates with a fixed 16:9 aspect from the selector", () => {
+    const rect = dragSelectionRect(
+      "create",
+      { x: 50, y: 50 },
+      { x: 370, y: 400 },
+      { x: 50, y: 50, width: 0, height: 0 },
+      bounds,
+      { aspectRatio: 16 / 9 },
+    );
+    expect(rect.width / rect.height).toBeCloseTo(16 / 9, 5);
+    expect(rect.x).toBe(50);
+    expect(rect.y).toBe(50);
+  });
+
+  it("lets Shift override a selected 16:9 create drag to a square", () => {
+    const rect = dragSelectionRect(
+      "create",
+      { x: 50, y: 50 },
+      { x: 370, y: 400 },
+      { x: 50, y: 50, width: 0, height: 0 },
+      bounds,
+      { aspectRatio: 16 / 9, forceSquare: true },
+    );
+    expect(rect.width).toBeCloseTo(rect.height);
+  });
+
+  it("resizes a corner with a locked aspect from the free corner", () => {
+    // SE free corner; opposite NW stays fixed at (100, 80). Pointer at (700, 500)
+    // proposes 600×420 (taller than 16:9), so width grows to match height, then
+    // clamps to remaining display width from the anchor (700).
+    const rect = dragSelectionRect(
+      "se",
+      { x: 500, y: 320 },
+      { x: 700, y: 500 },
+      initial,
+      bounds,
+      { aspectRatio: 16 / 9 },
+    );
+    expect(rect.x).toBe(100);
+    expect(rect.y).toBe(80);
+    expect(rect.width / rect.height).toBeCloseTo(16 / 9, 5);
+    expect(rect.width).toBeCloseTo(700);
+    expect(rect.height).toBeCloseTo(700 * 9 / 16);
+  });
+
+  it("keeps a square on Shift corner resize even when freeform was selected", () => {
+    const rect = dragSelectionRect(
+      "se",
+      { x: 500, y: 320 },
+      { x: 700, y: 500 },
+      initial,
+      bounds,
+      { forceSquare: true },
+    );
+    expect(rect.width).toBeCloseTo(rect.height);
+    // Dominant free-axis reach is 600×420 → square side 600, clamped by remaining
+    // display height from the NW anchor (600 - 80 = 520).
+    expect(rect.width).toBeCloseTo(520);
+  });
+
+  it("clamps aspect-locked resize to the display bounds", () => {
+    const rect = dragSelectionRect(
+      "se",
+      { x: 500, y: 320 },
+      { x: 2000, y: 2000 },
+      initial,
+      bounds,
+      { aspectRatio: 1 },
+    );
+    expect(rect.x).toBe(100);
+    expect(rect.y).toBe(80);
+    expect(rect.width).toBeCloseTo(rect.height);
+    expect(rect.x + rect.width).toBeLessThanOrEqual(bounds.width);
+    expect(rect.y + rect.height).toBeLessThanOrEqual(bounds.height);
   });
 });
 

@@ -12,6 +12,29 @@ export interface SelectionRect {
 
 export type SelectionDragMode = "create" | "move" | "nw" | "ne" | "sw" | "se";
 
+/** Panel presets for capture region aspect lock. */
+export const REGION_ASPECT_PRESETS = [
+  { value: "free", label: "Free" },
+  { value: "1:1", label: "1 : 1" },
+  { value: "4:3", label: "4 : 3" },
+  { value: "3:2", label: "3 : 2" },
+  { value: "16:9", label: "16 : 9" },
+  { value: "9:16", label: "9 : 16" },
+] as const;
+
+export type RegionAspectPreset = (typeof REGION_ASPECT_PRESETS)[number]["value"];
+
+export type DragSelectionOptions = {
+  minimumSize?: number;
+  /**
+   * Fixed width/height ratio from the aspect selector (`16/9`, `1`, …).
+   * `null` / omitted means freeform. Ignored when `forceSquare` is true.
+   */
+  aspectRatio?: number | null;
+  /** Shift held: force a 1:1 square regardless of the selected aspect. */
+  forceSquare?: boolean;
+};
+
 export function frontToBackWindows<T extends { z_order: number }>(windows: readonly T[]): T[] {
   return windows
     .map((window, index) => ({ index, window }))
@@ -29,6 +52,34 @@ export function selectionRect(start: SelectionPoint, end: SelectionPoint): Selec
     width: Math.abs(end.x - start.x),
     height: Math.abs(end.y - start.y),
   };
+}
+
+/**
+ * Parse a preset like `"16:9"` into width/height. `"free"` and invalid values
+ * return `null` (freeform).
+ */
+export function parseAspectRatioPreset(value: string): number | null {
+  if (!value || value === "free") return null;
+  const parts = value.split(":").map(Number);
+  if (parts.length !== 2) return null;
+  const [width, height] = parts;
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return null;
+  }
+  return width / height;
+}
+
+/**
+ * Effective aspect for a drag: Shift always wins with 1:1; otherwise the
+ * selector ratio (or freeform when unset).
+ */
+export function effectiveDragAspectRatio(
+  aspectRatio: number | null | undefined,
+  forceSquare: boolean,
+): number | null {
+  if (forceSquare) return 1;
+  if (aspectRatio && Number.isFinite(aspectRatio) && aspectRatio > 0) return aspectRatio;
+  return null;
 }
 
 export function isCapturableSelection(
@@ -95,9 +146,14 @@ export function dragSelectionRect(
   current: SelectionPoint,
   initial: SelectionRect,
   bounds: { width: number; height: number },
-  minimumSize = 16,
+  options: DragSelectionOptions = {},
 ): SelectionRect {
-  if (mode === "create") return selectionRect(origin, current);
+  const minimumSize = options.minimumSize ?? 16;
+  const aspect = effectiveDragAspectRatio(options.aspectRatio, Boolean(options.forceSquare));
+
+  if (mode === "create") {
+    return createSelectionRect(origin, current, bounds, aspect);
+  }
 
   const dx = current.x - origin.x;
   const dy = current.y - origin.y;
@@ -109,6 +165,10 @@ export function dragSelectionRect(
     };
   }
 
+  if (aspect !== null) {
+    return resizeCornerWithAspect(mode, current, initial, bounds, aspect, minimumSize);
+  }
+
   let left = initial.x;
   let top = initial.y;
   let right = initial.x + initial.width;
@@ -118,6 +178,133 @@ export function dragSelectionRect(
   if (mode.includes("n")) top = clamp(initial.y + dy, 0, bottom - minimumSize);
   if (mode.includes("s")) bottom = clamp(initial.y + initial.height + dy, top + minimumSize, bounds.height);
   return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+/**
+ * Create a region from origin→current, optionally locked to `aspectRatio`.
+ * Mirrors photo-editor crop drag: the free corner follows the pointer while
+ * width/height stay proportional, clamped to the display.
+ */
+function createSelectionRect(
+  origin: SelectionPoint,
+  current: SelectionPoint,
+  bounds: { width: number; height: number },
+  aspectRatio: number | null,
+): SelectionRect {
+  const start = {
+    x: clamp(origin.x, 0, bounds.width),
+    y: clamp(origin.y, 0, bounds.height),
+  };
+  let end = {
+    x: clamp(current.x, 0, bounds.width),
+    y: clamp(current.y, 0, bounds.height),
+  };
+
+  if (aspectRatio === null) {
+    return selectionRect(start, end);
+  }
+
+  const directionX = end.x < start.x ? -1 : 1;
+  const directionY = end.y < start.y ? -1 : 1;
+  let width = Math.abs(end.x - start.x);
+  let height = Math.abs(end.y - start.y);
+  if (height === 0 || width / height > aspectRatio) {
+    height = width / aspectRatio;
+  } else {
+    width = height * aspectRatio;
+  }
+  width = Math.min(width, directionX > 0 ? bounds.width - start.x : start.x);
+  height = width / aspectRatio;
+  if (height > (directionY > 0 ? bounds.height - start.y : start.y)) {
+    height = directionY > 0 ? bounds.height - start.y : start.y;
+    width = height * aspectRatio;
+  }
+  end = {
+    x: start.x + width * directionX,
+    y: start.y + height * directionY,
+  };
+  return selectionRect(start, end);
+}
+
+/**
+ * Corner resize with a fixed opposite corner and locked aspect ratio.
+ * The free corner tracks the pointer; size is clamped to the display.
+ */
+function resizeCornerWithAspect(
+  mode: Exclude<SelectionDragMode, "create" | "move">,
+  current: SelectionPoint,
+  initial: SelectionRect,
+  bounds: { width: number; height: number },
+  aspect: number,
+  minimumSize: number,
+): SelectionRect {
+  const anchor = {
+    x: mode.includes("w") ? initial.x + initial.width : initial.x,
+    y: mode.includes("n") ? initial.y + initial.height : initial.y,
+  };
+  const pointer = {
+    x: clamp(current.x, 0, bounds.width),
+    y: clamp(current.y, 0, bounds.height),
+  };
+
+  // Prefer the pointer quadrant so the free corner can flip past the anchor.
+  const signX = pointer.x >= anchor.x ? 1 : -1;
+  const signY = pointer.y >= anchor.y ? 1 : -1;
+
+  let width = Math.max(Math.abs(pointer.x - anchor.x), 1e-6);
+  let height = Math.max(Math.abs(pointer.y - anchor.y), 1e-6);
+  if (width / height > aspect) {
+    height = width / aspect;
+  } else {
+    width = height * aspect;
+  }
+
+  // Room available from the anchor in the chosen direction.
+  const maxWidth = signX > 0 ? bounds.width - anchor.x : anchor.x;
+  const maxHeight = signY > 0 ? bounds.height - anchor.y : anchor.y;
+  if (width > maxWidth) {
+    width = maxWidth;
+    height = width / aspect;
+  }
+  if (height > maxHeight) {
+    height = maxHeight;
+    width = height * aspect;
+  }
+
+  // Keep both axes at least `minimumSize` without breaking the aspect when space allows.
+  const min = Math.max(1, minimumSize);
+  if ((width < min || height < min) && maxWidth >= min && maxHeight >= min / aspect && maxHeight >= min && maxWidth >= min * aspect) {
+    if (aspect >= 1) {
+      width = Math.max(min, Math.min(width, maxWidth));
+      height = width / aspect;
+      if (height < min || height > maxHeight) {
+        height = Math.max(min, Math.min(height, maxHeight));
+        width = height * aspect;
+      }
+    } else {
+      height = Math.max(min, Math.min(height, maxHeight));
+      width = height * aspect;
+      if (width < min || width > maxWidth) {
+        width = Math.max(min, Math.min(width, maxWidth));
+        height = width / aspect;
+      }
+    }
+  }
+
+  // Degenerate: no room for a capturable rect in this quadrant — fall back to min fit.
+  width = Math.max(0, Math.min(width, maxWidth));
+  height = width / aspect;
+  if (height > maxHeight) {
+    height = Math.max(0, maxHeight);
+    width = height * aspect;
+  }
+
+  return {
+    x: signX > 0 ? anchor.x : anchor.x - width,
+    y: signY > 0 ? anchor.y : anchor.y - height,
+    width,
+    height,
+  };
 }
 
 function clamp(value: number, minimum: number, maximum: number): number {
