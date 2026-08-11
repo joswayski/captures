@@ -373,32 +373,37 @@ const COLOR_SWATCHES = [
 ];
 
 /**
- * Shared compress presets. JPEG maps these to encode quality; PNG maps them to
- * palette size (color quantization), the same idea as compresspng.com.
+ * Shared compress presets.
+ * - JPEG / WebP: encode quality (lossy)
+ * - PNG: palette size / color quantization (like compresspng.com)
  */
 const SCREENSHOT_QUALITY_OPTIONS = [
   {
     value: "55",
     label: "Tiny",
     jpegDescription: "Smallest file with the most visible compression.",
+    webpDescription: "Smallest lossy WebP with the most visible compression.",
     pngDescription: "About 32 colors — smallest PNG, most posterization.",
   },
   {
     value: "70",
     label: "Smaller",
     jpegDescription: "Very small file with more visible compression.",
+    webpDescription: "Very small lossy WebP with more visible compression.",
     pngDescription: "About 64 colors — strong size reduction with some banding.",
   },
   {
     value: "85",
     label: "Balanced",
     jpegDescription: "Good quality with a meaningfully smaller file.",
+    webpDescription: "Good lossy WebP quality with a meaningfully smaller file.",
     pngDescription: "About 128 colors — solid savings while staying close to the original.",
   },
   {
     value: "92",
     label: "High",
     jpegDescription: "Larger file with the least quality loss.",
+    webpDescription: "Larger lossy WebP with the least quality loss.",
     pngDescription: "Up to 256 colors — lightest quantization, largest compressed PNG.",
   },
 ] as const;
@@ -3837,10 +3842,13 @@ export function ScreenshotEditor() {
       void (async () => {
         try {
           const canvas = renderFlattened();
-          // PNG compress uses Rust color quantization (browser toBlob cannot model it).
-          // JPEG/WebP estimates stay in-browser for snappier feedback.
+          // PNG color quant and lossy WebP go through Rust so Est. size matches save.
+          // JPEG stays in-browser (toBlob quality matches our encoder closely enough).
           let bytes: number;
-          if (exportFormat === "png" && qualityMode !== "preserve") {
+          if (
+            (exportFormat === "png" || exportFormat === "webp")
+            && qualityMode !== "preserve"
+          ) {
             const imagePng = await canvasPngBytes(canvas);
             const maxSizeBytes = qualityMode === "maximum"
               ? Number(maximumFileSize) * SCREENSHOT_FILE_SIZE_UNIT_BYTES[maximumFileSizeUnit]
@@ -4058,7 +4066,7 @@ export function ScreenshotEditor() {
         && Number.isFinite(maximumSizeBytes)
         && maximumSizeBytes >= 10_000
         && estimatedBytes > maximumSizeBytes
-        && exportFormat === "jpeg"
+        && (exportFormat === "jpeg" || exportFormat === "webp")
         ? `≤ ${formatFileSize(maximumSizeBytes)}`
         : `≈ ${formatFileSize(estimatedBytes)}`;
   const formatLabel = exportFormat === "jpeg"
@@ -4066,11 +4074,8 @@ export function ScreenshotEditor() {
     : exportFormat === "webp"
       ? "WebP"
       : "PNG";
-  // Compress quality applies to JPEG (encode quality) and PNG (color count).
-  // WebP stays lossless-only in our encoder, so it only gets packing guidance.
-  const showCompressQuality = qualityMode === "compress"
-    && (exportFormat === "jpeg" || exportFormat === "png");
-  const showCompressPackingHint = qualityMode === "compress" && exportFormat === "webp";
+  // Compress quality applies to every format: JPEG/WebP encode quality, PNG colors.
+  const showCompressQuality = qualityMode === "compress";
 
   const applyExportFormat = (format: ExportFormat) => {
     setExportFormat(format);
@@ -5680,9 +5685,9 @@ export function ScreenshotEditor() {
                   label: "Compress",
                   description: exportFormat === "png"
                     ? "Smaller PNG by reducing colors (like compresspng.com), then packing hard."
-                    : exportFormat === "jpeg"
-                      ? "Smaller JPEG with Tiny through High quality presets."
-                      : "Stronger WebP packing (lossless).",
+                    : exportFormat === "webp"
+                      ? "Smaller lossy WebP with Tiny through High quality presets."
+                      : "Smaller JPEG with Tiny through High quality presets.",
                 },
                 {
                   value: "maximum",
@@ -5704,25 +5709,19 @@ export function ScreenshotEditor() {
                   label: option.label,
                   description: exportFormat === "png"
                     ? option.pngDescription
-                    : option.jpegDescription,
+                    : exportFormat === "webp"
+                      ? option.webpDescription
+                      : option.jpegDescription,
                 }))}
                 onChange={(value) => setJpegQuality(value as ScreenshotQuality)}
               />
             </div>
           )}
-          {showCompressPackingHint && (
-            <div className="screenshot-export-control screenshot-quality-packing">
-              <span>Quality</span>
-              <p className="screenshot-quality-format-hint">
-                WebP export is lossless packing only. Switch to PNG for color reduction or JPEG for classic quality presets.
-              </p>
-            </div>
-          )}
           {qualityMode === "maximum" && (
             <div
               className="screenshot-export-control screenshot-maximum-size"
-              title={exportFormat === "jpeg"
-                ? "JPEG quality is lowered only when needed to meet this limit."
+              title={exportFormat === "jpeg" || exportFormat === "webp"
+                ? `${formatLabel} quality is lowered only when needed to meet this limit.`
                 : exportFormat === "png"
                   ? "PNG color count is reduced until the file fits this limit."
                   : `Uses stronger ${formatLabel} compression. If still over the limit, reduce dimensions or switch format.`}
