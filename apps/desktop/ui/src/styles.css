@@ -2021,16 +2021,21 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   box-shadow: 0 0 0 1px rgba(255,255,255,.1), 0 1px 3px rgba(0,0,0,.4);
 }
 .screenshot-editor-zoom-presets {
-  width: 62px;
+  /* Wide enough for values like "98.9%" / "800%" plus the native chevron. */
+  box-sizing: border-box;
+  width: 76px;
+  min-width: 76px;
   height: 100%;
   border: 0;
-  padding: 0 18px 0 6px;
+  padding: 0 20px 0 8px;
   color: var(--editor-text);
   background-color: transparent;
   outline: none;
   font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   font-size: 10px;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: visible;
 }
 .screenshot-tool-rail { z-index: 5; display: flex; grid-row: 2; grid-column: 1; padding: 9px; flex-direction: column; align-items: center; gap: 4px; overflow: visible; border-right: 1px solid var(--editor-border); background: var(--editor-chrome); }
 .screenshot-tool-rail button { position: relative; display: grid; width: 40px; min-height: 40px; padding: 0; place-items: center; border: 1px solid transparent; border-radius: 10px; color: var(--editor-text-muted); background: transparent; }
@@ -3617,7 +3622,7 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   .screenshot-editor-history-actions > button:first-child,
   .screenshot-editor-history-actions > button:nth-child(2) { display: none; }
   .screenshot-editor-zoom-slider { width: 72px; padding: 0 6px; }
-  .screenshot-editor-zoom-presets { width: 54px; padding-right: 14px; }
+  .screenshot-editor-zoom-presets { width: 72px; min-width: 72px; padding-right: 18px; }
   .screenshot-save-row { grid-template-columns: minmax(170px,200px) minmax(230px,1fr) auto; gap: 8px 10px; }
   .screenshot-export-disclosure { grid-row: 1; grid-column: 1; }
   .screenshot-filename { grid-row: 1; grid-column: 2; }
