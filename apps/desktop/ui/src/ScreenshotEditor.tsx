@@ -1442,14 +1442,18 @@ export function ScreenshotEditor() {
   const [viewPan, setViewPan] = useState({ x: 0, y: 0 });
   const [canvasOffscreen, setCanvasOffscreen] = useState(false);
   const [layerDropTarget, setLayerDropTarget] = useState<LayerDropTarget | null>(null);
-  /** Which layer row's stack-actions dropdown is open (⋯ menu). */
+  /** Which layer row's settings popover is open (⋯ menu). */
   const [layerMenuId, setLayerMenuId] = useState<string | null>(null);
+  /** Draft for an image-layer name edited directly in the Layers list. */
+  const [layerRename, setLayerRename] = useState<{ id: string; value: string } | null>(null);
   const layerMenuRootRef = useRef<HTMLElement | null>(null);
+  const layerMenuPanelRef = useRef<HTMLDivElement | null>(null);
   const layerMenuTriggerRefs = useRef(new Map<string, HTMLButtonElement>());
   const [layerMenuPlacement, setLayerMenuPlacement] = useState<{
     top: number | "auto";
     bottom: number | "auto";
     left: number;
+    maxHeight: number;
   } | null>(null);
   const [exportFormat, setExportFormat] = useState<ExportFormat>("png");
   const [exportSize, setExportSize] = useState<ExportSize>("original");
@@ -1607,16 +1611,16 @@ export function ScreenshotEditor() {
     }
   }, []);
 
-  // Position the per-layer stack menu with fixed coords so overflow:auto on the
-  // layer list does not clip it; flip above the trigger near the bottom edge.
+  // Position the per-layer settings popover with fixed coords so overflow:auto
+  // on the layer list does not clip it; flip above near the bottom edge.
   useLayoutEffect(() => {
     if (!layerMenuId) return;
     const trigger = layerMenuTriggerRefs.current.get(layerMenuId);
     if (!trigger) return;
     const place = () => {
       const bounds = trigger.getBoundingClientRect();
-      const menuWidth = 248;
-      const menuHeight = 320;
+      const menuWidth = 304;
+      const menuHeight = Math.min(560, window.innerHeight - 16);
       const gap = 4;
       const openUp = bounds.bottom + gap + menuHeight > window.innerHeight
         && bounds.top > window.innerHeight - bounds.bottom;
@@ -1629,11 +1633,16 @@ export function ScreenshotEditor() {
           top: "auto",
           bottom: Math.max(8, window.innerHeight - bounds.top + gap),
           left,
+          maxHeight: Math.max(160, Math.min(menuHeight, bounds.top - gap - 8)),
         }
         : {
           top: Math.min(window.innerHeight - 8, bounds.bottom + gap),
           bottom: "auto",
           left,
+          maxHeight: Math.max(
+            160,
+            Math.min(menuHeight, window.innerHeight - bounds.bottom - gap - 8),
+          ),
         });
     };
     place();
@@ -1646,12 +1655,15 @@ export function ScreenshotEditor() {
     };
   }, [layerMenuId]);
 
-  // Close the per-layer stack menu on outside click or Escape.
+  // Close the per-layer settings popover on outside click or Escape.
   useEffect(() => {
     if (!layerMenuId) return;
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target as Node | null;
-      if (target && layerMenuRootRef.current?.contains(target)) return;
+      if (target && (
+        layerMenuRootRef.current?.contains(target)
+        || layerMenuPanelRef.current?.contains(target)
+      )) return;
       setLayerMenuId(null);
     };
     const onKeyDown = (event: KeyboardEvent) => {
@@ -3658,9 +3670,9 @@ export function ScreenshotEditor() {
     setTrimEdgesHover(false);
   };
 
-  const transformSelectedImageLayer = useCallback((action: ImageTransformAction) => {
+  const transformImageLayer = useCallback((elementId: string, action: ImageTransformAction) => {
     const current = documentRef.current;
-    const element = current?.elements.find(({ id }) => id === selectedId);
+    const element = current?.elements.find(({ id }) => id === elementId);
     if (!current || element?.kind !== "image") return;
 
     const rotates = action === "rotate-clockwise" || action === "rotate-counterclockwise";
@@ -3685,12 +3697,13 @@ export function ScreenshotEditor() {
     }
 
     commitDocument(next);
+    setSelectedId(element.id);
     setEditingTextId(null);
     setCropSelection(null);
     setTrimEdgesHover(false);
     setTool("select");
     setError("");
-  }, [commitDocument, selectedId]);
+  }, [commitDocument]);
 
   /** Decode a cached layer image into natural-resolution pixels. */
   const readLayerImageData = (src: string): ImageData => {
@@ -3833,6 +3846,26 @@ export function ScreenshotEditor() {
     const element = current?.elements.find(({ id }) => id === elementId);
     if (!current || !element) return;
     commitDocument(replaceElement(current, element.id, updater(element)));
+  };
+
+  const beginLayerRename = (element: ScreenshotElement) => {
+    if (element.kind !== "image") return;
+    setLayerMenuId(null);
+    setSelectedId(element.id);
+    setTool("select");
+    setCropSelection(null);
+    setLayerRename({ id: element.id, value: element.name });
+  };
+
+  const finishLayerRename = () => {
+    const rename = layerRename;
+    setLayerRename(null);
+    if (!rename) return;
+    const name = rename.value.trim();
+    if (!name) return;
+    updateLayer(rename.id, (element) => (
+      element.kind === "image" ? { ...element, name } : element
+    ));
   };
 
   const moveLayer = (elementId: string, direction: "front" | "back") => {
@@ -5152,7 +5185,7 @@ export function ScreenshotEditor() {
                     draggedLayerId === element.id ? "dragging" : "",
                     dropPlacement ? `drop-${dropPlacement}` : "",
                   ].filter(Boolean).join(" ")}
-                  draggable={!locked}
+                  draggable={!locked && layerRename?.id !== element.id}
                   onDragStart={(event) => {
                     if (locked) {
                       event.preventDefault();
@@ -5197,11 +5230,28 @@ export function ScreenshotEditor() {
                     setLayerDropTarget(null);
                   }}
                 >
-                  <button
-                    type="button"
+                  <div
                     className="screenshot-layer-select"
-                    aria-pressed={selectedId === element.id}
+                    role={layerRename?.id === element.id ? "group" : "button"}
+                    tabIndex={layerRename?.id === element.id ? -1 : 0}
+                    aria-pressed={layerRename?.id === element.id
+                      ? undefined
+                      : selectedId === element.id}
                     onClick={() => {
+                      setEditingTextId(null);
+                      setTool("select");
+                      setCropSelection(null);
+                      setSelectedId(element.id);
+                    }}
+                    onDoubleClick={(event) => {
+                      if (element.kind !== "image") return;
+                      event.preventDefault();
+                      event.stopPropagation();
+                      beginLayerRename(element);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Enter" && event.key !== " ") return;
+                      event.preventDefault();
                       setEditingTextId(null);
                       setTool("select");
                       setCropSelection(null);
@@ -5232,10 +5282,39 @@ export function ScreenshotEditor() {
                         : <AnnotationLayerPreview element={element} />}
                     </span>
                     <span className="screenshot-layer-copy">
-                      <strong>{elementLayerName(element)}</strong>
+                      {layerRename?.id === element.id && element.kind === "image" ? (
+                        <input
+                          autoFocus
+                          aria-label="Rename layer"
+                          value={layerRename.value}
+                          onFocus={(event) => event.currentTarget.select()}
+                          onPointerDown={(event) => event.stopPropagation()}
+                          onClick={(event) => event.stopPropagation()}
+                          onDoubleClick={(event) => event.stopPropagation()}
+                          onChange={(event) => setLayerRename({
+                            id: element.id,
+                            value: event.target.value,
+                          })}
+                          onBlur={finishLayerRename}
+                          onKeyDown={(event) => {
+                            event.stopPropagation();
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              finishLayerRename();
+                            } else if (event.key === "Escape") {
+                              event.preventDefault();
+                              setLayerRename(null);
+                            }
+                          }}
+                        />
+                      ) : (
+                        <strong title={element.kind === "image" ? "Double-click to rename" : undefined}>
+                          {elementLayerName(element)}
+                        </strong>
+                      )}
                       <small>{elementKindLabel(element)}</small>
                     </span>
-                  </button>
+                  </div>
                   <span className="screenshot-layer-quick-actions">
                     <button
                       type="button"
@@ -5280,10 +5359,10 @@ export function ScreenshotEditor() {
                       <button
                         type="button"
                         className={layerMenuId === element.id ? "active" : ""}
-                        aria-label={`Layer actions for ${elementLayerName(element)}`}
-                        aria-haspopup="menu"
+                        aria-label={`Layer settings for ${elementLayerName(element)}`}
+                        aria-haspopup="dialog"
                         aria-expanded={layerMenuId === element.id}
-                        title="Layer actions — stack order, merge, duplicate, delete"
+                        title="Layer settings and actions"
                         ref={(node) => {
                           if (node) layerMenuTriggerRefs.current.set(element.id, node);
                           else layerMenuTriggerRefs.current.delete(element.id);
@@ -5301,21 +5380,101 @@ export function ScreenshotEditor() {
                       >
                         <EditorIcon name="more" />
                       </button>
-                      {layerMenuId === element.id && layerMenuPlacement && (
+                      {layerMenuId === element.id && layerMenuPlacement && createPortal(
                         <div
+                          ref={layerMenuPanelRef}
                           className={`screenshot-layer-menu-panel${layerMenuPlacement.bottom === "auto" ? "" : " open-up"}`}
-                          role="menu"
-                          aria-label={`Layer actions for ${elementLayerName(element)}`}
+                          role="dialog"
+                          aria-label={`Layer settings for ${elementLayerName(element)}`}
                           style={{
                             top: layerMenuPlacement.top,
                             bottom: layerMenuPlacement.bottom,
                             left: layerMenuPlacement.left,
+                            maxHeight: layerMenuPlacement.maxHeight,
                           }}
                           onClick={(event) => event.stopPropagation()}
                         >
+                          <section className="screenshot-layer-menu-section">
+                            <strong>Appearance</strong>
+                            <label>
+                              <span>Blend mode</span>
+                              <select
+                                value={element.blendMode}
+                                onChange={(event) => updateLayer(element.id, (current) => ({
+                                  ...current,
+                                  blendMode: event.target.value as LayerBlendMode,
+                                }))}
+                              >
+                                {LAYER_BLEND_MODE_OPTIONS.map((option) => (
+                                  <option key={option.value} value={option.value}>{option.label}</option>
+                                ))}
+                              </select>
+                            </label>
+                            <label>
+                              <span>Opacity</span>
+                              <RangeSlider
+                                ariaLabel="Layer opacity"
+                                min={0}
+                                max={100}
+                                value={element.opacity}
+                                valueText={`${element.opacity}%`}
+                                onChange={(opacity) => updateLayer(element.id, (current) => ({
+                                  ...current,
+                                  opacity,
+                                }))}
+                              />
+                            </label>
+                          </section>
+                          {element.kind === "image" && (
+                            <section className="screenshot-layer-menu-section">
+                              <strong>Transform</strong>
+                              <div
+                                className="screenshot-layer-menu-transform-grid"
+                                role="group"
+                                aria-label={`Image transforms for ${elementLayerName(element)}`}
+                              >
+                                <button
+                                  type="button"
+                                  aria-label="Rotate image counterclockwise"
+                                  title="Rotate this image layer 90° counterclockwise"
+                                  onClick={() => transformImageLayer(element.id, "rotate-counterclockwise")}
+                                >
+                                  <EditorIcon name="rotate-counterclockwise" />
+                                  <span>Rotate left</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  aria-label="Rotate image clockwise"
+                                  title="Rotate this image layer 90° clockwise"
+                                  onClick={() => transformImageLayer(element.id, "rotate-clockwise")}
+                                >
+                                  <EditorIcon name="rotate-clockwise" />
+                                  <span>Rotate right</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  aria-label="Flip image horizontally"
+                                  title="Mirror this image layer from left to right"
+                                  onClick={() => transformImageLayer(element.id, "flip-horizontal")}
+                                >
+                                  <EditorIcon name="flip-horizontal" />
+                                  <span>Flip horizontal</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  aria-label="Flip image vertically"
+                                  title="Mirror this image layer from top to bottom"
+                                  onClick={() => transformImageLayer(element.id, "flip-vertical")}
+                                >
+                                  <EditorIcon name="flip-vertical" />
+                                  <span>Flip vertical</span>
+                                </button>
+                              </div>
+                            </section>
+                          )}
+                          <div className="screenshot-layer-menu-section-heading">Arrange &amp; combine</div>
                           <button
                             type="button"
-                            role="menuitem"
                             disabled={locked || element.id === editorDocument.elements.at(-1)?.id}
                             title="Move this layer above every other layer"
                             onClick={() => moveLayer(element.id, "front")}
@@ -5323,12 +5482,10 @@ export function ScreenshotEditor() {
                             <EditorIcon name="bring-front" />
                             <span className="screenshot-layer-menu-copy">
                               <span>Bring to front</span>
-                              <small>Stack above every other layer</small>
                             </span>
                           </button>
                           <button
                             type="button"
-                            role="menuitem"
                             disabled={locked || element.id === editorDocument.elements[0]?.id}
                             title="Move this layer below every other layer"
                             onClick={() => moveLayer(element.id, "back")}
@@ -5336,13 +5493,11 @@ export function ScreenshotEditor() {
                             <EditorIcon name="send-back" />
                             <span className="screenshot-layer-menu-copy">
                               <span>Send to back</span>
-                              <small>Stack below every other layer</small>
                             </span>
                           </button>
                           <div className="screenshot-layer-menu-separator" role="separator" />
                           <button
                             type="button"
-                            role="menuitem"
                             disabled={!canMergeLayerDown(editorDocument.elements, element.id)}
                             title="Rasterize this layer together with the unlocked layer directly under it"
                             onClick={() => { mergeLayerDown(element.id); }}
@@ -5350,12 +5505,10 @@ export function ScreenshotEditor() {
                             <EditorIcon name="merge-down" />
                             <span className="screenshot-layer-menu-copy">
                               <span>Merge down</span>
-                              <small>Combine with the layer below</small>
                             </span>
                           </button>
                           <button
                             type="button"
-                            role="menuitem"
                             disabled={!canMergeVisibleLayers(editorDocument.elements)}
                             title="Rasterize every visible layer into one image; hidden layers stay"
                             onClick={() => { mergeVisibleLayers(); }}
@@ -5363,12 +5516,10 @@ export function ScreenshotEditor() {
                             <EditorIcon name="merge-visible" />
                             <span className="screenshot-layer-menu-copy">
                               <span>Merge visible</span>
-                              <small>Combine all visible layers</small>
                             </span>
                           </button>
                           <button
                             type="button"
-                            role="menuitem"
                             disabled={!canFlattenLayers(editorDocument.elements, editorDocument.background)}
                             title="Bake the canvas background and visible layers into one locked background layer; discard hidden layers"
                             onClick={() => { flattenImage(); }}
@@ -5376,25 +5527,21 @@ export function ScreenshotEditor() {
                             <EditorIcon name="flatten" />
                             <span className="screenshot-layer-menu-copy">
                               <span>Flatten image</span>
-                              <small>Bake into one locked layer</small>
                             </span>
                           </button>
                           <div className="screenshot-layer-menu-separator" role="separator" />
                           <button
                             type="button"
-                            role="menuitem"
                             title="Duplicate this layer (Command/Ctrl+D)"
                             onClick={() => { duplicateLayer(element.id); }}
                           >
                             <EditorIcon name="duplicate" />
                             <span className="screenshot-layer-menu-copy">
                               <span>Duplicate</span>
-                              <small>Copy this layer (⌘/Ctrl+D)</small>
                             </span>
                           </button>
                           <button
                             type="button"
-                            role="menuitem"
                             className="danger"
                             disabled={locked}
                             title="Delete this layer"
@@ -5403,10 +5550,10 @@ export function ScreenshotEditor() {
                             <EditorIcon name="trash" />
                             <span className="screenshot-layer-menu-copy">
                               <span>Delete</span>
-                              <small>Remove this layer</small>
                             </span>
                           </button>
-                        </div>
+                        </div>,
+                        document.body,
                       )}
                     </span>
                   </span>
@@ -5419,79 +5566,7 @@ export function ScreenshotEditor() {
         <section className="screenshot-properties" aria-label="Tool properties">
         <div className="screenshot-properties-heading">
           <strong>{selected ? elementLabel(selected) : toolLabel(tool)}</strong>
-          {selected && !selected.locked && (
-            <button type="button" aria-label="Delete selected item" onClick={deleteSelected}>
-              <EditorIcon name="trash" />
-            </button>
-          )}
         </div>
-
-        {selected && (
-          <section className="screenshot-property-section screenshot-layer-inspector">
-            {selected.kind === "image" && (
-              <label>
-                Layer name
-                <input
-                  value={selected.name}
-                  onChange={(event) => updateSelected((element) => (
-                    element.kind === "image" ? { ...element, name: event.target.value } : element
-                  ))}
-                />
-              </label>
-            )}
-            <label>
-              Blend mode
-              <select
-                value={selected.blendMode}
-                onChange={(event) => updateSelected((element) => ({
-                  ...element,
-                  blendMode: event.target.value as LayerBlendMode,
-                }))}
-              >
-                {LAYER_BLEND_MODE_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Opacity
-              <RangeSlider
-                ariaLabel="Layer opacity"
-                min={0}
-                max={100}
-                value={selected.opacity}
-                valueText={`${selected.opacity}%`}
-                onChange={(opacity) => updateSelected((element) => ({ ...element, opacity }))}
-              />
-            </label>
-            <div className="screenshot-layer-state-grid">
-              <button
-                type="button"
-                className={selected.locked ? "active" : ""}
-                aria-pressed={selected.locked}
-                onClick={() => updateSelected((element) => ({
-                  ...element,
-                  locked: !element.locked,
-                }))}
-              >
-                <EditorIcon name={selected.locked ? "lock" : "unlock"} />
-                {selected.locked ? "Locked" : "Unlocked"}
-              </button>
-              <button
-                type="button"
-                className={selected.visible ? "active" : ""}
-                aria-pressed={selected.visible}
-                onClick={() => updateSelected((element) => ({
-                  ...element,
-                  visible: !element.visible,
-                }))}
-              >
-                <EditorIcon name={selected.visible ? "eye" : "eye-off"} />
-                {selected.visible ? "Visible" : "Hidden"}
-              </button>
-            </div>
-          </section>
-        )}
 
         {tool === "crop" && (
           <section className="screenshot-property-section">
@@ -5736,48 +5811,6 @@ export function ScreenshotEditor() {
 
         {selected?.kind === "image" && (
           <section className="screenshot-property-section">
-            <div
-              className="screenshot-image-transform-actions"
-              role="group"
-              aria-label="Image transforms"
-            >
-              <button
-                type="button"
-                aria-label="Rotate image counterclockwise"
-                title="Rotate this image layer 90° counterclockwise"
-                onClick={() => transformSelectedImageLayer("rotate-counterclockwise")}
-              >
-                <EditorIcon name="rotate-counterclockwise" />
-                <span>Rotate left</span>
-              </button>
-              <button
-                type="button"
-                aria-label="Rotate image clockwise"
-                title="Rotate this image layer 90° clockwise"
-                onClick={() => transformSelectedImageLayer("rotate-clockwise")}
-              >
-                <EditorIcon name="rotate-clockwise" />
-                <span>Rotate right</span>
-              </button>
-              <button
-                type="button"
-                aria-label="Flip image horizontally"
-                title="Mirror this image layer from left to right"
-                onClick={() => transformSelectedImageLayer("flip-horizontal")}
-              >
-                <EditorIcon name="flip-horizontal" />
-                <span>Flip horizontal</span>
-              </button>
-              <button
-                type="button"
-                aria-label="Flip image vertically"
-                title="Mirror this image layer from top to bottom"
-                onClick={() => transformSelectedImageLayer("flip-vertical")}
-              >
-                <EditorIcon name="flip-vertical" />
-                <span>Flip vertical</span>
-              </button>
-            </div>
             <div className="screenshot-number-pair">
               <label>
                 Width

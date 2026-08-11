@@ -354,7 +354,12 @@ describe("ScreenshotEditor", () => {
     fireEvent.click(screen.getByRole("button", {
       name: /Original screenshotBackground/,
     }));
-    fireEvent.click(screen.getByRole("button", { name: "Delete selected item" }));
+    fireEvent.click(within(layers).getByRole("button", {
+      name: "Layer settings for Original screenshot",
+    }));
+    fireEvent.click(within(screen.getByRole("dialog", {
+      name: "Layer settings for Original screenshot",
+    })).getByRole("button", { name: /Delete/ }));
 
     await waitFor(() => {
       expect(emit).toHaveBeenCalledWith("editor-layers-changed", {
@@ -1112,60 +1117,69 @@ describe("ScreenshotEditor", () => {
     expect(screen.getByRole("button", { name: "Straighten line" })).toBeInTheDocument();
   });
 
-  it("lets the original layer be unlocked and exposes layer appearance controls", async () => {
+  it("renames image layers inline and keeps secondary controls in the layer popover", async () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
 
     const layers = screen.getByRole("region", { name: "Layers" });
-    // One lock control on the layer row (status is the control's pressed state, not a second icon).
+    const originalLayer = within(layers).getByRole("button", {
+      name: /Original screenshotLocked background/,
+    });
+
+    // Selecting a layer no longer reserves the inspector for rarely used settings.
+    fireEvent.click(originalLayer);
+    expect(screen.queryByRole("slider", { name: "Layer opacity" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Blend mode")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Layer name")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete selected item" })).not.toBeInTheDocument();
+
+    fireEvent.doubleClick(originalLayer);
+    const rename = within(layers).getByRole("textbox", { name: "Rename layer" });
+    expect(rename).toHaveValue("Original screenshot");
+    fireEvent.change(rename, { target: { value: "Reference image" } });
+    fireEvent.keyDown(rename, { key: "Enter" });
+    expect(within(layers).getByRole("button", {
+      name: /Reference imageLocked background/,
+    })).toBeInTheDocument();
+
+    // Lock and visibility stay as the only always-visible layer-row actions.
     const layerLock = within(layers).getByRole("button", {
-      name: "Unlock Original screenshot",
+      name: "Unlock Reference image",
     });
     expect(layerLock).toHaveAttribute("aria-pressed", "true");
     expect(layerLock).toHaveClass("active");
     expect(
-      within(layers).queryByRole("button", { name: "Lock Original screenshot" }),
+      within(layers).queryByRole("button", { name: "Lock Reference image" }),
     ).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /Original screenshotLocked background/ }));
-    expect(screen.getByRole("slider", { name: "Layer opacity" })).toHaveValue("100");
-    expect(screen.getByLabelText("Blend mode")).toHaveValue("source-over");
-    expect(screen.getByRole("button", { name: "Locked" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    expect(screen.getByRole("button", { name: "Visible" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Locked" }));
-    expect(screen.getByRole("button", { name: "Unlocked" })).toBeInTheDocument();
-    // Stack/merge tools live on the layer row ⋯ menu so the properties panel
-    // does not permanently reserve space for them.
-    expect(screen.queryByRole("toolbar", { name: "Layer actions" })).not.toBeInTheDocument();
+    fireEvent.click(layerLock);
     expect(screen.queryByRole("button", { name: "Bring to front" })).not.toBeInTheDocument();
-    const layerActionsTrigger = within(layers).getByRole("button", {
-      name: "Layer actions for Original screenshot",
+    const layerSettingsTrigger = within(layers).getByRole("button", {
+      name: "Layer settings for Reference image",
     });
-    fireEvent.click(layerActionsTrigger);
-    const layerMenu = screen.getByRole("menu", {
-      name: "Layer actions for Original screenshot",
+    fireEvent.click(layerSettingsTrigger);
+    const layerSettings = screen.getByRole("dialog", {
+      name: "Layer settings for Reference image",
     });
-    expect(within(layerMenu).getByRole("menuitem", { name: /Duplicate/ })).toBeEnabled();
-    expect(within(layerMenu).getByRole("menuitem", { name: /Delete/ })).toBeEnabled();
+    expect(within(layerSettings).getByRole("slider", { name: "Layer opacity" }))
+      .toHaveValue("100");
+    expect(within(layerSettings).getByLabelText("Blend mode")).toHaveValue("source-over");
+    fireEvent.change(within(layerSettings).getByRole("slider", { name: "Layer opacity" }), {
+      target: { value: "65" },
+    });
+    expect(within(layerSettings).getByRole("slider", { name: "Layer opacity" }))
+      .toHaveAttribute("aria-valuetext", "65%");
+    expect(within(layerSettings).getByRole("button", { name: /Duplicate/ })).toBeEnabled();
+    expect(within(layerSettings).getByRole("button", { name: /Delete/ })).toBeEnabled();
     // Single-layer document: nothing to merge into, and flatten only bakes when
     // a solid canvas background remains (it does by default).
-    expect(within(layerMenu).getByRole("menuitem", { name: /Merge down/ })).toBeDisabled();
-    expect(within(layerMenu).getByRole("menuitem", { name: /Merge visible/ })).toBeDisabled();
-    expect(within(layerMenu).getByRole("menuitem", { name: /Flatten image/ })).toBeEnabled();
-    expect(within(layerMenu).getByRole("menuitem", { name: /Bring to front/ })).toBeDisabled();
-    expect(within(layerMenu).getByRole("menuitem", { name: /Send to back/ })).toBeDisabled();
-    // Descriptions act as always-visible tooltips for each stack action.
-    expect(within(layerMenu).getByText("Combine with the layer below")).toBeInTheDocument();
-    expect(within(layerMenu).getByText("Bake into one locked layer")).toBeInTheDocument();
+    expect(within(layerSettings).getByRole("button", { name: /Merge down/ })).toBeDisabled();
+    expect(within(layerSettings).getByRole("button", { name: /Merge visible/ })).toBeDisabled();
+    expect(within(layerSettings).getByRole("button", { name: /Flatten image/ })).toBeEnabled();
+    expect(within(layerSettings).getByRole("button", { name: /Bring to front/ })).toBeDisabled();
+    expect(within(layerSettings).getByRole("button", { name: /Send to back/ })).toBeDisabled();
     expect(
-      within(layers).getByRole("button", { name: "Lock Original screenshot" }),
+      within(layers).getByRole("button", { name: "Lock Reference image" }),
     ).toHaveAttribute("aria-pressed", "false");
     expect(within(layers).getByText("Background")).toBeInTheDocument();
   });
@@ -1178,9 +1192,12 @@ describe("ScreenshotEditor", () => {
     const originalLayer = within(layers).getByRole("button", {
       name: /Original screenshotLocked background/,
     });
-    fireEvent.click(originalLayer);
-
-    const transforms = screen.getByRole("group", { name: "Image transforms" });
+    fireEvent.click(within(layers).getByRole("button", {
+      name: "Layer settings for Original screenshot",
+    }));
+    const transforms = screen.getByRole("group", {
+      name: "Image transforms for Original screenshot",
+    });
     expect(within(transforms).getByRole("button", {
       name: "Rotate image counterclockwise",
     })).toBeEnabled();
@@ -1203,8 +1220,9 @@ describe("ScreenshotEditor", () => {
     fireEvent.click(screen.getByRole("button", { name: "Undo" }));
     expect(preview.style.transform).toBe("matrix(1, 0, 0, 1, 0, 0)");
 
-    fireEvent.click(originalLayer);
-    fireEvent.click(screen.getByRole("button", { name: "Rotate image clockwise" }));
+    fireEvent.click(within(transforms).getByRole("button", {
+      name: "Rotate image clockwise",
+    }));
     const canvasToolbar = screen.getByRole("group", { name: "Canvas" });
     expect(within(canvasToolbar).getByLabelText("Width")).toHaveValue(900);
     expect(within(canvasToolbar).getByLabelText("Height")).toHaveValue(1440);
@@ -1555,8 +1573,6 @@ describe("ScreenshotEditor", () => {
       "aria-pressed",
       "true",
     );
-    expect(screen.getByRole("button", { name: "Delete selected item" }))
-      .toBeInTheDocument();
     expect(
       within(screen.getByRole("region", { name: "Layers" })).getByRole("button", {
         name: /RectangleShape/,
@@ -1595,8 +1611,9 @@ describe("ScreenshotEditor", () => {
       clientX: 140,
       clientY: 95,
     });
-    expect(screen.getByRole("button", { name: "Delete selected item" }))
-      .toBeInTheDocument();
+    const textLayer = within(screen.getByRole("region", { name: "Layers" }))
+      .getByRole("button", { name: /TextText/ });
+    expect(textLayer).toHaveAttribute("aria-pressed", "true");
 
     // Click the checkerboard / empty padding around the canvas surface.
     fireEvent.pointerDown(viewport, {
@@ -1605,8 +1622,7 @@ describe("ScreenshotEditor", () => {
       clientX: -40,
       clientY: -30,
     });
-    expect(screen.queryByRole("button", { name: "Delete selected item" }))
-      .not.toBeInTheDocument();
+    expect(textLayer).toHaveAttribute("aria-pressed", "false");
   });
 
   it("can start an arrow outside the canvas and expands to fit on release", async () => {

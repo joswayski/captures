@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -520,6 +520,59 @@ describe("RecordingEditor", () => {
         request: expect.objectContaining({
           export: expect.objectContaining({
             quality: "standard",
+          }),
+        }),
+      });
+    });
+  });
+
+  it("uses shared accessible controls for output format and recorded-audio volume", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_recording_artifact") {
+        return {
+          ...artifact,
+          has_system_audio: true,
+          has_microphone_audio: true,
+        };
+      }
+      if (command === "get_settings") return settings;
+      if (command === "prepare_recording_timeline_preview") return timeline;
+      if (command === "start_recording_export") return "export-1";
+      throw new Error(`unexpected command: ${command}`);
+    });
+    render(<RecordingEditor />);
+    await screen.findByRole("heading", { name: "Edit recording" });
+
+    const format = screen.getByRole("group", { name: "Output format" });
+    expect(within(format).getByRole("button", { name: "Video (MP4)" }))
+      .toHaveAttribute("aria-pressed", "true");
+    expect(within(format).getByRole("button", { name: "Animated GIF" }))
+      .toHaveAttribute("aria-pressed", "false");
+
+    const systemVolume = screen.getByRole("slider", { name: "System audio volume" });
+    const microphoneVolume = screen.getByRole("slider", { name: "Microphone volume" });
+    expect(systemVolume).toHaveAttribute("aria-valuetext", "100%");
+    expect(microphoneVolume).toHaveAttribute("aria-valuetext", "100%");
+
+    fireEvent.change(systemVolume, { target: { value: "140" } });
+    expect(systemVolume).toHaveAttribute("aria-valuetext", "140%");
+    fireEvent.click(screen.getByRole("checkbox", { name: "System audio" }));
+    expect(systemVolume).toBeDisabled();
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Saved filename" }), {
+      target: { value: "Audio controls" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("start_recording_export", {
+        request: expect.objectContaining({
+          edit: expect.objectContaining({
+            audio: expect.objectContaining({
+              system_volume: 1.4,
+              microphone_volume: 1,
+              mute_system_audio: true,
+              mute_microphone: false,
+            }),
           }),
         }),
       });
