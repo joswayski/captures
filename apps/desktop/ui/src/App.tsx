@@ -20,7 +20,7 @@ import { Feedback } from "./Feedback";
 import { NumberInput } from "./NumberInput";
 import { Onboarding } from "./Onboarding";
 import { ScreenshotEditor } from "./ScreenshotEditor";
-import { NotchedSlider } from "./RangeSlider";
+import { NotchedSlider, RangeSlider } from "./RangeSlider";
 import {
   applyColorTheme,
   buildCustomThemeVariables,
@@ -3582,11 +3582,17 @@ export function RecordingEditor() {
       <div className="recording-editor-grid">
         <section className="editor-card editor-output-card">
           <h2>Output format</h2>
-          <div className="editor-segmented">
-            <button type="button" className={outputFormat === "mp4" ? "active" : ""} onClick={() => updateOutputFormat("mp4")}>Video (MP4)</button>
+          <div className="editor-segmented" role="group" aria-label="Output format">
+            <button
+              type="button"
+              className={outputFormat === "mp4" ? "active" : ""}
+              aria-pressed={outputFormat === "mp4"}
+              onClick={() => updateOutputFormat("mp4")}
+            >Video (MP4)</button>
             <button
               type="button"
               className={outputFormat === "gif" ? "active" : ""}
+              aria-pressed={outputFormat === "gif"}
               onClick={() => updateOutputFormat("gif")}
             >Animated GIF</button>
           </div>
@@ -3768,8 +3774,48 @@ export function RecordingEditor() {
 
         {artifact.kind === "video" && outputFormat === "mp4" && hasRecordedAudio && <section className="editor-card editor-audio-card">
           <h2>Audio</h2>
-          {artifact.has_system_audio && <label className="editor-volume"><span><input type="checkbox" checked={!muteSystem} onChange={(event) => setMuteSystem(!event.target.checked)} />System audio</span><input type="range" min={0} max={200} value={systemVolume} disabled={muteSystem} onChange={(event) => setSystemVolume(Number(event.target.value))} /><output>{systemVolume}%</output></label>}
-          {artifact.has_microphone_audio && <label className="editor-volume"><span><input type="checkbox" checked={!muteMicrophone} onChange={(event) => setMuteMicrophone(!event.target.checked)} />Microphone</span><input type="range" min={0} max={200} value={microphoneVolume} disabled={muteMicrophone} onChange={(event) => setMicrophoneVolume(Number(event.target.value))} /><output>{microphoneVolume}%</output></label>}
+          {artifact.has_system_audio && (
+            <div className="editor-volume">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={!muteSystem}
+                  onChange={(event) => setMuteSystem(!event.target.checked)}
+                />
+                System audio
+              </label>
+              <RangeSlider
+                ariaLabel="System audio volume"
+                min={0}
+                max={200}
+                value={systemVolume}
+                valueText={`${systemVolume}%`}
+                disabled={muteSystem}
+                onChange={setSystemVolume}
+              />
+            </div>
+          )}
+          {artifact.has_microphone_audio && (
+            <div className="editor-volume">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={!muteMicrophone}
+                  onChange={(event) => setMuteMicrophone(!event.target.checked)}
+                />
+                Microphone
+              </label>
+              <RangeSlider
+                ariaLabel="Microphone volume"
+                min={0}
+                max={200}
+                value={microphoneVolume}
+                valueText={`${microphoneVolume}%`}
+                disabled={muteMicrophone}
+                onChange={setMicrophoneVolume}
+              />
+            </div>
+          )}
           <label className="check-row compact"><input type="checkbox" checked={mono} onChange={(event) => setMono(event.target.checked)} /><span>Convert to mono</span></label>
         </section>}
         {artifact.kind === "video" && outputFormat === "gif" && hasRecordedAudio && <section className="editor-card editor-audio-warning" role="status">

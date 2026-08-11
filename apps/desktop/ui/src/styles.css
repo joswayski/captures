@@ -1346,7 +1346,7 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 .editor-size-limit .number-input { width: 100%; min-width: 0; }
 .editor-segmented { display: flex; padding: 2px; border-radius: 8px; background: #111216; }.editor-segmented button { flex: 1; border: 0; border-radius: 6px; padding: 7px; color: #96979b; background: transparent; font-size: 10px; font-weight: 750; }.editor-segmented button.active { color: var(--theme-accent-ink); background: var(--theme-accent); }
 .editor-output-card { grid-column: 1 / -1; }
-.editor-audio-card { grid-column: 1 / -1; }.editor-volume { display: grid; margin: 10px 0; grid-template-columns: 130px minmax(100px, 1fr) 46px; align-items: center; gap: 12px; color: #c9c9cc; font-size: 11px; }.editor-volume span { display: flex; align-items: center; gap: 7px; }.editor-volume input[type="range"] { accent-color: var(--theme-accent); }.editor-volume output { color: #a5a6aa; font-variant-numeric: tabular-nums; text-align: right; }
+.editor-audio-card { grid-column: 1 / -1; }.editor-volume { display: grid; margin: 10px 0; grid-template-columns: 130px minmax(100px, 1fr); align-items: center; gap: 12px; color: #c9c9cc; font-size: 11px; }.editor-volume > label { display: flex; align-items: center; gap: 7px; }.editor-volume .range-slider { width: 100%; }.editor-volume .range-slider-value output { color: #a5a6aa; }
 .recording-export-progress { position: absolute; top: 0; right: 0; left: 0; height: 3px; background: #303137; }.recording-export-progress span { display: block; height: 100%; background: var(--theme-accent); transition: width .2s ease; }
 
 /* Recording controls share one keyboard-accessible dropdown instead of the
@@ -3023,7 +3023,8 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 .screenshot-layer-list li.dragging { opacity: .42; transform: scale(.985); }.screenshot-layer-list li.locked { cursor: default; }
 .screenshot-layer-list li.drop-before::before, .screenshot-layer-list li.drop-after::after { position: absolute; z-index: 3; right: 3px; left: 3px; height: 2px; border-radius: 999px; background: var(--editing-accent); box-shadow: 0 0 8px rgba(var(--theme-accent-rgb),.5); content: ""; pointer-events: none; }
 .screenshot-layer-list li.drop-before::before { top: -4px; }.screenshot-layer-list li.drop-after::after { bottom: -4px; }
-.screenshot-layer-list li > .screenshot-layer-select { display: grid; width: 100%; min-height: 56px; padding: 6px 90px 6px 7px; grid-template-columns: 12px 46px minmax(0,1fr); align-items: center; gap: 8px; border: 0; color: var(--editor-text); background: transparent; text-align: left; }
+.screenshot-layer-list li > .screenshot-layer-select { display: grid; width: 100%; min-height: 56px; padding: 6px 90px 6px 7px; grid-template-columns: 12px 46px minmax(0,1fr); align-items: center; gap: 8px; border: 0; color: var(--editor-text); background: transparent; outline: none; text-align: left; }
+.screenshot-layer-list li > .screenshot-layer-select:focus-visible { border-radius: 9px; box-shadow: 0 0 0 2px rgba(var(--theme-accent-rgb),.5) inset; }
 .screenshot-layer-grip { display: grid; place-items: center; color: var(--editor-text-subtle); opacity: .58; }.screenshot-layer-grip svg { width: 12px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .screenshot-layer-list li:not(.locked):hover .screenshot-layer-grip { color: var(--editor-text-muted); opacity: 1; }
 /* Keep the grip as a reorder cue only — locked layers dim it instead of swapping in a second lock icon. */
@@ -3034,6 +3035,7 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 .screenshot-layer-preview img { object-fit: cover; }
 .screenshot-layer-preview svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .screenshot-layer-copy { display: grid; min-width: 0; gap: 3px; }.screenshot-layer-copy strong, .screenshot-layer-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.screenshot-layer-copy strong { color: var(--editor-text); font-size: 11px; font-weight: 600; }.screenshot-layer-copy small { color: var(--editor-text-subtle); font-size: 9.5px; font-weight: 500; }
+.screenshot-layer-copy input { width: 100%; min-width: 0; height: 25px; border: 1px solid rgba(var(--theme-accent-rgb),.58); border-radius: 6px; padding: 3px 6px; color: var(--editor-text); background: var(--editor-field); box-shadow: 0 0 0 2px rgba(var(--theme-accent-rgb),.12); outline: none; font: inherit; font-size: 11px; font-weight: 600; }
 .screenshot-layer-list li.hidden .screenshot-layer-preview, .screenshot-layer-list li.hidden .screenshot-layer-copy { opacity: .42; }
 .screenshot-layer-quick-actions { position: absolute; z-index: 2; top: 50%; right: 6px; display: flex; gap: 2px; transform: translateY(-50%); }
 .screenshot-layer-quick-actions > button,
@@ -3050,17 +3052,17 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 .screenshot-layer-quick-actions > button.active:hover,
 .screenshot-layer-menu > button.active:hover { color: var(--theme-accent-text); background: rgba(var(--theme-accent-rgb),.22); }
 .screenshot-layer-quick-actions svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-/* Per-layer stack actions (order / merge / duplicate / delete) open from ⋯.
-   Fixed positioning is set inline so the scrollable layer list does not clip. */
+/* Secondary layer settings and actions open from ⋯. Fixed positioning is set
+   inline so the scrollable layer list does not clip the popover. */
 .screenshot-layer-menu { position: relative; display: flex; }
 .screenshot-layer-menu-panel {
   position: fixed;
   z-index: 80;
   display: grid;
-  width: min(272px, calc(100vw - 24px));
-  max-height: min(390px, calc(100vh - 16px));
+  width: min(304px, calc(100vw - 24px));
+  max-height: min(560px, calc(100vh - 16px));
   padding: 6px;
-  gap: 3px;
+  gap: 1px;
   overflow-y: auto;
   border: 1px solid var(--editor-border-strong);
   border-radius: 12px;
@@ -3074,8 +3076,8 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 .screenshot-layer-menu-panel button {
   display: grid;
   width: 100%;
-  min-height: 43px;
-  padding: 7px 9px;
+  min-height: 34px;
+  padding: 4px 9px;
   grid-template-columns: 17px minmax(0, 1fr);
   align-items: center;
   gap: 9px;
@@ -3098,6 +3100,18 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   color: #ff9da6;
   background: rgba(255, 90, 105, .12);
 }
+.screenshot-layer-menu-section { display: grid; padding: 7px 8px 9px; gap: 9px; border-bottom: 1px solid var(--editor-border); }
+.screenshot-layer-menu-section > strong,
+.screenshot-layer-menu-section-heading { color: var(--editor-text-subtle); font-size: 9px; font-weight: 750; letter-spacing: .07em; text-transform: uppercase; }
+.screenshot-layer-menu-section-heading { padding: 8px 9px 3px; }
+.screenshot-layer-menu-section label { display: grid; min-width: 0; gap: 5px; color: var(--editor-text-muted); font-size: 10px; font-weight: 600; }
+.screenshot-layer-menu-section select { width: 100%; min-height: 34px; border: 1px solid var(--editor-border-strong); border-radius: 8px; padding: 6px 9px; color: var(--editor-text); background: var(--editor-field); outline: none; font: inherit; font-size: 11px; }
+.screenshot-layer-menu-section select:focus { border-color: rgba(var(--theme-accent-rgb),.62); box-shadow: 0 0 0 2px rgba(var(--theme-accent-rgb),.13); }
+.screenshot-layer-menu-section .range-slider-value output { color: var(--theme-accent-text); }
+.screenshot-layer-menu-transform-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 5px; }
+.screenshot-layer-menu-panel .screenshot-layer-menu-transform-grid button { min-height: 34px; padding: 6px 7px; grid-template-columns: 15px minmax(0,1fr); gap: 6px; border: 1px solid var(--editor-border); color: var(--editor-text-muted); background: var(--editor-control); font-size: 9.5px; font-weight: 600; }
+.screenshot-layer-menu-panel .screenshot-layer-menu-transform-grid button:hover:not(:disabled) { border-color: var(--editor-border-strong); background: var(--editor-control-hover); }
+.screenshot-layer-menu-transform-grid button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .screenshot-layer-menu-panel svg {
   width: 15px;
   height: 15px;
@@ -3110,7 +3124,6 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 .screenshot-layer-menu-copy {
   display: grid;
   min-width: 0;
-  gap: 2px;
 }
 .screenshot-layer-menu-copy > span {
   overflow: hidden;
@@ -3119,18 +3132,6 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.screenshot-layer-menu-copy small {
-  overflow: hidden;
-  color: var(--editor-text-subtle);
-  font-size: 10px;
-  font-weight: 500;
-  line-height: 1.25;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.screenshot-layer-menu-panel button:hover:not(:disabled) .screenshot-layer-menu-copy small {
-  color: var(--editor-text-muted);
 }
 .screenshot-layer-menu-separator {
   height: 1px;
@@ -3153,11 +3154,6 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 .screenshot-property-section textarea { min-height: 82px; resize: vertical; line-height: 1.45; }
 .screenshot-property-section input:focus, .screenshot-property-section .number-input:focus-within, .screenshot-property-section select:focus, .screenshot-property-section textarea:focus { border-color: rgba(var(--theme-accent-rgb),.62); box-shadow: 0 0 0 3px rgba(var(--theme-accent-rgb),.13); }
 .screenshot-number-pair { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
-.screenshot-image-transform-actions { display: grid; margin-bottom: 1px; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 7px; }
-.screenshot-image-transform-actions button { display: inline-flex; min-height: 36px; padding: 7px 9px; align-items: center; justify-content: flex-start; gap: 8px; border: 1px solid var(--editor-border); border-radius: 9px; color: var(--editor-text-muted); background: var(--editor-control); font-size: 10.5px; font-weight: 600; }
-.screenshot-image-transform-actions button:hover { border-color: var(--editor-border-strong); color: white; background: var(--editor-control-hover); }
-.screenshot-image-transform-actions button:focus-visible { outline: 2px solid var(--theme-accent); outline-offset: 2px; }
-.screenshot-image-transform-actions svg { flex: 0 0 auto; width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .screenshot-range { display: grid; grid-template-columns: minmax(0,1fr) 42px; align-items: center; gap: 8px; }
 .screenshot-range input { width: 100%; accent-color: var(--editing-accent); }
 .screenshot-range output { color: var(--editor-text-muted); font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-size: 10px; text-align: right; }
@@ -3276,14 +3272,6 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 .screenshot-custom-color { border-radius: 7px; background: conic-gradient(#f44,#ff4,#4f4,#4ff,#44f,#f4f,#f44); cursor: pointer; }
 .screenshot-custom-color::after { position: absolute; inset: 4px; border: 1px solid rgba(255,255,255,.5); border-radius: 3px; background: #1d1e22; content: ""; pointer-events: none; }
 .screenshot-custom-color input { position: absolute; inset: -8px; width: 40px; height: 40px; opacity: 0; cursor: pointer; }
-.screenshot-layer-actions { display: grid; grid-template-columns: 1fr 1fr; }
-.screenshot-layer-inspector .range-slider-value output { color: var(--theme-accent-text); }
-.screenshot-layer-state-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
-.screenshot-layer-state-grid button { display: inline-flex; min-height: 36px; padding: 7px 9px; align-items: center; justify-content: center; gap: 7px; border: 1px solid var(--editor-border); border-radius: 9px; color: var(--editor-text-muted); background: var(--editor-control); font-size: 10.5px; font-weight: 600; }
-.screenshot-layer-state-grid button:hover:not(:disabled) { border-color: var(--editor-border-strong); color: var(--editor-text); background: var(--editor-control-hover); }
-.screenshot-layer-state-grid button.active { border-color: rgba(var(--theme-accent-rgb),.45); color: var(--theme-accent-text); background: rgba(var(--theme-accent-rgb),.12); }
-.screenshot-layer-state-grid button:disabled { cursor: default; opacity: .4; }
-.screenshot-layer-state-grid svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .screenshot-file-name { overflow: hidden; color: #d5d6d8 !important; text-overflow: ellipsis; white-space: nowrap; }
 /* Saving stays visible; detailed format/quality controls expand only when needed. */
 .screenshot-export-bar { z-index: 20; display: flex; min-width: 0; grid-row: 3; grid-column: 1 / -1; padding: 10px 12px; flex-direction: column; gap: 9px; border-top: 1px solid var(--editor-border); background: rgba(25,26,29,.97); box-shadow: 0 -1px 0 rgba(0,0,0,.3); backdrop-filter: blur(20px) saturate(1.12); }
