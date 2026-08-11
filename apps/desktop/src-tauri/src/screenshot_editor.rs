@@ -237,6 +237,40 @@ pub async fn estimate_screenshot_export(
     .map_err(|error| error.to_string())
 }
 
+/// Encode the flattened editor canvas the same way save does and return the
+/// compressed file bytes for an on-screen before/after preview.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreenshotExportPreview {
+    bytes: Vec<u8>,
+    size_bytes: u64,
+    format: ScreenshotEditFormat,
+}
+
+#[tauri::command]
+pub async fn preview_screenshot_export(
+    image_png: Vec<u8>,
+    format: ScreenshotEditFormat,
+    quality_mode: ScreenshotExportQualityMode,
+    jpeg_quality: u8,
+    max_size_bytes: Option<u64>,
+) -> CommandResult<ScreenshotExportPreview> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let image = decode_editor_png(&image_png)?;
+        let bytes =
+            encode_export_with_limit(&image, format, quality_mode, jpeg_quality, max_size_bytes)?;
+        let size_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        Ok::<_, AppError>(ScreenshotExportPreview {
+            bytes,
+            size_bytes,
+            format,
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 pub async fn save_screenshot_edit(
     app: AppHandle,

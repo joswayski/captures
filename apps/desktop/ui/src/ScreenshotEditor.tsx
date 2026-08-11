@@ -14,6 +14,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
+import { CompressionPreview } from "./CompressionPreview";
 import { sameSortedIds } from "./lib/editorPresence";
 import { formatFileSize } from "./lib/format";
 import {
@@ -1444,6 +1445,17 @@ export function ScreenshotEditor() {
   const [destinationDirectory, setDestinationDirectory] = useState("");
   const [estimatedBytes, setEstimatedBytes] = useState<number | null>(null);
   const [estimatePending, setEstimatePending] = useState(false);
+  const [compressPreviewOpen, setCompressPreviewOpen] = useState(false);
+  const [compressPreviewPending, setCompressPreviewPending] = useState(false);
+  const [compressPreviewError, setCompressPreviewError] = useState("");
+  const [compressPreviewBeforeUrl, setCompressPreviewBeforeUrl] = useState<string | null>(null);
+  const [compressPreviewAfterUrl, setCompressPreviewAfterUrl] = useState<string | null>(null);
+  const [compressPreviewBeforeBytes, setCompressPreviewBeforeBytes] = useState<number | null>(null);
+  const [compressPreviewAfterBytes, setCompressPreviewAfterBytes] = useState<number | null>(null);
+  const compressPreviewUrlsRef = useRef<{ before: string | null; after: string | null }>({
+    before: null,
+    after: null,
+  });
   const baselineDocumentRef = useRef<ScreenshotDocument | null>(null);
   const [busy, setBusy] = useState<"copying" | "saving" | null>(null);
   /** Transient success for copy/save — does not replace the stable export hint. */
@@ -1685,14 +1697,25 @@ export function ScreenshotEditor() {
     if (cached.status !== "loaded") {
       throw new Error("An image layer could not be saved into the edit draft.");
     }
-    const width = Math.max(1, cached.image.naturalWidth || cached.image.width || 1);
-    const height = Math.max(1, cached.image.naturalHeight || cached.image.height || 1);
+    const source = cached.image;
+    const width = Math.max(
+      1,
+      source instanceof HTMLImageElement
+        ? (source.naturalWidth || source.width || 1)
+        : (source.width || 1),
+    );
+    const height = Math.max(
+      1,
+      source instanceof HTMLImageElement
+        ? (source.naturalHeight || source.height || 1)
+        : (source.height || 1),
+    );
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
     const context = canvas.getContext("2d");
     if (!context) throw new Error("The edit draft could not be encoded.");
-    context.drawImage(cached.image, 0, 0, width, height);
+    context.drawImage(source, 0, 0, width, height);
     return canvasPngBytes(canvas);
   }, [ensureImage]);
 
@@ -4222,6 +4245,119 @@ export function ScreenshotEditor() {
     }
   };
 
+  // Hooks must stay above the loading early-return.
+  const canPreviewCompression = qualityMode === "compress" || qualityMode === "maximum";
+
+  const revokeCompressPreviewUrls = useCallback(() => {
+    const { before, after } = compressPreviewUrlsRef.current;
+    if (before) URL.revokeObjectURL(before);
+    if (after) URL.revokeObjectURL(after);
+    compressPreviewUrlsRef.current = { before: null, after: null };
+    setCompressPreviewBeforeUrl(null);
+    setCompressPreviewAfterUrl(null);
+  }, []);
+
+  const closeCompressPreview = useCallback(() => {
+    setCompressPreviewOpen(false);
+    setCompressPreviewPending(false);
+    setCompressPreviewError("");
+    revokeCompressPreviewUrls();
+    setCompressPreviewBeforeBytes(null);
+    setCompressPreviewAfterBytes(null);
+  }, [revokeCompressPreviewUrls]);
+
+  const loadCompressPreview = useCallback(async () => {
+    if (!canPreviewCompression || !editorDocument || !artifact) return;
+    setCompressPreviewPending(true);
+    setCompressPreviewError("");
+    try {
+      const canvas = renderFlattened();
+      const beforePng = await canvasPngBytes(canvas);
+      const beforeBlob = new Blob([new Uint8Array(beforePng)], { type: "image/png" });
+      const beforeUrl = URL.createObjectURL(beforeBlob);
+
+      const maxSizeBytes = qualityMode === "maximum"
+        ? Number(maximumFileSize) * SCREENSHOT_FILE_SIZE_UNIT_BYTES[maximumFileSizeUnit]
+        : null;
+      const preview = await invoke<{
+        bytes: number[];
+        sizeBytes: number;
+        format: ExportFormat;
+      }>("preview_screenshot_export", {
+        imagePng: beforePng,
+        format: exportFormat,
+        qualityMode,
+        jpegQuality: qualityMode === "compress" ? Number(jpegQuality) : 100,
+        maxSizeBytes: maxSizeBytes !== null && Number.isFinite(maxSizeBytes)
+          ? Math.round(maxSizeBytes)
+          : null,
+      });
+      const mime = exportFormat === "jpeg"
+        ? "image/jpeg"
+        : exportFormat === "webp"
+          ? "image/webp"
+          : "image/png";
+      const afterBlob = new Blob([new Uint8Array(preview.bytes)], { type: mime });
+      const afterUrl = URL.createObjectURL(afterBlob);
+
+      revokeCompressPreviewUrls();
+      compressPreviewUrlsRef.current = { before: beforeUrl, after: afterUrl };
+      setCompressPreviewBeforeUrl(beforeUrl);
+      setCompressPreviewAfterUrl(afterUrl);
+      setCompressPreviewBeforeBytes(beforeBlob.size);
+      setCompressPreviewAfterBytes(preview.sizeBytes);
+    } catch (reason) {
+      setCompressPreviewError(String(reason));
+      setCompressPreviewAfterUrl(null);
+      setCompressPreviewAfterBytes(null);
+    } finally {
+      setCompressPreviewPending(false);
+    }
+  }, [
+    artifact,
+    canPreviewCompression,
+    editorDocument,
+    exportFormat,
+    jpegQuality,
+    maximumFileSize,
+    maximumFileSizeUnit,
+    qualityMode,
+    renderFlattened,
+    revokeCompressPreviewUrls,
+  ]);
+
+  const openCompressPreview = useCallback(() => {
+    if (!canPreviewCompression) return;
+    setExportSettingsOpen(true);
+    setCompressPreviewOpen(true);
+  }, [canPreviewCompression]);
+
+  useEffect(() => {
+    if (!compressPreviewOpen) return;
+    if (!canPreviewCompression) {
+      closeCompressPreview();
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void loadCompressPreview();
+    }, 280);
+    return () => window.clearTimeout(timer);
+  }, [
+    canPreviewCompression,
+    closeCompressPreview,
+    compressPreviewOpen,
+    exportFormat,
+    jpegQuality,
+    loadCompressPreview,
+    maximumFileSize,
+    maximumFileSizeUnit,
+    qualityMode,
+  ]);
+
+  useEffect(() => () => {
+    revokeCompressPreviewUrls();
+  }, [revokeCompressPreviewUrls]);
+
   if (!artifact || !editorDocument) {
     return (
       <main className="screenshot-editor screenshot-editor-loading">
@@ -4262,6 +4398,11 @@ export function ScreenshotEditor() {
       : "PNG";
   // Compress quality applies to every format: JPEG/WebP encode quality, PNG colors.
   const showCompressQuality = qualityMode === "compress";
+  const compressQualityLabel = qualityMode === "compress"
+    ? (SCREENSHOT_QUALITY_OPTIONS.find((option) => option.value === jpegQuality)?.label ?? "High")
+    : qualityMode === "maximum"
+      ? "Maximum file size"
+      : "";
 
   const applyExportFormat = (format: ExportFormat) => {
     setExportFormat(format);
@@ -5972,6 +6113,19 @@ export function ScreenshotEditor() {
               {estimatedSizeLabel}
             </strong>
           </div>
+          {canPreviewCompression && (
+            <div className="screenshot-export-control screenshot-compress-preview-control">
+              <span>Preview</span>
+              <button
+                type="button"
+                className="screenshot-compress-preview-button"
+                disabled={busy !== null}
+                onClick={openCompressPreview}
+              >
+                Compare before / after
+              </button>
+            </div>
+          )}
           </div>
         </div>
         <div className="screenshot-save-row">
@@ -6111,6 +6265,22 @@ export function ScreenshotEditor() {
           </div>
         </div>
       </footer>
+
+      {compressPreviewOpen && createPortal(
+        <CompressionPreview
+          open={compressPreviewOpen}
+          beforeUrl={compressPreviewBeforeUrl}
+          afterUrl={compressPreviewAfterUrl}
+          beforeBytes={compressPreviewBeforeBytes}
+          afterBytes={compressPreviewAfterBytes}
+          formatLabel={formatLabel}
+          qualityLabel={compressQualityLabel}
+          pending={compressPreviewPending}
+          error={compressPreviewError}
+          onClose={closeCompressPreview}
+        />,
+        window.document.body,
+      )}
     </main>
   );
 }
