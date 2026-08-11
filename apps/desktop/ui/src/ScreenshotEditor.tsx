@@ -5564,9 +5564,13 @@ export function ScreenshotEditor() {
         </section>
 
         <section className="screenshot-properties" aria-label="Tool properties">
-        <div className="screenshot-properties-heading">
-          <strong>{selected ? elementLabel(selected) : toolLabel(tool)}</strong>
-        </div>
+        {/* Select tool is already indicated on the left rail; only show a heading
+            when an element is selected or another tool has properties to configure. */}
+        {(selected || tool !== "select") && (
+          <div className="screenshot-properties-heading">
+            <strong>{selected ? elementLabel(selected) : toolLabel(tool)}</strong>
+          </div>
+        )}
 
         {tool === "crop" && (
           <section className="screenshot-property-section">
@@ -5962,7 +5966,7 @@ export function ScreenshotEditor() {
           </section>
         )}
 
-        {!selected && tool !== "crop" && (
+        {!selected && tool !== "crop" && tool !== "select" && (
           <section className="screenshot-property-section">
             {tool === "text" ? (
               <>
@@ -5981,7 +5985,7 @@ export function ScreenshotEditor() {
                   />
                 </label>
               </>
-            ) : tool !== "select" ? (
+            ) : (
               <>
                 <ColorField
                   label="New annotation color"
@@ -6003,8 +6007,6 @@ export function ScreenshotEditor() {
                   />
                 </label>
               </>
-            ) : (
-              <p>Select an annotation or imported image to move and format it.</p>
             )}
           </section>
         )}

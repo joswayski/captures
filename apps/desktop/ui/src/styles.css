@@ -1657,8 +1657,9 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 
 /* Screenshot editing stays inside one platform-neutral canvas surface. The
    native layer only owns the window, clipboard, and final file write. */
-/* user-select:none blocks the blue image/text selection highlight while drawing.
-   Form fields re-enable text selection so labels and export values stay editable. */
+/* Chrome labels/status stay selectable for copy-paste while debugging.
+   Canvas interaction surfaces keep user-select:none so drawing does not
+   paint a blue text selection highlight. */
 .screenshot-editor {
   --editor-canvas: #0e0f11;
   --editor-chrome: #191a1d;
@@ -1684,8 +1685,6 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   background: var(--editor-chrome);
   color-scheme: dark;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
-  -webkit-user-select: none;
-  user-select: none;
 }
 .screenshot-editor-loading { min-width: 0; min-height: 100%; place-items: center; color: var(--editor-text-muted); }
 .screenshot-editor button, .screenshot-editor input, .screenshot-editor select, .screenshot-editor textarea { font: inherit; }
@@ -1704,6 +1703,12 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   cursor: default;
 }
 .screenshot-editor input, .screenshot-editor textarea { -webkit-user-select: text; user-select: text; }
+/* Keep drag/draw surfaces non-selectable without blocking chrome copy. */
+.screenshot-canvas-viewport,
+.screenshot-canvas-surface {
+  -webkit-user-select: none;
+  user-select: none;
+}
 .screenshot-editor-header {
   z-index: 10;
   display: flex;
