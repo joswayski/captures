@@ -59,7 +59,7 @@ Preview builds update after every successful merge to `main` and may contain bug
 - Record as H.264 video or GIF, with desktop audio and microphone
 - Pause, resume, restart, and mute while recording
 - Cursor and click highlights in recordings (where supported)
-- Built-in screenshot editor — text, shapes, drawing, crop, layers, erase to transparent
+- Built-in screenshot editor — text, shapes, drawing, crop, layers, erase to transparent; unsaved edits restore when you reopen
 - Trim, crop, resize, and adjust audio in recordings
 - Export PNG, JPEG, or WebP with compression options
 - Mini previews for quick copy, save, and drag into other apps
