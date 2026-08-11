@@ -5337,17 +5337,21 @@ export function ThumbnailCard({
         ].filter(Boolean).join(" ")}
         aria-label={editorControlAriaLabel}
         aria-pressed={editorControlPresent || undefined}
-        data-tooltip={editorControlPresent || editorControlLeaving ? undefined : "Edit"}
         disabled={isExiting}
         onClick={isExiting ? undefined : openEditor}
         onPointerLeave={(event) => rearmThumbnailEditorControlHover(event.currentTarget)}
       >
-        <EditIcon />
-        {mountEditorLabels && (
-          <span className="thumbnail-editor-control-label" aria-hidden="true">
-            <span className="label-rest">In editor</span>
-            <span className="label-hover">Show in editor</span>
-          </span>
+        <span className="thumbnail-editor-control-face">
+          <EditIcon />
+          {mountEditorLabels && (
+            <span className="thumbnail-editor-control-label" aria-hidden="true">
+              <span className="label-rest">In editor</span>
+              <span className="label-hover">Show in editor</span>
+            </span>
+          )}
+        </span>
+        {!(editorControlPresent || editorControlLeaving) && (
+          <span className="thumbnail-editor-control-tip" aria-hidden="true">Edit</span>
         )}
       </button>
       <div className="thumbnail-main-actions">
