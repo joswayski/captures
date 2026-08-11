@@ -82,6 +82,67 @@ export function effectiveDragAspectRatio(
   return null;
 }
 
+/**
+ * Refit a settled selection to a new aspect ratio immediately (dropdown change).
+ *
+ * Keeps the previous center and fits inside the previous box so the region
+ * never expands past what the user already framed. Returns `rect` unchanged
+ * when `aspectRatio` is freeform/`null`.
+ */
+export function constrainSelectionToAspect(
+  rect: SelectionRect,
+  aspectRatio: number | null,
+  bounds?: { width: number; height: number },
+  minimumSize = 16,
+): SelectionRect {
+  if (aspectRatio === null || !Number.isFinite(aspectRatio) || aspectRatio <= 0) {
+    return rect;
+  }
+  if (!(rect.width > 0) || !(rect.height > 0)) {
+    return rect;
+  }
+
+  let width: number;
+  let height: number;
+  if (rect.width / rect.height > aspectRatio) {
+    height = rect.height;
+    width = height * aspectRatio;
+  } else {
+    width = rect.width;
+    height = width / aspectRatio;
+  }
+
+  // Prefer a capturable minimum when the original box is large enough.
+  const min = Math.max(1, minimumSize);
+  if (width < min || height < min) {
+    if (aspectRatio >= 1) {
+      width = Math.max(min, width);
+      height = width / aspectRatio;
+    } else {
+      height = Math.max(min, height);
+      width = height * aspectRatio;
+    }
+  }
+
+  let x = rect.x + (rect.width - width) / 2;
+  let y = rect.y + (rect.height - height) / 2;
+
+  if (bounds && bounds.width > 0 && bounds.height > 0) {
+    if (width > bounds.width) {
+      width = bounds.width;
+      height = width / aspectRatio;
+    }
+    if (height > bounds.height) {
+      height = bounds.height;
+      width = height * aspectRatio;
+    }
+    x = clamp(x, 0, Math.max(0, bounds.width - width));
+    y = clamp(y, 0, Math.max(0, bounds.height - height));
+  }
+
+  return { x, y, width, height };
+}
+
 export function isCapturableSelection(
   rect: SelectionRect | null,
 ): rect is SelectionRect {

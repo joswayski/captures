@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   captureDimClipPath,
+  constrainSelectionToAspect,
   dragSelectionRect,
   effectiveDragAspectRatio,
   frontToBackWindows,
@@ -98,6 +99,52 @@ describe("effectiveDragAspectRatio", () => {
     expect(effectiveDragAspectRatio(null, true)).toBe(1);
     expect(effectiveDragAspectRatio(16 / 9, false)).toBeCloseTo(16 / 9);
     expect(effectiveDragAspectRatio(null, false)).toBeNull();
+  });
+});
+
+describe("constrainSelectionToAspect", () => {
+  const bounds = { width: 1440, height: 900 };
+
+  it("leaves freeform selections unchanged", () => {
+    const rect = { x: 100, y: 80, width: 320, height: 200 };
+    expect(constrainSelectionToAspect(rect, null, bounds)).toEqual(rect);
+  });
+
+  it("snaps a wide 16:9 region to a centered 1:1 square inside the box", () => {
+    // 320×180 is 16:9. Inscribed 1:1 keeps height 180, shrinks width to 180, centers X.
+    const rect = constrainSelectionToAspect(
+      { x: 100, y: 50, width: 320, height: 180 },
+      1,
+      bounds,
+    );
+    expect(rect.width).toBeCloseTo(180);
+    expect(rect.height).toBeCloseTo(180);
+    expect(rect.x).toBeCloseTo(100 + (320 - 180) / 2);
+    expect(rect.y).toBeCloseTo(50);
+    expect(rect.width / rect.height).toBeCloseTo(1);
+  });
+
+  it("snaps a square to 16:9 while staying inside the original box", () => {
+    const rect = constrainSelectionToAspect(
+      { x: 200, y: 100, width: 400, height: 400 },
+      16 / 9,
+      bounds,
+    );
+    expect(rect.width / rect.height).toBeCloseTo(16 / 9, 5);
+    expect(rect.width).toBeCloseTo(400);
+    expect(rect.height).toBeCloseTo(400 * 9 / 16);
+    expect(rect.x).toBeCloseTo(200);
+    expect(rect.y).toBeCloseTo(100 + (400 - rect.height) / 2);
+  });
+
+  it("never expands past the original selection bounds", () => {
+    const original = { x: 40, y: 60, width: 160, height: 90 };
+    const rect = constrainSelectionToAspect(original, 9 / 16, bounds);
+    expect(rect.x).toBeGreaterThanOrEqual(original.x - 1e-6);
+    expect(rect.y).toBeGreaterThanOrEqual(original.y - 1e-6);
+    expect(rect.x + rect.width).toBeLessThanOrEqual(original.x + original.width + 1e-6);
+    expect(rect.y + rect.height).toBeLessThanOrEqual(original.y + original.height + 1e-6);
+    expect(rect.width / rect.height).toBeCloseTo(9 / 16, 5);
   });
 });
 

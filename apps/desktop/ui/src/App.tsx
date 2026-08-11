@@ -43,6 +43,7 @@ import {
 } from "./lib/recordingEditor";
 import {
   captureDimClipPath,
+  constrainSelectionToAspect,
   dragSelectionRect,
   frontToBackWindows,
   isCapturableSelection,
@@ -1429,6 +1430,33 @@ export function RecordingSelector() {
     regionAspectRef.current = regionAspect;
   }, [regionAspect]);
 
+  const surfaceBounds = useCallback(() => {
+    const bounds = surfaceRef.current?.getBoundingClientRect();
+    return {
+      width: bounds?.width ?? 0,
+      height: bounds?.height ?? 0,
+    };
+  }, []);
+
+  /** Apply a new aspect preset: snap any settled region immediately, and re-run an in-progress drag. */
+  const changeRegionAspect = useCallback((next: RegionAspectPreset) => {
+    setRegionAspect(next);
+    // Keep the ref current before any synchronous re-drag so pointer math uses the new ratio.
+    regionAspectRef.current = next;
+    const surface = surfaceBounds();
+    const point = pendingRegionPointRef.current;
+    if (regionDragRef.current && point) {
+      applyRegionDrag(point, pendingRegionForceSquareRef.current, surface);
+      return;
+    }
+    const aspect = parseAspectRatioPreset(next);
+    if (aspect === null) return;
+    setRegion((current) => {
+      if (!current || !isCapturableSelection(current)) return current;
+      return constrainSelectionToAspect(current, aspect, surface);
+    });
+  }, [applyRegionDrag, surfaceBounds]);
+
   // Re-apply the active region drag when Shift is pressed or released mid-gesture
   // so the marquee snaps between free/selected aspect and a square without waiting
   // for another pointer move.
@@ -1439,12 +1467,7 @@ export function RecordingSelector() {
       if (!point) return;
       const forceSquare = event.type === "keydown";
       pendingRegionForceSquareRef.current = forceSquare;
-      const bounds = surfaceRef.current?.getBoundingClientRect();
-      const surface = {
-        width: bounds?.width ?? 0,
-        height: bounds?.height ?? 0,
-      };
-      applyRegionDrag(point, forceSquare, surface);
+      applyRegionDrag(point, forceSquare, surfaceBounds());
     };
     window.addEventListener("keydown", onShift, true);
     window.addEventListener("keyup", onShift, true);
@@ -1452,7 +1475,7 @@ export function RecordingSelector() {
       window.removeEventListener("keydown", onShift, true);
       window.removeEventListener("keyup", onShift, true);
     };
-  }, [applyRegionDrag]);
+  }, [applyRegionDrag, surfaceBounds]);
 
   const loadAudioDevices = useCallback(() => {
     if (
@@ -2242,6 +2265,7 @@ export function RecordingSelector() {
           )}
           {targetMode === "region" && (
             <div className="recording-region-aspect-picker">
+              <span className="recording-region-aspect-label">Aspect</span>
               <CustomSelect
                 value={regionAspect}
                 options={REGION_ASPECT_PRESETS.map((preset) => ({
@@ -2250,7 +2274,7 @@ export function RecordingSelector() {
                 }))}
                 ariaLabel="Region aspect ratio"
                 disabled={starting}
-                onChange={(value) => setRegionAspect(value as RegionAspectPreset)}
+                onChange={(value) => changeRegionAspect(value as RegionAspectPreset)}
               />
             </div>
           )}
