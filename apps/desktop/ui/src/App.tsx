@@ -4135,12 +4135,16 @@ function CaptureOverlay() {
       return;
     }
     if (shouldPrimeRegionOverlay) {
-      // Paint the stable snapshot and zero-opacity shade while native alpha is
-      // 0, so revealing the window can start the shade fade without a WebKit flash.
+      // Keep the shade at rest while the snapshot paints under native alpha 0.
+      // The snapshot itself is always CSS-opaque; only the dim fades in after
+      // reveal so live/frozen editor chrome never crossfades.
       setPrimingSessionId(sessionId);
     }
     afterNextPaint(() => {
       if (activeSessionIdRef.current !== sessionId) return;
+      // Native reveal makes the already-painted snapshot fully opaque, then
+      // focuses the overlay under cover of that frame (macOS). Fade only the
+      // shade / chrome after that so open editors cannot shimmer.
       void invoke("reveal_capture_overlay", { sessionId }).then(() => {
         if (shouldPrimeRegionOverlay) regionOverlayWarmedRef.current = true;
         requestAnimationFrame(() => {

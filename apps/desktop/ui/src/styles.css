@@ -246,23 +246,23 @@ h1, h2, p { margin: 0; }
 .history-empty p { margin-top: 7px; color: #8f90a0; font-size: 12px; }
 @media (max-width: 700px) { .capture-history { padding: 24px 20px 32px; } .history-header { align-items: start; } .history-header-actions { margin-top: 24px; flex-wrap: wrap; justify-content: flex-start; } .history-grid { grid-template-columns: 1fr; } }
 
-.capture-surface { position: relative; width: 100%; height: 100%; overflow: hidden; background: #0e0f15; opacity: 0; pointer-events: none; transition: opacity .3s ease-out; user-select: none; }
-/* The native window and capture surface stay transparent until the snapshot
-   has painted. Reveal that snapshot without interpolation, then fade only the
-   dim layer so live/frozen window pixels do not crossfade against each other. */
-.capture-region { transition: none; }
-.capture-surface.capture-visible { opacity: 1; pointer-events: auto; }
-.capture-surface.capture-priming { pointer-events: none; transition: none; }
+/* Snapshot pixels stay fully opaque. The native overlay alpha is the only
+   show/hide gate — never CSS-fade the frozen frame over the live desktop.
+   Crossfading live vs frozen is what made open editors’ drop shadows / glow
+   shimmer (active window chrome in the snapshot vs inactive live chrome). */
+.capture-surface { position: relative; width: 100%; height: 100%; overflow: hidden; background: #0e0f15; opacity: 1; pointer-events: none; user-select: none; }
+.capture-surface.capture-visible { pointer-events: auto; }
+.capture-surface.capture-priming { pointer-events: none; }
 .capture-priming .capture-shade, .capture-priming .capture-guidance, .capture-priming .window-targets { transition: none; }
 /* Full-res snapshot is sized to the display; keep crisp scaling on Retina. */
-.capture-snapshot { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; image-rendering: auto; pointer-events: none; }
+.capture-snapshot { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; image-rendering: auto; pointer-events: none; opacity: 1; }
 .capture-region.capture-visible:not(.capture-priming) { cursor: crosshair; }
 .capture-window { cursor: var(--capture-action-cursor); }
 html.capture-region-cursor, html.capture-region-cursor * { cursor: crosshair !important; }
 html.capture-window-cursor, html.capture-window-cursor * { cursor: var(--capture-action-cursor) !important; }
 /*
- * Soft dim only — never blur. In region mode the shade itself fades over the
- * stable frozen snapshot; window mode continues using the surface transition.
+ * Soft dim only — never blur. Fade the shade (and chrome) over the already-
+ * opaque frozen snapshot so live window pixels never crossfade against it.
  * Square region holes use a closed evenodd CSS clip-path (same CSS pixels as
  * the marquee). Rounded window holes use one evenodd SVG path. Closing the
  * hole ring matters: an open polygon auto-closes to the origin and WebKit
