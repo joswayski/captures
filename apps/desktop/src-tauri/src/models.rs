@@ -28,6 +28,11 @@ pub struct AppSettings {
     pub feedback_shortcut: String,
     #[serde(default = "default_auto_copy_to_clipboard")]
     pub auto_copy_to_clipboard: bool,
+    /// When true, finishing a region drag or clicking a window starts the
+    /// screenshot/recording immediately (no Enter). Full screen still waits
+    /// so capture options can be adjusted first.
+    #[serde(default)]
+    pub auto_start_on_selection: bool,
     #[serde(default = "default_true")]
     pub show_mini_previews: bool,
     /// When true, keep the quick-access mini preview stack visible during
@@ -162,6 +167,7 @@ impl Default for AppSettings {
             display_shortcut: "Ctrl+Shift+3".to_owned(),
             feedback_shortcut: default_feedback_shortcut(),
             auto_copy_to_clipboard: true,
+            auto_start_on_selection: false,
             show_mini_previews: true,
             include_mini_previews_in_captures: false,
             include_recording_controls_in_captures: false,
@@ -869,6 +875,7 @@ mod tests {
         assert!(settings.pending_capture_after_restart.is_none());
         assert!(!settings.onboarding_completed);
         assert!(settings.auto_copy_to_clipboard);
+        assert!(!settings.auto_start_on_selection);
         assert!(settings.show_mini_previews);
         assert!(!settings.include_mini_previews_in_captures);
         assert!(!settings.include_recording_controls_in_captures);

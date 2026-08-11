@@ -27,6 +27,7 @@ const settings: AppSettings = {
   display_shortcut: "Ctrl+Shift+3",
   feedback_shortcut: "Ctrl+Shift+F",
   auto_copy_to_clipboard: true,
+  auto_start_on_selection: false,
   show_mini_previews: true,
   include_mini_previews_in_captures: false,
   include_recording_controls_in_captures: false,
@@ -120,6 +121,22 @@ describe("Preferences", () => {
           screenshot_countdown_seconds: 4,
           recording: expect.objectContaining({ countdown_seconds: 7 }),
         }),
+      });
+    });
+  });
+
+  it("can enable auto-start after region or window selection", async () => {
+    render(<Preferences />);
+
+    const autoStart = await screen.findByRole("checkbox", {
+      name: /Start capture as soon as a region or window is selected/,
+    });
+    expect(autoStart).not.toBeChecked();
+    fireEvent.click(autoStart);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("update_settings", {
+        settings: expect.objectContaining({ auto_start_on_selection: true }),
       });
     });
   });

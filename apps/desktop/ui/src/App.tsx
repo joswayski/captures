@@ -1394,6 +1394,8 @@ export function RecordingSelector() {
   const activeSessionIdRef = useRef<string | null>(null);
   const revealingSessionIdRef = useRef<string | null>(null);
   const visibleSnapshotRef = useRef<string | null>(null);
+  /** Set when region create or window pick should auto-confirm (preference). */
+  const autoStartAfterSelectionRef = useRef(false);
 
   const clearRegionDrag = useCallback(() => {
     if (regionFrameRef.current !== null) {
@@ -1623,10 +1625,10 @@ export function RecordingSelector() {
       setTargetMode(selection.initial_target);
       setSelectedWindow(null);
       setHoveredWindow(null);
-      {
-        const overlay = displayOverlaySize(selection.display, selection.window_coordinate_scale);
-        setRegion(defaultRecordingRegion(overlay.width, overlay.height));
-      }
+      // Region starts empty so the user can draw anywhere (including mid-screen).
+      // A pre-sized frame made intra-region create drags impossible (they moved the frame).
+      setRegion(null);
+      autoStartAfterSelectionRef.current = false;
       clearRegionDrag();
       panelDragRef.current = null;
       setPanelDragging(false);
@@ -1832,6 +1834,32 @@ export function RecordingSelector() {
     : { width: 0, height: 0 };
   const surfaceSize = useElementCssSize(surfaceRef, overlaySize);
 
+  const canStartSelection = Boolean(session) && !switchingDisplay && (
+    targetMode === "display"
+    || (targetMode === "window" && Boolean(selectedWindow))
+    || (targetMode === "region" && Boolean(region && region.width >= 2 && region.height >= 2))
+  );
+
+  // Preference: finish selecting a region or window → start capture without Enter.
+  useEffect(() => {
+    if (!autoStartAfterSelectionRef.current || !canStartSelection || starting || switchingDisplay) {
+      return;
+    }
+    autoStartAfterSelectionRef.current = false;
+    const primaryAction = panelRef.current?.querySelector<HTMLButtonElement>(
+      ".capture-selector-primary:not(:disabled)",
+    );
+    primaryAction?.click();
+  }, [
+    canStartSelection,
+    starting,
+    switchingDisplay,
+    region,
+    selectedWindow,
+    targetMode,
+    actionMode,
+  ]);
+
   if (!session || !settings) {
     return <main className="recording-selector-idle" aria-hidden="true" />;
   }
@@ -1882,8 +1910,22 @@ export function RecordingSelector() {
   const onPointerUp = (event: React.PointerEvent) => {
     const drag = regionDragRef.current;
     const current = pendingRegionPointRef.current;
+    const forceSquare = event.shiftKey || pendingRegionForceSquareRef.current;
+    let finishedCreate: ReturnType<typeof dragSelectionRect> | null = null;
     if (drag && current) {
-      applyRegionDrag(current, event.shiftKey || pendingRegionForceSquareRef.current, surfaceSize);
+      const next = dragSelectionRect(
+        drag.mode,
+        drag.origin,
+        current,
+        drag.initial,
+        surfaceSize,
+        {
+          aspectRatio: parseAspectRatioPreset(regionAspectRef.current),
+          forceSquare,
+        },
+      );
+      setRegion(next);
+      if (drag.mode === "create") finishedCreate = next;
     }
     if (
       typeof event.currentTarget.hasPointerCapture === "function"
@@ -1892,6 +1934,14 @@ export function RecordingSelector() {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
     clearRegionDrag();
+    // Auto-start only after a create drag finishes — move/resize stay adjust-only.
+    if (
+      finishedCreate
+      && settingsRef.current?.auto_start_on_selection
+      && isCapturableSelection(finishedCreate)
+    ) {
+      autoStartAfterSelectionRef.current = true;
+    }
   };
 
   const selectableWindows = frontToBackWindows(session.windows);
@@ -1926,11 +1976,7 @@ export function RecordingSelector() {
         } : null
       : region;
   const activeWindowCornerRadius = activeWindowLayout?.cornerRadius ?? session.window_corner_radius;
-  const canStart = !switchingDisplay && (
-    targetMode === "display"
-    || (targetMode === "window" && Boolean(selectedWindow))
-    || (targetMode === "region" && Boolean(region && region.width >= 2 && region.height >= 2))
-  );
+  const canStart = canStartSelection;
 
   const switchDisplay = async (displayId: string) => {
     if (displayId === session.display.id || switchingDisplay || starting) return;
@@ -1944,8 +1990,8 @@ export function RecordingSelector() {
       if (activeSessionIdRef.current !== next.id) return;
       sessionRef.current = next;
       setSession(next);
-      const nextOverlay = displayOverlaySize(next.display, next.window_coordinate_scale);
-      setRegion(defaultRecordingRegion(nextOverlay.width, nextOverlay.height));
+      setRegion(null);
+      autoStartAfterSelectionRef.current = false;
       setSelectedWindow(null);
       setHoveredWindow(null);
     } catch (error) {
@@ -2173,7 +2219,12 @@ export function RecordingSelector() {
               onPointerDown={(event) => event.stopPropagation()}
               onMouseEnter={() => setHoveredWindow(window.id)}
               onMouseLeave={() => setHoveredWindow(null)}
-              onClick={() => setSelectedWindow(window.id)}
+              onClick={() => {
+                setSelectedWindow(window.id);
+                if (settingsRef.current?.auto_start_on_selection) {
+                  autoStartAfterSelectionRef.current = true;
+                }
+              }}
             >
               <span>{window.title || window.app_name || "Window"}</span>
             </button>
@@ -2410,7 +2461,10 @@ export function RecordingSelector() {
             controlsExcluded ?? session.recording_capabilities.controls_excluded,
             actionMode,
           )}{" "}
-          <span aria-hidden="true">·</span> Press <kbd>Enter</kbd> to confirm
+          <span aria-hidden="true">·</span>{" "}
+          {settings.auto_start_on_selection
+            ? <>Region and window captures start when selected · Press <kbd>Enter</kbd> for full screen</>
+            : <>Press <kbd>Enter</kbd> to confirm</>}
         </p>
         {error && <p className="recording-selector-error" role="alert">{error}</p>}
       </section>
@@ -2443,17 +2497,6 @@ function displayOverlaySize(
   return {
     width: display.width / scale,
     height: display.height / scale,
-  };
-}
-
-function defaultRecordingRegion(width: number, height: number): RecordingRect {
-  const regionWidth = Math.max(320, Math.round(width * 0.66));
-  const regionHeight = Math.max(240, Math.round(height * 0.62));
-  return {
-    x: Math.round((width - regionWidth) / 2),
-    y: Math.round((height - regionHeight) / 2),
-    width: Math.min(width, regionWidth),
-    height: Math.min(height, regionHeight),
   };
 }
 
@@ -6049,6 +6092,20 @@ export function Preferences() {
           <span>
             Automatically copy captures to the clipboard
             <small>Turn this off to preserve existing text or other clipboard contents.</small>
+          </span>
+        </label>
+        <label className="check-row capture-option">
+          <input
+            type="checkbox"
+            checked={settings.auto_start_on_selection}
+            onChange={(event) => update("auto_start_on_selection", event.target.checked)}
+          />
+          <span>
+            Start capture as soon as a region or window is selected
+            <small>
+              Skip pressing Enter after drawing a region or picking a window.
+              Full screen still waits so you can adjust options first.
+            </small>
           </span>
         </label>
         <label className="check-row capture-option">

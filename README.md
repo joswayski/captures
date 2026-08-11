@@ -55,7 +55,8 @@ Preview builds update after every successful merge to `main` and may contain bug
 ## Features
 
 - Capture regions, windows, or full displays
-- Lock region selection to common aspect ratios, or hold Shift for a square
+- Draw a region from an empty screen (no pre-sized outline); lock to common aspect ratios, or hold Shift for a square
+- Optional auto-start after selecting a region or window (Preferences)
 - Optional countdown before screenshots and recordings
 - Record as H.264 video or GIF, with desktop audio and microphone
 - Pause, resume, restart, and mute while recording
