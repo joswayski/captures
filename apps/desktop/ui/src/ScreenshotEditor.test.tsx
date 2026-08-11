@@ -148,6 +148,15 @@ describe("ScreenshotEditor", () => {
         // Lower quality notches map to fewer PNG colors → smaller estimate.
         return Math.max(8_000, Math.round(120_000 * (quality / 100)));
       }
+      if (command === "preview_screenshot_export") {
+        const quality = Number((args as { jpegQuality?: number } | undefined)?.jpegQuality ?? 92);
+        const size = Math.max(8_000, Math.round(120_000 * (quality / 100)));
+        return {
+          bytes: Array.from({ length: Math.min(size, 256) }, (_, index) => index % 256),
+          sizeBytes: size,
+          format: (args as { format?: string } | undefined)?.format ?? "png",
+        };
+      }
       const draft = draftCommandResult(String(command));
       if (draft !== undefined || String(command).includes("screenshot_editor_draft")) {
         return draft;
@@ -1808,6 +1817,7 @@ describe("ScreenshotEditor", () => {
     expect(
       screen.getByText("Compressed PNG replaces the original; turn on Make a copy to keep it."),
     ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Compare before / after" })).toBeInTheDocument();
 
     fireEvent.click(format);
     fireEvent.click(screen.getByRole("option", { name: "JPEG" }));
