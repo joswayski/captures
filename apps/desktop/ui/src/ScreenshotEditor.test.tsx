@@ -1163,21 +1163,22 @@ describe("ScreenshotEditor", () => {
     });
     expect(within(layerSettings).getByRole("slider", { name: "Layer opacity" }))
       .toHaveValue("100");
-    expect(within(layerSettings).getByLabelText("Blend mode")).toHaveValue("source-over");
+    expect(within(layerSettings).getByRole("combobox", { name: "Blend mode" }))
+      .toHaveTextContent("Normal");
     fireEvent.change(within(layerSettings).getByRole("slider", { name: "Layer opacity" }), {
       target: { value: "65" },
     });
     expect(within(layerSettings).getByRole("slider", { name: "Layer opacity" }))
       .toHaveAttribute("aria-valuetext", "65%");
-    expect(within(layerSettings).getByRole("button", { name: /Duplicate/ })).toBeEnabled();
-    expect(within(layerSettings).getByRole("button", { name: /Delete/ })).toBeEnabled();
+    expect(within(layerSettings).getByRole("button", { name: "Duplicate" })).toBeEnabled();
+    expect(within(layerSettings).getByRole("button", { name: "Delete" })).toBeEnabled();
     // Single-layer document: nothing to merge into, and flatten only bakes when
     // a solid canvas background remains (it does by default).
-    expect(within(layerSettings).getByRole("button", { name: /Merge down/ })).toBeDisabled();
-    expect(within(layerSettings).getByRole("button", { name: /Merge visible/ })).toBeDisabled();
-    expect(within(layerSettings).getByRole("button", { name: /Flatten image/ })).toBeEnabled();
-    expect(within(layerSettings).getByRole("button", { name: /Bring to front/ })).toBeDisabled();
-    expect(within(layerSettings).getByRole("button", { name: /Send to back/ })).toBeDisabled();
+    expect(within(layerSettings).getByRole("button", { name: "Merge down" })).toBeDisabled();
+    expect(within(layerSettings).getByRole("button", { name: "Merge visible" })).toBeDisabled();
+    expect(within(layerSettings).getByRole("button", { name: "Flatten image" })).toBeEnabled();
+    expect(within(layerSettings).getByRole("button", { name: "Bring to front" })).toBeDisabled();
+    expect(within(layerSettings).getByRole("button", { name: "Send to back" })).toBeDisabled();
     expect(
       within(layers).getByRole("button", { name: "Lock Reference image" }),
     ).toHaveAttribute("aria-pressed", "false");
