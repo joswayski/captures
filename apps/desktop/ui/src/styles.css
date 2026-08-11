@@ -3058,65 +3058,238 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 .screenshot-layer-menu > button.active:hover { color: var(--theme-accent-text); background: rgba(var(--theme-accent-rgb),.22); }
 .screenshot-layer-quick-actions svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 /* Secondary layer settings and actions open from ⋯. Fixed positioning is set
-   inline so the scrollable layer list does not clip the popover. */
+   inline so the scrollable layer list does not clip the popover. The card sits
+   beside the sidebar (over the canvas) rather than covering the layer list. */
 .screenshot-layer-menu { position: relative; display: flex; }
 .screenshot-layer-menu-panel {
   position: fixed;
   z-index: 80;
-  display: grid;
-  width: min(304px, calc(100vw - 24px));
+  display: flex;
+  width: min(280px, calc(100vw - 24px));
   max-height: min(560px, calc(100vh - 16px));
-  padding: 6px;
-  gap: 1px;
-  overflow-y: auto;
+  flex-direction: column;
+  overflow: visible;
   border: 1px solid var(--editor-border-strong);
-  border-radius: 12px;
-  background: rgba(31,32,35,.97);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, .5), 0 1px 0 rgba(255,255,255,.05) inset;
-  backdrop-filter: blur(22px) saturate(1.18);
+  border-radius: 14px;
+  background: rgba(28, 29, 33, .98);
+  box-shadow:
+    0 22px 56px rgba(0, 0, 0, .55),
+    0 0 0 1px rgba(255, 255, 255, .04) inset;
+  backdrop-filter: blur(24px) saturate(1.2);
+  color: var(--editor-text);
 }
-.screenshot-layer-menu-panel.open-up {
-  box-shadow: 0 -18px 48px rgba(0, 0, 0, .5), 0 1px 0 rgba(255,255,255,.05) inset;
+/* Appearance stays outside the scroll region so the blend CustomSelect listbox
+   is not clipped by overflow. */
+.screenshot-layer-menu-section-static {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--editor-border);
 }
-.screenshot-layer-menu-panel button {
+.screenshot-layer-menu-scroll {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, .16) transparent;
+}
+.screenshot-layer-menu-section {
+  display: grid;
+  padding: 12px 12px 13px;
+  gap: 10px;
+  border-bottom: 1px solid var(--editor-border);
+}
+.screenshot-layer-menu-scroll > .screenshot-layer-menu-section:last-child {
+  border-bottom: 0;
+}
+.screenshot-layer-menu-section-title {
+  margin: 0;
+  color: var(--editor-text-subtle);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: .08em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+.screenshot-layer-menu-field {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+.screenshot-layer-menu-field-label {
+  color: var(--editor-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+/* Match export / recording CustomSelect chrome inside the layer card. */
+.screenshot-layer-menu-panel .custom-select-trigger {
+  min-height: 36px;
+  padding: 0 10px;
+  border-color: var(--editor-border-strong);
+  border-radius: 9px;
+  color: var(--editor-text);
+  background: var(--editor-field);
+  font-size: 12px;
+  font-weight: 550;
+}
+.screenshot-layer-menu-panel .custom-select-trigger:hover:not(:disabled) {
+  border-color: var(--editor-border-strong);
+  background: var(--editor-control);
+}
+.screenshot-layer-menu-panel .custom-select.open .custom-select-trigger,
+.screenshot-layer-menu-panel .custom-select-trigger:focus-visible {
+  border-color: rgba(var(--theme-accent-rgb), .62);
+  box-shadow: 0 0 0 3px rgba(var(--theme-accent-rgb), .13);
+}
+.screenshot-layer-menu-panel .custom-select-listbox {
+  z-index: 90;
+  border-color: var(--editor-border-strong);
+  border-radius: 9px;
+  background: #1c1d22;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, .55);
+}
+.screenshot-layer-menu-panel .range-slider-value output {
+  color: var(--theme-accent-text);
+  font-size: 11px;
+  font-weight: 700;
+}
+.screenshot-layer-menu-transform-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+.screenshot-layer-menu-tile {
   display: grid;
   width: 100%;
-  min-height: 34px;
-  padding: 4px 9px;
-  grid-template-columns: 17px minmax(0, 1fr);
+  min-height: 38px;
+  padding: 7px 8px;
+  grid-template-columns: 16px minmax(0, 1fr);
   align-items: center;
-  gap: 9px;
-  border: 0;
-  border-radius: 8px;
+  gap: 7px;
+  border: 1px solid var(--editor-border);
+  border-radius: 9px;
   color: var(--editor-text-muted);
-  background: transparent;
+  background: var(--editor-control);
+  cursor: pointer;
   font: inherit;
+  font-size: 11px;
+  font-weight: 600;
   text-align: left;
+  transition:
+    color .12s ease,
+    background .12s ease,
+    border-color .12s ease;
 }
-.screenshot-layer-menu-panel button:hover:not(:disabled) {
-  color: white;
-  background: rgba(255,255,255,.075);
+.screenshot-layer-menu-tile:hover:not(:disabled) {
+  border-color: var(--editor-border-strong);
+  color: var(--editor-text);
+  background: var(--editor-control-hover);
 }
-.screenshot-layer-menu-panel button:disabled {
+.screenshot-layer-menu-tile:disabled {
   cursor: default;
   opacity: .42;
 }
-.screenshot-layer-menu-panel button.danger:hover:not(:disabled) {
+.screenshot-layer-menu-tile span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.screenshot-layer-menu-actions {
+  display: grid;
+  gap: 4px;
+}
+.screenshot-layer-menu-action {
+  display: grid;
+  width: 100%;
+  min-height: 36px;
+  padding: 0 10px;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: var(--editor-text);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition:
+    color .12s ease,
+    background .12s ease,
+    border-color .12s ease;
+}
+.screenshot-layer-menu-action:hover:not(:disabled) {
+  border-color: var(--editor-border);
+  color: var(--editor-text);
+  background: var(--editor-control);
+}
+.screenshot-layer-menu-action:focus-visible {
+  outline: none;
+  border-color: rgba(var(--theme-accent-rgb), .62);
+  box-shadow: 0 0 0 3px rgba(var(--theme-accent-rgb), .13);
+}
+.screenshot-layer-menu-action:disabled {
+  cursor: default;
+  opacity: .4;
+}
+.screenshot-layer-menu-action.danger {
+  color: #f0b4ba;
+}
+.screenshot-layer-menu-action.danger:hover:not(:disabled) {
+  border-color: rgba(255, 90, 105, .28);
   color: #ff9da6;
   background: rgba(255, 90, 105, .12);
 }
-.screenshot-layer-menu-section { display: grid; padding: 7px 8px 9px; gap: 9px; border-bottom: 1px solid var(--editor-border); }
-.screenshot-layer-menu-section > strong,
-.screenshot-layer-menu-section-heading { color: var(--editor-text-subtle); font-size: 9px; font-weight: 750; letter-spacing: .07em; text-transform: uppercase; }
-.screenshot-layer-menu-section-heading { padding: 8px 9px 3px; }
-.screenshot-layer-menu-section label { display: grid; min-width: 0; gap: 5px; color: var(--editor-text-muted); font-size: 10px; font-weight: 600; }
-.screenshot-layer-menu-section select { width: 100%; min-height: 34px; border: 1px solid var(--editor-border-strong); border-radius: 8px; padding: 6px 9px; color: var(--editor-text); background: var(--editor-field); outline: none; font: inherit; font-size: 11px; }
-.screenshot-layer-menu-section select:focus { border-color: rgba(var(--theme-accent-rgb),.62); box-shadow: 0 0 0 2px rgba(var(--theme-accent-rgb),.13); }
-.screenshot-layer-menu-section .range-slider-value output { color: var(--theme-accent-text); }
-.screenshot-layer-menu-transform-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 5px; }
-.screenshot-layer-menu-panel .screenshot-layer-menu-transform-grid button { min-height: 34px; padding: 6px 7px; grid-template-columns: 15px minmax(0,1fr); gap: 6px; border: 1px solid var(--editor-border); color: var(--editor-text-muted); background: var(--editor-control); font-size: 9.5px; font-weight: 600; }
-.screenshot-layer-menu-panel .screenshot-layer-menu-transform-grid button:hover:not(:disabled) { border-color: var(--editor-border-strong); background: var(--editor-control-hover); }
-.screenshot-layer-menu-transform-grid button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.screenshot-layer-menu-action-icon {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  color: var(--editor-text-muted);
+}
+.screenshot-layer-menu-action:hover:not(:disabled) .screenshot-layer-menu-action-icon {
+  color: var(--editor-text);
+}
+.screenshot-layer-menu-action.danger .screenshot-layer-menu-action-icon {
+  color: #e08a93;
+}
+.screenshot-layer-menu-action.danger:hover:not(:disabled) .screenshot-layer-menu-action-icon {
+  color: #ff9da6;
+}
+.screenshot-layer-menu-action-label {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.screenshot-layer-menu-footer {
+  display: grid;
+  flex: 0 0 auto;
+  padding: 8px;
+  gap: 4px;
+  border-top: 1px solid var(--editor-border);
+  background: rgba(0, 0, 0, .12);
+}
+.screenshot-layer-menu-footer .screenshot-layer-menu-action {
+  background: var(--editor-control);
+  border-color: var(--editor-border);
+}
+.screenshot-layer-menu-footer .screenshot-layer-menu-action:hover:not(:disabled) {
+  border-color: var(--editor-border-strong);
+  background: var(--editor-control-hover);
+}
+.screenshot-layer-menu-footer .screenshot-layer-menu-action.danger {
+  background: rgba(255, 90, 105, .08);
+  border-color: rgba(255, 90, 105, .22);
+}
+.screenshot-layer-menu-footer .screenshot-layer-menu-action.danger:hover:not(:disabled) {
+  background: rgba(255, 90, 105, .14);
+  border-color: rgba(255, 90, 105, .35);
+}
 .screenshot-layer-menu-panel svg {
   width: 15px;
   height: 15px;
@@ -3125,23 +3298,6 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   stroke-width: 1.8;
   stroke-linecap: round;
   stroke-linejoin: round;
-}
-.screenshot-layer-menu-copy {
-  display: grid;
-  min-width: 0;
-}
-.screenshot-layer-menu-copy > span {
-  overflow: hidden;
-  color: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.screenshot-layer-menu-separator {
-  height: 1px;
-  margin: 4px 5px;
-  background: var(--editor-border);
 }
 .screenshot-properties { min-height: 0; padding: 0 16px 24px; overflow-y: auto; border-top: 1px solid var(--editor-border); background: var(--editor-panel); scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.16) transparent; }
 .screenshot-properties-heading { position: sticky; z-index: 3; top: 0; display: flex; min-height: 50px; margin: 0 -16px 8px; padding: 0 16px; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--editor-border); background: rgba(29,30,33,.94); backdrop-filter: blur(18px) saturate(1.15); }
