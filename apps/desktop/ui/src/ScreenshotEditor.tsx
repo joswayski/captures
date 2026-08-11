@@ -1685,14 +1685,26 @@ export function ScreenshotEditor() {
     if (cached.status !== "loaded") {
       throw new Error("An image layer could not be saved into the edit draft.");
     }
-    const width = Math.max(1, cached.image.naturalWidth || cached.image.width || 1);
-    const height = Math.max(1, cached.image.naturalHeight || cached.image.height || 1);
+    // Cache may hold an Image or a working canvas (e.g. after remove-bg).
+    const source = cached.image;
+    const width = Math.max(
+      1,
+      source instanceof HTMLImageElement
+        ? source.naturalWidth || source.width || 1
+        : source.width || 1,
+    );
+    const height = Math.max(
+      1,
+      source instanceof HTMLImageElement
+        ? source.naturalHeight || source.height || 1
+        : source.height || 1,
+    );
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
     const context = canvas.getContext("2d");
     if (!context) throw new Error("The edit draft could not be encoded.");
-    context.drawImage(cached.image, 0, 0, width, height);
+    context.drawImage(source, 0, 0, width, height);
     return canvasPngBytes(canvas);
   }, [ensureImage]);
 
