@@ -296,6 +296,57 @@ describe("ScreenshotEditor", () => {
     });
   });
 
+  it("resolves the close handler even when draft flush never finishes", async () => {
+    // Regression: awaiting an unbounded draft encode/IPC made the red X a no-op
+    // because Tauri only destroy()s after onCloseRequested settles.
+    type CloseHandler = (event: { preventDefault: () => void }) => void | Promise<void>;
+    let closeHandler: CloseHandler | null = null;
+    const onCloseRequested = vi.fn(async (handler: CloseHandler) => {
+      closeHandler = handler;
+      return () => undefined;
+    });
+    vi.mocked(isTauri).mockReturnValue(true);
+    vi.mocked(getCurrentWindow).mockReturnValue({
+      onCloseRequested,
+      destroy: vi.fn(async () => undefined),
+    } as unknown as ReturnType<typeof getCurrentWindow>);
+
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "discard_screenshot_editor_draft") {
+        return new Promise(() => {
+          /* never resolves — simulates a stuck draft write */
+        });
+      }
+      if (command === "get_artifact") return artifact;
+      if (command === "estimate_screenshot_export") {
+        const quality = Number((args as { jpegQuality?: number } | undefined)?.jpegQuality ?? 92);
+        return Math.max(8_000, Math.round(120_000 * (quality / 100)));
+      }
+      const draft = draftCommandResult(String(command));
+      if (draft !== undefined || String(command).includes("screenshot_editor_draft")) {
+        return draft;
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Width");
+    await waitFor(() => {
+      expect(closeHandler).not.toBeNull();
+    });
+
+    const preventDefault = vi.fn();
+    const started = performance.now();
+    await act(async () => {
+      await closeHandler!({ preventDefault });
+    });
+    const elapsedMs = performance.now() - started;
+
+    expect(preventDefault).not.toHaveBeenCalled();
+    // Must settle via the close-flush timeout (~400ms), not hang indefinitely.
+    expect(elapsedMs).toBeLessThan(2_000);
+  });
+
   it("loads the full-resolution artifact and exposes every requested annotation tool", async () => {
     render(<ScreenshotEditor />);
 
