@@ -224,7 +224,7 @@ export interface EditSpec {
 
 export interface ExportSpec {
   format: "mp4" | "gif" | "web_m";
-  quality: "preserve" | "high" | "standard" | "small";
+  quality: "preserve" | "high" | "standard" | "small" | "tiny";
   max_size_bytes: number | null;
   frames_per_second: number | null;
   gif_max_colors: number | null;

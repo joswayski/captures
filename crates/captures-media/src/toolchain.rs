@@ -652,6 +652,7 @@ impl MediaToolchain {
                 QualityPreset::Preserve | QualityPreset::High => "90",
                 QualityPreset::Standard => "70",
                 QualityPreset::Small => "50",
+                QualityPreset::Tiny => "35",
             };
             command.args(["-q:v", quality]);
         }
@@ -1184,6 +1185,7 @@ fn openh264_bitrate(attempt: &VideoAttempt, spec: &ExportSpec) -> u32 {
         QualityPreset::Preserve | QualityPreset::High => 12_u64,
         QualityPreset::Standard => 8,
         QualityPreset::Small => 5,
+        QualityPreset::Tiny => 3,
     };
     let estimated = u64::from(attempt.width)
         .saturating_mul(u64::from(attempt.height))

@@ -85,6 +85,8 @@ pub enum QualityPreset {
     High,
     Standard,
     Small,
+    /// Strongest compress preset (smallest file, most visible compression).
+    Tiny,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

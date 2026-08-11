@@ -289,7 +289,7 @@ describe("RecordingSelector", () => {
     expect(audioToggle).toBeDisabled();
     expect(microphone).toBeDisabled();
     expect(container.querySelector(".capture-selector-note")).toHaveTextContent(
-      "These controls will show in screenshots and recordings",
+      "These controls will show in recordings",
     );
     expect(invoke).not.toHaveBeenCalledWith("list_recording_audio_devices");
 
@@ -333,7 +333,7 @@ describe("RecordingSelector", () => {
     expect(regionGuidance).toHaveTextContent("Shift for square · Esc to cancel");
     expect(screen.getByRole("combobox", { name: "Region aspect ratio" })).toBeInTheDocument();
     expect(container.querySelector(".capture-selector-note")).toHaveTextContent(
-      "These controls won’t show in screenshots or recordings · Press Enter to confirm",
+      "These controls won’t show in screenshots · Press Enter to confirm",
     );
     expect(screen.getByRole("button", { name: "Take screenshot" }))
       .toHaveAttribute("aria-keyshortcuts", "Enter");
@@ -352,11 +352,17 @@ describe("RecordingSelector", () => {
     expect(actionSwitch).toHaveAttribute("data-active", "recording");
     expect(screen.getByRole("button", { name: "Record", pressed: true })).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Frames per second" })).toBeInTheDocument();
+    expect(container.querySelector(".capture-selector-note")).toHaveTextContent(
+      "These controls won’t show in recordings · Press Enter to confirm",
+    );
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("list_recording_audio_devices");
     });
 
     fireEvent.click(screenshotMode);
+    expect(container.querySelector(".capture-selector-note")).toHaveTextContent(
+      "These controls won’t show in screenshots · Press Enter to confirm",
+    );
     expect(screen.getByRole("button", { name: "Take screenshot" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Take screenshot" }));
 

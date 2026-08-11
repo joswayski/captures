@@ -1610,10 +1610,8 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 .editor-aspect-lock { margin-top: 16px !important; margin-bottom: 11px; }
 .editor-resolution-field { margin-top: 0; }
 .editor-quality-card .editor-field + .editor-field { margin-top: 13px; }
-.editor-quality-mode-field { max-width: 430px; }
-.editor-quality-slider { max-width: 560px; }
-.editor-quality-slider .notched-slider { padding: 3px 1px 0; }
-.editor-quality-slider .range-slider-value output { color: var(--theme-accent-text); }
+.editor-quality-mode-field,
+.editor-quality-preset { max-width: 430px; }
 .editor-field-help { max-width: 430px; margin: 7px 0 0; color: #8f9096; font-size: 9px; line-height: 1.4; }
 .editor-field-help + .editor-field { margin-top: 13px; }
 .editor-size-limit { display: grid; grid-template-columns: minmax(100px, 1fr) 92px; gap: 8px; }

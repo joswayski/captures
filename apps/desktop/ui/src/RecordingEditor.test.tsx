@@ -497,19 +497,24 @@ describe("RecordingEditor", () => {
     });
   });
 
-  it("uses a notched quality slider instead of compression presets", async () => {
+  it("uses compress quality presets instead of a notched slider", async () => {
     render(<RecordingEditor />);
     await screen.findByRole("heading", { name: "Edit recording" });
 
     fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
     fireEvent.click(screen.getByRole("option", { name: /Compress/ }));
-    const quality = screen.getByRole("slider", { name: "Compression quality" });
-    expect(quality).toHaveAttribute("aria-valuetext", "High");
-    expect(screen.queryByRole("combobox", { name: "Compression preset" }))
+    const quality = screen.getByRole("combobox", { name: "Compression quality" });
+    expect(quality).toHaveTextContent("High");
+    expect(screen.queryByRole("slider", { name: "Compression quality" }))
       .not.toBeInTheDocument();
 
-    fireEvent.change(quality, { target: { value: "1" } });
-    expect(quality).toHaveAttribute("aria-valuetext", "Balanced");
+    fireEvent.click(quality);
+    expect(screen.getByRole("option", { name: /Tiny/ })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /Smaller/ })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /Balanced/ })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /High/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("option", { name: /Balanced/ }));
+    expect(quality).toHaveTextContent("Balanced");
     fireEvent.change(screen.getByRole("textbox", { name: "Saved filename" }), {
       target: { value: "Balanced recording" },
     });

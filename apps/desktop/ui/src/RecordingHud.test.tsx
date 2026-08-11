@@ -117,7 +117,7 @@ describe("RecordingHud", () => {
 
     expect(screen.getByText("Recording")).toBeInTheDocument();
     expect(screen.queryByText("Not in recording")).not.toBeInTheDocument();
-    const privacy = screen.getByText("These controls won’t show in screenshots or recordings");
+    const privacy = screen.getByText("These controls won’t show in recordings");
     expect(privacy).toBeInTheDocument();
     expect(container.querySelector(".recording-hud")?.firstElementChild).toBe(privacy);
     expect(container.querySelector(".recording-hud-main")).toContainElement(
@@ -244,10 +244,10 @@ describe("RecordingHud", () => {
     render(<RecordingHud />);
 
     expect(await screen.findByText(
-      "These controls will show in screenshots and recordings · Use Hide controls to keep them out",
+      "These controls will show in recordings · Use Hide controls to keep them out",
     ))
       .toBeInTheDocument();
-    expect(screen.queryByText("These controls won’t show in screenshots or recordings"))
+    expect(screen.queryByText("These controls won’t show in recordings"))
       .not.toBeInTheDocument();
   });
 
@@ -266,7 +266,7 @@ describe("RecordingHud", () => {
 
     render(<RecordingHud />);
 
-    expect(await screen.findByText("These controls won’t show in screenshots or recordings"))
+    expect(await screen.findByText("These controls won’t show in recordings"))
       .toBeInTheDocument();
 
     controlsExcluded = false;
@@ -277,7 +277,7 @@ describe("RecordingHud", () => {
     });
 
     expect(await screen.findByText(
-      "These controls will show in screenshots and recordings · Use Hide controls to keep them out",
+      "These controls will show in recordings · Use Hide controls to keep them out",
     ))
       .toBeInTheDocument();
   });
