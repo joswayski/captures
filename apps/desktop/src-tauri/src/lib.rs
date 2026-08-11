@@ -1026,12 +1026,19 @@ fn show_capture_overlay(
         #[cfg(target_os = "macos")]
         captures_macos_window::remember_frontmost_app_before_activation();
         window.show().map_err(|error| error.to_string())?;
-        window.set_focus().map_err(|error| error.to_string())?;
-        #[cfg(target_os = "macos")]
-        if should_activate_capture_cursor_before_reveal(mode) {
-            captures_macos_window::activate_capture_cursor(&window, false)
-                .map_err(str::to_owned)?;
+        // On macOS keep the overlay unfocused until the frozen snapshot is
+        // fully opaque (reveal_capture_overlay). Focusing here deactivates
+        // open editors while the overlay is still alpha-0, which changes
+        // their AppKit drop shadow / titlebar chrome and produces a visible
+        // glow flicker against the still-active snapshot pixels.
+        // Non-macOS has no native alpha gate, so focus immediately.
+        #[cfg(not(target_os = "macos"))]
+        {
+            window.set_focus().map_err(|error| error.to_string())?;
+            let _ = mode;
         }
+        #[cfg(target_os = "macos")]
+        let _ = mode;
         Ok(())
     } else {
         Err("capture overlay is unavailable".to_owned())
@@ -1056,7 +1063,12 @@ fn reveal_capture_overlay(
         .ok_or_else(|| "capture overlay is unavailable".to_owned())?;
     #[cfg(target_os = "macos")]
     {
+        // Opaque frozen frame first, then take key focus so sibling document
+        // windows (editors) can deactivate under cover of the snapshot.
         captures_macos_window::reveal_capture_overlay(&window).map_err(str::to_owned)?;
+        if let Err(error) = window.set_focus() {
+            eprintln!("failed to focus capture overlay: {error}");
+        }
         captures_macos_window::activate_capture_cursor(&window, mode == CaptureMode::Region)
             .map_err(str::to_owned)?;
     }
@@ -2823,11 +2835,6 @@ fn should_trigger_shortcut(armed: &AtomicBool, state: ShortcutState) -> bool {
         }
         ShortcutState::Released => armed.swap(false, Ordering::AcqRel),
     }
-}
-
-#[cfg(any(target_os = "macos", test))]
-fn should_activate_capture_cursor_before_reveal(mode: CaptureMode) -> bool {
-    mode != CaptureMode::Region
 }
 
 fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
@@ -4686,11 +4693,10 @@ mod tests {
         ThumbnailCursorAction, ThumbnailCursorKind, ThumbnailMonitorBounds, clipboard_fingerprint,
         display_contains_pointer, mask_macos_window_corners, parse_shortcut,
         primary_app_window_priority, refine_window_chrome_from_snapshot,
-        should_activate_capture_cursor_before_reveal, should_trigger_shortcut,
-        thumbnail_cursor_action, thumbnail_geometry, thumbnail_pointer_position,
-        thumbnail_stack_should_be_visible, thumbnail_visible_window_height,
-        track_shortcut_suppression, viewer_window_label, window_is_capturable,
-        windows_window_is_capture_overlay,
+        should_trigger_shortcut, thumbnail_cursor_action, thumbnail_geometry,
+        thumbnail_pointer_position, thumbnail_stack_should_be_visible,
+        thumbnail_visible_window_height, track_shortcut_suppression,
+        viewer_window_label, window_is_capturable, windows_window_is_capture_overlay,
     };
 
     fn bounds(
@@ -4712,16 +4718,6 @@ mod tests {
     }
 
     use captures_capture::{DisplayDescriptor, WindowDescriptor};
-
-    #[test]
-    fn region_cursor_waits_until_the_hidden_webview_is_primed() {
-        assert!(!should_activate_capture_cursor_before_reveal(
-            CaptureMode::Region
-        ));
-        assert!(should_activate_capture_cursor_before_reveal(
-            CaptureMode::Window
-        ));
-    }
 
     #[test]
     fn estimates_rounded_window_chrome_from_the_freeze_frame() {
