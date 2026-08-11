@@ -8,7 +8,7 @@ use std::{
 use chrono::{Local, Utc};
 use image::{
     ExtendedColorType, ImageEncoder, ImageFormat, Rgb, RgbImage, RgbaImage,
-    codecs::{jpeg::JpegEncoder, webp::WebPEncoder},
+    codecs::jpeg::JpegEncoder,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{
@@ -213,6 +213,28 @@ pub async fn copy_screenshot_edit(app: AppHandle, image_png: Vec<u8>) -> Command
         .await
         .map(|_| ())
         .map_err(|error| error.to_string())
+}
+
+/// Encode the flattened editor canvas the same way save does, and return only the
+/// resulting byte length — used for the live Est. size readout (especially PNG
+/// color quantization, which the browser cannot estimate accurately).
+#[tauri::command]
+pub async fn estimate_screenshot_export(
+    image_png: Vec<u8>,
+    format: ScreenshotEditFormat,
+    quality_mode: ScreenshotExportQualityMode,
+    jpeg_quality: u8,
+    max_size_bytes: Option<u64>,
+) -> CommandResult<u64> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let image = decode_editor_png(&image_png)?;
+        let output =
+            encode_export_with_limit(&image, format, quality_mode, jpeg_quality, max_size_bytes)?;
+        Ok::<_, AppError>(u64::try_from(output.len()).unwrap_or(u64::MAX))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -446,8 +468,7 @@ pub struct LoadedScreenshotEditorDraft {
 pub fn save_screenshot_editor_draft(
     request: SaveScreenshotEditorDraftRequest,
 ) -> CommandResult<()> {
-    validate_draft_component_id(&request.artifact_id)
-        .map_err(|error| error.to_string())?;
+    validate_draft_component_id(&request.artifact_id).map_err(|error| error.to_string())?;
     if request.assets.len() > MAX_EDITOR_DRAFT_ASSETS {
         return Err("this edit has too many image layers to keep as a draft".to_owned());
     }
@@ -541,7 +562,7 @@ pub fn discard_screenshot_editor_draft_files(artifact_id: &str) -> Result<(), Ap
     if !root.exists() {
         return Ok(());
     }
-    fs::remove_dir_all(root).map_err(|error| AppError::Io(error))?;
+    fs::remove_dir_all(root).map_err(AppError::Io)?;
     Ok(())
 }
 
@@ -566,13 +587,17 @@ pub(crate) fn resolve_editor_draft_asset(path: &str) -> Option<Vec<u8>> {
 
 fn validate_draft_component_id(id: &str) -> Result<(), AppError> {
     if id.is_empty() || id.len() > 80 {
-        return Err(AppError::Task("invalid screenshot editor draft id".to_owned()));
+        return Err(AppError::Task(
+            "invalid screenshot editor draft id".to_owned(),
+        ));
     }
     if !id
         .chars()
         .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
     {
-        return Err(AppError::Task("invalid screenshot editor draft id".to_owned()));
+        return Err(AppError::Task(
+            "invalid screenshot editor draft id".to_owned(),
+        ));
     }
     Ok(())
 }
@@ -607,7 +632,8 @@ fn rewrite_draft_document_asset_urls(document: &mut serde_json::Value, artifact_
             if !asset_path.is_file() {
                 return false;
             }
-            element[field] = serde_json::Value::String(editor_draft_asset_url(artifact_id, asset_id));
+            element[field] =
+                serde_json::Value::String(editor_draft_asset_url(artifact_id, asset_id));
         }
     }
     true
@@ -642,7 +668,16 @@ fn encode_export(
 ) -> Result<Vec<u8>, AppError> {
     match format {
         ScreenshotEditFormat::Png => {
-            storage::encode_png_export(image, quality_mode.uses_compact_encode())
+            let max_colors = match quality_mode {
+                ScreenshotExportQualityMode::Preserve => None,
+                // Compress: reduce colors like compresspng.com, then pack hard.
+                ScreenshotExportQualityMode::Compress => {
+                    Some(storage::png_palette_colors_for_quality(jpeg_quality))
+                }
+                // Maximum without a byte budget still quantizes aggressively.
+                ScreenshotExportQualityMode::Maximum => Some(64),
+            };
+            storage::encode_png_export(image, quality_mode.uses_compact_encode(), max_colors)
         }
         ScreenshotEditFormat::Jpeg => {
             let quality = if matches!(quality_mode, ScreenshotExportQualityMode::Preserve) {
@@ -654,17 +689,13 @@ fn encode_export(
             encode_jpeg(&rgb, quality)
         }
         ScreenshotEditFormat::Webp => {
-            // image crate WebP is lossless-only; compress still keeps WebP, not JPEG.
-            let mut bytes = Vec::new();
-            WebPEncoder::new_lossless(&mut bytes)
-                .write_image(
-                    image.as_raw(),
-                    image.width(),
-                    image.height(),
-                    ExtendedColorType::Rgba8,
-                )
-                .map_err(|error| AppError::Image(error.to_string()))?;
-            Ok(bytes)
+            // Preserve = lossless WebP. Compress/maximum = lossy quality (libwebp).
+            let quality = match quality_mode {
+                ScreenshotExportQualityMode::Preserve => None,
+                ScreenshotExportQualityMode::Compress => Some(jpeg_quality.clamp(1, 100)),
+                ScreenshotExportQualityMode::Maximum => Some(jpeg_quality.clamp(1, 100).min(80)),
+            };
+            encode_webp(image, quality)
         }
     }
 }
@@ -688,40 +719,93 @@ fn encode_export_with_limit(
     if u64::try_from(output.len()).unwrap_or(u64::MAX) <= maximum {
         return Ok(output);
     }
-    if !matches!(format, ScreenshotEditFormat::Jpeg) {
-        return Err(AppError::Image(format!(
-            "the {} is larger than the requested maximum even with stronger compression; reduce the output size, raise the limit, or switch to JPEG for more aggressive size control",
-            format.extension().to_uppercase()
-        )));
-    }
 
-    let rgb = composite_onto_white(image);
-    let maximum_quality = jpeg_quality.clamp(40, 100);
-    let minimum = encode_jpeg(&rgb, 40)?;
-    if u64::try_from(minimum.len()).unwrap_or(u64::MAX) > maximum {
-        return Err(AppError::Image(
-            "JPEG cannot meet the requested maximum at the supported quality range; reduce the output size or raise the limit"
-                .to_owned(),
-        ));
-    }
-
-    let mut best = minimum;
-    let mut low = 41_u8;
-    let mut high = maximum_quality;
-    while low <= high {
-        let quality = low + (high - low) / 2;
-        let candidate = encode_jpeg(&rgb, quality)?;
-        if u64::try_from(candidate.len()).unwrap_or(u64::MAX) <= maximum {
-            best = candidate;
-            low = quality.saturating_add(1);
-        } else {
-            if quality == 0 {
-                break;
+    match format {
+        ScreenshotEditFormat::Jpeg => {
+            let rgb = composite_onto_white(image);
+            let maximum_quality = jpeg_quality.clamp(40, 100);
+            let minimum = encode_jpeg(&rgb, 40)?;
+            if u64::try_from(minimum.len()).unwrap_or(u64::MAX) > maximum {
+                return Err(AppError::Image(
+                    "JPEG cannot meet the requested maximum at the supported quality range; reduce the output size or raise the limit"
+                        .to_owned(),
+                ));
             }
-            high = quality - 1;
+
+            let mut best = minimum;
+            let mut low = 41_u8;
+            let mut high = maximum_quality;
+            while low <= high {
+                let quality = low + (high - low) / 2;
+                let candidate = encode_jpeg(&rgb, quality)?;
+                if u64::try_from(candidate.len()).unwrap_or(u64::MAX) <= maximum {
+                    best = candidate;
+                    low = quality.saturating_add(1);
+                } else {
+                    if quality == 0 {
+                        break;
+                    }
+                    high = quality - 1;
+                }
+            }
+            Ok(best)
+        }
+        ScreenshotEditFormat::Png => {
+            // Walk down the color budget until the file fits (same idea as quality notches).
+            let mut best: Option<Vec<u8>> = None;
+            for colors in storage::PNG_MAXIMUM_COLOR_STEPS {
+                let candidate = storage::encode_png_export(image, true, Some(colors))?;
+                if u64::try_from(candidate.len()).unwrap_or(u64::MAX) <= maximum {
+                    best = Some(candidate);
+                    // Keep trying fewer colors? Prefer the highest quality that still fits.
+                    // First success in the descending list is the largest palette that fits.
+                    break;
+                }
+                best = Some(candidate);
+            }
+            let best = best.ok_or_else(|| {
+                AppError::Image(
+                    "PNG cannot meet the requested maximum; reduce the output size or raise the limit"
+                        .to_owned(),
+                )
+            })?;
+            if u64::try_from(best.len()).unwrap_or(u64::MAX) <= maximum {
+                Ok(best)
+            } else {
+                Err(AppError::Image(
+                    "the PNG is larger than the requested maximum even after reducing colors; reduce the output size, raise the limit, or switch to JPEG for more aggressive size control"
+                        .to_owned(),
+                ))
+            }
+        }
+        ScreenshotEditFormat::Webp => {
+            let maximum_quality = jpeg_quality.clamp(1, 100);
+            let minimum = encode_webp(image, Some(1))?;
+            if u64::try_from(minimum.len()).unwrap_or(u64::MAX) > maximum {
+                return Err(AppError::Image(
+                    "WebP cannot meet the requested maximum at the supported quality range; reduce the output size or raise the limit"
+                        .to_owned(),
+                ));
+            }
+            let mut best = minimum;
+            let mut low = 2_u8;
+            let mut high = maximum_quality;
+            while low <= high {
+                let quality = low + (high - low) / 2;
+                let candidate = encode_webp(image, Some(quality))?;
+                if u64::try_from(candidate.len()).unwrap_or(u64::MAX) <= maximum {
+                    best = candidate;
+                    low = quality.saturating_add(1);
+                } else {
+                    if quality == 0 {
+                        break;
+                    }
+                    high = quality - 1;
+                }
+            }
+            Ok(best)
         }
     }
-    Ok(best)
 }
 
 fn encode_jpeg(image: &RgbImage, quality: u8) -> Result<Vec<u8>, AppError> {
@@ -735,6 +819,26 @@ fn encode_jpeg(image: &RgbImage, quality: u8) -> Result<Vec<u8>, AppError> {
         )
         .map_err(|error| AppError::Image(error.to_string()))?;
     Ok(bytes)
+}
+
+/// Encode WebP. `None` quality is lossless; `Some(q)` is lossy at quality 1–100.
+/// Keeps alpha (unlike JPEG). Uses libwebp because the `image` crate only encodes lossless WebP.
+fn encode_webp(image: &RgbaImage, quality: Option<u8>) -> Result<Vec<u8>, AppError> {
+    if image.width() == 0 || image.height() == 0 {
+        return Err(AppError::Image(
+            "cannot encode an empty WebP image".to_owned(),
+        ));
+    }
+    let encoder = webp::Encoder::from_rgba(image.as_raw(), image.width(), image.height());
+    let encoded = match quality {
+        None => encoder
+            .encode_simple(true, 100.0)
+            .map_err(|error| AppError::Image(format!("WebP lossless encode failed: {error:?}")))?,
+        Some(q) => encoder
+            .encode_simple(false, f32::from(q.clamp(1, 100)))
+            .map_err(|error| AppError::Image(format!("WebP lossy encode failed: {error:?}")))?,
+    };
+    Ok(encoded.to_vec())
 }
 
 fn composite_onto_white(image: &RgbaImage) -> RgbImage {
@@ -883,6 +987,100 @@ mod tests {
         .unwrap();
         assert_eq!(&compressed[..8], b"\x89PNG\r\n\x1a\n");
         assert!(compressed.len() <= preserve.len());
+    }
+
+    #[test]
+    fn png_compress_quality_reduces_file_size_via_color_quantization() {
+        let image = detailed_sample();
+        let high = encode_export(
+            &image,
+            ScreenshotEditFormat::Png,
+            ScreenshotExportQualityMode::Compress,
+            92,
+        )
+        .unwrap();
+        let tiny = encode_export(
+            &image,
+            ScreenshotEditFormat::Png,
+            ScreenshotExportQualityMode::Compress,
+            55,
+        )
+        .unwrap();
+        assert_eq!(&tiny[..8], b"\x89PNG\r\n\x1a\n");
+        assert!(
+            tiny.len() < high.len(),
+            "fewer palette colors should shrink the PNG (tiny={}, high={})",
+            tiny.len(),
+            high.len()
+        );
+        image::load_from_memory_with_format(&tiny, ImageFormat::Png)
+            .expect("quantized PNG remains readable");
+    }
+
+    #[test]
+    fn webp_compress_quality_reduces_file_size_via_lossy_encode() {
+        let image = detailed_sample();
+        let high = encode_export(
+            &image,
+            ScreenshotEditFormat::Webp,
+            ScreenshotExportQualityMode::Compress,
+            92,
+        )
+        .unwrap();
+        let tiny = encode_export(
+            &image,
+            ScreenshotEditFormat::Webp,
+            ScreenshotExportQualityMode::Compress,
+            55,
+        )
+        .unwrap();
+        // RIFF....WEBP
+        assert!(
+            high.starts_with(b"RIFF"),
+            "lossy WebP should be a RIFF container"
+        );
+        assert!(
+            tiny.len() < high.len(),
+            "lower WebP quality should shrink the file (tiny={}, high={})",
+            tiny.len(),
+            high.len()
+        );
+        image::load_from_memory_with_format(&tiny, ImageFormat::WebP)
+            .expect("lossy WebP remains readable");
+    }
+
+    #[test]
+    fn webp_maximum_lowers_quality_to_meet_a_size_limit() {
+        let image = detailed_sample();
+        let high = encode_export(
+            &image,
+            ScreenshotEditFormat::Webp,
+            ScreenshotExportQualityMode::Compress,
+            100,
+        )
+        .unwrap();
+        let low = encode_export(
+            &image,
+            ScreenshotEditFormat::Webp,
+            ScreenshotExportQualityMode::Compress,
+            20,
+        )
+        .unwrap();
+        assert!(high.len() > low.len());
+        let maximum = u64::try_from((high.len() + low.len()) / 2).unwrap();
+
+        let limited = encode_export_with_limit(
+            &image,
+            ScreenshotEditFormat::Webp,
+            ScreenshotExportQualityMode::Maximum,
+            100,
+            Some(maximum),
+        )
+        .expect("WebP fits the requested maximum");
+
+        assert!(u64::try_from(limited.len()).unwrap() <= maximum);
+        image::load_from_memory_with_format(&limited, ImageFormat::WebP)
+            .expect("limited WebP remains readable");
     }
 
     #[test]

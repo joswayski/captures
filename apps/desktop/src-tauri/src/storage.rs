@@ -6,9 +6,10 @@ use std::{
 
 use chrono::{DateTime, Duration, Local, Utc};
 use image::{
-    ExtendedColorType, ImageEncoder, RgbaImage,
+    ExtendedColorType, ImageEncoder, RgbImage, RgbaImage,
     codecs::png::{CompressionType, FilterType, PngEncoder},
 };
+use quantette::{ImageBuf, PaletteSize, Pipeline};
 use uuid::Uuid;
 
 use crate::{
@@ -569,14 +570,118 @@ pub fn encode_png(image: &RgbaImage) -> Result<Vec<u8>, AppError> {
     encode_png_with_filter(image, FilterType::Sub)
 }
 
-/// Encode a PNG for user export. `compact` uses slower, stronger compression for
-/// smaller files while keeping the same pixels (still PNG, no format change).
-pub fn encode_png_export(image: &RgbaImage, compact: bool) -> Result<Vec<u8>, AppError> {
+/// Encode a PNG for user export.
+///
+/// - Preserve (`compact = false`): fast lossless packing, identical pixels.
+/// - Compact without a color budget: stronger lossless packing only.
+/// - Compact with `max_colors`: lossy **color quantization** (fewer colors), then
+///   strong packing — the same class of reduction tools like compresspng.com use.
+///   Fully opaque images become indexed PNGs; images with alpha keep the original
+///   alpha channel on remapped RGB.
+pub fn encode_png_export(
+    image: &RgbaImage,
+    compact: bool,
+    max_colors: Option<u16>,
+) -> Result<Vec<u8>, AppError> {
+    if let Some(colors) = max_colors.filter(|count| *count > 0) {
+        return encode_png_quantized(image, colors);
+    }
     if compact {
         encode_png_with_quality(image, CompressionType::Best, FilterType::Adaptive)
     } else {
         encode_png_with_filter(image, FilterType::Sub)
     }
+}
+
+/// Map the shared compress quality notch (also used for JPEG) to a PNG palette size.
+/// Higher quality → more colors kept → larger file.
+pub fn png_palette_colors_for_quality(quality: u8) -> u16 {
+    match quality {
+        0..=59 => 32,   // Tiny (~55)
+        60..=77 => 64,  // Smaller (~70)
+        78..=88 => 128, // Balanced (~85)
+        _ => 256,       // High (~92+)
+    }
+}
+
+/// Palette sizes tried when a hard maximum file size is requested for PNG.
+pub const PNG_MAXIMUM_COLOR_STEPS: [u16; 10] = [256, 192, 128, 96, 64, 48, 32, 24, 16, 8];
+
+fn encode_png_quantized(image: &RgbaImage, max_colors: u16) -> Result<Vec<u8>, AppError> {
+    let width = image.width();
+    let height = image.height();
+    if width == 0 || height == 0 {
+        return encode_png_with_quality(image, CompressionType::Best, FilterType::Adaptive);
+    }
+
+    let has_transparency = image.pixels().any(|pixel| pixel[3] < 255);
+    let rgb = RgbImage::from_fn(width, height, |x, y| {
+        let pixel = image.get_pixel(x, y);
+        image::Rgb([pixel[0], pixel[1], pixel[2]])
+    });
+
+    let quant_image = ImageBuf::try_from(rgb).map_err(|error| {
+        AppError::Image(format!(
+            "could not prepare image for PNG compression: {error}"
+        ))
+    })?;
+    let colors = max_colors.clamp(2, 256);
+    let indexed = Pipeline::new()
+        .palette_size(PaletteSize::from_u16_clamped(colors))
+        .parallel(true)
+        .input_image(quant_image.as_ref())
+        .output_srgb8_indexed_image();
+
+    if indexed.palette().is_empty() || indexed.indices().is_empty() {
+        return encode_png_with_quality(image, CompressionType::Best, FilterType::Adaptive);
+    }
+
+    if has_transparency {
+        let remapped = RgbaImage::from_fn(width, height, |x, y| {
+            let index = usize::from(indexed.indices()[(y * width + x) as usize]);
+            let color = indexed.palette().get(index).copied().unwrap_or_default();
+            let alpha = image.get_pixel(x, y)[3];
+            image::Rgba([color.red, color.green, color.blue, alpha])
+        });
+        return encode_png_with_quality(&remapped, CompressionType::Best, FilterType::Adaptive);
+    }
+
+    encode_indexed_png(width, height, indexed.palette(), indexed.indices())
+}
+
+fn encode_indexed_png(
+    width: u32,
+    height: u32,
+    palette_colors: &[quantette::deps::palette::Srgb<u8>],
+    indices: &[u8],
+) -> Result<Vec<u8>, AppError> {
+    let mut palette = Vec::with_capacity(palette_colors.len().max(1) * 3);
+    for color in palette_colors {
+        palette.push(color.red);
+        palette.push(color.green);
+        palette.push(color.blue);
+    }
+    // png crate requires a non-empty palette for indexed images.
+    if palette.is_empty() {
+        palette.extend_from_slice(&[0, 0, 0]);
+    }
+
+    let mut bytes = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut bytes, width, height);
+        encoder.set_color(png::ColorType::Indexed);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_compression(png::Compression::Best);
+        encoder.set_filter(png::FilterType::Paeth);
+        encoder.set_palette(palette);
+        let mut writer = encoder
+            .write_header()
+            .map_err(|error| AppError::Image(error.to_string()))?;
+        writer
+            .write_image_data(indices)
+            .map_err(|error| AppError::Image(error.to_string()))?;
+    }
+    Ok(bytes)
 }
 
 /// Downscale a full-resolution capture to logical display pixels (tests / legacy).

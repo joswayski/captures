@@ -141,8 +141,13 @@ function setCanvasBounds(canvas: HTMLCanvasElement, width = 1_440, height = 900)
 describe("ScreenshotEditor", () => {
   beforeEach(() => {
     window.history.replaceState({}, "", "/?view=screenshot-editor&artifact_id=capture-1");
-    vi.mocked(invoke).mockImplementation(async (command) => {
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
       if (command === "get_artifact") return artifact;
+      if (command === "estimate_screenshot_export") {
+        const quality = Number((args as { jpegQuality?: number } | undefined)?.jpegQuality ?? 92);
+        // Lower quality notches map to fewer PNG colors → smaller estimate.
+        return Math.max(8_000, Math.round(120_000 * (quality / 100)));
+      }
       const draft = draftCommandResult(String(command));
       if (draft !== undefined || String(command).includes("screenshot_editor_draft")) {
         return draft;
@@ -1622,7 +1627,7 @@ describe("ScreenshotEditor", () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
 
-    const editor = screen.getByText("Screenshot editor").closest("main");
+    const editor = screen.getByLabelText("Screenshot editing canvas").closest("main");
     expect(editor).toBeTruthy();
     const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
     // jsdom often reports 0×0 canvas layout; force a known client→document mapping.
@@ -1675,7 +1680,7 @@ describe("ScreenshotEditor", () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
 
-    const editor = screen.getByText("Screenshot editor").closest("main");
+    const editor = screen.getByLabelText("Screenshot editing canvas").closest("main");
     expect(editor).toBeTruthy();
     const viewport = screen.getByLabelText("Screenshot editing canvas");
     vi.spyOn(viewport, "getBoundingClientRect").mockReturnValue({
@@ -1776,7 +1781,7 @@ describe("ScreenshotEditor", () => {
     expect(format).toHaveTextContent("PNG");
     const saveQuality = screen.getByRole("combobox", { name: "Save quality" });
     expect(saveQuality).toHaveTextContent("Preserve quality");
-    expect(screen.queryByRole("slider", { name: "Compression quality" }))
+    expect(screen.queryByRole("combobox", { name: "Compression quality" }))
       .not.toBeInTheDocument();
     expect(screen.queryByRole("spinbutton", { name: "Maximum file size" }))
       .not.toBeInTheDocument();
@@ -1784,37 +1789,35 @@ describe("ScreenshotEditor", () => {
       screen.getByText("Keeps original quality as PNG and replaces the original."),
     ).toBeInTheDocument();
 
-    // Compress keeps PNG and shows the same Smaller / Balanced / High presets as video.
+    // Compress keeps PNG and shows color-reduction quality presets.
     fireEvent.click(saveQuality);
     fireEvent.click(screen.getByRole("option", { name: /Compress/ }));
 
     await waitFor(() => {
       expect(format).toHaveTextContent("PNG");
     });
-    const quality = screen.getByRole("slider", { name: "Compression quality" });
-    expect(quality).toHaveAttribute("aria-valuetext", "High");
-    expect(screen.getByText("Larger file with the least quality loss.")).toBeInTheDocument();
-    expect(
-      screen.getByText("PNG uses stronger packing. Quality presets apply to JPEG."),
-    ).toBeInTheDocument();
+    const pngQuality = screen.getByRole("combobox", { name: "Compression quality" });
+    expect(pngQuality).toHaveTextContent("High");
+    fireEvent.click(pngQuality);
+    expect(screen.getByRole("option", { name: /Tiny/ })).toBeInTheDocument();
+    expect(screen.getByText(/About 32 colors/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("option", { name: /Tiny/ }));
+    expect(pngQuality).toHaveTextContent("Tiny");
     expect(screen.queryByRole("spinbutton", { name: "Maximum file size" }))
       .not.toBeInTheDocument();
     expect(
       screen.getByText("Compressed PNG replaces the original; turn on Make a copy to keep it."),
     ).toBeInTheDocument();
 
-    fireEvent.change(quality, { target: { value: "1" } });
-    expect(quality).toHaveAttribute("aria-valuetext", "Balanced");
-
     fireEvent.click(format);
     fireEvent.click(screen.getByRole("option", { name: "JPEG" }));
     expect(screen.getByRole("combobox", { name: "Save quality" }))
       .toHaveTextContent("Compress");
-    expect(screen.getByRole("slider", { name: "Compression quality" }))
-      .toHaveAttribute("aria-valuetext", "Balanced");
-    expect(
-      screen.queryByText("PNG uses stronger packing. Quality presets apply to JPEG."),
-    ).not.toBeInTheDocument();
+    const quality = screen.getByRole("combobox", { name: "Compression quality" });
+    expect(quality).toHaveTextContent("Tiny");
+    fireEvent.click(quality);
+    fireEvent.click(screen.getByRole("option", { name: /Balanced/ }));
+    expect(quality).toHaveTextContent("Balanced");
     // Source is still a PNG path, so a JPEG save is always a new file.
     expect(
       screen.getByText("Compressed JPEG saves as a new file and leaves the original untouched."),
@@ -1823,7 +1826,7 @@ describe("ScreenshotEditor", () => {
     fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
     fireEvent.click(screen.getByRole("option", { name: /Maximum file size/ }));
 
-    expect(screen.queryByRole("slider", { name: "Compression quality" }))
+    expect(screen.queryByRole("combobox", { name: "Compression quality" }))
       .not.toBeInTheDocument();
     expect(screen.getByRole("spinbutton", { name: "Maximum file size" })).toHaveValue(10);
     expect(screen.getByRole("combobox", { name: "Screenshot file size unit" }))
@@ -1905,7 +1908,14 @@ describe("ScreenshotEditor", () => {
       const size = type === "image/jpeg"
         ? Math.max(1, Math.round(80_000 * (quality ?? 1)))
         : 220_000;
-      callback(new Blob([new Uint8Array(size)], { type: type ?? "image/png" }));
+      const bytes = new Uint8Array(size);
+      const blob = new Blob([bytes], { type: type ?? "image/png" });
+      if (typeof blob.arrayBuffer !== "function") {
+        Object.defineProperty(blob, "arrayBuffer", {
+          value: async () => bytes.buffer,
+        });
+      }
+      callback(blob);
     });
     const context = {
       canvas: document.createElement("canvas"),
@@ -1968,22 +1978,43 @@ describe("ScreenshotEditor", () => {
 
       fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
       fireEvent.click(screen.getByRole("option", { name: /Compress/ }));
-      // PNG compress keeps PNG; switch to JPEG to exercise the quality estimate path.
+      // PNG compress estimates go through Rust (color quantization).
       expect(screen.getByRole("combobox", { name: "Format" })).toHaveTextContent("PNG");
+      await waitFor(() => {
+        expect(screen.getByRole("combobox", { name: "Compression quality" })).toBeInTheDocument();
+      });
+
+      const estimate = () => screen.getByTitle(
+        "Estimated export file size for the current format, quality, and output size",
+      );
+      await waitFor(() => {
+        expect(vi.mocked(invoke).mock.calls.some(
+          ([command]) => command === "estimate_screenshot_export",
+        )).toBe(true);
+        expect(estimate()).toHaveTextContent(/≈/);
+      }, { timeout: 2_000 });
+
+      // JPEG still uses the browser quality estimate path.
       fireEvent.click(screen.getByRole("combobox", { name: "Format" }));
       fireEvent.click(screen.getByRole("option", { name: "JPEG" }));
       await waitFor(() => {
         expect(screen.getByRole("combobox", { name: "Format" })).toHaveTextContent("JPEG");
-        expect(screen.getByRole("slider", { name: "Compression quality" })).toBeInTheDocument();
       });
-      fireEvent.change(screen.getByRole("slider", { name: "Compression quality" }), {
-        target: { value: "0" },
-      });
-
+      fireEvent.click(screen.getByRole("combobox", { name: "Compression quality" }));
+      fireEvent.click(screen.getByRole("option", { name: /High/ }));
       await waitFor(() => {
         expect(toBlob.mock.calls.some((call) => call[1] === "image/jpeg")).toBe(true);
-        expect(screen.getByTitle("Estimated export file size for the current format, quality, and output size"))
-          .toHaveTextContent(/≈/);
+        expect(estimate()).toHaveTextContent(/≈/);
+      }, { timeout: 2_000 });
+      const highEstimate = estimate().textContent;
+
+      fireEvent.click(screen.getByRole("combobox", { name: "Compression quality" }));
+      fireEvent.click(screen.getByRole("option", { name: /Tiny/ }));
+
+      await waitFor(() => {
+        expect(estimate()).toHaveTextContent(/≈/);
+        // Lower JPEG quality should yield a smaller estimated encode.
+        expect(estimate().textContent).not.toBe(highEstimate);
       }, { timeout: 2_000 });
     } finally {
       window.Image = originalImage;
