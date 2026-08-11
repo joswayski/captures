@@ -2100,16 +2100,38 @@ export function resizeHandlePoint(bounds: EditorRect, handle: ResizeHandle): Edi
 }
 
 /**
+ * True for the four corner grips. Mid-edge handles stay freeform even when
+ * Shift is held — proportional lock only applies to corners.
+ */
+export function isResizeCornerHandle(handle: ResizeHandle): boolean {
+  return RESIZE_CORNER_HANDLES.includes(handle);
+}
+
+/**
  * Compute a new selection rectangle while dragging a corner or edge handle.
  * The opposite edge/corner stays fixed; the dragged side follows `current`.
+ *
+ * When `lockAspectRatio` is true and `handle` is a corner, width and height
+ * keep the initial aspect ratio (Shift-drag proportional scale). Edge handles
+ * ignore the lock so mid-side drags remain single-axis.
  */
 export function resizeBoundsFromHandle(
   initial: EditorRect,
   handle: ResizeHandle,
   current: EditorPoint,
   minimumSize = 8,
+  lockAspectRatio = false,
 ): EditorRect {
   const min = Math.max(1, minimumSize);
+  if (
+    lockAspectRatio
+    && isResizeCornerHandle(handle)
+    && initial.width >= 1
+    && initial.height >= 1
+  ) {
+    return resizeBoundsProportional(initial, handle, current, min);
+  }
+
   const fixedLeft = initial.x;
   const fixedTop = initial.y;
   const fixedRight = initial.x + initial.width;
@@ -2160,6 +2182,58 @@ export function resizeBoundsFromHandle(
   }
 
   return { x: left, y: top, width, height };
+}
+
+/**
+ * Corner resize with a fixed opposite corner and locked aspect ratio.
+ * The free corner tracks the pointer while width/height stay proportional.
+ */
+function resizeBoundsProportional(
+  initial: EditorRect,
+  handle: ResizeHandle,
+  current: EditorPoint,
+  min: number,
+): EditorRect {
+  const aspect = initial.width / initial.height;
+  const anchor = resizeHandlePoint(initial, oppositeResizeHandle(handle));
+
+  // Proposed free size from the fixed corner to the pointer (allow flip).
+  let width = Math.max(Math.abs(current.x - anchor.x), 1e-6);
+  let height = Math.max(Math.abs(current.y - anchor.y), 1e-6);
+
+  if (width / height > aspect) {
+    height = width / aspect;
+  } else {
+    width = height * aspect;
+  }
+
+  // Keep both axes at least `min` without breaking the aspect ratio.
+  if (width < min || height < min) {
+    if (aspect >= 1) {
+      width = Math.max(min, width);
+      height = width / aspect;
+      if (height < min) {
+        height = min;
+        width = height * aspect;
+      }
+    } else {
+      height = Math.max(min, height);
+      width = height * aspect;
+      if (width < min) {
+        width = min;
+        height = width / aspect;
+      }
+    }
+  }
+
+  const signX = current.x >= anchor.x ? 1 : -1;
+  const signY = current.y >= anchor.y ? 1 : -1;
+  return {
+    x: signX > 0 ? anchor.x : anchor.x - width,
+    y: signY > 0 ? anchor.y : anchor.y - height,
+    width,
+    height,
+  };
 }
 
 export function oppositeResizeHandle(handle: ResizeHandle): ResizeHandle {

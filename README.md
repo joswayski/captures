@@ -101,8 +101,9 @@ Preview builds update after every successful merge to `main` and may contain bug
 
 Global capture and feedback shortcuts can be changed in Preferences. In the
 screenshot editor, zoom with the header slider and `+`/`-` controls, pinch or
-`Ctrl`/`Cmd`+scroll, pan with `Ctrl`/`Cmd`-drag or middle-click, and duplicate
-layers with `Ctrl`/`Cmd`+`D`.
+`Ctrl`/`Cmd`+scroll, pan with `Ctrl`/`Cmd`-drag or middle-click, hold `Shift`
+while dragging a corner handle to scale proportionally, and duplicate layers
+with `Ctrl`/`Cmd`+`D`.
 
 ## Development
 
