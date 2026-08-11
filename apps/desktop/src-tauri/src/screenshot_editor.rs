@@ -563,7 +563,7 @@ pub fn discard_screenshot_editor_draft_files(artifact_id: &str) -> Result<(), Ap
     if !root.exists() {
         return Ok(());
     }
-    fs::remove_dir_all(root).map_err(|error| AppError::Io(error))?;
+    fs::remove_dir_all(root).map_err(AppError::Io)?;
     Ok(())
 }
 
