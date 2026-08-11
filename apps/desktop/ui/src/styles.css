@@ -433,52 +433,41 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-top-action
 .thumbnail-top-left .icon-button:hover::after, .thumbnail-top-left .icon-button[data-native-pointer-hover="true"]::after, .thumbnail-top-left .icon-button:focus-visible::after { transform: translate(0, 0); }
 /*
  * Unified editor control (top-right): compact Edit icon ↔ “In editor” pill.
- * Stays visible while the capture is present in an editor (not only on card hover).
+ * Shell = hit target + Edit tooltip host (no transform / backdrop-filter —
+ * those clip overflow in WKWebView and made the tip flash then vanish).
+ * Face = visual chrome, entrance/hover motion, and label morph clipping.
  */
 .thumbnail-editor-control {
   --editor-control-ease: cubic-bezier(.2, .8, .2, 1);
   position: absolute;
-  z-index: 5;
+  z-index: 9;
   top: 8px;
   right: 8px;
   display: inline-flex;
   height: 29px;
   min-width: 29px;
   max-width: 29px;
-  padding: 5px;
-  align-items: center;
-  justify-content: center;
-  gap: 0;
-  /* Compact state stays visible so the Edit tooltip can paint above the icon.
-     overflow:hidden on the always-on control clips that ::after for a flash-then-gone. */
-  overflow: visible;
-  border: 1px solid rgba(255, 255, 255, .14);
-  border-radius: 7px;
+  padding: 0;
+  align-items: stretch;
+  justify-content: stretch;
+  border: 0;
+  border-radius: 0;
   color: #f8f8fb;
-  background: rgba(16, 17, 25, .8);
-  box-shadow: 0 3px 12px rgba(0, 0, 0, .3);
-  backdrop-filter: blur(12px);
+  background: transparent;
+  box-shadow: none;
   cursor: pointer;
   outline: none;
   opacity: 0;
   pointer-events: none;
-  transform: translateY(-3px);
+  overflow: visible;
   font-size: 10px;
   font-weight: 750;
   line-height: 1.3;
   white-space: nowrap;
   transition:
     opacity .16s ease,
-    transform .18s ease,
-    color .2s ease,
-    background .22s var(--editor-control-ease),
-    border-color .22s var(--editor-control-ease),
-    border-radius .26s var(--editor-control-ease),
-    box-shadow .22s var(--editor-control-ease),
     max-width .28s var(--editor-control-ease),
-    min-width .28s var(--editor-control-ease),
-    padding .28s var(--editor-control-ease),
-    gap .28s var(--editor-control-ease);
+    min-width .28s var(--editor-control-ease);
 }
 html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-editor-control,
 .thumbnail-card:focus-within .thumbnail-editor-control,
@@ -487,37 +476,75 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-editor-con
 .thumbnail-card.thumbnail-editor-leaving .thumbnail-editor-control {
   opacity: 1;
   pointer-events: auto;
+}
+.thumbnail-editor-control:focus { outline: none; }
+.thumbnail-editor-control:focus-visible .thumbnail-editor-control-face {
+  box-shadow:
+    0 3px 12px rgba(0, 0, 0, .3),
+    0 0 0 2px rgba(var(--theme-accent-rgb), .65);
+}
+.thumbnail-editor-control-face {
+  position: relative;
+  z-index: 0;
+  display: inline-flex;
+  height: 100%;
+  min-width: 29px;
+  max-width: 100%;
+  padding: 5px;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, .14);
+  border-radius: 7px;
+  color: inherit;
+  background: rgba(16, 17, 25, .8);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, .3);
+  backdrop-filter: blur(12px);
+  transform: translateY(-3px);
+  transition:
+    transform .18s ease,
+    color .2s ease,
+    background .22s var(--editor-control-ease),
+    border-color .22s var(--editor-control-ease),
+    border-radius .26s var(--editor-control-ease),
+    box-shadow .22s var(--editor-control-ease),
+    padding .28s var(--editor-control-ease),
+    gap .28s var(--editor-control-ease),
+    filter .16s ease;
+}
+html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-editor-control-face,
+.thumbnail-card:focus-within .thumbnail-editor-control-face,
+.thumbnail-card[data-thumbnail-native-active="true"] .thumbnail-editor-control-face,
+.thumbnail-card.thumbnail-editor-active .thumbnail-editor-control-face,
+.thumbnail-card.thumbnail-editor-leaving .thumbnail-editor-control-face {
   transform: translateY(0);
 }
-.thumbnail-editor-control:hover,
-.thumbnail-editor-control[data-native-pointer-hover="true"] {
+.thumbnail-editor-control:hover .thumbnail-editor-control-face,
+.thumbnail-editor-control[data-native-pointer-hover="true"] .thumbnail-editor-control-face {
   background: rgba(48, 49, 64, .96);
   transform: translateY(-1px) scale(1.04);
 }
-html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-editor-control:hover,
-html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-editor-control[data-native-pointer-hover="true"],
-.thumbnail-card:focus-within .thumbnail-editor-control:hover,
-.thumbnail-card:focus-within .thumbnail-editor-control[data-native-pointer-hover="true"],
-.thumbnail-card[data-thumbnail-native-active="true"] .thumbnail-editor-control:hover,
-.thumbnail-card[data-thumbnail-native-active="true"] .thumbnail-editor-control[data-native-pointer-hover="true"],
-.thumbnail-card.thumbnail-editor-active .thumbnail-editor-control:hover,
-.thumbnail-card.thumbnail-editor-active .thumbnail-editor-control[data-native-pointer-hover="true"],
-.thumbnail-card.thumbnail-editor-leaving .thumbnail-editor-control:hover,
-.thumbnail-card.thumbnail-editor-leaving .thumbnail-editor-control[data-native-pointer-hover="true"] {
+html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-editor-control:hover .thumbnail-editor-control-face,
+html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-editor-control[data-native-pointer-hover="true"] .thumbnail-editor-control-face,
+.thumbnail-card:focus-within .thumbnail-editor-control:hover .thumbnail-editor-control-face,
+.thumbnail-card:focus-within .thumbnail-editor-control[data-native-pointer-hover="true"] .thumbnail-editor-control-face,
+.thumbnail-card[data-thumbnail-native-active="true"] .thumbnail-editor-control:hover .thumbnail-editor-control-face,
+.thumbnail-card[data-thumbnail-native-active="true"] .thumbnail-editor-control[data-native-pointer-hover="true"] .thumbnail-editor-control-face,
+.thumbnail-card.thumbnail-editor-active .thumbnail-editor-control:hover .thumbnail-editor-control-face,
+.thumbnail-card.thumbnail-editor-active .thumbnail-editor-control[data-native-pointer-hover="true"] .thumbnail-editor-control-face,
+.thumbnail-card.thumbnail-editor-leaving .thumbnail-editor-control:hover .thumbnail-editor-control-face,
+.thumbnail-card.thumbnail-editor-leaving .thumbnail-editor-control[data-native-pointer-hover="true"] .thumbnail-editor-control-face {
   transform: translateY(-1px) scale(1.04);
 }
-.thumbnail-editor-control:focus { outline: none; }
-.thumbnail-editor-control:focus-visible {
-  box-shadow: 0 3px 12px rgba(0, 0, 0, .3), 0 0 0 2px rgba(var(--theme-accent-rgb), .65);
-}
-/* Compact Edit tooltip (hidden when the pill label is visible or morphing). */
-.thumbnail-editor-control::after {
+/* Compact Edit tip: real node on the shell (not ::after on a filtered face). */
+.thumbnail-editor-control-tip {
   position: absolute;
+  z-index: 20;
   bottom: calc(100% + 6px);
   right: 0;
   padding: 4px 7px;
   border-radius: 5px;
-  content: attr(data-tooltip);
   color: white;
   background: rgba(10, 11, 16, .94);
   box-shadow: 0 3px 12px rgba(0, 0, 0, .3);
@@ -528,25 +555,12 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-editor-con
   font-size: 10px;
   font-weight: 600;
   white-space: nowrap;
-  z-index: 20;
 }
-.thumbnail-editor-control:hover::after,
-.thumbnail-editor-control[data-native-pointer-hover="true"]::after,
-.thumbnail-editor-control:focus-visible::after {
+.thumbnail-editor-control:hover .thumbnail-editor-control-tip,
+.thumbnail-editor-control[data-native-pointer-hover="true"] .thumbnail-editor-control-tip,
+.thumbnail-editor-control:focus-visible .thumbnail-editor-control-tip {
   opacity: 1;
   transform: translateY(0);
-}
-.thumbnail-editor-control.is-present::after,
-.thumbnail-editor-control.leaving::after,
-.thumbnail-editor-control:not([data-tooltip])::after {
-  content: none;
-  opacity: 0;
-}
-/* Clip the expanding/collapsing label to the rounded pill; keep compact
-   overflow:visible so the Edit tooltip is not swallowed. */
-.thumbnail-editor-control.is-present,
-.thumbnail-editor-control.leaving {
-  overflow: hidden;
 }
 .thumbnail-editor-control svg {
   width: 17px;
@@ -563,6 +577,9 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-editor-con
 .thumbnail-editor-control.is-present {
   min-width: 0;
   max-width: 11rem;
+}
+.thumbnail-editor-control.is-present .thumbnail-editor-control-face {
+  min-width: 0;
   padding: 3px 9px 3px 7px;
   gap: 5px;
   border-radius: 999px;
@@ -581,9 +598,9 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-editor-con
   stroke-width: 2.2;
 }
 /* Hover while present: fill accent + action label (“Show in editor”). */
-.thumbnail-editor-control.is-present:not([data-editor-just-opened="true"]):hover,
-.thumbnail-editor-control.is-present:not([data-editor-just-opened="true"])[data-native-pointer-hover="true"],
-.thumbnail-editor-control.is-present:not([data-editor-just-opened="true"]):focus-visible {
+.thumbnail-editor-control.is-present:not([data-editor-just-opened="true"]):hover .thumbnail-editor-control-face,
+.thumbnail-editor-control.is-present:not([data-editor-just-opened="true"])[data-native-pointer-hover="true"] .thumbnail-editor-control-face,
+.thumbnail-editor-control.is-present:not([data-editor-just-opened="true"]):focus-visible .thumbnail-editor-control-face {
   color: var(--theme-accent-ink, #120f1c);
   background: var(--theme-accent);
   border-color: rgba(var(--theme-accent-rgb), .9);
@@ -676,7 +693,7 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   cursor: default !important;
 }
 .thumbnail-card.thumbnail-exiting .icon-button::after,
-.thumbnail-card.thumbnail-exiting .thumbnail-editor-control::after {
+.thumbnail-card.thumbnail-exiting .thumbnail-editor-control-tip {
   opacity: 0 !important;
   transition: none !important;
 }
@@ -793,14 +810,16 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   pointer-events: none !important;
   transition: none !important;
   opacity: 1;
-  transform: translateY(0);
   animation: thumbnail-chrome-fade-plain .85s cubic-bezier(.22, .1, .25, 1) both !important;
+}
+.thumbnail-exit-delete .thumbnail-editor-control-face {
+  transform: translateY(0) !important;
 }
 .thumbnail-exit-delete .thumbnail-bottom-bar {
   transition: none !important;
 }
 .thumbnail-exit-delete .icon-button::after,
-.thumbnail-exit-delete .thumbnail-editor-control::after {
+.thumbnail-exit-delete .thumbnail-editor-control-tip {
   opacity: 0 !important;
   transition: none !important;
 }
@@ -936,7 +955,7 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 /* Dust chip flight keyframes live in playThumbnailDustAnimations (WAAPI). */
 @keyframes thumbnail-action-pop { from { opacity: .25; transform: scale(.65); } to { opacity: 1; transform: scale(1); } }
 @media (prefers-reduced-motion: reduce) {
-  .capture-surface, .capture-shade, .capture-guidance, .window-targets, .recording-countdown, .recording-countdown-content, .thumbnail-card, .thumbnail-card::after, .thumbnail-card img, .thumbnail-overflow-cue, .clipboard-confirmation, .thumbnail-editor-control, .thumbnail-editor-control-label, .thumbnail-top-actions, .thumbnail-main-actions, .thumbnail-main-actions svg, .thumbnail-dust, .thumbnail-dust-layer { animation-duration: .01ms !important; transition-duration: .01ms; }
+  .capture-surface, .capture-shade, .capture-guidance, .window-targets, .recording-countdown, .recording-countdown-content, .thumbnail-card, .thumbnail-card::after, .thumbnail-card img, .thumbnail-overflow-cue, .clipboard-confirmation, .thumbnail-editor-control, .thumbnail-editor-control-face, .thumbnail-editor-control-label, .thumbnail-editor-control-tip, .thumbnail-top-actions, .thumbnail-main-actions, .thumbnail-main-actions svg, .thumbnail-dust, .thumbnail-dust-layer { animation-duration: .01ms !important; transition-duration: .01ms; }
   .thumbnail-card.thumbnail-exit-dismiss img { animation: none; filter: blur(2px) brightness(.56); transform: scale(1.015); }
   .thumbnail-dust { opacity: 0; }
 }
