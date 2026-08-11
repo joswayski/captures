@@ -1890,25 +1890,19 @@ export function ScreenshotEditor() {
   }, [artifactId, editorDocument, persistEditorDraft]);
 
   // Flush the latest draft before the native window is destroyed.
+  //
+  // Tauri's onCloseRequested awaits this handler, then destroys the window unless
+  // preventDefault() was called. Always calling preventDefault and then destroy()
+  // manually cancelled the first close (mini-previews still cleared presence on
+  // CloseRequested) and left the editor open until a second click.
   useEffect(() => {
     if (!isTauri() || !artifactId) return;
     let active = true;
     let unlisten: (() => void) | undefined;
-    let closing = false;
-    void getCurrentWindow().onCloseRequested(async (event) => {
-      if (!active || closing) return;
-      closing = true;
-      event.preventDefault();
-      try {
-        await flushEditorDraft();
-      } finally {
-        unlisten?.();
-        try {
-          await getCurrentWindow().destroy();
-        } catch {
-          // Window may already be gone.
-        }
-      }
+    void getCurrentWindow().onCloseRequested(async () => {
+      if (!active) return;
+      await flushEditorDraft();
+      // Do not preventDefault — allow Tauri to destroy after the flush completes.
     }).then((dispose) => {
       if (!active) {
         dispose();
