@@ -733,28 +733,58 @@ fn make_key_and_activate(window: &WebviewWindow) -> Result<(), &'static str> {
 /// session already recorded an anchor (selector → countdown should not clobber
 /// the original frontmost app).
 ///
-/// Also conceals open titled document windows (editors, history, preferences)
-/// so app activation cannot flash them above the user's work. Call
-/// [`reveal_concealed_document_windows`] only when the full capture UI session
-/// ends — not on intermediate frontmost restores (for example overlay →
+/// When another app is frontmost, also conceals open titled document windows
+/// (editors, history, preferences) so app activation cannot flash them above
+/// the user's work. When Captures is already frontmost — the usual case with an
+/// editor open — documents stay visible so region/window selection does not
+/// hide and re-show them for the whole capture UI session. The always-on-top
+/// overlay still covers them on the capture display.
+///
+/// Call [`reveal_concealed_document_windows`] only when the full capture UI
+/// session ends — not on intermediate frontmost restores (for example overlay →
 /// countdown).
 ///
 /// Call this immediately before focusing the screenshot overlay or another
 /// capture UI so document windows can be returned to the background afterward.
 pub fn remember_frontmost_app_before_activation() {
-    conceal_document_windows_for_capture();
-    let mut slot = FRONTMOST_APP_BEFORE_CAPTURE
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if slot.is_some() {
-        return;
+    {
+        let slot = FRONTMOST_APP_BEFORE_CAPTURE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if slot.is_some() {
+            return;
+        }
     }
     let frontmost = NSWorkspace::sharedWorkspace().frontmostApplication();
     let current = NSRunningApplication::currentApplication();
-    *slot = match frontmost {
+    let previous = match frontmost {
         Some(app) if !app.isEqual(Some(&*current)) && !app.isTerminated() => Some(app),
         _ => None,
     };
+    // Only order out documents when activation would pull them over another
+    // app. Concealing while Captures is already key is what made open editors
+    // vanish for the whole region/window selection and pop back at the end.
+    if should_conceal_documents_for_capture_activation(previous.is_some()) {
+        conceal_document_windows_for_capture();
+    }
+    let mut slot = FRONTMOST_APP_BEFORE_CAPTURE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // A concurrent activation may have recorded the anchor first; keep it.
+    if slot.is_some() {
+        return;
+    }
+    *slot = previous;
+}
+
+/// Whether titled documents should be ordered out for this capture activation.
+///
+/// `other_app_is_frontmost` is true when the workspace frontmost app is not
+/// Captures (and is still running). Pure helper for unit tests.
+pub(crate) fn should_conceal_documents_for_capture_activation(
+    other_app_is_frontmost: bool,
+) -> bool {
+    other_app_is_frontmost
 }
 
 /// Drops a remembered frontmost app without restoring it.
@@ -1196,9 +1226,20 @@ mod tests {
         cursor_mode_is_interactive, cursor_surface_can_apply,
         cursor_surface_can_take_key_window_with_thumbnail_allowed, cursor_surface_uses_key_window,
         reassert_thumbnail_cursor_after_click, shortcut_modifiers_pressed,
-        should_release_thumbnail_key_after_event, should_reset_cursor_on_exit,
-        style_mask_is_titled_document, window_corner_radius_for_major_version,
+        should_conceal_documents_for_capture_activation, should_release_thumbnail_key_after_event,
+        should_reset_cursor_on_exit, style_mask_is_titled_document,
+        window_corner_radius_for_major_version,
     };
+
+    #[test]
+    fn conceals_documents_only_when_another_app_is_frontmost() {
+        // Editor open + capture shortcut: Captures is already frontmost — keep
+        // the editor on screen for the whole selection session.
+        assert!(!should_conceal_documents_for_capture_activation(false));
+        // Capture while Chrome/Discord is key: order out so activation cannot
+        // flash editors above the user's work when the overlay dismisses.
+        assert!(should_conceal_documents_for_capture_activation(true));
+    }
 
     #[test]
     fn titled_document_mask_matches_editors_not_capture_surfaces() {
