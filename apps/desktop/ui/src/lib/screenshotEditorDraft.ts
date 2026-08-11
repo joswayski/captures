@@ -8,6 +8,16 @@ export const SCREENSHOT_EDITOR_DRAFT_SCHEMA_VERSION = 1;
 /** Debounce before writing a dirty document to disk. */
 export const SCREENSHOT_EDITOR_DRAFT_SAVE_MS = 700;
 
+/**
+ * Max time the editor window may stay open after the user clicks close while a
+ * draft flush is in progress. Encoding full-resolution PNG layers to `number[]`
+ * and shipping them over IPC can take seconds; Tauri only destroys the window
+ * after `onCloseRequested` resolves, so an uncapped await made the red X look
+ * completely dead. Autosave already keeps most sessions on disk; this budget
+ * only covers a last best-effort write.
+ */
+export const SCREENSHOT_EDITOR_DRAFT_CLOSE_FLUSH_MS = 400;
+
 /** Soft cap so huge multi-layer edits do not fill the disk unexpectedly. */
 export const SCREENSHOT_EDITOR_DRAFT_MAX_TOTAL_BYTES = 80 * 1024 * 1024;
 

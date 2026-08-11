@@ -21,6 +21,7 @@ import {
   buildScreenshotEditorDraftPayload,
   collectDocumentImageSources,
   isScreenshotDocumentDirty,
+  SCREENSHOT_EDITOR_DRAFT_CLOSE_FLUSH_MS,
   SCREENSHOT_EDITOR_DRAFT_SAVE_MS,
   type LoadedScreenshotEditorDraft,
 } from "./lib/screenshotEditorDraft";
@@ -1505,6 +1506,8 @@ export function ScreenshotEditor() {
   const successTimerRef = useRef<number | null>(null);
   /** Bumps to cancel in-flight debounced draft writes. */
   const draftSaveGenerationRef = useRef(0);
+  /** Latest flush function for the close handler (stable listener, no re-subscribe). */
+  const flushEditorDraftRef = useRef<() => Promise<void>>(async () => undefined);
   const objectUrlsRef = useRef(new Set<string>());
   const gestureRef = useRef<EditorGesture | null>(null);
   /** Live natural-resolution canvas drawn over the target layer during brush strokes. */
@@ -1787,6 +1790,8 @@ export function ScreenshotEditor() {
     }
   }, [artifactId, persistEditorDraft]);
 
+  flushEditorDraftRef.current = flushEditorDraft;
+
   const discardRestoredDraft = useCallback(() => {
     if (!artifact) return;
     const next = createScreenshotDocument(
@@ -1921,20 +1926,28 @@ export function ScreenshotEditor() {
     return () => window.clearTimeout(timer);
   }, [artifactId, editorDocument, persistEditorDraft]);
 
-  // Flush the latest draft before the native window is destroyed.
+  // Best-effort draft flush before the native window is destroyed.
   //
-  // Tauri's onCloseRequested awaits this handler, then destroys the window unless
-  // preventDefault() was called. Always calling preventDefault and then destroy()
-  // manually cancelled the first close (mini-previews still cleared presence on
-  // CloseRequested) and left the editor open until a second click.
+  // Tauri always prevent_close()s when a JS onCloseRequested listener exists,
+  // then the API wrapper awaits this handler and calls destroy() unless
+  // preventDefault() was used. A full dirty-draft encode (every image layer →
+  // PNG → number[] IPC) can hang long enough that the red X appears broken.
+  // Cap the wait so the window always closes; debounced autosave already keeps
+  // most sessions recoverable. Keep this effect dependent only on artifactId
+  // so we do not unlisten/re-listen on every render (unlisten can strand close).
   useEffect(() => {
     if (!isTauri() || !artifactId) return;
     let active = true;
     let unlisten: (() => void) | undefined;
     void getCurrentWindow().onCloseRequested(async () => {
       if (!active) return;
-      await flushEditorDraft();
-      // Do not preventDefault — allow Tauri to destroy after the flush completes.
+      await Promise.race([
+        flushEditorDraftRef.current(),
+        new Promise<void>((resolve) => {
+          window.setTimeout(resolve, SCREENSHOT_EDITOR_DRAFT_CLOSE_FLUSH_MS);
+        }),
+      ]);
+      // Do not preventDefault — allow Tauri to destroy after the race settles.
     }).then((dispose) => {
       if (!active) {
         dispose();
@@ -1946,7 +1959,7 @@ export function ScreenshotEditor() {
       active = false;
       unlisten?.();
     };
-  }, [artifactId, flushEditorDraft]);
+  }, [artifactId]);
 
   // Keep mini-previews in sync with image layers still present in this editor.
   // Deleting a layer drops that capture; closing the window clears them all.
