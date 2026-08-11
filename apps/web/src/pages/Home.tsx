@@ -9,6 +9,10 @@ const PREVIEW_DOWNLOAD_BASE = `${REPO_URL}/releases/download/preview`;
 const PREVIEW_TAG = /^v(\d{4})\.(\d{2})\.(\d{2})\.([1-9]\d?)$/u;
 /** How often the homepage re-checks Preview build status (and the API cache TTL). */
 const PREVIEW_STATUS_POLL_MS = 60 * 60 * 1_000;
+/** Hide "still cooking" once a merge is this old — avoids stuck/failed publishes lingering. */
+const COOKING_MAX_AGE_MS = 4 * 60 * 60 * 1_000;
+const COOKING_TOOLTIP =
+  "Preview builds are still publishing this change. Downloads may not include it yet.";
 
 const PREVIEW_DOWNLOADS = [
   {
@@ -156,7 +160,9 @@ export default function Home() {
 
           <ol className="mt-6 space-y-5">
             {__LATEST_CHANGES__.map((change) => {
-              const cooking = cookingShas.has(change.sha);
+              const cooking =
+                cookingShas.has(change.sha) && isWithinCookingWindow(change.committedAt, now);
+              const cookingTipId = `cooking-tip-${change.sha.slice(0, 12)}`;
               return (
                 <li key={change.sha}>
                   <a
@@ -172,10 +178,19 @@ export default function Home() {
                     {cooking ? (
                       <>
                         <span aria-hidden="true"> · </span>
-                        <span className="cooking-emoji" aria-hidden="true">
-                          🍳
-                        </span>{" "}
-                        <span>still cooking</span>
+                        <span
+                          className="cooking-status"
+                          tabIndex={0}
+                          aria-describedby={cookingTipId}
+                        >
+                          <span className="cooking-emoji" aria-hidden="true">
+                            🍳
+                          </span>{" "}
+                          still cooking
+                          <span id={cookingTipId} role="tooltip" className="cooking-tooltip">
+                            {COOKING_TOOLTIP}
+                          </span>
+                        </span>
                       </>
                     ) : null}
                   </p>
@@ -376,6 +391,7 @@ async function resolveCookingPreviewShas(
 
   for (const change of changes) {
     const sha = change.sha.toLowerCase();
+    const recentEnough = isWithinCookingWindow(change.committedAt, now);
 
     // Never show cooking for finished failures/cancels.
     if (failed.has(sha) && !building.has(sha) && !succeeded.has(sha)) {
@@ -383,14 +399,15 @@ async function resolveCookingPreviewShas(
       continue;
     }
 
-    if (building.has(sha)) {
+    // Actively building — only badge merges still inside the cooking window.
+    if (recentEnough && building.has(sha)) {
       cooking.add(change.sha);
     }
 
     if (!seenPublished) {
       if (publishedCommit && sha === publishedCommit) {
         seenPublished = true;
-      } else if (!failed.has(sha)) {
+      } else if (recentEnough && !failed.has(sha)) {
         // Newer than the latest published Preview and not a known failed build.
         cooking.add(change.sha);
       }
@@ -456,6 +473,12 @@ function CopyEmailButton({ email }: { email: string }) {
       </span>
     </button>
   );
+}
+
+function isWithinCookingWindow(committedAt: string, now: number) {
+  const committedMs = new Date(committedAt).getTime();
+  if (Number.isNaN(committedMs)) return false;
+  return now - committedMs <= COOKING_MAX_AGE_MS;
 }
 
 function formatRelativeTime(date: string, now: number) {
