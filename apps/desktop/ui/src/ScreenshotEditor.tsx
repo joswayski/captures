@@ -101,6 +101,7 @@ import {
   resizeCursor,
   resizeDocumentCanvas,
   resizeElement,
+  resizeHandlePoint,
   snapResizedBounds,
   snapTranslatedBounds,
   stackDropLightFocusAtPoint,
@@ -3321,11 +3322,14 @@ export function ScreenshotEditor() {
       setCanvasCursor(resizeCursor(gesture.handle));
       const minSize = 8 / Math.max(0.01, displayScale);
       const snapThreshold = ALIGNMENT_SNAP_SCREEN_PX / Math.max(0.01, displayScale);
+      // Hold Shift while dragging a corner to keep the original aspect ratio.
+      const lockAspectRatio = event.shiftKey;
       const freeBounds = resizeBoundsFromHandle(
         gesture.initialBounds,
         gesture.handle,
         point,
         minSize,
+        lockAspectRatio,
       );
       const lines = collectAlignmentSnapLines(
         gesture.initialDocument,
@@ -3339,16 +3343,26 @@ export function ScreenshotEditor() {
         snapThreshold,
         minSize,
       );
+      // Snap can nudge axes independently; re-apply the lock so Shift stays fixed-ratio.
+      const nextBounds = lockAspectRatio
+        ? resizeBoundsFromHandle(
+          gesture.initialBounds,
+          gesture.handle,
+          resizeHandlePoint(snapped.bounds, gesture.handle),
+          minSize,
+          true,
+        )
+        : snapped.bounds;
       const resized = resizeElement(
         gesture.element,
         gesture.initialBounds,
-        snapped.bounds,
+        nextBounds,
       );
-      gestureRef.current = { ...gesture, currentBounds: snapped.bounds };
-      setResizePreviewBounds(snapped.bounds);
+      gestureRef.current = { ...gesture, currentBounds: nextBounds };
+      setResizePreviewBounds(nextBounds);
       setAlignmentGuides(snapped.guides);
       setCanvasExpandPreview(canvasExpandPreviewForBounds(
-        snapped.bounds,
+        nextBounds,
         gesture.initialDocument,
         resized,
       ));

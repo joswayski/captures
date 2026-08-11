@@ -1089,6 +1089,38 @@ describe("screenshot editor geometry", () => {
     });
   });
 
+  it("locks aspect ratio when resizing from a corner with Shift", () => {
+    // 2:1 initial box. Freehand SE to (400,250) is 300×200 (3:2); lock stays 2:1.
+    const bounds = { x: 100, y: 50, width: 200, height: 100 };
+    // Height dominates (free 1.5 < aspect 2) → 400×200.
+    const lockedSeTall = resizeBoundsFromHandle(bounds, "se", { x: 400, y: 250 }, 8, true);
+    expect(lockedSeTall).toMatchObject({ x: 100, y: 50 });
+    expect(lockedSeTall.width / lockedSeTall.height).toBeCloseTo(2, 5);
+    expect(lockedSeTall.width).toBeCloseTo(400, 5);
+    expect(lockedSeTall.height).toBeCloseTo(200, 5);
+
+    // Width dominates (free 300×50 is 6:1 > 2) → 300×150.
+    const lockedSeWide = resizeBoundsFromHandle(bounds, "se", { x: 400, y: 100 }, 8, true);
+    expect(lockedSeWide).toMatchObject({ x: 100, y: 50 });
+    expect(lockedSeWide.width / lockedSeWide.height).toBeCloseTo(2, 5);
+    expect(lockedSeWide.width).toBeCloseTo(300, 5);
+    expect(lockedSeWide.height).toBeCloseTo(150, 5);
+
+    // NW corner: opposite SE stays fixed; aspect preserved.
+    const lockedNw = resizeBoundsFromHandle(bounds, "nw", { x: 50, y: 0 }, 8, true);
+    expect(lockedNw.x + lockedNw.width).toBeCloseTo(300, 5);
+    expect(lockedNw.y + lockedNw.height).toBeCloseTo(150, 5);
+    expect(lockedNw.width / lockedNw.height).toBeCloseTo(2, 5);
+
+    // Mid-edge handles ignore the lock (single-axis still free).
+    expect(resizeBoundsFromHandle(bounds, "e", { x: 350, y: 90 }, 8, true)).toEqual({
+      x: 100,
+      y: 50,
+      width: 250,
+      height: 100,
+    });
+  });
+
   it("snaps moved layers to other image edges and the canvas border", () => {
     const document = createScreenshotDocument("capture.png", 1_000, 800);
     const imported: EditorImageElement = {
