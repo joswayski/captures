@@ -484,7 +484,8 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-editor-con
 .thumbnail-card:focus-within .thumbnail-editor-control,
 .thumbnail-card[data-thumbnail-native-active="true"] .thumbnail-editor-control,
 .thumbnail-card.thumbnail-editor-active .thumbnail-editor-control,
-.thumbnail-card.thumbnail-editor-leaving .thumbnail-editor-control {
+.thumbnail-card.thumbnail-editor-leaving .thumbnail-editor-control,
+.thumbnail-card.thumbnail-editor-lingering .thumbnail-editor-control {
   opacity: 1;
   pointer-events: auto;
   transform: translateY(0);
@@ -503,7 +504,9 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-editor-con
 .thumbnail-card.thumbnail-editor-active .thumbnail-editor-control:hover,
 .thumbnail-card.thumbnail-editor-active .thumbnail-editor-control[data-native-pointer-hover="true"],
 .thumbnail-card.thumbnail-editor-leaving .thumbnail-editor-control:hover,
-.thumbnail-card.thumbnail-editor-leaving .thumbnail-editor-control[data-native-pointer-hover="true"] {
+.thumbnail-card.thumbnail-editor-leaving .thumbnail-editor-control[data-native-pointer-hover="true"],
+.thumbnail-card.thumbnail-editor-lingering .thumbnail-editor-control:hover,
+.thumbnail-card.thumbnail-editor-lingering .thumbnail-editor-control[data-native-pointer-hover="true"] {
   transform: translateY(-1px) scale(1.04);
 }
 .thumbnail-editor-control:focus { outline: none; }

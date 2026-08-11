@@ -1,5 +1,6 @@
 import {
   EDITOR_PRESENCE_LEAVE_MS,
+  EDITOR_PRESENCE_LINGER_MS,
   artifactIdsInEditors,
   reconcileEditorPresence,
   sameSortedIds,
@@ -8,6 +9,10 @@ import {
 describe("editor presence reconciliation", () => {
   it("exposes a leave duration for the mini-preview editor-control morph", () => {
     expect(EDITOR_PRESENCE_LEAVE_MS).toBeGreaterThan(0);
+  });
+
+  it("exposes a linger duration so the plain Edit icon stays clickable after close", () => {
+    expect(EDITOR_PRESENCE_LINGER_MS).toBe(3_000);
   });
 
   it("records layers for an open editor", () => {

@@ -572,6 +572,60 @@ describe("ThumbnailCard", () => {
     expect(within(screen.getByRole("button", { name: "Edit" })).queryByText("In editor"))
       .not.toBeInTheDocument();
     expect(card).not.toHaveClass("thumbnail-editor-leaving");
+    // Plain Edit icon stays up so a mis-close can be reopened without hover.
+    expect(card).toHaveClass("thumbnail-editor-lingering");
+
+    act(() => {
+      vi.advanceTimersByTime(3_000);
+    });
+    expect(card).not.toHaveClass("thumbnail-editor-lingering");
+    vi.useRealTimers();
+  });
+
+  it("cancels the post-close Edit linger if the editor reopens", () => {
+    vi.useFakeTimers();
+    const { rerender } = render(
+      <ThumbnailCard
+        artifact={artifact(null)}
+        clipboardCurrent={false}
+        viewerActive={false}
+        editorActive
+        onRemoved={() => undefined}
+      />,
+    );
+
+    rerender(
+      <ThumbnailCard
+        artifact={artifact(null)}
+        clipboardCurrent={false}
+        viewerActive={false}
+        editorActive={false}
+        onRemoved={() => undefined}
+      />,
+    );
+    act(() => {
+      vi.advanceTimersByTime(550);
+    });
+    const card = screen.getByRole("article");
+    expect(card).toHaveClass("thumbnail-editor-lingering");
+
+    rerender(
+      <ThumbnailCard
+        artifact={artifact(null)}
+        clipboardCurrent={false}
+        viewerActive={false}
+        editorActive
+        onRemoved={() => undefined}
+      />,
+    );
+    expect(card).not.toHaveClass("thumbnail-editor-lingering");
+    expect(screen.getByRole("button", { name: "Show in editor" })).toHaveClass("is-present");
+
+    act(() => {
+      vi.advanceTimersByTime(3_000);
+    });
+    // Linger timer must not strip presence after cancel.
+    expect(screen.getByRole("button", { name: "Show in editor" })).toHaveClass("is-present");
     vi.useRealTimers();
   });
 
