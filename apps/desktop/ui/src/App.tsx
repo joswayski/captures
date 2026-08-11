@@ -20,7 +20,7 @@ import { Feedback } from "./Feedback";
 import { NumberInput } from "./NumberInput";
 import { Onboarding } from "./Onboarding";
 import { ScreenshotEditor } from "./ScreenshotEditor";
-import { NotchedSlider, RangeSlider } from "./RangeSlider";
+import { RangeSlider } from "./RangeSlider";
 import {
   applyColorTheme,
   buildCustomThemeVariables,
@@ -2408,6 +2408,7 @@ export function RecordingSelector() {
         <p className="capture-selector-note">
           {recordingControlsVisibilityText(
             controlsExcluded ?? session.recording_capabilities.controls_excluded,
+            actionMode,
           )}{" "}
           <span aria-hidden="true">·</span> Press <kbd>Enter</kbd> to confirm
         </p>
@@ -2467,15 +2468,23 @@ function roundRecordingRect(rect: RecordingRect, maxWidth: number, maxHeight: nu
   };
 }
 
+type CaptureVisibilityContext = "screenshot" | "recording";
+
+function captureOutputLabel(context: CaptureVisibilityContext): string {
+  return context === "screenshot" ? "screenshots" : "recordings";
+}
+
 function recordingControlsVisibilityText(
   controlsExcluded: boolean | null,
+  context: CaptureVisibilityContext,
   showHideHint = false,
 ): string {
-  if (controlsExcluded === true) return "These controls won’t show in screenshots or recordings";
+  const output = captureOutputLabel(context);
+  if (controlsExcluded === true) return `These controls won’t show in ${output}`;
   if (controlsExcluded === false) {
     return showHideHint
-      ? "These controls will show in screenshots and recordings · Use Hide controls to keep them out"
-      : "These controls will show in screenshots and recordings";
+      ? `These controls will show in ${output} · Use Hide controls to keep them out`
+      : `These controls will show in ${output}`;
   }
   return "Checking whether these controls will show…";
 }
@@ -2649,7 +2658,7 @@ export function RecordingHud() {
       onPointerDown={startHudDrag}
     >
       <span className="recording-hud-privacy">
-        {recordingControlsVisibilityText(controlsExcluded, true)}
+        {recordingControlsVisibilityText(controlsExcluded, "recording", true)}
       </span>
       <div className="recording-hud-main">
         <div className="recording-hud-status">
@@ -2755,6 +2764,32 @@ type EditorCropDrag = {
 
 type FileSizeUnit = "kb" | "mb" | "gb";
 
+/** Compress presets for the video editor (mirrors photo Tiny → High ladder). */
+const RECORDING_QUALITY_OPTIONS = [
+  {
+    value: "tiny",
+    label: "Tiny",
+    description: "Smallest file with the most visible compression.",
+  },
+  {
+    value: "small",
+    label: "Smaller",
+    description: "Very small file with more visible compression.",
+  },
+  {
+    value: "standard",
+    label: "Balanced",
+    description: "Good quality with a meaningfully smaller file.",
+  },
+  {
+    value: "high",
+    label: "High",
+    description: "Larger file with the least quality loss.",
+  },
+] as const;
+
+type RecordingCompressQuality = (typeof RECORDING_QUALITY_OPTIONS)[number]["value"];
+
 type RecordingEditorFingerprint = {
   artifact: string;
   makeCopy: boolean;
@@ -2770,7 +2805,7 @@ type RecordingEditorFingerprint = {
   gifFps: number;
   gifMaxWidth: number;
   gifColors: number;
-  quality: "high" | "standard" | "small";
+  quality: RecordingCompressQuality;
   sizeMode: "preserve" | "compress" | "maximum";
   maximumSize: string;
   maximumUnit: FileSizeUnit;
@@ -2791,24 +2826,6 @@ const FILE_SIZE_UNIT_BYTES: Record<FileSizeUnit, number> = {
   gb: 1_000_000_000,
 };
 
-const RECORDING_QUALITY_OPTIONS = [
-  {
-    value: "small",
-    label: "Smaller",
-    description: "Smallest file with more visible compression.",
-  },
-  {
-    value: "standard",
-    label: "Balanced",
-    description: "Good quality with a meaningfully smaller file.",
-  },
-  {
-    value: "high",
-    label: "High",
-    description: "Larger file with the least quality loss.",
-  },
-] as const;
-
 export function RecordingEditor() {
   const artifactId = query("artifact_id");
   const [artifact, setArtifact] = useState<RecordingArtifact | null>(null);
@@ -2827,7 +2844,7 @@ export function RecordingEditor() {
   const [gifFps, setGifFps] = useState(15);
   const [gifMaxWidth, setGifMaxWidth] = useState(800);
   const [gifColors, setGifColors] = useState(256);
-  const [quality, setQuality] = useState<"high" | "standard" | "small">("high");
+  const [quality, setQuality] = useState<RecordingCompressQuality>("high");
   const [sizeMode, setSizeMode] = useState<"preserve" | "compress" | "maximum">("preserve");
   const [maximumSize, setMaximumSize] = useState("10");
   const [maximumUnit, setMaximumUnit] = useState<FileSizeUnit>("mb");
@@ -3735,7 +3752,7 @@ export function RecordingEditor() {
                 {
                   value: "compress",
                   label: "Compress",
-                  description: "Choose a smaller file with a notched quality control.",
+                  description: "Choose a smaller file with Tiny through High quality presets.",
                 },
                 {
                   value: "maximum",
@@ -3750,17 +3767,21 @@ export function RecordingEditor() {
             {sizeMode === "preserve"
               ? "Original quality with no extra compression unless an edit requires it."
               : sizeMode === "compress"
-                ? "Choose a smaller file with a notched quality control."
+                ? "Choose a smaller file with Tiny through High quality presets."
                 : "Set a hard size limit for the saved file."}
           </p>
           {sizeMode === "compress" && (
-            <div className="editor-field editor-quality-slider">
+            <div className="editor-field editor-quality-preset">
               <span>Quality</span>
-              <NotchedSlider
-                ariaLabel="Compression quality"
+              <CustomSelect
                 value={quality}
-                options={RECORDING_QUALITY_OPTIONS}
-                onChange={setQuality}
+                ariaLabel="Compression quality"
+                options={RECORDING_QUALITY_OPTIONS.map((option) => ({
+                  value: option.value,
+                  label: option.label,
+                  description: option.description,
+                }))}
+                onChange={(value) => setQuality(value as RecordingCompressQuality)}
               />
             </div>
           )}
