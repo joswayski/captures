@@ -821,17 +821,29 @@ export function resizeDocumentCanvas(
   };
 }
 
+/**
+ * How an imported image is scaled into the document.
+ * - `overlay`: cap at ~65% of the canvas so stacked drops stay manageable.
+ * - `natural`: keep source pixels 1:1 so edge-snapped screenshots match the
+ *   backdrop when they share the same capture scale (no surprise downscale).
+ */
+export type ImportedImageFit = "overlay" | "natural";
+
 export function positionImportedImage(
   naturalWidth: number,
   naturalHeight: number,
   document: Pick<ScreenshotDocument, "width" | "height">,
   dropPoint?: EditorPoint,
+  fit: ImportedImageFit = "overlay",
 ): EditorRect {
   const safeWidth = Math.max(1, naturalWidth);
   const safeHeight = Math.max(1, naturalHeight);
-  const maximumWidth = Math.max(160, document.width * 0.65);
-  const maximumHeight = Math.max(120, document.height * 0.65);
-  const scale = Math.min(1, maximumWidth / safeWidth, maximumHeight / safeHeight);
+  let scale = 1;
+  if (fit === "overlay") {
+    const maximumWidth = Math.max(160, document.width * 0.65);
+    const maximumHeight = Math.max(120, document.height * 0.65);
+    scale = Math.min(1, maximumWidth / safeWidth, maximumHeight / safeHeight);
+  }
   const width = Math.max(1, Math.round(safeWidth * scale));
   const height = Math.max(1, Math.round(safeHeight * scale));
   const center = dropPoint ?? {
@@ -970,6 +982,10 @@ export function imageDropGuideAtPoint(
 /**
  * Position an imported image relative to a drop target: flush to an edge, or
  * centered on the pointer when stacking on top (`stack` + optional `point`).
+ *
+ * Edge snaps use natural 1:1 pixels so composing similar screenshots keeps them
+ * the same size; stack-on-top still uses the overlay cap so large imports do
+ * not fully cover the canvas.
  */
 export function positionImportedImageAtEdge(
   naturalWidth: number,
@@ -983,6 +999,7 @@ export function positionImportedImageAtEdge(
     x: target.x + target.width / 2,
     y: target.y + target.height / 2,
   };
+  const fit: ImportedImageFit = edge === "stack" ? "overlay" : "natural";
   const centered = positionImportedImage(
     naturalWidth,
     naturalHeight,
@@ -990,6 +1007,7 @@ export function positionImportedImageAtEdge(
     edge === "stack"
       ? stackCenter
       : { x: target.x + target.width / 2, y: target.y + target.height / 2 },
+    fit,
   );
   if (edge === "stack") {
     return {
@@ -1024,6 +1042,11 @@ export function positionImportedImageAtEdge(
     x: Math.round(target.x + (target.width - centered.width) / 2),
     y: Math.round(target.y + target.height),
   };
+}
+
+/** Canvas growth padding after an image drop. Edge collages sit flush; stack keeps a small margin. */
+export function imageDropExpandPadding(edge: ImageDropPlacement): number {
+  return edge === "stack" ? 24 : 0;
 }
 
 export function expandDocumentForElement(
