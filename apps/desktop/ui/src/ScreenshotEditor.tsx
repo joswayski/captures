@@ -127,13 +127,13 @@ import {
 } from "./lib/screenshotEditor";
 import { CustomSelect } from "./CustomSelect";
 import { NumberInput } from "./NumberInput";
-import { NotchedSlider, RangeSlider } from "./RangeSlider";
+import { RangeSlider } from "./RangeSlider";
 import type { CaptureArtifact, EditorLayerPresence } from "./types";
 
 type ExportFormat = "png" | "jpeg" | "webp";
 type ExportSize = "original" | "75" | "50" | "custom";
-/** JPEG quality notches for Compress mode — same three presets as the recording editor. */
-type ScreenshotQuality = "70" | "85" | "92";
+/** JPEG quality presets for Compress mode (lossy). PNG/WebP stay lossless with stronger packing. */
+type ScreenshotQuality = "55" | "70" | "85" | "92";
 /** Matches the recording editor: preserve by default, compress with presets, or cap size. */
 type ScreenshotQualityMode = "preserve" | "compress" | "maximum";
 type ScreenshotFileSizeUnit = "kb" | "mb" | "gb";
@@ -372,18 +372,21 @@ const COLOR_SWATCHES = [
   "#ffffff",
 ];
 
-/** Matches the recording editor's compress notches (mapped to JPEG quality). */
+/** JPEG quality presets for Compress mode (lossy encode). */
 const SCREENSHOT_QUALITY_OPTIONS = [
+  {
+    value: "55",
+    label: "Tiny",
+    description: "Smallest file with the most visible compression.",
+  },
   {
     value: "70",
     label: "Smaller",
-    shortLabel: "Small",
-    description: "Smallest file with more visible compression.",
+    description: "Very small file with more visible compression.",
   },
   {
     value: "85",
     label: "Balanced",
-    shortLabel: "Medium",
     description: "Good quality with a meaningfully smaller file.",
   },
   {
@@ -4036,10 +4039,10 @@ export function ScreenshotEditor() {
     : exportFormat === "webp"
       ? "WebP"
       : "PNG";
-  // Always show compress presets (like the recording editor). JPEG uses the
-  // quality notch; PNG/WebP still use stronger packing while the notch is ready
-  // if the user switches to JPEG.
-  const showCompressQuality = qualityMode === "compress";
+  // JPEG quality presets only change encode quality (and estimated size). PNG/WebP
+  // compress mode uses stronger packing only — still lossless, so no quality menu.
+  const showCompressQuality = qualityMode === "compress" && exportFormat === "jpeg";
+  const showCompressPackingHint = qualityMode === "compress" && exportFormat !== "jpeg";
 
   const applyExportFormat = (format: ExportFormat) => {
     setExportFormat(format);
@@ -4124,9 +4127,8 @@ export function ScreenshotEditor() {
       }}
     >
       <header className="screenshot-editor-header">
+        {/* Window title already says "Captures screenshot editor"; keep chrome here only. */}
         <div className="screenshot-editor-title">
-          <span>Screenshot editor</span>
-          {/* Document chrome: always visible next to the title — not buried in a menu. */}
           <div className="screenshot-canvas-toolbar" role="group" aria-label="Canvas">
             <label className="screenshot-canvas-dim">
               <span>W</span>
@@ -5648,7 +5650,7 @@ export function ScreenshotEditor() {
                 {
                   value: "compress",
                   label: "Compress",
-                  description: "Choose a smaller file with Smaller, Balanced, or High quality.",
+                  description: "Smaller file via JPEG quality presets, or stronger PNG/WebP packing.",
                 },
                 {
                   value: "maximum",
@@ -5662,17 +5664,24 @@ export function ScreenshotEditor() {
           {showCompressQuality && (
             <div className="screenshot-export-control screenshot-quality">
               <span>Quality</span>
-              <NotchedSlider
-                ariaLabel="Compression quality"
+              <CustomSelect
                 value={jpegQuality}
-                options={SCREENSHOT_QUALITY_OPTIONS}
-                onChange={setJpegQuality}
+                ariaLabel="Compression quality"
+                options={SCREENSHOT_QUALITY_OPTIONS.map((option) => ({
+                  value: option.value,
+                  label: option.label,
+                  description: option.description,
+                }))}
+                onChange={(value) => setJpegQuality(value as ScreenshotQuality)}
               />
-              {exportFormat !== "jpeg" && (
-                <p className="screenshot-quality-format-hint">
-                  {formatLabel} uses stronger packing. Quality presets apply to JPEG.
-                </p>
-              )}
+            </div>
+          )}
+          {showCompressPackingHint && (
+            <div className="screenshot-export-control screenshot-quality-packing">
+              <span>Quality</span>
+              <p className="screenshot-quality-format-hint">
+                {formatLabel} uses stronger packing (lossless). Switch to JPEG for quality presets that shrink estimated size.
+              </p>
             </div>
           )}
           {qualityMode === "maximum" && (
