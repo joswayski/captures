@@ -6,6 +6,7 @@ import {
   clearThumbnailCssCursor,
   clearThumbnailNativeHover,
   markThumbnailEditorControlOpened,
+  rearmThumbnailEditorControlHover,
   shouldIgnoreThumbnailCursorEvents,
   shouldRecoverThumbnailAfterNullPolls,
   thumbnailCssCursor,
@@ -229,6 +230,44 @@ describe("applyThumbnailNativeHover", () => {
     target = image;
     expect(applyThumbnailNativeHover({ x: 100, y: 80, inside: true })).toBe("grab");
     expect(button).not.toHaveAttribute(THUMBNAIL_EDITOR_JUST_OPENED_ATTRIBUTE);
+  });
+
+  it("on leave, drops residual native hover so the action label cannot flash", () => {
+    document.body.innerHTML = `
+      <button
+        class="thumbnail-editor-control is-present"
+        data-editor-just-opened="true"
+        data-native-pointer-hover="true"
+      >
+        <span class="label-rest">In editor</span>
+        <span class="label-hover">Show in editor</span>
+      </button>
+    `;
+    const button = document.querySelector<HTMLButtonElement>("button")!;
+    button.focus();
+    expect(document.activeElement).toBe(button);
+
+    rearmThumbnailEditorControlHover(button, { fromLeave: true });
+
+    expect(button).not.toHaveAttribute(THUMBNAIL_EDITOR_JUST_OPENED_ATTRIBUTE);
+    expectNativePointerHover(button, false);
+    expect(document.activeElement).not.toBe(button);
+  });
+
+  it("open-failure rearm keeps native hover so the action label can return", () => {
+    document.body.innerHTML = `
+      <button
+        class="thumbnail-editor-control is-present"
+        data-editor-just-opened="true"
+        data-native-pointer-hover="true"
+      >In editor</button>
+    `;
+    const button = document.querySelector<HTMLButtonElement>("button")!;
+
+    rearmThumbnailEditorControlHover(button);
+
+    expect(button).not.toHaveAttribute(THUMBNAIL_EDITOR_JUST_OPENED_ATTRIBUTE);
+    expectNativePointerHover(button, true);
   });
 
   it("keeps overflow cues clickable without activating a preview card", () => {

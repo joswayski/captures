@@ -174,8 +174,14 @@ describe("ThumbnailCard", () => {
     expect(editorControl).toHaveAttribute("data-editor-just-opened", "true");
     expect(within(editorControl).getByText("In editor")).toBeInTheDocument();
 
+    // Stale native hover after click would otherwise flash “Show in editor”
+    // for the gap between pointerleave and the next pointer poll.
+    editorControl.setAttribute("data-native-pointer-hover", "true");
+    editorControl.focus();
     fireEvent.pointerLeave(editorControl);
     expect(editorControl).not.toHaveAttribute("data-editor-just-opened");
+    expect(editorControl).not.toHaveAttribute("data-native-pointer-hover");
+    expect(document.activeElement).not.toBe(editorControl);
   });
 
   it("after a folder save: Close keeps the file, Delete removes it", () => {
