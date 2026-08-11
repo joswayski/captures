@@ -1,5 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   memo,
@@ -15,6 +16,13 @@ import { createPortal } from "react-dom";
 
 import { sameSortedIds } from "./lib/editorPresence";
 import { formatFileSize } from "./lib/format";
+import {
+  buildScreenshotEditorDraftPayload,
+  collectDocumentImageSources,
+  isScreenshotDocumentDirty,
+  SCREENSHOT_EDITOR_DRAFT_SAVE_MS,
+  type LoadedScreenshotEditorDraft,
+} from "./lib/screenshotEditorDraft";
 import {
   applyImageBackgroundEdit,
   brushRadiusInNaturalPixels,
@@ -1428,6 +1436,8 @@ export function ScreenshotEditor() {
   const [error, setError] = useState("");
   /** Original capture was deleted after the editor opened; the edit is still exportable. */
   const [sourceMissing, setSourceMissing] = useState(false);
+  /** True when this session restored a disk draft from a previous editor close. */
+  const [draftRestored, setDraftRestored] = useState(false);
   const [makeCopy, setMakeCopy] = useState(false);
   const [saved, setSaved] = useState<SavedScreenshotEdit | null>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -1440,6 +1450,8 @@ export function ScreenshotEditor() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageCacheRef = useRef(new Map<string, CachedImage>());
   const successTimerRef = useRef<number | null>(null);
+  /** Bumps to cancel in-flight debounced draft writes. */
+  const draftSaveGenerationRef = useRef(0);
   const objectUrlsRef = useRef(new Set<string>());
   const gestureRef = useRef<EditorGesture | null>(null);
   /** Live natural-resolution canvas drawn over the target layer during brush strokes. */
@@ -1641,6 +1653,92 @@ export function ScreenshotEditor() {
     return cached;
   }, []);
 
+  /** Encode any document image URL to PNG bytes for draft persistence. */
+  const pngBytesForSource = useCallback(async (src: string): Promise<number[]> => {
+    if (src.startsWith("data:image/png;base64,")) {
+      const binary = atob(src.slice("data:image/png;base64,".length));
+      const bytes = new Array<number>(binary.length);
+      for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index);
+      }
+      return bytes;
+    }
+    const cached = ensureImage(src);
+    for (let attempt = 0; attempt < 120 && cached.status === "loading"; attempt += 1) {
+      await new Promise((resolve) => window.setTimeout(resolve, 25));
+    }
+    if (cached.status !== "loaded") {
+      throw new Error("An image layer could not be saved into the edit draft.");
+    }
+    const width = Math.max(1, cached.image.naturalWidth || cached.image.width || 1);
+    const height = Math.max(1, cached.image.naturalHeight || cached.image.height || 1);
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("The edit draft could not be encoded.");
+    context.drawImage(cached.image, 0, 0, width, height);
+    return canvasPngBytes(canvas);
+  }, [ensureImage]);
+
+  const persistEditorDraft = useCallback(async (
+    document: ScreenshotDocument,
+    artifactKey: string,
+  ): Promise<void> => {
+    if (!isScreenshotDocumentDirty(document, baselineDocumentRef.current)) {
+      await invoke("discard_screenshot_editor_draft", { artifactId: artifactKey });
+      return;
+    }
+    const payload = await buildScreenshotEditorDraftPayload(
+      artifactKey,
+      document,
+      pngBytesForSource,
+    );
+    await invoke("save_screenshot_editor_draft", {
+      request: {
+        artifact_id: payload.artifact_id,
+        document: payload.document,
+        assets: payload.assets,
+        updated_at_ms: payload.updated_at_ms,
+      },
+    });
+  }, [pngBytesForSource]);
+
+  const flushEditorDraft = useCallback(async (): Promise<void> => {
+    draftSaveGenerationRef.current += 1;
+    const document = documentRef.current;
+    const artifactKey = artifactId;
+    if (!document || !artifactKey) return;
+    try {
+      await persistEditorDraft(document, artifactKey);
+    } catch {
+      // Best-effort on close; a failed draft should not block quitting the editor.
+    }
+  }, [artifactId, persistEditorDraft]);
+
+  const discardRestoredDraft = useCallback(() => {
+    if (!artifact) return;
+    const next = createScreenshotDocument(
+      artifact.full_url,
+      artifact.width,
+      artifact.height,
+      artifact.id,
+    );
+    ensureImage(artifact.full_url);
+    baselineDocumentRef.current = next;
+    setUndoStack([]);
+    setRedoStack([]);
+    replaceDocument(next);
+    setDraftRestored(false);
+    setSelectedId(null);
+    setEditingTextId(null);
+    clearSuccess();
+    setError("");
+    draftSaveGenerationRef.current += 1;
+    void invoke("discard_screenshot_editor_draft", { artifactId: artifact.id })
+      .catch(() => undefined);
+  }, [artifact, clearSuccess, ensureImage, replaceDocument]);
+
   const editorPresenceId = artifactId ? `screenshot-editor-${artifactId}` : null;
   const lastEmittedPresenceRef = useRef<string[] | null>(null);
 
@@ -1681,16 +1779,39 @@ export function ScreenshotEditor() {
         format: "png",
       });
       if (!active) return;
-      const next = createScreenshotDocument(
+      const baseline = createScreenshotDocument(
         loaded.full_url,
         loaded.width,
         loaded.height,
         loaded.id,
       );
       ensureImage(loaded.full_url);
+      let working = baseline;
+      let restoredDraft = false;
+      try {
+        const draft = await invoke<LoadedScreenshotEditorDraft | null>(
+          "load_screenshot_editor_draft",
+          { artifactId: loaded.id },
+        );
+        if (
+          draft
+          && draft.document
+          && Array.isArray(draft.document.elements)
+          && typeof draft.document.width === "number"
+          && typeof draft.document.height === "number"
+        ) {
+          working = draft.document;
+          restoredDraft = true;
+          collectDocumentImageSources(working).forEach((src) => ensureImage(src));
+        }
+      } catch {
+        // Missing or corrupt drafts fall back to a fresh document.
+      }
+      if (!active) return;
       setArtifact(loaded);
-      baselineDocumentRef.current = next;
-      replaceDocument(next);
+      baselineDocumentRef.current = baseline;
+      replaceDocument(working);
+      setDraftRestored(restoredDraft);
       setCustomExportWidth(loaded.width);
       setCustomExportHeight(loaded.height);
       setExportFormat("png");
@@ -1710,6 +1831,57 @@ export function ScreenshotEditor() {
       objectUrls.clear();
     };
   }, [artifactId, clearSuccess, ensureImage, replaceDocument]);
+
+  // Autosave dirty documents so closing the window can restore the session later.
+  useEffect(() => {
+    if (!artifactId || !editorDocument) return;
+    const generation = draftSaveGenerationRef.current + 1;
+    draftSaveGenerationRef.current = generation;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          await persistEditorDraft(editorDocument, artifactId);
+        } catch {
+          // Keep editing; the next change or close flush can retry.
+        }
+        if (generation !== draftSaveGenerationRef.current) return;
+      })();
+    }, SCREENSHOT_EDITOR_DRAFT_SAVE_MS);
+    return () => window.clearTimeout(timer);
+  }, [artifactId, editorDocument, persistEditorDraft]);
+
+  // Flush the latest draft before the native window is destroyed.
+  useEffect(() => {
+    if (!isTauri() || !artifactId) return;
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    let closing = false;
+    void getCurrentWindow().onCloseRequested(async (event) => {
+      if (!active || closing) return;
+      closing = true;
+      event.preventDefault();
+      try {
+        await flushEditorDraft();
+      } finally {
+        unlisten?.();
+        try {
+          await getCurrentWindow().destroy();
+        } catch {
+          // Window may already be gone.
+        }
+      }
+    }).then((dispose) => {
+      if (!active) {
+        dispose();
+        return;
+      }
+      unlisten = dispose;
+    });
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, [artifactId, flushEditorDraft]);
 
   // Keep mini-previews in sync with image layers still present in this editor.
   // Deleting a layer drops that capture; closing the window clears them all.
@@ -3955,6 +4127,15 @@ export function ScreenshotEditor() {
       if (documentRef.current) {
         baselineDocumentRef.current = documentRef.current;
       }
+      setDraftRestored(false);
+      draftSaveGenerationRef.current += 1;
+      void invoke("discard_screenshot_editor_draft", { artifactId: result.artifact.id })
+        .catch(() => undefined);
+      // Window may still be keyed by the previous capture when Make a copy saved a new id.
+      if (artifactId && artifactId !== result.artifact.id) {
+        void invoke("discard_screenshot_editor_draft", { artifactId })
+          .catch(() => undefined);
+      }
       setSaved(result);
       showSuccess(
         "save",
@@ -4128,7 +4309,26 @@ export function ScreenshotEditor() {
         void loadDroppedFiles(Array.from(event.dataTransfer.files), guide);
       }}
     >
-      <header className="screenshot-editor-header">
+      <header className={`screenshot-editor-header${draftRestored ? " has-draft-banner" : ""}`}>
+        {draftRestored && (
+          <div className="screenshot-editor-draft-banner" role="status">
+            <span>Restored unsaved edits from last time.</span>
+            <div className="screenshot-editor-draft-banner-actions">
+              <button type="button" onClick={discardRestoredDraft}>
+                Discard
+              </button>
+              <button
+                type="button"
+                className="screenshot-editor-draft-banner-dismiss"
+                onClick={() => setDraftRestored(false)}
+                aria-label="Dismiss restored-edits notice"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
+        <div className="screenshot-editor-header-main">
         <div className="screenshot-editor-title">
           <span>Screenshot editor</span>
           {/* Document chrome: always visible next to the title — not buried in a menu. */}
@@ -4286,6 +4486,7 @@ export function ScreenshotEditor() {
               event.target.value = "";
             }}
           />
+        </div>
         </div>
       </header>
 

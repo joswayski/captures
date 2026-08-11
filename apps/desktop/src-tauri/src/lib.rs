@@ -252,6 +252,9 @@ pub fn run() {
             screenshot_editor::default_screenshot_edit_path,
             screenshot_editor::copy_screenshot_edit,
             screenshot_editor::save_screenshot_edit,
+            screenshot_editor::save_screenshot_editor_draft,
+            screenshot_editor::load_screenshot_editor_draft,
+            screenshot_editor::discard_screenshot_editor_draft,
             show_capture_overlay,
             reveal_capture_overlay,
             sync_capture_cursor,
@@ -1819,6 +1822,7 @@ async fn delete_history_artifact(
     .await
     .map_err(|error| error.to_string())?
     .map_err(|error| error.to_string())?;
+    let _ = screenshot_editor::discard_screenshot_editor_draft_files(&artifact_id);
     state.history.lock().retain(|entry| entry.id != artifact_id);
     state
         .recording_artifacts
@@ -1848,6 +1852,7 @@ async fn clear_capture_history(
     tauri::async_runtime::spawn_blocking(move || {
         for artifact_id in &ids_for_delete {
             storage::delete_history_capture(artifact_id)?;
+            let _ = screenshot_editor::discard_screenshot_editor_draft_files(artifact_id);
         }
         Ok::<(), AppError>(())
     })
@@ -4126,6 +4131,9 @@ impl Drop for RevealDocumentWindowsOnDrop {
 }
 
 fn resolve_asset(state: &AppState, path: &str) -> Option<Vec<u8>> {
+    if let Some(bytes) = screenshot_editor::resolve_editor_draft_asset(path) {
+        return Some(bytes);
+    }
     let mut segments = path.split('/');
     match (segments.next(), segments.next()) {
         (Some("session"), Some(id)) => Uuid::parse_str(id).ok().and_then(|id| {
