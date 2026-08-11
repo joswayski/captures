@@ -482,7 +482,8 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-editor-con
 .thumbnail-card:focus-within .thumbnail-editor-control,
 .thumbnail-card[data-thumbnail-native-active="true"] .thumbnail-editor-control,
 .thumbnail-card.thumbnail-editor-active .thumbnail-editor-control,
-.thumbnail-card.thumbnail-editor-leaving .thumbnail-editor-control {
+.thumbnail-card.thumbnail-editor-leaving .thumbnail-editor-control,
+.thumbnail-card.thumbnail-editor-lingering .thumbnail-editor-control {
   opacity: 1;
   pointer-events: auto;
 }
@@ -526,7 +527,8 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-editor-con
 .thumbnail-card:focus-within .thumbnail-editor-control-face,
 .thumbnail-card[data-thumbnail-native-active="true"] .thumbnail-editor-control-face,
 .thumbnail-card.thumbnail-editor-active .thumbnail-editor-control-face,
-.thumbnail-card.thumbnail-editor-leaving .thumbnail-editor-control-face {
+.thumbnail-card.thumbnail-editor-leaving .thumbnail-editor-control-face,
+.thumbnail-card.thumbnail-editor-lingering .thumbnail-editor-control-face {
   transform: translateY(0);
 }
 .thumbnail-editor-control:hover .thumbnail-editor-control-face,
@@ -543,7 +545,9 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-editor-con
 .thumbnail-card.thumbnail-editor-active .thumbnail-editor-control:hover .thumbnail-editor-control-face,
 .thumbnail-card.thumbnail-editor-active .thumbnail-editor-control[data-native-pointer-hover="true"] .thumbnail-editor-control-face,
 .thumbnail-card.thumbnail-editor-leaving .thumbnail-editor-control:hover .thumbnail-editor-control-face,
-.thumbnail-card.thumbnail-editor-leaving .thumbnail-editor-control[data-native-pointer-hover="true"] .thumbnail-editor-control-face {
+.thumbnail-card.thumbnail-editor-leaving .thumbnail-editor-control[data-native-pointer-hover="true"] .thumbnail-editor-control-face,
+.thumbnail-card.thumbnail-editor-lingering .thumbnail-editor-control:hover .thumbnail-editor-control-face,
+.thumbnail-card.thumbnail-editor-lingering .thumbnail-editor-control[data-native-pointer-hover="true"] .thumbnail-editor-control-face {
   transform: translateY(-1px) scale(1.04);
 }
 /* Compact Edit tip: real node on the shell (not ::after on a filtered face). */
