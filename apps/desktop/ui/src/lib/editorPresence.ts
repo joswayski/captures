@@ -11,6 +11,12 @@ export type EditorLayerPresence = {
  */
 export const EDITOR_PRESENCE_LEAVE_MS = 550;
 
+/**
+ * After the reverse morph finishes, keep the plain Edit icon visible this long
+ * so an accidental editor close can be undone without re-hovering the preview.
+ */
+export const EDITOR_PRESENCE_LINGER_MS = 3_000;
+
 export function reconcileEditorPresence(
   current: ReadonlyMap<string, readonly string[]>,
   next: EditorLayerPresence,

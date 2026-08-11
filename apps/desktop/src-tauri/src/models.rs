@@ -729,6 +729,13 @@ pub fn recording_recovery_directory() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".captures-recording-recovery"))
 }
 
+/// Unsaved screenshot editor sessions (layered document + PNG assets).
+pub fn screenshot_editor_drafts_directory() -> PathBuf {
+    ProjectDirs::from("io", "github", "captures")
+        .map(|dirs| dirs.data_local_dir().join("screenshot-editor-drafts"))
+        .unwrap_or_else(|| PathBuf::from(".captures-screenshot-editor-drafts"))
+}
+
 pub fn snapshot_url(session_id: &str) -> String {
     capture_asset_url(&format!("session/{session_id}"))
 }
@@ -763,6 +770,11 @@ pub fn history_preview_url(artifact_id: &str) -> String {
 
 pub fn history_full_url(artifact_id: &str) -> String {
     capture_asset_url(&format!("history-full/{artifact_id}"))
+}
+
+/// Serve a PNG asset from a screenshot editor draft folder.
+pub fn editor_draft_asset_url(artifact_id: &str, asset_id: &str) -> String {
+    capture_asset_url(&format!("editor-draft/{artifact_id}/{asset_id}"))
 }
 
 fn capture_asset_url(path: &str) -> String {

@@ -3,11 +3,13 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { act, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
+import { createScreenshotDocument } from "./lib/screenshotEditor";
 import { ScreenshotEditor } from "./ScreenshotEditor";
 import type { CaptureArtifact } from "./types";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
+  isTauri: () => false,
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -15,9 +17,24 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(async () => () => undefined),
 }));
 
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({
+    onCloseRequested: vi.fn(async () => () => undefined),
+    destroy: vi.fn(async () => undefined),
+  }),
+}));
+
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(async () => null),
 }));
+
+/** Shared no-op handlers for draft autosave commands used by every editor test. */
+function draftCommandResult(command: string): unknown {
+  if (command === "load_screenshot_editor_draft") return null;
+  if (command === "save_screenshot_editor_draft") return undefined;
+  if (command === "discard_screenshot_editor_draft") return undefined;
+  return undefined;
+}
 
 const artifact: CaptureArtifact = {
   id: "capture-1",
@@ -131,6 +148,10 @@ describe("ScreenshotEditor", () => {
         // Lower quality notches map to fewer PNG colors → smaller estimate.
         return Math.max(8_000, Math.round(120_000 * (quality / 100)));
       }
+      const draft = draftCommandResult(String(command));
+      if (draft !== undefined || String(command).includes("screenshot_editor_draft")) {
+        return draft;
+      }
       throw new Error(`unexpected command: ${command}`);
     });
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
@@ -139,6 +160,63 @@ describe("ScreenshotEditor", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.clearAllMocks();
+  });
+
+  it("restores a saved editor draft and can discard it", async () => {
+    const draftDocument = createScreenshotDocument(
+      "captures-capture://localhost/editor-draft/capture-1/asset-1",
+      1_200,
+      800,
+      "capture-1",
+    );
+    draftDocument.background = null;
+    draftDocument.elements.push({
+      id: "note-1",
+      kind: "text",
+      text: "Draft note",
+      fontSize: 32,
+      width: 200,
+      fontFamily: "sans",
+      bold: false,
+      italic: false,
+      align: "left",
+      color: "#fff",
+      background: null,
+      outlined: false,
+      roundedBackground: false,
+      x: 20,
+      y: 30,
+      locked: false,
+      visible: true,
+      opacity: 100,
+      blendMode: "source-over",
+    });
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifact") return artifact;
+      if (command === "load_screenshot_editor_draft") {
+        return { document: draftDocument, updated_at_ms: 1 };
+      }
+      if (command === "save_screenshot_editor_draft") return undefined;
+      if (command === "discard_screenshot_editor_draft") return undefined;
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<ScreenshotEditor />);
+
+    expect(await screen.findByText("Restored unsaved edits from last time.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Width")).toHaveValue(1_200);
+    expect(screen.getByText("Draft note")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+
+    await waitFor(() => {
+      expect(screen.queryByText("Restored unsaved edits from last time.")).not.toBeInTheDocument();
+    });
+    expect(screen.getByLabelText("Width")).toHaveValue(1_440);
+    expect(screen.queryByText("Draft note")).not.toBeInTheDocument();
+    expect(invoke).toHaveBeenCalledWith("discard_screenshot_editor_draft", {
+      artifactId: "capture-1",
+    });
   });
 
   it("loads the full-resolution artifact and exposes every requested annotation tool", async () => {
@@ -1194,6 +1272,10 @@ describe("ScreenshotEditor", () => {
     const brushArtifact = { ...artifact, width: 20, height: 10 };
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "get_artifact") return brushArtifact;
+      const draft = draftCommandResult(String(command));
+      if (draft !== undefined || String(command).includes("screenshot_editor_draft")) {
+        return draft;
+      }
       throw new Error(`unexpected command: ${command}`);
     });
 
@@ -1949,6 +2031,10 @@ describe("ScreenshotEditor", () => {
       if (command === "default_screenshot_edit_path") {
         return "/Users/example/Captures/Captures_2026-08-08_12-00-00_000.png";
       }
+      const draft = draftCommandResult(String(command));
+      if (draft !== undefined || String(command).includes("screenshot_editor_draft")) {
+        return draft;
+      }
       throw new Error(`unexpected command: ${command}`);
     });
 
@@ -1984,6 +2070,10 @@ describe("ScreenshotEditor", () => {
         };
       }
       if (command === "reveal_artifact") return undefined;
+      const draft = draftCommandResult(String(command));
+      if (draft !== undefined || String(command).includes("screenshot_editor_draft")) {
+        return draft;
+      }
       throw new Error(`unexpected command: ${command}`);
     });
 
@@ -2099,6 +2189,10 @@ describe("ScreenshotEditor", () => {
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "get_artifact") return artifact;
       if (command === "copy_screenshot_edit") return undefined;
+      const draft = draftCommandResult(String(command));
+      if (draft !== undefined || String(command).includes("screenshot_editor_draft")) {
+        return draft;
+      }
       throw new Error(`unexpected command: ${command}`);
     });
 

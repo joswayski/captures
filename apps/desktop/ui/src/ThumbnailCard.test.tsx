@@ -116,7 +116,7 @@ describe("ThumbnailCard", () => {
     expect(screen.getByRole("button", { name: "Save file" })).toBeInTheDocument();
   });
 
-  it("exposes a stable Edit tooltip on the compact icon and drops it when present", () => {
+  it("keeps a compact Edit tip node that unmounts when the control is present", () => {
     const { rerender } = render(
       <ThumbnailCard
         artifact={artifact(null)}
@@ -127,8 +127,11 @@ describe("ThumbnailCard", () => {
     );
 
     const compact = screen.getByRole("button", { name: "Edit" });
-    expect(compact).toHaveAttribute("data-tooltip", "Edit");
     expect(compact).not.toHaveClass("is-present");
+    expect(compact.querySelector(".thumbnail-editor-control-face")).toBeTruthy();
+    const tip = compact.querySelector(".thumbnail-editor-control-tip");
+    expect(tip).toBeTruthy();
+    expect(tip).toHaveTextContent("Edit");
 
     rerender(
       <ThumbnailCard
@@ -141,7 +144,7 @@ describe("ThumbnailCard", () => {
     );
     const present = screen.getByRole("button", { name: "Show in editor" });
     expect(present).toHaveClass("is-present");
-    expect(present).not.toHaveAttribute("data-tooltip");
+    expect(present.querySelector(".thumbnail-editor-control-tip")).toBeNull();
 
     rerender(
       <ThumbnailCard
@@ -152,10 +155,10 @@ describe("ThumbnailCard", () => {
         onRemoved={() => undefined}
       />,
     );
-    // Reverse morph: labels still mounted; tooltip must stay off so it does not flash.
+    // Reverse morph: tip stays unmounted so it cannot flash during collapse.
     const leaving = screen.getByRole("button", { name: "Edit" });
     expect(leaving).toHaveClass("leaving");
-    expect(leaving).not.toHaveAttribute("data-tooltip");
+    expect(leaving.querySelector(".thumbnail-editor-control-tip")).toBeNull();
   });
 
   it("shows In editor immediately after opening, then rearms the hover action on leave", () => {
@@ -572,6 +575,60 @@ describe("ThumbnailCard", () => {
     expect(within(screen.getByRole("button", { name: "Edit" })).queryByText("In editor"))
       .not.toBeInTheDocument();
     expect(card).not.toHaveClass("thumbnail-editor-leaving");
+    // Plain Edit icon stays up so a mis-close can be reopened without hover.
+    expect(card).toHaveClass("thumbnail-editor-lingering");
+
+    act(() => {
+      vi.advanceTimersByTime(3_000);
+    });
+    expect(card).not.toHaveClass("thumbnail-editor-lingering");
+    vi.useRealTimers();
+  });
+
+  it("cancels the post-close Edit linger if the editor reopens", () => {
+    vi.useFakeTimers();
+    const { rerender } = render(
+      <ThumbnailCard
+        artifact={artifact(null)}
+        clipboardCurrent={false}
+        viewerActive={false}
+        editorActive
+        onRemoved={() => undefined}
+      />,
+    );
+
+    rerender(
+      <ThumbnailCard
+        artifact={artifact(null)}
+        clipboardCurrent={false}
+        viewerActive={false}
+        editorActive={false}
+        onRemoved={() => undefined}
+      />,
+    );
+    act(() => {
+      vi.advanceTimersByTime(550);
+    });
+    const card = screen.getByRole("article");
+    expect(card).toHaveClass("thumbnail-editor-lingering");
+
+    rerender(
+      <ThumbnailCard
+        artifact={artifact(null)}
+        clipboardCurrent={false}
+        viewerActive={false}
+        editorActive
+        onRemoved={() => undefined}
+      />,
+    );
+    expect(card).not.toHaveClass("thumbnail-editor-lingering");
+    expect(screen.getByRole("button", { name: "Show in editor" })).toHaveClass("is-present");
+
+    act(() => {
+      vi.advanceTimersByTime(3_000);
+    });
+    // Linger timer must not strip presence after cancel.
+    expect(screen.getByRole("button", { name: "Show in editor" })).toHaveClass("is-present");
     vi.useRealTimers();
   });
 

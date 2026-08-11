@@ -94,6 +94,7 @@ import {
 } from "./lib/thumbnailLayout";
 import {
   EDITOR_PRESENCE_LEAVE_MS,
+  EDITOR_PRESENCE_LINGER_MS,
   artifactIdsInEditors,
   reconcileEditorPresence,
 } from "./lib/editorPresence";
@@ -4907,22 +4908,30 @@ export function ThumbnailCard({
   const [editorOpening, setEditorOpening] = useState(false);
   /**
    * Editor control labels + card ring stay in the leave path so width/ring can
-   * ease when the editor closes. `trackedActive` mirrors the last `editorActive`
-   * prop we adjusted for, so we can update presence during render (avoids
-   * setState-in-effect).
+   * ease when the editor closes. After the morph, `lingering` keeps the plain
+   * Edit icon visible briefly so a mis-close can be reopened without hover.
+   * `trackedActive` mirrors the last `editorActive` prop we adjusted for, so we
+   * can update presence during render (avoids setState-in-effect).
    */
   const [editorPresence, setEditorPresence] = useState({
     visible: editorActive,
     leaving: false,
+    lingering: false,
     trackedActive: editorActive,
   });
   if (editorActive !== editorPresence.trackedActive) {
     if (editorActive) {
-      setEditorPresence({ visible: true, leaving: false, trackedActive: true });
+      setEditorPresence({
+        visible: true,
+        leaving: false,
+        lingering: false,
+        trackedActive: true,
+      });
     } else {
       setEditorPresence({
         visible: editorPresence.visible,
         leaving: editorPresence.visible,
+        lingering: false,
         trackedActive: false,
       });
     }
@@ -4932,6 +4941,7 @@ export function ThumbnailCard({
   }
   const editorPresenceVisible = editorPresence.visible;
   const editorPresenceLeaving = editorPresence.leaving;
+  const editorPresenceLingering = editorPresence.lingering;
   /**
    * Snapshot of chrome labels taken the moment exit starts.
    * While `isExiting`, UI is frozen on this snapshot — no “Saved to Folder!”→
@@ -4980,19 +4990,37 @@ export function ThumbnailCard({
     };
   }, []);
 
-  // After presence leaves, drop leave-held labels/ring once the ease finishes.
+  // After presence leaves, drop leave-held labels/ring once the ease finishes,
+  // then hold the plain Edit icon for a short recovery window.
   useEffect(() => {
     if (!editorPresenceLeaving) return;
     const leaveMs = prefersReducedMotion() ? 0 : EDITOR_PRESENCE_LEAVE_MS;
     const timer = window.setTimeout(() => {
       setEditorPresence((current) => (
         current.leaving
-          ? { visible: false, leaving: false, trackedActive: current.trackedActive }
+          ? {
+            visible: false,
+            leaving: false,
+            lingering: true,
+            trackedActive: current.trackedActive,
+          }
           : current
       ));
     }, leaveMs);
     return () => window.clearTimeout(timer);
   }, [editorPresenceLeaving]);
+
+  useEffect(() => {
+    if (!editorPresenceLingering) return;
+    const timer = window.setTimeout(() => {
+      setEditorPresence((current) => (
+        current.lingering
+          ? { ...current, lingering: false }
+          : current
+      ));
+    }, EDITOR_PRESENCE_LINGER_MS);
+    return () => window.clearTimeout(timer);
+  }, [editorPresenceLingering]);
 
   // WAAPI chip flight — avoids CSS custom-property keyframes that WebView2 drops.
   // Depend on `exit` too so the layer is mounted before we query chips.
@@ -5223,6 +5251,7 @@ export function ThumbnailCard({
   // briefly so width can ease back, and the card ring uses the leaving class.
   const editorControlPresent = isExiting ? chrome.editorActive : editorActive || editorOpening;
   const editorControlLeaving = !isExiting && editorPresenceLeaving;
+  const editorControlLingering = !isExiting && editorPresenceLingering;
   const mountEditorLabels = isExiting
     ? chrome.editorActive
     : editorOpening || editorPresenceVisible;
@@ -5241,6 +5270,7 @@ export function ThumbnailCard({
         viewerActive && !isExiting ? "thumbnail-viewer-active" : "",
         editorControlPresent && !isExiting ? "thumbnail-editor-active" : "",
         editorControlLeaving ? "thumbnail-editor-leaving" : "",
+        editorControlLingering ? "thumbnail-editor-lingering" : "",
         fileDragging ? "thumbnail-file-dragging" : "",
         exit ? `thumbnail-exit-${exit}` : "",
         usingDust ? "thumbnail-exit-dust" : "",
@@ -5337,17 +5367,21 @@ export function ThumbnailCard({
         ].filter(Boolean).join(" ")}
         aria-label={editorControlAriaLabel}
         aria-pressed={editorControlPresent || undefined}
-        data-tooltip={editorControlPresent || editorControlLeaving ? undefined : "Edit"}
         disabled={isExiting}
         onClick={isExiting ? undefined : openEditor}
         onPointerLeave={(event) => rearmThumbnailEditorControlHover(event.currentTarget)}
       >
-        <EditIcon />
-        {mountEditorLabels && (
-          <span className="thumbnail-editor-control-label" aria-hidden="true">
-            <span className="label-rest">In editor</span>
-            <span className="label-hover">Show in editor</span>
-          </span>
+        <span className="thumbnail-editor-control-face">
+          <EditIcon />
+          {mountEditorLabels && (
+            <span className="thumbnail-editor-control-label" aria-hidden="true">
+              <span className="label-rest">In editor</span>
+              <span className="label-hover">Show in editor</span>
+            </span>
+          )}
+        </span>
+        {!(editorControlPresent || editorControlLeaving) && (
+          <span className="thumbnail-editor-control-tip" aria-hidden="true">Edit</span>
         )}
       </button>
       <div className="thumbnail-main-actions">
