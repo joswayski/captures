@@ -2611,7 +2611,7 @@ fn onboarding_state(state: &AppState) -> Result<OnboardingState, AppError> {
         let request_access = !can_request || requested_this_launch;
         let screen_recording_granted = state.backend.ensure_permission(request_access).is_ok();
         let microphone_granted = captures_recording_macos::microphone_authorized();
-        return Ok(OnboardingState {
+        Ok(OnboardingState {
             platform: std::env::consts::OS.to_owned(),
             screen_recording_required: true,
             screen_recording_granted,
@@ -2622,7 +2622,7 @@ fn onboarding_state(state: &AppState) -> Result<OnboardingState, AppError> {
             microphone_granted,
             microphone_can_request: !microphone_granted
                 && captures_recording_macos::microphone_can_request(),
-        });
+        })
     }
 
     #[cfg(not(target_os = "macos"))]
