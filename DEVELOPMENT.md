@@ -64,6 +64,8 @@ CAPTURES_RESET_PERMISSIONS=1 npm run build
 
 macOS builds use an installed Apple Development signing identity when available and otherwise use an ad-hoc signature. Local builds omit updater artifacts unless `TAURI_SIGNING_PRIVATE_KEY` is provided.
 
+A local macOS build is a different Screen Recording identity than a downloaded Preview. In System Settings, turn on the row for the copy you just launched — enabling a previously downloaded `Captures.app` does not grant a freshly built one.
+
 Windows builds produce an NSIS installer, MSI package, and unpackaged executable under `target/release`. Linux builds produce AppImage and Debian packages.
 
 ## Platform architecture
