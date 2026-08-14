@@ -1133,6 +1133,7 @@ fn request_onboarding_screen_permission(
                 *state.screen_permission_requested_this_launch.lock() = true;
             }
             Err(CaptureError::PermissionDenied) => {
+                *state.screen_permission_requested_this_launch.lock() = true;
                 open_macos_screen_recording_settings(&app).map_err(|error| error.to_string())?;
             }
             Err(error) => return Err(error.to_string()),
@@ -1162,18 +1163,14 @@ fn request_onboarding_microphone_permission(
 ) -> CommandResult<OnboardingState> {
     #[cfg(target_os = "macos")]
     {
-        if captures_recording_macos::request_microphone_access() {
-            update_onboarding_recording_audio(&app, state.inner(), None, Some(true))
-                .map_err(|error| error.to_string())?;
-        } else if !captures_recording_macos::microphone_can_request() {
+        if !captures_recording_macos::request_microphone_access()
+            && !captures_recording_macos::microphone_can_request()
+        {
             open_macos_microphone_settings(&app).map_err(|error| error.to_string())?;
         }
     }
     #[cfg(not(target_os = "macos"))]
-    {
-        update_onboarding_recording_audio(&app, state.inner(), None, Some(true))
-            .map_err(|error| error.to_string())?;
-    }
+    let _ = app;
 
     onboarding_state(state.inner()).map_err(|error| error.to_string())
 }

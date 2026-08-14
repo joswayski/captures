@@ -36,22 +36,10 @@ describe("Onboarding", () => {
         };
         return currentState;
       }
-      if (command === "set_onboarding_desktop_audio") {
-        currentState = { ...currentState, capture_system_audio: true };
-        return currentState;
-      }
-      if (command === "set_onboarding_microphone") {
-        currentState = {
-          ...currentState,
-          microphone_enabled: currentState.microphone_granted,
-        };
-        return currentState;
-      }
       if (command === "request_onboarding_microphone_permission") {
         currentState = {
           ...currentState,
           microphone_granted: true,
-          microphone_enabled: true,
           microphone_can_request: false,
         };
         return currentState;
@@ -70,9 +58,14 @@ describe("Onboarding", () => {
   it("guides a new macOS user through screen access before enabling capture", async () => {
     render(<Onboarding />);
 
-    expect(await screen.findByRole("heading", { name: "One place for access" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Allow screen access" })).toBeInTheDocument();
+    expect(screen.getByText(/Pick audio sources when you record/)).toBeInTheDocument();
     expect(screen.getByText("Needs approval")).toBeInTheDocument();
+    expect(screen.getByText("Required")).toHaveClass("required");
     expect(screen.getByRole("button", { name: "Start capturing" })).toBeDisabled();
+    expect(screen.queryByText("One place for access")).not.toBeInTheDocument();
+    expect(screen.queryByText("Desktop audio")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Use by default" })).not.toBeInTheDocument();
     expect(screen.queryByText("Welcome")).not.toBeInTheDocument();
     expect(screen.queryByText("First-run setup")).not.toBeInTheDocument();
     expect(screen.queryByText("1 step left")).not.toBeInTheDocument();
@@ -88,7 +81,8 @@ describe("Onboarding", () => {
       expect(invoke).toHaveBeenCalledWith("request_onboarding_screen_permission");
     });
     expect(await screen.findByText("Restart required")).toBeInTheDocument();
-    expect(screen.getByText(/Turn the switch on for Captures/)).toBeInTheDocument();
+    expect(screen.getByText(/Turn the switch on next to this copy of Captures/)).toBeInTheDocument();
+    expect(screen.getByText(/A local build is a different row from a downloaded app/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open Settings" })).toBeInTheDocument();
     const restart = screen.getByRole("button", { name: "Restart Captures" });
     expect(restart).toBeInTheDocument();
@@ -111,6 +105,21 @@ describe("Onboarding", () => {
 
     expect(await screen.findByText("Allowed")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start capturing" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Restart Captures" })).not.toBeInTheDocument();
+  });
+
+  it("tells the user the switch is still off after a restart without access", async () => {
+    currentState = {
+      ...macNeedsPermission,
+      screen_recording_can_request: false,
+      screen_recording_requested_this_launch: false,
+    };
+    render(<Onboarding />);
+
+    expect(await screen.findByText("Still off")).toBeInTheDocument();
+    expect(screen.getByText(/The switch for this copy of Captures is still off/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open Settings" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start capturing" })).toBeDisabled();
     expect(screen.queryByRole("button", { name: "Restart Captures" })).not.toBeInTheDocument();
   });
 
@@ -146,27 +155,30 @@ describe("Onboarding", () => {
     };
     render(<Onboarding />);
 
-    expect(await screen.findByText("Windows provides screen capture access without a separate permission prompt. Secure and protected windows remain private.")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "You’re ready to capture" })).toBeInTheDocument();
+    expect(screen.getByText("Windows provides screen capture access without a separate permission prompt. Secure and protected windows remain private.")).toBeInTheDocument();
     expect(screen.getByText("Built in")).toBeInTheDocument();
     expect(screen.getByText("Ready")).toBeInTheDocument();
+    expect(screen.queryByText("Desktop audio")).not.toBeInTheDocument();
+    expect(screen.queryByText("Microphone")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Allow access" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start capturing" })).toBeEnabled();
   });
 
-  it("lets a new user enable desktop audio and the microphone from first run", async () => {
+  it("lets a new macOS user grant the microphone without turning it on by default", async () => {
     render(<Onboarding />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Use by default" }));
-    await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith("set_onboarding_desktop_audio", { enabled: true });
-    });
-    expect(await screen.findByText("On by default")).toBeInTheDocument();
-
+    expect(await screen.findByText("Microphone")).toBeInTheDocument();
+    expect(screen.getByText("Optional")).toHaveClass("optional");
     fireEvent.click(screen.getByRole("button", { name: "Allow microphone" }));
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("request_onboarding_microphone_permission");
     });
-    expect(screen.getAllByText("On by default")).toHaveLength(2);
+    expect(await screen.findByText("Allowed")).toBeInTheDocument();
+    expect(screen.getByText(/Turn the microphone on when you start a recording/)).toBeInTheDocument();
+    expect(screen.queryByText("On by default")).not.toBeInTheDocument();
+    expect(invoke).not.toHaveBeenCalledWith("set_onboarding_desktop_audio", expect.anything());
+    expect(invoke).not.toHaveBeenCalledWith("set_onboarding_microphone", expect.anything());
   });
 
   it("restarts after returning from Settings when access is still missing", async () => {
