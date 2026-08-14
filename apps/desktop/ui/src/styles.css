@@ -139,8 +139,6 @@ h1, h2, p { margin: 0; }
   transition: background .14s ease;
 }
 .onboarding-permission-button:hover:not(:disabled) { background: #27272a; }
-.onboarding-text-button { min-height: 22px; padding: 2px 2px; border: 0; color: var(--onboarding-soft); background: transparent; font-size: 12px; font-weight: 500; }
-.onboarding-text-button:hover:not(:disabled) { color: var(--onboarding-ink); }
 .onboarding-permission button:disabled { cursor: wait; opacity: .55; }
 .onboarding-error { margin-top: 14px; padding: 10px 12px; border: 1px solid #f0c7c4; border-radius: 6px; color: #9b2c2c; background: #fff5f5; font-size: 12.5px; line-height: 1.4; }
 .onboarding-footer { display: flex; min-height: 40px; margin-top: auto; padding-top: 22px; align-items: center; justify-content: flex-end; gap: 16px; }

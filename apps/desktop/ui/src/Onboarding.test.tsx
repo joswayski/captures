@@ -64,7 +64,25 @@ describe("Onboarding", () => {
     expect(await screen.findByText("Waiting for macOS")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open Settings" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Restart Captures" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Check again" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start capturing" })).toBeDisabled();
+  });
+
+  it("picks up Screen Recording after the user enables it in Settings", async () => {
+    render(<Onboarding />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Allow access" }));
+    expect(await screen.findByText("Waiting for macOS")).toBeInTheDocument();
+
+    currentState = {
+      ...currentState,
+      screen_recording_granted: true,
+    };
+    window.dispatchEvent(new Event("focus"));
+
+    expect(await screen.findByText("Allowed")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start capturing" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Restart Captures" })).not.toBeInTheDocument();
   });
 
   it("finishes setup once required macOS access is available", async () => {

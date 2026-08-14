@@ -2520,16 +2520,19 @@ fn display_contains_pointer(
 fn onboarding_state(state: &AppState) -> Result<OnboardingState, AppError> {
     #[cfg(target_os = "macos")]
     {
-        let screen_recording_granted = state.backend.ensure_permission(false).is_ok();
+        let can_request = screen_permission_request_available(state)?;
+        let requested_this_launch = *state.screen_permission_requested_this_launch.lock();
+        // After the first prompt, `preflight()` can stay false even once the
+        // user enables Screen Recording in System Settings. `request()` returns
+        // the live TCC answer and does not show another dialog.
+        let request_access = !can_request || requested_this_launch;
+        let screen_recording_granted = state.backend.ensure_permission(request_access).is_ok();
         return Ok(OnboardingState {
             platform: std::env::consts::OS.to_owned(),
             screen_recording_required: true,
             screen_recording_granted,
-            screen_recording_can_request: !screen_recording_granted
-                && screen_permission_request_available(state)?,
-            screen_recording_requested_this_launch: *state
-                .screen_permission_requested_this_launch
-                .lock(),
+            screen_recording_can_request: !screen_recording_granted && can_request,
+            screen_recording_requested_this_launch: requested_this_launch,
         });
     }
 

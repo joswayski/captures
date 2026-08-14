@@ -4,7 +4,9 @@ import { useCallback, useEffect, useState } from "react";
 
 import type { OnboardingState } from "./types";
 
-type BusyAction = "permission" | "refresh" | "restart" | "complete" | null;
+type BusyAction = "permission" | "restart" | "complete" | null;
+
+const PERMISSION_POLL_MS = 1_500;
 
 function CaptureSetupIcon() {
   return (
@@ -57,15 +59,11 @@ export function Onboarding() {
   const [busy, setBusy] = useState<BusyAction>(null);
   const [error, setError] = useState("");
 
-  const refresh = useCallback(async (showBusy = false) => {
-    if (showBusy) setBusy("refresh");
-    setError("");
+  const refresh = useCallback(async () => {
     try {
       setSetup(await invoke<OnboardingState>("get_onboarding_state"));
     } catch (refreshError) {
       setError(`Couldn’t check screen access: ${String(refreshError)}`);
-    } finally {
-      if (showBusy) setBusy(null);
     }
   }, []);
 
@@ -80,13 +78,41 @@ export function Onboarding() {
       }
     };
     const handleFocus = () => void load();
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") void load();
+    };
     void load();
     window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibility);
+    let unlistenFocus: (() => void) | undefined;
+    if (isTauri()) {
+      void getCurrentWindow()
+        .onFocusChanged(({ payload: focused }) => {
+          if (focused) void load();
+        })
+        .then((stop) => {
+          if (!active) stop();
+          else unlistenFocus = stop;
+        });
+    }
     return () => {
       active = false;
+      unlistenFocus?.();
       window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibility);
     };
   }, []);
+
+  useEffect(() => {
+    const waiting = Boolean(
+      setup?.screen_recording_required
+        && !setup.screen_recording_granted
+        && (!setup.screen_recording_can_request || setup.screen_recording_requested_this_launch),
+    );
+    if (!waiting) return undefined;
+    const timer = window.setInterval(() => void refresh(), PERMISSION_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [refresh, setup]);
 
   const requestPermission = async () => {
     setBusy("permission");
@@ -189,16 +215,6 @@ export function Onboarding() {
                       ? "Allow access"
                       : "Open Settings"}
                 </button>
-                {!setup.screen_recording_can_request && (
-                  <button
-                    type="button"
-                    className="onboarding-text-button"
-                    disabled={busy !== null}
-                    onClick={() => void refresh(true)}
-                  >
-                    {busy === "refresh" ? "Checking…" : "Check again"}
-                  </button>
-                )}
               </div>
             )}
           </article>
