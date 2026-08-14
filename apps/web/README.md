@@ -1,8 +1,9 @@
 # Captures website
 
 Minimal static work-in-progress page with direct Preview download links (same stable
-`preview` release assets as the root README), a link to [the repo](https://github.com/joswayski/captures),
-and recent changes from `main`.
+`preview` release assets as the root README). The homepage offers the installer that
+matches the visitor's OS, with the full platform list one click away. It also links to
+[the repo](https://github.com/joswayski/captures) and shows recent changes from `main`.
 
 ## Stack
 

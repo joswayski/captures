@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { detectPreviewDownloadId } from "../detectPreviewDownload";
 
 const REPO_URL = "https://github.com/joswayski/captures";
 const REPO_API = "https://api.github.com/repos/joswayski/captures";
@@ -16,34 +17,49 @@ const COOKING_TOOLTIP =
 
 const PREVIEW_DOWNLOADS = [
   {
+    id: "macos",
+    family: "macos",
     platform: "macOS 13+",
     arch: "Apple silicon",
     format: "dmg",
+    label: "Download for macOS",
     href: `${PREVIEW_DOWNLOAD_BASE}/Captures-macOS-Apple-Silicon.dmg`,
     fileName: "Captures-macOS-Apple-Silicon.dmg",
   },
   {
+    id: "windows",
+    family: "windows",
     platform: "Windows 11",
     arch: "x64",
     format: "exe",
+    label: "Download for Windows",
     href: `${PREVIEW_DOWNLOAD_BASE}/Captures-Windows-x64-setup.exe`,
     fileName: "Captures-Windows-x64-setup.exe",
   },
   {
+    id: "linux-deb",
+    family: "linux",
     platform: "Ubuntu / Debian",
     arch: "x64",
     format: "deb",
+    label: "Download for Linux",
     href: `${PREVIEW_DOWNLOAD_BASE}/Captures-Linux-x64.deb`,
     fileName: "Captures-Linux-x64.deb",
   },
   {
+    id: "linux-appimage",
+    family: "linux",
     platform: "Other Linux",
     arch: "x64",
     format: "AppImage",
+    label: "Download for Linux",
     href: `${PREVIEW_DOWNLOAD_BASE}/Captures-Linux-x64.AppImage`,
     fileName: "Captures-Linux-x64.AppImage",
   },
 ] as const;
+
+type PreviewDownload = (typeof PREVIEW_DOWNLOADS)[number];
+type OsFamily = PreviewDownload["family"];
 
 const relativeTimeFormatter = new Intl.RelativeTimeFormat("en", {
   numeric: "always",
@@ -51,7 +67,10 @@ const relativeTimeFormatter = new Intl.RelativeTimeFormat("en", {
 
 export default function Home() {
   const [now, setNow] = useState(() => Date.now());
+  const [showAllDownloads, setShowAllDownloads] = useState(false);
   const cookingShas = useCookingPreviewShas(__LATEST_CHANGES__);
+  const detectedDownload = detectPreviewDownload();
+  const linuxAlternative = detectedDownload ? linuxAlternativeDownload(detectedDownload) : null;
 
   useEffect(() => {
     const interval = window.setInterval(() => setNow(Date.now()), 60_000);
@@ -114,30 +133,57 @@ export default function Home() {
               <CopyEmailButton email={CONTACT_EMAIL} />.
             </p>
 
-            <ul className="mt-6 divide-y divide-border border border-border bg-surface">
-              {PREVIEW_DOWNLOADS.map((download) => (
-                <li key={download.href}>
-                  <a
-                    href={download.href}
-                    className="group flex items-center justify-between gap-4 px-4 py-3.5 no-underline transition-colors duration-200 ease-out hover:bg-canvas"
+            {detectedDownload ? (
+              <div className="mt-6">
+                <a href={detectedDownload.href} className="download-button">
+                  <OsIcon family={detectedDownload.family} className="h-[1.15rem] w-[1.15rem]" />
+                  {detectedDownload.label}
+                  <span className="sr-only"> {detectedDownload.fileName}</span>
+                </a>
+                <p className="mt-2.5 text-xs text-ink-soft">
+                  {detectedDownload.arch} · {detectedDownload.format}
+                  {linuxAlternative ? (
+                    <>
+                      {" · "}
+                      <a
+                        href={linuxAlternative.href}
+                        className="font-medium text-ink-muted no-underline underline-offset-2 transition-colors duration-200 ease-out hover:text-accent-readable hover:underline"
+                      >
+                        or {linuxAlternativeLabel(linuxAlternative)}
+                      </a>
+                    </>
+                  ) : null}
+                </p>
+              </div>
+            ) : null}
+
+            {detectedDownload === null || showAllDownloads ? (
+              <DownloadList
+                downloads={
+                  detectedDownload
+                    ? PREVIEW_DOWNLOADS.filter((download) => download.id !== detectedDownload.id)
+                    : PREVIEW_DOWNLOADS
+                }
+                className={detectedDownload ? "mt-4" : "mt-6"}
+              />
+            ) : null}
+
+            <p className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-soft">
+              {detectedDownload ? (
+                <>
+                  <button
+                    type="button"
+                    className="cursor-pointer font-medium text-ink-muted underline-offset-2 transition-colors duration-200 ease-out hover:text-accent-readable hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                    aria-expanded={showAllDownloads}
+                    onClick={() => setShowAllDownloads((open) => !open)}
                   >
-                    <span className="min-w-0">
-                      <span className="block text-sm font-medium text-ink">{download.platform}</span>
-                      <span className="mt-0.5 block text-xs text-ink-soft">{download.arch}</span>
-                    </span>
-                    <span className="shrink-0 text-right">
-                      <span className="block text-xs font-medium text-ink-muted transition-colors duration-200 ease-out group-hover:text-accent-readable">
-                        Download
-                      </span>
-                      <span className="mt-0.5 block text-xs text-ink-soft">{download.format}</span>
-                      <span className="sr-only"> {download.fileName}</span>
-                    </span>
-                  </a>
-                </li>
-              ))}
-            </ul>
-            <p className="mt-2.5 text-right text-xs text-ink-soft">
-              …or{" "}
+                    {showAllDownloads ? "Hide other platforms" : "Other platforms"}
+                  </button>
+                  <span aria-hidden="true">·</span>
+                </>
+              ) : (
+                <span>…or</span>
+              )}
               <a
                 href={RELEASES_URL}
                 target="_blank"
@@ -423,6 +469,67 @@ async function resolveCookingPreviewShas(
   return cooking;
 }
 
+function detectPreviewDownload(): PreviewDownload | null {
+  if (typeof navigator === "undefined") return null;
+  const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
+  const id = detectPreviewDownloadId({
+    userAgent: nav.userAgent ?? "",
+    platform: nav.platform ?? "",
+    userAgentDataPlatform: nav.userAgentData?.platform ?? "",
+    maxTouchPoints: nav.maxTouchPoints ?? 0,
+  });
+  return PREVIEW_DOWNLOADS.find((download) => download.id === id) ?? null;
+}
+
+function linuxAlternativeDownload(download: PreviewDownload) {
+  if (download.family !== "linux") return null;
+  return PREVIEW_DOWNLOADS.find((item) => item.family === "linux" && item.id !== download.id) ?? null;
+}
+
+function linuxAlternativeLabel(download: PreviewDownload) {
+  return download.id === "linux-deb" ? ".deb for Ubuntu / Debian" : "AppImage";
+}
+
+function DownloadList({
+  downloads,
+  className,
+}: {
+  downloads: readonly PreviewDownload[];
+  className?: string;
+}) {
+  return (
+    <ul className={`divide-y divide-border border border-border bg-surface ${className ?? ""}`}>
+      {downloads.map((download) => {
+        return (
+          <li key={download.href}>
+            <a
+              href={download.href}
+              className="group flex items-center justify-between gap-4 px-4 py-3.5 no-underline transition-colors duration-200 ease-out hover:bg-canvas"
+            >
+              <span className="flex min-w-0 items-center gap-3">
+                <span className="grid h-8 w-8 shrink-0 place-items-center text-ink" aria-hidden="true">
+                  <OsIcon family={download.family} className="h-4 w-4" />
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium text-ink">{download.platform}</span>
+                  <span className="mt-0.5 block text-xs text-ink-soft">{download.arch}</span>
+                </span>
+              </span>
+              <span className="shrink-0 text-right">
+                <span className="block text-xs font-medium text-ink-muted transition-colors duration-200 ease-out group-hover:text-accent-readable">
+                  Download
+                </span>
+                <span className="mt-0.5 block text-xs text-ink-soft">{download.format}</span>
+                <span className="sr-only"> {download.fileName}</span>
+              </span>
+            </a>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 function CopyEmailButton({ email }: { email: string }) {
   const [copied, setCopied] = useState(false);
   const resetTimer = useRef<number | null>(null);
@@ -534,6 +641,39 @@ function XIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" className={className}>
       <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.744l7.727-8.835L1.254 2.25H8.08l4.253 5.622zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+    </svg>
+  );
+}
+
+function OsIcon({ family, className }: { family: OsFamily; className?: string }) {
+  if (family === "macos") return <AppleIcon className={className} />;
+  if (family === "windows") return <WindowsIcon className={className} />;
+  return <LinuxIcon className={className} />;
+}
+
+function AppleIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" className={className}>
+      <path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701" />
+    </svg>
+  );
+}
+
+function WindowsIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" className={className}>
+      <path d="M3 5.15 11.15 4v7.35H3V5.15Zm9.15-1.45L21 2.4v8.95h-8.85V3.7ZM3 12.85h8.15V20.2L3 19.05v-6.2Zm9.15 0H21v8.95l-8.85-1.45v-7.5Z" />
+    </svg>
+  );
+}
+
+function LinuxIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" className={className}>
+      <path
+        fillRule="evenodd"
+        d="M12 2.2c-2.05 0-3.7 1.7-3.7 4 0 .72.18 1.38.5 1.94-2.28 1.32-3.85 3.55-4.38 6.1-.52 2.5.05 4.28 1.55 5.15-.62.42-1.02 1.1-1.02 1.88 0 1.42 1.48 2.18 3.05 2.52 1.42.3 3.12.36 5 .36s3.58-.06 5-.36c1.57-.34 3.05-1.1 3.05-2.52 0-.78-.4-1.46-1.02-1.88 1.5-.87 2.07-2.65 1.55-5.15-.53-2.55-2.1-4.78-4.38-6.1.32-.56.5-1.22.5-1.94 0-2.3-1.65-4-3.7-4ZM10.2 5.55c.45-.3.95.05.88.58-.06.46-.58.72-1.02.45-.44-.26-.42-.82.14-1.03Zm3.8 0c.56.21.58.77.14 1.03-.44.27-.96.01-1.02-.45-.07-.53.43-.88.88-.58ZM9.35 16.85c.9.5 1.75.78 2.65.78s1.75-.28 2.65-.78c.28-.16.6.02.6.34 0 .78-1.05 1.5-3.25 1.5s-3.25-.72-3.25-1.5c0-.32.32-.5.6-.34Z"
+      />
     </svg>
   );
 }
