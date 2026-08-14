@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import type { OnboardingState } from "./types";
 
-type BusyAction = "permission" | "restart" | "complete" | null;
+type BusyAction = "permission" | "desktop-audio" | "microphone" | "restart" | "complete" | null;
 
 const PERMISSION_POLL_MS = 1_500;
 
@@ -35,6 +35,15 @@ function AudioAccessIcon() {
   );
 }
 
+function MicrophoneAccessIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="9" y="3" width="6" height="11" rx="3" />
+      <path d="M6 11a6 6 0 0 0 12 0M12 17v4M9 21h6" />
+    </svg>
+  );
+}
+
 function ArrowIcon() {
   return <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h11M11 6l4 4-4 4" /></svg>;
 }
@@ -54,10 +63,32 @@ function screenAccessDescription(platform: string, required: boolean) {
     : "Screen capture is available without an additional setup step.";
 }
 
+function desktopAudioDescription(platform: string) {
+  if (platform === "macos") {
+    return "Uses Screen Recording — there is no extra permission. Turn it on so new videos include what your computer plays.";
+  }
+  return "Turn it on so new videos include what your computer plays. You can change this later in Preferences.";
+}
+
+function microphoneStatus(setup: OnboardingState, asked: boolean) {
+  if (setup.microphone_enabled) return "On by default";
+  if (setup.microphone_granted) return "Allowed";
+  if (asked || !setup.microphone_can_request) return "Needs approval";
+  return "Off";
+}
+
+function microphoneDescription(platform: string, granted: boolean) {
+  if (platform === "macos" && !granted) {
+    return "A separate microphone permission. Allow it now if you want voice in recordings, or wait until you pick a mic.";
+  }
+  return "Turn it on so new recordings use your default microphone. You can change the device later.";
+}
+
 export function Onboarding() {
   const [setup, setSetup] = useState<OnboardingState | null>(null);
   const [busy, setBusy] = useState<BusyAction>(null);
   const [error, setError] = useState("");
+  const [microphoneAsked, setMicrophoneAsked] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -104,15 +135,33 @@ export function Onboarding() {
   }, []);
 
   useEffect(() => {
-    const waiting = Boolean(
+    const waitingForScreen = Boolean(
       setup?.screen_recording_required
         && !setup.screen_recording_granted
         && (!setup.screen_recording_can_request || setup.screen_recording_requested_this_launch),
     );
-    if (!waiting) return undefined;
+    const waitingForMicrophone = Boolean(
+      microphoneAsked && setup && !setup.microphone_granted,
+    );
+    if (!waitingForScreen && !waitingForMicrophone) return undefined;
     const timer = window.setInterval(() => void refresh(), PERMISSION_POLL_MS);
     return () => window.clearInterval(timer);
-  }, [refresh, setup]);
+  }, [microphoneAsked, refresh, setup]);
+
+  useEffect(() => {
+    if (!microphoneAsked || !setup?.microphone_granted || setup.microphone_enabled) return undefined;
+    let cancelled = false;
+    void invoke<OnboardingState>("set_onboarding_microphone", { enabled: true })
+      .then((next) => {
+        if (!cancelled) setSetup(next);
+      })
+      .catch((enableError) => {
+        if (!cancelled) setError(`Couldn’t enable the microphone: ${String(enableError)}`);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [microphoneAsked, setup]);
 
   const requestPermission = async () => {
     setBusy("permission");
@@ -121,6 +170,31 @@ export function Onboarding() {
       setSetup(await invoke<OnboardingState>("request_onboarding_screen_permission"));
     } catch (permissionError) {
       setError(`Couldn’t open screen access: ${String(permissionError)}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const setDesktopAudio = async (enabled: boolean) => {
+    setBusy("desktop-audio");
+    setError("");
+    try {
+      setSetup(await invoke<OnboardingState>("set_onboarding_desktop_audio", { enabled }));
+    } catch (audioError) {
+      setError(`Couldn’t update desktop audio: ${String(audioError)}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const requestMicrophone = async () => {
+    setBusy("microphone");
+    setError("");
+    setMicrophoneAsked(true);
+    try {
+      setSetup(await invoke<OnboardingState>("request_onboarding_microphone_permission"));
+    } catch (microphoneError) {
+      setError(`Couldn’t open microphone access: ${String(microphoneError)}`);
     } finally {
       setBusy(null);
     }
@@ -183,7 +257,7 @@ export function Onboarding() {
       <section className="onboarding-setup" aria-labelledby="onboarding-setup-title">
         <header className="onboarding-setup-header">
           <h1 id="onboarding-setup-title">One place for access</h1>
-          <p>Captures asks only for what a feature needs, when it needs it.</p>
+          <p>Screen capture is required. Audio is optional and can wait until you record.</p>
         </header>
 
         <div className="onboarding-permissions" aria-live="polite">
@@ -219,16 +293,88 @@ export function Onboarding() {
             )}
           </article>
 
-          <article className="onboarding-permission optional">
+          <article className={`onboarding-permission optional${setup?.capture_system_audio ? " ready" : ""}`}>
             <span className="onboarding-permission-icon audio"><AudioAccessIcon /></span>
             <div className="onboarding-permission-copy">
               <div className="onboarding-permission-title">
-                <h3>Recording audio</h3>
+                <h3>Desktop audio</h3>
                 <span>Optional</span>
               </div>
-              <p>Microphone and desktop-audio access are requested only when you turn those sources on for a recording.</p>
-              <span className="onboarding-permission-status optional"><i aria-hidden="true" /> On demand</span>
+              <p>{setup ? desktopAudioDescription(setup.platform) : "Checking audio options…"}</p>
+              {setup && (
+                <span className={`onboarding-permission-status${setup.capture_system_audio ? " ready" : " optional"}`}>
+                  <i aria-hidden="true" /> {setup.capture_system_audio ? "On by default" : "Off"}
+                </span>
+              )}
             </div>
+            {setup && (
+              <div className="onboarding-permission-actions">
+                <button
+                  type="button"
+                  className={setup.capture_system_audio ? "onboarding-text-button" : "onboarding-permission-button"}
+                  disabled={busy !== null}
+                  onClick={() => void setDesktopAudio(!setup.capture_system_audio)}
+                >
+                  {busy === "desktop-audio"
+                    ? "Saving…"
+                    : setup.capture_system_audio
+                      ? "Turn off"
+                      : "Use by default"}
+                </button>
+              </div>
+            )}
+          </article>
+
+          <article className={`onboarding-permission optional${setup?.microphone_enabled ? " ready" : ""}`}>
+            <span className="onboarding-permission-icon microphone"><MicrophoneAccessIcon /></span>
+            <div className="onboarding-permission-copy">
+              <div className="onboarding-permission-title">
+                <h3>Microphone</h3>
+                <span>Optional</span>
+              </div>
+              <p>{setup ? microphoneDescription(setup.platform, setup.microphone_granted) : "Checking microphone access…"}</p>
+              {setup && (
+                <span className={`onboarding-permission-status${setup.microphone_enabled ? " ready" : setup.microphone_granted ? " optional" : ""}`}>
+                  <i aria-hidden="true" /> {microphoneStatus(setup, microphoneAsked)}
+                </span>
+              )}
+            </div>
+            {setup && (
+              <div className="onboarding-permission-actions">
+                {setup.microphone_enabled ? (
+                  <button
+                    type="button"
+                    className="onboarding-text-button"
+                    disabled={busy !== null}
+                    onClick={() => {
+                      setBusy("microphone");
+                      setError("");
+                      void invoke<OnboardingState>("set_onboarding_microphone", { enabled: false })
+                        .then(setSetup)
+                        .catch((disableError) => {
+                          setError(`Couldn’t update the microphone: ${String(disableError)}`);
+                        })
+                        .finally(() => setBusy(null));
+                    }}
+                  >
+                    {busy === "microphone" ? "Saving…" : "Turn off"}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="onboarding-permission-button"
+                    disabled={busy !== null}
+                    onClick={() => void requestMicrophone()}
+                  >
+                    {busy === "microphone"
+                      ? "Opening…"
+                      : setup.platform === "macos" && !setup.microphone_granted
+                        ? (setup.microphone_can_request ? "Allow microphone" : "Microphone Settings")
+                        : "Use by default"}
+                  </button>
+                )}
+              </div>
+            )}
           </article>
         </div>
 

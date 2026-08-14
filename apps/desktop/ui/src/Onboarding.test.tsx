@@ -15,6 +15,10 @@ const macNeedsPermission: OnboardingState = {
   screen_recording_granted: false,
   screen_recording_can_request: true,
   screen_recording_requested_this_launch: false,
+  capture_system_audio: false,
+  microphone_enabled: false,
+  microphone_granted: false,
+  microphone_can_request: true,
 };
 
 describe("Onboarding", () => {
@@ -29,6 +33,26 @@ describe("Onboarding", () => {
           ...currentState,
           screen_recording_can_request: false,
           screen_recording_requested_this_launch: true,
+        };
+        return currentState;
+      }
+      if (command === "set_onboarding_desktop_audio") {
+        currentState = { ...currentState, capture_system_audio: true };
+        return currentState;
+      }
+      if (command === "set_onboarding_microphone") {
+        currentState = {
+          ...currentState,
+          microphone_enabled: currentState.microphone_granted,
+        };
+        return currentState;
+      }
+      if (command === "request_onboarding_microphone_permission") {
+        currentState = {
+          ...currentState,
+          microphone_granted: true,
+          microphone_enabled: true,
+          microphone_can_request: false,
         };
         return currentState;
       }
@@ -110,6 +134,10 @@ describe("Onboarding", () => {
       screen_recording_granted: true,
       screen_recording_can_request: false,
       screen_recording_requested_this_launch: false,
+      capture_system_audio: false,
+      microphone_enabled: false,
+      microphone_granted: true,
+      microphone_can_request: false,
     };
     render(<Onboarding />);
 
@@ -118,5 +146,21 @@ describe("Onboarding", () => {
     expect(screen.getByText("Ready")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Allow access" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start capturing" })).toBeEnabled();
+  });
+
+  it("lets a new user enable desktop audio and the microphone from first run", async () => {
+    render(<Onboarding />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Use by default" }));
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("set_onboarding_desktop_audio", { enabled: true });
+    });
+    expect(await screen.findByText("On by default")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Allow microphone" }));
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("request_onboarding_microphone_permission");
+    });
+    expect(screen.getAllByText("On by default")).toHaveLength(2);
   });
 });

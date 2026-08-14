@@ -115,6 +115,10 @@ struct OnboardingState {
     screen_recording_granted: bool,
     screen_recording_can_request: bool,
     screen_recording_requested_this_launch: bool,
+    capture_system_audio: bool,
+    microphone_enabled: bool,
+    microphone_granted: bool,
+    microphone_can_request: bool,
 }
 
 struct ClipboardWrite {
@@ -226,6 +230,9 @@ pub fn run() {
             get_settings,
             get_onboarding_state,
             request_onboarding_screen_permission,
+            set_onboarding_desktop_audio,
+            set_onboarding_microphone,
+            request_onboarding_microphone_permission,
             restart_captures_for_permissions,
             complete_onboarding,
             set_shortcut_capture_suppressed,
@@ -1135,6 +1142,78 @@ fn request_onboarding_screen_permission(
     let _ = app;
 
     onboarding_state(state.inner()).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_onboarding_desktop_audio(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    enabled: bool,
+) -> CommandResult<OnboardingState> {
+    update_onboarding_recording_audio(&app, state.inner(), Some(enabled), None)
+        .map_err(|error| error.to_string())?;
+    onboarding_state(state.inner()).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn request_onboarding_microphone_permission(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> CommandResult<OnboardingState> {
+    #[cfg(target_os = "macos")]
+    {
+        if captures_recording_macos::request_microphone_access() {
+            update_onboarding_recording_audio(&app, state.inner(), None, Some(true))
+                .map_err(|error| error.to_string())?;
+        } else if !captures_recording_macos::microphone_can_request() {
+            open_macos_microphone_settings(&app).map_err(|error| error.to_string())?;
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        update_onboarding_recording_audio(&app, state.inner(), None, Some(true))
+            .map_err(|error| error.to_string())?;
+    }
+
+    onboarding_state(state.inner()).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_onboarding_microphone(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    enabled: bool,
+) -> CommandResult<OnboardingState> {
+    #[cfg(target_os = "macos")]
+    if enabled && !captures_recording_macos::microphone_authorized() {
+        return onboarding_state(state.inner()).map_err(|error| error.to_string());
+    }
+    update_onboarding_recording_audio(&app, state.inner(), None, Some(enabled))
+        .map_err(|error| error.to_string())?;
+    onboarding_state(state.inner()).map_err(|error| error.to_string())
+}
+
+fn update_onboarding_recording_audio(
+    app: &AppHandle,
+    state: &AppState,
+    capture_system_audio: Option<bool>,
+    enable_microphone: Option<bool>,
+) -> Result<(), AppError> {
+    let settings = {
+        let mut settings = state.settings.write();
+        if let Some(enabled) = capture_system_audio {
+            settings.recording.capture_system_audio = enabled;
+        }
+        if let Some(enabled) = enable_microphone {
+            settings.recording.microphone_device_id = enabled.then(|| "default".to_owned());
+        }
+        storage::save_settings(&settings)?;
+        settings.clone()
+    };
+    if let Err(error) = app.emit("settings-changed", &settings) {
+        eprintln!("failed to broadcast onboarding audio settings: {error}");
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -2518,6 +2597,10 @@ fn display_contains_pointer(
 }
 
 fn onboarding_state(state: &AppState) -> Result<OnboardingState, AppError> {
+    let settings = state.settings();
+    let microphone_enabled = settings.recording.microphone_device_id.is_some();
+    let capture_system_audio = settings.recording.capture_system_audio;
+
     #[cfg(target_os = "macos")]
     {
         let can_request = screen_permission_request_available(state)?;
@@ -2527,24 +2610,33 @@ fn onboarding_state(state: &AppState) -> Result<OnboardingState, AppError> {
         // the live TCC answer and does not show another dialog.
         let request_access = !can_request || requested_this_launch;
         let screen_recording_granted = state.backend.ensure_permission(request_access).is_ok();
+        let microphone_granted = captures_recording_macos::microphone_authorized();
         return Ok(OnboardingState {
             platform: std::env::consts::OS.to_owned(),
             screen_recording_required: true,
             screen_recording_granted,
             screen_recording_can_request: !screen_recording_granted && can_request,
             screen_recording_requested_this_launch: requested_this_launch,
+            capture_system_audio,
+            microphone_enabled: microphone_enabled && microphone_granted,
+            microphone_granted,
+            microphone_can_request: !microphone_granted
+                && captures_recording_macos::microphone_can_request(),
         });
     }
 
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = state;
         Ok(OnboardingState {
             platform: std::env::consts::OS.to_owned(),
             screen_recording_required: false,
             screen_recording_granted: true,
             screen_recording_can_request: false,
             screen_recording_requested_this_launch: false,
+            capture_system_audio,
+            microphone_enabled,
+            microphone_granted: true,
+            microphone_can_request: false,
         })
     }
 }
@@ -3744,6 +3836,16 @@ fn open_macos_screen_recording_settings(app: &AppHandle) -> Result<(), AppError>
     app.opener()
         .open_url(
             "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+            None::<&str>,
+        )
+        .map_err(|error| AppError::Task(error.to_string()))
+}
+
+#[cfg(target_os = "macos")]
+fn open_macos_microphone_settings(app: &AppHandle) -> Result<(), AppError> {
+    app.opener()
+        .open_url(
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
             None::<&str>,
         )
         .map_err(|error| AppError::Task(error.to_string()))

@@ -113,6 +113,7 @@ h1, h2, p { margin: 0; }
 .onboarding-permission-icon { display: grid; width: 40px; height: 40px; place-items: center; border-radius: 8px; }
 .onboarding-permission-icon.screen { color: #3f4a63; background: #eef2f8; }
 .onboarding-permission-icon.audio { color: var(--onboarding-accent); background: rgba(var(--onboarding-accent-rgb), .1); }
+.onboarding-permission-icon.microphone { color: #5b4a7a; background: #f0ebf8; }
 .onboarding-permission-icon svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.65; stroke-linecap: round; stroke-linejoin: round; }
 .onboarding-permission-copy { min-width: 0; }
 .onboarding-permission-title { display: flex; align-items: center; gap: 8px; }
@@ -139,6 +140,8 @@ h1, h2, p { margin: 0; }
   transition: background .14s ease;
 }
 .onboarding-permission-button:hover:not(:disabled) { background: #27272a; }
+.onboarding-text-button { min-height: 32px; padding: 7px 10px; border: 0; color: var(--onboarding-soft); background: transparent; font-size: 12.5px; font-weight: 500; }
+.onboarding-text-button:hover:not(:disabled) { color: var(--onboarding-ink); }
 .onboarding-permission button:disabled { cursor: wait; opacity: .55; }
 .onboarding-error { margin-top: 14px; padding: 10px 12px; border: 1px solid #f0c7c4; border-radius: 6px; color: #9b2c2c; background: #fff5f5; font-size: 12.5px; line-height: 1.4; }
 .onboarding-footer { display: flex; min-height: 40px; margin-top: auto; padding-top: 22px; align-items: center; justify-content: flex-end; gap: 16px; }

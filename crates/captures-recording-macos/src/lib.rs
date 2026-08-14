@@ -195,6 +195,32 @@ pub fn microphone_devices() -> Vec<AudioDevice> {
     }
 }
 
+#[cfg(target_os = "macos")]
+pub fn microphone_authorized() -> bool {
+    // SAFETY: the Swift bridge only queries AVFoundation's current TCC status.
+    unsafe { captures_microphone_authorized() }
+}
+
+#[cfg(target_os = "macos")]
+pub fn microphone_can_request() -> bool {
+    // SAFETY: the Swift bridge only queries AVFoundation's current TCC status.
+    unsafe { captures_microphone_can_request() }
+}
+
+#[cfg(target_os = "macos")]
+pub fn request_microphone_access() -> bool {
+    // SAFETY: the Swift bridge shows the system prompt if needed, then returns
+    // whether this process is authorized.
+    unsafe { captures_microphone_request() }
+}
+
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    fn captures_microphone_authorized() -> bool;
+    fn captures_microphone_can_request() -> bool;
+    fn captures_microphone_request() -> bool;
+}
+
 pub fn play_start_chime() {
     #[cfg(target_os = "macos")]
     // AudioServices plays from this process, so ScreenCaptureKit's
