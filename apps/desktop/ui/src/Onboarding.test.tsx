@@ -48,6 +48,13 @@ describe("Onboarding", () => {
     expect(await screen.findByRole("heading", { name: "One place for access" })).toBeInTheDocument();
     expect(screen.getByText("Needs approval")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start capturing" })).toBeDisabled();
+    expect(screen.queryByText("Welcome")).not.toBeInTheDocument();
+    expect(screen.queryByText("First-run setup")).not.toBeInTheDocument();
+    expect(screen.queryByText("1 step left")).not.toBeInTheDocument();
+    expect(screen.queryByText("Screenshot")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Setup for/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Your work stays yours/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Everything ready before your first capture/)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Allow access" }));
 
@@ -90,7 +97,7 @@ describe("Onboarding", () => {
 
     expect(await screen.findByText("Windows provides screen capture access without a separate permission prompt. Secure and protected windows remain private.")).toBeInTheDocument();
     expect(screen.getByText("Built in")).toBeInTheDocument();
-    expect(screen.getAllByText("Ready")).toHaveLength(2);
+    expect(screen.getByText("Ready")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Allow access" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start capturing" })).toBeEnabled();
   });

@@ -3029,7 +3029,7 @@ fn show_onboarding(app: &AppHandle) {
             ONBOARDING_WINDOW_LABEL,
             WebviewUrl::App("index.html?view=onboarding".into()),
         )
-        .title("Welcome to Captures")
+        .title("Captures")
         .inner_size(ONBOARDING_WINDOW_WIDTH, ONBOARDING_WINDOW_HEIGHT)
         .min_inner_size(720.0, 540.0)
         .center()
@@ -4655,7 +4655,6 @@ fn captures_window_is_internal(window: &captures_capture::WindowDescriptor) -> b
     const INTERNAL_WINDOW_TITLES: &[&str] = &[
         "Captures",
         "Captures is running",
-        "Welcome to Captures",
         "Captures Recording Controls",
         "Captures Recording Countdown",
         "Captures Update",
@@ -5004,7 +5003,6 @@ mod tests {
         for title in [
             "Captures",
             "Captures is running",
-            "Welcome to Captures",
             "Captures Recording Controls",
             "Captures Recording Countdown",
             "Captures Update",

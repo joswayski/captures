@@ -6,12 +6,6 @@ import type { OnboardingState } from "./types";
 
 type BusyAction = "permission" | "refresh" | "restart" | "complete" | null;
 
-const PLATFORM_NAMES: Record<string, string> = {
-  macos: "macOS",
-  windows: "Windows",
-  linux: "Linux",
-};
-
 function CaptureSetupIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -37,10 +31,6 @@ function AudioAccessIcon() {
       <path d="M4 13v-2M8 16V8M12 19V5M16 16V8M20 13v-2" />
     </svg>
   );
-}
-
-function CheckmarkIcon() {
-  return <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m4 10 3.5 3.5L16 5" /></svg>;
 }
 
 function ArrowIcon() {
@@ -134,7 +124,6 @@ export function Onboarding() {
   const screenReady = Boolean(
     setup && (!setup.screen_recording_required || setup.screen_recording_granted),
   );
-  const platformName = setup ? (PLATFORM_NAMES[setup.platform] ?? "this computer") : "this computer";
   const permissionPending = Boolean(
     setup?.screen_recording_required && !setup.screen_recording_granted,
   );
@@ -151,17 +140,10 @@ export function Onboarding() {
 
   return (
     <main className="onboarding-shell">
-      <section className="onboarding-intro" aria-labelledby="onboarding-title">
+      <section className="onboarding-intro" aria-label="Captures">
         <div className="onboarding-brand">
           <span className="onboarding-brand-icon"><CaptureSetupIcon /></span>
           <span>Captures</span>
-        </div>
-        <div className="onboarding-intro-copy">
-          <span className="onboarding-kicker">Welcome</span>
-          <h1 id="onboarding-title">Everything ready before your first capture.</h1>
-          <p>
-            A quick system check keeps screenshots, video, and GIF recording smooth from the start.
-          </p>
         </div>
         <div className="onboarding-visual" aria-hidden="true">
           <span className="onboarding-frame onboarding-frame-large" />
@@ -170,21 +152,12 @@ export function Onboarding() {
           <span className="onboarding-orbit onboarding-orbit-blue" />
           <span className="onboarding-spark"><CaptureSetupIcon /></span>
         </div>
-        <div className="onboarding-formats" aria-label="Capture formats">
-          <span>Screenshot</span><span>Video</span><span>GIF</span>
-        </div>
       </section>
 
       <section className="onboarding-setup" aria-labelledby="onboarding-setup-title">
         <header className="onboarding-setup-header">
-          <div>
-            <span className="onboarding-kicker">First-run setup</span>
-            <h2 id="onboarding-setup-title">One place for access</h2>
-            <p>Captures asks only for what a feature needs, when it needs it.</p>
-          </div>
-          <span className={`onboarding-progress${screenReady ? " ready" : ""}`}>
-            {screenReady ? <><CheckmarkIcon /> Ready</> : "1 step left"}
-          </span>
+          <h1 id="onboarding-setup-title">One place for access</h1>
+          <p>Captures asks only for what a feature needs, when it needs it.</p>
         </header>
 
         <div className="onboarding-permissions" aria-live="polite">
@@ -243,15 +216,9 @@ export function Onboarding() {
           </article>
         </div>
 
-        <div className="onboarding-privacy-note">
-          <span aria-hidden="true"><CheckmarkIcon /></span>
-          <p><strong>Your work stays yours.</strong> Captures saves captures locally and never includes them in feedback.</p>
-        </div>
-
         {error && <p className="onboarding-error" role="alert">{error}</p>}
 
         <footer className="onboarding-footer">
-          <p>{setup ? `Setup for ${platformName}` : "Checking this computer…"}</p>
           <div>
             {shouldOfferRestart && (
               <button
