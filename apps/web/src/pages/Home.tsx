@@ -67,7 +67,6 @@ const relativeTimeFormatter = new Intl.RelativeTimeFormat("en", {
 
 export default function Home() {
   const [now, setNow] = useState(() => Date.now());
-  const [showAllDownloads, setShowAllDownloads] = useState(false);
   const cookingShas = useCookingPreviewShas(__LATEST_CHANGES__);
   const detectedDownload = detectPreviewDownload();
   const linuxAlternative = detectedDownload ? linuxAlternativeDownload(detectedDownload) : null;
@@ -108,7 +107,7 @@ export default function Home() {
             </h2>
             <p className="mt-3 max-w-xl text-sm leading-relaxed text-ink-muted">
               Builds are available after every merge and may contain bugs or incomplete features.
-              Please give feedback on{" "}
+              Please give feedback in the app, on{" "}
               <a
                 href={X_URL}
                 target="_blank"
@@ -118,81 +117,59 @@ export default function Home() {
               >
                 <XIcon className="h-3 w-3" />
               </a>
-              ,{" "}
-              <a
-                href={REPO_URL}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-chip"
-                aria-label="Give feedback on GitHub"
-              >
-                <GitHubIcon className="h-3 w-3" />
-                GitHub
-              </a>
               , or{" "}
               <CopyEmailButton email={CONTACT_EMAIL} />.
             </p>
 
-            {detectedDownload ? (
-              <div className="mt-6">
-                <a href={detectedDownload.href} className="download-button">
-                  <OsIcon family={detectedDownload.family} className="h-[1.15rem] w-[1.15rem]" />
-                  {detectedDownload.label}
-                  <span className="sr-only"> {detectedDownload.fileName}</span>
-                </a>
-                <p className="mt-2.5 text-xs text-ink-soft">
-                  {detectedDownload.arch} · {detectedDownload.format}
-                  {linuxAlternative ? (
-                    <>
-                      {" · "}
-                      <a
-                        href={linuxAlternative.href}
-                        className="font-medium text-ink-muted no-underline underline-offset-2 transition-colors duration-200 ease-out hover:text-accent-readable hover:underline"
-                      >
-                        or {linuxAlternativeLabel(linuxAlternative)}
-                      </a>
-                    </>
-                  ) : null}
-                </p>
-              </div>
-            ) : null}
-
-            {detectedDownload === null || showAllDownloads ? (
-              <DownloadList
-                downloads={
-                  detectedDownload
-                    ? PREVIEW_DOWNLOADS.filter((download) => download.id !== detectedDownload.id)
-                    : PREVIEW_DOWNLOADS
-                }
-                className={detectedDownload ? "mt-4" : "mt-6"}
-              />
-            ) : null}
-
-            <p className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-soft">
-              {detectedDownload ? (
-                <>
-                  <button
-                    type="button"
-                    className="cursor-pointer font-medium text-ink-muted underline-offset-2 transition-colors duration-200 ease-out hover:text-accent-readable hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-                    aria-expanded={showAllDownloads}
-                    onClick={() => setShowAllDownloads((open) => !open)}
+            <div className="mt-8">
+              <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
+                {detectedDownload ? (
+                  <a href={detectedDownload.href} className="download-button">
+                    <OsIcon family={detectedDownload.family} className="h-[1.15rem] w-[1.15rem]" />
+                    {detectedDownload.label}
+                    <span className="sr-only"> {detectedDownload.fileName}</span>
+                  </a>
+                ) : (
+                  <a
+                    href={RELEASES_URL}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="download-button"
                   >
-                    {showAllDownloads ? "Hide other platforms" : "Other platforms"}
-                  </button>
-                  <span aria-hidden="true">·</span>
-                </>
-              ) : (
-                <span>…or</span>
-              )}
-              <a
-                href={RELEASES_URL}
-                target="_blank"
-                rel="noreferrer"
-                className="font-medium text-ink-muted no-underline underline-offset-2 transition-colors duration-200 ease-out hover:text-accent-readable hover:underline"
-              >
-                view all releases on GitHub
-              </a>
-            </p>
+                    Download on GitHub
+                  </a>
+                )}
+                <a
+                  href={REPO_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="source-button"
+                >
+                  <GitHubIcon className="h-[1.15rem] w-[1.15rem]" />
+                  View source
+                </a>
+              </div>
+              {linuxAlternative ? (
+                <p className="mt-3 text-xs text-ink-soft">
+                  <a
+                    href={linuxAlternative.href}
+                    className="font-medium text-ink-muted no-underline underline-offset-2 transition-colors duration-200 ease-out hover:text-accent-readable hover:underline"
+                  >
+                    or {linuxAlternativeLabel(linuxAlternative)}
+                  </a>
+                </p>
+              ) : null}
+              <p className="mt-3 text-xs text-ink-soft">
+                <a
+                  href={RELEASES_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-ink-muted no-underline underline-offset-2 transition-colors duration-200 ease-out hover:text-accent-readable hover:underline"
+                >
+                  {availabilityLabel(detectedDownload)}
+                </a>
+              </p>
+            </div>
           </div>
         </section>
 
@@ -490,44 +467,19 @@ function linuxAlternativeLabel(download: PreviewDownload) {
   return download.id === "linux-deb" ? ".deb for Ubuntu / Debian" : "AppImage";
 }
 
-function DownloadList({
-  downloads,
-  className,
-}: {
-  downloads: readonly PreviewDownload[];
-  className?: string;
-}) {
-  return (
-    <ul className={`divide-y divide-border border border-border bg-surface ${className ?? ""}`}>
-      {downloads.map((download) => {
-        return (
-          <li key={download.href}>
-            <a
-              href={download.href}
-              className="group flex items-center justify-between gap-4 px-4 py-3.5 no-underline transition-colors duration-200 ease-out hover:bg-canvas"
-            >
-              <span className="flex min-w-0 items-center gap-3">
-                <span className="grid h-8 w-8 shrink-0 place-items-center text-ink" aria-hidden="true">
-                  <OsIcon family={download.family} className="h-4 w-4" />
-                </span>
-                <span className="min-w-0">
-                  <span className="block text-sm font-medium text-ink">{download.platform}</span>
-                  <span className="mt-0.5 block text-xs text-ink-soft">{download.arch}</span>
-                </span>
-              </span>
-              <span className="shrink-0 text-right">
-                <span className="block text-xs font-medium text-ink-muted transition-colors duration-200 ease-out group-hover:text-accent-readable">
-                  Download
-                </span>
-                <span className="mt-0.5 block text-xs text-ink-soft">{download.format}</span>
-                <span className="sr-only"> {download.fileName}</span>
-              </span>
-            </a>
-          </li>
-        );
-      })}
-    </ul>
-  );
+function availabilityLabel(download: PreviewDownload | null) {
+  const names = ["macOS", "Windows", "Linux"] as const;
+  const current =
+    download?.family === "macos"
+      ? "macOS"
+      : download?.family === "windows"
+        ? "Windows"
+        : download?.family === "linux"
+          ? "Linux"
+          : null;
+  if (!current) return "Available for macOS, Windows, and Linux";
+  const others = names.filter((name) => name !== current);
+  return `Also available for ${others[0]} and ${others[1]}`;
 }
 
 function CopyEmailButton({ email }: { email: string }) {

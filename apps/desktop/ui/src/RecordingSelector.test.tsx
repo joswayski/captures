@@ -900,6 +900,9 @@ describe("RecordingSelector", () => {
 
     const surface = container.querySelector<HTMLElement>(".recording-selector");
     expect(surface).not.toBeNull();
+    surface!.setPointerCapture = vi.fn();
+    surface!.hasPointerCapture = vi.fn(() => true);
+    surface!.releasePointerCapture = vi.fn();
     vi.spyOn(surface!, "getBoundingClientRect").mockReturnValue({
       x: 0,
       y: 0,
@@ -911,6 +914,17 @@ describe("RecordingSelector", () => {
       height: 900,
       toJSON: () => undefined,
     });
+
+    // Empty-start: draw a free region first so there is something to snap.
+    fireEvent.pointerDown(surface!, { pointerId: 13, clientX: 40, clientY: 40 });
+    fireEvent.pointerMove(surface!, { pointerId: 13, clientX: 400, clientY: 280 });
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+    });
+    fireEvent.pointerUp(surface!, { pointerId: 13, clientX: 400, clientY: 280 });
+    expect(container.querySelector(".recording-selection-frame")).not.toBeNull();
 
     const aspect = screen.getByRole("combobox", { name: "Region aspect ratio" });
     fireEvent.click(aspect);

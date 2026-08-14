@@ -4689,14 +4689,14 @@ mod tests {
     #[cfg(target_os = "macos")]
     use super::macos_window_is_capture_overlay;
     use super::{
-        AppError, CaptureMode, THUMBNAIL_AUTO_HIDE_RESERVE, THUMBNAIL_SYSTEM_CHROME_GAP,
-        ThumbnailCursorAction, ThumbnailCursorKind, ThumbnailMonitorBounds, clipboard_fingerprint,
+        AppError, THUMBNAIL_AUTO_HIDE_RESERVE, THUMBNAIL_SYSTEM_CHROME_GAP, ThumbnailCursorAction,
+        ThumbnailCursorKind, ThumbnailMonitorBounds, clipboard_fingerprint,
         display_contains_pointer, mask_macos_window_corners, parse_shortcut,
-        primary_app_window_priority, refine_window_chrome_from_snapshot,
-        should_trigger_shortcut, thumbnail_cursor_action, thumbnail_geometry,
-        thumbnail_pointer_position, thumbnail_stack_should_be_visible,
-        thumbnail_visible_window_height, track_shortcut_suppression,
-        viewer_window_label, window_is_capturable, windows_window_is_capture_overlay,
+        primary_app_window_priority, refine_window_chrome_from_snapshot, should_trigger_shortcut,
+        thumbnail_cursor_action, thumbnail_geometry, thumbnail_pointer_position,
+        thumbnail_stack_should_be_visible, thumbnail_visible_window_height,
+        track_shortcut_suppression, viewer_window_label, window_is_capturable,
+        windows_window_is_capture_overlay,
     };
 
     fn bounds(

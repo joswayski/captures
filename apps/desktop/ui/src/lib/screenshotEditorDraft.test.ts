@@ -126,7 +126,9 @@ describe("screenshot editor drafts", () => {
   });
 
   it("rejects drafts that exceed the total asset budget", async () => {
-    const oversized = new Array(SCREENSHOT_EDITOR_DRAFT_MAX_TOTAL_BYTES + 1).fill(0);
+    // Sparse array so the test checks the byte cap without allocating 80MB+.
+    const oversized: number[] = [];
+    oversized.length = SCREENSHOT_EDITOR_DRAFT_MAX_TOTAL_BYTES + 1;
     await expect(
       buildScreenshotEditorDraftPayload(
         "capture-1",
