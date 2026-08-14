@@ -82,6 +82,10 @@ export interface OnboardingState {
   screen_recording_granted: boolean;
   screen_recording_can_request: boolean;
   screen_recording_requested_this_launch: boolean;
+  capture_system_audio: boolean;
+  microphone_enabled: boolean;
+  microphone_granted: boolean;
+  microphone_can_request: boolean;
 }
 
 export interface RecordingSettings {

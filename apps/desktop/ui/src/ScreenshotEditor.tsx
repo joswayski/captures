@@ -1790,7 +1790,9 @@ export function ScreenshotEditor() {
     }
   }, [artifactId, persistEditorDraft]);
 
-  flushEditorDraftRef.current = flushEditorDraft;
+  useLayoutEffect(() => {
+    flushEditorDraftRef.current = flushEditorDraft;
+  }, [flushEditorDraft]);
 
   const discardRestoredDraft = useCallback(() => {
     if (!artifact) return;

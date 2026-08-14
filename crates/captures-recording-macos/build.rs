@@ -18,6 +18,7 @@ fn command_output(program: &str, arguments: &[&str]) -> String {
 
 fn main() {
     println!("cargo:rerun-if-changed=swift/MediaWriter.swift");
+    println!("cargo:rerun-if-changed=swift/MicrophonePermission.swift");
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
         return;
     }
@@ -58,6 +59,7 @@ fn main() {
             "-emit-object",
         ])
         .arg(&source)
+        .arg("swift/MicrophonePermission.swift")
         .arg("-o")
         .arg(&object)
         .env("CLANG_MODULE_CACHE_PATH", &module_cache)
