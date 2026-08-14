@@ -270,10 +270,6 @@ export function Onboarding() {
   return (
     <main className="onboarding-shell">
       <section className="onboarding-intro" aria-label="Captures">
-        <div className="onboarding-brand">
-          <span className="onboarding-brand-icon"><CaptureSetupIcon /></span>
-          <span>Captures</span>
-        </div>
         <div className="onboarding-visual" aria-hidden="true">
           <span className="onboarding-frame onboarding-frame-large" />
           <span className="onboarding-frame onboarding-frame-small" />
@@ -289,7 +285,8 @@ export function Onboarding() {
           <p>{setupDescription(setup?.platform)}</p>
         </header>
 
-        <div className="onboarding-permissions" aria-live="polite">
+        <div className="onboarding-setup-body">
+          <div className="onboarding-permissions" aria-live="polite">
           <article className={`onboarding-permission${screenReady ? " ready" : " action-required"}`}>
             <span className="onboarding-permission-icon screen"><ScreenAccessIcon /></span>
             <div className="onboarding-permission-copy">
@@ -355,9 +352,10 @@ export function Onboarding() {
               )}
             </article>
           )}
-        </div>
+          </div>
 
-        {error && <p className="onboarding-error" role="alert">{error}</p>}
+          {error && <p className="onboarding-error" role="alert">{error}</p>}
+        </div>
 
         <footer className="onboarding-footer">
           <div>

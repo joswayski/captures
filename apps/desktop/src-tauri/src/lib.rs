@@ -26,7 +26,7 @@ use image::RgbaImage;
 use mouse_position::mouse_position::Mouse;
 use serde::Serialize;
 use tauri::{
-    AppHandle, Emitter, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder,
+    AppHandle, Emitter, LogicalSize, Manager, Theme, WebviewUrl, WebviewWindowBuilder,
     image::Image,
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
@@ -3105,6 +3105,39 @@ const STARTUP_NOTICE_HEIGHT: f64 = 112.0;
 const ONBOARDING_WINDOW_WIDTH: f64 = 860.0;
 const ONBOARDING_WINDOW_HEIGHT: f64 = 610.0;
 
+/// Native title chrome should follow the OS, not the light onboarding canvas.
+/// A light `background_color` otherwise keeps title text dark on a dark title bar.
+fn onboarding_window_theme() -> Option<Theme> {
+    #[cfg(target_os = "macos")]
+    {
+        Some(
+            if macos_interface_style_is_dark(&macos_apple_interface_style()) {
+                Theme::Dark
+            } else {
+                Theme::Light
+            },
+        )
+    }
+    #[cfg(not(target_os = "macos"))]
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn macos_apple_interface_style() -> String {
+    Command::new("defaults")
+        .args(["read", "-g", "AppleInterfaceStyle"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .unwrap_or_default()
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn macos_interface_style_is_dark(stdout: &str) -> bool {
+    stdout.trim().eq_ignore_ascii_case("Dark")
+}
+
 fn show_onboarding(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(ONBOARDING_WINDOW_LABEL) {
         if let Err(error) = reveal_and_focus_document_window(&window) {
@@ -3126,6 +3159,7 @@ fn show_onboarding(app: &AppHandle) {
         .min_inner_size(720.0, 540.0)
         .center()
         .resizable(true)
+        .theme(onboarding_window_theme())
         .background_color(Color(245, 247, 251, 255))
         .focused(false)
         .visible(false)
@@ -4792,12 +4826,12 @@ mod tests {
     use super::{
         AppError, THUMBNAIL_AUTO_HIDE_RESERVE, THUMBNAIL_SYSTEM_CHROME_GAP, ThumbnailCursorAction,
         ThumbnailCursorKind, ThumbnailMonitorBounds, clipboard_fingerprint,
-        display_contains_pointer, mask_macos_window_corners, parse_shortcut,
-        primary_app_window_priority, refine_window_chrome_from_snapshot, should_trigger_shortcut,
-        thumbnail_cursor_action, thumbnail_geometry, thumbnail_pointer_position,
-        thumbnail_stack_should_be_visible, thumbnail_visible_window_height,
-        track_shortcut_suppression, viewer_window_label, window_is_capturable,
-        windows_window_is_capture_overlay,
+        display_contains_pointer, macos_interface_style_is_dark, mask_macos_window_corners,
+        parse_shortcut, primary_app_window_priority, refine_window_chrome_from_snapshot,
+        should_trigger_shortcut, thumbnail_cursor_action, thumbnail_geometry,
+        thumbnail_pointer_position, thumbnail_stack_should_be_visible,
+        thumbnail_visible_window_height, track_shortcut_suppression, viewer_window_label,
+        window_is_capturable, windows_window_is_capture_overlay,
     };
 
     fn bounds(
@@ -5147,6 +5181,14 @@ mod tests {
                 "viewer capability should grant {permission}"
             );
         }
+    }
+
+    #[test]
+    fn macos_interface_style_dark_selects_dark_title_chrome() {
+        assert!(macos_interface_style_is_dark("Dark\n"));
+        assert!(macos_interface_style_is_dark("dark"));
+        assert!(!macos_interface_style_is_dark(""));
+        assert!(!macos_interface_style_is_dark("Light\n"));
     }
 
     #[test]
