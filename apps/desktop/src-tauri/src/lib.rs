@@ -3034,7 +3034,7 @@ fn show_onboarding(app: &AppHandle) {
         .min_inner_size(720.0, 540.0)
         .center()
         .resizable(true)
-        .background_color(Color(244, 242, 236, 255))
+        .background_color(Color(245, 247, 251, 255))
         .focused(false)
         .visible(false)
         .on_page_load(|window, payload| {
