@@ -1,8 +1,10 @@
 # Captures website
 
-Minimal static work-in-progress page with direct Preview download links (same stable
-`preview` release assets as the root README), a link to [the repo](https://github.com/joswayski/captures),
-and recent changes from `main`.
+Minimal static work-in-progress page with a Preview download for the visitor's OS
+(same stable `preview` release assets as the root README), a View source link to
+[the repo](https://github.com/joswayski/captures), and recent changes from `main`.
+Other platforms are mentioned with a link to GitHub Releases rather than listed as
+installers.
 
 ## Stack
 

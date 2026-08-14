@@ -72,6 +72,31 @@
     @apply outline-2 outline-offset-2 outline-accent;
   }
 
+  .download-button {
+    @apply inline-flex w-full max-w-full items-center justify-center gap-2.5 rounded-full bg-ink px-5 py-3 text-sm font-medium text-surface no-underline transition-colors duration-200 ease-out sm:w-auto;
+    box-shadow: 0 8px 20px rgba(24, 24, 27, 0.14);
+  }
+
+  .download-button:hover {
+    background: #2a2a2f;
+  }
+
+  .download-button:focus-visible {
+    @apply outline-2 outline-offset-2 outline-accent;
+  }
+
+  .source-button {
+    @apply inline-flex w-full max-w-full items-center justify-center gap-2.5 rounded-full border border-border-strong bg-surface px-5 py-3 text-sm font-medium text-ink no-underline transition-colors duration-200 ease-out sm:w-auto;
+  }
+
+  .source-button:hover {
+    @apply border-accent/30 bg-accent-soft text-accent-readable;
+  }
+
+  .source-button:focus-visible {
+    @apply outline-2 outline-offset-2 outline-accent;
+  }
+
   /* Match the desktop app mark: dark tile, light glyph. Blue is only an accent. */
   .brand-mark {
     @apply grid h-8 w-8 shrink-0 place-items-center rounded-md bg-ink text-surface;
