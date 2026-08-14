@@ -1,12 +1,13 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { OnboardingState } from "./types";
 
 type BusyAction = "permission" | "desktop-audio" | "microphone" | "restart" | "complete" | null;
 
 const PERMISSION_POLL_MS = 1_500;
+const SETTINGS_AWAY_MS = 2_500;
 
 function CaptureSetupIcon() {
   return (
@@ -48,7 +49,10 @@ function ArrowIcon() {
   return <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h11M11 6l4 4-4 4" /></svg>;
 }
 
-function screenAccessDescription(platform: string, required: boolean) {
+function screenAccessDescription(platform: string, required: boolean, restartRequired: boolean) {
+  if (platform === "macos" && restartRequired) {
+    return "Turn the switch on for Captures in Screen & System Audio Recording, then restart. macOS does not apply that permission to the running app.";
+  }
   if (platform === "macos") {
     return "Allow Screen Recording so Captures can read the pixels you choose to capture. macOS keeps everything else hidden.";
   }
@@ -89,6 +93,9 @@ export function Onboarding() {
   const [busy, setBusy] = useState<BusyAction>(null);
   const [error, setError] = useState("");
   const [microphoneAsked, setMicrophoneAsked] = useState(false);
+  const [leftForSettings, setLeftForSettings] = useState(false);
+  const blurredAtRef = useRef<number | null>(null);
+  const restartingRef = useRef(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -163,11 +170,65 @@ export function Onboarding() {
     };
   }, [microphoneAsked, setup]);
 
+  const restart = useCallback(() => {
+    if (restartingRef.current) return;
+    restartingRef.current = true;
+    setBusy("restart");
+    setError("");
+    void invoke("restart_captures_for_permissions").catch((restartError) => {
+      restartingRef.current = false;
+      setBusy(null);
+      setError(`Couldn’t restart Captures: ${String(restartError)}`);
+    });
+  }, []);
+
+  const handleReturnedFromSettings = useCallback(async () => {
+    const blurredAt = blurredAtRef.current;
+    blurredAtRef.current = null;
+    if (!leftForSettings || restartingRef.current) return;
+    try {
+      const next = await invoke<OnboardingState>("get_onboarding_state");
+      setSetup(next);
+      if (!next.screen_recording_required || next.screen_recording_granted) return;
+      if (blurredAt == null || Date.now() - blurredAt < SETTINGS_AWAY_MS) return;
+      restart();
+    } catch (refreshError) {
+      setError(`Couldn’t check screen access: ${String(refreshError)}`);
+    }
+  }, [leftForSettings, restart]);
+
+  useEffect(() => {
+    if (!leftForSettings) return undefined;
+    blurredAtRef.current = Date.now();
+    const onBlur = () => {
+      blurredAtRef.current = Date.now();
+    };
+    const onFocus = () => {
+      void handleReturnedFromSettings();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") onBlur();
+      else onFocus();
+    };
+    window.addEventListener("blur", onBlur);
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("blur", onBlur);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [handleReturnedFromSettings, leftForSettings]);
+
   const requestPermission = async () => {
     setBusy("permission");
     setError("");
     try {
-      setSetup(await invoke<OnboardingState>("request_onboarding_screen_permission"));
+      const next = await invoke<OnboardingState>("request_onboarding_screen_permission");
+      setSetup(next);
+      if (!next.screen_recording_granted && !next.screen_recording_can_request) {
+        setLeftForSettings(true);
+      }
     } catch (permissionError) {
       setError(`Couldn’t open screen access: ${String(permissionError)}`);
     } finally {
@@ -200,15 +261,6 @@ export function Onboarding() {
     }
   };
 
-  const restart = () => {
-    setBusy("restart");
-    setError("");
-    void invoke("restart_captures_for_permissions").catch((restartError) => {
-      setBusy(null);
-      setError(`Couldn’t restart Captures: ${String(restartError)}`);
-    });
-  };
-
   const complete = async () => {
     setBusy("complete");
     setError("");
@@ -234,8 +286,8 @@ export function Onboarding() {
   );
   const permissionStatus = screenReady
     ? (setup?.screen_recording_required ? "Allowed" : "Ready")
-    : setup?.screen_recording_requested_this_launch
-      ? "Waiting for macOS"
+    : shouldOfferRestart
+      ? "Restart required"
       : "Needs approval";
 
   return (
@@ -268,7 +320,7 @@ export function Onboarding() {
                 <h3>Screen capture</h3>
                 <span>{setup?.screen_recording_required ? "Required" : "Built in"}</span>
               </div>
-              <p>{setup ? screenAccessDescription(setup.platform, setup.screen_recording_required) : "Checking the access available on this computer…"}</p>
+              <p>{setup ? screenAccessDescription(setup.platform, setup.screen_recording_required, shouldOfferRestart) : "Checking the access available on this computer…"}</p>
               {setup && (
                 <span className={`onboarding-permission-status${screenReady ? " ready" : ""}`}>
                   <i aria-hidden="true" /> {permissionStatus}
@@ -382,25 +434,26 @@ export function Onboarding() {
 
         <footer className="onboarding-footer">
           <div>
-            {shouldOfferRestart && (
+            {shouldOfferRestart ? (
               <button
                 type="button"
-                className="onboarding-secondary-button"
+                className="onboarding-primary-button"
                 disabled={busy !== null}
                 onClick={restart}
               >
                 {busy === "restart" ? "Restarting…" : "Restart Captures"}
               </button>
+            ) : (
+              <button
+                type="button"
+                className="onboarding-primary-button"
+                disabled={!screenReady || busy !== null}
+                onClick={() => void complete()}
+              >
+                {busy === "complete" ? "Starting…" : "Start capturing"}
+                {busy !== "complete" && <ArrowIcon />}
+              </button>
             )}
-            <button
-              type="button"
-              className="onboarding-primary-button"
-              disabled={!screenReady || busy !== null}
-              onClick={() => void complete()}
-            >
-              {busy === "complete" ? "Starting…" : "Start capturing"}
-              {busy !== "complete" && <ArrowIcon />}
-            </button>
           </div>
         </footer>
       </section>

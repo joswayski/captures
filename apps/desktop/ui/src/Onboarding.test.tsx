@@ -63,6 +63,7 @@ describe("Onboarding", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.clearAllMocks();
   });
 
@@ -85,18 +86,19 @@ describe("Onboarding", () => {
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("request_onboarding_screen_permission");
     });
-    expect(await screen.findByText("Waiting for macOS")).toBeInTheDocument();
+    expect(await screen.findByText("Restart required")).toBeInTheDocument();
+    expect(screen.getByText(/Turn the switch on for Captures/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open Settings" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Restart Captures" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Check again" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Start capturing" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Start capturing" })).not.toBeInTheDocument();
   });
 
   it("picks up Screen Recording after the user enables it in Settings", async () => {
     render(<Onboarding />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Allow access" }));
-    expect(await screen.findByText("Waiting for macOS")).toBeInTheDocument();
+    expect(await screen.findByText("Restart required")).toBeInTheDocument();
 
     currentState = {
       ...currentState,
@@ -162,5 +164,23 @@ describe("Onboarding", () => {
       expect(invoke).toHaveBeenCalledWith("request_onboarding_microphone_permission");
     });
     expect(screen.getAllByText("On by default")).toHaveLength(2);
+  });
+
+  it("restarts after returning from Settings when access is still missing", async () => {
+    const now = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+
+    render(<Onboarding />);
+    fireEvent.click(await screen.findByRole("button", { name: "Allow access" }));
+    expect(await screen.findByRole("button", { name: "Restart Captures" })).toBeInTheDocument();
+
+    window.dispatchEvent(new Event("blur"));
+    nowSpy.mockReturnValue(now + 3_000);
+    window.dispatchEvent(new Event("focus"));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("restart_captures_for_permissions");
+    });
+    nowSpy.mockRestore();
   });
 });
