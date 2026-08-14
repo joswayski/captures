@@ -115,6 +115,10 @@ struct OnboardingState {
     screen_recording_granted: bool,
     screen_recording_can_request: bool,
     screen_recording_requested_this_launch: bool,
+    capture_system_audio: bool,
+    microphone_enabled: bool,
+    microphone_granted: bool,
+    microphone_can_request: bool,
 }
 
 struct ClipboardWrite {
@@ -226,6 +230,9 @@ pub fn run() {
             get_settings,
             get_onboarding_state,
             request_onboarding_screen_permission,
+            set_onboarding_desktop_audio,
+            set_onboarding_microphone,
+            request_onboarding_microphone_permission,
             restart_captures_for_permissions,
             complete_onboarding,
             set_shortcut_capture_suppressed,
@@ -1135,6 +1142,78 @@ fn request_onboarding_screen_permission(
     let _ = app;
 
     onboarding_state(state.inner()).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_onboarding_desktop_audio(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    enabled: bool,
+) -> CommandResult<OnboardingState> {
+    update_onboarding_recording_audio(&app, state.inner(), Some(enabled), None)
+        .map_err(|error| error.to_string())?;
+    onboarding_state(state.inner()).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn request_onboarding_microphone_permission(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> CommandResult<OnboardingState> {
+    #[cfg(target_os = "macos")]
+    {
+        if captures_recording_macos::request_microphone_access() {
+            update_onboarding_recording_audio(&app, state.inner(), None, Some(true))
+                .map_err(|error| error.to_string())?;
+        } else if !captures_recording_macos::microphone_can_request() {
+            open_macos_microphone_settings(&app).map_err(|error| error.to_string())?;
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        update_onboarding_recording_audio(&app, state.inner(), None, Some(true))
+            .map_err(|error| error.to_string())?;
+    }
+
+    onboarding_state(state.inner()).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_onboarding_microphone(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    enabled: bool,
+) -> CommandResult<OnboardingState> {
+    #[cfg(target_os = "macos")]
+    if enabled && !captures_recording_macos::microphone_authorized() {
+        return onboarding_state(state.inner()).map_err(|error| error.to_string());
+    }
+    update_onboarding_recording_audio(&app, state.inner(), None, Some(enabled))
+        .map_err(|error| error.to_string())?;
+    onboarding_state(state.inner()).map_err(|error| error.to_string())
+}
+
+fn update_onboarding_recording_audio(
+    app: &AppHandle,
+    state: &AppState,
+    capture_system_audio: Option<bool>,
+    enable_microphone: Option<bool>,
+) -> Result<(), AppError> {
+    let settings = {
+        let mut settings = state.settings.write();
+        if let Some(enabled) = capture_system_audio {
+            settings.recording.capture_system_audio = enabled;
+        }
+        if let Some(enabled) = enable_microphone {
+            settings.recording.microphone_device_id = enabled.then(|| "default".to_owned());
+        }
+        storage::save_settings(&settings)?;
+        settings.clone()
+    };
+    if let Err(error) = app.emit("settings-changed", &settings) {
+        eprintln!("failed to broadcast onboarding audio settings: {error}");
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -2518,30 +2597,46 @@ fn display_contains_pointer(
 }
 
 fn onboarding_state(state: &AppState) -> Result<OnboardingState, AppError> {
+    let settings = state.settings();
+    let microphone_enabled = settings.recording.microphone_device_id.is_some();
+    let capture_system_audio = settings.recording.capture_system_audio;
+
     #[cfg(target_os = "macos")]
     {
-        let screen_recording_granted = state.backend.ensure_permission(false).is_ok();
+        let can_request = screen_permission_request_available(state)?;
+        let requested_this_launch = *state.screen_permission_requested_this_launch.lock();
+        // After the first prompt, `preflight()` can stay false even once the
+        // user enables Screen Recording in System Settings. `request()` returns
+        // the live TCC answer and does not show another dialog.
+        let request_access = !can_request || requested_this_launch;
+        let screen_recording_granted = state.backend.ensure_permission(request_access).is_ok();
+        let microphone_granted = captures_recording_macos::microphone_authorized();
         return Ok(OnboardingState {
             platform: std::env::consts::OS.to_owned(),
             screen_recording_required: true,
             screen_recording_granted,
-            screen_recording_can_request: !screen_recording_granted
-                && screen_permission_request_available(state)?,
-            screen_recording_requested_this_launch: *state
-                .screen_permission_requested_this_launch
-                .lock(),
+            screen_recording_can_request: !screen_recording_granted && can_request,
+            screen_recording_requested_this_launch: requested_this_launch,
+            capture_system_audio,
+            microphone_enabled: microphone_enabled && microphone_granted,
+            microphone_granted,
+            microphone_can_request: !microphone_granted
+                && captures_recording_macos::microphone_can_request(),
         });
     }
 
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = state;
         Ok(OnboardingState {
             platform: std::env::consts::OS.to_owned(),
             screen_recording_required: false,
             screen_recording_granted: true,
             screen_recording_can_request: false,
             screen_recording_requested_this_launch: false,
+            capture_system_audio,
+            microphone_enabled,
+            microphone_granted: true,
+            microphone_can_request: false,
         })
     }
 }
@@ -3029,12 +3124,12 @@ fn show_onboarding(app: &AppHandle) {
             ONBOARDING_WINDOW_LABEL,
             WebviewUrl::App("index.html?view=onboarding".into()),
         )
-        .title("Welcome to Captures")
+        .title("Captures")
         .inner_size(ONBOARDING_WINDOW_WIDTH, ONBOARDING_WINDOW_HEIGHT)
         .min_inner_size(720.0, 540.0)
         .center()
         .resizable(true)
-        .background_color(Color(244, 242, 236, 255))
+        .background_color(Color(245, 247, 251, 255))
         .focused(false)
         .visible(false)
         .on_page_load(|window, payload| {
@@ -3741,6 +3836,16 @@ fn open_macos_screen_recording_settings(app: &AppHandle) -> Result<(), AppError>
     app.opener()
         .open_url(
             "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+            None::<&str>,
+        )
+        .map_err(|error| AppError::Task(error.to_string()))
+}
+
+#[cfg(target_os = "macos")]
+fn open_macos_microphone_settings(app: &AppHandle) -> Result<(), AppError> {
+    app.opener()
+        .open_url(
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
             None::<&str>,
         )
         .map_err(|error| AppError::Task(error.to_string()))
@@ -4655,7 +4760,6 @@ fn captures_window_is_internal(window: &captures_capture::WindowDescriptor) -> b
     const INTERNAL_WINDOW_TITLES: &[&str] = &[
         "Captures",
         "Captures is running",
-        "Welcome to Captures",
         "Captures Recording Controls",
         "Captures Recording Countdown",
         "Captures Update",
@@ -4692,11 +4796,11 @@ mod tests {
         AppError, CaptureMode, THUMBNAIL_AUTO_HIDE_RESERVE, THUMBNAIL_SYSTEM_CHROME_GAP,
         ThumbnailCursorAction, ThumbnailCursorKind, ThumbnailMonitorBounds, clipboard_fingerprint,
         display_contains_pointer, mask_macos_window_corners, parse_shortcut,
-        primary_app_window_priority, refine_window_chrome_from_snapshot,
-        should_trigger_shortcut, thumbnail_cursor_action, thumbnail_geometry,
-        thumbnail_pointer_position, thumbnail_stack_should_be_visible,
-        thumbnail_visible_window_height, track_shortcut_suppression,
-        viewer_window_label, window_is_capturable, windows_window_is_capture_overlay,
+        primary_app_window_priority, refine_window_chrome_from_snapshot, should_trigger_shortcut,
+        thumbnail_cursor_action, thumbnail_geometry, thumbnail_pointer_position,
+        thumbnail_stack_should_be_visible, thumbnail_visible_window_height,
+        track_shortcut_suppression, viewer_window_label, window_is_capturable,
+        windows_window_is_capture_overlay,
     };
 
     fn bounds(
@@ -5004,7 +5108,6 @@ mod tests {
         for title in [
             "Captures",
             "Captures is running",
-            "Welcome to Captures",
             "Captures Recording Controls",
             "Captures Recording Countdown",
             "Captures Update",

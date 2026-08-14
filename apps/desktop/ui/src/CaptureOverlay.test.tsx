@@ -2,7 +2,8 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-import { App, isPointerOverCaptureGuidance } from "./App";
+import { App } from "./App";
+import { isPointerOverCaptureGuidance } from "./lib/captureGuidance";
 import type { ActiveSession } from "./types";
 
 vi.mock("@tauri-apps/api/core", () => ({
