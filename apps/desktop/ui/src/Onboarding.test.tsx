@@ -80,6 +80,7 @@ describe("Onboarding", () => {
     expect(screen.queryByText(/Setup for/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Your work stays yours/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Everything ready before your first capture/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Captures")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Allow access" }));
 
@@ -89,7 +90,9 @@ describe("Onboarding", () => {
     expect(await screen.findByText("Restart required")).toBeInTheDocument();
     expect(screen.getByText(/Turn the switch on for Captures/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open Settings" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Restart Captures" })).toBeInTheDocument();
+    const restart = screen.getByRole("button", { name: "Restart Captures" });
+    expect(restart).toBeInTheDocument();
+    expect(restart.closest("footer")).not.toBeNull();
     expect(screen.queryByRole("button", { name: "Check again" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Start capturing" })).not.toBeInTheDocument();
   });
