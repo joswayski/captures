@@ -3,6 +3,12 @@
 Tiny Rust HTTP service that receives product feedback from the desktop app and
 posts it to a Discord channel webhook. No database.
 
+This Railway service remains the production compatibility endpoint for released
+desktop builds. New builds use the same feedback behavior in `apps/web` on the
+single Cloudflare Worker at `https://captur.es/api/feedback`; do not remove this
+service until older clients have aged out or `api.captur.es` has a compatibility
+route.
+
 ## Endpoints
 
 | Method | Path | Description |

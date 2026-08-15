@@ -12,7 +12,7 @@ use crate::CommandResult;
 
 /// Production feedback endpoint. Override at runtime with `CAPTURES_FEEDBACK_URL`
 /// (useful for local API development).
-const DEFAULT_FEEDBACK_URL: &str = "https://api.captur.es/feedback";
+const DEFAULT_FEEDBACK_URL: &str = "https://captur.es/api/feedback";
 const FEEDBACK_TIMEOUT: Duration = Duration::from_secs(20);
 const LOCAL_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60);
 const MAX_MESSAGE_LEN: usize = 8_000;
@@ -307,7 +307,7 @@ mod tests {
     fn default_endpoint_is_production_api() {
         // Ensure packaged builds have a stable default when the env var is unset.
         // Runtime env is not forced here; this locks the constant itself.
-        assert_eq!(DEFAULT_FEEDBACK_URL, "https://api.captur.es/feedback");
+        assert_eq!(DEFAULT_FEEDBACK_URL, "https://captur.es/api/feedback");
     }
 
     #[test]

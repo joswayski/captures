@@ -9,11 +9,13 @@ installers.
 ## Stack
 
 - React 19 + TanStack Start and Router
-- Vite + Nitro static prerendering
+- Vite + the Cloudflare Vite plugin
+- A raw Cloudflare Worker entrypoint for `/api/*`
 - Tailwind CSS v4
 
-Every route is prerendered at build time. Production serves the generated files and
-does not run the TanStack server bundle.
+The public website is prerendered at build time. The same Cloudflare project also
+contains a framework-independent API. TanStack renders the frontend; it does not
+route or implement `/api/*`.
 
 ## Develop
 
@@ -23,23 +25,52 @@ npm run dev:web
 
 Site runs at [http://localhost:5174](http://localhost:5174).
 
+For the feedback endpoint, create an ignored `apps/web/.dev.vars` file:
+
+```dotenv
+DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
+```
+
+The local API is available at `http://localhost:5174/api/*`.
+
 ## Build
 
 ```sh
 npm run build:web
 ```
 
-Static output lands in `apps/web/.output/public/` — deploy those files as-is. The
-build fetches recent `main` commits from the GitHub API, drops Dependabot dependency
-bumps, and embeds the latest ten product changes in the prerendered page. Client-side
-JavaScript still handles OS-specific downloads, clipboard feedback, relative times,
-and Preview publishing status.
+The Cloudflare Vite plugin emits the deployable Worker and its static client assets.
+The build fetches recent `main` commits from the GitHub API, drops Dependabot
+dependency bumps, and embeds the latest ten product changes in the prerendered
+page. Client-side JavaScript still handles OS-specific downloads, clipboard
+feedback, relative times, and Preview publishing status.
 
 ## Cloudflare
 
-The site deploys as a Cloudflare Workers Static Assets project. The Wrangler
-configuration has no Worker entry point: it uploads only the prerendered files in
-`.output/public/`.
+The site and API deploy together as one Cloudflare Worker named `captures`:
+
+1. `/api/*` runs the raw Worker entrypoint first and never enters TanStack.
+2. Every other request checks the generated static assets without invoking Worker
+   code.
+3. A browser navigation that matches neither a static page nor `/api/*` returns
+   HTTP 404 from static-asset routing.
+
+`src/worker/index.ts` is the Worker entrypoint. It owns Cloudflare event handling
+and dispatches `/api/*` to the framework-independent implementation in
+`src/worker/api.ts`. Only non-API requests that Cloudflare deliberately sends to
+the Worker are delegated to TanStack; that is where future explicitly configured
+SSR routes would run.
+
+The current API exposes `GET /api/health` and `POST /api/feedback`. Feedback is
+validated, limited to one accepted submission per client IP per minute, and sent
+to Discord. `DISCORD_WEBHOOK_URL` must be configured as an encrypted runtime
+secret under **Settings → Variables and Secrets**.
+
+There are no R2 or Queue bindings. A future Queue producer binding can be used
+from API code through `env`, and a Queue consumer adds a top-level `queue()`
+handler to `src/worker/index.ts`. If a real SSR route is added later, exclude it
+from prerendering and add its explicit path to `assets.run_worker_first`. Unknown
+paths remain 404s.
 
 Configure Workers Builds from the monorepo root with:
 
