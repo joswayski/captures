@@ -76,9 +76,8 @@ Windows builds produce an NSIS installer, MSI package, and unpackaged executable
 
 ## Feedback API
 
-Early user feedback is posted to Discord with no database. The existing Rust
-service under `apps/api` remains available for released desktop clients while the
-raw Cloudflare Worker entrypoint under `apps/web/src/worker` serves `/api/*`.
+Early user feedback is posted to Discord with no database. The same-origin
+`/api/*` routes live in the Cloudflare Worker under `apps/web/src/worker`.
 
 To run the website and its API locally, create `apps/web/.dev.vars` with:
 
@@ -95,20 +94,11 @@ npm run dev:web
 The local health endpoint is `http://localhost:5174/api/health`. See
 [`apps/web/README.md`](apps/web/README.md) for Cloudflare routing and deployment.
 
-To run the legacy Rust service locally, create a channel webhook in Discord, then:
+Point a local desktop build at that Worker:
 
 ```sh
-export DISCORD_WEBHOOK_URL='https://discord.com/api/webhooks/...'
-cargo run -p captures-api
-```
-
-Point a local desktop build at that service:
-
-```sh
-export CAPTURES_FEEDBACK_URL=http://127.0.0.1:8080/feedback
+export CAPTURES_FEEDBACK_URL=http://localhost:5174/api/feedback
 npm run dev
 ```
 
-New packaged builds default to `https://captur.es/api/feedback`. Released builds
-that still call `https://api.captur.es/feedback` use the compatibility service
-documented in [apps/api/README.md](apps/api/README.md).
+Packaged builds default to `https://captur.es/api/feedback`.

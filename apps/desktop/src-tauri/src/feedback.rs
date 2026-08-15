@@ -11,7 +11,7 @@ use tauri::{
 use crate::CommandResult;
 
 /// Production feedback endpoint. Override at runtime with `CAPTURES_FEEDBACK_URL`
-/// (useful for local API development).
+/// (useful for pointing a local desktop build at `npm run dev:web`).
 const DEFAULT_FEEDBACK_URL: &str = "https://captur.es/api/feedback";
 const FEEDBACK_TIMEOUT: Duration = Duration::from_secs(20);
 const LOCAL_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60);
