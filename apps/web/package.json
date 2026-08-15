@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite dev",
     "build": "vite build && tsc --noEmit && tsc --noEmit -p tsconfig.node.json",
+    "deploy": "wrangler deploy",
     "preview": "vite preview",
     "start": "vite preview --host 0.0.0.0 --port ${PORT:-3000}",
     "typecheck": "tsc --noEmit --pretty false && tsc --noEmit -p tsconfig.node.json --pretty false",
@@ -26,6 +27,7 @@
     "nitro": "^3.0.260610-beta",
     "tailwindcss": "^4.1.0",
     "typescript": "^5.9.0",
-    "vite": "^7.2.0"
+    "vite": "^7.2.0",
+    "wrangler": "^4.123.0"
   }
 }

@@ -35,18 +35,28 @@ bumps, and embeds the latest ten product changes in the prerendered page. Client
 JavaScript still handles OS-specific downloads, clipboard feedback, relative times,
 and Preview publishing status.
 
-## Docker
+## Cloudflare
 
-From the monorepo root:
+The site deploys as a Cloudflare Workers Static Assets project. The Wrangler
+configuration has no Worker entry point: it uploads only the prerendered files in
+`.output/public/`.
+
+Configure Workers Builds from the monorepo root with:
+
+- Production branch: `main`
+- Build command: `npm run build:web`
+- Deploy command: `npm run deploy:web`
+- Root directory: repository root (leave the setting blank)
+
+For a manual deployment from the monorepo root:
 
 ```sh
-docker build -t captures-web .
-docker run --rm -p 8080:3000 captures-web
+npm run build:web
+npm run deploy:web
 ```
 
-The Docker build gets its homepage history directly from the GitHub API. Squash-merged commits link back to their pull requests, and the build fails instead of publishing hardcoded or stale history if GitHub is unavailable.
-
-Railway supplies `RAILWAY_GIT_COMMIT_SHA` to the Docker build, so the history-fetch
-layer is invalidated on each GitHub deployment. The final image contains only the
-static output and a small BusyBox HTTP server on port 3000 (override with `PORT`);
-Node and the TanStack server bundle are not included.
+Each Cloudflare build gets the homepage history directly from the GitHub API.
+Squash-merged commits link back to their pull requests, and the build fails instead
+of publishing hardcoded or stale history if GitHub is unavailable. Attach
+`captur.es` as the custom domain for the `captures` Worker after connecting the
+repository.
