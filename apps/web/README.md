@@ -10,10 +10,12 @@ installers.
 
 - React 19 + TanStack Start and Router
 - Vite + the Cloudflare Vite plugin
+- A raw Cloudflare Worker entrypoint for `/api/*`
 - Tailwind CSS v4
 
 The public website is prerendered at build time. The same Cloudflare project also
-contains the TanStack server entry for explicit `/api/*` routes.
+contains a framework-independent API. TanStack renders the frontend; it does not
+route or implement `/api/*`.
 
 ## Develop
 
@@ -47,20 +49,28 @@ feedback, relative times, and Preview publishing status.
 
 The site and API deploy together as one Cloudflare Worker named `captures`:
 
-1. `/api/*` runs the Worker first.
+1. `/api/*` runs the raw Worker entrypoint first and never enters TanStack.
 2. Every other request checks the generated static assets without invoking Worker
    code.
 3. A browser navigation that matches neither a static page nor `/api/*` returns
    HTTP 404 from static-asset routing.
+
+`src/worker/index.ts` is the Worker entrypoint. It owns Cloudflare event handling
+and dispatches `/api/*` to the framework-independent implementation in
+`src/worker/api.ts`. Only non-API requests that Cloudflare deliberately sends to
+the Worker are delegated to TanStack; that is where future explicitly configured
+SSR routes would run.
 
 The current API exposes `GET /api/health` and `POST /api/feedback`. Feedback is
 validated, limited to one accepted submission per client IP per minute, and sent
 to Discord. `DISCORD_WEBHOOK_URL` must be configured as an encrypted runtime
 secret under **Settings → Variables and Secrets**.
 
-There are no R2 bindings. If a real SSR route is added later, exclude it from
-prerendering and add its explicit path to `assets.run_worker_first`. Unknown paths
-remain 404s.
+There are no R2 or Queue bindings. A future Queue producer binding can be used
+from API code through `env`, and a Queue consumer adds a top-level `queue()`
+handler to `src/worker/index.ts`. If a real SSR route is added later, exclude it
+from prerendering and add its explicit path to `assets.run_worker_first`. Unknown
+paths remain 404s.
 
 Configure Workers Builds from the monorepo root with:
 

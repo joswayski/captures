@@ -78,7 +78,7 @@ Windows builds produce an NSIS installer, MSI package, and unpackaged executable
 
 Early user feedback is posted to Discord with no database. The existing Rust
 service under `apps/api` remains available for released desktop clients while the
-single Cloudflare web Worker is brought online at `/api/*`.
+raw Cloudflare Worker entrypoint under `apps/web/src/worker` serves `/api/*`.
 
 To run the website and its API locally, create `apps/web/.dev.vars` with:
 

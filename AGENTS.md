@@ -9,7 +9,7 @@
 ## Repository map
 
 - `apps/desktop` contains the Tauri desktop application and its React UI.
-- `apps/web` contains the TanStack website and its same-origin Cloudflare `/api/*` routes.
+- `apps/web` contains the TanStack website and a raw Cloudflare Worker entrypoint for its same-origin `/api/*` routes.
 - `apps/api` contains the legacy Rust HTTP API kept during the feedback migration.
 - `crates` contains the shared Rust capture and platform-integration crates.
 - `DEVELOPMENT.md` contains local setup, validation, and packaging instructions.

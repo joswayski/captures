@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildDiscordPayload, handleRequest, type ApiEnv } from "./api.ts";
+import { buildDiscordPayload, handleApiRequest, type WorkerEnv } from "./api.ts";
 
 function createEnv(options: { rateLimitSuccess?: boolean; webhook?: string } = {}) {
   const rateLimitKeys: string[] = [];
-  const env: ApiEnv = {
+  const env: WorkerEnv = {
     DISCORD_WEBHOOK_URL:
       options.webhook ?? "https://discord.com/api/webhooks/123/example-token",
     FEEDBACK_RATE_LIMITER: {
@@ -20,7 +20,7 @@ function createEnv(options: { rateLimitSuccess?: boolean; webhook?: string } = {
 
 test("serves health only from the API path", async () => {
   const { env } = createEnv();
-  const response = await handleRequest(
+  const response = await handleApiRequest(
     new Request("https://captur.es/api/health"),
     env,
   );
@@ -28,7 +28,7 @@ test("serves health only from the API path", async () => {
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { status: "ok" });
 
-  const missing = await handleRequest(
+  const missing = await handleApiRequest(
     new Request("https://captur.es/health"),
     env,
   );
@@ -38,7 +38,7 @@ test("serves health only from the API path", async () => {
 test("validates feedback before rate limiting or calling Discord", async () => {
   const { env, rateLimitKeys } = createEnv();
   let fetchCalls = 0;
-  const response = await handleRequest(
+  const response = await handleApiRequest(
     new Request("https://captur.es/api/feedback", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -60,7 +60,7 @@ test("validates feedback before rate limiting or calling Discord", async () => {
 test("rejects oversized feedback before rate limiting or calling Discord", async () => {
   const { env, rateLimitKeys } = createEnv();
   let fetchCalls = 0;
-  const response = await handleRequest(
+  const response = await handleApiRequest(
     new Request("https://captur.es/api/feedback", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -84,7 +84,7 @@ test("rejects oversized feedback before rate limiting or calling Discord", async
 test("rate limits accepted feedback by the Cloudflare client IP", async () => {
   const { env, rateLimitKeys } = createEnv({ rateLimitSuccess: false });
   let fetchCalls = 0;
-  const response = await handleRequest(
+  const response = await handleApiRequest(
     new Request("https://captur.es/api/feedback", {
       method: "POST",
       headers: {
@@ -109,7 +109,7 @@ test("delivers normalized feedback to Discord", async () => {
   const { env, rateLimitKeys } = createEnv();
   let webhookUrl = "";
   let webhookBody: unknown;
-  const response = await handleRequest(
+  const response = await handleApiRequest(
     new Request("https://captur.es/api/feedback", {
       method: "POST",
       headers: {

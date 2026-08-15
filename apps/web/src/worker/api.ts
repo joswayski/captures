@@ -10,7 +10,7 @@ const ALLOWED_WEB_ORIGINS = new Set([
   "http://127.0.0.1:5174",
 ]);
 
-export interface ApiEnv {
+export interface WorkerEnv {
   DISCORD_WEBHOOK_URL?: string;
   FEEDBACK_RATE_LIMITER: RateLimit;
 }
@@ -50,9 +50,9 @@ type ParseResult<T> =
   | { ok: true; value: T }
   | { ok: false; error: string };
 
-export async function handleRequest(
+export async function handleApiRequest(
   request: Request,
-  env: ApiEnv,
+  env: WorkerEnv,
   fetcher: Fetcher = fetch,
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -79,7 +79,7 @@ export async function handleRequest(
 
 async function createFeedback(
   request: Request,
-  env: ApiEnv,
+  env: WorkerEnv,
   fetcher: Fetcher,
 ): Promise<Response> {
   const origin = request.headers.get("Origin");
