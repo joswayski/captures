@@ -21,18 +21,16 @@ COPY shared shared
 ARG RAILWAY_GIT_COMMIT_SHA=local
 RUN RAILWAY_GIT_COMMIT_SHA="$RAILWAY_GIT_COMMIT_SHA" npm run build --workspace=@captures/web
 
-FROM node:24-alpine
+FROM busybox:1.37.0-musl
 
-WORKDIR /app
+WORKDIR /site
 
-ENV NODE_ENV=production
 ENV PORT=3000
 
-COPY apps/web/package.json ./
-RUN npm install --omit=dev
-
-COPY --from=build /app/apps/web/dist ./dist
+COPY --from=build /app/apps/web/.output/public ./
 
 EXPOSE 3000
 
-CMD ["npm", "start"]
+USER 65534:65534
+
+CMD ["sh", "-c", "httpd -f -p ${PORT:-3000} -h /site"]

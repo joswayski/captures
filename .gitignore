@@ -4,6 +4,7 @@ apps/desktop/src-tauri/ffmpeg/COPYING.LGPLv2.1
 /node_modules/
 **/node_modules/
 **/dist/
+**/.output/
 **/*.tsbuildinfo
 **/.DS_Store
 *.log

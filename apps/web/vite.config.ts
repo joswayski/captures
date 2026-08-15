@@ -1,6 +1,8 @@
-import { defineConfig } from "vite";
+import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { nitro } from "nitro/vite";
+import { defineConfig } from "vite";
 
 const REPOSITORY = "joswayski/captures";
 const CHANGE_COUNT = 10;
@@ -104,7 +106,18 @@ export default defineConfig(async () => {
   console.log(`Fetched ${latestChanges.length} latest changes from the GitHub API.`);
 
   return {
-    plugins: [react(), tailwindcss()],
+    plugins: [
+      tailwindcss(),
+      tanstackStart({
+        prerender: {
+          enabled: true,
+          crawlLinks: true,
+          failOnError: true,
+        },
+      }),
+      react(),
+      nitro(),
+    ],
     define: {
       __LATEST_CHANGES__: JSON.stringify(latestChanges),
     },
