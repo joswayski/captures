@@ -1,0 +1,23 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "captures-api",
+  "main": "./src/index.ts",
+  "compatibility_date": "2026-08-15",
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "captur.es/api/*",
+      "zone_name": "captur.es"
+    }
+  ],
+  "ratelimits": [
+    {
+      "name": "FEEDBACK_RATE_LIMITER",
+      "namespace_id": "2026081501",
+      "simple": {
+        "limit": 1,
+        "period": 60
+      }
+    }
+  ]
+}

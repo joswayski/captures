@@ -41,6 +41,11 @@ The site deploys as a Cloudflare Workers Static Assets project. The Wrangler
 configuration has no Worker entry point: it uploads only the prerendered files in
 `.output/public/`.
 
+The web and API deployments are intentionally isolated. `npm run deploy:web`
+runs Wrangler inside `apps/web` and can only deploy the assets-only `captures`
+project. The separate `npm run deploy:api` command uses
+`apps/api-worker/wrangler.jsonc` and can only deploy the `captures-api` Worker.
+
 Configure Workers Builds from the monorepo root with:
 
 - Production branch: `main`
