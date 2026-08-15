@@ -10,7 +10,7 @@ const ALLOWED_WEB_ORIGINS = new Set([
   "http://127.0.0.1:5174",
 ]);
 
-export interface Env {
+export interface ApiEnv {
   DISCORD_WEBHOOK_URL?: string;
   FEEDBACK_RATE_LIMITER: RateLimit;
 }
@@ -52,7 +52,7 @@ type ParseResult<T> =
 
 export async function handleRequest(
   request: Request,
-  env: Env,
+  env: ApiEnv,
   fetcher: Fetcher = fetch,
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -79,7 +79,7 @@ export async function handleRequest(
 
 async function createFeedback(
   request: Request,
-  env: Env,
+  env: ApiEnv,
   fetcher: Fetcher,
 ): Promise<Response> {
   const origin = request.headers.get("Origin");
@@ -372,9 +372,3 @@ function corsHeaders(request: Request): Headers {
   }
   return headers;
 }
-
-export default {
-  fetch(request, env): Promise<Response> {
-    return handleRequest(request, env);
-  },
-} satisfies ExportedHandler<Env>;

@@ -5,6 +5,7 @@ apps/desktop/src-tauri/ffmpeg/COPYING.LGPLv2.1
 **/node_modules/
 **/dist/
 **/.output/
+**/.wrangler/
 **/.dev.vars
 **/.dev.vars.*
 **/*.tsbuildinfo

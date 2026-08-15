@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildDiscordPayload, handleRequest, type Env } from "./index.ts";
+import { buildDiscordPayload, handleRequest, type ApiEnv } from "./api.ts";
 
 function createEnv(options: { rateLimitSuccess?: boolean; webhook?: string } = {}) {
   const rateLimitKeys: string[] = [];
-  const env: Env = {
+  const env: ApiEnv = {
     DISCORD_WEBHOOK_URL:
       options.webhook ?? "https://discord.com/api/webhooks/123/example-token",
     FEEDBACK_RATE_LIMITER: {
