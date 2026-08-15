@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { detectPreviewDownloadId } from "../detectPreviewDownload";
 
 const REPO_URL = "https://github.com/joswayski/captures";
@@ -65,13 +65,19 @@ const relativeTimeFormatter = new Intl.RelativeTimeFormat("en", {
   numeric: "always",
 });
 
-export default function Home() {
-  const [now, setNow] = useState(() => Date.now());
-  const cookingShas = useCookingPreviewShas(__LATEST_CHANGES__);
-  const detectedDownload = detectPreviewDownload();
+type HomeProps = {
+  initialNow: number;
+  latestChanges: readonly LatestChange[];
+};
+
+export default function Home({ initialNow, latestChanges }: HomeProps) {
+  const [now, setNow] = useState(initialNow);
+  const cookingShas = useCookingPreviewShas(latestChanges);
+  const detectedDownload = useDetectedPreviewDownload();
   const linuxAlternative = detectedDownload ? linuxAlternativeDownload(detectedDownload) : null;
 
   useEffect(() => {
+    setNow(Date.now());
     const interval = window.setInterval(() => setNow(Date.now()), 60_000);
     return () => window.clearInterval(interval);
   }, []);
@@ -182,7 +188,7 @@ export default function Home() {
           </h2>
 
           <ol className="mt-6 space-y-5">
-            {__LATEST_CHANGES__.map((change) => {
+            {latestChanges.map((change) => {
               const cooking =
                 cookingShas.has(change.sha) && isWithinCookingWindow(change.committedAt, now);
               const cookingTipId = `cooking-tip-${change.sha.slice(0, 12)}`;
@@ -456,6 +462,15 @@ function detectPreviewDownload(): PreviewDownload | null {
     maxTouchPoints: nav.maxTouchPoints ?? 0,
   });
   return PREVIEW_DOWNLOADS.find((download) => download.id === id) ?? null;
+}
+
+function subscribeToBrowserHints() {
+  return () => {};
+}
+
+/** Keep the prerender and hydration snapshots OS-neutral, then select a download in the browser. */
+function useDetectedPreviewDownload() {
+  return useSyncExternalStore(subscribeToBrowserHints, detectPreviewDownload, () => null);
 }
 
 function linuxAlternativeDownload(download: PreviewDownload) {

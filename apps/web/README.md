@@ -8,10 +8,12 @@ installers.
 
 ## Stack
 
-- React 19 + Vite (static client build)
+- React 19 + TanStack Start and Router
+- Vite + Nitro static prerendering
 - Tailwind CSS v4
 
-Vite can do SSR later if the site needs it; this app stays a plain static SPA for now.
+Every route is prerendered at build time. Production serves the generated files and
+does not run the TanStack server bundle.
 
 ## Develop
 
@@ -27,17 +29,34 @@ Site runs at [http://localhost:5174](http://localhost:5174).
 npm run build:web
 ```
 
-Output lands in `apps/web/dist/` — deploy those static files as-is. Vite fetches recent `main` commits from the GitHub API during the build, drops Dependabot dependency bumps, and embeds the latest six product changes in the static JavaScript bundle. The browser does not call GitHub at runtime.
+Static output lands in `apps/web/.output/public/` — deploy those files as-is. The
+build fetches recent `main` commits from the GitHub API, drops Dependabot dependency
+bumps, and embeds the latest ten product changes in the prerendered page. Client-side
+JavaScript still handles OS-specific downloads, clipboard feedback, relative times,
+and Preview publishing status.
 
-## Docker
+## Cloudflare
 
-From the monorepo root:
+The site deploys as a Cloudflare Workers Static Assets project. The Wrangler
+configuration has no Worker entry point: it uploads only the prerendered files in
+`.output/public/`.
+
+Configure Workers Builds from the monorepo root with:
+
+- Production branch: `main`
+- Build command: `npm run build:web`
+- Deploy command: `npm run deploy:web`
+- Root directory: repository root (leave the setting blank)
+
+For a manual deployment from the monorepo root:
 
 ```sh
-docker build -t captures-web .
-docker run --rm -p 8080:3000 captures-web
+npm run build:web
+npm run deploy:web
 ```
 
-The Docker build gets its homepage history directly from the GitHub API. Squash-merged commits link back to their pull requests, and the build fails instead of publishing hardcoded or stale history if GitHub is unavailable.
-
-Railway supplies `RAILWAY_GIT_COMMIT_SHA` to the Docker build, so the history-fetch layer is invalidated on each GitHub deployment. The image serves the result with `serve` on port 3000 (override with `PORT`).
+Each Cloudflare build gets the homepage history directly from the GitHub API.
+Squash-merged commits link back to their pull requests, and the build fails instead
+of publishing hardcoded or stale history if GitHub is unavailable. Attach
+`captur.es` as the custom domain for the `captures` Worker after connecting the
+repository.
