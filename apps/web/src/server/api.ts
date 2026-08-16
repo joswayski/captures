@@ -56,14 +56,14 @@ export async function handleApiRequest(
 ): Promise<Response> {
   const url = new URL(request.url);
 
-  if (url.pathname === "/api/health") {
+  if (isHealthPath(url.pathname)) {
     if (request.method !== "GET") {
       return methodNotAllowed(request, ["GET"]);
     }
     return json(request, { status: "ok" });
   }
 
-  if (url.pathname === "/api/feedback") {
+  if (isFeedbackPath(url.pathname)) {
     if (request.method === "OPTIONS") {
       return preflight(request);
     }
@@ -322,6 +322,14 @@ function truncate(value: string, maxCharacters: number): string {
   const characters = Array.from(value);
   if (characters.length <= maxCharacters) return value;
   return `${characters.slice(0, Math.max(0, maxCharacters - 1)).join("")}…`;
+}
+
+function isHealthPath(pathname: string): boolean {
+  return pathname === "/api/health" || pathname === "/health";
+}
+
+function isFeedbackPath(pathname: string): boolean {
+  return pathname === "/api/feedback" || pathname === "/feedback";
 }
 
 function isDiscordWebhookUrl(value: string): boolean {

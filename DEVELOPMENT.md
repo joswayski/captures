@@ -101,4 +101,6 @@ export CAPTURES_FEEDBACK_URL=http://localhost:5174/api/feedback
 npm run dev
 ```
 
-Packaged builds default to `https://captur.es/api/feedback`.
+Packaged builds default to `https://captur.es/api/feedback`. Older Preview
+builds still POST to `https://api.captur.es/feedback`; the web server keeps
+that host and path as an alias.

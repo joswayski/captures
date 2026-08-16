@@ -18,21 +18,56 @@ function createEnv(options: { rateLimitSuccess?: boolean; webhook?: string } = {
   return { env, rateLimitKeys };
 }
 
-test("serves health only from the API path", async () => {
+test("serves health from the current and legacy API paths", async () => {
   const { env } = createEnv();
-  const response = await handleApiRequest(
-    new Request("https://captur.es/api/health"),
-    env,
-  );
+  for (const url of [
+    "https://captur.es/api/health",
+    "https://captur.es/health",
+    "https://api.captur.es/health",
+  ]) {
+    const response = await handleApiRequest(new Request(url), env);
+    assert.equal(response.status, 200, url);
+    assert.deepEqual(await response.json(), { status: "ok" });
+    assert.equal(response.headers.get("Cache-Control"), "no-store");
+  }
+});
 
-  assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { status: "ok" });
+test("accepts feedback from the current and legacy desktop paths", async () => {
+  const { env, rateLimitKeys } = createEnv();
+  let fetchCalls = 0;
+  for (const url of [
+    "https://captur.es/api/feedback",
+    "https://captur.es/feedback",
+    "https://api.captur.es/feedback",
+    "https://api.captur.es/api/feedback",
+  ]) {
+    const response = await handleApiRequest(
+      new Request(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "CF-Connecting-IP": "203.0.113.20",
+        },
+        body: JSON.stringify({ message: "Recording freezes", category: "bug" }),
+      }),
+      env,
+      async () => {
+        fetchCalls += 1;
+        return new Response(null, { status: 204 });
+      },
+    );
 
-  const missing = await handleApiRequest(
-    new Request("https://captur.es/health"),
-    env,
-  );
-  assert.equal(missing.status, 404);
+    assert.equal(response.status, 201, url);
+    assert.deepEqual(await response.json(), { ok: true });
+    assert.equal(response.headers.get("Cache-Control"), "no-store");
+  }
+  assert.equal(fetchCalls, 4);
+  assert.deepEqual(rateLimitKeys, [
+    "feedback:203.0.113.20",
+    "feedback:203.0.113.20",
+    "feedback:203.0.113.20",
+    "feedback:203.0.113.20",
+  ]);
 });
 
 test("validates feedback before rate limiting or calling Discord", async () => {

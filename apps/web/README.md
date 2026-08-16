@@ -59,14 +59,15 @@ read from the environment.
 
 The Node process serves the site and API together:
 
-1. `/api/*` runs the framework-independent handler first and never enters TanStack.
+1. `/api/*`, `/feedback`, and `/health` run the framework-independent handler
+   first and never enter TanStack.
 2. `/` is server-rendered so TanStack can pick the homepage download button from
    request headers.
 3. Hashed `/assets/*` files and other public files are served as static assets
    with long-lived cache headers.
 4. Unknown paths return the in-app 404 page.
 
-Nitro serves `/api/*` from `server/routes/api` and never enters TanStack.
+Nitro serves those API paths from `server/routes` and never enters TanStack.
 Those handlers call the framework-independent implementation in `src/server`.
 The homepage is delegated to TanStack.
 
@@ -75,6 +76,12 @@ validated, limited to one accepted submission per client IP per minute, and sent
 to Discord. Rate limits are in-memory (one Railway replica). Client IP prefers
 Cloudflare’s `CF-Connecting-IP`, then `X-Real-IP`, and never a client-spoofable
 `X-Forwarded-For` value. Set `DISCORD_WEBHOOK_URL` as a Railway service variable.
+
+Packaged desktop builds from August 2026 still POST to
+`https://api.captur.es/feedback` (and a few even earlier ones to
+`/api/feedback` on that host). Keep those paths as aliases of the same
+handlers, and keep `api.captur.es` as a custom domain on the same Railway
+service so those Previews keep working.
 
 Keep Railway unreachable except through Cloudflare so those forwarding headers
 stay trustworthy.
@@ -106,35 +113,49 @@ docker run --rm -p 8080:3000 -e DISCORD_WEBHOOK_URL="$DISCORD_WEBHOOK_URL" captu
 ```
 
 Generate a Railway domain such as `*.up.railway.app` first, then attach
-`captur.es` as a custom domain. Railway will give you a CNAME target and a TXT
-ownership record.
+`captur.es` and `api.captur.es` as custom domains. Railway will give you a
+CNAME target and a TXT ownership record for each.
 
 ## Cloudflare in front
 
 `captur.es` stays on Cloudflare. Railway is the origin. Visitors hit Cloudflare;
 hashed JS/CSS are cached at the edge; HTML and `/api/*` go to Railway.
 
-1. In Railway, add the custom domain `captur.es` and copy the CNAME plus TXT
-   records.
+1. In Railway, add the custom domains `captur.es` and `api.captur.es` and copy
+   the CNAME plus TXT records.
 2. In Cloudflare DNS:
    - `CNAME @` → the Railway `*.up.railway.app` target, **proxied** (orange cloud).
-   - The Railway TXT ownership record, **DNS only**.
+   - `CNAME api` → the Railway target Railway printed for `api.captur.es`,
+     **proxied**.
+   - Each Railway TXT ownership record, **DNS only**.
    - Optional: `CNAME www` → `@`, proxied, plus a 301 redirect to `https://captur.es`.
 3. SSL/TLS → Overview: **Full**, not Flexible and not Full (Strict). Railway
    documents that Strict does not work as intended when the orange cloud is on.
 4. SSL/TLS → Edge Certificates: enable Universal SSL.
 5. After DNS verifies, Railway should show **Cloudflare proxy detected**.
 
-Cache behavior comes from origin headers plus two Cache Rules:
+Do **not** 301 `api.captur.es/feedback` to `captur.es/api/feedback`. Desktop
+clients POST JSON; a redirect would drop the body.
+
+### Cache
+
+Origin `Cache-Control` is the source of truth. Cloudflare already honors it, so
+Cache Rules are optional. Confirmed live behavior:
+
+| Path | Origin header | Cloudflare |
+| --- | --- | --- |
+| `/assets/*` (hashed JS/CSS) | `public, max-age=31536000, immutable` | cached (`HIT`) |
+| `/favicon.png`, `/icon.svg` | `public, max-age=86400` | cached (`HIT`) |
+| `/` | `private` plus `Vary` on OS hint headers | not cached (`DYNAMIC`) |
+| `/api/*`, `/feedback`, `/health` | `no-store` | not cached (`DYNAMIC`) |
+
+If you add Cache Rules anyway, keep them aligned with those headers:
 
 | Rule | Match | Action |
 | --- | --- | --- |
-| Hashed assets | hostname is `captur.es` and URI Path starts with `/assets/` | Eligible for cache, Edge TTL 1 year, respect origin `Cache-Control` |
-| Dynamic | hostname is `captur.es` and (URI Path equals `/` or starts with `/api/`) | Bypass cache |
+| Hashed assets | hostname is `captur.es` or `api.captur.es` and URI Path starts with `/assets/` | Eligible for cache, Edge TTL 1 year, respect origin `Cache-Control` |
+| Dynamic | hostname is `captur.es` or `api.captur.es` and (URI Path equals `/` or starts with `/api/` or equals `/feedback` or `/health`) | Bypass cache |
 
-The homepage already sends `Cache-Control: private` and `Vary` on the OS hint
-headers, so a missed Bypass rule still should not share one download button
-across macOS, Windows, and Linux. Do not use Cache Everything on `/`.
-
-After a deploy, hashed filenames change, so visitors pick up new JS/CSS without
-a purge. Purge `/` only if a stale homepage HTML response is stuck at the edge.
+Do not use Cache Everything on `/`. After a deploy, hashed filenames change, so
+visitors pick up new JS/CSS without a purge. Purge `/` only if a stale homepage
+HTML response is stuck at the edge.

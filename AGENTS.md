@@ -9,7 +9,7 @@
 ## Repository map
 
 - `apps/desktop` contains the Tauri desktop application and its React UI.
-- `apps/web` contains the TanStack website and a Node server for its same-origin `/api/*` routes. Railway runs that process; Cloudflare proxies `captur.es` and caches hashed static assets.
+- `apps/web` contains the TanStack website and a Node server for its same-origin `/api/*` routes. Railway runs that process; Cloudflare proxies `captur.es` and caches hashed static assets. Keep `api.captur.es` plus `/feedback` and `/health` as aliases so older Preview builds can still send feedback.
 - `crates` contains the shared Rust capture and platform-integration crates.
 - `DEVELOPMENT.md` contains local setup, validation, and packaging instructions.
 - `docs/releases.md` contains maintainer release and recovery procedures.
