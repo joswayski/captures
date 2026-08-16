@@ -72,6 +72,22 @@ function mockGuidanceBounds(rect: DOMRect = guidanceBounds) {
   );
 }
 
+/** Re-dispatch the move until the listener is attached. waitFor alone will not. */
+async function movePointerOverGuidance(
+  guidance: HTMLElement,
+  coords: { clientX: number; clientY: number },
+  faded: boolean,
+) {
+  await waitFor(() => {
+    fireEvent.pointerMove(window, coords);
+    if (faded) {
+      expect(guidance).toHaveAttribute("data-faded", "true");
+    } else {
+      expect(guidance).not.toHaveAttribute("data-faded");
+    }
+  });
+}
+
 describe("CaptureOverlay guidance", () => {
   let activeSession: ActiveSession;
 
@@ -141,15 +157,8 @@ describe("CaptureOverlay guidance", () => {
       .closest(".capture-guidance") as HTMLElement;
     expect(guidance).not.toHaveAttribute("data-faded");
 
-    fireEvent.pointerMove(window, { clientX: 620, clientY: 150 });
-    await waitFor(() => {
-      expect(guidance).toHaveAttribute("data-faded", "true");
-    });
-
-    fireEvent.pointerMove(window, { clientX: 20, clientY: 20 });
-    await waitFor(() => {
-      expect(guidance).not.toHaveAttribute("data-faded");
-    });
+    await movePointerOverGuidance(guidance, { clientX: 620, clientY: 150 }, true);
+    await movePointerOverGuidance(guidance, { clientX: 20, clientY: 20 }, false);
   });
 
   it("keeps region guidance faded while the cursor rests on the leave slack edge", async () => {
@@ -164,22 +173,11 @@ describe("CaptureOverlay guidance", () => {
     const guidance = (await screen.findByText("Drag to select a region"))
       .closest(".capture-guidance") as HTMLElement;
 
-    fireEvent.pointerMove(window, { clientX: 620, clientY: 150 });
-    await waitFor(() => {
-      expect(guidance).toHaveAttribute("data-faded", "true");
-    });
-
+    await movePointerOverGuidance(guidance, { clientX: 620, clientY: 150 }, true);
     // Just outside the painted box but inside leave slack — stay faded.
-    fireEvent.pointerMove(window, { clientX: 768, clientY: 150 });
-    await waitFor(() => {
-      expect(guidance).toHaveAttribute("data-faded", "true");
-    });
-
+    await movePointerOverGuidance(guidance, { clientX: 768, clientY: 150 }, true);
     // Clear the slack zone — restore.
-    fireEvent.pointerMove(window, { clientX: 800, clientY: 150 });
-    await waitFor(() => {
-      expect(guidance).not.toHaveAttribute("data-faded");
-    });
+    await movePointerOverGuidance(guidance, { clientX: 800, clientY: 150 }, false);
   });
 
   it("ignores the painted border edge until the cursor is clearly inside", async () => {
@@ -195,16 +193,9 @@ describe("CaptureOverlay guidance", () => {
       .closest(".capture-guidance") as HTMLElement;
 
     // On the exact left edge — enter inset keeps it visible.
-    fireEvent.pointerMove(window, { clientX: 500, clientY: 150 });
-    await waitFor(() => {
-      expect(guidance).not.toHaveAttribute("data-faded");
-    });
-
+    await movePointerOverGuidance(guidance, { clientX: 500, clientY: 150 }, false);
     // Past the 4px enter inset — fade out of the way.
-    fireEvent.pointerMove(window, { clientX: 510, clientY: 150 });
-    await waitFor(() => {
-      expect(guidance).toHaveAttribute("data-faded", "true");
-    });
+    await movePointerOverGuidance(guidance, { clientX: 510, clientY: 150 }, true);
   });
 
   it("fades window guidance when the cursor enters its bounds", async () => {
@@ -220,10 +211,7 @@ describe("CaptureOverlay guidance", () => {
     const guidance = (await screen.findByText("Select a window to continue"))
       .closest(".capture-guidance") as HTMLElement;
 
-    fireEvent.pointerMove(window, { clientX: 620, clientY: 150 });
-    await waitFor(() => {
-      expect(guidance).toHaveAttribute("data-faded", "true");
-    });
+    await movePointerOverGuidance(guidance, { clientX: 620, clientY: 150 }, true);
   });
 
   it("uses enter/leave hysteresis for guidance hit testing", () => {
