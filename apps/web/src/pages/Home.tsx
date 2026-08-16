@@ -566,6 +566,8 @@ function CaptureIcon({ className }: { className?: string }) {
   return (
     <svg
       viewBox="0 0 24 24"
+      width="16"
+      height="16"
       fill="none"
       stroke="currentColor"
       aria-hidden="true"

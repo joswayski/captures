@@ -111,6 +111,11 @@ export default defineConfig(async () => {
         prerender: {
           enabled: false,
         },
+        server: {
+          build: {
+            inlineCss: true,
+          },
+        },
       }),
       react(),
       tailwindcss(),
