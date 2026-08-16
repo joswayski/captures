@@ -1,6 +1,6 @@
 # Captures website
 
-Minimal static work-in-progress page with a Preview download for the visitor's OS
+Minimal work-in-progress page with a Preview download for the visitor's OS
 (same stable `preview` release assets as the root README), a View source link to
 [the repo](https://github.com/joswayski/captures), and recent changes from `main`.
 Other platforms are mentioned with a link to GitHub Releases rather than listed as
@@ -13,9 +13,10 @@ installers.
 - A raw Cloudflare Worker entrypoint for `/api/*`
 - Tailwind CSS v4
 
-The public website is prerendered at build time. The same Cloudflare project also
-contains a framework-independent API. TanStack renders the frontend; it does not
-route or implement `/api/*`.
+The homepage is server-rendered so the first HTML already includes the matching
+Preview download. Latest changes are still baked in at build time. The same
+Cloudflare project also contains a framework-independent API. TanStack renders
+the frontend; it does not route or implement `/api/*`.
 
 ## Develop
 
@@ -41,8 +42,9 @@ npm run build:web
 
 The Cloudflare Vite plugin emits the deployable Worker and its static client assets.
 The build fetches recent `main` commits from the GitHub API, drops Dependabot
-dependency bumps, and embeds the latest ten product changes in the prerendered
-page. Client-side JavaScript still handles OS-specific downloads, clipboard
+dependency bumps, and embeds the latest ten product changes in the homepage
+payload. The Worker picks the Preview installer from the request `User-Agent`
+and `Sec-CH-UA-*` headers. Client-side JavaScript still handles clipboard
 feedback, relative times, and Preview publishing status.
 
 ## Cloudflare
@@ -50,16 +52,17 @@ feedback, relative times, and Preview publishing status.
 The site and API deploy together as one Cloudflare Worker named `captures`:
 
 1. `/api/*` runs the raw Worker entrypoint first and never enters TanStack.
-2. Every other request checks the generated static assets without invoking Worker
+2. `/` also runs the Worker first so TanStack can SSR the homepage download
+   button from request headers.
+3. Every other request checks the generated static assets without invoking Worker
    code.
-3. A browser navigation that matches neither a static page nor `/api/*` returns
-   HTTP 404 from static-asset routing.
+4. A browser navigation that matches neither a static asset, `/`, nor `/api/*`
+   returns HTTP 404 from static-asset routing.
 
 `src/worker/index.ts` is the Worker entrypoint. It owns Cloudflare event handling
 and dispatches `/api/*` to the framework-independent implementation in
-`src/worker/api.ts`. Only non-API requests that Cloudflare deliberately sends to
-the Worker are delegated to TanStack; that is where future explicitly configured
-SSR routes would run.
+`src/worker/api.ts`. The homepage is delegated to TanStack. Other unknown paths
+stay 404s unless they are added to `assets.run_worker_first`.
 
 The current API exposes `GET /api/health` and `POST /api/feedback`. Feedback is
 validated, limited to one accepted submission per client IP per minute, and sent
@@ -68,9 +71,9 @@ secret under **Settings → Variables and Secrets**.
 
 There are no R2 or Queue bindings. A future Queue producer binding can be used
 from API code through `env`, and a Queue consumer adds a top-level `queue()`
-handler to `src/worker/index.ts`. If a real SSR route is added later, exclude it
-from prerendering and add its explicit path to `assets.run_worker_first`. Unknown
-paths remain 404s.
+handler to `src/worker/index.ts`. Additional SSR routes should stay off the
+prerender list and be added to `assets.run_worker_first`. Unknown paths remain
+404s.
 
 Configure Workers Builds from the monorepo root with:
 

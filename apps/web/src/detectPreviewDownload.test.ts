@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { detectPreviewDownloadId } from "./detectPreviewDownload.ts";
+import {
+  detectPreviewDownloadId,
+  detectPreviewDownloadIdFromRequest,
+} from "./detectPreviewDownload.ts";
 
 test("detects macOS from client hints and classic user agents", () => {
   assert.equal(
@@ -51,6 +54,60 @@ test("detects Windows and Linux, preferring .deb on Debian-family user agents", 
       maxTouchPoints: 0,
     }),
     "linux-deb",
+  );
+});
+
+test("detects desktop installers from request headers", () => {
+  assert.equal(
+    detectPreviewDownloadIdFromRequest({
+      userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
+      secChUaPlatform: '"macOS"',
+    }),
+    "macos",
+  );
+  assert.equal(
+    detectPreviewDownloadIdFromRequest({
+      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    }),
+    "windows",
+  );
+  assert.equal(
+    detectPreviewDownloadIdFromRequest({
+      userAgent: "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:129.0) Gecko/20100101 Firefox/129.0",
+    }),
+    "linux-deb",
+  );
+  assert.equal(
+    detectPreviewDownloadIdFromRequest({
+      userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+      secChUaPlatform: '"Linux"',
+    }),
+    "linux-appimage",
+  );
+});
+
+test("does not pick a desktop installer from mobile request headers", () => {
+  assert.equal(
+    detectPreviewDownloadIdFromRequest({
+      userAgent:
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+    }),
+    null,
+  );
+  assert.equal(
+    detectPreviewDownloadIdFromRequest({
+      userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
+      secChUaPlatform: '"macOS"',
+      secChUaMobile: "?1",
+    }),
+    null,
+  );
+  assert.equal(
+    detectPreviewDownloadIdFromRequest({
+      userAgent: "Mozilla/5.0 (X11; CrOS x86_64) AppleWebKit/537.36",
+      secChUaPlatform: '"Chrome OS"',
+    }),
+    null,
   );
 });
 
