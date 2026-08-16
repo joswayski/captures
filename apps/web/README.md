@@ -9,14 +9,13 @@ installers.
 ## Stack
 
 - React 19 + TanStack Start and Router
-- Vite + the Cloudflare Vite plugin
-- A raw Cloudflare Worker entrypoint for `/api/*`
+- Vite + Nitro, producing a Node server
+- A framework-independent `/api/*` handler in front of TanStack
 - Tailwind CSS v4
 
 The homepage is server-rendered so the first HTML already includes the matching
-Preview download. Latest changes are still baked in at build time. The same
-Cloudflare project also contains a framework-independent API. TanStack renders
-the frontend; it does not route or implement `/api/*`.
+Preview download. Latest changes are still baked in at build time. TanStack
+renders the frontend; it does not route or implement `/api/*`.
 
 ## Develop
 
@@ -26,7 +25,7 @@ npm run dev:web
 
 Site runs at [http://localhost:5174](http://localhost:5174).
 
-For the feedback endpoint, create an ignored `apps/web/.dev.vars` file:
+For the feedback endpoint, create an ignored `apps/web/.env` file:
 
 ```dotenv
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
@@ -40,57 +39,102 @@ The local API is available at `http://localhost:5174/api/*`.
 npm run build:web
 ```
 
-The Cloudflare Vite plugin emits the deployable Worker and its static client assets.
-The build fetches recent `main` commits from the GitHub API, drops Dependabot
-dependency bumps, and embeds the latest ten product changes in the homepage
-payload. The Worker picks the Preview installer from the request `User-Agent`
-and `Sec-CH-UA-*` headers. Client-side JavaScript still handles clipboard
-feedback, relative times, and Preview publishing status.
+Nitro emits a standalone Node server in `apps/web/.output`. The build fetches
+recent `main` commits from the GitHub API, drops Dependabot dependency bumps, and
+embeds the latest ten product changes in the homepage payload. The server picks
+the Preview installer from the request `User-Agent` and `Sec-CH-UA-*` headers.
+Client-side JavaScript still handles clipboard feedback, relative times, and
+Preview publishing status.
 
-## Cloudflare
+Start the production server with:
 
-The site and API deploy together as one Cloudflare Worker named `captures`:
+```sh
+npm run start:web
+```
 
-1. `/api/*` runs the raw Worker entrypoint first and never enters TanStack.
-2. `/` also runs the Worker first so TanStack can SSR the homepage download
-   button from request headers.
-3. Every other request checks the generated static assets without invoking Worker
-   code.
-4. A browser navigation that matches neither a static asset, `/`, nor `/api/*`
-   returns HTTP 404 from static-asset routing.
+`PORT` (default `3000`) and `HOST` (default all interfaces in the image) are
+read from the environment.
 
-`src/worker/index.ts` is the Worker entrypoint. It owns Cloudflare event handling
-and dispatches `/api/*` to the framework-independent implementation in
-`src/worker/api.ts`. The homepage is delegated to TanStack. Other unknown paths
-stay 404s unless they are added to `assets.run_worker_first`.
+## Request routing
+
+The Node process serves the site and API together:
+
+1. `/api/*` runs the framework-independent handler first and never enters TanStack.
+2. `/` is server-rendered so TanStack can pick the homepage download button from
+   request headers.
+3. Hashed `/assets/*` files and other public files are served as static assets
+   with long-lived cache headers.
+4. Unknown paths return the in-app 404 page.
+
+Nitro serves `/api/*` from `server/routes/api` and never enters TanStack.
+Those handlers call the framework-independent implementation in `src/server`.
+The homepage is delegated to TanStack.
 
 The current API exposes `GET /api/health` and `POST /api/feedback`. Feedback is
 validated, limited to one accepted submission per client IP per minute, and sent
-to Discord. `DISCORD_WEBHOOK_URL` must be configured as an encrypted runtime
-secret under **Settings → Variables and Secrets**.
+to Discord. Rate limits are in-memory (one Railway replica). Client IP prefers
+Cloudflare’s `CF-Connecting-IP`, then `X-Real-IP`, and never a client-spoofable
+`X-Forwarded-For` value. Set `DISCORD_WEBHOOK_URL` as a Railway service variable.
 
-There are no R2 or Queue bindings. A future Queue producer binding can be used
-from API code through `env`, and a Queue consumer adds a top-level `queue()`
-handler to `src/worker/index.ts`. Additional SSR routes should stay off the
-prerender list and be added to `assets.run_worker_first`. Unknown paths remain
-404s.
+Keep Railway unreachable except through Cloudflare so those forwarding headers
+stay trustworthy.
 
-Configure Workers Builds from the monorepo root with:
+## Railway
 
-- Production branch: `main`
-- Build command: `npm run build:web`
-- Deploy command: `npm run deploy:web`
-- Root directory: repository root (leave the setting blank)
+Deploy from the monorepo root as one Docker service:
 
-For a manual deployment from the monorepo root:
+| Setting | Value |
+| --- | --- |
+| Builder | Dockerfile |
+| Dockerfile path | `Dockerfile` |
+| Root directory | repository root (leave blank) |
+| Watch paths | `apps/web/**`, `shared/**`, `package.json`, `package-lock.json`, `Dockerfile` |
+| Public port | `3000` (`PORT` is injected) |
+| Health check | `GET /api/health` |
+
+Required env on the **web** service: `DISCORD_WEBHOOK_URL`.
+
+Connect the GitHub repo so pushes to `main` rebuild the image. Railway supplies
+`RAILWAY_GIT_COMMIT_SHA`, which busts the Docker layer that fetches homepage
+history.
+
+From the monorepo root, a local image is:
 
 ```sh
-npm run build:web
-npm run deploy:web
+docker build -t captures-web .
+docker run --rm -p 8080:3000 -e DISCORD_WEBHOOK_URL="$DISCORD_WEBHOOK_URL" captures-web
 ```
 
-Each Cloudflare build gets the homepage history directly from the GitHub API.
-Squash-merged commits link back to their pull requests, and the build fails instead
-of publishing hardcoded or stale history if GitHub is unavailable. Attach
-`captur.es` as the custom domain for the `captures` Worker after connecting the
-repository.
+Generate a Railway domain such as `*.up.railway.app` first, then attach
+`captur.es` as a custom domain. Railway will give you a CNAME target and a TXT
+ownership record.
+
+## Cloudflare in front
+
+`captur.es` stays on Cloudflare. Railway is the origin. Visitors hit Cloudflare;
+hashed JS/CSS are cached at the edge; HTML and `/api/*` go to Railway.
+
+1. In Railway, add the custom domain `captur.es` and copy the CNAME plus TXT
+   records.
+2. In Cloudflare DNS:
+   - `CNAME @` → the Railway `*.up.railway.app` target, **proxied** (orange cloud).
+   - The Railway TXT ownership record, **DNS only**.
+   - Optional: `CNAME www` → `@`, proxied, plus a 301 redirect to `https://captur.es`.
+3. SSL/TLS → Overview: **Full**, not Flexible and not Full (Strict). Railway
+   documents that Strict does not work as intended when the orange cloud is on.
+4. SSL/TLS → Edge Certificates: enable Universal SSL.
+5. After DNS verifies, Railway should show **Cloudflare proxy detected**.
+
+Cache behavior comes from origin headers plus two Cache Rules:
+
+| Rule | Match | Action |
+| --- | --- | --- |
+| Hashed assets | hostname is `captur.es` and URI Path starts with `/assets/` | Eligible for cache, Edge TTL 1 year, respect origin `Cache-Control` |
+| Dynamic | hostname is `captur.es` and (URI Path equals `/` or starts with `/api/`) | Bypass cache |
+
+The homepage already sends `Cache-Control: private` and `Vary` on the OS hint
+headers, so a missed Bypass rule still should not share one download button
+across macOS, Windows, and Linux. Do not use Cache Everything on `/`.
+
+After a deploy, hashed filenames change, so visitors pick up new JS/CSS without
+a purge. Purge `/` only if a stale homepage HTML response is stuck at the edge.

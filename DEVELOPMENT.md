@@ -77,9 +77,9 @@ Windows builds produce an NSIS installer, MSI package, and unpackaged executable
 ## Feedback API
 
 Early user feedback is posted to Discord with no database. The same-origin
-`/api/*` routes live in the Cloudflare Worker under `apps/web/src/worker`.
+`/api/*` routes live in the Node server under `apps/web/src/server`.
 
-To run the website and its API locally, create `apps/web/.dev.vars` with:
+To run the website and its API locally, create `apps/web/.env` with:
 
 ```dotenv
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
@@ -92,9 +92,9 @@ npm run dev:web
 ```
 
 The local health endpoint is `http://localhost:5174/api/health`. See
-[`apps/web/README.md`](apps/web/README.md) for Cloudflare routing and deployment.
+[`apps/web/README.md`](apps/web/README.md) for Railway and Cloudflare setup.
 
-Point a local desktop build at that Worker:
+Point a local desktop build at that server:
 
 ```sh
 export CAPTURES_FEEDBACK_URL=http://localhost:5174/api/feedback
