@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { detectPreviewDownloadId } from "../detectPreviewDownload";
+import { useEffect, useRef, useState } from "react";
+import type { PreviewDownloadId } from "../detectPreviewDownload";
 
 const REPO_URL = "https://github.com/joswayski/captures";
 const REPO_API = "https://api.github.com/repos/joswayski/captures";
@@ -68,12 +68,13 @@ const relativeTimeFormatter = new Intl.RelativeTimeFormat("en", {
 type HomeProps = {
   initialNow: number;
   latestChanges: readonly LatestChange[];
+  previewDownloadId: PreviewDownloadId | null;
 };
 
-export default function Home({ initialNow, latestChanges }: HomeProps) {
+export default function Home({ initialNow, latestChanges, previewDownloadId }: HomeProps) {
   const [now, setNow] = useState(initialNow);
   const cookingShas = useCookingPreviewShas(latestChanges);
-  const detectedDownload = useDetectedPreviewDownload();
+  const detectedDownload = previewDownloadById(previewDownloadId);
   const linuxAlternative = detectedDownload ? linuxAlternativeDownload(detectedDownload) : null;
 
   useEffect(() => {
@@ -452,25 +453,8 @@ async function resolveCookingPreviewShas(
   return cooking;
 }
 
-function detectPreviewDownload(): PreviewDownload | null {
-  if (typeof navigator === "undefined") return null;
-  const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
-  const id = detectPreviewDownloadId({
-    userAgent: nav.userAgent ?? "",
-    platform: nav.platform ?? "",
-    userAgentDataPlatform: nav.userAgentData?.platform ?? "",
-    maxTouchPoints: nav.maxTouchPoints ?? 0,
-  });
+function previewDownloadById(id: PreviewDownloadId | null) {
   return PREVIEW_DOWNLOADS.find((download) => download.id === id) ?? null;
-}
-
-function subscribeToBrowserHints() {
-  return () => {};
-}
-
-/** Keep the prerender and hydration snapshots OS-neutral, then select a download in the browser. */
-function useDetectedPreviewDownload() {
-  return useSyncExternalStore(subscribeToBrowserHints, detectPreviewDownload, () => null);
 }
 
 function linuxAlternativeDownload(download: PreviewDownload) {

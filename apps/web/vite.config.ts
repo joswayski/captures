@@ -111,9 +111,7 @@ export default defineConfig(async () => {
       tailwindcss(),
       tanstackStart({
         prerender: {
-          enabled: true,
-          crawlLinks: true,
-          failOnError: true,
+          enabled: false,
         },
       }),
       react(),

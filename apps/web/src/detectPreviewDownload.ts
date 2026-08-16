@@ -7,6 +7,12 @@ export type NavigatorHints = {
   maxTouchPoints: number;
 };
 
+export type RequestPreviewHints = {
+  userAgent: string;
+  secChUaPlatform?: string;
+  secChUaMobile?: string;
+};
+
 /** Pick a Preview installer from browser hints. Mobile browsers return null. */
 export function detectPreviewDownloadId(hints: NavigatorHints): PreviewDownloadId | null {
   const { userAgent: ua, platform, userAgentDataPlatform: ch, maxTouchPoints } = hints;
@@ -24,4 +30,21 @@ export function detectPreviewDownloadId(hints: NavigatorHints): PreviewDownloadI
     return /ubuntu|debian|linux mint|pop!_os|elementary/i.test(ua) ? "linux-deb" : "linux-appimage";
   }
   return null;
+}
+
+/** Pick a Preview installer from request headers during SSR. */
+export function detectPreviewDownloadIdFromRequest(
+  hints: RequestPreviewHints,
+): PreviewDownloadId | null {
+  if (hints.secChUaMobile === "?1") return null;
+  return detectPreviewDownloadId({
+    userAgent: hints.userAgent,
+    platform: "",
+    userAgentDataPlatform: unwrapClientHint(hints.secChUaPlatform ?? ""),
+    maxTouchPoints: 0,
+  });
+}
+
+function unwrapClientHint(value: string) {
+  return value.trim().replace(/^"+|"+$/g, "");
 }
