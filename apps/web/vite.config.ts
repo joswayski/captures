@@ -1,7 +1,7 @@
-import { cloudflare } from "@cloudflare/vite-plugin";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { nitro } from "nitro/vite";
 import { defineConfig } from "vite";
 
 const REPOSITORY = "joswayski/captures";
@@ -107,14 +107,33 @@ export default defineConfig(async () => {
 
   return {
     plugins: [
-      cloudflare({ viteEnvironment: { name: "ssr" } }),
-      tailwindcss(),
       tanstackStart({
         prerender: {
           enabled: false,
         },
       }),
       react(),
+      tailwindcss(),
+      nitro({
+        serverDir: "server",
+        routeRules: {
+          "/assets/**": {
+            headers: {
+              "cache-control": "public, max-age=31536000, immutable",
+            },
+          },
+          "/favicon.png": {
+            headers: {
+              "cache-control": "public, max-age=86400",
+            },
+          },
+          "/icon.svg": {
+            headers: {
+              "cache-control": "public, max-age=86400",
+            },
+          },
+        },
+      }),
     ],
     define: {
       __LATEST_CHANGES__: JSON.stringify(latestChanges),

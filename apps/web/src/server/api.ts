@@ -1,3 +1,5 @@
+import { clientKeyFromRequest, type ApiEnv } from "./env.ts";
+
 const MAX_MESSAGE_LEN = 8_000;
 const MAX_CONTACT_LEN = 200;
 const MAX_META_LEN = 128;
@@ -10,10 +12,7 @@ const ALLOWED_WEB_ORIGINS = new Set([
   "http://127.0.0.1:5174",
 ]);
 
-export interface WorkerEnv {
-  DISCORD_WEBHOOK_URL?: string;
-  FEEDBACK_RATE_LIMITER: RateLimit;
-}
+export type { ApiEnv };
 
 interface FeedbackInput {
   message: string;
@@ -52,7 +51,7 @@ type ParseResult<T> =
 
 export async function handleApiRequest(
   request: Request,
-  env: WorkerEnv,
+  env: ApiEnv,
   fetcher: Fetcher = fetch,
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -79,7 +78,7 @@ export async function handleApiRequest(
 
 async function createFeedback(
   request: Request,
-  env: WorkerEnv,
+  env: ApiEnv,
   fetcher: Fetcher,
 ): Promise<Response> {
   const origin = request.headers.get("Origin");
@@ -110,7 +109,7 @@ async function createFeedback(
     return json(request, { error: "feedback service is not configured" }, 503);
   }
 
-  const clientKey = request.headers.get("CF-Connecting-IP")?.trim() || "unknown";
+  const clientKey = clientKeyFromRequest(request);
   try {
     const { success } = await env.FEEDBACK_RATE_LIMITER.limit({
       key: `feedback:${clientKey}`,

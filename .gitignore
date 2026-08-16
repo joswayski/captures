@@ -8,6 +8,9 @@ apps/desktop/src-tauri/ffmpeg/COPYING.LGPLv2.1
 **/.wrangler/
 **/.dev.vars
 **/.dev.vars.*
+.env
+.env.*
+!.env.example
 **/*.tsbuildinfo
 **/.DS_Store
 *.log

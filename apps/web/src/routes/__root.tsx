@@ -8,6 +8,7 @@ import type { ReactNode } from "react";
 import stylesheet from "../index.css?url";
 
 export const Route = createRootRoute({
+  notFoundComponent: NotFound,
   head: () => ({
     meta: [
       { charSet: "utf-8" },
@@ -43,6 +44,21 @@ function RootComponent() {
     <RootDocument>
       <Outlet />
     </RootDocument>
+  );
+}
+
+function NotFound() {
+  return (
+    <main className="mx-auto flex min-h-dvh w-full max-w-xl flex-col justify-center px-6">
+      <p className="text-sm text-ink-muted">404</p>
+      <h1 className="mt-2 text-2xl font-medium tracking-tight text-ink">Page not found.</h1>
+      <p className="mt-3 text-sm leading-relaxed text-ink-muted">
+        The requested page does not exist.
+      </p>
+      <a href="/" className="mt-6 font-semibold text-ink underline-offset-4 hover:underline">
+        Return to Captures
+      </a>
+    </main>
   );
 }
 
