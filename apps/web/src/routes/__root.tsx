@@ -5,7 +5,7 @@ import {
   createRootRoute,
 } from "@tanstack/react-router";
 import type { ReactNode } from "react";
-import stylesheet from "../index.css?url";
+import "../index.css";
 
 export const Route = createRootRoute({
   notFoundComponent: NotFound,
@@ -22,7 +22,6 @@ export const Route = createRootRoute({
       { title: "Captures" },
     ],
     links: [
-      { rel: "stylesheet", href: stylesheet },
       { rel: "icon", type: "image/png", href: "/favicon.png" },
       { rel: "preconnect", href: "https://fonts.googleapis.com" },
       {
