@@ -9,21 +9,11 @@ type BusyAction = "permission" | "microphone" | "restart" | "complete" | null;
 const PERMISSION_POLL_MS = 1_500;
 const SETTINGS_AWAY_MS = 2_500;
 
-function CaptureSetupIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M9 4H7a3 3 0 0 0-3 3v2M15 4h2a3 3 0 0 1 3 3v2M20 15v2a3 3 0 0 1-3 3h-2M9 20H7a3 3 0 0 1-3-3v-2" />
-      <path className="onboarding-icon-fill" d="M12 8.5c.4 1.8 1.7 3.1 3.5 3.5-1.8.4-3.1 1.7-3.5 3.5-.4-1.8-1.7-3.1-3.5-3.5 1.8-.4 3.1-1.7 3.5-3.5Z" />
-    </svg>
-  );
-}
-
 function ScreenAccessIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
       <rect x="3" y="4" width="18" height="13" rx="2.5" />
       <path d="M8 21h8M12 17v4" />
-      <path className="onboarding-icon-fill" d="M12 8c.35 1.55 1.45 2.65 3 3-1.55.35-2.65 1.45-3 3-.35-1.55-1.45-2.65-3-3 1.55-.35 2.65-1.45 3-3Z" />
     </svg>
   );
 }
@@ -37,18 +27,22 @@ function MicrophoneAccessIcon() {
   );
 }
 
-function ArrowIcon() {
-  return <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h11M11 6l4 4-4 4" /></svg>;
+function CheckmarkIcon() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M3.2 8.2 6.4 11.4 12.8 4.6" />
+    </svg>
+  );
 }
 
 function setupTitle(platform: string | undefined) {
-  if (platform === "macos") return "Allow screen access";
+  if (platform === "macos") return "Required permissions";
   return "You’re ready to capture";
 }
 
 function setupDescription(platform: string | undefined) {
   if (platform === "macos") {
-    return "Screen Recording is required. Microphone is optional — allow it now if you don’t want a prompt later. Pick audio sources when you record.";
+    return "Captures needs screen access to work. Microphone is optional — allow it now or when you record.";
   }
   return "Screen capture is available on this computer. Pick desktop audio and a microphone when you start a recording.";
 }
@@ -61,7 +55,7 @@ function screenAccessDescription(platform: string, required: boolean, restartReq
     return "Turn the switch on next to this copy of Captures, then restart. A local build is a different row from a downloaded app. macOS does not apply the permission until Captures relaunches.";
   }
   if (platform === "macos") {
-    return "Allow Screen Recording so Captures can read the pixels you choose to capture. macOS keeps everything else hidden.";
+    return "This allows Captures to read the pixels you choose to capture. macOS keeps everything else hidden.";
   }
   if (platform === "windows") {
     return "Windows provides screen capture access without a separate permission prompt. Secure and protected windows remain private.";
@@ -74,17 +68,21 @@ function screenAccessDescription(platform: string, required: boolean, restartReq
     : "Screen capture is available without an additional setup step.";
 }
 
-function microphoneStatus(setup: OnboardingState, asked: boolean) {
-  if (setup.microphone_granted) return "Allowed";
-  if (asked || !setup.microphone_can_request) return "Needs approval";
-  return "Not requested";
-}
-
 function microphoneDescription(granted: boolean) {
   if (granted) {
     return "macOS will not ask again. Turn the microphone on when you start a recording.";
   }
-  return "A separate microphone permission. Allow it now so a recording does not pause to ask, or wait until you pick a mic.";
+  return "Allow it now so a recording does not pause to ask, or wait until you pick a mic.";
+}
+
+function permissionActionLabel(setup: OnboardingState, busy: boolean) {
+  if (busy) return "Opening…";
+  return setup.screen_recording_can_request ? "Allow access" : "Open Settings";
+}
+
+function microphoneActionLabel(setup: OnboardingState, busy: boolean) {
+  if (busy) return "Opening…";
+  return setup.microphone_can_request ? "Allow microphone" : "Microphone Settings";
 }
 
 export function Onboarding() {
@@ -260,128 +258,155 @@ export function Onboarding() {
       && !setup.screen_recording_can_request
       && !setup.screen_recording_requested_this_launch,
   );
-  const permissionStatus = screenReady
-    ? (setup?.screen_recording_required ? "Allowed" : "Ready")
-    : shouldOfferRestart
-      ? "Restart required"
-      : switchStillOff
-        ? "Still off"
-        : "Needs approval";
+  const showMicrophone = setup?.platform === "macos";
+  const screenStepState = screenReady ? "done" : "current";
+  const microphoneStepState = setup?.microphone_granted ? "done" : "idle";
+  const primaryLabel = shouldOfferRestart
+    ? (busy === "restart" ? "Restarting…" : "Restart Captures")
+    : (busy === "complete" ? "Starting…" : "Start capturing");
+
   return (
     <main className="onboarding-shell">
-      <section className="onboarding-intro" aria-label="Captures">
-        <div className="onboarding-visual" aria-hidden="true">
-          <span className="onboarding-frame onboarding-frame-large" />
-          <span className="onboarding-frame onboarding-frame-small" />
-          <span className="onboarding-orbit onboarding-orbit-accent" />
-          <span className="onboarding-orbit onboarding-orbit-blue" />
-          <span className="onboarding-spark"><CaptureSetupIcon /></span>
-        </div>
-      </section>
-
-      <section className="onboarding-setup" aria-labelledby="onboarding-setup-title">
-        <header className="onboarding-setup-header">
+      <div className="onboarding-stage">
+        <section className="onboarding-copy" aria-labelledby="onboarding-setup-title">
           <h1 id="onboarding-setup-title">{setupTitle(setup?.platform)}</h1>
           <p>{setupDescription(setup?.platform)}</p>
-        </header>
+          {shouldOfferRestart ? (
+            <button
+              type="button"
+              className="onboarding-primary-button"
+              disabled={busy !== null}
+              onClick={restart}
+            >
+              {primaryLabel}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="onboarding-primary-button"
+              disabled={!screenReady || busy !== null}
+              onClick={() => void complete()}
+            >
+              {primaryLabel}
+            </button>
+          )}
+        </section>
 
-        <div className="onboarding-setup-body">
+        <div className="onboarding-panel">
           <div className="onboarding-permissions" aria-live="polite">
-          <article className={`onboarding-permission${screenReady ? " ready" : " action-required"}`}>
-            <span className="onboarding-permission-icon screen"><ScreenAccessIcon /></span>
-            <div className="onboarding-permission-copy">
-              <div className="onboarding-permission-title">
-                <h3>Screen capture</h3>
-                <span className={setup?.screen_recording_required ? "required" : undefined}>
-                  {setup?.screen_recording_required ? "Required" : "Built in"}
-                </span>
-              </div>
-              <p>{setup ? screenAccessDescription(setup.platform, setup.screen_recording_required, shouldOfferRestart, switchStillOff) : "Checking the access available on this computer…"}</p>
-              {setup && (
-                <span className={`onboarding-permission-status${screenReady ? " ready" : ""}`}>
-                  <i aria-hidden="true" /> {permissionStatus}
-                </span>
-              )}
-            </div>
-            {permissionPending && setup && (
-              <div className="onboarding-permission-actions">
-                <button
-                  type="button"
-                  className="onboarding-permission-button"
-                  disabled={busy !== null}
-                  onClick={() => void requestPermission()}
-                >
-                  {busy === "permission"
-                    ? "Opening…"
-                    : setup.screen_recording_can_request
-                      ? "Allow access"
-                      : "Open Settings"}
-                </button>
-              </div>
-            )}
-          </article>
-
-          {setup && setup.platform === "macos" && (
-            <article className={`onboarding-permission optional${setup.microphone_granted ? " ready" : ""}`}>
-              <span className="onboarding-permission-icon microphone"><MicrophoneAccessIcon /></span>
+            <article className="onboarding-permission">
+              <span className="onboarding-permission-icon"><ScreenAccessIcon /></span>
               <div className="onboarding-permission-copy">
-                <div className="onboarding-permission-title">
-                  <h3>Microphone</h3>
-                  <span className="optional">Optional</span>
-                </div>
-                <p>{microphoneDescription(setup.microphone_granted)}</p>
-                <span className={`onboarding-permission-status${setup.microphone_granted ? " ready" : " optional"}`}>
-                  <i aria-hidden="true" /> {microphoneStatus(setup, microphoneAsked)}
-                </span>
+                <h3>Screen capture</h3>
+                <p>
+                  {setup
+                    ? screenAccessDescription(
+                        setup.platform,
+                        setup.screen_recording_required,
+                        shouldOfferRestart,
+                        switchStillOff,
+                      )
+                    : "Checking the access available on this computer…"}
+                </p>
               </div>
-              {!setup.microphone_granted && (
-                <div className="onboarding-permission-actions">
-                  <button
-                    type="button"
-                    className="onboarding-permission-button"
-                    disabled={busy !== null}
-                    onClick={() => void requestMicrophone()}
-                  >
-                    {busy === "microphone"
-                      ? "Opening…"
-                      : setup.microphone_can_request
-                        ? "Allow microphone"
-                        : "Microphone Settings"}
-                  </button>
-                </div>
+              {setup && (
+                <ScreenPermissionAction
+                  setup={setup}
+                  screenReady={screenReady}
+                  shouldOfferRestart={shouldOfferRestart}
+                  switchStillOff={switchStillOff}
+                  busy={busy !== null}
+                  opening={busy === "permission"}
+                  onRequest={() => void requestPermission()}
+                />
               )}
             </article>
-          )}
+
+            {showMicrophone && setup && (
+              <article className="onboarding-permission">
+                <span className="onboarding-permission-icon"><MicrophoneAccessIcon /></span>
+                <div className="onboarding-permission-copy">
+                  <div className="onboarding-permission-heading">
+                    <h3>Microphone</h3>
+                    <span className="optional">Optional</span>
+                  </div>
+                  <p>{microphoneDescription(setup.microphone_granted)}</p>
+                </div>
+                {setup.microphone_granted ? (
+                  <GrantedStatus label="Granted" />
+                ) : (
+                  <div className="onboarding-permission-actions">
+                    <button
+                      type="button"
+                      className="onboarding-permission-button"
+                      disabled={busy !== null}
+                      onClick={() => void requestMicrophone()}
+                    >
+                      {microphoneActionLabel(setup, busy === "microphone")}
+                    </button>
+                  </div>
+                )}
+              </article>
+            )}
           </div>
 
           {error && <p className="onboarding-error" role="alert">{error}</p>}
         </div>
+      </div>
 
-        <footer className="onboarding-footer">
-          <div>
-            {shouldOfferRestart ? (
-              <button
-                type="button"
-                className="onboarding-primary-button"
-                disabled={busy !== null}
-                onClick={restart}
-              >
-                {busy === "restart" ? "Restarting…" : "Restart Captures"}
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="onboarding-primary-button"
-                disabled={!screenReady || busy !== null}
-                onClick={() => void complete()}
-              >
-                {busy === "complete" ? "Starting…" : "Start capturing"}
-                {busy !== "complete" && <ArrowIcon />}
-              </button>
-            )}
-          </div>
-        </footer>
-      </section>
+      <nav className="onboarding-steps" aria-label="Setup progress">
+        <span className={`onboarding-step ${screenStepState}`} />
+        {showMicrophone && <span className={`onboarding-step ${microphoneStepState}`} />}
+      </nav>
     </main>
+  );
+}
+
+function GrantedStatus({ label }: { label: string }) {
+  return (
+    <span className="onboarding-permission-status ready">
+      {label} <CheckmarkIcon />
+    </span>
+  );
+}
+
+function ScreenPermissionAction({
+  setup,
+  screenReady,
+  shouldOfferRestart,
+  switchStillOff,
+  busy,
+  opening,
+  onRequest,
+}: {
+  setup: OnboardingState;
+  screenReady: boolean;
+  shouldOfferRestart: boolean;
+  switchStillOff: boolean;
+  busy: boolean;
+  opening: boolean;
+  onRequest: () => void;
+}) {
+  if (screenReady) {
+    return <GrantedStatus label={setup.screen_recording_required ? "Granted" : "Ready"} />;
+  }
+
+  return (
+    <div className="onboarding-permission-actions">
+      {shouldOfferRestart && (
+        <span className="onboarding-permission-status">Restart required</span>
+      )}
+      {switchStillOff && (
+        <span className="onboarding-permission-status">Still off</span>
+      )}
+      <button
+        type="button"
+        className="onboarding-permission-button"
+        disabled={busy}
+        onClick={onRequest}
+      >
+        {permissionActionLabel(setup, opening)}
+      </button>
+    </div>
   );
 }

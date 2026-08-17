@@ -3105,37 +3105,11 @@ const STARTUP_NOTICE_HEIGHT: f64 = 112.0;
 const ONBOARDING_WINDOW_WIDTH: f64 = 860.0;
 const ONBOARDING_WINDOW_HEIGHT: f64 = 610.0;
 
-/// Native title chrome should follow the OS, not the light onboarding canvas.
-/// A light `background_color` otherwise keeps title text dark on a dark title bar.
+/// First-run setup is a dark canvas. Force dark title chrome so Windows and
+/// macOS keep the window title readable instead of inheriting light text color
+/// from a previous light background.
 fn onboarding_window_theme() -> Option<Theme> {
-    #[cfg(target_os = "macos")]
-    {
-        Some(
-            if macos_interface_style_is_dark(&macos_apple_interface_style()) {
-                Theme::Dark
-            } else {
-                Theme::Light
-            },
-        )
-    }
-    #[cfg(not(target_os = "macos"))]
-    None
-}
-
-#[cfg(target_os = "macos")]
-fn macos_apple_interface_style() -> String {
-    Command::new("defaults")
-        .args(["read", "-g", "AppleInterfaceStyle"])
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .unwrap_or_default()
-}
-
-#[cfg(any(test, target_os = "macos"))]
-fn macos_interface_style_is_dark(stdout: &str) -> bool {
-    stdout.trim().eq_ignore_ascii_case("Dark")
+    Some(Theme::Dark)
 }
 
 fn show_onboarding(app: &AppHandle) {
@@ -3160,7 +3134,7 @@ fn show_onboarding(app: &AppHandle) {
         .center()
         .resizable(true)
         .theme(onboarding_window_theme())
-        .background_color(Color(245, 247, 251, 255))
+        .background_color(Color(28, 28, 30, 255))
         .focused(false)
         .visible(false)
         .on_page_load(|window, payload| {
@@ -4826,7 +4800,7 @@ mod tests {
     use super::{
         AppError, THUMBNAIL_AUTO_HIDE_RESERVE, THUMBNAIL_SYSTEM_CHROME_GAP, ThumbnailCursorAction,
         ThumbnailCursorKind, ThumbnailMonitorBounds, clipboard_fingerprint,
-        display_contains_pointer, macos_interface_style_is_dark, mask_macos_window_corners,
+        display_contains_pointer, mask_macos_window_corners, onboarding_window_theme,
         parse_shortcut, primary_app_window_priority, refine_window_chrome_from_snapshot,
         should_trigger_shortcut, thumbnail_cursor_action, thumbnail_geometry,
         thumbnail_pointer_position, thumbnail_stack_should_be_visible,
@@ -5184,11 +5158,8 @@ mod tests {
     }
 
     #[test]
-    fn macos_interface_style_dark_selects_dark_title_chrome() {
-        assert!(macos_interface_style_is_dark("Dark\n"));
-        assert!(macos_interface_style_is_dark("dark"));
-        assert!(!macos_interface_style_is_dark(""));
-        assert!(!macos_interface_style_is_dark("Light\n"));
+    fn onboarding_window_uses_dark_title_chrome() {
+        assert_eq!(onboarding_window_theme(), Some(tauri::Theme::Dark));
     }
 
     #[test]
