@@ -55,8 +55,14 @@ newest so their revisions preserve merge order.
 
 ## Install the latest Preview
 
-Use the CI-produced Preview rather than a local build when testing the exact
-installer, signing, notarization, and packaging path intended for users:
+Use a local signed macOS build when iterating on first-run setup. See
+[DEVELOPMENT.md](../DEVELOPMENT.md#packaging) for `npm run build:signed`. That
+command signs with the Developer ID identity, notarizes and staples a DMG, and
+installs it with Gatekeeper quarantine. It does not publish a Preview or build
+the Windows and Linux installers.
+
+Use the CI-produced Preview when you need the published multi-platform
+installer set, updater channel, or `SHA256SUMS` completion marker:
 
 ```sh
 npm run install:preview

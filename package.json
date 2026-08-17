@@ -10,6 +10,7 @@
     "dev": "npm run tauri:dev --workspace @captures/desktop",
     "dev:web": "npm run dev --workspace @captures/web",
     "build": "node scripts/build.mjs",
+    "build:signed": "node scripts/build-signed-local.mjs",
     "prepare:media": "bash scripts/build-ffmpeg-sidecars.sh",
     "install:preview": "node scripts/install-latest-release.mjs",
     "build:web": "npm run build --workspace @captures/web",
