@@ -58,11 +58,10 @@ describe("Onboarding", () => {
   it("guides a new macOS user through screen access before enabling capture", async () => {
     render(<Onboarding />);
 
-    expect(await screen.findByRole("heading", { name: "Allow screen access" })).toBeInTheDocument();
-    expect(screen.getByText(/Pick audio sources when you record/)).toBeInTheDocument();
-    expect(screen.getByText("Needs approval")).toBeInTheDocument();
-    expect(screen.getByText("Required")).toHaveClass("required");
+    expect(await screen.findByRole("heading", { name: "Required permissions" })).toBeInTheDocument();
+    expect(screen.getByText(/Captures needs screen access to work/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start capturing" })).toBeDisabled();
+    expect(screen.getByRole("navigation", { name: "Setup progress" })).toBeInTheDocument();
     expect(screen.queryByText("One place for access")).not.toBeInTheDocument();
     expect(screen.queryByText("Desktop audio")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Use by default" })).not.toBeInTheDocument();
@@ -73,7 +72,7 @@ describe("Onboarding", () => {
     expect(screen.queryByText(/Setup for/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Your work stays yours/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Everything ready before your first capture/)).not.toBeInTheDocument();
-    expect(screen.queryByText("Captures")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Captures")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Allow access" }));
 
@@ -86,7 +85,7 @@ describe("Onboarding", () => {
     expect(screen.getByRole("button", { name: "Open Settings" })).toBeInTheDocument();
     const restart = screen.getByRole("button", { name: "Restart Captures" });
     expect(restart).toBeInTheDocument();
-    expect(restart.closest("footer")).not.toBeNull();
+    expect(restart.closest("section")).not.toBeNull();
     expect(screen.queryByRole("button", { name: "Check again" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Start capturing" })).not.toBeInTheDocument();
   });
@@ -103,7 +102,7 @@ describe("Onboarding", () => {
     };
     window.dispatchEvent(new Event("focus"));
 
-    expect(await screen.findByText("Allowed")).toBeInTheDocument();
+    expect(await screen.findByText("Granted")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start capturing" })).toBeEnabled();
     expect(screen.queryByRole("button", { name: "Restart Captures" })).not.toBeInTheDocument();
   });
@@ -133,7 +132,7 @@ describe("Onboarding", () => {
 
     const start = await screen.findByRole("button", { name: "Start capturing" });
     expect(start).toBeEnabled();
-    expect(screen.getByText("Allowed")).toBeInTheDocument();
+    expect(screen.getByText("Granted")).toBeInTheDocument();
     fireEvent.click(start);
 
     await waitFor(() => {
@@ -157,7 +156,6 @@ describe("Onboarding", () => {
 
     expect(await screen.findByRole("heading", { name: "You’re ready to capture" })).toBeInTheDocument();
     expect(screen.getByText("Windows provides screen capture access without a separate permission prompt. Secure and protected windows remain private.")).toBeInTheDocument();
-    expect(screen.getByText("Built in")).toBeInTheDocument();
     expect(screen.getByText("Ready")).toBeInTheDocument();
     expect(screen.queryByText("Desktop audio")).not.toBeInTheDocument();
     expect(screen.queryByText("Microphone")).not.toBeInTheDocument();
@@ -174,7 +172,7 @@ describe("Onboarding", () => {
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("request_onboarding_microphone_permission");
     });
-    expect(await screen.findByText("Allowed")).toBeInTheDocument();
+    expect(await screen.findByText("Granted")).toBeInTheDocument();
     expect(screen.getByText(/Turn the microphone on when you start a recording/)).toBeInTheDocument();
     expect(screen.queryByText("On by default")).not.toBeInTheDocument();
     expect(invoke).not.toHaveBeenCalledWith("set_onboarding_desktop_audio", expect.anything());
