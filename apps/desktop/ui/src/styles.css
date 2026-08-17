@@ -38,8 +38,8 @@ h1, h2, p { margin: 0; }
   --onboarding-ink: #18181b;
   --onboarding-muted: #52525b;
   --onboarding-soft: #71717a;
-  --onboarding-accent: #2563eb;
-  --onboarding-accent-hover: #1d4ed8;
+  --onboarding-accent: var(--theme-accent);
+  --onboarding-accent-hover: var(--theme-accent-hover);
   --onboarding-granted: #15803d;
   display: grid;
   width: 100%;
