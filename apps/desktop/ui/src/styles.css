@@ -36,7 +36,7 @@ h1, h2, p { margin: 0; }
   --onboarding-surface: #141416;
   --onboarding-border: rgba(255, 255, 255, .08);
   --onboarding-ink: #f4f4f5;
-  --onboarding-muted: #a1a1aa;
+  --onboarding-muted: #9f9fa8;
   --onboarding-soft: #71717a;
   --onboarding-accent: #3b82f6;
   --onboarding-accent-hover: #4f8ef7;
@@ -190,10 +190,10 @@ h1, h2, p { margin: 0; }
 .onboarding-error {
   margin-top: 14px;
   padding: 10px 12px;
-  border: 1px solid rgba(239, 70, 80, .28);
+  border: 1px solid rgba(var(--theme-signal-rgb), .28);
   border-radius: 10px;
-  color: #ffb5bc;
-  background: rgba(43, 29, 34, .92);
+  color: var(--theme-signal-text);
+  background: var(--theme-signal-surface);
   font-size: 12.5px;
   line-height: 1.4;
 }
