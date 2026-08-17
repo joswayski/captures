@@ -1,17 +1,12 @@
 import { useEffect, useRef, useState } from "react";
+import { isWithinCookingWindow } from "../cookingPreview";
 import type { PreviewDownloadId } from "../detectPreviewDownload";
 
 const REPO_URL = "https://github.com/joswayski/captures";
-const REPO_API = "https://api.github.com/repos/joswayski/captures";
 const RELEASES_URL = `${REPO_URL}/releases`;
 const X_URL = "https://x.com/josevalerio";
 const CONTACT_EMAIL = "contact@josevalerio.com";
 const PREVIEW_DOWNLOAD_BASE = `${REPO_URL}/releases/download/preview`;
-const PREVIEW_TAG = /^v(\d{4})\.(\d{2})\.(\d{2})\.([1-9]\d?)$/u;
-/** How often the homepage re-checks Preview build status (and the API cache TTL). */
-const PREVIEW_STATUS_POLL_MS = 60 * 60 * 1_000;
-/** Hide "still cooking" once a merge is this old — avoids stuck/failed publishes lingering. */
-const COOKING_MAX_AGE_MS = 4 * 60 * 60 * 1_000;
 const COOKING_TOOLTIP =
   "Preview builds are still publishing this change. Downloads may not include it yet.";
 
@@ -69,11 +64,16 @@ type HomeProps = {
   initialNow: number;
   latestChanges: readonly LatestChange[];
   previewDownloadId: PreviewDownloadId | null;
+  cookingShas: readonly string[];
 };
 
-export default function Home({ initialNow, latestChanges, previewDownloadId }: HomeProps) {
+export default function Home({
+  initialNow,
+  latestChanges,
+  previewDownloadId,
+  cookingShas,
+}: HomeProps) {
   const [now, setNow] = useState(initialNow);
-  const cookingShas = useCookingPreviewShas(latestChanges);
   const detectedDownload = previewDownloadById(previewDownloadId);
   const linuxAlternative = detectedDownload ? linuxAlternativeDownload(detectedDownload) : null;
 
@@ -191,7 +191,8 @@ export default function Home({ initialNow, latestChanges, previewDownloadId }: H
           <ol className="mt-6 space-y-5">
             {latestChanges.map((change) => {
               const cooking =
-                cookingShas.has(change.sha) && isWithinCookingWindow(change.committedAt, now);
+                cookingShas.includes(change.sha) &&
+                isWithinCookingWindow(change.committedAt, now);
               const cookingTipId = `cooking-tip-${change.sha.slice(0, 12)}`;
               return (
                 <li key={change.sha}>
@@ -232,225 +233,6 @@ export default function Home({ initialNow, latestChanges, previewDownloadId }: H
       </main>
     </div>
   );
-}
-
-/** Commits still waiting on a finished Preview publish (newer than the latest release, or actively building). */
-function useCookingPreviewShas(changes: readonly LatestChange[]) {
-  const [cookingShas, setCookingShas] = useState<ReadonlySet<string>>(() => new Set());
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function refresh() {
-      try {
-        const next = await resolveCookingPreviewShas(changes);
-        if (!cancelled) setCookingShas(next);
-      } catch {
-        if (!cancelled) setCookingShas(new Set());
-      }
-    }
-
-    void refresh();
-    const interval = window.setInterval(() => void refresh(), PREVIEW_STATUS_POLL_MS);
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [changes]);
-
-  return cookingShas;
-}
-
-type GitHubRelease = {
-  draft: boolean;
-  prerelease: boolean;
-  tag_name: string;
-  target_commitish: string;
-};
-
-type GitHubWorkflowRun = {
-  head_sha: string;
-  status: string;
-  conclusion: string | null;
-};
-
-type GitHubWorkflowRuns = {
-  workflow_runs?: GitHubWorkflowRun[];
-};
-
-function previewVersion(tag: string) {
-  const match = PREVIEW_TAG.exec(tag);
-  if (!match) return null;
-  return match.slice(1).map(Number);
-}
-
-function comparePreviewVersions(left: number[], right: number[]) {
-  for (let index = 0; index < left.length; index += 1) {
-    const order = left[index] - right[index];
-    if (order !== 0) return order;
-  }
-  return 0;
-}
-
-async function githubJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${REPO_API}${path}`, {
-    headers: {
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-    },
-  });
-  if (!response.ok) {
-    throw new Error(`GitHub request failed (${response.status})`);
-  }
-  return (await response.json()) as T;
-}
-
-async function latestPublishedPreviewCommit(): Promise<string | null> {
-  const releases = await githubJson<GitHubRelease[]>("/releases?per_page=40");
-  let best: { version: number[]; tag: string; commitish: string } | null = null;
-
-  for (const release of releases) {
-    if (release.draft || !release.prerelease) continue;
-    const version = previewVersion(release.tag_name);
-    if (!version) continue;
-    if (!best || comparePreviewVersions(version, best.version) > 0) {
-      best = {
-        version,
-        tag: release.tag_name,
-        commitish: release.target_commitish,
-      };
-    }
-  }
-
-  if (!best) return null;
-  // Releases usually pin the full SHA; fall back if CI used a branch name.
-  if (/^[0-9a-f]{40}$/iu.test(best.commitish)) return best.commitish.toLowerCase();
-
-  try {
-    const ref = await githubJson<{ object: { sha: string; type: string } }>(
-      `/git/ref/tags/${encodeURIComponent(best.tag)}`,
-    );
-    if (ref.object.type === "commit") return ref.object.sha.toLowerCase();
-    const tagObject = await githubJson<{ object: { sha: string } }>(
-      `/git/tags/${ref.object.sha}`,
-    );
-    return tagObject.object.sha.toLowerCase();
-  } catch {
-    return null;
-  }
-}
-
-async function recentReleaseRuns(): Promise<GitHubWorkflowRun[]> {
-  try {
-    const payload = await githubJson<GitHubWorkflowRuns>(
-      "/actions/workflows/release.yml/runs?per_page=30",
-    );
-    return payload.workflow_runs ?? [];
-  } catch {
-    // Actions API can be picky unauthenticated; releases alone still cover lagging publishes.
-    return [];
-  }
-}
-
-function releaseRunBuckets(runs: GitHubWorkflowRun[]) {
-  const building = new Set<string>();
-  const failed = new Set<string>();
-  const succeeded = new Set<string>();
-
-  for (const run of runs) {
-    const sha = run.head_sha?.toLowerCase();
-    if (!sha) continue;
-
-    if (run.status === "in_progress" || run.status === "queued" || run.status === "pending") {
-      building.add(sha);
-      continue;
-    }
-
-    if (run.status !== "completed") continue;
-
-    if (run.conclusion === "success") {
-      succeeded.add(sha);
-    } else if (
-      run.conclusion === "failure" ||
-      run.conclusion === "cancelled" ||
-      run.conclusion === "timed_out" ||
-      run.conclusion === "startup_failure"
-    ) {
-      // Only mark failed if this SHA never also succeeded (retries).
-      if (!succeeded.has(sha)) failed.add(sha);
-    }
-  }
-
-  // A later success for the same SHA clears failure.
-  for (const sha of succeeded) failed.delete(sha);
-
-  return { building, failed, succeeded };
-}
-
-type CookingPreviewCache = {
-  key: string;
-  expiresAt: number;
-  value: ReadonlySet<string>;
-};
-
-let cookingPreviewCache: CookingPreviewCache | null = null;
-
-async function resolveCookingPreviewShas(
-  changes: readonly LatestChange[],
-): Promise<Set<string>> {
-  if (changes.length === 0) return new Set();
-
-  const cacheKey = changes.map((change) => change.sha).join(",");
-  const now = Date.now();
-  if (
-    cookingPreviewCache &&
-    cookingPreviewCache.key === cacheKey &&
-    now < cookingPreviewCache.expiresAt
-  ) {
-    return new Set(cookingPreviewCache.value);
-  }
-
-  const [publishedCommit, runs] = await Promise.all([
-    latestPublishedPreviewCommit(),
-    recentReleaseRuns(),
-  ]);
-  const { building, failed, succeeded } = releaseRunBuckets(runs);
-
-  const cooking = new Set<string>();
-  let seenPublished = publishedCommit === null;
-
-  for (const change of changes) {
-    const sha = change.sha.toLowerCase();
-    const recentEnough = isWithinCookingWindow(change.committedAt, now);
-
-    // Never show cooking for finished failures/cancels.
-    if (failed.has(sha) && !building.has(sha) && !succeeded.has(sha)) {
-      if (publishedCommit && sha === publishedCommit) seenPublished = true;
-      continue;
-    }
-
-    // Actively building — only badge merges still inside the cooking window.
-    if (recentEnough && building.has(sha)) {
-      cooking.add(change.sha);
-    }
-
-    if (!seenPublished) {
-      if (publishedCommit && sha === publishedCommit) {
-        seenPublished = true;
-      } else if (recentEnough && !failed.has(sha)) {
-        // Newer than the latest published Preview and not a known failed build.
-        cooking.add(change.sha);
-      }
-    }
-  }
-
-  cookingPreviewCache = {
-    key: cacheKey,
-    expiresAt: now + PREVIEW_STATUS_POLL_MS,
-    value: cooking,
-  };
-
-  return cooking;
 }
 
 function previewDownloadById(id: PreviewDownloadId | null) {
@@ -531,12 +313,6 @@ function CopyEmailButton({ email }: { email: string }) {
       </span>
     </button>
   );
-}
-
-function isWithinCookingWindow(committedAt: string, now: number) {
-  const committedMs = new Date(committedAt).getTime();
-  if (Number.isNaN(committedMs)) return false;
-  return now - committedMs <= COOKING_MAX_AGE_MS;
 }
 
 function formatRelativeTime(date: string, now: number) {

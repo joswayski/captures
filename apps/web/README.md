@@ -14,8 +14,9 @@ installers.
 - Tailwind CSS v4
 
 The homepage is server-rendered so the first HTML already includes the matching
-Preview download. Latest changes are still baked in at build time. TanStack
-renders the frontend; it does not route or implement `/api/*`.
+Preview download and any "still cooking" Preview status. Latest changes are
+still baked in at build time. TanStack renders the frontend; it does not route
+or implement `/api/*`.
 
 ## Develop
 
@@ -42,9 +43,10 @@ npm run build:web
 Nitro emits a standalone Node server in `apps/web/.output`. The build fetches
 recent `main` commits from the GitHub API, drops Dependabot dependency bumps, and
 embeds the latest ten product changes in the homepage payload. The server picks
-the Preview installer from the request `User-Agent` and `Sec-CH-UA-*` headers.
-Client-side JavaScript still handles clipboard feedback, relative times, and
-Preview publishing status.
+the Preview installer from the request `User-Agent` and `Sec-CH-UA-*` headers,
+and looks up Preview publishing status from the GitHub API (cached in memory for
+one hour) so "still cooking" is in the first HTML. Client-side JavaScript still
+handles clipboard feedback and relative times.
 
 Start the production server with:
 
