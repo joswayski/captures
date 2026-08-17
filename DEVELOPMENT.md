@@ -62,9 +62,30 @@ CAPTURES_OPEN_AFTER_INSTALL=0 npm run build
 CAPTURES_RESET_PERMISSIONS=1 npm run build
 ```
 
-macOS builds use an installed Apple Development signing identity when available and otherwise use an ad-hoc signature. Local builds omit updater artifacts unless `TAURI_SIGNING_PRIVATE_KEY` is provided.
+macOS `npm run build` uses an installed Apple Development signing identity when available and otherwise uses an ad-hoc signature. Those builds omit updater artifacts unless `TAURI_SIGNING_PRIVATE_KEY` is provided. They also skip Apple notarization and strip quarantine on install, so they are a different Screen Recording identity and a different Gatekeeper path than a downloaded Preview.
 
-A local macOS build is a different Screen Recording identity than a downloaded Preview. In System Settings, turn on the row for the copy you just launched — enabling a previously downloaded `Captures.app` does not grant a freshly built one.
+To iterate on first-run setup against the same Developer ID signature, notarized DMG, and Gatekeeper quarantine a user gets, use the local signed build:
+
+```sh
+# One-time: store the App Store Connect API key you already backed up for CI
+npm run build:signed -- --setup --key ~/AuthKey_XXXXXXXXXX.p8 --key-id XXXXXXXXXX --issuer <issuer-id>
+
+# Each iteration: sign, notarize, staple, install from the DMG, reset setup
+npm run build:signed
+```
+
+The Developer ID Application identity name (`Developer ID Application: Your Name (TEAMID)`) is not a secret. `codesign` prints it on every shipped app. The `.p12` private key, its password, and the App Store Connect `.p8` are secrets; `--setup` stores the API key in `~/.captures` and a `captures-notary` keychain profile. GitHub will not give the `release` environment secrets back.
+
+`npm run build:signed` requires macOS and that Developer ID identity in the login keychain. It resets the onboarding flag and Screen Recording / Microphone grants unless you pass `--keep-onboarding` or `--keep-permissions`. Notarization talks to Apple and usually takes a few minutes. It still does not publish a Preview, produce Windows or Linux installers, or exercise the in-app updater.
+
+Useful options:
+
+```sh
+npm run build:signed -- --dry-run
+npm run build:signed -- --no-launch
+npm run build:signed -- --fresh-settings
+npm run build:signed -- --skip-notarize
+```
 
 Windows builds produce an NSIS installer, MSI package, and unpackaged executable under `target/release`. Linux builds produce AppImage and Debian packages.
 
