@@ -6,6 +6,7 @@ import {
   RecordingControlsHiddenNotice,
   RecordingHud,
   RecordingSavedNotice,
+  StartupNotice,
 } from "./App";
 import type { RecordingSessionSnapshot } from "./types";
 
@@ -179,6 +180,27 @@ describe("RecordingHud", () => {
     expect(screen.getByText(/to bring them back/)).toBeInTheDocument();
     expect(screen.queryByText(/New Capture/)).not.toBeInTheDocument();
     expect(screen.queryByText(/your shortcut/)).not.toBeInTheDocument();
+  });
+
+  it("points first-run setup at the tray and New Capture shortcut", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_settings") {
+        return {
+          new_capture_shortcut: "Ctrl+Shift+Space",
+        };
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<StartupNotice />);
+
+    expect(screen.getByText("Captures is here whenever you need it")).toBeInTheDocument();
+    expect(screen.getByText(/Use the (menu bar|tray) icon, or press/)).toBeInTheDocument();
+    expect(await screen.findByText("Ctrl")).toBeInTheDocument();
+    expect(screen.getByText("Shift")).toBeInTheDocument();
+    expect(screen.getByText("Space")).toBeInTheDocument();
+    expect(screen.getByText(/to start/)).toBeInTheDocument();
+    expect(screen.queryByText("Captures is running")).not.toBeInTheDocument();
   });
 
   it("offers history recovery wording until a recording is permanently saved", () => {

@@ -1240,7 +1240,9 @@ fn complete_onboarding(
         eprintln!("failed to broadcast completed onboarding: {error}");
     }
     hide_window(&app, ONBOARDING_WINDOW_LABEL);
-    open_capture_controls(&app, CaptureSelectorMode::Screenshot);
+    if let Err(error) = show_startup_notice(&app) {
+        eprintln!("failed to show Captures ready notice: {error}");
+    }
     Ok(())
 }
 
@@ -2969,7 +2971,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let mut tray = TrayIconBuilder::with_id("main")
         .menu(&menu)
-        .tooltip("Captures — Screen capture utility");
+        .tooltip("Captures is here whenever you need it");
 
     #[cfg(target_os = "macos")]
     if let Some(icon) = macos_tray_icon() {
@@ -3100,16 +3102,16 @@ fn create_overlay_window(app: &AppHandle) -> Result<(), tauri::Error> {
     Ok(())
 }
 
-const STARTUP_NOTICE_WIDTH: f64 = 356.0;
-const STARTUP_NOTICE_HEIGHT: f64 = 112.0;
-const ONBOARDING_WINDOW_WIDTH: f64 = 860.0;
-const ONBOARDING_WINDOW_HEIGHT: f64 = 610.0;
+const STARTUP_NOTICE_WIDTH: f64 = 400.0;
+const STARTUP_NOTICE_HEIGHT: f64 = 118.0;
+const ONBOARDING_WINDOW_WIDTH: f64 = 560.0;
+const ONBOARDING_WINDOW_HEIGHT: f64 = 520.0;
 
-/// First-run setup is a dark canvas. Force dark title chrome so Windows and
-/// macOS keep the window title readable instead of inheriting light text color
-/// from a previous light background.
+/// First-run setup is a light canvas. Force light title chrome so the native
+/// "Captures" title stays readable in system dark mode instead of rendering
+/// black text over a dark title bar.
 fn onboarding_window_theme() -> Option<Theme> {
-    Some(Theme::Dark)
+    Some(Theme::Light)
 }
 
 fn show_onboarding(app: &AppHandle) {
@@ -3130,11 +3132,11 @@ fn show_onboarding(app: &AppHandle) {
         )
         .title("Captures")
         .inner_size(ONBOARDING_WINDOW_WIDTH, ONBOARDING_WINDOW_HEIGHT)
-        .min_inner_size(720.0, 540.0)
+        .min_inner_size(480.0, 440.0)
         .center()
         .resizable(true)
         .theme(onboarding_window_theme())
-        .background_color(Color(28, 28, 30, 255))
+        .background_color(Color(246, 246, 247, 255))
         .focused(false)
         .visible(false)
         .on_page_load(|window, payload| {
@@ -5158,8 +5160,8 @@ mod tests {
     }
 
     #[test]
-    fn onboarding_window_uses_dark_title_chrome() {
-        assert_eq!(onboarding_window_theme(), Some(tauri::Theme::Dark));
+    fn onboarding_window_uses_light_title_chrome() {
+        assert_eq!(onboarding_window_theme(), Some(tauri::Theme::Light));
     }
 
     #[test]

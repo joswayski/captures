@@ -59,7 +59,9 @@ describe("Onboarding", () => {
     render(<Onboarding />);
 
     expect(await screen.findByRole("heading", { name: "Required permissions" })).toBeInTheDocument();
-    expect(screen.getByText(/Captures needs screen access to work/)).toBeInTheDocument();
+    expect(screen.queryByText(/Captures needs screen access to work/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Screen Recording is required/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Pick audio sources when you record/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start capturing" })).toBeDisabled();
     expect(screen.getByRole("navigation", { name: "Setup progress" })).toBeInTheDocument();
     expect(screen.queryByText("One place for access")).not.toBeInTheDocument();
@@ -73,6 +75,7 @@ describe("Onboarding", () => {
     expect(screen.queryByText(/Your work stays yours/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Everything ready before your first capture/)).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Captures")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Microphone Settings" })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Allow access" }));
 
@@ -85,7 +88,7 @@ describe("Onboarding", () => {
     expect(screen.getByRole("button", { name: "Open Settings" })).toBeInTheDocument();
     const restart = screen.getByRole("button", { name: "Restart Captures" });
     expect(restart).toBeInTheDocument();
-    expect(restart.closest("section")).not.toBeNull();
+    expect(restart.closest("section")).toBeNull();
     expect(screen.queryByRole("button", { name: "Check again" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Start capturing" })).not.toBeInTheDocument();
   });
@@ -138,6 +141,7 @@ describe("Onboarding", () => {
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("complete_onboarding");
     });
+    expect(invoke).not.toHaveBeenCalledWith("start_capture", expect.anything());
   });
 
   it("does not invent an up-front permission step on Windows", async () => {
@@ -177,6 +181,38 @@ describe("Onboarding", () => {
     expect(screen.queryByText("On by default")).not.toBeInTheDocument();
     expect(invoke).not.toHaveBeenCalledWith("set_onboarding_desktop_audio", expect.anything());
     expect(invoke).not.toHaveBeenCalledWith("set_onboarding_microphone", expect.anything());
+  });
+
+  it("asks macOS for the microphone before sending the user to Settings", async () => {
+    currentState = {
+      ...macNeedsPermission,
+      microphone_can_request: false,
+    };
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_onboarding_state") return currentState;
+      if (command === "request_onboarding_microphone_permission") {
+        currentState = {
+          ...currentState,
+          microphone_granted: false,
+          microphone_can_request: false,
+        };
+        return currentState;
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<Onboarding />);
+
+    const allow = await screen.findByRole("button", { name: "Allow microphone" });
+    expect(screen.queryByRole("button", { name: "Microphone Settings" })).not.toBeInTheDocument();
+    fireEvent.click(allow);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("request_onboarding_microphone_permission");
+    });
+    expect(await screen.findByRole("button", { name: "Open Settings" })).toBeInTheDocument();
+    expect(screen.getByText(/macOS only lists apps after they ask/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Microphone Settings" })).not.toBeInTheDocument();
   });
 
   it("restarts after returning from Settings when access is still missing", async () => {
