@@ -225,15 +225,36 @@ function IdleView() {
   );
 }
 
-function StartupNotice() {
+export function StartupNotice() {
+  const [shortcut, setShortcut] = useState("Ctrl+Shift+Space");
+
+  useEffect(() => {
+    void invoke<AppSettings>("get_settings")
+      .then((settings) => {
+        if (settings.new_capture_shortcut.trim()) {
+          setShortcut(settings.new_capture_shortcut);
+        }
+      })
+      .catch(() => undefined);
+  }, []);
+
+  const keys = shortcutDisplayTokens(shortcut);
+  const trayLabel = /Mac/i.test(navigator.userAgent) ? "menu bar" : "tray";
+
   return (
     <main className="startup-notice">
       <div className="startup-icon" aria-hidden="true">
         <CaptureIcon />
       </div>
       <div>
-        <strong>Captures is running</strong>
-        <p>Use the Captures menu or your New Capture shortcut.</p>
+        <strong>Captures is here whenever you need it</strong>
+        <p>
+          Use the {trayLabel} icon, or press{" "}
+          {keys.map((key, index) => (
+            <kbd key={`${key}-${index}`}>{key}</kbd>
+          ))}
+          {" "}to start.
+        </p>
       </div>
     </main>
   );

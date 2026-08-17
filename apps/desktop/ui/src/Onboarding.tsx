@@ -40,13 +40,6 @@ function setupTitle(platform: string | undefined) {
   return "You’re ready to capture";
 }
 
-function setupDescription(platform: string | undefined) {
-  if (platform === "macos") {
-    return "Captures needs screen access to work. Microphone is optional — allow it now or when you record.";
-  }
-  return "Screen capture is available on this computer. Pick desktop audio and a microphone when you start a recording.";
-}
-
 function screenAccessDescription(platform: string, required: boolean, restartRequired: boolean, stillOff: boolean) {
   if (platform === "macos" && stillOff) {
     return "The switch for this copy of Captures is still off. A local build is a different row from a downloaded app. Turn it on, then restart.";
@@ -68,9 +61,12 @@ function screenAccessDescription(platform: string, required: boolean, restartReq
     : "Screen capture is available without an additional setup step.";
 }
 
-function microphoneDescription(granted: boolean) {
+function microphoneDescription(granted: boolean, asked: boolean) {
   if (granted) {
     return "macOS will not ask again. Turn the microphone on when you start a recording.";
+  }
+  if (asked) {
+    return "Turn Captures on in Microphone settings. macOS only lists apps after they ask.";
   }
   return "Allow it now so a recording does not pause to ask, or wait until you pick a mic.";
 }
@@ -80,9 +76,10 @@ function permissionActionLabel(setup: OnboardingState, busy: boolean) {
   return setup.screen_recording_can_request ? "Allow access" : "Open Settings";
 }
 
-function microphoneActionLabel(setup: OnboardingState, busy: boolean) {
+function microphoneActionLabel(setup: OnboardingState, busy: boolean, asked: boolean) {
   if (busy) return "Opening…";
-  return setup.microphone_can_request ? "Allow microphone" : "Microphone Settings";
+  if (asked && !setup.microphone_can_request) return "Open Settings";
+  return "Allow microphone";
 }
 
 export function Onboarding() {
@@ -263,34 +260,14 @@ export function Onboarding() {
   const microphoneStepState = setup?.microphone_granted ? "done" : "idle";
   const primaryLabel = shouldOfferRestart
     ? (busy === "restart" ? "Restarting…" : "Restart Captures")
-    : (busy === "complete" ? "Starting…" : "Start capturing");
+    : (busy === "complete" ? "Finishing…" : "Start capturing");
 
   return (
     <main className="onboarding-shell">
       <div className="onboarding-stage">
-        <section className="onboarding-copy" aria-labelledby="onboarding-setup-title">
+        <header className="onboarding-copy" aria-labelledby="onboarding-setup-title">
           <h1 id="onboarding-setup-title">{setupTitle(setup?.platform)}</h1>
-          <p>{setupDescription(setup?.platform)}</p>
-          {shouldOfferRestart ? (
-            <button
-              type="button"
-              className="onboarding-primary-button"
-              disabled={busy !== null}
-              onClick={restart}
-            >
-              {primaryLabel}
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="onboarding-primary-button"
-              disabled={!screenReady || busy !== null}
-              onClick={() => void complete()}
-            >
-              {primaryLabel}
-            </button>
-          )}
-        </section>
+        </header>
 
         <div className="onboarding-panel">
           <div className="onboarding-permissions" aria-live="polite">
@@ -330,7 +307,7 @@ export function Onboarding() {
                     <h3>Microphone</h3>
                     <span className="optional">Optional</span>
                   </div>
-                  <p>{microphoneDescription(setup.microphone_granted)}</p>
+                  <p>{microphoneDescription(setup.microphone_granted, microphoneAsked)}</p>
                 </div>
                 {setup.microphone_granted ? (
                   <GrantedStatus label="Granted" />
@@ -342,7 +319,7 @@ export function Onboarding() {
                       disabled={busy !== null}
                       onClick={() => void requestMicrophone()}
                     >
-                      {microphoneActionLabel(setup, busy === "microphone")}
+                      {microphoneActionLabel(setup, busy === "microphone", microphoneAsked)}
                     </button>
                   </div>
                 )}
@@ -351,6 +328,26 @@ export function Onboarding() {
           </div>
 
           {error && <p className="onboarding-error" role="alert">{error}</p>}
+
+          {shouldOfferRestart ? (
+            <button
+              type="button"
+              className="onboarding-primary-button"
+              disabled={busy !== null}
+              onClick={restart}
+            >
+              {primaryLabel}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="onboarding-primary-button"
+              disabled={!screenReady || busy !== null}
+              onClick={() => void complete()}
+            >
+              {primaryLabel}
+            </button>
+          )}
         </div>
       </div>
 
