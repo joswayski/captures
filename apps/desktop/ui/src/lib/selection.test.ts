@@ -3,12 +3,14 @@ import { describe, expect, it } from "vitest";
 import {
   captureDimClipPath,
   constrainSelectionToAspect,
+  displayAlignedCornerRadii,
   dragSelectionRect,
   effectiveDragAspectRatio,
   frontToBackWindows,
   isCapturableSelection,
   parseAspectRatioPreset,
   roundedRectPath,
+  selectionBorderRadiusCss,
   selectionRect,
 } from "./selection";
 
@@ -298,5 +300,57 @@ describe("captureDimClipPath", () => {
     // from the hole's last corner back to 0% 0% — the top-left "spotlight".
     const path = captureDimClipPath({ x: 40, y: 30, width: 200, height: 120 });
     expect(path.endsWith("40px 30px, 40px 150px, 240px 150px, 240px 30px, 40px 30px)")).toBe(true);
+  });
+});
+
+describe("displayAlignedCornerRadii", () => {
+  const bounds = { width: 1440, height: 900 };
+
+  it("rounds only the corners that sit on the display edge", () => {
+    expect(displayAlignedCornerRadii(
+      { x: 0, y: 0, width: 400, height: 300 },
+      bounds,
+      40,
+    )).toEqual({
+      topLeft: 40,
+      topRight: 0,
+      bottomRight: 0,
+      bottomLeft: 0,
+    });
+  });
+
+  it("rounds every corner of a full-display selection", () => {
+    expect(displayAlignedCornerRadii(
+      { x: 0, y: 0, width: 1440, height: 900 },
+      bounds,
+      38.5,
+    )).toEqual({
+      topLeft: 38.5,
+      topRight: 38.5,
+      bottomRight: 38.5,
+      bottomLeft: 38.5,
+    });
+  });
+
+  it("keeps mid-screen regions square", () => {
+    expect(displayAlignedCornerRadii(
+      { x: 120, y: 80, width: 400, height: 300 },
+      bounds,
+      40,
+    )).toEqual({
+      topLeft: 0,
+      topRight: 0,
+      bottomRight: 0,
+      bottomLeft: 0,
+    });
+  });
+
+  it("uses the display radius on flush corners and the inner radius elsewhere", () => {
+    expect(selectionBorderRadiusCss(
+      { x: 0, y: 0, width: 400, height: 300 },
+      bounds,
+      40,
+      3,
+    )).toBe("40px 3px 3px 3px");
   });
 });

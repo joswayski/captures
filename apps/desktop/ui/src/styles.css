@@ -363,7 +363,7 @@ h1, h2, p { margin: 0; }
    show/hide gate — never CSS-fade the frozen frame over the live desktop.
    Crossfading live vs frozen is what made open editors’ drop shadows / glow
    shimmer (active window chrome in the snapshot vs inactive live chrome). */
-.capture-surface { position: relative; width: 100%; height: 100%; overflow: hidden; background: #0e0f15; opacity: 1; pointer-events: none; user-select: none; }
+.capture-surface { position: relative; width: 100%; height: 100%; overflow: hidden; background: #0e0f15; opacity: 1; pointer-events: none; user-select: none; border-radius: var(--display-corner-radius, 0px); }
 .capture-surface.capture-visible { pointer-events: auto; }
 .capture-surface.capture-priming { pointer-events: none; }
 .capture-priming .capture-shade, .capture-priming .capture-guidance, .capture-priming .window-targets { transition: none; }
@@ -1200,13 +1200,13 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 
 /* Recording selector */
 .recording-selector-idle { width: 100%; height: 100%; background: transparent; }
-.recording-selector { position: relative; width: 100%; height: 100%; overflow: hidden; color: #f7f7f8; background: transparent; -webkit-user-select: none; user-select: none; touch-action: none; }
+.recording-selector { position: relative; width: 100%; height: 100%; overflow: hidden; color: #f7f7f8; background: transparent; -webkit-user-select: none; user-select: none; touch-action: none; border-radius: var(--display-corner-radius, 0px); }
 .recording-selector, .recording-selector * { -webkit-user-drag: none; }
 .recording-selector ::selection { color: inherit; background: transparent; }
 .recording-selector-snapshot { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; pointer-events: none; }
 .recording-target-region { cursor: crosshair; }
 .recording-target-display .capture-shade-full { background: rgba(9,10,16,.5); }
-.recording-display-outline { position: absolute; z-index: 8; inset: 0; box-shadow: 0 0 0 3px var(--chrome-active) inset, 0 0 28px rgba(var(--theme-accent-rgb),.2) inset; pointer-events: none; }
+.recording-display-outline { position: absolute; z-index: 8; inset: 0; border-radius: inherit; box-shadow: 0 0 0 3px var(--chrome-active) inset, 0 0 28px rgba(var(--theme-accent-rgb),.2) inset; pointer-events: none; }
 .recording-display-identity { position: absolute; z-index: 9; top: 50%; left: 50%; display: grid; min-width: 280px; justify-items: center; gap: 7px; color: white; filter: drop-shadow(0 3px 10px rgba(0,0,0,.45)); pointer-events: none; text-align: center; transform: translate(-50%,-60%); }
 .recording-display-identity strong { font-size: 24px; font-weight: 850; letter-spacing: -.02em; }
 .recording-display-identity > span:last-child { color: rgba(255,255,255,.78); font-size: 12px; font-weight: 700; }

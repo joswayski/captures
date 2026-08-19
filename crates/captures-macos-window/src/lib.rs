@@ -21,11 +21,13 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationOptions, NSCursor, NSEvent, NSEventMask, NSEventType,
-    NSPasteboard, NSRunningApplication, NSSound, NSStatusWindowLevel, NSTrackingArea,
-    NSTrackingAreaOptions, NSView, NSViewLayerContentsPlacement, NSWindow, NSWindowStyleMask,
-    NSWorkspace,
+    NSPasteboard, NSRunningApplication, NSScreen, NSSound, NSStatusWindowLevel, NSTrackingArea,
+    NSTrackingAreaOptions, NSView, NSViewLayerContentsPlacement, NSWindow,
+    NSWindowCollectionBehavior, NSWindowStyleMask, NSWorkspace,
 };
-use objc2_foundation::{NSObject, NSObjectProtocol, NSProcessInfo, NSRect, NSSize, NSString};
+use objc2_foundation::{
+    NSNumber, NSObject, NSObjectProtocol, NSProcessInfo, NSRect, NSSize, NSString,
+};
 use tauri::WebviewWindow;
 use tauri_nspanel::WebviewWindowExt;
 
@@ -612,13 +614,129 @@ fn window_corner_radius_for_major_version(major_version: isize) -> f64 {
     }
 }
 
+/// One step above the status items so capture surfaces cover the menu bar
+/// and still sit under the macOS screen-saver / shield levels.
+fn capture_surface_window_level() -> objc2_app_kit::NSWindowLevel {
+    NSStatusWindowLevel + 1
+}
+
+fn capture_surface_collection_behavior() -> NSWindowCollectionBehavior {
+    NSWindowCollectionBehavior::CanJoinAllSpaces
+        | NSWindowCollectionBehavior::FullScreenAuxiliary
+        | NSWindowCollectionBehavior::Stationary
+        | NSWindowCollectionBehavior::IgnoresCycle
+}
+
+/// Raises a fullscreen capture surface above the menu bar and keeps it there
+/// across spaces and full-screen apps.
+fn elevate_fullscreen_capture_window(native_window: &NSWindow) {
+    native_window.setLevel(capture_surface_window_level());
+    native_window.setHidesOnDeactivate(false);
+    native_window.setAcceptsMouseMovedEvents(true);
+    native_window.setCollectionBehavior(capture_surface_collection_behavior());
+}
+
+fn parse_display_id(display_id: &str) -> Option<u32> {
+    display_id.parse().ok()
+}
+
+fn clamp_display_corner_radius(value: f64) -> f64 {
+    if !value.is_finite() || value <= 0.0 {
+        0.0
+    } else {
+        // Prefer half-point steps so CSS border-radius stays stable on Retina.
+        (value * 2.0).round() / 2.0
+    }
+}
+
+fn screen_display_id(screen: &NSScreen) -> Option<u32> {
+    let key = NSString::from_str("NSScreenNumber");
+    let value = screen.deviceDescription().objectForKey(&key)?;
+    value
+        .downcast_ref::<NSNumber>()
+        .map(NSNumber::unsignedIntValue)
+}
+
+fn screen_for_display_id(mtm: MainThreadMarker, display_id: &str) -> Option<Retained<NSScreen>> {
+    let requested = parse_display_id(display_id)?;
+    NSScreen::screens(mtm)
+        .into_iter()
+        .find(|screen| screen_display_id(screen) == Some(requested))
+}
+
+fn screen_corner_radius(screen: &NSScreen) -> f64 {
+    // Private NSScreen keys used by the system screenshot UI. Missing or
+    // square displays return 0, which keeps the overlay rectangular.
+    for key in ["_displayCornerRadius", "_cornerRadius"] {
+        let name = NSString::from_str(key);
+        // SAFETY: `valueForKey:` returns a retained object or nil. The keys are
+        // documented NSScreen internals that yield NSNumber when present.
+        let value: Option<Retained<AnyObject>> = unsafe { msg_send![screen, valueForKey: &*name] };
+        let Some(value) = value else {
+            continue;
+        };
+        let Ok(number) = value.downcast::<NSNumber>() else {
+            continue;
+        };
+        let radius = clamp_display_corner_radius(number.doubleValue());
+        if radius > 0.0 {
+            return radius;
+        }
+    }
+    0.0
+}
+
+fn clip_content_to_display_corners(native_window: &NSWindow, radius: f64) {
+    let Some(view) = native_window.contentView() else {
+        return;
+    };
+    view.setWantsLayer(true);
+    // SAFETY: `layer` is the view's CALayer after `setWantsLayer:YES`.
+    // `setCornerRadius:` / `setMasksToBounds:` are CALayer selectors.
+    let layer: Option<Retained<AnyObject>> = unsafe { msg_send![&*view, layer] };
+    let Some(layer) = layer else {
+        return;
+    };
+    let radius = radius.max(0.0);
+    let _: () = unsafe { msg_send![&*layer, setCornerRadius: radius] };
+    let _: () = unsafe { msg_send![&*layer, setMasksToBounds: true] };
+}
+
+/// Visible display corner radius in logical points for the given CGDisplay id.
+///
+/// Runs on the main thread (hopping there when needed) so capture session
+/// setup can stay off the UI thread.
+pub fn display_corner_radius_points(display_id: &str) -> f64 {
+    if MainThreadMarker::new().is_some() {
+        return display_corner_radius_on_main(display_id);
+    }
+    let id = display_id.to_owned();
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    DispatchQueue::main().exec_async(move || {
+        let _ = sender.send(display_corner_radius_on_main(&id));
+    });
+    receiver
+        .recv_timeout(std::time::Duration::from_millis(250))
+        .unwrap_or(0.0)
+}
+
+fn display_corner_radius_on_main(display_id: &str) -> f64 {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return 0.0;
+    };
+    screen_for_display_id(mtm, display_id)
+        .map(|screen| screen_corner_radius(&screen))
+        .unwrap_or(0.0)
+}
+
 /// Installs the capture overlay's native cursor tracker during app startup.
 ///
 /// The overlay is created hidden and reused for every capture. Installing its
 /// tracking areas here keeps the first capture on the same path as later ones,
 /// instead of doing one-time AppKit setup while the overlay is being focused.
 pub fn configure_capture_overlay(window: &WebviewWindow) -> Result<(), &'static str> {
-    native_window(window)?.setAcceptsMouseMovedEvents(true);
+    let native = native_window(window)?;
+    elevate_fullscreen_capture_window(native);
     set_tracked_cursor(window, CursorMode::Arrow, CursorSurface::CaptureOverlay)
 }
 
@@ -628,15 +746,34 @@ pub fn configure_capture_overlay(window: &WebviewWindow) -> Result<(), &'static 
 pub fn configure_capture_selector(window: &WebviewWindow) -> Result<(), &'static str> {
     let _main_thread =
         MainThreadMarker::new().ok_or("capture selector setup must run on the main thread")?;
-    let native_window = native_window(window)?;
-    native_window.setLevel(NSStatusWindowLevel + 1);
-    native_window.setAcceptsMouseMovedEvents(true);
+    elevate_fullscreen_capture_window(native_window(window)?);
+    Ok(())
+}
+
+/// Re-asserts the menu-bar-covering window level after Tauri show/focus.
+pub fn elevate_capture_surface(window: &WebviewWindow) -> Result<(), &'static str> {
+    elevate_fullscreen_capture_window(native_window(window)?);
+    Ok(())
+}
+
+/// Pins a fullscreen capture surface to the physical display, including the
+/// menu bar, and clips its content to the display's rounded corners.
+pub fn cover_display(window: &WebviewWindow, display_id: &str) -> Result<(), &'static str> {
+    let mtm =
+        MainThreadMarker::new().ok_or("fullscreen capture coverage must run on the main thread")?;
+    let native = native_window(window)?;
+    elevate_fullscreen_capture_window(native);
+    if let Some(screen) = screen_for_display_id(mtm, display_id) {
+        native.setFrame_display(screen.frame(), true);
+        clip_content_to_display_corners(native, screen_corner_radius(&screen));
+    }
     Ok(())
 }
 
 /// Makes a reused capture overlay transparent before bringing it onscreen.
 pub fn prepare_capture_overlay(window: &WebviewWindow) -> Result<(), &'static str> {
     let native_window = native_window(window)?;
+    elevate_fullscreen_capture_window(native_window);
     prepare_window_reveal(window)?;
     set_cursor_rects_enabled(native_window, true);
     set_tracked_cursor(window, CursorMode::WebView, CursorSurface::CaptureOverlay)?;
@@ -1217,15 +1354,16 @@ fn native_window(window: &WebviewWindow) -> Result<&NSWindow, &'static str> {
 mod tests {
     use std::sync::atomic::Ordering;
 
-    use objc2_app_kit::{NSEventModifierFlags, NSEventType};
-
-    use objc2_app_kit::NSWindowStyleMask;
+    use objc2_app_kit::{
+        NSEventModifierFlags, NSEventType, NSMainMenuWindowLevel, NSWindowStyleMask,
+    };
 
     use super::{
         CAPTURE_OVERLAY_OWNS_CURSOR, CursorMode, CursorSurface, THUMBNAIL_CURSOR_MODE,
-        cursor_mode_is_interactive, cursor_surface_can_apply,
+        capture_surface_collection_behavior, capture_surface_window_level,
+        clamp_display_corner_radius, cursor_mode_is_interactive, cursor_surface_can_apply,
         cursor_surface_can_take_key_window_with_thumbnail_allowed, cursor_surface_uses_key_window,
-        reassert_thumbnail_cursor_after_click, shortcut_modifiers_pressed,
+        parse_display_id, reassert_thumbnail_cursor_after_click, shortcut_modifiers_pressed,
         should_conceal_documents_for_capture_activation, should_release_thumbnail_key_after_event,
         should_reset_cursor_on_exit, style_mask_is_titled_document,
         window_corner_radius_for_major_version,
@@ -1274,6 +1412,34 @@ mod tests {
         assert_eq!(window_corner_radius_for_major_version(15), 10.0);
         assert_eq!(window_corner_radius_for_major_version(26), 25.0);
         assert_eq!(window_corner_radius_for_major_version(27), 25.0);
+    }
+
+    #[test]
+    fn capture_surfaces_sit_above_the_menu_bar() {
+        assert!(capture_surface_window_level() > NSMainMenuWindowLevel);
+    }
+
+    #[test]
+    fn capture_surfaces_join_spaces_as_fullscreen_auxiliaries() {
+        let behavior = capture_surface_collection_behavior();
+        assert!(behavior.contains(objc2_app_kit::NSWindowCollectionBehavior::CanJoinAllSpaces));
+        assert!(behavior.contains(objc2_app_kit::NSWindowCollectionBehavior::FullScreenAuxiliary));
+    }
+
+    #[test]
+    fn parses_xcap_display_ids() {
+        assert_eq!(parse_display_id("1"), Some(1));
+        assert_eq!(parse_display_id("69733382"), Some(69_733_382));
+        assert_eq!(parse_display_id("display-1"), None);
+    }
+
+    #[test]
+    fn clamps_display_corner_radius_to_half_points() {
+        assert_eq!(clamp_display_corner_radius(-1.0), 0.0);
+        assert_eq!(clamp_display_corner_radius(f64::NAN), 0.0);
+        assert_eq!(clamp_display_corner_radius(38.2), 38.0);
+        assert_eq!(clamp_display_corner_radius(38.6), 38.5);
+        assert_eq!(clamp_display_corner_radius(54.0), 54.0);
     }
 
     #[test]
