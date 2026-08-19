@@ -1,0 +1,118 @@
+name: AWS image
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  image-arm64:
+    name: linux/arm64 image
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64
+          load: true
+          tags: captures:arm64
+          build-args: |
+            RAILWAY_GIT_COMMIT_SHA=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Assert linux/arm64 image
+        run: |
+          os="$(docker image inspect captures:arm64 --format '{{.Os}}')"
+          arch="$(docker image inspect captures:arm64 --format '{{.Architecture}}')"
+          test "$os" = "linux"
+          test "$arch" = "arm64"
+          machine="$(docker run --rm --platform linux/arm64 --entrypoint uname captures:arm64 -m)"
+          test "$machine" = "aarch64"
+      - name: Verify the production health endpoint
+        run: |
+          container_id="$(docker run --detach --platform linux/arm64 --publish 127.0.0.1:3000:3000 captures:arm64)"
+          trap 'docker rm --force "$container_id" >/dev/null' EXIT
+
+          for _ in {1..30}; do
+            if response="$(curl --fail --silent --show-error http://127.0.0.1:3000/api/health)"; then
+              test "$response" = '{"status":"ok"}'
+              exit 0
+            fi
+            sleep 1
+          done
+
+          docker logs "$container_id"
+          exit 1
+
+  publish-ecr:
+    name: Publish immutable ECR image
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [image-arm64]
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      image: ${{ steps.record.outputs.image }}
+      digest: ${{ steps.record.outputs.digest }}
+    env:
+      AWS_ACCOUNT_ID: "395451633568"
+      AWS_REGION: us-east-1
+      ECR_REGISTRY: 395451633568.dkr.ecr.us-east-1.amazonaws.com
+      ECR_REPOSITORY: production/captures
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.2.3
+        with:
+          role-to-assume: arn:aws:iam::395451633568:role/production-captures-ecr-publisher
+          role-session-name: captures-ecr-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+          allowed-account-ids: ${{ env.AWS_ACCOUNT_ID }}
+      - name: Check for an existing immutable tag
+        id: existing
+        run: |
+          digest="$(aws ecr describe-images \
+            --repository-name "$ECR_REPOSITORY" \
+            --image-ids "imageTag=$GITHUB_SHA" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text 2>/dev/null || true)"
+          if [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            printf 'exists=true\n' >> "$GITHUB_OUTPUT"
+            printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          else
+            printf 'exists=false\n' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Log in to Amazon ECR
+        if: steps.existing.outputs.exists != 'true'
+        uses: aws-actions/amazon-ecr-login@v2.1.6
+      - if: steps.existing.outputs.exists != 'true'
+        uses: docker/setup-buildx-action@v3
+      - name: Build and push linux/arm64 image
+        id: build
+        if: steps.existing.outputs.exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64
+          push: true
+          tags: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+          build-args: |
+            RAILWAY_GIT_COMMIT_SHA=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Record immutable image
+        id: record
+        env:
+          DIGEST: ${{ steps.build.outputs.digest || steps.existing.outputs.digest }}
+        run: |
+          image="${ECR_REGISTRY}/${ECR_REPOSITORY}:${GITHUB_SHA}"
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'image=%s\n' "$image" >> "$GITHUB_OUTPUT"
+          printf 'digest=%s\n' "$DIGEST" >> "$GITHUB_OUTPUT"
+          printf '### Published image\n\n`%s@%s`\n' "$image" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"
