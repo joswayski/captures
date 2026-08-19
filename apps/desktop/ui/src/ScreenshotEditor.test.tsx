@@ -1508,14 +1508,24 @@ describe("ScreenshotEditor", () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");
 
-    // Canvas background lives in the header toolbar (document chrome, not layers).
+    // Canvas background lives behind a compact header button so the swatches
+    // do not occupy the toolbar until the picker is opened.
     const canvasToolbar = screen.getByRole("group", { name: "Canvas" });
-    const solidBackground = within(canvasToolbar).getByRole("checkbox", {
+    const backgroundTrigger = within(canvasToolbar).getByRole("button", {
+      name: /Background color/,
+    });
+    expect(backgroundTrigger).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("dialog", { name: "Canvas background" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Canvas background:/)).not.toBeInTheDocument();
+
+    fireEvent.click(backgroundTrigger);
+    const picker = await screen.findByRole("dialog", { name: "Canvas background" });
+    expect(backgroundTrigger).toHaveAttribute("aria-expanded", "true");
+    const solidBackground = within(picker).getByRole("checkbox", {
       name: "Solid background",
     });
     expect(solidBackground).toBeChecked();
-    // Compact ColorField keeps legend visually hidden but still exposes swatches.
-    expect(within(canvasToolbar).getByLabelText("Canvas background: #ffffff")).toBeInTheDocument();
+    expect(within(picker).getByLabelText("Canvas background: #ffffff")).toBeInTheDocument();
 
     const surface = screen
       .getByLabelText("Screenshot editing canvas")
@@ -1524,13 +1534,45 @@ describe("ScreenshotEditor", () => {
 
     fireEvent.click(solidBackground);
     expect(solidBackground).not.toBeChecked();
-    expect(within(canvasToolbar).queryByLabelText(/Canvas background:/)).not.toBeInTheDocument();
     expect(surface).toHaveClass("transparent");
+    expect(backgroundTrigger).toHaveAccessibleName("Background color: transparent");
 
     fireEvent.click(solidBackground);
     expect(solidBackground).toBeChecked();
-    expect(within(canvasToolbar).getByLabelText("Canvas background: #ffffff")).toBeInTheDocument();
+    expect(within(picker).getByLabelText("Canvas background: #ffffff")).toBeInTheDocument();
     expect(surface).not.toHaveClass("transparent");
+    expect(backgroundTrigger).toHaveAccessibleName(/Background color: #f7f7f5/i);
+  });
+
+  it("picks a canvas background color from the compact picker popover", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Width");
+
+    const canvasToolbar = screen.getByRole("group", { name: "Canvas" });
+    fireEvent.click(within(canvasToolbar).getByRole("button", { name: /Background color/ }));
+    const picker = await screen.findByRole("dialog", { name: "Canvas background" });
+    const solidBackground = within(picker).getByRole("checkbox", {
+      name: "Solid background",
+    });
+
+    fireEvent.click(solidBackground);
+    expect(solidBackground).not.toBeChecked();
+
+    fireEvent.click(within(picker).getByLabelText("Canvas background: #ff3b5c"));
+
+    expect(solidBackground).toBeChecked();
+    const surface = screen
+      .getByLabelText("Screenshot editing canvas")
+      .querySelector(".screenshot-canvas-surface");
+    expect(surface).not.toHaveClass("transparent");
+    expect(surface).toHaveStyle({ backgroundColor: "#ff3b5c" });
+    expect(within(canvasToolbar).getByRole("button", { name: /Background color/ }))
+      .toHaveAccessibleName("Background color: #ff3b5c");
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Canvas background" })).not.toBeInTheDocument();
+    });
   });
 
   it("offers Trim edges in the header canvas toolbar and disables it when already tight", async () => {
@@ -1540,6 +1582,7 @@ describe("ScreenshotEditor", () => {
 
     // Fresh capture fills the canvas — nothing to trim.
     const canvasTrim = within(canvasToolbar).getByRole("button", { name: "Trim edges" });
+    expect(canvasTrim.querySelector("svg")).not.toBeNull();
     expect(canvasTrim).toBeDisabled();
 
     // Manual canvas growth creates empty margin; trim should re-enable.

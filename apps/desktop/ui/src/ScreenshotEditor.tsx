@@ -384,6 +384,9 @@ const COLOR_SWATCHES = [
   "#ffffff",
 ];
 
+/** Solid canvas fill restored when "Solid background" is turned back on. */
+const DEFAULT_CANVAS_BACKGROUND = "#f7f7f5";
+
 /**
  * Shared compress presets.
  * - JPEG / WebP: encode quality (lossy)
@@ -4616,9 +4619,10 @@ export function ScreenshotEditor() {
                 ))}
               />
             </label>
+            <span className="screenshot-canvas-toolbar-split" aria-hidden="true" />
             <button
               type="button"
-              className="screenshot-canvas-trim"
+              className="screenshot-canvas-tool screenshot-canvas-trim"
               disabled={!canTrimEdges}
               title="Shrink the canvas to the edges of visible layers"
               onClick={applyTrimEdges}
@@ -4627,27 +4631,13 @@ export function ScreenshotEditor() {
               onFocus={() => setTrimEdgesHover(true)}
               onBlur={() => setTrimEdgesHover(false)}
             >
+              <EditorIcon name="trim" />
               Trim edges
             </button>
-            <label className="screenshot-check-row screenshot-canvas-bg-toggle">
-              <input
-                type="checkbox"
-                checked={editorDocument.background !== null}
-                onChange={(event) => commitDocument({
-                  ...editorDocument,
-                  background: event.target.checked ? "#f7f7f5" : null,
-                })}
-              />
-              Solid background
-            </label>
-            {editorDocument.background !== null && (
-              <ColorField
-                label="Canvas background"
-                value={editorDocument.background}
-                onChange={(background) => commitDocument({ ...editorDocument, background })}
-                compact
-              />
-            )}
+            <CanvasBackgroundPicker
+              value={editorDocument.background}
+              onChange={(background) => commitDocument({ ...editorDocument, background })}
+            />
           </div>
         </div>
         <div className="screenshot-editor-history-actions">
@@ -6537,6 +6527,155 @@ function TextStylePicker({
   );
 }
 
+function CanvasBackgroundPicker({
+  value,
+  onChange,
+}: {
+  value: string | null;
+  onChange: (value: string | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [lastSolid, setLastSolid] = useState(value ?? DEFAULT_CANVAS_BACKGROUND);
+  const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 });
+  const pickerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const solid = value !== null;
+  if (value !== null && value !== lastSolid) {
+    setLastSolid(value);
+  }
+  const swatchValue = value ?? lastSolid;
+
+  const positionMenu = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const triggerBounds = trigger.getBoundingClientRect();
+    const menuBounds = menuRef.current?.getBoundingClientRect();
+    const menuHeight = menuBounds?.height ?? 92;
+    const menuWidth = menuBounds?.width ?? 248;
+    const gap = 6;
+    const viewportPadding = 8;
+    const roomBelow = window.innerHeight - triggerBounds.bottom - viewportPadding;
+    const roomAbove = triggerBounds.top - viewportPadding;
+    const openAbove = roomBelow < menuHeight && roomAbove > roomBelow;
+    const requestedTop = openAbove
+      ? triggerBounds.top - menuHeight - gap
+      : triggerBounds.bottom + gap;
+    setMenuPosition({
+      top: Math.min(
+        Math.max(viewportPadding, requestedTop),
+        Math.max(viewportPadding, window.innerHeight - menuHeight - viewportPadding),
+      ),
+      left: Math.min(
+        Math.max(viewportPadding, triggerBounds.left),
+        Math.max(viewportPadding, window.innerWidth - menuWidth - viewportPadding),
+      ),
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return undefined;
+    positionMenu();
+    window.addEventListener("resize", positionMenu);
+    document.addEventListener("scroll", positionMenu, true);
+    return () => {
+      window.removeEventListener("resize", positionMenu);
+      document.removeEventListener("scroll", positionMenu, true);
+    };
+  }, [open, positionMenu]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const closeOutside = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (
+        !pickerRef.current?.contains(target)
+        && !menuRef.current?.contains(target)
+      ) {
+        setOpen(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      setOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  return (
+    <>
+      <div ref={pickerRef} className="screenshot-canvas-bg">
+        <button
+          ref={triggerRef}
+          type="button"
+          className={[
+            "screenshot-canvas-tool",
+            "screenshot-canvas-bg-trigger",
+            open ? "is-open" : "",
+          ].filter(Boolean).join(" ")}
+          aria-label={solid ? `Background color: ${value}` : "Background color: transparent"}
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          title="Canvas background color"
+          onClick={() => {
+            if (open) setOpen(false);
+            else {
+              positionMenu();
+              setOpen(true);
+            }
+          }}
+        >
+          <span
+            className={[
+              "screenshot-canvas-bg-chip",
+              solid ? "" : "is-transparent",
+            ].filter(Boolean).join(" ")}
+            style={solid ? { background: value } : undefined}
+            aria-hidden="true"
+          />
+          Background color
+          <EditorIcon name="chevron-down" />
+        </button>
+      </div>
+      {open && createPortal(
+        <div
+          ref={menuRef}
+          className="screenshot-canvas-bg-menu"
+          role="dialog"
+          aria-label="Canvas background"
+          style={menuPosition}
+        >
+          <label className="screenshot-check-row screenshot-canvas-bg-toggle">
+            <input
+              type="checkbox"
+              checked={solid}
+              onChange={(event) => onChange(event.target.checked ? lastSolid : null)}
+            />
+            Solid background
+          </label>
+          <ColorField
+            label="Canvas background"
+            value={swatchValue}
+            onChange={(background) => {
+              setLastSolid(background);
+              onChange(background);
+            }}
+            compact
+          />
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
 function ColorField({
   label,
   value,
@@ -6546,7 +6685,7 @@ function ColorField({
   label: string;
   value: string;
   onChange: (value: string) => void;
-  /** Header strip: swatches only, legend is for assistive tech. */
+  /** Swatches only; legend is for assistive tech. */
   compact?: boolean;
 }) {
   return (
@@ -6707,6 +6846,14 @@ function toolLabel(tool: ScreenshotTool): string {
 function EditorIcon({ name }: { name: string }) {
   if (name === "select") return <svg viewBox="0 0 24 24"><path d="m5 3 13 9-7 2-3 7Z" /></svg>;
   if (name === "crop") return <svg viewBox="0 0 24 24"><path d="M7 3v14a2 2 0 0 0 2 2h12M3 7h14a2 2 0 0 1 2 2v12" /></svg>;
+  if (name === "trim") {
+    return (
+      <svg viewBox="0 0 24 24">
+        <rect x="8" y="8" width="8" height="8" rx="1.2" />
+        <path d="M8 4H5a1 1 0 0 0-1 1v3M16 4h3a1 1 0 0 1 1 1v3M4 16v3a1 1 0 0 0 1 1h3M20 16v3a1 1 0 0 1-1 1h-3" />
+      </svg>
+    );
+  }
   if (name === "text") return <svg viewBox="0 0 24 24"><path d="M5 5h14M12 5v14M8 19h8" /></svg>;
   if (name === "rectangle") return <svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2" /></svg>;
   if (name === "ellipse") return <svg viewBox="0 0 24 24"><ellipse cx="12" cy="12" rx="8" ry="6.5" /></svg>;
