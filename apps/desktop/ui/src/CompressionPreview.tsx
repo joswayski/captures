@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 
 import { formatFileSize } from "./lib/format";
+import { NumberInput } from "./NumberInput";
+import { RangeSlider } from "./RangeSlider";
+
+const MIN_PNG_PREVIEW_COLORS = 8;
+const MAX_PNG_PREVIEW_COLORS = 256;
 
 export type CompressionPreviewProps = {
   open: boolean;
@@ -12,6 +17,8 @@ export type CompressionPreviewProps = {
   qualityLabel: string;
   pending: boolean;
   error: string;
+  pngColors?: number | null;
+  onPngColorsChange?: (value: number) => void;
   onClose: () => void;
 };
 
@@ -29,6 +36,8 @@ export function CompressionPreview({
   qualityLabel,
   pending,
   error,
+  pngColors = null,
+  onPngColorsChange,
   onClose,
 }: CompressionPreviewProps) {
   const titleId = useId();
@@ -163,6 +172,31 @@ export function CompressionPreview({
             </strong>
           </span>
         </div>
+
+        {typeof pngColors === "number" && onPngColorsChange && (
+          <div className="compression-preview-colors">
+            <span>Colors</span>
+            <NumberInput
+              min={MIN_PNG_PREVIEW_COLORS}
+              max={MAX_PNG_PREVIEW_COLORS}
+              value={pngColors}
+              ariaLabel="PNG palette colors"
+              onChange={(value) => onPngColorsChange(
+                Math.min(MAX_PNG_PREVIEW_COLORS, Math.max(MIN_PNG_PREVIEW_COLORS, Math.round(value))),
+              )}
+            />
+            <RangeSlider
+              ariaLabel="PNG palette colors"
+              min={MIN_PNG_PREVIEW_COLORS}
+              max={MAX_PNG_PREVIEW_COLORS}
+              value={pngColors}
+              valueText={`${pngColors} colors`}
+              onChange={(value) => onPngColorsChange(
+                Math.min(MAX_PNG_PREVIEW_COLORS, Math.max(MIN_PNG_PREVIEW_COLORS, Math.round(value))),
+              )}
+            />
+          </div>
+        )}
 
         <div
           ref={frameRef}

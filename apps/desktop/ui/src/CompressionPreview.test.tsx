@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import { vi } from "vitest";
 
 import { CompressionPreview } from "./CompressionPreview";
 
@@ -26,6 +27,31 @@ describe("CompressionPreview", () => {
     expect(screen.getByAltText("After compression")).toHaveAttribute("src", "blob:after");
     expect(screen.getByRole("slider", { name: "Before and after comparison" }))
       .toHaveValue("50");
+  });
+
+  it("lets PNG color count be changed from the preview", () => {
+    const onPngColorsChange = vi.fn();
+    render(
+      <CompressionPreview
+        open
+        beforeUrl="blob:before"
+        afterUrl="blob:after"
+        beforeBytes={1_700_000}
+        afterBytes={330_000}
+        formatLabel="PNG"
+        qualityLabel="128 colors"
+        pending={false}
+        error=""
+        pngColors={128}
+        onPngColorsChange={onPngColorsChange}
+        onClose={() => undefined}
+      />,
+    );
+
+    const colors = screen.getByRole("spinbutton", { name: "PNG palette colors" });
+    expect(colors).toHaveValue(128);
+    fireEvent.change(colors, { target: { value: "64" } });
+    expect(onPngColorsChange).toHaveBeenCalledWith(64);
   });
 
   it("closes from the dismiss control", () => {

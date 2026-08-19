@@ -3604,6 +3604,17 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 .screenshot-custom-dimensions > div > button svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .screenshot-quality-mode { width: 188px; }
 .screenshot-quality { width: 148px; }
+.screenshot-png-colors { width: 280px; }
+.screenshot-png-colors-control {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+.screenshot-png-colors-control .number-input { width: 72px; min-width: 72px; height: 36px; }
+.screenshot-png-colors .range-slider { gap: 0; }
+.screenshot-png-colors .range-slider:not(.has-marks) { grid-template-rows: 14px 20px; }
+.screenshot-png-colors .range-slider-value output { color: var(--theme-accent-text); }
 .screenshot-quality-packing { width: 268px; }
 .screenshot-quality-format-hint {
   margin: 0;
@@ -3715,6 +3726,18 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   font-variant-numeric: tabular-nums;
 }
 .compression-preview-stats strong.is-smaller { color: #6dcea0; }
+.compression-preview-colors {
+  display: grid;
+  grid-template-columns: auto 72px minmax(120px, 1fr);
+  align-items: center;
+  gap: 10px 12px;
+  color: var(--editor-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+.compression-preview-colors .number-input { width: 72px; min-width: 72px; height: 34px; }
+.compression-preview-colors .range-slider { min-width: 0; }
+.compression-preview-colors .range-slider-value output { color: var(--theme-accent-text); }
 .compression-preview-frame {
   position: relative;
   overflow: hidden;
@@ -3899,6 +3922,7 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   .screenshot-export-actions { grid-row: 1; grid-column: 3; }
   .screenshot-export-status { grid-row: 2; grid-column: 1 / -1; min-height: 20px; text-align: left; }
   .screenshot-quality { width: 136px; }
+  .screenshot-png-colors { width: 220px; }
   .screenshot-quality-packing { width: 220px; }
   .screenshot-maximum-size { width: 124px; }
   .screenshot-export-settings { gap: 8px 10px; }

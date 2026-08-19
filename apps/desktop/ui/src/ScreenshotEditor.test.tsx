@@ -173,13 +173,12 @@ describe("ScreenshotEditor", () => {
     vi.mocked(invoke).mockImplementation(async (command, args) => {
       if (command === "get_artifact") return artifact;
       if (command === "estimate_screenshot_export") {
-        const quality = Number((args as { jpegQuality?: number } | undefined)?.jpegQuality ?? 92);
-        // Lower quality notches map to fewer PNG colors → smaller estimate.
-        return Math.max(8_000, Math.round(120_000 * (quality / 100)));
+        const colors = Number((args as { pngMaxColors?: number } | undefined)?.pngMaxColors ?? 128);
+        return Math.max(8_000, Math.round(1_200 * colors));
       }
       if (command === "preview_screenshot_export") {
-        const quality = Number((args as { jpegQuality?: number } | undefined)?.jpegQuality ?? 92);
-        const size = Math.max(8_000, Math.round(120_000 * (quality / 100)));
+        const colors = Number((args as { pngMaxColors?: number } | undefined)?.pngMaxColors ?? 128);
+        const size = Math.max(8_000, Math.round(1_200 * colors));
         return {
           bytes: Array.from({ length: Math.min(size, 256) }, (_, index) => index % 256),
           sizeBytes: size,
@@ -1955,7 +1954,7 @@ describe("ScreenshotEditor", () => {
       screen.getByText("Keeps original quality as PNG and replaces the original."),
     ).toBeInTheDocument();
 
-    // Compress keeps PNG and shows color-reduction quality presets.
+    // Compress keeps PNG and shows a color-count slider.
     fireEvent.click(saveQuality);
     const compressOption = screen.getByRole("option", { name: /Compress/ });
     expect(compressOption).toHaveTextContent(
@@ -1967,13 +1966,13 @@ describe("ScreenshotEditor", () => {
     await waitFor(() => {
       expect(format).toHaveTextContent("PNG");
     });
-    const pngQuality = screen.getByRole("combobox", { name: "Compression quality" });
-    expect(pngQuality).toHaveTextContent("High");
-    fireEvent.click(pngQuality);
-    expect(screen.getByRole("option", { name: /Tiny/ })).toBeInTheDocument();
-    expect(screen.getByText(/About 32 colors/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("option", { name: /Tiny/ }));
-    expect(pngQuality).toHaveTextContent("Tiny");
+    expect(screen.queryByRole("combobox", { name: "Compression quality" }))
+      .not.toBeInTheDocument();
+    const pngColors = screen.getByRole("spinbutton", { name: "PNG palette colors" });
+    expect(pngColors).toHaveValue(128);
+    fireEvent.change(pngColors, { target: { value: "32" } });
+    expect(pngColors).toHaveValue(32);
+    expect(screen.getByRole("slider", { name: "PNG palette colors" })).toHaveValue("32");
     expect(screen.queryByRole("spinbutton", { name: "Maximum file size" }))
       .not.toBeInTheDocument();
     expect(
@@ -1986,7 +1985,7 @@ describe("ScreenshotEditor", () => {
     expect(screen.getByRole("combobox", { name: "Save quality" }))
       .toHaveTextContent("Compress");
     const quality = screen.getByRole("combobox", { name: "Compression quality" });
-    expect(quality).toHaveTextContent("Tiny");
+    expect(quality).toHaveTextContent("High");
     fireEvent.click(quality);
     fireEvent.click(screen.getByRole("option", { name: /Balanced/ }));
     expect(quality).toHaveTextContent("Balanced");
@@ -2153,7 +2152,7 @@ describe("ScreenshotEditor", () => {
       // PNG compress estimates go through Rust (color quantization).
       expect(screen.getByRole("combobox", { name: "Format" })).toHaveTextContent("PNG");
       await waitFor(() => {
-        expect(screen.getByRole("combobox", { name: "Compression quality" })).toBeInTheDocument();
+        expect(screen.getByRole("spinbutton", { name: "PNG palette colors" })).toBeInTheDocument();
       });
 
       const estimate = () => screen.getByTitle(
