@@ -108,6 +108,8 @@ container. After a commit reaches `main`, it uses GitHub OIDC to publish that
 same application shape to the private `production/captures` ECR repository.
 Images use the immutable application Git SHA as the tag; Kubernetes deployments
 must also pin the ECR digest and must not use `latest` or a Docker-login Secret.
+The short-lived GitHub token used to fetch homepage history is mounted only as a
+BuildKit secret and is not stored in the image or its build arguments.
 
 Railway remains the live origin until the separately reviewed infrastructure
 cutover has a Ready k3s pod and the Cloudflare Tunnel route is switched.

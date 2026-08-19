@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1
+
 # Node server for the Captures website (TanStack Start + /api/*).
 # Build from the monorepo root:
 #   docker build -t captures-web .
@@ -19,7 +21,10 @@ COPY shared shared
 # Railway provides a different commit SHA for every GitHub deployment. Referencing
 # it here invalidates this layer so the homepage history fetch is not reused.
 ARG RAILWAY_GIT_COMMIT_SHA=local
-RUN RAILWAY_GIT_COMMIT_SHA="$RAILWAY_GIT_COMMIT_SHA" npm run build:web
+RUN --mount=type=secret,id=github_token \
+    GITHUB_TOKEN="$(cat /run/secrets/github_token 2>/dev/null || true)" \
+    RAILWAY_GIT_COMMIT_SHA="$RAILWAY_GIT_COMMIT_SHA" \
+    npm run build:web
 
 FROM node:24-alpine
 

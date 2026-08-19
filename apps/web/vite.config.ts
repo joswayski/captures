@@ -9,6 +9,17 @@ const CHANGE_COUNT = 10;
 /** Fetch extra commits so Dependabot merges can be dropped without under-filling the list. */
 const FETCH_COUNT = 30;
 
+function githubRequestHeaders(): Record<string, string> {
+  const token = process.env.GITHUB_TOKEN?.trim();
+
+  return {
+    Accept: "application/vnd.github+json",
+    "User-Agent": "captures-web-build",
+    "X-GitHub-Api-Version": "2022-11-28",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
 type GitHubCommit = {
   sha: string;
   html_url: string;
@@ -73,11 +84,7 @@ async function fetchLatestChanges(): Promise<LatestChange[]> {
   url.searchParams.set("per_page", String(FETCH_COUNT));
 
   const response = await fetch(url, {
-    headers: {
-      Accept: "application/vnd.github+json",
-      "User-Agent": "captures-web-build",
-      "X-GitHub-Api-Version": "2022-11-28",
-    },
+    headers: githubRequestHeaders(),
   });
 
   if (!response.ok) {

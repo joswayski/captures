@@ -108,6 +108,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
 
   rust:
     name: Rust checks (${{ matrix.os }})
