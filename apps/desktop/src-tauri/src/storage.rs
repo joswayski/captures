@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs::{self, File},
     io::Write,
     path::{Component, Path, PathBuf},
@@ -575,9 +576,9 @@ pub fn encode_png(image: &RgbaImage) -> Result<Vec<u8>, AppError> {
 /// - Preserve (`compact = false`): fast lossless packing, identical pixels.
 /// - Compact without a color budget: stronger lossless packing only.
 /// - Compact with `max_colors`: lossy **color quantization** (fewer colors), then
-///   strong packing — the same class of reduction tools like compresspng.com use.
-///   Fully opaque images become indexed PNGs; images with alpha keep the original
-///   alpha channel on remapped RGB.
+///   an indexed PNG (1 byte/pixel) with optional `tRNS` for alpha. Window
+///   shadows and transparent canvas padding stay palettized instead of falling
+///   back to 32-bit RGBA.
 pub fn encode_png_export(
     image: &RgbaImage,
     compact: bool,
@@ -614,56 +615,253 @@ fn encode_png_quantized(image: &RgbaImage, max_colors: u16) -> Result<Vec<u8>, A
         return encode_png_with_quality(image, CompressionType::Best, FilterType::Adaptive);
     }
 
+    let colors = max_colors.clamp(2, 256);
+    let (palette, indices) = match index_image(image, colors) {
+        Ok(indexed) => indexed,
+        Err(_) => {
+            return encode_png_with_quality(image, CompressionType::Best, FilterType::Adaptive);
+        }
+    };
+    if palette.is_empty() || indices.len() != (width as usize) * (height as usize) {
+        return encode_png_with_quality(image, CompressionType::Best, FilterType::Adaptive);
+    }
+    encode_indexed_png(width, height, &palette, &indices)
+}
+
+fn index_image(image: &RgbaImage, max_colors: u16) -> Result<(Vec<[u8; 4]>, Vec<u8>), AppError> {
+    if let Some(exact) = exact_indexed_rgba(image, max_colors) {
+        return Ok(exact);
+    }
+
     let has_transparency = image.pixels().any(|pixel| pixel[3] < 255);
-    let rgb = RgbImage::from_fn(width, height, |x, y| {
+    if !has_transparency {
+        return quantette_rgb_indexed(image, max_colors);
+    }
+    let has_partial_alpha = image.pixels().any(|pixel| pixel[3] > 0 && pixel[3] < 255);
+    if has_partial_alpha {
+        Ok(median_cut_rgba(image, max_colors))
+    } else {
+        quantette_rgb_binary_alpha(image, max_colors)
+    }
+}
+
+fn exact_indexed_rgba(image: &RgbaImage, max_colors: u16) -> Option<(Vec<[u8; 4]>, Vec<u8>)> {
+    let limit = usize::from(max_colors);
+    let mut map = HashMap::new();
+    let mut palette = Vec::new();
+    let mut indices = Vec::with_capacity(rgba_pixel_count(image));
+    for pixel in image.pixels() {
+        if let Some(&index) = map.get(&pixel.0) {
+            indices.push(index);
+            continue;
+        }
+        if palette.len() >= limit {
+            return None;
+        }
+        let index = u8::try_from(palette.len()).ok()?;
+        map.insert(pixel.0, index);
+        palette.push(pixel.0);
+        indices.push(index);
+    }
+    Some((palette, indices))
+}
+
+fn quantette_rgb_indexed(
+    image: &RgbaImage,
+    max_colors: u16,
+) -> Result<(Vec<[u8; 4]>, Vec<u8>), AppError> {
+    let indexed = quantette_rgb(image, max_colors)?;
+    let palette = indexed
+        .palette()
+        .iter()
+        .map(|color| [color.red, color.green, color.blue, 255])
+        .collect();
+    Ok((palette, indexed.indices().to_vec()))
+}
+
+fn quantette_rgb_binary_alpha(
+    image: &RgbaImage,
+    max_colors: u16,
+) -> Result<(Vec<[u8; 4]>, Vec<u8>), AppError> {
+    let budget = max_colors.saturating_sub(1).clamp(2, 255);
+    let indexed = quantette_rgb(image, budget)?;
+    let mut palette = Vec::with_capacity(indexed.palette().len() + 1);
+    palette.push([0, 0, 0, 0]);
+    palette.extend(
+        indexed
+            .palette()
+            .iter()
+            .map(|color| [color.red, color.green, color.blue, 255]),
+    );
+    let mut indices = Vec::with_capacity(rgba_pixel_count(image));
+    for (offset, pixel) in image.pixels().enumerate() {
+        if pixel[3] == 0 {
+            indices.push(0);
+        } else {
+            indices.push(indexed.indices()[offset].saturating_add(1));
+        }
+    }
+    Ok((palette, indices))
+}
+
+fn quantette_rgb(
+    image: &RgbaImage,
+    max_colors: u16,
+) -> Result<quantette::IndexedImage<quantette::deps::palette::Srgb<u8>>, AppError> {
+    let rgb = RgbImage::from_fn(image.width(), image.height(), |x, y| {
         let pixel = image.get_pixel(x, y);
         image::Rgb([pixel[0], pixel[1], pixel[2]])
     });
-
     let quant_image = ImageBuf::try_from(rgb).map_err(|error| {
         AppError::Image(format!(
             "could not prepare image for PNG compression: {error}"
         ))
     })?;
-    let colors = max_colors.clamp(2, 256);
     let indexed = Pipeline::new()
-        .palette_size(PaletteSize::from_u16_clamped(colors))
+        .palette_size(PaletteSize::from_u16_clamped(max_colors.clamp(2, 256)))
         .parallel(true)
         .input_image(quant_image.as_ref())
         .output_srgb8_indexed_image();
-
     if indexed.palette().is_empty() || indexed.indices().is_empty() {
-        return encode_png_with_quality(image, CompressionType::Best, FilterType::Adaptive);
+        return Err(AppError::Image(
+            "PNG color quantization produced an empty palette".to_owned(),
+        ));
+    }
+    Ok(indexed)
+}
+
+fn rgba_pixel_count(image: &RgbaImage) -> usize {
+    usize::try_from(u64::from(image.width()).saturating_mul(u64::from(image.height())))
+        .unwrap_or(usize::MAX)
+}
+
+fn median_cut_rgba(image: &RgbaImage, max_colors: u16) -> (Vec<[u8; 4]>, Vec<u8>) {
+    let pixel_count = rgba_pixel_count(image);
+    let target = usize::from(max_colors)
+        .clamp(2, 256)
+        .min(pixel_count.max(1));
+    let mut boxes = vec![ColorBox {
+        members: (0..u32::try_from(pixel_count).unwrap_or(u32::MAX)).collect(),
+    }];
+
+    while boxes.len() < target {
+        let Some((split_at, channel)) = next_split(&boxes, image) else {
+            break;
+        };
+        let mut members = std::mem::take(&mut boxes[split_at].members);
+        members.sort_unstable_by_key(|&index| rgba_at(image, index)[channel]);
+        let mid = members.len() / 2;
+        if mid == 0 || mid == members.len() {
+            boxes[split_at].members = members;
+            break;
+        }
+        let right = members.split_off(mid);
+        boxes[split_at].members = members;
+        boxes.push(ColorBox { members: right });
     }
 
-    if has_transparency {
-        let remapped = RgbaImage::from_fn(width, height, |x, y| {
-            let index = usize::from(indexed.indices()[(y * width + x) as usize]);
-            let color = indexed.palette().get(index).copied().unwrap_or_default();
-            let alpha = image.get_pixel(x, y)[3];
-            image::Rgba([color.red, color.green, color.blue, alpha])
-        });
-        return encode_png_with_quality(&remapped, CompressionType::Best, FilterType::Adaptive);
+    let mut palette = Vec::with_capacity(boxes.len());
+    let mut indices = vec![0_u8; pixel_count];
+    for (box_index, color_box) in boxes.iter().enumerate() {
+        let palette_index = u8::try_from(box_index).unwrap_or(255);
+        palette.push(box_centroid(image, &color_box.members));
+        for &member in &color_box.members {
+            if let Some(slot) = indices.get_mut(member as usize) {
+                *slot = palette_index;
+            }
+        }
     }
+    if palette.is_empty() {
+        palette.push([0, 0, 0, 255]);
+    }
+    (palette, indices)
+}
 
-    encode_indexed_png(width, height, indexed.palette(), indexed.indices())
+struct ColorBox {
+    members: Vec<u32>,
+}
+
+fn next_split(boxes: &[ColorBox], image: &RgbaImage) -> Option<(usize, usize)> {
+    let mut best: Option<(usize, usize, u8)> = None;
+    for (box_index, color_box) in boxes.iter().enumerate() {
+        if color_box.members.len() < 2 {
+            continue;
+        }
+        let (min, max) = box_bounds(image, &color_box.members);
+        let channel = (0..4)
+            .max_by_key(|&channel| max[channel].saturating_sub(min[channel]))
+            .unwrap_or(0);
+        let range = max[channel].saturating_sub(min[channel]);
+        if range == 0 {
+            continue;
+        }
+        if best.is_none_or(|(_, _, best_range)| range > best_range) {
+            best = Some((box_index, channel, range));
+        }
+    }
+    best.map(|(box_index, channel, _)| (box_index, channel))
+}
+
+fn box_bounds(image: &RgbaImage, members: &[u32]) -> ([u8; 4], [u8; 4]) {
+    let mut min = [255_u8; 4];
+    let mut max = [0_u8; 4];
+    for &index in members {
+        let pixel = rgba_at(image, index);
+        for channel in 0..4 {
+            min[channel] = min[channel].min(pixel[channel]);
+            max[channel] = max[channel].max(pixel[channel]);
+        }
+    }
+    (min, max)
+}
+
+fn box_centroid(image: &RgbaImage, members: &[u32]) -> [u8; 4] {
+    if members.is_empty() {
+        return [0, 0, 0, 255];
+    }
+    let mut sum = [0_u64; 4];
+    for &index in members {
+        let pixel = rgba_at(image, index);
+        for channel in 0..4 {
+            sum[channel] += u64::from(pixel[channel]);
+        }
+    }
+    let count = u64::try_from(members.len()).unwrap_or(1);
+    [
+        (sum[0] / count) as u8,
+        (sum[1] / count) as u8,
+        (sum[2] / count) as u8,
+        (sum[3] / count) as u8,
+    ]
+}
+
+fn rgba_at(image: &RgbaImage, index: u32) -> [u8; 4] {
+    let width = image.width().max(1);
+    let x = index % width;
+    let y = index / width;
+    image.get_pixel(x, y).0
 }
 
 fn encode_indexed_png(
     width: u32,
     height: u32,
-    palette_colors: &[quantette::deps::palette::Srgb<u8>],
+    palette_colors: &[[u8; 4]],
     indices: &[u8],
 ) -> Result<Vec<u8>, AppError> {
     let mut palette = Vec::with_capacity(palette_colors.len().max(1) * 3);
+    let mut trns = Vec::with_capacity(palette_colors.len());
+    let mut has_transparency = false;
     for color in palette_colors {
-        palette.push(color.red);
-        palette.push(color.green);
-        palette.push(color.blue);
+        palette.push(color[0]);
+        palette.push(color[1]);
+        palette.push(color[2]);
+        trns.push(color[3]);
+        has_transparency |= color[3] < 255;
     }
     // png crate requires a non-empty palette for indexed images.
     if palette.is_empty() {
         palette.extend_from_slice(&[0, 0, 0]);
+        trns.push(255);
     }
 
     let mut bytes = Vec::new();
@@ -674,6 +872,9 @@ fn encode_indexed_png(
         encoder.set_compression(png::Compression::Best);
         encoder.set_filter(png::FilterType::Paeth);
         encoder.set_palette(palette);
+        if has_transparency {
+            encoder.set_trns(trns);
+        }
         let mut writer = encoder
             .write_header()
             .map_err(|error| AppError::Image(error.to_string()))?;
@@ -777,9 +978,9 @@ mod tests {
     use super::{
         DRAG_EXPORT_DIRECTORY, DRAG_ICON_FILE, DRAG_ICON_HEIGHT, DRAG_ICON_WIDTH,
         HISTORY_IMAGE_FILE, HISTORY_PREVIEW_FILE, clear_drag_exports_in, encode_drag_icon_png,
-        encode_png, encode_preview_png, encode_thumbnail_png, load_capture_history_from,
-        prepare_artifact_drag_in, recording_destination_path, recording_destination_path_in,
-        recording_replacement_destination_path_in,
+        encode_png, encode_png_export, encode_preview_png, encode_thumbnail_png,
+        load_capture_history_from, prepare_artifact_drag_in, recording_destination_path,
+        recording_destination_path_in, recording_replacement_destination_path_in,
         recording_replacement_destination_path_in_with_replaceable, save_encoded_capture,
         save_history_capture_in, save_history_entry_in, save_settings_to, unique_path,
     };
@@ -1317,5 +1518,43 @@ mod tests {
         )
         .expect("updated settings should be valid JSON");
         assert!(!saved.auto_copy_to_clipboard);
+    }
+
+    fn png_color_type(bytes: &[u8]) -> png::ColorType {
+        png::Decoder::new(std::io::Cursor::new(bytes))
+            .read_info()
+            .expect("png header")
+            .info()
+            .color_type
+    }
+
+    #[test]
+    fn quantized_png_stays_indexed_when_a_pixel_is_transparent() {
+        let mut image = RgbaImage::from_pixel(64, 48, Rgba([40, 80, 160, 255]));
+        image.put_pixel(0, 0, Rgba([0, 0, 0, 0]));
+        image.put_pixel(8, 8, Rgba([220, 40, 40, 180]));
+        let bytes = encode_png_export(&image, true, Some(32)).expect("quantized");
+        assert_eq!(png_color_type(&bytes), png::ColorType::Indexed);
+        image::load_from_memory(&bytes).expect("indexed PNG with alpha is readable");
+    }
+
+    #[test]
+    fn quantized_png_with_alpha_is_smaller_than_32bit_rgba() {
+        let image = RgbaImage::from_fn(220, 150, |x, y| {
+            let r = (x.wrapping_mul(17).wrapping_add(y.wrapping_mul(3)) % 256) as u8;
+            let g = (x.wrapping_mul(5).wrapping_add(y.wrapping_mul(11)) % 256) as u8;
+            let b = (x.wrapping_mul(y).wrapping_add(40) % 256) as u8;
+            let alpha = if x < 40 { ((x * 255) / 40) as u8 } else { 255 };
+            Rgba([r, g, b, alpha])
+        });
+        let indexed = encode_png_export(&image, true, Some(48)).expect("indexed");
+        let rgba = encode_png_export(&image, true, None).expect("rgba");
+        assert_eq!(png_color_type(&indexed), png::ColorType::Indexed);
+        assert!(
+            indexed.len() < rgba.len(),
+            "indexed+tRNS should beat RGBA packing (indexed={}, rgba={})",
+            indexed.len(),
+            rgba.len()
+        );
     }
 }

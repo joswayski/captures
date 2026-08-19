@@ -144,7 +144,7 @@ import type { CaptureArtifact, EditorLayerPresence } from "./types";
 
 type ExportFormat = "png" | "jpeg" | "webp";
 type ExportSize = "original" | "75" | "50" | "custom";
-/** JPEG quality presets for Compress mode (lossy). PNG/WebP stay lossless with stronger packing. */
+/** JPEG / WebP quality presets for Compress mode. PNG uses a separate color count. */
 type ScreenshotQuality = "55" | "70" | "85" | "92";
 /** Matches the recording editor: preserve by default, compress with presets, or cap size. */
 type ScreenshotQualityMode = "preserve" | "compress" | "maximum";
@@ -388,9 +388,8 @@ const COLOR_SWATCHES = [
 const DEFAULT_CANVAS_BACKGROUND = "#f7f7f5";
 
 /**
- * Shared compress presets.
- * - JPEG / WebP: encode quality (lossy)
- * - PNG: palette size / color quantization
+ * Shared compress presets for JPEG / WebP encode quality.
+ * PNG uses a separate color-count slider instead of these named notches.
  */
 const SCREENSHOT_QUALITY_OPTIONS = [
   {
@@ -398,30 +397,35 @@ const SCREENSHOT_QUALITY_OPTIONS = [
     label: "Tiny",
     jpegDescription: "Smallest file with the most visible compression.",
     webpDescription: "Smallest lossy WebP with the most visible compression.",
-    pngDescription: "About 32 colors — smallest PNG, most posterization.",
   },
   {
     value: "70",
     label: "Smaller",
     jpegDescription: "Very small file with more visible compression.",
     webpDescription: "Very small lossy WebP with more visible compression.",
-    pngDescription: "About 64 colors — strong size reduction with some banding.",
   },
   {
     value: "85",
     label: "Balanced",
     jpegDescription: "Good quality with a meaningfully smaller file.",
     webpDescription: "Good lossy WebP quality with a meaningfully smaller file.",
-    pngDescription: "About 128 colors — solid savings while staying close to the original.",
   },
   {
     value: "92",
     label: "High",
     jpegDescription: "Larger file with the least quality loss.",
     webpDescription: "Larger lossy WebP with the least quality loss.",
-    pngDescription: "Up to 256 colors — lightest quantization, largest compressed PNG.",
   },
 ] as const;
+
+const MIN_PNG_EXPORT_COLORS = 8;
+const MAX_PNG_EXPORT_COLORS = 256;
+const DEFAULT_PNG_EXPORT_COLORS = 128;
+
+function clampPngExportColors(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_PNG_EXPORT_COLORS;
+  return Math.min(MAX_PNG_EXPORT_COLORS, Math.max(MIN_PNG_EXPORT_COLORS, Math.round(value)));
+}
 
 const SCREENSHOT_FILE_SIZE_UNIT_BYTES: Record<ScreenshotFileSizeUnit, number> = {
   kb: 1_000,
@@ -1465,6 +1469,7 @@ export function ScreenshotEditor() {
   const [customExportHeight, setCustomExportHeight] = useState(1_080);
   const [exportAspectLocked, setExportAspectLocked] = useState(true);
   const [jpegQuality, setJpegQuality] = useState<ScreenshotQuality>("92");
+  const [pngColors, setPngColors] = useState(DEFAULT_PNG_EXPORT_COLORS);
   const [qualityMode, setQualityMode] =
     useState<ScreenshotQualityMode>("preserve");
   const [maximumFileSize, setMaximumFileSize] = useState("10");
@@ -4140,6 +4145,9 @@ export function ScreenshotEditor() {
               maxSizeBytes: maxSizeBytes !== null && Number.isFinite(maxSizeBytes)
                 ? Math.round(maxSizeBytes)
                 : null,
+              pngMaxColors: exportFormat === "png" && qualityMode === "compress"
+                ? pngColors
+                : null,
             });
           } else {
             const estimateQuality = exportFormat === "jpeg" && qualityMode !== "preserve"
@@ -4178,6 +4186,7 @@ export function ScreenshotEditor() {
     jpegQuality,
     maximumFileSize,
     maximumFileSizeUnit,
+    pngColors,
     qualityMode,
     renderFlattened,
   ]);
@@ -4251,6 +4260,9 @@ export function ScreenshotEditor() {
           format: exportFormat,
           quality_mode: qualityMode,
           jpeg_quality: saveQuality,
+          png_max_colors: exportFormat === "png" && qualityMode === "compress"
+            ? pngColors
+            : null,
           max_size_bytes: maximumSizeBytes,
           overwrite_source: overwriteSource,
           image_png: imagePng,
@@ -4370,6 +4382,9 @@ export function ScreenshotEditor() {
         maxSizeBytes: maxSizeBytes !== null && Number.isFinite(maxSizeBytes)
           ? Math.round(maxSizeBytes)
           : null,
+        pngMaxColors: exportFormat === "png" && qualityMode === "compress"
+          ? pngColors
+          : null,
       });
       const mime = exportFormat === "jpeg"
         ? "image/jpeg"
@@ -4400,6 +4415,7 @@ export function ScreenshotEditor() {
     jpegQuality,
     maximumFileSize,
     maximumFileSizeUnit,
+    pngColors,
     qualityMode,
     renderFlattened,
     revokeCompressPreviewUrls,
@@ -4425,6 +4441,7 @@ export function ScreenshotEditor() {
     exportFormat,
     jpegQuality,
     loadCompressPreview,
+    pngColors,
     maximumFileSize,
     maximumFileSizeUnit,
     qualityMode,
@@ -4475,7 +4492,9 @@ export function ScreenshotEditor() {
   // Compress quality applies to every format: JPEG/WebP encode quality, PNG colors.
   const showCompressQuality = qualityMode === "compress";
   const compressQualityLabel = qualityMode === "compress"
-    ? (SCREENSHOT_QUALITY_OPTIONS.find((option) => option.value === jpegQuality)?.label ?? "High")
+    ? exportFormat === "png"
+      ? `${pngColors} colors`
+      : (SCREENSHOT_QUALITY_OPTIONS.find((option) => option.value === jpegQuality)?.label ?? "High")
     : qualityMode === "maximum"
       ? "Maximum file size"
       : "";
@@ -6143,7 +6162,29 @@ export function ScreenshotEditor() {
               onChange={(value) => applyQualityMode(value as ScreenshotQualityMode)}
             />
           </div>
-          {showCompressQuality && (
+          {showCompressQuality && exportFormat === "png" && (
+            <div className="screenshot-export-control screenshot-png-colors">
+              <span>Colors</span>
+              <div className="screenshot-png-colors-control">
+                <NumberInput
+                  min={MIN_PNG_EXPORT_COLORS}
+                  max={MAX_PNG_EXPORT_COLORS}
+                  value={pngColors}
+                  ariaLabel="PNG palette colors"
+                  onChange={(value) => setPngColors(clampPngExportColors(value))}
+                />
+                <RangeSlider
+                  ariaLabel="PNG palette colors"
+                  min={MIN_PNG_EXPORT_COLORS}
+                  max={MAX_PNG_EXPORT_COLORS}
+                  value={pngColors}
+                  valueText={`${pngColors} colors`}
+                  onChange={(value) => setPngColors(clampPngExportColors(value))}
+                />
+              </div>
+            </div>
+          )}
+          {showCompressQuality && exportFormat !== "png" && (
             <div className="screenshot-export-control screenshot-quality">
               <span>Quality</span>
               <CustomSelect
@@ -6152,11 +6193,9 @@ export function ScreenshotEditor() {
                 options={SCREENSHOT_QUALITY_OPTIONS.map((option) => ({
                   value: option.value,
                   label: option.label,
-                  description: exportFormat === "png"
-                    ? option.pngDescription
-                    : exportFormat === "webp"
-                      ? option.webpDescription
-                      : option.jpegDescription,
+                  description: exportFormat === "webp"
+                    ? option.webpDescription
+                    : option.jpegDescription,
                 }))}
                 onChange={(value) => setJpegQuality(value as ScreenshotQuality)}
               />
@@ -6375,6 +6414,8 @@ export function ScreenshotEditor() {
           qualityLabel={compressQualityLabel}
           pending={compressPreviewPending}
           error={compressPreviewError}
+          pngColors={exportFormat === "png" && qualityMode === "compress" ? pngColors : null}
+          onPngColorsChange={setPngColors}
           onClose={closeCompressPreview}
         />,
         window.document.body,

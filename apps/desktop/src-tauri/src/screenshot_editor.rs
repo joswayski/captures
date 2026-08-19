@@ -88,6 +88,8 @@ pub struct ScreenshotEditSaveRequest {
     quality_mode: ScreenshotExportQualityMode,
     jpeg_quality: u8,
     #[serde(default)]
+    png_max_colors: Option<u16>,
+    #[serde(default)]
     max_size_bytes: Option<u64>,
     #[serde(default)]
     overwrite_source: bool,
@@ -225,11 +227,18 @@ pub async fn estimate_screenshot_export(
     quality_mode: ScreenshotExportQualityMode,
     jpeg_quality: u8,
     max_size_bytes: Option<u64>,
+    png_max_colors: Option<u16>,
 ) -> CommandResult<u64> {
     tauri::async_runtime::spawn_blocking(move || {
         let image = decode_editor_png(&image_png)?;
-        let output =
-            encode_export_with_limit(&image, format, quality_mode, jpeg_quality, max_size_bytes)?;
+        let output = encode_export_with_limit(
+            &image,
+            format,
+            quality_mode,
+            jpeg_quality,
+            max_size_bytes,
+            png_max_colors,
+        )?;
         Ok::<_, AppError>(u64::try_from(output.len()).unwrap_or(u64::MAX))
     })
     .await
@@ -254,11 +263,18 @@ pub async fn preview_screenshot_export(
     quality_mode: ScreenshotExportQualityMode,
     jpeg_quality: u8,
     max_size_bytes: Option<u64>,
+    png_max_colors: Option<u16>,
 ) -> CommandResult<ScreenshotExportPreview> {
     tauri::async_runtime::spawn_blocking(move || {
         let image = decode_editor_png(&image_png)?;
-        let bytes =
-            encode_export_with_limit(&image, format, quality_mode, jpeg_quality, max_size_bytes)?;
+        let bytes = encode_export_with_limit(
+            &image,
+            format,
+            quality_mode,
+            jpeg_quality,
+            max_size_bytes,
+            png_max_colors,
+        )?;
         let size_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
         Ok::<_, AppError>(ScreenshotExportPreview {
             bytes,
@@ -309,6 +325,7 @@ pub async fn save_screenshot_edit(
     let format = request.format;
     let quality_mode = request.quality_mode;
     let jpeg_quality = request.jpeg_quality;
+    let png_max_colors = request.png_max_colors;
     let max_size_bytes = request.max_size_bytes;
     let capture_mode = source
         .as_ref()
@@ -329,6 +346,7 @@ pub async fn save_screenshot_edit(
                 quality_mode,
                 jpeg_quality,
                 max_size_bytes,
+                png_max_colors,
             )?;
             let encoded_size = u64::try_from(output.len()).unwrap_or(u64::MAX);
             write_export_atomically(&task_destination, &output)?;
@@ -699,17 +717,21 @@ fn encode_export(
     format: ScreenshotEditFormat,
     quality_mode: ScreenshotExportQualityMode,
     jpeg_quality: u8,
+    png_max_colors: Option<u16>,
 ) -> Result<Vec<u8>, AppError> {
     match format {
         ScreenshotEditFormat::Png => {
             let max_colors = match quality_mode {
                 ScreenshotExportQualityMode::Preserve => None,
-                // Compress: reduce colors like compresspng.com, then pack hard.
-                ScreenshotExportQualityMode::Compress => {
-                    Some(storage::png_palette_colors_for_quality(jpeg_quality))
-                }
+                ScreenshotExportQualityMode::Compress => Some(
+                    png_max_colors
+                        .filter(|count| *count > 0)
+                        .unwrap_or_else(|| storage::png_palette_colors_for_quality(jpeg_quality)),
+                ),
                 // Maximum without a byte budget still quantizes aggressively.
-                ScreenshotExportQualityMode::Maximum => Some(64),
+                ScreenshotExportQualityMode::Maximum => {
+                    Some(png_max_colors.filter(|count| *count > 0).unwrap_or(64))
+                }
             };
             storage::encode_png_export(image, quality_mode.uses_compact_encode(), max_colors)
         }
@@ -740,13 +762,14 @@ fn encode_export_with_limit(
     quality_mode: ScreenshotExportQualityMode,
     jpeg_quality: u8,
     max_size_bytes: Option<u64>,
+    png_max_colors: Option<u16>,
 ) -> Result<Vec<u8>, AppError> {
     let effective_mode = if max_size_bytes.is_some() {
         ScreenshotExportQualityMode::Maximum
     } else {
         quality_mode
     };
-    let output = encode_export(image, format, effective_mode, jpeg_quality)?;
+    let output = encode_export(image, format, effective_mode, jpeg_quality, png_max_colors)?;
     let Some(maximum) = max_size_bytes else {
         return Ok(output);
     };
@@ -994,8 +1017,14 @@ mod tests {
             (ScreenshotEditFormat::Jpeg, ImageFormat::Jpeg),
             (ScreenshotEditFormat::Webp, ImageFormat::WebP),
         ] {
-            let bytes = encode_export(&sample(), format, ScreenshotExportQualityMode::Compress, 92)
-                .expect("image encoded");
+            let bytes = encode_export(
+                &sample(),
+                format,
+                ScreenshotExportQualityMode::Compress,
+                92,
+                None,
+            )
+            .expect("image encoded");
             let decoded = image::load_from_memory_with_format(&bytes, expected)
                 .expect("encoded image is readable");
             assert_eq!((decoded.width(), decoded.height()), (3, 2));
@@ -1010,6 +1039,7 @@ mod tests {
             ScreenshotEditFormat::Png,
             ScreenshotExportQualityMode::Preserve,
             100,
+            None,
         )
         .unwrap();
         let compressed = encode_export(
@@ -1017,6 +1047,7 @@ mod tests {
             ScreenshotEditFormat::Png,
             ScreenshotExportQualityMode::Compress,
             85,
+            None,
         )
         .unwrap();
         assert_eq!(&compressed[..8], b"\x89PNG\r\n\x1a\n");
@@ -1031,6 +1062,7 @@ mod tests {
             ScreenshotEditFormat::Png,
             ScreenshotExportQualityMode::Compress,
             92,
+            None,
         )
         .unwrap();
         let tiny = encode_export(
@@ -1038,6 +1070,7 @@ mod tests {
             ScreenshotEditFormat::Png,
             ScreenshotExportQualityMode::Compress,
             55,
+            None,
         )
         .unwrap();
         assert_eq!(&tiny[..8], b"\x89PNG\r\n\x1a\n");
@@ -1051,6 +1084,91 @@ mod tests {
             .expect("quantized PNG remains readable");
     }
 
+    fn png_color_type(bytes: &[u8]) -> png::ColorType {
+        png::Decoder::new(std::io::Cursor::new(bytes))
+            .read_info()
+            .expect("png header")
+            .info()
+            .color_type
+    }
+
+    fn photo_like(width: u32, height: u32, with_shadow: bool) -> RgbaImage {
+        RgbaImage::from_fn(width, height, |x, y| {
+            let r = (x.wrapping_mul(17).wrapping_add(y.wrapping_mul(3)) % 256) as u8;
+            let g = (x.wrapping_mul(5).wrapping_add(y.wrapping_mul(11)) % 256) as u8;
+            let b = (x.wrapping_mul(y).wrapping_add(40) % 256) as u8;
+            let alpha = if with_shadow && (x < 36 || y + 12 > height) {
+                let edge = x.min(height.saturating_sub(y).saturating_sub(1)).min(36);
+                ((edge * 255) / 36) as u8
+            } else {
+                255
+            };
+            Rgba([r, g, b, alpha])
+        })
+    }
+
+    #[test]
+    fn png_compress_uses_indexed_color_even_when_pixels_have_alpha() {
+        let image = photo_like(240, 160, true);
+        assert!(image.pixels().any(|pixel| pixel[3] < 255));
+
+        let compressed = encode_export(
+            &image,
+            ScreenshotEditFormat::Png,
+            ScreenshotExportQualityMode::Compress,
+            85,
+            Some(64),
+        )
+        .unwrap();
+
+        assert_eq!(png_color_type(&compressed), png::ColorType::Indexed);
+        let lossless = encode_export(
+            &image,
+            ScreenshotEditFormat::Png,
+            ScreenshotExportQualityMode::Preserve,
+            100,
+            None,
+        )
+        .unwrap();
+        assert!(
+            compressed.len() < lossless.len(),
+            "indexed PNG should beat 32-bit RGBA packing (indexed={}, rgba={})",
+            compressed.len(),
+            lossless.len()
+        );
+        image::load_from_memory_with_format(&compressed, ImageFormat::Png)
+            .expect("indexed PNG with tRNS remains readable");
+    }
+
+    #[test]
+    fn png_color_slider_changes_file_size() {
+        let image = photo_like(200, 140, false);
+        let high = encode_export(
+            &image,
+            ScreenshotEditFormat::Png,
+            ScreenshotExportQualityMode::Compress,
+            92,
+            Some(256),
+        )
+        .unwrap();
+        let tiny = encode_export(
+            &image,
+            ScreenshotEditFormat::Png,
+            ScreenshotExportQualityMode::Compress,
+            92,
+            Some(32),
+        )
+        .unwrap();
+        assert_eq!(png_color_type(&high), png::ColorType::Indexed);
+        assert_eq!(png_color_type(&tiny), png::ColorType::Indexed);
+        assert!(
+            tiny.len() < high.len(),
+            "fewer colors should shrink the indexed PNG (32={}, 256={})",
+            tiny.len(),
+            high.len()
+        );
+    }
+
     #[test]
     fn webp_compress_quality_reduces_file_size_via_lossy_encode() {
         let image = detailed_sample();
@@ -1059,6 +1177,7 @@ mod tests {
             ScreenshotEditFormat::Webp,
             ScreenshotExportQualityMode::Compress,
             92,
+            None,
         )
         .unwrap();
         let tiny = encode_export(
@@ -1066,6 +1185,7 @@ mod tests {
             ScreenshotEditFormat::Webp,
             ScreenshotExportQualityMode::Compress,
             55,
+            None,
         )
         .unwrap();
         // RIFF....WEBP
@@ -1091,6 +1211,7 @@ mod tests {
             ScreenshotEditFormat::Webp,
             ScreenshotExportQualityMode::Compress,
             100,
+            None,
         )
         .unwrap();
         let low = encode_export(
@@ -1098,6 +1219,7 @@ mod tests {
             ScreenshotEditFormat::Webp,
             ScreenshotExportQualityMode::Compress,
             20,
+            None,
         )
         .unwrap();
         assert!(high.len() > low.len());
@@ -1109,6 +1231,7 @@ mod tests {
             ScreenshotExportQualityMode::Maximum,
             100,
             Some(maximum),
+            None,
         )
         .expect("WebP fits the requested maximum");
 
@@ -1132,6 +1255,7 @@ mod tests {
             ScreenshotEditFormat::Jpeg,
             ScreenshotExportQualityMode::Compress,
             100,
+            None,
         )
         .unwrap();
         let low = encode_export(
@@ -1139,6 +1263,7 @@ mod tests {
             ScreenshotEditFormat::Jpeg,
             ScreenshotExportQualityMode::Compress,
             40,
+            None,
         )
         .unwrap();
         assert!(high.len() > low.len());
@@ -1150,6 +1275,7 @@ mod tests {
             ScreenshotExportQualityMode::Maximum,
             100,
             Some(maximum),
+            None,
         )
         .expect("JPEG fits the requested maximum");
 
@@ -1166,6 +1292,7 @@ mod tests {
             ScreenshotExportQualityMode::Maximum,
             100,
             Some(10),
+            None,
         )
         .expect_err("PNG should not silently switch format to meet a size cap");
 

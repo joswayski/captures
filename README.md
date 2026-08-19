@@ -63,7 +63,7 @@ Preview builds update after every successful merge to `main` and may contain bug
 - Cursor and click highlights in recordings (where supported)
 - Built-in screenshot editor — text, shapes, drawing, crop, layers, erase to transparent; unsaved edits restore when you reopen
 - Trim, crop, resize, and adjust audio in recordings
-- Export PNG, JPEG, or WebP with compression options
+- Export PNG, JPEG, or WebP with compression options, including a PNG color slider and before/after preview
 - Mini previews for quick copy, save, and drag into other apps
 - Screenshots during an active recording
 - 30-day capture history
