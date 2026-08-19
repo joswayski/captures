@@ -1932,11 +1932,14 @@ export function ScreenshotEditor() {
   //
   // Tauri always prevent_close()s when a JS onCloseRequested listener exists,
   // then the API wrapper awaits this handler and calls destroy() unless
-  // preventDefault() was used. A full dirty-draft encode (every image layer →
-  // PNG → number[] IPC) can hang long enough that the red X appears broken.
-  // Cap the wait so the window always closes; debounced autosave already keeps
-  // most sessions recoverable. Keep this effect dependent only on artifactId
-  // so we do not unlisten/re-listen on every render (unlisten can strand close).
+  // preventDefault() was used. Editor windows must therefore grant
+  // core:window:allow-destroy (see capabilities/editors.json); without it the
+  // red traffic-light / title-bar close control looks dead while minimize and
+  // zoom still work. A full dirty-draft encode (every image layer → PNG →
+  // number[] IPC) can also hang long enough that close appears broken. Cap the
+  // wait so the window always closes; debounced autosave already keeps most
+  // sessions recoverable. Keep this effect dependent only on artifactId so we
+  // do not unlisten/re-listen on every render (unlisten can strand close).
   useEffect(() => {
     if (!isTauri() || !artifactId) return;
     let active = true;
