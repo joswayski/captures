@@ -8,6 +8,7 @@ import {
   arrowVertices,
   arrowWithBend,
   boundedCropRect,
+  cropDragAspectRatio,
   canvasOverflowEdges,
   closestImageSnapEdge,
   closestPointOnArrow,
@@ -52,6 +53,7 @@ import {
   stackDropLightFocusAtPoint,
   resizeBoundsFromHandle,
   resizeElement,
+  shiftLockedCropAspect,
   snapResizedBounds,
   snapTranslatedBounds,
   translateElement,
@@ -161,6 +163,87 @@ describe("screenshot editor geometry", () => {
     expect(widescreen.width / widescreen.height).toBeCloseTo(16 / 9, 2);
     expect(widescreen.x + widescreen.width).toBeLessThanOrEqual(1_000);
     expect(widescreen.y + widescreen.height).toBeLessThanOrEqual(800);
+  });
+
+  it("snaps an off-canvas crop drag to the canvas edges", () => {
+    expect(boundedCropRect(
+      { x: -40, y: -20 },
+      { x: 1_200, y: 900 },
+      { width: 1_000, height: 800 },
+    )).toEqual({ x: 0, y: 0, width: 1_000, height: 800 });
+
+    expect(boundedCropRect(
+      { x: -30, y: 120 },
+      { x: 400, y: 500 },
+      { width: 1_000, height: 800 },
+    )).toEqual({ x: 0, y: 120, width: 400, height: 380 });
+  });
+
+  it("locks Shift-crop to the live box, then scales that ratio", () => {
+    const bounds = { width: 1_000, height: 800 };
+    const origin = { x: 100, y: 100 };
+    const live = { x: 300, y: 200 };
+    const ratio = shiftLockedCropAspect(origin, live, bounds);
+    expect(ratio).toBeCloseTo(2, 5);
+
+    const scaled = boundedCropRect(origin, { x: 500, y: 700 }, bounds, ratio);
+    expect(scaled.width / scaled.height).toBeCloseTo(2, 2);
+    expect(scaled.x).toBe(100);
+    expect(scaled.y).toBe(100);
+
+    expect(shiftLockedCropAspect(origin, { x: 104, y: 103 }, bounds)).toBe(1);
+  });
+
+  it("lets Shift lock the current crop ratio while a preset still wins", () => {
+    const bounds = { width: 1_000, height: 800 };
+    const origin = { x: 50, y: 50 };
+    const current = { x: 250, y: 150 };
+
+    const liveRect = { x: 50, y: 50, width: 200, height: 100 };
+    const free = cropDragAspectRatio({
+      preset: "free",
+      shiftKey: true,
+      origin,
+      current: { x: 400, y: 600 },
+      bounds,
+      shiftAspect: null,
+      liveRect,
+    });
+    expect(free.aspectRatio).toBeCloseTo(2, 5);
+    expect(free.shiftAspect).toBeCloseTo(2, 5);
+
+    const held = cropDragAspectRatio({
+      preset: "free",
+      shiftKey: true,
+      origin,
+      current: { x: 400, y: 600 },
+      bounds,
+      shiftAspect: free.shiftAspect,
+      liveRect,
+    });
+    expect(held.aspectRatio).toBe(free.shiftAspect);
+    expect(held.shiftAspect).toBe(free.shiftAspect);
+
+    const released = cropDragAspectRatio({
+      preset: "free",
+      shiftKey: false,
+      origin,
+      current,
+      bounds,
+      shiftAspect: free.shiftAspect,
+    });
+    expect(released).toEqual({ aspectRatio: null, shiftAspect: null });
+
+    const preset = cropDragAspectRatio({
+      preset: "16:9",
+      shiftKey: true,
+      origin,
+      current,
+      bounds,
+      shiftAspect: null,
+    });
+    expect(preset.aspectRatio).toBeCloseTo(16 / 9, 5);
+    expect(preset.shiftAspect).toBeNull();
   });
 
   it("crops by translating every editable layer", () => {

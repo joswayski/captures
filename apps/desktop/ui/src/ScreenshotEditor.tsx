@@ -59,6 +59,7 @@ import {
   arrowVertices,
   arrowWithBend,
   boundedCropRect,
+  cropDragAspectRatio,
   canvasOverflowEdges,
   closestPointOnArrow,
   collectAlignmentSnapLines,
@@ -184,6 +185,10 @@ type EditorGesture =
     kind: "crop";
     pointerId: number;
     origin: EditorPoint;
+    /** Live Shift-lock snapshot; null when Shift is not held (or a preset is set). */
+    shiftAspect: number | null;
+    /** Last canvas-clamped crop, used to freeze ratio when Shift goes down. */
+    lastRect: EditorRect | null;
   }
   | {
     kind: "arrow-handle";
@@ -2994,11 +2999,23 @@ export function ScreenshotEditor() {
 
     if (tool === "crop") {
       setSelectedId(null);
-      setCropSelection({ x: point.x, y: point.y, width: 1, height: 1 });
+      const next = cropDragAspectRatio({
+        preset: cropAspect,
+        shiftKey: event.shiftKey,
+        origin: point,
+        current: point,
+        bounds: current,
+        shiftAspect: null,
+        liveRect: null,
+      });
+      const rect = boundedCropRect(point, point, current, next.aspectRatio);
+      setCropSelection(rect);
       gestureRef.current = {
         kind: "crop",
         pointerId: event.pointerId,
         origin: point,
+        shiftAspect: next.shiftAspect,
+        lastRect: rect,
       };
       capturePointerTarget(event.currentTarget, event.pointerId);
       return;
@@ -3157,7 +3174,7 @@ export function ScreenshotEditor() {
 
   /**
    * Pointer on the checkerboard / empty viewport chrome around the canvas.
-   * Drawing tools can start off-canvas; Select clears the current selection.
+   * Drawing tools and crop can start off-canvas; Select clears the current selection.
    */
   const startOutsidePointer = (event: React.PointerEvent<HTMLDivElement>) => {
     // Only the viewport padding/empty area — not the canvas surface or overlays.
@@ -3166,8 +3183,8 @@ export function ScreenshotEditor() {
     // Command/Ctrl / middle-button pan is handled in capture phase.
     if (modifierPanRef.current || event.metaKey || event.ctrlKey) return;
     if (panGestureRef.current) return;
-    // Crop / remove-bg need image pixels; ignore starts in the chrome.
-    if (tool === "crop" || tool === "remove-bg") return;
+    // Remove-bg needs image pixels; ignore starts in the chrome.
+    if (tool === "remove-bg") return;
     startPointerAt(event, canvasPoint(event));
   };
 
@@ -3275,15 +3292,28 @@ export function ScreenshotEditor() {
     }
     setCurveHoverTip(null);
     if (gesture.kind === "crop") {
-      const aspectRatio = cropAspect === "free"
-        ? null
-        : cropAspect.split(":").map(Number).reduce((width, height) => width / height);
-      setCropSelection(boundedCropRect(
+      const bounds = documentRef.current ?? { width: 1, height: 1 };
+      const next = cropDragAspectRatio({
+        preset: cropAspect,
+        shiftKey: event.shiftKey,
+        origin: gesture.origin,
+        current: point,
+        bounds,
+        shiftAspect: gesture.shiftAspect,
+        liveRect: gesture.lastRect,
+      });
+      const rect = boundedCropRect(
         gesture.origin,
         point,
-        documentRef.current ?? { width: 1, height: 1 },
-        aspectRatio,
-      ));
+        bounds,
+        next.aspectRatio,
+      );
+      gestureRef.current = {
+        ...gesture,
+        shiftAspect: next.shiftAspect,
+        lastRect: rect,
+      };
+      setCropSelection(rect);
       return;
     }
     if (gesture.kind === "arrow-handle") {
@@ -5632,16 +5662,27 @@ export function ScreenshotEditor() {
             {cropSelection ? (
               <>
                 <div className="screenshot-number-pair">
-                  <label>Width<input value={cropSelection.width} readOnly /></label>
-                  <label>Height<input value={cropSelection.height} readOnly /></label>
+                  <label>Width<input value={cropSelection.width} readOnly aria-label="Crop width" /></label>
+                  <label>Height<input value={cropSelection.height} readOnly aria-label="Crop height" /></label>
                 </div>
                 <div className="screenshot-property-actions">
                   <button type="button" onClick={() => setCropSelection(null)}>Clear</button>
-                  <button type="button" className="primary" onClick={applyCrop}>Apply crop</button>
+                  <button
+                    type="button"
+                    className="primary cta-pulse"
+                    onClick={applyCrop}
+                  >
+                    Apply crop
+                  </button>
                 </div>
+                <p>Hold Shift while dragging to keep this aspect ratio.</p>
               </>
             ) : (
-              <p>Drag over the area you want to keep.</p>
+              <p>
+                Drag over the area you want to keep. Start from outside the
+                canvas to crop to an edge. Hold Shift to lock the current
+                aspect ratio.
+              </p>
             )}
           </section>
         )}

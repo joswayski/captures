@@ -1719,6 +1719,104 @@ describe("ScreenshotEditor", () => {
     expect(textLayer).toHaveAttribute("aria-pressed", "false");
   });
 
+  it("can start a crop outside the canvas and apply an edge-to-edge cut", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Width");
+
+    setCanvasZoomPercent(100);
+    fireEvent.click(screen.getByRole("button", { name: "Crop (C)" }));
+    const viewport = screen.getByLabelText("Screenshot editing canvas");
+    const canvas = viewport.querySelector("canvas")!;
+    vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
+      x: 100,
+      y: 80,
+      top: 80,
+      left: 100,
+      right: 100 + 1_440,
+      bottom: 80 + 900,
+      width: 1_440,
+      height: 900,
+      toJSON: () => ({}),
+    });
+    viewport.setPointerCapture = vi.fn();
+    viewport.hasPointerCapture = vi.fn(() => true);
+    viewport.releasePointerCapture = vi.fn();
+
+    fireEvent.pointerDown(viewport, {
+      button: 0,
+      pointerId: 61,
+      clientX: 60,
+      clientY: 40,
+    });
+    fireEvent.pointerMove(viewport, {
+      pointerId: 61,
+      clientX: 100 + 500,
+      clientY: 80 + 400,
+    });
+    fireEvent.pointerUp(viewport, {
+      button: 0,
+      pointerId: 61,
+      clientX: 100 + 500,
+      clientY: 80 + 400,
+    });
+
+    expect(screen.getByLabelText("Crop width")).toHaveValue("500");
+    expect(screen.getByLabelText("Crop height")).toHaveValue("400");
+    const apply = screen.getByRole("button", { name: "Apply crop" });
+    expect(apply).toHaveClass("cta-pulse");
+    fireEvent.click(apply);
+    expect(screen.getByLabelText("Width")).toHaveValue(500);
+    expect(screen.getByLabelText("Height")).toHaveValue(400);
+  });
+
+  it("holds Shift during a free crop drag to keep the live aspect ratio", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Width");
+
+    setCanvasZoomPercent(100);
+    fireEvent.click(screen.getByRole("button", { name: "Crop (C)" }));
+    const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
+    setCanvasBounds(canvas);
+    canvas.setPointerCapture = vi.fn();
+    canvas.hasPointerCapture = vi.fn(() => true);
+    canvas.releasePointerCapture = vi.fn();
+
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 62,
+      clientX: 100,
+      clientY: 100,
+    });
+    fireEvent.pointerMove(canvas, {
+      pointerId: 62,
+      clientX: 300,
+      clientY: 200,
+    });
+    expect(screen.getByLabelText("Crop width")).toHaveValue("200");
+    expect(screen.getByLabelText("Crop height")).toHaveValue("100");
+
+    fireEvent.pointerMove(canvas, {
+      pointerId: 62,
+      clientX: 500,
+      clientY: 700,
+      shiftKey: true,
+    });
+    const width = Number(screen.getByLabelText("Crop width").getAttribute("value"));
+    const height = Number(screen.getByLabelText("Crop height").getAttribute("value"));
+    expect(width / height).toBeCloseTo(2, 2);
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 62,
+      clientX: 500,
+      clientY: 700,
+      shiftKey: true,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply crop" }));
+    expect(screen.getByLabelText("Width")).toHaveValue(width);
+    expect(screen.getByLabelText("Height")).toHaveValue(height);
+  });
+
   it("can start an arrow outside the canvas and expands to fit on release", async () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");

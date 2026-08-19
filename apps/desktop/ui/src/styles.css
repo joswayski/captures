@@ -3440,7 +3440,36 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 .screenshot-property-actions button, .screenshot-layer-actions button { min-height: 36px; border: 1px solid var(--editor-border); border-radius: 9px; color: var(--editor-text-muted); background: var(--editor-control); font-size: 10.5px; font-weight: 650; }
 .screenshot-property-actions button:hover:not(:disabled), .screenshot-layer-actions button:hover:not(:disabled) { border-color: var(--editor-border-strong); color: var(--editor-text); background: var(--editor-control-hover); }
 .screenshot-property-actions button:disabled, .screenshot-layer-actions button:disabled { cursor: default; opacity: .45; }
-.screenshot-property-actions button.primary { border-color: var(--theme-accent-strong); color: var(--theme-accent-ink); background: var(--editing-accent); }
+.screenshot-property-actions button.primary { border-color: var(--theme-accent-strong); color: var(--theme-accent-ink); background: var(--editing-accent); box-shadow: 0 6px 16px rgba(var(--theme-accent-rgb),.18); }
+.screenshot-property-actions button.primary:hover:not(:disabled) {
+  border-color: var(--theme-accent-strong);
+  color: var(--theme-accent-ink);
+  background: var(--editing-accent);
+  filter: brightness(1.06);
+}
+.screenshot-property-actions button.primary.cta-pulse {
+  animation: screenshot-cta-pulse 1.6s ease-in-out infinite;
+}
+.screenshot-property-actions button.primary.cta-pulse:hover:not(:disabled) {
+  animation: none;
+  box-shadow:
+    0 0 0 4px rgba(var(--theme-accent-rgb),.18),
+    0 8px 20px rgba(var(--theme-accent-rgb),.3);
+}
+@keyframes screenshot-cta-pulse {
+  0%, 100% {
+    box-shadow:
+      0 0 0 0 rgba(var(--theme-accent-rgb),0),
+      0 6px 16px rgba(var(--theme-accent-rgb),.18);
+    filter: brightness(1);
+  }
+  50% {
+    box-shadow:
+      0 0 0 5px rgba(var(--theme-accent-rgb),.24),
+      0 10px 24px rgba(var(--theme-accent-rgb),.4);
+    filter: brightness(1.08);
+  }
+}
 .screenshot-format-buttons { display: grid; grid-template-columns: repeat(5,1fr); gap: 5px; }
 .screenshot-format-buttons button { display: grid; min-height: 34px; place-items: center; border: 1px solid var(--editor-border); border-radius: 8px; color: var(--editor-text-muted); background: var(--editor-control); font-size: 12px; font-weight: 700; }
 .screenshot-format-buttons button.active { border-color: rgba(var(--theme-accent-rgb),.45); color: var(--theme-accent-text); background: rgba(var(--theme-accent-rgb),.12); }
@@ -3941,7 +3970,7 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 @media (max-width: 820px) { .recording-selector-panel { width: calc(100% - 32px); }.recording-options-row { grid-template-columns: repeat(2,minmax(0,1fr)); }.recording-start { margin-left: 0; }.recording-editor { padding-bottom: 142px; }.recording-editor-grid { grid-template-columns: 1fr; }.editor-output-card, .editor-audio-card { grid-column: auto; }.recording-save-footer { min-height: 116px; padding: 8px 16px; grid-template-columns: minmax(0,1fr) max-content; justify-content: stretch; gap: 7px 14px; }.recording-filename { grid-column: 1; }.recording-make-copy { grid-column: 2; margin-top: 19px; }.recording-save-action-area { min-width: 0; grid-column: 1 / -1; }.recording-save-toast, .recording-save-actions { justify-content: flex-end; } }
 @media (max-width: 460px) { .theme-options { grid-template-columns: repeat(3,minmax(0,1fr)); }.custom-theme-fields { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) {
-  .recording-start:not(:disabled) > span::after, .capture-guidance, .recording-options-row { animation: none; }
+  .recording-start:not(:disabled) > span::after, .capture-guidance, .recording-options-row, .screenshot-property-actions button.primary.cta-pulse { animation: none; }
   .capture-guidance { transition-duration: .01ms; }
   .capture-segmented-indicator.ready { transition-duration: .01ms; }
 }
