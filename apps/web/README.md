@@ -100,6 +100,18 @@ Connect the GitHub repo so pushes to `main` rebuild the image. Railway supplies
 `RAILWAY_GIT_COMMIT_SHA`, which busts the Docker layer that fetches homepage
 history.
 
+## AWS image publishing
+
+The `AWS image` GitHub Actions workflow builds the production Dockerfile for
+`linux/arm64` on pull requests and verifies `/api/health` inside the resulting
+container. After a commit reaches `main`, it uses GitHub OIDC to publish that
+same application shape to the private `production/captures` ECR repository.
+Images use the immutable application Git SHA as the tag; Kubernetes deployments
+must also pin the ECR digest and must not use `latest` or a Docker-login Secret.
+
+Railway remains the live origin until the separately reviewed infrastructure
+cutover has a Ready k3s pod and the Cloudflare Tunnel route is switched.
+
 From the monorepo root, a local image is:
 
 ```sh
