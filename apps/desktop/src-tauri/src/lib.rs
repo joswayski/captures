@@ -1126,7 +1126,6 @@ fn get_onboarding_state(state: tauri::State<'_, Arc<AppState>>) -> CommandResult
 
 #[tauri::command]
 fn request_onboarding_screen_permission(
-    app: AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> CommandResult<OnboardingState> {
     #[cfg(target_os = "macos")]
@@ -1140,13 +1139,11 @@ fn request_onboarding_screen_permission(
             }
             Err(CaptureError::PermissionDenied) => {
                 *state.screen_permission_requested_this_launch.lock() = true;
-                open_macos_screen_recording_settings(&app).map_err(|error| error.to_string())?;
+                open_macos_screen_recording_settings().map_err(|error| error.to_string())?;
             }
             Err(error) => return Err(error.to_string()),
         }
     }
-    #[cfg(not(target_os = "macos"))]
-    let _ = app;
 
     onboarding_state(state.inner()).map_err(|error| error.to_string())
 }
@@ -1164,7 +1161,6 @@ fn set_onboarding_desktop_audio(
 
 #[tauri::command]
 fn request_onboarding_microphone_permission(
-    app: AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> CommandResult<OnboardingState> {
     #[cfg(target_os = "macos")]
@@ -1172,11 +1168,9 @@ fn request_onboarding_microphone_permission(
         if !captures_recording_macos::request_microphone_access()
             && !captures_recording_macos::microphone_can_request()
         {
-            open_macos_microphone_settings(&app).map_err(|error| error.to_string())?;
+            open_macos_microphone_settings().map_err(|error| error.to_string())?;
         }
     }
-    #[cfg(not(target_os = "macos"))]
-    let _ = app;
 
     onboarding_state(state.inner()).map_err(|error| error.to_string())
 }
@@ -3128,6 +3122,19 @@ const STARTUP_NOTICE_WIDTH: f64 = 400.0;
 const STARTUP_NOTICE_HEIGHT: f64 = 118.0;
 const ONBOARDING_WINDOW_WIDTH: f64 = 560.0;
 const ONBOARDING_WINDOW_HEIGHT: f64 = 520.0;
+/// Matches the marketing site canvas (`#f5f7fb`) so first-run setup is not mustard/cream.
+const ONBOARDING_WINDOW_BACKGROUND: Color = Color(245, 247, 251, 255);
+
+#[cfg(any(target_os = "macos", test))]
+const MACOS_SCREEN_RECORDING_SETTINGS_URLS: &[&str] = &[
+    "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ScreenCapture",
+    "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+];
+#[cfg(any(target_os = "macos", test))]
+const MACOS_MICROPHONE_SETTINGS_URLS: &[&str] = &[
+    "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Microphone",
+    "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+];
 
 /// First-run setup is a light canvas. Force light title chrome so the native
 /// "Captures" title stays readable in system dark mode instead of rendering
@@ -3158,7 +3165,7 @@ fn show_onboarding(app: &AppHandle) {
         .center()
         .resizable(true)
         .theme(onboarding_window_theme())
-        .background_color(Color(246, 246, 247, 255))
+        .background_color(ONBOARDING_WINDOW_BACKGROUND)
         .focused(false)
         .visible(false)
         .on_page_load(|window, payload| {
@@ -3861,23 +3868,28 @@ fn capture_error_message(error: &AppError) -> String {
 }
 
 #[cfg(target_os = "macos")]
-fn open_macos_screen_recording_settings(app: &AppHandle) -> Result<(), AppError> {
-    app.opener()
-        .open_url(
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
-            None::<&str>,
-        )
-        .map_err(|error| AppError::Task(error.to_string()))
+fn open_macos_privacy_settings(urls: &[&str]) -> Result<(), AppError> {
+    let mut last_error = None;
+    for url in urls {
+        match Command::new("/usr/bin/open").arg(url).status() {
+            Ok(status) if status.success() => return Ok(()),
+            Ok(status) => last_error = Some(format!("open {url} exited with {status}")),
+            Err(error) => last_error = Some(error.to_string()),
+        }
+    }
+    Err(AppError::Task(last_error.unwrap_or_else(|| {
+        "could not open System Settings".to_owned()
+    })))
 }
 
 #[cfg(target_os = "macos")]
-fn open_macos_microphone_settings(app: &AppHandle) -> Result<(), AppError> {
-    app.opener()
-        .open_url(
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
-            None::<&str>,
-        )
-        .map_err(|error| AppError::Task(error.to_string()))
+fn open_macos_screen_recording_settings() -> Result<(), AppError> {
+    open_macos_privacy_settings(MACOS_SCREEN_RECORDING_SETTINGS_URLS)
+}
+
+#[cfg(target_os = "macos")]
+fn open_macos_microphone_settings() -> Result<(), AppError> {
+    open_macos_privacy_settings(MACOS_MICROPHONE_SETTINGS_URLS)
 }
 
 #[cfg(target_os = "macos")]
@@ -5214,6 +5226,46 @@ mod tests {
     #[test]
     fn onboarding_window_uses_light_title_chrome() {
         assert_eq!(onboarding_window_theme(), Some(tauri::Theme::Light));
+        assert_eq!(
+            super::ONBOARDING_WINDOW_BACKGROUND,
+            super::Color(245, 247, 251, 255)
+        );
+    }
+
+    #[test]
+    fn macos_bundle_requests_microphone_audio_input() {
+        let entitlements = include_str!("../Entitlements.plist");
+        assert!(
+            entitlements.contains("com.apple.security.device.audio-input"),
+            "Hardened Runtime blocks microphone access unless the audio-input entitlement is signed in"
+        );
+
+        let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json"))
+            .expect("tauri.conf.json should be valid JSON");
+        assert_eq!(
+            config["bundle"]["macOS"]["entitlements"],
+            "./Entitlements.plist"
+        );
+    }
+
+    #[test]
+    fn macos_privacy_settings_prefer_current_system_settings_urls() {
+        assert_eq!(
+            super::MACOS_MICROPHONE_SETTINGS_URLS[0],
+            "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Microphone"
+        );
+        assert_eq!(
+            super::MACOS_SCREEN_RECORDING_SETTINGS_URLS[0],
+            "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ScreenCapture"
+        );
+        assert!(
+            super::MACOS_MICROPHONE_SETTINGS_URLS[1].contains("Privacy_Microphone"),
+            "keep the pre-Ventura microphone URL as a fallback"
+        );
+        assert!(
+            super::MACOS_SCREEN_RECORDING_SETTINGS_URLS[1].contains("Privacy_ScreenCapture"),
+            "keep the pre-Ventura Screen Recording URL as a fallback"
+        );
     }
 
     #[test]

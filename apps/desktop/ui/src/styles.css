@@ -32,14 +32,16 @@ h1, h2, p { margin: 0; }
 .idle-view p { color: #a7a7b6; }
 
 .onboarding-shell {
-  --onboarding-canvas: #f6f6f7;
+  /* Match captur.es: cool neutrals and an ink CTA, not the mustard/cream app theme. */
+  --onboarding-canvas: #f5f7fb;
   --onboarding-surface: #fff;
-  --onboarding-border: rgba(24, 24, 27, .1);
+  --onboarding-border: #e2e7f0;
   --onboarding-ink: #18181b;
   --onboarding-muted: #52525b;
   --onboarding-soft: #71717a;
-  --onboarding-accent: var(--theme-accent);
-  --onboarding-accent-hover: var(--theme-accent-hover);
+  --onboarding-accent: #18181b;
+  --onboarding-accent-hover: #27272a;
+  --onboarding-focus: #3f74e8;
   --onboarding-granted: #15803d;
   display: grid;
   width: 100%;
@@ -74,7 +76,7 @@ h1, h2, p { margin: 0; }
   display: flex;
   min-width: 0;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: stretch;
   gap: 16px;
 }
 .onboarding-permissions {
@@ -183,12 +185,17 @@ h1, h2, p { margin: 0; }
 .onboarding-error {
   width: 100%;
   padding: 10px 12px;
-  border: 1px solid rgba(var(--theme-signal-rgb), .28);
+  border: 1px solid #f1c5c7;
   border-radius: 10px;
-  color: var(--theme-signal-text);
-  background: var(--theme-signal-surface);
+  color: #9f1239;
+  background: #fff1f2;
   font-size: 12.5px;
   line-height: 1.4;
+}
+.onboarding-actions {
+  display: flex;
+  width: 100%;
+  justify-content: flex-end;
 }
 .onboarding-primary-button {
   display: inline-flex;
@@ -221,9 +228,9 @@ h1, h2, p { margin: 0; }
   border-radius: 999px;
   background: #d4d4d8;
 }
-.onboarding-step.current { background: var(--onboarding-accent); }
+.onboarding-step.current { background: var(--onboarding-focus); }
 .onboarding-step.done { background: #3f3f46; }
-.onboarding-shell button:focus-visible { outline: 2px solid var(--onboarding-accent); outline-offset: 2px; }
+.onboarding-shell button:focus-visible { outline: 2px solid var(--onboarding-focus); outline-offset: 2px; }
 @media (max-width: 560px) {
   .onboarding-stage { padding: 24px 20px 8px; gap: 18px; }
   .onboarding-copy h1 { font-size: 22px; }

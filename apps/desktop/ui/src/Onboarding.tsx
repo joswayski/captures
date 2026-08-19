@@ -329,25 +329,27 @@ export function Onboarding() {
 
           {error && <p className="onboarding-error" role="alert">{error}</p>}
 
-          {shouldOfferRestart ? (
-            <button
-              type="button"
-              className="onboarding-primary-button"
-              disabled={busy !== null}
-              onClick={restart}
-            >
-              {primaryLabel}
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="onboarding-primary-button"
-              disabled={!screenReady || busy !== null}
-              onClick={() => void complete()}
-            >
-              {primaryLabel}
-            </button>
-          )}
+          <div className="onboarding-actions">
+            {shouldOfferRestart ? (
+              <button
+                type="button"
+                className="onboarding-primary-button"
+                disabled={busy !== null}
+                onClick={restart}
+              >
+                {primaryLabel}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="onboarding-primary-button"
+                disabled={!screenReady || busy !== null}
+                onClick={() => void complete()}
+              >
+                {primaryLabel}
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
