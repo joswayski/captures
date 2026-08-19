@@ -648,6 +648,83 @@ export function boundedCropRect(
   };
 }
 
+/** Below this size, Shift-lock treats the crop as unsized and snaps to 1:1. */
+const CROP_SHIFT_LOCK_MIN_SIZE = 8;
+
+/**
+ * Aspect used while dragging a crop.
+ *
+ * A sidebar preset (`16:9`, `1:1`, …) always wins. When the preset is free,
+ * holding Shift locks the live crop's current ratio (1:1 if the box is still
+ * tiny) and keeps that snapshot until Shift is released.
+ *
+ * Pass `liveRect` (the last crop box) so Shift-down freezes the ratio you
+ * already drew, not the unconstrained pointer on this frame.
+ *
+ * Command/Ctrl is not used here — the editor already pans with those keys.
+ */
+export function cropDragAspectRatio(options: {
+  preset: string;
+  shiftKey: boolean;
+  origin: EditorPoint;
+  current: EditorPoint;
+  bounds: Pick<ScreenshotDocument, "width" | "height">;
+  shiftAspect: number | null;
+  liveRect?: EditorRect | null;
+}): { aspectRatio: number | null; shiftAspect: number | null } {
+  const preset = parseCropAspectPreset(options.preset);
+  if (preset !== null) {
+    return { aspectRatio: preset, shiftAspect: null };
+  }
+  if (!options.shiftKey) {
+    return { aspectRatio: null, shiftAspect: null };
+  }
+  if (options.shiftAspect && options.shiftAspect > 0) {
+    return { aspectRatio: options.shiftAspect, shiftAspect: options.shiftAspect };
+  }
+  const shiftAspect = cropAspectFromLiveRect(options.liveRect)
+    ?? shiftLockedCropAspect(options.origin, options.current, options.bounds);
+  return { aspectRatio: shiftAspect, shiftAspect };
+}
+
+function cropAspectFromLiveRect(rect: EditorRect | null | undefined): number | null {
+  if (
+    !rect
+    || rect.width < CROP_SHIFT_LOCK_MIN_SIZE
+    || rect.height < CROP_SHIFT_LOCK_MIN_SIZE
+  ) {
+    return null;
+  }
+  return rect.width / rect.height;
+}
+
+function parseCropAspectPreset(value: string): number | null {
+  if (!value || value === "free") return null;
+  const parts = value.split(":").map(Number);
+  if (parts.length !== 2) return null;
+  const [width, height] = parts;
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return null;
+  }
+  return width / height;
+}
+
+/**
+ * Ratio of the current (canvas-clamped) crop box. Tiny boxes lock to a square
+ * so holding Shift from the first pixel behaves like a 1:1 constraint.
+ */
+export function shiftLockedCropAspect(
+  origin: EditorPoint,
+  current: EditorPoint,
+  bounds: Pick<ScreenshotDocument, "width" | "height">,
+): number {
+  const live = boundedCropRect(origin, current, bounds, null);
+  if (live.width >= CROP_SHIFT_LOCK_MIN_SIZE && live.height >= CROP_SHIFT_LOCK_MIN_SIZE) {
+    return live.width / live.height;
+  }
+  return 1;
+}
+
 export function cropDocument(
   document: ScreenshotDocument,
   crop: EditorRect,
