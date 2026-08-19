@@ -5182,6 +5182,36 @@ mod tests {
     }
 
     #[test]
+    fn editor_windows_can_complete_close_requests() {
+        // Screenshot editors listen to onCloseRequested so they can flush a
+        // draft. Tauri then destroy()s the window; without these permissions
+        // the native close button is a no-op. Recording editors share the
+        // same window family so a future close listener cannot regress.
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/editors.json"))
+                .expect("editors capability should be valid JSON");
+        let windows = capability["windows"]
+            .as_array()
+            .expect("editors capability should target windows");
+        let permissions = capability["permissions"]
+            .as_array()
+            .expect("editors capability should grant permissions");
+
+        for window in ["screenshot-editor-*", "recording-editor-*"] {
+            assert!(
+                windows.iter().any(|granted| granted == window),
+                "editors capability should target {window}"
+            );
+        }
+        for permission in ["core:window:allow-close", "core:window:allow-destroy"] {
+            assert!(
+                permissions.iter().any(|granted| granted == permission),
+                "editors capability should grant {permission}"
+            );
+        }
+    }
+
+    #[test]
     fn onboarding_window_uses_light_title_chrome() {
         assert_eq!(onboarding_window_theme(), Some(tauri::Theme::Light));
     }
