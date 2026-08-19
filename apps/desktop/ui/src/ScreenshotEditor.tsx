@@ -390,7 +390,7 @@ const DEFAULT_CANVAS_BACKGROUND = "#f7f7f5";
 /**
  * Shared compress presets.
  * - JPEG / WebP: encode quality (lossy)
- * - PNG: palette size / color quantization (like compresspng.com)
+ * - PNG: palette size / color quantization
  */
 const SCREENSHOT_QUALITY_OPTIONS = [
   {
@@ -6129,7 +6129,7 @@ export function ScreenshotEditor() {
                   value: "compress",
                   label: "Compress",
                   description: exportFormat === "png"
-                    ? "Smaller PNG by reducing colors (like compresspng.com), then packing hard."
+                    ? "Smaller PNG by reducing colors, then packing hard."
                     : exportFormat === "webp"
                       ? "Smaller lossy WebP with Tiny through High quality presets."
                       : "Smaller JPEG with Tiny through High quality presets.",

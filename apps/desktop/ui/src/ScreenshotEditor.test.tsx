@@ -1957,7 +1957,12 @@ describe("ScreenshotEditor", () => {
 
     // Compress keeps PNG and shows color-reduction quality presets.
     fireEvent.click(saveQuality);
-    fireEvent.click(screen.getByRole("option", { name: /Compress/ }));
+    const compressOption = screen.getByRole("option", { name: /Compress/ });
+    expect(compressOption).toHaveTextContent(
+      "Smaller PNG by reducing colors, then packing hard.",
+    );
+    expect(compressOption).not.toHaveTextContent(/compresspng/i);
+    fireEvent.click(compressOption);
 
     await waitFor(() => {
       expect(format).toHaveTextContent("PNG");
