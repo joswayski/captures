@@ -23,6 +23,8 @@ jobs:
           tags: captures:arm64
           build-args: |
             RAILWAY_GIT_COMMIT_SHA=${{ github.sha }}
+          secrets: |
+            github_token=${{ github.token }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Assert linux/arm64 image
@@ -104,6 +106,8 @@ jobs:
           tags: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
           build-args: |
             RAILWAY_GIT_COMMIT_SHA=${{ github.sha }}
+          secrets: |
+            github_token=${{ github.token }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Record immutable image
