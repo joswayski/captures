@@ -25,10 +25,24 @@ public func capturesMicrophoneRequest() -> Bool {
 
     let gate = DispatchSemaphore(value: 0)
     var granted = false
-    AVCaptureDevice.requestAccess(for: .audio) { allowed in
-        granted = allowed
-        gate.signal()
+    let request = {
+        AVCaptureDevice.requestAccess(for: .audio) { allowed in
+            granted = allowed
+            gate.signal()
+        }
     }
-    _ = gate.wait(timeout: .now() + 120)
+
+    if Thread.isMainThread {
+        request()
+        // The system prompt needs the main run loop. Waiting on a semaphore
+        // here would freeze the dialog, so pump until the user answers.
+        let deadline = Date().addingTimeInterval(120)
+        while gate.wait(timeout: .now()) == .timedOut, Date() < deadline {
+            _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+        }
+    } else {
+        DispatchQueue.main.async(execute: request)
+        _ = gate.wait(timeout: .now() + 120)
+    }
     return granted
 }

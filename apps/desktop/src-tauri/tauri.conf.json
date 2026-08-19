@@ -31,7 +31,8 @@
     "shortDescription": "A lightweight screen capture utility",
     "longDescription": "Capture screenshots, videos, and GIFs with a quick, lightweight workflow.",
     "macOS": {
-      "minimumSystemVersion": "13.0"
+      "minimumSystemVersion": "13.0",
+      "entitlements": "./Entitlements.plist"
     }
   },
   "plugins": {

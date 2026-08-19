@@ -62,7 +62,9 @@ describe("Onboarding", () => {
     expect(screen.queryByText(/Captures needs screen access to work/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Screen Recording is required/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Pick audio sources when you record/)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Start capturing" })).toBeDisabled();
+    const start = screen.getByRole("button", { name: "Start capturing" });
+    expect(start).toBeDisabled();
+    expect(start.parentElement).toHaveClass("onboarding-actions");
     expect(screen.getByRole("navigation", { name: "Setup progress" })).toBeInTheDocument();
     expect(screen.queryByText("One place for access")).not.toBeInTheDocument();
     expect(screen.queryByText("Desktop audio")).not.toBeInTheDocument();
@@ -88,6 +90,7 @@ describe("Onboarding", () => {
     expect(screen.getByRole("button", { name: "Open Settings" })).toBeInTheDocument();
     const restart = screen.getByRole("button", { name: "Restart Captures" });
     expect(restart).toBeInTheDocument();
+    expect(restart.parentElement).toHaveClass("onboarding-actions");
     expect(restart.closest("section")).toBeNull();
     expect(screen.queryByRole("button", { name: "Check again" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Start capturing" })).not.toBeInTheDocument();

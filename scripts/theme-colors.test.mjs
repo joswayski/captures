@@ -41,6 +41,18 @@ test("every declared color theme has a shared CSS palette and backend value", as
   }
 });
 
+test("first-run setup uses the website palette instead of mustard cream", async () => {
+  const desktopCss = await readFile(desktopCssPath, "utf8");
+  const onboarding = desktopCss.match(/\.onboarding-shell\s*\{([\s\S]*?)\n\}/u)?.[1];
+  assert.ok(onboarding, "missing .onboarding-shell palette");
+  assert.match(onboarding, /--onboarding-canvas:\s*#f5f7fb/u);
+  assert.match(onboarding, /--onboarding-border:\s*#e2e7f0/u);
+  assert.match(onboarding, /--onboarding-accent:\s*#18181b/u);
+  assert.doesNotMatch(onboarding, /var\(--theme-accent\)/u);
+  assert.doesNotMatch(desktopCss, /\.onboarding-actions\s*\{[^}]*justify-content:\s*flex-start/u);
+  assert.match(desktopCss, /\.onboarding-actions\s*\{[^}]*justify-content:\s*flex-end/u);
+});
+
 test("desktop and web surfaces consume the shared theme source", async () => {
   const [desktopCss, webCss] = await Promise.all([
     readFile(desktopCssPath, "utf8"),
