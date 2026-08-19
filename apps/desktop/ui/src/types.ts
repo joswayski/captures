@@ -48,6 +48,8 @@ export interface ActiveSession {
   display: DisplayDescriptor;
   window_coordinate_scale: number;
   window_corner_radius: number;
+  /** Visible display corner radius in logical points (MacBooks, etc.). */
+  display_corner_radius?: number;
   snapshot_url: string;
   windows: WindowDescriptor[];
 }
@@ -152,6 +154,8 @@ export interface RecordingSelectionSession {
   displays: DisplayDescriptor[];
   window_coordinate_scale: number;
   window_corner_radius: number;
+  /** Visible display corner radius in logical points (MacBooks, etc.). */
+  display_corner_radius?: number;
   snapshot_url: string;
   windows: WindowDescriptor[];
 }

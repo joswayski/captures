@@ -308,6 +308,7 @@ pub(crate) async fn prepare_capture_selector_inner(
             ),
             window_coordinate_scale: crate::window_coordinate_scale(&frame.descriptor),
             window_corner_radius: crate::window_corner_radius_points(),
+            display_corner_radius: crate::display_corner_radius_points(&frame.descriptor.id),
             display: frame.descriptor,
             displays,
             snapshot_url: recording_selection_url(&id),
@@ -411,6 +412,7 @@ async fn select_capture_display_inner(
     summary.display = frame.descriptor;
     summary.displays = displays;
     summary.window_coordinate_scale = crate::window_coordinate_scale(&summary.display);
+    summary.display_corner_radius = crate::display_corner_radius_points(&summary.display.id);
     summary.snapshot_url = format!(
         "{}?refresh={}",
         recording_selection_url(&summary.id),
@@ -3175,6 +3177,8 @@ async fn prepare_recording_selector(
             window
                 .set_position(tauri::LogicalPosition::new(x, y))
                 .map_err(|error| error.to_string())?;
+            #[cfg(target_os = "macos")]
+            captures_macos_window::cover_display(&window, &display.id).map_err(str::to_owned)?;
             window
                 .set_content_protected(cfg!(target_os = "windows"))
                 .map_err(|error| error.to_string())?;
@@ -3305,7 +3309,10 @@ pub fn reveal_recording_selector(
         .get_webview_window("recording-selector")
         .ok_or_else(|| "recording selector is unavailable".to_owned())?;
     #[cfg(target_os = "macos")]
-    captures_macos_window::reveal_window(&window).map_err(str::to_owned)?;
+    {
+        captures_macos_window::reveal_window(&window).map_err(str::to_owned)?;
+        captures_macos_window::elevate_capture_surface(&window).map_err(str::to_owned)?;
+    }
     window
         .set_ignore_cursor_events(false)
         .map_err(|error| error.to_string())?;

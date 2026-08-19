@@ -383,6 +383,25 @@ describe("RecordingSelector", () => {
     });
   });
 
+  it("rounds the full-display outline to the monitor corner radius", async () => {
+    preparedSession = {
+      ...session,
+      initial_mode: "screenshot",
+      initial_target: "display",
+      display_corner_radius: 40,
+    };
+    const { container } = render(<RecordingSelector />);
+
+    expect(await screen.findByRole("button", { name: "Full screen", pressed: true }))
+      .toBeInTheDocument();
+    expect(container.querySelector(".recording-selector")).toHaveStyle({
+      borderRadius: "40px",
+    });
+    expect(container.querySelector(".recording-display-outline")).toHaveStyle({
+      borderRadius: "40px",
+    });
+  });
+
   it("starts full-screen capture on the current display and can switch displays before capture", async () => {
     preparedSession = {
       ...session,
@@ -394,6 +413,9 @@ describe("RecordingSelector", () => {
     expect(await screen.findByRole("button", { name: "Full screen", pressed: true }))
       .toBeInTheDocument();
     expect(container.querySelector(".recording-display-outline")).toBeInTheDocument();
+    expect(container.querySelector(".recording-display-outline")).not.toHaveStyle({
+      borderRadius: "40px",
+    });
     expect(container.querySelector(".recording-display-identity")).toHaveTextContent(
       "Built-in Retina Display1440 × 900",
     );

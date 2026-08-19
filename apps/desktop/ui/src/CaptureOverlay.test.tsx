@@ -174,13 +174,13 @@ describe("CaptureOverlay guidance", () => {
       .closest(".capture-guidance") as HTMLElement;
 
     await movePointerOverGuidance(guidance, { clientX: 620, clientY: 150 }, true);
-    // Just outside the painted box but inside leave slack — stay faded.
-    await movePointerOverGuidance(guidance, { clientX: 768, clientY: 150 }, true);
+    // Just outside the painted box but inside the 40px leave zone — stay faded.
+    await movePointerOverGuidance(guidance, { clientX: 790, clientY: 150 }, true);
     // Clear the slack zone — restore.
-    await movePointerOverGuidance(guidance, { clientX: 800, clientY: 150 }, false);
+    await movePointerOverGuidance(guidance, { clientX: 810, clientY: 150 }, false);
   });
 
-  it("ignores the painted border edge until the cursor is clearly inside", async () => {
+  it("fades region guidance as the cursor approaches the chip", async () => {
     window.history.replaceState(
       {},
       "",
@@ -192,10 +192,10 @@ describe("CaptureOverlay guidance", () => {
     const guidance = (await screen.findByText("Drag to select a region"))
       .closest(".capture-guidance") as HTMLElement;
 
-    // On the exact left edge — enter inset keeps it visible.
-    await movePointerOverGuidance(guidance, { clientX: 500, clientY: 150 }, false);
-    // Past the 4px enter inset — fade out of the way.
-    await movePointerOverGuidance(guidance, { clientX: 510, clientY: 150 }, true);
+    // On the painted left edge — fade immediately.
+    await movePointerOverGuidance(guidance, { clientX: 500, clientY: 150 }, true);
+    // Still in the 28px approach pad.
+    await movePointerOverGuidance(guidance, { clientX: 480, clientY: 150 }, true);
   });
 
   it("fades window guidance when the cursor enters its bounds", async () => {
@@ -217,14 +217,14 @@ describe("CaptureOverlay guidance", () => {
   it("uses enter/leave hysteresis for guidance hit testing", () => {
     const bounds = { left: 500, right: 760, top: 120, bottom: 180 };
 
-    // Enter inset is 4px; edge stays visible, past inset fades.
-    expect(isPointerOverCaptureGuidance(500, 150, bounds, false)).toBe(false);
-    expect(isPointerOverCaptureGuidance(503, 150, bounds, false)).toBe(false);
-    expect(isPointerOverCaptureGuidance(504, 150, bounds, false)).toBe(true);
+    // Approach pad is 28px; the painted edge and nearby cursor fade.
+    expect(isPointerOverCaptureGuidance(500, 150, bounds, false)).toBe(true);
+    expect(isPointerOverCaptureGuidance(480, 150, bounds, false)).toBe(true);
+    expect(isPointerOverCaptureGuidance(471, 150, bounds, false)).toBe(false);
     expect(isPointerOverCaptureGuidance(510, 150, bounds, false)).toBe(true);
-    // Leave slack is 20px beyond the painted box while already faded.
-    expect(isPointerOverCaptureGuidance(768, 150, bounds, true)).toBe(true);
-    expect(isPointerOverCaptureGuidance(800, 150, bounds, true)).toBe(false);
+    // Leave slack is 12px beyond the 28px approach pad while already faded.
+    expect(isPointerOverCaptureGuidance(790, 150, bounds, true)).toBe(true);
+    expect(isPointerOverCaptureGuidance(801, 150, bounds, true)).toBe(false);
   });
 
   it("hides region guidance while the user is dragging a selection", async () => {

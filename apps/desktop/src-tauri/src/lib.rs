@@ -582,6 +582,7 @@ async fn prepare_capture(
         mode,
         window_coordinate_scale: window_coordinate_scale(&session.display),
         window_corner_radius: window_corner_radius_points(),
+        display_corner_radius: display_corner_radius_points(&session.display.id),
         display: session.display.clone(),
         snapshot_url: models::snapshot_url(&id.to_string()),
         windows: session.windows.clone(),
@@ -977,6 +978,7 @@ fn get_active_session(
         mode: session.mode,
         window_coordinate_scale: window_coordinate_scale(&session.display),
         window_corner_radius: window_corner_radius_points(),
+        display_corner_radius: display_corner_radius_points(&session.display.id),
         display: session.display.clone(),
         snapshot_url: models::snapshot_url(&session.id.to_string()),
         windows: session.windows.clone(),
@@ -995,6 +997,7 @@ fn get_pending_session(state: tauri::State<'_, Arc<AppState>>) -> Option<ActiveS
             mode: session.mode,
             window_coordinate_scale: window_coordinate_scale(&session.display),
             window_corner_radius: window_corner_radius_points(),
+            display_corner_radius: display_corner_radius_points(&session.display.id),
             display: session.display.clone(),
             snapshot_url: models::snapshot_url(&session.id.to_string()),
             windows: session.windows.clone(),
@@ -1073,6 +1076,9 @@ fn reveal_capture_overlay(
         // Opaque frozen frame first, then take key focus so sibling document
         // windows (editors) can deactivate under cover of the snapshot.
         captures_macos_window::reveal_capture_overlay(&window).map_err(str::to_owned)?;
+        if let Err(error) = captures_macos_window::elevate_capture_surface(&window) {
+            eprintln!("failed to keep the capture overlay above the menu bar: {error}");
+        }
         if let Err(error) = window.set_focus() {
             eprintln!("failed to focus capture overlay: {error}");
         }
@@ -2718,13 +2724,25 @@ fn window_coordinate_scale(display: &captures_capture::DisplayDescriptor) -> f64
     }
 }
 
-fn window_corner_radius_points() -> f64 {
+pub(crate) fn window_corner_radius_points() -> f64 {
     #[cfg(target_os = "macos")]
     {
         captures_macos_window::standard_window_corner_radius_points()
     }
     #[cfg(not(target_os = "macos"))]
     {
+        0.0
+    }
+}
+
+pub(crate) fn display_corner_radius_points(display_id: &str) -> f64 {
+    #[cfg(target_os = "macos")]
+    {
+        captures_macos_window::display_corner_radius_points(display_id)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = display_id;
         0.0
     }
 }
@@ -3056,6 +3074,10 @@ fn show_capture_window(app: &AppHandle, session: &ActiveSession) {
             // top-left edge on the selected display (same as the recording selector).
             let _ = window.set_size(LogicalSize::new(width, height));
             let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+            #[cfg(target_os = "macos")]
+            if let Err(error) = captures_macos_window::cover_display(&window, &display.id) {
+                eprintln!("failed to cover the capture display: {error}");
+            }
             #[cfg(target_os = "linux")]
             let _ = window.set_fullscreen(wayland_session());
             if let Err(error) = handle.emit("capture-session-ready", &session) {
