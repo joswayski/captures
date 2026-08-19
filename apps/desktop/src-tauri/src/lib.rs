@@ -3125,10 +3125,12 @@ const ONBOARDING_WINDOW_HEIGHT: f64 = 520.0;
 /// Matches the marketing site canvas (`#f5f7fb`) so first-run setup is not mustard/cream.
 const ONBOARDING_WINDOW_BACKGROUND: Color = Color(245, 247, 251, 255);
 
+#[cfg(any(target_os = "macos", test))]
 const MACOS_SCREEN_RECORDING_SETTINGS_URLS: &[&str] = &[
     "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ScreenCapture",
     "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
 ];
+#[cfg(any(target_os = "macos", test))]
 const MACOS_MICROPHONE_SETTINGS_URLS: &[&str] = &[
     "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Microphone",
     "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
