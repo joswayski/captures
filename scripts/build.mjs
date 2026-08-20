@@ -3,6 +3,8 @@ import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { hideCheckoutMacAppFromLaunchers } from "./macos-app-discovery.mjs";
+
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const APP_NAME = "Captures";
 const BINARY_NAME = "captures";
@@ -281,6 +283,12 @@ if (isMac && !skipInstall) {
       log("Keeping existing Screen Recording permission (set CAPTURES_RESET_PERMISSIONS=1 to wipe it).");
     }
     installToApplications();
+    hideCheckoutMacAppFromLaunchers({
+      targetDirectory: join(ROOT, "target"),
+      builtApp: BUILT_APP,
+      applicationsApp: APPLICATIONS_APP,
+      log,
+    });
     if (openAfterInstall) {
       log(`Launching ${APP_NAME}…`);
       runChecked("/usr/bin/open", [APPLICATIONS_APP], { stdio: "inherit" });
@@ -297,6 +305,13 @@ if (isMac && !skipInstall) {
     console.warn("Ignoring CAPTURES_RESET_PERMISSIONS=1 because CAPTURES_SKIP_INSTALL=1.");
   }
   log("Skipping Applications install (CAPTURES_SKIP_INSTALL=1).");
+  hideCheckoutMacAppFromLaunchers({
+    targetDirectory: join(ROOT, "target"),
+    builtApp: BUILT_APP,
+    applicationsApp: APPLICATIONS_APP,
+    relocateCheckoutApp: false,
+    log,
+  });
   log(`Bundle is at: ${BUILT_APP}`);
 }
 

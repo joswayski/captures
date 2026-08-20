@@ -47,7 +47,7 @@ Build Captures on the operating system where the package will run:
 npm run build
 ```
 
-Packages are written under `target/release/bundle`. On macOS, the default build also replaces `/Applications/Captures.app` and launches it.
+Packages are written under `target/release/bundle`. On macOS, the default build also replaces `/Applications/Captures.app` and launches it. Use that Applications copy from Spotlight or Raycast. Checkout bundles in `target/` and Git worktrees are the same app name, so packaging excludes `target/` from Spotlight and moves the leftover `.app` to `target/release/bundle/macos.noindex` after install.
 
 Useful macOS options:
 
