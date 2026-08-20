@@ -136,16 +136,7 @@ export default function Home({
                     {detectedDownload.label}
                     <span className="sr-only"> {detectedDownload.fileName}</span>
                   </a>
-                ) : (
-                  <a
-                    href={RELEASES_URL}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="download-button"
-                  >
-                    Download on GitHub
-                  </a>
-                )}
+                ) : null}
                 <a
                   href={REPO_URL}
                   target="_blank"

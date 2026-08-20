@@ -3,8 +3,9 @@
 Minimal work-in-progress page with a Preview download for the visitor's OS
 (same stable `preview` release assets as the root README), a View source link to
 [the repo](https://github.com/joswayski/captures), and recent changes from `main`.
-Other platforms are mentioned with a link to GitHub Releases rather than listed as
-installers.
+Phones, tablets, Chrome OS, and other systems without a matching installer see
+View source instead of a download button. Other desktop platforms are mentioned
+with a link to GitHub Releases rather than listed as installers.
 
 ## Stack
 
