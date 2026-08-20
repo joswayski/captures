@@ -183,6 +183,7 @@ describe("RecordingHud", () => {
   });
 
   it("points first-run setup at the tray and New Capture shortcut", async () => {
+    window.history.replaceState({}, "", "/?view=startup");
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "get_settings") {
         return {
@@ -201,6 +202,28 @@ describe("RecordingHud", () => {
     expect(screen.getByText("Space")).toBeInTheDocument();
     expect(screen.getByText(/to start/)).toBeInTheDocument();
     expect(screen.queryByText("Captures is running")).not.toBeInTheDocument();
+    expect(document.querySelector(".startup-notice-caret")).not.toBeInTheDocument();
+  });
+
+  it("renders a caret pointing at the tray when placement is provided", () => {
+    window.history.replaceState({}, "", "/?view=startup&caret=top&caret_x=180");
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_settings") {
+        return {
+          new_capture_shortcut: "Ctrl+Shift+Space",
+        };
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    const { container } = render(<StartupNotice />);
+    const notice = container.querySelector(".startup-notice");
+
+    expect(notice).toHaveAttribute("data-caret", "top");
+    expect((notice as HTMLElement | null)?.style.getPropertyValue("--startup-caret-x")).toBe(
+      "180px",
+    );
+    expect(container.querySelector(".startup-notice-caret")).toBeInTheDocument();
   });
 
   it("offers history recovery wording until a recording is permanently saved", () => {

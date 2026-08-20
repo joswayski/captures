@@ -228,6 +228,11 @@ function IdleView() {
 
 export function StartupNotice() {
   const [shortcut, setShortcut] = useState("Ctrl+Shift+Space");
+  const caretEdge = query("caret");
+  const caretXRaw = query("caret_x");
+  const caretX = caretXRaw == null ? Number.NaN : Number(caretXRaw);
+  const hasCaret =
+    (caretEdge === "top" || caretEdge === "bottom") && Number.isFinite(caretX);
 
   useEffect(() => {
     void invoke<AppSettings>("get_settings")
@@ -241,21 +246,31 @@ export function StartupNotice() {
 
   const keys = shortcutDisplayTokens(shortcut);
   const trayLabel = /Mac/i.test(navigator.userAgent) ? "menu bar" : "tray";
+  const caretStyle = hasCaret
+    ? ({ "--startup-caret-x": `${caretX}px` } as CSSProperties)
+    : undefined;
 
   return (
-    <main className="startup-notice">
-      <div className="startup-icon" aria-hidden="true">
-        <CaptureIcon />
-      </div>
-      <div>
-        <strong>Captures is here whenever you need it</strong>
-        <p>
-          Use the {trayLabel} icon, or press{" "}
-          {keys.map((key, index) => (
-            <kbd key={`${key}-${index}`}>{key}</kbd>
-          ))}
-          {" "}to start.
-        </p>
+    <main
+      className="startup-notice"
+      data-caret={hasCaret ? caretEdge : undefined}
+      style={caretStyle}
+    >
+      {hasCaret ? <div className="startup-notice-caret" aria-hidden="true" /> : null}
+      <div className="startup-notice-body">
+        <div className="startup-icon" aria-hidden="true">
+          <CaptureIcon />
+        </div>
+        <div>
+          <strong>Captures is here whenever you need it</strong>
+          <p>
+            Use the {trayLabel} icon, or press{" "}
+            {keys.map((key, index) => (
+              <kbd key={`${key}-${index}`}>{key}</kbd>
+            ))}
+            {" "}to start.
+          </p>
+        </div>
       </div>
     </main>
   );
