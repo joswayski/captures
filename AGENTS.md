@@ -9,7 +9,7 @@
 ## Repository map
 
 - `apps/desktop` contains the Tauri desktop application and its React UI.
-- `apps/web` contains the TanStack website and a Node server for its same-origin `/api/*` routes. Railway runs that process; Cloudflare proxies `captur.es` and caches hashed static assets.
+- `apps/web` contains the TanStack website and a Node server for its same-origin `/api/*` routes. AWS k3s runs that process; Cloudflare proxies `captur.es` and caches hashed static assets.
 - `crates` contains the shared Rust capture and platform-integration crates.
 - `DEVELOPMENT.md` contains local setup, validation, and packaging instructions.
 - `docs/releases.md` contains maintainer release and recovery procedures.

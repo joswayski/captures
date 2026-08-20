@@ -113,7 +113,7 @@ npm run dev:web
 ```
 
 The local health endpoint is `http://localhost:5174/api/health`. See
-[`apps/web/README.md`](apps/web/README.md) for Railway and Cloudflare setup.
+[`apps/web/README.md`](apps/web/README.md) for AWS and Cloudflare setup.
 
 Point a local desktop build at that server:
 

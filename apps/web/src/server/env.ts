@@ -17,7 +17,7 @@ export function getApiEnv(): ApiEnv {
   };
 }
 
-/** Prefer Cloudflare's connecting IP when the edge is in front of Railway. */
+/** Prefer Cloudflare's connecting IP when the edge is in front of the origin. */
 export function clientKeyFromRequest(request: Request): string {
   const cloudflareIp = request.headers.get("CF-Connecting-IP")?.trim();
   if (cloudflareIp) return cloudflareIp;
