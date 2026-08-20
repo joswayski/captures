@@ -91,6 +91,7 @@ enum AppError {
 
 type CommandResult<T> = Result<T, String>;
 const AUTOSTART_ARG: &str = "--captures-autostart";
+const TRAY_ICON_ID: &str = "main";
 const ONBOARDING_WINDOW_LABEL: &str = "onboarding";
 const RECORDING_EDITOR_WINDOW_PREFIX: &str = "recording-editor-";
 const RECORDING_SAVED_NOTICE_LABEL: &str = "recording-saved";
@@ -349,9 +350,7 @@ pub fn run() {
                 if !onboarding_completed {
                     show_onboarding(&handle);
                 } else if launched_from_autostart() {
-                    if let Err(error) = show_startup_notice(&handle) {
-                        eprintln!("failed to show Captures launch notice: {error}");
-                    }
+                    show_startup_notice(&handle);
                 } else {
                     open_capture_controls(&handle, CaptureSelectorMode::Screenshot);
                 }
@@ -1240,9 +1239,7 @@ fn complete_onboarding(
         eprintln!("failed to broadcast completed onboarding: {error}");
     }
     hide_window(&app, ONBOARDING_WINDOW_LABEL);
-    if let Err(error) = show_startup_notice(&app) {
-        eprintln!("failed to show Captures ready notice: {error}");
-    }
+    show_startup_notice(&app);
     Ok(())
 }
 
@@ -2981,7 +2978,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             &quit,
         ],
     )?;
-    let mut tray = TrayIconBuilder::with_id("main")
+    let mut tray = TrayIconBuilder::with_id(TRAY_ICON_ID)
         .menu(&menu)
         .tooltip("Captures is here whenever you need it");
 
@@ -3120,6 +3117,14 @@ fn create_overlay_window(app: &AppHandle) -> Result<(), tauri::Error> {
 
 const STARTUP_NOTICE_WIDTH: f64 = 400.0;
 const STARTUP_NOTICE_HEIGHT: f64 = 118.0;
+/// Extra window height reserved for the tray-pointing caret.
+const STARTUP_NOTICE_CARET_SPACE: f64 = 12.0;
+/// Keep the caret off the rounded corners of the notice.
+const STARTUP_NOTICE_CARET_INSET: f64 = 28.0;
+/// Pull the transparent window margin over the tray so the caret sits a few
+/// pixels away from the icon instead of a full card-height below it.
+const STARTUP_NOTICE_TRAY_OVERLAP: f64 = 6.0;
+const STARTUP_NOTICE_SCREEN_MARGIN: f64 = 10.0;
 const ONBOARDING_WINDOW_WIDTH: f64 = 560.0;
 const ONBOARDING_WINDOW_HEIGHT: f64 = 520.0;
 /// Matches the marketing site canvas (`#f5f7fb`) so first-run setup is not mustard/cream.
@@ -3184,16 +3189,72 @@ fn show_onboarding(app: &AppHandle) {
     }
 }
 
-fn show_startup_notice(app: &AppHandle) -> Result<(), tauri::Error> {
-    let (x, y) = startup_notice_position(app);
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StartupNoticeCaret {
+    None,
+    Top,
+    Bottom,
+}
+
+impl StartupNoticeCaret {
+    fn as_query_value(self) -> Option<&'static str> {
+        match self {
+            Self::None => None,
+            Self::Top => Some("top"),
+            Self::Bottom => Some("bottom"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct StartupNoticePlacement {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    caret: StartupNoticeCaret,
+    caret_x: f64,
+}
+
+fn show_startup_notice(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        // `TrayIcon::rect` hops to the main thread and waits. Calling it from
+        // setup() would deadlock, and the status item may not have a screen
+        // rect until the event loop has run once.
+        let placement = startup_notice_placement_with_retry(&app);
+        let handle = app.clone();
+        if let Err(error) = app.run_on_main_thread(move || {
+            if let Err(error) = create_startup_notice(&handle, placement) {
+                eprintln!("failed to show Captures launch notice: {error}");
+            }
+        }) {
+            eprintln!("failed to schedule Captures launch notice: {error}");
+        }
+    });
+}
+
+fn startup_notice_placement_with_retry(app: &AppHandle) -> StartupNoticePlacement {
+    let first = startup_notice_placement(app);
+    if first.caret != StartupNoticeCaret::None {
+        return first;
+    }
+    std::thread::sleep(std::time::Duration::from_millis(80));
+    startup_notice_placement(app)
+}
+
+fn create_startup_notice(
+    app: &AppHandle,
+    placement: StartupNoticePlacement,
+) -> Result<(), tauri::Error> {
     let window = WebviewWindowBuilder::new(
         app,
         "startup",
-        WebviewUrl::App("index.html?view=startup".into()),
+        WebviewUrl::App(startup_notice_url(placement).into()),
     )
     .title("Captures is running")
-    .inner_size(STARTUP_NOTICE_WIDTH, STARTUP_NOTICE_HEIGHT)
-    .position(x, y)
+    .inner_size(placement.width, placement.height)
+    .position(placement.x, placement.y)
     .decorations(false)
     .always_on_top(true)
     .visible_on_all_workspaces(true)
@@ -3227,20 +3288,119 @@ fn show_startup_notice(app: &AppHandle) -> Result<(), tauri::Error> {
     Ok(())
 }
 
-fn startup_notice_position(app: &AppHandle) -> (f64, f64) {
-    app.primary_monitor()
-        .ok()
-        .flatten()
-        .map(|monitor| {
-            let scale = monitor.scale_factor().max(1.0);
-            let position = monitor.position();
-            let size = monitor.size();
-            let left = f64::from(position.x) / scale;
-            let top = f64::from(position.y) / scale;
-            let right = left + f64::from(size.width) / scale;
-            (right - STARTUP_NOTICE_WIDTH - 18.0, top + 30.0)
+fn startup_notice_url(placement: StartupNoticePlacement) -> String {
+    match placement.caret.as_query_value() {
+        Some(caret) => format!(
+            "index.html?view=startup&caret={caret}&caret_x={}",
+            placement.caret_x.round()
+        ),
+        None => "index.html?view=startup".to_owned(),
+    }
+}
+
+fn startup_notice_placement(app: &AppHandle) -> StartupNoticePlacement {
+    let tray = tray_icon_physical_rect(app);
+    let monitor = tray
+        .and_then(|(x, y, width, height)| {
+            app.monitor_from_point(x + width / 2.0, y + height / 2.0)
+                .ok()
+                .flatten()
         })
-        .unwrap_or((20.0, 30.0))
+        .or_else(|| app.primary_monitor().ok().flatten());
+    let Some(monitor) = monitor else {
+        return place_startup_notice(
+            LogicalRect {
+                x: 0.0,
+                y: 0.0,
+                width: 1440.0,
+                height: 900.0,
+            },
+            None,
+        );
+    };
+    let scale = monitor.scale_factor().max(1.0);
+    let tray = tray.map(|(x, y, width, height)| LogicalRect {
+        x: x / scale,
+        y: y / scale,
+        width: width / scale,
+        height: height / scale,
+    });
+    place_startup_notice(monitor_logical_rect(&monitor), tray)
+}
+
+fn tray_icon_physical_rect(app: &AppHandle) -> Option<(f64, f64, f64, f64)> {
+    let tray = app.tray_by_id(TRAY_ICON_ID)?;
+    let rect = tray.rect().ok().flatten()?;
+    // Already physical; scale is ignored for Physical variants.
+    let position = rect.position.to_physical::<f64>(1.0);
+    let size = rect.size.to_physical::<f64>(1.0);
+    if size.width <= 0.0 || size.height <= 0.0 {
+        return None;
+    }
+    Some((position.x, position.y, size.width, size.height))
+}
+
+fn monitor_logical_rect(monitor: &tauri::Monitor) -> LogicalRect {
+    let scale = monitor.scale_factor().max(1.0);
+    let position = monitor.position();
+    let size = monitor.size();
+    LogicalRect {
+        x: f64::from(position.x) / scale,
+        y: f64::from(position.y) / scale,
+        width: f64::from(size.width) / scale,
+        height: f64::from(size.height) / scale,
+    }
+}
+
+fn place_startup_notice(monitor: LogicalRect, tray: Option<LogicalRect>) -> StartupNoticePlacement {
+    let fallback = StartupNoticePlacement {
+        x: monitor.x + monitor.width - STARTUP_NOTICE_WIDTH - 18.0,
+        y: monitor.y + 30.0,
+        width: STARTUP_NOTICE_WIDTH,
+        height: STARTUP_NOTICE_HEIGHT,
+        caret: StartupNoticeCaret::None,
+        caret_x: STARTUP_NOTICE_WIDTH / 2.0,
+    };
+    let Some(tray) = tray else {
+        return fallback;
+    };
+    if tray.width <= 0.0 || tray.height <= 0.0 {
+        return fallback;
+    }
+
+    let tray_center_x = tray.x + tray.width / 2.0;
+    let tray_center_y = tray.y + tray.height / 2.0;
+    let caret = if tray_center_y <= monitor.y + monitor.height / 2.0 {
+        StartupNoticeCaret::Top
+    } else {
+        StartupNoticeCaret::Bottom
+    };
+    let width = STARTUP_NOTICE_WIDTH;
+    let height = STARTUP_NOTICE_HEIGHT + STARTUP_NOTICE_CARET_SPACE;
+    let min_x = monitor.x + STARTUP_NOTICE_SCREEN_MARGIN;
+    let max_x = monitor.x + monitor.width - width - STARTUP_NOTICE_SCREEN_MARGIN;
+    let x = (tray_center_x - width / 2.0).clamp(min_x.min(max_x), max_x.max(min_x));
+    let unclamped_y = match caret {
+        StartupNoticeCaret::Top => tray.y + tray.height - STARTUP_NOTICE_TRAY_OVERLAP,
+        StartupNoticeCaret::Bottom => tray.y - height + STARTUP_NOTICE_TRAY_OVERLAP,
+        StartupNoticeCaret::None => fallback.y,
+    };
+    let min_y = monitor.y + STARTUP_NOTICE_SCREEN_MARGIN;
+    let max_y = monitor.y + monitor.height - height - STARTUP_NOTICE_SCREEN_MARGIN;
+    let y = unclamped_y.clamp(min_y.min(max_y), max_y.max(min_y));
+    let caret_x = (tray_center_x - x).clamp(
+        STARTUP_NOTICE_CARET_INSET,
+        (width - STARTUP_NOTICE_CARET_INSET).max(STARTUP_NOTICE_CARET_INSET),
+    );
+
+    StartupNoticePlacement {
+        x,
+        y,
+        width,
+        height,
+        caret,
+        caret_x,
+    }
 }
 
 const RECORDING_SAVED_NOTICE_WIDTH: f64 = 440.0;
@@ -4834,14 +4994,17 @@ mod tests {
     #[cfg(target_os = "macos")]
     use super::macos_window_is_capture_overlay;
     use super::{
-        AppError, THUMBNAIL_AUTO_HIDE_RESERVE, THUMBNAIL_SYSTEM_CHROME_GAP, ThumbnailCursorAction,
-        ThumbnailCursorKind, ThumbnailMonitorBounds, clipboard_fingerprint,
+        AppError, LogicalRect, STARTUP_NOTICE_CARET_INSET, STARTUP_NOTICE_CARET_SPACE,
+        STARTUP_NOTICE_HEIGHT, STARTUP_NOTICE_TRAY_OVERLAP, STARTUP_NOTICE_WIDTH,
+        StartupNoticeCaret, THUMBNAIL_AUTO_HIDE_RESERVE, THUMBNAIL_SYSTEM_CHROME_GAP,
+        ThumbnailCursorAction, ThumbnailCursorKind, ThumbnailMonitorBounds, clipboard_fingerprint,
         display_contains_pointer, mask_macos_window_corners, onboarding_window_theme,
-        parse_shortcut, primary_app_window_priority, refine_window_chrome_from_snapshot,
-        should_trigger_shortcut, thumbnail_cursor_action, thumbnail_geometry,
-        thumbnail_pointer_position, thumbnail_stack_should_be_visible,
-        thumbnail_visible_window_height, track_shortcut_suppression, viewer_window_label,
-        window_is_capturable, windows_window_is_capture_overlay,
+        parse_shortcut, place_startup_notice, primary_app_window_priority,
+        refine_window_chrome_from_snapshot, should_trigger_shortcut, startup_notice_url,
+        thumbnail_cursor_action, thumbnail_geometry, thumbnail_pointer_position,
+        thumbnail_stack_should_be_visible, thumbnail_visible_window_height,
+        track_shortcut_suppression, viewer_window_label, window_is_capturable,
+        windows_window_is_capture_overlay,
     };
 
     fn bounds(
@@ -5527,5 +5690,87 @@ mod tests {
         assert!(!super::screen_rect_contains_point(
             100.0, 200.0, 400.0, 300.0, 99.0, 250.0
         ));
+    }
+
+    fn notice_monitor(width: f64, height: f64) -> LogicalRect {
+        LogicalRect {
+            x: 0.0,
+            y: 0.0,
+            width,
+            height,
+        }
+    }
+
+    fn notice_tray(x: f64, y: f64, width: f64, height: f64) -> LogicalRect {
+        LogicalRect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    #[test]
+    fn startup_notice_falls_back_to_the_top_right_without_a_tray_rect() {
+        let placement = place_startup_notice(notice_monitor(1440.0, 900.0), None);
+        assert_eq!(placement.x, 1022.0);
+        assert_eq!(placement.y, 30.0);
+        assert_eq!(placement.width, STARTUP_NOTICE_WIDTH);
+        assert_eq!(placement.height, STARTUP_NOTICE_HEIGHT);
+        assert_eq!(placement.caret, StartupNoticeCaret::None);
+        assert_eq!(startup_notice_url(placement), "index.html?view=startup");
+    }
+
+    #[test]
+    fn startup_notice_centers_under_a_macos_menu_bar_icon() {
+        let placement = place_startup_notice(
+            notice_monitor(1440.0, 900.0),
+            Some(notice_tray(800.0, 0.0, 28.0, 24.0)),
+        );
+        assert_eq!(placement.caret, StartupNoticeCaret::Top);
+        assert_eq!(
+            placement.height,
+            STARTUP_NOTICE_HEIGHT + STARTUP_NOTICE_CARET_SPACE
+        );
+        assert_eq!(placement.x, 614.0);
+        assert_eq!(placement.y, 24.0 - STARTUP_NOTICE_TRAY_OVERLAP);
+        assert_eq!(placement.caret_x, 200.0);
+        assert_eq!(
+            startup_notice_url(placement),
+            "index.html?view=startup&caret=top&caret_x=200"
+        );
+    }
+
+    #[test]
+    fn startup_notice_keeps_a_right_edge_icon_caret_on_the_card() {
+        let placement = place_startup_notice(
+            notice_monitor(1440.0, 900.0),
+            Some(notice_tray(1410.0, 0.0, 28.0, 24.0)),
+        );
+        assert_eq!(placement.caret, StartupNoticeCaret::Top);
+        assert_eq!(placement.x, 1030.0);
+        assert_eq!(
+            placement.caret_x,
+            STARTUP_NOTICE_WIDTH - STARTUP_NOTICE_CARET_INSET
+        );
+    }
+
+    #[test]
+    fn startup_notice_sits_above_a_windows_taskbar_tray_icon() {
+        let placement = place_startup_notice(
+            notice_monitor(1920.0, 1080.0),
+            Some(notice_tray(1860.0, 1048.0, 24.0, 24.0)),
+        );
+        assert_eq!(placement.caret, StartupNoticeCaret::Bottom);
+        assert_eq!(placement.x, 1510.0);
+        assert_eq!(
+            placement.y,
+            1048.0 - (STARTUP_NOTICE_HEIGHT + STARTUP_NOTICE_CARET_SPACE)
+                + STARTUP_NOTICE_TRAY_OVERLAP
+        );
+        assert_eq!(
+            startup_notice_url(placement),
+            "index.html?view=startup&caret=bottom&caret_x=362"
+        );
     }
 }
