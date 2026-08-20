@@ -14,6 +14,8 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { hideCheckoutMacAppFromLaunchers } from "./macos-app-discovery.mjs";
+
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const APP_NAME = "Captures";
 const BINARY_NAME = "captures";
@@ -575,6 +577,12 @@ export function main(args = process.argv.slice(2), runtime = {}) {
   }
 
   installFromDmg(dmg, { quarantine: options.quarantine });
+  hideCheckoutMacAppFromLaunchers({
+    targetDirectory: join(ROOT, "target"),
+    builtApp: BUILT_APP,
+    applicationsApp: APPLICATIONS_APP,
+    log,
+  });
   if (options.launch) {
     log(`Launching ${APP_NAME}…`);
     if (options.quarantine) {
