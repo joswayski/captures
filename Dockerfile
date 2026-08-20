@@ -18,12 +18,12 @@ RUN npm ci
 COPY apps/web apps/web
 COPY shared shared
 
-# Railway provides a different commit SHA for every GitHub deployment. Referencing
-# it here invalidates this layer so the homepage history fetch is not reused.
-ARG RAILWAY_GIT_COMMIT_SHA=local
+# Each Git commit SHA invalidates this layer so the homepage history fetch is
+# not reused across deployments.
+ARG GIT_COMMIT_SHA=local
 RUN --mount=type=secret,id=github_token \
     GITHUB_TOKEN="$(cat /run/secrets/github_token 2>/dev/null || true)" \
-    RAILWAY_GIT_COMMIT_SHA="$RAILWAY_GIT_COMMIT_SHA" \
+    GIT_COMMIT_SHA="$GIT_COMMIT_SHA" \
     npm run build:web
 
 FROM node:24-alpine

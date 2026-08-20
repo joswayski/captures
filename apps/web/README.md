@@ -75,33 +75,19 @@ The homepage is delegated to TanStack.
 
 The current API exposes `GET /api/health` and `POST /api/feedback`. Feedback is
 validated, limited to one accepted submission per client IP per minute, and sent
-to Discord. Rate limits are in-memory (one Railway replica). Client IP prefers
+to Discord. Rate limits are in-memory (one replica). Client IP prefers
 Cloudflare’s `CF-Connecting-IP`, then `X-Real-IP`, and never a client-spoofable
-`X-Forwarded-For` value. Set `DISCORD_WEBHOOK_URL` as a Railway service variable.
+`X-Forwarded-For` value. Set `DISCORD_WEBHOOK_URL` in the production app secret.
 
-Keep Railway unreachable except through Cloudflare so those forwarding headers
+Keep the origin unreachable except through Cloudflare so those forwarding headers
 stay trustworthy.
 
-## Railway
+## AWS
 
-Deploy from the monorepo root as one Docker service:
-
-| Setting | Value |
-| --- | --- |
-| Builder | Dockerfile |
-| Dockerfile path | `Dockerfile` |
-| Root directory | repository root (leave blank) |
-| Watch paths | `apps/web/**`, `shared/**`, `package.json`, `package-lock.json`, `Dockerfile` |
-| Public port | `3000` (`PORT` is injected) |
-| Health check | `GET /api/health` |
-
-Required env on the **web** service: `DISCORD_WEBHOOK_URL`.
-
-Connect the GitHub repo so pushes to `main` rebuild the image. Railway supplies
-`RAILWAY_GIT_COMMIT_SHA`, which busts the Docker layer that fetches homepage
-history.
-
-## AWS image publishing
+The production origin is one `linux/arm64` container on the AWS k3s cluster. The
+process listens on port `3000` (`PORT` / `HOST` from the environment). Health
+check is `GET /api/health`. Run one replica: the feedback rate limiter is
+in-memory. Required env: `DISCORD_WEBHOOK_URL`.
 
 The `AWS image` GitHub Actions workflow builds the production Dockerfile for
 `linux/arm64` on pull requests and verifies `/api/health` inside the resulting
@@ -112,8 +98,8 @@ must also pin the ECR digest and must not use `latest` or a Docker-login Secret.
 The short-lived GitHub token used to fetch homepage history is mounted only as a
 BuildKit secret and is not stored in the image or its build arguments.
 
-Railway remains the live origin until the separately reviewed infrastructure
-cutover has a Ready k3s pod and the Cloudflare Tunnel route is switched.
+CI passes `GIT_COMMIT_SHA` (the GitHub SHA) so the Docker layer that fetches
+homepage history is not reused across commits.
 
 From the monorepo root, a local image is:
 
@@ -122,25 +108,16 @@ docker build -t captures-web .
 docker run --rm -p 8080:3000 -e DISCORD_WEBHOOK_URL="$DISCORD_WEBHOOK_URL" captures-web
 ```
 
-Generate a Railway domain such as `*.up.railway.app` first, then attach
-`captur.es` as a custom domain. Railway will give you a CNAME target and a TXT
-ownership record.
-
 ## Cloudflare in front
 
-`captur.es` stays on Cloudflare. Railway is the origin. Visitors hit Cloudflare;
-hashed JS/CSS are cached at the edge; HTML and `/api/*` go to Railway.
+`captur.es` stays on Cloudflare. The AWS k3s Deployment is the origin, reached
+through Cloudflare Tunnel. Visitors hit Cloudflare; hashed JS/CSS are cached at
+the edge; HTML and `/api/*` go to the origin.
 
-1. In Railway, add the custom domain `captur.es` and copy the CNAME plus TXT
-   records.
-2. In Cloudflare DNS:
-   - `CNAME @` → the Railway `*.up.railway.app` target, **proxied** (orange cloud).
-   - The Railway TXT ownership record, **DNS only**.
-   - Optional: `CNAME www` → `@`, proxied, plus a 301 redirect to `https://captur.es`.
-3. SSL/TLS → Overview: **Full**, not Flexible and not Full (Strict). Railway
-   documents that Strict does not work as intended when the orange cloud is on.
+1. Point `captur.es` at the production Cloudflare Tunnel, **proxied**.
+2. Optional: `CNAME www` → `@`, proxied, plus a 301 redirect to `https://captur.es`.
+3. SSL/TLS → Overview: **Full (Strict)**.
 4. SSL/TLS → Edge Certificates: enable Universal SSL.
-5. After DNS verifies, Railway should show **Cloudflare proxy detected**.
 
 Cache behavior comes from origin headers plus two Cache Rules:
 
