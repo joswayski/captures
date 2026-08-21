@@ -342,7 +342,7 @@ export function Onboarding() {
             ) : (
               <button
                 type="button"
-                className="onboarding-primary-button"
+                className={`onboarding-primary-button${screenReady && busy === null ? " cta-pulse" : ""}`}
                 disabled={!screenReady || busy !== null}
                 onClick={() => void complete()}
               >
