@@ -350,7 +350,7 @@ pub fn run() {
                 if !onboarding_completed {
                     show_onboarding(&handle);
                 } else if launched_from_autostart() {
-                    show_startup_notice(&handle);
+                    show_startup_notice(&handle, STARTUP_NOTICE_AUTOSTART_VISIBLE);
                 } else {
                     open_capture_controls(&handle, CaptureSelectorMode::Screenshot);
                 }
@@ -1239,7 +1239,7 @@ fn complete_onboarding(
         eprintln!("failed to broadcast completed onboarding: {error}");
     }
     hide_window(&app, ONBOARDING_WINDOW_LABEL);
-    show_startup_notice(&app);
+    show_startup_notice(&app, STARTUP_NOTICE_AFTER_SETUP_VISIBLE);
     Ok(())
 }
 
@@ -3125,6 +3125,9 @@ const STARTUP_NOTICE_CARET_INSET: f64 = 28.0;
 /// pixels away from the icon instead of a full card-height below it.
 const STARTUP_NOTICE_TRAY_OVERLAP: f64 = 6.0;
 const STARTUP_NOTICE_SCREEN_MARGIN: f64 = 10.0;
+const STARTUP_NOTICE_AUTOSTART_VISIBLE: std::time::Duration = std::time::Duration::from_secs(5);
+/// After first-run setup, keep the tray hint up long enough to read.
+const STARTUP_NOTICE_AFTER_SETUP_VISIBLE: std::time::Duration = std::time::Duration::from_secs(15);
 const ONBOARDING_WINDOW_WIDTH: f64 = 560.0;
 const ONBOARDING_WINDOW_HEIGHT: f64 = 520.0;
 /// Matches the marketing site canvas (`#f5f7fb`) so first-run setup is not mustard/cream.
@@ -3216,7 +3219,7 @@ struct StartupNoticePlacement {
     caret_x: f64,
 }
 
-fn show_startup_notice(app: &AppHandle) {
+fn show_startup_notice(app: &AppHandle, visible_for: std::time::Duration) {
     let app = app.clone();
     std::thread::spawn(move || {
         // `TrayIcon::rect` hops to the main thread and waits. Calling it from
@@ -3225,7 +3228,7 @@ fn show_startup_notice(app: &AppHandle) {
         let placement = startup_notice_placement_with_retry(&app);
         let handle = app.clone();
         if let Err(error) = app.run_on_main_thread(move || {
-            if let Err(error) = create_startup_notice(&handle, placement) {
+            if let Err(error) = create_startup_notice(&handle, placement, visible_for) {
                 eprintln!("failed to show Captures launch notice: {error}");
             }
         }) {
@@ -3246,6 +3249,7 @@ fn startup_notice_placement_with_retry(app: &AppHandle) -> StartupNoticePlacemen
 fn create_startup_notice(
     app: &AppHandle,
     placement: StartupNoticePlacement,
+    visible_for: std::time::Duration,
 ) -> Result<(), tauri::Error> {
     let window = WebviewWindowBuilder::new(
         app,
@@ -3277,7 +3281,7 @@ fn create_startup_notice(
 
     let timer_app = app.clone();
     std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_secs(5));
+        std::thread::sleep(visible_for);
         let handle = timer_app.clone();
         let _ = timer_app.run_on_main_thread(move || {
             if let Some(window) = handle.get_webview_window("startup") {
@@ -4994,7 +4998,8 @@ mod tests {
     #[cfg(target_os = "macos")]
     use super::macos_window_is_capture_overlay;
     use super::{
-        AppError, LogicalRect, STARTUP_NOTICE_CARET_INSET, STARTUP_NOTICE_CARET_SPACE,
+        AppError, LogicalRect, STARTUP_NOTICE_AFTER_SETUP_VISIBLE,
+        STARTUP_NOTICE_AUTOSTART_VISIBLE, STARTUP_NOTICE_CARET_INSET, STARTUP_NOTICE_CARET_SPACE,
         STARTUP_NOTICE_HEIGHT, STARTUP_NOTICE_TRAY_OVERLAP, STARTUP_NOTICE_WIDTH,
         StartupNoticeCaret, THUMBNAIL_AUTO_HIDE_RESERVE, THUMBNAIL_SYSTEM_CHROME_GAP,
         ThumbnailCursorAction, ThumbnailCursorKind, ThumbnailMonitorBounds, clipboard_fingerprint,
@@ -5708,6 +5713,14 @@ mod tests {
             width,
             height,
         }
+    }
+
+    #[test]
+    fn startup_notice_after_setup_lasts_three_times_as_long_as_autostart() {
+        assert_eq!(
+            STARTUP_NOTICE_AFTER_SETUP_VISIBLE,
+            STARTUP_NOTICE_AUTOSTART_VISIBLE * 3
+        );
     }
 
     #[test]

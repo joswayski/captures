@@ -66,7 +66,7 @@ describe("Onboarding", () => {
     expect(start).toBeDisabled();
     expect(start).not.toHaveClass("cta-pulse");
     expect(start.parentElement).toHaveClass("onboarding-actions");
-    expect(screen.getByRole("navigation", { name: "Setup progress" })).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Setup progress" })).not.toBeInTheDocument();
     expect(screen.queryByText("One place for access")).not.toBeInTheDocument();
     expect(screen.queryByText("Desktop audio")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Use by default" })).not.toBeInTheDocument();
@@ -175,6 +175,7 @@ describe("Onboarding", () => {
     expect(screen.queryByRole("button", { name: "Allow access" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start capturing" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Start capturing" })).toHaveClass("cta-pulse");
+    expect(screen.queryByRole("navigation", { name: "Setup progress" })).not.toBeInTheDocument();
   });
 
   it("lets a new macOS user grant the microphone without turning it on by default", async () => {

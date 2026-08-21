@@ -256,8 +256,6 @@ export function Onboarding() {
       && !setup.screen_recording_requested_this_launch,
   );
   const showMicrophone = setup?.platform === "macos";
-  const screenStepState = screenReady ? "done" : "current";
-  const microphoneStepState = setup?.microphone_granted ? "done" : "idle";
   const primaryLabel = shouldOfferRestart
     ? (busy === "restart" ? "Restarting…" : "Restart Captures")
     : (busy === "complete" ? "Finishing…" : "Start capturing");
@@ -352,11 +350,6 @@ export function Onboarding() {
           </div>
         </div>
       </div>
-
-      <nav className="onboarding-steps" aria-label="Setup progress">
-        <span className={`onboarding-step ${screenStepState}`} />
-        {showMicrophone && <span className={`onboarding-step ${microphoneStepState}`} />}
-      </nav>
     </main>
   );
 }
