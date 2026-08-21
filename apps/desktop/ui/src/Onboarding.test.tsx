@@ -64,8 +64,9 @@ describe("Onboarding", () => {
     expect(screen.queryByText(/Pick audio sources when you record/)).not.toBeInTheDocument();
     const start = screen.getByRole("button", { name: "Start capturing" });
     expect(start).toBeDisabled();
+    expect(start).not.toHaveClass("cta-pulse");
     expect(start.parentElement).toHaveClass("onboarding-actions");
-    expect(screen.getByRole("navigation", { name: "Setup progress" })).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Setup progress" })).not.toBeInTheDocument();
     expect(screen.queryByText("One place for access")).not.toBeInTheDocument();
     expect(screen.queryByText("Desktop audio")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Use by default" })).not.toBeInTheDocument();
@@ -90,6 +91,7 @@ describe("Onboarding", () => {
     expect(screen.getByRole("button", { name: "Open Settings" })).toBeInTheDocument();
     const restart = screen.getByRole("button", { name: "Restart Captures" });
     expect(restart).toBeInTheDocument();
+    expect(restart).not.toHaveClass("cta-pulse");
     expect(restart.parentElement).toHaveClass("onboarding-actions");
     expect(restart.closest("section")).toBeNull();
     expect(screen.queryByRole("button", { name: "Check again" })).not.toBeInTheDocument();
@@ -109,7 +111,9 @@ describe("Onboarding", () => {
     window.dispatchEvent(new Event("focus"));
 
     expect(await screen.findByText("Granted")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Start capturing" })).toBeEnabled();
+    const start = screen.getByRole("button", { name: "Start capturing" });
+    expect(start).toBeEnabled();
+    expect(start).toHaveClass("cta-pulse");
     expect(screen.queryByRole("button", { name: "Restart Captures" })).not.toBeInTheDocument();
   });
 
@@ -125,6 +129,7 @@ describe("Onboarding", () => {
     expect(screen.getByText(/The switch for this copy of Captures is still off/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open Settings" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start capturing" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Start capturing" })).not.toHaveClass("cta-pulse");
     expect(screen.queryByRole("button", { name: "Restart Captures" })).not.toBeInTheDocument();
   });
 
@@ -138,6 +143,7 @@ describe("Onboarding", () => {
 
     const start = await screen.findByRole("button", { name: "Start capturing" });
     expect(start).toBeEnabled();
+    expect(start).toHaveClass("cta-pulse");
     expect(screen.getByText("Granted")).toBeInTheDocument();
     fireEvent.click(start);
 
@@ -168,6 +174,8 @@ describe("Onboarding", () => {
     expect(screen.queryByText("Microphone")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Allow access" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start capturing" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Start capturing" })).toHaveClass("cta-pulse");
+    expect(screen.queryByRole("navigation", { name: "Setup progress" })).not.toBeInTheDocument();
   });
 
   it("lets a new macOS user grant the microphone without turning it on by default", async () => {
