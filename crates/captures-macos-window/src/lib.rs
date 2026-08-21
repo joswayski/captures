@@ -13,7 +13,7 @@ use std::{
 use block2::RcBlock;
 use dispatch2::DispatchQueue;
 use objc2::{
-    AllocAnyThread, DefinedClass, MainThreadMarker, define_class,
+    AllocAnyThread, DefinedClass, MainThreadMarker, Message, define_class, exception,
     ffi::{OBJC_ASSOCIATION_RETAIN_NONATOMIC, objc_getAssociatedObject, objc_setAssociatedObject},
     msg_send,
     rc::Retained,
@@ -664,21 +664,36 @@ fn screen_for_display_id(mtm: MainThreadMarker, display_id: &str) -> Option<Reta
         .find(|screen| screen_display_id(screen) == Some(requested))
 }
 
+fn kvc_number(object: &impl Message, key: &str) -> Option<f64> {
+    let name = NSString::from_str(key);
+    // Missing KVC keys raise NSUndefinedKeyException instead of returning nil.
+    // Catch that so newer displays without these private NSScreen keys cannot
+    // abort the process while a capture session is starting.
+    let result = exception::catch(std::panic::AssertUnwindSafe(|| {
+        // SAFETY: `valueForKey:` returns a retained object or nil. Defined
+        // NSScreen internals yield NSNumber; undefined keys raise, which
+        // `catch` turns into `Err`.
+        let value: Option<Retained<AnyObject>> = unsafe { msg_send![object, valueForKey: &*name] };
+        value
+    }));
+    let value = match result {
+        Ok(value) => value?,
+        Err(_) => return None,
+    };
+    value
+        .downcast::<NSNumber>()
+        .ok()
+        .map(|number| number.doubleValue())
+}
+
 fn screen_corner_radius(screen: &NSScreen) -> f64 {
     // Private NSScreen keys used by the system screenshot UI. Missing or
     // square displays return 0, which keeps the overlay rectangular.
     for key in ["_displayCornerRadius", "_cornerRadius"] {
-        let name = NSString::from_str(key);
-        // SAFETY: `valueForKey:` returns a retained object or nil. The keys are
-        // documented NSScreen internals that yield NSNumber when present.
-        let value: Option<Retained<AnyObject>> = unsafe { msg_send![screen, valueForKey: &*name] };
-        let Some(value) = value else {
+        let Some(value) = kvc_number(screen, key) else {
             continue;
         };
-        let Ok(number) = value.downcast::<NSNumber>() else {
-            continue;
-        };
-        let radius = clamp_display_corner_radius(number.doubleValue());
+        let radius = clamp_display_corner_radius(value);
         if radius > 0.0 {
             return radius;
         }
@@ -1363,10 +1378,10 @@ mod tests {
         capture_surface_collection_behavior, capture_surface_window_level,
         clamp_display_corner_radius, cursor_mode_is_interactive, cursor_surface_can_apply,
         cursor_surface_can_take_key_window_with_thumbnail_allowed, cursor_surface_uses_key_window,
-        parse_display_id, reassert_thumbnail_cursor_after_click, shortcut_modifiers_pressed,
-        should_conceal_documents_for_capture_activation, should_release_thumbnail_key_after_event,
-        should_reset_cursor_on_exit, style_mask_is_titled_document,
-        window_corner_radius_for_major_version,
+        kvc_number, parse_display_id, reassert_thumbnail_cursor_after_click,
+        shortcut_modifiers_pressed, should_conceal_documents_for_capture_activation,
+        should_release_thumbnail_key_after_event, should_reset_cursor_on_exit,
+        style_mask_is_titled_document, window_corner_radius_for_major_version,
     };
 
     #[test]
@@ -1440,6 +1455,13 @@ mod tests {
         assert_eq!(clamp_display_corner_radius(38.2), 38.0);
         assert_eq!(clamp_display_corner_radius(38.6), 38.5);
         assert_eq!(clamp_display_corner_radius(54.0), 54.0);
+    }
+
+    #[test]
+    fn missing_display_corner_kvc_keys_do_not_abort() {
+        let object = objc2_foundation::NSObject::new();
+        assert_eq!(kvc_number(&*object, "_displayCornerRadius"), None);
+        assert_eq!(kvc_number(&*object, "_cornerRadius"), None);
     }
 
     #[test]
