@@ -120,3 +120,41 @@ jobs:
           printf 'image=%s\n' "$image" >> "$GITHUB_OUTPUT"
           printf 'digest=%s\n' "$DIGEST" >> "$GITHUB_OUTPUT"
           printf '### Published image\n\n`%s@%s`\n' "$image" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"
+      - name: Notify deployment webhook
+        env:
+          DEPLOY_NOTIFICATION_WEBHOOK_URL: ${{ secrets.DEPLOY_NOTIFICATION_WEBHOOK_URL }}
+          DEPLOY_WORKFLOW_URL: https://github.com/joswayski/captures/actions/workflows/deploy-production.yml?query=branch%3Amain
+          IMAGE_DIGEST: ${{ steps.record.outputs.digest }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "$DEPLOY_NOTIFICATION_WEBHOOK_URL" ]]; then
+            echo "DEPLOY_NOTIFICATION_WEBHOOK_URL is not configured; skipping notification."
+            exit 0
+          fi
+
+          payload="$(jq -cn \
+            --arg git_sha "$GITHUB_SHA" \
+            --arg digest "$IMAGE_DIGEST" \
+            --arg deploy_url "$DEPLOY_WORKFLOW_URL" \
+            '{
+              username: "Production deploys",
+              embeds: [{
+                title: "Captures image is ready",
+                description: "Use this Git SHA when starting the manual production deployment.",
+                color: 5763711,
+                fields: [
+                  {name: "Git SHA", value: ("`" + $git_sha + "`"), inline: false},
+                  {name: "Digest", value: ("`" + $digest + "`"), inline: false}
+                ]
+              }],
+              components: [{
+                type: 1,
+                components: [{type: 2, style: 5, label: "Deploy", url: $deploy_url}]
+              }]
+            }')"
+
+          curl --fail --show-error --silent --retry 3 --retry-all-errors --max-time 10 \
+            --header 'Content-Type: application/json' \
+            --data "$payload" \
+            "${DEPLOY_NOTIFICATION_WEBHOOK_URL}?wait=false&with_components=true"
