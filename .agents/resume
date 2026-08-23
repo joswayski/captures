@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Captures has no required backing services or per-user authentication to
+# reconnect when an orb wakes.
+echo "[resume] Captures requires no wake-time repair."
