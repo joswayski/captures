@@ -123,7 +123,7 @@ jobs:
       - name: Notify deployment webhook
         env:
           DEPLOY_NOTIFICATION_WEBHOOK_URL: ${{ secrets.DEPLOY_NOTIFICATION_WEBHOOK_URL }}
-          DEPLOY_WORKFLOW_URL: https://github.com/joswayski/infrastructure/actions/workflows/deploy-application.yml
+          DEPLOY_WORKFLOW_URL: https://github.com/joswayski/infrastructure/actions/workflows/deploy-captures.yml
           IMAGE_DIGEST: ${{ steps.record.outputs.digest }}
         run: |
           set -euo pipefail
@@ -141,7 +141,7 @@ jobs:
               username: "Production deploys",
               embeds: [{
                 title: "Captures image is ready",
-                description: "Use this Git SHA when starting the manual production deployment.",
+                description: "Opens the Captures-only deploy. Click Run workflow and leave the SHA blank unless you are rolling back.",
                 color: 5763711,
                 fields: [
                   {name: "Git SHA", value: ("`" + $git_sha + "`"), inline: false},
@@ -150,7 +150,7 @@ jobs:
               }],
               components: [{
                 type: 1,
-                components: [{type: 2, style: 5, label: "Deploy", url: $deploy_url}]
+                components: [{type: 2, style: 5, label: "Deploy Captures", url: $deploy_url}]
               }]
             }')"
 
