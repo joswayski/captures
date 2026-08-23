@@ -13,20 +13,22 @@ use std::{
 use block2::RcBlock;
 use dispatch2::DispatchQueue;
 use objc2::{
-    AllocAnyThread, DefinedClass, MainThreadMarker, Message, define_class, exception,
+    AllocAnyThread, DefinedClass, MainThreadMarker, define_class,
     ffi::{OBJC_ASSOCIATION_RETAIN_NONATOMIC, objc_getAssociatedObject, objc_setAssociatedObject},
     msg_send,
     rc::Retained,
     runtime::AnyObject,
+    sel,
 };
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationOptions, NSCursor, NSEvent, NSEventMask, NSEventType,
-    NSPasteboard, NSRunningApplication, NSScreen, NSSound, NSStatusWindowLevel, NSTrackingArea,
-    NSTrackingAreaOptions, NSView, NSViewLayerContentsPlacement, NSWindow,
-    NSWindowCollectionBehavior, NSWindowStyleMask, NSWorkspace,
+    NSApplication, NSApplicationActivationOptions, NSBezierPath, NSBezierPathElement, NSCursor,
+    NSEvent, NSEventMask, NSEventType, NSPasteboard, NSRunningApplication, NSScreen, NSSound,
+    NSStatusWindowLevel, NSTrackingArea, NSTrackingAreaOptions, NSView,
+    NSViewLayerContentsPlacement, NSWindow, NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSWorkspace,
 };
 use objc2_foundation::{
-    NSNumber, NSObject, NSObjectProtocol, NSProcessInfo, NSRect, NSSize, NSString,
+    NSNumber, NSObject, NSObjectProtocol, NSPoint, NSProcessInfo, NSRect, NSSize, NSString,
 };
 use tauri::WebviewWindow;
 use tauri_nspanel::WebviewWindowExt;
@@ -664,41 +666,142 @@ fn screen_for_display_id(mtm: MainThreadMarker, display_id: &str) -> Option<Reta
         .find(|screen| screen_display_id(screen) == Some(requested))
 }
 
-fn kvc_number(object: &impl Message, key: &str) -> Option<f64> {
-    let name = NSString::from_str(key);
-    // Missing KVC keys raise NSUndefinedKeyException instead of returning nil.
-    // Catch that so newer displays without these private NSScreen keys cannot
-    // abort the process while a capture session is starting.
-    let result = exception::catch(std::panic::AssertUnwindSafe(|| {
-        // SAFETY: `valueForKey:` returns a retained object or nil. Defined
-        // NSScreen internals yield NSNumber; undefined keys raise, which
-        // `catch` turns into `Err`.
-        let value: Option<Retained<AnyObject>> = unsafe { msg_send![object, valueForKey: &*name] };
-        value
-    }));
-    let value = match result {
-        Ok(value) => value?,
-        Err(_) => return None,
-    };
-    value
-        .downcast::<NSNumber>()
-        .ok()
-        .map(|number| number.doubleValue())
-}
-
 fn screen_corner_radius(screen: &NSScreen) -> f64 {
-    // Private NSScreen keys used by the system screenshot UI. Missing or
-    // square displays return 0, which keeps the overlay rectangular.
-    for key in ["_displayCornerRadius", "_cornerRadius"] {
-        let Some(value) = kvc_number(screen, key) else {
-            continue;
-        };
+    // Prefer the display outline path. Private `_displayCornerRadius` KVC keys
+    // are missing on macOS 26+ hardware and `valueForKey:` raises
+    // `NSUndefinedKeyException`, which aborts the process.
+    if let Some(radius) = screen_bezel_corner_radius(screen) {
+        let radius = clamp_display_corner_radius(radius);
+        if radius > 0.0 {
+            return radius;
+        }
+    }
+    if let Some(value) = screen_legacy_corner_radius(screen) {
         let radius = clamp_display_corner_radius(value);
         if radius > 0.0 {
             return radius;
         }
     }
     0.0
+}
+
+fn screen_bezel_corner_radius(screen: &NSScreen) -> Option<f64> {
+    if !screen.respondsToSelector(sel!(bezelPath)) {
+        return None;
+    }
+    // SAFETY: `respondsToSelector` is true. `bezelPath` returns an
+    // `NSBezierPath` (or nil) for the visible display outline.
+    let path: Option<Retained<NSBezierPath>> = unsafe { msg_send![screen, bezelPath] };
+    let path = path?;
+    Some(corner_radius_from_bezel_path(&path, screen.frame()))
+}
+
+fn screen_legacy_corner_radius(screen: &NSScreen) -> Option<f64> {
+    if screen.respondsToSelector(sel!(_displayCornerRadius)) {
+        // SAFETY: selector exists. Older NSScreen builds return CGFloat.
+        let value: f64 = unsafe { msg_send![screen, _displayCornerRadius] };
+        return Some(value);
+    }
+    if screen.respondsToSelector(sel!(_cornerRadius)) {
+        // SAFETY: selector exists. Older NSScreen builds return CGFloat.
+        let value: f64 = unsafe { msg_send![screen, _cornerRadius] };
+        return Some(value);
+    }
+    None
+}
+
+fn on_path_points(path: &NSBezierPath) -> Vec<NSPoint> {
+    let count = path.elementCount();
+    let mut points = Vec::new();
+    let mut index = 0;
+    while index < count {
+        let mut associated = [NSPoint::ZERO; 3];
+        // SAFETY: AppKit writes at most three points for a cubic element.
+        let element =
+            unsafe { path.elementAtIndex_associatedPoints(index, associated.as_mut_ptr()) };
+        if element == NSBezierPathElement::MoveTo || element == NSBezierPathElement::LineTo {
+            points.push(associated[0]);
+        } else if element == NSBezierPathElement::CubicCurveTo {
+            points.push(associated[2]);
+        } else if element == NSBezierPathElement::QuadraticCurveTo {
+            points.push(associated[1]);
+        }
+        index += 1;
+    }
+    points
+}
+
+fn consider_radius(radius: &mut f64, value: f64) {
+    if value.is_finite() && value > *radius {
+        *radius = value;
+    }
+}
+
+/// How far the path's axis-aligned spines stop short of its bounds.
+///
+/// A rounded rectangle's left-edge points sit `radius` below the top; a
+/// square path reaches the corners and yields 0. Control points are ignored
+/// so squircles are not mistaken for a smaller radius.
+fn corner_radius_from_bezel_path(path: &NSBezierPath, frame: NSRect) -> f64 {
+    let points = on_path_points(path);
+    let mut min_x = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+    for point in &points {
+        min_x = min_x.min(point.x);
+        max_x = max_x.max(point.x);
+        min_y = min_y.min(point.y);
+        max_y = max_y.max(point.y);
+    }
+    if !min_x.is_finite() {
+        return 0.0;
+    }
+
+    const SPINE: f64 = 0.5;
+    let mut left_max_y = f64::NEG_INFINITY;
+    let mut left_min_y = f64::INFINITY;
+    let mut right_max_y = f64::NEG_INFINITY;
+    let mut right_min_y = f64::INFINITY;
+    let mut top_min_x = f64::INFINITY;
+    let mut top_max_x = f64::NEG_INFINITY;
+    let mut bottom_min_x = f64::INFINITY;
+    let mut bottom_max_x = f64::NEG_INFINITY;
+    for point in &points {
+        if point.x <= min_x + SPINE {
+            left_max_y = left_max_y.max(point.y);
+            left_min_y = left_min_y.min(point.y);
+        }
+        if point.x >= max_x - SPINE {
+            right_max_y = right_max_y.max(point.y);
+            right_min_y = right_min_y.min(point.y);
+        }
+        if point.y >= max_y - SPINE {
+            top_min_x = top_min_x.min(point.x);
+            top_max_x = top_max_x.max(point.x);
+        }
+        if point.y <= min_y + SPINE {
+            bottom_min_x = bottom_min_x.min(point.x);
+            bottom_max_x = bottom_max_x.max(point.x);
+        }
+    }
+
+    let mut radius = 0.0;
+    consider_radius(&mut radius, max_y - left_max_y);
+    consider_radius(&mut radius, left_min_y - min_y);
+    consider_radius(&mut radius, max_y - right_max_y);
+    consider_radius(&mut radius, right_min_y - min_y);
+    consider_radius(&mut radius, top_min_x - min_x);
+    consider_radius(&mut radius, max_x - top_max_x);
+    consider_radius(&mut radius, bottom_min_x - min_x);
+    consider_radius(&mut radius, max_x - bottom_max_x);
+
+    let max_allowed = frame.size.width.min(frame.size.height) / 2.0;
+    if !radius.is_finite() || radius <= 0.0 || !max_allowed.is_finite() {
+        0.0
+    } else {
+        radius.min(max_allowed)
+    }
 }
 
 fn clip_content_to_display_corners(native_window: &NSWindow, radius: f64) {
@@ -1369,19 +1472,22 @@ fn native_window(window: &WebviewWindow) -> Result<&NSWindow, &'static str> {
 mod tests {
     use std::sync::atomic::Ordering;
 
+    use objc2::sel;
     use objc2_app_kit::{
-        NSEventModifierFlags, NSEventType, NSMainMenuWindowLevel, NSWindowStyleMask,
+        NSBezierPath, NSEventModifierFlags, NSEventType, NSMainMenuWindowLevel, NSWindowStyleMask,
     };
+    use objc2_foundation::{NSObjectProtocol, NSPoint, NSRect, NSSize};
 
     use super::{
         CAPTURE_OVERLAY_OWNS_CURSOR, CursorMode, CursorSurface, THUMBNAIL_CURSOR_MODE,
         capture_surface_collection_behavior, capture_surface_window_level,
-        clamp_display_corner_radius, cursor_mode_is_interactive, cursor_surface_can_apply,
-        cursor_surface_can_take_key_window_with_thumbnail_allowed, cursor_surface_uses_key_window,
-        kvc_number, parse_display_id, reassert_thumbnail_cursor_after_click,
-        shortcut_modifiers_pressed, should_conceal_documents_for_capture_activation,
-        should_release_thumbnail_key_after_event, should_reset_cursor_on_exit,
-        style_mask_is_titled_document, window_corner_radius_for_major_version,
+        clamp_display_corner_radius, corner_radius_from_bezel_path, cursor_mode_is_interactive,
+        cursor_surface_can_apply, cursor_surface_can_take_key_window_with_thumbnail_allowed,
+        cursor_surface_uses_key_window, display_corner_radius_points, parse_display_id,
+        reassert_thumbnail_cursor_after_click, shortcut_modifiers_pressed,
+        should_conceal_documents_for_capture_activation, should_release_thumbnail_key_after_event,
+        should_reset_cursor_on_exit, style_mask_is_titled_document,
+        window_corner_radius_for_major_version,
     };
 
     #[test]
@@ -1452,16 +1558,45 @@ mod tests {
     fn clamps_display_corner_radius_to_half_points() {
         assert_eq!(clamp_display_corner_radius(-1.0), 0.0);
         assert_eq!(clamp_display_corner_radius(f64::NAN), 0.0);
+        assert_eq!(clamp_display_corner_radius(36.997_622_963_456_48), 37.0);
         assert_eq!(clamp_display_corner_radius(38.2), 38.0);
         assert_eq!(clamp_display_corner_radius(38.6), 38.5);
         assert_eq!(clamp_display_corner_radius(54.0), 54.0);
     }
 
     #[test]
-    fn missing_display_corner_kvc_keys_do_not_abort() {
+    fn rounded_rect_bezel_path_reports_its_radius() {
+        let frame = NSRect::new(NSPoint::new(10.0, 20.0), NSSize::new(200.0, 120.0));
+        let path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(frame, 12.0, 12.0);
+        assert_eq!(
+            clamp_display_corner_radius(corner_radius_from_bezel_path(&path, frame)),
+            12.0
+        );
+    }
+
+    #[test]
+    fn rectangular_bezel_path_reports_no_radius() {
+        let frame = NSRect::new(NSPoint::ZERO, NSSize::new(100.0, 80.0));
+        let path = NSBezierPath::bezierPathWithRect(frame);
+        assert_eq!(
+            clamp_display_corner_radius(corner_radius_from_bezel_path(&path, frame)),
+            0.0
+        );
+    }
+
+    #[test]
+    fn missing_legacy_display_corner_selectors_are_ignored() {
         let object = objc2_foundation::NSObject::new();
-        assert_eq!(kvc_number(&*object, "_displayCornerRadius"), None);
-        assert_eq!(kvc_number(&*object, "_cornerRadius"), None);
+        assert!(!object.respondsToSelector(sel!(bezelPath)));
+        assert!(!object.respondsToSelector(sel!(_displayCornerRadius)));
+        assert!(!object.respondsToSelector(sel!(_cornerRadius)));
+    }
+
+    #[test]
+    fn live_display_corner_lookup_does_not_abort() {
+        let radius = display_corner_radius_points("1");
+        assert!(radius.is_finite());
+        assert!(radius >= 0.0);
     }
 
     #[test]
