@@ -2259,6 +2259,8 @@ async fn finish_capture(
     }) {
         eprintln!("failed to schedule capture sound: {error}");
     }
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    captures_recording_xcap::play_capture_sound();
 
     let width = image.width();
     let height = image.height();
