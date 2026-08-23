@@ -71,26 +71,48 @@ jobs:
           printf 'target_sha=%s\n' "$target_sha" >> "$GITHUB_OUTPUT"
           printf 'image=%s\n' "$image" >> "$GITHUB_OUTPUT"
 
-      - name: Locate the production k3s node
+      - name: Locate a production k3s server
         id: host
         run: |
           set -euo pipefail
 
+          # Name tags are production-k3s-server-{1,2,3} after HA. Discover by
+          # cluster/role so a rename or extra control-plane member cannot make
+          # this step report zero hosts.
           instances_json="$(aws ec2 describe-instances \
             --filters \
-              Name=tag:Name,Values=production-k3s-server \
+              Name=tag:cluster,Values=production-k3s \
               Name=tag:role,Values=k3s-server \
               Name=instance-state-name,Values=running \
             --output json)"
-          instance_count="$(jq '[.Reservations[].Instances[]] | length' \
-            <<<"$instances_json")"
-          [[ "$instance_count" == "1" ]] || {
-            echo "Expected exactly one running production k3s node; found $instance_count." >&2
+          instances="$(jq '[.Reservations[].Instances[]]' <<<"$instances_json")"
+          instance_count="$(jq 'length' <<<"$instances")"
+          if [[ "$instance_count" -lt 1 ]]; then
+            echo "Expected at least one running production k3s server (cluster=production-k3s, role=k3s-server); found 0." >&2
+            aws ec2 describe-instances \
+              --filters \
+                Name=tag:cluster,Values=production-k3s \
+                Name=tag:role,Values=k3s-server \
+              --query 'Reservations[].Instances[].{Id:InstanceId,State:State.Name,Name:Tags[?Key==`Name`]|[0].Value,Key:Tags[?Key==`server-key`]|[0].Value}' \
+              --output table >&2 || true
             exit 1
-          }
-          instance_id="$(jq -r '.Reservations[0].Instances[0].InstanceId' \
-            <<<"$instances_json")"
+          fi
+
+          instance_id="$(jq -r '
+            (map(select(
+              (.Tags // []) | any(.Key == "server-key" and .Value == "server_1")
+            )) | .[0].InstanceId // empty) as $preferred
+            | if $preferred != "" then $preferred
+              else sort_by(.InstanceId)[0].InstanceId
+              end
+          ' <<<"$instances")"
           [[ "$instance_id" =~ ^i-[0-9a-f]+$ ]]
+          instance_name="$(jq -r --arg id "$instance_id" '
+            map(select(.InstanceId == $id))[0].Tags
+            | map(select(.Key == "Name"))[0].Value // $id
+          ' <<<"$instances")"
+          printf 'Using %s (%s) of %s running k3s servers.\n' \
+            "$instance_name" "$instance_id" "$instance_count"
           printf 'instance_id=%s\n' "$instance_id" >> "$GITHUB_OUTPUT"
 
       - name: Deploy and wait for rollout
