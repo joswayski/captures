@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+step_started=$SECONDS
+step() {
+  printf '[setup] %s (%ss)\n' "$1" "$((SECONDS - step_started))"
+  step_started=$SECONDS
+}
+
+step "checking Linux build dependencies"
+packages=(
+  build-essential
+  curl
+  file
+  libayatana-appindicator3-dev
+  libasound2-dev
+  libclang-dev
+  libdbus-1-dev
+  libegl-dev
+  libgbm-dev
+  libpipewire-0.3-dev
+  libspa-0.2-dev
+  librsvg2-dev
+  libssl-dev
+  libwayland-dev
+  libwebkit2gtk-4.1-dev
+  libxcb1-dev
+  libxdo-dev
+  libxrandr-dev
+  nasm
+  pkg-config
+  wget
+  xz-utils
+  yasm
+  zlib1g-dev
+)
+missing_packages=()
+for package in "${packages[@]}"; do
+  if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -Fq 'install ok installed'; then
+    missing_packages+=("$package")
+  fi
+done
+if ((${#missing_packages[@]} > 0)); then
+  sudo apt-get update
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing_packages[@]}"
+fi
+
+step "checking Node.js and npm"
+if ! command -v npm >/dev/null 2>&1; then
+  sudo apt-get update
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nodejs npm
+fi
+node_major="$(node -p 'process.versions.node.split(".")[0]')"
+if ((node_major != 24)); then
+  npm install --global n
+  n 24
+  hash -r
+fi
+npm_major="$(npm --version | cut -d. -f1)"
+if ((npm_major < 11)); then
+  npm install --global npm@11
+  hash -r
+fi
+
+step "installing Rust 1.94.0"
+if [[ -f "$HOME/.cargo/env" ]]; then
+  # shellcheck disable=SC1091
+  source "$HOME/.cargo/env"
+fi
+if ! command -v rustup >/dev/null 2>&1; then
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --profile minimal --default-toolchain none
+  # shellcheck disable=SC1091
+  source "$HOME/.cargo/env"
+fi
+rustup toolchain install 1.94.0 --profile minimal --component rustfmt --component clippy
+
+step "installing JavaScript dependencies"
+npm ci
+
+step "fetching Rust dependencies"
+cargo fetch --locked
+
+step "complete"
+printf '[setup] Node %s, npm %s, Rust %s\n' \
+  "$(node --version)" \
+  "$(npm --version)" \
+  "$(rustc --version | awk '{print $2}')"
