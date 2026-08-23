@@ -123,7 +123,7 @@ jobs:
       - name: Notify deployment webhook
         env:
           DEPLOY_NOTIFICATION_WEBHOOK_URL: ${{ secrets.DEPLOY_NOTIFICATION_WEBHOOK_URL }}
-          DEPLOY_WORKFLOW_URL: https://github.com/joswayski/captures/actions/workflows/deploy-production.yml?query=branch%3Amain
+          DEPLOY_WORKFLOW_URL: https://github.com/joswayski/infrastructure/actions/workflows/deploy-application.yml
           IMAGE_DIGEST: ${{ steps.record.outputs.digest }}
         run: |
           set -euo pipefail

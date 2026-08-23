@@ -98,20 +98,21 @@ must also pin the ECR digest and must not use `latest` or a Docker-login Secret.
 The short-lived GitHub token used to fetch homepage history is mounted only as a
 BuildKit secret and is not stored in the image or its build arguments.
 
-Publishing does not deploy. Start the manual `Deploy production` workflow from
-`main` to deploy only Captures and wait for its Kubernetes rollout:
+Publishing does not deploy. Rollout is the `Deploy application` workflow in
+[`joswayski/infrastructure`](https://github.com/joswayski/infrastructure):
 
 ```sh
-gh workflow run deploy-production.yml --repo joswayski/captures --ref main
+gh workflow run deploy-application.yml \
+  --repo joswayski/infrastructure \
+  --ref main \
+  -f application=captures \
+  -f git_sha=<full-40-character-main-sha>
 ```
 
-The workflow defaults to the current `main` SHA. For rollback, add
-`-f git_sha=<full-40-character-main-sha>` for an image previously published by
-the `main` pipeline. It resolves the ECR digest, assumes the Captures-only AWS
-deployer role, selects a running production k3s server (`cluster=production-k3s`,
-`role=k3s-server`; prefers `server_1`), and invokes a bounded SSM document; it
-does not write to the infrastructure repository or receive a kubeconfig. Flux owns every other
-Deployment field but leaves the live image to this workflow. Captures retains
+The SHA must already exist as an immutable ECR tag from this repository's
+`main` image pipeline. Host lookup and the bounded SSM document live in
+infrastructure so they are not copied per app. Flux owns every other
+Deployment field but leaves the live image to that workflow. Captures retains
 one steady-state replica with `maxSurge: 1` and `maxUnavailable: 0`, so a deploy
 temporarily starts one extra pod and removes the old pod only after the new one
 is Ready.
