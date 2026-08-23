@@ -59,6 +59,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      pull-requests: read
     outputs:
       image: ${{ steps.record.outputs.image }}
       digest: ${{ steps.record.outputs.digest }}
@@ -122,8 +123,10 @@ jobs:
           printf '### Published image\n\n`%s@%s`\n' "$image" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"
       - name: Notify deployment webhook
         env:
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
           DEPLOY_NOTIFICATION_WEBHOOK_URL: ${{ secrets.DEPLOY_NOTIFICATION_WEBHOOK_URL }}
           DEPLOY_WORKFLOW_URL: https://github.com/joswayski/infrastructure/actions/workflows/deploy-captures.yml
+          GITHUB_TOKEN: ${{ github.token }}
           IMAGE_DIGEST: ${{ steps.record.outputs.digest }}
         run: |
           set -euo pipefail
@@ -133,20 +136,47 @@ jobs:
             exit 0
           fi
 
+          commit_title="${COMMIT_MESSAGE%%$'\n'*}"
+          commit_body=""
+          if [[ "$COMMIT_MESSAGE" == *$'\n'* ]]; then
+            commit_body="${COMMIT_MESSAGE#*$'\n'}"
+          fi
+
+          if pull_requests="$(curl --fail --show-error --silent \
+            --header "Authorization: Bearer $GITHUB_TOKEN" \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls?per_page=1")" && \
+            pull_request="$(jq -cer '.[0] | select(type == "object") | {title, body}' <<< "$pull_requests")"; then
+            commit_title="$(jq -r '.title // ""' <<< "$pull_request")"
+            commit_body="$(jq -r '.body // ""' <<< "$pull_request")"
+          fi
+
           payload="$(jq -cn \
             --arg git_sha "$GITHUB_SHA" \
             --arg digest "$IMAGE_DIGEST" \
             --arg deploy_url "$DEPLOY_WORKFLOW_URL" \
-            '{
+            --arg commit_title "$commit_title" \
+            --arg commit_body "$commit_body" \
+            'def truncate_field:
+              if length > 1024 then .[:1021] + "..." else . end;
+            ($commit_title | rtrimstr("\r") | truncate_field) as $title |
+            ($commit_body | split("\n") | map(rtrimstr("\r")) | join("\n")
+              | sub("^([ \\t]*\\n)+"; "")
+              | sub("(\\n[ \\t]*)+$"; "")) as $body |
+            {
               username: "Production deploys",
               embeds: [{
                 title: "Captures image is ready",
                 description: "Opens the Captures-only deploy. Click Run workflow and leave the SHA blank unless you are rolling back.",
                 color: 5763711,
-                fields: [
+                fields: ([
                   {name: "Git SHA", value: ("`" + $git_sha + "`"), inline: false},
-                  {name: "Digest", value: ("`" + $digest + "`"), inline: false}
-                ]
+                  {name: "Digest", value: ("`" + $digest + "`"), inline: false},
+                  {name: "Title", value: $title, inline: false}
+                ] + (if $body | test("[^[:space:]]") then
+                  [{name: "Description", value: ($body | truncate_field), inline: false}]
+                else [] end))
               }],
               components: [{
                 type: 1,
