@@ -108,8 +108,9 @@ gh workflow run deploy-production.yml --repo joswayski/captures --ref main
 The workflow defaults to the current `main` SHA. For rollback, add
 `-f git_sha=<full-40-character-main-sha>` for an image previously published by
 the `main` pipeline. It resolves the ECR digest, assumes the Captures-only AWS
-deployer role, and invokes a bounded SSM document; it does not write to the
-infrastructure repository or receive a kubeconfig. Flux owns every other
+deployer role, selects a running production k3s server (`cluster=production-k3s`,
+`role=k3s-server`; prefers `server_1`), and invokes a bounded SSM document; it
+does not write to the infrastructure repository or receive a kubeconfig. Flux owns every other
 Deployment field but leaves the live image to this workflow. Captures retains
 one steady-state replica with `maxSurge: 1` and `maxUnavailable: 0`, so a deploy
 temporarily starts one extra pod and removes the old pod only after the new one
