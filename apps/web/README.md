@@ -98,24 +98,23 @@ must also pin the ECR digest and must not use `latest` or a Docker-login Secret.
 The short-lived GitHub token used to fetch homepage history is mounted only as a
 BuildKit secret and is not stored in the image or its build arguments.
 
-Publishing does not deploy. Rollout is the `Deploy application` workflow in
+Publishing does not deploy. Rollout is the `Deploy Captures` workflow in
 [`joswayski/infrastructure`](https://github.com/joswayski/infrastructure):
 
 ```sh
-gh workflow run deploy-application.yml \
+gh workflow run deploy-captures.yml \
   --repo joswayski/infrastructure \
-  --ref main \
-  -f application=captures \
-  -f git_sha=<full-40-character-main-sha>
+  --ref main
 ```
 
-The SHA must already exist as an immutable ECR tag from this repository's
-`main` image pipeline. Host lookup and the bounded SSM document live in
-infrastructure so they are not copied per app. Flux owns every other
-Deployment field but leaves the live image to that workflow. Captures retains
-one steady-state replica with `maxSurge: 1` and `maxUnavailable: 0`, so a deploy
-temporarily starts one extra pod and removes the old pod only after the new one
-is Ready.
+Leave the SHA blank to pin the newest published ECR image. Paste
+`-f git_sha=<full-40-character-main-sha>` only for rollback; that SHA must
+already exist as an immutable ECR tag from this repository's `main` image
+pipeline. Host lookup and the bounded SSM document live in infrastructure so
+they are not copied per app. The workflow writes the pin into git; Flux
+applies that image. Captures retains one steady-state replica with
+`maxSurge: 1` and `maxUnavailable: 0`, so a deploy temporarily starts one
+extra pod and removes the old pod only after the new one is Ready.
 
 CI passes `GIT_COMMIT_SHA` (the GitHub SHA) so the Docker layer that fetches
 homepage history is not reused across commits.
