@@ -108,66 +108,73 @@ export default function Home({
           </p>
 
           <div className="mt-12 border-t border-border pt-10">
-            <h2 className="text-base font-medium tracking-tight text-ink sm:text-lg">
-              Download Captures{" "}
-              <span className="text-xs font-normal text-ink-soft">(experimental)</span>
-            </h2>
-            <p className="mt-3 max-w-xl text-sm leading-relaxed text-ink-muted">
-              Builds are available after every merge and may contain bugs or incomplete features.
-              Please give feedback in the app, on{" "}
-              <a
-                href={X_URL}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-chip"
-                aria-label="Give feedback on X"
-              >
-                <XIcon className="h-3 w-3" />
-              </a>
-              , or{" "}
-              <CopyEmailButton email={CONTACT_EMAIL} />.
-            </p>
-
-            <div className="mt-8">
-              <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
-                {detectedDownload ? (
-                  <a href={detectedDownload.href} className="download-button">
-                    <OsIcon family={detectedDownload.family} className="h-[1.15rem] w-[1.15rem]" />
-                    {detectedDownload.label}
-                    <span className="sr-only"> {detectedDownload.fileName}</span>
-                  </a>
-                ) : null}
-                <a
-                  href={REPO_URL}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="source-button"
-                >
-                  <GitHubIcon className="h-[1.15rem] w-[1.15rem]" />
-                  View source
-                </a>
-              </div>
-              {linuxAlternative ? (
-                <p className="mt-3 text-xs text-ink-soft">
+            {detectedDownload ? (
+              <>
+                <h2 className="text-base font-medium tracking-tight text-ink sm:text-lg">
+                  Download Captures{" "}
+                  <span className="text-xs font-normal text-ink-soft">(experimental)</span>
+                </h2>
+                <p className="mt-3 max-w-xl text-sm leading-relaxed text-ink-muted">
+                  Builds are available after every merge and may contain bugs or incomplete
+                  features. Please give feedback in the app, on{" "}
                   <a
-                    href={linuxAlternative.href}
-                    className="font-medium text-ink-muted no-underline underline-offset-2 transition-colors duration-200 ease-out hover:text-accent-readable hover:underline"
+                    href={X_URL}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-chip"
+                    aria-label="Give feedback on X"
                   >
-                    or {linuxAlternativeLabel(linuxAlternative)}
+                    <XIcon className="h-3 w-3" />
                   </a>
+                  , or{" "}
+                  <CopyEmailButton email={CONTACT_EMAIL} />.
                 </p>
-              ) : null}
-              <p className="mt-3 text-xs text-ink-soft">
-                <a
-                  href={RELEASES_URL}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-ink-muted no-underline underline-offset-2 transition-colors duration-200 ease-out hover:text-accent-readable hover:underline"
-                >
-                  {availabilityLabel(detectedDownload)}
-                </a>
-              </p>
-            </div>
+
+                <div className="mt-8">
+                  <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
+                    <a href={detectedDownload.href} className="download-button">
+                      <OsIcon family={detectedDownload.family} className="h-[1.15rem] w-[1.15rem]" />
+                      {detectedDownload.label}
+                      <span className="sr-only"> {detectedDownload.fileName}</span>
+                    </a>
+                    <GitHubSourceButton />
+                  </div>
+                  {linuxAlternative ? (
+                    <p className="mt-3 text-xs text-ink-soft">
+                      <a
+                        href={linuxAlternative.href}
+                        className="font-medium text-ink-muted no-underline underline-offset-2 transition-colors duration-200 ease-out hover:text-accent-readable hover:underline"
+                      >
+                        or {linuxAlternativeLabel(linuxAlternative)}
+                      </a>
+                    </p>
+                  ) : null}
+                  <p className="mt-3 text-xs text-ink-soft">
+                    <a
+                      href={RELEASES_URL}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-ink-muted no-underline underline-offset-2 transition-colors duration-200 ease-out hover:text-accent-readable hover:underline"
+                    >
+                      {availabilityLabel(detectedDownload)}
+                    </a>
+                  </p>
+                </div>
+              </>
+            ) : (
+              <>
+                <h2 className="text-base font-medium tracking-tight text-ink sm:text-lg">
+                  A desktop app
+                </h2>
+                <p className="mt-3 max-w-xl text-sm leading-relaxed text-ink-muted">
+                  Captures runs on macOS, Windows, and Linux — not on phones or tablets. Follow
+                  the project on GitHub.
+                </p>
+                <div className="mt-8">
+                  <GitHubSourceButton primary />
+                </div>
+              </>
+            )}
           </div>
         </section>
 
@@ -346,6 +353,20 @@ function CaptureIcon({ className }: { className?: string }) {
         d="M12 8.8c.45 1.65 1.55 2.75 3.2 3.2-1.65.45-2.75 1.55-3.2 3.2-.45-1.65-1.55-2.75-3.2-3.2 1.65-.45 2.75-1.55 3.2-3.2Z"
       />
     </svg>
+  );
+}
+
+function GitHubSourceButton({ primary = false }: { primary?: boolean }) {
+  return (
+    <a
+      href={REPO_URL}
+      target="_blank"
+      rel="noreferrer"
+      className={primary ? "download-button" : "source-button"}
+    >
+      <GitHubIcon className="h-[1.15rem] w-[1.15rem]" />
+      {primary ? "View on GitHub" : "View source"}
+    </a>
   );
 }
 
