@@ -900,6 +900,8 @@ fn start_native_segment(
 fn play_recording_start_chime() {
     #[cfg(target_os = "macos")]
     captures_recording_macos::play_start_chime();
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    captures_recording_xcap::play_start_chime();
 }
 
 async fn start_segment(
@@ -3061,26 +3063,20 @@ fn media_toolchain(app: &AppHandle) -> MediaToolchain {
         .ok()
         .and_then(|path| path.parent().map(Path::to_path_buf));
     let resource_directory = app.path().resource_dir().ok();
-    let target_suffix = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-        "aarch64-apple-darwin"
-    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
-        "x86_64-apple-darwin"
-    } else if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
-        "x86_64-pc-windows-msvc"
-    } else {
-        "x86_64-unknown-linux-gnu"
-    };
+    let target_suffix = media_target_suffix(std::env::consts::OS, std::env::consts::ARCH);
     let find = |name: &str| {
         let executable_name = if cfg!(target_os = "windows") {
             format!("{name}.exe")
         } else {
             name.to_owned()
         };
-        let suffixed_name = if cfg!(target_os = "windows") {
-            format!("{name}-{target_suffix}.exe")
-        } else {
-            format!("{name}-{target_suffix}")
-        };
+        let suffixed_name = target_suffix.map(|target_suffix| {
+            if cfg!(target_os = "windows") {
+                format!("{name}-{target_suffix}.exe")
+            } else {
+                format!("{name}-{target_suffix}")
+            }
+        });
         executable_directory
             .as_ref()
             .map(|directory| directory.join(&executable_name))
@@ -3088,7 +3084,11 @@ fn media_toolchain(app: &AppHandle) -> MediaToolchain {
             .or_else(|| {
                 executable_directory
                     .as_ref()
-                    .map(|directory| directory.join(&suffixed_name))
+                    .and_then(|directory| {
+                        suffixed_name
+                            .as_ref()
+                            .map(|suffixed_name| directory.join(suffixed_name))
+                    })
                     .filter(|path| path.is_file())
             })
             .or_else(|| {
@@ -3100,23 +3100,34 @@ fn media_toolchain(app: &AppHandle) -> MediaToolchain {
             .or_else(|| {
                 resource_directory
                     .as_ref()
-                    .map(|directory| directory.join("binaries").join(&suffixed_name))
+                    .and_then(|directory| {
+                        suffixed_name
+                            .as_ref()
+                            .map(|suffixed_name| directory.join("binaries").join(suffixed_name))
+                    })
                     .filter(|path| path.is_file())
             })
             .or_else(|| {
-                Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("binaries")
-                    .join(&suffixed_name)
-                    .is_file()
-                    .then(|| {
-                        Path::new(env!("CARGO_MANIFEST_DIR"))
-                            .join("binaries")
-                            .join(&suffixed_name)
-                    })
+                suffixed_name.as_ref().and_then(|suffixed_name| {
+                    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("binaries")
+                        .join(suffixed_name);
+                    path.is_file().then_some(path)
+                })
             })
             .unwrap_or_else(|| PathBuf::from(name))
     };
     MediaToolchain::new(find("ffmpeg"), find("ffprobe"))
+}
+
+fn media_target_suffix(os: &str, arch: &str) -> Option<&'static str> {
+    match (os, arch) {
+        ("macos", "aarch64") => Some("aarch64-apple-darwin"),
+        ("macos", "x86_64") => Some("x86_64-apple-darwin"),
+        ("windows", "x86_64") => Some("x86_64-pc-windows-msvc"),
+        ("linux", "x86_64") => Some("x86_64-unknown-linux-gnu"),
+        _ => None,
+    }
 }
 
 fn create_recording_selector_window(app: &AppHandle) -> Result<(), AppError> {
@@ -3562,9 +3573,27 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        replace_recording_source, replace_recording_source_at, replacement_working_path,
-        screenshot_capture_is_blocked_for,
+        media_target_suffix, replace_recording_source, replace_recording_source_at,
+        replacement_working_path, screenshot_capture_is_blocked_for,
     };
+
+    #[test]
+    fn resolves_media_sidecars_only_for_packaged_platform_architectures() {
+        assert_eq!(
+            media_target_suffix("macos", "aarch64"),
+            Some("aarch64-apple-darwin")
+        );
+        assert_eq!(
+            media_target_suffix("windows", "x86_64"),
+            Some("x86_64-pc-windows-msvc")
+        );
+        assert_eq!(
+            media_target_suffix("linux", "x86_64"),
+            Some("x86_64-unknown-linux-gnu")
+        );
+        assert_eq!(media_target_suffix("linux", "aarch64"), None);
+        assert_eq!(media_target_suffix("windows", "aarch64"), None);
+    }
 
     #[test]
     fn permits_screenshot_shortcuts_while_capture_controls_are_open() {
