@@ -8,6 +8,8 @@ pub enum CaptureError {
     PermissionRequestStarted,
     #[error("screen capture permission was denied")]
     PermissionDenied,
+    #[error("screen capture is unavailable while the desktop session is locked or inactive")]
+    SessionUnavailable,
     #[error("the requested capture target is not available")]
     TargetUnavailable,
     #[error("the requested capture mode is not supported")]

@@ -11,6 +11,12 @@ use std::{
 };
 
 use block2::RcBlock;
+use core_foundation::{
+    base::TCFType,
+    boolean::CFBoolean,
+    dictionary::{CFDictionary, CFDictionaryRef},
+    string::CFString,
+};
 use dispatch2::DispatchQueue;
 use objc2::{
     AllocAnyThread, DefinedClass, MainThreadMarker, define_class,
@@ -78,6 +84,38 @@ use thumbnail_panel::ThumbnailPanel;
 const LEGACY_WINDOW_CORNER_RADIUS_POINTS: f64 = 10.0;
 const LIQUID_GLASS_WINDOW_CORNER_RADIUS_POINTS: f64 = 25.0;
 const LIQUID_GLASS_MACOS_MAJOR_VERSION: isize = 26;
+
+#[link(name = "ApplicationServices", kind = "framework")]
+unsafe extern "C" {
+    fn CGSessionCopyCurrentDictionary() -> CFDictionaryRef;
+}
+
+/// Returns whether this process owns an active, unlocked macOS console session.
+pub fn capture_session_available() -> bool {
+    // CGSessionCopyCurrentDictionary returns null when this process has no GUI
+    // session. The lock key is present and true only while loginwindow owns the
+    // screen; the console key also rejects fast-user-switched sessions.
+    let session = unsafe { CGSessionCopyCurrentDictionary() };
+    if session.is_null() {
+        return false;
+    }
+    let session = unsafe { CFDictionary::<CFString, CFBoolean>::wrap_under_create_rule(session) };
+    session_allows_capture(
+        session_boolean(&session, "kCGSSessionOnConsoleKey"),
+        session_boolean(&session, "CGSSessionScreenIsLocked"),
+    )
+}
+
+fn session_boolean(session: &CFDictionary<CFString, CFBoolean>, key: &str) -> Option<bool> {
+    let key = CFString::new(key);
+    session
+        .find(&key)
+        .map(|value| value.as_CFTypeRef() == CFBoolean::true_value().as_CFTypeRef())
+}
+
+fn session_allows_capture(on_console: Option<bool>, locked: Option<bool>) -> bool {
+    on_console == Some(true) && locked != Some(true)
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -1484,7 +1522,7 @@ mod tests {
         clamp_display_corner_radius, corner_radius_from_bezel_path, cursor_mode_is_interactive,
         cursor_surface_can_apply, cursor_surface_can_take_key_window_with_thumbnail_allowed,
         cursor_surface_uses_key_window, display_corner_radius_points, parse_display_id,
-        reassert_thumbnail_cursor_after_click, shortcut_modifiers_pressed,
+        reassert_thumbnail_cursor_after_click, session_allows_capture, shortcut_modifiers_pressed,
         should_conceal_documents_for_capture_activation, should_release_thumbnail_key_after_event,
         should_reset_cursor_on_exit, style_mask_is_titled_document,
         window_corner_radius_for_major_version,
@@ -1538,6 +1576,15 @@ mod tests {
     #[test]
     fn capture_surfaces_sit_above_the_menu_bar() {
         assert!(capture_surface_window_level() > NSMainMenuWindowLevel);
+    }
+
+    #[test]
+    fn capture_requires_an_active_unlocked_console_session() {
+        assert!(session_allows_capture(Some(true), Some(false)));
+        assert!(session_allows_capture(Some(true), None));
+        assert!(!session_allows_capture(Some(true), Some(true)));
+        assert!(!session_allows_capture(Some(false), Some(false)));
+        assert!(!session_allows_capture(None, None));
     }
 
     #[test]

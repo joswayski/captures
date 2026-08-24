@@ -590,6 +590,7 @@ name = "captures-macos-window"
 version = "0.1.0"
 dependencies = [
  "block2",
+ "core-foundation 0.10.1",
  "dispatch2",
  "objc2",
  "objc2-app-kit",

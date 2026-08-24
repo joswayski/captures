@@ -219,6 +219,7 @@ pub(crate) async fn prepare_capture_selector_inner(
     initial_mode: CaptureSelectorMode,
     initial_target: CaptureMode,
 ) -> Result<RecordingSelectionSession, AppError> {
+    crate::ensure_capture_session_available()?;
     if crate::updates::install_is_active(&app) {
         return Err(AppError::UpdateInstalling);
     }
@@ -268,6 +269,7 @@ pub(crate) async fn prepare_capture_selector_inner(
     crate::suppress_thumbnail_capture_ui(&state);
     crate::hide_capture_huds_before_snapshot(&app).await;
     let prepared = (|| {
+        crate::ensure_capture_session_available()?;
         let display = crate::display_under_pointer(&state)?;
         let mut displays = state.monitors()?;
         if !displays.iter().any(|candidate| candidate.id == display.id) {
@@ -367,6 +369,7 @@ async fn select_capture_display_inner(
     selection_id: &str,
     display_id: &str,
 ) -> Result<RecordingSelectionSession, AppError> {
+    crate::ensure_capture_session_available()?;
     let current = state
         .recording_selection
         .lock()
@@ -494,6 +497,7 @@ async fn capture_selection_screenshot_inner(
     state: Arc<AppState>,
     request: CaptureSelectionScreenshotRequest,
 ) -> Result<CaptureArtifact, AppError> {
+    crate::ensure_capture_session_available()?;
     if crate::screenshot_countdown_is_active(&state) {
         return Err(AppError::CaptureInProgress);
     }
@@ -588,6 +592,7 @@ fn live_image_for_target(
     state: &AppState,
     target: &RecordingTarget,
 ) -> Result<image::RgbaImage, AppError> {
+    crate::ensure_capture_session_available()?;
     match target {
         RecordingTarget::Display { display_id } => {
             Ok(state.backend.capture_display(display_id)?.image)
@@ -699,6 +704,7 @@ async fn start_recording_inner(
     state: Arc<AppState>,
     request: StartRecordingRequest,
 ) -> Result<RecordingSessionSnapshot, AppError> {
+    crate::ensure_capture_session_available()?;
     request
         .options
         .validate()
