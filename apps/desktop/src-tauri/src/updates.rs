@@ -20,7 +20,8 @@ use crate::state::AppState;
 const UPDATE_EVENT: &str = "update-status-changed";
 const RELEASES_URL: &str = "https://github.com/joswayski/captures/releases";
 const UPDATE_NOTICE_WIDTH: f64 = 420.0;
-const UPDATE_NOTICE_HEIGHT: f64 = 220.0;
+const UPDATE_NOTICE_HEIGHT: f64 = 300.0;
+const RESTART_COUNTDOWN_SECONDS: u8 = 5;
 const INITIAL_CHECK_DELAY: Duration = Duration::from_secs(15);
 const CHECK_INTERVAL: Duration = Duration::from_secs(4 * 60 * 60);
 
@@ -55,6 +56,13 @@ pub enum UpdateStatus {
         display_version: String,
         downloaded: u64,
         total: Option<u64>,
+    },
+    Restarting {
+        current_version: String,
+        current_display_version: String,
+        version: String,
+        display_version: String,
+        seconds_remaining: u8,
     },
     Error {
         current_version: String,
@@ -296,6 +304,20 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
         return Err(message);
     }
 
+    for seconds_remaining in (1..=RESTART_COUNTDOWN_SECONDS).rev() {
+        set_status(
+            &app,
+            UpdateStatus::Restarting {
+                current_version: current_version.clone(),
+                current_display_version: current_display_version.clone(),
+                version: version.clone(),
+                display_version: display_version.clone(),
+                seconds_remaining,
+            },
+        );
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+
     app.restart();
 }
 
@@ -400,6 +422,7 @@ fn refresh_menu(app: &AppHandle) {
             display_version, ..
         } => format!("Update Available — {display_version}…"),
         UpdateStatus::Downloading { .. } => "Installing Update…".to_owned(),
+        UpdateStatus::Restarting { .. } => "Restarting Captures…".to_owned(),
         UpdateStatus::Checking { .. } => "Checking for Updates…".to_owned(),
         _ => "Check for Updates…".to_owned(),
     };

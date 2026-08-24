@@ -353,4 +353,10 @@ export type UpdateStatus =
       downloaded: number;
       total: number | null;
     })
+  | (UpdateVersionInfo & {
+      state: "restarting";
+      version: string;
+      display_version: string;
+      seconds_remaining: number;
+    })
   | (UpdateVersionInfo & { state: "error"; message: string });

@@ -20,7 +20,7 @@ const available: UpdateStatus = {
   current_display_version: "2026.07.19.1",
   version: "2026.7.1902",
   display_version: "2026.07.19.2",
-  notes: "Adds automatic releases.",
+  notes: "> [!WARNING]\n> This Preview is experimental.\n\n## What's Changed\n* Adds automatic releases by @joswayski in https://github.com/joswayski/captures/pull/1\n\n**Full Changelog**: https://github.com/joswayski/captures/compare/old...new",
   installable: true,
   manual_download_url: null,
 };
@@ -38,7 +38,9 @@ describe("UpdateNotice", () => {
     render(<UpdateNotice />);
 
     expect(await screen.findByText("Version 2026.07.19.2 is available")).toBeInTheDocument();
-    expect(screen.getByText("Adds automatic releases.")).toBeInTheDocument();
+    expect(screen.getByText("Adds automatic releases")).toBeInTheDocument();
+    expect(screen.queryByText(/experimental/u)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Full Changelog/u)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Install & Restart" }));
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("install_update"));
@@ -58,6 +60,23 @@ describe("UpdateNotice", () => {
     render(<UpdateNotice />);
 
     expect(await screen.findByText("Downloading… 25%")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Later" })).toBeDisabled();
+  });
+
+  it("shows the restart countdown after installation", async () => {
+    vi.mocked(invoke).mockResolvedValue({
+      state: "restarting",
+      current_version: "2026.7.1901",
+      current_display_version: "2026.07.19.1",
+      version: "2026.7.1902",
+      display_version: "2026.07.19.2",
+      seconds_remaining: 5,
+    } satisfies UpdateStatus);
+
+    render(<UpdateNotice />);
+
+    expect(await screen.findByText("Update installed successfully")).toBeInTheDocument();
+    expect(screen.getByText("Restarting Captures in 5…")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Later" })).toBeDisabled();
   });
 

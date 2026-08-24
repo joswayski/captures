@@ -32,6 +32,7 @@ import {
 } from "../../../../shared/themes";
 import { formatFileSize } from "./lib/format";
 import { reconcileClipboardState } from "./lib/clipboard";
+import { releaseNoteItems } from "./lib/releaseNotes";
 import {
   editorCropAfterDrag,
   formatEditorTime,
@@ -462,7 +463,9 @@ export function UpdateNotice() {
 
   const available = status?.state === "available" ? status : null;
   const downloading = status?.state === "downloading" ? status : null;
+  const restarting = status?.state === "restarting" ? status : null;
   const error = actionError || (status?.state === "error" ? status.message : "");
+  const notes = available?.notes ? releaseNoteItems(available.notes) : [];
   const progress = downloading?.total
     ? Math.min(100, Math.round((downloading.downloaded / downloading.total) * 100))
     : null;
@@ -474,7 +477,9 @@ export function UpdateNotice() {
         <div>
           <span className="eyebrow">Captures update</span>
           <strong>
-            {available || downloading
+            {restarting
+              ? "Update installed successfully"
+              : available || downloading
               ? `Version ${(available ?? downloading)!.display_version} is available`
               : status?.state === "up_to_date"
                 ? "Captures is up to date"
@@ -487,12 +492,22 @@ export function UpdateNotice() {
         </div>
       </div>
 
-      {available?.notes && <p className="update-notes">{available.notes}</p>}
+      {notes.length > 0 && (
+        <section className="update-notes" aria-label="What's new">
+          <h2>What's new</h2>
+          <ul>{notes.map((note, index) => <li key={`${index}-${note}`}>{note}</li>)}</ul>
+        </section>
+      )}
       {downloading && (
         <div className="update-progress" role="progressbar" aria-valuenow={progress ?? undefined}>
           <span style={{ width: `${progress ?? 15}%` }} />
           <small>{progress === null ? "Downloading update…" : `Downloading… ${progress}%`}</small>
         </div>
+      )}
+      {restarting && (
+        <p className="update-restarting" role="status">
+          Restarting Captures in {restarting.seconds_remaining}…
+        </p>
       )}
       {error && <p className="update-error" role="alert">{error}</p>}
 
@@ -505,10 +520,10 @@ export function UpdateNotice() {
         {error && (
           <button className="primary" type="button" onClick={() => void run("check_for_updates")}>Try Again</button>
         )}
-        {!available && !downloading && !error && status?.state !== "checking" && (
+        {!available && !downloading && !restarting && !error && status?.state !== "checking" && (
           <button className="primary" type="button" onClick={() => void run("check_for_updates")}>Check Again</button>
         )}
-        <button type="button" onClick={close} disabled={Boolean(downloading)}>Later</button>
+        <button type="button" onClick={close} disabled={Boolean(downloading || restarting)}>Later</button>
       </div>
     </main>
   );
@@ -520,6 +535,7 @@ function UpdatePreferences() {
   const currentVersion = status?.current_display_version ?? "…";
   const available = status?.state === "available" ? status : null;
   const downloading = status?.state === "downloading";
+  const restarting = status?.state === "restarting";
 
   const run = async (command: "check_for_updates" | "install_update") => {
     setActionError("");
@@ -550,10 +566,12 @@ function UpdatePreferences() {
         </div>
         <button
           type="button"
-          disabled={status?.state === "checking" || downloading}
+          disabled={status?.state === "checking" || downloading || restarting}
           onClick={() => void run(available ? "install_update" : "check_for_updates")}
         >
-          {downloading
+          {restarting
+            ? "Restarting…"
+            : downloading
             ? "Installing…"
             : available
               ? available.installable ? "Install & Restart" : "Download Release"
