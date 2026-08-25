@@ -311,8 +311,8 @@ h1, h2, p { margin: 0; }
 .update-progress { position: relative; height: 7px; margin-top: 6px; border-radius: 999px; background: #e4e4e0; }
 .update-progress span { display: block; height: 100%; border-radius: inherit; background: var(--chrome-active); transition: width .18s ease; }
 .update-progress small, .update-restarting { display: block; margin-top: 6px; color: #68686f; font-size: 10px; }
-.update-notice:has(.update-restarting) { animation: update-restart-exit 5s linear forwards; }
-@keyframes update-restart-exit { 0%, 75% { opacity: 1; transform: translateY(0); } 100% { opacity: 0; transform: translateY(-5px); } }
+.update-notice:has(.update-restarting) { animation: update-restart-exit .25s ease-in 3s forwards; }
+@keyframes update-restart-exit { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-5px); } }
 .update-actions { display: flex; margin-top: auto; justify-content: flex-end; gap: 8px; }
 .update-actions button { border: 1px solid #d4d4d0; border-radius: 7px; padding: 7px 11px; color: #27272a; background: #f0f0ec; font-size: 11px; font-weight: 700; }
 .update-actions button:hover { background: #e4e4df; }

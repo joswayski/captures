@@ -346,12 +346,13 @@ pub fn run() {
                 }
             };
             refresh_autostart_registration(app);
+            let restarted_after_update = updates::take_update_restart_pending();
             if pending_capture.is_none() {
                 let onboarding_completed =
                     app.state::<Arc<AppState>>().settings().onboarding_completed;
                 if !onboarding_completed {
                     show_onboarding(&handle);
-                } else if launched_from_autostart() {
+                } else if restarted_after_update || launched_from_autostart() {
                     show_startup_notice(&handle, STARTUP_NOTICE_AUTOSTART_VISIBLE);
                 } else {
                     open_capture_controls(&handle, CaptureSelectorMode::Screenshot);

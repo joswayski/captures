@@ -70,13 +70,13 @@ describe("UpdateNotice", () => {
       current_display_version: "2026.07.19.1",
       version: "2026.7.1902",
       display_version: "2026.07.19.2",
-      seconds_remaining: 5,
+      seconds_remaining: 3,
     } satisfies UpdateStatus);
 
     render(<UpdateNotice />);
 
     expect(await screen.findByText("Update installed successfully")).toBeInTheDocument();
-    expect(screen.getByText("Restarting Captures in 5…")).toBeInTheDocument();
+    expect(screen.getByText("Restarting Captures in 3…")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Later" })).toBeDisabled();
   });
 

@@ -1,4 +1,6 @@
 use std::{
+    fs,
+    path::Path,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -21,7 +23,8 @@ const UPDATE_EVENT: &str = "update-status-changed";
 const RELEASES_URL: &str = "https://github.com/joswayski/captures/releases";
 const UPDATE_NOTICE_WIDTH: f64 = 420.0;
 const UPDATE_NOTICE_HEIGHT: f64 = 300.0;
-const RESTART_COUNTDOWN_SECONDS: u8 = 5;
+const RESTART_COUNTDOWN_SECONDS: u8 = 3;
+const RESTART_FADE_DURATION: Duration = Duration::from_millis(400);
 const INITIAL_CHECK_DELAY: Duration = Duration::from_secs(15);
 const CHECK_INTERVAL: Duration = Duration::from_secs(4 * 60 * 60);
 
@@ -318,7 +321,44 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
 
+    tokio::time::sleep(RESTART_FADE_DURATION).await;
+    if let Err(error) = mark_update_restart_pending() {
+        eprintln!("failed to remember update restart: {error}");
+    }
     app.restart();
+}
+
+pub fn take_update_restart_pending() -> bool {
+    match take_restart_marker(&restart_marker_path()) {
+        Ok(pending) => pending,
+        Err(error) => {
+            eprintln!("failed to clear update restart marker: {error}");
+            false
+        }
+    }
+}
+
+fn mark_update_restart_pending() -> std::io::Result<()> {
+    let path = restart_marker_path();
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, [])
+}
+
+fn take_restart_marker(path: &Path) -> std::io::Result<bool> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+fn restart_marker_path() -> std::path::PathBuf {
+    crate::models::settings_path().with_file_name("update-restart-pending")
 }
 
 async fn check_for_updates_inner(app: &AppHandle, manual: bool) -> Result<UpdateStatus, String> {
@@ -672,7 +712,7 @@ mod tests {
 
     use super::{
         AtomicFlagGuard, NoticeDisposition, UpdateStatus, check_error_status, display_version,
-        notice_disposition, release_channel_enabled, restart_blocker,
+        notice_disposition, release_channel_enabled, restart_blocker, take_restart_marker,
     };
 
     #[test]
@@ -720,6 +760,16 @@ mod tests {
         assert!(AtomicFlagGuard::acquire(&checking).is_none());
         drop(guard);
         assert!(AtomicFlagGuard::acquire(&checking).is_some());
+    }
+
+    #[test]
+    fn consumes_update_restart_marker_once() {
+        let directory = tempfile::tempdir().expect("temporary directory should exist");
+        let marker = directory.path().join("update-restart-pending");
+        std::fs::write(&marker, []).expect("marker should be written");
+
+        assert!(take_restart_marker(&marker).expect("marker should be consumed"));
+        assert!(!take_restart_marker(&marker).expect("consumed marker should stay absent"));
     }
 
     #[test]
