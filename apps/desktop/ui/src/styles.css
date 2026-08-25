@@ -3801,8 +3801,8 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 }
 .compression-preview-colors {
   display: grid;
-  max-width: 380px;
-  grid-template-columns: auto minmax(160px, 1fr);
+  max-width: 260px;
+  grid-template-columns: auto minmax(120px, 1fr);
   align-items: center;
   gap: 10px 12px;
   color: var(--editor-text-muted);
