@@ -9,8 +9,10 @@ use std::{
 
 use captures_capture::{CaptureMode, DisplayDescriptor};
 use captures_media::{
-    ByteRange, CancelToken, EditSpec, ExportFormat, ExportProgress, ExportSpec, MediaToolchain,
-    RecordingAudioLayout, RecordingSegmentInput, TimelineSpriteSpec,
+    ByteRange, CancelToken, EditSpec, ExportFormat, ExportProgress, ExportSpec, MediaToolError,
+    MediaToolchain, QualityPreset, RecordingAudioLayout, RecordingSegmentInput, TimelineSpriteSpec,
+    estimate_sample_windows, export_preserves_source_bytes, extrapolate_sampled_size,
+    visual_edit_is_identity,
 };
 use captures_recording::{
     DraftStore, RecordingCoordinator, RecordingDraftManifest, RecordingKind, RecordingOptions,
@@ -60,6 +62,11 @@ pub struct RecordingRuntime {
     session: Option<RuntimeSession>,
     generation: u64,
     exports: HashMap<String, CancelToken>,
+    /// In-flight export size estimates, keyed by artifact ID. A newer request
+    /// cancels and replaces the previous one for the same artifact.
+    estimates: HashMap<String, CancelToken>,
+    /// In-flight before/after frame previews, keyed by artifact ID.
+    previews: HashMap<String, CancelToken>,
 }
 
 struct RuntimeSession {
@@ -1758,6 +1765,269 @@ pub async fn prepare_recording_timeline_preview(
         .lock()
         .insert(cache_key, bytes);
     Ok(preview())
+}
+
+/// Result of a background export size estimate for the recording editor.
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingExportEstimate {
+    pub size_bytes: u64,
+    /// True when the whole trimmed range was encoded (or the save is a plain
+    /// copy), so the size is exact instead of extrapolated from samples.
+    pub exact: bool,
+}
+
+/// Before/after frames rendered for the recording editor's compression preview.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingExportPreview {
+    pub before_png: Vec<u8>,
+    pub after_png: Vec<u8>,
+}
+
+/// Duration of the sample encoded for a before/after frame preview.
+const PREVIEW_SAMPLE_MS: u64 = 1_500;
+/// How far the sample starts ahead of the requested frame so the compared
+/// frame lands mid-stream with typical quality instead of on the opening
+/// keyframe.
+const PREVIEW_FRAME_LEAD_MS: u64 = 1_000;
+
+/// Estimate the saved file size for the current editor settings by encoding
+/// short samples of the trimmed range with the same pipeline used to save.
+#[tauri::command]
+pub async fn estimate_recording_export(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    artifact_id: String,
+    mut edit: EditSpec,
+    export: ExportSpec,
+) -> Result<RecordingExportEstimate, String> {
+    if export.format == ExportFormat::WebM {
+        return Err("size estimates are not available for WebM".to_owned());
+    }
+    let source = state
+        .recording_artifacts
+        .lock()
+        .iter()
+        .find(|artifact| artifact.summary.id == artifact_id)
+        .map(|artifact| artifact.summary.clone())
+        .ok_or_else(|| "recording is no longer available".to_owned())?;
+    if !Path::new(&source.path).is_file() {
+        return Err("the recording file is missing".to_owned());
+    }
+    edit.audio.source_has_system_audio = source.has_system_audio;
+    edit.audio.source_has_microphone_audio = source.has_microphone_audio;
+    let cancel = CancelToken::default();
+    if let Some(previous) = state
+        .recording
+        .lock()
+        .estimates
+        .insert(artifact_id, cancel.clone())
+    {
+        previous.cancel();
+    }
+    let toolchain = media_toolchain(&app);
+    let input = PathBuf::from(&source.path);
+    tauri::async_runtime::spawn_blocking(move || {
+        estimate_export_size(&toolchain, &input, &edit, &export, &cancel)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
+/// Render matching before/after frames for the recording editor's compression
+/// preview by encoding a short sample around `at_ms` with the save pipeline.
+#[tauri::command]
+pub async fn preview_recording_export(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    artifact_id: String,
+    mut edit: EditSpec,
+    export: ExportSpec,
+    at_ms: u64,
+) -> Result<RecordingExportPreview, String> {
+    if export.format == ExportFormat::WebM {
+        return Err("previews are not available for WebM".to_owned());
+    }
+    let source = state
+        .recording_artifacts
+        .lock()
+        .iter()
+        .find(|artifact| artifact.summary.id == artifact_id)
+        .map(|artifact| artifact.summary.clone())
+        .ok_or_else(|| "recording is no longer available".to_owned())?;
+    if !Path::new(&source.path).is_file() {
+        return Err("the recording file is missing".to_owned());
+    }
+    edit.audio.source_has_system_audio = source.has_system_audio;
+    edit.audio.source_has_microphone_audio = source.has_microphone_audio;
+    let cancel = CancelToken::default();
+    if let Some(previous) = state
+        .recording
+        .lock()
+        .previews
+        .insert(artifact_id, cancel.clone())
+    {
+        previous.cancel();
+    }
+    let toolchain = media_toolchain(&app);
+    let input = PathBuf::from(&source.path);
+    tauri::async_runtime::spawn_blocking(move || {
+        render_export_preview(&toolchain, &input, &edit, &export, at_ms, &cancel)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
+fn estimate_export_size(
+    toolchain: &MediaToolchain,
+    input: &Path,
+    edit: &EditSpec,
+    export: &ExportSpec,
+    cancel: &CancelToken,
+) -> Result<RecordingExportEstimate, MediaToolError> {
+    let probe = toolchain.probe(input)?;
+    if export_preserves_source_bytes(&probe, edit, export) {
+        return Ok(RecordingExportEstimate {
+            size_bytes: probe.metadata.size_bytes,
+            exact: true,
+        });
+    }
+    if export.format == ExportFormat::Mp4
+        && export.quality == QualityPreset::Preserve
+        && export.max_size_bytes.is_none()
+        && visual_edit_is_identity(&probe, edit)
+    {
+        // Only the audio track is re-encoded; the copied video stream
+        // dominates the file, so the source size is a close estimate.
+        return Ok(RecordingExportEstimate {
+            size_bytes: probe.metadata.size_bytes,
+            exact: false,
+        });
+    }
+    let source_duration_ms = probe
+        .metadata
+        .duration_ms
+        .ok_or(MediaToolError::IncompleteMetadata)?;
+    let trim_end_ms = edit
+        .trim_end_ms
+        .unwrap_or(source_duration_ms)
+        .min(source_duration_ms);
+    let trimmed_ms = trim_end_ms.saturating_sub(edit.trim_start_ms).max(1);
+    let windows = estimate_sample_windows(edit.trim_start_ms, trimmed_ms);
+    let exact = windows.len() == 1;
+    let extension = if export.format == ExportFormat::Gif {
+        "gif"
+    } else {
+        "mp4"
+    };
+    let scratch = std::env::temp_dir().join(format!("captures-estimate-{}", Uuid::new_v4()));
+    fs::create_dir_all(&scratch)?;
+    let mut sampled_bytes: u64 = 0;
+    let mut sampled_ms: u64 = 0;
+    let result = (|| {
+        for (index, (start_ms, window_ms)) in windows.iter().copied().enumerate() {
+            if cancel.is_cancelled() {
+                return Err(MediaToolError::Cancelled);
+            }
+            let mut sample_edit = edit.clone();
+            sample_edit.trim_start_ms = start_ms;
+            sample_edit.trim_end_ms = Some(start_ms + window_ms);
+            let sample_export = sampled_export_spec(export, window_ms, trimmed_ms);
+            let destination = scratch.join(format!("sample-{index}.{extension}"));
+            let outcome = toolchain.export(
+                input,
+                &destination,
+                &sample_edit,
+                &sample_export,
+                cancel,
+                |_| {},
+            )?;
+            sampled_bytes = sampled_bytes.saturating_add(outcome.size_bytes);
+            sampled_ms = sampled_ms.saturating_add(window_ms);
+        }
+        Ok(())
+    })();
+    let _ = fs::remove_dir_all(&scratch);
+    result?;
+    Ok(RecordingExportEstimate {
+        size_bytes: extrapolate_sampled_size(sampled_bytes, sampled_ms, trimmed_ms),
+        exact,
+    })
+}
+
+fn render_export_preview(
+    toolchain: &MediaToolchain,
+    input: &Path,
+    edit: &EditSpec,
+    export: &ExportSpec,
+    at_ms: u64,
+    cancel: &CancelToken,
+) -> Result<RecordingExportPreview, MediaToolError> {
+    let probe = toolchain.probe(input)?;
+    let source_duration_ms = probe
+        .metadata
+        .duration_ms
+        .ok_or(MediaToolError::IncompleteMetadata)?;
+    let trim_start_ms = edit.trim_start_ms.min(source_duration_ms.saturating_sub(1));
+    let trim_end_ms = edit
+        .trim_end_ms
+        .unwrap_or(source_duration_ms)
+        .min(source_duration_ms)
+        .max(trim_start_ms + 1);
+    let trimmed_ms = trim_end_ms - trim_start_ms;
+    let at = at_ms.clamp(trim_start_ms, trim_end_ms - 1);
+    let window_ms = PREVIEW_SAMPLE_MS.min(trimmed_ms);
+    let start_ms = at
+        .saturating_sub(PREVIEW_FRAME_LEAD_MS)
+        .min(trim_end_ms - window_ms)
+        .max(trim_start_ms);
+    let mut sample_edit = edit.clone();
+    sample_edit.trim_start_ms = start_ms;
+    sample_edit.trim_end_ms = Some(start_ms + window_ms);
+    let sample_export = sampled_export_spec(export, window_ms, trimmed_ms);
+    let extension = if export.format == ExportFormat::Gif {
+        "gif"
+    } else {
+        "mp4"
+    };
+    let scratch = std::env::temp_dir().join(format!("captures-preview-{}", Uuid::new_v4()));
+    fs::create_dir_all(&scratch)?;
+    let result = (|| {
+        let sample_path = scratch.join(format!("sample.{extension}"));
+        toolchain.export(
+            input,
+            &sample_path,
+            &sample_edit,
+            &sample_export,
+            cancel,
+            |_| {},
+        )?;
+        let after_path = scratch.join("after.png");
+        toolchain.extract_frame(&sample_path, at - start_ms, &after_path, cancel)?;
+        let before_path = scratch.join("before.png");
+        toolchain.extract_edited_frame(input, edit, export, at, &before_path, cancel)?;
+        Ok(RecordingExportPreview {
+            before_png: fs::read(&before_path)?,
+            after_png: fs::read(&after_path)?,
+        })
+    })();
+    let _ = fs::remove_dir_all(&scratch);
+    result
+}
+
+/// Give a sampled window a proportional share of a whole-export size cap so
+/// bitrate selection matches the real save.
+fn sampled_export_spec(export: &ExportSpec, window_ms: u64, trimmed_ms: u64) -> ExportSpec {
+    let mut sample = export.clone();
+    sample.max_size_bytes = export.max_size_bytes.map(|cap| {
+        u64::try_from(u128::from(cap) * u128::from(window_ms) / u128::from(trimmed_ms.max(1)))
+            .unwrap_or(cap)
+            .max(1)
+    });
+    sample
 }
 
 #[tauri::command]

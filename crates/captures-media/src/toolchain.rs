@@ -471,6 +471,76 @@ impl MediaToolchain {
         result
     }
 
+    /// Extract one decoded frame at `at_ms` from an already-encoded file as a
+    /// PNG, without applying any edits.
+    pub fn extract_frame(
+        &self,
+        input: &Path,
+        at_ms: u64,
+        destination: &Path,
+        cancel: &CancelToken,
+    ) -> Result<(), MediaToolError> {
+        let mut command = Command::new(&self.ffmpeg);
+        command
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-ss",
+                &seconds(at_ms),
+                "-i",
+            ])
+            .arg(input)
+            .args(["-frames:v", "1"])
+            .arg(destination);
+        run_command(&mut command, cancel, "FFmpeg")
+    }
+
+    /// Extract one source frame at `at_ms` as a PNG with the export's crop and
+    /// scaling applied, so it lines up with a frame from the encoded output.
+    pub fn extract_edited_frame(
+        &self,
+        input: &Path,
+        edit: &EditSpec,
+        spec: &ExportSpec,
+        at_ms: u64,
+        destination: &Path,
+        cancel: &CancelToken,
+    ) -> Result<(), MediaToolError> {
+        let probe = self.probe(input)?;
+        validate_edit_spec(&probe, edit)?;
+        let attempts = export_attempts(&probe, edit, spec)?;
+        let attempt = attempts.first().ok_or(MediaToolError::IncompleteMetadata)?;
+        let mut filters = Vec::new();
+        if let Some(crop) = edit.crop {
+            filters.push(format!(
+                "crop={}:{}:{}:{}",
+                crop.width, crop.height, crop.x, crop.y
+            ));
+        }
+        filters.push(format!(
+            "scale={}:{}:flags=lanczos",
+            attempt.width, attempt.height
+        ));
+        let filter = filters.join(",");
+        let mut command = Command::new(&self.ffmpeg);
+        command
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-ss",
+                &seconds(at_ms),
+                "-i",
+            ])
+            .arg(input)
+            .args(["-frames:v", "1", "-vf", &filter])
+            .arg(destination);
+        run_command(&mut command, cancel, "FFmpeg")
+    }
+
     pub fn export<F>(
         &self,
         input: &Path,
@@ -1134,7 +1204,25 @@ fn validate_edit_spec(probe: &ProbeResult, edit: &EditSpec) -> Result<(), MediaT
     Ok(())
 }
 
-fn visual_edit_is_identity(probe: &ProbeResult, edit: &EditSpec) -> bool {
+/// True when [`MediaToolchain::export`] would copy the source file unchanged,
+/// so the saved file's size equals the source size exactly.
+pub fn export_preserves_source_bytes(
+    probe: &ProbeResult,
+    edit: &EditSpec,
+    spec: &ExportSpec,
+) -> bool {
+    spec.format == ExportFormat::Mp4
+        && spec.quality == QualityPreset::Preserve
+        && spec
+            .max_size_bytes
+            .is_none_or(|maximum| probe.metadata.size_bytes <= maximum)
+        && visual_edit_is_identity(probe, edit)
+        && audio_edit_is_identity(edit)
+}
+
+/// True when the edit leaves the video stream untouched (no trim, crop, or
+/// resize), so a Preserve-quality MP4 export copies it instead of re-encoding.
+pub fn visual_edit_is_identity(probe: &ProbeResult, edit: &EditSpec) -> bool {
     edit.trim_start_ms == 0
         && edit
             .trim_end_ms

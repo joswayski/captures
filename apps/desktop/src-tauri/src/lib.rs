@@ -306,6 +306,8 @@ pub fn run() {
             recording::get_recording_artifacts,
             recording::get_recording_artifact,
             recording::prepare_recording_timeline_preview,
+            recording::estimate_recording_export,
+            recording::preview_recording_export,
             recording::start_recording_export,
             recording::cancel_recording_export,
             recording::reveal_recording_artifact,

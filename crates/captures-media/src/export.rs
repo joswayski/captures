@@ -195,10 +195,47 @@ pub fn gif_export_attempts(
     attempts
 }
 
+/// Longest trimmed duration that a size estimate encodes in full, which makes
+/// the estimate exact instead of extrapolated.
+pub const ESTIMATE_FULL_ENCODE_MAX_MS: u64 = 6_000;
+/// Duration of each sampled window when the trimmed range is too long to
+/// encode in full for an estimate.
+pub const ESTIMATE_SAMPLE_WINDOW_MS: u64 = 2_000;
+
+/// Sample windows `(start_ms, duration_ms)` inside the trimmed range used to
+/// estimate an export's size without encoding the whole recording. Short
+/// recordings return one window covering the full range.
+pub fn estimate_sample_windows(trim_start_ms: u64, trimmed_duration_ms: u64) -> Vec<(u64, u64)> {
+    if trimmed_duration_ms == 0 {
+        return Vec::new();
+    }
+    if trimmed_duration_ms <= ESTIMATE_FULL_ENCODE_MAX_MS {
+        return vec![(trim_start_ms, trimmed_duration_ms)];
+    }
+    let latest_start = trimmed_duration_ms - ESTIMATE_SAMPLE_WINDOW_MS;
+    [25, 65]
+        .into_iter()
+        .map(|percent| {
+            let offset = (trimmed_duration_ms * percent / 100).min(latest_start);
+            (trim_start_ms + offset, ESTIMATE_SAMPLE_WINDOW_MS)
+        })
+        .collect()
+}
+
+/// Scale sampled output bytes up to the full trimmed duration.
+pub fn extrapolate_sampled_size(sampled_bytes: u64, sampled_ms: u64, total_ms: u64) -> u64 {
+    if sampled_ms == 0 {
+        return sampled_bytes;
+    }
+    u64::try_from(u128::from(sampled_bytes) * u128::from(total_ms) / u128::from(sampled_ms))
+        .unwrap_or(u64::MAX)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        GifExportAttempt, QualityPreset, SizeBudgetError, calculate_size_budget,
+        ESTIMATE_SAMPLE_WINDOW_MS, GifExportAttempt, QualityPreset, SizeBudgetError,
+        calculate_size_budget, estimate_sample_windows, extrapolate_sampled_size,
         gif_export_attempts,
     };
 
@@ -246,5 +283,44 @@ mod tests {
                 max_width: 320,
             })
         );
+    }
+
+    #[test]
+    fn short_recordings_are_estimated_with_one_full_window() {
+        assert_eq!(estimate_sample_windows(1_500, 4_000), vec![(1_500, 4_000)]);
+        assert_eq!(estimate_sample_windows(0, 0), Vec::new());
+    }
+
+    #[test]
+    fn long_recordings_sample_two_disjoint_windows_inside_the_trim() {
+        let windows = estimate_sample_windows(10_000, 60_000);
+        assert_eq!(
+            windows,
+            vec![
+                (25_000, ESTIMATE_SAMPLE_WINDOW_MS),
+                (49_000, ESTIMATE_SAMPLE_WINDOW_MS),
+            ]
+        );
+        for (start, duration) in windows {
+            assert!(start >= 10_000);
+            assert!(start + duration <= 70_000);
+        }
+    }
+
+    #[test]
+    fn sample_windows_never_pass_the_end_of_the_trim() {
+        for (start, duration) in estimate_sample_windows(0, 6_001) {
+            assert!(start + duration <= 6_001);
+        }
+    }
+
+    #[test]
+    fn sampled_sizes_extrapolate_to_the_full_duration() {
+        assert_eq!(
+            extrapolate_sampled_size(1_000_000, 4_000, 60_000),
+            15_000_000
+        );
+        assert_eq!(extrapolate_sampled_size(1_000_000, 0, 60_000), 1_000_000);
+        assert_eq!(extrapolate_sampled_size(u64::MAX, 1, 2), u64::MAX);
     }
 }
