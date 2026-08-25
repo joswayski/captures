@@ -451,6 +451,7 @@ async fn start_capture_inner(
     state: Arc<AppState>,
     mode: CaptureMode,
 ) -> Result<Option<ActiveSession>, AppError> {
+    ensure_capture_session_available()?;
     if updates::install_is_active(&app) {
         return Err(AppError::UpdateInstalling);
     }
@@ -528,6 +529,7 @@ async fn prepare_capture(
             return Ok(None);
         }
     }
+    ensure_capture_session_available()?;
     let frame = state.backend.capture_display(&display.id)?;
     // The background frame is frozen now, so this capture no longer needs HUD
     // exclusion. Release it before encoding can emit a new preview and allow a
@@ -634,6 +636,7 @@ async fn commit_region(
             return Ok(None);
         }
         let live_image = (|| -> Result<RgbaImage, AppError> {
+            ensure_capture_session_available()?;
             let frame = state.backend.capture_display(&session.display.id)?;
             crop_region_from_display(&frame.descriptor, &frame.image, rect)
         })();
@@ -2694,6 +2697,14 @@ fn take_pending_capture_after_restart(state: &AppState) -> Result<Option<Capture
     Ok(pending)
 }
 
+pub(crate) fn ensure_capture_session_available() -> Result<(), AppError> {
+    if !captures_session::capture_session_available() {
+        return Err(CaptureError::SessionUnavailable.into());
+    }
+
+    Ok(())
+}
+
 #[cfg(target_os = "macos")]
 fn restart_and_retry_capture(app: &AppHandle, mode: CaptureMode) -> Result<(), AppError> {
     let state = app.state::<Arc<AppState>>().inner().clone();
@@ -3917,6 +3928,11 @@ fn thumbnail_geometry(bounds: ThumbnailMonitorBounds, count: usize) -> (f64, f64
 
 fn report_capture_error(app: &AppHandle, error: &AppError, mode: CaptureMode) {
     eprintln!("capture failed: {error}");
+    if matches!(error, AppError::Capture(CaptureError::SessionUnavailable)) {
+        // Capture shortcuts and restored app launches can arrive while the desktop
+        // is locked. Do not put capture UI or an error dialog over the lock screen.
+        return;
+    }
     #[cfg(not(target_os = "macos"))]
     let _ = mode;
 
@@ -4535,6 +4551,7 @@ fn capture_live_window(
     state: &AppState,
     selected_window: &captures_capture::WindowDescriptor,
 ) -> Result<RgbaImage, AppError> {
+    ensure_capture_session_available()?;
     let current_window = state
         .windows()
         .ok()

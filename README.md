@@ -68,6 +68,7 @@ Preview builds update after every successful merge to `main` and may contain bug
 - Screenshots during an active recording
 - 30-day capture history
 - Customizable shortcuts and color themes
+- Capture UI and capture actions stay disabled while the desktop session is locked or inactive
 - Optional in-app feedback (never includes your captures)
 
 ## Wishlist

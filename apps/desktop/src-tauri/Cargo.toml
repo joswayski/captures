@@ -20,6 +20,7 @@ tauri-build = { version = "2", features = [] }
 captures-capture = { path = "../../../crates/captures-capture" }
 captures-media = { path = "../../../crates/captures-media" }
 captures-recording = { path = "../../../crates/captures-recording" }
+captures-session = { path = "../../../crates/captures-session" }
 anyhow = "1"
 chrono.workspace = true
 image.workspace = true
