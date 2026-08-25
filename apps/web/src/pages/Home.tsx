@@ -164,11 +164,11 @@ export default function Home({
             ) : (
               <>
                 <h2 className="text-base font-medium tracking-tight text-ink sm:text-lg">
-                  A desktop app
+                  Capture from your desktop
                 </h2>
                 <p className="mt-3 max-w-xl text-sm leading-relaxed text-ink-muted">
-                  Captures runs on macOS, Windows, and Linux — not on phones or tablets. Follow
-                  the project on GitHub.
+                  Captures is available for macOS, Windows, and Linux. Visit from your computer to
+                  download it, or follow the project on GitHub.
                 </p>
                 <div className="mt-8">
                   <GitHubSourceButton primary />
