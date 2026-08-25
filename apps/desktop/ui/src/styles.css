@@ -1762,6 +1762,30 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 .editor-field-help + .editor-field { margin-top: 13px; }
 .editor-size-limit { display: grid; grid-template-columns: minmax(100px, 1fr) 92px; gap: 8px; }
 .editor-size-limit input { width: 100%; min-width: 0; }
+.recording-output-estimate { display: inline-flex; align-items: center; gap: 8px; margin-top: 4px; color: var(--editor-text-muted); font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-size: 11px; font-weight: 600; line-height: 1; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.recording-output-estimate[data-pending="true"] { color: var(--editor-text-subtle); font-weight: 500; }
+.recording-output-estimate-delta { padding: 2px 6px; border-radius: 999px; font-size: 10px; font-weight: 650; }
+.recording-output-estimate-delta.is-smaller { color: #4cae5d; background: rgba(76, 174, 93, .14); }
+.recording-output-estimate-delta.is-larger { color: var(--theme-signal-text); background: rgba(var(--theme-signal-rgb), .12); }
+.recording-compress-preview-button {
+  height: 32px;
+  margin-top: 4px;
+  padding: 0 12px;
+  border: 1px solid var(--editor-border-strong);
+  border-radius: 9px;
+  color: var(--editor-text);
+  background: var(--editor-field);
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
+  justify-self: start;
+}
+.recording-compress-preview-button:hover:not(:disabled) {
+  border-color: rgba(var(--theme-accent-rgb), .45);
+  color: var(--theme-accent-text);
+  background: rgba(var(--theme-accent-rgb), .1);
+}
+.recording-compress-preview-button:disabled { opacity: .45; cursor: default; }
 .editor-audio-warning { border-color: rgba(var(--theme-accent-rgb),.26); color: var(--theme-accent-text); background: var(--theme-accent-surface); }.editor-audio-warning p { font-size: 11px; }
 
 .recording-save-footer { position: fixed; z-index: 120; right: 0; bottom: 0; left: 0; display: grid; min-height: 76px; padding: 8px 22px; grid-template-columns: minmax(280px, 420px) max-content minmax(340px, auto); align-items: center; justify-content: center; gap: 16px; border-top: 1px solid #3a3b40; background: rgba(28,29,33,.98); box-shadow: 0 -12px 30px rgba(0,0,0,.32); backdrop-filter: blur(20px); }

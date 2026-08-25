@@ -14,7 +14,9 @@ import {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 
+import { CompressionPreview } from "./CompressionPreview";
 import { CustomSelect } from "./CustomSelect";
 import { Feedback } from "./Feedback";
 import { NumberInput } from "./NumberInput";
@@ -2936,6 +2938,20 @@ export function RecordingEditor() {
   const [previewLoop, setPreviewLoop] = useState(false);
   const [toast, setToast] = useState("");
   const [error, setError] = useState("");
+  const [estimatedBytes, setEstimatedBytes] = useState<number | null>(null);
+  const [estimateExact, setEstimateExact] = useState(false);
+  const [estimatePending, setEstimatePending] = useState(false);
+  const estimateRequestRef = useRef(0);
+  const [compressPreviewOpen, setCompressPreviewOpen] = useState(false);
+  const [compressPreviewPending, setCompressPreviewPending] = useState(false);
+  const [compressPreviewError, setCompressPreviewError] = useState("");
+  const [compressPreviewBeforeUrl, setCompressPreviewBeforeUrl] = useState<string | null>(null);
+  const [compressPreviewAfterUrl, setCompressPreviewAfterUrl] = useState<string | null>(null);
+  const compressPreviewUrlsRef = useRef<{ before: string | null; after: string | null }>({
+    before: null,
+    after: null,
+  });
+  const playheadMsRef = useRef(0);
   const videoRef = useRef<HTMLVideoElement>(null);
   const previewMediaRef = useRef<HTMLDivElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
@@ -3119,6 +3135,172 @@ export function RecordingEditor() {
     return () => window.cancelAnimationFrame(frameId);
   }, [previewPlaying]);
 
+  // Build the same edit/export payloads used by Save so background size
+  // estimates and the before/after preview always match the real encode.
+  const buildExportRequestSpecs = useCallback((): {
+    edit: EditSpec;
+    export: ExportSpec;
+    maximumBytes: number | null;
+  } | null => {
+    if (!artifact) return null;
+    const maximumBytes = sizeMode === "maximum"
+      ? Math.floor(Number(maximumSize) * FILE_SIZE_UNIT_BYTES[maximumUnit])
+      : null;
+    const baseOutput = editorOutputDimensions(
+      cropEnabled ? crop.width : artifact.width,
+      cropEnabled ? crop.height : artifact.height,
+      resolution,
+      customWidth,
+      customHeight,
+    );
+    const output = outputFormat === "gif"
+      ? dimensionsAtMaximumWidth(baseOutput.width, baseOutput.height, gifMaxWidth)
+      : baseOutput;
+    const edit: EditSpec = {
+      trim_start_ms: Math.round(trimStart),
+      trim_end_ms: Math.round(trimEnd) >= artifact.duration_ms ? null : Math.round(trimEnd),
+      crop: cropEnabled ? boundedCrop(crop, artifact.width, artifact.height) : null,
+      output_width: resolution === "original" && outputFormat !== "gif" ? null : output.width,
+      output_height: resolution === "original" && outputFormat !== "gif" ? null : output.height,
+      audio: {
+        system_volume: systemVolume / 100,
+        microphone_volume: microphoneVolume / 100,
+        mute_system_audio: outputFormat === "gif" || muteSystem,
+        mute_microphone: outputFormat === "gif" || muteMicrophone,
+        mono_output: mono,
+        source_has_system_audio: artifact.has_system_audio,
+        source_has_microphone_audio: artifact.has_microphone_audio,
+      },
+    };
+    const exportSpec: ExportSpec = {
+      format: outputFormat,
+      quality: sizeMode === "preserve" ? "preserve" : sizeMode === "compress" ? quality : "preserve",
+      max_size_bytes: maximumBytes,
+      frames_per_second: outputFormat === "gif" ? gifFps : null,
+      gif_max_colors: outputFormat === "gif" ? gifColors : null,
+    };
+    return { edit, export: exportSpec, maximumBytes };
+  }, [
+    artifact,
+    crop,
+    cropEnabled,
+    customHeight,
+    customWidth,
+    gifColors,
+    gifFps,
+    gifMaxWidth,
+    maximumSize,
+    maximumUnit,
+    microphoneVolume,
+    mono,
+    muteMicrophone,
+    muteSystem,
+    outputFormat,
+    quality,
+    resolution,
+    sizeMode,
+    systemVolume,
+    trimEnd,
+    trimStart,
+  ]);
+
+  // Estimate the saved size in the background whenever settings change. The
+  // backend encodes short samples with the save pipeline, so this takes a few
+  // seconds and is debounced. Maximum mode shows the cap instead.
+  useEffect(() => {
+    if (!artifact || artifact.missing || exportId) return;
+    // Maximum mode shows the cap instead of a sampled estimate; the label
+    // ignores any stale estimate state, so nothing is cleared here.
+    if (sizeMode === "maximum") return;
+    const request = ++estimateRequestRef.current;
+    const timer = window.setTimeout(() => {
+      setEstimatePending(true);
+      void (async () => {
+        try {
+          const specs = buildExportRequestSpecs();
+          if (!specs) return;
+          const estimate = await invoke<{ sizeBytes: number; exact: boolean }>(
+            "estimate_recording_export",
+            { artifactId: artifact.id, edit: specs.edit, export: specs.export },
+          );
+          if (estimateRequestRef.current !== request) return;
+          setEstimatedBytes(estimate.sizeBytes);
+          setEstimateExact(estimate.exact);
+        } catch {
+          if (estimateRequestRef.current === request) setEstimatedBytes(null);
+        } finally {
+          if (estimateRequestRef.current === request) setEstimatePending(false);
+        }
+      })();
+    }, 600);
+    return () => window.clearTimeout(timer);
+  }, [artifact, buildExportRequestSpecs, exportId, sizeMode]);
+
+  useEffect(() => {
+    playheadMsRef.current = playheadMs;
+  }, [playheadMs]);
+
+  const revokeCompressPreviewUrls = useCallback(() => {
+    const { before, after } = compressPreviewUrlsRef.current;
+    if (before) URL.revokeObjectURL(before);
+    if (after) URL.revokeObjectURL(after);
+    compressPreviewUrlsRef.current = { before: null, after: null };
+    setCompressPreviewBeforeUrl(null);
+    setCompressPreviewAfterUrl(null);
+  }, []);
+
+  // Revoke any cached preview object URLs when the editor unmounts.
+  useEffect(() => () => {
+    const { before, after } = compressPreviewUrlsRef.current;
+    if (before) URL.revokeObjectURL(before);
+    if (after) URL.revokeObjectURL(after);
+  }, []);
+
+  const loadCompressPreview = useCallback(async () => {
+    if (!artifact) return;
+    setCompressPreviewPending(true);
+    setCompressPreviewError("");
+    try {
+      const specs = buildExportRequestSpecs();
+      if (!specs) return;
+      const preview = await invoke<{ beforePng: number[]; afterPng: number[] }>(
+        "preview_recording_export",
+        {
+          artifactId: artifact.id,
+          edit: specs.edit,
+          export: specs.export,
+          atMs: Math.round(playheadMsRef.current),
+        },
+      );
+      const beforeUrl = URL.createObjectURL(
+        new Blob([new Uint8Array(preview.beforePng)], { type: "image/png" }),
+      );
+      const afterUrl = URL.createObjectURL(
+        new Blob([new Uint8Array(preview.afterPng)], { type: "image/png" }),
+      );
+      revokeCompressPreviewUrls();
+      compressPreviewUrlsRef.current = { before: beforeUrl, after: afterUrl };
+      setCompressPreviewBeforeUrl(beforeUrl);
+      setCompressPreviewAfterUrl(afterUrl);
+    } catch (reason) {
+      setCompressPreviewError(recordingErrorMessage(reason));
+    } finally {
+      setCompressPreviewPending(false);
+    }
+  }, [artifact, buildExportRequestSpecs, revokeCompressPreviewUrls]);
+
+  const canPreviewCompression = sizeMode === "compress" || sizeMode === "maximum";
+
+  // Encode a fresh sample when the preview opens and whenever settings change
+  // while it stays open. The previous frames stay visible during the refresh.
+  useEffect(() => {
+    if (!canPreviewCompression || !compressPreviewOpen) return;
+    const timer = window.setTimeout(() => {
+      void loadCompressPreview();
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [canPreviewCompression, compressPreviewOpen, loadCompressPreview]);
+
   const exportFingerprint = artifact ? recordingEditorFingerprint({
     artifact: artifact.id,
     makeCopy,
@@ -3158,9 +3340,6 @@ export function RecordingEditor() {
     customWidth,
     customHeight,
   );
-  const outputDimensions = outputFormat === "gif"
-    ? dimensionsAtMaximumWidth(baseOutputDimensions.width, baseOutputDimensions.height, gifMaxWidth)
-    : baseOutputDimensions;
   const hasRecordedAudio = artifact.has_system_audio || artifact.has_microphone_audio;
   // User-facing original is the permanent Captures save when present — not the
   // private history recovery path (`…/history/<id>/media.mp4`).
@@ -3175,6 +3354,29 @@ export function RecordingEditor() {
   const sourceFormat = artifact.kind === "gif" ? "gif" : "mp4";
   const formatRequiresCopy = outputFormat !== sourceFormat;
   const alreadySaved = Boolean(exported && savedFingerprint === exportFingerprint);
+  const maximumBytes = sizeMode === "maximum"
+    ? Math.floor(Number(maximumSize) * FILE_SIZE_UNIT_BYTES[maximumUnit])
+    : null;
+  const maximumBytesValid = maximumBytes !== null
+    && Number.isFinite(maximumBytes)
+    && maximumBytes >= 100_000;
+  const estimatedSizeLabel = sizeMode === "maximum"
+    ? maximumBytesValid && maximumBytes !== null ? `≤ ${formatFileSize(maximumBytes)}` : "—"
+    : estimatePending && estimatedBytes === null
+      ? "Estimating…"
+      : estimatedBytes === null
+        ? "—"
+        : `${estimateExact ? "" : "≈ "}${formatFileSize(estimatedBytes)}`;
+  const estimatedDeltaPercent = sizeMode === "compress"
+    && estimatedBytes !== null
+    && artifact.size_bytes > 0
+    ? Math.round((estimatedBytes / artifact.size_bytes - 1) * 100)
+    : null;
+  const estimatedDeltaLabel = estimatedDeltaPercent === null || estimatedDeltaPercent === 0
+    ? null
+    : estimatedDeltaPercent < 0
+      ? `−${Math.abs(estimatedDeltaPercent)}%`
+      : `+${estimatedDeltaPercent}%`;
   const saveStatus = error
     || toast
     || (exportId ? progress?.message || exportStageLabel(progress?.stage || "preparing") : "");
@@ -3425,9 +3627,9 @@ export function RecordingEditor() {
       setError(invalidFilename);
       return;
     }
-    const maximumBytes = sizeMode === "maximum"
-      ? Math.floor(Number(maximumSize) * FILE_SIZE_UNIT_BYTES[maximumUnit])
-      : null;
+    const specs = buildExportRequestSpecs();
+    if (!specs) return;
+    const { edit, export: exportSpec, maximumBytes } = specs;
     if (
       sizeMode === "maximum"
       && (maximumBytes === null || !Number.isFinite(maximumBytes) || maximumBytes < 100_000)
@@ -3435,29 +3637,6 @@ export function RecordingEditor() {
       setError("Enter a maximum file size of at least 100 KB.");
       return;
     }
-    const edit: EditSpec = {
-      trim_start_ms: Math.round(trimStart),
-      trim_end_ms: Math.round(trimEnd) >= artifact.duration_ms ? null : Math.round(trimEnd),
-      crop: cropEnabled ? boundedCrop(crop, artifact.width, artifact.height) : null,
-      output_width: resolution === "original" && outputFormat !== "gif" ? null : outputDimensions.width,
-      output_height: resolution === "original" && outputFormat !== "gif" ? null : outputDimensions.height,
-      audio: {
-        system_volume: systemVolume / 100,
-        microphone_volume: microphoneVolume / 100,
-        mute_system_audio: outputFormat === "gif" || muteSystem,
-        mute_microphone: outputFormat === "gif" || muteMicrophone,
-        mono_output: mono,
-        source_has_system_audio: artifact.has_system_audio,
-        source_has_microphone_audio: artifact.has_microphone_audio,
-      },
-    };
-    const exportSpec: ExportSpec = {
-      format: outputFormat,
-      quality: sizeMode === "preserve" ? "preserve" : sizeMode === "compress" ? quality : "preserve",
-      max_size_bytes: maximumBytes,
-      frames_per_second: outputFormat === "gif" ? gifFps : null,
-      gif_max_colors: outputFormat === "gif" ? gifColors : null,
-    };
     setError("");
     setToast("");
     setExported(null);
@@ -3831,7 +4010,12 @@ export function RecordingEditor() {
                   description: "Set a hard size limit for the saved file.",
                 },
               ]}
-              onChange={(value) => setSizeMode(value as typeof sizeMode)}
+              onChange={(value) => {
+                const mode = value as typeof sizeMode;
+                setSizeMode(mode);
+                // Preserve mode has no compression to compare.
+                if (mode !== "compress" && mode !== "maximum") setCompressPreviewOpen(false);
+              }}
             />
           </div>
           <p className="editor-field-help">
@@ -3884,6 +4068,37 @@ export function RecordingEditor() {
                   }}
                 />
               </div>
+            </div>
+          )}
+          <div className="editor-field recording-output-estimate-field" aria-live="polite">
+            <span>Est. size</span>
+            <strong
+              className="recording-output-estimate"
+              data-pending={sizeMode !== "maximum" && estimatePending ? "true" : undefined}
+              title="Estimated saved file size for the current edits and settings"
+            >
+              {estimatedSizeLabel}
+              {estimatedDeltaLabel && !estimatePending && (
+                <span
+                  className={`recording-output-estimate-delta${estimatedDeltaPercent !== null && estimatedDeltaPercent < 0 ? " is-smaller" : " is-larger"}`}
+                  title="Change versus the original recording file"
+                >
+                  {estimatedDeltaLabel}
+                </span>
+              )}
+            </strong>
+          </div>
+          {canPreviewCompression && (
+            <div className="editor-field recording-compress-preview-field">
+              <span>Preview</span>
+              <button
+                type="button"
+                className="recording-compress-preview-button"
+                disabled={Boolean(exportId)}
+                onClick={() => setCompressPreviewOpen(true)}
+              >
+                Compare before / after
+              </button>
             </div>
           )}
         </section>
@@ -4028,6 +4243,27 @@ export function RecordingEditor() {
           </div>
         </div>
       </footer>
+      {compressPreviewOpen && canPreviewCompression && createPortal(
+        <CompressionPreview
+          open={compressPreviewOpen}
+          beforeUrl={compressPreviewBeforeUrl}
+          afterUrl={compressPreviewAfterUrl}
+          beforeBytes={artifact.size_bytes}
+          afterBytes={sizeMode === "maximum"
+            ? maximumBytesValid ? maximumBytes : null
+            : estimatedBytes}
+          formatLabel={outputFormat === "gif" ? "GIF" : "MP4"}
+          qualityLabel={sizeMode === "maximum"
+            ? maximumBytesValid && maximumBytes !== null
+              ? `≤ ${formatFileSize(maximumBytes)}`
+              : "Maximum file size"
+            : RECORDING_QUALITY_OPTIONS.find((option) => option.value === quality)?.label ?? ""}
+          pending={compressPreviewPending}
+          error={compressPreviewError}
+          onClose={() => setCompressPreviewOpen(false)}
+        />,
+        document.body,
+      )}
     </main>
   );
 }
