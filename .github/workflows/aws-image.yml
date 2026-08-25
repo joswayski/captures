@@ -168,7 +168,7 @@ jobs:
               username: "Production deploys",
               embeds: [{
                 title: "Captures image is ready",
-                description: "Opens the Captures-only deploy. Click Run workflow and leave the SHA blank unless you are rolling back.",
+                description: "Deploy Captures triggers this exact image. Open GitHub is the fallback.",
                 color: 5763711,
                 fields: ([
                   {name: "Git SHA", value: ("`" + $git_sha + "`"), inline: false},
@@ -180,7 +180,15 @@ jobs:
               }],
               components: [{
                 type: 1,
-                components: [{type: 2, style: 5, label: "Deploy Captures", url: $deploy_url}]
+                components: [
+                  {
+                    type: 2,
+                    style: 3,
+                    label: "Deploy Captures",
+                    custom_id: ("production-deploy:v1:captures:" + $git_sha)
+                  },
+                  {type: 2, style: 5, label: "Open GitHub", url: $deploy_url}
+                ]
               }]
             }')"
 
