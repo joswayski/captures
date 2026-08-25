@@ -3668,11 +3668,9 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 .screenshot-png-colors { width: 280px; }
 .screenshot-png-colors-control {
   display: grid;
-  grid-template-columns: 72px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
-  gap: 8px;
 }
-.screenshot-png-colors-control .number-input { width: 72px; min-width: 72px; height: 36px; }
 .screenshot-png-colors .range-slider { gap: 0; }
 .screenshot-png-colors .range-slider:not(.has-marks) { grid-template-rows: 14px 20px; }
 .screenshot-png-colors .range-slider-value output { color: var(--theme-accent-text); }
@@ -3695,6 +3693,9 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 .screenshot-output-estimate-control { min-width: 72px; }
 .screenshot-output-estimate { display: flex; height: 36px; align-items: center; color: var(--editor-text-muted); font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-size: 10px; font-weight: 600; line-height: 1; text-transform: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .screenshot-output-estimate[data-pending="true"] { color: var(--editor-text-subtle); font-weight: 500; }
+.screenshot-output-estimate-delta { margin-left: 6px; font-weight: 700; }
+.screenshot-output-estimate-delta.is-smaller { color: #6dcea0; }
+.screenshot-output-estimate-delta.is-larger { color: var(--theme-signal-text, #ff9da6); }
 .screenshot-export-control.screenshot-compress-preview-control { width: auto; }
 .screenshot-compress-preview-button {
   height: 36px;
@@ -3770,33 +3771,20 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   line-height: 1;
 }
 .compression-preview-close:hover {
-  color: var(--editor-text);
-  background: var(--editor-control-hover);
+  border-color: rgba(var(--theme-signal-rgb), .55);
+  color: #fff;
+  background: var(--theme-signal-hover);
 }
-.compression-preview-stats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px 18px;
-  color: var(--editor-text-subtle);
-  font-size: 11px;
-  font-weight: 500;
-}
-.compression-preview-stats strong {
-  color: var(--editor-text);
-  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
-  font-variant-numeric: tabular-nums;
-}
-.compression-preview-stats strong.is-smaller { color: #6dcea0; }
 .compression-preview-colors {
   display: grid;
-  grid-template-columns: auto 72px minmax(120px, 1fr);
+  max-width: 380px;
+  grid-template-columns: auto minmax(160px, 1fr);
   align-items: center;
   gap: 10px 12px;
   color: var(--editor-text-muted);
   font-size: 11px;
   font-weight: 600;
 }
-.compression-preview-colors .number-input { width: 72px; min-width: 72px; height: 34px; }
 .compression-preview-colors .range-slider { min-width: 0; }
 .compression-preview-colors .range-slider-value output { color: var(--theme-accent-text); }
 .compression-preview-frame {
@@ -3826,7 +3814,7 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   object-fit: contain;
   pointer-events: none;
 }
-.compression-preview-after-clip {
+.compression-preview-before-clip {
   position: absolute;
   inset: 0 auto 0 0;
   overflow: hidden;
@@ -3835,7 +3823,7 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   border-right: 1px solid rgba(255, 255, 255, .55);
   box-shadow: 8px 0 24px rgba(0, 0, 0, .18);
 }
-.compression-preview-after-clip .compression-preview-after {
+.compression-preview-before-clip .compression-preview-before {
   max-width: none;
   height: 100%;
   object-fit: contain;
@@ -3891,13 +3879,14 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   position: absolute;
   z-index: 2;
   top: 10px;
-  padding: 4px 8px;
+  padding: 4px 9px;
   border-radius: 999px;
   color: #f5f5f7;
   background: rgba(12, 13, 16, .72);
   font-size: 10px;
   font-weight: 700;
   letter-spacing: .02em;
+  font-variant-numeric: tabular-nums;
   pointer-events: none;
 }
 .compression-preview-badge.is-before { left: 10px; }
@@ -3906,13 +3895,6 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   margin: 0;
   color: var(--theme-signal-text-strong, #ff8e8e);
   font-size: 11px;
-}
-.compression-preview-hint {
-  margin: 0;
-  color: var(--editor-text-subtle);
-  font-size: 10.5px;
-  font-weight: 500;
-  line-height: 1.4;
 }
 .screenshot-save-row { display: grid; min-width: 0; grid-template-columns: minmax(178px,210px) minmax(240px,390px) minmax(120px,1fr) auto; align-items: end; gap: 12px; }
 .screenshot-export-disclosure { display: grid; min-width: 0; height: 38px; padding: 0 10px 0 12px; grid-template-columns: minmax(0,1fr) 15px; grid-template-rows: auto auto; align-content: center; align-items: center; gap: 2px 8px; border: 1px solid var(--editor-border); border-radius: 10px; color: var(--editor-text-muted); background: rgba(255,255,255,.035); text-align: left; }

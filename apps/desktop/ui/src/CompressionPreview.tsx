@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 
 import { formatFileSize } from "./lib/format";
-import { NumberInput } from "./NumberInput";
 import { RangeSlider } from "./RangeSlider";
 
 const MIN_PNG_PREVIEW_COLORS = 8;
 const MAX_PNG_PREVIEW_COLORS = 256;
+
+// Keep the divider handle clear of the Before/After badges at the frame edges.
+const MIN_SPLIT_PERCENT = 6;
+const MAX_SPLIT_PERCENT = 94;
 
 export type CompressionPreviewProps = {
   open: boolean;
@@ -25,6 +28,7 @@ export type CompressionPreviewProps = {
 /**
  * Full-screen before/after export comparison with a draggable split, similar to
  * compresspng.com — “before” is the current canvas, “after” is the compressed encode.
+ * The original shows on the left of the divider and the compressed encode on the right.
  */
 export function CompressionPreview({
   open,
@@ -46,7 +50,10 @@ export function CompressionPreview({
   const [splitState, setSplitState] = useState({ key: splitKey, split: 50 });
   const split = splitState.key === splitKey ? splitState.split : 50;
   const setSplit = useCallback((value: number) => {
-    setSplitState({ key: splitKey, split: value });
+    setSplitState({
+      key: splitKey,
+      split: Math.min(MAX_SPLIT_PERCENT, Math.max(MIN_SPLIT_PERCENT, value)),
+    });
   }, [splitKey]);
 
   const [frameWidth, setFrameWidth] = useState(0);
@@ -85,7 +92,7 @@ export function CompressionPreview({
     if (!frame) return;
     const bounds = frame.getBoundingClientRect();
     const next = ((clientX - bounds.left) / Math.max(1, bounds.width)) * 100;
-    setSplit(Math.min(100, Math.max(0, next)));
+    setSplit(next);
   }, [setSplit]);
 
   useEffect(() => {
@@ -113,6 +120,11 @@ export function CompressionPreview({
     && afterBytes < beforeBytes
     ? Math.round((1 - afterBytes / beforeBytes) * 100)
     : null;
+
+  // The compressed result fills the frame; the original is revealed left of the
+  // divider, so the labels match what each side actually shows.
+  const baseUrl = afterUrl ?? beforeUrl;
+  const showSplit = Boolean(beforeUrl && afterUrl);
 
   return (
     <div
@@ -152,39 +164,9 @@ export function CompressionPreview({
           </button>
         </header>
 
-        <div className="compression-preview-stats" aria-live="polite">
-          <span>
-            Before
-            {" "}
-            <strong>
-              {beforeBytes === null ? "—" : formatFileSize(beforeBytes)}
-            </strong>
-          </span>
-          <span>
-            After
-            {" "}
-            <strong className={savings !== null ? "is-smaller" : undefined}>
-              {pending
-                ? "Encoding…"
-                : afterBytes === null
-                  ? "—"
-                  : formatFileSize(afterBytes)}
-            </strong>
-          </span>
-        </div>
-
         {typeof pngColors === "number" && onPngColorsChange && (
           <div className="compression-preview-colors">
             <span>Colors</span>
-            <NumberInput
-              min={MIN_PNG_PREVIEW_COLORS}
-              max={MAX_PNG_PREVIEW_COLORS}
-              value={pngColors}
-              ariaLabel="PNG palette colors"
-              onChange={(value) => onPngColorsChange(
-                Math.min(MAX_PNG_PREVIEW_COLORS, Math.max(MIN_PNG_PREVIEW_COLORS, Math.round(value))),
-              )}
-            />
             <RangeSlider
               ariaLabel="PNG palette colors"
               min={MIN_PNG_PREVIEW_COLORS}
@@ -203,65 +185,74 @@ export function CompressionPreview({
           className="compression-preview-frame"
           data-pending={pending ? "true" : undefined}
         >
-          {beforeUrl ? (
+          {baseUrl ? (
             <img
-              className="compression-preview-image compression-preview-before"
-              src={beforeUrl}
-              alt="Before compression"
+              className="compression-preview-image compression-preview-after"
+              src={baseUrl}
+              alt={afterUrl ? "After compression" : "Before compression"}
               draggable={false}
             />
           ) : (
-            <div className="compression-preview-empty">Preparing original…</div>
+            <div className="compression-preview-empty">Preparing preview…</div>
           )}
-          {afterUrl && (
+          {showSplit && (
             <div
-              className="compression-preview-after-clip"
+              className="compression-preview-before-clip"
               style={{ width: `${split}%` }}
             >
               <img
-                className="compression-preview-image compression-preview-after"
-                src={afterUrl}
-                alt="After compression"
+                className="compression-preview-image compression-preview-before"
+                src={beforeUrl ?? undefined}
+                alt="Before compression"
                 draggable={false}
                 style={frameWidth > 0 ? { width: frameWidth } : undefined}
               />
             </div>
           )}
-          <div
-            className="compression-preview-divider"
-            style={{ left: `${split}%` }}
-          >
-            <button
-              type="button"
-              className="compression-preview-handle"
-              aria-label="Drag to compare before and after"
-              onPointerDown={(event) => {
-                event.preventDefault();
-                draggingRef.current = true;
-                setSplitFromClientX(event.clientX);
-              }}
-            >
-              ‹ ›
-            </button>
-          </div>
-          <input
-            className="compression-preview-range"
-            type="range"
-            min={0}
-            max={100}
-            step={0.1}
-            value={split}
-            aria-label="Before and after comparison"
-            onChange={(event) => setSplit(Number(event.target.value))}
-          />
-          <span className="compression-preview-badge is-before">Before</span>
-          <span className="compression-preview-badge is-after">After</span>
+          {showSplit && (
+            <>
+              <div
+                className="compression-preview-divider"
+                style={{ left: `${split}%` }}
+              >
+                <button
+                  type="button"
+                  className="compression-preview-handle"
+                  aria-label="Drag to compare before and after"
+                  onPointerDown={(event) => {
+                    event.preventDefault();
+                    draggingRef.current = true;
+                    setSplitFromClientX(event.clientX);
+                  }}
+                >
+                  ‹ ›
+                </button>
+              </div>
+              <input
+                className="compression-preview-range"
+                type="range"
+                min={MIN_SPLIT_PERCENT}
+                max={MAX_SPLIT_PERCENT}
+                step={0.1}
+                value={split}
+                aria-label="Before and after comparison"
+                onChange={(event) => setSplit(Number(event.target.value))}
+              />
+            </>
+          )}
+          <span className="compression-preview-badge is-before" aria-live="polite">
+            Before
+            {beforeBytes !== null && ` · ${formatFileSize(beforeBytes)}`}
+          </span>
+          <span className="compression-preview-badge is-after" aria-live="polite">
+            After
+            {pending
+              ? " · Encoding…"
+              : afterBytes !== null && ` · ${formatFileSize(afterBytes)}`}
+          </span>
         </div>
 
         {error && <p className="compression-preview-error">{error}</p>}
-        <p className="compression-preview-hint">
-          Drag the handle to compare. This is the same encode used when you Save — it does not write a file.
-        </p>
       </div>
     </div>
   );

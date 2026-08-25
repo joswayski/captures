@@ -585,7 +585,17 @@ pub fn encode_png_export(
     max_colors: Option<u16>,
 ) -> Result<Vec<u8>, AppError> {
     if let Some(colors) = max_colors.filter(|count| *count > 0) {
-        return encode_png_quantized(image, colors);
+        let quantized = encode_png_quantized(image, colors)?;
+        // Quantization is not guaranteed to shrink already-efficient images
+        // (flat UI screenshots often deflate better as full RGBA than as a
+        // dithered palette). Never let Compress produce a bigger file than the
+        // Preserve encode of the same pixels.
+        let lossless = encode_png_with_filter(image, FilterType::Sub)?;
+        return Ok(if lossless.len() < quantized.len() {
+            lossless
+        } else {
+            quantized
+        });
     }
     if compact {
         encode_png_with_quality(image, CompressionType::Best, FilterType::Adaptive)
@@ -870,7 +880,10 @@ fn encode_indexed_png(
         encoder.set_color(png::ColorType::Indexed);
         encoder.set_depth(png::BitDepth::Eight);
         encoder.set_compression(png::Compression::Best);
-        encoder.set_filter(png::FilterType::Paeth);
+        // Palette indices are categorical, not intensities: byte-difference
+        // filters like Paeth add noise and inflate the deflate stream, which
+        // could make a "compressed" PNG larger than the original.
+        encoder.set_filter(png::FilterType::NoFilter);
         encoder.set_palette(palette);
         if has_transparency {
             encoder.set_trns(trns);
@@ -1536,6 +1549,33 @@ mod tests {
         let bytes = encode_png_export(&image, true, Some(32)).expect("quantized");
         assert_eq!(png_color_type(&bytes), png::ColorType::Indexed);
         image::load_from_memory(&bytes).expect("indexed PNG with alpha is readable");
+    }
+
+    #[test]
+    fn quantized_png_never_exceeds_the_preserve_encode() {
+        // Flat, dark UI-like screenshot: mostly one background color with a few
+        // solid panels and hairline borders. These deflate extremely well as
+        // RGBA, and the old Paeth-filtered indexed encode produced a *larger*
+        // "compressed" file than the original.
+        let image = RgbaImage::from_fn(640, 400, |x, y| {
+            if y % 100 == 0 || x % 160 == 0 {
+                Rgba([58, 59, 66, 255])
+            } else if x > 480 && y > 300 {
+                Rgba([26, 27, 32, 255])
+            } else {
+                Rgba([16, 17, 20, 255])
+            }
+        });
+        let preserve = encode_png_export(&image, false, None).expect("preserve");
+        for colors in [8, 32, 128, 256] {
+            let compressed = encode_png_export(&image, true, Some(colors)).expect("compressed");
+            assert!(
+                compressed.len() <= preserve.len(),
+                "compress ({colors} colors) must not exceed preserve (compressed={}, preserve={})",
+                compressed.len(),
+                preserve.len()
+            );
+        }
     }
 
     #[test]

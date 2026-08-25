@@ -2066,11 +2066,12 @@ describe("ScreenshotEditor", () => {
     });
     expect(screen.queryByRole("combobox", { name: "Compression quality" }))
       .not.toBeInTheDocument();
-    const pngColors = screen.getByRole("spinbutton", { name: "PNG palette colors" });
-    expect(pngColors).toHaveValue(128);
+    const pngColors = screen.getByRole("slider", { name: "PNG palette colors" });
+    expect(pngColors).toHaveValue("128");
     fireEvent.change(pngColors, { target: { value: "32" } });
-    expect(pngColors).toHaveValue(32);
-    expect(screen.getByRole("slider", { name: "PNG palette colors" })).toHaveValue("32");
+    expect(pngColors).toHaveValue("32");
+    expect(screen.queryByRole("spinbutton", { name: "PNG palette colors" }))
+      .not.toBeInTheDocument();
     expect(screen.queryByRole("spinbutton", { name: "Maximum file size" }))
       .not.toBeInTheDocument();
     expect(
@@ -2250,7 +2251,7 @@ describe("ScreenshotEditor", () => {
       // PNG compress estimates go through Rust (color quantization).
       expect(screen.getByRole("combobox", { name: "Format" })).toHaveTextContent("PNG");
       await waitFor(() => {
-        expect(screen.getByRole("spinbutton", { name: "PNG palette colors" })).toBeInTheDocument();
+        expect(screen.getByRole("slider", { name: "PNG palette colors" })).toBeInTheDocument();
       });
 
       const estimate = () => screen.getByTitle(

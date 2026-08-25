@@ -4381,14 +4381,12 @@ export function ScreenshotEditor() {
     setCompressPreviewAfterUrl(null);
   }, []);
 
+  // Keep the prepared before/after URLs across close so reopening is instant;
+  // they are revoked when a newer encode replaces them or the editor unmounts.
   const closeCompressPreview = useCallback(() => {
     setCompressPreviewOpen(false);
-    setCompressPreviewPending(false);
     setCompressPreviewError("");
-    revokeCompressPreviewUrls();
-    setCompressPreviewBeforeBytes(null);
-    setCompressPreviewAfterBytes(null);
-  }, [revokeCompressPreviewUrls]);
+  }, []);
 
   const loadCompressPreview = useCallback(async () => {
     if (!canPreviewCompression || !editorDocument || !artifact) return;
@@ -4461,9 +4459,12 @@ export function ScreenshotEditor() {
   }, [canPreviewCompression]);
 
   useEffect(() => {
-    // Only refresh an already-open preview. Closing when quality mode leaves
-    // Compress/Maximum is handled in applyQualityMode (event path), not here.
-    if (!compressPreviewOpen || !canPreviewCompression) return;
+    // Refresh the open preview, and pre-encode it in the background while the
+    // export settings are visible so opening it never shows a loading state.
+    // Closing when quality mode leaves Compress/Maximum is handled in
+    // applyQualityMode (event path), not here.
+    if (!canPreviewCompression) return;
+    if (!compressPreviewOpen && !exportSettingsOpen) return;
     const timer = window.setTimeout(() => {
       void loadCompressPreview();
     }, 280);
@@ -4472,6 +4473,8 @@ export function ScreenshotEditor() {
     canPreviewCompression,
     compressPreviewOpen,
     exportFormat,
+    exportSettingsOpen,
+    imageRevision,
     jpegQuality,
     loadCompressPreview,
     pngColors,
@@ -4517,6 +4520,17 @@ export function ScreenshotEditor() {
         && (exportFormat === "jpeg" || exportFormat === "webp")
         ? `≤ ${formatFileSize(maximumSizeBytes)}`
         : `≈ ${formatFileSize(estimatedBytes)}`;
+  // Size change versus the original file, mirroring the compare modal's −N%.
+  const estimatedDeltaPercent = qualityMode !== "preserve"
+    && estimatedBytes !== null
+    && artifact.size_bytes > 0
+    ? Math.round((estimatedBytes / artifact.size_bytes - 1) * 100)
+    : null;
+  const estimatedDeltaLabel = estimatedDeltaPercent === null || estimatedDeltaPercent === 0
+    ? null
+    : estimatedDeltaPercent < 0
+      ? `−${Math.abs(estimatedDeltaPercent)}%`
+      : `+${estimatedDeltaPercent}%`;
   const formatLabel = exportFormat === "jpeg"
     ? "JPEG"
     : exportFormat === "webp"
@@ -6210,13 +6224,6 @@ export function ScreenshotEditor() {
             <div className="screenshot-export-control screenshot-png-colors">
               <span>Colors</span>
               <div className="screenshot-png-colors-control">
-                <NumberInput
-                  min={MIN_PNG_EXPORT_COLORS}
-                  max={MAX_PNG_EXPORT_COLORS}
-                  value={pngColors}
-                  ariaLabel="PNG palette colors"
-                  onChange={(value) => setPngColors(clampPngExportColors(value))}
-                />
                 <RangeSlider
                   ariaLabel="PNG palette colors"
                   min={MIN_PNG_EXPORT_COLORS}
@@ -6292,6 +6299,14 @@ export function ScreenshotEditor() {
               title="Estimated export file size for the current format, quality, and output size"
             >
               {estimatedSizeLabel}
+              {estimatedDeltaLabel && !estimatePending && (
+                <span
+                  className={`screenshot-output-estimate-delta${estimatedDeltaPercent !== null && estimatedDeltaPercent < 0 ? " is-smaller" : " is-larger"}`}
+                  title="Change from the original file size"
+                >
+                  {estimatedDeltaLabel}
+                </span>
+              )}
             </strong>
           </div>
           {canPreviewCompression && (
