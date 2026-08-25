@@ -146,12 +146,6 @@ export function CompressionPreview({
             <p>
               {formatLabel}
               {qualityLabel ? ` · ${qualityLabel}` : ""}
-              {savings !== null ? (
-                <>
-                  {" · "}
-                  <span className="compression-preview-savings">−{savings}%</span>
-                </>
-              ) : null}
             </p>
           </div>
           <button
@@ -248,7 +242,14 @@ export function CompressionPreview({
             After
             {pending
               ? " · Encoding…"
-              : afterBytes !== null && ` · ${formatFileSize(afterBytes)}`}
+              : afterBytes !== null && (
+                <>
+                  {` · ${formatFileSize(afterBytes)}`}
+                  {savings !== null && (
+                    <span className="compression-preview-savings"> · {savings}% smaller</span>
+                  )}
+                </>
+              )}
           </span>
         </div>
 

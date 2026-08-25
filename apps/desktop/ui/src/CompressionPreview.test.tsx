@@ -21,12 +21,17 @@ describe("CompressionPreview", () => {
     );
 
     expect(screen.getByRole("dialog", { name: "Compression preview" })).toBeInTheDocument();
-    expect(screen.getByText((_, node) => node?.textContent === "PNG · Tiny · −75%")).toBeInTheDocument();
-    expect(screen.getByText("−75%")).toBeInTheDocument();
+    expect(screen.getByText((_, node) => node?.textContent === "PNG · Tiny")).toBeInTheDocument();
     expect(screen.getByAltText("Before compression")).toHaveAttribute("src", "blob:before");
     expect(screen.getByAltText("After compression")).toHaveAttribute("src", "blob:after");
     expect(screen.getByText((_, node) => node?.textContent === "Before · 1.0 MB")).toBeInTheDocument();
-    expect(screen.getByText((_, node) => node?.textContent === "After · 250 KB")).toBeInTheDocument();
+    expect(screen.getByText((_, node) => (
+      node?.textContent === "After · 250 KB · 75% smaller"
+    ))).toBeInTheDocument();
+    expect(screen.getByText((_, node) => (
+      node?.classList.contains("compression-preview-savings") === true
+      && node.textContent === " · 75% smaller"
+    ))).toBeInTheDocument();
     expect(screen.getByRole("slider", { name: "Before and after comparison" }))
       .toHaveValue("50");
   });
