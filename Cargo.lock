@@ -555,6 +555,7 @@ dependencies = [
  "captures-recording",
  "captures-recording-macos",
  "captures-recording-xcap",
+ "captures-session",
  "chrono",
  "clipboard-win",
  "directories",
@@ -590,7 +591,6 @@ name = "captures-macos-window"
 version = "0.1.0"
 dependencies = [
  "block2",
- "core-foundation 0.10.1",
  "dispatch2",
  "objc2",
  "objc2-app-kit",
@@ -649,6 +649,15 @@ dependencies = [
  "windows-sys 0.61.2",
  "x11rb",
  "xcap",
+]
+
+[[package]]
+name = "captures-session"
+version = "0.1.0"
+dependencies = [
+ "core-foundation 0.10.1",
+ "dbus",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

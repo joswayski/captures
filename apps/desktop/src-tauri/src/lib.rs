@@ -2698,8 +2698,7 @@ fn take_pending_capture_after_restart(state: &AppState) -> Result<Option<Capture
 }
 
 pub(crate) fn ensure_capture_session_available() -> Result<(), AppError> {
-    #[cfg(target_os = "macos")]
-    if !captures_macos_window::capture_session_available() {
+    if !captures_session::capture_session_available() {
         return Err(CaptureError::SessionUnavailable.into());
     }
 
@@ -3930,8 +3929,8 @@ fn thumbnail_geometry(bounds: ThumbnailMonitorBounds, count: usize) -> (f64, f64
 fn report_capture_error(app: &AppHandle, error: &AppError, mode: CaptureMode) {
     eprintln!("capture failed: {error}");
     if matches!(error, AppError::Capture(CaptureError::SessionUnavailable)) {
-        // Capture shortcuts and restored app launches can arrive while macOS is
-        // locked. Do not put either capture UI or an error dialog over loginwindow.
+        // Capture shortcuts and restored app launches can arrive while the desktop
+        // is locked. Do not put capture UI or an error dialog over the lock screen.
         return;
     }
     #[cfg(not(target_os = "macos"))]
