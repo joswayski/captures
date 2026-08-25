@@ -25,8 +25,36 @@ describe("CompressionPreview", () => {
     expect(screen.getByText("−75%")).toBeInTheDocument();
     expect(screen.getByAltText("Before compression")).toHaveAttribute("src", "blob:before");
     expect(screen.getByAltText("After compression")).toHaveAttribute("src", "blob:after");
+    expect(screen.getByText((_, node) => node?.textContent === "Before · 1.0 MB")).toBeInTheDocument();
+    expect(screen.getByText((_, node) => node?.textContent === "After · 250 KB")).toBeInTheDocument();
     expect(screen.getByRole("slider", { name: "Before and after comparison" }))
       .toHaveValue("50");
+  });
+
+  it("shows the original left of the divider and keeps the handle inside the badges", () => {
+    render(
+      <CompressionPreview
+        open
+        beforeUrl="blob:before"
+        afterUrl="blob:after"
+        beforeBytes={1_000_000}
+        afterBytes={250_000}
+        formatLabel="PNG"
+        qualityLabel="Tiny"
+        pending={false}
+        error=""
+        onClose={() => undefined}
+      />,
+    );
+
+    // The left clip reveals the original over the full-frame compressed encode.
+    const before = screen.getByAltText("Before compression");
+    expect(before.parentElement).toHaveClass("compression-preview-before-clip");
+    const split = screen.getByRole("slider", { name: "Before and after comparison" });
+    fireEvent.change(split, { target: { value: "6" } });
+    expect(split).toHaveValue("6");
+    expect(split).toHaveAttribute("min", "6");
+    expect(split).toHaveAttribute("max", "94");
   });
 
   it("lets PNG color count be changed from the preview", () => {
@@ -48,8 +76,8 @@ describe("CompressionPreview", () => {
       />,
     );
 
-    const colors = screen.getByRole("spinbutton", { name: "PNG palette colors" });
-    expect(colors).toHaveValue(128);
+    const colors = screen.getByRole("slider", { name: "PNG palette colors" });
+    expect(colors).toHaveValue("128");
     fireEvent.change(colors, { target: { value: "64" } });
     expect(onPngColorsChange).toHaveBeenCalledWith(64);
   });
