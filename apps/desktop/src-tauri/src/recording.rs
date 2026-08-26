@@ -277,22 +277,32 @@ pub(crate) async fn prepare_capture_selector_inner(
     crate::hide_capture_huds_before_snapshot(&app).await;
     let prepared = (|| {
         crate::ensure_capture_session_available()?;
-        let display = crate::display_under_pointer(&state)?;
-        let mut displays = state.monitors()?;
-        if !displays.iter().any(|candidate| candidate.id == display.id) {
-            displays.push(display.clone());
-        }
-        let frame = state.backend.capture_display(&display.id)?;
-        let snapshot_png = storage::encode_png(&frame.image)?;
-        let mut windows = state
-            .windows()
+        let (frame, snapshot_png, mut displays, mut windows) = std::thread::scope(|scope| {
+            // The selector always needs window targets, but their enumeration is
+            // independent of freezing and encoding the display background.
+            let windows = scope.spawn(|| state.windows());
+            let frame = state
+                .backend
+                .capture_display_at_point(crate::pointer_position())?;
+            let snapshot_png = storage::encode_png(&frame.image)?;
+            let displays = state.monitors()?;
+            let windows = match windows.join() {
+                Ok(windows) => windows,
+                Err(panic) => std::panic::resume_unwind(panic),
+            }
             .unwrap_or_else(|error| {
                 eprintln!("window targets are unavailable for this capture: {error}");
                 Vec::new()
-            })
-            .into_iter()
-            .filter(|window| crate::window_is_capturable(window, &display))
-            .collect::<Vec<_>>();
+            });
+            Ok::<_, AppError>((frame, snapshot_png, displays, windows))
+        })?;
+        if !displays
+            .iter()
+            .any(|candidate| candidate.id == frame.descriptor.id)
+        {
+            displays.push(frame.descriptor.clone());
+        }
+        windows.retain(|window| crate::window_is_capturable(window, &frame.descriptor));
         crate::refine_window_chrome_from_snapshot(
             &mut windows,
             &frame.descriptor,
