@@ -71,11 +71,19 @@ impl XcapBackend {
 
     pub fn capture_display(&self, id: &str) -> CaptureResult<DisplayFrame> {
         let monitor = Self::find_monitor(id)?;
-        let descriptor = descriptor_for_monitor(&monitor)?;
-        let image = monitor
-            .capture_image()
-            .map_err(|error| CaptureError::Backend(error.to_string()))?;
-        Ok(DisplayFrame { descriptor, image })
+        capture_monitor(&monitor)
+    }
+
+    /// Capture the display containing `point` without enumerating every display first.
+    /// Falls back to the primary display when the pointer position is unavailable.
+    pub fn capture_display_at_point(
+        &self,
+        point: Option<(i32, i32)>,
+    ) -> CaptureResult<DisplayFrame> {
+        let monitor = point
+            .and_then(|(x, y)| Monitor::from_point(x, y).ok())
+            .map_or_else(Self::default_monitor, Ok)?;
+        capture_monitor(&monitor)
     }
 
     pub fn windows(&self) -> CaptureResult<Vec<WindowDescriptor>> {
@@ -167,6 +175,27 @@ impl XcapBackend {
             })
             .ok_or(CaptureError::TargetUnavailable)
     }
+
+    fn default_monitor() -> CaptureResult<Monitor> {
+        let mut monitors =
+            Monitor::all().map_err(|error| CaptureError::Backend(error.to_string()))?;
+        if monitors.is_empty() {
+            return Err(CaptureError::TargetUnavailable);
+        }
+        let primary = monitors
+            .iter()
+            .position(|monitor| monitor.is_primary().unwrap_or(false))
+            .unwrap_or(0);
+        Ok(monitors.swap_remove(primary))
+    }
+}
+
+fn capture_monitor(monitor: &Monitor) -> CaptureResult<DisplayFrame> {
+    let descriptor = descriptor_for_monitor(monitor)?;
+    let image = monitor
+        .capture_image()
+        .map_err(|error| CaptureError::Backend(error.to_string()))?;
+    Ok(DisplayFrame { descriptor, image })
 }
 
 #[cfg(target_os = "linux")]

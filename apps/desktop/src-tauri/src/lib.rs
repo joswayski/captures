@@ -329,11 +329,11 @@ pub fn run() {
             updates::initialize(&handle);
             register_shortcuts(&handle)
                 .map_err(|error| tauri::Error::Anyhow(anyhow::anyhow!(error.to_string())))?;
-            if let Err(error) = create_thumbnail_window(&handle, false) {
-                eprintln!("failed to prepare capture thumbnail: {error}");
-            }
             if let Err(error) = create_overlay_window(&handle) {
                 eprintln!("failed to prepare capture overlay: {error}");
+            }
+            if let Err(error) = create_thumbnail_window(&handle, false) {
+                eprintln!("failed to prepare capture thumbnail: {error}");
             }
             let pending_capture = {
                 let state = app.state::<Arc<AppState>>().inner().clone();
@@ -514,8 +514,8 @@ async fn prepare_capture(
         }
         return Err(error.into());
     }
-    let display = display_under_pointer(&state)?;
     if mode == CaptureMode::Display {
+        let display = display_under_pointer(&state)?;
         let countdown_seconds = state.settings().screenshot_countdown_seconds;
         if countdown_seconds > 0
             && !run_screenshot_countdown(
@@ -531,15 +531,9 @@ async fn prepare_capture(
             // re-showed any capture-concealed document windows.
             return Ok(None);
         }
-    }
-    ensure_capture_session_available()?;
-    let frame = state.backend.capture_display(&display.id)?;
-    // The background frame is frozen now, so this capture no longer needs HUD
-    // exclusion. Release it before encoding can emit a new preview and allow a
-    // rapid follow-up capture to start with its own protection generation.
-    set_capture_huds_protected(&app, false);
-
-    if mode == CaptureMode::Display {
+        ensure_capture_session_available()?;
+        let frame = state.backend.capture_display(&display.id)?;
+        set_capture_huds_protected(&app, false);
         let _ = finish_capture(
             &app,
             &state,
@@ -551,19 +545,32 @@ async fn prepare_capture(
         return Ok(None);
     }
 
+    ensure_capture_session_available()?;
     let id = Uuid::new_v4();
-    // Keep the selector background full-resolution and lossless. Region/window
-    // crops also come directly from `frame.image`, so no lossy stage is involved.
-    let snapshot_png = storage::encode_png(&frame.image)?;
-    let mut windows = if mode == CaptureMode::Window {
-        state
-            .windows()?
+    let (frame, snapshot_png, mut windows) = std::thread::scope(|scope| {
+        // Window discovery is independent of the frozen display pixels. Run it
+        // beside capture + encoding so window mode pays the slower cost, not both.
+        let windows = (mode == CaptureMode::Window).then(|| scope.spawn(|| state.windows()));
+        let frame = state.backend.capture_display_at_point(pointer_position())?;
+        // The background frame is frozen now, so this capture no longer needs HUD
+        // exclusion. Release it before encoding can emit a new preview and allow a
+        // rapid follow-up capture to start with its own protection generation.
+        set_capture_huds_protected(&app, false);
+        // Keep the selector background full-resolution and lossless. Region/window
+        // crops also come directly from `frame.image`, so no lossy stage is involved.
+        let snapshot_png = storage::encode_png(&frame.image)?;
+        let windows = windows
+            .map(|task| match task.join() {
+                Ok(windows) => windows,
+                Err(panic) => std::panic::resume_unwind(panic),
+            })
+            .transpose()?
+            .unwrap_or_default()
             .into_iter()
-            .filter(|window| window_is_capturable(window, &display))
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
+            .filter(|window| window_is_capturable(window, &frame.descriptor))
+            .collect::<Vec<_>>();
+        Ok::<_, AppError>((frame, snapshot_png, windows))
+    })?;
     if mode == CaptureMode::Window {
         refine_window_chrome_from_snapshot(
             &mut windows,
