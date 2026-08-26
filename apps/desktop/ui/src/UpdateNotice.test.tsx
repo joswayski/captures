@@ -37,7 +37,12 @@ describe("UpdateNotice", () => {
 
     render(<UpdateNotice />);
 
-    expect(await screen.findByText("Version 2026.07.19.2 is available")).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", {
+      name: "A new Captures Preview is ready",
+    })).toBeInTheDocument();
+    expect(screen.getByLabelText(
+      "Updating Captures from version 2026.07.19.1 to 2026.07.19.2",
+    )).toBeInTheDocument();
     expect(screen.getByText("Adds automatic releases")).toBeInTheDocument();
     expect(screen.queryByText(/experimental/u)).not.toBeInTheDocument();
     expect(screen.queryByText(/Full Changelog/u)).not.toBeInTheDocument();
@@ -60,7 +65,21 @@ describe("UpdateNotice", () => {
     render(<UpdateNotice />);
 
     expect(await screen.findByText("Downloading… 25%")).toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: "Downloading update" })).toHaveAttribute(
+      "aria-valuenow",
+      "25",
+    );
     expect(screen.getByRole("button", { name: "Later" })).toBeDisabled();
+  });
+
+  it("keeps the available state useful when release notes are missing", async () => {
+    vi.mocked(invoke).mockResolvedValue({ ...available, notes: null } satisfies UpdateStatus);
+
+    render(<UpdateNotice />);
+
+    expect(await screen.findByText("The latest Captures improvements")).toBeInTheDocument();
+    expect(screen.getByText(/Release notes aren’t available/u)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Install & Restart" })).toBeEnabled();
   });
 
   it("shows the restart countdown after installation", async () => {

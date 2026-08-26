@@ -21,8 +21,8 @@ use crate::state::AppState;
 
 const UPDATE_EVENT: &str = "update-status-changed";
 const RELEASES_URL: &str = "https://github.com/joswayski/captures/releases";
-const UPDATE_NOTICE_WIDTH: f64 = 420.0;
-const UPDATE_NOTICE_HEIGHT: f64 = 300.0;
+const UPDATE_NOTICE_WIDTH: f64 = 470.0;
+const UPDATE_NOTICE_HEIGHT: f64 = 410.0;
 const RESTART_COUNTDOWN_SECONDS: u8 = 3;
 const RESTART_FADE_DURATION: Duration = Duration::from_millis(400);
 const INITIAL_CHECK_DELAY: Duration = Duration::from_secs(15);
