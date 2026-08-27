@@ -656,6 +656,7 @@ html.capture-window-cursor * {
   min-height: var(--h-xl);
   margin-left: var(--s-2);
   padding: 0 var(--s-6);
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
   gap: var(--s-3);
@@ -666,6 +667,7 @@ html.capture-window-cursor * {
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
   font-size: var(--text-md);
   font-weight: var(--weight-semibold);
+  white-space: nowrap;
   transition:
     background var(--dur-2) var(--ease-standard),
     box-shadow var(--dur-2) var(--ease-standard),
@@ -682,11 +684,16 @@ html.capture-window-cursor * {
   stroke-linejoin: round;
 }
 
+.capture-selector-primary-recording {
+  min-width: 9.5rem;
+}
+
 .capture-selector-primary-recording > .capture-record-dot {
   position: relative;
   width: 10px;
   height: 10px;
-  background: var(--theme-accent-ink);
+  background: var(--theme-signal);
+  box-shadow: 0 0 0 1.5px var(--theme-accent-ink);
 }
 
 .capture-selector-primary-recording:not(:disabled) > .capture-record-dot::after {
