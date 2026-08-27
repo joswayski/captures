@@ -40,7 +40,7 @@ function makeDesktopSnapshot(width = 1_440, height = 900): string {
   ctx.fillStyle = "#f4f4f5";
   ctx.font = "600 22px ui-sans-serif, system-ui, sans-serif";
   ctx.fillText("Inbox", 96, 108);
-  ctx.fillStyle = "#a1a1aa";
+  ctx.fillStyle = "#9b9ba6";
   ctx.font = "500 14px ui-sans-serif, system-ui, sans-serif";
   ctx.fillText("Design review · Captures redesign", 96, 138);
   for (let index = 0; index < 5; index += 1) {
@@ -58,7 +58,7 @@ function makeDesktopSnapshot(width = 1_440, height = 900): string {
   ctx.fillStyle = "#f4f4f5";
   ctx.font = "560 28px ui-sans-serif, system-ui, sans-serif";
   ctx.fillText("Captures", 768, 140);
-  ctx.fillStyle = "#a1a1aa";
+  ctx.fillStyle = "#9b9ba6";
   ctx.font = "500 16px ui-sans-serif, system-ui, sans-serif";
   ctx.fillText("A quieter capture, still crystal clear.", 768, 172);
 

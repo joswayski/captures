@@ -4459,8 +4459,12 @@ function CaptureOverlay() {
   const [session, setSession] = useState<ActiveSession | null>(null);
   const [visibleSessionId, setVisibleSessionId] = useState<string | null>(null);
   const [primingSessionId, setPrimingSessionId] = useState<string | null>(null);
-  const [start, setStart] = useState<SelectionPoint | null>(null);
-  const [current, setCurrent] = useState<SelectionPoint | null>(null);
+  const [start, setStart] = useState<SelectionPoint | null>(() => (
+    query("preview_mode") === "selected" ? { x: 180, y: 120 } : null
+  ));
+  const [current, setCurrent] = useState<SelectionPoint | null>(() => (
+    query("preview_mode") === "selected" ? { x: 1_140, y: 660 } : null
+  ));
   const [hoveredWindow, setHoveredWindow] = useState<string | null>(null);
   const [selectionFeedback, setSelectionFeedback] = useState(0);
   const surfaceRef = useRef<HTMLDivElement>(null);
@@ -4542,9 +4546,14 @@ function CaptureOverlay() {
     [current, start],
   );
 
+  const previewHoveredWindowId = query("preview_mode") === "hovered"
+    ? session?.windows[0]?.id ?? null
+    : null;
+  const activeHoveredWindow = hoveredWindow ?? previewHoveredWindowId;
+
   const hoveredWindowLayout = useMemo(() => {
-    if (mode !== "window" || !hoveredWindow || !session) return null;
-    const match = session.windows.find((window) => window.id === hoveredWindow);
+    if (mode !== "window" || !activeHoveredWindow || !session) return null;
+    const match = session.windows.find((window) => window.id === activeHoveredWindow);
     if (!match) return null;
     const scale = session.window_coordinate_scale || 1;
     return {
@@ -4554,7 +4563,7 @@ function CaptureOverlay() {
       height: match.height / scale,
       cornerRadius: match.corner_radius ?? session.window_corner_radius,
     };
-  }, [hoveredWindow, mode, session]);
+  }, [activeHoveredWindow, mode, session]);
 
   // ALL hooks must stay above any early return.
   const windowLayouts = useMemo(() => {
@@ -4579,18 +4588,6 @@ function CaptureOverlay() {
     ? displayOverlaySize(session.display, session.window_coordinate_scale)
     : { width: 0, height: 0 };
   const surfaceSize = useElementCssSize(surfaceRef, displayOverlay);
-
-  useEffect(() => {
-    if (!session || mode !== "region" || query("preview_mode") !== "selected") return;
-    setStart({ x: 180, y: 120 });
-    setCurrent({ x: 1_140, y: 660 });
-  }, [mode, session]);
-
-  useEffect(() => {
-    if (!session || mode !== "window" || query("preview_mode") !== "hovered") return;
-    const firstWindow = session.windows[0];
-    if (firstWindow) setHoveredWindow(firstWindow.id);
-  }, [mode, session]);
 
   const revealOverlay = useCallback(async () => {
     if (!sessionId) return;
@@ -4773,7 +4770,7 @@ function CaptureOverlay() {
             <button
               type="button"
               key={item.window.id}
-              className={`window-target${hoveredWindow === item.window.id ? " window-target-hovered" : ""}`}
+              className={`window-target${activeHoveredWindow === item.window.id ? " window-target-hovered" : ""}`}
               style={{
                 left: item.left,
                 top: item.top,
@@ -6364,7 +6361,7 @@ export function Preferences() {
 
   useEffect(() => {
     const root = preferencesMainRef.current;
-    if (!root) return;
+    if (!root || typeof IntersectionObserver === "undefined") return;
     const observer = new IntersectionObserver((entries) => {
       const visible = entries
         .filter((entry) => entry.isIntersecting)
