@@ -798,7 +798,9 @@ function drawText(
     `${element.fontSize}px`,
     fontFamily(element),
   ].filter(Boolean).join(" ");
-  context.textBaseline = "top";
+  // Middle of the line box (CSS half-leading) so glyphs sit in the plate,
+  // not pinned to the top with leftover leading underneath.
+  context.textBaseline = "middle";
   context.textAlign = element.align;
   const lines = wrapTextLines(
     element.text,
@@ -841,10 +843,11 @@ function drawText(
   context.lineWidth = textOutlineWidth(element.fontSize);
   context.lineJoin = "round";
   lines.forEach((line, index) => {
+    const lineMidY = element.y + index * lineHeight + lineHeight / 2;
     if (element.outlined) {
-      context.strokeText(line || " ", anchorX, element.y + index * lineHeight);
+      context.strokeText(line || " ", anchorX, lineMidY);
     } else {
-      context.fillText(line || " ", anchorX, element.y + index * lineHeight);
+      context.fillText(line || " ", anchorX, lineMidY);
     }
   });
   context.restore();
@@ -3502,7 +3505,10 @@ export function ScreenshotEditor() {
       const minSize = 8 / Math.max(0.01, displayScale);
       const snapThreshold = ALIGNMENT_SNAP_SCREEN_PX / Math.max(0.01, displayScale);
       // Hold Shift while dragging a corner to keep the original aspect ratio.
-      const lockAspectRatio = event.shiftKey;
+      // Text labels always scale as a unit from corners so the plate cannot
+      // stretch independently of the glyphs.
+      const lockAspectRatio = event.shiftKey
+        || (gesture.element.kind === "text" && isResizeCornerHandle(gesture.handle));
       const freeBounds = resizeBoundsFromHandle(
         gesture.initialBounds,
         gesture.handle,
@@ -3538,7 +3544,9 @@ export function ScreenshotEditor() {
         nextBounds,
       );
       gestureRef.current = { ...gesture, currentBounds: nextBounds };
-      setResizePreviewBounds(nextBounds);
+      setResizePreviewBounds(
+        resized.kind === "text" ? elementBounds(resized) : nextBounds,
+      );
       setAlignmentGuides(snapped.guides);
       setCanvasExpandPreview(canvasExpandPreviewForBounds(
         nextBounds,

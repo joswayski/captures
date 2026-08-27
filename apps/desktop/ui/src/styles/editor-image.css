@@ -844,8 +844,10 @@
 .screenshot-inline-text-editor {
   position: absolute;
   z-index: 6;
+  display: block;
   box-sizing: border-box;
   margin: 0;
+  padding: 0;
   overflow: hidden;
   border: 1px solid var(--theme-accent);
   border-radius: 3px;

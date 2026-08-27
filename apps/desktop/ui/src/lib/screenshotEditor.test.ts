@@ -1474,7 +1474,7 @@ describe("screenshot editor geometry", () => {
     expect(resizedTaller).toMatchObject({
       kind: "text",
       fontSize: 80,
-      width: 120,
+      width: 240,
       x: textBounds.x,
       y: textBounds.y,
     });
@@ -1512,7 +1512,32 @@ describe("screenshot editor geometry", () => {
       ...elementBounds(autoWidth),
       width: elementBounds(autoWidth).width * 2,
     });
-    expect(autoWider).toMatchObject({ kind: "text", autoWidth: false, fontSize: 40 });
+    expect(autoWider).toMatchObject({ kind: "text", autoWidth: true, fontSize: 80 });
+    if (autoWider.kind !== "text") throw new Error("expected text");
+    expect(autoWider.width).toBe(fittedAutoWidthTextBox("Hi", 80));
+
+    // Non-uniform corner drag must not stretch the plate independently of type.
+    const bubbleLabel: EditorTextElement = {
+      ...autoWidth,
+      id: "bubble-label",
+      background: "#111318",
+      roundedBackground: true,
+      fontFamily: "rounded",
+      align: "center",
+    };
+    const bubbleStart = elementBounds(bubbleLabel);
+    const stretched = resizeElement(bubbleLabel, bubbleStart, {
+      ...bubbleStart,
+      width: bubbleStart.width * 2,
+      height: bubbleStart.height * 1.1,
+    });
+    expect(stretched).toMatchObject({ kind: "text", autoWidth: true, fontSize: 44 });
+    if (stretched.kind !== "text") throw new Error("expected text");
+    const bubbleEnd = elementBounds(stretched);
+    expect(bubbleEnd.width / bubbleEnd.height)
+      .toBeCloseTo(bubbleStart.width / bubbleStart.height, 2);
+    expect(bubbleEnd.width / bubbleEnd.height)
+      .toBeLessThan((bubbleStart.width * 2) / (bubbleStart.height * 1.1) * 0.7);
 
     // Background plates expand paint/selection bounds beyond the layout box.
     const bubble: EditorTextElement = {

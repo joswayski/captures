@@ -4,7 +4,12 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { act, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
-import { createScreenshotDocument } from "./lib/screenshotEditor";
+import {
+  createScreenshotDocument,
+  elementBounds,
+  resizeHandlePoint,
+  type EditorShapeElement,
+} from "./lib/screenshotEditor";
 import { ScreenshotEditor } from "./ScreenshotEditor";
 import type { CaptureArtifact } from "./types";
 
@@ -996,6 +1001,80 @@ describe("ScreenshotEditor", () => {
     const px = Number(label.replace(" px", ""));
     expect(px).toBeGreaterThan(0);
     expect(px).toBeLessThan(4);
+  });
+
+  it("shrinks the arrow head when a box-corner grip scales the arrow down", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Width");
+
+    setCanvasZoomPercent(100);
+    fireEvent.click(screen.getByRole("button", { name: "Arrow (A)" }));
+    const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
+    canvas.setPointerCapture = vi.fn();
+    canvas.hasPointerCapture = vi.fn(() => true);
+    canvas.releasePointerCapture = vi.fn();
+    setCanvasBounds(canvas);
+
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 80,
+      clientX: 80,
+      clientY: 200,
+    });
+    fireEvent.pointerMove(canvas, {
+      pointerId: 80,
+      clientX: 480,
+      clientY: 200,
+    });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 80,
+      clientX: 480,
+      clientY: 200,
+    });
+
+    expect(screen.getByRole("slider", { name: "Stroke width" }))
+      .toHaveAttribute("aria-valuetext", "8 px");
+
+    const placed: EditorShapeElement = {
+      id: "placed-arrow",
+      kind: "shape",
+      shape: "arrow",
+      x: 80,
+      y: 200,
+      endX: 480,
+      endY: 200,
+      controls: [],
+      style: { color: "#ff3b5c", fill: null, strokeWidth: 8 },
+      locked: false,
+      visible: true,
+      opacity: 100,
+      blendMode: "source-over",
+    };
+    const bounds = elementBounds(placed);
+    const se = resizeHandlePoint(bounds, "se");
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 81,
+      clientX: se.x,
+      clientY: se.y,
+    });
+    fireEvent.pointerMove(canvas, {
+      pointerId: 81,
+      clientX: bounds.x + bounds.width * 0.28,
+      clientY: bounds.y + bounds.height * 0.28,
+    });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 81,
+      clientX: bounds.x + bounds.width * 0.28,
+      clientY: bounds.y + bounds.height * 0.28,
+    });
+
+    const scaled = screen.getByRole("slider", { name: "Stroke width" });
+    const scaledPx = Number((scaled.getAttribute("aria-valuetext") ?? "").replace(" px", ""));
+    expect(scaledPx).toBeGreaterThan(0);
+    expect(scaledPx).toBeLessThan(4);
   });
 
   it("shows curve handles after placing a stroke and bends without leaving the shape tool", async () => {

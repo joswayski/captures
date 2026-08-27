@@ -133,7 +133,8 @@ export type EditorTextElement = EditorElementBase & {
   /**
    * When true, typing grows the box with the longest line (a normal text field)
    * instead of wrapping inside the current width. New text starts this way;
-   * resizing the box width locks wrapping (`false`). Omitted on older documents.
+   * older documents omit it and keep a fixed wrap width. Scaling an auto-width
+   * label changes type size and keeps the plate hugging the glyphs.
    */
   autoWidth?: boolean;
   fontFamily: "sans" | "serif" | "mono" | "rounded";
@@ -2515,15 +2516,32 @@ export function resizeElement(
   }
 
   if (element.kind === "text") {
-    // Width-only drags reflow wrap width. Height (or corner) drags also scale
-    // type size so stretching the yellow selection box visibly resizes the label.
+    // Side drags on a fixed wrap box change column width (reflow, same type size).
+    // Auto-width labels and any height/corner drag scale type size instead of
+    // stretching an empty plate around unchanged glyphs.
     const widthOnly = Math.abs(scaleY - 1) < 0.001 && Math.abs(scaleX - 1) >= 0.001;
     const heightOnly = Math.abs(scaleX - 1) < 0.001 && Math.abs(scaleY - 1) >= 0.001;
+    const autoWidth = isAutoWidthText(element);
+    if (widthOnly && !autoWidth) {
+      const pad = textHasBackgroundPlate(element)
+        ? textBackgroundPad(element.fontSize)
+        : { x: 0, y: 0 };
+      return {
+        ...element,
+        x: nextBounds.x + pad.x,
+        y: nextBounds.y + pad.y,
+        width: Math.max(
+          minTextBoxWidth(element.fontSize),
+          nextBounds.width - pad.x * 2,
+        ),
+        autoWidth: false,
+      };
+    }
     const fontScale = widthOnly
-      ? 1
+      ? scaleX
       : heightOnly
         ? scaleY
-        : Math.min(scaleX, scaleY);
+        : Math.min(Math.abs(scaleX), Math.abs(scaleY));
     const nextFontSize = clamp(
       Math.round(element.fontSize * Math.max(0.05, fontScale)),
       8,
@@ -2532,26 +2550,28 @@ export function resizeElement(
     const pad = textHasBackgroundPlate(element)
       ? textBackgroundPad(nextFontSize)
       : { x: 0, y: 0 };
-    // Height-only font scaling keeps auto-width so typing still grows the line.
-    // Side or corner drags that change width lock wrapping to the new box.
-    if (isAutoWidthText(element) && heightOnly) {
-      return fitAutoWidthTextElement({
+    const originX = nextBounds.x + pad.x;
+    const originY = nextBounds.y + pad.y;
+    if (autoWidth) {
+      const nextWidth = fittedAutoWidthTextBox(element.text, nextFontSize);
+      return {
         ...element,
         fontSize: nextFontSize,
-        y: nextBounds.y + pad.y,
+        x: originX,
+        y: originY,
+        width: nextWidth,
         autoWidth: true,
-      });
+      };
     }
-    const contentWidth = Math.max(
-      minTextBoxWidth(nextFontSize),
-      nextBounds.width - pad.x * 2,
-    );
     return {
       ...element,
       fontSize: nextFontSize,
-      x: nextBounds.x + pad.x,
-      y: nextBounds.y + pad.y,
-      width: contentWidth,
+      x: originX,
+      y: originY,
+      width: Math.max(
+        minTextBoxWidth(nextFontSize),
+        element.width * Math.max(0.05, fontScale),
+      ),
       autoWidth: false,
     };
   }
