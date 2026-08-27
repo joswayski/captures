@@ -1600,7 +1600,7 @@ describe("screenshot editor geometry", () => {
   it("scales arrow heads with stroke and shaft length", () => {
     expect(arrowHeadLength(8)).toBeCloseTo(33.6, 5);
     expect(arrowHeadLength(2)).toBeCloseTo(8.4, 5);
-    expect(arrowHeadLength(8, 20)).toBeCloseTo(5, 5);
+    expect(arrowHeadLength(8, 20)).toBeCloseTo(4.4, 5);
     expect(arrowHeadLength(8, 400)).toBeCloseTo(33.6, 5);
 
     const long: EditorShapeElement = {

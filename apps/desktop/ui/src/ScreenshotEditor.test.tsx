@@ -940,6 +940,64 @@ describe("ScreenshotEditor", () => {
     expect(screen.getByRole("button", { name: "Straighten arrow" })).toBeInTheDocument();
   });
 
+  it("shrinks the arrow head when the tip handle is dragged back", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Width");
+
+    setCanvasZoomPercent(100);
+    fireEvent.click(screen.getByRole("button", { name: "Arrow (A)" }));
+    const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
+    canvas.setPointerCapture = vi.fn();
+    canvas.hasPointerCapture = vi.fn(() => true);
+    canvas.releasePointerCapture = vi.fn();
+    setCanvasBounds(canvas);
+
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 70,
+      clientX: 80,
+      clientY: 200,
+    });
+    fireEvent.pointerMove(canvas, {
+      pointerId: 70,
+      clientX: 480,
+      clientY: 200,
+    });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 70,
+      clientX: 480,
+      clientY: 200,
+    });
+
+    const stroke = screen.getByRole("slider", { name: "Stroke width" });
+    expect(stroke).toHaveAttribute("aria-valuetext", "8 px");
+
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 71,
+      clientX: 480,
+      clientY: 200,
+    });
+    fireEvent.pointerMove(canvas, {
+      pointerId: 71,
+      clientX: 160,
+      clientY: 200,
+    });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 71,
+      clientX: 160,
+      clientY: 200,
+    });
+
+    const shortened = screen.getByRole("slider", { name: "Stroke width" });
+    const label = shortened.getAttribute("aria-valuetext") ?? "";
+    const px = Number(label.replace(" px", ""));
+    expect(px).toBeGreaterThan(0);
+    expect(px).toBeLessThan(4);
+  });
+
   it("shows curve handles after placing a stroke and bends without leaving the shape tool", async () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Width");

@@ -105,6 +105,7 @@ import {
   resizeDocumentCanvas,
   resizeElement,
   resizeHandlePoint,
+  isResizeCornerHandle,
   scaleArrowStrokeForLength,
   snapResizedBounds,
   snapTranslatedBounds,
@@ -345,12 +346,17 @@ function hitTestSelectedAnnotation(
   | null
 ) {
   if (selected.locked || !selected.visible) return null;
+  const bounds = elementBounds(selected);
+  const handle = hitTestResizeHandle(bounds, point, interactionRadius);
+  // Arrow endpoints sit near the dashed-box corners. Prefer those corners so
+  // shrinking the box scales the whole arrow (shaft + head), not just the tip.
+  if (handle && isResizeCornerHandle(handle)) {
+    return { kind: "resize", handle, bounds };
+  }
   if (selected.kind === "shape" && isCurveableStrokeShape(selected)) {
     const strokeHandle = hitTestArrowHandle(selected, point, interactionRadius);
     if (strokeHandle) return { kind: "arrow-handle", handle: strokeHandle };
   }
-  const bounds = elementBounds(selected);
-  const handle = hitTestResizeHandle(bounds, point, interactionRadius);
   if (handle) return { kind: "resize", handle, bounds };
   return null;
 }
@@ -1191,17 +1197,23 @@ function drawEditorOverlays(
       context.setLineDash([6 * unit, 4 * unit]);
       context.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
       context.setLineDash([]);
-      // Corner + mid-edge resize grips for closed shapes / non-stroke selections.
-      // Line/arrow use endpoint + mid/control handles instead.
-      if (!curveable) {
-        context.globalAlpha = 0.88;
-        context.fillStyle = accentColor;
-        context.strokeStyle = "rgba(255, 255, 255, 0.9)";
-        context.lineWidth = 1.1 * unit;
-        const grip = 5.5 * unit;
-        const midX = bounds.x + bounds.width / 2;
-        const midY = bounds.y + bounds.height / 2;
-        for (const point of [
+      // Corner grips scale the whole annotation (including arrow heads).
+      // Mid-edge grips stay off lines/arrows so curve dots remain easy to grab.
+      context.globalAlpha = 0.88;
+      context.fillStyle = accentColor;
+      context.strokeStyle = "rgba(255, 255, 255, 0.9)";
+      context.lineWidth = 1.1 * unit;
+      const grip = 5.5 * unit;
+      const midX = bounds.x + bounds.width / 2;
+      const midY = bounds.y + bounds.height / 2;
+      const gripPoints = curveable
+        ? [
+          [bounds.x, bounds.y],
+          [bounds.x + bounds.width, bounds.y],
+          [bounds.x + bounds.width, bounds.y + bounds.height],
+          [bounds.x, bounds.y + bounds.height],
+        ]
+        : [
           [bounds.x, bounds.y],
           [midX, bounds.y],
           [bounds.x + bounds.width, bounds.y],
@@ -1210,20 +1222,20 @@ function drawEditorOverlays(
           [midX, bounds.y + bounds.height],
           [bounds.x, bounds.y + bounds.height],
           [bounds.x, midY],
-        ]) {
-          context.fillRect(
-            point[0] - grip / 2,
-            point[1] - grip / 2,
-            grip,
-            grip,
-          );
-          context.strokeRect(
-            point[0] - grip / 2,
-            point[1] - grip / 2,
-            grip,
-            grip,
-          );
-        }
+        ];
+      for (const point of gripPoints) {
+        context.fillRect(
+          point[0] - grip / 2,
+          point[1] - grip / 2,
+          grip,
+          grip,
+        );
+        context.strokeRect(
+          point[0] - grip / 2,
+          point[1] - grip / 2,
+          grip,
+          grip,
+        );
       }
       if (selected?.kind === "shape" && isCurveableStrokeShape(selected)) {
         context.globalAlpha = 1;

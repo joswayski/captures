@@ -1921,7 +1921,7 @@ export function arrowHeadLength(strokeWidth: number, shaftLength?: number): numb
   if (shaftLength == null || !(shaftLength > 0)) return fromStroke;
   // Keep the tip shorter than the remaining shaft so endpoint-shrink cannot
   // leave a creation-sized head on a stub.
-  return Math.max(1, Math.min(fromStroke, shaftLength * 0.25));
+  return Math.max(1, Math.min(fromStroke, shaftLength * 0.22));
 }
 
 /**
