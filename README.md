@@ -9,10 +9,10 @@ Captures is a cross-platform screen capture utility built for quick captures and
 
 Open one compact menu to switch between screenshots and recordings, then choose a region, window, or full display.
 
-![Captures selecting a screenshot region over a coastline](docs/images/capture-selection.jpg)
+![Captures selecting a region over a landscape](docs/images/capture-selection.jpg)
 
 <p align="center">
-  <img src="docs/images/capture-controls.jpg" alt="Close-up of the Captures capture menu with screenshot and recording options" width="728">
+  <img src="docs/images/capture-controls.jpg" alt="Close-up of the Captures capture menu with recording options" width="728">
   <br>
   <sub><strong>Everything in reach</strong> with capture type and target controls together in one compact menu.</sub>
 </p>
