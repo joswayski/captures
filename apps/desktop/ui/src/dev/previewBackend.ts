@@ -20,12 +20,14 @@ import type {
   AudioDevice,
   CaptureArtifact,
   ClipboardState,
+  DisplayDescriptor,
   OnboardingState,
   RecordingArtifact,
   RecordingDraftManifest,
   RecordingSelectionSession,
   RecordingSessionSnapshot,
   UpdateStatus,
+  WindowDescriptor,
 } from "../types";
 
 type Query = URLSearchParams;
@@ -157,7 +159,7 @@ const SETTINGS: AppSettings = {
   },
 };
 
-const DISPLAY = {
+const DISPLAY: DisplayDescriptor = {
   id: "display-1",
   name: "Built-in Display",
   x: 0,
@@ -168,7 +170,21 @@ const DISPLAY = {
   is_primary: true,
 };
 
-const WINDOWS = [
+const DISPLAYS: DisplayDescriptor[] = [
+  DISPLAY,
+  {
+    id: "display-2",
+    name: "Studio Display",
+    x: DISPLAY.width,
+    y: 0,
+    width: 1920,
+    height: 1080,
+    scale_factor: 2,
+    is_primary: false,
+  },
+];
+
+const WINDOWS: WindowDescriptor[] = [
   {
     id: "window-1",
     title: "capture.ts — captures",
@@ -192,6 +208,18 @@ const WINDOWS = [
     height: 420,
     display_id: "display-1",
     corner_radius: 14,
+  },
+  {
+    id: "window-3",
+    title: "Safari",
+    app_name: "Safari",
+    z_order: 0,
+    x: DISPLAY.width + 80,
+    y: 80,
+    width: 1100,
+    height: 800,
+    display_id: "display-2",
+    corner_radius: 12,
   },
 ];
 
@@ -380,27 +408,67 @@ function recordingSnapshot(): RecordingSessionSnapshot {
   };
 }
 
-const SELECTION: RecordingSelectionSession = {
-  id: "selection-1",
-  kind: "video",
-  initial_mode: (query().get("mode") as "screenshot" | "recording") ?? "screenshot",
-  initial_target: (query().get("target") as ActiveSession["mode"]) ?? "region",
-  recording_available: true,
-  recording_capabilities: {
-    system_audio: true,
-    microphone: true,
-    cursor_control: true,
-    click_highlights: true,
-    controls_excluded: true,
-  },
-  display: DISPLAY,
-  displays: [DISPLAY, { ...DISPLAY, id: "display-2", name: "Studio Display", is_primary: false }],
-  window_coordinate_scale: 1,
-  window_corner_radius: 12,
-  display_corner_radius: 0,
-  snapshot_url: CAPTURE_URL,
-  windows: WINDOWS,
-};
+function snapshotUrlFor(display: DisplayDescriptor): string {
+  return `${sampleCapture(display.width, display.height)}#${display.id}`;
+}
+
+function payloadString(payload: unknown, ...keys: string[]): string | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  const record = payload as Record<string, unknown>;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.length > 0) return value;
+  }
+  return undefined;
+}
+
+function createSelection(): RecordingSelectionSession {
+  return {
+    id: "selection-1",
+    kind: "video",
+    initial_mode: (query().get("mode") as "screenshot" | "recording") ?? "screenshot",
+    initial_target: (query().get("target") as ActiveSession["mode"]) ?? "region",
+    recording_available: true,
+    recording_capabilities: {
+      system_audio: true,
+      microphone: true,
+      cursor_control: true,
+      click_highlights: true,
+      controls_excluded: true,
+    },
+    display: DISPLAY,
+    displays: DISPLAYS.map((item) => ({ ...item })),
+    window_coordinate_scale: 1,
+    window_corner_radius: 12,
+    display_corner_radius: 0,
+    snapshot_url: snapshotUrlFor(DISPLAY),
+    windows: WINDOWS.filter((window) => window.display_id === DISPLAY.id),
+  };
+}
+
+let selection: RecordingSelectionSession = createSelection();
+
+function selectCaptureDisplay(payload: unknown): RecordingSelectionSession {
+  const selectionId = payloadString(payload, "selectionId", "selection_id");
+  const displayId = payloadString(payload, "displayId", "display_id");
+  if (!displayId) {
+    throw new Error("display is unavailable");
+  }
+  if (selectionId && selectionId !== selection.id) {
+    throw new Error("session is unavailable");
+  }
+  const display = selection.displays.find((candidate) => candidate.id === displayId);
+  if (!display) {
+    throw new Error("display is unavailable");
+  }
+  selection = {
+    ...selection,
+    display: { ...display },
+    snapshot_url: snapshotUrlFor(display),
+    windows: WINDOWS.filter((window) => window.display_id === display.id),
+  };
+  return selection;
+}
 
 const CAPTURE_SESSION: ActiveSession = {
   id: "session-1",
@@ -410,7 +478,7 @@ const CAPTURE_SESSION: ActiveSession = {
   window_corner_radius: 12,
   display_corner_radius: 0,
   snapshot_url: CAPTURE_URL,
-  windows: WINDOWS,
+  windows: WINDOWS.filter((window) => window.display_id === DISPLAY.id),
 };
 
 const CLIPBOARD: ClipboardState = { revision: 4, artifact_id: "artifact-1" };
@@ -443,7 +511,6 @@ const RESPONSES: Record<string, unknown> = {
   get_artifact: ARTIFACT,
   get_recording_artifact: RECORDING,
   get_clipboard_state: CLIPBOARD,
-  get_recording_selection: SELECTION,
   get_pending_session: CAPTURE_SESSION,
   get_active_session: CAPTURE_SESSION,
   get_recording_snapshot: recordingSnapshot(),
@@ -486,7 +553,10 @@ function applyPreviewStage(): void {
 
 export function installPreviewBackend(): void {
   applyPreviewStage();
-  mockIPC(async (command) => {
+  selection = createSelection();
+  mockIPC(async (command, payload) => {
+    if (command === "get_recording_selection") return selection;
+    if (command === "select_capture_display") return selectCaptureDisplay(payload);
     if (command in RESPONSES) return RESPONSES[command];
     // Everything else is a side effect (show window, copy, save…) with no payload.
     return undefined;

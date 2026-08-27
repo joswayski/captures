@@ -2171,10 +2171,14 @@ export function RecordingSelector() {
     setSwitchingDisplay(true);
     setError("");
     try {
-      const next = await invoke<RecordingSelectionSession>("select_capture_display", {
+      const next = await invoke<RecordingSelectionSession | null>("select_capture_display", {
         selectionId: session.id,
         displayId,
       });
+      if (!next?.id || !next.display?.id) {
+        setError("Could not switch displays.");
+        return;
+      }
       if (activeSessionIdRef.current !== next.id) return;
       sessionRef.current = next;
       setSession(next);
@@ -2541,7 +2545,7 @@ export function RecordingSelector() {
             {starting
               ? actionMode === "screenshot" ? "Capturing…" : "Starting…"
               : switchingDisplay ? "Switching…"
-              : actionMode === "screenshot" ? "Capture" : "Record"}
+              : actionMode === "screenshot" ? "Capture" : "Start recording"}
           </button>
         </div>
         {actionMode === "recording" && (

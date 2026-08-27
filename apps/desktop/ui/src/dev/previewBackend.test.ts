@@ -1,0 +1,46 @@
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { invoke } from "@tauri-apps/api/core";
+import { clearMocks } from "@tauri-apps/api/mocks";
+
+import { installPreviewBackend } from "./previewBackend";
+import type { RecordingSelectionSession } from "../types";
+
+describe("previewBackend capture display switching", () => {
+  beforeEach(() => {
+    installPreviewBackend();
+  });
+
+  afterEach(() => {
+    clearMocks();
+  });
+
+  it("returns an updated selection instead of undefined when switching displays", async () => {
+    const current = await invoke<RecordingSelectionSession>("get_recording_selection");
+    expect(current.display.id).toBe("display-1");
+    expect(current.windows.length).toBeGreaterThan(0);
+
+    const next = await invoke<RecordingSelectionSession>("select_capture_display", {
+      selectionId: current.id,
+      displayId: "display-2",
+    });
+
+    expect(next.id).toBe(current.id);
+    expect(next.display.id).toBe("display-2");
+    expect(next.display.name).toBe("Studio Display");
+    expect(next.display.width).toBe(1920);
+    expect(next.display.height).toBe(1080);
+    expect(next.snapshot_url).not.toBe(current.snapshot_url);
+    expect(next.windows.every((window) => window.display_id === "display-2")).toBe(true);
+
+    const stored = await invoke<RecordingSelectionSession>("get_recording_selection");
+    expect(stored.display.id).toBe("display-2");
+  });
+
+  it("rejects an unknown display without returning undefined", async () => {
+    const current = await invoke<RecordingSelectionSession>("get_recording_selection");
+    await expect(invoke("select_capture_display", {
+      selectionId: current.id,
+      displayId: "missing",
+    })).rejects.toThrow(/display is unavailable/);
+  });
+});

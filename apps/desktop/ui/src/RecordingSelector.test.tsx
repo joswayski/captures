@@ -449,6 +449,46 @@ describe("RecordingSelector", () => {
     });
   });
 
+  it("keeps the selector usable when switching displays returns nothing", async () => {
+    preparedSession = {
+      ...session,
+      initial_mode: "recording",
+      initial_target: "display",
+    };
+    const defaultInvoke = vi.mocked(invoke).getMockImplementation();
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "select_capture_display") return undefined;
+      return defaultInvoke?.(command, args);
+    });
+
+    render(<RecordingSelector />);
+    expect(await screen.findByRole("button", { name: "Full screen", pressed: true }))
+      .toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Display" }));
+    fireEvent.click(screen.getByRole("option", { name: /Studio Display/ }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not switch displays");
+    expect(screen.getByRole("combobox", { name: "Display" })).toHaveTextContent(
+      "Built-in Retina Display",
+    );
+    expect(screen.queryByText(/Cannot read properties of undefined/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start recording" })).toBeEnabled();
+  });
+
+  it("labels the recording action Start recording so it is distinct from Record mode", async () => {
+    render(<RecordingSelector />);
+
+    const start = await screen.findByRole("button", { name: "Start recording" });
+    const recordMode = screen.getByRole("button", { name: "Record", pressed: true });
+    expect(start).toHaveTextContent("Start recording");
+    expect(start).toHaveClass("capture-selector-primary-recording");
+    expect(start.querySelector(".capture-record-dot")).not.toBeNull();
+    expect(recordMode).toHaveTextContent(/^Record$/);
+    expect(recordMode.querySelector(".capture-record-dot")).not.toBeNull();
+    expect(start).not.toBe(recordMode);
+  });
+
   it("starts with no region so the user can draw mid-screen", async () => {
     preparedSession = {
       ...session,
