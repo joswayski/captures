@@ -155,7 +155,8 @@ export async function resolveCookingPreviewShas(
         expiresAt: Date.now() + FAILURE_RETRY_MS,
         value: fallback,
       };
-      throw error;
+      console.error("cooking preview lookup failed", error);
+      return [...fallback];
     })
     .finally(() => {
       if (cookingPreviewInflight?.promise === promise) {

@@ -54,6 +54,9 @@ const RECORDING_COUNTDOWN_FADE_OUT_MS: u64 = 180;
 const RECORDING_HUD_FULL_WIDTH: f64 = 430.0;
 const RECORDING_HUD_HEIGHT: f64 = 102.0;
 const RECORDING_HUD_BOTTOM_MARGIN: f64 = 20.0;
+/// Cap un-ranged `captures-capture://media/...` reads so a missing Range header
+/// cannot pull an entire recording into the desktop process.
+const DEFAULT_UNRANGED_MEDIA_BYTES: u64 = 2 * 1024 * 1024;
 const GIF_SOURCE_RETENTION_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
 
 #[derive(Default)]
@@ -2917,6 +2920,14 @@ pub fn resolve_recording_asset(
                 let mut bytes = vec![0; length];
                 file.read_exact(&mut bytes).ok()?;
                 (206, Some(range.content_range(total_length)), bytes)
+            } else if let Some(range) =
+                ByteRange::prefix_when_unbounded(total_length, DEFAULT_UNRANGED_MEDIA_BYTES)
+            {
+                file.seek(SeekFrom::Start(range.start)).ok()?;
+                let length = usize::try_from(range.length()).ok()?;
+                let mut bytes = vec![0; length];
+                file.read_exact(&mut bytes).ok()?;
+                (206, Some(range.content_range(total_length)), bytes)
             } else {
                 let mut bytes = Vec::with_capacity(usize::try_from(total_length).ok()?);
                 file.read_to_end(&mut bytes).ok()?;
@@ -3127,25 +3138,30 @@ fn append_segment(
 }
 
 fn fail_session(app: &AppHandle, state: &AppState, session_id: &str, message: String) {
-    let snapshot = {
+    let (snapshot, segment) = {
         let mut runtime = state.recording.lock();
         let now = now_ms();
         let snapshot = runtime
             .coordinator
             .fail(session_id, message.clone(), now)
             .ok();
-        if let Some(session) = runtime
-            .session
-            .as_mut()
-            .filter(|session| session.id == session_id)
-        {
+        let segment = runtime.session.as_mut().and_then(|session| {
+            if session.id != session_id {
+                return None;
+            }
             session.manifest.state = RecordingState::Failed;
             session.manifest.last_error = Some(message.clone());
             session.manifest.updated_at_ms = now;
             let _ = save_manifest(&session.manifest);
-        }
-        snapshot
+            session.active_segment.take()
+        });
+        (snapshot, segment)
     };
+    if let Some(segment) = segment {
+        tauri::async_runtime::spawn_blocking(move || {
+            let _ = segment.discard();
+        });
+    }
     if let Some(snapshot) = snapshot {
         emit_snapshot(app, &snapshot);
     }
@@ -3157,6 +3173,7 @@ fn fail_session(app: &AppHandle, state: &AppState, session_id: &str, message: St
         },
     );
     destroy_recording_countdown(app);
+    crate::hide_window(app, "recording-hud");
 }
 
 fn restore_recording_ui(app: &AppHandle, state: &Arc<AppState>) {
@@ -3625,14 +3642,23 @@ pub fn reveal_recording_selector(
     Ok(())
 }
 
+fn recording_hud_position(display: &DisplayDescriptor) -> (f64, f64) {
+    let (x, y, width, height) = display.overlay_geometry();
+    recording_hud_logical_position(x, y, width, height)
+}
+
+fn recording_hud_logical_position(x: f64, y: f64, width: f64, height: f64) -> (f64, f64) {
+    (
+        x + (width - RECORDING_HUD_FULL_WIDTH) / 2.0,
+        y + height - RECORDING_HUD_HEIGHT - RECORDING_HUD_BOTTOM_MARGIN,
+    )
+}
+
 async fn prepare_recording_hud(
     app: &AppHandle,
     display: &DisplayDescriptor,
 ) -> Result<(), AppError> {
-    let x = f64::from(display.x) + (f64::from(display.width) - RECORDING_HUD_FULL_WIDTH) / 2.0;
-    let y = f64::from(display.y) + f64::from(display.height)
-        - RECORDING_HUD_HEIGHT
-        - RECORDING_HUD_BOTTOM_MARGIN;
+    let (x, y) = recording_hud_position(display);
     let created = app.get_webview_window("recording-hud").is_none();
     if created {
         WebviewWindowBuilder::new(
@@ -3861,9 +3887,28 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        media_target_suffix, replace_recording_source, replace_recording_source_at,
-        replacement_working_path, screenshot_capture_is_blocked_for,
+        RECORDING_HUD_BOTTOM_MARGIN, RECORDING_HUD_FULL_WIDTH, RECORDING_HUD_HEIGHT,
+        media_target_suffix, recording_hud_logical_position, replace_recording_source,
+        replace_recording_source_at, replacement_working_path, screenshot_capture_is_blocked_for,
     };
+
+    #[test]
+    fn recording_hud_uses_overlay_dips_not_physical_pixels() {
+        let (x, y) = recording_hud_logical_position(0.0, 0.0, 1_920.0, 1_080.0);
+        assert!((x - (1_920.0 - RECORDING_HUD_FULL_WIDTH) / 2.0).abs() < f64::EPSILON);
+        assert!(
+            (y - (1_080.0 - RECORDING_HUD_HEIGHT - RECORDING_HUD_BOTTOM_MARGIN)).abs()
+                < f64::EPSILON
+        );
+
+        let (width, height) =
+            captures_capture::DisplayDescriptor::overlay_size_for(3_840, 2_160, 2.0, true);
+        let (scaled_x, scaled_y) = recording_hud_logical_position(0.0, 0.0, width, height);
+        assert!((scaled_x - x).abs() < f64::EPSILON);
+        assert!((scaled_y - y).abs() < f64::EPSILON);
+        let physical_x = (3_840.0 - RECORDING_HUD_FULL_WIDTH) / 2.0;
+        assert!((scaled_x - physical_x).abs() > 100.0);
+    }
 
     #[test]
     fn resolves_media_sidecars_only_for_packaged_platform_architectures() {

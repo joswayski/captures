@@ -1397,10 +1397,16 @@ fn run_command(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| map_spawn_error(error, tool))?;
-    let mut stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| MediaToolError::Process("failed to capture media tool errors".to_owned()))?;
+    let mut stderr = match child.stderr.take() {
+        Some(stderr) => stderr,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(MediaToolError::Process(
+                "failed to capture media tool errors".to_owned(),
+            ));
+        }
+    };
     let stderr_reader = thread::spawn(move || {
         let mut bytes = Vec::new();
         stderr.read_to_end(&mut bytes).map(|_| bytes)

@@ -42,7 +42,7 @@ pub type MacRecordingResult<T> = Result<T, MacRecordingError>;
 /// relying on an in-memory encoder state.
 pub struct MacRecordingSegment {
     #[cfg(target_os = "macos")]
-    inner: native::NativeRecordingSegment,
+    inner: Option<native::NativeRecordingSegment>,
     #[cfg(target_os = "macos")]
     microphone: Option<microphone::MicrophoneSegment>,
     #[cfg(not(target_os = "macos"))]
@@ -83,7 +83,10 @@ impl MacRecordingSegment {
             } else {
                 None
             };
-            Ok(Self { inner, microphone })
+            Ok(Self {
+                inner: Some(inner),
+                microphone,
+            })
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -95,7 +98,9 @@ impl MacRecordingSegment {
     pub fn dimensions(&self) -> (u32, u32) {
         #[cfg(target_os = "macos")]
         {
-            self.inner.dimensions()
+            self.inner
+                .as_ref()
+                .map_or((0, 0), native::NativeRecordingSegment::dimensions)
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -106,8 +111,16 @@ impl MacRecordingSegment {
     pub fn stop(self) -> MacRecordingResult<RecordingSegmentInfo> {
         #[cfg(target_os = "macos")]
         {
-            let screen = self.inner.stop();
-            let microphone = self.microphone.map(microphone::MicrophoneSegment::stop);
+            let mut this = self;
+            let screen = this
+                .inner
+                .take()
+                .ok_or(MacRecordingError::RecordingOutputUnavailable)?
+                .stop();
+            let microphone = this
+                .microphone
+                .take()
+                .map(microphone::MicrophoneSegment::stop);
             let mut info = screen?;
             if let Some(microphone) = microphone {
                 let microphone = microphone?;
@@ -126,8 +139,12 @@ impl MacRecordingSegment {
     pub fn discard(self) -> MacRecordingResult<()> {
         #[cfg(target_os = "macos")]
         {
-            let screen_result = self.inner.discard();
-            if let Some(microphone) = self.microphone {
+            let mut this = self;
+            let screen_result = this
+                .inner
+                .take()
+                .map_or(Ok(()), native::NativeRecordingSegment::discard);
+            if let Some(microphone) = this.microphone.take() {
                 let _ = microphone.discard();
             }
             screen_result
@@ -141,11 +158,14 @@ impl MacRecordingSegment {
     pub fn warning(&self) -> Option<String> {
         #[cfg(target_os = "macos")]
         {
-            self.inner.warning().or_else(|| {
-                self.microphone
-                    .as_ref()
-                    .and_then(microphone::MicrophoneSegment::warning)
-            })
+            self.inner
+                .as_ref()
+                .and_then(native::NativeRecordingSegment::warning)
+                .or_else(|| {
+                    self.microphone
+                        .as_ref()
+                        .and_then(microphone::MicrophoneSegment::warning)
+                })
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -181,6 +201,20 @@ impl MacRecordingSegment {
 
     pub const fn system_audio_draft_info(&self) -> Option<(PathBuf, i64)> {
         None
+    }
+}
+
+impl Drop for MacRecordingSegment {
+    fn drop(&mut self) {
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(inner) = self.inner.take() {
+                let _ = inner.discard();
+            }
+            if let Some(microphone) = self.microphone.take() {
+                let _ = microphone.discard();
+            }
+        }
     }
 }
 

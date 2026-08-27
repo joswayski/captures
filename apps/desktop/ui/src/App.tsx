@@ -244,6 +244,10 @@ export function App() {
   return <IdleView />;
 }
 
+function captureChromeLabel(): string {
+  return /Mac/i.test(navigator.userAgent) ? "menu bar" : "tray";
+}
+
 function IdleView() {
   return (
     <main className="idle-view">
@@ -273,7 +277,7 @@ export function StartupNotice() {
   }, []);
 
   const keys = shortcutDisplayTokens(shortcut);
-  const trayLabel = /Mac/i.test(navigator.userAgent) ? "menu bar" : "tray";
+  const trayLabel = captureChromeLabel();
   const caretStyle = hasCaret
     ? ({ "--startup-caret-x": `${caretX}px` } as CSSProperties)
     : undefined;
@@ -427,6 +431,7 @@ export function RecordingControlsHiddenNotice() {
   }, []);
 
   const keys = shortcutDisplayTokens(shortcut);
+  const trayLabel = captureChromeLabel();
 
   return (
     <main className="recording-controls-hidden-notice" role="status">
@@ -434,7 +439,7 @@ export function RecordingControlsHiddenNotice() {
       <div>
         <strong>Recording controls hidden</strong>
         <p>
-          Open Captures from the taskbar, or press{" "}
+          Open Captures from the {trayLabel}, or press{" "}
           {keys.map((key, index) => (
             <kbd key={`${key}-${index}`}>{key}</kbd>
           ))}
