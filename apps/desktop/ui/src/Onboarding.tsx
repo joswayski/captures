@@ -264,7 +264,17 @@ export function Onboarding() {
     <main className="onboarding-shell">
       <div className="onboarding-stage">
         <header className="onboarding-copy" aria-labelledby="onboarding-setup-title">
+          <div className="onboarding-brand" aria-label="Captures">
+            <span className="onboarding-brand-mark" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M8 4H6a2 2 0 0 0-2 2v2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2" />
+                <path d="M12 8.5c.3 1.8 1.7 3.2 3.5 3.5-1.8.3-3.2 1.7-3.5 3.5-.3-1.8-1.7-3.2-3.5-3.5 1.8-.3 3.2-1.7 3.5-3.5Z" />
+              </svg>
+            </span>
+            <span>Captures</span>
+          </div>
           <h1 id="onboarding-setup-title">{setupTitle(setup?.platform)}</h1>
+          <p>One quick check, then Captures stays out of your way until you need it.</p>
         </header>
 
         <div className="onboarding-panel">

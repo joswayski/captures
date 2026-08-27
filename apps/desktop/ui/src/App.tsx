@@ -641,7 +641,7 @@ function UpdatePreferences() {
   };
 
   return (
-    <section className="settings-section update-settings">
+    <section id="preferences-updates" className="settings-section update-settings">
       <h2>Updates</h2>
       <div className="settings-utility-row update-settings-row">
         <div className="settings-utility-copy">
@@ -6366,10 +6366,19 @@ export function Preferences() {
   return (
     <main className="preferences">
       <header className="preferences-header">
-        <div>
+        <div className="preferences-header-copy">
           <span className="eyebrow">Captures</span>
           <h1>Preferences</h1>
+          <p>Set the defaults once. Captures remembers the rest.</p>
         </div>
+        <nav className="preferences-nav" aria-label="Preference sections">
+          <a href="#preferences-appearance">Appearance</a>
+          <a href="#preferences-captures">Captures</a>
+          <a href="#preferences-shortcuts">Shortcuts</a>
+          <a href="#preferences-recording">Recording</a>
+          <a href="#preferences-updates">Updates</a>
+          <a href="#preferences-feedback">Feedback</a>
+        </nav>
         {saveStatus.kind !== "idle" && (
           <div className="preferences-header-actions">
             <div className={`preferences-save-status preferences-save-${saveStatus.kind}`} role="status">
@@ -6380,7 +6389,7 @@ export function Preferences() {
         )}
       </header>
 
-      <section className="settings-section appearance-section">
+      <section id="preferences-appearance" className="settings-section appearance-section">
         <h2>Appearance</h2>
         <p className="help-text">
           Apply one color system across every Captures window. Status colors keep their meaning.
@@ -6460,7 +6469,7 @@ export function Preferences() {
         )}
       </section>
 
-      <section className="settings-section">
+      <section id="preferences-captures" className="settings-section">
         <h2>Captures</h2>
         <label className="field-label" htmlFor="output-directory">Save captures to</label>
         <div className="directory-input">
@@ -6552,7 +6561,7 @@ export function Preferences() {
         </p>
       </section>
 
-      <section className="settings-section">
+      <section id="preferences-shortcuts" className="settings-section">
         <h2>Shortcuts</h2>
         <ShortcutInput
           id="new-capture-shortcut"
@@ -6605,7 +6614,7 @@ export function Preferences() {
         <p className="help-text">Select a shortcut, then press the key combination you want. Press Esc to cancel recording. Changes save automatically.</p>
       </section>
 
-      <section className="settings-section recording-settings-section">
+      <section id="preferences-recording" className="settings-section recording-settings-section">
         <h2>Video recording</h2>
         <div className="settings-inline-grid">
           <div className="settings-select-field"><span>Frames per second</span>
@@ -6676,7 +6685,7 @@ export function Preferences() {
 
       <UpdatePreferences />
 
-      <section className="settings-section">
+      <section id="preferences-feedback" className="settings-section">
         <h2>Feedback</h2>
         <div className="settings-utility-row">
           <div className="settings-utility-copy">
