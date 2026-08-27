@@ -52,6 +52,7 @@ import {
   ALIGNMENT_SNAP_SCREEN_PX,
   applyTextStylePreset,
   arrowBendAmount,
+  arrowChordLength,
   arrowDefaultMidHandle,
   arrowHeadTangentPoint,
   arrowHeadWingTips,
@@ -108,6 +109,10 @@ import {
   snapTranslatedBounds,
   stackDropLightFocusAtPoint,
   defaultTextBoxWidth,
+  estimateTextWidth,
+  fitAutoWidthTextElement,
+  fittedAutoWidthTextBox,
+  isAutoWidthText,
   TEXT_LINE_HEIGHT_RATIO,
   textBackgroundPad,
   textHasBackgroundPlate,
@@ -130,6 +135,7 @@ import {
   type LayerDropPlacement,
   type EditorPoint,
   type EditorRect,
+  type EditorTextElement,
   type ElementStyle,
   type ResizeHandle,
   type ScreenshotDocument,
@@ -537,6 +543,35 @@ function fontFamily(element: Extract<ScreenshotElement, { kind: "text" }>): stri
   return "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
 }
 
+/** Offscreen 2D context for measuring live text while typing (not the editor canvas). */
+let textMetricsContext: CanvasRenderingContext2D | null | undefined;
+
+function measureTextElementLine(element: EditorTextElement, line: string): number {
+  if (textMetricsContext === undefined) {
+    textMetricsContext = typeof document === "undefined"
+      ? null
+      : document.createElement("canvas").getContext("2d");
+  }
+  if (!textMetricsContext) return estimateTextWidth(line, element.fontSize);
+  textMetricsContext.font = [
+    element.italic ? "italic" : "",
+    element.bold ? "700" : "400",
+    `${element.fontSize}px`,
+    fontFamily(element),
+  ].filter(Boolean).join(" ");
+  const width = textMetricsContext.measureText(line || " ").width;
+  return Number.isFinite(width) && width > 0
+    ? width
+    : estimateTextWidth(line, element.fontSize);
+}
+
+function fitLiveText(element: EditorTextElement): EditorTextElement {
+  return fitAutoWidthTextElement(
+    element,
+    (line) => measureTextElementLine(element, line),
+  );
+}
+
 function textOutlineWidth(fontSize: number): number {
   return Math.max(1.5, fontSize * 0.08);
 }
@@ -673,8 +708,9 @@ function arrowHead(
   end: EditorPoint,
   tangent: EditorPoint,
   strokeWidth: number,
+  shaftLength?: number,
 ): void {
-  const [wingA, wingB] = arrowHeadWingTips(end, tangent, strokeWidth);
+  const [wingA, wingB] = arrowHeadWingTips(end, tangent, strokeWidth, shaftLength);
   context.beginPath();
   context.moveTo(end.x, end.y);
   context.lineTo(wingA.x, wingA.y);
@@ -728,6 +764,7 @@ function drawShape(
         { x: endX, y: endY },
         arrowHeadTangentPoint(element),
         style.strokeWidth,
+        arrowChordLength(element),
       );
     }
     context.restore();
@@ -1539,6 +1576,7 @@ export function ScreenshotEditor() {
   const modifierPanRef = useRef(false);
   const viewPanRef = useRef({ x: 0, y: 0 });
   const selectInlineTextRef = useRef(false);
+  const suppressInlineTextBlurRef = useRef(false);
   const layerClipboardRef = useRef<{
     element: ScreenshotElement;
     pasteCount: number;
@@ -2033,14 +2071,35 @@ export function ScreenshotEditor() {
     setCropSelection(null);
   }, []);
 
+  const beginTextEditingFromPointerDown = useCallback((elementId: string, selectAll = false) => {
+    suppressInlineTextBlurRef.current = true;
+    const release = () => {
+      window.removeEventListener("pointerup", release, true);
+      window.removeEventListener("pointercancel", release, true);
+      window.requestAnimationFrame(() => {
+        suppressInlineTextBlurRef.current = false;
+      });
+    };
+    window.addEventListener("pointerup", release, true);
+    window.addEventListener("pointercancel", release, true);
+    beginTextEditing(elementId, selectAll);
+  }, [beginTextEditing]);
+
   useLayoutEffect(() => {
     if (!editingTextId) return;
-    const input = inlineTextRef.current;
-    if (!input) return;
-    input.focus({ preventScroll: true });
-    if (selectInlineTextRef.current) input.select();
-    else input.setSelectionRange(input.value.length, input.value.length);
-    selectInlineTextRef.current = false;
+    const focus = () => {
+      const input = inlineTextRef.current;
+      if (!input) return;
+      input.focus({ preventScroll: true });
+      if (selectInlineTextRef.current) input.select();
+      else input.setSelectionRange(input.value.length, input.value.length);
+    };
+    focus();
+    const frame = window.requestAnimationFrame(() => {
+      focus();
+      selectInlineTextRef.current = false;
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [editingTextId]);
 
   const displayScale = zoomMode === "fit" ? fitScale : zoom / 100;
@@ -2052,17 +2111,19 @@ export function ScreenshotEditor() {
       ? textBackgroundPad(editingText.fontSize)
       : { x: 0, y: 0 };
     // Match the painted bubble (padding + layout box) so wrapping tracks canvas width.
+    // Border is extra under border-box; include it so the content box matches `width`.
+    const border = 2;
     return {
       left: (editingText.x - pad.x) * displayScale,
       top: (editingText.y - pad.y) * displayScale,
       width: Math.max(
         48,
-        (editingText.width + pad.x * 2) * displayScale,
+        (editingText.width + pad.x * 2) * displayScale + border,
       ),
       height: Math.max(
         28,
         // elementBounds already includes pad when a plate is present.
-        contentHeight * displayScale,
+        contentHeight * displayScale + border,
       ),
       padding: `${pad.y * displayScale}px ${pad.x * displayScale}px`,
     };
@@ -2916,7 +2977,7 @@ export function ScreenshotEditor() {
     const current = documentRef.current;
     if (!current || event.button !== 0) return;
     const interactionRadius = 10 / Math.max(0.01, displayScale);
-    setEditingTextId(null);
+    if (tool !== "text") setEditingTextId(null);
     setError("");
     clearSuccess();
     setSaved(null);
@@ -3030,10 +3091,12 @@ export function ScreenshotEditor() {
     if (tool === "text") {
       const existing = hitTestElement(current.elements, point, interactionRadius);
       if (existing?.kind === "text") {
-        beginTextEditing(existing.id);
+        beginTextEditingFromPointerDown(existing.id);
         return;
       }
-      const element = applyTextStylePreset({
+      // Keep the coming textarea focused; otherwise the canvas click steals it.
+      event.preventDefault();
+      const styled = applyTextStylePreset({
         id: editorId(),
         kind: "text",
         x: point.x,
@@ -3041,6 +3104,7 @@ export function ScreenshotEditor() {
         text: "Text",
         fontSize: defaultFontSize,
         width: defaultTextBoxWidth(defaultFontSize),
+        autoWidth: true,
         fontFamily: "sans",
         bold: false,
         italic: false,
@@ -3055,10 +3119,19 @@ export function ScreenshotEditor() {
         opacity: 100,
         blendMode: "source-over",
       }, defaultTextStyle);
+      const element = {
+        ...styled,
+        autoWidth: true as const,
+        width: fittedAutoWidthTextBox(
+          styled.text,
+          styled.fontSize,
+          (line) => measureTextElementLine(styled, line),
+        ),
+      };
       // Expand when text is placed past the canvas edge (e.g. viewport chrome).
       const withText = { ...current, elements: [...current.elements, element] };
       commitDocument(expandDocumentToFitBounds(withText, elementBounds(element), 0));
-      beginTextEditing(element.id, true);
+      beginTextEditingFromPointerDown(element.id, true);
       return;
     }
 
@@ -4913,10 +4986,14 @@ export function ScreenshotEditor() {
           {editingText && inlineTextLayout && (
             <textarea
               ref={inlineTextRef}
-              className="screenshot-inline-text-editor"
+              className={[
+                "screenshot-inline-text-editor",
+                isAutoWidthText(editingText) ? "is-auto-width" : "",
+              ].filter(Boolean).join(" ")}
               aria-label="Edit text on canvas"
+              autoFocus
               value={editingText.text}
-              wrap="soft"
+              wrap={isAutoWidthText(editingText) ? "off" : "soft"}
               spellCheck
               style={{
                 ...inlineTextLayout,
@@ -4947,12 +5024,31 @@ export function ScreenshotEditor() {
                   ? "normal"
                   : editingText.blendMode,
               }}
-              onChange={(event) => updateLayer(editingText.id, (element) => (
-                element.kind === "text" ? { ...element, text: event.target.value } : element
-              ))}
-              onBlur={() => setEditingTextId((current) => (
-                current === editingText.id ? null : current
-              ))}
+              onChange={(event) => {
+                const nextText = event.target.value;
+                updateLayer(editingText.id, (element) => (
+                  element.kind === "text"
+                    ? fitLiveText({ ...element, text: nextText })
+                    : element
+                ));
+              }}
+              onPointerDown={(event) => event.stopPropagation()}
+              onBlur={(event) => {
+                // The placing canvas click can steal focus after the textarea mounts.
+                // Ignore only real pointer-driven blurs until that click finishes.
+                if (suppressInlineTextBlurRef.current && event.nativeEvent.isTrusted) {
+                  const input = inlineTextRef.current;
+                  window.requestAnimationFrame(() => {
+                    if (!input) return;
+                    input.focus({ preventScroll: true });
+                    if (selectInlineTextRef.current) input.select();
+                  });
+                  return;
+                }
+                setEditingTextId((current) => (
+                  current === editingText.id ? null : current
+                ));
+              }}
               onKeyDown={(event) => {
                 if (event.key !== "Escape") return;
                 event.preventDefault();
@@ -5812,7 +5908,7 @@ export function ScreenshotEditor() {
                 setDefaultTextStyle(preset);
                 updateSelected((element) => (
                   element.kind === "text"
-                    ? applyTextStylePreset(element, preset)
+                    ? fitLiveText(applyTextStylePreset(element, preset))
                     : element
                 ));
               }}
@@ -5823,7 +5919,9 @@ export function ScreenshotEditor() {
                 rows={4}
                 value={selected.text}
                 onChange={(event) => updateSelected((element) => (
-                  element.kind === "text" ? { ...element, text: event.target.value } : element
+                  element.kind === "text"
+                    ? fitLiveText({ ...element, text: event.target.value })
+                    : element
                 ))}
               />
             </label>
@@ -5834,13 +5932,13 @@ export function ScreenshotEditor() {
                   value={selected.fontFamily}
                   onChange={(event) => updateSelected((element) => (
                     element.kind === "text"
-                      ? {
+                      ? fitLiveText({
                         ...element,
                         fontFamily: event.target.value as typeof element.fontFamily,
                         roundedBackground: event.target.value === "rounded"
                           ? element.roundedBackground
                           : false,
-                      }
+                      })
                       : element
                   ))}
                 >
@@ -5858,7 +5956,7 @@ export function ScreenshotEditor() {
                   value={selected.fontSize}
                   onChange={(fontSize) => updateSelected((element) => (
                     element.kind === "text"
-                      ? { ...element, fontSize: Math.max(8, fontSize) }
+                      ? fitLiveText({ ...element, fontSize: Math.max(8, fontSize) })
                       : element
                   ))}
                 />
@@ -5870,7 +5968,9 @@ export function ScreenshotEditor() {
                 className={selected.bold ? "active" : ""}
                 aria-label="Bold"
                 onClick={() => updateSelected((element) => (
-                  element.kind === "text" ? { ...element, bold: !element.bold } : element
+                  element.kind === "text"
+                    ? fitLiveText({ ...element, bold: !element.bold })
+                    : element
                 ))}
               >B</button>
               <button
@@ -5878,7 +5978,9 @@ export function ScreenshotEditor() {
                 className={selected.italic ? "active" : ""}
                 aria-label="Italic"
                 onClick={() => updateSelected((element) => (
-                  element.kind === "text" ? { ...element, italic: !element.italic } : element
+                  element.kind === "text"
+                    ? fitLiveText({ ...element, italic: !element.italic })
+                    : element
                 ))}
               ><em>I</em></button>
               {(["left", "center", "right"] as const).map((align) => (

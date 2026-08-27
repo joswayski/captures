@@ -858,6 +858,12 @@
   box-shadow: var(--shadow-md);
 }
 
+.screenshot-inline-text-editor.is-auto-width {
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
 /* Fixed width so title swaps do not reflow the toast. */
 .screenshot-drop-overlay {
   position: fixed;

@@ -94,7 +94,9 @@ function installExportableCanvas(): () => void {
     arc: vi.fn(),
     closePath: vi.fn(),
     setLineDash: vi.fn(),
-    measureText: () => ({ width: 40 }),
+    measureText: (text: string) => ({
+      width: Math.max(1, [...String(text ?? "")].length * 10),
+    }),
     fillText: vi.fn(),
     strokeText: vi.fn(),
     translate: vi.fn(),
@@ -715,18 +717,34 @@ describe("ScreenshotEditor", () => {
       clientX: 120,
       clientY: 80,
     });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 1,
+      clientX: 120,
+      clientY: 80,
+    });
 
     const inlineEditor = await screen.findByRole("textbox", {
       name: "Edit text on canvas",
     });
     expect(inlineEditor).toHaveValue("Text");
     expect(inlineEditor).toHaveFocus();
-    fireEvent.change(inlineEditor, { target: { value: "Inline text" } });
-    expect(screen.getByRole("textbox", { name: "Text" })).toHaveValue("Inline text");
+    const initialWidth = Number.parseFloat(inlineEditor.style.width);
+    fireEvent.change(inlineEditor, {
+      target: { value: "Hello from the screenshot editor" },
+    });
+    expect(screen.getByRole("textbox", { name: "Text" })).toHaveValue(
+      "Hello from the screenshot editor",
+    );
+    expect(Number.parseFloat(inlineEditor.style.width)).toBeGreaterThan(initialWidth);
+    expect(inlineEditor).toHaveClass("is-auto-width");
+    expect(inlineEditor).toHaveAttribute("wrap", "off");
     expect(screen.getByRole("button", { name: "Bold" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Italic" })).toBeInTheDocument();
     expect(
-      within(screen.getByRole("region", { name: "Layers" })).getByText("Inline text"),
+      within(screen.getByRole("region", { name: "Layers" })).getByText(
+        "Hello from the screenshot editor",
+      ),
     ).toBeInTheDocument();
 
     fireEvent.blur(inlineEditor);
@@ -745,7 +763,7 @@ describe("ScreenshotEditor", () => {
       clientY: 100,
     });
     expect(await screen.findByRole("textbox", { name: "Edit text on canvas" }))
-      .toHaveValue("Inline text");
+      .toHaveValue("Hello from the screenshot editor");
   });
 
   it("creates text with any of the seven visual style presets", async () => {
@@ -816,6 +834,12 @@ describe("ScreenshotEditor", () => {
     const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
     setCanvasBounds(canvas);
     fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 20,
+      clientX: 120,
+      clientY: 80,
+    });
+    fireEvent.pointerUp(canvas, {
       button: 0,
       pointerId: 20,
       clientX: 120,
@@ -1689,6 +1713,12 @@ describe("ScreenshotEditor", () => {
       clientX: 120,
       clientY: 80,
     });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 40,
+      clientX: 120,
+      clientY: 80,
+    });
     fireEvent.blur(await screen.findByRole("textbox", { name: "Edit text on canvas" }));
 
     // Select the text layer (Select tool becomes active via layer list click).
@@ -2202,7 +2232,9 @@ describe("ScreenshotEditor", () => {
       arc: vi.fn(),
       closePath: vi.fn(),
       setLineDash: vi.fn(),
-      measureText: () => ({ width: 40 }),
+      measureText: (text: string) => ({
+      width: Math.max(1, [...String(text ?? "")].length * 10),
+    }),
       fillText: vi.fn(),
       strokeText: vi.fn(),
       translate: vi.fn(),

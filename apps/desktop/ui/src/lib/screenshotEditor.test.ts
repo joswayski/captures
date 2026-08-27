@@ -64,6 +64,11 @@ import {
   textStylePreset,
   visibleContentBounds,
   wrapTextLines,
+  fitAutoWidthTextElement,
+  fittedAutoWidthTextBox,
+  isAutoWidthText,
+  arrowChordLength,
+  arrowHeadLength,
   type EditorImageElement,
   type EditorShapeElement,
   type EditorTextElement,
@@ -1414,6 +1419,31 @@ describe("screenshot editor geometry", () => {
     if (resized.kind !== "shape") throw new Error("expected shape");
     expect(resized.endX - resized.x).toBeCloseTo((shape.endX - shape.x) * 2, 5);
     expect(resized.endY - resized.y).toBeCloseTo((shape.endY - shape.y) * 2, 5);
+    expect(resized.style.strokeWidth).toBe(4);
+
+    const arrow: EditorShapeElement = {
+      ...editableLayer,
+      id: "arrow",
+      kind: "shape",
+      shape: "arrow",
+      x: 80,
+      y: 80,
+      endX: 280,
+      endY: 180,
+      controls: [],
+      style: { color: "#f00", fill: null, strokeWidth: 8 },
+    };
+    const arrowBounds = elementBounds(arrow);
+    const shrunkArrow = resizeElement(arrow, arrowBounds, {
+      x: arrowBounds.x,
+      y: arrowBounds.y,
+      width: arrowBounds.width * 0.25,
+      height: arrowBounds.height * 0.25,
+    });
+    if (shrunkArrow.kind !== "shape") throw new Error("expected arrow");
+    expect(shrunkArrow.style.strokeWidth).toBeCloseTo(2, 5);
+    expect(arrowHeadLength(shrunkArrow.style.strokeWidth, arrowChordLength(shrunkArrow)))
+      .toBeLessThan(arrowHeadLength(arrow.style.strokeWidth, arrowChordLength(arrow)) * 0.5);
 
     const text: EditorTextElement = {
       ...editableLayer,
@@ -1462,6 +1492,27 @@ describe("screenshot editor geometry", () => {
     expect(elementBounds(resizedWider as EditorTextElement).height)
       .toBeLessThanOrEqual(elementBounds(text).height);
 
+    const autoWidth: EditorTextElement = {
+      ...text,
+      id: "auto",
+      autoWidth: true,
+      width: fittedAutoWidthTextBox("Hi", 40),
+      text: "Hi",
+    };
+    const autoTaller = resizeElement(autoWidth, elementBounds(autoWidth), {
+      ...elementBounds(autoWidth),
+      height: elementBounds(autoWidth).height * 2,
+    });
+    expect(autoTaller).toMatchObject({ kind: "text", autoWidth: true, fontSize: 80 });
+    if (autoTaller.kind !== "text") throw new Error("expected text");
+    expect(autoTaller.width).toBe(fittedAutoWidthTextBox("Hi", 80));
+
+    const autoWider = resizeElement(autoWidth, elementBounds(autoWidth), {
+      ...elementBounds(autoWidth),
+      width: elementBounds(autoWidth).width * 2,
+    });
+    expect(autoWider).toMatchObject({ kind: "text", autoWidth: false, fontSize: 40 });
+
     // Background plates expand paint/selection bounds beyond the layout box.
     const bubble: EditorTextElement = {
       ...text,
@@ -1493,6 +1544,63 @@ describe("screenshot editor geometry", () => {
     const hard = wrapTextLines("supercalifragilistic", 40, 20);
     expect(hard.length).toBeGreaterThan(1);
     expect(hard.join("")).toBe("supercalifragilistic");
+  });
+
+  it("grows auto-width text horizontally instead of wrapping into a column", () => {
+    const short: EditorTextElement = {
+      ...editableLayer,
+      id: "label",
+      kind: "text",
+      x: 40,
+      y: 60,
+      text: "Hi",
+      fontSize: 40,
+      width: fittedAutoWidthTextBox("Hi", 40),
+      autoWidth: true,
+      fontFamily: "sans",
+      bold: false,
+      italic: false,
+      align: "left",
+      color: "#f00",
+      background: null,
+      outlined: false,
+      roundedBackground: false,
+    };
+    expect(isAutoWidthText(short)).toBe(true);
+
+    const long = fitAutoWidthTextElement({
+      ...short,
+      text: "Hello from the screenshot editor",
+    });
+    expect(long.width).toBeGreaterThan(short.width);
+    expect(wrapTextLines(long.text, long.width, long.fontSize)).toEqual([
+      "Hello from the screenshot editor",
+    ]);
+    expect(elementBounds(long).height).toBeCloseTo(elementBounds(short).height, 5);
+
+    const centered = fitAutoWidthTextElement({
+      ...short,
+      align: "center",
+      text: "Hello from the screenshot editor",
+    });
+    expect(centered.x).toBeLessThan(short.x);
+
+    const wrapped = fitAutoWidthTextElement({
+      ...short,
+      autoWidth: false,
+      width: 80,
+      text: "Hello from the screenshot editor",
+    });
+    expect(wrapped.width).toBe(80);
+    expect(wrapTextLines(wrapped.text, wrapped.width, wrapped.fontSize).length)
+      .toBeGreaterThan(1);
+  });
+
+  it("scales arrow heads with stroke and shaft length", () => {
+    expect(arrowHeadLength(8)).toBeCloseTo(33.6, 5);
+    expect(arrowHeadLength(2)).toBeCloseTo(8.4, 5);
+    expect(arrowHeadLength(8, 20)).toBeCloseTo(9, 5);
+    expect(arrowHeadLength(8, 400)).toBeCloseTo(33.6, 5);
   });
 
   it("applies all named text styles without changing content or color", () => {

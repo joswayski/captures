@@ -130,6 +130,12 @@ export type EditorTextElement = EditorElementBase & {
    * so the selection box tracks content rather than a free-form tall empty area.
    */
   width: number;
+  /**
+   * When true, typing grows the box with the longest line (a normal text field)
+   * instead of wrapping inside the current width. New text starts this way;
+   * resizing the box width locks wrapping (`false`). Omitted on older documents.
+   */
+  autoWidth?: boolean;
   fontFamily: "sans" | "serif" | "mono" | "rounded";
   bold: boolean;
   italic: boolean;
@@ -276,6 +282,56 @@ export function defaultTextBoxWidth(fontSize: number, sample = "Text"): number {
     Math.round(fontSize * 2.2),
     Math.ceil(estimateTextWidth(sample, fontSize) + fontSize * 0.4),
   );
+}
+
+/** True when typing should grow the layout box instead of wrapping. */
+export function isAutoWidthText(
+  element: Pick<EditorTextElement, "autoWidth">,
+): boolean {
+  return element.autoWidth === true;
+}
+
+/**
+ * Width of an auto-growing text box: the longest line, plus room for the caret.
+ * Explicit newlines still create extra lines; words do not wrap to fit a column.
+ */
+export function fittedAutoWidthTextBox(
+  text: string,
+  fontSize: number,
+  measure: (line: string) => number = (line) => estimateTextWidth(line, fontSize),
+): number {
+  const lines = text.split("\n");
+  let widest = 0;
+  for (const line of lines) {
+    widest = Math.max(widest, measure(line.length > 0 ? line : " "));
+  }
+  if (widest <= 0) widest = measure(" ");
+  return Math.max(
+    minTextBoxWidth(fontSize),
+    Math.ceil(widest + fontSize * 0.35),
+  );
+}
+
+/**
+ * Grow (or shrink) an auto-width text layer to fit its current content.
+ * Left-aligned boxes grow to the right; center and right keep their anchor.
+ */
+export function fitAutoWidthTextElement(
+  element: EditorTextElement,
+  measure?: (line: string) => number,
+): EditorTextElement {
+  if (!isAutoWidthText(element)) return element;
+  const nextWidth = fittedAutoWidthTextBox(element.text, element.fontSize, measure);
+  if (Math.abs(nextWidth - element.width) < 0.5) {
+    return nextWidth === element.width ? element : { ...element, width: nextWidth };
+  }
+  const delta = nextWidth - element.width;
+  const x = element.align === "center"
+    ? element.x - delta / 2
+    : element.align === "right"
+      ? element.x - delta
+      : element.x;
+  return { ...element, width: nextWidth, x };
 }
 
 /** Background inset around the text layout box (document pixels). */
@@ -1845,12 +1901,25 @@ export function closestPointOnArrow(
   };
 }
 
+/** Straight-line length from start to tip (used to keep the head in proportion). */
+export function arrowChordLength(
+  element: Pick<EditorShapeElement, "x" | "y" | "endX" | "endY">,
+): number {
+  return Math.hypot(element.endX - element.x, element.endY - element.y);
+}
+
 /**
  * Drawn arrow-head wing length (must match the renderer in ScreenshotEditor).
  * Used for content bounds so trim/expand account for the head, not just the shaft.
+ *
+ * Head size follows stroke width. When `shaftLength` is given, the tip also
+ * cannot exceed a fraction of the shaft — otherwise shrinking an arrow leaves a
+ * giant point on a tiny body.
  */
-export function arrowHeadLength(strokeWidth: number): number {
-  return Math.max(14, strokeWidth * 4.2);
+export function arrowHeadLength(strokeWidth: number, shaftLength?: number): number {
+  const fromStroke = Math.max(1, strokeWidth * 4.2);
+  if (shaftLength == null || !(shaftLength > 0)) return fromStroke;
+  return Math.max(1, Math.min(fromStroke, shaftLength * 0.45));
 }
 
 /**
@@ -1862,9 +1931,10 @@ export function arrowHeadWingTips(
   end: EditorPoint,
   tangent: EditorPoint,
   strokeWidth: number,
+  shaftLength?: number,
 ): [EditorPoint, EditorPoint] {
   const angle = Math.atan2(end.y - tangent.y, end.x - tangent.x);
-  const length = arrowHeadLength(strokeWidth);
+  const length = arrowHeadLength(strokeWidth, shaftLength);
   return [
     {
       x: end.x - length * Math.cos(angle - Math.PI / 6),
@@ -1947,6 +2017,7 @@ function shapeElementBounds(element: EditorShapeElement): EditorRect {
         tip,
         arrowHeadTangentPoint(element),
         element.style.strokeWidth,
+        arrowChordLength(element),
       );
       points.push(tip, wings[0], wings[1]);
     }
@@ -2433,6 +2504,16 @@ export function resizeElement(
     const pad = textHasBackgroundPlate(element)
       ? textBackgroundPad(nextFontSize)
       : { x: 0, y: 0 };
+    // Height-only font scaling keeps auto-width so typing still grows the line.
+    // Side or corner drags that change width lock wrapping to the new box.
+    if (isAutoWidthText(element) && heightOnly) {
+      return fitAutoWidthTextElement({
+        ...element,
+        fontSize: nextFontSize,
+        y: nextBounds.y + pad.y,
+        autoWidth: true,
+      });
+    }
     const contentWidth = Math.max(
       minTextBoxWidth(nextFontSize),
       nextBounds.width - pad.x * 2,
@@ -2443,12 +2524,18 @@ export function resizeElement(
       x: nextBounds.x + pad.x,
       y: nextBounds.y + pad.y,
       width: contentWidth,
+      autoWidth: false,
     };
   }
 
   if (element.kind === "shape") {
     const start = mapPoint({ x: element.x, y: element.y });
     const end = mapPoint({ x: element.endX, y: element.endY });
+    // Lines/arrows scale stroke (and therefore the arrow head) with the box so
+    // a shrunk arrow does not keep a giant tip on a tiny shaft.
+    const strokeScale = isCurveableStrokeShape(element)
+      ? Math.max(0.05, Math.min(Math.abs(scaleX), Math.abs(scaleY)))
+      : 1;
     return {
       ...element,
       x: start.x,
@@ -2456,6 +2543,12 @@ export function resizeElement(
       endX: end.x,
       endY: end.y,
       controls: element.controls.map(mapPoint),
+      style: strokeScale === 1
+        ? element.style
+        : {
+          ...element.style,
+          strokeWidth: clamp(element.style.strokeWidth * strokeScale, 1, 80),
+        },
     };
   }
 
