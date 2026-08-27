@@ -27,7 +27,7 @@ import {
 } from "./thumbnailLayout";
 
 const thumbnailStyles = readFileSync(
-  resolve(process.cwd(), "ui/src/styles.css"),
+  resolve(process.cwd(), "ui/src/styles/mini-preview.css"),
   "utf8",
 );
 

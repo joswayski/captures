@@ -64,6 +64,7 @@ const timeline: RecordingTimelinePreview = {
 };
 
 const settings: AppSettings = {
+  appearance: "system",
   theme: "mustard",
   custom_theme: {
     accent: "#ffca28",

@@ -22,6 +22,42 @@ npm run dev
 
 `npm run prepare:media` is required on the first run for each operating system and whenever the pinned media build changes.
 
+## Design harness
+
+Every Captures window is a `?view=` route on one SPA. `npm run dev --workspace @captures/desktop`
+serves that SPA on `http://127.0.0.1:1420` without Tauri, and adding `?mock` installs a
+mocked backend with representative sample data so any window can be reviewed in a browser:
+
+```sh
+npm run dev --workspace @captures/desktop
+open "http://127.0.0.1:1420/?view=preferences&mock=1"
+open "http://127.0.0.1:1420/?view=recording-hud&mock=1&stage=1"
+```
+
+- `mock` installs the sample backend (`apps/desktop/ui/src/dev/previewBackend.ts`).
+- `stage` paints a sample desktop behind transparent overlay windows.
+- Other parameters set variants: `mode`, `target`, `state`, `update`, `platform`, `granted`, `drafts`.
+- Appearance follows the `captures-appearance` value in `localStorage`.
+
+The harness is dev-only and is dropped from production builds. Drop an optional
+`apps/desktop/ui/public/dev-sample.mp4` (git-ignored) to review the recording editor
+with a real clip.
+
+## Design system
+
+Tokens live in `shared/design.css` (neutral ramp, semantic surfaces, spacing, radii,
+elevation, motion) and `shared/themes.css` (accent and signal palettes). The desktop
+stylesheet is `apps/desktop/ui/src/styles.css`, which imports those tokens plus one
+module per family of surfaces from `apps/desktop/ui/src/styles/`.
+
+- Regular windows follow the light/dark/system appearance setting.
+- Surfaces that float over the desktop — capture overlay, capture menu, recording
+  controls, mini previews, transient notices — use the fixed `--glass-*` media palette
+  so they stay legible on any wallpaper.
+- Accent is reserved for the primary capture action, selection, and focus. Status
+  colors keep stable meanings: signal for recording and destructive, green for saved,
+  blue for progress.
+
 ## Validation
 
 Run the default repository gate:

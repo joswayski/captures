@@ -15,6 +15,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 const settings: AppSettings = {
+  appearance: "system",
   theme: "mustard",
   custom_theme: {
     accent: "#ffca28",
@@ -326,7 +327,7 @@ describe("Preferences", () => {
     expect(recorder).toHaveTextContent("Space");
   });
 
-  it("separates recording toggles from the selects above them", async () => {
+  it("presents recording toggles as switch rows inside the Recording card", async () => {
     render(<Preferences />);
 
     const mono = await screen.findByRole("checkbox", {
@@ -339,12 +340,31 @@ describe("Preferences", () => {
       name: "Show clicks in recordings",
     });
 
-    expect(mono.closest("label")).toHaveClass("recording-setting-after-select");
-    expect(showCursor.closest("label")).toHaveClass(
-      "recording-setting-after-select",
-      "recording-behavior-toggle",
-    );
-    expect(showClicks.closest("label")).toHaveClass("recording-behavior-toggle");
+    for (const toggle of [mono, showCursor, showClicks]) {
+      expect(toggle.closest("label")).toHaveClass("check-row", "switch-row");
+      expect(toggle.closest("section")).toHaveAttribute("id", "recording");
+    }
+  });
+
+  it("moves between settings sections from the sidebar", async () => {
+    render(<Preferences />);
+
+    const shortcuts = await screen.findByRole("button", { name: "Shortcuts" });
+    fireEvent.click(shortcuts);
+    expect(shortcuts).toHaveAttribute("aria-current", "true");
+  });
+
+  it("persists the interface appearance", async () => {
+    render(<Preferences />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Light" }));
+
+    expect(document.documentElement).toHaveAttribute("data-appearance", "light");
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("update_settings", {
+        settings: expect.objectContaining({ appearance: "light" }),
+      });
+    });
   });
 
   it("shows the installed version and offers a manual update check", async () => {

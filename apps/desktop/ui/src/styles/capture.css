@@ -1,0 +1,1147 @@
+/*
+ * Capture surfaces: the full-screen selection overlay, the capture menu,
+ * countdowns, and the recording controls bar.
+ *
+ * These float above the user's desktop, so they always use the fixed media
+ * palette rather than the light/dark appearance tokens.
+ */
+
+/* --------------------------------------------------- selection overlay ---- */
+
+/*
+ * Snapshot pixels stay fully opaque. The native overlay alpha is the only
+ * show/hide gate — never CSS-fade the frozen frame over the live desktop, or
+ * open editors shimmer as active and inactive window chrome crossfade.
+ */
+.capture-surface {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #0e0f15;
+  opacity: 1;
+  pointer-events: none;
+  user-select: none;
+  border-radius: var(--display-corner-radius, 0px);
+}
+
+.capture-surface.capture-visible {
+  pointer-events: auto;
+}
+
+.capture-surface.capture-priming {
+  pointer-events: none;
+}
+
+.capture-priming .capture-shade,
+.capture-priming .capture-guidance,
+.capture-priming .window-targets {
+  transition: none;
+}
+
+.capture-snapshot {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  image-rendering: auto;
+  pointer-events: none;
+  opacity: 1;
+}
+
+.capture-region.capture-visible:not(.capture-priming) {
+  cursor: crosshair;
+}
+
+.capture-window {
+  cursor: var(--capture-action-cursor);
+}
+
+html.capture-region-cursor,
+html.capture-region-cursor * {
+  cursor: crosshair !important;
+}
+
+html.capture-window-cursor,
+html.capture-window-cursor * {
+  cursor: var(--capture-action-cursor) !important;
+}
+
+/*
+ * Soft dim only — never blur. Square region holes use a closed evenodd CSS
+ * clip-path in the same CSS pixels as the marquee; rounded window holes use one
+ * evenodd SVG path. Closing the hole ring matters: an open polygon auto-closes
+ * to the origin and WebKit paints a bright diagonal wedge into the selection.
+ */
+.capture-shade-cutout {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.capture-shade {
+  position: absolute;
+  fill: rgba(6, 6, 10, 0.2);
+  background: rgba(6, 6, 10, 0.2);
+  pointer-events: none;
+}
+
+.capture-shade-full {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  background: rgba(6, 6, 10, 0.2);
+  pointer-events: none;
+}
+
+.capture-region .capture-shade {
+  opacity: 0;
+  transition: opacity var(--dur-4) cubic-bezier(0.42, 0, 0.58, 1);
+}
+
+.capture-region.capture-visible .capture-shade {
+  opacity: 1;
+}
+
+.capture-window .capture-shade {
+  fill: rgba(6, 9, 16, 0.42);
+  background: rgba(6, 9, 16, 0.42);
+}
+
+/*
+ * Opacity owns both entrance and hover ducking. Keyframe fill-mode used to pin
+ * opacity, so fading out under the cursor snapped while leaving re-ran the
+ * entrance animation.
+ */
+.capture-guidance {
+  position: absolute;
+  z-index: 10;
+  top: 16%;
+  left: 50%;
+  display: grid;
+  padding: var(--s-4) var(--s-6);
+  justify-items: center;
+  gap: 2px;
+  border: 1px solid var(--glass-border-strong);
+  border-radius: var(--r-xl);
+  color: var(--glass-text);
+  background: var(--glass-strong);
+  box-shadow: var(--glass-shadow);
+  backdrop-filter: var(--glass-blur);
+  pointer-events: none;
+  text-align: center;
+  opacity: 0;
+  transform: translate(-50%, -6px);
+  transition:
+    opacity var(--dur-3) var(--ease-standard),
+    transform var(--dur-3) var(--ease-out);
+}
+
+.capture-guidance[data-ready="true"]:not([data-faded="true"]) {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.capture-guidance strong {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-tight);
+}
+
+.capture-guidance span {
+  color: var(--glass-text-muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+
+.capture-guidance-feedback {
+  border-color: rgba(var(--theme-accent-rgb), 0.8);
+  animation: capture-guidance-nudge var(--dur-4) var(--ease-out);
+}
+
+.capture-guidance[data-faded="true"] {
+  opacity: 0;
+  transform: translate(-50%, 0);
+}
+
+@keyframes capture-guidance-nudge {
+  0%,
+  100% {
+    margin-left: 0;
+  }
+  25% {
+    margin-left: -8px;
+  }
+  75% {
+    margin-left: 8px;
+  }
+}
+
+/* Marquee only — the surrounding dim comes from the atomic CaptureDim cutout. */
+.selection-box {
+  position: absolute;
+  z-index: 5;
+  border: 1.5px solid var(--theme-accent);
+  background: transparent;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.28);
+  pointer-events: none;
+}
+
+.selection-box span,
+.recording-selection-frame > span {
+  position: absolute;
+  top: -30px;
+  left: 0;
+  padding: var(--s-2) var(--s-4);
+  border-radius: var(--r-sm);
+  color: var(--theme-accent-ink);
+  background: var(--theme-accent);
+  box-shadow: var(--shadow-sm);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.window-targets {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  opacity: 0;
+  transition: opacity var(--dur-4) var(--ease-out);
+}
+
+.capture-visible .window-targets {
+  opacity: 1;
+}
+
+/*
+ * The hit target matches the window bounds exactly; the ring is an outer
+ * box-shadow so a 2px stroke never insets into the frozen window chrome.
+ */
+.window-target,
+.recording-window-target {
+  position: absolute;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  color: transparent;
+  background: transparent;
+  outline: none;
+  appearance: none;
+  box-shadow: none;
+  text-align: left;
+  cursor: inherit;
+  transition:
+    background var(--dur-1) var(--ease-standard),
+    box-shadow var(--dur-1) var(--ease-standard);
+}
+
+.recording-window-target {
+  overflow: visible;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.window-target-hovered,
+.window-target:hover,
+.recording-window-target:hover,
+.recording-window-target.hovered,
+.recording-window-target.selected {
+  color: #fff;
+  background: rgba(var(--theme-accent-rgb), 0.14);
+  box-shadow: 0 0 0 2px var(--theme-accent);
+}
+
+.window-target span,
+.recording-window-target span {
+  position: relative;
+  z-index: 1;
+  display: inline-block;
+  max-width: calc(100% - 8px);
+  margin: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  overflow: hidden;
+  border-radius: var(--r-sm);
+  background: transparent;
+  opacity: 0;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.window-target-hovered span,
+.window-target:hover span,
+.recording-window-target:hover span,
+.recording-window-target.hovered span,
+.recording-window-target.selected span {
+  color: var(--glass-text);
+  background: var(--glass-strong);
+  opacity: 1;
+}
+
+/* --------------------------------------------------------- capture menu --- */
+
+.recording-selector-idle {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+}
+
+.recording-selector {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  color: var(--glass-text);
+  background: transparent;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: none;
+  border-radius: var(--display-corner-radius, 0px);
+}
+
+.recording-selector,
+.recording-selector * {
+  -webkit-user-drag: none;
+}
+
+.recording-selector ::selection {
+  color: inherit;
+  background: transparent;
+}
+
+.recording-selector-snapshot {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  pointer-events: none;
+}
+
+.recording-target-region {
+  cursor: crosshair;
+}
+
+.recording-selector .capture-shade,
+.recording-selector .capture-shade-full {
+  fill: rgba(4, 5, 8, 0.38);
+  background: rgba(4, 5, 8, 0.38);
+}
+
+.recording-selector .capture-shade-cutout {
+  z-index: 1;
+}
+
+.recording-target-display .capture-shade-full {
+  background: rgba(4, 5, 8, 0.5);
+}
+
+.recording-target-window .capture-shade {
+  fill: rgba(4, 5, 8, 0.3);
+  background: rgba(4, 5, 8, 0.3);
+}
+
+.recording-target-region .capture-shade,
+.recording-target-window .capture-shade {
+  opacity: 0;
+  transition: opacity var(--dur-4) cubic-bezier(0.42, 0, 0.58, 1);
+}
+
+.recording-selector.recording-focus-visible .capture-shade {
+  opacity: 1;
+}
+
+.recording-display-outline {
+  position: absolute;
+  z-index: 8;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 2px var(--theme-accent);
+  pointer-events: none;
+}
+
+.recording-display-identity {
+  position: absolute;
+  z-index: 9;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  min-width: 280px;
+  justify-items: center;
+  gap: var(--s-4);
+  color: var(--glass-text);
+  pointer-events: none;
+  text-align: center;
+  transform: translate(-50%, -60%);
+}
+
+.recording-display-identity strong {
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-tighter);
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
+}
+
+.recording-display-identity > span:last-child {
+  color: var(--glass-text-muted);
+  font-size: var(--text-md);
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+}
+
+.recording-display-icon {
+  display: grid;
+  width: 68px;
+  height: 50px;
+  place-items: center;
+  border: 1px solid var(--glass-border-strong);
+  border-radius: var(--r-xl);
+  color: var(--glass-text);
+  background: var(--glass);
+  box-shadow: var(--glass-shadow);
+  backdrop-filter: var(--glass-blur);
+}
+
+.recording-display-icon svg {
+  width: 34px;
+  height: 34px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.recording-selection-frame {
+  position: absolute;
+  z-index: 3;
+  border: 1.5px solid var(--theme-accent);
+  border-radius: 2px;
+  background: transparent;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.28);
+  pointer-events: none;
+}
+
+.recording-selection-frame.movable {
+  pointer-events: auto;
+  cursor: move;
+}
+
+.recording-selection-frame > span {
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.recording-selection-frame .handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--theme-accent-ink);
+  border-radius: 50%;
+  background: var(--theme-accent);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+
+.recording-selection-frame .nw,
+.recording-selection-frame .se {
+  cursor: nwse-resize;
+}
+
+.recording-selection-frame .ne,
+.recording-selection-frame .sw {
+  cursor: nesw-resize;
+}
+
+.recording-selection-frame .nw {
+  top: -6px;
+  left: -6px;
+}
+
+.recording-selection-frame .ne {
+  top: -6px;
+  right: -6px;
+}
+
+.recording-selection-frame .sw {
+  bottom: -6px;
+  left: -6px;
+}
+
+.recording-selection-frame .se {
+  right: -6px;
+  bottom: -6px;
+}
+
+.recording-window-targets {
+  position: absolute;
+  z-index: 4;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* One floating command bar holds capture type, target, options, and the action. */
+.recording-selector-panel {
+  position: absolute;
+  z-index: 20;
+  bottom: 26px;
+  left: 50%;
+  width: max-content;
+  max-width: calc(100% - 32px);
+  overflow: visible;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-2xl);
+  background: var(--glass-strong);
+  box-shadow: var(--glass-shadow);
+  backdrop-filter: var(--glass-blur);
+  cursor: grab;
+  touch-action: none;
+  transform: translateX(-50%);
+}
+
+.recording-selector-panel[data-resizing="true"] {
+  overflow: hidden;
+}
+
+.recording-selector-panel.dragging {
+  cursor: grabbing;
+}
+
+.recording-selector-panel button,
+.recording-selector-panel label,
+.recording-selector-panel input {
+  cursor: pointer;
+}
+
+.recording-panel-top {
+  display: flex;
+  min-height: 56px;
+  padding: var(--s-4);
+  align-items: center;
+  gap: var(--s-4);
+}
+
+.capture-selector-close {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 0;
+  border-radius: var(--r-md);
+  padding: 0;
+  color: var(--glass-text-subtle);
+  background: transparent;
+  transition:
+    color var(--dur-2) var(--ease-standard),
+    background var(--dur-2) var(--ease-standard);
+}
+
+.capture-selector-close:hover {
+  color: var(--glass-text);
+  background: var(--glass-hover);
+}
+
+.capture-selector-close svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.capture-selector-close:focus-visible,
+.capture-action-switch button:focus-visible,
+.recording-target-switch button:focus-visible,
+.capture-selector-primary:focus-visible {
+  outline: 2px solid var(--theme-accent);
+  outline-offset: 2px;
+}
+
+.capture-record-dot {
+  display: block;
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--theme-signal);
+}
+
+.capture-selector-divider {
+  width: 1px;
+  height: 24px;
+  flex: 0 0 auto;
+  background: var(--glass-border);
+}
+
+.recording-display-picker {
+  width: 190px;
+  flex: 0 0 190px;
+}
+
+.recording-region-aspect-picker {
+  display: flex;
+  width: 150px;
+  flex: 0 0 150px;
+  align-items: center;
+  gap: var(--s-3);
+}
+
+.recording-region-aspect-label {
+  flex: 0 0 auto;
+  color: var(--glass-text-subtle);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+
+/* Selects inside the capture menu switch to the media palette. */
+.recording-selector-panel .custom-select-trigger,
+.recording-hud .custom-select-trigger {
+  min-height: var(--h-lg);
+  border-color: var(--glass-border);
+  color: var(--glass-text);
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.recording-selector-panel .custom-select-trigger:hover:not(:disabled) {
+  border-color: var(--glass-border-strong);
+}
+
+.recording-selector-panel .custom-select-trigger svg {
+  color: var(--glass-text-subtle);
+}
+
+.recording-selector-panel .custom-select-listbox {
+  border-color: var(--glass-border);
+  color: var(--glass-text);
+  background: var(--glass-raised);
+  backdrop-filter: var(--glass-blur);
+}
+
+.recording-selector-panel .custom-select-listbox button {
+  color: var(--glass-text-muted);
+}
+
+.recording-selector-panel .custom-select-listbox button.active,
+.recording-selector-panel .custom-select-listbox button:hover:not(:disabled) {
+  color: var(--glass-text);
+  background: var(--glass-hover);
+}
+
+.recording-selector-panel .custom-select-listbox button[aria-selected="true"] {
+  color: var(--glass-text);
+}
+
+.recording-selector-panel .custom-select-option-copy small {
+  color: var(--glass-text-subtle);
+}
+
+.recording-start {
+  display: flex;
+  min-width: 112px;
+  min-height: var(--h-xl);
+  margin-left: var(--s-2);
+  padding: 0 var(--s-6);
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-3);
+  border: 0;
+  border-radius: var(--r-lg);
+  color: var(--theme-accent-ink);
+  background: var(--theme-accent);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  transition:
+    background var(--dur-2) var(--ease-standard),
+    box-shadow var(--dur-2) var(--ease-standard),
+    transform var(--dur-2) var(--ease-standard);
+}
+
+.capture-selector-primary svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.capture-selector-primary-recording > .capture-record-dot {
+  position: relative;
+  width: 10px;
+  height: 10px;
+  background: var(--theme-accent-ink);
+}
+
+.capture-selector-primary-recording:not(:disabled) > .capture-record-dot::after {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: inherit;
+  opacity: 0.7;
+  content: "";
+  animation: recording-ready-ping 1.1s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+.recording-start:hover:not(:disabled) {
+  background: var(--theme-accent-hover);
+  transform: translateY(-1px);
+}
+
+.recording-start:active:not(:disabled) {
+  transform: translateY(0) scale(0.98);
+}
+
+.recording-start:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.recording-options-row {
+  display: grid;
+  min-height: 74px;
+  padding: var(--s-5);
+  grid-template-columns: 76px 132px 92px 92px 118px minmax(180px, 240px);
+  align-items: stretch;
+  gap: var(--s-4);
+  border-top: 1px solid var(--glass-border);
+  animation: recording-options-arrive var(--dur-3) 40ms var(--ease-standard) both;
+}
+
+.recording-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--s-3);
+  color: var(--glass-text-subtle);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+}
+
+.recording-field .recording-toggle {
+  display: flex;
+  min-height: var(--h-lg);
+  align-items: center;
+  gap: var(--s-3);
+  color: var(--glass-text-muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0;
+  text-transform: none;
+  transition: color var(--dur-2) var(--ease-standard);
+}
+
+.recording-field .recording-toggle:hover {
+  color: var(--glass-text);
+}
+
+.recording-selector-panel .recording-switch {
+  border-color: var(--glass-border-strong);
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.recording-selector-panel .recording-switch::after {
+  background: var(--glass-text-subtle);
+}
+
+.recording-selector-panel .recording-toggle input:checked + .recording-switch {
+  border-color: transparent;
+  background: var(--theme-accent);
+}
+
+.recording-selector-panel .recording-toggle input:checked + .recording-switch::after {
+  background: var(--theme-accent-ink);
+}
+
+.capture-selector-note {
+  display: flex;
+  min-height: 28px;
+  padding: 0 var(--s-5) var(--s-4);
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+  color: var(--glass-text-subtle);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+
+.recording-selector-error {
+  padding: var(--s-4) var(--s-5);
+  border-top: 1px solid var(--danger-border);
+  border-radius: 0 0 var(--r-2xl) var(--r-2xl);
+  color: var(--theme-signal-text);
+  background: rgba(var(--theme-signal-rgb), 0.16);
+  font-size: var(--text-sm);
+}
+
+@keyframes recording-ready-ping {
+  75%,
+  100% {
+    opacity: 0;
+    transform: scale(2);
+  }
+}
+
+@keyframes recording-options-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(-5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ----------------------------------------------------------- countdown ---- */
+
+.recording-countdown {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  color: var(--glass-text);
+  background: rgba(6, 7, 10, 0.5);
+  user-select: none;
+  animation: recording-countdown-fade-in var(--dur-3) var(--ease-out) both;
+}
+
+.recording-countdown.exiting {
+  pointer-events: none;
+  animation: recording-countdown-fade-out var(--dur-2) var(--ease-in) both;
+}
+
+.recording-countdown-content {
+  display: grid;
+  justify-items: center;
+  text-align: center;
+  text-shadow: 0 3px 24px rgba(0, 0, 0, 0.6);
+  animation: recording-countdown-content-in var(--dur-4) var(--ease-out) both;
+}
+
+.recording-countdown.exiting .recording-countdown-content {
+  animation: recording-countdown-content-out var(--dur-2) var(--ease-in) both;
+}
+
+.recording-countdown-content > span {
+  color: var(--glass-text-muted);
+  font-size: clamp(14px, 1.6vw, 20px);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+}
+
+.recording-countdown-content > strong {
+  margin: 0.04em 0 0.06em;
+  font-size: clamp(150px, 26vw, 340px);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-tighter);
+  line-height: 0.95;
+}
+
+.recording-countdown-content small {
+  margin-top: var(--s-7);
+  color: var(--glass-text-muted);
+  font-size: var(--text-md);
+}
+
+@keyframes recording-countdown-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes recording-countdown-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes recording-countdown-content-in {
+  from {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes recording-countdown-content-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.035);
+  }
+}
+
+/* --------------------------------------------------- recording controls --- */
+
+.recording-hud {
+  position: relative;
+  display: grid;
+  width: calc(100% - 12px);
+  height: 70px;
+  margin: 6px;
+  padding: var(--s-3) var(--s-4) var(--s-4);
+  grid-template-rows: 13px 38px;
+  align-items: center;
+  gap: 2px;
+  overflow: visible;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-2xl);
+  color: var(--glass-text);
+  background: var(--glass-strong);
+  backdrop-filter: var(--glass-blur);
+  cursor: grab;
+  transition: background var(--dur-2) var(--ease-standard);
+  user-select: none;
+}
+
+.recording-hud:active {
+  cursor: grabbing;
+}
+
+.recording-hud-loading {
+  place-items: center;
+  color: var(--glass-text-muted);
+  font-size: var(--text-sm);
+}
+
+.recording-hud-privacy {
+  color: var(--glass-text-subtle);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  text-align: center;
+  white-space: nowrap;
+}
+
+.recording-hud-main {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--s-5);
+}
+
+.recording-hud-status {
+  display: grid;
+  min-width: 96px;
+  grid-template-columns: 11px auto;
+  align-items: center;
+  gap: 0 var(--s-4);
+}
+
+.recording-hud-status .recording-dot {
+  grid-row: 1 / 3;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--theme-signal);
+  box-shadow: 0 0 0 4px rgba(var(--theme-signal-rgb), 0.16);
+  animation: recording-pulse 1.6s ease-in-out infinite;
+}
+
+.recording-hud-countdown .recording-dot,
+.recording-hud-paused .recording-dot {
+  background: var(--theme-accent);
+  box-shadow: 0 0 0 4px rgba(var(--theme-accent-rgb), 0.16);
+}
+
+.recording-hud-paused .recording-dot {
+  animation: none;
+}
+
+.recording-hud-finalizing .recording-dot {
+  background: var(--info);
+  box-shadow: 0 0 0 4px rgba(59, 116, 224, 0.16);
+}
+
+.recording-hud-failed .recording-dot {
+  position: relative;
+  background: var(--glass-text-subtle);
+  box-shadow: none;
+  animation: none;
+}
+
+.recording-hud-status strong {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--tracking-tight);
+}
+
+.recording-hud-status small {
+  color: var(--glass-text-subtle);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+}
+
+.recording-hud-actions {
+  display: flex;
+  min-width: 0;
+  margin-left: auto;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.recording-microphone-level {
+  display: block;
+  width: 34px;
+  height: 4px;
+  margin: 0 var(--s-2);
+  overflow: hidden;
+  border-radius: var(--r-pill);
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.recording-microphone-level i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--positive);
+  transition: width 0.09s linear;
+}
+
+.recording-hud-actions button {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  padding: 0;
+  color: var(--glass-text-muted);
+  background: transparent;
+  transition:
+    color var(--dur-2) var(--ease-standard),
+    background var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard);
+}
+
+.recording-hud-actions button:hover:not(:disabled) {
+  color: var(--glass-text);
+  background: var(--glass-hover);
+}
+
+.recording-hud-actions button:disabled {
+  cursor: default;
+  opacity: 0.32;
+}
+
+.recording-hud-actions button:focus-visible {
+  outline: none;
+  border-color: var(--theme-accent);
+}
+
+.recording-hud-actions .recording-stop {
+  width: 36px;
+  border-color: rgba(var(--theme-signal-rgb), 0.4);
+  background: rgba(var(--theme-signal-rgb), 0.14);
+}
+
+.recording-hud-actions .recording-stop:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--theme-signal);
+}
+
+.recording-hud-actions .recording-stop:hover:not(:disabled) span {
+  background: #fff;
+}
+
+.recording-stop span {
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+  background: var(--theme-signal);
+}
+
+.recording-icon-button svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.recording-hud-actions .active {
+  color: var(--theme-accent);
+  border-color: rgba(var(--theme-accent-rgb), 0.3);
+}
+
+.recording-hud-actions .recording-discard:hover:not(:disabled) {
+  color: #fff;
+  background: var(--theme-signal);
+}
+
+.recording-hud-actions .recording-hide {
+  margin-left: var(--s-2);
+}
+
+.recording-hud-error {
+  position: absolute;
+  top: calc(100% + 5px);
+  right: 10px;
+  left: 10px;
+  overflow: hidden;
+  color: var(--theme-signal-text);
+  font-size: var(--text-2xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recording-hud-actions > .recording-tooltip > [role="tooltip"] {
+  top: calc(100% + 6px);
+  bottom: auto;
+}
+
+.recording-hud-actions > .recording-tooltip:nth-last-child(-n + 3) > [role="tooltip"] {
+  right: 0;
+  left: auto;
+  transform: translateY(-3px);
+}
+
+.recording-hud-actions > .recording-tooltip:nth-last-child(-n + 3):hover > [role="tooltip"],
+.recording-hud-actions > .recording-tooltip:nth-last-child(-n + 3):focus-within > [role="tooltip"] {
+  transform: translateY(0);
+}
+
+@keyframes recording-pulse {
+  50% {
+    opacity: 0.6;
+    transform: scale(0.84);
+  }
+}

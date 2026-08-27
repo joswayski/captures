@@ -24,6 +24,13 @@ import { Onboarding } from "./Onboarding";
 import { ScreenshotEditor } from "./ScreenshotEditor";
 import { RangeSlider } from "./RangeSlider";
 import {
+  APPEARANCE_MODES,
+  applyAppearance,
+  DEFAULT_APPEARANCE,
+  watchSystemAppearance,
+  type AppearanceMode,
+} from "../../../../shared/appearance";
+import {
   applyColorTheme,
   buildCustomThemeVariables,
   COLOR_THEMES,
@@ -163,13 +170,30 @@ function emitViewerActivation(artifactId: string | null, active: boolean) {
   }).catch(() => undefined);
 }
 
-function useColorThemeSync() {
+/**
+ * Keeps every window on the same appearance and accent as the saved settings.
+ * Runs in the browser too so the shared "System" preference still tracks the OS.
+ */
+function useAppearanceSync() {
   useEffect(() => {
-    if (!isTauri()) return;
-
     let active = true;
+    let mode: AppearanceMode = DEFAULT_APPEARANCE;
     let unlisten: (() => void) | undefined;
-    const applySettingsTheme = (settings: AppSettings) => {
+
+    const stopWatching = watchSystemAppearance(() => {
+      if (active && mode === "system") applyAppearance("system");
+    });
+
+    if (!isTauri()) {
+      return () => {
+        active = false;
+        stopWatching();
+      };
+    }
+
+    const applySettings = (settings: AppSettings) => {
+      mode = settings.appearance ?? DEFAULT_APPEARANCE;
+      applyAppearance(mode);
       applyColorTheme(
         settings.theme ?? DEFAULT_COLOR_THEME,
         settings.custom_theme ?? DEFAULT_CUSTOM_THEME,
@@ -178,12 +202,12 @@ function useColorThemeSync() {
 
     void invoke<AppSettings>("get_settings")
       .then((settings) => {
-        if (active) applySettingsTheme(settings);
+        if (active) applySettings(settings);
       })
       .catch(() => undefined);
 
     void listen<AppSettings>("settings-changed", ({ payload }) => {
-      if (active) applySettingsTheme(payload);
+      if (active) applySettings(payload);
     }).then((dispose) => {
       if (active) unlisten = dispose;
       else dispose();
@@ -191,13 +215,14 @@ function useColorThemeSync() {
 
     return () => {
       active = false;
+      stopWatching();
       unlisten?.();
     };
   }, []);
 }
 
 export function App() {
-  useColorThemeSync();
+  useAppearanceSync();
   const view = query("view");
   if (view === "overlay") return <CaptureOverlay />;
   if (view === "recording-selector") return <RecordingSelector />;
@@ -646,8 +671,11 @@ function UpdatePreferences() {
   };
 
   return (
-    <section className="settings-section update-settings">
-      <h2>Updates</h2>
+    <section className="settings-card update-settings" id="updates" aria-labelledby="updates-heading">
+      <header className="settings-card-header">
+        <h2 id="updates-heading">Updates</h2>
+        <p>Preview builds update after every successful merge and may contain incomplete features.</p>
+      </header>
       <div className="settings-utility-row update-settings-row">
         <div className="settings-utility-copy">
           <strong>{heading}</strong>
@@ -786,8 +814,18 @@ function ArtifactViewer() {
   );
 }
 
+const HISTORY_FILTERS = [
+  { id: "all", label: "All" },
+  { id: "screenshot", label: "Screenshots" },
+  { id: "video", label: "Video" },
+  { id: "gif", label: "GIF" },
+] as const;
+
+type HistoryFilter = (typeof HISTORY_FILTERS)[number]["id"];
+
 export function CaptureHistory() {
   const [entries, setEntries] = useState<ArtifactSummary[]>([]);
+  const [filter, setFilter] = useState<HistoryFilter>("all");
   const [drafts, setDrafts] = useState<RecordingDraftManifest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -857,19 +895,26 @@ export function CaptureHistory() {
     }
   };
 
+  const counts = {
+    all: entries.length,
+    screenshot: entries.filter((entry) => entry.kind === "screenshot").length,
+    video: entries.filter((entry) => entry.kind === "video").length,
+    gif: entries.filter((entry) => entry.kind === "gif").length,
+  };
+  const filtered = filter === "all"
+    ? entries
+    : entries.filter((entry) => entry.kind === filter);
+
   return (
     <main className="capture-history">
-      <header className="history-header">
-        <div>
-          <p className="eyebrow">ON THIS DEVICE</p>
-          <h1>Capture History</h1>
-          <p>Screenshots, videos, GIFs, and interrupted recordings you can recover all appear here.</p>
-        </div>
-        {!loading && entries.length > 0 && (
-          <div className="history-header-actions">
-            <span className="history-count">
-              {entries.length} {entries.length === 1 ? "capture" : "captures"}
-            </span>
+      <div className="history-shell">
+        <header className="history-header">
+          <div className="history-heading">
+            <p className="eyebrow">On this device</p>
+            <h1>Capture History</h1>
+            <p>Screenshots, videos, GIFs, and interrupted recordings you can recover all appear here for 30 days.</p>
+          </div>
+          {!loading && entries.length > 0 && (
             <button
               type="button"
               className={confirmingClearAll
@@ -888,36 +933,59 @@ export function CaptureHistory() {
                   ? "Delete all forever"
                   : "Delete all"}
             </button>
+          )}
+        </header>
+
+        {!loading && entries.length > 0 && (
+          <div className="history-toolbar">
+            <div className="history-filters" role="group" aria-label="Filter captures">
+              {HISTORY_FILTERS.map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  className={filter === option.id ? "active" : ""}
+                  aria-pressed={filter === option.id}
+                  disabled={counts[option.id] === 0 && option.id !== "all"}
+                  onClick={() => setFilter(option.id)}
+                >
+                  {option.label}
+                  <span aria-hidden="true">{counts[option.id]}</span>
+                </button>
+              ))}
+            </div>
+            <span className="history-count">
+              {entries.length} {entries.length === 1 ? "capture" : "captures"}
+            </span>
           </div>
         )}
-      </header>
 
-      {error && <p className="history-error" role="alert">{error}</p>}
-      <RecordingRecovery drafts={drafts} onChanged={refresh} />
-      {loading ? (
-        <section className="history-empty" aria-live="polite">
-          <span className="history-empty-icon" aria-hidden="true"><HistoryIcon /></span>
-          <h2>Loading history…</h2>
-        </section>
-      ) : entries.length === 0 && drafts.length === 0 ? (
-        <section className="history-empty">
-          <span className="history-empty-icon" aria-hidden="true"><HistoryIcon /></span>
-          <h2>No captures yet</h2>
-          <p>New screenshots, videos, and GIFs appear here automatically.</p>
-        </section>
-      ) : entries.length > 0 ? (
-        <section className="history-grid" aria-label="Recent captures">
-          {entries.map((entry) => (
-            <HistoryCard
-              key={entry.id}
-              entry={entry}
-              onDeleted={(artifactId) => {
-                setEntries((current) => current.filter(({ id }) => id !== artifactId));
-              }}
-            />
-          ))}
-        </section>
-      ) : null}
+        {error && <p className="history-error" role="alert">{error}</p>}
+        <RecordingRecovery drafts={drafts} onChanged={refresh} />
+        {loading ? (
+          <section className="history-empty" aria-live="polite">
+            <span className="history-empty-icon" aria-hidden="true"><HistoryIcon /></span>
+            <h2>Loading history…</h2>
+          </section>
+        ) : entries.length === 0 && drafts.length === 0 ? (
+          <section className="history-empty">
+            <span className="history-empty-icon" aria-hidden="true"><HistoryIcon /></span>
+            <h2>No captures yet</h2>
+            <p>New screenshots, videos, and GIFs appear here automatically.</p>
+          </section>
+        ) : filtered.length > 0 ? (
+          <section className="history-grid" aria-label="Recent captures">
+            {filtered.map((entry) => (
+              <HistoryCard
+                key={entry.id}
+                entry={entry}
+                onDeleted={(artifactId) => {
+                  setEntries((current) => current.filter(({ id }) => id !== artifactId));
+                }}
+              />
+            ))}
+          </section>
+        ) : null}
+      </div>
     </main>
   );
 }
@@ -2364,7 +2432,7 @@ export function RecordingSelector() {
 
       <section
         ref={panelRef}
-        className={`recording-selector-panel${panelDragging ? " dragging" : ""}`}
+        className={`recording-selector-panel on-media${panelDragging ? " dragging" : ""}`}
         style={panelPosition ? {
           left: panelPosition.left,
           top: panelPosition.top,
@@ -2827,7 +2895,7 @@ export function RecordingHud() {
 
   return (
     <main
-      className={`recording-hud recording-hud-${snapshot.state}`}
+      className={`recording-hud on-media recording-hud-${snapshot.state}`}
       onPointerDown={startHudDrag}
     >
       <span className="recording-hud-privacy">
@@ -6153,6 +6221,70 @@ type PreferencesSaveStatus = {
   message: string;
 };
 
+const PREFERENCE_SECTIONS = [
+  { id: "appearance", label: "Appearance" },
+  { id: "capture", label: "Capture" },
+  { id: "shortcuts", label: "Shortcuts" },
+  { id: "recording", label: "Recording" },
+  { id: "gif", label: "GIF export" },
+  { id: "updates", label: "Updates" },
+  { id: "about", label: "About" },
+] as const;
+
+type PreferenceSectionId = (typeof PREFERENCE_SECTIONS)[number]["id"];
+
+/** Highlights the sidebar entry for whichever settings card is in view. */
+function useVisibleSection(
+  scrollerRef: RefObject<HTMLElement | null>,
+): [PreferenceSectionId, (id: PreferenceSectionId) => void] {
+  const [visible, setVisible] = useState<PreferenceSectionId>(PREFERENCE_SECTIONS[0].id);
+
+  useEffect(() => {
+    const root = scrollerRef.current;
+    if (!root || typeof IntersectionObserver !== "function") return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const topMost = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
+        const id = topMost?.target.id as PreferenceSectionId | undefined;
+        if (id) setVisible(id);
+      },
+      { root, rootMargin: "0px 0px -68% 0px", threshold: 0 },
+    );
+    for (const section of PREFERENCE_SECTIONS) {
+      const element = root.querySelector(`#${section.id}`);
+      if (element) observer.observe(element);
+    }
+    return () => observer.disconnect();
+  }, [scrollerRef]);
+
+  return [visible, setVisible];
+}
+
+function SettingRow({
+  title,
+  description,
+  control,
+  layout = "inline",
+}: {
+  title: React.ReactNode;
+  description?: React.ReactNode;
+  control: React.ReactNode;
+  /** `stack` puts the control on its own line for wide inputs. */
+  layout?: "inline" | "stack";
+}) {
+  return (
+    <div className={`setting-row setting-row-${layout}`}>
+      <div className="setting-copy">
+        <span>{title}</span>
+        {description && <small>{description}</small>}
+      </div>
+      <div className="setting-control">{control}</div>
+    </div>
+  );
+}
+
 function ThemeColorField({
   label,
   description,
@@ -6212,6 +6344,8 @@ export function Preferences() {
   const [recordingDevices, setRecordingDevices] = useState<AudioDevice[]>([]);
   const [saveStatus, setSaveStatus] = useState<PreferencesSaveStatus>({ kind: "idle", message: "" });
   const [recordingShortcut, setRecordingShortcut] = useState<string | null>(null);
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const [visibleSection, setVisibleSection] = useVisibleSection(scrollerRef);
   const settingsRef = useRef<AppSettings | null>(null);
   const pendingSettingsRef = useRef<AppSettings | null>(null);
   const saveDelayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -6368,65 +6502,177 @@ export function Preferences() {
     if (typeof selected === "string") update("output_directory", selected);
   };
 
+  const setAppearance = (mode: AppearanceMode) => {
+    applyAppearance(mode);
+    update("appearance", mode);
+  };
+
+  const goToSection = (id: PreferenceSectionId) => {
+    setVisibleSection(id);
+    const target = scrollerRef.current?.querySelector(`#${id}`);
+    if (target && typeof target.scrollIntoView === "function") {
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  };
+
   return (
     <main className="preferences">
-      <header className="preferences-header">
-        <div>
-          <span className="eyebrow">Captures</span>
-          <h1>Preferences</h1>
+      <aside className="preferences-nav">
+        <div className="preferences-nav-brand">
+          <span aria-hidden="true"><CaptureIcon /></span>
+          <strong>Captures</strong>
         </div>
-        {saveStatus.kind !== "idle" && (
-          <div className="preferences-header-actions">
-            <div className={`preferences-save-status preferences-save-${saveStatus.kind}`} role="status">
-              <span aria-hidden="true">{saveStatus.kind === "saved" ? "✓" : saveStatus.kind === "error" ? "!" : ""}</span>
-              {saveStatus.message}
-            </div>
-          </div>
-        )}
-      </header>
+        <nav aria-label="Preferences sections">
+          {PREFERENCE_SECTIONS.map((section) => (
+            <button
+              key={section.id}
+              type="button"
+              className={visibleSection === section.id ? "active" : ""}
+              aria-current={visibleSection === section.id ? "true" : undefined}
+              onClick={() => goToSection(section.id)}
+            >
+              {section.label}
+            </button>
+          ))}
+        </nav>
+      </aside>
 
-      <section className="settings-section appearance-section">
-        <h2>Appearance</h2>
-        <p className="help-text">
-          Apply one color system across every Captures window. Status colors keep their meaning.
-        </p>
-        <div className="theme-options" role="radiogroup" aria-label="Color theme">
-          {COLOR_THEMES.map((theme) => {
-            const previewStyle = theme.id === "custom"
-              ? buildCustomThemeVariables(settings.custom_theme) as CSSProperties
-              : undefined;
-            return (
-              <button
-                key={theme.id}
-                type="button"
-                className={`theme-option theme-option-${theme.id}${settings.theme === theme.id ? " active" : ""}`}
-                role="radio"
-                aria-checked={settings.theme === theme.id}
-                aria-label={`${theme.name}: ${theme.description}`}
-                data-capture-theme={theme.id}
-                style={previewStyle}
-                title={theme.description}
-                onClick={() => {
-                  applyColorTheme(theme.id, settings.custom_theme);
-                  update("theme", theme.id);
-                }}
-              >
-                <span
-                  className="theme-option-preview"
-                  aria-hidden="true"
-                >
-                  <span />
-                  <span />
-                </span>
-                <span className="theme-option-copy">
-                  <strong>{theme.name}</strong>
-                  <small>{theme.description}</small>
-                </span>
-                <span className="theme-option-check" aria-hidden="true">✓</span>
-              </button>
-            );
-          })}
+      <div className="preferences-body">
+        <header className="preferences-header">
+          <div>
+            <h1>Preferences</h1>
+            <p>Changes save automatically.</p>
+          </div>
+          <div className="preferences-header-actions">
+            {saveStatus.kind !== "idle" && (
+              <div className={`preferences-save-status preferences-save-${saveStatus.kind}`} role="status">
+                <span aria-hidden="true">{saveStatus.kind === "saved" ? "✓" : saveStatus.kind === "error" ? "!" : ""}</span>
+                {saveStatus.message}
+              </div>
+            )}
+          </div>
+        </header>
+
+        <div className="preferences-scroller" ref={scrollerRef}>
+          <div className="preferences-sections">
+            <PreferencesSections
+              settings={settings}
+              recordingDevices={recordingDevices}
+              recordingShortcut={recordingShortcut}
+              setRecordingShortcut={setRecordingShortcut}
+              setShortcutRecording={setShortcutRecording}
+              update={update}
+              updateRecording={updateRecording}
+              setAppearance={setAppearance}
+              setCustomTheme={setCustomTheme}
+              chooseDirectory={chooseDirectory}
+            />
+          </div>
         </div>
+      </div>
+    </main>
+  );
+}
+
+function PreferencesSections({
+  settings,
+  recordingDevices,
+  recordingShortcut,
+  setRecordingShortcut,
+  setShortcutRecording,
+  update,
+  updateRecording,
+  setAppearance,
+  setCustomTheme,
+  chooseDirectory,
+}: {
+  settings: AppSettings;
+  recordingDevices: AudioDevice[];
+  recordingShortcut: string | null;
+  setRecordingShortcut: (id: string | null) => void;
+  setShortcutRecording: (id: string, recording: boolean) => void;
+  update: <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => void;
+  updateRecording: <K extends keyof AppSettings["recording"]>(
+    key: K,
+    value: AppSettings["recording"][K],
+  ) => void;
+  setAppearance: (mode: AppearanceMode) => void;
+  setCustomTheme: (colors: CustomThemeColors) => void;
+  chooseDirectory: () => Promise<void>;
+}) {
+  const appearance = settings.appearance ?? DEFAULT_APPEARANCE;
+
+  return (
+    <>
+      <section className="settings-card" id="appearance" aria-labelledby="appearance-heading">
+        <header className="settings-card-header">
+          <h2 id="appearance-heading">Appearance</h2>
+          <p>One look across every Captures window. Capture overlays stay dark so they read on any desktop.</p>
+        </header>
+
+        <SettingRow
+          title="Interface theme"
+          description="Follow the system setting, or lock Captures to light or dark."
+          control={(
+            <div className="ui-segmented appearance-switch" role="group" aria-label="Interface theme" data-active={appearance}>
+              <SegmentedControlIndicator value={appearance} />
+              {APPEARANCE_MODES.map((mode) => (
+                <button
+                  key={mode.id}
+                  type="button"
+                  className={appearance === mode.id ? "active" : ""}
+                  aria-pressed={appearance === mode.id}
+                  onClick={() => setAppearance(mode.id)}
+                >
+                  {mode.name}
+                </button>
+              ))}
+            </div>
+          )}
+        />
+
+        <SettingRow
+          layout="stack"
+          title="Accent color"
+          description="Used for the capture action, selection, and focus. Status colors keep their meaning."
+          control={(
+            <div className="theme-options" role="radiogroup" aria-label="Color theme">
+              {COLOR_THEMES.map((theme) => {
+                const previewStyle = theme.id === "custom"
+                  ? buildCustomThemeVariables(settings.custom_theme) as CSSProperties
+                  : undefined;
+                return (
+                  <button
+                    key={theme.id}
+                    type="button"
+                    className={`theme-option theme-option-${theme.id}${settings.theme === theme.id ? " active" : ""}`}
+                    role="radio"
+                    aria-checked={settings.theme === theme.id}
+                    aria-label={`${theme.name}: ${theme.description}`}
+                    data-capture-theme={theme.id}
+                    style={previewStyle}
+                    title={theme.description}
+                    onClick={() => {
+                      applyColorTheme(theme.id, settings.custom_theme);
+                      update("theme", theme.id);
+                    }}
+                  >
+                    <span className="theme-option-preview" aria-hidden="true">
+                      <span />
+                      <span />
+                    </span>
+                    <span className="theme-option-copy">
+                      <strong>{theme.name}</strong>
+                      <small>{theme.description}</small>
+                    </span>
+                    <span className="theme-option-check" aria-hidden="true">✓</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        />
+
         {settings.theme === "custom" && (
           <div className="custom-theme-editor" role="group" aria-label="Custom theme colors">
             <div className="custom-theme-editor-heading">
@@ -6446,33 +6692,42 @@ export function Preferences() {
                 label="Accent"
                 description="Capture actions, selections, focus, and editing."
                 value={settings.custom_theme.accent}
-                onChange={(accent) => setCustomTheme({
-                  ...settings.custom_theme,
-                  accent,
-                })}
+                onChange={(accent) => setCustomTheme({ ...settings.custom_theme, accent })}
               />
               <ThemeColorField
                 label="Recording signal"
                 description="Recording indicators, errors, and destructive actions."
                 value={settings.custom_theme.signal}
-                onChange={(signal) => setCustomTheme({
-                  ...settings.custom_theme,
-                  signal,
-                })}
+                onChange={(signal) => setCustomTheme({ ...settings.custom_theme, signal })}
               />
             </div>
           </div>
         )}
       </section>
 
-      <section className="settings-section">
-        <h2>Captures</h2>
-        <label className="field-label" htmlFor="output-directory">Save captures to</label>
-        <div className="directory-input">
-          <input id="output-directory" value={settings.output_directory} onChange={(event) => update("output_directory", event.target.value)} />
-          <button type="button" onClick={() => void chooseDirectory()}>Choose</button>
-        </div>
-        <label className="check-row capture-option">
+      <section className="settings-card" id="capture" aria-labelledby="capture-heading">
+        <header className="settings-card-header">
+          <h2 id="capture-heading">Capture</h2>
+          <p>Where captures go and what happens right after you take one.</p>
+        </header>
+
+        <SettingRow
+          layout="stack"
+          title="Save captures to"
+          control={(
+            <div className="directory-input">
+              <input
+                id="output-directory"
+                aria-label="Save captures to"
+                value={settings.output_directory}
+                onChange={(event) => update("output_directory", event.target.value)}
+              />
+              <button type="button" onClick={() => void chooseDirectory()}>Choose…</button>
+            </div>
+          )}
+        />
+
+        <label className="check-row switch-row">
           <input
             type="checkbox"
             checked={settings.auto_copy_to_clipboard}
@@ -6483,7 +6738,8 @@ export function Preferences() {
             <small>Turn this off to preserve existing text or other clipboard contents.</small>
           </span>
         </label>
-        <label className="check-row capture-option">
+
+        <label className="check-row switch-row">
           <input
             type="checkbox"
             checked={settings.auto_start_on_selection}
@@ -6497,7 +6753,8 @@ export function Preferences() {
             </small>
           </span>
         </label>
-        <label className="check-row capture-option">
+
+        <label className="check-row switch-row">
           <input
             type="checkbox"
             checked={settings.show_mini_previews}
@@ -6508,7 +6765,8 @@ export function Preferences() {
             <small>Turn this off to keep the quick-access preview stack hidden.</small>
           </span>
         </label>
-        <label className="check-row capture-option">
+
+        <label className="check-row switch-row">
           <input
             type="checkbox"
             checked={settings.include_mini_previews_in_captures}
@@ -6526,7 +6784,8 @@ export function Preferences() {
             </small>
           </span>
         </label>
-        <label className="check-row capture-option">
+
+        <label className="check-row switch-row">
           <input
             type="checkbox"
             checked={settings.include_recording_controls_in_captures}
@@ -6541,148 +6800,250 @@ export function Preferences() {
             </small>
           </span>
         </label>
-        <div className="settings-select-field field-label"><span>Screenshot countdown</span>
-          <CustomSelect
-            value={String(settings.screenshot_countdown_seconds)}
-            ariaLabel="Screenshot countdown"
-            options={COUNTDOWN_SECONDS.map((value) => ({
-              value: String(value),
-              label: value === 0 ? "Off" : value === 1 ? "1 second" : `${value} seconds`,
-            }))}
-            onChange={(value) => update("screenshot_countdown_seconds", Number(value))}
+
+        <SettingRow
+          title="Screenshot countdown"
+          description="Wait before capturing so you can open menus or hover states. Press Esc to cancel."
+          control={(
+            <CustomSelect
+              value={String(settings.screenshot_countdown_seconds)}
+              ariaLabel="Screenshot countdown"
+              options={COUNTDOWN_SECONDS.map((value) => ({
+                value: String(value),
+                label: value === 0 ? "Off" : value === 1 ? "1 second" : `${value} seconds`,
+              }))}
+              onChange={(value) => update("screenshot_countdown_seconds", Number(value))}
+            />
+          )}
+        />
+      </section>
+
+      <section className="settings-card" id="shortcuts" aria-labelledby="shortcuts-heading">
+        <header className="settings-card-header">
+          <h2 id="shortcuts-heading">Shortcuts</h2>
+          <p>Select a shortcut, then press the key combination you want. Press Esc to cancel recording.</p>
+        </header>
+        <div className="shortcut-list">
+          <ShortcutInput
+            id="new-capture-shortcut"
+            label="New Capture"
+            value={settings.new_capture_shortcut}
+            recording={recordingShortcut === "new-capture-shortcut"}
+            onRecordingChange={(recording) => setRecordingShortcut(recording ? "new-capture-shortcut" : null)}
+            onChange={(value) => update("new_capture_shortcut", value)}
+          />
+          <ShortcutInput
+            id="region-shortcut"
+            label="Region"
+            value={settings.region_shortcut}
+            recording={recordingShortcut === "region-shortcut"}
+            onRecordingChange={(recording) => setShortcutRecording("region-shortcut", recording)}
+            onChange={(value) => update("region_shortcut", value)}
+          />
+          <ShortcutInput
+            id="window-shortcut"
+            label="Window"
+            value={settings.window_shortcut}
+            recording={recordingShortcut === "window-shortcut"}
+            onRecordingChange={(recording) => setShortcutRecording("window-shortcut", recording)}
+            onChange={(value) => update("window_shortcut", value)}
+          />
+          <ShortcutInput
+            id="display-shortcut"
+            label="Full Screen"
+            value={settings.display_shortcut}
+            recording={recordingShortcut === "display-shortcut"}
+            onRecordingChange={(recording) => setShortcutRecording("display-shortcut", recording)}
+            onChange={(value) => update("display_shortcut", value)}
+          />
+          <ShortcutInput
+            id="video-shortcut"
+            label="Record Screen"
+            value={settings.recording.video_shortcut}
+            recording={recordingShortcut === "video-shortcut"}
+            onRecordingChange={(recording) => setShortcutRecording("video-shortcut", recording)}
+            onChange={(value) => updateRecording("video_shortcut", value)}
+          />
+          <ShortcutInput
+            id="feedback-shortcut"
+            label="Send Feedback"
+            value={settings.feedback_shortcut}
+            recording={recordingShortcut === "feedback-shortcut"}
+            onRecordingChange={(recording) => setShortcutRecording("feedback-shortcut", recording)}
+            onChange={(value) => update("feedback_shortcut", value)}
           />
         </div>
-        <p className="help-text">
-          Wait before taking a screenshot so you can open menus or hover states. Press Esc to cancel.
-        </p>
       </section>
 
-      <section className="settings-section">
-        <h2>Shortcuts</h2>
-        <ShortcutInput
-          id="new-capture-shortcut"
-          label="New Capture"
-          value={settings.new_capture_shortcut}
-          recording={recordingShortcut === "new-capture-shortcut"}
-          onRecordingChange={(recording) => setRecordingShortcut(recording ? "new-capture-shortcut" : null)}
-          onChange={(value) => update("new_capture_shortcut", value)}
-        />
-        <ShortcutInput
-          id="region-shortcut"
-          label="Region"
-          value={settings.region_shortcut}
-          recording={recordingShortcut === "region-shortcut"}
-          onRecordingChange={(recording) => setShortcutRecording("region-shortcut", recording)}
-          onChange={(value) => update("region_shortcut", value)}
-        />
-        <ShortcutInput
-          id="window-shortcut"
-          label="Window"
-          value={settings.window_shortcut}
-          recording={recordingShortcut === "window-shortcut"}
-          onRecordingChange={(recording) => setShortcutRecording("window-shortcut", recording)}
-          onChange={(value) => update("window_shortcut", value)}
-        />
-        <ShortcutInput
-          id="display-shortcut"
-          label="Full Screen"
-          value={settings.display_shortcut}
-          recording={recordingShortcut === "display-shortcut"}
-          onRecordingChange={(recording) => setShortcutRecording("display-shortcut", recording)}
-          onChange={(value) => update("display_shortcut", value)}
-        />
-        <ShortcutInput
-          id="video-shortcut"
-          label="Record Screen"
-          value={settings.recording.video_shortcut}
-          recording={recordingShortcut === "video-shortcut"}
-          onRecordingChange={(recording) => setShortcutRecording("video-shortcut", recording)}
-          onChange={(value) => updateRecording("video_shortcut", value)}
-        />
-        <ShortcutInput
-          id="feedback-shortcut"
-          label="Send Feedback"
-          value={settings.feedback_shortcut}
-          recording={recordingShortcut === "feedback-shortcut"}
-          onRecordingChange={(recording) => setShortcutRecording("feedback-shortcut", recording)}
-          onChange={(value) => update("feedback_shortcut", value)}
-        />
-        <p className="help-text">Select a shortcut, then press the key combination you want. Press Esc to cancel recording. Changes save automatically.</p>
-      </section>
+      <section className="settings-card" id="recording" aria-labelledby="recording-heading">
+        <header className="settings-card-header">
+          <h2 id="recording-heading">Recording</h2>
+          <p>Defaults for new screen recordings. You can still change them in the capture menu.</p>
+        </header>
 
-      <section className="settings-section recording-settings-section">
-        <h2>Video recording</h2>
-        <div className="settings-inline-grid">
-          <div className="settings-select-field"><span>Frames per second</span>
+        <div className="setting-grid">
+          <SettingRow
+            layout="stack"
+            title="Frames per second"
+            control={(
+              <CustomSelect
+                value={String(settings.recording.video_fps)}
+                ariaLabel="Recording frames per second"
+                options={[60, 30, 15].map((value) => ({ value: String(value), label: `${value} FPS` }))}
+                onChange={(value) => updateRecording("video_fps", Number(value))}
+              />
+            )}
+          />
+          <SettingRow
+            layout="stack"
+            title="Maximum resolution"
+            control={(
+              <CustomSelect
+                value={settings.recording.video_max_resolution}
+                ariaLabel="Recording maximum resolution"
+                options={[
+                  { value: "original", label: "Original" },
+                  { value: "p1080", label: "1080p" },
+                  { value: "p720", label: "720p" },
+                ]}
+                onChange={(value) => updateRecording("video_max_resolution", value as MaxResolution)}
+              />
+            )}
+          />
+        </div>
+
+        <SettingRow
+          title="Countdown"
+          description="Delay before a recording starts."
+          control={(
             <CustomSelect
-              value={String(settings.recording.video_fps)}
-              ariaLabel="Recording frames per second"
-              options={[60, 30, 15].map((value) => ({ value: String(value), label: `${value} FPS` }))}
-              onChange={(value) => updateRecording("video_fps", Number(value))}
+              value={String(settings.recording.countdown_seconds)}
+              ariaLabel="Recording countdown"
+              options={COUNTDOWN_SECONDS.map((value) => ({
+                value: String(value),
+                label: value === 0 ? "Off" : value === 1 ? "1 second" : `${value} seconds`,
+              }))}
+              onChange={(value) => updateRecording("countdown_seconds", Number(value))}
             />
-          </div>
-          <div className="settings-select-field"><span>Maximum resolution</span>
+          )}
+        />
+
+        <SettingRow
+          title="Default microphone"
+          description="Used when a recording starts with microphone audio."
+          control={(
             <CustomSelect
-              value={settings.recording.video_max_resolution}
-              ariaLabel="Recording maximum resolution"
+              value={settings.recording.microphone_device_id ?? "off"}
+              ariaLabel="Default microphone"
               options={[
-                { value: "original", label: "Original" },
-                { value: "p1080", label: "1080p" },
-                { value: "p720", label: "720p" },
+                { value: "off", label: "Off" },
+                ...recordingDevices.map((device) => ({ value: device.id, label: device.name })),
               ]}
-              onChange={(value) => updateRecording("video_max_resolution", value as MaxResolution)}
+              onChange={(value) => updateRecording("microphone_device_id", value === "off" ? null : value)}
             />
-          </div>
-        </div>
-        <label className="check-row capture-option"><input type="checkbox" checked={settings.recording.capture_system_audio} onChange={(event) => updateRecording("capture_system_audio", event.target.checked)} /><span>Record desktop audio<small>Records sound playing through the system output.</small></span></label>
-        <div className="settings-select-field field-label"><span>Default microphone</span>
-          <CustomSelect
-            value={settings.recording.microphone_device_id ?? "off"}
-            ariaLabel="Default microphone"
-            options={[
-              { value: "off", label: "Off" },
-              ...recordingDevices.map((device) => ({ value: device.id, label: device.name })),
-            ]}
-            onChange={(value) => updateRecording("microphone_device_id", value === "off" ? null : value)}
+          )}
+        />
+
+        <label className="check-row switch-row">
+          <input
+            type="checkbox"
+            checked={settings.recording.capture_system_audio}
+            onChange={(event) => updateRecording("capture_system_audio", event.target.checked)}
           />
-        </div>
-        <label className="check-row recording-setting-after-select"><input type="checkbox" checked={settings.recording.mono_audio} onChange={(event) => updateRecording("mono_audio", event.target.checked)} /><span>Export recording audio in mono</span></label>
+          <span>
+            Record desktop audio
+            <small>Records sound playing through the system output.</small>
+          </span>
+        </label>
+        <label className="check-row switch-row">
+          <input
+            type="checkbox"
+            checked={settings.recording.mono_audio}
+            onChange={(event) => updateRecording("mono_audio", event.target.checked)}
+          />
+          <span>Export recording audio in mono</span>
+        </label>
+        <label className="check-row switch-row">
+          <input
+            type="checkbox"
+            checked={settings.recording.show_cursor}
+            onChange={(event) => updateRecording("show_cursor", event.target.checked)}
+          />
+          <span>Show cursor in recordings</span>
+        </label>
+        <label className="check-row switch-row">
+          <input
+            type="checkbox"
+            checked={settings.recording.highlight_clicks}
+            onChange={(event) => updateRecording("highlight_clicks", event.target.checked)}
+          />
+          <span>Show clicks in recordings</span>
+        </label>
+        <label className="check-row switch-row">
+          <input
+            type="checkbox"
+            checked={settings.recording.open_editor_after_recording}
+            onChange={(event) => updateRecording("open_editor_after_recording", event.target.checked)}
+          />
+          <span>
+            Open the editor after recording
+            <small>The recording is kept in Capture History for 30 days, so closing the editor never loses it.</small>
+          </span>
+        </label>
       </section>
 
-      <section className="settings-section recording-settings-section">
-        <h2>GIF export defaults</h2>
-        <div className="settings-inline-grid">
-          <div className="settings-select-field"><span>Frames per second</span>
-            <CustomSelect value={String(settings.recording.gif_fps)} ariaLabel="GIF frames per second" options={[8, 10, 12, 15, 20, 24, 30].map((value) => ({ value: String(value), label: `${value} FPS` }))} onChange={(value) => updateRecording("gif_fps", Number(value))} />
-          </div>
-          <div className="settings-select-field"><span>Maximum width</span>
-            <CustomSelect value={String(settings.recording.gif_max_width)} ariaLabel="GIF maximum width" options={[320, 480, 640, 800, 1200].map((value) => ({ value: String(value), label: `${value} px` }))} onChange={(value) => updateRecording("gif_max_width", Number(value))} />
-          </div>
-          <div className="settings-select-field"><span>Palette colors</span>
-            <CustomSelect value={String(settings.recording.gif_max_colors)} ariaLabel="GIF palette colors" options={[64, 96, 128, 256].map((value) => ({ value: String(value), label: String(value) }))} onChange={(value) => updateRecording("gif_max_colors", Number(value))} />
-          </div>
-        </div>
-      </section>
-
-      <section className="settings-section recording-settings-section">
-        <h2>Recording behavior</h2>
-        <div className="settings-select-field field-label"><span>Countdown</span>
-          <CustomSelect
-            value={String(settings.recording.countdown_seconds)}
-            ariaLabel="Recording countdown"
-            options={COUNTDOWN_SECONDS.map((value) => ({ value: String(value), label: value === 0 ? "Off" : value === 1 ? "1 second" : `${value} seconds` }))}
-            onChange={(value) => updateRecording("countdown_seconds", Number(value))}
+      <section className="settings-card" id="gif" aria-labelledby="gif-heading">
+        <header className="settings-card-header">
+          <h2 id="gif-heading">GIF export</h2>
+          <p>Starting point when a recording is exported as an animated GIF.</p>
+        </header>
+        <div className="setting-grid setting-grid-three">
+          <SettingRow
+            layout="stack"
+            title="Frames per second"
+            control={(
+              <CustomSelect
+                value={String(settings.recording.gif_fps)}
+                ariaLabel="GIF frames per second"
+                options={[8, 10, 12, 15, 20, 24, 30].map((value) => ({ value: String(value), label: `${value} FPS` }))}
+                onChange={(value) => updateRecording("gif_fps", Number(value))}
+              />
+            )}
+          />
+          <SettingRow
+            layout="stack"
+            title="Maximum width"
+            control={(
+              <CustomSelect
+                value={String(settings.recording.gif_max_width)}
+                ariaLabel="GIF maximum width"
+                options={[320, 480, 640, 800, 1200].map((value) => ({ value: String(value), label: `${value} px` }))}
+                onChange={(value) => updateRecording("gif_max_width", Number(value))}
+              />
+            )}
+          />
+          <SettingRow
+            layout="stack"
+            title="Palette colors"
+            control={(
+              <CustomSelect
+                value={String(settings.recording.gif_max_colors)}
+                ariaLabel="GIF palette colors"
+                options={[64, 96, 128, 256].map((value) => ({ value: String(value), label: String(value) }))}
+                onChange={(value) => updateRecording("gif_max_colors", Number(value))}
+              />
+            )}
           />
         </div>
-        <label className="check-row recording-setting-after-select recording-behavior-toggle"><input type="checkbox" checked={settings.recording.show_cursor} onChange={(event) => updateRecording("show_cursor", event.target.checked)} /><span>Show cursor in recordings</span></label>
-        <label className="check-row recording-behavior-toggle"><input type="checkbox" checked={settings.recording.highlight_clicks} onChange={(event) => updateRecording("highlight_clicks", event.target.checked)} /><span>Show clicks in recordings</span></label>
-        <label className="check-row capture-option"><input type="checkbox" checked={settings.recording.open_editor_after_recording} onChange={(event) => updateRecording("open_editor_after_recording", event.target.checked)} /><span>Open the editor after recording<small>The recording is kept in Capture History for 30 days, so closing the editor never loses it.</small></span></label>
       </section>
 
       <UpdatePreferences />
 
-      <section className="settings-section">
-        <h2>Feedback</h2>
+      <section className="settings-card" id="about" aria-labelledby="about-heading">
+        <header className="settings-card-header">
+          <h2 id="about-heading">About</h2>
+          <p>Captures is in active development. Telling us what breaks is the fastest way to fix it.</p>
+        </header>
         <div className="settings-utility-row">
           <div className="settings-utility-copy">
             <strong>Send feedback</strong>
@@ -6695,13 +7056,16 @@ export function Preferences() {
             Open
           </button>
         </div>
+        <label className="check-row switch-row">
+          <input
+            type="checkbox"
+            checked={settings.launch_at_login}
+            onChange={(event) => update("launch_at_login", event.target.checked)}
+          />
+          <span>Launch Captures when I sign in</span>
+        </label>
       </section>
-
-      <label className="check-row">
-        <input type="checkbox" checked={settings.launch_at_login} onChange={(event) => update("launch_at_login", event.target.checked)} />
-        <span>Launch Captures when I sign in</span>
-      </label>
-    </main>
+    </>
   );
 }
 

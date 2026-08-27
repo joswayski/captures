@@ -15,6 +15,8 @@ pub struct AppSettings {
     #[serde(default)]
     pub settings_schema_version: u8,
     #[serde(default)]
+    pub appearance: Appearance,
+    #[serde(default)]
     pub theme: ColorTheme,
     #[serde(default)]
     pub custom_theme: CustomThemeSettings,
@@ -56,6 +58,17 @@ pub struct AppSettings {
     pub screenshot_countdown_seconds: u8,
     #[serde(default)]
     pub recording: RecordingSettings,
+}
+
+/// Light/dark preference for regular Captures windows. Surfaces that float over
+/// the desktop (capture overlay, recording controls, mini previews) stay dark.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Appearance {
+    #[default]
+    System,
+    Light,
+    Dark,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -158,6 +171,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             settings_schema_version: CURRENT_SETTINGS_SCHEMA_VERSION,
+            appearance: Appearance::default(),
             theme: ColorTheme::default(),
             custom_theme: CustomThemeSettings::default(),
             output_directory: default_output_directory().to_string_lossy().into_owned(),
@@ -807,7 +821,7 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        AppSettings, ColorTheme, CustomThemeSettings, HistoryEntry, RecordingArtifact,
+        AppSettings, Appearance, ColorTheme, CustomThemeSettings, HistoryEntry, RecordingArtifact,
         migrate_output_directory, migrate_settings, platform_can_exclude_recording_controls,
         recording_controls_are_excluded, recording_media_url, recording_poster_url,
         recording_selection_url, snapshot_url,
@@ -885,6 +899,7 @@ mod tests {
         assert!(settings.show_mini_previews);
         assert!(!settings.include_mini_previews_in_captures);
         assert!(!settings.include_recording_controls_in_captures);
+        assert_eq!(settings.appearance, Appearance::System);
         assert_eq!(settings.theme, ColorTheme::Mustard);
         assert_eq!(settings.custom_theme, CustomThemeSettings::default());
         assert_eq!(settings.new_capture_shortcut, "Ctrl+Shift+Space");
@@ -1099,6 +1114,28 @@ mod tests {
 
         assert_eq!(restored.theme, ColorTheme::Custom);
         assert_eq!(restored.custom_theme, settings.custom_theme);
+    }
+
+    #[test]
+    fn persists_the_selected_appearance_and_defaults_older_settings_to_system() {
+        let settings = AppSettings {
+            appearance: Appearance::Light,
+            ..AppSettings::default()
+        };
+        let json = serde_json::to_string(&settings).expect("settings should serialize");
+        let restored: AppSettings =
+            serde_json::from_str(&json).expect("settings should deserialize");
+        assert_eq!(restored.appearance, Appearance::Light);
+
+        let mut legacy =
+            serde_json::to_value(AppSettings::default()).expect("settings should serialize");
+        legacy
+            .as_object_mut()
+            .expect("settings should be an object")
+            .remove("appearance");
+        let migrated: AppSettings =
+            serde_json::from_value(legacy).expect("settings without appearance should deserialize");
+        assert_eq!(migrated.appearance, Appearance::System);
     }
 
     #[test]

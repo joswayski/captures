@@ -16,6 +16,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 const settings: AppSettings = {
+  appearance: "system",
   theme: "mustard",
   custom_theme: {
     accent: "#ffca28",

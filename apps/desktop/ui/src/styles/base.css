@@ -1,0 +1,162 @@
+/* Document reset, typography defaults, and cross-window chrome. */
+
+:root {
+  --chrome-active: var(--theme-accent);
+  --chrome-active-hover: var(--theme-accent-hover);
+  --chrome-active-ink: var(--theme-accent-ink);
+  --editing-accent: var(--theme-accent);
+  --focus-ring: 0 0 0 2px var(--surface-canvas), 0 0 0 4px rgba(var(--theme-accent-rgb), 0.55);
+  --focus-ring-tight: 0 0 0 2px rgba(var(--theme-accent-rgb), 0.55);
+
+  --capture-action-cursor: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2232%22 height=%2232%22 viewBox=%220 0 32 32%22%3E%3Crect x=%223%22 y=%223%22 width=%2226%22 height=%2226%22 rx=%228%22 fill=%22%2310151d%22 stroke=%22white%22 stroke-width=%221.5%22/%3E%3Cg fill=%22none%22 stroke=%22white%22 stroke-linecap=%22round%22 stroke-width=%221.8%22%3E%3Cpath d=%22M13 9h-2a2 2 0 0 0-2 2v2M19 9h2a2 2 0 0 1 2 2v2M23 19v2a2 2 0 0 1-2 2h-2M13 23h-2a2 2 0 0 1-2-2v-2%22/%3E%3C/g%3E%3Cpath d=%22M16 12.5c.4 1.8 1.7 3.1 3.5 3.5-1.8.4-3.1 1.7-3.5 3.5-.4-1.8-1.7-3.1-3.5-3.5 1.8-.4 3.1-1.7 3.5-3.5Z%22 fill=%22%23f4f4f2%22/%3E%3C/svg%3E") 16 16, crosshair;
+
+  color: var(--text);
+  background: transparent;
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  background: transparent;
+}
+
+/* Floating notices size themselves to the native window; never scroll. */
+html:has(.update-notice),
+body:has(.update-notice),
+#root:has(.update-notice) {
+  overflow: hidden;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+h1,
+h2,
+h3 {
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--leading-tight);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  letter-spacing: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+a {
+  color: var(--theme-accent-readable);
+}
+
+::selection {
+  color: var(--theme-accent-ink);
+  background: var(--theme-accent);
+}
+
+:focus-visible {
+  outline: none;
+}
+
+/* Scrollbars stay quiet until the surface is hovered. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: var(--r-pill);
+  background: var(--border-strong);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-faint);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Keyboard keys read as physical caps in both appearances. */
+kbd {
+  display: inline-flex;
+  min-width: 20px;
+  padding: 2px 5px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: var(--r-xs);
+  color: var(--text-muted);
+  background: var(--surface-raised);
+  font-family: inherit;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  line-height: 1.3;
+}
+
+.on-media kbd,
+.capture-selector-note kbd,
+.startup-notice kbd,
+.recording-controls-hidden-notice kbd {
+  border-color: var(--glass-border-strong);
+  color: var(--glass-text);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

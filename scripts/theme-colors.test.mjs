@@ -1,15 +1,27 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { readdir, readFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sharedCssPath = resolve(root, "shared/themes.css");
 const sharedTsPath = resolve(root, "shared/themes.ts");
-const desktopCssPath = resolve(root, "apps/desktop/ui/src/styles.css");
+const designCssPath = resolve(root, "shared/design.css");
+const appearanceTsPath = resolve(root, "shared/appearance.ts");
+const desktopEntryCssPath = resolve(root, "apps/desktop/ui/src/styles.css");
+const desktopStylesDir = resolve(root, "apps/desktop/ui/src/styles");
 const webCssPath = resolve(root, "apps/web/src/index.css");
 const rustModelsPath = resolve(root, "apps/desktop/src-tauri/src/models.rs");
+
+async function readDesktopCss() {
+  const entry = await readFile(desktopEntryCssPath, "utf8");
+  const files = (await readdir(desktopStylesDir)).filter((name) => name.endsWith(".css")).sort();
+  const modules = await Promise.all(
+    files.map((name) => readFile(join(desktopStylesDir, name), "utf8")),
+  );
+  return [entry, ...modules].join("\n");
+}
 
 test("every declared color theme has a shared CSS palette and backend value", async () => {
   const [sharedCss, sharedTs, rustModels] = await Promise.all([
@@ -41,30 +53,79 @@ test("every declared color theme has a shared CSS palette and backend value", as
   }
 });
 
-test("first-run setup uses the website palette instead of mustard cream", async () => {
-  const desktopCss = await readFile(desktopCssPath, "utf8");
-  const onboarding = desktopCss.match(/\.onboarding-shell\s*\{([\s\S]*?)\n\}/u)?.[1];
-  assert.ok(onboarding, "missing .onboarding-shell palette");
-  assert.match(onboarding, /--onboarding-canvas:\s*#f5f7fb/u);
-  assert.match(onboarding, /--onboarding-border:\s*#e2e7f0/u);
-  assert.match(onboarding, /--onboarding-accent:\s*#18181b/u);
-  assert.doesNotMatch(onboarding, /var\(--theme-accent\)/u);
-  assert.doesNotMatch(desktopCss, /\.onboarding-actions\s*\{[^}]*justify-content:\s*flex-start/u);
-  assert.match(desktopCss, /\.onboarding-actions\s*\{[^}]*justify-content:\s*flex-end/u);
+test("every appearance mode has design tokens and a backend value", async () => {
+  const [designCss, appearanceTs, rustModels] = await Promise.all([
+    readFile(designCssPath, "utf8"),
+    readFile(appearanceTsPath, "utf8"),
+    readFile(rustModelsPath, "utf8"),
+  ]);
+  const ids = [...appearanceTs.matchAll(/\bid:\s*"([^"]+)"/gu)].map((match) => match[1]);
+  const rustEnum = rustModels.match(/pub enum Appearance\s*\{([^}]+)\}/u)?.[1];
+  assert.ok(rustEnum, "missing Rust Appearance enum");
+  const backendIds = [...rustEnum.matchAll(/^\s*([A-Z][A-Za-z]+),$/gmu)]
+    .map((match) => match[1].toLowerCase());
+
+  assert.deepEqual(ids, ["system", "light", "dark"]);
+  assert.deepEqual(backendIds, ids);
+  assert.match(designCss, /\[data-appearance="light"\]/u);
+  assert.match(designCss, /\[data-appearance="dark"\]/u);
+});
+
+test("light and dark declare the same semantic surface tokens", async () => {
+  const designCss = await readFile(designCssPath, "utf8");
+  const block = (selector) => {
+    const start = designCss.indexOf(selector);
+    assert.notEqual(start, -1, `missing ${selector} block`);
+    const open = designCss.indexOf("{", start);
+    const close = designCss.indexOf("\n}", open);
+    return designCss.slice(open, close);
+  };
+  const names = (text) => new Set(
+    [...text.matchAll(/^\s*(--[a-z0-9-]+):/gmu)].map((match) => match[1]),
+  );
+
+  const dark = names(block(`[data-appearance="dark"]`));
+  const light = names(block(`[data-appearance="light"]`));
+
+  assert.ok(dark.size > 30, "expected a full dark token set");
+  assert.deepEqual([...dark].sort(), [...light].sort());
+  for (const required of [
+    "--surface-canvas",
+    "--surface-raised",
+    "--surface-overlay",
+    "--border",
+    "--text",
+    "--text-muted",
+    "--solid",
+    "--danger-text",
+  ]) {
+    assert.ok(dark.has(required), `missing ${required}`);
+  }
 });
 
 test("desktop and web surfaces consume the shared theme source", async () => {
-  const [desktopCss, webCss] = await Promise.all([
-    readFile(desktopCssPath, "utf8"),
+  const [entryCss, webCss] = await Promise.all([
+    readFile(desktopEntryCssPath, "utf8"),
     readFile(webCssPath, "utf8"),
   ]);
 
-  assert.match(desktopCss, /@import "\.\.\/\.\.\/\.\.\/\.\.\/shared\/themes\.css";/u);
+  assert.match(entryCss, /@import "\.\.\/\.\.\/\.\.\/\.\.\/shared\/themes\.css";/u);
+  assert.match(entryCss, /@import "\.\.\/\.\.\/\.\.\/\.\.\/shared\/design\.css";/u);
   assert.match(webCss, /@import "\.\.\/\.\.\/\.\.\/shared\/themes\.css";/u);
 });
 
+test("first-run setup follows the shared appearance tokens", async () => {
+  const desktopCss = await readDesktopCss();
+  const onboarding = desktopCss.match(/\.onboarding-shell\s*\{([\s\S]*?)\n\}/u)?.[1];
+  assert.ok(onboarding, "missing .onboarding-shell rule");
+  // The old design hardcoded a light island inside an otherwise dark app.
+  assert.doesNotMatch(onboarding, /#[0-9a-f]{3,6}/iu);
+  assert.match(onboarding, /background:\s*var\(--surface-canvas\)/u);
+  assert.match(desktopCss, /\.onboarding-actions\s*\{[^}]*justify-content:\s*flex-end/u);
+});
+
 test("preferences keeps presets compact and gives Custom a full-spectrum treatment", async () => {
-  const desktopCss = await readFile(desktopCssPath, "utf8");
+  const desktopCss = await readDesktopCss();
 
   assert.match(
     desktopCss,
@@ -83,7 +144,7 @@ test("preferences keeps presets compact and gives Custom a full-spectrum treatme
 test("preset accent and signal values are not duplicated outside the shared palette", async () => {
   const [sharedCss, desktopCss, webCss] = await Promise.all([
     readFile(sharedCssPath, "utf8"),
-    readFile(desktopCssPath, "utf8"),
+    readDesktopCss(),
     readFile(webCssPath, "utf8"),
   ]);
   const themedValues = [

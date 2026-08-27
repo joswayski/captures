@@ -1,0 +1,239 @@
+/*
+ * Captures design tokens.
+ *
+ * Three layers, in order:
+ *   1. Primitives   — the neutral ramp, radii, spacing, type, motion, elevation.
+ *   2. Semantics    — surface/border/text roles that flip with the appearance mode.
+ *   3. Media chrome — a fixed dark glass palette for surfaces that float over the
+ *                     user's desktop (capture overlay, HUD, mini previews, notices).
+ *                     Those never follow light mode: they must stay legible on top
+ *                     of arbitrary screen content.
+ *
+ * Accent and signal hues come from shared/themes.css and stay deliberately scarce:
+ * primary actions, selection, focus, and status only. Everything else is neutral.
+ */
+
+:root {
+  /* Type */
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI",
+    Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, "SF Mono", "Cascadia Mono", "Segoe UI Mono",
+    Menlo, Consolas, "Liberation Mono", monospace;
+
+  --text-2xs: 10px;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-md: 13px;
+  --text-lg: 15px;
+  --text-xl: 18px;
+  --text-2xl: 22px;
+  --text-3xl: 28px;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 680;
+
+  --leading-tight: 1.2;
+  --leading-snug: 1.35;
+  --leading-normal: 1.5;
+
+  --tracking-tight: -0.011em;
+  --tracking-tighter: -0.022em;
+  --tracking-wide: 0.04em;
+
+  /* Spacing — 4px grid */
+  --s-0: 0px;
+  --s-1: 2px;
+  --s-2: 4px;
+  --s-3: 6px;
+  --s-4: 8px;
+  --s-5: 12px;
+  --s-6: 16px;
+  --s-7: 20px;
+  --s-8: 24px;
+  --s-9: 32px;
+  --s-10: 40px;
+  --s-11: 48px;
+  --s-12: 64px;
+
+  /* Radii */
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 10px;
+  --r-xl: 14px;
+  --r-2xl: 18px;
+  --r-3xl: 24px;
+  --r-pill: 999px;
+
+  /* Control heights */
+  --h-xs: 24px;
+  --h-sm: 28px;
+  --h-md: 32px;
+  --h-lg: 36px;
+  --h-xl: 40px;
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --dur-1: 90ms;
+  --dur-2: 140ms;
+  --dur-3: 200ms;
+  --dur-4: 280ms;
+  --dur-5: 420ms;
+
+  /* Media chrome — fixed, appearance-independent */
+  --glass: rgba(20, 20, 24, 0.82);
+  --glass-strong: rgba(15, 15, 18, 0.93);
+  --glass-raised: rgba(38, 38, 45, 0.94);
+  --glass-hover: rgba(255, 255, 255, 0.09);
+  --glass-active: rgba(255, 255, 255, 0.14);
+  --glass-border: rgba(255, 255, 255, 0.11);
+  --glass-border-strong: rgba(255, 255, 255, 0.2);
+  --glass-text: #f6f6f8;
+  --glass-text-muted: rgba(246, 246, 248, 0.64);
+  --glass-text-subtle: rgba(246, 246, 248, 0.42);
+  --glass-shadow: 0 16px 44px rgba(0, 0, 0, 0.44), 0 2px 8px rgba(0, 0, 0, 0.3);
+  --glass-blur: blur(24px) saturate(1.4);
+
+  /* Status hues. Accent/signal come from the selected color theme. */
+  --positive: #35a35d;
+  --positive-ink: #ffffff;
+  --caution: #b57614;
+  --info: #3b74e0;
+}
+
+/* ---------------------------------------------------------------- dark ---- */
+
+:root,
+[data-appearance="dark"] {
+  color-scheme: dark;
+
+  --n-1: #0b0b0e;
+  --n-2: #101014;
+  --n-3: #16161b;
+  --n-4: #1c1c22;
+  --n-5: #232329;
+  --n-6: #2b2b33;
+  --n-7: #35353f;
+  --n-8: #45454f;
+  --n-9: #5d5d69;
+  --n-10: #8b8b98;
+  --n-11: #b9b9c4;
+  --n-12: #f2f2f4;
+
+  --surface-canvas: var(--n-2);
+  --surface-raised: var(--n-3);
+  --surface-overlay: #1a1a20;
+  --surface-sunken: var(--n-1);
+  --surface-field: #0e0e12;
+  --surface-hover: rgba(255, 255, 255, 0.05);
+  --surface-active: rgba(255, 255, 255, 0.09);
+  --surface-selected: rgba(var(--theme-accent-rgb), 0.14);
+
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border: rgba(255, 255, 255, 0.1);
+  --border-strong: rgba(255, 255, 255, 0.18);
+
+  --text: var(--n-12);
+  --text-muted: var(--n-11);
+  --text-subtle: var(--n-10);
+  --text-faint: var(--n-9);
+
+  --control: rgba(255, 255, 255, 0.06);
+  --control-hover: rgba(255, 255, 255, 0.1);
+  --control-border: rgba(255, 255, 255, 0.1);
+
+  /* High-contrast neutral fill, used for the one confirming action on a surface
+     that should not compete with the themed capture action. */
+  --solid: var(--n-12);
+  --solid-hover: #ffffff;
+  --solid-ink: var(--n-1);
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.32);
+  --shadow-md: 0 8px 20px rgba(0, 0, 0, 0.38);
+  --shadow-lg: 0 18px 44px rgba(0, 0, 0, 0.46);
+  --shadow-xl: 0 28px 70px rgba(0, 0, 0, 0.55);
+
+  --positive-surface: rgba(53, 163, 93, 0.16);
+  --positive-text: #7fd79c;
+  --caution-surface: rgba(224, 168, 62, 0.15);
+  --caution-text: #e6bd6c;
+  --info-surface: rgba(59, 116, 224, 0.16);
+  --info-text: #8fb2f5;
+  --danger-surface: var(--theme-signal-surface);
+  --danger-text: var(--theme-signal-text);
+  --danger-border: rgba(var(--theme-signal-rgb), 0.34);
+
+  --canvas-checker-a: #0f0f13;
+  --canvas-checker-b: #17171c;
+}
+
+/* --------------------------------------------------------------- light ---- */
+
+[data-appearance="light"] {
+  color-scheme: light;
+
+  --n-1: #fbfbfc;
+  --n-2: #f5f5f7;
+  --n-3: #efeff2;
+  --n-4: #e8e8ed;
+  --n-5: #e0e0e7;
+  --n-6: #d5d5de;
+  --n-7: #c4c4d0;
+  --n-8: #a8a8b6;
+  --n-9: #7d7d8c;
+  --n-10: #5c5c69;
+  --n-11: #3a3a45;
+  --n-12: #131318;
+
+  --surface-canvas: var(--n-2);
+  --surface-raised: #ffffff;
+  --surface-overlay: #ffffff;
+  --surface-sunken: var(--n-3);
+  --surface-field: #ffffff;
+  --surface-hover: rgba(19, 19, 24, 0.045);
+  --surface-active: rgba(19, 19, 24, 0.08);
+  --surface-selected: rgba(var(--theme-accent-rgb), 0.13);
+
+  --border-subtle: rgba(19, 19, 24, 0.07);
+  --border: rgba(19, 19, 24, 0.12);
+  --border-strong: rgba(19, 19, 24, 0.2);
+
+  --text: var(--n-12);
+  --text-muted: var(--n-10);
+  --text-subtle: var(--n-9);
+  --text-faint: var(--n-8);
+
+  --control: #ffffff;
+  --control-hover: var(--n-3);
+  --control-border: rgba(19, 19, 24, 0.14);
+
+  --solid: var(--n-12);
+  --solid-hover: #2b2b33;
+  --solid-ink: #ffffff;
+
+  --shadow-xs: 0 1px 2px rgba(19, 19, 24, 0.06);
+  --shadow-sm: 0 1px 3px rgba(19, 19, 24, 0.08), 0 1px 2px rgba(19, 19, 24, 0.04);
+  --shadow-md: 0 6px 18px rgba(19, 19, 24, 0.09), 0 1px 3px rgba(19, 19, 24, 0.06);
+  --shadow-lg: 0 16px 40px rgba(19, 19, 24, 0.12), 0 2px 6px rgba(19, 19, 24, 0.06);
+  --shadow-xl: 0 28px 64px rgba(19, 19, 24, 0.16), 0 4px 10px rgba(19, 19, 24, 0.07);
+
+  --positive-surface: rgba(53, 163, 93, 0.12);
+  --positive-text: #1c7a41;
+  --caution-surface: rgba(181, 118, 20, 0.12);
+  --caution-text: #8a5a0f;
+  --info-surface: rgba(59, 116, 224, 0.1);
+  --info-text: #2b57ac;
+  --danger-surface: rgba(var(--theme-signal-rgb), 0.1);
+  --danger-text: var(--theme-signal-strong);
+  --danger-border: rgba(var(--theme-signal-rgb), 0.3);
+
+  --canvas-checker-a: #eaeaee;
+  --canvas-checker-b: #f6f6f8;
+}
