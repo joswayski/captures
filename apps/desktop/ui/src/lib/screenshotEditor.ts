@@ -1919,7 +1919,9 @@ export function arrowChordLength(
 export function arrowHeadLength(strokeWidth: number, shaftLength?: number): number {
   const fromStroke = Math.max(1, strokeWidth * 4.2);
   if (shaftLength == null || !(shaftLength > 0)) return fromStroke;
-  return Math.max(1, Math.min(fromStroke, shaftLength * 0.45));
+  // Keep the tip shorter than the remaining shaft so endpoint-shrink cannot
+  // leave a creation-sized head on a stub.
+  return Math.max(1, Math.min(fromStroke, shaftLength * 0.25));
 }
 
 /**
@@ -1945,6 +1947,32 @@ export function arrowHeadWingTips(
       y: end.y - length * Math.sin(angle + Math.PI / 6),
     },
   ];
+}
+
+/**
+ * Thin an arrow's stroke when its shaft is shortened (endpoint or corner scale)
+ * so the head, which is derived from stroke width, shrinks with the body.
+ * Lengthening keeps the original pen size.
+ */
+export function scaleArrowStrokeForLength(
+  initial: EditorShapeElement,
+  next: EditorShapeElement,
+): EditorShapeElement {
+  if (initial.shape !== "arrow" || next.shape !== "arrow") return next;
+  const initialLength = Math.max(1, arrowChordLength(initial));
+  const nextLength = arrowChordLength(next);
+  if (nextLength >= initialLength - 0.5) return next;
+  return {
+    ...next,
+    style: {
+      ...next.style,
+      strokeWidth: clamp(
+        initial.style.strokeWidth * (nextLength / initialLength),
+        1,
+        80,
+      ),
+    },
+  };
 }
 
 /**

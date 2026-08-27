@@ -105,6 +105,7 @@ import {
   resizeDocumentCanvas,
   resizeElement,
   resizeHandlePoint,
+  scaleArrowStrokeForLength,
   snapResizedBounds,
   snapTranslatedBounds,
   stackDropLightFocusAtPoint,
@@ -3412,6 +3413,9 @@ export function ScreenshotEditor() {
           index === controlIndex ? { x: point.x, y: point.y } : control
         ));
         next = { ...gesture.element, controls };
+      }
+      if (handle.kind === "start" || handle.kind === "end") {
+        next = scaleArrowStrokeForLength(gesture.element, next);
       }
       setCanvasCursor("grabbing");
       setCanvasExpandPreview(canvasExpandPreviewForBounds(

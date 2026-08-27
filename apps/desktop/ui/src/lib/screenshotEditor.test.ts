@@ -69,6 +69,7 @@ import {
   isAutoWidthText,
   arrowChordLength,
   arrowHeadLength,
+  scaleArrowStrokeForLength,
   type EditorImageElement,
   type EditorShapeElement,
   type EditorTextElement,
@@ -1599,8 +1600,27 @@ describe("screenshot editor geometry", () => {
   it("scales arrow heads with stroke and shaft length", () => {
     expect(arrowHeadLength(8)).toBeCloseTo(33.6, 5);
     expect(arrowHeadLength(2)).toBeCloseTo(8.4, 5);
-    expect(arrowHeadLength(8, 20)).toBeCloseTo(9, 5);
+    expect(arrowHeadLength(8, 20)).toBeCloseTo(5, 5);
     expect(arrowHeadLength(8, 400)).toBeCloseTo(33.6, 5);
+
+    const long: EditorShapeElement = {
+      ...editableLayer,
+      id: "arrow",
+      kind: "shape",
+      shape: "arrow",
+      x: 0,
+      y: 0,
+      endX: 200,
+      endY: 0,
+      controls: [],
+      style: { color: "#f00", fill: null, strokeWidth: 8 },
+    };
+    const short = scaleArrowStrokeForLength(long, { ...long, endX: 50 });
+    expect(short.style.strokeWidth).toBeCloseTo(2, 5);
+    expect(arrowHeadLength(short.style.strokeWidth, arrowChordLength(short)))
+      .toBeLessThan(12);
+    const longer = scaleArrowStrokeForLength(long, { ...long, endX: 400 });
+    expect(longer.style.strokeWidth).toBe(8);
   });
 
   it("applies all named text styles without changing content or color", () => {
