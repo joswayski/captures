@@ -836,7 +836,8 @@ describe("RecordingSelector", () => {
 
     fireEvent.pointerMove(surface!, { pointerId: 9, clientX: 120, clientY: 140 });
     fireEvent.pointerUp(surface!, { pointerId: 9, clientX: 120, clientY: 140 });
-    expect(guidance).not.toHaveAttribute("data-faded");
+    // Stay out of the way once a region exists; the capture panel is the next decision.
+    expect(guidance).toHaveAttribute("data-faded", "true");
   });
 
   it("locks a create drag to the selected aspect ratio and Shift square", async () => {

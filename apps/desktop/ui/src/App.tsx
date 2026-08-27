@@ -2310,7 +2310,10 @@ export function RecordingSelector() {
         </div>
       </>}
       {targetMode === "region" && (
-        <CaptureGuidance mode="region" hidden={regionSelecting} />
+        <CaptureGuidance
+          mode="region"
+          hidden={regionSelecting || Boolean(selectedRect && selectedRect.width > 0 && selectedRect.height > 0)}
+        />
       )}
       {targetMode === "window" && !selectedWindow && <CaptureGuidance mode="window" />}
       {targetMode === "region" && selectedRect && selectedRect.width > 0 && selectedRect.height > 0 && (
@@ -6239,12 +6242,19 @@ const PREFERENCE_NAV = [
 
 type PreferenceSectionId = (typeof PREFERENCE_NAV)[number]["id"];
 
+function previewPreferenceSection(): PreferenceSectionId {
+  const mode = query("preview_mode");
+  return PREFERENCE_NAV.some((item) => item.id === mode)
+    ? mode as PreferenceSectionId
+    : "appearance";
+}
+
 export function Preferences() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [recordingDevices, setRecordingDevices] = useState<AudioDevice[]>([]);
   const [saveStatus, setSaveStatus] = useState<PreferencesSaveStatus>({ kind: "idle", message: "" });
   const [recordingShortcut, setRecordingShortcut] = useState<string | null>(null);
-  const [preferenceSection, setPreferenceSection] = useState<PreferenceSectionId>("appearance");
+  const [preferenceSection, setPreferenceSection] = useState<PreferenceSectionId>(previewPreferenceSection);
   const preferencesMainRef = useRef<HTMLDivElement>(null);
   const settingsRef = useRef<AppSettings | null>(null);
   const pendingSettingsRef = useRef<AppSettings | null>(null);
@@ -6376,6 +6386,13 @@ export function Preferences() {
       if (section) observer.observe(section);
     }
     return () => observer.disconnect();
+  }, [settings]);
+
+  useEffect(() => {
+    if (!settings) return;
+    const id = previewPreferenceSection();
+    if (id === "appearance") return;
+    document.getElementById(`prefs-${id}`)?.scrollIntoView({ behavior: "auto", block: "start" });
   }, [settings]);
 
   if (!settings) return <main className="preferences loading">Loading preferences…</main>;

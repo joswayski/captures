@@ -4240,10 +4240,18 @@ html.capture-preview:has(.thumbnail-stack) {
   display: grid;
   place-items: center;
 }
+html.capture-preview .capture-guidance,
+html.capture-preview .capture-segmented-indicator.ready,
+html.capture-preview .recording-options-row,
+html.capture-preview .recording-start:not(:disabled) > span::after {
+  animation: none !important;
+  transition: none !important;
+}
+html.capture-preview .capture-guidance[data-faded="true"] { visibility: hidden; }
 html.capture-preview:has(.recording-hud) .recording-hud { width: 430px; }
 html.capture-preview:has(.startup-notice) .startup-notice { width: 400px; height: 118px; }
 html.capture-preview:has(.recording-saved-notice) { display: grid; place-items: center; }
-html.capture-preview:has(.recording-saved-notice) .recording-saved-notice { width: 440px; height: 100px; animation: none; }
-html.capture-preview:has(.recording-controls-hidden-notice) .recording-controls-hidden-notice { width: 400px; animation: none; }
+html.capture-preview:has(.recording-saved-notice) .recording-saved-notice { width: 440px; height: 116px; animation: none; }
+html.capture-preview:has(.recording-controls-hidden-notice) .recording-controls-hidden-notice { width: 430px; animation: none; }
 html.capture-preview:has(.update-notice) .update-notice { width: 440px; }
 html.capture-preview:has(.thumbnail-stack) .thumbnail-stack { position: relative; width: 340px; height: 420px; }
