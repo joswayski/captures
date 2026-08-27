@@ -1,5 +1,5 @@
 use captures_recording::{CaptureRect, MaxResolution};
-use image::{RgbaImage, imageops::FilterType};
+use image::{GenericImageView, RgbaImage, imageops::FilterType};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FrameRect {
@@ -77,36 +77,42 @@ impl FrameTransform {
         (self.output_width, self.output_height)
     }
 
+    #[cfg(test)]
     pub fn rgb(&self, frame: &RgbaImage) -> Vec<u8> {
-        let cropped = image::imageops::crop_imm(
+        let mut rgb = Vec::new();
+        self.rgb_into(frame, &mut rgb);
+        rgb
+    }
+
+    pub fn rgb_into(&self, frame: &RgbaImage, rgb: &mut Vec<u8>) {
+        let needed = usize::try_from(self.output_width)
+            .unwrap_or_default()
+            .saturating_mul(usize::try_from(self.output_height).unwrap_or_default())
+            .saturating_mul(3);
+        rgb.clear();
+        rgb.reserve(needed);
+        let view = image::imageops::crop_imm(
             frame,
             self.source.x,
             self.source.y,
             self.source.width,
             self.source.height,
-        )
-        .to_image();
-        let output =
-            if cropped.width() == self.output_width && cropped.height() == self.output_height {
-                cropped
-            } else {
-                image::imageops::resize(
-                    &cropped,
-                    self.output_width,
-                    self.output_height,
-                    FilterType::Triangle,
-                )
-            };
-        let mut rgb = Vec::with_capacity(
-            usize::try_from(self.output_width)
-                .unwrap_or_default()
-                .saturating_mul(usize::try_from(self.output_height).unwrap_or_default())
-                .saturating_mul(3),
+        );
+        if view.width() == self.output_width && view.height() == self.output_height {
+            for (_, _, pixel) in view.pixels() {
+                rgb.extend_from_slice(&pixel.0[..3]);
+            }
+            return;
+        }
+        let output = image::imageops::resize(
+            &view.to_image(),
+            self.output_width,
+            self.output_height,
+            FilterType::Triangle,
         );
         for pixel in output.pixels() {
             rgb.extend_from_slice(&pixel.0[..3]);
         }
-        rgb
     }
 }
 
@@ -162,5 +168,8 @@ mod tests {
         let rgb = transform.rgb(&frame);
         assert_eq!(rgb.len(), 1_280 * 720 * 3);
         assert_eq!(&rgb[..3], &[20, 40, 60]);
+        let mut reused = vec![1, 2, 3];
+        transform.rgb_into(&frame, &mut reused);
+        assert_eq!(reused, rgb);
     }
 }

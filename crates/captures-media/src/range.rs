@@ -60,6 +60,20 @@ impl ByteRange {
             self.start, self.end_inclusive, total_length
         )
     }
+
+    /// When a client omitted `Range`, read the whole object if it fits in
+    /// `max_bytes`; otherwise return a prefix so callers never slurp a large
+    /// recording into RAM.
+    #[must_use]
+    pub fn prefix_when_unbounded(total_length: u64, max_bytes: u64) -> Option<Self> {
+        if total_length == 0 || max_bytes == 0 || total_length <= max_bytes {
+            return None;
+        }
+        Some(Self {
+            start: 0,
+            end_inclusive: max_bytes - 1,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
@@ -109,6 +123,19 @@ mod tests {
         assert_eq!(
             ByteRange::parse("bytes=100-101", 100),
             Err(ByteRangeError::Unsatisfiable)
+        );
+    }
+
+    #[test]
+    fn unbounded_reads_use_a_prefix_only_for_large_objects() {
+        assert_eq!(ByteRange::prefix_when_unbounded(100, 1_000), None);
+        assert_eq!(ByteRange::prefix_when_unbounded(0, 1_000), None);
+        assert_eq!(
+            ByteRange::prefix_when_unbounded(8_000, 1_000),
+            Some(ByteRange {
+                start: 0,
+                end_inclusive: 999,
+            })
         );
     }
 }
