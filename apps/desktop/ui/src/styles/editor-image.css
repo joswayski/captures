@@ -1,0 +1,3480 @@
+/*
+ * Screenshot editor.
+ *
+ * Chrome is neutral so the canvas is the only saturated thing on screen. The
+ * `--editor-*` variables map onto the appearance tokens, so the whole editor
+ * follows light/dark with the rest of the app.
+ */
+
+.screenshot-editor {
+  --editor-canvas: var(--surface-sunken);
+  --editor-chrome: var(--surface-canvas);
+  --editor-panel: var(--surface-raised);
+  --editor-panel-raised: var(--surface-overlay);
+  --editor-control: var(--control);
+  --editor-control-hover: var(--control-hover);
+  --editor-field: var(--surface-field);
+  --editor-border: var(--border-subtle);
+  --editor-border-strong: var(--border);
+  --editor-text: var(--text);
+  --editor-text-muted: var(--text-muted);
+  --editor-text-subtle: var(--text-subtle);
+  display: grid;
+  width: 100%;
+  height: 100%;
+  min-width: 860px;
+  min-height: 600px;
+  /* Header row is auto so the optional restored-draft banner can grow it. */
+  grid-template: auto minmax(0, 1fr) auto / 56px minmax(0, 1fr) 320px;
+  overflow: hidden;
+  color: var(--editor-text);
+  background: var(--editor-chrome);
+}
+
+.screenshot-editor button,
+.screenshot-editor input,
+.screenshot-editor select,
+.screenshot-editor textarea {
+  font: inherit;
+}
+
+/*
+ * Explicit pointer so tool/layer/export controls stay clickable-looking even
+ * when a parent sets grab/default (layer rows) or the WebView inherits an
+ * unexpected cursor.
+ */
+.screenshot-editor button:not(:disabled),
+.screenshot-editor select:not(:disabled),
+.screenshot-editor summary,
+.screenshot-editor label.screenshot-check-row,
+.screenshot-editor .screenshot-custom-color,
+.screenshot-editor .screenshot-make-copy:not(:has(input:disabled)) {
+  cursor: pointer;
+}
+
+.screenshot-editor button:disabled,
+.screenshot-editor select:disabled {
+  cursor: default;
+}
+
+.screenshot-editor input,
+.screenshot-editor textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* Keep drag/draw surfaces non-selectable without blocking chrome copy. */
+.screenshot-canvas-viewport,
+.screenshot-canvas-surface {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.screenshot-editor button:focus-visible,
+.screenshot-editor select:focus-visible,
+.screenshot-editor input:focus-visible,
+.screenshot-editor textarea:focus-visible {
+  outline: 2px solid var(--theme-accent);
+  outline-offset: 2px;
+}
+
+/* --------------------------------------------------------------- header --- */
+
+.screenshot-editor-header {
+  z-index: 10;
+  display: flex;
+  grid-column: 1 / -1;
+  min-height: 52px;
+  padding: 0;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  border-bottom: 1px solid var(--editor-border);
+  background: var(--surface-raised);
+}
+
+.screenshot-editor-header-main {
+  display: flex;
+  min-width: 0;
+  min-height: 52px;
+  padding: 0 var(--s-5);
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-5);
+}
+
+.screenshot-editor-header-main > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--s-3);
+}
+
+.screenshot-editor-draft-banner {
+  display: flex;
+  padding: var(--s-3) var(--s-5);
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-5);
+  color: var(--caution-text);
+  background: var(--caution-surface);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.screenshot-editor-draft-banner-actions {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--s-3);
+}
+
+.screenshot-editor-draft-banner-actions > button {
+  min-height: var(--h-sm);
+  padding: 0 var(--s-4);
+  font-size: var(--text-sm);
+}
+
+.screenshot-editor-draft-banner-dismiss {
+  border-color: transparent !important;
+  background: transparent !important;
+  color: inherit !important;
+}
+
+.screenshot-editor-title {
+  align-items: center !important;
+  gap: var(--s-5) !important;
+  flex-wrap: nowrap;
+}
+
+/* Document controls share one quiet surface so the canvas stays the focus. */
+.screenshot-canvas-toolbar {
+  display: flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  height: 34px;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  overflow: hidden;
+  border: 1px solid var(--editor-border);
+  border-radius: var(--r-lg);
+  background: var(--surface-sunken);
+}
+
+.screenshot-canvas-dim {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  color: var(--editor-text-subtle);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+
+.screenshot-canvas-dim span {
+  flex: 0 0 auto;
+}
+
+.screenshot-canvas-dim .number-input {
+  width: 74px;
+  min-height: 28px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.screenshot-canvas-dim .number-input:focus-within {
+  border-color: var(--theme-accent);
+  background: var(--editor-field);
+}
+
+.screenshot-canvas-dim-sep {
+  color: var(--editor-text-subtle);
+  font-size: var(--text-xs);
+}
+
+.screenshot-canvas-toolbar-split {
+  width: 1px;
+  height: 16px;
+  margin: 0 var(--s-2);
+  flex: 0 0 auto;
+  background: var(--border);
+}
+
+.screenshot-canvas-tool {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  gap: var(--s-3);
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  padding: 0 var(--s-4);
+  color: var(--editor-text-muted);
+  background: transparent;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  transition:
+    color var(--dur-2) var(--ease-standard),
+    background var(--dur-2) var(--ease-standard);
+}
+
+.screenshot-canvas-tool:hover:not(:disabled),
+.screenshot-canvas-tool.is-open {
+  color: var(--editor-text);
+  background: var(--surface-hover);
+}
+
+.screenshot-canvas-tool:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.screenshot-canvas-tool svg {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.screenshot-canvas-bg {
+  display: inline-flex;
+  min-width: 0;
+}
+
+.screenshot-canvas-bg-trigger {
+  padding-right: var(--s-3);
+}
+
+.screenshot-canvas-bg-trigger > svg {
+  width: 11px;
+  height: 11px;
+  color: var(--editor-text-subtle);
+}
+
+.screenshot-canvas-bg-chip {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-xs);
+}
+
+.screenshot-canvas-bg-chip.is-transparent {
+  background-color: var(--canvas-checker-b);
+  background-image:
+    linear-gradient(45deg, var(--canvas-checker-a) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--canvas-checker-a) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--canvas-checker-a) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--canvas-checker-a) 75%);
+  background-position: 0 0, 0 4px, 4px -4px, -4px 0;
+  background-size: 8px 8px;
+}
+
+.screenshot-canvas-bg-menu,
+.screenshot-text-style-menu,
+.screenshot-layer-menu-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  background: var(--surface-overlay);
+  box-shadow: var(--shadow-lg);
+  color: var(--editor-text);
+}
+
+.screenshot-canvas-bg-menu {
+  position: fixed;
+  z-index: 200;
+  display: grid;
+  min-width: 248px;
+  gap: var(--s-4);
+  padding: var(--s-5);
+}
+
+.screenshot-canvas-bg-menu .screenshot-canvas-bg-toggle {
+  margin: 0;
+  min-height: 24px !important;
+  padding: 0;
+  color: var(--editor-text-muted);
+  font-size: var(--text-sm) !important;
+  white-space: nowrap;
+}
+
+.screenshot-canvas-bg-menu .screenshot-color-field.compact {
+  display: flex;
+  align-items: center;
+}
+
+.screenshot-color-field.compact legend.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.screenshot-canvas-bg-menu .screenshot-color-field.compact > div {
+  gap: var(--s-2);
+}
+
+.screenshot-editor-history-actions {
+  align-items: center !important;
+  gap: var(--s-2) !important;
+}
+
+.screenshot-editor-history-actions > button {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-3);
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  padding: 0 var(--s-4);
+  color: var(--editor-text-muted);
+  background: transparent;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.screenshot-editor-history-actions > button:not(.screenshot-add-image) {
+  width: 34px;
+  padding: 0;
+}
+
+.screenshot-editor-history-actions > button:hover:not(:disabled) {
+  color: var(--editor-text);
+  background: var(--surface-hover);
+}
+
+.screenshot-editor-history-actions > button:disabled {
+  cursor: default;
+  opacity: 0.32;
+}
+
+.screenshot-editor-history-actions svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.screenshot-editor-history-actions > .screenshot-add-image {
+  width: auto;
+  margin-left: var(--s-2);
+  padding: 0 var(--s-5);
+  border-color: var(--control-border);
+  color: var(--editor-text);
+  background: var(--control);
+  white-space: nowrap;
+}
+
+.screenshot-editor-history-actions > .screenshot-add-image:hover {
+  border-color: var(--border-strong);
+  background: var(--control-hover);
+}
+
+.screenshot-editor-zoom {
+  display: flex;
+  height: 34px;
+  margin-left: var(--s-2);
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid var(--editor-border);
+  border-radius: var(--r-lg);
+  background: var(--surface-sunken);
+}
+
+.screenshot-editor-zoom > button {
+  display: grid;
+  width: 30px;
+  height: 100%;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-right: 1px solid var(--editor-border);
+  color: var(--editor-text-muted);
+  background: transparent;
+}
+
+.screenshot-editor-zoom > button:hover:not(:disabled) {
+  color: var(--editor-text);
+  background: var(--surface-hover);
+}
+
+.screenshot-editor-zoom > button:disabled {
+  cursor: default;
+  opacity: 0.32;
+}
+
+.screenshot-editor-zoom > button.active {
+  color: var(--theme-accent-readable);
+  background: var(--surface-selected);
+}
+
+[data-appearance="dark"] .screenshot-editor-zoom > button.active {
+  color: var(--theme-accent-text);
+}
+
+.screenshot-editor-zoom > button svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Compact continuous zoom: drag instead of relying on pinch / modified scroll. */
+.screenshot-editor-zoom-slider {
+  display: flex;
+  width: 92px;
+  height: 100%;
+  align-items: center;
+  padding: 0 var(--s-4);
+  border-right: 1px solid var(--editor-border);
+  background: transparent;
+}
+
+.screenshot-editor-zoom-slider input[type="range"] {
+  width: 100%;
+  height: 18px;
+  margin: 0;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+  outline: none;
+}
+
+.screenshot-editor-zoom-slider input[type="range"]::-webkit-slider-runnable-track {
+  height: 3px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--n-6);
+}
+
+.screenshot-editor-zoom-slider input[type="range"]::-webkit-slider-thumb {
+  width: 12px;
+  height: 12px;
+  margin-top: -4.5px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-pill);
+  appearance: none;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-xs);
+}
+
+.screenshot-editor-zoom-slider input[type="range"]::-moz-range-track {
+  height: 3px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--n-6);
+}
+
+.screenshot-editor-zoom-slider input[type="range"]::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-pill);
+  background: var(--surface-raised);
+}
+
+.screenshot-editor-zoom-presets {
+  /* Wide enough for values like "98.9%" / "800%" plus the native chevron. */
+  box-sizing: border-box;
+  width: 76px;
+  min-width: 76px;
+  height: 100%;
+  border: 0;
+  padding: 0 20px 0 var(--s-4);
+  color: var(--editor-text);
+  background-color: transparent;
+  outline: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: visible;
+}
+
+/* ------------------------------------------------------------ tool rail --- */
+
+.screenshot-tool-rail {
+  z-index: 5;
+  display: flex;
+  grid-row: 2;
+  grid-column: 1;
+  padding: var(--s-4) var(--s-3);
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-1);
+  overflow: visible;
+  border-right: 1px solid var(--editor-border);
+  background: var(--surface-raised);
+}
+
+.screenshot-tool-rail button {
+  position: relative;
+  display: grid;
+  width: 38px;
+  min-height: 38px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: var(--r-lg);
+  color: var(--editor-text-muted);
+  background: transparent;
+  transition:
+    color var(--dur-2) var(--ease-standard),
+    background var(--dur-2) var(--ease-standard);
+}
+
+.screenshot-tool-rail button:hover {
+  color: var(--editor-text);
+  background: var(--surface-hover);
+}
+
+.screenshot-tool-rail button.active {
+  color: var(--theme-accent-ink);
+  background: var(--theme-accent);
+}
+
+.screenshot-tool-rail svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.screenshot-tool-rail span {
+  position: absolute;
+  z-index: 60;
+  top: 50%;
+  left: calc(100% + 10px);
+  width: max-content;
+  max-width: 180px;
+  padding: 5px var(--s-4);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-sm);
+  color: var(--glass-text);
+  background: var(--glass-strong);
+  box-shadow: var(--shadow-md);
+  backdrop-filter: blur(14px);
+  pointer-events: none;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  line-height: 1.2;
+  text-align: left;
+  white-space: nowrap;
+  opacity: 0;
+  transform: translate(-4px, -50%);
+  transition:
+    opacity var(--dur-1) var(--ease-standard),
+    transform var(--dur-2) var(--ease-standard);
+}
+
+.screenshot-tool-rail button:hover span,
+.screenshot-tool-rail button:focus-visible span {
+  opacity: 1;
+  transform: translate(0, -50%);
+}
+
+/* --------------------------------------------------------------- canvas --- */
+
+.screenshot-canvas-viewport {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-row: 2;
+  grid-column: 2;
+  padding: var(--s-9);
+  overflow: auto;
+  place-items: center;
+  overscroll-behavior: contain;
+  background-color: var(--editor-canvas);
+}
+
+.screenshot-canvas-surface {
+  position: relative;
+  flex: 0 0 auto;
+  overflow: visible;
+  background-color: #f7f7f5;
+  box-shadow:
+    0 0 0 1px var(--border),
+    var(--shadow-lg);
+  will-change: transform;
+}
+
+/* Checkerboard preview when the document background is transparent. */
+.screenshot-canvas-surface.transparent {
+  background-color: var(--canvas-checker-b);
+  background-image:
+    linear-gradient(45deg, var(--canvas-checker-a) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--canvas-checker-a) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--canvas-checker-a) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--canvas-checker-a) 75%);
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  background-size: 16px 16px;
+}
+
+.screenshot-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: none;
+}
+
+.screenshot-canvas.tool-select {
+  cursor: default;
+}
+
+.screenshot-canvas.tool-crop,
+.screenshot-canvas.tool-text,
+.screenshot-canvas.tool-rectangle,
+.screenshot-canvas.tool-ellipse,
+.screenshot-canvas.tool-line,
+.screenshot-canvas.tool-arrow,
+.screenshot-canvas.tool-pen {
+  cursor: crosshair;
+}
+
+/* Match canvas tool cursors on empty viewport chrome so off-canvas draws feel continuous. */
+.screenshot-canvas-viewport:has(.screenshot-canvas.tool-crop),
+.screenshot-canvas-viewport:has(.screenshot-canvas.tool-text),
+.screenshot-canvas-viewport:has(.screenshot-canvas.tool-rectangle),
+.screenshot-canvas-viewport:has(.screenshot-canvas.tool-ellipse),
+.screenshot-canvas-viewport:has(.screenshot-canvas.tool-line),
+.screenshot-canvas-viewport:has(.screenshot-canvas.tool-arrow),
+.screenshot-canvas-viewport:has(.screenshot-canvas.tool-pen) {
+  cursor: crosshair;
+}
+
+.screenshot-canvas-viewport.is-pan-ready,
+.screenshot-canvas-viewport.is-pan-ready .screenshot-canvas {
+  cursor: grab !important;
+}
+
+.screenshot-canvas-viewport.is-panning,
+.screenshot-canvas-viewport.is-panning .screenshot-canvas {
+  cursor: grabbing !important;
+}
+
+.screenshot-curve-hover-tip {
+  position: fixed;
+  z-index: 40;
+  max-width: 240px;
+  margin: 0;
+  padding: 5px var(--s-4);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-sm);
+  color: var(--glass-text);
+  background: var(--glass-strong);
+  box-shadow: var(--shadow-md);
+  pointer-events: none;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-snug);
+  white-space: normal;
+  transform: translate(14px, 18px);
+}
+
+/* Remove-bg erase/restore brush outline (size = brush diameter × zoom). */
+.screenshot-brush-cursor {
+  position: fixed;
+  z-index: 41;
+  box-sizing: border-box;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.92);
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.55),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  will-change: left, top, width, height;
+}
+
+.screenshot-brush-cursor.is-restore {
+  border-style: dashed;
+  background: rgba(var(--theme-accent-rgb), 0.08);
+}
+
+/* Remove-bg wand: magnified color loupe beside the crosshair. */
+.screenshot-wand-loupe {
+  position: fixed;
+  z-index: 42;
+  box-sizing: border-box;
+  border-radius: 50%;
+  pointer-events: none;
+  filter: drop-shadow(0 8px 18px rgba(0, 0, 0, 0.42));
+  will-change: left, top;
+}
+
+.screenshot-wand-loupe-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  /* Clip nearest-neighbor tiles to a clean circle. */
+  clip-path: circle(50% at 50% 50%);
+  background:
+    linear-gradient(45deg, #c4c4c8 25%, transparent 25%),
+    linear-gradient(-45deg, #c4c4c8 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #c4c4c8 75%),
+    linear-gradient(-45deg, transparent 75%, #c4c4c8 75%);
+  background-size: 10px 10px;
+  background-position: 0 0, 0 5px, 5px -5px, -5px 0;
+  background-color: #ececee;
+}
+
+.screenshot-wand-loupe-rim {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.92);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.55),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+}
+
+.screenshot-wand-loupe-meta {
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 6px);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-3);
+  max-width: 140px;
+  padding: 3px 7px 3px 4px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-pill);
+  color: var(--glass-text);
+  background: var(--glass-strong);
+  box-shadow: var(--shadow-md);
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+.screenshot-wand-loupe-swatch {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+  background: #888;
+}
+
+.screenshot-wand-loupe-swatch.is-transparent {
+  background:
+    linear-gradient(45deg, #c4c4c8 25%, transparent 25%),
+    linear-gradient(-45deg, #c4c4c8 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #c4c4c8 75%),
+    linear-gradient(-45deg, transparent 75%, #c4c4c8 75%);
+  background-size: 6px 6px;
+  background-position: 0 0, 0 3px, 3px -3px, -3px 0;
+  background-color: #ececee;
+}
+
+.screenshot-wand-loupe-hex {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+/* Maps-style cue when free pan leaves the canvas mostly off-screen. */
+.screenshot-canvas-recenter {
+  position: absolute;
+  z-index: 30;
+  top: var(--s-5);
+  left: 50%;
+  display: inline-flex;
+  min-height: var(--h-sm);
+  padding: 0 var(--s-5);
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-pill);
+  color: var(--glass-text);
+  background: var(--glass-strong);
+  box-shadow: var(--shadow-md);
+  backdrop-filter: blur(14px);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -6px);
+  transition:
+    opacity var(--dur-3) var(--ease-standard),
+    transform var(--dur-3) var(--ease-standard);
+}
+
+.screenshot-canvas-recenter.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(-50%, 0);
+}
+
+/* Single edit chrome (border + soft outline); canvas selection is suppressed while editing. */
+.screenshot-inline-text-editor {
+  position: absolute;
+  z-index: 6;
+  box-sizing: border-box;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--theme-accent);
+  border-radius: 3px;
+  outline: 2px solid rgba(var(--theme-accent-rgb), 0.28);
+  resize: none;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  caret-color: currentColor;
+  box-shadow: var(--shadow-md);
+}
+
+/* Fixed width so title swaps do not reflow the toast. */
+.screenshot-drop-overlay {
+  position: fixed;
+  z-index: 80;
+  top: 72px;
+  left: 50%;
+  display: grid;
+  width: auto;
+  min-width: 0;
+  max-width: 280px;
+  padding: var(--s-4) var(--s-5) var(--s-4) 44px;
+  border: 1px solid rgba(var(--theme-accent-rgb), 0.72);
+  border-radius: var(--r-lg);
+  color: var(--glass-text);
+  background: var(--glass-strong);
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(16px);
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.screenshot-drop-overlay svg {
+  position: absolute;
+  top: 50%;
+  left: 13px;
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: var(--theme-accent);
+  stroke-width: 1.7;
+  transform: translateY(-50%);
+}
+
+.screenshot-drop-overlay strong {
+  min-height: 14px;
+  overflow: hidden;
+  font-size: var(--text-sm);
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ------------------------------- canvas hint effects (drop / expand / trim) */
+
+/* Image-drop edge snap: bright edge bar + outward bloom + particles. */
+.screenshot-drop-snap-guide {
+  position: absolute;
+  z-index: 4;
+  overflow: visible;
+  border: 1px solid rgba(var(--theme-accent-rgb), 0.78);
+  border-radius: 3px;
+  background: rgba(var(--theme-accent-rgb), 0.1);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.35),
+    0 0 22px rgba(var(--theme-accent-rgb), 0.28),
+    inset 0 0 28px rgba(var(--theme-accent-rgb), 0.08);
+  pointer-events: none;
+}
+
+.screenshot-drop-snap-guide::after {
+  position: absolute;
+  z-index: 2;
+  border-radius: var(--r-pill);
+  background: var(--theme-accent);
+  box-shadow:
+    0 0 8px rgba(var(--theme-accent-rgb), 0.95),
+    0 0 20px rgba(var(--theme-accent-rgb), 0.65),
+    0 0 36px rgba(var(--theme-accent-rgb), 0.4);
+  content: "";
+  animation: drop-snap-edge-pulse 1.4s ease-in-out infinite;
+}
+
+.screenshot-drop-snap-guide.edge-top::after,
+.screenshot-drop-snap-guide.edge-bottom::after {
+  right: -1px;
+  left: -1px;
+  height: 5px;
+}
+
+.screenshot-drop-snap-guide.edge-top::after {
+  top: -2px;
+}
+
+.screenshot-drop-snap-guide.edge-bottom::after {
+  bottom: -2px;
+}
+
+.screenshot-drop-snap-guide.edge-left::after,
+.screenshot-drop-snap-guide.edge-right::after {
+  top: -1px;
+  bottom: -1px;
+  width: 5px;
+}
+
+.screenshot-drop-snap-guide.edge-left::after {
+  left: -2px;
+}
+
+.screenshot-drop-snap-guide.edge-right::after {
+  right: -2px;
+}
+
+.screenshot-drop-snap-bloom,
+.screenshot-canvas-expand-bloom,
+.screenshot-canvas-trim-bloom {
+  position: absolute;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0.95;
+  filter: blur(0.5px);
+  animation: drop-snap-bloom-breathe 1.6s ease-in-out infinite;
+}
+
+.screenshot-drop-snap-guide.edge-top .screenshot-drop-snap-bloom {
+  right: -8%;
+  bottom: 100%;
+  left: -8%;
+  height: min(96px, 42%);
+  background: linear-gradient(
+    to top,
+    rgba(var(--theme-accent-rgb), 0.55) 0%,
+    rgba(var(--theme-accent-rgb), 0.22) 38%,
+    rgba(var(--theme-accent-rgb), 0.06) 72%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 88%, transparent 100%);
+}
+
+.screenshot-drop-snap-guide.edge-bottom .screenshot-drop-snap-bloom {
+  top: 100%;
+  right: -8%;
+  left: -8%;
+  height: min(96px, 42%);
+  background: linear-gradient(
+    to bottom,
+    rgba(var(--theme-accent-rgb), 0.55) 0%,
+    rgba(var(--theme-accent-rgb), 0.22) 38%,
+    rgba(var(--theme-accent-rgb), 0.06) 72%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 88%, transparent 100%);
+}
+
+.screenshot-drop-snap-guide.edge-left .screenshot-drop-snap-bloom {
+  top: -8%;
+  right: 100%;
+  bottom: -8%;
+  width: min(96px, 42%);
+  background: linear-gradient(
+    to left,
+    rgba(var(--theme-accent-rgb), 0.55) 0%,
+    rgba(var(--theme-accent-rgb), 0.22) 38%,
+    rgba(var(--theme-accent-rgb), 0.06) 72%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%);
+}
+
+.screenshot-drop-snap-guide.edge-right .screenshot-drop-snap-bloom {
+  top: -8%;
+  bottom: -8%;
+  left: 100%;
+  width: min(96px, 42%);
+  background: linear-gradient(
+    to right,
+    rgba(var(--theme-accent-rgb), 0.55) 0%,
+    rgba(var(--theme-accent-rgb), 0.22) 38%,
+    rgba(var(--theme-accent-rgb), 0.06) 72%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%);
+}
+
+.screenshot-drop-snap-particles,
+.screenshot-canvas-expand-particles,
+.screenshot-canvas-trim-particles {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.screenshot-drop-snap-particle,
+.screenshot-canvas-expand-particle {
+  position: absolute;
+  width: var(--snap-size, 3px);
+  height: var(--snap-size, 3px);
+  border-radius: var(--r-pill);
+  background: var(--theme-accent);
+  box-shadow:
+    0 0 4px rgba(var(--theme-accent-rgb), 0.95),
+    0 0 10px rgba(var(--theme-accent-rgb), 0.55);
+  opacity: 0;
+  will-change: transform, opacity;
+  animation-name: drop-snap-particle-right;
+  animation-duration: var(--snap-duration, 1.2s);
+  animation-delay: var(--snap-delay, 0s);
+  animation-timing-function: cubic-bezier(0.2, 0.65, 0.25, 1);
+  animation-iteration-count: infinite;
+}
+
+.screenshot-drop-snap-guide.edge-top .screenshot-drop-snap-particle,
+.screenshot-canvas-expand-edge.edge-top .screenshot-canvas-expand-particle,
+.screenshot-canvas-trim-edge.edge-top .screenshot-canvas-trim-particle {
+  left: calc(var(--snap-along, 0.5) * 100%);
+  top: 0;
+  animation-name: drop-snap-particle-top;
+}
+
+.screenshot-drop-snap-guide.edge-bottom .screenshot-drop-snap-particle,
+.screenshot-canvas-expand-edge.edge-bottom .screenshot-canvas-expand-particle,
+.screenshot-canvas-trim-edge.edge-bottom .screenshot-canvas-trim-particle {
+  left: calc(var(--snap-along, 0.5) * 100%);
+  bottom: 0;
+  animation-name: drop-snap-particle-bottom;
+}
+
+.screenshot-drop-snap-guide.edge-left .screenshot-drop-snap-particle,
+.screenshot-canvas-expand-edge.edge-left .screenshot-canvas-expand-particle,
+.screenshot-canvas-trim-edge.edge-left .screenshot-canvas-trim-particle {
+  top: calc(var(--snap-along, 0.5) * 100%);
+  left: 0;
+  animation-name: drop-snap-particle-left;
+}
+
+.screenshot-drop-snap-guide.edge-right .screenshot-drop-snap-particle,
+.screenshot-canvas-expand-edge.edge-right .screenshot-canvas-expand-particle,
+.screenshot-canvas-trim-edge.edge-right .screenshot-canvas-trim-particle {
+  top: calc(var(--snap-along, 0.5) * 100%);
+  right: 0;
+  animation-name: drop-snap-particle-right;
+}
+
+/* Stack-on-top: elevated spill under the native drag preview. */
+.screenshot-drop-snap-guide.edge-stack {
+  isolation: isolate;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.screenshot-drop-snap-guide.edge-stack::after {
+  display: none;
+}
+
+/*
+ * The emitter tracks the estimated native-preview footprint. Three layers sell
+ * depth without neon accent or omnidirectional rays: warm surface pool, contact
+ * shadow, and a thin white rim. The OS drag image stays the only plate.
+ */
+.screenshot-drop-snap-stack-light {
+  position: absolute;
+  z-index: 1;
+  isolation: isolate;
+  overflow: visible;
+  border-radius: var(--r-md);
+  pointer-events: none;
+  transform: translateZ(0);
+}
+
+.screenshot-drop-snap-stack-light > i {
+  position: absolute;
+  display: block;
+  pointer-events: none;
+}
+
+.screenshot-drop-snap-stack-pool {
+  z-index: 0;
+  inset: -48% -62% -72% -62%;
+  border-radius: 50%;
+  background: radial-gradient(
+    ellipse at 50% 40%,
+    rgba(255, 250, 240, 0.3) 0%,
+    rgba(255, 244, 228, 0.14) 34%,
+    rgba(255, 244, 228, 0.05) 56%,
+    transparent 74%
+  );
+  filter: blur(14px);
+  opacity: 0.86;
+  animation: drop-snap-stack-pool-breathe 3.2s ease-in-out infinite;
+}
+
+.screenshot-drop-snap-stack-shadow {
+  z-index: 1;
+  inset: 0;
+  border-radius: var(--r-md);
+  background: transparent;
+  box-shadow:
+    0 2px 4px rgba(0, 0, 0, 0.2),
+    0 8px 18px rgba(0, 0, 0, 0.3),
+    0 18px 40px rgba(0, 0, 0, 0.24),
+    0 28px 56px rgba(0, 0, 0, 0.12);
+  opacity: 0.94;
+}
+
+.screenshot-drop-snap-stack-rim {
+  z-index: 2;
+  inset: 0;
+  border-radius: var(--r-md);
+  background: transparent;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.36),
+    0 0 10px rgba(255, 255, 255, 0.1),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  opacity: 0.9;
+  animation: drop-snap-stack-rim-breathe 2.8s ease-in-out infinite;
+}
+
+@keyframes drop-snap-edge-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    filter: brightness(1);
+  }
+  50% {
+    opacity: 0.88;
+    filter: brightness(1.15);
+  }
+}
+
+@keyframes drop-snap-bloom-breathe {
+  0%,
+  100% {
+    opacity: 0.82;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.04);
+  }
+}
+
+@keyframes drop-snap-stack-pool-breathe {
+  0%,
+  100% {
+    opacity: 0.78;
+  }
+  50% {
+    opacity: 0.94;
+  }
+}
+
+@keyframes drop-snap-stack-rim-breathe {
+  0%,
+  100% {
+    opacity: 0.82;
+  }
+  50% {
+    opacity: 0.95;
+  }
+}
+
+@keyframes drop-snap-particle-right {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, -50%, 0) scale(0.55);
+  }
+  12% {
+    opacity: 1;
+  }
+  70% {
+    opacity: 0.55;
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(calc(var(--snap-travel, 1) * 72px), -50%, 0) scale(0.2);
+  }
+}
+
+@keyframes drop-snap-particle-left {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, -50%, 0) scale(0.55);
+  }
+  12% {
+    opacity: 1;
+  }
+  70% {
+    opacity: 0.55;
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(calc(var(--snap-travel, 1) * -72px), -50%, 0) scale(0.2);
+  }
+}
+
+@keyframes drop-snap-particle-top {
+  0% {
+    opacity: 0;
+    transform: translate3d(-50%, 0, 0) scale(0.55);
+  }
+  12% {
+    opacity: 1;
+  }
+  70% {
+    opacity: 0.55;
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(-50%, calc(var(--snap-travel, 1) * -72px), 0) scale(0.2);
+  }
+}
+
+@keyframes drop-snap-particle-bottom {
+  0% {
+    opacity: 0;
+    transform: translate3d(-50%, 0, 0) scale(0.55);
+  }
+  12% {
+    opacity: 1;
+  }
+  70% {
+    opacity: 0.55;
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(-50%, calc(var(--snap-travel, 1) * 72px), 0) scale(0.2);
+  }
+}
+
+/* Alignment guides while moving/resizing a selected layer. */
+.screenshot-align-snap-guide {
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+  background: var(--theme-accent);
+  box-shadow: 0 0 10px rgba(var(--theme-accent-rgb), 0.75);
+}
+
+.screenshot-align-snap-guide.vertical {
+  top: 0;
+  width: 2px;
+  transform: translateX(-1px);
+}
+
+.screenshot-align-snap-guide.horizontal {
+  left: 0;
+  height: 2px;
+  transform: translateY(-1px);
+}
+
+/* Canvas-edge expand: ghost outline of the post-release canvas + edge glow. */
+.screenshot-canvas-expand-ghost {
+  position: absolute;
+  z-index: 4;
+  border: 1.5px dashed rgba(var(--theme-accent-rgb), 0.42);
+  border-radius: 3px;
+  background: transparent;
+  box-shadow: 0 0 0 1px rgba(var(--theme-accent-rgb), 0.08);
+  pointer-events: none;
+  animation: canvas-expand-ghost-breathe 1.7s ease-in-out infinite;
+}
+
+.screenshot-canvas-expand-ghost.edge-top {
+  border-top-color: rgba(var(--theme-accent-rgb), 0.82);
+  border-top-width: 2px;
+}
+
+.screenshot-canvas-expand-ghost.edge-bottom {
+  border-bottom-color: rgba(var(--theme-accent-rgb), 0.82);
+  border-bottom-width: 2px;
+}
+
+.screenshot-canvas-expand-ghost.edge-left {
+  border-left-color: rgba(var(--theme-accent-rgb), 0.82);
+  border-left-width: 2px;
+}
+
+.screenshot-canvas-expand-ghost.edge-right {
+  border-right-color: rgba(var(--theme-accent-rgb), 0.82);
+  border-right-width: 2px;
+}
+
+.screenshot-canvas-expand-overflow {
+  position: absolute;
+  z-index: 4;
+  display: block;
+  pointer-events: none;
+  filter: saturate(0.92);
+}
+
+.screenshot-canvas-expand-hint {
+  position: absolute;
+  z-index: 5;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.screenshot-canvas-expand-edge {
+  position: absolute;
+  z-index: 2;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.screenshot-canvas-expand-edge::after {
+  position: absolute;
+  z-index: 2;
+  border-radius: var(--r-pill);
+  background: var(--theme-accent);
+  box-shadow:
+    0 0 8px rgba(var(--theme-accent-rgb), 0.95),
+    0 0 20px rgba(var(--theme-accent-rgb), 0.65),
+    0 0 36px rgba(var(--theme-accent-rgb), 0.4);
+  content: "";
+  animation: drop-snap-edge-pulse 1.4s ease-in-out infinite;
+}
+
+.screenshot-canvas-expand-edge.edge-top,
+.screenshot-canvas-expand-edge.edge-bottom {
+  right: 0;
+  left: 0;
+  height: 0;
+}
+
+.screenshot-canvas-expand-edge.edge-top {
+  top: 0;
+}
+
+.screenshot-canvas-expand-edge.edge-bottom {
+  bottom: 0;
+}
+
+.screenshot-canvas-expand-edge.edge-left,
+.screenshot-canvas-expand-edge.edge-right {
+  top: 0;
+  bottom: 0;
+  width: 0;
+}
+
+.screenshot-canvas-expand-edge.edge-left {
+  left: 0;
+}
+
+.screenshot-canvas-expand-edge.edge-right {
+  right: 0;
+}
+
+.screenshot-canvas-expand-edge.edge-top::after,
+.screenshot-canvas-expand-edge.edge-bottom::after {
+  right: -1px;
+  left: -1px;
+  height: 5px;
+}
+
+.screenshot-canvas-expand-edge.edge-top::after {
+  top: -2px;
+}
+
+.screenshot-canvas-expand-edge.edge-bottom::after {
+  bottom: -2px;
+}
+
+.screenshot-canvas-expand-edge.edge-left::after,
+.screenshot-canvas-expand-edge.edge-right::after {
+  top: -1px;
+  bottom: -1px;
+  width: 5px;
+}
+
+.screenshot-canvas-expand-edge.edge-left::after {
+  left: -2px;
+}
+
+.screenshot-canvas-expand-edge.edge-right::after {
+  right: -2px;
+}
+
+/* Edge strips are zero-thickness, so bloom uses fixed px offsets. */
+.screenshot-canvas-expand-edge.edge-top .screenshot-canvas-expand-bloom {
+  top: -96px;
+  right: 0;
+  left: 0;
+  height: 96px;
+  background: linear-gradient(
+    to top,
+    rgba(var(--theme-accent-rgb), 0.55) 0%,
+    rgba(var(--theme-accent-rgb), 0.22) 38%,
+    rgba(var(--theme-accent-rgb), 0.06) 72%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 88%, transparent 100%);
+}
+
+.screenshot-canvas-expand-edge.edge-bottom .screenshot-canvas-expand-bloom {
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 96px;
+  background: linear-gradient(
+    to bottom,
+    rgba(var(--theme-accent-rgb), 0.55) 0%,
+    rgba(var(--theme-accent-rgb), 0.22) 38%,
+    rgba(var(--theme-accent-rgb), 0.06) 72%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 88%, transparent 100%);
+}
+
+.screenshot-canvas-expand-edge.edge-left .screenshot-canvas-expand-bloom {
+  top: 0;
+  bottom: 0;
+  left: -96px;
+  width: 96px;
+  background: linear-gradient(
+    to left,
+    rgba(var(--theme-accent-rgb), 0.55) 0%,
+    rgba(var(--theme-accent-rgb), 0.22) 38%,
+    rgba(var(--theme-accent-rgb), 0.06) 72%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%);
+}
+
+.screenshot-canvas-expand-edge.edge-right .screenshot-canvas-expand-bloom {
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 96px;
+  background: linear-gradient(
+    to right,
+    rgba(var(--theme-accent-rgb), 0.55) 0%,
+    rgba(var(--theme-accent-rgb), 0.22) 38%,
+    rgba(var(--theme-accent-rgb), 0.06) 72%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%);
+}
+
+.screenshot-canvas-expand-hint > span {
+  position: absolute;
+  z-index: 4;
+  top: 50%;
+  left: 50%;
+  padding: var(--s-2) var(--s-4);
+  border-radius: var(--r-sm);
+  color: var(--theme-accent-ink);
+  background: var(--theme-accent);
+  box-shadow: var(--shadow-md);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+  transform: translate(-50%, -50%);
+}
+
+@keyframes canvas-expand-ghost-breathe {
+  0%,
+  100% {
+    opacity: 0.88;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/*
+ * Trim-edges hover: the red "negative" of the expand glow — highlight margins
+ * that will be removed, with particles streaming into the discard strips.
+ */
+.screenshot-canvas-trim-hint {
+  --trim-rgb: 255, 92, 106;
+  --trim-accent: #ff5c6a;
+  position: absolute;
+  z-index: 4;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.screenshot-canvas-trim-region {
+  position: absolute;
+  z-index: 1;
+  pointer-events: none;
+  background: rgba(var(--trim-rgb), 0.14);
+  box-shadow: inset 0 0 24px rgba(var(--trim-rgb), 0.12);
+  animation: canvas-trim-region-breathe 1.7s ease-in-out infinite;
+}
+
+.screenshot-canvas-trim-keep {
+  position: absolute;
+  z-index: 2;
+  border: 1.5px dashed rgba(var(--trim-rgb), 0.72);
+  border-radius: 3px;
+  background: transparent;
+  box-shadow:
+    0 0 0 1px rgba(var(--trim-rgb), 0.1),
+    0 0 22px rgba(var(--trim-rgb), 0.18);
+  pointer-events: none;
+  animation: canvas-trim-keep-breathe 1.7s ease-in-out infinite;
+}
+
+.screenshot-canvas-trim-edge {
+  position: absolute;
+  z-index: 3;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.screenshot-canvas-trim-edge::after {
+  position: absolute;
+  z-index: 2;
+  border-radius: var(--r-pill);
+  background: var(--trim-accent);
+  box-shadow:
+    0 0 8px rgba(var(--trim-rgb), 0.95),
+    0 0 20px rgba(var(--trim-rgb), 0.55),
+    0 0 32px rgba(var(--trim-rgb), 0.32);
+  content: "";
+  animation: canvas-trim-edge-pulse 1.4s ease-in-out infinite;
+}
+
+.screenshot-canvas-trim-edge.edge-top,
+.screenshot-canvas-trim-edge.edge-bottom {
+  right: 0;
+  left: 0;
+  height: 0;
+}
+
+.screenshot-canvas-trim-edge.edge-top {
+  top: 0;
+}
+
+.screenshot-canvas-trim-edge.edge-bottom {
+  bottom: 0;
+}
+
+.screenshot-canvas-trim-edge.edge-left,
+.screenshot-canvas-trim-edge.edge-right {
+  top: 0;
+  bottom: 0;
+  width: 0;
+}
+
+.screenshot-canvas-trim-edge.edge-left {
+  left: 0;
+}
+
+.screenshot-canvas-trim-edge.edge-right {
+  right: 0;
+}
+
+.screenshot-canvas-trim-edge.edge-top::after,
+.screenshot-canvas-trim-edge.edge-bottom::after {
+  right: -1px;
+  left: -1px;
+  height: 4px;
+}
+
+.screenshot-canvas-trim-edge.edge-top::after {
+  top: -2px;
+}
+
+.screenshot-canvas-trim-edge.edge-bottom::after {
+  bottom: -2px;
+}
+
+.screenshot-canvas-trim-edge.edge-left::after,
+.screenshot-canvas-trim-edge.edge-right::after {
+  top: -1px;
+  bottom: -1px;
+  width: 4px;
+}
+
+.screenshot-canvas-trim-edge.edge-left::after {
+  left: -2px;
+}
+
+.screenshot-canvas-trim-edge.edge-right::after {
+  right: -2px;
+}
+
+.screenshot-canvas-trim-edge.edge-top .screenshot-canvas-trim-bloom {
+  top: -96px;
+  right: 0;
+  left: 0;
+  height: 96px;
+  background: linear-gradient(
+    to top,
+    rgba(var(--trim-rgb), 0.5) 0%,
+    rgba(var(--trim-rgb), 0.2) 38%,
+    rgba(var(--trim-rgb), 0.06) 72%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 88%, transparent 100%);
+}
+
+.screenshot-canvas-trim-edge.edge-bottom .screenshot-canvas-trim-bloom {
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 96px;
+  background: linear-gradient(
+    to bottom,
+    rgba(var(--trim-rgb), 0.5) 0%,
+    rgba(var(--trim-rgb), 0.2) 38%,
+    rgba(var(--trim-rgb), 0.06) 72%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 88%, transparent 100%);
+}
+
+.screenshot-canvas-trim-edge.edge-left .screenshot-canvas-trim-bloom {
+  top: 0;
+  bottom: 0;
+  left: -96px;
+  width: 96px;
+  background: linear-gradient(
+    to left,
+    rgba(var(--trim-rgb), 0.5) 0%,
+    rgba(var(--trim-rgb), 0.2) 38%,
+    rgba(var(--trim-rgb), 0.06) 72%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%);
+}
+
+.screenshot-canvas-trim-edge.edge-right .screenshot-canvas-trim-bloom {
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 96px;
+  background: linear-gradient(
+    to right,
+    rgba(var(--trim-rgb), 0.5) 0%,
+    rgba(var(--trim-rgb), 0.2) 38%,
+    rgba(var(--trim-rgb), 0.06) 72%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%);
+}
+
+.screenshot-canvas-trim-particle {
+  position: absolute;
+  width: var(--snap-size, 3px);
+  height: var(--snap-size, 3px);
+  border-radius: var(--r-pill);
+  background: var(--trim-accent);
+  box-shadow:
+    0 0 4px rgba(var(--trim-rgb), 0.95),
+    0 0 10px rgba(var(--trim-rgb), 0.5);
+  opacity: 0;
+  will-change: transform, opacity;
+  animation-name: drop-snap-particle-right;
+  animation-duration: var(--snap-duration, 1.2s);
+  animation-delay: var(--snap-delay, 0s);
+  animation-timing-function: cubic-bezier(0.2, 0.65, 0.25, 1);
+  animation-iteration-count: infinite;
+}
+
+@keyframes canvas-trim-region-breathe {
+  0%,
+  100% {
+    opacity: 0.82;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes canvas-trim-keep-breathe {
+  0%,
+  100% {
+    opacity: 0.88;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes canvas-trim-edge-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    filter: brightness(1);
+  }
+  50% {
+    opacity: 0.9;
+    filter: brightness(1.12);
+  }
+}
+
+/* -------------------------------------------------------------- sidebar --- */
+
+.screenshot-sidebar {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-row: 2;
+  grid-column: 3;
+  grid-template-rows: minmax(188px, 40%) minmax(0, 1fr);
+  overflow: hidden;
+  border-left: 1px solid var(--editor-border);
+  background: var(--editor-panel);
+}
+
+.screenshot-layers {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  padding: 0 var(--s-4) var(--s-5);
+  flex-direction: column;
+  background: var(--editor-panel);
+}
+
+.screenshot-layers-heading {
+  display: flex;
+  min-height: 48px;
+  margin: 0 calc(-1 * var(--s-4)) var(--s-3);
+  padding: 0 var(--s-4) 0 var(--s-5);
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--editor-border);
+}
+
+.screenshot-layers-heading > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--s-3);
+}
+
+.screenshot-layers-heading strong {
+  color: var(--editor-text);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+}
+
+.screenshot-layers-heading span {
+  display: grid;
+  min-width: 19px;
+  height: 19px;
+  padding: 0 var(--s-2);
+  place-items: center;
+  border-radius: var(--r-pill);
+  color: var(--editor-text-subtle);
+  background: var(--surface-sunken);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.screenshot-layers-heading button {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  color: var(--editor-text-muted);
+  background: transparent;
+}
+
+.screenshot-layers-heading button:hover {
+  color: var(--editor-text);
+  background: var(--surface-hover);
+}
+
+.screenshot-layers-heading button svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+
+.screenshot-layer-list {
+  min-height: 0;
+  margin: 0;
+  padding: 0 2px;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.screenshot-layer-list li {
+  position: relative;
+  margin: 2px 0;
+  border: 1px solid transparent;
+  border-radius: var(--r-lg);
+  background: transparent;
+  cursor: grab;
+  transition:
+    border-color var(--dur-2) var(--ease-standard),
+    background var(--dur-2) var(--ease-standard),
+    opacity var(--dur-2) var(--ease-standard),
+    transform var(--dur-2) var(--ease-standard);
+}
+
+.screenshot-layer-list li:hover {
+  background: var(--surface-hover);
+}
+
+.screenshot-layer-list li.active {
+  border-color: rgba(var(--theme-accent-rgb), 0.4);
+  background: var(--surface-selected);
+}
+
+.screenshot-layer-list li.dragging {
+  opacity: 0.42;
+  transform: scale(0.985);
+}
+
+.screenshot-layer-list li.locked {
+  cursor: default;
+}
+
+.screenshot-layer-list li.drop-before::before,
+.screenshot-layer-list li.drop-after::after {
+  position: absolute;
+  z-index: 3;
+  right: 3px;
+  left: 3px;
+  height: 2px;
+  border-radius: var(--r-pill);
+  background: var(--theme-accent);
+  box-shadow: 0 0 8px rgba(var(--theme-accent-rgb), 0.5);
+  content: "";
+  pointer-events: none;
+}
+
+.screenshot-layer-list li.drop-before::before {
+  top: -4px;
+}
+
+.screenshot-layer-list li.drop-after::after {
+  bottom: -4px;
+}
+
+.screenshot-layer-list li > .screenshot-layer-select {
+  display: grid;
+  width: 100%;
+  min-height: 54px;
+  padding: var(--s-3) 88px var(--s-3) var(--s-3);
+  grid-template-columns: 12px 44px minmax(0, 1fr);
+  align-items: center;
+  gap: var(--s-4);
+  border: 0;
+  color: var(--editor-text);
+  background: transparent;
+  outline: none;
+  text-align: left;
+}
+
+.screenshot-layer-list li > .screenshot-layer-select:focus-visible {
+  border-radius: var(--r-md);
+  box-shadow: inset 0 0 0 2px rgba(var(--theme-accent-rgb), 0.5);
+}
+
+.screenshot-layer-grip {
+  display: grid;
+  place-items: center;
+  color: var(--editor-text-subtle);
+  opacity: 0.5;
+}
+
+.screenshot-layer-grip svg {
+  width: 12px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.screenshot-layer-list li:not(.locked):hover .screenshot-layer-grip {
+  color: var(--editor-text-muted);
+  opacity: 1;
+}
+
+/* The grip is a reorder cue only; locked layers dim it instead of adding a lock icon. */
+.screenshot-layer-list li.locked .screenshot-layer-grip {
+  opacity: 0.35;
+}
+
+.screenshot-layer-preview {
+  display: grid;
+  width: 44px;
+  height: 32px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--editor-border-strong);
+  border-radius: var(--r-sm);
+  color: var(--editor-text-muted);
+  background-color: var(--canvas-checker-b);
+  background-image:
+    linear-gradient(45deg, var(--canvas-checker-a) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--canvas-checker-a) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--canvas-checker-a) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--canvas-checker-a) 75%);
+  background-position: 0 0, 0 5px, 5px -5px, -5px 0;
+  background-size: 10px 10px;
+}
+
+.screenshot-layer-preview img,
+.screenshot-layer-preview-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.screenshot-layer-preview img {
+  object-fit: cover;
+}
+
+.screenshot-layer-preview svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.screenshot-layer-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.screenshot-layer-copy strong,
+.screenshot-layer-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.screenshot-layer-copy strong {
+  color: var(--editor-text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.screenshot-layer-copy small {
+  color: var(--editor-text-subtle);
+  font-size: var(--text-xs);
+}
+
+.screenshot-layer-copy input {
+  width: 100%;
+  min-width: 0;
+  height: 25px;
+  border: 1px solid var(--theme-accent);
+  border-radius: var(--r-sm);
+  padding: 0 var(--s-3);
+  color: var(--editor-text);
+  background: var(--editor-field);
+  outline: none;
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.screenshot-layer-list li.hidden .screenshot-layer-preview,
+.screenshot-layer-list li.hidden .screenshot-layer-copy {
+  opacity: 0.42;
+}
+
+.screenshot-layer-quick-actions {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  right: var(--s-3);
+  display: flex;
+  gap: 2px;
+  transform: translateY(-50%);
+}
+
+.screenshot-layer-quick-actions > button,
+.screenshot-layer-menu > button {
+  display: grid;
+  width: 25px;
+  height: 28px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: var(--r-sm);
+  color: var(--editor-text-subtle);
+  background: transparent;
+  opacity: 0.5;
+  transition:
+    color var(--dur-2) var(--ease-standard),
+    background var(--dur-2) var(--ease-standard),
+    opacity var(--dur-2) var(--ease-standard);
+}
+
+.screenshot-layer-quick-actions > button:hover,
+.screenshot-layer-menu > button:hover {
+  color: var(--editor-text);
+  background: var(--surface-active);
+  opacity: 1;
+}
+
+.screenshot-layer-list li:hover .screenshot-layer-quick-actions > button,
+.screenshot-layer-list li.active .screenshot-layer-quick-actions > button,
+.screenshot-layer-quick-actions > button.active,
+.screenshot-layer-menu > button.active {
+  opacity: 1;
+}
+
+/* Active = state is on (locked / hidden) or the ⋯ menu is open. */
+.screenshot-layer-quick-actions > button.active,
+.screenshot-layer-menu > button.active {
+  color: var(--theme-accent-readable);
+  background: var(--surface-selected);
+}
+
+[data-appearance="dark"] .screenshot-layer-quick-actions > button.active,
+[data-appearance="dark"] .screenshot-layer-menu > button.active {
+  color: var(--theme-accent-text);
+}
+
+.screenshot-layer-quick-actions svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/*
+ * Secondary layer settings open from ⋯. Fixed positioning is set inline so the
+ * scrollable layer list cannot clip the popover; the card sits beside the
+ * sidebar (over the canvas) rather than covering the list.
+ */
+.screenshot-layer-menu {
+  position: relative;
+  display: flex;
+}
+
+.screenshot-layer-menu-panel {
+  position: fixed;
+  z-index: 80;
+  display: flex;
+  width: min(280px, calc(100vw - 24px));
+  max-height: min(560px, calc(100vh - 16px));
+  flex-direction: column;
+  overflow: visible;
+}
+
+/* Appearance stays outside the scroll region so its listbox is not clipped. */
+.screenshot-layer-menu-section-static {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--editor-border);
+}
+
+.screenshot-layer-menu-scroll {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.screenshot-layer-menu-section {
+  display: grid;
+  padding: var(--s-5);
+  gap: var(--s-4);
+  border-bottom: 1px solid var(--editor-border);
+}
+
+.screenshot-layer-menu-scroll > .screenshot-layer-menu-section:last-child {
+  border-bottom: 0;
+}
+
+.screenshot-layer-menu-section-title {
+  margin: 0;
+  color: var(--editor-text-subtle);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-wide);
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.screenshot-layer-menu-field {
+  display: grid;
+  min-width: 0;
+  gap: var(--s-3);
+}
+
+.screenshot-layer-menu-field-label {
+  color: var(--editor-text-muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  line-height: 1.2;
+}
+
+.screenshot-layer-menu-transform-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s-3);
+}
+
+.screenshot-layer-menu-tile {
+  display: grid;
+  width: 100%;
+  min-height: 36px;
+  padding: 0 var(--s-4);
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  gap: var(--s-3);
+  border: 1px solid var(--editor-border);
+  border-radius: var(--r-md);
+  color: var(--editor-text-muted);
+  background: var(--editor-control);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  text-align: left;
+  transition:
+    color var(--dur-2) var(--ease-standard),
+    background var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard);
+}
+
+.screenshot-layer-menu-tile:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  color: var(--editor-text);
+  background: var(--editor-control-hover);
+}
+
+.screenshot-layer-menu-tile:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.screenshot-layer-menu-tile span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.screenshot-layer-menu-actions {
+  display: grid;
+  gap: 2px;
+}
+
+.screenshot-layer-menu-action {
+  display: grid;
+  width: 100%;
+  min-height: 34px;
+  padding: 0 var(--s-4);
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: var(--s-4);
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  color: var(--editor-text);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition:
+    color var(--dur-2) var(--ease-standard),
+    background var(--dur-2) var(--ease-standard);
+}
+
+.screenshot-layer-menu-action:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.screenshot-layer-menu-action:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring-tight);
+}
+
+.screenshot-layer-menu-action:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.screenshot-layer-menu-action.danger {
+  color: var(--danger-text);
+}
+
+.screenshot-layer-menu-action.danger:hover:not(:disabled) {
+  background: var(--danger-surface);
+}
+
+.screenshot-layer-menu-action-icon {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  color: var(--editor-text-muted);
+}
+
+.screenshot-layer-menu-action.danger .screenshot-layer-menu-action-icon {
+  color: inherit;
+}
+
+.screenshot-layer-menu-action-label {
+  overflow: hidden;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.screenshot-layer-menu-footer {
+  display: grid;
+  flex: 0 0 auto;
+  padding: var(--s-4);
+  gap: var(--s-2);
+  border-top: 1px solid var(--editor-border);
+  background: var(--surface-sunken);
+}
+
+.screenshot-layer-menu-footer .screenshot-layer-menu-action {
+  border-color: var(--editor-border);
+  background: var(--editor-control);
+}
+
+.screenshot-layer-menu-footer .screenshot-layer-menu-action:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--editor-control-hover);
+}
+
+.screenshot-layer-menu-footer .screenshot-layer-menu-action.danger {
+  border-color: var(--danger-border);
+  background: var(--danger-surface);
+}
+
+.screenshot-layer-menu-panel svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ----------------------------------------------------------- properties --- */
+
+.screenshot-properties {
+  min-height: 0;
+  padding: 0 var(--s-5) var(--s-8);
+  overflow-y: auto;
+  border-top: 1px solid var(--editor-border);
+  background: var(--editor-panel);
+}
+
+.screenshot-properties-heading {
+  position: sticky;
+  z-index: 3;
+  top: 0;
+  display: flex;
+  min-height: 48px;
+  margin: 0 calc(-1 * var(--s-5)) var(--s-4);
+  padding: 0 var(--s-5);
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--editor-border);
+  background: var(--editor-panel);
+}
+
+.screenshot-properties-heading strong {
+  color: var(--editor-text);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+}
+
+.screenshot-properties-heading button {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 0;
+  border-radius: var(--r-md);
+  color: var(--danger-text);
+  background: transparent;
+}
+
+.screenshot-properties-heading button:hover {
+  background: var(--danger-surface);
+}
+
+.screenshot-properties-heading svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.screenshot-property-section {
+  display: flex;
+  padding: var(--s-5) 0;
+  flex-direction: column;
+  gap: var(--s-5);
+  border-bottom: 1px solid var(--editor-border);
+}
+
+.screenshot-property-section h2 {
+  margin: 0;
+  color: var(--editor-text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.screenshot-property-section > p {
+  margin: 0;
+  color: var(--editor-text-subtle);
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
+}
+
+.screenshot-property-section label {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--s-3);
+  color: var(--editor-text-muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.screenshot-property-section input:not([type="range"]):not([type="checkbox"]),
+.screenshot-property-section .number-input,
+.screenshot-property-section select,
+.screenshot-property-section textarea {
+  width: 100%;
+  min-height: var(--h-md);
+  border: 1px solid var(--control-border);
+  border-radius: var(--r-md);
+  padding: var(--s-3) var(--s-4);
+  color: var(--editor-text);
+  background-color: var(--editor-field);
+  outline: none;
+  font-size: var(--text-sm);
+}
+
+.screenshot-property-section .number-input {
+  padding: 0;
+}
+
+.screenshot-property-section .number-input input[type="number"] {
+  padding: var(--s-3) var(--s-4);
+  font-size: var(--text-sm);
+}
+
+.screenshot-property-section textarea {
+  min-height: 82px;
+  resize: vertical;
+  line-height: var(--leading-snug);
+}
+
+.screenshot-property-section input:focus,
+.screenshot-property-section .number-input:focus-within,
+.screenshot-property-section select:focus,
+.screenshot-property-section textarea:focus {
+  border-color: var(--theme-accent);
+  box-shadow: var(--focus-ring-tight);
+}
+
+.screenshot-number-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s-4);
+}
+
+.screenshot-range {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 42px;
+  align-items: center;
+  gap: var(--s-4);
+}
+
+.screenshot-range input {
+  width: 100%;
+  accent-color: var(--theme-accent);
+}
+
+.screenshot-range output {
+  color: var(--editor-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.screenshot-property-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s-3);
+}
+
+.screenshot-property-actions button,
+.screenshot-layer-actions button {
+  min-height: var(--h-md);
+  border: 1px solid var(--control-border);
+  border-radius: var(--r-md);
+  color: var(--editor-text);
+  background: var(--editor-control);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.screenshot-property-actions button:hover:not(:disabled),
+.screenshot-layer-actions button:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--editor-control-hover);
+}
+
+.screenshot-property-actions button:disabled,
+.screenshot-layer-actions button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.screenshot-property-actions button.primary {
+  border-color: transparent;
+  color: var(--theme-accent-ink);
+  background: var(--theme-accent);
+  font-weight: var(--weight-semibold);
+}
+
+.screenshot-property-actions button.primary:hover:not(:disabled) {
+  background: var(--theme-accent-hover);
+}
+
+.screenshot-property-actions button.primary.cta-pulse {
+  animation: screenshot-cta-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes screenshot-cta-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(var(--theme-accent-rgb), 0);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(var(--theme-accent-rgb), 0.22);
+  }
+}
+
+.screenshot-format-buttons {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: var(--s-2);
+}
+
+.screenshot-format-buttons button {
+  display: grid;
+  min-height: 32px;
+  place-items: center;
+  border: 1px solid var(--editor-border);
+  border-radius: var(--r-sm);
+  color: var(--editor-text-muted);
+  background: var(--editor-control);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.screenshot-format-buttons button.active {
+  border-color: var(--theme-accent);
+  color: var(--theme-accent-ink);
+  background: var(--theme-accent);
+}
+
+.screenshot-format-buttons svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+}
+
+.screenshot-check-row {
+  display: flex !important;
+  min-height: 28px;
+  flex-direction: row !important;
+  align-items: center;
+  gap: var(--s-4) !important;
+  cursor: pointer;
+}
+
+.screenshot-check-row input[type="checkbox"] {
+  display: grid;
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  place-content: center;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-xs);
+  appearance: none;
+  -webkit-appearance: none;
+  background: var(--editor-field);
+  cursor: pointer;
+  outline: none;
+  accent-color: unset;
+  transition:
+    border-color var(--dur-2) var(--ease-standard),
+    background var(--dur-2) var(--ease-standard);
+}
+
+.screenshot-check-row input[type="checkbox"]::before {
+  width: 7.5px;
+  height: 4px;
+  border-bottom: 1.75px solid var(--theme-accent-ink);
+  border-left: 1.75px solid var(--theme-accent-ink);
+  content: "";
+  opacity: 0;
+  transform: translateY(-1px) rotate(-45deg) scale(0.55);
+  transition:
+    opacity var(--dur-1) var(--ease-standard),
+    transform var(--dur-2) var(--ease-standard);
+}
+
+.screenshot-check-row input[type="checkbox"]:checked {
+  border-color: var(--theme-accent);
+  background: var(--theme-accent);
+}
+
+.screenshot-check-row input[type="checkbox"]:checked::before {
+  opacity: 1;
+  transform: translateY(-1px) rotate(-45deg) scale(1);
+}
+
+.screenshot-check-row input[type="checkbox"]:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+
+.screenshot-check-row input[type="checkbox"]:disabled {
+  cursor: default;
+  opacity: 0.38;
+}
+
+.screenshot-text-style-picker {
+  position: relative;
+  z-index: 4;
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.screenshot-text-style-picker legend {
+  margin-bottom: var(--s-3);
+  padding: 0;
+  color: var(--editor-text-muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.screenshot-text-style-trigger,
+.screenshot-text-style-menu button {
+  display: grid;
+  min-height: 38px;
+  padding: var(--s-3) var(--s-4);
+  grid-template-columns: 82px minmax(0, 1fr);
+  align-items: center;
+  gap: var(--s-4);
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  color: var(--editor-text-muted);
+  background: var(--editor-control);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  text-align: left;
+}
+
+.screenshot-text-style-trigger {
+  width: 100%;
+  grid-template-columns: 82px minmax(0, 1fr) 14px;
+  border-color: var(--control-border);
+  background: var(--editor-field);
+}
+
+.screenshot-text-style-trigger:hover,
+.screenshot-text-style-menu button:hover {
+  border-color: var(--border-strong);
+  color: var(--editor-text);
+  background: var(--editor-control-hover);
+}
+
+.screenshot-text-style-trigger[aria-expanded="true"] {
+  border-color: var(--theme-accent);
+}
+
+.screenshot-text-style-trigger > svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform var(--dur-2) var(--ease-standard);
+}
+
+.screenshot-text-style-trigger[aria-expanded="true"] > svg {
+  transform: rotate(180deg);
+}
+
+.screenshot-text-style-menu {
+  position: fixed;
+  z-index: 200;
+  display: grid;
+  gap: 2px;
+  padding: var(--s-2);
+}
+
+.screenshot-text-style-menu button {
+  width: 100%;
+  cursor: pointer;
+  background: transparent;
+}
+
+.screenshot-text-style-menu button.active {
+  border-color: var(--theme-accent);
+  color: var(--editor-text);
+  background: var(--surface-selected);
+}
+
+.screenshot-text-style-preview {
+  display: inline-grid;
+  width: 72px;
+  min-height: 24px;
+  padding: 0 var(--s-2);
+  place-items: center;
+  justify-self: center;
+  box-sizing: border-box;
+  color: var(--editor-text-muted);
+  font-size: 17px;
+  font-weight: var(--weight-bold);
+  line-height: 1;
+  letter-spacing: var(--tracking-tighter);
+}
+
+.screenshot-text-style-preview.style-rounded,
+.screenshot-text-style-preview.style-rounded-box {
+  font-family: ui-rounded, "SF Pro Rounded", "Arial Rounded MT Bold", system-ui, sans-serif;
+}
+
+.screenshot-text-style-preview.style-mono,
+.screenshot-text-style-preview.style-mono-box {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0;
+}
+
+.screenshot-text-style-preview.style-outlined {
+  color: transparent;
+  -webkit-text-stroke: 1.2px var(--editor-text-muted);
+}
+
+.screenshot-text-style-preview.style-box,
+.screenshot-text-style-preview.style-mono-box,
+.screenshot-text-style-preview.style-rounded-box {
+  color: var(--surface-raised);
+  background: var(--editor-text-muted);
+}
+
+.screenshot-text-style-preview.style-rounded-box {
+  border-radius: var(--r-pill);
+}
+
+.screenshot-color-field {
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.screenshot-color-field legend {
+  margin-bottom: var(--s-4);
+  padding: 0;
+  color: var(--editor-text-muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.screenshot-color-field > div {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.screenshot-color-field button,
+.screenshot-custom-color {
+  position: relative;
+  display: block;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  padding: 0;
+  box-shadow: var(--shadow-xs);
+}
+
+.screenshot-color-field button.active {
+  box-shadow:
+    0 0 0 2px var(--editor-panel),
+    0 0 0 4px var(--theme-accent);
+}
+
+.screenshot-custom-color {
+  border-radius: var(--r-sm);
+  background: conic-gradient(#f44, #ff4, #4f4, #4ff, #44f, #f4f, #f44);
+  cursor: pointer;
+}
+
+.screenshot-custom-color::after {
+  position: absolute;
+  inset: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  background: var(--surface-raised);
+  content: "";
+  pointer-events: none;
+}
+
+.screenshot-custom-color input {
+  position: absolute;
+  inset: -8px;
+  width: 40px;
+  height: 40px;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.screenshot-file-name {
+  overflow: hidden;
+  color: var(--editor-text-muted) !important;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ----------------------------------------------------------- export bar --- */
+
+/* Saving stays visible; format/quality controls expand only when needed. */
+.screenshot-export-bar {
+  z-index: 20;
+  display: flex;
+  min-width: 0;
+  grid-row: 3;
+  grid-column: 1 / -1;
+  padding: var(--s-4) var(--s-5);
+  flex-direction: column;
+  gap: var(--s-4);
+  border-top: 1px solid var(--editor-border);
+  background: var(--surface-raised);
+}
+
+.screenshot-export-options {
+  display: none;
+  min-width: 0;
+}
+
+.screenshot-export-options.is-open {
+  display: block;
+}
+
+.screenshot-export-settings {
+  display: flex;
+  min-width: 0;
+  padding: var(--s-5);
+  flex-wrap: wrap;
+  align-items: end;
+  gap: var(--s-5);
+  border: 1px solid var(--editor-border);
+  border-radius: var(--r-xl);
+  background: var(--surface-sunken);
+  animation: screenshot-export-options-in var(--dur-2) var(--ease-out);
+}
+
+@keyframes screenshot-export-options-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.screenshot-export-settings label,
+.screenshot-export-control {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: var(--s-3);
+  color: var(--editor-text-muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  line-height: 1;
+  text-transform: none;
+}
+
+.screenshot-export-settings select,
+.screenshot-export-settings input[type="number"],
+.screenshot-export-settings .number-input {
+  min-width: 96px;
+  height: var(--h-md);
+  min-height: var(--h-md);
+  border: 1px solid var(--control-border);
+  border-radius: var(--r-md);
+  padding: 0 var(--s-4);
+  color: var(--editor-text);
+  background-color: var(--editor-field);
+  outline: none;
+  font-size: var(--text-sm);
+  line-height: 1;
+}
+
+.screenshot-export-settings input[type="number"],
+.screenshot-export-settings .number-input {
+  width: 100px;
+  min-width: 0;
+  padding: 0;
+}
+
+.screenshot-export-settings .number-input input[type="number"] {
+  padding: 0 var(--s-4);
+  font-size: var(--text-sm);
+}
+
+.screenshot-export-settings .custom-select {
+  min-width: 96px;
+}
+
+.screenshot-export-size-control {
+  display: flex;
+  min-width: 0;
+  height: var(--h-md);
+  align-items: center;
+  gap: var(--s-4);
+}
+
+.screenshot-export-size-control .custom-select {
+  min-width: 108px;
+}
+
+.screenshot-export-format {
+  width: 108px;
+}
+
+.screenshot-output-dimensions {
+  color: var(--editor-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: 1;
+  white-space: nowrap;
+  text-transform: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.screenshot-custom-dimensions {
+  width: 268px;
+}
+
+.screenshot-custom-dimensions > div {
+  display: grid;
+  height: var(--h-md);
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) 32px;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.screenshot-custom-dimensions .number-input {
+  width: 100%;
+  min-width: 0;
+  height: var(--h-md);
+}
+
+.screenshot-custom-dimensions > div > span {
+  color: var(--editor-text-subtle);
+  font-size: var(--text-xs);
+}
+
+.screenshot-custom-dimensions > div > button {
+  display: grid;
+  width: 32px;
+  height: var(--h-md);
+  padding: 0;
+  place-items: center;
+  border: 1px solid var(--control-border);
+  border-radius: var(--r-md);
+  color: var(--editor-text-subtle);
+  background: var(--editor-field);
+}
+
+.screenshot-custom-dimensions > div > button.active {
+  border-color: var(--theme-accent);
+  color: var(--theme-accent-ink);
+  background: var(--theme-accent);
+}
+
+.screenshot-custom-dimensions > div > button svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.screenshot-quality-mode {
+  width: 188px;
+}
+
+.screenshot-quality {
+  width: 148px;
+}
+
+.screenshot-png-colors {
+  width: 280px;
+}
+
+.screenshot-png-colors-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+}
+
+.screenshot-png-colors .range-slider {
+  gap: 0;
+}
+
+.screenshot-quality-packing {
+  width: 268px;
+}
+
+.screenshot-quality-format-hint {
+  margin: 0;
+  min-height: var(--h-md);
+  display: flex;
+  align-items: center;
+  color: var(--editor-text-subtle);
+  font-size: var(--text-2xs);
+  line-height: 1.3;
+  text-transform: none;
+}
+
+.screenshot-maximum-size {
+  width: 184px;
+}
+
+.screenshot-maximum-size-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 58px;
+  gap: var(--s-2);
+  align-items: center;
+}
+
+.screenshot-maximum-size .number-input {
+  width: 100%;
+  min-width: 0;
+}
+
+.screenshot-maximum-size .custom-select {
+  min-width: 0;
+  width: 58px;
+}
+
+.screenshot-output-estimate-control {
+  min-width: 72px;
+}
+
+.screenshot-output-estimate {
+  display: flex;
+  height: var(--h-md);
+  align-items: center;
+  color: var(--editor-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1;
+  text-transform: none;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.screenshot-output-estimate[data-pending="true"] {
+  color: var(--editor-text-subtle);
+}
+
+.screenshot-output-estimate-delta {
+  margin-left: var(--s-3);
+  font-weight: var(--weight-semibold);
+}
+
+.screenshot-output-estimate-delta.is-smaller {
+  color: var(--positive-text);
+}
+
+.screenshot-output-estimate-delta.is-larger {
+  color: var(--danger-text);
+}
+
+.screenshot-export-control.screenshot-compress-preview-control {
+  width: auto;
+}
+
+.screenshot-compress-preview-button {
+  height: var(--h-md);
+  padding: 0 var(--s-5);
+  border: 1px solid var(--control-border);
+  border-radius: var(--r-md);
+  color: var(--editor-text);
+  background: var(--editor-field);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+
+.screenshot-compress-preview-button:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--editor-control-hover);
+}
+
+.screenshot-compress-preview-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.screenshot-save-row {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(178px, 210px) minmax(240px, 390px) minmax(120px, 1fr) auto;
+  align-items: end;
+  gap: var(--s-5);
+}
+
+.screenshot-export-disclosure {
+  display: grid;
+  min-width: 0;
+  height: var(--h-lg);
+  padding: 0 var(--s-4) 0 var(--s-5);
+  grid-template-columns: minmax(0, 1fr) 15px;
+  grid-template-rows: auto auto;
+  align-content: center;
+  align-items: center;
+  gap: 2px var(--s-4);
+  border: 1px solid var(--control-border);
+  border-radius: var(--r-md);
+  color: var(--editor-text-muted);
+  background: var(--editor-control);
+  text-align: left;
+}
+
+.screenshot-export-disclosure:hover {
+  border-color: var(--border-strong);
+  color: var(--editor-text);
+  background: var(--editor-control-hover);
+}
+
+.screenshot-export-disclosure-label {
+  color: inherit;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  line-height: 1.1;
+}
+
+.screenshot-export-summary {
+  overflow: hidden;
+  color: var(--editor-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.screenshot-export-disclosure svg {
+  width: 15px;
+  height: 15px;
+  grid-row: 1 / -1;
+  grid-column: 2;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform var(--dur-2) var(--ease-standard);
+}
+
+.screenshot-export-disclosure[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.screenshot-filename {
+  min-width: 0;
+}
+
+/* Stable two-line status: reserved success/error row + always-visible hint. */
+.screenshot-export-status {
+  display: flex;
+  min-width: 0;
+  min-height: var(--h-lg);
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  color: var(--editor-text-subtle);
+  cursor: text;
+  font-size: var(--text-xs);
+  line-height: 1.35;
+  text-align: right;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.screenshot-export-notice {
+  min-height: 12px;
+  overflow: hidden;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.screenshot-export-notice.idle {
+  visibility: hidden;
+}
+
+.screenshot-export-notice.success {
+  color: var(--positive-text);
+  visibility: visible;
+}
+
+.screenshot-export-notice.error {
+  max-height: 34px;
+  overflow: auto;
+  color: var(--danger-text);
+  visibility: visible;
+  white-space: normal;
+}
+
+.screenshot-export-hint {
+  min-width: 0;
+  color: var(--editor-text-subtle);
+  font-size: var(--text-xs);
+  line-height: 1.35;
+  white-space: normal;
+}
+
+.screenshot-export-status.has-error .screenshot-export-hint {
+  display: none;
+}
+
+.screenshot-export-actions {
+  display: flex;
+  min-height: var(--h-lg);
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--s-3);
+}
+
+.screenshot-export-actions > button.success {
+  border-color: transparent;
+  color: var(--positive-text);
+  background: var(--positive-surface);
+}
+
+.screenshot-make-copy {
+  display: inline-flex;
+  height: var(--h-lg);
+  align-items: center;
+  gap: var(--s-3);
+  color: var(--editor-text-muted);
+  cursor: pointer;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+
+.screenshot-make-copy > input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.screenshot-make-copy .recording-switch {
+  width: 28px;
+  height: 16px;
+}
+
+.screenshot-make-copy .recording-switch::after {
+  width: 10px;
+  height: 10px;
+}
+
+.screenshot-make-copy input:checked + .recording-switch {
+  border-color: transparent;
+  background: var(--theme-accent);
+}
+
+.screenshot-make-copy input:checked + .recording-switch::after {
+  background: var(--theme-accent-ink);
+  transform: translateX(12px);
+}
+
+.screenshot-make-copy input:focus-visible + .recording-switch {
+  box-shadow: var(--focus-ring);
+}
+
+.screenshot-make-copy:has(input:disabled) {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.screenshot-export-actions > button {
+  display: inline-flex;
+  min-width: 86px;
+  height: var(--h-lg);
+  min-height: var(--h-lg);
+  padding: 0 var(--s-5);
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-3);
+  border: 1px solid var(--control-border);
+  border-radius: var(--r-md);
+  color: var(--editor-text);
+  background: var(--editor-control);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+
+.screenshot-export-actions button:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--editor-control-hover);
+}
+
+.screenshot-export-actions button.primary {
+  min-width: 106px;
+  border-color: transparent;
+  color: var(--theme-accent-ink);
+  background: var(--theme-accent);
+  font-weight: var(--weight-semibold);
+}
+
+.screenshot-export-actions button.primary:hover:not(:disabled) {
+  background: var(--theme-accent-hover);
+}
+
+.screenshot-export-actions button:disabled {
+  cursor: wait;
+  opacity: 0.5;
+}
+
+.screenshot-export-actions svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.screenshot-editor select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 26px !important;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--editor-text-subtle) 50%),
+    linear-gradient(135deg, var(--editor-text-subtle) 50%, transparent 50%);
+  background-position:
+    calc(100% - 13px) calc(50% - 1px),
+    calc(100% - 9px) calc(50% - 1px);
+  background-repeat: no-repeat;
+  background-size: 4px 4px, 4px 4px;
+}
+
+.screenshot-editor input[type="number"],
+.screenshot-editor .number-input input[type="number"] {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.screenshot-editor .recording-filename {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  color: var(--editor-text-muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.screenshot-editor .recording-filename-heading {
+  height: 15px;
+}
+
+.screenshot-editor .recording-filename-input {
+  height: var(--h-lg);
+  border: 1px solid var(--control-border);
+  border-radius: var(--r-md);
+  background: var(--editor-field);
+}
+
+.screenshot-editor .recording-filename-input:focus-within {
+  border-color: var(--theme-accent);
+  box-shadow: var(--focus-ring-tight);
+}
+
+.screenshot-editor .recording-filename-input input {
+  padding: 0 0 0 var(--s-4);
+  color: var(--editor-text);
+  font-size: var(--text-sm);
+}
+
+.screenshot-editor .recording-filename-input strong {
+  color: var(--editor-text-subtle);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-regular);
+}
+
+.screenshot-editor .recording-destination {
+  color: var(--editor-text-subtle);
+  font-size: var(--text-2xs);
+}
+
+.screenshot-editor .recording-destination output {
+  max-width: 170px;
+  color: var(--editor-text-subtle);
+  font-size: var(--text-2xs);
+}
+
+.screenshot-editor .recording-destination button {
+  color: var(--editor-text-muted);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+}
+
+@media (max-width: 1040px) {
+  .screenshot-editor {
+    grid-template-columns: 56px minmax(0, 1fr) 280px;
+  }
+
+  /* Keep zoom reachable on narrower editor windows; only drop undo/redo chrome. */
+  .screenshot-editor-history-actions > button:first-child,
+  .screenshot-editor-history-actions > button:nth-child(2) {
+    display: none;
+  }
+
+  .screenshot-editor-zoom-slider {
+    width: 72px;
+    padding: 0 var(--s-3);
+  }
+
+  .screenshot-editor-zoom-presets {
+    width: 72px;
+    min-width: 72px;
+    padding-right: 18px;
+  }
+
+  .screenshot-save-row {
+    grid-template-columns: minmax(170px, 200px) minmax(230px, 1fr) auto;
+    gap: var(--s-4);
+  }
+
+  .screenshot-export-disclosure {
+    grid-row: 1;
+    grid-column: 1;
+  }
+
+  .screenshot-filename {
+    grid-row: 1;
+    grid-column: 2;
+  }
+
+  .screenshot-export-actions {
+    grid-row: 1;
+    grid-column: 3;
+  }
+
+  .screenshot-export-status {
+    grid-row: 2;
+    grid-column: 1 / -1;
+    min-height: 20px;
+    text-align: left;
+  }
+
+  .screenshot-quality {
+    width: 136px;
+  }
+
+  .screenshot-png-colors,
+  .screenshot-quality-packing {
+    width: 220px;
+  }
+
+  .screenshot-maximum-size {
+    width: 124px;
+  }
+}

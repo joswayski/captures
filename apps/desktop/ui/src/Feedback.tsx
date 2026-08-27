@@ -81,109 +81,114 @@ export function Feedback() {
 
   return (
     <main className="feedback">
-      <header className="feedback-header">
-        <div>
-          <span className="eyebrow">Captures</span>
-          <h1>Send feedback</h1>
-        </div>
-      </header>
+      <div className="feedback-shell">
+        <header className="feedback-header">
+          <div>
+            <span className="eyebrow">Captures</span>
+            <h1>Send feedback</h1>
+            <p className="help-text feedback-intro">
+              Tell us what broke, what is missing, or what you wish worked better. Captures sends
+              only what you type here plus the app and system details listed below — never your
+              screenshots or recordings.
+            </p>
+          </div>
+        </header>
 
-      <p className="help-text feedback-intro">
-        Tell us what broke, what is missing, or what you wish worked better. Captures only sends
-        what you type here plus app and system details listed below — never your screenshots or
-        recordings.
-      </p>
-
-      <section className="settings-section feedback-section">
-        <h2>Category</h2>
-        <div className="feedback-categories" role="radiogroup" aria-label="Feedback category">
-          {CATEGORIES.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              className={`feedback-category${category === item.id ? " active" : ""}`}
-              role="radio"
-              aria-checked={category === item.id}
-              onClick={() => setCategory(item.id)}
+        <section className="settings-card feedback-section">
+          <div className="feedback-field">
+            <span className="field-label" id="feedback-category-label">Category</span>
+            <div
+              className="feedback-categories"
+              role="radiogroup"
+              aria-labelledby="feedback-category-label"
+              aria-label="Feedback category"
             >
-              <strong>{item.label}</strong>
-              <small>{item.description}</small>
-            </button>
-          ))}
-        </div>
-      </section>
-
-      <section className="settings-section feedback-section">
-        <label className="field-label" htmlFor="feedback-message">
-          Message
-        </label>
-        <textarea
-          id="feedback-message"
-          className="feedback-message"
-          value={message}
-          onChange={(event) => {
-            setMessage(event.target.value);
-            if (status === "sent" || status === "error") setStatus("idle");
-          }}
-          placeholder="What happened? What did you expect?"
-          rows={7}
-          maxLength={8_000}
-          disabled={status === "sending"}
-        />
-      </section>
-
-      <section className="settings-section feedback-section">
-        <label className="field-label" htmlFor="feedback-contact">
-          Contact <span className="feedback-optional">(optional)</span>
-        </label>
-        <input
-          id="feedback-contact"
-          className="feedback-contact"
-          value={contact}
-          onChange={(event) => setContact(event.target.value)}
-          placeholder="X handle, GitHub username, email…"
-          maxLength={200}
-          disabled={status === "sending"}
-          autoComplete="off"
-          spellCheck={false}
-        />
-        <p className="help-text">Only if you want a reply. Leave blank to stay anonymous.</p>
-      </section>
-
-      <section className="settings-section feedback-section">
-        <h2>Included automatically</h2>
-        <dl className="feedback-meta">
-          <div>
-            <dt>App version</dt>
-            <dd>{context?.app_version ?? "…"}</dd>
+              {CATEGORIES.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={`feedback-category${category === item.id ? " active" : ""}`}
+                  role="radio"
+                  aria-checked={category === item.id}
+                  onClick={() => setCategory(item.id)}
+                >
+                  <strong>{item.label}</strong>
+                  <small>{item.description}</small>
+                </button>
+              ))}
+            </div>
           </div>
-          <div>
-            <dt>System</dt>
-            <dd>{context ? formatOsLabel(context) : "…"}</dd>
+
+          <div className="feedback-field">
+            <label className="field-label" htmlFor="feedback-message">Message</label>
+            <textarea
+              id="feedback-message"
+              className="feedback-message"
+              value={message}
+              onChange={(event) => {
+                setMessage(event.target.value);
+                if (status === "sent" || status === "error") setStatus("idle");
+              }}
+              placeholder="What happened? What did you expect?"
+              rows={7}
+              maxLength={8_000}
+              disabled={status === "sending"}
+            />
           </div>
-        </dl>
-      </section>
 
-      {status === "error" && error && (
-        <p className="feedback-status feedback-status-error" role="alert">
-          {error}
-        </p>
-      )}
-      {status === "sent" && (
-        <p className="feedback-status feedback-status-ok" role="status">
-          Thanks — feedback sent.
-        </p>
-      )}
+          <div className="feedback-field">
+            <label className="field-label" htmlFor="feedback-contact">
+              Contact <span className="feedback-optional">optional</span>
+            </label>
+            <input
+              id="feedback-contact"
+              className="feedback-contact"
+              value={contact}
+              onChange={(event) => setContact(event.target.value)}
+              placeholder="X handle, GitHub username, email…"
+              maxLength={200}
+              disabled={status === "sending"}
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <p className="help-text">Only if you want a reply. Leave blank to stay anonymous.</p>
+          </div>
+        </section>
 
-      <div className="feedback-actions">
-        <button
-          type="button"
-          className="feedback-submit"
-          disabled={!canSubmit}
-          onClick={() => void submit()}
-        >
-          {status === "sending" ? "Sending…" : "Send feedback"}
-        </button>
+        <section className="settings-card feedback-section feedback-meta-card">
+          <h2>Included automatically</h2>
+          <dl className="feedback-meta">
+            <div>
+              <dt>App version</dt>
+              <dd>{context?.app_version ?? "…"}</dd>
+            </div>
+            <div>
+              <dt>System</dt>
+              <dd>{context ? formatOsLabel(context) : "…"}</dd>
+            </div>
+          </dl>
+        </section>
+
+        <footer className="feedback-actions">
+          {status === "error" && error && (
+            <p className="feedback-status feedback-status-error" role="alert">
+              {error}
+            </p>
+          )}
+          {status === "sent" && (
+            <p className="feedback-status feedback-status-ok" role="status">
+              Thanks — feedback sent.
+            </p>
+          )}
+          <button
+            type="button"
+            className="feedback-submit"
+            disabled={!canSubmit}
+            onClick={() => void submit()}
+          >
+            {status === "sending" ? "Sending…" : "Send feedback"}
+          </button>
+        </footer>
       </div>
     </main>
   );

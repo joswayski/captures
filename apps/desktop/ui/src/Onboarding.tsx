@@ -27,6 +27,18 @@ function MicrophoneAccessIcon() {
   );
 }
 
+function AppMarkIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M9 4H7a3 3 0 0 0-3 3v2M15 4h2a3 3 0 0 1 3 3v2M20 15v2a3 3 0 0 1-3 3h-2M9 20H7a3 3 0 0 1-3-3v-2" />
+      <path
+        className="capture-icon-spark"
+        d="M12 8.5c.4 1.8 1.7 3.1 3.5 3.5-1.8.4-3.1 1.7-3.5 3.5-.4-1.8-1.7-3.1-3.5-3.5 1.8-.4 3.1-1.7 3.5-3.5Z"
+      />
+    </svg>
+  );
+}
+
 function CheckmarkIcon() {
   return (
     <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -264,7 +276,13 @@ export function Onboarding() {
     <main className="onboarding-shell">
       <div className="onboarding-stage">
         <header className="onboarding-copy" aria-labelledby="onboarding-setup-title">
+          <span className="onboarding-mark" aria-hidden="true"><AppMarkIcon /></span>
+          <p className="eyebrow">Welcome to Captures</p>
           <h1 id="onboarding-setup-title">{setupTitle(setup?.platform)}</h1>
+          <p className="onboarding-lede">
+            Captures only reads the pixels you choose to capture. Nothing is uploaded, and nothing
+            leaves this computer unless you send it somewhere.
+          </p>
         </header>
 
         <div className="onboarding-panel">

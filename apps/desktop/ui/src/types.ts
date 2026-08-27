@@ -1,6 +1,7 @@
+import type { AppearanceMode } from "../../../../shared/appearance";
 import type { ColorTheme, CustomThemeColors } from "../../../../shared/themes";
 
-export type { ColorTheme, CustomThemeColors };
+export type { AppearanceMode, ColorTheme, CustomThemeColors };
 
 export type CaptureMode = "region" | "window" | "display";
 export type RecordingKind = "video" | "gif";
@@ -56,6 +57,7 @@ export interface ActiveSession {
 
 export interface AppSettings {
   settings_schema_version?: number;
+  appearance: AppearanceMode;
   theme: ColorTheme;
   custom_theme: CustomThemeColors;
   output_directory: string;
