@@ -7,6 +7,9 @@ import {
 
 const REPO_API = "https://api.github.com/repos/joswayski/captures";
 const PREVIEW_TAG = /^v(\d{4})\.(\d{2})\.(\d{2})\.([1-9]\d?)$/u;
+const GITHUB_TIMEOUT_MS = 5_000;
+/** How long to serve the fallback before retrying GitHub after a failed lookup. */
+const FAILURE_RETRY_MS = 60_000;
 
 type GitHubRelease = {
   draft: boolean;
@@ -49,6 +52,9 @@ async function githubJson<T>(path: string): Promise<T> {
       "User-Agent": "captures-web",
       "X-GitHub-Api-Version": "2022-11-28",
     },
+    // Homepage SSR awaits these lookups; a hung GitHub connection must not
+    // stall page responses indefinitely.
+    signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
   });
   if (!response.ok) {
     throw new Error(`GitHub request failed (${response.status})`);
@@ -138,6 +144,18 @@ export async function resolveCookingPreviewShas(
         value,
       };
       return value;
+    })
+    .catch((error: unknown) => {
+      // Back off instead of retrying GitHub on every request during an
+      // outage. Serve the last known value (possibly expired) meanwhile.
+      const fallback =
+        cookingPreviewCache?.key === cacheKey ? cookingPreviewCache.value : [];
+      cookingPreviewCache = {
+        key: cacheKey,
+        expiresAt: Date.now() + FAILURE_RETRY_MS,
+        value: fallback,
+      };
+      throw error;
     })
     .finally(() => {
       if (cookingPreviewInflight?.promise === promise) {

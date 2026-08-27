@@ -5,6 +5,7 @@ const MAX_CONTACT_LEN = 200;
 const MAX_META_LEN = 128;
 const MAX_BODY_BYTES = 32 * 1024;
 const DISCORD_DESCRIPTION_MAX = 4_000;
+const DISCORD_TIMEOUT_MS = 10_000;
 
 const ALLOWED_WEB_ORIGINS = new Set([
   "https://captur.es",
@@ -133,6 +134,9 @@ async function createFeedback(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(discordPayload),
+      // Bound the outbound request so a stalled Discord connection cannot
+      // pin this handler (and its socket) open indefinitely.
+      signal: AbortSignal.timeout(DISCORD_TIMEOUT_MS),
     });
   } catch (error) {
     console.error("Discord webhook request failed", error);
