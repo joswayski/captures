@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { createMemoryRateLimiter } from "./rateLimit.ts";
 import { buildDiscordPayload, handleApiRequest, type ApiEnv } from "./api.ts";
 
 function createEnv(options: { rateLimitSuccess?: boolean; webhook?: string } = {}) {
@@ -192,4 +193,32 @@ test("keeps Discord descriptions within the embed limit", () => {
 
   assert.equal(Array.from(payload.embeds[0].description).length, 4_000);
   assert.match(payload.embeds[0].description, /…$/u);
+});
+
+test("refunds the rate limit when Discord delivery fails", async () => {
+  const env: ApiEnv = {
+    DISCORD_WEBHOOK_URL: "https://discord.com/api/webhooks/123/example-token",
+    FEEDBACK_RATE_LIMITER: createMemoryRateLimiter({ limit: 1, periodMs: 60_000 }),
+  };
+  const request = () =>
+    new Request("https://captur.es/api/feedback", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "CF-Connecting-IP": "203.0.113.9",
+      },
+      body: JSON.stringify({ message: "Recording freezes" }),
+    });
+
+  const failed = await handleApiRequest(request(), env, async () => {
+    throw new Error("network down");
+  });
+  assert.equal(failed.status, 502);
+
+  const retry = await handleApiRequest(
+    request(),
+    env,
+    async () => new Response(null, { status: 204 }),
+  );
+  assert.equal(retry.status, 201);
 });

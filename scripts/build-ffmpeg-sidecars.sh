@@ -93,6 +93,7 @@ else
 fi
 if [[ "$ACTUAL_SHA256" != "$FFMPEG_SHA256" ]]; then
   echo "FFmpeg source checksum mismatch: expected $FFMPEG_SHA256, got $ACTUAL_SHA256" >&2
+  rm -f "$SOURCE_ARCHIVE"
   exit 1
 fi
 if [[ ! -f "$SOURCE_SIGNATURE" ]]; then
@@ -101,13 +102,17 @@ if [[ ! -f "$SOURCE_SIGNATURE" ]]; then
     -o "$SOURCE_SIGNATURE"
 fi
 
+ensure_ffmpeg_source() {
+  if [[ ! -d "$SOURCE_DIRECTORY" ]]; then
+    tar -xf "$SOURCE_ARCHIVE" -C "$BUILD_ROOT"
+  fi
+}
+
 if [[ ! -x "$FFMPEG_OUTPUT" || ! -x "$FFPROBE_OUTPUT" || "${CAPTURES_REBUILD_FFMPEG:-0}" == "1" ]]; then
   if [[ "${CAPTURES_REBUILD_FFMPEG:-0}" == "1" && -d "$SOURCE_DIRECTORY" ]]; then
     rm -rf "$SOURCE_DIRECTORY"
   fi
-  if [[ ! -d "$SOURCE_DIRECTORY" ]]; then
-    tar -xf "$SOURCE_ARCHIVE" -C "$BUILD_ROOT"
-  fi
+  ensure_ffmpeg_source
   pushd "$SOURCE_DIRECTORY" >/dev/null
   make distclean >/dev/null 2>&1 || true
   ./configure "${CONFIGURE_FLAGS[@]}"
@@ -125,6 +130,7 @@ if [[ ! -x "$FFMPEG_OUTPUT" || ! -x "$FFPROBE_OUTPUT" || "${CAPTURES_REBUILD_FFM
   chmod 755 "$FFMPEG_OUTPUT" "$FFPROBE_OUTPUT"
 fi
 
+ensure_ffmpeg_source
 cp "$SOURCE_DIRECTORY/COPYING.LGPLv2.1" "$COMPLIANCE_DIRECTORY/COPYING.LGPLv2.1"
 cp "$SOURCE_ARCHIVE" "$DIST_DIRECTORY/ffmpeg-$FFMPEG_VERSION.tar.xz"
 cp "$SOURCE_SIGNATURE" "$DIST_DIRECTORY/ffmpeg-$FFMPEG_VERSION.tar.xz.asc"

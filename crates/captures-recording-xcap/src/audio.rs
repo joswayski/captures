@@ -361,6 +361,12 @@ impl CpalAudioSegment {
     }
 }
 
+impl Drop for CpalAudioSegment {
+    fn drop(&mut self) {
+        let _ = self.finish_thread();
+    }
+}
+
 fn run_cpal_audio(
     source: CpalSource,
     path: &Path,

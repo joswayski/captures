@@ -316,7 +316,8 @@ pub fn save_history_capture(
 ) -> Result<(), AppError> {
     let directory = crate::models::history_directory();
     save_history_capture_in(&directory, entry, image_png, preview_png)?;
-    let _ = load_capture_history_from(&directory, Utc::now())?;
+    // Expired entries are pruned when history is loaded at launch, not after
+    // every save, so capture latency does not grow with history size.
     Ok(())
 }
 
@@ -350,7 +351,6 @@ pub fn save_history_recording(
         poster_png,
         Some((media_source, media_name.as_str())),
     )?;
-    let _ = load_capture_history_from(&directory, Utc::now())?;
     recovery_path
         .ok_or_else(|| AppError::Task("recording history media was not written".to_owned()))
 }

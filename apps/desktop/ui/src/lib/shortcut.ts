@@ -74,27 +74,17 @@ const SUPPORTED_NAMED_CODES = new Set([
   "ArrowUp",
 ]);
 
-const DISPLAY_NAMES: Record<string, string> = {
-  alt: "Option",
-  option: "Option",
+export type ShortcutPlatform = "macos" | "windows" | "linux";
+
+const SHARED_DISPLAY_NAMES: Record<string, string> = {
   control: "Ctrl",
   ctrl: "Ctrl",
   shift: "Shift",
-  command: "Cmd",
-  cmd: "Cmd",
-  super: "Cmd",
-  meta: "Cmd",
-  commandorcontrol: "Cmd",
-  commandorctrl: "Cmd",
-  cmdorcontrol: "Cmd",
-  cmdorctrl: "Cmd",
   Backquote: "`",
   Backslash: "\\",
-  Backspace: "Delete",
   BracketLeft: "[",
   BracketRight: "]",
   Comma: ",",
-  Enter: "Return",
   Equal: "=",
   Minus: "-",
   Period: ".",
@@ -115,6 +105,66 @@ const DISPLAY_NAMES: Record<string, string> = {
   NumpadSubtract: "Num -",
 };
 
+const MACOS_DISPLAY_NAMES: Record<string, string> = {
+  ...SHARED_DISPLAY_NAMES,
+  alt: "Option",
+  option: "Option",
+  command: "Cmd",
+  cmd: "Cmd",
+  super: "Cmd",
+  meta: "Cmd",
+  commandorcontrol: "Cmd",
+  commandorctrl: "Cmd",
+  cmdorcontrol: "Cmd",
+  cmdorctrl: "Cmd",
+  Backspace: "Delete",
+  Enter: "Return",
+};
+
+const WINDOWS_DISPLAY_NAMES: Record<string, string> = {
+  ...SHARED_DISPLAY_NAMES,
+  alt: "Alt",
+  option: "Alt",
+  command: "Win",
+  cmd: "Win",
+  super: "Win",
+  meta: "Win",
+  commandorcontrol: "Ctrl",
+  commandorctrl: "Ctrl",
+  cmdorcontrol: "Ctrl",
+  cmdorctrl: "Ctrl",
+  Backspace: "Backspace",
+  Enter: "Enter",
+};
+
+const LINUX_DISPLAY_NAMES: Record<string, string> = {
+  ...WINDOWS_DISPLAY_NAMES,
+  command: "Super",
+  cmd: "Super",
+  super: "Super",
+  meta: "Super",
+};
+
+export function detectShortcutPlatform(
+  userAgent = typeof navigator === "undefined" ? "" : navigator.userAgent,
+): ShortcutPlatform {
+  if (/Mac(?:intosh| OS X)/i.test(userAgent)) return "macos";
+  if (/Win(?:dows)?/i.test(userAgent)) return "windows";
+  return "linux";
+}
+
+function displayNamesFor(platform: ShortcutPlatform): Record<string, string> {
+  if (platform === "macos") return MACOS_DISPLAY_NAMES;
+  if (platform === "windows") return WINDOWS_DISPLAY_NAMES;
+  return LINUX_DISPLAY_NAMES;
+}
+
+function modifierRequirementMessage(platform: ShortcutPlatform): string {
+  if (platform === "macos") return "Include Ctrl, Shift, Option, or Command.";
+  if (platform === "windows") return "Include Ctrl, Shift, Alt, or Win.";
+  return "Include Ctrl, Shift, Alt, or Super.";
+}
+
 export function isModifierCode(code: string): boolean {
   return MODIFIER_CODES.has(code);
 }
@@ -133,13 +183,20 @@ function canonicalModifiers(event: ShortcutKeyEvent): string[] {
   return modifiers;
 }
 
-export function modifierDisplayTokens(event: ShortcutKeyEvent): string[] {
-  return canonicalModifiers(event).map(displayShortcutToken);
+export function modifierDisplayTokens(
+  event: ShortcutKeyEvent,
+  platform: ShortcutPlatform = detectShortcutPlatform(),
+): string[] {
+  return canonicalModifiers(event).map((token) => displayShortcutToken(token, platform));
 }
 
-export function displayShortcutToken(token: string): string {
+export function displayShortcutToken(
+  token: string,
+  platform: ShortcutPlatform = detectShortcutPlatform(),
+): string {
+  const names = displayNamesFor(platform);
   const normalized = token.trim();
-  const named = DISPLAY_NAMES[normalized] ?? DISPLAY_NAMES[normalized.toLowerCase()];
+  const named = names[normalized] ?? names[normalized.toLowerCase()];
   if (named) return named;
   if (/^Key[A-Z]$/i.test(normalized)) return normalized.slice(3).toUpperCase();
   if (/^Digit[0-9]$/i.test(normalized)) return normalized.slice(5);
@@ -147,21 +204,27 @@ export function displayShortcutToken(token: string): string {
   return normalized;
 }
 
-export function shortcutDisplayTokens(shortcut: string): string[] {
+export function shortcutDisplayTokens(
+  shortcut: string,
+  platform: ShortcutPlatform = detectShortcutPlatform(),
+): string[] {
   return shortcut
     .split("+")
-    .map(displayShortcutToken)
+    .map((token) => displayShortcutToken(token, platform))
     .filter(Boolean);
 }
 
-export function recordShortcut(event: ShortcutKeyEvent): ShortcutRecordingResult {
+export function recordShortcut(
+  event: ShortcutKeyEvent,
+  platform: ShortcutPlatform = detectShortcutPlatform(),
+): ShortcutRecordingResult {
   if (event.code === "Escape") return { kind: "cancel" };
 
   const modifiers = canonicalModifiers(event);
-  const modifierKeys = modifiers.map(displayShortcutToken);
+  const modifierKeys = modifiers.map((token) => displayShortcutToken(token, platform));
   if (isModifierCode(event.code)) return { kind: "waiting", keys: modifierKeys };
 
-  const key = displayShortcutToken(event.code);
+  const key = displayShortcutToken(event.code, platform);
   if (!isSupportedShortcutCode(event.code)) {
     return {
       kind: "invalid",
@@ -173,7 +236,7 @@ export function recordShortcut(event: ShortcutKeyEvent): ShortcutRecordingResult
     return {
       kind: "invalid",
       keys: [key],
-      message: "Include Ctrl, Shift, Option, or Command.",
+      message: modifierRequirementMessage(platform),
     };
   }
 

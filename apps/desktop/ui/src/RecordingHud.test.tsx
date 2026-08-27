@@ -173,7 +173,7 @@ describe("RecordingHud", () => {
     render(<RecordingControlsHiddenNotice />);
 
     expect(screen.getByText("Recording controls hidden")).toBeInTheDocument();
-    expect(screen.getByText(/Open Captures from the taskbar, or press/)).toBeInTheDocument();
+    expect(screen.getByText(/Open Captures from the (menu bar|tray), or press/)).toBeInTheDocument();
     expect(await screen.findByText("Ctrl")).toBeInTheDocument();
     expect(screen.getByText("Shift")).toBeInTheDocument();
     expect(screen.getByText("Space")).toBeInTheDocument();

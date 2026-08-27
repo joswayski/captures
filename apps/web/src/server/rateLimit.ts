@@ -1,5 +1,6 @@
 export interface RateLimiter {
   limit(input: { key: string }): Promise<{ success: boolean }>;
+  refund?(input: { key: string }): Promise<void>;
 }
 
 export function createMemoryRateLimiter(options: {
@@ -37,6 +38,17 @@ export function createMemoryRateLimiter(options: {
       recent.push(now);
       hits.set(key, recent);
       return { success: true };
+    },
+    async refund({ key }) {
+      const now = Date.now();
+      const windowStart = now - options.periodMs;
+      const recent = (hits.get(key) ?? []).filter((timestamp) => timestamp > windowStart);
+      recent.pop();
+      if (recent.length === 0) {
+        hits.delete(key);
+      } else {
+        hits.set(key, recent);
+      }
     },
   };
 }

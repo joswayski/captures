@@ -130,6 +130,12 @@ impl PipeWireSystemAudioSegment {
     }
 }
 
+impl Drop for PipeWireSystemAudioSegment {
+    fn drop(&mut self) {
+        let _ = self.finish_thread();
+    }
+}
+
 fn run_pipewire_system_audio(
     path: &Path,
     failure: Arc<Mutex<Option<String>>>,

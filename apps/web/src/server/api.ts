@@ -140,15 +140,25 @@ async function createFeedback(
     });
   } catch (error) {
     console.error("Discord webhook request failed", error);
+    await refundRateLimit(env, clientKey);
     return json(request, { error: "failed to deliver feedback" }, 502);
   }
 
   if (!response.ok) {
     console.warn("Discord webhook rejected feedback", response.status);
+    await refundRateLimit(env, clientKey);
     return json(request, { error: "failed to deliver feedback" }, 502);
   }
 
   return json(request, { ok: true }, 201);
+}
+
+async function refundRateLimit(env: ApiEnv, clientKey: string): Promise<void> {
+  try {
+    await env.FEEDBACK_RATE_LIMITER.refund?.({ key: `feedback:${clientKey}` });
+  } catch (error) {
+    console.error("feedback rate limiter refund failed", error);
+  }
 }
 
 async function readBody(request: Request): Promise<ParseResult<string>> {
