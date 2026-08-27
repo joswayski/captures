@@ -3465,7 +3465,11 @@ fn resolve_startup_notice_placement(
         None => fallback_startup_notice(
             monitor,
             work_area,
-            startup_notice_fallback_edge(monitor, work_area),
+            if menu_bar_at_top {
+                StartupNoticeCaret::Top
+            } else {
+                startup_notice_fallback_edge(monitor, work_area)
+            },
         ),
     }
 }
