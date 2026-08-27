@@ -1211,6 +1211,17 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   background: var(--app-canvas);
 }
 .preferences.loading, .feedback.loading { padding: 28px 32px; }
+.feedback {
+  display: grid;
+  height: 100%;
+  overflow: hidden;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+.feedback-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
+}
 .preferences {
   display: grid;
   height: 100%;
@@ -1257,8 +1268,8 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   padding: 28px 32px 48px;
   overflow-y: auto;
 }
-.feedback { padding: 28px 32px 40px; }
-.preferences-header, .feedback-header { display: flex; justify-content: space-between; align-items: start; margin-bottom: 28px; }
+.feedback { padding: 24px 28px 28px; }
+.preferences-header, .feedback-header { display: flex; justify-content: space-between; align-items: start; margin-bottom: 22px; }
 .preferences-header-actions { display: flex; min-width: 0; margin-left: 18px; align-items: center; gap: 10px; }
 .preferences-save-status { display: flex; min-width: 0; max-width: 42vw; min-height: 28px; padding: 5px 10px; overflow: hidden; align-items: center; gap: 6px; border: 1px solid var(--app-border); border-radius: 999px; color: var(--app-ink-muted); background: var(--app-elevated); font-size: 12px; font-weight: 520; text-overflow: ellipsis; white-space: nowrap; animation: preferences-status-arrive .18s ease-out; }
 .preferences-save-status > span { display: grid; width: 14px; height: 14px; place-items: center; border-radius: 50%; font-size: 10px; font-weight: 700; }
@@ -1273,23 +1284,23 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 .preferences h1, .feedback h1 { margin-top: 4px; font-size: 26px; font-weight: 560; letter-spacing: -.04em; }
 .settings-section { margin-bottom: 32px; padding-bottom: 8px; }
 .settings-section h2 { margin-bottom: 14px; color: var(--app-ink); font-size: 14px; font-weight: 560; letter-spacing: -.015em; }
-.feedback-intro { max-width: 42rem; margin: -8px 0 22px; color: var(--app-ink-muted); line-height: 1.5; }
-.feedback-section { margin-bottom: 18px; }
+.feedback-intro { max-width: 42rem; margin: -4px 0 16px; color: var(--app-ink-muted); line-height: 1.5; }
+.feedback-section { margin-bottom: 14px; }
 .feedback-optional { color: var(--app-ink-soft); font-weight: 500; }
 .feedback-categories { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-.feedback-category { display: grid; min-height: 78px; padding: 12px; align-content: start; gap: 6px; border: 1px solid var(--app-border); border-radius: 10px; color: var(--app-ink-muted); background: var(--app-elevated); text-align: left; }
+.feedback-category { display: grid; min-height: 64px; padding: 10px; align-content: start; gap: 4px; border: 1px solid var(--app-border); border-radius: 10px; color: var(--app-ink-muted); background: var(--app-elevated); text-align: left; }
 .feedback-category:hover { border-color: var(--app-border-strong); background: var(--app-raised); }
 .feedback-category.active { border-color: rgba(var(--theme-accent-rgb), .55); color: var(--app-ink); background: var(--theme-accent-surface); }
 .feedback-category strong { color: var(--app-ink); font-size: 13px; font-weight: 560; }
 .feedback-category small { color: var(--app-ink-muted); font-size: 12px; line-height: 1.4; }
 .feedback-message, .feedback-contact { width: 100%; margin-top: 7px; border: 1px solid var(--app-border); border-radius: 10px; padding: 10px 12px; color: var(--app-ink); background: var(--app-field); outline: none; font: inherit; resize: vertical; }
 .feedback-message:focus, .feedback-contact:focus { border-color: var(--chrome-active); box-shadow: 0 0 0 3px rgba(var(--theme-accent-rgb), .16); }
-.feedback-message { min-height: 140px; line-height: 1.5; }
+.feedback-message { min-height: 108px; line-height: 1.5; }
 .feedback-meta { display: grid; gap: 8px; margin: 0; padding: 12px; border: 1px solid var(--app-border); border-radius: 10px; background: var(--app-elevated); }
 .feedback-meta > div { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 10px; align-items: baseline; }
 .feedback-meta dt { color: var(--app-ink-muted); font-size: 12px; font-weight: 520; }
 .feedback-meta dd { margin: 0; color: var(--app-ink); font-size: 12px; font-weight: 520; overflow-wrap: anywhere; }
-.feedback-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
+.feedback-actions { display: flex; justify-content: flex-end; padding-top: 12px; border-top: 1px solid var(--app-border); }
 .feedback-submit { min-height: 36px; border: 0; border-radius: 8px; padding: 8px 14px; color: var(--chrome-active-ink); background: var(--chrome-active); font-size: 13px; font-weight: 560; }
 .feedback-submit:hover:not(:disabled) { background: var(--chrome-active-hover); }
 .feedback-submit:disabled { cursor: not-allowed; opacity: .55; }
@@ -1499,7 +1510,7 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 @keyframes recording-options-arrive { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
 
 /* Recording editor */
-.recording-editor { width: 100%; min-height: 100%; padding: 24px 28px 30px; overflow-y: auto; color: var(--app-ink); background: var(--app-canvas); }
+.recording-editor { width: 100%; min-height: 100%; padding: 24px 28px 110px; overflow-y: auto; color: var(--app-ink); background: var(--app-canvas); }
 .recording-editor-loading { display: grid; place-items: center; color: var(--app-ink-muted); background: var(--app-canvas); }
 .recording-editor-header { display: flex; max-width: 1220px; margin: 0 auto 18px; align-items: center; justify-content: space-between; gap: 20px; }
 .recording-editor-header h1 { margin-top: 2px; font-size: 24px; font-weight: 560; letter-spacing: -.04em; }
@@ -4163,7 +4174,6 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   .screenshot-export-settings { gap: 8px 10px; }
 }
 
-.feedback { height: 100%; overflow-y: auto; }
 .recording-settings-section { padding: 14px; border: 1px solid var(--app-border); border-radius: 12px; background: var(--app-surface); }
 .recording-settings-section + .recording-settings-section { margin-top: 14px; }
 .settings-subheading { margin: 18px 0 10px; color: var(--app-ink); font-size: 13px; font-weight: 560; letter-spacing: -.015em; }

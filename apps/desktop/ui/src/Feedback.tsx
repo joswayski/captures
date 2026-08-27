@@ -88,6 +88,7 @@ export function Feedback() {
         </div>
       </header>
 
+      <div className="feedback-scroll">
       <p className="help-text feedback-intro">
         Tell us what broke, what is missing, or what you wish worked better. Captures only sends
         what you type here plus app and system details listed below — never your screenshots or
@@ -174,6 +175,7 @@ export function Feedback() {
           Thanks — feedback sent.
         </p>
       )}
+      </div>
 
       <div className="feedback-actions">
         <button

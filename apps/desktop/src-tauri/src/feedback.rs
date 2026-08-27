@@ -210,8 +210,8 @@ pub fn show_feedback(app: &AppHandle) {
             WebviewUrl::App("index.html?view=feedback".into()),
         )
         .title("Send Feedback")
-        .inner_size(520.0, 620.0)
-        .min_inner_size(440.0, 520.0)
+        .inner_size(520.0, 700.0)
+        .min_inner_size(440.0, 560.0)
         .center()
         .resizable(true)
         .background_color(Color(11, 11, 13, 255))

@@ -111,6 +111,16 @@ function images() {
   return { snapshotUrl, timelineUrl };
 }
 
+function dataUrlPngBytes(url: string): number[] {
+  const encoded = url.split(",")[1] ?? "";
+  const binary = atob(encoded);
+  const bytes = new Array<number>(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
 const previewSettings: AppSettings = {
   theme: "mustard",
   custom_theme: {
@@ -516,6 +526,10 @@ async function previewInvoke(command: string, args?: Record<string, unknown>): P
       return command === "estimate_recording_export"
         ? { sizeBytes: 2_400_000, exact: false }
         : 180_000;
+    case "preview_recording_export": {
+      const bytes = dataUrlPngBytes(images().snapshotUrl);
+      return { beforePng: bytes, afterPng: bytes };
+    }
     default:
       return undefined;
   }
