@@ -3520,6 +3520,7 @@ fn startup_notice_fallback_edge(
     startup_notice_fallback_edge_from_insets(monitor, work_area)
 }
 
+#[cfg(any(test, not(any(target_os = "macos", target_os = "windows"))))]
 fn startup_notice_fallback_edge_from_insets(
     monitor: LogicalRect,
     work_area: LogicalRect,
