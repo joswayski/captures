@@ -62,6 +62,8 @@ import {
   transformImageElement,
   TEXT_LINE_HEIGHT_RATIO,
   textStylePreset,
+  textGlyphDrawY,
+  TEXT_OPTICAL_CENTER_NUDGE_RATIO,
   visibleContentBounds,
   wrapTextLines,
   fitAutoWidthTextElement,
@@ -1232,6 +1234,12 @@ describe("screenshot editor geometry", () => {
     expect(hitTestResizeHandle(bounds, { x: 200, y: 100 }, 8)).toBeNull();
     // Dragging the dashed border strip (not just the mid grip) also counts.
     expect(hitTestResizeHandle(bounds, { x: 180, y: 50 }, 8)).toBe("n");
+    // Labels scale as a unit: mid-edge hits map to the nearest corner.
+    expect(hitTestResizeHandle(bounds, { x: 200, y: 50 }, 8, "corners")).toBe("ne");
+    expect(hitTestResizeHandle(bounds, { x: 200, y: 150 }, 8, "corners")).toBe("se");
+    expect(hitTestResizeHandle(bounds, { x: 100, y: 100 }, 8, "corners")).toBe("sw");
+    expect(hitTestResizeHandle(bounds, { x: 180, y: 50 }, 8, "corners")).toBe("nw");
+    expect(hitTestResizeHandle(bounds, { x: 100, y: 50 }, 8, "corners")).toBe("nw");
 
     expect(resizeBoundsFromHandle(bounds, "se", { x: 400, y: 250 }, 8)).toEqual({
       x: 100,
@@ -1646,6 +1654,26 @@ describe("screenshot editor geometry", () => {
       .toBeLessThan(12);
     const longer = scaleArrowStrokeForLength(long, { ...long, endX: 400 });
     expect(longer.style.strokeWidth).toBe(8);
+  });
+
+  it("draws text glyphs toward the optical center of the line box", () => {
+    const top = 40;
+    const fontSize = 40;
+    const fallback = textGlyphDrawY(top, fontSize, 0);
+    expect(fallback.baseline).toBe("middle");
+    expect(fallback.y).toBeCloseTo(
+      top + (fontSize * TEXT_LINE_HEIGHT_RATIO) / 2 + fontSize * TEXT_OPTICAL_CENTER_NUDGE_RATIO,
+      5,
+    );
+
+    const measured = textGlyphDrawY(top, fontSize, 0, {
+      actualBoundingBoxAscent: 28,
+      actualBoundingBoxDescent: 8,
+    });
+    expect(measured.baseline).toBe("alphabetic");
+    const mid = top + (fontSize * TEXT_LINE_HEIGHT_RATIO) / 2;
+    expect(measured.y).toBeCloseTo(mid + (28 - 8) / 2, 5);
+    expect(measured.y).toBeGreaterThan(fallback.y);
   });
 
   it("applies all named text styles without changing content or color", () => {

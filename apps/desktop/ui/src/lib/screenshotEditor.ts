@@ -266,6 +266,48 @@ export const TEXT_BACKGROUND_PAD_X_RATIO = 0.22;
  */
 export const TEXT_BACKGROUND_PAD_Y_RATIO = 0.2;
 
+/**
+ * Extra downward shift when glyph bounding boxes are unavailable.
+ * Latin caps sit high in the em square; this keeps labels optically centered
+ * in rounded-box plates instead of hugging the top.
+ */
+export const TEXT_OPTICAL_CENTER_NUDGE_RATIO = 0.07;
+
+/** Metrics used to sit glyphs in the vertical center of a line box. */
+export type TextGlyphMetrics = {
+  actualBoundingBoxAscent?: number;
+  actualBoundingBoxDescent?: number;
+};
+
+/**
+ * fillText Y and baseline so the painted letters sit in the middle of the
+ * line box (and therefore the background plate), not at the em-square top.
+ */
+export function textGlyphDrawY(
+  lineTop: number,
+  fontSize: number,
+  lineIndex: number,
+  metrics?: TextGlyphMetrics | null,
+): { y: number; baseline: "alphabetic" | "middle" } {
+  const lineHeight = fontSize * TEXT_LINE_HEIGHT_RATIO;
+  const mid = lineTop + lineIndex * lineHeight + lineHeight / 2;
+  const ascent = metrics?.actualBoundingBoxAscent;
+  const descent = metrics?.actualBoundingBoxDescent;
+  if (
+    typeof ascent === "number"
+    && typeof descent === "number"
+    && Number.isFinite(ascent)
+    && Number.isFinite(descent)
+    && ascent + descent > 1
+  ) {
+    return { y: mid + (ascent - descent) / 2, baseline: "alphabetic" };
+  }
+  return {
+    y: mid + fontSize * TEXT_OPTICAL_CENTER_NUDGE_RATIO,
+    baseline: "middle",
+  };
+}
+
 /** Minimum text box width so a single glyph still fits. */
 export function minTextBoxWidth(fontSize: number): number {
   return Math.max(8, Math.round(fontSize * 0.5));
@@ -2278,13 +2320,18 @@ const RESIZE_CORNER_HANDLES: ResizeHandle[] = ["nw", "ne", "se", "sw"];
 /**
  * Hit-test corner grips, mid-edge grips, and the dashed selection border itself.
  * `handleRadius` is in document pixels (scale for display zoom before calling).
+ *
+ * `grips: "corners"` is for labels that must scale as a unit: mid-edge squares
+ * are ignored, and dragging the dashed border maps onto the nearest corner.
  */
 export function hitTestResizeHandle(
   bounds: EditorRect,
   point: EditorPoint,
   handleRadius: number,
+  grips: "all" | "corners" = "all",
 ): ResizeHandle | null {
   const radius = Math.max(4, handleRadius);
+  const cornersOnly = grips === "corners";
   // Corners first so diagonal grips win over edge strips near the same pixel.
   for (const handle of RESIZE_CORNER_HANDLES) {
     const corner = resizeHandlePoint(bounds, handle);
@@ -2295,14 +2342,16 @@ export function hitTestResizeHandle(
       return handle;
     }
   }
-  for (const handle of RESIZE_HANDLES) {
-    if (RESIZE_CORNER_HANDLES.includes(handle)) continue;
-    const mid = resizeHandlePoint(bounds, handle);
-    if (
-      Math.abs(point.x - mid.x) <= radius
-      && Math.abs(point.y - mid.y) <= radius
-    ) {
-      return handle;
+  if (!cornersOnly) {
+    for (const handle of RESIZE_HANDLES) {
+      if (RESIZE_CORNER_HANDLES.includes(handle)) continue;
+      const mid = resizeHandlePoint(bounds, handle);
+      if (
+        Math.abs(point.x - mid.x) <= radius
+        && Math.abs(point.y - mid.y) <= radius
+      ) {
+        return handle;
+      }
     }
   }
 
@@ -2319,6 +2368,20 @@ export function hitTestResizeHandle(
   const nearRight = Math.abs(point.x - right) <= radius;
   const nearTop = Math.abs(point.y - top) <= radius;
   const nearBottom = Math.abs(point.y - bottom) <= radius;
+  const midX = left + bounds.width / 2;
+  const midY = top + bounds.height / 2;
+
+  if (cornersOnly) {
+    if (nearTop && nearLeft) return "nw";
+    if (nearTop && nearRight) return "ne";
+    if (nearBottom && nearRight) return "se";
+    if (nearBottom && nearLeft) return "sw";
+    if (nearTop) return point.x >= midX ? "ne" : "nw";
+    if (nearBottom) return point.x >= midX ? "se" : "sw";
+    if (nearLeft) return point.y >= midY ? "sw" : "nw";
+    if (nearRight) return point.y >= midY ? "se" : "ne";
+    return null;
+  }
 
   if (nearTop && !nearLeft && !nearRight) return "n";
   if (nearBottom && !nearLeft && !nearRight) return "s";
