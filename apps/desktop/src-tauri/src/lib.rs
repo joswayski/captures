@@ -3150,6 +3150,12 @@ const STARTUP_NOTICE_CARET_INSET: f64 = 28.0;
 /// pixels away from the icon instead of a full card-height below it.
 const STARTUP_NOTICE_TRAY_OVERLAP: f64 = 6.0;
 const STARTUP_NOTICE_SCREEN_MARGIN: f64 = 10.0;
+/// Status items and tray icons live in a thin band along a display edge.
+/// After an update restart, AppKit can report the status item at the Cocoa
+/// origin (bottom-left) before it has been placed in the menu bar.
+const STARTUP_NOTICE_TRAY_EDGE_BAND: f64 = 56.0;
+const STARTUP_NOTICE_TRAY_RETRY_ATTEMPTS: u32 = 20;
+const STARTUP_NOTICE_TRAY_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
 const STARTUP_NOTICE_AUTOSTART_VISIBLE: std::time::Duration = std::time::Duration::from_secs(5);
 /// After first-run setup, keep the tray hint up long enough to read.
 const STARTUP_NOTICE_AFTER_SETUP_VISIBLE: std::time::Duration = std::time::Duration::from_secs(15);
@@ -3270,10 +3276,14 @@ fn show_startup_notice(app: &AppHandle, visible_for: std::time::Duration) {
     std::thread::spawn(move || {
         // `TrayIcon::rect` hops to the main thread and waits. Calling it from
         // setup() would deadlock, and the status item may not have a screen
-        // rect until the event loop has run once.
-        let placement = startup_notice_placement_with_retry(&app);
+        // rect until the event loop has run once. After an update restart the
+        // menu bar can take several hundred milliseconds to assign a real frame.
+        let _ = startup_notice_placement_with_retry(&app);
         let handle = app.clone();
         if let Err(error) = app.run_on_main_thread(move || {
+            // Re-read on the main thread so we use the laid-out icon, not the
+            // stale bottom-left origin captured while waiting.
+            let placement = startup_notice_placement(&handle);
             if let Err(error) = create_startup_notice(&handle, placement, visible_for) {
                 eprintln!("failed to show Captures launch notice: {error}");
             }
@@ -3284,12 +3294,24 @@ fn show_startup_notice(app: &AppHandle, visible_for: std::time::Duration) {
 }
 
 fn startup_notice_placement_with_retry(app: &AppHandle) -> StartupNoticePlacement {
-    let first = startup_notice_placement(app);
-    if first.caret != StartupNoticeCaret::None {
-        return first;
+    let mut last = startup_notice_placement(app);
+    if last.caret != StartupNoticeCaret::None || !should_retry_startup_notice_tray() {
+        return last;
     }
-    std::thread::sleep(std::time::Duration::from_millis(80));
-    startup_notice_placement(app)
+    for _ in 0..STARTUP_NOTICE_TRAY_RETRY_ATTEMPTS {
+        std::thread::sleep(STARTUP_NOTICE_TRAY_RETRY_DELAY);
+        last = startup_notice_placement(app);
+        if last.caret != StartupNoticeCaret::None {
+            return last;
+        }
+    }
+    last
+}
+
+fn should_retry_startup_notice_tray() -> bool {
+    // Linux AppIndicator never reports a tray rect; waiting would only delay
+    // the fallback. macOS and Windows do report one once the icon is laid out.
+    cfg!(any(target_os = "macos", target_os = "windows"))
 }
 
 fn create_startup_notice(
@@ -3317,6 +3339,10 @@ fn create_startup_notice(
     .visible(false)
     .build()?;
     window.set_ignore_cursor_events(true)?;
+    // Builder `.position` is not enough on macOS: a borderless NSWindow is
+    // anchored at its bottom-left, and a hidden window can keep the default
+    // origin (the bottom-left of the display). Size first, then position.
+    apply_startup_notice_position(&window, placement)?;
 
     #[cfg(target_os = "macos")]
     captures_macos_window::show_without_activating(&window)
@@ -3324,6 +3350,8 @@ fn create_startup_notice(
 
     #[cfg(not(target_os = "macos"))]
     window.show()?;
+
+    apply_startup_notice_position(&window, placement)?;
 
     let timer_app = app.clone();
     std::thread::spawn(move || {
@@ -3335,6 +3363,15 @@ fn create_startup_notice(
             }
         });
     });
+    Ok(())
+}
+
+fn apply_startup_notice_position(
+    window: &tauri::WebviewWindow,
+    placement: StartupNoticePlacement,
+) -> Result<(), tauri::Error> {
+    window.set_size(LogicalSize::new(placement.width, placement.height))?;
+    window.set_position(tauri::LogicalPosition::new(placement.x, placement.y))?;
     Ok(())
 }
 
@@ -3358,15 +3395,13 @@ fn startup_notice_placement(app: &AppHandle) -> StartupNoticePlacement {
         })
         .or_else(|| app.primary_monitor().ok().flatten());
     let Some(monitor) = monitor else {
-        return place_startup_notice(
-            LogicalRect {
-                x: 0.0,
-                y: 0.0,
-                width: 1440.0,
-                height: 900.0,
-            },
-            None,
-        );
+        let bounds = LogicalRect {
+            x: 0.0,
+            y: 0.0,
+            width: 1440.0,
+            height: 900.0,
+        };
+        return resolve_startup_notice_placement(bounds, bounds, None, cfg!(target_os = "macos"));
     };
     let scale = monitor.scale_factor().max(1.0);
     let tray = tray.map(|(x, y, width, height)| LogicalRect {
@@ -3375,7 +3410,12 @@ fn startup_notice_placement(app: &AppHandle) -> StartupNoticePlacement {
         width: width / scale,
         height: height / scale,
     });
-    place_startup_notice(monitor_logical_rect(&monitor), tray)
+    resolve_startup_notice_placement(
+        monitor_logical_rect(&monitor),
+        monitor_logical_work_area(&monitor),
+        tray,
+        cfg!(target_os = "macos"),
+    )
 }
 
 fn tray_icon_physical_rect(app: &AppHandle) -> Option<(f64, f64, f64, f64)> {
@@ -3402,15 +3442,135 @@ fn monitor_logical_rect(monitor: &tauri::Monitor) -> LogicalRect {
     }
 }
 
-fn place_startup_notice(monitor: LogicalRect, tray: Option<LogicalRect>) -> StartupNoticePlacement {
-    let fallback = StartupNoticePlacement {
-        x: monitor.x + monitor.width - STARTUP_NOTICE_WIDTH - 18.0,
-        y: monitor.y + 30.0,
-        width: STARTUP_NOTICE_WIDTH,
-        height: STARTUP_NOTICE_HEIGHT,
-        caret: StartupNoticeCaret::None,
-        caret_x: STARTUP_NOTICE_WIDTH / 2.0,
+fn monitor_logical_work_area(monitor: &tauri::Monitor) -> LogicalRect {
+    let scale = monitor.scale_factor().max(1.0);
+    let work_area = monitor.work_area();
+    LogicalRect {
+        x: f64::from(work_area.position.x) / scale,
+        y: f64::from(work_area.position.y) / scale,
+        width: f64::from(work_area.size.width) / scale,
+        height: f64::from(work_area.size.height) / scale,
+    }
+}
+
+fn resolve_startup_notice_placement(
+    monitor: LogicalRect,
+    work_area: LogicalRect,
+    tray: Option<LogicalRect>,
+    menu_bar_at_top: bool,
+) -> StartupNoticePlacement {
+    let tray = tray.filter(|tray| tray_icon_rect_is_usable(monitor, *tray, menu_bar_at_top));
+    match tray {
+        Some(tray) => place_startup_notice(monitor, Some(tray)),
+        None => fallback_startup_notice(
+            monitor,
+            work_area,
+            startup_notice_fallback_edge(monitor, work_area),
+        ),
+    }
+}
+
+fn tray_icon_rect_is_usable(
+    monitor: LogicalRect,
+    tray: LogicalRect,
+    menu_bar_at_top: bool,
+) -> bool {
+    if tray.width <= 0.0 || tray.height <= 0.0 {
+        return false;
+    }
+    let center_x = tray.x + tray.width / 2.0;
+    let center_y = tray.y + tray.height / 2.0;
+    if center_x < monitor.x
+        || center_x > monitor.x + monitor.width
+        || center_y < monitor.y
+        || center_y > monitor.y + monitor.height
+    {
+        return false;
+    }
+    let from_top = center_y - monitor.y;
+    let from_bottom = monitor.y + monitor.height - center_y;
+    if menu_bar_at_top {
+        // macOS extras always sit in the menu bar. Reject the unlaid-out
+        // status item at the Cocoa origin, which maps to the bottom-left.
+        return from_top <= STARTUP_NOTICE_TRAY_EDGE_BAND;
+    }
+    let from_left = center_x - monitor.x;
+    let from_right = monitor.x + monitor.width - center_x;
+    from_top <= STARTUP_NOTICE_TRAY_EDGE_BAND
+        || from_bottom <= STARTUP_NOTICE_TRAY_EDGE_BAND
+        || from_left <= STARTUP_NOTICE_TRAY_EDGE_BAND
+        || from_right <= STARTUP_NOTICE_TRAY_EDGE_BAND
+}
+
+fn startup_notice_fallback_edge(
+    monitor: LogicalRect,
+    work_area: LogicalRect,
+) -> StartupNoticeCaret {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = (monitor, work_area);
+        StartupNoticeCaret::Top
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = (monitor, work_area);
+        StartupNoticeCaret::Bottom
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    startup_notice_fallback_edge_from_insets(monitor, work_area)
+}
+
+fn startup_notice_fallback_edge_from_insets(
+    monitor: LogicalRect,
+    work_area: LogicalRect,
+) -> StartupNoticeCaret {
+    let top_inset = (work_area.y - monitor.y).max(0.0);
+    let bottom_inset = (monitor.y + monitor.height - (work_area.y + work_area.height)).max(0.0);
+    const DISTINCT_PANEL: f64 = 16.0;
+    if bottom_inset >= DISTINCT_PANEL && bottom_inset > top_inset {
+        StartupNoticeCaret::Bottom
+    } else {
+        StartupNoticeCaret::Top
+    }
+}
+
+fn fallback_startup_notice(
+    monitor: LogicalRect,
+    work_area: LogicalRect,
+    edge: StartupNoticeCaret,
+) -> StartupNoticePlacement {
+    let width = STARTUP_NOTICE_WIDTH;
+    let height = STARTUP_NOTICE_HEIGHT;
+    let min_x = work_area.x + STARTUP_NOTICE_SCREEN_MARGIN;
+    let max_x = work_area.x + work_area.width - width - STARTUP_NOTICE_SCREEN_MARGIN;
+    let x =
+        (work_area.x + work_area.width - width - 18.0).clamp(min_x.min(max_x), max_x.max(min_x));
+    let unclamped_y = match edge {
+        StartupNoticeCaret::Bottom => work_area.y + work_area.height - height - 18.0,
+        StartupNoticeCaret::Top | StartupNoticeCaret::None => {
+            // Work area already excludes a menu bar / top panel. Otherwise keep
+            // the historical inset that clears a 24–30px menu bar.
+            if work_area.y > monitor.y + 1.0 {
+                work_area.y + STARTUP_NOTICE_SCREEN_MARGIN
+            } else {
+                monitor.y + 30.0
+            }
+        }
     };
+    let min_y = work_area.y + STARTUP_NOTICE_SCREEN_MARGIN;
+    let max_y = work_area.y + work_area.height - height - STARTUP_NOTICE_SCREEN_MARGIN;
+    StartupNoticePlacement {
+        x,
+        y: unclamped_y.clamp(min_y.min(max_y), max_y.max(min_y)),
+        width,
+        height,
+        caret: StartupNoticeCaret::None,
+        caret_x: width / 2.0,
+    }
+}
+
+fn place_startup_notice(monitor: LogicalRect, tray: Option<LogicalRect>) -> StartupNoticePlacement {
+    let fallback = fallback_startup_notice(monitor, monitor, StartupNoticeCaret::Top);
     let Some(tray) = tray else {
         return fallback;
     };
@@ -5059,11 +5219,13 @@ mod tests {
         STARTUP_NOTICE_HEIGHT, STARTUP_NOTICE_TRAY_OVERLAP, STARTUP_NOTICE_WIDTH,
         StartupNoticeCaret, THUMBNAIL_AUTO_HIDE_RESERVE, THUMBNAIL_SYSTEM_CHROME_GAP,
         ThumbnailCursorAction, ThumbnailCursorKind, ThumbnailMonitorBounds, clipboard_fingerprint,
-        display_contains_pointer, mask_macos_window_corners, parse_shortcut, place_startup_notice,
-        primary_app_window_priority, refine_window_chrome_from_snapshot, should_trigger_shortcut,
-        startup_notice_url, thumbnail_cursor_action, thumbnail_geometry,
-        thumbnail_pointer_position, thumbnail_stack_should_be_visible,
-        thumbnail_visible_window_height, track_shortcut_suppression, viewer_window_label,
+        display_contains_pointer, fallback_startup_notice, mask_macos_window_corners,
+        parse_shortcut, place_startup_notice, primary_app_window_priority,
+        refine_window_chrome_from_snapshot, resolve_startup_notice_placement,
+        should_trigger_shortcut, startup_notice_fallback_edge_from_insets, startup_notice_url,
+        thumbnail_cursor_action, thumbnail_geometry, thumbnail_pointer_position,
+        thumbnail_stack_should_be_visible, thumbnail_visible_window_height,
+        track_shortcut_suppression, tray_icon_rect_is_usable, viewer_window_label,
         window_is_capturable, windows_window_is_capture_overlay,
     };
 
@@ -5843,5 +6005,91 @@ mod tests {
             startup_notice_url(placement),
             "index.html?view=startup&caret=bottom&caret_x=362"
         );
+    }
+
+    #[test]
+    fn macos_rejects_an_unlaid_out_status_item_at_the_bottom_left() {
+        let monitor = notice_monitor(1440.0, 900.0);
+        assert!(!tray_icon_rect_is_usable(
+            monitor,
+            notice_tray(0.0, 876.0, 28.0, 24.0),
+            true
+        ));
+        assert!(tray_icon_rect_is_usable(
+            monitor,
+            notice_tray(800.0, 0.0, 28.0, 24.0),
+            true
+        ));
+        let placement = resolve_startup_notice_placement(
+            monitor,
+            monitor,
+            Some(notice_tray(0.0, 876.0, 28.0, 24.0)),
+            true,
+        );
+        assert_eq!(placement.caret, StartupNoticeCaret::None);
+        assert_eq!(placement.x, 1022.0);
+        assert_eq!(placement.y, 30.0);
+    }
+
+    #[test]
+    fn macos_still_anchors_to_a_laid_out_menu_bar_icon() {
+        let monitor = notice_monitor(1440.0, 900.0);
+        let placement = resolve_startup_notice_placement(
+            monitor,
+            monitor,
+            Some(notice_tray(800.0, 0.0, 28.0, 24.0)),
+            true,
+        );
+        assert_eq!(placement.caret, StartupNoticeCaret::Top);
+        assert_eq!(placement.x, 614.0);
+        assert_eq!(placement.y, 24.0 - STARTUP_NOTICE_TRAY_OVERLAP);
+    }
+
+    #[test]
+    fn windows_fallback_without_a_tray_rect_sits_above_the_taskbar() {
+        let monitor = notice_monitor(1920.0, 1080.0);
+        let work_area = LogicalRect {
+            x: 0.0,
+            y: 0.0,
+            width: 1920.0,
+            height: 1040.0,
+        };
+        let placement = fallback_startup_notice(monitor, work_area, StartupNoticeCaret::Bottom);
+        assert_eq!(placement.caret, StartupNoticeCaret::None);
+        assert_eq!(placement.x, 1502.0);
+        assert_eq!(placement.y, 904.0);
+        assert!(tray_icon_rect_is_usable(
+            monitor,
+            notice_tray(1860.0, 1048.0, 24.0, 24.0),
+            false
+        ));
+    }
+
+    #[test]
+    fn linux_fallback_follows_the_panel_edge_of_the_work_area() {
+        let monitor = notice_monitor(1920.0, 1080.0);
+        let top_panel = LogicalRect {
+            x: 0.0,
+            y: 28.0,
+            width: 1920.0,
+            height: 1052.0,
+        };
+        let bottom_panel = LogicalRect {
+            x: 0.0,
+            y: 0.0,
+            width: 1920.0,
+            height: 1040.0,
+        };
+        assert_eq!(
+            startup_notice_fallback_edge_from_insets(monitor, top_panel),
+            StartupNoticeCaret::Top
+        );
+        assert_eq!(
+            startup_notice_fallback_edge_from_insets(monitor, bottom_panel),
+            StartupNoticeCaret::Bottom
+        );
+        let below_panel = fallback_startup_notice(monitor, top_panel, StartupNoticeCaret::Top);
+        assert_eq!(below_panel.y, 38.0);
+        assert_eq!(below_panel.x, 1502.0);
     }
 }
