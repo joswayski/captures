@@ -85,6 +85,8 @@ async function fetchLatestChanges(): Promise<LatestChange[]> {
 
   const response = await fetch(url, {
     headers: githubRequestHeaders(),
+    // Fail the build promptly instead of hanging it on a stalled connection.
+    signal: AbortSignal.timeout(30_000),
   });
 
   if (!response.ok) {

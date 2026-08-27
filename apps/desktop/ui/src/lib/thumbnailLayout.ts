@@ -95,10 +95,16 @@ export function thumbnailStackShiftPx(slots: number): number {
 export function computeThumbnailStackShifts(
   cards: readonly ThumbnailStackCardMotionState[],
 ): number[] {
-  return cards.map((card, index) => {
-    if (card.exiting) return 0;
-    return thumbnailStackShiftPx(countMotionReadySlotsBelow(cards, index));
-  });
+  // Single bottom-up pass keeps this O(n); it runs from a MutationObserver
+  // that can fire repeatedly during exit animations.
+  const shifts = new Array<number>(cards.length);
+  let readySlotsBelow = 0;
+  for (let index = cards.length - 1; index >= 0; index -= 1) {
+    const card = cards[index];
+    shifts[index] = card?.exiting ? 0 : thumbnailStackShiftPx(readySlotsBelow);
+    if (card?.holdsLayoutSlot && card.motionReady) readySlotsBelow += 1;
+  }
+  return shifts;
 }
 
 /**

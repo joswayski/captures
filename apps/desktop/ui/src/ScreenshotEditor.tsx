@@ -1496,6 +1496,9 @@ export function ScreenshotEditor() {
     before: null,
     after: null,
   });
+  // Monotonic id so an older in-flight preview encode cannot overwrite the
+  // result of a newer one when responses arrive out of order.
+  const compressPreviewRequestRef = useRef(0);
   const baselineDocumentRef = useRef<ScreenshotDocument | null>(null);
   const [busy, setBusy] = useState<"copying" | "saving" | null>(null);
   /** Transient success for copy/save — does not replace the stable export hint. */
@@ -4390,13 +4393,18 @@ export function ScreenshotEditor() {
 
   const loadCompressPreview = useCallback(async () => {
     if (!canPreviewCompression || !editorDocument || !artifact) return;
+    const request = ++compressPreviewRequestRef.current;
     setCompressPreviewPending(true);
     setCompressPreviewError("");
+    // Local until ownership transfers to compressPreviewUrlsRef; anything
+    // still local by `finally` (stale response or error) gets revoked.
+    let beforeUrl: string | null = null;
+    let afterUrl: string | null = null;
     try {
       const canvas = renderFlattened();
       const beforePng = await canvasPngBytes(canvas);
       const beforeBlob = new Blob([new Uint8Array(beforePng)], { type: "image/png" });
-      const beforeUrl = URL.createObjectURL(beforeBlob);
+      beforeUrl = URL.createObjectURL(beforeBlob);
 
       const maxSizeBytes = qualityMode === "maximum"
         ? Number(maximumFileSize) * SCREENSHOT_FILE_SIZE_UNIT_BYTES[maximumFileSizeUnit]
@@ -4423,20 +4431,29 @@ export function ScreenshotEditor() {
           ? "image/webp"
           : "image/png";
       const afterBlob = new Blob([new Uint8Array(preview.bytes)], { type: mime });
-      const afterUrl = URL.createObjectURL(afterBlob);
+      afterUrl = URL.createObjectURL(afterBlob);
 
+      if (compressPreviewRequestRef.current !== request) return;
       revokeCompressPreviewUrls();
       compressPreviewUrlsRef.current = { before: beforeUrl, after: afterUrl };
       setCompressPreviewBeforeUrl(beforeUrl);
       setCompressPreviewAfterUrl(afterUrl);
       setCompressPreviewBeforeBytes(beforeBlob.size);
       setCompressPreviewAfterBytes(preview.sizeBytes);
+      beforeUrl = null;
+      afterUrl = null;
     } catch (reason) {
-      setCompressPreviewError(String(reason));
-      setCompressPreviewAfterUrl(null);
-      setCompressPreviewAfterBytes(null);
+      if (compressPreviewRequestRef.current === request) {
+        setCompressPreviewError(String(reason));
+        setCompressPreviewAfterUrl(null);
+        setCompressPreviewAfterBytes(null);
+      }
     } finally {
-      setCompressPreviewPending(false);
+      if (beforeUrl) URL.revokeObjectURL(beforeUrl);
+      if (afterUrl) URL.revokeObjectURL(afterUrl);
+      if (compressPreviewRequestRef.current === request) {
+        setCompressPreviewPending(false);
+      }
     }
   }, [
     artifact,

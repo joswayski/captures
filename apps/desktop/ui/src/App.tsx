@@ -3046,6 +3046,9 @@ export function RecordingEditor() {
     before: null,
     after: null,
   });
+  // Monotonic id so an older in-flight preview encode cannot overwrite the
+  // result of a newer one when responses arrive out of order.
+  const compressPreviewRequestRef = useRef(0);
   const playheadMsRef = useRef(0);
   const videoRef = useRef<HTMLVideoElement>(null);
   const previewMediaRef = useRef<HTMLDivElement>(null);
@@ -3353,8 +3356,13 @@ export function RecordingEditor() {
 
   const loadCompressPreview = useCallback(async () => {
     if (!artifact) return;
+    const request = ++compressPreviewRequestRef.current;
     setCompressPreviewPending(true);
     setCompressPreviewError("");
+    // Local until ownership transfers to compressPreviewUrlsRef; anything
+    // still local by `finally` (stale response or error) gets revoked.
+    let beforeUrl: string | null = null;
+    let afterUrl: string | null = null;
     try {
       const specs = buildExportRequestSpecs();
       if (!specs) return;
@@ -3367,20 +3375,29 @@ export function RecordingEditor() {
           atMs: Math.round(playheadMsRef.current),
         },
       );
-      const beforeUrl = URL.createObjectURL(
+      beforeUrl = URL.createObjectURL(
         new Blob([new Uint8Array(preview.beforePng)], { type: "image/png" }),
       );
-      const afterUrl = URL.createObjectURL(
+      afterUrl = URL.createObjectURL(
         new Blob([new Uint8Array(preview.afterPng)], { type: "image/png" }),
       );
+      if (compressPreviewRequestRef.current !== request) return;
       revokeCompressPreviewUrls();
       compressPreviewUrlsRef.current = { before: beforeUrl, after: afterUrl };
       setCompressPreviewBeforeUrl(beforeUrl);
       setCompressPreviewAfterUrl(afterUrl);
+      beforeUrl = null;
+      afterUrl = null;
     } catch (reason) {
-      setCompressPreviewError(recordingErrorMessage(reason));
+      if (compressPreviewRequestRef.current === request) {
+        setCompressPreviewError(recordingErrorMessage(reason));
+      }
     } finally {
-      setCompressPreviewPending(false);
+      if (beforeUrl) URL.revokeObjectURL(beforeUrl);
+      if (afterUrl) URL.revokeObjectURL(afterUrl);
+      if (compressPreviewRequestRef.current === request) {
+        setCompressPreviewPending(false);
+      }
     }
   }, [artifact, buildExportRequestSpecs, revokeCompressPreviewUrls]);
 
