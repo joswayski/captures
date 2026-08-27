@@ -50,7 +50,7 @@ mod storage;
 mod updates;
 
 use models::{
-    ActiveSession, AppSettings, ArtifactKind, ArtifactSummary, CaptureArtifact,
+    ActiveSession, AppSettings, Appearance, ArtifactKind, ArtifactSummary, CaptureArtifact,
     CaptureSelectorMode, CaptureSession, ClipboardCopyStatus, ClipboardState,
     HISTORY_RETENTION_DAYS, HistoryEntry,
 };
@@ -2167,6 +2167,7 @@ fn open_artifact_viewer(
         .keys()
         .filter(|label| label.starts_with(VIEWER_WINDOW_PREFIX))
         .count();
+    let (viewer_theme, viewer_background) = document_window_chrome(&app);
     let window = WebviewWindowBuilder::new(
         &app,
         label,
@@ -2177,7 +2178,8 @@ fn open_artifact_viewer(
     .min_inner_size(560.0, 400.0)
     .center()
     .resizable(true)
-    .background_color(Color(17, 18, 26, 255))
+    .theme(viewer_theme)
+    .background_color(viewer_background)
     .focused(false)
     .visible(false)
     .build()
@@ -3151,10 +3153,8 @@ const STARTUP_NOTICE_SCREEN_MARGIN: f64 = 10.0;
 const STARTUP_NOTICE_AUTOSTART_VISIBLE: std::time::Duration = std::time::Duration::from_secs(5);
 /// After first-run setup, keep the tray hint up long enough to read.
 const STARTUP_NOTICE_AFTER_SETUP_VISIBLE: std::time::Duration = std::time::Duration::from_secs(15);
-const ONBOARDING_WINDOW_WIDTH: f64 = 560.0;
-const ONBOARDING_WINDOW_HEIGHT: f64 = 520.0;
-/// Matches the marketing site canvas (`#f5f7fb`) so first-run setup is not mustard/cream.
-const ONBOARDING_WINDOW_BACKGROUND: Color = Color(245, 247, 251, 255);
+const ONBOARDING_WINDOW_WIDTH: f64 = 620.0;
+const ONBOARDING_WINDOW_HEIGHT: f64 = 560.0;
 
 #[cfg(any(target_os = "macos", test))]
 const MACOS_SCREEN_RECORDING_SETTINGS_URLS: &[&str] = &[
@@ -3167,11 +3167,33 @@ const MACOS_MICROPHONE_SETTINGS_URLS: &[&str] = &[
     "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
 ];
 
-/// First-run setup is a light canvas. Force light title chrome so the native
-/// "Captures" title stays readable in system dark mode instead of rendering
-/// black text over a dark title bar.
-fn onboarding_window_theme() -> Option<Theme> {
-    Some(Theme::Light)
+/// `--surface-canvas` for each appearance, used as the pre-paint background so
+/// a new window does not flash the opposite theme before the webview loads.
+const DOCUMENT_WINDOW_BACKGROUND_DARK: Color = Color(16, 16, 20, 255);
+const DOCUMENT_WINDOW_BACKGROUND_LIGHT: Color = Color(245, 245, 247, 255);
+
+pub(crate) fn resolve_appearance_is_dark(app: &AppHandle) -> bool {
+    match app.state::<Arc<AppState>>().settings().appearance {
+        Appearance::Light => false,
+        Appearance::Dark => true,
+        // The webview resolves "system" from `prefers-color-scheme`; mirror it
+        // from an existing window where the platform reports one, else assume dark.
+        Appearance::System => app
+            .webview_windows()
+            .values()
+            .find_map(|window| window.theme().ok())
+            .map(|theme| theme == Theme::Dark)
+            .unwrap_or(true),
+    }
+}
+
+/// Native title-bar theme and pre-paint fill for regular Captures windows.
+pub(crate) fn document_window_chrome(app: &AppHandle) -> (Option<Theme>, Color) {
+    if resolve_appearance_is_dark(app) {
+        (Some(Theme::Dark), DOCUMENT_WINDOW_BACKGROUND_DARK)
+    } else {
+        (Some(Theme::Light), DOCUMENT_WINDOW_BACKGROUND_LIGHT)
+    }
 }
 
 fn show_onboarding(app: &AppHandle) {
@@ -3185,6 +3207,7 @@ fn show_onboarding(app: &AppHandle) {
     let app = app.clone();
     let handle = app.clone();
     if let Err(error) = app.run_on_main_thread(move || {
+        let (onboarding_theme, onboarding_background) = document_window_chrome(&handle);
         let result = WebviewWindowBuilder::new(
             &handle,
             ONBOARDING_WINDOW_LABEL,
@@ -3195,8 +3218,8 @@ fn show_onboarding(app: &AppHandle) {
         .min_inner_size(480.0, 440.0)
         .center()
         .resizable(true)
-        .theme(onboarding_window_theme())
-        .background_color(ONBOARDING_WINDOW_BACKGROUND)
+        .theme(onboarding_theme)
+        .background_color(onboarding_background)
         .focused(false)
         .visible(false)
         .on_page_load(|window, payload| {
@@ -4164,17 +4187,19 @@ fn show_capture_history(app: &AppHandle) {
     let app = app.clone();
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
+        let (history_theme, history_background) = document_window_chrome(&handle);
         let result = WebviewWindowBuilder::new(
             &handle,
             "history",
             WebviewUrl::App("index.html?view=history".into()),
         )
         .title("Capture History")
-        .inner_size(960.0, 680.0)
+        .inner_size(1_020.0, 720.0)
         .min_inner_size(640.0, 440.0)
         .center()
         .resizable(true)
-        .background_color(Color(17, 18, 26, 255))
+        .theme(history_theme)
+        .background_color(history_background)
         .focused(false)
         .visible(false)
         .on_page_load(|window, payload| {
@@ -4306,17 +4331,19 @@ fn show_preferences(app: &AppHandle) {
     let app = app.clone();
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
+        let (preferences_theme, preferences_background) = document_window_chrome(&handle);
         let result = WebviewWindowBuilder::new(
             &handle,
             "preferences",
             WebviewUrl::App("index.html?view=preferences".into()),
         )
         .title("Captures Preferences")
-        .inner_size(520.0, 480.0)
-        .min_inner_size(420.0, 360.0)
+        .inner_size(880.0, 660.0)
+        .min_inner_size(560.0, 440.0)
         .center()
         .resizable(true)
-        .background_color(Color(23, 24, 33, 255))
+        .theme(preferences_theme)
+        .background_color(preferences_background)
         .focused(false)
         .visible(false)
         .on_page_load(|window, payload| {
@@ -5032,13 +5059,12 @@ mod tests {
         STARTUP_NOTICE_HEIGHT, STARTUP_NOTICE_TRAY_OVERLAP, STARTUP_NOTICE_WIDTH,
         StartupNoticeCaret, THUMBNAIL_AUTO_HIDE_RESERVE, THUMBNAIL_SYSTEM_CHROME_GAP,
         ThumbnailCursorAction, ThumbnailCursorKind, ThumbnailMonitorBounds, clipboard_fingerprint,
-        display_contains_pointer, mask_macos_window_corners, onboarding_window_theme,
-        parse_shortcut, place_startup_notice, primary_app_window_priority,
-        refine_window_chrome_from_snapshot, should_trigger_shortcut, startup_notice_url,
-        thumbnail_cursor_action, thumbnail_geometry, thumbnail_pointer_position,
-        thumbnail_stack_should_be_visible, thumbnail_visible_window_height,
-        track_shortcut_suppression, viewer_window_label, window_is_capturable,
-        windows_window_is_capture_overlay,
+        display_contains_pointer, mask_macos_window_corners, parse_shortcut, place_startup_notice,
+        primary_app_window_priority, refine_window_chrome_from_snapshot, should_trigger_shortcut,
+        startup_notice_url, thumbnail_cursor_action, thumbnail_geometry,
+        thumbnail_pointer_position, thumbnail_stack_should_be_visible,
+        thumbnail_visible_window_height, track_shortcut_suppression, viewer_window_label,
+        window_is_capturable, windows_window_is_capture_overlay,
     };
 
     fn bounds(
@@ -5421,11 +5447,14 @@ mod tests {
     }
 
     #[test]
-    fn onboarding_window_uses_light_title_chrome() {
-        assert_eq!(onboarding_window_theme(), Some(tauri::Theme::Light));
+    fn document_window_backgrounds_match_the_appearance_canvases() {
         assert_eq!(
-            super::ONBOARDING_WINDOW_BACKGROUND,
-            super::Color(245, 247, 251, 255)
+            super::DOCUMENT_WINDOW_BACKGROUND_DARK,
+            super::Color(16, 16, 20, 255)
+        );
+        assert_eq!(
+            super::DOCUMENT_WINDOW_BACKGROUND_LIGHT,
+            super::Color(245, 245, 247, 255)
         );
     }
 

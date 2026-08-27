@@ -13,7 +13,6 @@ use image::{
 use serde::{Deserialize, Serialize};
 use tauri::{
     AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, webview::PageLoadEvent,
-    window::Color,
 };
 use uuid::Uuid;
 
@@ -128,6 +127,7 @@ pub fn open_screenshot_editor(
         return Ok(());
     }
 
+    let (theme, background) = crate::document_window_chrome(&app);
     WebviewWindowBuilder::new(
         &app,
         label,
@@ -141,7 +141,8 @@ pub fn open_screenshot_editor(
     .center()
     .resizable(true)
     .disable_drag_drop_handler()
-    .background_color(Color(21, 22, 25, 255))
+    .theme(theme)
+    .background_color(background)
     .focused(false)
     .visible(false)
     .on_page_load(|window, payload| {

@@ -9,7 +9,7 @@ Captures is a cross-platform screen capture utility built for quick captures and
 
 Open one compact menu to switch between screenshots and recordings, then choose a region, window, or full display.
 
-![Captures selecting a screenshot region over a coastline](docs/images/capture-selection.jpg)
+![The Captures menu over a frozen desktop, with screenshot and recording controls in one bar](docs/images/capture-selection.jpg)
 
 <p align="center">
   <img src="docs/images/capture-controls.jpg" alt="Close-up of the Captures capture menu with screenshot and recording options" width="728">
@@ -32,9 +32,9 @@ Open one compact menu to switch between screenshots and recordings, then choose 
   </tr>
   <tr>
     <td colspan="2" align="center">
-      <img src="docs/images/preferences.jpg" alt="Captures Preferences showing color themes and capture options" width="52%">
+      <img src="docs/images/preferences.jpg" alt="Captures Preferences showing the appearance, accent color, and capture settings" width="72%">
       <br>
-      <sub><strong>Make it yours</strong> with themes, shortcuts, and capture and recording defaults.</sub>
+      <sub><strong>Make it yours</strong> with a light or dark appearance, accent colors, shortcuts, and capture and recording defaults.</sub>
     </td>
   </tr>
 </table>
@@ -66,8 +66,9 @@ Preview builds update after every successful merge to `main` and may contain bug
 - Export PNG, JPEG, or WebP with compression options, including a PNG color slider and before/after preview
 - Mini previews for quick copy, save, and drag into other apps
 - Screenshots during an active recording
-- 30-day capture history
-- Customizable shortcuts and color themes
+- 30-day capture history, filtered by screenshots, video, or GIF
+- Light, dark, or system appearance across every Captures window
+- Customizable shortcuts and accent colors
 - Capture UI and capture actions stay disabled while the desktop session is locked or inactive
 - Optional in-app feedback (never includes your captures)
 

@@ -11,6 +11,8 @@
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 
+import { readStoredAppearance } from "../../../../../shared/appearance";
+
 import type {
   ActiveSession,
   AppSettings,
@@ -92,12 +94,32 @@ function sampleCapture(width: number, height: number): string {
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 }
 
+/** Horizontal sprite of evenly spaced frames, like the backend timeline preview. */
+function sampleFilmstrip(frames: number): string {
+  const frameWidth = 120;
+  const frameHeight = 76;
+  const cells = Array.from({ length: frames }, (_, index) => {
+    const x = index * frameWidth;
+    const shift = (index / Math.max(1, frames - 1)) * 60;
+    return `<g transform="translate(${x} 0)">
+      <rect width="${frameWidth}" height="${frameHeight}" fill="#1b2440"/>
+      <path d="M0 ${frameHeight} L30 ${52 - shift / 6} L62 ${60 - shift / 8} L92 ${46 - shift / 5} L${frameWidth} ${58 - shift / 7} L${frameWidth} ${frameHeight} Z" fill="#101827"/>
+      <rect x="${8 + shift / 4}" y="14" width="26" height="16" rx="3" fill="#3a4b74"/>
+      <rect x="8" y="${frameHeight - 18}" width="${44 + shift / 3}" height="4" rx="2" fill="#4a5f92"/>
+    </g>`;
+  }).join("");
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${frames * frameWidth}" height="${frameHeight}" viewBox="0 0 ${frames * frameWidth} ${frameHeight}">${cells}</svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
+const TIMELINE_FRAMES = 14;
 const CAPTURE_URL = sampleCapture(1600, 1000);
+const FILMSTRIP_URL = sampleFilmstrip(TIMELINE_FRAMES);
 const CAPTURE_TALL_URL = sampleCapture(1200, 900);
 
 const SETTINGS: AppSettings = {
   settings_schema_version: 2,
-  appearance: "dark",
+  appearance: readStoredAppearance(),
   theme: "mustard",
   custom_theme: { accent: "#32d3ff", signal: "#ff4fc3" },
   output_directory: "/Users/alex/Pictures/Captures",
@@ -201,12 +223,19 @@ const SECOND_ARTIFACT: CaptureArtifact = {
   clipboard_copy_status: "skipped",
 };
 
+/**
+ * Optional local clip for reviewing the recording editor. Generate one with
+ * `ffmpeg -f lavfi -i color=c=black:s=800x500:d=6 apps/desktop/ui/public/dev-sample.mp4`.
+ * The editor still lays out correctly when it is missing.
+ */
+const SAMPLE_VIDEO_URL = "/dev-sample.mp4";
+
 const RECORDING: RecordingArtifact = {
   id: "recording-1",
   kind: "video",
   path: "/Users/alex/Pictures/Captures/Recording 2026-08-27 at 09.32.00.mp4",
   saved_path: null,
-  media_url: "",
+  media_url: SAMPLE_VIDEO_URL,
   poster_url: CAPTURE_URL,
   mime_type: "video/mp4",
   duration_ms: 42_500,
@@ -237,7 +266,7 @@ const HISTORY: ArtifactSummary[] = [
     id: "recording-1",
     kind: "video",
     poster_url: CAPTURE_URL,
-    media_url: "",
+    media_url: SAMPLE_VIDEO_URL,
     saved_path: null,
     mime_type: "video/mp4",
     duration_ms: 42_500,
@@ -385,7 +414,24 @@ const CAPTURE_SESSION: ActiveSession = {
 };
 
 const CLIPBOARD: ClipboardState = { revision: 4, artifact_id: "artifact-1" };
-const DRAFTS: RecordingDraftManifest[] = [];
+
+const DRAFTS: RecordingDraftManifest[] = flag("drafts")
+  ? [
+    {
+      session_id: "draft-1",
+      created_at_ms: Date.parse("2026-08-27T08:12:00Z"),
+      updated_at_ms: Date.parse("2026-08-27T08:13:20Z"),
+      state: "failed",
+      options: recordingSnapshot().options,
+      segments: [
+        { index: 0, duration_ms: 42_000, size_bytes: 8_200_000, dropped_frames: 0, complete: true },
+        { index: 1, duration_ms: 6_000, size_bytes: 1_100_000, dropped_frames: 3, complete: false },
+      ],
+      final_path: null,
+      last_error: "Recording failed: the display went to sleep.",
+    },
+  ]
+  : [];
 
 const RESPONSES: Record<string, unknown> = {
   get_settings: SETTINGS,
@@ -413,13 +459,33 @@ const RESPONSES: Record<string, unknown> = {
   get_screenshot_countdown: { remaining_seconds: 3 },
   default_screenshot_edit_path: "/Users/alex/Pictures/Captures/Capture edited.png",
   load_screenshot_editor_draft: null,
-  prepare_recording_timeline_preview: null,
+  prepare_recording_timeline_preview: {
+    url: FILMSTRIP_URL,
+    frame_count: TIMELINE_FRAMES,
+    frame_width: 120,
+    frame_height: 76,
+    sprite_width: TIMELINE_FRAMES * 120,
+    sprite_height: 76,
+  },
   estimate_recording_export: { sizeBytes: 9_120_000, exact: false },
   estimate_screenshot_export: 512_000,
   prepared_drag_artifact_id: null,
 };
 
+/**
+ * Overlay windows are transparent and normally float over the desktop. `?stage`
+ * paints the sample desktop behind them so they can be reviewed in context.
+ */
+function applyPreviewStage(): void {
+  if (!flag("stage")) return;
+  const style = document.documentElement.style;
+  style.setProperty("background-image", `url("${CAPTURE_URL}")`);
+  style.setProperty("background-size", "cover");
+  style.setProperty("background-position", "center");
+}
+
 export function installPreviewBackend(): void {
+  applyPreviewStage();
   mockIPC(async (command) => {
     if (command in RESPONSES) return RESPONSES[command];
     // Everything else is a side effect (show window, copy, save…) with no payload.

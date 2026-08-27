@@ -4,9 +4,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use tauri::{
-    AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, webview::PageLoadEvent, window::Color,
-};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, webview::PageLoadEvent};
 
 use crate::CommandResult;
 
@@ -204,17 +202,19 @@ pub fn show_feedback(app: &AppHandle) {
     }
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
+        let (theme, background) = crate::document_window_chrome(&handle);
         let result = WebviewWindowBuilder::new(
             &handle,
             "feedback",
             WebviewUrl::App("index.html?view=feedback".into()),
         )
         .title("Send Feedback")
-        .inner_size(480.0, 560.0)
-        .min_inner_size(400.0, 460.0)
+        .inner_size(640.0, 700.0)
+        .min_inner_size(460.0, 460.0)
         .center()
         .resizable(true)
-        .background_color(Color(23, 24, 33, 255))
+        .theme(theme)
+        .background_color(background)
         .focused(false)
         .visible(false)
         .on_page_load(|window, payload| {

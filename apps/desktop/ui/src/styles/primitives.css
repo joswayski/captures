@@ -150,10 +150,14 @@
   background: var(--surface-hover);
 }
 
+/*
+ * Destructive actions stay quiet until they are hovered or awaiting
+ * confirmation, so a list of cards is not a wall of red.
+ */
 .ui-btn-danger,
 :is(.history-delete, .history-clear-all, .recording-recovery-row button.danger) {
-  border-color: var(--danger-border);
-  color: var(--danger-text);
+  border-color: transparent;
+  color: var(--text-subtle);
   background: transparent;
   box-shadow: none;
 }
@@ -161,8 +165,8 @@
 .ui-btn-danger:hover:not(:disabled),
 :is(.history-delete, .history-clear-all, .recording-recovery-row button.danger):hover:not(:disabled) {
   border-color: transparent;
-  color: #fff;
-  background: var(--theme-signal);
+  color: var(--danger-text);
+  background: var(--danger-surface);
 }
 
 :is(.history-delete-confirm, .history-clear-all-confirm) {

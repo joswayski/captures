@@ -15,3 +15,6 @@ apps/desktop/src-tauri/ffmpeg/COPYING.LGPLv2.1
 **/*.tsbuildinfo
 **/.DS_Store
 *.log
+
+# Local-only sample media for the dev preview harness
+apps/desktop/ui/public/dev-sample.mp4

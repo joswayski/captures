@@ -26,6 +26,11 @@
 
 ## Visual design
 
+- The desktop UI is built on tokens. `shared/design.css` holds the neutral ramp, semantic surfaces, spacing, radii, elevation, and motion; `shared/themes.css` holds accent and signal palettes. Style against those tokens instead of literal colors or pixel values.
+- `apps/desktop/ui/src/styles.css` is only an import list. Real rules live in `apps/desktop/ui/src/styles/`: `base`, `primitives`, then one module per family of surfaces.
+- Regular windows follow the light/dark/system appearance setting. Surfaces that float over the user's desktop (capture overlay, capture menu, recording controls, mini previews, transient notices) always use the fixed `--glass-*` media palette so they stay legible on any wallpaper.
+- Reserve the accent for the primary capture action, selection, and focus. Keep status colors stable: signal for recording and destructive, green for saved, blue for progress.
+- Review UI changes with the dev harness (`?view=…&mock=1`, see DEVELOPMENT.md) before claiming a surface looks right.
 - Build from neutral foundations: off-white or white and charcoal or near-black surfaces, high-contrast typography, subtle borders, and restrained shadows and corner radii.
 - Do not force one accent color across the product. Use a small multi-accent palette selectively and consistently for actions, selection and focus, status, diagrams, and occasional feature moments while keeping most interface chrome neutral.
 - Establish hierarchy with typography, spacing, and modular layout before color. Prefer generous whitespace, clear grids or cards, and concise copy. Keep default page and application chrome neutral; reserve gradients or large color fields for contained feature moments.

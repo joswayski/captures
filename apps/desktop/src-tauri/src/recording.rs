@@ -3827,6 +3827,7 @@ fn show_recording_editor(app: &AppHandle, artifact_id: &str) -> Result<(), AppEr
         crate::reveal_and_focus_document_window(&window)?;
         return Ok(());
     }
+    let (theme, background) = crate::document_window_chrome(app);
     WebviewWindowBuilder::new(
         app,
         &label,
@@ -3839,7 +3840,8 @@ fn show_recording_editor(app: &AppHandle, artifact_id: &str) -> Result<(), AppEr
     .min_inner_size(760.0, 560.0)
     .center()
     .resizable(true)
-    .background_color(Color(24, 25, 29, 255))
+    .theme(theme)
+    .background_color(background)
     .focused(false)
     .visible(false)
     .on_page_load(|window, payload| {
