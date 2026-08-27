@@ -20,7 +20,7 @@ use xcap::{Frame, Monitor, VideoRecorder};
 
 use crate::{
     audio::AudioSegment,
-    overlay::{PointerLayout, PointerOverlay},
+    overlay::{PointerCaptureSpace, PointerLayout, PointerOverlay},
     pointer::{PointerSource, pointer_features_available},
     transform::{FrameRect, FrameTransform},
 };
@@ -66,7 +66,7 @@ struct EncoderContext {
 }
 
 pub struct XcapRecordingSegment {
-    recorder: VideoRecorder,
+    recorder: Option<VideoRecorder>,
     stop_requested: Arc<AtomicBool>,
     capture_worker: Option<thread::JoinHandle<()>>,
     encoder_worker: Option<thread::JoinHandle<XcapRecordingResult<WorkerOutcome>>>,
@@ -174,14 +174,21 @@ impl XcapRecordingSegment {
         let warning = Arc::new(Mutex::new(None));
         let latest_frame = Arc::new(Mutex::new(Some(first_image)));
         let dropped_frames = Arc::new(AtomicU64::new(0));
-        let pointer_scale = if cfg!(target_os = "linux") {
-            display.scale_factor
-        } else {
-            1.0
-        };
+        let source_is_overlay_space = matches!(options.target, RecordingTarget::Region { .. });
         let pointer_overlay = (options.show_cursor || options.highlight_clicks).then(|| {
             PointerOverlay::new(
-                PointerLayout::new(display.x, display.y, source, width, height, pointer_scale),
+                PointerLayout::for_capture(
+                    PointerCaptureSpace {
+                        display_x: display.x,
+                        display_y: display.y,
+                        scale_factor: display.scale_factor,
+                        physical_display_geometry: DisplayDescriptor::reports_physical_geometry(),
+                        source,
+                        source_is_overlay_space,
+                    },
+                    width,
+                    height,
+                ),
                 options.show_cursor,
                 options.highlight_clicks,
             )
@@ -279,7 +286,7 @@ impl XcapRecordingSegment {
         }
 
         Ok(Self {
-            recorder,
+            recorder: Some(recorder),
             stop_requested,
             capture_worker: Some(capture_worker),
             encoder_worker: Some(encoder_worker),
@@ -299,8 +306,13 @@ impl XcapRecordingSegment {
     pub fn stop(mut self) -> XcapRecordingResult<RecordingSegmentInfo> {
         let recorder_result = self
             .recorder
-            .stop()
-            .map_err(|error| XcapRecordingError::Capture(error.to_string()));
+            .take()
+            .map(|recorder| {
+                recorder
+                    .stop()
+                    .map_err(|error| XcapRecordingError::Capture(error.to_string()))
+            })
+            .transpose();
         self.stop_requested.store(true, Ordering::Release);
         let system_audio_result = self.system_audio.take().map(AudioSegment::stop).transpose();
         let microphone_result = self.microphone.take().map(AudioSegment::stop).transpose();
@@ -313,7 +325,7 @@ impl XcapRecordingSegment {
         let microphone = microphone_result?;
         let size_bytes = fs::metadata(&self.output_path)?.len();
         Ok(RecordingSegmentInfo {
-            path: self.output_path,
+            path: self.output_path.clone(),
             system_audio_path: system_audio.as_ref().and_then(|audio| audio.path.clone()),
             system_audio_offset_ms: system_audio.as_ref().map_or(0, |audio| audio.offset_ms),
             system_audio_warning: system_audio.and_then(|audio| audio.warning),
@@ -329,7 +341,18 @@ impl XcapRecordingSegment {
     }
 
     pub fn discard(mut self) -> XcapRecordingResult<()> {
-        let _ = self.recorder.stop();
+        self.abort();
+        match fs::remove_file(&self.output_path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn abort(&mut self) {
+        if let Some(recorder) = self.recorder.take() {
+            let _ = recorder.stop();
+        }
         self.stop_requested.store(true, Ordering::Release);
         if let Some(system_audio) = self.system_audio.take() {
             let _ = system_audio.discard();
@@ -337,13 +360,8 @@ impl XcapRecordingSegment {
         if let Some(microphone) = self.microphone.take() {
             let _ = microphone.discard();
         }
-        let _ = self.join_capture_worker();
-        let _ = self.join_encoder_worker();
-        match fs::remove_file(self.output_path) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error.into()),
-        }
+        let _ = self.capture_worker.take().map(thread::JoinHandle::join);
+        let _ = self.encoder_worker.take().map(thread::JoinHandle::join);
     }
 
     pub fn warning(&self) -> Option<String> {
@@ -382,6 +400,12 @@ impl XcapRecordingSegment {
             .ok_or_else(|| XcapRecordingError::Worker("encoder worker was missing".to_owned()))?
             .join()
             .map_err(|_| XcapRecordingError::Worker("encoder worker panicked".to_owned()))?
+    }
+}
+
+impl Drop for XcapRecordingSegment {
+    fn drop(&mut self) {
+        self.abort();
     }
 }
 
@@ -432,7 +456,8 @@ fn record_frames(
         .lock()
         .take()
         .ok_or(XcapRecordingError::FirstFrameUnavailable)?;
-    let mut last_rgb = transform.rgb(&first_image);
+    let mut last_rgb = Vec::new();
+    transform.rgb_into(&first_image, &mut last_rgb);
     let mut skipped_frames = 0_u64;
     let pointer_source = pointer_overlay.as_ref().map(|_| PointerSource::new());
     encode_frame(
@@ -453,7 +478,7 @@ fn record_frames(
         }
 
         if let Some(image) = latest_frame.lock().take() {
-            last_rgb = transform.rgb(&image);
+            transform.rgb_into(&image, &mut last_rgb);
         }
         let elapsed_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
         encode_frame(

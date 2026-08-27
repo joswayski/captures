@@ -44,6 +44,16 @@ pub struct PointerLayout {
     pointer_scale: f64,
 }
 
+#[derive(Clone, Copy)]
+pub struct PointerCaptureSpace {
+    pub display_x: i32,
+    pub display_y: i32,
+    pub scale_factor: f64,
+    pub physical_display_geometry: bool,
+    pub source: CaptureRect,
+    pub source_is_overlay_space: bool,
+}
+
 impl PointerLayout {
     pub fn new(
         display_x: i32,
@@ -63,6 +73,25 @@ impl PointerLayout {
         }
     }
 
+    /// Map a global pointer sample into the recorded output.
+    ///
+    /// Region targets are selected in overlay/CSS DIPs. Display/window geometry
+    /// stays in the capture backend's native units (physical on Windows, logical
+    /// on Linux). Pointer samples are physical on both Windows (`GetCursorPos`)
+    /// and X11, so the scale applied here has to put origin, source, and sample
+    /// into the same space.
+    pub fn for_capture(space: PointerCaptureSpace, output_width: u32, output_height: u32) -> Self {
+        let (origin_x, origin_y, pointer_scale) = pointer_origin_and_scale(space);
+        Self::new(
+            origin_x,
+            origin_y,
+            space.source,
+            output_width,
+            output_height,
+            pointer_scale,
+        )
+    }
+
     fn map(self, sample: PointerSample) -> Option<(i32, i32)> {
         let display_x = f64::from(sample.x) / self.pointer_scale - f64::from(self.display_x);
         let display_y = f64::from(sample.y) / self.pointer_scale - f64::from(self.display_y);
@@ -80,6 +109,21 @@ impl PointerLayout {
             (source_y * f64::from(self.output_height) / f64::from(self.source.height)).round()
                 as i32,
         ))
+    }
+}
+
+fn pointer_origin_and_scale(space: PointerCaptureSpace) -> (i32, i32, f64) {
+    let scale = space.scale_factor.max(1.0);
+    if space.source_is_overlay_space && space.physical_display_geometry {
+        (
+            (f64::from(space.display_x) / scale).round() as i32,
+            (f64::from(space.display_y) / scale).round() as i32,
+            scale,
+        )
+    } else if space.physical_display_geometry {
+        (space.display_x, space.display_y, 1.0)
+    } else {
+        (space.display_x, space.display_y, scale)
     }
 }
 
@@ -335,7 +379,7 @@ mod tests {
 
     use captures_recording::CaptureRect;
 
-    use super::{PointerLayout, PointerOverlay, PointerSample};
+    use super::{PointerCaptureSpace, PointerLayout, PointerOverlay, PointerSample};
 
     fn layout() -> PointerLayout {
         PointerLayout::new(
@@ -357,6 +401,97 @@ mod tests {
     fn maps_scaled_global_pointer_into_recorded_region() {
         assert_eq!(
             layout().map(PointerSample {
+                x: 800,
+                y: 500,
+                primary_down: false,
+                secondary_down: false,
+            }),
+            Some((400, 300))
+        );
+    }
+
+    #[test]
+    fn windows_region_layout_converts_physical_cursor_into_overlay_space() {
+        let layout = PointerLayout::for_capture(
+            PointerCaptureSpace {
+                display_x: 0,
+                display_y: 0,
+                scale_factor: 2.0,
+                physical_display_geometry: true,
+                source: CaptureRect {
+                    x: 100,
+                    y: 50,
+                    width: 800,
+                    height: 450,
+                },
+                source_is_overlay_space: true,
+            },
+            1_600,
+            900,
+        );
+        // Physical (800, 500) → DIP (400, 250) → region-local (300, 200) → 1600×900.
+        assert_eq!(
+            layout.map(PointerSample {
+                x: 800,
+                y: 500,
+                primary_down: false,
+                secondary_down: false,
+            }),
+            Some((600, 400))
+        );
+    }
+
+    #[test]
+    fn windows_display_layout_keeps_physical_cursor_and_source_aligned() {
+        let layout = PointerLayout::for_capture(
+            PointerCaptureSpace {
+                display_x: 100,
+                display_y: 50,
+                scale_factor: 2.0,
+                physical_display_geometry: true,
+                source: CaptureRect {
+                    x: 0,
+                    y: 0,
+                    width: 3_840,
+                    height: 2_160,
+                },
+                source_is_overlay_space: false,
+            },
+            1_920,
+            1_080,
+        );
+        assert_eq!(
+            layout.map(PointerSample {
+                x: 900,
+                y: 550,
+                primary_down: false,
+                secondary_down: false,
+            }),
+            Some((400, 250))
+        );
+    }
+
+    #[test]
+    fn linux_region_layout_divides_physical_pointer_samples() {
+        let layout = PointerLayout::for_capture(
+            PointerCaptureSpace {
+                display_x: 100,
+                display_y: 50,
+                scale_factor: 2.0,
+                physical_display_geometry: false,
+                source: CaptureRect {
+                    x: 100,
+                    y: 50,
+                    width: 800,
+                    height: 450,
+                },
+                source_is_overlay_space: true,
+            },
+            1_600,
+            900,
+        );
+        assert_eq!(
+            layout.map(PointerSample {
                 x: 800,
                 y: 500,
                 primary_down: false,
