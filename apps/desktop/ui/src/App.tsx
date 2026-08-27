@@ -1,5 +1,4 @@
-import { invoke, isTauri } from "@tauri-apps/api/core";
-import { emit, listen } from "@tauri-apps/api/event";
+import { emit, invoke, isTauri, listen } from "./lib/tauri";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { message, open } from "@tauri-apps/plugin-dialog";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
@@ -223,8 +222,8 @@ function IdleView() {
   return (
     <main className="idle-view">
       <div className="brand-mark">Captures</div>
-      <h1>Captures is running</h1>
-      <p>Use the Captures menu or your New Capture shortcut to start a capture.</p>
+      <h1>Ready when you are</h1>
+      <p>Use the tray, the menu bar, or your shortcut to start a capture.</p>
     </main>
   );
 }
@@ -641,7 +640,7 @@ function UpdatePreferences() {
   };
 
   return (
-    <section className="settings-section update-settings">
+    <section id="prefs-updates" className="settings-section update-settings">
       <h2>Updates</h2>
       <div className="settings-utility-row update-settings-row">
         <div className="settings-utility-copy">
@@ -697,7 +696,7 @@ function ArtifactViewer() {
           emitViewerActivation(artifactId, false);
           void currentWindow?.close();
         }),
-      ]);
+      ]).catch(() => []);
       if (!artifactId) return;
       const initialArtifact = await invoke<CaptureArtifact | null>("get_artifact", { artifactId });
       if (active) {
@@ -813,9 +812,13 @@ export function CaptureHistory() {
     activeRef.current = true;
 
     void (async () => {
-      dispose = await listen("capture-history-changed", () => {
-        void refresh();
-      });
+      try {
+        dispose = await listen("capture-history-changed", () => {
+          void refresh();
+        });
+      } catch {
+        dispose = undefined;
+      }
       await refresh();
     })();
 
@@ -856,9 +859,8 @@ export function CaptureHistory() {
     <main className="capture-history">
       <header className="history-header">
         <div>
-          <p className="eyebrow">ON THIS DEVICE</p>
           <h1>Capture History</h1>
-          <p>Screenshots, videos, GIFs, and interrupted recordings you can recover all appear here.</p>
+          <p>Screenshots, videos, and GIFs on this device, including recordings you can recover.</p>
         </div>
         {!loading && entries.length > 0 && (
           <div className="history-header-actions">
@@ -1742,6 +1744,16 @@ export function RecordingSelector() {
       // Region starts empty so the user can draw anywhere (including mid-screen).
       // A pre-sized frame made intra-region create drags impossible (they moved the frame).
       setRegion(null);
+      if (query("preview_frame") === "1" && selection.initial_target === "region") {
+        setRegion({ x: 180, y: 120, width: 960, height: 540 });
+      }
+      if (query("preview_frame") === "1" && selection.initial_target === "window") {
+        const firstWindow = selection.windows[0];
+        if (firstWindow) {
+          setSelectedWindow(firstWindow.id);
+          setHoveredWindow(firstWindow.id);
+        }
+      }
       autoStartAfterSelectionRef.current = false;
       clearRegionDrag();
       panelDragRef.current = null;
@@ -3104,7 +3116,7 @@ export function RecordingEditor() {
           setExportId(null);
           exportIdRef.current = null;
         }),
-      ]);
+      ]).catch(() => []);
       if (!artifactId) return;
       const [loaded, loadedSettings] = await Promise.all([
         invoke<RecordingArtifact | null>("get_recording_artifact", { artifactId }),
@@ -3836,6 +3848,7 @@ export function RecordingEditor() {
               <video
                 ref={videoRef}
                 src={artifact.media_url}
+                poster={artifact.poster_url}
                 playsInline
                 preload="auto"
                 onClick={() => void togglePreviewPlayback()}
@@ -4463,22 +4476,26 @@ function CaptureOverlay() {
     let active = true;
     let dispose: (() => void) | undefined;
     void (async () => {
-      dispose = await listen<ActiveSession>("capture-session-ready", ({ payload }) => {
-        activeSessionIdRef.current = payload.id;
-        revealingSessionIdRef.current = null;
-        setVisibleSessionId(null);
-        setPrimingSessionId(null);
-        setSession(payload);
-        setStart(null);
-        setCurrent(null);
-        setHoveredWindow(null);
-        if (selectionFeedbackTimerRef.current) {
-          clearTimeout(selectionFeedbackTimerRef.current);
-          selectionFeedbackTimerRef.current = null;
-        }
-        setSelectionFeedback(0);
-        lastRegionCursorSyncAtRef.current = 0;
-      });
+      try {
+        dispose = await listen<ActiveSession>("capture-session-ready", ({ payload }) => {
+          activeSessionIdRef.current = payload.id;
+          revealingSessionIdRef.current = null;
+          setVisibleSessionId(null);
+          setPrimingSessionId(null);
+          setSession(payload);
+          setStart(null);
+          setCurrent(null);
+          setHoveredWindow(null);
+          if (selectionFeedbackTimerRef.current) {
+            clearTimeout(selectionFeedbackTimerRef.current);
+            selectionFeedbackTimerRef.current = null;
+          }
+          setSelectionFeedback(0);
+          lastRegionCursorSyncAtRef.current = 0;
+        });
+      } catch {
+        dispose = undefined;
+      }
       const initialSession = query("session_id")
         ? await invoke<ActiveSession | null>("get_active_session", { sessionId: query("session_id") })
         : await invoke<ActiveSession | null>("get_pending_session");
@@ -4562,6 +4579,18 @@ function CaptureOverlay() {
     ? displayOverlaySize(session.display, session.window_coordinate_scale)
     : { width: 0, height: 0 };
   const surfaceSize = useElementCssSize(surfaceRef, displayOverlay);
+
+  useEffect(() => {
+    if (!session || mode !== "region" || query("preview_mode") !== "selected") return;
+    setStart({ x: 180, y: 120 });
+    setCurrent({ x: 1_140, y: 660 });
+  }, [mode, session]);
+
+  useEffect(() => {
+    if (!session || mode !== "window" || query("preview_mode") !== "hovered") return;
+    const firstWindow = session.windows[0];
+    if (firstWindow) setHoveredWindow(firstWindow.id);
+  }, [mode, session]);
 
   const revealOverlay = useCallback(async () => {
     if (!sessionId) return;
@@ -4944,7 +4973,7 @@ export function Thumbnail() {
         listen<EditorLayerPresence>("editor-layers-changed", ({ payload }) => {
           setEditorPresence((current) => reconcileEditorPresence(current, payload));
         }),
-      ]);
+      ]).catch(() => []);
       const initialArtifacts = await invoke<CaptureArtifact[]>("get_artifacts");
       if (active) {
         setArtifacts((current) => {
@@ -6202,11 +6231,24 @@ function ThemeColorField({
   );
 }
 
+const PREFERENCE_NAV = [
+  { id: "appearance", label: "Appearance" },
+  { id: "capture", label: "Capture" },
+  { id: "shortcuts", label: "Shortcuts" },
+  { id: "recording", label: "Recording" },
+  { id: "updates", label: "Updates" },
+  { id: "feedback", label: "Feedback" },
+] as const;
+
+type PreferenceSectionId = (typeof PREFERENCE_NAV)[number]["id"];
+
 export function Preferences() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [recordingDevices, setRecordingDevices] = useState<AudioDevice[]>([]);
   const [saveStatus, setSaveStatus] = useState<PreferencesSaveStatus>({ kind: "idle", message: "" });
   const [recordingShortcut, setRecordingShortcut] = useState<string | null>(null);
+  const [preferenceSection, setPreferenceSection] = useState<PreferenceSectionId>("appearance");
+  const preferencesMainRef = useRef<HTMLDivElement>(null);
   const settingsRef = useRef<AppSettings | null>(null);
   const pendingSettingsRef = useRef<AppSettings | null>(null);
   const saveDelayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -6320,6 +6362,25 @@ export function Preferences() {
     };
   }, []);
 
+  useEffect(() => {
+    const root = preferencesMainRef.current;
+    if (!root) return;
+    const observer = new IntersectionObserver((entries) => {
+      const visible = entries
+        .filter((entry) => entry.isIntersecting)
+        .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+      const id = visible?.target.id.replace(/^prefs-/, "");
+      if (id && PREFERENCE_NAV.some((item) => item.id === id)) {
+        setPreferenceSection(id as PreferenceSectionId);
+      }
+    }, { root, rootMargin: "-12% 0px -70% 0px", threshold: [0.08, 0.2, 0.45] });
+    for (const item of PREFERENCE_NAV) {
+      const section = root.querySelector(`#prefs-${item.id}`);
+      if (section) observer.observe(section);
+    }
+    return () => observer.disconnect();
+  }, [settings]);
+
   if (!settings) return <main className="preferences loading">Loading preferences…</main>;
 
   const update = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
@@ -6363,11 +6424,29 @@ export function Preferences() {
     if (typeof selected === "string") update("output_directory", selected);
   };
 
+  const showPreferenceSection = (id: PreferenceSectionId) => {
+    setPreferenceSection(id);
+    document.getElementById(`prefs-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
   return (
     <main className="preferences">
+      <nav className="preferences-nav" aria-label="Preferences">
+        <div className="preferences-nav-brand">Captures</div>
+        {PREFERENCE_NAV.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            aria-current={preferenceSection === item.id ? "true" : undefined}
+            onClick={() => showPreferenceSection(item.id)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </nav>
+      <div className="preferences-main" ref={preferencesMainRef}>
       <header className="preferences-header">
         <div>
-          <span className="eyebrow">Captures</span>
           <h1>Preferences</h1>
         </div>
         {saveStatus.kind !== "idle" && (
@@ -6380,7 +6459,7 @@ export function Preferences() {
         )}
       </header>
 
-      <section className="settings-section appearance-section">
+      <section id="prefs-appearance" className="settings-section appearance-section">
         <h2>Appearance</h2>
         <p className="help-text">
           Apply one color system across every Captures window. Status colors keep their meaning.
@@ -6460,8 +6539,8 @@ export function Preferences() {
         )}
       </section>
 
-      <section className="settings-section">
-        <h2>Captures</h2>
+      <section id="prefs-capture" className="settings-section">
+        <h2>Capture</h2>
         <label className="field-label" htmlFor="output-directory">Save captures to</label>
         <div className="directory-input">
           <input id="output-directory" value={settings.output_directory} onChange={(event) => update("output_directory", event.target.value)} />
@@ -6550,9 +6629,13 @@ export function Preferences() {
         <p className="help-text">
           Wait before taking a screenshot so you can open menus or hover states. Press Esc to cancel.
         </p>
+        <label className="check-row capture-option">
+          <input type="checkbox" checked={settings.launch_at_login} onChange={(event) => update("launch_at_login", event.target.checked)} />
+          <span>Launch Captures when I sign in</span>
+        </label>
       </section>
 
-      <section className="settings-section">
+      <section id="prefs-shortcuts" className="settings-section">
         <h2>Shortcuts</h2>
         <ShortcutInput
           id="new-capture-shortcut"
@@ -6605,8 +6688,10 @@ export function Preferences() {
         <p className="help-text">Select a shortcut, then press the key combination you want. Press Esc to cancel recording. Changes save automatically.</p>
       </section>
 
-      <section className="settings-section recording-settings-section">
-        <h2>Video recording</h2>
+      <section id="prefs-recording" className="settings-section">
+        <h2>Recording</h2>
+        <div className="recording-settings-section">
+        <h3 className="settings-subheading">Video</h3>
         <div className="settings-inline-grid">
           <div className="settings-select-field"><span>Frames per second</span>
             <CustomSelect
@@ -6642,10 +6727,9 @@ export function Preferences() {
           />
         </div>
         <label className="check-row recording-setting-after-select"><input type="checkbox" checked={settings.recording.mono_audio} onChange={(event) => updateRecording("mono_audio", event.target.checked)} /><span>Export recording audio in mono</span></label>
-      </section>
-
-      <section className="settings-section recording-settings-section">
-        <h2>GIF export defaults</h2>
+        </div>
+        <div className="recording-settings-section">
+        <h3 className="settings-subheading">GIF export</h3>
         <div className="settings-inline-grid">
           <div className="settings-select-field"><span>Frames per second</span>
             <CustomSelect value={String(settings.recording.gif_fps)} ariaLabel="GIF frames per second" options={[8, 10, 12, 15, 20, 24, 30].map((value) => ({ value: String(value), label: `${value} FPS` }))} onChange={(value) => updateRecording("gif_fps", Number(value))} />
@@ -6657,10 +6741,9 @@ export function Preferences() {
             <CustomSelect value={String(settings.recording.gif_max_colors)} ariaLabel="GIF palette colors" options={[64, 96, 128, 256].map((value) => ({ value: String(value), label: String(value) }))} onChange={(value) => updateRecording("gif_max_colors", Number(value))} />
           </div>
         </div>
-      </section>
-
-      <section className="settings-section recording-settings-section">
-        <h2>Recording behavior</h2>
+        </div>
+        <div className="recording-settings-section">
+        <h3 className="settings-subheading">Behavior</h3>
         <div className="settings-select-field field-label"><span>Countdown</span>
           <CustomSelect
             value={String(settings.recording.countdown_seconds)}
@@ -6672,11 +6755,12 @@ export function Preferences() {
         <label className="check-row recording-setting-after-select recording-behavior-toggle"><input type="checkbox" checked={settings.recording.show_cursor} onChange={(event) => updateRecording("show_cursor", event.target.checked)} /><span>Show cursor in recordings</span></label>
         <label className="check-row recording-behavior-toggle"><input type="checkbox" checked={settings.recording.highlight_clicks} onChange={(event) => updateRecording("highlight_clicks", event.target.checked)} /><span>Show clicks in recordings</span></label>
         <label className="check-row capture-option"><input type="checkbox" checked={settings.recording.open_editor_after_recording} onChange={(event) => updateRecording("open_editor_after_recording", event.target.checked)} /><span>Open the editor after recording<small>The recording is kept in Capture History for 30 days, so closing the editor never loses it.</small></span></label>
+        </div>
       </section>
 
       <UpdatePreferences />
 
-      <section className="settings-section">
+      <section id="prefs-feedback" className="settings-section">
         <h2>Feedback</h2>
         <div className="settings-utility-row">
           <div className="settings-utility-copy">
@@ -6691,11 +6775,7 @@ export function Preferences() {
           </button>
         </div>
       </section>
-
-      <label className="check-row">
-        <input type="checkbox" checked={settings.launch_at_login} onChange={(event) => update("launch_at_login", event.target.checked)} />
-        <span>Launch Captures when I sign in</span>
-      </label>
+      </div>
     </main>
   );
 }

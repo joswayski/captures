@@ -1,4 +1,4 @@
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "./lib/tauri";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -264,6 +264,7 @@ export function Onboarding() {
     <main className="onboarding-shell">
       <div className="onboarding-stage">
         <header className="onboarding-copy" aria-labelledby="onboarding-setup-title">
+          <p className="onboarding-kicker">Captures</p>
           <h1 id="onboarding-setup-title">{setupTitle(setup?.platform)}</h1>
         </header>
 

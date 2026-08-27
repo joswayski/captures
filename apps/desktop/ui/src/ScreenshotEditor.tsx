@@ -1,5 +1,4 @@
-import { invoke, isTauri } from "@tauri-apps/api/core";
-import { emit, listen } from "@tauri-apps/api/event";
+import { emit, invoke, isTauri, listen } from "./lib/tauri";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
@@ -1857,14 +1856,18 @@ export function ScreenshotEditor() {
     const objectUrls = objectUrlsRef.current;
     void (async () => {
       if (!artifactId) throw new Error("No screenshot was selected.");
-      unlisten = await listen<string>("artifact-removed", ({ payload }) => {
-        if (payload !== artifactId) return;
-        // The canvas still holds the edited image — copy/save remain available.
-        setSourceMissing(true);
-        setMakeCopy(true);
-        setError("");
-        clearSuccess();
-      });
+      try {
+        unlisten = await listen<string>("artifact-removed", ({ payload }) => {
+          if (payload !== artifactId) return;
+          // The canvas still holds the edited image — copy/save remain available.
+          setSourceMissing(true);
+          setMakeCopy(true);
+          setError("");
+          clearSuccess();
+        });
+      } catch {
+        unlisten = undefined;
+      }
       const loaded = await invoke<CaptureArtifact | null>("get_artifact", { artifactId });
       if (!active) return;
       if (!loaded) throw new Error("The screenshot is no longer available.");

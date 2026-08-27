@@ -2177,7 +2177,7 @@ fn open_artifact_viewer(
     .min_inner_size(560.0, 400.0)
     .center()
     .resizable(true)
-    .background_color(Color(17, 18, 26, 255))
+    .background_color(Color(11, 11, 13, 255))
     .focused(false)
     .visible(false)
     .build()
@@ -4174,7 +4174,7 @@ fn show_capture_history(app: &AppHandle) {
         .min_inner_size(640.0, 440.0)
         .center()
         .resizable(true)
-        .background_color(Color(17, 18, 26, 255))
+        .background_color(Color(11, 11, 13, 255))
         .focused(false)
         .visible(false)
         .on_page_load(|window, payload| {
@@ -4312,11 +4312,11 @@ fn show_preferences(app: &AppHandle) {
             WebviewUrl::App("index.html?view=preferences".into()),
         )
         .title("Captures Preferences")
-        .inner_size(520.0, 480.0)
-        .min_inner_size(420.0, 360.0)
+        .inner_size(880.0, 640.0)
+        .min_inner_size(720.0, 520.0)
         .center()
         .resizable(true)
-        .background_color(Color(23, 24, 33, 255))
+        .background_color(Color(11, 11, 13, 255))
         .focused(false)
         .visible(false)
         .on_page_load(|window, payload| {

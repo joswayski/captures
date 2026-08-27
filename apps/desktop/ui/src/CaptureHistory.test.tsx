@@ -104,7 +104,7 @@ describe("CaptureHistory", () => {
     render(<CaptureHistory />);
 
     expect(await screen.findByRole("heading", { name: "Capture History" })).toBeInTheDocument();
-    expect(screen.getByText("ON THIS DEVICE")).toBeInTheDocument();
+    expect(screen.queryByText("ON THIS DEVICE")).not.toBeInTheDocument();
     expect(screen.queryByText("ON THIS MAC")).not.toBeInTheDocument();
     expect(screen.getByText("1440 × 900 · 250 KB")).toBeInTheDocument();
 

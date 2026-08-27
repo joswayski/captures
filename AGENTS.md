@@ -30,6 +30,7 @@
 - Do not force one accent color across the product. Use a small multi-accent palette selectively and consistently for actions, selection and focus, status, diagrams, and occasional feature moments while keeping most interface chrome neutral.
 - Establish hierarchy with typography, spacing, and modular layout before color. Prefer generous whitespace, clear grids or cards, and concise copy. Keep default page and application chrome neutral; reserve gradients or large color fields for contained feature moments.
 - Product imagery and illustrations may carry more color than their surrounding interface. Preserve accessible contrast and give recurring accent colors stable meanings.
+- Desktop chrome uses `--app-*` charcoal tokens. Keep accent and signal for actions, selection, focus, and status — do not paint window chrome with the selected theme color.
 
 ## Documentation
 

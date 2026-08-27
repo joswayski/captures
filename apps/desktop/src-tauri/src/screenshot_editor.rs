@@ -141,7 +141,7 @@ pub fn open_screenshot_editor(
     .center()
     .resizable(true)
     .disable_drag_drop_handler()
-    .background_color(Color(21, 22, 25, 255))
+    .background_color(Color(18, 18, 21, 255))
     .focused(false)
     .visible(false)
     .on_page_load(|window, payload| {

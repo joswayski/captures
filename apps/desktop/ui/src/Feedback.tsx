@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./lib/tauri";
 import { useEffect, useMemo, useState } from "react";
 
 export type FeedbackCategory = "bug" | "idea" | "other";

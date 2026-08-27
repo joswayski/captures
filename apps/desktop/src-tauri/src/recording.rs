@@ -3839,7 +3839,7 @@ fn show_recording_editor(app: &AppHandle, artifact_id: &str) -> Result<(), AppEr
     .min_inner_size(760.0, 560.0)
     .center()
     .resizable(true)
-    .background_color(Color(24, 25, 29, 255))
+    .background_color(Color(11, 11, 13, 255))
     .focused(false)
     .visible(false)
     .on_page_load(|window, payload| {
