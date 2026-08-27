@@ -42,6 +42,7 @@ jobs:
             libegl-dev \
             libgbm-dev \
             libpipewire-0.3-dev \
+            libspa-0.2-dev \
             librsvg2-dev \
             libssl-dev \
             libwayland-dev \
@@ -131,6 +132,7 @@ jobs:
             libegl-dev \
             libgbm-dev \
             libpipewire-0.3-dev \
+            libspa-0.2-dev \
             librsvg2-dev \
             libssl-dev \
             libwayland-dev \
