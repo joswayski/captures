@@ -264,7 +264,7 @@ export function Onboarding() {
     <main className="onboarding-shell">
       <div className="onboarding-stage">
         <header className="onboarding-copy" aria-labelledby="onboarding-setup-title">
-          <div className="onboarding-brand" aria-label="Captures">
+          <div className="onboarding-brand">
             <span className="onboarding-brand-mark" aria-hidden="true">
               <svg viewBox="0 0 24 24">
                 <path d="M8 4H6a2 2 0 0 0-2 2v2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2" />
