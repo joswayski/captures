@@ -28,7 +28,7 @@ const available: UpdateStatus = {
 describe("UpdateNotice", () => {
   afterEach(() => vi.clearAllMocks());
 
-  it("offers an explicit install and restart for an available update", async () => {
+  it("presents an available update without repeating metadata", async () => {
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "get_update_status") return available;
       if (command === "install_update") return undefined;
@@ -38,15 +38,17 @@ describe("UpdateNotice", () => {
     render(<UpdateNotice />);
 
     expect(await screen.findByRole("dialog", {
-      name: "A new Captures Preview is ready",
+      name: "An update is available",
     })).toBeInTheDocument();
-    expect(screen.getByLabelText(
-      "Updating Captures from version 2026.07.19.1 to 2026.07.19.2",
-    )).toBeInTheDocument();
+    expect(screen.getAllByText("Version 2026.07.19.2")).toHaveLength(1);
     expect(screen.getByText("Adds automatic releases")).toBeInTheDocument();
     expect(screen.queryByText(/experimental/u)).not.toBeInTheDocument();
     expect(screen.queryByText(/Full Changelog/u)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Install & Restart" }));
+    expect(screen.queryByText(/highlights/u)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Captures Preview/u)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Signed Preview/u)).not.toBeInTheDocument();
+    expect(screen.queryByText("2026.07.19.1")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Update now" }));
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("install_update"));
   });
@@ -64,12 +66,12 @@ describe("UpdateNotice", () => {
 
     render(<UpdateNotice />);
 
-    expect(await screen.findByText("Downloading… 25%")).toBeInTheDocument();
+    expect(await screen.findByText("25%")).toBeInTheDocument();
     expect(screen.getByRole("progressbar", { name: "Downloading update" })).toHaveAttribute(
       "aria-valuenow",
       "25",
     );
-    expect(screen.getByRole("button", { name: "Later" })).toBeDisabled();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 
   it("keeps the available state useful when release notes are missing", async () => {
@@ -77,9 +79,8 @@ describe("UpdateNotice", () => {
 
     render(<UpdateNotice />);
 
-    expect(await screen.findByText("The latest Captures improvements")).toBeInTheDocument();
-    expect(screen.getByText(/Release notes aren’t available/u)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Install & Restart" })).toBeEnabled();
+    expect(await screen.findByText("Release notes aren’t available for this update.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Update now" })).toBeEnabled();
   });
 
   it("shows the restart countdown after installation", async () => {
@@ -94,9 +95,9 @@ describe("UpdateNotice", () => {
 
     render(<UpdateNotice />);
 
-    expect(await screen.findByText("Update installed successfully")).toBeInTheDocument();
-    expect(screen.getByText("Restarting Captures in 3…")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Later" })).toBeDisabled();
+    expect(await screen.findByText("Update complete")).toBeInTheDocument();
+    expect(screen.getByText("Reopening in 3 seconds…")).toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 
   it("allows a failed check to be retried", async () => {
@@ -116,7 +117,7 @@ describe("UpdateNotice", () => {
     render(<UpdateNotice />);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("GitHub is unavailable");
-    fireEvent.click(screen.getByRole("button", { name: "Try Again" }));
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("check_for_updates"));
   });

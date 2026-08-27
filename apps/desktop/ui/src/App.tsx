@@ -473,46 +473,30 @@ export function UpdateNotice() {
     : null;
   const state = status?.state ?? "loading";
   const visualState = error ? "error" : state;
-  const update = available ?? downloading ?? restarting;
   const title = restarting
-    ? "Captures is ready to relaunch"
+    ? "Update complete"
     : downloading
-      ? "Installing your update"
+      ? "Updating Captures"
       : error
-        ? "We couldn’t complete the update"
+        ? "Update failed"
         : available
-          ? "A new Captures Preview is ready"
+          ? "An update is available"
           : status?.state === "up_to_date"
             ? "You’re up to date"
             : status?.state === "checking"
-              ? "Looking for updates"
-              : "Getting things ready";
+              ? "Checking for updates"
+              : "Loading update details";
   const description = restarting
-    ? `Version ${restarting.display_version} installed successfully.`
+    ? `Version ${restarting.display_version}`
     : downloading
-      ? `Version ${downloading.display_version} is downloading and will install automatically.`
+      ? `Version ${downloading.display_version}`
       : error
-        ? "Your current version is safe. Try the update again when you’re ready."
+        ? "Your current version was not changed."
         : available
-          ? available.installable
-            ? `Version ${available.display_version} is ready to install. Captures will relaunch when it’s finished.`
-            : `Version ${available.display_version} is ready to download from GitHub Releases.`
+          ? `Version ${available.display_version}`
           : status?.state === "up_to_date"
-            ? `Version ${status.current_display_version} is the newest available Preview.`
-            : status?.state === "checking"
-              ? "Checking the latest validated Preview on GitHub Releases."
-              : "Loading the latest Captures Preview details.";
-  const footerNote = downloading
-    ? "Keep Captures open"
-    : restarting
-      ? "Captures and settings stay in place"
-      : error
-        ? "Keep using your current version"
-        : available
-          ? available.installable
-            ? "Signed Preview · One restart"
-            : "Opens the Captures release page"
-          : "Checks continue automatically";
+            ? `Version ${status.current_display_version}`
+            : "This should only take a moment.";
 
   return (
     <main
@@ -524,70 +508,32 @@ export function UpdateNotice() {
       <header className="update-notice-header">
         <div className="update-app-icon" aria-hidden="true">
           <CaptureIcon />
-          <span className={`update-icon-status update-icon-status-${visualState}`}>
-            {restarting || status?.state === "up_to_date"
-              ? <CheckIcon />
-              : downloading || status?.state === "checking"
-                ? <span className="update-spinner" />
-                : error
-                  ? "!"
-                  : <UpdateArrowIcon />}
-          </span>
         </div>
         <div className="update-notice-copy">
-          <span className="update-badge">Captures Preview</span>
           <h1 id="update-notice-title">{title}</h1>
           <p id="update-notice-description">{description}</p>
         </div>
       </header>
 
-      <div className="update-notice-body">
+      <div className={`update-notice-body${available && !error ? "" : " update-notice-body-status"}`}>
         {available && !error && (
-          <>
-            <div
-              className="update-version-route"
-              role="group"
-              aria-label={`Updating Captures from version ${available.current_display_version} to ${available.display_version}`}
-            >
-              <div aria-hidden="true">
-                <small>Installed</small>
-                <span>{available.current_display_version}</span>
-              </div>
-              <span className="update-version-arrow" aria-hidden="true"><ArrowRightIcon /></span>
-              <div className="update-version-new" aria-hidden="true">
-                <small>Ready</small>
-                <span>{available.display_version}</span>
-              </div>
-            </div>
-            <section className="update-notes" aria-label="What's new">
-              <div className="update-notes-heading">
-                <h2>What’s new</h2>
-                {notes.length > 0 && <span>{notes.length} {notes.length === 1 ? "highlight" : "highlights"}</span>}
-              </div>
-              {notes.length > 0 ? (
-                <ul>
-                  {notes.map((note, index) => (
-                    <li key={`${index}-${note}`}><span aria-hidden="true"><CheckIcon /></span>{note}</li>
-                  ))}
-                </ul>
-              ) : (
-                <div className="update-notes-empty">
-                  <strong>The latest Captures improvements</strong>
-                  <p>Release notes aren’t available for this build, but this is the latest validated Preview.</p>
-                </div>
-              )}
-            </section>
-          </>
+          <section className="update-notes" aria-label="What's new">
+            <h2>What’s new</h2>
+            {notes.length > 0 ? (
+              <ul>
+                {notes.map((note, index) => <li key={`${index}-${note}`}>{note}</li>)}
+              </ul>
+            ) : (
+              <p className="update-notes-empty">Release notes aren’t available for this update.</p>
+            )}
+          </section>
         )}
 
         {downloading && (
-          <section className="update-status-card" aria-label="Update installation progress">
-            <div className="update-status-heading">
-              <div>
-                <span>Installing version</span>
-                <strong>{downloading.display_version}</strong>
-              </div>
-              <strong>{progress === null ? "Downloading…" : `${progress}%`}</strong>
+          <section className="update-download" aria-label="Update installation progress">
+            <div className="update-progress-label">
+              <span>Downloading</span>
+              {progress !== null && <strong>{progress}%</strong>}
             </div>
             <div
               className={`update-progress${progress === null ? " update-progress-indeterminate" : ""}`}
@@ -600,78 +546,54 @@ export function UpdateNotice() {
             >
               <span style={{ width: `${progress ?? 34}%` }} />
             </div>
-            <p>{progress === null ? "Downloading update…" : `Downloading… ${progress}%`}</p>
-            <small>Captures will restart automatically when installation finishes.</small>
           </section>
         )}
 
         {restarting && (
-          <section className="update-status-card update-status-success" role="status">
-            <span className="update-state-symbol" aria-hidden="true"><CheckIcon /></span>
-            <strong>Update installed successfully</strong>
-            <p className="update-restarting">Restarting Captures in {restarting.seconds_remaining}…</p>
-          </section>
+          <p className="update-status-message update-restarting" role="status">
+            Reopening in {restarting.seconds_remaining} seconds…
+          </p>
         )}
 
-        {error && (
-          <section className="update-status-card update-status-error">
-            <span className="update-state-symbol" aria-hidden="true">!</span>
-            <strong>Update details</strong>
-            <p className="update-error" role="alert">{error}</p>
-          </section>
+        {error && <p className="update-error" role="alert">{error}</p>}
+
+        {!available && !downloading && !restarting && !error && status?.state === "up_to_date" && (
+          <p className="update-status-message" role="status">No updates are available.</p>
         )}
 
-        {!update && !error && status?.state === "up_to_date" && (
-          <section className="update-status-card update-status-success" role="status">
-            <span className="update-state-symbol" aria-hidden="true"><CheckIcon /></span>
-            <strong>Nothing to install</strong>
-            <p>Captures checks for new Preview builds automatically.</p>
-          </section>
-        )}
-
-        {!update && !error && status?.state !== "up_to_date" && (
-          <section className="update-status-card update-status-loading" role="status">
-            <span className="update-state-symbol" aria-hidden="true"><span className="update-spinner" /></span>
-            <strong>{status?.state === "checking" ? "Checking GitHub Releases" : "Loading update details"}</strong>
-            <p>This should only take a moment.</p>
-          </section>
+        {!available && !downloading && !restarting && !error && status?.state !== "up_to_date" && (
+          <p className="update-status-message update-checking" role="status">
+            <span className="update-spinner" aria-hidden="true" />Checking…
+          </p>
         )}
       </div>
 
-      <footer className="update-notice-footer">
-        <p className="update-footer-note"><span aria-hidden="true"><CheckIcon /></span>{footerNote}</p>
-        <div className="update-actions">
+      {!downloading && !restarting && (
+        <footer className="update-notice-footer">
           <button
+            className="update-dismiss"
             type="button"
             onClick={close}
-            disabled={Boolean(downloading || restarting)}
           >
-            Later
+            {available ? "Later" : "Close"}
           </button>
           {available && !error && (
             <button className="primary" type="button" onClick={() => void run("install_update")}>
-              {available.installable ? <UpdateArrowIcon /> : <ExternalLinkIcon />}
-              {available.installable ? "Install & Restart" : "View Download"}
+              {available.installable ? "Update now" : "View release"}
             </button>
           )}
           {error && (
             <button className="primary" type="button" onClick={() => void run("check_for_updates")}>
-              <RestartRecordingIcon />Try Again
+              Try again
             </button>
           )}
-          {!available && !downloading && !restarting && !error && status?.state !== "checking" && (
+          {!available && !error && status?.state !== "checking" && status?.state !== "up_to_date" && (
             <button className="primary" type="button" onClick={() => void run("check_for_updates")}>
-              <RestartRecordingIcon />Check Again
+              Check again
             </button>
           )}
-          {downloading && (
-            <button className="primary" type="button" disabled><span className="update-spinner" />Installing…</button>
-          )}
-          {restarting && (
-            <button className="primary" type="button" disabled><CheckIcon />Installed</button>
-          )}
-        </div>
-      </footer>
+        </footer>
+      )}
     </main>
   );
 }
@@ -686,20 +608,28 @@ function UpdatePreferences() {
   const progress = downloading?.total
     ? Math.min(100, Math.round((downloading.downloaded / downloading.total) * 100))
     : null;
-  const state = status?.state ?? "loading";
-  const statusLabel = available
-    ? "Update available"
+  const heading = available
+    ? `Version ${available.display_version} is available`
     : downloading
-      ? "Installing"
+      ? `Updating to version ${downloading.display_version}`
       : restarting
-        ? "Restarting"
-        : status?.state === "up_to_date"
-          ? "Up to date"
-          : status?.state === "checking"
-            ? "Checking"
-            : status?.state === "error"
-              ? "Needs attention"
-              : "Current version";
+        ? "Update complete"
+        : status?.state === "checking"
+          ? "Checking for updates…"
+          : status?.state === "error"
+            ? "Couldn’t check for updates"
+            : `Version ${currentVersion}`;
+  const detail = downloading
+    ? progress === null ? "Downloading…" : `${progress}% downloaded`
+    : restarting
+      ? "Reopening Captures…"
+      : status?.state === "up_to_date"
+        ? "Up to date."
+        : status?.state === "error"
+          ? status.message
+          : available || status?.state === "checking"
+            ? ""
+            : "Updates are checked automatically.";
 
   const run = async (command: "check_for_updates" | "install_update") => {
     setActionError("");
@@ -713,44 +643,23 @@ function UpdatePreferences() {
   return (
     <section className="settings-section update-settings">
       <h2>Updates</h2>
-      <div className={`settings-action-card update-settings-card update-settings-${state}`}>
-        <div className="settings-action-icon update-settings-icon" aria-hidden="true">
-          <CaptureIcon />
-          <span />
-        </div>
-        <div className="settings-action-copy">
-          <div className="settings-action-heading">
-            <strong>Captures Preview</strong>
-            <span className={`update-settings-status update-settings-status-${state}`}>{statusLabel}</span>
-          </div>
-          <span className="update-settings-version">Version {currentVersion}</span>
-          <small>
-            {available
-              ? `Version ${available.display_version} is ready. Captures will restart after installation.`
-              : status?.state === "up_to_date"
-                ? "You’re running the newest available Preview."
-                : status?.state === "checking"
-                  ? "Checking GitHub Releases…"
-                  : status?.state === "error"
-                    ? status.message
-                    : "Captures checks GitHub Releases for signed updates."}
-          </small>
+      <div className="settings-utility-row update-settings-row">
+        <div className="settings-utility-copy">
+          <strong>{heading}</strong>
+          {detail && <small>{detail}</small>}
         </div>
         <button
-          className="settings-action-button"
+          className="settings-utility-action"
           type="button"
           disabled={Boolean(status?.state === "checking" || downloading || restarting)}
           onClick={() => void run(available ? "install_update" : "check_for_updates")}
         >
-          {available
-            ? available.installable ? <UpdateArrowIcon /> : <ExternalLinkIcon />
-            : <RestartRecordingIcon />}
           {restarting
             ? "Restarting…"
             : downloading
             ? "Installing…"
             : available
-              ? available.installable ? "Install & Restart" : "Download Release"
+              ? available.installable ? "Update now" : "View release"
               : status?.state === "checking" ? "Checking…" : "Check Now"}
         </button>
         {downloading && (
@@ -1263,22 +1172,6 @@ function CaptureIcon() {
     <path d="M9 4H7a3 3 0 0 0-3 3v2M15 4h2a3 3 0 0 1 3 3v2M20 15v2a3 3 0 0 1-3 3h-2M9 20H7a3 3 0 0 1-3-3v-2" />
     <path className="capture-icon-spark" d="M12 8.5c.4 1.8 1.7 3.1 3.5 3.5-1.8.4-3.1 1.7-3.5 3.5-.4-1.8-1.7-3.1-3.5-3.5 1.8-.4 3.1-1.7 3.5-3.5Z" />
   </svg>;
-}
-
-function UpdateArrowIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M5 20h14" /></svg>;
-}
-
-function ArrowRightIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5" /></svg>;
-}
-
-function ExternalLinkIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 5h5v5M19 5l-8 8" /><path d="M18 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" /></svg>;
-}
-
-function FeedbackIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v11H9l-4 3Z" /><path d="M8 9h8M8 12h5" /></svg>;
 }
 
 function SegmentedControlIndicator({ value }: { value: string }) {
@@ -6768,19 +6661,16 @@ export function Preferences() {
 
       <section className="settings-section">
         <h2>Feedback</h2>
-        <div className="settings-action-card">
-          <div className="settings-action-icon feedback-settings-icon" aria-hidden="true">
-            <FeedbackIcon />
-          </div>
-          <div className="settings-action-copy">
+        <div className="settings-utility-row">
+          <div className="settings-utility-copy">
             <strong>Send feedback</strong>
             <small>
               Report a bug or share an idea. Captures includes app version and system details only —
               never your captures.
             </small>
           </div>
-          <button className="settings-action-button" type="button" onClick={() => void invoke("open_feedback")}>
-            <FeedbackIcon />Open
+          <button className="settings-utility-action" type="button" onClick={() => void invoke("open_feedback")}>
+            Open
           </button>
         </div>
       </section>
