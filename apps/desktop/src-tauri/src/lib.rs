@@ -4894,8 +4894,8 @@ fn hide_window(app: &AppHandle, label: &str) {
     #[cfg(target_os = "macos")]
     {
         let app = app.clone();
-        let label = label.to_owned();
-        if run_on_appkit_main(move || hide_window_inner(&app, &label)).is_none() {
+        let hop_label = label.to_owned();
+        if run_on_appkit_main(move || hide_window_inner(&app, &hop_label)).is_none() {
             eprintln!("failed to hide {label} on the main thread");
         }
         return;
