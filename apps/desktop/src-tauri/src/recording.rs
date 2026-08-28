@@ -281,7 +281,7 @@ pub(crate) async fn prepare_capture_selector_inner(
     let prepared = (|| {
         crate::ensure_capture_session_available()?;
         let id = Uuid::new_v4().to_string();
-        let (display, snapshot_png, image, mut displays, mut windows) = if freeze_screen {
+        let (display, snapshot_png, image, displays, windows) = if freeze_screen {
             let (frame, snapshot_png, mut displays, mut windows) = std::thread::scope(|scope| {
                 // The selector always needs window targets, but their enumeration is
                 // independent of freezing and encoding the display background.
@@ -434,7 +434,7 @@ async fn select_capture_display_inner(
         .cloned()
         .ok_or(AppError::InvalidSelection)?;
     let freeze_screen = current.frozen;
-    let (display, snapshot_png, image, mut windows) = if freeze_screen {
+    let (display, snapshot_png, image, windows) = if freeze_screen {
         let frame = state.backend.capture_display(&requested_display.id)?;
         let snapshot_png = storage::encode_png(&frame.image)?;
         let mut windows = state

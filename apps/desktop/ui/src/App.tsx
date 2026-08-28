@@ -3454,12 +3454,7 @@ export function RecordingEditor() {
     // Maximum mode shows the cap instead of a sampled estimate; the label
     // ignores any stale estimate state, so nothing is cleared here.
     if (sizeMode === "maximum") return;
-    if (outputFormat === "webm") {
-      setEstimatedBytes(null);
-      setEstimateExact(false);
-      setEstimatePending(false);
-      return;
-    }
+    if (outputFormat === "webm") return;
     const request = ++estimateRequestRef.current;
     const timer = window.setTimeout(() => {
       setEstimatePending(true);
@@ -3632,12 +3627,14 @@ export function RecordingEditor() {
     && maximumBytes >= 100_000;
   const estimatedSizeLabel = sizeMode === "maximum"
     ? maximumBytesValid && maximumBytes !== null ? `≤ ${formatFileSize(maximumBytes)}` : "—"
-    : estimatePending && estimatedBytes === null
-      ? "Estimating…"
-      : estimatedBytes === null
-        ? "—"
-        : `${estimateExact ? "" : "≈ "}${formatFileSize(estimatedBytes)}`;
-  const estimatedDelta = sizeMode === "maximum" || estimatePending
+    : outputFormat === "webm"
+      ? "—"
+      : estimatePending && estimatedBytes === null
+        ? "Estimating…"
+        : estimatedBytes === null
+          ? "—"
+          : `${estimateExact ? "" : "≈ "}${formatFileSize(estimatedBytes)}`;
+  const estimatedDelta = sizeMode === "maximum" || outputFormat === "webm" || estimatePending
     ? null
     : formatFileSizeDelta(estimatedBytes, artifact.size_bytes);
   const saveStatus = error
@@ -4342,7 +4339,7 @@ export function RecordingEditor() {
             <span>Est. size</span>
             <strong
               className="recording-output-estimate"
-              data-pending={sizeMode !== "maximum" && estimatePending ? "true" : undefined}
+              data-pending={sizeMode !== "maximum" && outputFormat !== "webm" && estimatePending ? "true" : undefined}
               title="Estimated saved file size for the current edits and settings"
             >
               {estimatedSizeLabel}

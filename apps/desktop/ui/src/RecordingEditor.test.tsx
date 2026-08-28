@@ -835,7 +835,7 @@ describe("RecordingEditor", () => {
       throw new Error(`unexpected command: ${command}`);
     });
     render(<RecordingEditor />);
-    await screen.findByRole("heading", { name: "Edit recording" });
+    await screen.findByRole("heading", { name: "Edit GIF" });
     expect(screen.getByRole("combobox", { name: "Format" })).toHaveTextContent(".gif");
   });
 });

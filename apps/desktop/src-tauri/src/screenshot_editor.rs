@@ -20,8 +20,8 @@ use crate::{
     AppError, CommandResult,
     models::{
         ArtifactKind, CaptureArtifact, ClipboardCopyStatus, ClipboardState, HistoryEntry,
-        ScreenshotFormat, artifact_full_url, artifact_url, editor_draft_asset_url, history_full_url,
-        history_preview_url, screenshot_editor_drafts_directory,
+        ScreenshotFormat, artifact_full_url, artifact_url, editor_draft_asset_url,
+        history_full_url, history_preview_url, screenshot_editor_drafts_directory,
     },
     state::AppState,
     storage,

@@ -168,16 +168,6 @@ pub enum VideoFormat {
     WebM,
 }
 
-impl VideoFormat {
-    pub const fn extension(self) -> &'static str {
-        match self {
-            Self::Mp4 => "mp4",
-            Self::Gif => "gif",
-            Self::WebM => "webm",
-        }
-    }
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RecordingSettings {
     #[serde(default = "default_video_shortcut")]
@@ -1223,10 +1213,10 @@ mod tests {
 
     use super::{
         AppSettings, Appearance, ColorTheme, CustomThemeSettings, HistoryEntry, RecordingArtifact,
-        ScreenshotFormat, VideoFormat,
-        macos_screenshot_hotkeys_conflicting_with, migrate_output_directory, migrate_settings,
-        platform_can_exclude_recording_controls, recording_controls_are_excluded,
-        recording_media_url, recording_poster_url, recording_selection_url, snapshot_url,
+        ScreenshotFormat, VideoFormat, macos_screenshot_hotkeys_conflicting_with,
+        migrate_output_directory, migrate_settings, platform_can_exclude_recording_controls,
+        recording_controls_are_excluded, recording_media_url, recording_poster_url,
+        recording_selection_url, snapshot_url,
     };
 
     #[test]
