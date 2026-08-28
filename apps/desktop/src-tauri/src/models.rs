@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use captures_capture::{CaptureMode, DisplayDescriptor, WindowDescriptor};
@@ -8,7 +9,14 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub const HISTORY_RETENTION_DAYS: i64 = 30;
-const CURRENT_SETTINGS_SCHEMA_VERSION: u8 = 2;
+const CURRENT_SETTINGS_SCHEMA_VERSION: u8 = 3;
+const SHORTCUT_MODIFIER: &str = "CommandOrControl";
+/// macOS Screenshot "Save picture of selected area as a file" (⌘⇧4).
+const MACOS_SCREENSHOT_SAVE_AREA: u32 = 28;
+/// macOS Screenshot "Save picture of screen as a file" (⌘⇧3).
+const MACOS_SCREENSHOT_SAVE_SCREEN: u32 = 30;
+/// macOS Screenshot and recording options (⌘⇧5).
+const MACOS_SCREENSHOT_OPTIONS: u32 = 184;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AppSettings {
@@ -176,9 +184,9 @@ impl Default for AppSettings {
             custom_theme: CustomThemeSettings::default(),
             output_directory: default_output_directory().to_string_lossy().into_owned(),
             new_capture_shortcut: default_new_capture_shortcut(),
-            region_shortcut: "Ctrl+Shift+4".to_owned(),
-            window_shortcut: "Ctrl+Shift+W".to_owned(),
-            display_shortcut: "Ctrl+Shift+3".to_owned(),
+            region_shortcut: default_region_shortcut(),
+            window_shortcut: default_window_shortcut(),
+            display_shortcut: default_display_shortcut(),
             feedback_shortcut: default_feedback_shortcut(),
             auto_copy_to_clipboard: true,
             auto_start_on_selection: false,
@@ -612,19 +620,31 @@ const fn default_auto_copy_to_clipboard() -> bool {
 }
 
 fn default_new_capture_shortcut() -> String {
-    "Ctrl+Shift+Space".to_owned()
+    format!("{SHORTCUT_MODIFIER}+Shift+Space")
+}
+
+fn default_region_shortcut() -> String {
+    format!("{SHORTCUT_MODIFIER}+Shift+4")
+}
+
+fn default_window_shortcut() -> String {
+    format!("{SHORTCUT_MODIFIER}+Shift+W")
+}
+
+fn default_display_shortcut() -> String {
+    format!("{SHORTCUT_MODIFIER}+Shift+3")
 }
 
 fn default_feedback_shortcut() -> String {
-    "Ctrl+Shift+F".to_owned()
+    format!("{SHORTCUT_MODIFIER}+Shift+F")
 }
 
 fn default_video_shortcut() -> String {
-    "Ctrl+Shift+5".to_owned()
+    format!("{SHORTCUT_MODIFIER}+Shift+5")
 }
 
 fn default_gif_shortcut() -> String {
-    "Ctrl+Shift+6".to_owned()
+    format!("{SHORTCUT_MODIFIER}+Shift+6")
 }
 
 const fn default_video_fps() -> u16 {
@@ -727,8 +747,140 @@ pub fn migrate_settings(settings: &mut AppSettings) -> bool {
         // any earlier build proves this installation has already been used.
         settings.onboarding_completed = true;
     }
+    if settings.settings_schema_version < 3 {
+        // Previous defaults used Control+Shift on every platform, including
+        // macOS. Move still-factory bindings to CommandOrControl so macOS gets
+        // Command (matching Screenshot) and Windows/Linux keep Control. Custom
+        // shortcuts are left alone.
+        migrate_legacy_default_shortcuts(settings);
+    }
     settings.settings_schema_version = CURRENT_SETTINGS_SCHEMA_VERSION;
     true
+}
+
+fn migrate_legacy_default_shortcuts(settings: &mut AppSettings) {
+    replace_legacy_default_shortcut(
+        &mut settings.new_capture_shortcut,
+        "Ctrl+Shift+Space",
+        default_new_capture_shortcut(),
+    );
+    replace_legacy_default_shortcut(
+        &mut settings.region_shortcut,
+        "Ctrl+Shift+4",
+        default_region_shortcut(),
+    );
+    replace_legacy_default_shortcut(
+        &mut settings.window_shortcut,
+        "Ctrl+Shift+W",
+        default_window_shortcut(),
+    );
+    replace_legacy_default_shortcut(
+        &mut settings.display_shortcut,
+        "Ctrl+Shift+3",
+        default_display_shortcut(),
+    );
+    replace_legacy_default_shortcut(
+        &mut settings.feedback_shortcut,
+        "Ctrl+Shift+F",
+        default_feedback_shortcut(),
+    );
+    replace_legacy_default_shortcut(
+        &mut settings.recording.video_shortcut,
+        "Ctrl+Shift+5",
+        default_video_shortcut(),
+    );
+    replace_legacy_default_shortcut(
+        &mut settings.recording.gif_shortcut,
+        "Ctrl+Shift+6",
+        default_gif_shortcut(),
+    );
+}
+
+fn replace_legacy_default_shortcut(value: &mut String, legacy: &str, next: String) {
+    if shortcuts_equivalent(value, legacy) {
+        *value = next;
+    }
+}
+
+fn shortcuts_equivalent(left: &str, right: &str) -> bool {
+    match (
+        canonical_shortcut_parts(left),
+        canonical_shortcut_parts(right),
+    ) {
+        (Some(left), Some(right)) => left == right,
+        _ => false,
+    }
+}
+
+fn canonical_shortcut_parts(shortcut: &str) -> Option<(BTreeSet<String>, String)> {
+    let mut tokens: Vec<String> = shortcut
+        .split('+')
+        .map(canonical_shortcut_token)
+        .filter(|token| !token.is_empty())
+        .collect();
+    let key = tokens.pop().filter(|token| !token.is_empty())?;
+    if tokens.is_empty() {
+        return None;
+    }
+    Some((tokens.into_iter().collect(), key))
+}
+
+fn canonical_shortcut_token(token: &str) -> String {
+    let normalized = token.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "control" | "ctrl" => "control".to_owned(),
+        "shift" => "shift".to_owned(),
+        "alt" | "option" => "alt".to_owned(),
+        "super" | "cmd" | "command" | "meta" | "win" => "super".to_owned(),
+        "commandorcontrol" | "commandorctrl" | "cmdorctrl" | "cmdorcontrol" => {
+            "commandorcontrol".to_owned()
+        }
+        other => other
+            .strip_prefix("digit")
+            .or_else(|| other.strip_prefix("key"))
+            .unwrap_or(other)
+            .to_owned(),
+    }
+}
+
+fn shortcut_uses_command_shift_key(shortcut: &str, key: &str) -> bool {
+    let Some((mods, parsed_key)) = canonical_shortcut_parts(shortcut) else {
+        return false;
+    };
+    parsed_key == key
+        && mods.contains("shift")
+        && (mods.contains("super") || mods.contains("commandorcontrol"))
+        && !mods.contains("control")
+        && mods.len() == 2
+}
+
+/// Symbolic hotkey IDs for stock macOS Screenshot shortcuts that overlap the
+/// current Captures bindings (⌘⇧3 / ⌘⇧4 / ⌘⇧5).
+pub fn macos_screenshot_hotkeys_conflicting_with(settings: &AppSettings) -> Vec<u32> {
+    let mut ids = Vec::new();
+    let shortcuts = [
+        settings.new_capture_shortcut.as_str(),
+        settings.region_shortcut.as_str(),
+        settings.window_shortcut.as_str(),
+        settings.display_shortcut.as_str(),
+        settings.feedback_shortcut.as_str(),
+        settings.recording.video_shortcut.as_str(),
+        settings.recording.gif_shortcut.as_str(),
+    ];
+    for shortcut in shortcuts {
+        if shortcut_uses_command_shift_key(shortcut, "3") {
+            ids.push(MACOS_SCREENSHOT_SAVE_SCREEN);
+        }
+        if shortcut_uses_command_shift_key(shortcut, "4") {
+            ids.push(MACOS_SCREENSHOT_SAVE_AREA);
+        }
+        if shortcut_uses_command_shift_key(shortcut, "5") {
+            ids.push(MACOS_SCREENSHOT_OPTIONS);
+        }
+    }
+    ids.sort_unstable();
+    ids.dedup();
+    ids
 }
 
 fn migrate_output_directory(settings: &mut AppSettings, legacy: &Path, current: &Path) {
@@ -822,9 +974,9 @@ mod tests {
 
     use super::{
         AppSettings, Appearance, ColorTheme, CustomThemeSettings, HistoryEntry, RecordingArtifact,
-        migrate_output_directory, migrate_settings, platform_can_exclude_recording_controls,
-        recording_controls_are_excluded, recording_media_url, recording_poster_url,
-        recording_selection_url, snapshot_url,
+        macos_screenshot_hotkeys_conflicting_with, migrate_output_directory, migrate_settings,
+        platform_can_exclude_recording_controls, recording_controls_are_excluded,
+        recording_media_url, recording_poster_url, recording_selection_url, snapshot_url,
     };
 
     #[test]
@@ -902,8 +1054,11 @@ mod tests {
         assert_eq!(settings.appearance, Appearance::System);
         assert_eq!(settings.theme, ColorTheme::Mustard);
         assert_eq!(settings.custom_theme, CustomThemeSettings::default());
-        assert_eq!(settings.new_capture_shortcut, "Ctrl+Shift+Space");
-        assert_eq!(settings.feedback_shortcut, "Ctrl+Shift+F");
+        assert_eq!(
+            settings.new_capture_shortcut,
+            "CommandOrControl+Shift+Space"
+        );
+        assert_eq!(settings.feedback_shortcut, "CommandOrControl+Shift+F");
         assert_eq!(settings.recording.video_fps, 60);
         assert_eq!(
             settings.recording.video_max_resolution,
@@ -924,7 +1079,7 @@ mod tests {
     fn fresh_settings_require_first_run_onboarding() {
         let mut settings = AppSettings::default();
 
-        assert_eq!(settings.settings_schema_version, 2);
+        assert_eq!(settings.settings_schema_version, 3);
         assert!(!settings.onboarding_completed);
         assert!(!migrate_settings(&mut settings));
     }
@@ -940,7 +1095,7 @@ mod tests {
         settings.recording.video_max_resolution = captures_recording::MaxResolution::P1080;
 
         assert!(migrate_settings(&mut settings));
-        assert_eq!(settings.settings_schema_version, 2);
+        assert_eq!(settings.settings_schema_version, 3);
         assert!(settings.onboarding_completed);
         assert_eq!(settings.recording.video_fps, 30);
         assert_eq!(
@@ -1010,8 +1165,14 @@ mod tests {
         assert!(!settings.recording.show_cursor);
         assert_eq!(settings.recording.gif_fps, 15);
         assert_eq!(settings.recording.gif_max_colors, 256);
-        assert_eq!(settings.new_capture_shortcut, "Ctrl+Shift+Space");
-        assert_eq!(settings.recording.video_shortcut, "Ctrl+Shift+5");
+        assert_eq!(
+            settings.new_capture_shortcut,
+            "CommandOrControl+Shift+Space"
+        );
+        assert_eq!(
+            settings.recording.video_shortcut,
+            "CommandOrControl+Shift+5"
+        );
         assert!(settings.recording.open_editor_after_recording);
     }
 
@@ -1204,5 +1365,100 @@ mod tests {
         assert_eq!(json["missing"], true);
         assert_eq!(json["saved_path"], "/missing/Captures_recording.mp4");
         assert!(json.get("fields").is_none());
+    }
+
+    #[test]
+    fn treats_legacy_and_recorded_control_shortcuts_as_the_same_default() {
+        assert!(super::shortcuts_equivalent(
+            "Ctrl+Shift+4",
+            "Control+Shift+Digit4"
+        ));
+        assert!(super::shortcuts_equivalent(
+            "ctrl+shift+w",
+            "Control+Shift+KeyW"
+        ));
+        assert!(!super::shortcuts_equivalent(
+            "CommandOrControl+Shift+4",
+            "Ctrl+Shift+4"
+        ));
+        assert!(!super::shortcuts_equivalent(
+            "Super+Shift+Digit4",
+            "Ctrl+Shift+4"
+        ));
+        assert!(!super::shortcuts_equivalent("Alt+Shift+4", "Ctrl+Shift+4"));
+    }
+
+    #[test]
+    fn migrates_factory_control_shortcuts_and_preserves_custom_ones() {
+        let mut settings = AppSettings {
+            settings_schema_version: 2,
+            region_shortcut: "Control+Shift+Digit4".to_owned(),
+            window_shortcut: "Alt+Shift+W".to_owned(),
+            display_shortcut: "Ctrl+Shift+3".to_owned(),
+            new_capture_shortcut: "Ctrl+Shift+Space".to_owned(),
+            feedback_shortcut: "Control+Shift+KeyF".to_owned(),
+            ..AppSettings::default()
+        };
+        settings.recording.video_shortcut = "Ctrl+Shift+5".to_owned();
+        settings.recording.gif_shortcut = "Command+Shift+6".to_owned();
+
+        assert!(migrate_settings(&mut settings));
+        assert_eq!(settings.settings_schema_version, 3);
+        assert_eq!(
+            settings.new_capture_shortcut,
+            "CommandOrControl+Shift+Space"
+        );
+        assert_eq!(settings.region_shortcut, "CommandOrControl+Shift+4");
+        assert_eq!(settings.window_shortcut, "Alt+Shift+W");
+        assert_eq!(settings.display_shortcut, "CommandOrControl+Shift+3");
+        assert_eq!(settings.feedback_shortcut, "CommandOrControl+Shift+F");
+        assert_eq!(
+            settings.recording.video_shortcut,
+            "CommandOrControl+Shift+5"
+        );
+        assert_eq!(settings.recording.gif_shortcut, "Command+Shift+6");
+
+        settings.region_shortcut = "Ctrl+Shift+4".to_owned();
+        assert!(!migrate_settings(&mut settings));
+        assert_eq!(settings.region_shortcut, "Ctrl+Shift+4");
+    }
+
+    #[test]
+    fn reports_macos_screenshot_hotkeys_that_overlap_command_shift_defaults() {
+        let settings = AppSettings::default();
+        assert_eq!(
+            macos_screenshot_hotkeys_conflicting_with(&settings),
+            vec![
+                super::MACOS_SCREENSHOT_SAVE_AREA,
+                super::MACOS_SCREENSHOT_SAVE_SCREEN,
+                super::MACOS_SCREENSHOT_OPTIONS
+            ]
+        );
+
+        let mut control_defaults = AppSettings {
+            region_shortcut: "Ctrl+Shift+4".to_owned(),
+            display_shortcut: "Ctrl+Shift+3".to_owned(),
+            new_capture_shortcut: "Ctrl+Shift+Space".to_owned(),
+            window_shortcut: "Ctrl+Shift+W".to_owned(),
+            feedback_shortcut: "Ctrl+Shift+F".to_owned(),
+            ..AppSettings::default()
+        };
+        control_defaults.recording.video_shortcut = "Ctrl+Shift+5".to_owned();
+        control_defaults.recording.gif_shortcut = "Ctrl+Shift+6".to_owned();
+        assert!(macos_screenshot_hotkeys_conflicting_with(&control_defaults).is_empty());
+
+        let recorded_command = AppSettings {
+            region_shortcut: "Super+Shift+Digit4".to_owned(),
+            display_shortcut: "Command+Shift+3".to_owned(),
+            ..AppSettings::default()
+        };
+        assert_eq!(
+            macos_screenshot_hotkeys_conflicting_with(&recorded_command),
+            vec![
+                super::MACOS_SCREENSHOT_SAVE_AREA,
+                super::MACOS_SCREENSHOT_SAVE_SCREEN,
+                super::MACOS_SCREENSHOT_OPTIONS
+            ]
+        );
     }
 }

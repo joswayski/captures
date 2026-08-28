@@ -16,7 +16,7 @@ import { createPortal } from "react-dom";
 
 import { CompressionPreview } from "./CompressionPreview";
 import { sameSortedIds } from "./lib/editorPresence";
-import { formatFileSize } from "./lib/format";
+import { formatFileSize, formatFileSizeDelta } from "./lib/format";
 import {
   buildScreenshotEditorDraftPayload,
   collectDocumentImageSources,
@@ -158,7 +158,7 @@ import type { CaptureArtifact, EditorLayerPresence } from "./types";
 
 type ExportFormat = "png" | "jpeg" | "webp";
 type ExportSize = "original" | "75" | "50" | "custom";
-/** JPEG / WebP quality presets for Compress mode. PNG uses a separate color count. */
+/** Shared compress quality notches for JPEG, WebP, and PNG. */
 type ScreenshotQuality = "55" | "70" | "85" | "92";
 /** Matches the recording editor: preserve by default, compress with presets, or cap size. */
 type ScreenshotQualityMode = "preserve" | "compress" | "maximum";
@@ -416,8 +416,8 @@ const COLOR_SWATCHES = [
 const DEFAULT_CANVAS_BACKGROUND = "#f7f7f5";
 
 /**
- * Shared compress presets for JPEG / WebP encode quality.
- * PNG uses a separate color-count slider instead of these named notches.
+ * Shared compress presets. JPEG / WebP use encode quality; PNG maps the same
+ * notches onto palette size plus compact packing.
  */
 const SCREENSHOT_QUALITY_OPTIONS = [
   {
@@ -425,34 +425,52 @@ const SCREENSHOT_QUALITY_OPTIONS = [
     label: "Tiny",
     jpegDescription: "Smallest file with the most visible compression.",
     webpDescription: "Smallest lossy WebP with the most visible compression.",
+    pngDescription: "Smallest PNG with the most visible compression.",
   },
   {
     value: "70",
     label: "Smaller",
     jpegDescription: "Very small file with more visible compression.",
     webpDescription: "Very small lossy WebP with more visible compression.",
+    pngDescription: "Very small PNG with more visible compression.",
   },
   {
     value: "85",
     label: "Balanced",
     jpegDescription: "Good quality with a meaningfully smaller file.",
     webpDescription: "Good lossy WebP quality with a meaningfully smaller file.",
+    pngDescription: "Good quality with a meaningfully smaller PNG.",
   },
   {
     value: "92",
     label: "High",
     jpegDescription: "Larger file with the least quality loss.",
     webpDescription: "Larger lossy WebP with the least quality loss.",
+    pngDescription: "Larger PNG with the least quality loss.",
   },
 ] as const;
 
-const MIN_PNG_EXPORT_COLORS = 8;
-const MAX_PNG_EXPORT_COLORS = 256;
-const DEFAULT_PNG_EXPORT_COLORS = 128;
+/** Keep in sync with `png_palette_colors_for_quality` in the Rust encoder. */
+function pngMaxColorsForQuality(quality: ScreenshotQuality): number {
+  switch (quality) {
+    case "55":
+      return 32;
+    case "70":
+      return 64;
+    case "85":
+      return 128;
+    case "92":
+      return 256;
+  }
+}
 
-function clampPngExportColors(value: number): number {
-  if (!Number.isFinite(value)) return DEFAULT_PNG_EXPORT_COLORS;
-  return Math.min(MAX_PNG_EXPORT_COLORS, Math.max(MIN_PNG_EXPORT_COLORS, Math.round(value)));
+function screenshotQualityDescription(
+  format: ExportFormat,
+  option: (typeof SCREENSHOT_QUALITY_OPTIONS)[number],
+): string {
+  if (format === "webp") return option.webpDescription;
+  if (format === "png") return option.pngDescription;
+  return option.jpegDescription;
 }
 
 const SCREENSHOT_FILE_SIZE_UNIT_BYTES: Record<ScreenshotFileSizeUnit, number> = {
@@ -1592,7 +1610,6 @@ export function ScreenshotEditor() {
   const [customExportHeight, setCustomExportHeight] = useState(1_080);
   const [exportAspectLocked, setExportAspectLocked] = useState(true);
   const [jpegQuality, setJpegQuality] = useState<ScreenshotQuality>("92");
-  const [pngColors, setPngColors] = useState(DEFAULT_PNG_EXPORT_COLORS);
   const [qualityMode, setQualityMode] =
     useState<ScreenshotQualityMode>("preserve");
   const [maximumFileSize, setMaximumFileSize] = useState("10");
@@ -1603,10 +1620,8 @@ export function ScreenshotEditor() {
   const [destinationDirectory, setDestinationDirectory] = useState("");
   const [estimatedBytes, setEstimatedBytes] = useState<number | null>(null);
   const [estimatePending, setEstimatePending] = useState(false);
-  const [compressPreviewOpen, setCompressPreviewOpen] = useState(false);
   const [compressPreviewPending, setCompressPreviewPending] = useState(false);
   const [compressPreviewError, setCompressPreviewError] = useState("");
-  const [compressPreviewBeforeUrl, setCompressPreviewBeforeUrl] = useState<string | null>(null);
   const [compressPreviewAfterUrl, setCompressPreviewAfterUrl] = useState<string | null>(null);
   const [compressPreviewBeforeBytes, setCompressPreviewBeforeBytes] = useState<number | null>(null);
   const [compressPreviewAfterBytes, setCompressPreviewAfterBytes] = useState<number | null>(null);
@@ -4345,7 +4360,7 @@ export function ScreenshotEditor() {
                 ? Math.round(maxSizeBytes)
                 : null,
               pngMaxColors: exportFormat === "png" && qualityMode === "compress"
-                ? pngColors
+                ? pngMaxColorsForQuality(jpegQuality)
                 : null,
             });
           } else {
@@ -4385,7 +4400,6 @@ export function ScreenshotEditor() {
     jpegQuality,
     maximumFileSize,
     maximumFileSizeUnit,
-    pngColors,
     qualityMode,
     renderFlattened,
   ]);
@@ -4460,7 +4474,7 @@ export function ScreenshotEditor() {
           quality_mode: qualityMode,
           jpeg_quality: saveQuality,
           png_max_colors: exportFormat === "png" && qualityMode === "compress"
-            ? pngColors
+            ? pngMaxColorsForQuality(jpegQuality)
             : null,
           max_size_bytes: maximumSizeBytes,
           overwrite_source: overwriteSource,
@@ -4468,7 +4482,7 @@ export function ScreenshotEditor() {
         },
       });
       // Always adopt the saved artifact so a first Captures-folder save becomes
-      // the new original (Save overwrites it; Make a copy creates another file).
+      // the new original (Save overwrites it; Save as new file creates another file).
       setArtifact(result.artifact);
       if (result.artifact.path) {
         setMakeCopy(false);
@@ -4482,7 +4496,7 @@ export function ScreenshotEditor() {
       draftSaveGenerationRef.current += 1;
       void invoke("discard_screenshot_editor_draft", { artifactId: result.artifact.id })
         .catch(() => undefined);
-      // Window may still be keyed by the previous capture when Make a copy saved a new id.
+      // Window may still be keyed by the previous capture when Save as new file saved a new id.
       if (artifactId && artifactId !== result.artifact.id) {
         void invoke("discard_screenshot_editor_draft", { artifactId })
           .catch(() => undefined);
@@ -4543,15 +4557,7 @@ export function ScreenshotEditor() {
     if (before) URL.revokeObjectURL(before);
     if (after) URL.revokeObjectURL(after);
     compressPreviewUrlsRef.current = { before: null, after: null };
-    setCompressPreviewBeforeUrl(null);
     setCompressPreviewAfterUrl(null);
-  }, []);
-
-  // Keep the prepared before/after URLs across close so reopening is instant;
-  // they are revoked when a newer encode replaces them or the editor unmounts.
-  const closeCompressPreview = useCallback(() => {
-    setCompressPreviewOpen(false);
-    setCompressPreviewError("");
   }, []);
 
   const loadCompressPreview = useCallback(async () => {
@@ -4561,13 +4567,10 @@ export function ScreenshotEditor() {
     setCompressPreviewError("");
     // Local until ownership transfers to compressPreviewUrlsRef; anything
     // still local by `finally` (stale response or error) gets revoked.
-    let beforeUrl: string | null = null;
     let afterUrl: string | null = null;
     try {
       const canvas = renderFlattened();
       const beforePng = await canvasPngBytes(canvas);
-      const beforeBlob = new Blob([new Uint8Array(beforePng)], { type: "image/png" });
-      beforeUrl = URL.createObjectURL(beforeBlob);
 
       const maxSizeBytes = qualityMode === "maximum"
         ? Number(maximumFileSize) * SCREENSHOT_FILE_SIZE_UNIT_BYTES[maximumFileSizeUnit]
@@ -4585,7 +4588,7 @@ export function ScreenshotEditor() {
           ? Math.round(maxSizeBytes)
           : null,
         pngMaxColors: exportFormat === "png" && qualityMode === "compress"
-          ? pngColors
+          ? pngMaxColorsForQuality(jpegQuality)
           : null,
       });
       const mime = exportFormat === "jpeg"
@@ -4598,12 +4601,10 @@ export function ScreenshotEditor() {
 
       if (compressPreviewRequestRef.current !== request) return;
       revokeCompressPreviewUrls();
-      compressPreviewUrlsRef.current = { before: beforeUrl, after: afterUrl };
-      setCompressPreviewBeforeUrl(beforeUrl);
+      compressPreviewUrlsRef.current = { before: null, after: afterUrl };
       setCompressPreviewAfterUrl(afterUrl);
-      setCompressPreviewBeforeBytes(beforeBlob.size);
+      setCompressPreviewBeforeBytes(beforePng.length);
       setCompressPreviewAfterBytes(preview.sizeBytes);
-      beforeUrl = null;
       afterUrl = null;
     } catch (reason) {
       if (compressPreviewRequestRef.current === request) {
@@ -4612,7 +4613,6 @@ export function ScreenshotEditor() {
         setCompressPreviewAfterBytes(null);
       }
     } finally {
-      if (beforeUrl) URL.revokeObjectURL(beforeUrl);
       if (afterUrl) URL.revokeObjectURL(afterUrl);
       if (compressPreviewRequestRef.current === request) {
         setCompressPreviewPending(false);
@@ -4626,38 +4626,23 @@ export function ScreenshotEditor() {
     jpegQuality,
     maximumFileSize,
     maximumFileSizeUnit,
-    pngColors,
     qualityMode,
     renderFlattened,
     revokeCompressPreviewUrls,
   ]);
 
-  const openCompressPreview = useCallback(() => {
-    if (!canPreviewCompression) return;
-    setExportSettingsOpen(true);
-    setCompressPreviewOpen(true);
-  }, [canPreviewCompression]);
-
   useEffect(() => {
-    // Refresh the open preview, and pre-encode it in the background while the
-    // export settings are visible so opening it never shows a loading state.
-    // Closing when quality mode leaves Compress/Maximum is handled in
-    // applyQualityMode (event path), not here.
     if (!canPreviewCompression) return;
-    if (!compressPreviewOpen && !exportSettingsOpen) return;
     const timer = window.setTimeout(() => {
       void loadCompressPreview();
     }, 280);
     return () => window.clearTimeout(timer);
   }, [
     canPreviewCompression,
-    compressPreviewOpen,
     exportFormat,
-    exportSettingsOpen,
     imageRevision,
     jpegQuality,
     loadCompressPreview,
-    pngColors,
     maximumFileSize,
     maximumFileSizeUnit,
     qualityMode,
@@ -4689,42 +4674,29 @@ export function ScreenshotEditor() {
   const maximumSizeBytes = qualityMode === "maximum"
     ? Number(maximumFileSize) * SCREENSHOT_FILE_SIZE_UNIT_BYTES[maximumFileSizeUnit]
     : null;
+  const estimatedSizeIsCap = maximumSizeBytes !== null
+    && Number.isFinite(maximumSizeBytes)
+    && maximumSizeBytes >= 10_000
+    && estimatedBytes !== null
+    && estimatedBytes > maximumSizeBytes
+    && (exportFormat === "jpeg" || exportFormat === "webp");
   const estimatedSizeLabel = estimatePending && estimatedBytes === null
     ? "Estimating…"
     : estimatedBytes === null
       ? "—"
-      : maximumSizeBytes !== null
-        && Number.isFinite(maximumSizeBytes)
-        && maximumSizeBytes >= 10_000
-        && estimatedBytes > maximumSizeBytes
-        && (exportFormat === "jpeg" || exportFormat === "webp")
-        ? `≤ ${formatFileSize(maximumSizeBytes)}`
+      : estimatedSizeIsCap
+        ? `≤ ${formatFileSize(maximumSizeBytes ?? 0)}`
         : `≈ ${formatFileSize(estimatedBytes)}`;
-  // Size change versus the original file, mirroring the compare modal's −N%.
-  const estimatedDeltaPercent = qualityMode !== "preserve"
-    && estimatedBytes !== null
-    && artifact.size_bytes > 0
-    ? Math.round((estimatedBytes / artifact.size_bytes - 1) * 100)
-    : null;
-  const estimatedDeltaLabel = estimatedDeltaPercent === null || estimatedDeltaPercent === 0
+  // Versus the original file — shrinking pixels, compressing, or both.
+  const estimatedDelta = estimatedSizeIsCap || estimatePending
     ? null
-    : estimatedDeltaPercent < 0
-      ? `−${Math.abs(estimatedDeltaPercent)}%`
-      : `+${estimatedDeltaPercent}%`;
+    : formatFileSizeDelta(estimatedBytes, artifact.size_bytes);
   const formatLabel = exportFormat === "jpeg"
     ? "JPEG"
     : exportFormat === "webp"
       ? "WebP"
       : "PNG";
-  // Compress quality applies to every format: JPEG/WebP encode quality, PNG colors.
   const showCompressQuality = qualityMode === "compress";
-  const compressQualityLabel = qualityMode === "compress"
-    ? exportFormat === "png"
-      ? `${pngColors} colors`
-      : (SCREENSHOT_QUALITY_OPTIONS.find((option) => option.value === jpegQuality)?.label ?? "High")
-    : qualityMode === "maximum"
-      ? "Maximum file size"
-      : "";
 
   const applyExportFormat = (format: ExportFormat) => {
     setExportFormat(format);
@@ -4734,8 +4706,13 @@ export function ScreenshotEditor() {
 
   const applyQualityMode = (mode: ScreenshotQualityMode) => {
     setQualityMode(mode);
-    if (mode !== "compress" && mode !== "maximum" && compressPreviewOpen) {
-      closeCompressPreview();
+    if (mode !== "compress" && mode !== "maximum") {
+      compressPreviewRequestRef.current += 1;
+      revokeCompressPreviewUrls();
+      setCompressPreviewPending(false);
+      setCompressPreviewError("");
+      setCompressPreviewBeforeBytes(null);
+      setCompressPreviewAfterBytes(null);
     }
     setSaved(null);
     clearSuccess();
@@ -5078,6 +5055,18 @@ export function ScreenshotEditor() {
             }}
             onDoubleClick={handleCanvasDoubleClick}
           />
+          {canPreviewCompression && (
+            <CompressionPreview
+              className="is-embed"
+              liveBefore
+              beforeUrl={null}
+              afterUrl={compressPreviewAfterUrl}
+              beforeBytes={compressPreviewBeforeBytes}
+              afterBytes={compressPreviewAfterBytes}
+              pending={compressPreviewPending}
+              error={compressPreviewError}
+            />
+          )}
           {editingText && inlineTextLayout && (
             <textarea
               ref={inlineTextRef}
@@ -6387,10 +6376,26 @@ export function ScreenshotEditor() {
                 value={exportSize}
                 ariaLabel="Output size"
                 options={[
-                  { value: "original", label: "Original" },
-                  { value: "75", label: "75%" },
-                  { value: "50", label: "50%" },
-                  { value: "custom", label: "Custom" },
+                  {
+                    value: "original",
+                    label: "Original",
+                    description: "Keep the capture’s pixel dimensions.",
+                  },
+                  {
+                    value: "75",
+                    label: "75%",
+                    description: "Save at 75% of the pixel width and height.",
+                  },
+                  {
+                    value: "50",
+                    label: "50%",
+                    description: "Save at half the pixel width and height.",
+                  },
+                  {
+                    value: "custom",
+                    label: "Custom",
+                    description: "Choose exact pixel dimensions.",
+                  },
                 ]}
                 onChange={(value) => {
                   const next = value as ExportSize;
@@ -6453,7 +6458,7 @@ export function ScreenshotEditor() {
                   value: "compress",
                   label: "Compress",
                   description: exportFormat === "png"
-                    ? "Smaller PNG by reducing colors, then packing hard."
+                    ? "Smaller PNG with Tiny through High quality presets."
                     : exportFormat === "webp"
                       ? "Smaller lossy WebP with Tiny through High quality presets."
                       : "Smaller JPEG with Tiny through High quality presets.",
@@ -6467,22 +6472,7 @@ export function ScreenshotEditor() {
               onChange={(value) => applyQualityMode(value as ScreenshotQualityMode)}
             />
           </div>
-          {showCompressQuality && exportFormat === "png" && (
-            <div className="screenshot-export-control screenshot-png-colors">
-              <span>Colors</span>
-              <div className="screenshot-png-colors-control">
-                <RangeSlider
-                  ariaLabel="PNG palette colors"
-                  min={MIN_PNG_EXPORT_COLORS}
-                  max={MAX_PNG_EXPORT_COLORS}
-                  value={pngColors}
-                  valueText={`${pngColors} colors`}
-                  onChange={(value) => setPngColors(clampPngExportColors(value))}
-                />
-              </div>
-            </div>
-          )}
-          {showCompressQuality && exportFormat !== "png" && (
+          {showCompressQuality && (
             <div className="screenshot-export-control screenshot-quality">
               <span>Quality</span>
               <CustomSelect
@@ -6491,9 +6481,7 @@ export function ScreenshotEditor() {
                 options={SCREENSHOT_QUALITY_OPTIONS.map((option) => ({
                   value: option.value,
                   label: option.label,
-                  description: exportFormat === "webp"
-                    ? option.webpDescription
-                    : option.jpegDescription,
+                  description: screenshotQualityDescription(exportFormat, option),
                 }))}
                 onChange={(value) => setJpegQuality(value as ScreenshotQuality)}
               />
@@ -6504,9 +6492,7 @@ export function ScreenshotEditor() {
               className="screenshot-export-control screenshot-maximum-size"
               title={exportFormat === "jpeg" || exportFormat === "webp"
                 ? `${formatLabel} quality is lowered only when needed to meet this limit.`
-                : exportFormat === "png"
-                  ? "PNG color count is reduced until the file fits this limit."
-                  : `Uses stronger ${formatLabel} compression. If still over the limit, reduce dimensions or switch format.`}
+                : `Uses stronger ${formatLabel} compression. If still over the limit, reduce dimensions or switch format.`}
             >
               <span>Maximum file size</span>
               <span className="screenshot-maximum-size-control">
@@ -6546,29 +6532,16 @@ export function ScreenshotEditor() {
               title="Estimated export file size for the current format, quality, and output size"
             >
               {estimatedSizeLabel}
-              {estimatedDeltaLabel && !estimatePending && (
+              {estimatedDelta && (
                 <span
-                  className={`screenshot-output-estimate-delta${estimatedDeltaPercent !== null && estimatedDeltaPercent < 0 ? " is-smaller" : " is-larger"}`}
+                  className={`screenshot-output-estimate-delta${estimatedDelta.percent < 0 ? " is-smaller" : " is-larger"}`}
                   title="Change from the original file size"
                 >
-                  {estimatedDeltaLabel}
+                  {estimatedDelta.label}
                 </span>
               )}
             </strong>
           </div>
-          {canPreviewCompression && (
-            <div className="screenshot-export-control screenshot-compress-preview-control">
-              <span>Preview</span>
-              <button
-                type="button"
-                className="screenshot-compress-preview-button"
-                disabled={busy !== null}
-                onClick={openCompressPreview}
-              >
-                Compare before / after
-              </button>
-            </div>
-          )}
           </div>
         </div>
         <div className="screenshot-save-row">
@@ -6671,10 +6644,10 @@ export function ScreenshotEditor() {
                       : qualityMode === "compress"
                         ? savingCopy
                           ? `Compressed ${formatLabel} saves as a new file and leaves the original untouched.`
-                          : `Compressed ${formatLabel} replaces the original; turn on Make a copy to keep it.`
+                          : `Compressed ${formatLabel} replaces the original; turn on Save as new file to keep it.`
                         : savingCopy
                           ? "Save creates a new file and leaves the original untouched."
-                          : "Save replaces the original; turn on Make a copy to keep it."}
+                          : "Save replaces the original; turn on Save as new file to keep it."}
               </div>
             )}
           </div>
@@ -6685,20 +6658,21 @@ export function ScreenshotEditor() {
                 title="Save as a new file and leave the original untouched"
               >
                 <input
-                  aria-label="Make a copy"
+                  aria-label="Save as new file"
                   type="checkbox"
                   checked={makeCopy}
                   disabled={busy !== null}
                   onChange={(event) => updateMakeCopy(event.target.checked)}
                 />
                 <span className="recording-switch" aria-hidden="true" />
-                <span>Make a copy</span>
+                <span>Save as new file</span>
               </label>
             )}
             {saved && <button type="button" onClick={() => void showSavedFile()}>Show in Folder</button>}
             <button
               type="button"
               className={success?.kind === "copy" ? "success" : undefined}
+              title="Copy the edited image to the clipboard"
               disabled={busy !== null}
               onClick={() => void copyEditedImage()}
             >
@@ -6720,24 +6694,6 @@ export function ScreenshotEditor() {
           </div>
         </div>
       </footer>
-
-      {compressPreviewOpen && canPreviewCompression && createPortal(
-        <CompressionPreview
-          open={compressPreviewOpen}
-          beforeUrl={compressPreviewBeforeUrl}
-          afterUrl={compressPreviewAfterUrl}
-          beforeBytes={compressPreviewBeforeBytes}
-          afterBytes={compressPreviewAfterBytes}
-          formatLabel={formatLabel}
-          qualityLabel={compressQualityLabel}
-          pending={compressPreviewPending}
-          error={compressPreviewError}
-          pngColors={exportFormat === "png" && qualityMode === "compress" ? pngColors : null}
-          onPngColorsChange={setPngColors}
-          onClose={closeCompressPreview}
-        />,
-        window.document.body,
-      )}
     </main>
   );
 }

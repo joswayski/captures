@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -115,12 +115,27 @@ describe("RecordingEditor", () => {
       eventHandlers.set(event, handler as (event: { payload: unknown }) => void);
       return () => undefined;
     });
-    vi.mocked(invoke).mockImplementation(async (command) => {
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
       if (command === "get_recording_artifact") return artifact;
       if (command === "get_settings") return settings;
       if (command === "prepare_recording_timeline_preview") return timeline;
       if (command === "start_recording_export") return "export-1";
-      if (command === "estimate_recording_export") return { sizeBytes: 1_680_000, exact: false };
+      if (command === "estimate_recording_export") {
+        const request = args as {
+          edit?: { output_height?: number | null };
+          export?: { quality?: string };
+        } | undefined;
+        if (request?.export?.quality && request.export.quality !== "preserve") {
+          return { sizeBytes: 1_680_000, exact: false };
+        }
+        if (
+          typeof request?.edit?.output_height === "number"
+          && request.edit.output_height < artifact.height
+        ) {
+          return { sizeBytes: 1_050_000, exact: false };
+        }
+        return { sizeBytes: artifact.size_bytes, exact: true };
+      }
       if (command === "preview_recording_export") return { beforePng: [1, 2], afterPng: [3, 4] };
       if (command === "cancel_recording_export" || command === "reveal_recording_artifact") {
         return undefined;
@@ -352,7 +367,7 @@ describe("RecordingEditor", () => {
     fireEvent.focus(filename);
     expect((filename as HTMLInputElement).selectionStart).toBe(0);
     expect((filename as HTMLInputElement).selectionEnd).toBe("Captures_1140x692".length);
-    expect(screen.getByRole("checkbox", { name: "Make a copy" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Save as new file" })).not.toBeChecked();
     expect(screen.getByRole("combobox", { name: "Format" })).toHaveTextContent(".mp4");
     expect(filename.closest(".recording-filename-input"))
       .toContainElement(screen.getByRole("combobox", { name: "Format" }));
@@ -404,9 +419,9 @@ describe("RecordingEditor", () => {
       artifactId: artifact.id,
     });
 
-    // Reset to the original name so Make a copy can apply the -edited suffix.
+    // Reset to the original name so Save as new file can apply the -edited suffix.
     fireEvent.change(filename, { target: { value: "Captures_1140x692" } });
-    fireEvent.click(screen.getByRole("checkbox", { name: "Make a copy" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Save as new file" }));
     expect(filename).toHaveValue("Captures_1140x692-edited");
     expect(filename).toBeEnabled();
     expect(screen.queryByRole("button", { name: "Show in Folder" })).not.toBeInTheDocument();
@@ -451,7 +466,7 @@ describe("RecordingEditor", () => {
       "/Users/josevalerio/Captures",
     );
     expect(screen.getByLabelText("Save location")).not.toHaveTextContent("history");
-    expect(screen.getByRole("checkbox", { name: "Make a copy" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Save as new file" })).not.toBeChecked();
 
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => {
@@ -538,6 +553,37 @@ describe("RecordingEditor", () => {
     });
   });
 
+  it("maps GIF compress quality to palette size instead of a separate color control", async () => {
+    render(<RecordingEditor />);
+    await screen.findByRole("heading", { name: "Edit recording" });
+
+    fireEvent.click(await screen.findByRole("combobox", { name: "Format" }));
+    fireEvent.click(screen.getByRole("option", { name: "GIF" }));
+    expect(screen.getByRole("combobox", { name: "Format" })).toHaveTextContent(".gif");
+    expect(screen.queryByRole("combobox", { name: "GIF palette" })).not.toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Compression comparison" }))
+      .toBeInTheDocument();
+    const quality = screen.getByRole("combobox", { name: "Compression quality" });
+    fireEvent.click(quality);
+    fireEvent.click(screen.getByRole("option", { name: /Tiny/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Saved filename" }), {
+      target: { value: "Tiny gif" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("start_recording_export", {
+        request: expect.objectContaining({
+          export: expect.objectContaining({
+            format: "gif",
+            quality: "tiny",
+            gif_max_colors: 64,
+          }),
+        }),
+      });
+    });
+  });
+
   it("estimates the saved size in the background and shows the reduction for Compress", async () => {
     render(<RecordingEditor />);
     await screen.findByRole("heading", { name: "Edit recording" });
@@ -561,22 +607,60 @@ describe("RecordingEditor", () => {
     expect(screen.getByText("≤ 10.0 MB")).toBeInTheDocument();
   });
 
-  it("opens the before/after comparison and requests matching preview frames", async () => {
+  it("shows a size-change percent when output resolution shrinks the pixel dimensions", async () => {
+    render(<RecordingEditor />);
+    await screen.findByRole("heading", { name: "Edit recording" });
+
+    await waitFor(() => {
+      expect(screen.getByTitle("Estimated saved file size for the current edits and settings"))
+        .toHaveTextContent("4.2 MB");
+    }, { timeout: 3_000 });
+    expect(document.querySelector(".recording-output-estimate-delta")).toBeNull();
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Output resolution" }));
+    expect(screen.getByRole("option", { name: /Choose exact pixel dimensions/ })).toHaveTextContent(
+      "Choose exact pixel dimensions.",
+    );
+    fireEvent.click(screen.getByRole("option", { name: /Choose exact pixel dimensions/ }));
+    const customSize = document.querySelector(".editor-number-grid.dimensions");
+    expect(customSize).not.toBeNull();
+    fireEvent.change(within(customSize as HTMLElement).getByRole("spinbutton", { name: "Width" }), {
+      target: { value: "570" },
+    });
+    fireEvent.change(within(customSize as HTMLElement).getByRole("spinbutton", { name: "Height" }), {
+      target: { value: "346" },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("≈ 1.1 MB")).toBeInTheDocument();
+      expect(screen.getByText("−75%")).toBeInTheDocument();
+    }, { timeout: 3_000 });
+    expect(screen.getByText("−75%")).toHaveClass("recording-output-estimate-delta", "is-smaller");
+    expect(screen.getByRole("combobox", { name: "Save quality" }))
+      .toHaveTextContent("Preserve quality");
+  });
+
+  it("shows the before/after comparison in the preview when Compress is selected", async () => {
     const createObjectURL = vi.fn(() => "blob:recording-preview");
     const revokeObjectURL = vi.fn();
     Object.assign(URL, { createObjectURL, revokeObjectURL });
 
-    render(<RecordingEditor />);
+    const { container } = render(<RecordingEditor />);
     await screen.findByRole("heading", { name: "Edit recording" });
+    const video = container.querySelector<HTMLVideoElement>("video");
+    expect(video).not.toBeNull();
 
     expect(screen.queryByRole("button", { name: "Compare before / after" }))
       .not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Compression comparison" }))
+      .not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
     fireEvent.click(screen.getByRole("option", { name: /Compress/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Compare before / after" }));
 
-    expect(await screen.findByRole("dialog", { name: "Compression preview" }))
+    expect(screen.getByRole("group", { name: "Compression comparison" }))
       .toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Compression preview" }))
+      .not.toBeInTheDocument();
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("preview_recording_export", expect.objectContaining({
         artifactId: artifact.id,
@@ -587,9 +671,24 @@ describe("RecordingEditor", () => {
     await waitFor(() => {
       expect(createObjectURL).toHaveBeenCalledTimes(2);
     });
+    expect(screen.getByAltText("Before compression")).toHaveAttribute("src", "blob:recording-preview");
+    expect(screen.getByAltText("After compression")).toHaveAttribute("src", "blob:recording-preview");
 
-    fireEvent.click(screen.getByRole("button", { name: "Close compression preview" }));
-    expect(screen.queryByRole("dialog", { name: "Compression preview" }))
+    fireEvent.play(video!);
+    expect(screen.queryByRole("group", { name: "Compression comparison" }))
+      .not.toBeInTheDocument();
+    fireEvent.pause(video!);
+    expect(screen.getByRole("group", { name: "Compression comparison" }))
+      .toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
+    fireEvent.click(screen.getByRole("option", { name: /Maximum file size/ }));
+    expect(screen.getByRole("group", { name: "Compression comparison" }))
+      .toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
+    fireEvent.click(screen.getByRole("option", { name: /Preserve quality/ }));
+    expect(screen.queryByRole("group", { name: "Compression comparison" }))
       .not.toBeInTheDocument();
   });
 
@@ -654,6 +753,8 @@ describe("RecordingEditor", () => {
       }
       if (command === "get_settings") return settings;
       if (command === "prepare_recording_timeline_preview") return timeline;
+      if (command === "preview_recording_export") return { beforePng: [1, 2], afterPng: [3, 4] };
+      if (command === "estimate_recording_export") return { sizeBytes: 1_680_000, exact: false };
       throw new Error(`unexpected command: ${command}`);
     });
     render(<RecordingEditor />);

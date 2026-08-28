@@ -25,8 +25,7 @@ use captures_recording_macos::MacRecordingSegment as NativeRecordingSegment;
 use captures_recording_xcap::XcapRecordingSegment as NativeRecordingSegment;
 use serde::{Deserialize, Serialize};
 use tauri::{
-    AppHandle, Emitter, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder,
-    webview::PageLoadEvent, window::Color,
+    AppHandle, Emitter, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder, window::Color,
 };
 use tauri_plugin_opener::OpenerExt;
 use uuid::Uuid;
@@ -2072,7 +2071,7 @@ pub fn start_recording_export(
         .and_then(|value| value.to_str())
         .unwrap_or_default();
     if request.overwrite_source && !source_extension.eq_ignore_ascii_case(extension) {
-        return Err("changing the file format requires saving a copy".to_owned());
+        return Err("changing the file format requires saving a new file".to_owned());
     }
     let selected_directory = request
         .destination_directory
@@ -2202,7 +2201,7 @@ pub fn start_recording_export(
                 let exported_path = outcome.path.to_string_lossy().into_owned();
                 let recovery_path = PathBuf::from(&source.path);
                 // Prefer the user-facing Captures path:
-                // - Make a copy / format change → the export path itself
+                // - Save as new file / format change → the export path itself
                 // - Overwrite that already landed outside recovery media → that path
                 // - Overwrite of recovery media with an existing permanent save → keep it
                 // - First history-only Save that only rewrote recovery media → promote
@@ -3870,13 +3869,9 @@ fn show_recording_editor(app: &AppHandle, artifact_id: &str) -> Result<(), AppEr
     .background_color(background)
     .focused(false)
     .visible(false)
-    .on_page_load(|window, payload| {
-        if payload.event() == PageLoadEvent::Finished
-            && let Err(error) = crate::reveal_and_focus_document_window(&window)
-        {
-            eprintln!("failed to reveal recording editor: {error}");
-        }
-    })
+    .on_page_load(crate::document_window_page_load_handler(
+        "failed to reveal recording editor",
+    ))
     .build()?;
     Ok(())
 }

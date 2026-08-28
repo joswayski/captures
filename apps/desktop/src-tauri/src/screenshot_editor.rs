@@ -11,9 +11,7 @@ use image::{
     codecs::jpeg::JpegEncoder,
 };
 use serde::{Deserialize, Serialize};
-use tauri::{
-    AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, webview::PageLoadEvent,
-};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use uuid::Uuid;
 
 use captures_capture::CaptureMode;
@@ -145,13 +143,9 @@ pub fn open_screenshot_editor(
     .background_color(background)
     .focused(false)
     .visible(false)
-    .on_page_load(|window, payload| {
-        if payload.event() == PageLoadEvent::Finished
-            && let Err(error) = crate::reveal_and_focus_document_window(&window)
-        {
-            eprintln!("failed to reveal screenshot editor: {error}");
-        }
-    })
+    .on_page_load(crate::document_window_page_load_handler(
+        "failed to reveal screenshot editor",
+    ))
     .build()
     .map_err(|error| error.to_string())?;
     Ok(())
@@ -165,7 +159,7 @@ pub fn default_screenshot_edit_path(
 ) -> CommandResult<String> {
     // First permanent save for a path-less capture (fresh screenshot / history
     // restore). Suggest a normal Captures name — not an `-edited` copy suffix.
-    // The frontend only appends `-edited` when Make a copy is turned on for an
+    // The frontend only appends `-edited` when Save as new file is turned on for an
     // already-saved original.
     let artifact = state
         .artifacts
@@ -317,7 +311,7 @@ pub async fn save_screenshot_edit(
     }
     if !request.overwrite_source && source_path == Some(destination.as_path()) {
         return Err(
-            "Choose a new file name, or turn off Make a copy to replace the original screenshot."
+            "Choose a new file name, or turn off Save as new file to replace the original screenshot."
                 .to_owned(),
         );
     }
@@ -952,7 +946,7 @@ fn validated_destination(
 
 /// First-available `{stem}.{extension}` in `directory`, with numeric suffixes
 /// only when that name is already taken. Does not invent an `-edited` stem —
-/// copy naming is a frontend “Make a copy” concern.
+/// copy naming is a frontend “Save as new file” concern.
 fn unique_export_path(directory: &Path, stem: &str, extension: &str) -> PathBuf {
     let initial = directory.join(format!("{stem}.{extension}"));
     if !initial.exists() {

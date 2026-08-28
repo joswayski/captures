@@ -21,9 +21,9 @@ use objc2::{
     sel,
 };
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationOptions, NSBezierPath, NSBezierPathElement, NSCursor,
-    NSEvent, NSEventMask, NSEventType, NSPasteboard, NSRunningApplication, NSScreen, NSSound,
-    NSStatusWindowLevel, NSTrackingArea, NSTrackingAreaOptions, NSView,
+    NSApplication, NSApplicationActivationOptions, NSBezierPath, NSBezierPathElement, NSColor,
+    NSCursor, NSEvent, NSEventMask, NSEventType, NSPasteboard, NSRunningApplication, NSScreen,
+    NSSound, NSStatusWindowLevel, NSTrackingArea, NSTrackingAreaOptions, NSView,
     NSViewLayerContentsPlacement, NSWindow, NSWindowCollectionBehavior, NSWindowStyleMask,
     NSWorkspace,
 };
@@ -78,6 +78,13 @@ use thumbnail_panel::ThumbnailPanel;
 const LEGACY_WINDOW_CORNER_RADIUS_POINTS: f64 = 10.0;
 const LIQUID_GLASS_WINDOW_CORNER_RADIUS_POINTS: f64 = 25.0;
 const LIQUID_GLASS_MACOS_MAJOR_VERSION: isize = 26;
+/// Imperceptible alpha that still keeps WKWebView compositing. Fully transparent
+/// windows (`0.0`) can suspend painting and flash black on the first opaque frame.
+const WINDOW_REVEAL_PRIME_ALPHA: f64 = 0.01;
+const _: () = {
+    assert!(WINDOW_REVEAL_PRIME_ALPHA > 0.0);
+    assert!(WINDOW_REVEAL_PRIME_ALPHA < 0.05);
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -366,7 +373,7 @@ fn release_thumbnail_key_window(window_address: usize) {
     };
     if cursor_surface_for_window(&window) == Some(CursorSurface::Thumbnail) && window.isKeyWindow()
     {
-        window.resignKeyWindow();
+        resign_ns_window_key_without_raising_documents(&window);
     }
 }
 
@@ -810,14 +817,55 @@ fn clip_content_to_display_corners(native_window: &NSWindow, radius: f64) {
     };
     view.setWantsLayer(true);
     // SAFETY: `layer` is the view's CALayer after `setWantsLayer:YES`.
-    // `setCornerRadius:` / `setMasksToBounds:` are CALayer selectors.
+    // `setCornerRadius:` / `setMasksToBounds:` / `setOpaque:` /
+    // `setBackgroundColor:` are CALayer selectors.
     let layer: Option<Retained<AnyObject>> = unsafe { msg_send![&*view, layer] };
     let Some(layer) = layer else {
         return;
     };
+    clear_layer_fill(&layer);
     let radius = radius.max(0.0);
     let _: () = unsafe { msg_send![&*layer, setCornerRadius: radius] };
     let _: () = unsafe { msg_send![&*layer, setMasksToBounds: true] };
+}
+
+fn clear_transparent_window_backing(native_window: &NSWindow) {
+    native_window.setOpaque(false);
+    native_window.setBackgroundColor(Some(&NSColor::clearColor()));
+    if let Some(view) = native_window.contentView() {
+        clear_transparent_view_backing(&view);
+    }
+}
+
+fn clear_transparent_webview_backing(window: &WebviewWindow) {
+    let _ = window.as_ref().with_webview(|platform_webview| {
+        let pointer = platform_webview.inner();
+        // SAFETY: Tauri supplies the live WKWebView, which inherits from NSView,
+        // for the duration of this callback.
+        let Some(webview) = (unsafe { pointer.cast::<NSView>().as_ref() }) else {
+            return;
+        };
+        clear_transparent_view_backing(webview);
+    });
+}
+
+fn clear_transparent_view_backing(view: &NSView) {
+    view.setWantsLayer(true);
+    // SAFETY: `layer` is the view's CALayer after `setWantsLayer:YES`.
+    let layer: Option<Retained<AnyObject>> = unsafe { msg_send![view, layer] };
+    if let Some(layer) = layer {
+        clear_layer_fill(&layer);
+    }
+}
+
+fn clear_layer_fill(layer: &AnyObject) {
+    let clear = NSColor::clearColor();
+    // SAFETY: CALayer `setOpaque:` / `setBackgroundColor:` match these
+    // selectors. `CGColor` stays alive for the `setBackgroundColor:` call
+    // because `clear` is still in scope; the layer retains it afterward.
+    let _: () = unsafe { msg_send![layer, setOpaque: false] };
+    let cg_color: *const c_void = unsafe { msg_send![&*clear, CGColor] };
+    let _: () = unsafe { msg_send![layer, setBackgroundColor: cg_color] };
 }
 
 /// Visible display corner radius in logical points for the given CGDisplay id.
@@ -855,6 +903,9 @@ fn display_corner_radius_on_main(display_id: &str) -> f64 {
 pub fn configure_capture_overlay(window: &WebviewWindow) -> Result<(), &'static str> {
     let native = native_window(window)?;
     elevate_fullscreen_capture_window(native);
+    clear_transparent_window_backing(native);
+    clear_transparent_webview_backing(window);
+    native.setAlphaValue(0.0);
     set_tracked_cursor(window, CursorMode::Arrow, CursorSurface::CaptureOverlay)
 }
 
@@ -888,13 +939,30 @@ pub fn cover_display(window: &WebviewWindow, display_id: &str) -> Result<(), &'s
     Ok(())
 }
 
-/// Makes a reused capture overlay transparent before bringing it onscreen.
+/// Makes a reused capture overlay nearly transparent before bringing it onscreen.
+///
+/// Fully transparent (`0.0`) windows can suspend WKWebView, so the first
+/// opaque frame is an unpainted black CALayer. Prime at a tiny alpha instead,
+/// matching the recording selector, and clear native backing so that layer
+/// cannot flash black while the frozen snapshot decodes.
 pub fn prepare_capture_overlay(window: &WebviewWindow) -> Result<(), &'static str> {
     let native_window = native_window(window)?;
     elevate_fullscreen_capture_window(native_window);
-    prepare_window_reveal(window)?;
+    clear_transparent_window_backing(native_window);
+    clear_transparent_webview_backing(window);
+    prime_window_reveal(window)?;
     set_cursor_rects_enabled(native_window, true);
     set_tracked_cursor(window, CursorMode::WebView, CursorSurface::CaptureOverlay)?;
+    Ok(())
+}
+
+/// Orders the primed overlay onscreen without making it key.
+///
+/// Tauri's `show()` uses `makeKeyAndOrderFront:`, which focuses the overlay
+/// before the snapshot has painted and can flash a black WKWebView surface.
+pub fn present_capture_overlay(window: &WebviewWindow) -> Result<(), &'static str> {
+    prepare_capture_overlay(window)?;
+    native_window(window)?.orderFront(None);
     Ok(())
 }
 
@@ -942,7 +1010,7 @@ pub fn prepare_window_reveal(window: &WebviewWindow) -> Result<(), &'static str>
 /// enough to let it paint the next frame while remaining imperceptible until
 /// `reveal_window` makes the finished surface visible.
 pub fn prime_window_reveal(window: &WebviewWindow) -> Result<(), &'static str> {
-    native_window(window)?.setAlphaValue(0.01);
+    native_window(window)?.setAlphaValue(WINDOW_REVEAL_PRIME_ALPHA);
     Ok(())
 }
 
@@ -1010,12 +1078,7 @@ pub fn remember_frontmost_app_before_activation() {
             return;
         }
     }
-    let frontmost = NSWorkspace::sharedWorkspace().frontmostApplication();
-    let current = NSRunningApplication::currentApplication();
-    let previous = match frontmost {
-        Some(app) if !app.isEqual(Some(&*current)) && !app.isTerminated() => Some(app),
-        _ => None,
-    };
+    let previous = current_frontmost_if_not_captures();
     // Only order out documents when activation would pull them over another
     // app. Concealing while Captures is already key is what made open editors
     // vanish for the whole region/window selection and pop back at the end.
@@ -1077,6 +1140,20 @@ pub fn restore_frontmost_app_after_capture() {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         slot.take()
     };
+    yield_activation_to(previous);
+}
+
+fn current_frontmost_if_not_captures() -> Option<Retained<NSRunningApplication>> {
+    let frontmost = NSWorkspace::sharedWorkspace().frontmostApplication()?;
+    let current = NSRunningApplication::currentApplication();
+    if frontmost.isEqual(Some(&*current)) || frontmost.isTerminated() {
+        None
+    } else {
+        Some(frontmost)
+    }
+}
+
+fn yield_activation_to(previous: Option<Retained<NSRunningApplication>>) {
     let Some(previous) = previous else {
         return;
     };
@@ -1088,6 +1165,64 @@ pub fn restore_frontmost_app_after_capture() {
         app.yieldActivationToApplication(&previous);
     }
     let _ = previous.activateWithOptions(NSApplicationActivationOptions::empty());
+}
+
+fn concealment_session_is_idle() -> bool {
+    CONCEALED_DOCUMENT_WINDOWS.with(|concealed| concealed.borrow().is_empty())
+}
+
+/// Runs `work` without leaving Captures — and an open editor — in front of the
+/// user's current app.
+///
+/// Hiding or showing the nonactivating thumbnail panel, or resigning its key
+/// status, can activate Captures and donate key status to a titled document.
+/// When another app is frontmost, documents are ordered out for `work`, then
+/// activation is yielded back and those windows are restored without making
+/// Captures key.
+pub fn run_without_stealing_activation<F: FnOnce()>(work: F) {
+    let previous = current_frontmost_if_not_captures();
+    let conceal = should_conceal_documents_for_capture_activation(previous.is_some())
+        && concealment_session_is_idle();
+    if conceal {
+        conceal_document_windows_for_capture();
+    }
+    work();
+    yield_activation_to(previous);
+    if conceal {
+        reveal_concealed_document_windows();
+    }
+}
+
+/// Resigns key on a nonactivating panel without making an open editor key.
+///
+/// AppKit donates key status to the next window in the app when a key panel
+/// resigns. If another app is frontmost, that would activate Captures and
+/// order the screenshot or recording editor above the user's work.
+pub fn resign_panel_key_without_raising_documents(
+    window: &WebviewWindow,
+) -> Result<(), &'static str> {
+    resign_ns_window_key_without_raising_documents(native_window(window)?);
+    Ok(())
+}
+
+fn resign_ns_window_key_without_raising_documents(window: &NSWindow) {
+    if !window.isKeyWindow() {
+        return;
+    }
+    let previous = current_frontmost_if_not_captures();
+    window.resignKeyWindow();
+    if previous.is_none() {
+        return;
+    }
+    if let Some(main_thread) = MainThreadMarker::new() {
+        let app = NSApplication::sharedApplication(main_thread);
+        if let Some(key) = app.keyWindow()
+            && is_titled_document_window(&key)
+        {
+            key.resignKeyWindow();
+        }
+    }
+    yield_activation_to(previous);
 }
 
 /// Orders out titled document windows so capture activation cannot flash them.
@@ -1152,7 +1287,7 @@ fn style_mask_is_titled_document(mask: NSWindowStyleMask) -> bool {
 pub fn reset_capture_overlay(window: &WebviewWindow) -> Result<(), &'static str> {
     let result = (|| {
         let native_window = native_window(window)?;
-        native_window.setAlphaValue(1.0);
+        native_window.setAlphaValue(0.0);
         set_cursor_rects_enabled(native_window, true);
         set_tracked_cursor(window, CursorMode::Arrow, CursorSurface::CaptureOverlay)
     })();

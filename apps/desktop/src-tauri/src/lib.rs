@@ -9,14 +9,13 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
+    time::{Duration, Instant},
 };
 
 #[cfg(target_os = "macos")]
 use std::process::Command;
 #[cfg(not(target_os = "macos"))]
 use std::sync::atomic::AtomicIsize;
-#[cfg(target_os = "linux")]
-use std::time::{Duration, Instant};
 
 use tauri::CursorIcon;
 
@@ -278,6 +277,7 @@ pub fn run() {
             open_captures_folder,
             open_capture_history,
             open_preferences,
+            open_macos_screenshot_shortcut_settings,
             feedback::open_feedback,
             feedback::get_feedback_context,
             feedback::submit_feedback,
@@ -1040,27 +1040,29 @@ fn show_capture_overlay(
         window
             .set_cursor_icon(cursor)
             .map_err(|error| error.to_string())?;
+        // Keep the overlay click-through until the frozen snapshot is painted.
+        // Otherwise an early wake (needed so WKWebView will load the image)
+        // steals pointer events from the desktop.
+        window
+            .set_ignore_cursor_events(true)
+            .map_err(|error| error.to_string())?;
         #[cfg(target_os = "macos")]
-        captures_macos_window::prepare_capture_overlay(&window).map_err(str::to_owned)?;
-        // Focusing the overlay activates Captures and would otherwise leave
-        // open editors/history windows frontmost after the overlay hides.
-        // Remember the user's app first so hide_capture_overlay can restore it.
-        #[cfg(target_os = "macos")]
-        captures_macos_window::remember_frontmost_app_before_activation();
-        window.show().map_err(|error| error.to_string())?;
-        // On macOS keep the overlay unfocused until the frozen snapshot is
-        // fully opaque (reveal_capture_overlay). Focusing here deactivates
-        // open editors while the overlay is still alpha-0, which changes
-        // their AppKit drop shadow / titlebar chrome and produces a visible
-        // glow flicker against the still-active snapshot pixels.
-        // Non-macOS has no native alpha gate, so focus immediately.
+        {
+            // Focusing the overlay activates Captures and would otherwise leave
+            // open editors/history windows frontmost after the overlay hides.
+            captures_macos_window::remember_frontmost_app_before_activation();
+            // Do not call Tauri `show()` here: it uses `makeKeyAndOrderFront:`
+            // and can flash a black unpainted WKWebView. Present at a tiny
+            // alpha without taking key focus until reveal_capture_overlay.
+            captures_macos_window::present_capture_overlay(&window).map_err(str::to_owned)?;
+            let _ = mode;
+        }
         #[cfg(not(target_os = "macos"))]
         {
+            window.show().map_err(|error| error.to_string())?;
             window.set_focus().map_err(|error| error.to_string())?;
             let _ = mode;
         }
-        #[cfg(target_os = "macos")]
-        let _ = mode;
         Ok(())
     } else {
         Err("capture overlay is unavailable".to_owned())
@@ -1083,6 +1085,9 @@ fn reveal_capture_overlay(
     let window = app
         .get_webview_window("overlay")
         .ok_or_else(|| "capture overlay is unavailable".to_owned())?;
+    window
+        .set_ignore_cursor_events(false)
+        .map_err(|error| error.to_string())?;
     #[cfg(target_os = "macos")]
     {
         // Opaque frozen frame first, then take key focus so sibling document
@@ -1098,7 +1103,7 @@ fn reveal_capture_overlay(
             .map_err(str::to_owned)?;
     }
     #[cfg(not(target_os = "macos"))]
-    let _ = (window, mode);
+    let _ = mode;
     Ok(())
 }
 
@@ -2243,6 +2248,27 @@ fn open_preferences(app: AppHandle) -> CommandResult<()> {
 }
 
 #[tauri::command]
+fn open_macos_screenshot_shortcut_settings(app: AppHandle) -> CommandResult<()> {
+    #[cfg(target_os = "macos")]
+    {
+        for url in [
+            "x-apple.systempreferences:com.apple.Keyboard-Settings.extension?Shortcuts",
+            "x-apple.systempreferences:com.apple.preference.keyboard?Shortcuts",
+        ] {
+            if app.opener().open_url(url, None::<&str>).is_ok() {
+                return Ok(());
+            }
+        }
+        Err("could not open Keyboard settings".to_owned())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        Err("Keyboard shortcut settings are only available on macOS".to_owned())
+    }
+}
+
+#[tauri::command]
 fn dismiss_recording_saved_notice(
     app: AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
@@ -2772,6 +2798,14 @@ fn register_shortcuts_with(app: &AppHandle, settings: &AppSettings) -> Result<()
     app.global_shortcut()
         .unregister_all()
         .map_err(|error| AppError::Shortcut(error.to_string()))?;
+    let overlapping_macos_screenshot_hotkeys =
+        models::macos_screenshot_hotkeys_conflicting_with(settings);
+    #[cfg(target_os = "macos")]
+    if !overlapping_macos_screenshot_hotkeys.is_empty() {
+        disable_overlapping_macos_screenshot_shortcuts(&overlapping_macos_screenshot_hotkeys);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = overlapping_macos_screenshot_hotkeys;
     register_new_capture_shortcut(app, &settings.new_capture_shortcut)?;
     register_shortcut(app, &settings.region_shortcut, CaptureMode::Region)?;
     register_shortcut(app, &settings.window_shortcut, CaptureMode::Window)?;
@@ -2955,6 +2989,57 @@ fn parse_shortcut(shortcut: &str) -> Result<Shortcut, AppError> {
         .map_err(|error| AppError::Shortcut(error.to_string()))
 }
 
+#[cfg(target_os = "macos")]
+fn disable_overlapping_macos_screenshot_shortcuts(ids: &[u32]) {
+    if let Err(error) = disable_macos_screenshot_hotkeys(ids) {
+        eprintln!("could not disable overlapping macOS Screenshot shortcuts: {error}");
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn disable_macos_screenshot_hotkeys(ids: &[u32]) -> Result<(), String> {
+    let home = std::env::var("HOME").map_err(|error| error.to_string())?;
+    let plist = PathBuf::from(home).join("Library/Preferences/com.apple.symbolichotkeys.plist");
+    let buddy = "/usr/libexec/PlistBuddy";
+    if !Path::new(buddy).is_file() {
+        return Err("PlistBuddy is unavailable".to_owned());
+    }
+    let _ = run_plist_buddy(buddy, &plist, "Add :AppleSymbolicHotKeys dict");
+    for id in ids {
+        let _ = run_plist_buddy(
+            buddy,
+            &plist,
+            &format!("Add :AppleSymbolicHotKeys:{id} dict"),
+        );
+        let enabled = format!(":AppleSymbolicHotKeys:{id}:enabled");
+        let _ = run_plist_buddy(buddy, &plist, &format!("Delete {enabled}"));
+        run_plist_buddy(buddy, &plist, &format!("Add {enabled} bool false"))?;
+    }
+    let activate = "/System/Library/PrivateFrameworks/SystemAdministration.framework/Resources/activateSettings";
+    if Path::new(activate).is_file() {
+        let _ = Command::new(activate).arg("-u").status();
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn run_plist_buddy(buddy: &str, plist: &Path, command: &str) -> Result<(), String> {
+    let path = plist
+        .to_str()
+        .ok_or_else(|| "plist path is not valid UTF-8".to_owned())?;
+    let output = Command::new(buddy)
+        .args(["-c", command, path])
+        .output()
+        .map_err(|error| error.to_string())?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        Err(if stderr.is_empty() { stdout } else { stderr })
+    }
+}
+
 fn should_trigger_shortcut(armed: &AtomicBool, state: ShortcutState) -> bool {
     match state {
         ShortcutState::Pressed => {
@@ -3094,6 +3179,20 @@ fn show_capture_window(app: &AppHandle, session: &ActiveSession) {
             if let Err(error) = captures_macos_window::cover_display(&window, &display.id) {
                 eprintln!("failed to cover the capture display: {error}");
             }
+            #[cfg(target_os = "macos")]
+            {
+                // Wake WKWebView at an imperceptible alpha before React sets the
+                // snapshot src. A hidden or fully transparent webview defers
+                // image loading, then the first opaque frame is an unpainted
+                // black layer.
+                captures_macos_window::remember_frontmost_app_before_activation();
+                if let Err(error) = window.set_ignore_cursor_events(true) {
+                    eprintln!("failed to ignore overlay cursor events while priming: {error}");
+                }
+                if let Err(error) = captures_macos_window::present_capture_overlay(&window) {
+                    eprintln!("failed to present the capture overlay: {error}");
+                }
+            }
             #[cfg(target_os = "linux")]
             let _ = window.set_fullscreen(wayland_session());
             if let Err(error) = handle.emit("capture-session-ready", &session) {
@@ -3228,13 +3327,9 @@ fn show_onboarding(app: &AppHandle) {
         .background_color(onboarding_background)
         .focused(false)
         .visible(false)
-        .on_page_load(|window, payload| {
-            if payload.event() == PageLoadEvent::Finished
-                && let Err(error) = reveal_and_focus_document_window(&window)
-            {
-                eprintln!("failed to reveal onboarding window: {error}");
-            }
-        })
+        .on_page_load(document_window_page_load_handler(
+            "failed to reveal onboarding window",
+        ))
         .build();
         if let Err(error) = result {
             eprintln!("failed to show onboarding window: {error}");
@@ -3884,7 +3979,7 @@ fn update_thumbnail_stack(app: &AppHandle) {
             show_mini_previews,
             include_mini_previews_in_captures,
         ) {
-            let _ = window.hide();
+            hide_thumbnail_window(&window);
             return;
         }
         let (x, y, desired_height) = thumbnail_window_geometry(&handle, count);
@@ -3953,6 +4048,22 @@ fn thumbnail_visible_window_height(
     }
 }
 
+fn thumbnail_webview_needs_tauri_show(is_visible: bool) -> bool {
+    !is_visible
+}
+
+fn hide_thumbnail_window(window: &tauri::WebviewWindow) {
+    // Hiding a key nonactivating panel donates key status to the next Captures
+    // window — usually an open editor — and can activate the app over Chrome.
+    #[cfg(target_os = "macos")]
+    captures_macos_window::run_without_stealing_activation(|| {
+        let _ = captures_macos_window::resign_panel_key_without_raising_documents(window);
+        let _ = window.hide();
+    });
+    #[cfg(not(target_os = "macos"))]
+    let _ = window.hide();
+}
+
 fn show_thumbnail_window(window: &tauri::WebviewWindow) {
     // Sleep/resume and compositor handoffs can leave the window click-through.
     // Showing always re-arms hit testing; the JS hover poll then re-applies
@@ -3960,8 +4071,17 @@ fn show_thumbnail_window(window: &tauri::WebviewWindow) {
     let _ = window.set_ignore_cursor_events(false);
     // Tauri's hide pauses the WebView lifecycle on macOS. Resume it through
     // Tauri before raising the native panel so React hover and IPC polling do
-    // not remain frozen after a capture hides the stack.
-    let _ = window.show();
+    // not remain frozen after a capture hides the stack. Skip when already
+    // visible: `show()` can activate Captures and yank an open editor forward
+    // after a mini-preview delete/dismiss.
+    if thumbnail_webview_needs_tauri_show(window.is_visible().unwrap_or(false)) {
+        #[cfg(target_os = "macos")]
+        captures_macos_window::run_without_stealing_activation(|| {
+            let _ = window.show();
+        });
+        #[cfg(not(target_os = "macos"))]
+        let _ = window.show();
+    }
 
     #[cfg(target_os = "macos")]
     if let Err(error) = captures_macos_window::show_without_activating(window) {
@@ -4313,6 +4433,47 @@ fn wayland_session() -> bool {
             .is_some_and(|session| session.to_string_lossy().eq_ignore_ascii_case("wayland"))
 }
 
+/// How long after the first `PageLoadEvent::Finished` a follow-up load may
+/// still show and focus a new document window. Covers `about:blank` → app URL.
+/// Later loads (failed capture-protocol media, WebView recovery) must not
+/// yank an already-open editor over the user's other apps.
+const DOCUMENT_WINDOW_LOAD_FOCUS_GRACE: Duration = Duration::from_millis(1_500);
+
+pub(crate) fn should_focus_document_window_on_page_load(
+    first_finished_at: Option<Instant>,
+    now: Instant,
+) -> bool {
+    match first_finished_at {
+        None => true,
+        Some(at) => now.saturating_duration_since(at) < DOCUMENT_WINDOW_LOAD_FOCUS_GRACE,
+    }
+}
+
+pub(crate) fn document_window_page_load_handler(
+    failed_log: &'static str,
+) -> impl Fn(tauri::WebviewWindow, tauri::webview::PageLoadPayload<'_>) + Send + Sync + 'static {
+    let first_finished = std::sync::Mutex::new(None::<Instant>);
+    move |window, payload| {
+        if payload.event() != PageLoadEvent::Finished {
+            return;
+        }
+        let now = Instant::now();
+        let mut first = first_finished
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !should_focus_document_window_on_page_load(*first, now) {
+            return;
+        }
+        if first.is_none() {
+            *first = Some(now);
+        }
+        drop(first);
+        if let Err(error) = reveal_and_focus_document_window(&window) {
+            eprintln!("{failed_log}: {error}");
+        }
+    }
+}
+
 /// Show, unminimize, and focus a document window so hover and cursor styles
 /// work immediately after opening from a mini-preview Edit click.
 ///
@@ -4367,13 +4528,9 @@ fn show_capture_history(app: &AppHandle) {
         .background_color(history_background)
         .focused(false)
         .visible(false)
-        .on_page_load(|window, payload| {
-            if payload.event() == PageLoadEvent::Finished
-                && let Err(error) = window.show().and_then(|_| window.set_focus())
-            {
-                eprintln!("failed to reveal capture history window: {error}");
-            }
-        })
+        .on_page_load(document_window_page_load_handler(
+            "failed to reveal capture history window",
+        ))
         .build();
         if let Err(error) = result {
             eprintln!("failed to show capture history window: {error}");
@@ -4511,13 +4668,9 @@ fn show_preferences(app: &AppHandle) {
         .background_color(preferences_background)
         .focused(false)
         .visible(false)
-        .on_page_load(|window, payload| {
-            if payload.event() == PageLoadEvent::Finished
-                && let Err(error) = window.show().and_then(|_| window.set_focus())
-            {
-                eprintln!("failed to reveal preferences window: {error}");
-            }
-        })
+        .on_page_load(document_window_page_load_handler(
+            "failed to reveal preferences window",
+        ))
         .build();
         if let Err(error) = result {
             eprintln!("failed to show preferences window: {error}");
@@ -4527,6 +4680,10 @@ fn show_preferences(app: &AppHandle) {
 
 fn hide_window(app: &AppHandle, label: &str) {
     if let Some(window) = app.get_webview_window(label) {
+        if label == "thumbnail" {
+            hide_thumbnail_window(&window);
+            return;
+        }
         let _ = window.hide();
     }
 }
@@ -4625,6 +4782,7 @@ fn hide_capture_overlay(app: &AppHandle) {
     #[cfg(target_os = "macos")]
     captures_macos_window::restore_frontmost_app_after_capture();
     if let Some(window) = app.get_webview_window("overlay") {
+        let _ = window.set_ignore_cursor_events(false);
         let _ = window.hide();
         let _ = window.set_cursor_icon(CursorIcon::Default);
         #[cfg(target_os = "macos")]
@@ -5704,6 +5862,17 @@ mod tests {
             parse_shortcut("Control+Shift+Digit4").expect("recorded shortcut should parse")
         );
         assert!(parse_shortcut("Ctrl+Shift+Space").is_ok());
+        assert!(parse_shortcut("CommandOrControl+Shift+4").is_ok());
+        assert_eq!(
+            parse_shortcut("CommandOrControl+Shift+4")
+                .expect("cross-platform default should parse"),
+            parse_shortcut(if cfg!(target_os = "macos") {
+                "Command+Shift+4"
+            } else {
+                "Ctrl+Shift+4"
+            })
+            .expect("platform default should parse")
+        );
     }
 
     #[test]
@@ -5901,6 +6070,29 @@ mod tests {
         assert!(!super::is_editor_window_label("thumbnail"));
         assert!(!super::is_editor_window_label("history"));
         assert!(!super::is_editor_window_label("screenshot-countdown"));
+    }
+
+    #[test]
+    fn late_document_page_loads_do_not_steal_focus() {
+        let start = std::time::Instant::now();
+        assert!(super::should_focus_document_window_on_page_load(
+            None, start
+        ));
+        assert!(super::should_focus_document_window_on_page_load(
+            Some(start),
+            start + std::time::Duration::from_millis(400)
+        ));
+        assert!(!super::should_focus_document_window_on_page_load(
+            Some(start),
+            start + std::time::Duration::from_secs(5)
+        ));
+        assert!(super::DOCUMENT_WINDOW_LOAD_FOCUS_GRACE < std::time::Duration::from_secs(5));
+    }
+
+    #[test]
+    fn already_visible_thumbnail_does_not_need_tauri_show() {
+        assert!(super::thumbnail_webview_needs_tauri_show(false));
+        assert!(!super::thumbnail_webview_needs_tauri_show(true));
     }
 
     #[test]

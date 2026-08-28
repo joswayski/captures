@@ -198,6 +198,10 @@ describe("ScreenshotEditor", () => {
       }
       throw new Error(`unexpected command: ${command}`);
     });
+    Object.assign(URL, {
+      createObjectURL: vi.fn(() => "blob:compress-preview"),
+      revokeObjectURL: vi.fn(),
+    });
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
   });
 
@@ -1240,7 +1244,7 @@ describe("ScreenshotEditor", () => {
 
   it("lets a selected drawing toggle a drop shadow", async () => {
     render(<ScreenshotEditor />);
-    await screen.findByLabelText("Width");
+    await screen.findByLabelText("Canvas width");
 
     fireEvent.click(screen.getByRole("button", { name: "Arrow (A)" }));
     const defaults = screen.getByRole("checkbox", { name: "Drop shadow" });
@@ -2316,6 +2320,8 @@ describe("ScreenshotEditor", () => {
   });
 
   it("keeps preserve quality by default and compress shows quality presets without changing format", async () => {
+    const restoreCanvas = installExportableCanvas();
+    try {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Canvas width");
 
@@ -2330,12 +2336,14 @@ describe("ScreenshotEditor", () => {
     expect(
       screen.getByText("Keeps original quality as PNG and replaces the original."),
     ).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Compression comparison" }))
+      .not.toBeInTheDocument();
 
-    // Compress keeps PNG and shows a color-count slider.
+    // Compress keeps PNG and shows the same Tiny–High quality ladder as JPEG.
     fireEvent.click(saveQuality);
     const compressOption = screen.getByRole("option", { name: /Compress/ });
     expect(compressOption).toHaveTextContent(
-      "Smaller PNG by reducing colors, then packing hard.",
+      "Smaller PNG with Tiny through High quality presets.",
     );
     expect(compressOption).not.toHaveTextContent(/compresspng/i);
     fireEvent.click(compressOption);
@@ -2343,30 +2351,45 @@ describe("ScreenshotEditor", () => {
     await waitFor(() => {
       expect(format).toHaveTextContent(".png");
     });
-    expect(screen.queryByRole("combobox", { name: "Compression quality" }))
-      .not.toBeInTheDocument();
-    const pngColors = screen.getByRole("slider", { name: "PNG palette colors" });
-    expect(pngColors).toHaveValue("128");
-    fireEvent.change(pngColors, { target: { value: "32" } });
-    expect(pngColors).toHaveValue("32");
-    expect(screen.queryByRole("spinbutton", { name: "PNG palette colors" }))
+    const quality = screen.getByRole("combobox", { name: "Compression quality" });
+    expect(quality).toHaveTextContent("High");
+    expect(screen.queryByRole("slider", { name: "PNG palette colors" }))
       .not.toBeInTheDocument();
     expect(screen.queryByRole("spinbutton", { name: "Maximum file size" }))
       .not.toBeInTheDocument();
     expect(
-      screen.getByText("Compressed PNG replaces the original; turn on Make a copy to keep it."),
+      screen.getByText("Compressed PNG replaces the original; turn on Save as new file to keep it."),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Compare before / after" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Compare before / after" }))
+      .not.toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Compression comparison" }))
+      .toBeInTheDocument();
+
+    fireEvent.click(quality);
+    fireEvent.click(screen.getByRole("option", { name: /Tiny/ }));
+    expect(quality).toHaveTextContent("Tiny");
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        "preview_screenshot_export",
+        expect.objectContaining({
+          format: "png",
+          qualityMode: "compress",
+          jpegQuality: 55,
+          pngMaxColors: 32,
+        }),
+      );
+    });
 
     fireEvent.click(format);
     fireEvent.click(screen.getByRole("option", { name: "JPEG" }));
     expect(screen.getByRole("combobox", { name: "Save quality" }))
       .toHaveTextContent("Compress");
-    const quality = screen.getByRole("combobox", { name: "Compression quality" });
-    expect(quality).toHaveTextContent("High");
-    fireEvent.click(quality);
+    expect(screen.getByRole("combobox", { name: "Compression quality" }))
+      .toHaveTextContent("Tiny");
+    fireEvent.click(screen.getByRole("combobox", { name: "Compression quality" }));
     fireEvent.click(screen.getByRole("option", { name: /Balanced/ }));
-    expect(quality).toHaveTextContent("Balanced");
+    expect(screen.getByRole("combobox", { name: "Compression quality" }))
+      .toHaveTextContent("Balanced");
     // Source is still a PNG path, so a JPEG save is always a new file.
     expect(
       screen.getByText("Compressed JPEG saves as a new file and leaves the original untouched."),
@@ -2381,6 +2404,8 @@ describe("ScreenshotEditor", () => {
     expect(screen.getByRole("combobox", { name: "Screenshot file size unit" }))
       .toHaveTextContent("MB");
     expect(format).toHaveTextContent(".jpg");
+    expect(screen.getByRole("group", { name: "Compression comparison" }))
+      .toBeInTheDocument();
 
     // Switching format keeps the quality mode; maximum works for PNG too.
     fireEvent.click(format);
@@ -2388,6 +2413,18 @@ describe("ScreenshotEditor", () => {
     expect(screen.getByRole("combobox", { name: "Save quality" }))
       .toHaveTextContent("Maximum file size");
     expect(screen.getByRole("spinbutton", { name: "Maximum file size" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Compression comparison" }))
+      .toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
+    fireEvent.click(screen.getByRole("option", { name: /Preserve quality/ }));
+    expect(screen.queryByRole("group", { name: "Compression comparison" }))
+      .not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Compression quality" }))
+      .not.toBeInTheDocument();
+    } finally {
+      restoreCanvas();
+    }
   });
 
   it("uses the original file size when export is original + preserve quality and unedited", async () => {
@@ -2422,6 +2459,8 @@ describe("ScreenshotEditor", () => {
       await waitFor(() => {
         expect(screen.getByText("≈ 250 KB")).toBeInTheDocument();
       }, { timeout: 2_000 });
+      expect(screen.queryByText("−0%")).not.toBeInTheDocument();
+      expect(document.querySelector(".screenshot-output-estimate-delta")).toBeNull();
       // Browser re-encode path should not run for the unedited original estimate.
       expect(toBlob).not.toHaveBeenCalled();
     } finally {
@@ -2434,7 +2473,7 @@ describe("ScreenshotEditor", () => {
     await screen.findByLabelText("Canvas width");
 
     fireEvent.click(screen.getByRole("combobox", { name: "Output size" }));
-    fireEvent.click(screen.getByRole("option", { name: "Custom" }));
+    fireEvent.click(screen.getByRole("option", { name: /Choose exact pixel dimensions/ }));
     const width = screen.getByRole("spinbutton", { name: "Custom output width" });
     const height = screen.getByRole("spinbutton", { name: "Custom output height" });
     expect(width).toHaveValue(1_440);
@@ -2446,6 +2485,50 @@ describe("ScreenshotEditor", () => {
     fireEvent.change(height, { target: { value: "500" } });
     expect(width).toHaveValue(720);
     expect(height).toHaveValue(500);
+  });
+
+  it("shows a size-change percent when output size shrinks the pixel dimensions", async () => {
+    const restoreCanvas = installExportableCanvas();
+    Object.defineProperty(HTMLCanvasElement.prototype, "toBlob", {
+      configurable: true,
+      value: function toBlob(this: HTMLCanvasElement, callback: BlobCallback, type?: string) {
+        const pixels = Math.max(1, this.width * this.height);
+        const size = Math.max(1, Math.round(pixels * 0.12));
+        const bytes = new Uint8Array(size);
+        const blob = new Blob([bytes], { type: type ?? "image/png" });
+        if (typeof blob.arrayBuffer !== "function") {
+          Object.defineProperty(blob, "arrayBuffer", {
+            value: async () => bytes.buffer,
+          });
+        }
+        callback(blob);
+      },
+    });
+    try {
+      render(<ScreenshotEditor />);
+      await screen.findByLabelText("Canvas width");
+      await waitFor(() => {
+        expect(screen.getByText("≈ 250 KB")).toBeInTheDocument();
+      }, { timeout: 2_000 });
+      expect(document.querySelector(".screenshot-output-estimate-delta")).toBeNull();
+
+      fireEvent.click(screen.getByRole("combobox", { name: "Output size" }));
+      expect(screen.getByRole("option", { name: /half the pixel width/ })).toHaveTextContent(
+        "Save at half the pixel width and height.",
+      );
+      fireEvent.click(screen.getByRole("option", { name: /half the pixel width/ }));
+
+      // 1440×900 → 720×450; 0.12 bytes/pixel ≈ 38.9 KB vs the 250 KB original.
+      await waitFor(() => {
+        expect(screen.getByText("≈ 38.9 KB")).toBeInTheDocument();
+        expect(screen.getByText("−84%")).toBeInTheDocument();
+      }, { timeout: 2_000 });
+      expect(screen.getByText("−84%")).toHaveClass("screenshot-output-estimate-delta", "is-smaller");
+      expect(screen.getByRole("combobox", { name: "Save quality" }))
+        .toHaveTextContent("Preserve quality");
+    } finally {
+      restoreCanvas();
+    }
   });
 
   it("shows an estimated export size when format and quality change", async () => {
@@ -2529,10 +2612,10 @@ describe("ScreenshotEditor", () => {
 
       fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
       fireEvent.click(screen.getByRole("option", { name: /Compress/ }));
-      // PNG compress estimates go through Rust (color quantization).
+      // PNG compress estimates go through Rust (quality presets map to palette size).
       expect(screen.getByRole("combobox", { name: "Format" })).toHaveTextContent(".png");
       await waitFor(() => {
-        expect(screen.getByRole("slider", { name: "PNG palette colors" })).toBeInTheDocument();
+        expect(screen.getByRole("combobox", { name: "Compression quality" })).toBeInTheDocument();
       });
 
       const estimate = () => screen.getByTitle(
@@ -2594,8 +2677,8 @@ describe("ScreenshotEditor", () => {
       .toHaveValue("Captures_2026-08-08_12-00-00_000");
     expect(screen.getByLabelText("Save location"))
       .toHaveTextContent("/Users/example/Captures");
-    // No permanent original yet — Make a copy is hidden until the first save.
-    expect(screen.queryByRole("checkbox", { name: "Make a copy" }))
+    // No permanent original yet — Save as new file is hidden until the first save.
+    expect(screen.queryByRole("checkbox", { name: "Save as new file" }))
       .not.toBeInTheDocument();
     expect(invoke).toHaveBeenCalledWith("default_screenshot_edit_path", {
       artifactId: pathless.id,
@@ -2620,6 +2703,14 @@ describe("ScreenshotEditor", () => {
           format: "png",
         };
       }
+      if (command === "preview_screenshot_export") {
+        return {
+          bytes: [1, 2, 3],
+          sizeBytes: 12_000,
+          format: "png",
+        };
+      }
+      if (command === "estimate_screenshot_export") return 12_000;
       if (command === "reveal_artifact") return undefined;
       const draft = draftCommandResult(String(command));
       if (draft !== undefined || String(command).includes("screenshot_editor_draft")) {
@@ -2634,7 +2725,7 @@ describe("ScreenshotEditor", () => {
         .toHaveValue("capture");
       expect(screen.getByLabelText("Save location"))
         .toHaveTextContent("/Users/example/Captures");
-      expect(screen.getByRole("checkbox", { name: "Make a copy" })).not.toBeChecked();
+      expect(screen.getByRole("checkbox", { name: "Save as new file" })).not.toBeChecked();
 
       fireEvent.click(screen.getByRole("button", { name: "Change save location" }));
       await waitFor(() => {
@@ -2679,15 +2770,15 @@ describe("ScreenshotEditor", () => {
         artifactId: savedArtifact.id,
       });
       // After the first copy save, the editor treats that file as the original
-      // so later Save overwrites and Make a copy creates another file.
+      // so later Save overwrites and Save as new file creates another file.
       await waitFor(() => {
         expect(screen.getByRole("textbox", { name: "Saved filename" }))
           .toHaveValue("edited-photo");
         expect(screen.getByLabelText("Save location"))
           .toHaveTextContent("/Users/example/Pictures");
-        expect(screen.getByRole("checkbox", { name: "Make a copy" })).not.toBeChecked();
+        expect(screen.getByRole("checkbox", { name: "Save as new file" })).not.toBeChecked();
       });
-      fireEvent.click(screen.getByRole("checkbox", { name: "Make a copy" }));
+      fireEvent.click(screen.getByRole("checkbox", { name: "Save as new file" }));
       expect(screen.getByRole("textbox", { name: "Saved filename" }))
         .toHaveValue("edited-photo-edited");
     } finally {
@@ -2709,8 +2800,12 @@ describe("ScreenshotEditor", () => {
     await screen.findByLabelText("Canvas width");
 
     expect(screen.getByRole("button", { name: "Copy image" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Copy image" })).toHaveAttribute(
+      "title",
+      "Copy the edited image to the clipboard",
+    );
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
-    expect(screen.getByRole("checkbox", { name: "Make a copy" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Save as new file" })).not.toBeChecked();
     expect(
       screen.getByText("Keeps original quality as PNG and replaces the original."),
     ).toBeInTheDocument();
@@ -2730,7 +2825,7 @@ describe("ScreenshotEditor", () => {
     ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy image" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
-    expect(screen.queryByRole("checkbox", { name: "Make a copy" }))
+    expect(screen.queryByRole("checkbox", { name: "Save as new file" }))
       .not.toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });

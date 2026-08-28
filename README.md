@@ -62,8 +62,8 @@ Preview builds update after every successful merge to `main` and may contain bug
 - Pause, resume, restart, and mute while recording
 - Cursor and click highlights in recordings (where supported)
 - Built-in screenshot editor — text, shapes, drawing with optional drop shadows, crop (drag from outside the canvas to reach an edge; hold Shift to lock aspect), layers, erase to transparent; unsaved edits restore when you reopen
-- Trim, crop, resize, and adjust audio in recordings, with an estimated saved size and before/after compression preview
-- Export PNG, JPEG, or WebP with compression options, including a PNG color slider and before/after preview
+- Trim, crop, resize, and adjust audio in recordings, with an estimated saved size and an in-editor before/after compression comparison
+- Export PNG, JPEG, or WebP with Tiny through High quality presets and an in-editor before/after comparison
 - Mini previews for quick copy, save, and drag into other apps
 - Screenshots during an active recording
 - 30-day capture history, filtered by screenshots, video, or GIF
@@ -93,18 +93,21 @@ Preview builds update after every successful merge to `main` and may contain bug
 
 ## Shortcuts
 
+Defaults use Command on macOS and Control on Windows and Linux, matching macOS Screenshot for full screen (`3`), region (`4`), and recording (`5`):
+
 | Default shortcut | Action |
 | --- | --- |
-| `Ctrl+Shift+Space` | Open New Capture |
-| `Ctrl+Shift+4` | Capture a region |
-| `Ctrl+Shift+W` | Capture a window |
-| `Ctrl+Shift+3` | Choose a display for a full-screen screenshot |
-| `Ctrl+Shift+5` | Record the screen, then save video or GIF |
-| `Ctrl+Shift+F` | Open Send Feedback |
+| `Cmd`/`Ctrl`+`Shift`+`Space` | Open New Capture |
+| `Cmd`/`Ctrl`+`Shift`+`4` | Capture a region |
+| `Cmd`/`Ctrl`+`Shift`+`W` | Capture a window |
+| `Cmd`/`Ctrl`+`Shift`+`3` | Choose a display for a full-screen screenshot |
+| `Cmd`/`Ctrl`+`Shift`+`5` | Record the screen, then save video or GIF |
+| `Cmd`/`Ctrl`+`Shift`+`F` | Open Send Feedback |
 | `Esc` | Cancel an active capture, screenshot countdown, or recording countdown |
 
-Global capture and feedback shortcuts can be changed in Preferences. While
-selecting a capture region, pick an aspect ratio in the capture menu or hold
+Global capture and feedback shortcuts can be changed in Preferences. Installations still on the previous Control+Shift defaults are updated automatically; custom shortcuts stay as they are. On macOS, overlapping Screenshot app shortcuts (`Cmd`+`Shift`+`3` / `4` / `5`) are turned off so those keys reach Captures; restore them in System Settings → Keyboard → Keyboard Shortcuts → Screenshots if you want both.
+
+While selecting a capture region, pick an aspect ratio in the capture menu or hold
 `Shift` for a square. In the screenshot editor, zoom with the header slider and
 `+`/`-` controls, pinch or `Ctrl`/`Cmd`+scroll, pan with `Ctrl`/`Cmd`-drag or
 middle-click, hold `Shift` while dragging a corner handle to scale

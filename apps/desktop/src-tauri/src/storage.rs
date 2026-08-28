@@ -992,8 +992,9 @@ mod tests {
         DRAG_EXPORT_DIRECTORY, DRAG_ICON_FILE, DRAG_ICON_HEIGHT, DRAG_ICON_WIDTH,
         HISTORY_IMAGE_FILE, HISTORY_PREVIEW_FILE, clear_drag_exports_in, encode_drag_icon_png,
         encode_png, encode_png_export, encode_preview_png, encode_thumbnail_png,
-        load_capture_history_from, prepare_artifact_drag_in, recording_destination_path,
-        recording_destination_path_in, recording_replacement_destination_path_in,
+        load_capture_history_from, png_palette_colors_for_quality, prepare_artifact_drag_in,
+        recording_destination_path, recording_destination_path_in,
+        recording_replacement_destination_path_in,
         recording_replacement_destination_path_in_with_replaceable, save_encoded_capture,
         save_history_capture_in, save_history_entry_in, save_settings_to, unique_path,
     };
@@ -1596,5 +1597,13 @@ mod tests {
             indexed.len(),
             rgba.len()
         );
+    }
+
+    #[test]
+    fn png_palette_tracks_the_shared_quality_notches() {
+        assert_eq!(png_palette_colors_for_quality(55), 32);
+        assert_eq!(png_palette_colors_for_quality(70), 64);
+        assert_eq!(png_palette_colors_for_quality(85), 128);
+        assert_eq!(png_palette_colors_for_quality(92), 256);
     }
 }

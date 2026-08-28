@@ -325,6 +325,10 @@ describe("Preferences", () => {
     expect(recorder).toHaveTextContent("Ctrl");
     expect(recorder).toHaveTextContent("Shift");
     expect(recorder).toHaveTextContent("Space");
+    expect(
+      screen.getByText(/Defaults use Command on macOS and Control on Windows and Linux/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("macOS Screenshot shortcuts")).not.toBeInTheDocument();
   });
 
   it("presents recording toggles as switch rows inside the Recording card", async () => {

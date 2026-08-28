@@ -310,4 +310,37 @@ describe("CaptureOverlay guidance", () => {
       });
     });
   });
+
+  it("wakes the overlay when a region session is ready without revealing yet", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/?view=overlay&mode=region&session_id=capture-1",
+    );
+    render(<App />);
+    await screen.findByText("Drag to select a region");
+
+    expect(invoke).toHaveBeenCalledWith("show_capture_overlay", { sessionId: "capture-1" });
+    expect(vi.mocked(invoke).mock.calls.filter(([command]) => (
+      command === "reveal_capture_overlay"
+    ))).toHaveLength(0);
+  });
+
+  it("reveals the overlay after the frozen snapshot paints", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/?view=overlay&mode=region&session_id=capture-1",
+    );
+    const { container } = render(<App />);
+    await screen.findByText("Drag to select a region");
+
+    const snapshot = container.querySelector(".capture-snapshot");
+    expect(snapshot).not.toBeNull();
+    fireEvent.load(snapshot!);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("reveal_capture_overlay", { sessionId: "capture-1" });
+    });
+  });
 });

@@ -120,16 +120,16 @@ const FILMSTRIP_URL = sampleFilmstrip(TIMELINE_FRAMES);
 const CAPTURE_TALL_URL = sampleCapture(1200, 900);
 
 const SETTINGS: AppSettings = {
-  settings_schema_version: 2,
+  settings_schema_version: 3,
   appearance: readStoredAppearance(),
   theme: "mustard",
   custom_theme: { accent: "#32d3ff", signal: "#ff4fc3" },
   output_directory: "/Users/alex/Pictures/Captures",
-  new_capture_shortcut: "Ctrl+Shift+Space",
-  region_shortcut: "Ctrl+Shift+4",
-  window_shortcut: "Ctrl+Shift+W",
-  display_shortcut: "Ctrl+Shift+3",
-  feedback_shortcut: "Ctrl+Shift+F",
+  new_capture_shortcut: "CommandOrControl+Shift+Space",
+  region_shortcut: "CommandOrControl+Shift+4",
+  window_shortcut: "CommandOrControl+Shift+W",
+  display_shortcut: "CommandOrControl+Shift+3",
+  feedback_shortcut: "CommandOrControl+Shift+F",
   auto_copy_to_clipboard: true,
   auto_start_on_selection: false,
   show_mini_previews: true,
@@ -141,8 +141,8 @@ const SETTINGS: AppSettings = {
   onboarding_completed: true,
   screenshot_countdown_seconds: 3,
   recording: {
-    video_shortcut: "Ctrl+Shift+5",
-    gif_shortcut: "Ctrl+Shift+6",
+    video_shortcut: "CommandOrControl+Shift+5",
+    gif_shortcut: "CommandOrControl+Shift+6",
     video_fps: 60,
     video_max_resolution: "original",
     gif_fps: 15,
@@ -570,10 +570,31 @@ const RESPONSES: Record<string, unknown> = {
     sprite_width: TIMELINE_FRAMES * 120,
     sprite_height: 76,
   },
-  estimate_recording_export: { sizeBytes: 9_120_000, exact: false },
   estimate_screenshot_export: 512_000,
   prepared_drag_artifact_id: null,
 };
+
+async function samplePreviewPng(quality = 0.92): Promise<number[]> {
+  const image = new Image();
+  image.src = CAPTURE_URL;
+  try {
+    await image.decode();
+  } catch {
+    return [];
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = image.naturalWidth || 800;
+  canvas.height = image.naturalHeight || 500;
+  const context = canvas.getContext("2d");
+  if (!context) return [];
+  if (quality < 0.8) context.filter = "saturate(0.65) contrast(1.15)";
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  const blob = await new Promise<Blob | null>((resolve) => {
+    canvas.toBlob(resolve, "image/jpeg", quality);
+  });
+  if (!blob) return [];
+  return Array.from(new Uint8Array(await blob.arrayBuffer()));
+}
 
 /**
  * Overlay windows are transparent and normally float over the desktop. `?stage`
@@ -593,6 +614,38 @@ export function installPreviewBackend(): void {
   mockIPC(async (command, payload) => {
     if (command === "get_recording_selection") return selection;
     if (command === "select_capture_display") return selectCaptureDisplay(payload);
+    if (command === "preview_screenshot_export") {
+      const quality = Number(
+        (payload as { jpegQuality?: number } | undefined)?.jpegQuality ?? 70,
+      );
+      const bytes = await samplePreviewPng(Math.max(0.2, quality / 100));
+      return { bytes, sizeBytes: bytes.length, format: (payload as { format?: string } | undefined)?.format ?? "png" };
+    }
+    if (command === "preview_recording_export") {
+      const [beforePng, afterPng] = await Promise.all([
+        samplePreviewPng(0.95),
+        samplePreviewPng(0.45),
+      ]);
+      return { beforePng, afterPng };
+    }
+    if (command === "estimate_recording_export") {
+      const request = payload as {
+        edit?: { output_width?: number | null; output_height?: number | null };
+        export?: { quality?: string };
+      } | undefined;
+      const original = RECORDING.size_bytes;
+      if (request?.export?.quality && request.export.quality !== "preserve") {
+        return { sizeBytes: Math.round(original * 0.49), exact: false };
+      }
+      const outHeight = request?.edit?.output_height;
+      const outWidth = request?.edit?.output_width;
+      if (typeof outHeight === "number" && outHeight < RECORDING.height) {
+        const width = typeof outWidth === "number" ? outWidth : RECORDING.width;
+        const scale = (width * outHeight) / (RECORDING.width * RECORDING.height);
+        return { sizeBytes: Math.round(original * Math.max(0.18, scale)), exact: false };
+      }
+      return { sizeBytes: original, exact: true };
+    }
     if (command in RESPONSES) return RESPONSES[command];
     // Everything else is a side effect (show window, copy, save…) with no payload.
     return undefined;
