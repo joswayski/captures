@@ -11,12 +11,16 @@ use uuid::Uuid;
 pub const HISTORY_RETENTION_DAYS: i64 = 30;
 const CURRENT_SETTINGS_SCHEMA_VERSION: u8 = 4;
 const SHORTCUT_MODIFIER: &str = "CommandOrControl";
-/// macOS Screenshot "Save picture of selected area as a file" (⌘⇧4).
-const MACOS_SCREENSHOT_SAVE_AREA: u32 = 28;
-/// macOS Screenshot "Save picture of screen as a file" (⌘⇧3).
-const MACOS_SCREENSHOT_SAVE_SCREEN: u32 = 30;
-/// macOS Screenshot and recording options (⌘⇧5).
+/// kCGSHotKeyScreenshot — Save picture of screen as a file (⌘⇧3).
+const MACOS_SCREENSHOT_SAVE_SCREEN: u32 = 28;
+/// kCGSHotKeyScreenshotRegion — Save picture of selected area as a file (⌘⇧4).
+const MACOS_SCREENSHOT_SAVE_AREA: u32 = 30;
+/// Screenshot and recording options (⌘⇧5).
 const MACOS_SCREENSHOT_OPTIONS: u32 = 184;
+/// Stock Screenshot chords written back when persisting a disabled hotkey.
+const MACOS_SCREENSHOT_SAVE_SCREEN_PARAMETERS: (u32, u32, u32) = (51, 20, 1_179_648);
+const MACOS_SCREENSHOT_SAVE_AREA_PARAMETERS: (u32, u32, u32) = (52, 21, 1_179_648);
+const MACOS_SCREENSHOT_OPTIONS_PARAMETERS: (u32, u32, u32) = (53, 23, 1_179_648);
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AppSettings {
@@ -996,6 +1000,37 @@ pub fn macos_screenshot_hotkeys_conflicting_with(settings: &AppSettings) -> Vec<
     ids
 }
 
+/// `defaults write` arguments that disable a symbolic hotkey through cfprefsd.
+///
+/// Direct plist edits skip the preferences daemon, so WindowServer can keep the
+/// stock Screenshot chords live until logout. Integer hotkey IDs plus a full
+/// `enabled`/`value` dict match the stock Screenshot bindings.
+pub(crate) fn macos_screenshot_hotkey_defaults_write_args(id: u32) -> Vec<String> {
+    vec![
+        "write".to_owned(),
+        "com.apple.symbolichotkeys".to_owned(),
+        "AppleSymbolicHotKeys".to_owned(),
+        "-dict-add".to_owned(),
+        id.to_string(),
+        macos_screenshot_hotkey_disabled_entry(id),
+    ]
+}
+
+fn macos_screenshot_hotkey_disabled_entry(id: u32) -> String {
+    let parameters = match id {
+        MACOS_SCREENSHOT_SAVE_SCREEN => Some(MACOS_SCREENSHOT_SAVE_SCREEN_PARAMETERS),
+        MACOS_SCREENSHOT_SAVE_AREA => Some(MACOS_SCREENSHOT_SAVE_AREA_PARAMETERS),
+        MACOS_SCREENSHOT_OPTIONS => Some(MACOS_SCREENSHOT_OPTIONS_PARAMETERS),
+        _ => None,
+    };
+    match parameters {
+        Some((ascii, keycode, modifiers)) => format!(
+            "<dict><key>enabled</key><false/><key>value</key><dict><key>type</key><string>standard</string><key>parameters</key><array><integer>{ascii}</integer><integer>{keycode}</integer><integer>{modifiers}</integer></array></dict></dict>"
+        ),
+        None => "<dict><key>enabled</key><false/></dict>".to_owned(),
+    }
+}
+
 const GNOME_SHELL_KEYBINDINGS: &str = "org.gnome.shell.keybindings";
 const GNOME_MEDIA_KEYS: &str = "org.gnome.settings-daemon.plugins.media-keys";
 
@@ -1706,10 +1741,14 @@ mod tests {
         assert_eq!(
             macos_screenshot_hotkeys_conflicting_with(&settings),
             vec![
-                super::MACOS_SCREENSHOT_SAVE_AREA,
                 super::MACOS_SCREENSHOT_SAVE_SCREEN,
+                super::MACOS_SCREENSHOT_SAVE_AREA,
                 super::MACOS_SCREENSHOT_OPTIONS
             ]
+        );
+        assert_eq!(
+            macos_screenshot_hotkeys_conflicting_with(&settings),
+            vec![28, 30, 184]
         );
 
         let mut control_defaults = AppSettings {
@@ -1737,10 +1776,73 @@ mod tests {
         assert_eq!(
             macos_screenshot_hotkeys_conflicting_with(&recorded_command),
             vec![
-                super::MACOS_SCREENSHOT_SAVE_AREA,
                 super::MACOS_SCREENSHOT_SAVE_SCREEN,
+                super::MACOS_SCREENSHOT_SAVE_AREA,
                 super::MACOS_SCREENSHOT_OPTIONS
             ]
+        );
+        assert_eq!(
+            macos_screenshot_hotkeys_conflicting_with(&recorded_command),
+            vec![28, 30, 184]
+        );
+    }
+
+    #[test]
+    fn maps_command_shift_4_to_the_region_screenshot_hotkey() {
+        let mut settings = AppSettings {
+            new_capture_shortcut: "CommandOrControl+Shift+Space".to_owned(),
+            region_shortcut: "Command+Shift+4".to_owned(),
+            window_shortcut: "CommandOrControl+Shift+W".to_owned(),
+            display_shortcut: "Alt+Shift+3".to_owned(),
+            feedback_shortcut: "CommandOrControl+Shift+F".to_owned(),
+            ..AppSettings::default()
+        };
+        settings.recording.video_shortcut = "Alt+Shift+5".to_owned();
+        settings.recording.gif_shortcut = "CommandOrControl+Shift+6".to_owned();
+        assert_eq!(
+            macos_screenshot_hotkeys_conflicting_with(&settings),
+            vec![30]
+        );
+    }
+
+    #[test]
+    fn maps_command_shift_3_to_the_full_screen_screenshot_hotkey() {
+        let mut settings = AppSettings {
+            new_capture_shortcut: "CommandOrControl+Shift+Space".to_owned(),
+            region_shortcut: "Alt+Shift+4".to_owned(),
+            window_shortcut: "CommandOrControl+Shift+W".to_owned(),
+            display_shortcut: "Command+Shift+3".to_owned(),
+            feedback_shortcut: "CommandOrControl+Shift+F".to_owned(),
+            ..AppSettings::default()
+        };
+        settings.recording.video_shortcut = "Alt+Shift+5".to_owned();
+        settings.recording.gif_shortcut = "CommandOrControl+Shift+6".to_owned();
+        assert_eq!(
+            macos_screenshot_hotkeys_conflicting_with(&settings),
+            vec![28]
+        );
+    }
+
+    #[test]
+    fn persists_disabled_screenshot_hotkeys_as_cfprefsd_dict_entries() {
+        let args = super::macos_screenshot_hotkey_defaults_write_args(30);
+        assert_eq!(
+            args[..5],
+            [
+                "write",
+                "com.apple.symbolichotkeys",
+                "AppleSymbolicHotKeys",
+                "-dict-add",
+                "30"
+            ]
+        );
+        assert!(args[5].contains("<key>enabled</key><false/>"));
+        assert!(args[5].contains("<integer>21</integer>"));
+        assert!(
+            super::macos_screenshot_hotkey_disabled_entry(28).contains("<integer>20</integer>")
+        );
+        assert!(
+            super::macos_screenshot_hotkey_disabled_entry(184).contains("<integer>23</integer>")
         );
     }
 

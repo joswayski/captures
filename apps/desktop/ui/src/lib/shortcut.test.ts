@@ -127,6 +127,9 @@ describe("shortcut recording", () => {
 
   it("describes native screenshot defaults for each platform", () => {
     expect(platformShortcutHelp("macos").intro).toMatch(/macOS Screenshot/);
+    expect(platformShortcutHelp("macos").takeoverBody).toMatch(
+      /unbinds overlapping Screenshot app keys/,
+    );
     expect(platformShortcutHelp("windows").intro).toMatch(/Win\+Shift\+S/);
     expect(platformShortcutHelp("linux").intro).toMatch(/GNOME\/Ubuntu/);
   });
