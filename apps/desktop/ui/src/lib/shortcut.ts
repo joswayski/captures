@@ -80,6 +80,10 @@ const SHARED_DISPLAY_NAMES: Record<string, string> = {
   control: "Ctrl",
   ctrl: "Ctrl",
   shift: "Shift",
+  PrintScreen: "PrtScn",
+  printscreen: "PrtScn",
+  prtscn: "PrtScn",
+  print: "PrtScn",
   Backquote: "`",
   Backslash: "\\",
   BracketLeft: "[",
@@ -145,9 +149,18 @@ const LINUX_DISPLAY_NAMES: Record<string, string> = {
   meta: "Super",
 };
 
+function harnessShortcutPlatform(): ShortcutPlatform | undefined {
+  if (typeof window === "undefined") return undefined;
+  const value = new URLSearchParams(window.location.search).get("platform");
+  if (value === "macos" || value === "windows" || value === "linux") return value;
+  return undefined;
+}
+
 export function detectShortcutPlatform(
   userAgent = typeof navigator === "undefined" ? "" : navigator.userAgent,
 ): ShortcutPlatform {
+  const harness = harnessShortcutPlatform();
+  if (harness) return harness;
   if (/Mac(?:intosh| OS X)/i.test(userAgent)) return "macos";
   if (/Win(?:dows)?/i.test(userAgent)) return "windows";
   return "linux";
@@ -160,9 +173,41 @@ function displayNamesFor(platform: ShortcutPlatform): Record<string, string> {
 }
 
 function modifierRequirementMessage(platform: ShortcutPlatform): string {
-  if (platform === "macos") return "Include Ctrl, Shift, Option, or Command.";
-  if (platform === "windows") return "Include Ctrl, Shift, Alt, or Win.";
-  return "Include Ctrl, Shift, Alt, or Super.";
+  if (platform === "macos") return "Include Ctrl, Shift, Option, or Command, or use Print Screen.";
+  if (platform === "windows") return "Include Ctrl, Shift, Alt, or Win, or use Print Screen.";
+  return "Include Ctrl, Shift, Alt, or Super, or use Print Screen.";
+}
+
+export function platformShortcutHelp(platform: ShortcutPlatform): {
+  intro: string;
+  takeoverTitle: string;
+  takeoverBody: string;
+} {
+  if (platform === "macos") {
+    return {
+      intro:
+        "Defaults match macOS Screenshot for full screen, region, and recording. Captures-only actions keep their own shortcuts.",
+      takeoverTitle: "macOS Screenshot shortcuts",
+      takeoverBody:
+        "Captures turns off overlapping Screenshot app keys (⌘⇧3, ⌘⇧4, ⌘⇧5) so they reach this app. Restore them in System Settings if you want both.",
+    };
+  }
+  if (platform === "windows") {
+    return {
+      intro:
+        "Defaults match Windows screenshot keys: Win+Shift+S region, PrtScn full screen, Alt+PrtScn window, and Win+Alt+R recording.",
+      takeoverTitle: "Windows screenshot shortcuts",
+      takeoverBody:
+        "Captures turns off Print Screen for Snipping Tool when it uses that key. Win+Shift+S may still open Snipping Tool until you change it in Windows keyboard settings.",
+    };
+  }
+  return {
+    intro:
+      "Defaults match GNOME/Ubuntu screenshot keys: PrtScn opens New Capture, Super+Shift+S region, Shift+PrtScn full screen, Alt+PrtScn window, and Ctrl+Shift+Alt+R recording.",
+    takeoverTitle: "GNOME screenshot shortcuts",
+    takeoverBody:
+      "Captures turns off overlapping GNOME screenshot keys when possible so they reach this app. Restore them in Keyboard settings if you want both.",
+  };
 }
 
 export function isModifierCode(code: string): boolean {
@@ -232,7 +277,7 @@ export function recordShortcut(
       message: "That key cannot be used as a global shortcut.",
     };
   }
-  if (modifiers.length === 0) {
+  if (modifiers.length === 0 && event.code !== "PrintScreen") {
     return {
       kind: "invalid",
       keys: [key],

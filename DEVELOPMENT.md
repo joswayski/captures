@@ -37,6 +37,7 @@ open "http://127.0.0.1:1420/?view=recording-hud&mock=1&stage=1"
 - `mock` installs the sample backend (`apps/desktop/ui/src/dev/previewBackend.ts`).
 - `stage` paints a sample desktop behind transparent overlay windows.
 - Other parameters set variants: `mode`, `target`, `state`, `update`, `platform`, `granted`, `drafts`.
+- `platform` selects macOS, Windows, or Linux shortcut defaults and copy in the Preferences harness (`?view=preferences&mock=1&platform=windows`).
 - Appearance follows the `captures-appearance` value in `localStorage`.
 
 The harness is dev-only and is dropped from production builds. Drop an optional

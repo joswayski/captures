@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+use std::process::Command;
+#[cfg(not(target_os = "macos"))]
+use std::sync::atomic::AtomicIsize;
 use std::{
     collections::hash_map::DefaultHasher,
     fs,
@@ -11,11 +14,6 @@ use std::{
     },
     time::{Duration, Instant},
 };
-
-#[cfg(target_os = "macos")]
-use std::process::Command;
-#[cfg(not(target_os = "macos"))]
-use std::sync::atomic::AtomicIsize;
 
 use tauri::CursorIcon;
 
@@ -277,7 +275,7 @@ pub fn run() {
             open_captures_folder,
             open_capture_history,
             open_preferences,
-            open_macos_screenshot_shortcut_settings,
+            open_system_screenshot_shortcut_settings,
             feedback::open_feedback,
             feedback::get_feedback_context,
             feedback::submit_feedback,
@@ -327,8 +325,7 @@ pub fn run() {
             recording::prune_expired_gif_sources();
             let handle = app.handle().clone();
             updates::initialize(&handle);
-            register_shortcuts(&handle)
-                .map_err(|error| tauri::Error::Anyhow(anyhow::anyhow!(error.to_string())))?;
+            register_shortcuts(&handle);
             if let Err(error) = create_overlay_window(&handle) {
                 eprintln!("failed to prepare capture overlay: {error}");
             }
@@ -2248,7 +2245,7 @@ fn open_preferences(app: AppHandle) -> CommandResult<()> {
 }
 
 #[tauri::command]
-fn open_macos_screenshot_shortcut_settings(app: AppHandle) -> CommandResult<()> {
+fn open_system_screenshot_shortcut_settings(app: AppHandle) -> CommandResult<()> {
     #[cfg(target_os = "macos")]
     {
         for url in [
@@ -2261,10 +2258,24 @@ fn open_macos_screenshot_shortcut_settings(app: AppHandle) -> CommandResult<()> 
         }
         Err("could not open Keyboard settings".to_owned())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        app.opener()
+            .open_url("ms-settings:easeofaccess-keyboard", None::<&str>)
+            .map_err(|error| error.to_string())
+    }
+    #[cfg(target_os = "linux")]
     {
         let _ = app;
-        Err("Keyboard shortcut settings are only available on macOS".to_owned())
+        for args in [
+            &["gnome-control-center", "keyboard"][..],
+            &["systemsettings", "kcm_keys"][..],
+        ] {
+            if Command::new(args[0]).args(&args[1..]).spawn().is_ok() {
+                return Ok(());
+            }
+        }
+        Err("could not open Keyboard settings".to_owned())
     }
 }
 
@@ -2789,9 +2800,11 @@ pub(crate) fn display_corner_radius_points(display_id: &str) -> f64 {
     }
 }
 
-fn register_shortcuts(app: &AppHandle) -> Result<(), AppError> {
+fn register_shortcuts(app: &AppHandle) {
     let settings = app.state::<Arc<AppState>>().settings();
-    register_shortcuts_with(app, &settings)
+    if let Err(error) = register_shortcuts_with(app, &settings) {
+        eprintln!("failed to register global shortcuts: {error}");
+    }
 }
 
 fn register_shortcuts_with(app: &AppHandle, settings: &AppSettings) -> Result<(), AppError> {
@@ -2806,6 +2819,20 @@ fn register_shortcuts_with(app: &AppHandle, settings: &AppSettings) -> Result<()
     }
     #[cfg(not(target_os = "macos"))]
     let _ = overlapping_macos_screenshot_hotkeys;
+    let overlapping_gnome_screenshot_bindings =
+        models::gnome_screenshot_bindings_conflicting_with(settings);
+    #[cfg(target_os = "linux")]
+    if !overlapping_gnome_screenshot_bindings.is_empty() {
+        disable_overlapping_gnome_screenshot_shortcuts(&overlapping_gnome_screenshot_bindings);
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = overlapping_gnome_screenshot_bindings;
+    #[cfg(target_os = "windows")]
+    if models::settings_use_print_screen(settings) {
+        disable_windows_print_screen_snipping();
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = models::settings_use_print_screen(settings);
     register_new_capture_shortcut(app, &settings.new_capture_shortcut)?;
     register_shortcut(app, &settings.region_shortcut, CaptureMode::Region)?;
     register_shortcut(app, &settings.window_shortcut, CaptureMode::Window)?;
@@ -3018,6 +3045,68 @@ fn disable_macos_screenshot_hotkeys(ids: &[u32]) -> Result<(), String> {
     let activate = "/System/Library/PrivateFrameworks/SystemAdministration.framework/Resources/activateSettings";
     if Path::new(activate).is_file() {
         let _ = Command::new(activate).arg("-u").status();
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn disable_overlapping_gnome_screenshot_shortcuts(bindings: &[models::GnomeScreenshotBinding]) {
+    if let Err(error) = disable_gnome_screenshot_bindings(bindings) {
+        eprintln!("could not disable overlapping GNOME screenshot shortcuts: {error}");
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn disable_gnome_screenshot_bindings(
+    bindings: &[models::GnomeScreenshotBinding],
+) -> Result<(), String> {
+    for binding in bindings {
+        let output = Command::new("gsettings")
+            .args(["set", binding.schema, binding.key, "[]"])
+            .output()
+            .map_err(|error| error.to_string())?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+            return Err(if stderr.is_empty() { stdout } else { stderr });
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn disable_windows_print_screen_snipping() {
+    if let Err(error) = set_windows_print_screen_snipping_enabled(false) {
+        eprintln!("could not disable Windows Print Screen snipping: {error}");
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn set_windows_print_screen_snipping_enabled(enabled: bool) -> Result<(), String> {
+    let value = if enabled { "1" } else { "0" };
+    for key in [
+        r"HKCU\Control Panel\Keyboard",
+        r"HKCU\Control Panel\Accessibility",
+    ] {
+        let output = Command::new("reg")
+            .args([
+                "add",
+                key,
+                "/v",
+                "PrintScreenKeyForSnippingEnabled",
+                "/t",
+                "REG_DWORD",
+                "/d",
+                value,
+                "/f",
+            ])
+            .output()
+            .map_err(|error| error.to_string())?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+            return Err(if stderr.is_empty() { stdout } else { stderr });
+        }
     }
     Ok(())
 }
@@ -5863,6 +5952,12 @@ mod tests {
         );
         assert!(parse_shortcut("Ctrl+Shift+Space").is_ok());
         assert!(parse_shortcut("CommandOrControl+Shift+4").is_ok());
+        assert!(parse_shortcut("PrintScreen").is_ok());
+        assert!(parse_shortcut("Shift+PrintScreen").is_ok());
+        assert!(parse_shortcut("Alt+PrintScreen").is_ok());
+        assert!(parse_shortcut("Super+Shift+S").is_ok());
+        assert!(parse_shortcut("Super+Alt+R").is_ok());
+        assert!(parse_shortcut("Control+Shift+Alt+R").is_ok());
         assert_eq!(
             parse_shortcut("CommandOrControl+Shift+4")
                 .expect("cross-platform default should parse"),
@@ -5872,6 +5967,10 @@ mod tests {
                 "Ctrl+Shift+4"
             })
             .expect("platform default should parse")
+        );
+        assert_eq!(
+            parse_shortcut("Super+Shift+S").expect("windows/linux region shortcut should parse"),
+            parse_shortcut("Super+Shift+KeyS").expect("recorded super-shift-s should parse")
         );
     }
 

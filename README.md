@@ -93,19 +93,47 @@ Preview builds update after every successful merge to `main` and may contain bug
 
 ## Shortcuts
 
-Defaults use Command on macOS and Control on Windows and Linux, matching macOS Screenshot for full screen (`3`), region (`4`), and recording (`5`):
+Defaults follow each platform’s built-in screenshot keys. Captures-only actions keep extra shortcuts.
+
+### macOS
 
 | Default shortcut | Action |
 | --- | --- |
-| `Cmd`/`Ctrl`+`Shift`+`Space` | Open New Capture |
-| `Cmd`/`Ctrl`+`Shift`+`4` | Capture a region |
-| `Cmd`/`Ctrl`+`Shift`+`W` | Capture a window |
-| `Cmd`/`Ctrl`+`Shift`+`3` | Choose a display for a full-screen screenshot |
-| `Cmd`/`Ctrl`+`Shift`+`5` | Record the screen, then save video or GIF |
-| `Cmd`/`Ctrl`+`Shift`+`F` | Open Send Feedback |
+| `Cmd`+`Shift`+`Space` | Open New Capture |
+| `Cmd`+`Shift`+`4` | Capture a region |
+| `Cmd`+`Shift`+`W` | Capture a window |
+| `Cmd`+`Shift`+`3` | Choose a display for a full-screen screenshot |
+| `Cmd`+`Shift`+`5` | Record the screen, then save video or GIF |
+| `Cmd`+`Shift`+`F` | Open Send Feedback |
 | `Esc` | Cancel an active capture, screenshot countdown, or recording countdown |
 
-Global capture and feedback shortcuts can be changed in Preferences. Installations still on the previous Control+Shift defaults are updated automatically; custom shortcuts stay as they are. On macOS, overlapping Screenshot app shortcuts (`Cmd`+`Shift`+`3` / `4` / `5`) are turned off so those keys reach Captures; restore them in System Settings → Keyboard → Keyboard Shortcuts → Screenshots if you want both.
+### Windows
+
+| Default shortcut | Action |
+| --- | --- |
+| `Ctrl`+`Shift`+`Space` | Open New Capture |
+| `Win`+`Shift`+`S` | Capture a region |
+| `Alt`+`PrtScn` | Capture a window |
+| `PrtScn` | Choose a display for a full-screen screenshot |
+| `Win`+`Alt`+`R` | Record the screen, then save video or GIF |
+| `Ctrl`+`Shift`+`F` | Open Send Feedback |
+| `Esc` | Cancel an active capture, screenshot countdown, or recording countdown |
+
+### Linux (GNOME / Ubuntu)
+
+| Default shortcut | Action |
+| --- | --- |
+| `PrtScn` | Open New Capture |
+| `Super`+`Shift`+`S` | Capture a region |
+| `Alt`+`PrtScn` | Capture a window |
+| `Shift`+`PrtScn` | Choose a display for a full-screen screenshot |
+| `Ctrl`+`Shift`+`Alt`+`R` | Record the screen, then save video or GIF |
+| `Ctrl`+`Shift`+`F` | Open Send Feedback |
+| `Esc` | Cancel an active capture, screenshot countdown, or recording countdown |
+
+Global capture and feedback shortcuts can be changed in Preferences. Installations still on earlier factory defaults (`Ctrl`+`Shift` or the shared macOS-style number keys) are updated automatically; custom shortcuts stay as they are.
+
+On macOS, overlapping Screenshot app shortcuts (`Cmd`+`Shift`+`3` / `4` / `5`) are turned off so those keys reach Captures; restore them in System Settings → Keyboard → Keyboard Shortcuts → Screenshots if you want both. On GNOME, overlapping screenshot keybindings are cleared when `gsettings` is available. On Windows, Print Screen is turned off for Snipping Tool when Captures uses that key; `Win`+`Shift`+`S` may still open Snipping Tool until you change it in Windows keyboard settings.
 
 While selecting a capture region, pick an aspect ratio in the capture menu or hold
 `Shift` for a square. In the screenshot editor, zoom with the header slider and
