@@ -108,7 +108,9 @@ selecting a capture region, pick an aspect ratio in the capture menu or hold
 `Shift` for a square. In the screenshot editor, zoom with the header slider and
 `+`/`-` controls, pinch or `Ctrl`/`Cmd`+scroll, pan with `Ctrl`/`Cmd`-drag or
 middle-click, hold `Shift` while dragging a corner handle to scale
-proportionally, and duplicate layers with `Ctrl`/`Cmd`+`D`.
+proportionally, and duplicate layers with `Ctrl`/`Cmd`+`D`. Header W×H resizes
+the canvas. Locked layers keep size and position until unlocked; layer width
+and height stay proportional.
 
 ## Development
 

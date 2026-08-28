@@ -730,17 +730,24 @@
     box-shadow var(--dur-2) var(--ease-standard);
 }
 
-.number-input:hover:not(.is-disabled) {
+.number-input:hover:not(.is-disabled):not(.is-readonly) {
   border-color: var(--border-strong);
 }
 
-.number-input:focus-within {
+.number-input:focus-within:not(.is-disabled):not(.is-readonly) {
   border-color: var(--theme-accent);
   box-shadow: var(--focus-ring-tight);
 }
 
-.number-input.is-disabled {
+.number-input.is-disabled,
+.number-input.is-readonly {
   opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.number-input.is-disabled input,
+.number-input.is-readonly input {
+  cursor: not-allowed;
 }
 
 .number-input input[type="number"] {

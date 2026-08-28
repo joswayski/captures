@@ -169,6 +169,14 @@
   background: var(--surface-sunken);
 }
 
+.screenshot-canvas-toolbar-label {
+  flex: 0 0 auto;
+  padding: 0 var(--s-3) 0 var(--s-4);
+  color: var(--editor-text-subtle);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+
 .screenshot-canvas-dim {
   display: inline-flex;
   align-items: center;
@@ -189,7 +197,7 @@
   background: transparent;
 }
 
-.screenshot-canvas-dim .number-input:focus-within {
+.screenshot-canvas-dim .number-input:focus-within:not(.is-disabled):not(.is-readonly) {
   border-color: var(--theme-accent);
   background: var(--editor-field);
 }
@@ -2442,7 +2450,7 @@
 }
 
 .screenshot-property-section input:focus,
-.screenshot-property-section .number-input:focus-within,
+.screenshot-property-section .number-input:focus-within:not(.is-disabled):not(.is-readonly),
 .screenshot-property-section select:focus,
 .screenshot-property-section textarea:focus {
   border-color: var(--theme-accent);

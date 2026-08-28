@@ -96,7 +96,7 @@ export function NumberInput({
   onTextChange,
 }: NumberInputProps) {
   const inputId = useId();
-  const showSteppers = !hideSteppers && !readOnly;
+  const showSteppers = !hideSteppers && !readOnly && !disabled;
   const canEdit = !disabled && !readOnly;
 
   const emitValue = useCallback((next: number) => {
