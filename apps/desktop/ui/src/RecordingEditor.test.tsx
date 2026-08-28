@@ -115,12 +115,27 @@ describe("RecordingEditor", () => {
       eventHandlers.set(event, handler as (event: { payload: unknown }) => void);
       return () => undefined;
     });
-    vi.mocked(invoke).mockImplementation(async (command) => {
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
       if (command === "get_recording_artifact") return artifact;
       if (command === "get_settings") return settings;
       if (command === "prepare_recording_timeline_preview") return timeline;
       if (command === "start_recording_export") return "export-1";
-      if (command === "estimate_recording_export") return { sizeBytes: 1_680_000, exact: false };
+      if (command === "estimate_recording_export") {
+        const request = args as {
+          edit?: { output_height?: number | null };
+          export?: { quality?: string };
+        } | undefined;
+        if (request?.export?.quality && request.export.quality !== "preserve") {
+          return { sizeBytes: 1_680_000, exact: false };
+        }
+        if (
+          typeof request?.edit?.output_height === "number"
+          && request.edit.output_height < artifact.height
+        ) {
+          return { sizeBytes: 1_050_000, exact: false };
+        }
+        return { sizeBytes: artifact.size_bytes, exact: true };
+      }
       if (command === "preview_recording_export") return { beforePng: [1, 2], afterPng: [3, 4] };
       if (command === "cancel_recording_export" || command === "reveal_recording_artifact") {
         return undefined;
@@ -585,6 +600,39 @@ describe("RecordingEditor", () => {
     fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
     fireEvent.click(screen.getByRole("option", { name: /Maximum file size/ }));
     expect(screen.getByText("≤ 10.0 MB")).toBeInTheDocument();
+  });
+
+  it("shows a size-change percent when output resolution shrinks the pixel dimensions", async () => {
+    render(<RecordingEditor />);
+    await screen.findByRole("heading", { name: "Edit recording" });
+
+    await waitFor(() => {
+      expect(screen.getByTitle("Estimated saved file size for the current edits and settings"))
+        .toHaveTextContent("4.2 MB");
+    }, { timeout: 3_000 });
+    expect(document.querySelector(".recording-output-estimate-delta")).toBeNull();
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Output resolution" }));
+    expect(screen.getByRole("option", { name: /Choose exact pixel dimensions/ })).toHaveTextContent(
+      "Choose exact pixel dimensions.",
+    );
+    fireEvent.click(screen.getByRole("option", { name: /Choose exact pixel dimensions/ }));
+    const customSize = document.querySelector(".editor-number-grid.dimensions");
+    expect(customSize).not.toBeNull();
+    fireEvent.change(within(customSize as HTMLElement).getByRole("spinbutton", { name: "Width" }), {
+      target: { value: "570" },
+    });
+    fireEvent.change(within(customSize as HTMLElement).getByRole("spinbutton", { name: "Height" }), {
+      target: { value: "346" },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("≈ 1.1 MB")).toBeInTheDocument();
+      expect(screen.getByText("−75%")).toBeInTheDocument();
+    }, { timeout: 3_000 });
+    expect(screen.getByText("−75%")).toHaveClass("recording-output-estimate-delta", "is-smaller");
+    expect(screen.getByRole("combobox", { name: "Save quality" }))
+      .toHaveTextContent("Preserve quality");
   });
 
   it("shows the before/after comparison in the preview when Compress is selected", async () => {

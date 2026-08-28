@@ -38,7 +38,7 @@ import {
   normalizeCustomThemeColors,
   normalizeHexColor,
 } from "../../../../shared/themes";
-import { formatFileSize } from "./lib/format";
+import { formatFileSize, formatFileSizeDelta } from "./lib/format";
 import { reconcileClipboardState } from "./lib/clipboard";
 import { stackedReleaseNotes } from "./lib/releaseNotes";
 import {
@@ -3600,16 +3600,9 @@ export function RecordingEditor() {
       : estimatedBytes === null
         ? "—"
         : `${estimateExact ? "" : "≈ "}${formatFileSize(estimatedBytes)}`;
-  const estimatedDeltaPercent = sizeMode === "compress"
-    && estimatedBytes !== null
-    && artifact.size_bytes > 0
-    ? Math.round((estimatedBytes / artifact.size_bytes - 1) * 100)
-    : null;
-  const estimatedDeltaLabel = estimatedDeltaPercent === null || estimatedDeltaPercent === 0
+  const estimatedDelta = sizeMode === "maximum" || estimatePending
     ? null
-    : estimatedDeltaPercent < 0
-      ? `−${Math.abs(estimatedDeltaPercent)}%`
-      : `+${estimatedDeltaPercent}%`;
+    : formatFileSizeDelta(estimatedBytes, artifact.size_bytes);
   const saveStatus = error
     || toast
     || (exportId ? progress?.message || exportStageLabel(progress?.stage || "preparing") : "");
@@ -4205,10 +4198,23 @@ export function RecordingEditor() {
                 {
                   value: "original",
                   label: `Original — ${baseOutputDimensions.width} × ${baseOutputDimensions.height}`,
+                  description: "Keep the recording’s pixel dimensions.",
                 },
-                { value: "1080", label: "1080p maximum" },
-                { value: "720", label: "720p maximum" },
-                { value: "custom", label: "Custom" },
+                {
+                  value: "1080",
+                  label: "1080p maximum",
+                  description: "Scale down so the video is at most 1080 pixels tall.",
+                },
+                {
+                  value: "720",
+                  label: "720p maximum",
+                  description: "Scale down so the video is at most 720 pixels tall.",
+                },
+                {
+                  value: "custom",
+                  label: "Custom",
+                  description: "Choose exact pixel dimensions.",
+                },
               ]}
               onChange={(value) => setResolution(value as typeof resolution)}
             />
@@ -4317,12 +4323,12 @@ export function RecordingEditor() {
               title="Estimated saved file size for the current edits and settings"
             >
               {estimatedSizeLabel}
-              {estimatedDeltaLabel && !estimatePending && (
+              {estimatedDelta && (
                 <span
-                  className={`recording-output-estimate-delta${estimatedDeltaPercent !== null && estimatedDeltaPercent < 0 ? " is-smaller" : " is-larger"}`}
+                  className={`recording-output-estimate-delta${estimatedDelta.percent < 0 ? " is-smaller" : " is-larger"}`}
                   title="Change versus the original recording file"
                 >
-                  {estimatedDeltaLabel}
+                  {estimatedDelta.label}
                 </span>
               )}
             </strong>

@@ -16,7 +16,7 @@ import { createPortal } from "react-dom";
 
 import { CompressionPreview } from "./CompressionPreview";
 import { sameSortedIds } from "./lib/editorPresence";
-import { formatFileSize } from "./lib/format";
+import { formatFileSize, formatFileSizeDelta } from "./lib/format";
 import {
   buildScreenshotEditorDraftPayload,
   collectDocumentImageSources,
@@ -4623,28 +4623,23 @@ export function ScreenshotEditor() {
   const maximumSizeBytes = qualityMode === "maximum"
     ? Number(maximumFileSize) * SCREENSHOT_FILE_SIZE_UNIT_BYTES[maximumFileSizeUnit]
     : null;
+  const estimatedSizeIsCap = maximumSizeBytes !== null
+    && Number.isFinite(maximumSizeBytes)
+    && maximumSizeBytes >= 10_000
+    && estimatedBytes !== null
+    && estimatedBytes > maximumSizeBytes
+    && (exportFormat === "jpeg" || exportFormat === "webp");
   const estimatedSizeLabel = estimatePending && estimatedBytes === null
     ? "Estimating…"
     : estimatedBytes === null
       ? "—"
-      : maximumSizeBytes !== null
-        && Number.isFinite(maximumSizeBytes)
-        && maximumSizeBytes >= 10_000
-        && estimatedBytes > maximumSizeBytes
-        && (exportFormat === "jpeg" || exportFormat === "webp")
-        ? `≤ ${formatFileSize(maximumSizeBytes)}`
+      : estimatedSizeIsCap
+        ? `≤ ${formatFileSize(maximumSizeBytes ?? 0)}`
         : `≈ ${formatFileSize(estimatedBytes)}`;
-  // Size change versus the original file, matching the in-editor compare −N%.
-  const estimatedDeltaPercent = qualityMode !== "preserve"
-    && estimatedBytes !== null
-    && artifact.size_bytes > 0
-    ? Math.round((estimatedBytes / artifact.size_bytes - 1) * 100)
-    : null;
-  const estimatedDeltaLabel = estimatedDeltaPercent === null || estimatedDeltaPercent === 0
+  // Versus the original file — shrinking pixels, compressing, or both.
+  const estimatedDelta = estimatedSizeIsCap || estimatePending
     ? null
-    : estimatedDeltaPercent < 0
-      ? `−${Math.abs(estimatedDeltaPercent)}%`
-      : `+${estimatedDeltaPercent}%`;
+    : formatFileSizeDelta(estimatedBytes, artifact.size_bytes);
   const formatLabel = exportFormat === "jpeg"
     ? "JPEG"
     : exportFormat === "webp"
@@ -6292,10 +6287,26 @@ export function ScreenshotEditor() {
                 value={exportSize}
                 ariaLabel="Output size"
                 options={[
-                  { value: "original", label: "Original" },
-                  { value: "75", label: "75%" },
-                  { value: "50", label: "50%" },
-                  { value: "custom", label: "Custom" },
+                  {
+                    value: "original",
+                    label: "Original",
+                    description: "Keep the capture’s pixel dimensions.",
+                  },
+                  {
+                    value: "75",
+                    label: "75%",
+                    description: "Save at 75% of the pixel width and height.",
+                  },
+                  {
+                    value: "50",
+                    label: "50%",
+                    description: "Save at half the pixel width and height.",
+                  },
+                  {
+                    value: "custom",
+                    label: "Custom",
+                    description: "Choose exact pixel dimensions.",
+                  },
                 ]}
                 onChange={(value) => {
                   const next = value as ExportSize;
@@ -6432,12 +6443,12 @@ export function ScreenshotEditor() {
               title="Estimated export file size for the current format, quality, and output size"
             >
               {estimatedSizeLabel}
-              {estimatedDeltaLabel && !estimatePending && (
+              {estimatedDelta && (
                 <span
-                  className={`screenshot-output-estimate-delta${estimatedDeltaPercent !== null && estimatedDeltaPercent < 0 ? " is-smaller" : " is-larger"}`}
+                  className={`screenshot-output-estimate-delta${estimatedDelta.percent < 0 ? " is-smaller" : " is-larger"}`}
                   title="Change from the original file size"
                 >
-                  {estimatedDeltaLabel}
+                  {estimatedDelta.label}
                 </span>
               )}
             </strong>

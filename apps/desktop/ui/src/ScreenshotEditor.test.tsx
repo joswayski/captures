@@ -2347,6 +2347,8 @@ describe("ScreenshotEditor", () => {
       await waitFor(() => {
         expect(screen.getByText("≈ 250 KB")).toBeInTheDocument();
       }, { timeout: 2_000 });
+      expect(screen.queryByText("−0%")).not.toBeInTheDocument();
+      expect(document.querySelector(".screenshot-output-estimate-delta")).toBeNull();
       // Browser re-encode path should not run for the unedited original estimate.
       expect(toBlob).not.toHaveBeenCalled();
     } finally {
@@ -2359,7 +2361,7 @@ describe("ScreenshotEditor", () => {
     await screen.findByLabelText("Width");
 
     fireEvent.click(screen.getByRole("combobox", { name: "Output size" }));
-    fireEvent.click(screen.getByRole("option", { name: "Custom" }));
+    fireEvent.click(screen.getByRole("option", { name: /Choose exact pixel dimensions/ }));
     const width = screen.getByRole("spinbutton", { name: "Custom output width" });
     const height = screen.getByRole("spinbutton", { name: "Custom output height" });
     expect(width).toHaveValue(1_440);
@@ -2371,6 +2373,50 @@ describe("ScreenshotEditor", () => {
     fireEvent.change(height, { target: { value: "500" } });
     expect(width).toHaveValue(720);
     expect(height).toHaveValue(500);
+  });
+
+  it("shows a size-change percent when output size shrinks the pixel dimensions", async () => {
+    const restoreCanvas = installExportableCanvas();
+    Object.defineProperty(HTMLCanvasElement.prototype, "toBlob", {
+      configurable: true,
+      value: function toBlob(this: HTMLCanvasElement, callback: BlobCallback, type?: string) {
+        const pixels = Math.max(1, this.width * this.height);
+        const size = Math.max(1, Math.round(pixels * 0.12));
+        const bytes = new Uint8Array(size);
+        const blob = new Blob([bytes], { type: type ?? "image/png" });
+        if (typeof blob.arrayBuffer !== "function") {
+          Object.defineProperty(blob, "arrayBuffer", {
+            value: async () => bytes.buffer,
+          });
+        }
+        callback(blob);
+      },
+    });
+    try {
+      render(<ScreenshotEditor />);
+      await screen.findByLabelText("Width");
+      await waitFor(() => {
+        expect(screen.getByText("≈ 250 KB")).toBeInTheDocument();
+      }, { timeout: 2_000 });
+      expect(document.querySelector(".screenshot-output-estimate-delta")).toBeNull();
+
+      fireEvent.click(screen.getByRole("combobox", { name: "Output size" }));
+      expect(screen.getByRole("option", { name: /half the pixel width/ })).toHaveTextContent(
+        "Save at half the pixel width and height.",
+      );
+      fireEvent.click(screen.getByRole("option", { name: /half the pixel width/ }));
+
+      // 1440×900 → 720×450; 0.12 bytes/pixel ≈ 38.9 KB vs the 250 KB original.
+      await waitFor(() => {
+        expect(screen.getByText("≈ 38.9 KB")).toBeInTheDocument();
+        expect(screen.getByText("−84%")).toBeInTheDocument();
+      }, { timeout: 2_000 });
+      expect(screen.getByText("−84%")).toHaveClass("screenshot-output-estimate-delta", "is-smaller");
+      expect(screen.getByRole("combobox", { name: "Save quality" }))
+        .toHaveTextContent("Preserve quality");
+    } finally {
+      restoreCanvas();
+    }
   });
 
   it("shows an estimated export size when format and quality change", async () => {
