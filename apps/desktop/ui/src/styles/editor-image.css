@@ -327,7 +327,8 @@
 }
 
 .screenshot-canvas-bg-menu .screenshot-color-field.compact > div {
-  gap: var(--s-2);
+  gap: var(--s-4);
+  padding: var(--s-2) var(--s-1);
 }
 
 .screenshot-editor-history-actions {
@@ -2770,8 +2771,11 @@
 
 .screenshot-color-field > div {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--s-2);
+  /* 10px: selection ring is 4px outside each swatch; keep a sliver between rings. */
+  gap: calc(var(--s-4) + var(--s-1));
+  padding: var(--s-2) var(--s-1);
 }
 
 .screenshot-color-field button,
@@ -2781,7 +2785,6 @@
   width: 24px;
   height: 24px;
   flex: 0 0 auto;
-  overflow: hidden;
   border: 1px solid var(--border-strong);
   border-radius: 50%;
   padding: 0;
@@ -2795,6 +2798,7 @@
 }
 
 .screenshot-custom-color {
+  overflow: hidden;
   border-radius: var(--r-sm);
   background: conic-gradient(#f44, #ff4, #4f4, #4ff, #44f, #f4f, #f44);
   cursor: pointer;
