@@ -271,9 +271,15 @@
     margin: 0;
     padding: 0;
     border: 0;
+    outline: none;
     background: rgba(24, 24, 27, 0.92);
     color: var(--theme-web-surface);
     overscroll-behavior: none;
+  }
+
+  .product-lightbox:focus,
+  .product-lightbox:focus-visible {
+    outline: none;
   }
 
   .product-lightbox::backdrop {
