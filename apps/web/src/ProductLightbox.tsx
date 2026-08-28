@@ -3,14 +3,16 @@ import { useEffect, useId, useRef, useState, type PointerEvent as ReactPointerEv
 import type { ProductShot } from "./productShots";
 import {
   FIT_TRANSFORM,
+  MAX_SCALE,
+  ZOOM_BUTTON_FACTOR,
   clampPan,
-  isDoubleTap,
   pointerDistance,
   pointerMidpoint,
   scaleAroundPoint,
   shouldCloseOnSwipe,
   toggleZoom,
   wheelScaleFactor,
+  zoomFromCenter,
   type Point,
   type Size,
   type ZoomTransform,
@@ -35,7 +37,6 @@ export default function ProductLightbox({ open, src, shot, onClose }: ProductLig
   const pinchRef = useRef<{ distance: number; transform: ZoomTransform } | null>(null);
   const panRef = useRef<{ x: number; y: number; transform: ZoomTransform } | null>(null);
   const gestureStartRef = useRef<{ x: number; y: number; onImage: boolean } | null>(null);
-  const lastTapRef = useRef<{ time: number; x: number; y: number } | null>(null);
   const movedRef = useRef(false);
   const [zoom, setZoom] = useState<ZoomTransform>(FIT_TRANSFORM);
   const [settling, setSettling] = useState(false);
@@ -45,6 +46,18 @@ export default function ProductLightbox({ open, src, shot, onClose }: ProductLig
     zoomRef.current = clamped;
     setSettling(animate);
     setZoom(clamped);
+  }
+
+  function zoomBy(factor: number) {
+    commit(
+      zoomFromCenter(
+        zoomRef.current,
+        zoomRef.current.scale * factor,
+        viewportSizeRef.current,
+        fittedRef.current,
+      ),
+      true,
+    );
   }
 
   useEffect(() => {
@@ -213,24 +226,17 @@ export default function ProductLightbox({ open, src, shot, onClose }: ProductLig
       onClose();
       return;
     }
-    if (moved) return;
+    if (moved || !onImage) return;
 
-    const point = viewportPoint(event.clientX, event.clientY);
-    if (onImage) {
-      const now = event.timeStamp;
-      const tapPoint = { x: event.clientX, y: event.clientY };
-      const doubled =
-        event.pointerType !== "mouse" && isDoubleTap(lastTapRef.current, tapPoint, now);
-      if (event.pointerType === "mouse" || doubled) {
-        lastTapRef.current = null;
-        commit(toggleZoom(zoomRef.current, point, viewportSizeRef.current, fittedRef.current), true);
-        return;
-      }
-      lastTapRef.current = { time: now, x: tapPoint.x, y: tapPoint.y };
-      return;
-    }
-
-    if (zoomRef.current.scale <= 1.05) onClose();
+    commit(
+      toggleZoom(
+        zoomRef.current,
+        viewportPoint(event.clientX, event.clientY),
+        viewportSizeRef.current,
+        fittedRef.current,
+      ),
+      true,
+    );
   }
 
   function handlePointerCancel() {
@@ -248,23 +254,40 @@ export default function ProductLightbox({ open, src, shot, onClose }: ProductLig
   }
 
   const zoomed = zoom.scale > 1.05;
+  const atMinZoom = zoom.scale <= 1.05;
+  const atMaxZoom = zoom.scale >= MAX_SCALE - 0.01;
 
   return (
-    <dialog
-      ref={dialogRef}
-      className="product-lightbox"
-      aria-labelledby={titleId}
-      onClick={(event) => {
-        if (event.target === event.currentTarget && zoomRef.current.scale <= 1.05) onClose();
-      }}
-    >
+    <dialog ref={dialogRef} className="product-lightbox" aria-labelledby={titleId}>
       <h2 id={titleId} className="sr-only">
         {shot.title}
       </h2>
-      <button type="button" className="product-lightbox-close" onClick={onClose}>
-        <CloseIcon />
-        <span className="sr-only">Close</span>
-      </button>
+      <div className="product-lightbox-toolbar">
+        <div className="product-lightbox-zoom-cluster">
+          <button
+            type="button"
+            className="product-lightbox-tool"
+            aria-label="Zoom out"
+            disabled={atMinZoom}
+            onClick={() => zoomBy(1 / ZOOM_BUTTON_FACTOR)}
+          >
+            <MinusIcon />
+          </button>
+          <button
+            type="button"
+            className="product-lightbox-tool"
+            aria-label="Zoom in"
+            disabled={atMaxZoom}
+            onClick={() => zoomBy(ZOOM_BUTTON_FACTOR)}
+          >
+            <PlusIcon />
+          </button>
+        </div>
+        <button type="button" className="product-lightbox-tool" onClick={onClose}>
+          <CloseIcon />
+          <span className="sr-only">Close</span>
+        </button>
+      </div>
       <div
         ref={viewportRef}
         className={zoomed ? "product-lightbox-viewport is-zoomed" : "product-lightbox-viewport"}
@@ -287,7 +310,7 @@ export default function ProductLightbox({ open, src, shot, onClose }: ProductLig
       <p className="product-lightbox-hint">
         {shot.title}
         <span aria-hidden="true"> · </span>
-        Pinch, double-tap, or click to zoom
+        {zoomed ? "Drag to pan" : "Tap image or + to zoom"}
       </p>
     </dialog>
   );
@@ -306,6 +329,40 @@ function CloseIcon() {
       aria-hidden="true"
     >
       <path d="M4 4l8 8M12 4l-8 8" />
+    </svg>
+  );
+}
+
+function PlusIcon() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <path d="M8 3.5v9M3.5 8h9" />
+    </svg>
+  );
+}
+
+function MinusIcon() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <path d="M3.5 8h9" />
     </svg>
   );
 }

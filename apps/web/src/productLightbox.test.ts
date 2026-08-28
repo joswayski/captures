@@ -18,6 +18,7 @@ import {
   shouldCloseOnSwipe,
   toggleZoom,
   wheelScaleFactor,
+  zoomFromCenter,
 } from "./productLightbox.ts";
 
 const viewport = { width: 400, height: 800 };
@@ -70,6 +71,13 @@ test("toggle zoom enlarges from the tap, then returns to fit", () => {
   const zoomed = toggleZoom(FIT_TRANSFORM, pivot, viewport, fitted);
   assert.equal(zoomed.scale, DOUBLE_TAP_SCALE);
   assert.deepEqual(toggleZoom(zoomed, pivot, viewport, fitted), FIT_TRANSFORM);
+});
+
+test("center zoom buttons keep the shot in the middle of the viewport", () => {
+  const next = zoomFromCenter(FIT_TRANSFORM, 2, viewport, { width: 400, height: 700 });
+  assert.equal(next.scale, 2);
+  assert.equal(next.x, 0);
+  assert.equal(next.y, 0);
 });
 
 test("wheel zoom is exponential and bounded", () => {

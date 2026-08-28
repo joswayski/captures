@@ -35,6 +35,7 @@ export default function ProductGallery() {
   const previous = useCallback(() => goTo(index - 1), [goTo, index]);
   const next = useCallback(() => goTo(index + 1), [goTo, index]);
   const closeLightbox = useCallback(() => setLightboxOpen(false), []);
+  const openLightbox = useCallback(() => setLightboxOpen(true), []);
 
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (lightboxOpen) return;
@@ -50,6 +51,9 @@ export default function ProductGallery() {
     } else if (event.key === "End") {
       event.preventDefault();
       goTo(lastIndex);
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      openLightbox();
     }
   }
 
@@ -78,12 +82,12 @@ export default function ProductGallery() {
     swipeStart.current = null;
   }
 
-  function handleOpenClick() {
+  function handleFrameClick() {
     if (suppressClick.current) {
       suppressClick.current = false;
       return;
     }
-    setLightboxOpen(true);
+    openLightbox();
   }
 
   return (
@@ -109,29 +113,18 @@ export default function ProductGallery() {
           onPointerDown={handlePointerDown}
           onPointerUp={handlePointerUp}
           onPointerCancel={handlePointerCancel}
+          onClick={handleFrameClick}
         >
-          <button
-            type="button"
-            className="product-gallery-open"
-            aria-haspopup="dialog"
-            aria-expanded={lightboxOpen}
-            aria-label={`Enlarge screenshot: ${shot.title}`}
-            onClick={handleOpenClick}
-          >
-            <img
-              key={shot.file}
-              className="product-gallery-image"
-              src={src}
-              alt={shot.alt}
-              width={shot.width}
-              height={shot.height}
-              decoding="async"
-              draggable={false}
-            />
-            <span className="product-gallery-zoom-hint" aria-hidden="true">
-              <ExpandIcon />
-            </span>
-          </button>
+          <img
+            key={shot.file}
+            className="product-gallery-image"
+            src={src}
+            alt={shot.alt}
+            width={shot.width}
+            height={shot.height}
+            decoding="async"
+            draggable={false}
+          />
         </div>
 
         <div className="mt-4 flex items-start justify-between gap-3">
@@ -147,6 +140,19 @@ export default function ProductGallery() {
         <p className="sr-only" aria-live="polite">
           Screenshot {index + 1} of {PRODUCT_SHOTS.length}: {shot.title}
         </p>
+
+        <div className="mt-3 flex items-center justify-between gap-3">
+          <button
+            type="button"
+            className="gallery-enlarge"
+            aria-haspopup="dialog"
+            aria-expanded={lightboxOpen}
+            onClick={openLightbox}
+          >
+            <ExpandIcon />
+            Tap to enlarge
+          </button>
+        </div>
 
         <div className="mt-4 flex items-center justify-between gap-3">
           <button type="button" className="gallery-nav" onClick={previous}>
@@ -202,13 +208,14 @@ function ExpandIcon() {
   return (
     <svg
       viewBox="0 0 16 16"
-      width="13"
-      height="13"
+      width="12"
+      height="12"
       fill="none"
       stroke="currentColor"
       strokeWidth="1.6"
       strokeLinecap="round"
       strokeLinejoin="round"
+      aria-hidden="true"
     >
       <path d="M3 6.5V3h3.5M13 9.5V13H9.5M13 3 9.2 6.8M3 13l3.8-3.8" />
     </svg>

@@ -1,6 +1,7 @@
 export const MIN_SCALE = 1;
 export const MAX_SCALE = 4;
 export const DOUBLE_TAP_SCALE = 2.5;
+export const ZOOM_BUTTON_FACTOR = 1.4;
 export const SWIPE_THRESHOLD_PX = 48;
 export const TAP_SLOP_PX = 12;
 export const DOUBLE_TAP_MS = 320;
@@ -87,6 +88,21 @@ export function toggleZoom(
 ): ZoomTransform {
   if (current.scale > 1.05) return FIT_TRANSFORM;
   return scaleAroundPoint(current, DOUBLE_TAP_SCALE, pivot, viewport, fitted);
+}
+
+export function zoomFromCenter(
+  current: ZoomTransform,
+  nextScale: number,
+  viewport: Size,
+  fitted: Size,
+): ZoomTransform {
+  return scaleAroundPoint(
+    current,
+    nextScale,
+    { x: viewport.width / 2, y: viewport.height / 2 },
+    viewport,
+    fitted,
+  );
 }
 
 export function wheelScaleFactor(deltaY: number) {
