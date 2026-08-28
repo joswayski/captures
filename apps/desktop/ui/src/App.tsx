@@ -151,6 +151,7 @@ const THUMBNAIL_DELETE_FALLBACK_MS = 3_200;
 const THUMBNAIL_SAVED_FEEDBACK_MS = 1_000;
 const THUMBNAIL_HIT_TEST_CHANGED_EVENT = "captures-thumbnail-hit-test-changed";
 const RECORDING_SELECTOR_REVEAL_FALLBACK_MS = 200;
+const CAPTURE_OVERLAY_REVEAL_FALLBACK_MS = 400;
 const RECORDING_COUNTDOWN_FADE_OUT_MS = 180;
 const COUNTDOWN_SECONDS = Array.from({ length: 11 }, (_, seconds) => seconds);
 
@@ -4660,49 +4661,70 @@ function CaptureOverlay() {
     : { width: 0, height: 0 };
   const surfaceSize = useElementCssSize(surfaceRef, displayOverlay);
 
-  const revealOverlay = useCallback(async () => {
+  const wakeOverlay = useCallback(() => {
+    if (!sessionId) return Promise.resolve();
+    return invoke("show_capture_overlay", { sessionId });
+  }, [sessionId]);
+
+  const revealOverlay = useCallback(() => {
     if (!sessionId) return;
     if (revealingSessionIdRef.current === sessionId) return;
     revealingSessionIdRef.current = sessionId;
     const shouldPrimeRegionOverlay = mode === "region" && !regionOverlayWarmedRef.current;
-    try {
-      await invoke("show_capture_overlay", { sessionId });
-    } catch {
-      if (revealingSessionIdRef.current === sessionId) revealingSessionIdRef.current = null;
-      return;
-    }
-    if (shouldPrimeRegionOverlay) {
-      // Keep the shade at rest while the snapshot paints under native alpha 0.
-      // The snapshot itself is always CSS-opaque; only the dim fades in after
-      // reveal so live/frozen editor chrome never crossfades.
-      setPrimingSessionId(sessionId);
-    }
-    afterNextPaint(() => {
-      if (activeSessionIdRef.current !== sessionId) return;
-      // Native reveal makes the already-painted snapshot fully opaque, then
-      // focuses the overlay under cover of that frame (macOS). Fade only the
-      // shade / chrome after that so open editors cannot shimmer.
-      void invoke("reveal_capture_overlay", { sessionId }).then(() => {
-        if (shouldPrimeRegionOverlay) regionOverlayWarmedRef.current = true;
-        requestAnimationFrame(() => {
-          if (activeSessionIdRef.current !== sessionId) return;
+    void wakeOverlay().then(() => {
+      if (shouldPrimeRegionOverlay) {
+        // Keep the shade at rest while the snapshot paints under native alpha.
+        // The snapshot itself is always CSS-opaque; only the dim fades in after
+        // reveal so live/frozen editor chrome never crossfades.
+        setPrimingSessionId(sessionId);
+      }
+      let revealed = false;
+      const finishReveal = () => {
+        if (revealed || activeSessionIdRef.current !== sessionId) return;
+        revealed = true;
+        window.clearTimeout(fallbackTimer);
+        // Native reveal makes the already-painted snapshot fully opaque, then
+        // focuses the overlay under cover of that frame (macOS). Fade only the
+        // shade / chrome after that so open editors cannot shimmer.
+        void invoke("reveal_capture_overlay", { sessionId }).then(() => {
+          if (shouldPrimeRegionOverlay) regionOverlayWarmedRef.current = true;
+          requestAnimationFrame(() => {
+            if (activeSessionIdRef.current !== sessionId) return;
+            setPrimingSessionId(null);
+            setVisibleSessionId(sessionId);
+          });
+        }).catch(() => {
           setPrimingSessionId(null);
-          setVisibleSessionId(sessionId);
+          setVisibleSessionId(null);
+          if (revealingSessionIdRef.current === sessionId) revealingSessionIdRef.current = null;
         });
-      }).catch(() => {
-        setPrimingSessionId(null);
-        setVisibleSessionId(null);
-        if (revealingSessionIdRef.current === sessionId) revealingSessionIdRef.current = null;
-      });
+      };
+      afterNextPaint(finishReveal);
+      // WebKit can suspend requestAnimationFrame at near-zero opacity. Always
+      // reveal after a short deadline once the snapshot has asked to paint.
+      const fallbackTimer = window.setTimeout(
+        finishReveal,
+        CAPTURE_OVERLAY_REVEAL_FALLBACK_MS,
+      );
+    }).catch(() => {
+      if (revealingSessionIdRef.current === sessionId) revealingSessionIdRef.current = null;
     });
-  }, [mode, sessionId]);
+  }, [mode, sessionId, wakeOverlay]);
 
-  // Safety: if snapshot onLoad never fires, still show the overlay.
+  // Wake the overlay as soon as a session exists so a hidden WKWebView will
+  // load the snapshot. Do not reveal here — that used to race the image decode
+  // and flash a black unpainted surface.
+  useEffect(() => {
+    if (!session?.id) return;
+    void wakeOverlay().catch(() => undefined);
+  }, [session?.id, wakeOverlay]);
+
+  // Safety: if snapshot onLoad never fires, still reveal so capture is not stuck.
   useEffect(() => {
     if (!session?.id) return;
     const timer = window.setTimeout(() => {
       void revealOverlay();
-    }, 120);
+    }, CAPTURE_OVERLAY_REVEAL_FALLBACK_MS);
     return () => window.clearTimeout(timer);
   }, [session?.id, revealOverlay]);
 

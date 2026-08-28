@@ -1040,27 +1040,29 @@ fn show_capture_overlay(
         window
             .set_cursor_icon(cursor)
             .map_err(|error| error.to_string())?;
+        // Keep the overlay click-through until the frozen snapshot is painted.
+        // Otherwise an early wake (needed so WKWebView will load the image)
+        // steals pointer events from the desktop.
+        window
+            .set_ignore_cursor_events(true)
+            .map_err(|error| error.to_string())?;
         #[cfg(target_os = "macos")]
-        captures_macos_window::prepare_capture_overlay(&window).map_err(str::to_owned)?;
-        // Focusing the overlay activates Captures and would otherwise leave
-        // open editors/history windows frontmost after the overlay hides.
-        // Remember the user's app first so hide_capture_overlay can restore it.
-        #[cfg(target_os = "macos")]
-        captures_macos_window::remember_frontmost_app_before_activation();
-        window.show().map_err(|error| error.to_string())?;
-        // On macOS keep the overlay unfocused until the frozen snapshot is
-        // fully opaque (reveal_capture_overlay). Focusing here deactivates
-        // open editors while the overlay is still alpha-0, which changes
-        // their AppKit drop shadow / titlebar chrome and produces a visible
-        // glow flicker against the still-active snapshot pixels.
-        // Non-macOS has no native alpha gate, so focus immediately.
+        {
+            // Focusing the overlay activates Captures and would otherwise leave
+            // open editors/history windows frontmost after the overlay hides.
+            captures_macos_window::remember_frontmost_app_before_activation();
+            // Do not call Tauri `show()` here: it uses `makeKeyAndOrderFront:`
+            // and can flash a black unpainted WKWebView. Present at a tiny
+            // alpha without taking key focus until reveal_capture_overlay.
+            captures_macos_window::present_capture_overlay(&window).map_err(str::to_owned)?;
+            let _ = mode;
+        }
         #[cfg(not(target_os = "macos"))]
         {
+            window.show().map_err(|error| error.to_string())?;
             window.set_focus().map_err(|error| error.to_string())?;
             let _ = mode;
         }
-        #[cfg(target_os = "macos")]
-        let _ = mode;
         Ok(())
     } else {
         Err("capture overlay is unavailable".to_owned())
@@ -1083,6 +1085,9 @@ fn reveal_capture_overlay(
     let window = app
         .get_webview_window("overlay")
         .ok_or_else(|| "capture overlay is unavailable".to_owned())?;
+    window
+        .set_ignore_cursor_events(false)
+        .map_err(|error| error.to_string())?;
     #[cfg(target_os = "macos")]
     {
         // Opaque frozen frame first, then take key focus so sibling document
@@ -1098,7 +1103,7 @@ fn reveal_capture_overlay(
             .map_err(str::to_owned)?;
     }
     #[cfg(not(target_os = "macos"))]
-    let _ = (window, mode);
+    let _ = mode;
     Ok(())
 }
 
@@ -3174,6 +3179,20 @@ fn show_capture_window(app: &AppHandle, session: &ActiveSession) {
             if let Err(error) = captures_macos_window::cover_display(&window, &display.id) {
                 eprintln!("failed to cover the capture display: {error}");
             }
+            #[cfg(target_os = "macos")]
+            {
+                // Wake WKWebView at an imperceptible alpha before React sets the
+                // snapshot src. A hidden or fully transparent webview defers
+                // image loading, then the first opaque frame is an unpainted
+                // black layer.
+                captures_macos_window::remember_frontmost_app_before_activation();
+                if let Err(error) = window.set_ignore_cursor_events(true) {
+                    eprintln!("failed to ignore overlay cursor events while priming: {error}");
+                }
+                if let Err(error) = captures_macos_window::present_capture_overlay(&window) {
+                    eprintln!("failed to present the capture overlay: {error}");
+                }
+            }
             #[cfg(target_os = "linux")]
             let _ = window.set_fullscreen(wayland_session());
             if let Err(error) = handle.emit("capture-session-ready", &session) {
@@ -4763,6 +4782,7 @@ fn hide_capture_overlay(app: &AppHandle) {
     #[cfg(target_os = "macos")]
     captures_macos_window::restore_frontmost_app_after_capture();
     if let Some(window) = app.get_webview_window("overlay") {
+        let _ = window.set_ignore_cursor_events(false);
         let _ = window.hide();
         let _ = window.set_cursor_icon(CursorIcon::Default);
         #[cfg(target_os = "macos")]
