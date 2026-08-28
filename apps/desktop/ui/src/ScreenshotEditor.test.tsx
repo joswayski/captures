@@ -1240,7 +1240,7 @@ describe("ScreenshotEditor", () => {
 
   it("lets a selected drawing toggle a drop shadow", async () => {
     render(<ScreenshotEditor />);
-    await screen.findByLabelText("Width");
+    await screen.findByLabelText("Canvas width");
 
     fireEvent.click(screen.getByRole("button", { name: "Arrow (A)" }));
     const defaults = screen.getByRole("checkbox", { name: "Drop shadow" });
