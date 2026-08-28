@@ -3516,22 +3516,24 @@ export function RecordingEditor() {
   }, [artifact, buildExportRequestSpecs, revokeCompressPreviewUrls]);
 
   const canPreviewCompression = sizeMode === "compress" || sizeMode === "maximum";
-  const comparePlayhead = previewPlaying ? null : playheadMs;
+  const showCompressCompare = canPreviewCompression && !previewPlaying;
 
-  // Encode a fresh sample whenever compress/maximum is active. Pause the
-  // playhead refresh while the preview is playing so we don't re-encode every frame.
+  const clearCompressPreview = useCallback(() => {
+    compressPreviewRequestRef.current += 1;
+    revokeCompressPreviewUrls();
+    setCompressPreviewPending(false);
+    setCompressPreviewError("");
+  }, [revokeCompressPreviewUrls]);
+
+  // Encode a fresh sample whenever compress/maximum is active. Skip while the
+  // preview is playing so we don't re-encode every frame; compare hides then too.
   useEffect(() => {
-    if (!canPreviewCompression) {
-      revokeCompressPreviewUrls();
-      setCompressPreviewPending(false);
-      setCompressPreviewError("");
-      return;
-    }
+    if (!canPreviewCompression || previewPlaying) return;
     const timer = window.setTimeout(() => {
       void loadCompressPreview();
     }, 350);
     return () => window.clearTimeout(timer);
-  }, [canPreviewCompression, comparePlayhead, loadCompressPreview, revokeCompressPreviewUrls]);
+  }, [canPreviewCompression, loadCompressPreview, playheadMs, previewPlaying]);
 
   const exportFingerprint = artifact ? recordingEditorFingerprint({
     artifact: artifact.id,
@@ -3970,7 +3972,7 @@ export function RecordingEditor() {
             ) : (
               <img src={artifact.media_url} alt="Animated GIF preview" />
             )}
-            {canPreviewCompression && (
+            {showCompressCompare && (
               <CompressionPreview
                 className="is-embed is-cover"
                 beforeUrl={compressPreviewBeforeUrl}
@@ -4249,6 +4251,9 @@ export function RecordingEditor() {
               onChange={(value) => {
                 const mode = value as typeof sizeMode;
                 setSizeMode(mode);
+                if (mode === "preserve") {
+                  clearCompressPreview();
+                }
               }}
             />
           </div>

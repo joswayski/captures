@@ -541,6 +541,8 @@ describe("RecordingEditor", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Animated GIF" }));
     expect(screen.queryByRole("combobox", { name: "GIF palette" })).not.toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Compression comparison" }))
+      .toBeInTheDocument();
     const quality = screen.getByRole("combobox", { name: "Compression quality" });
     fireEvent.click(quality);
     fireEvent.click(screen.getByRole("option", { name: /Tiny/ }));
@@ -590,8 +592,10 @@ describe("RecordingEditor", () => {
     const revokeObjectURL = vi.fn();
     Object.assign(URL, { createObjectURL, revokeObjectURL });
 
-    render(<RecordingEditor />);
+    const { container } = render(<RecordingEditor />);
     await screen.findByRole("heading", { name: "Edit recording" });
+    const video = container.querySelector<HTMLVideoElement>("video");
+    expect(video).not.toBeNull();
 
     expect(screen.queryByRole("button", { name: "Compare before / after" }))
       .not.toBeInTheDocument();
@@ -616,6 +620,23 @@ describe("RecordingEditor", () => {
     });
     expect(screen.getByAltText("Before compression")).toHaveAttribute("src", "blob:recording-preview");
     expect(screen.getByAltText("After compression")).toHaveAttribute("src", "blob:recording-preview");
+
+    fireEvent.play(video!);
+    expect(screen.queryByRole("group", { name: "Compression comparison" }))
+      .not.toBeInTheDocument();
+    fireEvent.pause(video!);
+    expect(screen.getByRole("group", { name: "Compression comparison" }))
+      .toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
+    fireEvent.click(screen.getByRole("option", { name: /Maximum file size/ }));
+    expect(screen.getByRole("group", { name: "Compression comparison" }))
+      .toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
+    fireEvent.click(screen.getByRole("option", { name: /Preserve quality/ }));
+    expect(screen.queryByRole("group", { name: "Compression comparison" }))
+      .not.toBeInTheDocument();
   });
 
   it("uses shared accessible controls for output format and recorded-audio volume", async () => {

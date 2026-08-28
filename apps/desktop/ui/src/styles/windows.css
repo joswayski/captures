@@ -2349,6 +2349,15 @@
   z-index: 1;
   background-color: #050506;
   background-image: none;
+  pointer-events: none;
+}
+
+.compression-preview-frame.is-cover .compression-preview-after-clip {
+  pointer-events: none;
+}
+
+.compression-preview-frame.is-cover .compression-preview-range {
+  pointer-events: auto;
 }
 
 .compression-preview-frame[data-pending="true"] {

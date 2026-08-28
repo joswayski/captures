@@ -2301,6 +2301,15 @@ describe("ScreenshotEditor", () => {
     expect(screen.getByRole("combobox", { name: "Save quality" }))
       .toHaveTextContent("Maximum file size");
     expect(screen.getByRole("spinbutton", { name: "Maximum file size" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Compression comparison" }))
+      .toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
+    fireEvent.click(screen.getByRole("option", { name: /Preserve quality/ }));
+    expect(screen.queryByRole("group", { name: "Compression comparison" }))
+      .not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Compression quality" }))
+      .not.toBeInTheDocument();
     } finally {
       restoreCanvas();
     }

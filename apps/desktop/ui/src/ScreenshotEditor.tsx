@@ -4581,14 +4581,7 @@ export function ScreenshotEditor() {
   ]);
 
   useEffect(() => {
-    if (!canPreviewCompression) {
-      revokeCompressPreviewUrls();
-      setCompressPreviewPending(false);
-      setCompressPreviewError("");
-      setCompressPreviewBeforeBytes(null);
-      setCompressPreviewAfterBytes(null);
-      return;
-    }
+    if (!canPreviewCompression) return;
     const timer = window.setTimeout(() => {
       void loadCompressPreview();
     }, 280);
@@ -4602,7 +4595,6 @@ export function ScreenshotEditor() {
     maximumFileSize,
     maximumFileSizeUnit,
     qualityMode,
-    revokeCompressPreviewUrls,
   ]);
 
   useEffect(() => () => {
@@ -4642,7 +4634,7 @@ export function ScreenshotEditor() {
         && (exportFormat === "jpeg" || exportFormat === "webp")
         ? `≤ ${formatFileSize(maximumSizeBytes)}`
         : `≈ ${formatFileSize(estimatedBytes)}`;
-  // Size change versus the original file, mirroring the compare modal's −N%.
+  // Size change versus the original file, matching the in-editor compare −N%.
   const estimatedDeltaPercent = qualityMode !== "preserve"
     && estimatedBytes !== null
     && artifact.size_bytes > 0
@@ -4668,6 +4660,14 @@ export function ScreenshotEditor() {
 
   const applyQualityMode = (mode: ScreenshotQualityMode) => {
     setQualityMode(mode);
+    if (mode !== "compress" && mode !== "maximum") {
+      compressPreviewRequestRef.current += 1;
+      revokeCompressPreviewUrls();
+      setCompressPreviewPending(false);
+      setCompressPreviewError("");
+      setCompressPreviewBeforeBytes(null);
+      setCompressPreviewAfterBytes(null);
+    }
     setSaved(null);
     clearSuccess();
   };
