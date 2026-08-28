@@ -183,6 +183,17 @@
   transform: translate(-50%, -50%) scale(1.05);
 }
 
+/* Keep play clear of the centered compare handle. */
+.recording-preview-media:has(.compression-preview-frame) > .recording-preview-overlay-play {
+  top: auto;
+  bottom: calc(var(--s-5) + 40px);
+  transform: translate(-50%, 0);
+}
+
+.recording-preview-media:has(.compression-preview-frame) > .recording-preview-overlay-play:hover {
+  transform: translate(-50%, 0) scale(1.05);
+}
+
 .recording-preview-overlay-play.playing {
   opacity: 0;
 }
@@ -651,10 +662,6 @@
 .recording-output-estimate-delta.is-larger {
   color: var(--danger-text);
   background: var(--danger-surface);
-}
-
-.recording-compress-preview-button {
-  justify-self: start;
 }
 
 .editor-audio-warning {

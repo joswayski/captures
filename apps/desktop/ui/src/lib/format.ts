@@ -14,3 +14,20 @@ export function formatFileSize(bytes: number): string {
   const precision = value >= 100 ? 0 : 1;
   return `${value.toFixed(precision)} ${FILE_SIZE_UNITS[unitIndex]}`;
 }
+
+/**
+ * Percent change from the original file to an estimated export, or null when
+ * the change is unknown or rounds to zero.
+ */
+export function formatFileSizeDelta(
+  estimatedBytes: number | null,
+  originalBytes: number,
+): { percent: number; label: string } | null {
+  if (estimatedBytes === null || originalBytes <= 0) return null;
+  const percent = Math.round((estimatedBytes / originalBytes - 1) * 100);
+  if (percent === 0) return null;
+  return {
+    percent,
+    label: percent < 0 ? `−${Math.abs(percent)}%` : `+${percent}%`,
+  };
+}

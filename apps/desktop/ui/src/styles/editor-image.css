@@ -3019,20 +3019,6 @@
   width: 148px;
 }
 
-.screenshot-png-colors {
-  width: 280px;
-}
-
-.screenshot-png-colors-control {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  align-items: center;
-}
-
-.screenshot-png-colors .range-slider {
-  gap: 0;
-}
-
 .screenshot-quality-packing {
   width: 268px;
 }
@@ -3101,32 +3087,6 @@
 
 .screenshot-output-estimate-delta.is-larger {
   color: var(--danger-text);
-}
-
-.screenshot-export-control.screenshot-compress-preview-control {
-  width: auto;
-}
-
-.screenshot-compress-preview-button {
-  height: var(--h-md);
-  padding: 0 var(--s-5);
-  border: 1px solid var(--control-border);
-  border-radius: var(--r-md);
-  color: var(--editor-text);
-  background: var(--editor-field);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
-  white-space: nowrap;
-}
-
-.screenshot-compress-preview-button:hover:not(:disabled) {
-  border-color: var(--border-strong);
-  background: var(--editor-control-hover);
-}
-
-.screenshot-compress-preview-button:disabled {
-  opacity: 0.45;
-  cursor: default;
 }
 
 .screenshot-save-row {
@@ -3500,7 +3460,6 @@
     width: 136px;
   }
 
-  .screenshot-png-colors,
   .screenshot-quality-packing {
     width: 220px;
   }
