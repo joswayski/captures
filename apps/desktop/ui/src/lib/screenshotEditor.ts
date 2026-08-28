@@ -130,6 +130,13 @@ export type EditorTextElement = EditorElementBase & {
    * so the selection box tracks content rather than a free-form tall empty area.
    */
   width: number;
+  /**
+   * When true, typing grows the box with the longest line (a normal text field)
+   * instead of wrapping inside the current width. New text starts this way;
+   * older documents omit it and keep a fixed wrap width. Scaling an auto-width
+   * label changes type size and keeps the plate hugging the glyphs.
+   */
+  autoWidth?: boolean;
   fontFamily: "sans" | "serif" | "mono" | "rounded";
   bold: boolean;
   italic: boolean;
@@ -259,6 +266,48 @@ export const TEXT_BACKGROUND_PAD_X_RATIO = 0.22;
  */
 export const TEXT_BACKGROUND_PAD_Y_RATIO = 0.2;
 
+/**
+ * Extra downward shift when glyph bounding boxes are unavailable.
+ * Latin caps sit high in the em square; this keeps labels optically centered
+ * in rounded-box plates instead of hugging the top.
+ */
+export const TEXT_OPTICAL_CENTER_NUDGE_RATIO = 0.07;
+
+/** Metrics used to sit glyphs in the vertical center of a line box. */
+export type TextGlyphMetrics = {
+  actualBoundingBoxAscent?: number;
+  actualBoundingBoxDescent?: number;
+};
+
+/**
+ * fillText Y and baseline so the painted letters sit in the middle of the
+ * line box (and therefore the background plate), not at the em-square top.
+ */
+export function textGlyphDrawY(
+  lineTop: number,
+  fontSize: number,
+  lineIndex: number,
+  metrics?: TextGlyphMetrics | null,
+): { y: number; baseline: "alphabetic" | "middle" } {
+  const lineHeight = fontSize * TEXT_LINE_HEIGHT_RATIO;
+  const mid = lineTop + lineIndex * lineHeight + lineHeight / 2;
+  const ascent = metrics?.actualBoundingBoxAscent;
+  const descent = metrics?.actualBoundingBoxDescent;
+  if (
+    typeof ascent === "number"
+    && typeof descent === "number"
+    && Number.isFinite(ascent)
+    && Number.isFinite(descent)
+    && ascent + descent > 1
+  ) {
+    return { y: mid + (ascent - descent) / 2, baseline: "alphabetic" };
+  }
+  return {
+    y: mid + fontSize * TEXT_OPTICAL_CENTER_NUDGE_RATIO,
+    baseline: "middle",
+  };
+}
+
 /** Minimum text box width so a single glyph still fits. */
 export function minTextBoxWidth(fontSize: number): number {
   return Math.max(8, Math.round(fontSize * 0.5));
@@ -276,6 +325,56 @@ export function defaultTextBoxWidth(fontSize: number, sample = "Text"): number {
     Math.round(fontSize * 2.2),
     Math.ceil(estimateTextWidth(sample, fontSize) + fontSize * 0.4),
   );
+}
+
+/** True when typing should grow the layout box instead of wrapping. */
+export function isAutoWidthText(
+  element: Pick<EditorTextElement, "autoWidth">,
+): boolean {
+  return element.autoWidth === true;
+}
+
+/**
+ * Width of an auto-growing text box: the longest line, plus room for the caret.
+ * Explicit newlines still create extra lines; words do not wrap to fit a column.
+ */
+export function fittedAutoWidthTextBox(
+  text: string,
+  fontSize: number,
+  measure: (line: string) => number = (line) => estimateTextWidth(line, fontSize),
+): number {
+  const lines = text.split("\n");
+  let widest = 0;
+  for (const line of lines) {
+    widest = Math.max(widest, measure(line.length > 0 ? line : " "));
+  }
+  if (widest <= 0) widest = measure(" ");
+  return Math.max(
+    minTextBoxWidth(fontSize),
+    Math.ceil(widest + fontSize * 0.35),
+  );
+}
+
+/**
+ * Grow (or shrink) an auto-width text layer to fit its current content.
+ * Left-aligned boxes grow to the right; center and right keep their anchor.
+ */
+export function fitAutoWidthTextElement(
+  element: EditorTextElement,
+  measure?: (line: string) => number,
+): EditorTextElement {
+  if (!isAutoWidthText(element)) return element;
+  const nextWidth = fittedAutoWidthTextBox(element.text, element.fontSize, measure);
+  if (Math.abs(nextWidth - element.width) < 0.5) {
+    return nextWidth === element.width ? element : { ...element, width: nextWidth };
+  }
+  const delta = nextWidth - element.width;
+  const x = element.align === "center"
+    ? element.x - delta / 2
+    : element.align === "right"
+      ? element.x - delta
+      : element.x;
+  return { ...element, width: nextWidth, x };
 }
 
 /** Background inset around the text layout box (document pixels). */
@@ -1845,12 +1944,27 @@ export function closestPointOnArrow(
   };
 }
 
+/** Straight-line length from start to tip (used to keep the head in proportion). */
+export function arrowChordLength(
+  element: Pick<EditorShapeElement, "x" | "y" | "endX" | "endY">,
+): number {
+  return Math.hypot(element.endX - element.x, element.endY - element.y);
+}
+
 /**
  * Drawn arrow-head wing length (must match the renderer in ScreenshotEditor).
  * Used for content bounds so trim/expand account for the head, not just the shaft.
+ *
+ * Head size follows stroke width. When `shaftLength` is given, the tip also
+ * cannot exceed a fraction of the shaft — otherwise shrinking an arrow leaves a
+ * giant point on a tiny body.
  */
-export function arrowHeadLength(strokeWidth: number): number {
-  return Math.max(14, strokeWidth * 4.2);
+export function arrowHeadLength(strokeWidth: number, shaftLength?: number): number {
+  const fromStroke = Math.max(1, strokeWidth * 4.2);
+  if (shaftLength == null || !(shaftLength > 0)) return fromStroke;
+  // Keep the tip shorter than the remaining shaft so endpoint-shrink cannot
+  // leave a creation-sized head on a stub.
+  return Math.max(1, Math.min(fromStroke, shaftLength * 0.22));
 }
 
 /**
@@ -1862,9 +1976,10 @@ export function arrowHeadWingTips(
   end: EditorPoint,
   tangent: EditorPoint,
   strokeWidth: number,
+  shaftLength?: number,
 ): [EditorPoint, EditorPoint] {
   const angle = Math.atan2(end.y - tangent.y, end.x - tangent.x);
-  const length = arrowHeadLength(strokeWidth);
+  const length = arrowHeadLength(strokeWidth, shaftLength);
   return [
     {
       x: end.x - length * Math.cos(angle - Math.PI / 6),
@@ -1875,6 +1990,32 @@ export function arrowHeadWingTips(
       y: end.y - length * Math.sin(angle + Math.PI / 6),
     },
   ];
+}
+
+/**
+ * Thin an arrow's stroke when its shaft is shortened (endpoint or corner scale)
+ * so the head, which is derived from stroke width, shrinks with the body.
+ * Lengthening keeps the original pen size.
+ */
+export function scaleArrowStrokeForLength(
+  initial: EditorShapeElement,
+  next: EditorShapeElement,
+): EditorShapeElement {
+  if (initial.shape !== "arrow" || next.shape !== "arrow") return next;
+  const initialLength = Math.max(1, arrowChordLength(initial));
+  const nextLength = arrowChordLength(next);
+  if (nextLength >= initialLength - 0.5) return next;
+  return {
+    ...next,
+    style: {
+      ...next.style,
+      strokeWidth: clamp(
+        initial.style.strokeWidth * (nextLength / initialLength),
+        1,
+        80,
+      ),
+    },
+  };
 }
 
 /**
@@ -1947,6 +2088,7 @@ function shapeElementBounds(element: EditorShapeElement): EditorRect {
         tip,
         arrowHeadTangentPoint(element),
         element.style.strokeWidth,
+        arrowChordLength(element),
       );
       points.push(tip, wings[0], wings[1]);
     }
@@ -2178,13 +2320,18 @@ const RESIZE_CORNER_HANDLES: ResizeHandle[] = ["nw", "ne", "se", "sw"];
 /**
  * Hit-test corner grips, mid-edge grips, and the dashed selection border itself.
  * `handleRadius` is in document pixels (scale for display zoom before calling).
+ *
+ * `grips: "corners"` is for labels that must scale as a unit: mid-edge squares
+ * are ignored, and dragging the dashed border maps onto the nearest corner.
  */
 export function hitTestResizeHandle(
   bounds: EditorRect,
   point: EditorPoint,
   handleRadius: number,
+  grips: "all" | "corners" = "all",
 ): ResizeHandle | null {
   const radius = Math.max(4, handleRadius);
+  const cornersOnly = grips === "corners";
   // Corners first so diagonal grips win over edge strips near the same pixel.
   for (const handle of RESIZE_CORNER_HANDLES) {
     const corner = resizeHandlePoint(bounds, handle);
@@ -2195,14 +2342,16 @@ export function hitTestResizeHandle(
       return handle;
     }
   }
-  for (const handle of RESIZE_HANDLES) {
-    if (RESIZE_CORNER_HANDLES.includes(handle)) continue;
-    const mid = resizeHandlePoint(bounds, handle);
-    if (
-      Math.abs(point.x - mid.x) <= radius
-      && Math.abs(point.y - mid.y) <= radius
-    ) {
-      return handle;
+  if (!cornersOnly) {
+    for (const handle of RESIZE_HANDLES) {
+      if (RESIZE_CORNER_HANDLES.includes(handle)) continue;
+      const mid = resizeHandlePoint(bounds, handle);
+      if (
+        Math.abs(point.x - mid.x) <= radius
+        && Math.abs(point.y - mid.y) <= radius
+      ) {
+        return handle;
+      }
     }
   }
 
@@ -2219,6 +2368,20 @@ export function hitTestResizeHandle(
   const nearRight = Math.abs(point.x - right) <= radius;
   const nearTop = Math.abs(point.y - top) <= radius;
   const nearBottom = Math.abs(point.y - bottom) <= radius;
+  const midX = left + bounds.width / 2;
+  const midY = top + bounds.height / 2;
+
+  if (cornersOnly) {
+    if (nearTop && nearLeft) return "nw";
+    if (nearTop && nearRight) return "ne";
+    if (nearBottom && nearRight) return "se";
+    if (nearBottom && nearLeft) return "sw";
+    if (nearTop) return point.x >= midX ? "ne" : "nw";
+    if (nearBottom) return point.x >= midX ? "se" : "sw";
+    if (nearLeft) return point.y >= midY ? "sw" : "nw";
+    if (nearRight) return point.y >= midY ? "se" : "ne";
+    return null;
+  }
 
   if (nearTop && !nearLeft && !nearRight) return "n";
   if (nearBottom && !nearLeft && !nearRight) return "s";
@@ -2416,15 +2579,32 @@ export function resizeElement(
   }
 
   if (element.kind === "text") {
-    // Width-only drags reflow wrap width. Height (or corner) drags also scale
-    // type size so stretching the yellow selection box visibly resizes the label.
+    // Side drags on a fixed wrap box change column width (reflow, same type size).
+    // Auto-width labels and any height/corner drag scale type size instead of
+    // stretching an empty plate around unchanged glyphs.
     const widthOnly = Math.abs(scaleY - 1) < 0.001 && Math.abs(scaleX - 1) >= 0.001;
     const heightOnly = Math.abs(scaleX - 1) < 0.001 && Math.abs(scaleY - 1) >= 0.001;
+    const autoWidth = isAutoWidthText(element);
+    if (widthOnly && !autoWidth) {
+      const pad = textHasBackgroundPlate(element)
+        ? textBackgroundPad(element.fontSize)
+        : { x: 0, y: 0 };
+      return {
+        ...element,
+        x: nextBounds.x + pad.x,
+        y: nextBounds.y + pad.y,
+        width: Math.max(
+          minTextBoxWidth(element.fontSize),
+          nextBounds.width - pad.x * 2,
+        ),
+        autoWidth: false,
+      };
+    }
     const fontScale = widthOnly
-      ? 1
+      ? scaleX
       : heightOnly
         ? scaleY
-        : Math.min(scaleX, scaleY);
+        : Math.min(Math.abs(scaleX), Math.abs(scaleY));
     const nextFontSize = clamp(
       Math.round(element.fontSize * Math.max(0.05, fontScale)),
       8,
@@ -2433,22 +2613,40 @@ export function resizeElement(
     const pad = textHasBackgroundPlate(element)
       ? textBackgroundPad(nextFontSize)
       : { x: 0, y: 0 };
-    const contentWidth = Math.max(
-      minTextBoxWidth(nextFontSize),
-      nextBounds.width - pad.x * 2,
-    );
+    const originX = nextBounds.x + pad.x;
+    const originY = nextBounds.y + pad.y;
+    if (autoWidth) {
+      const nextWidth = fittedAutoWidthTextBox(element.text, nextFontSize);
+      return {
+        ...element,
+        fontSize: nextFontSize,
+        x: originX,
+        y: originY,
+        width: nextWidth,
+        autoWidth: true,
+      };
+    }
     return {
       ...element,
       fontSize: nextFontSize,
-      x: nextBounds.x + pad.x,
-      y: nextBounds.y + pad.y,
-      width: contentWidth,
+      x: originX,
+      y: originY,
+      width: Math.max(
+        minTextBoxWidth(nextFontSize),
+        element.width * Math.max(0.05, fontScale),
+      ),
+      autoWidth: false,
     };
   }
 
   if (element.kind === "shape") {
     const start = mapPoint({ x: element.x, y: element.y });
     const end = mapPoint({ x: element.endX, y: element.endY });
+    // Lines/arrows scale stroke (and therefore the arrow head) with the box so
+    // a shrunk arrow does not keep a giant tip on a tiny shaft.
+    const strokeScale = isCurveableStrokeShape(element)
+      ? Math.max(0.05, Math.min(Math.abs(scaleX), Math.abs(scaleY)))
+      : 1;
     return {
       ...element,
       x: start.x,
@@ -2456,6 +2654,12 @@ export function resizeElement(
       endX: end.x,
       endY: end.y,
       controls: element.controls.map(mapPoint),
+      style: strokeScale === 1
+        ? element.style
+        : {
+          ...element.style,
+          strokeWidth: clamp(element.style.strokeWidth * strokeScale, 1, 80),
+        },
     };
   }
 

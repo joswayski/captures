@@ -62,8 +62,16 @@ import {
   transformImageElement,
   TEXT_LINE_HEIGHT_RATIO,
   textStylePreset,
+  textGlyphDrawY,
+  TEXT_OPTICAL_CENTER_NUDGE_RATIO,
   visibleContentBounds,
   wrapTextLines,
+  fitAutoWidthTextElement,
+  fittedAutoWidthTextBox,
+  isAutoWidthText,
+  arrowChordLength,
+  arrowHeadLength,
+  scaleArrowStrokeForLength,
   type EditorImageElement,
   type EditorShapeElement,
   type EditorTextElement,
@@ -1226,6 +1234,12 @@ describe("screenshot editor geometry", () => {
     expect(hitTestResizeHandle(bounds, { x: 200, y: 100 }, 8)).toBeNull();
     // Dragging the dashed border strip (not just the mid grip) also counts.
     expect(hitTestResizeHandle(bounds, { x: 180, y: 50 }, 8)).toBe("n");
+    // Labels scale as a unit: mid-edge hits map to the nearest corner.
+    expect(hitTestResizeHandle(bounds, { x: 200, y: 50 }, 8, "corners")).toBe("ne");
+    expect(hitTestResizeHandle(bounds, { x: 200, y: 150 }, 8, "corners")).toBe("se");
+    expect(hitTestResizeHandle(bounds, { x: 100, y: 100 }, 8, "corners")).toBe("sw");
+    expect(hitTestResizeHandle(bounds, { x: 180, y: 50 }, 8, "corners")).toBe("nw");
+    expect(hitTestResizeHandle(bounds, { x: 100, y: 50 }, 8, "corners")).toBe("nw");
 
     expect(resizeBoundsFromHandle(bounds, "se", { x: 400, y: 250 }, 8)).toEqual({
       x: 100,
@@ -1414,6 +1428,31 @@ describe("screenshot editor geometry", () => {
     if (resized.kind !== "shape") throw new Error("expected shape");
     expect(resized.endX - resized.x).toBeCloseTo((shape.endX - shape.x) * 2, 5);
     expect(resized.endY - resized.y).toBeCloseTo((shape.endY - shape.y) * 2, 5);
+    expect(resized.style.strokeWidth).toBe(4);
+
+    const arrow: EditorShapeElement = {
+      ...editableLayer,
+      id: "arrow",
+      kind: "shape",
+      shape: "arrow",
+      x: 80,
+      y: 80,
+      endX: 280,
+      endY: 180,
+      controls: [],
+      style: { color: "#f00", fill: null, strokeWidth: 8 },
+    };
+    const arrowBounds = elementBounds(arrow);
+    const shrunkArrow = resizeElement(arrow, arrowBounds, {
+      x: arrowBounds.x,
+      y: arrowBounds.y,
+      width: arrowBounds.width * 0.25,
+      height: arrowBounds.height * 0.25,
+    });
+    if (shrunkArrow.kind !== "shape") throw new Error("expected arrow");
+    expect(shrunkArrow.style.strokeWidth).toBeCloseTo(2, 5);
+    expect(arrowHeadLength(shrunkArrow.style.strokeWidth, arrowChordLength(shrunkArrow)))
+      .toBeLessThan(arrowHeadLength(arrow.style.strokeWidth, arrowChordLength(arrow)) * 0.5);
 
     const text: EditorTextElement = {
       ...editableLayer,
@@ -1443,7 +1482,7 @@ describe("screenshot editor geometry", () => {
     expect(resizedTaller).toMatchObject({
       kind: "text",
       fontSize: 80,
-      width: 120,
+      width: 240,
       x: textBounds.x,
       y: textBounds.y,
     });
@@ -1461,6 +1500,52 @@ describe("screenshot editor geometry", () => {
     // Wider box reflows to fewer lines (or equal when already single-line).
     expect(elementBounds(resizedWider as EditorTextElement).height)
       .toBeLessThanOrEqual(elementBounds(text).height);
+
+    const autoWidth: EditorTextElement = {
+      ...text,
+      id: "auto",
+      autoWidth: true,
+      width: fittedAutoWidthTextBox("Hi", 40),
+      text: "Hi",
+    };
+    const autoTaller = resizeElement(autoWidth, elementBounds(autoWidth), {
+      ...elementBounds(autoWidth),
+      height: elementBounds(autoWidth).height * 2,
+    });
+    expect(autoTaller).toMatchObject({ kind: "text", autoWidth: true, fontSize: 80 });
+    if (autoTaller.kind !== "text") throw new Error("expected text");
+    expect(autoTaller.width).toBe(fittedAutoWidthTextBox("Hi", 80));
+
+    const autoWider = resizeElement(autoWidth, elementBounds(autoWidth), {
+      ...elementBounds(autoWidth),
+      width: elementBounds(autoWidth).width * 2,
+    });
+    expect(autoWider).toMatchObject({ kind: "text", autoWidth: true, fontSize: 80 });
+    if (autoWider.kind !== "text") throw new Error("expected text");
+    expect(autoWider.width).toBe(fittedAutoWidthTextBox("Hi", 80));
+
+    // Non-uniform corner drag must not stretch the plate independently of type.
+    const bubbleLabel: EditorTextElement = {
+      ...autoWidth,
+      id: "bubble-label",
+      background: "#111318",
+      roundedBackground: true,
+      fontFamily: "rounded",
+      align: "center",
+    };
+    const bubbleStart = elementBounds(bubbleLabel);
+    const stretched = resizeElement(bubbleLabel, bubbleStart, {
+      ...bubbleStart,
+      width: bubbleStart.width * 2,
+      height: bubbleStart.height * 1.1,
+    });
+    expect(stretched).toMatchObject({ kind: "text", autoWidth: true, fontSize: 44 });
+    if (stretched.kind !== "text") throw new Error("expected text");
+    const bubbleEnd = elementBounds(stretched);
+    expect(bubbleEnd.width / bubbleEnd.height)
+      .toBeCloseTo(bubbleStart.width / bubbleStart.height, 2);
+    expect(bubbleEnd.width / bubbleEnd.height)
+      .toBeLessThan((bubbleStart.width * 2) / (bubbleStart.height * 1.1) * 0.7);
 
     // Background plates expand paint/selection bounds beyond the layout box.
     const bubble: EditorTextElement = {
@@ -1493,6 +1578,102 @@ describe("screenshot editor geometry", () => {
     const hard = wrapTextLines("supercalifragilistic", 40, 20);
     expect(hard.length).toBeGreaterThan(1);
     expect(hard.join("")).toBe("supercalifragilistic");
+  });
+
+  it("grows auto-width text horizontally instead of wrapping into a column", () => {
+    const short: EditorTextElement = {
+      ...editableLayer,
+      id: "label",
+      kind: "text",
+      x: 40,
+      y: 60,
+      text: "Hi",
+      fontSize: 40,
+      width: fittedAutoWidthTextBox("Hi", 40),
+      autoWidth: true,
+      fontFamily: "sans",
+      bold: false,
+      italic: false,
+      align: "left",
+      color: "#f00",
+      background: null,
+      outlined: false,
+      roundedBackground: false,
+    };
+    expect(isAutoWidthText(short)).toBe(true);
+
+    const long = fitAutoWidthTextElement({
+      ...short,
+      text: "Hello from the screenshot editor",
+    });
+    expect(long.width).toBeGreaterThan(short.width);
+    expect(wrapTextLines(long.text, long.width, long.fontSize)).toEqual([
+      "Hello from the screenshot editor",
+    ]);
+    expect(elementBounds(long).height).toBeCloseTo(elementBounds(short).height, 5);
+
+    const centered = fitAutoWidthTextElement({
+      ...short,
+      align: "center",
+      text: "Hello from the screenshot editor",
+    });
+    expect(centered.x).toBeLessThan(short.x);
+
+    const wrapped = fitAutoWidthTextElement({
+      ...short,
+      autoWidth: false,
+      width: 80,
+      text: "Hello from the screenshot editor",
+    });
+    expect(wrapped.width).toBe(80);
+    expect(wrapTextLines(wrapped.text, wrapped.width, wrapped.fontSize).length)
+      .toBeGreaterThan(1);
+  });
+
+  it("scales arrow heads with stroke and shaft length", () => {
+    expect(arrowHeadLength(8)).toBeCloseTo(33.6, 5);
+    expect(arrowHeadLength(2)).toBeCloseTo(8.4, 5);
+    expect(arrowHeadLength(8, 20)).toBeCloseTo(4.4, 5);
+    expect(arrowHeadLength(8, 400)).toBeCloseTo(33.6, 5);
+
+    const long: EditorShapeElement = {
+      ...editableLayer,
+      id: "arrow",
+      kind: "shape",
+      shape: "arrow",
+      x: 0,
+      y: 0,
+      endX: 200,
+      endY: 0,
+      controls: [],
+      style: { color: "#f00", fill: null, strokeWidth: 8 },
+    };
+    const short = scaleArrowStrokeForLength(long, { ...long, endX: 50 });
+    expect(short.style.strokeWidth).toBeCloseTo(2, 5);
+    expect(arrowHeadLength(short.style.strokeWidth, arrowChordLength(short)))
+      .toBeLessThan(12);
+    const longer = scaleArrowStrokeForLength(long, { ...long, endX: 400 });
+    expect(longer.style.strokeWidth).toBe(8);
+  });
+
+  it("draws text glyphs toward the optical center of the line box", () => {
+    const top = 40;
+    const fontSize = 40;
+    const fallback = textGlyphDrawY(top, fontSize, 0);
+    expect(fallback.baseline).toBe("middle");
+    expect(fallback.y).toBeCloseTo(
+      top + (fontSize * TEXT_LINE_HEIGHT_RATIO) / 2 + fontSize * TEXT_OPTICAL_CENTER_NUDGE_RATIO,
+      5,
+    );
+
+    const measured = textGlyphDrawY(top, fontSize, 0, {
+      actualBoundingBoxAscent: 28,
+      actualBoundingBoxDescent: 8,
+    });
+    expect(measured.baseline).toBe("alphabetic");
+    const mid = top + (fontSize * TEXT_LINE_HEIGHT_RATIO) / 2;
+    expect(measured.y).toBeCloseTo(mid + (28 - 8) / 2, 5);
+    expect(measured.y).toBeGreaterThan(fallback.y);
   });
 
   it("applies all named text styles without changing content or color", () => {

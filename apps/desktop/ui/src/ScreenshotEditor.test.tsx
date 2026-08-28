@@ -4,7 +4,12 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { act, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
-import { createScreenshotDocument } from "./lib/screenshotEditor";
+import {
+  createScreenshotDocument,
+  elementBounds,
+  resizeHandlePoint,
+  type EditorShapeElement,
+} from "./lib/screenshotEditor";
 import { ScreenshotEditor } from "./ScreenshotEditor";
 import type { CaptureArtifact } from "./types";
 
@@ -94,7 +99,9 @@ function installExportableCanvas(): () => void {
     arc: vi.fn(),
     closePath: vi.fn(),
     setLineDash: vi.fn(),
-    measureText: () => ({ width: 40 }),
+    measureText: (text: string) => ({
+      width: Math.max(1, [...String(text ?? "")].length * 10),
+    }),
     fillText: vi.fn(),
     strokeText: vi.fn(),
     translate: vi.fn(),
@@ -715,18 +722,34 @@ describe("ScreenshotEditor", () => {
       clientX: 120,
       clientY: 80,
     });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 1,
+      clientX: 120,
+      clientY: 80,
+    });
 
     const inlineEditor = await screen.findByRole("textbox", {
       name: "Edit text on canvas",
     });
     expect(inlineEditor).toHaveValue("Text");
     expect(inlineEditor).toHaveFocus();
-    fireEvent.change(inlineEditor, { target: { value: "Inline text" } });
-    expect(screen.getByRole("textbox", { name: "Text" })).toHaveValue("Inline text");
+    const initialWidth = Number.parseFloat(inlineEditor.style.width);
+    fireEvent.change(inlineEditor, {
+      target: { value: "Hello from the screenshot editor" },
+    });
+    expect(screen.getByRole("textbox", { name: "Text" })).toHaveValue(
+      "Hello from the screenshot editor",
+    );
+    expect(Number.parseFloat(inlineEditor.style.width)).toBeGreaterThan(initialWidth);
+    expect(inlineEditor).toHaveClass("is-auto-width");
+    expect(inlineEditor).toHaveAttribute("wrap", "off");
     expect(screen.getByRole("button", { name: "Bold" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Italic" })).toBeInTheDocument();
     expect(
-      within(screen.getByRole("region", { name: "Layers" })).getByText("Inline text"),
+      within(screen.getByRole("region", { name: "Layers" })).getByText(
+        "Hello from the screenshot editor",
+      ),
     ).toBeInTheDocument();
 
     fireEvent.blur(inlineEditor);
@@ -745,7 +768,7 @@ describe("ScreenshotEditor", () => {
       clientY: 100,
     });
     expect(await screen.findByRole("textbox", { name: "Edit text on canvas" }))
-      .toHaveValue("Inline text");
+      .toHaveValue("Hello from the screenshot editor");
   });
 
   it("creates text with any of the seven visual style presets", async () => {
@@ -816,6 +839,12 @@ describe("ScreenshotEditor", () => {
     const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
     setCanvasBounds(canvas);
     fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 20,
+      clientX: 120,
+      clientY: 80,
+    });
+    fireEvent.pointerUp(canvas, {
       button: 0,
       pointerId: 20,
       clientX: 120,
@@ -914,6 +943,138 @@ describe("ScreenshotEditor", () => {
       clientY: 200,
     });
     expect(screen.getByRole("button", { name: "Straighten arrow" })).toBeInTheDocument();
+  });
+
+  it("shrinks the arrow head when the tip handle is dragged back", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Width");
+
+    setCanvasZoomPercent(100);
+    fireEvent.click(screen.getByRole("button", { name: "Arrow (A)" }));
+    const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
+    canvas.setPointerCapture = vi.fn();
+    canvas.hasPointerCapture = vi.fn(() => true);
+    canvas.releasePointerCapture = vi.fn();
+    setCanvasBounds(canvas);
+
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 70,
+      clientX: 80,
+      clientY: 200,
+    });
+    fireEvent.pointerMove(canvas, {
+      pointerId: 70,
+      clientX: 480,
+      clientY: 200,
+    });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 70,
+      clientX: 480,
+      clientY: 200,
+    });
+
+    const stroke = screen.getByRole("slider", { name: "Stroke width" });
+    expect(stroke).toHaveAttribute("aria-valuetext", "8 px");
+
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 71,
+      clientX: 480,
+      clientY: 200,
+    });
+    fireEvent.pointerMove(canvas, {
+      pointerId: 71,
+      clientX: 160,
+      clientY: 200,
+    });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 71,
+      clientX: 160,
+      clientY: 200,
+    });
+
+    const shortened = screen.getByRole("slider", { name: "Stroke width" });
+    const label = shortened.getAttribute("aria-valuetext") ?? "";
+    const px = Number(label.replace(" px", ""));
+    expect(px).toBeGreaterThan(0);
+    expect(px).toBeLessThan(4);
+  });
+
+  it("shrinks the arrow head when a box-corner grip scales the arrow down", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Width");
+
+    setCanvasZoomPercent(100);
+    fireEvent.click(screen.getByRole("button", { name: "Arrow (A)" }));
+    const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
+    canvas.setPointerCapture = vi.fn();
+    canvas.hasPointerCapture = vi.fn(() => true);
+    canvas.releasePointerCapture = vi.fn();
+    setCanvasBounds(canvas);
+
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 80,
+      clientX: 80,
+      clientY: 200,
+    });
+    fireEvent.pointerMove(canvas, {
+      pointerId: 80,
+      clientX: 480,
+      clientY: 200,
+    });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 80,
+      clientX: 480,
+      clientY: 200,
+    });
+
+    expect(screen.getByRole("slider", { name: "Stroke width" }))
+      .toHaveAttribute("aria-valuetext", "8 px");
+
+    const placed: EditorShapeElement = {
+      id: "placed-arrow",
+      kind: "shape",
+      shape: "arrow",
+      x: 80,
+      y: 200,
+      endX: 480,
+      endY: 200,
+      controls: [],
+      style: { color: "#ff3b5c", fill: null, strokeWidth: 8 },
+      locked: false,
+      visible: true,
+      opacity: 100,
+      blendMode: "source-over",
+    };
+    const bounds = elementBounds(placed);
+    const se = resizeHandlePoint(bounds, "se");
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 81,
+      clientX: se.x,
+      clientY: se.y,
+    });
+    fireEvent.pointerMove(canvas, {
+      pointerId: 81,
+      clientX: bounds.x + bounds.width * 0.28,
+      clientY: bounds.y + bounds.height * 0.28,
+    });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 81,
+      clientX: bounds.x + bounds.width * 0.28,
+      clientY: bounds.y + bounds.height * 0.28,
+    });
+
+    const scaled = screen.getByRole("slider", { name: "Stroke width" });
+    const scaledPx = Number((scaled.getAttribute("aria-valuetext") ?? "").replace(" px", ""));
+    expect(scaledPx).toBeGreaterThan(0);
+    expect(scaledPx).toBeLessThan(4);
   });
 
   it("shows curve handles after placing a stroke and bends without leaving the shape tool", async () => {
@@ -1689,6 +1850,12 @@ describe("ScreenshotEditor", () => {
       clientX: 120,
       clientY: 80,
     });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 40,
+      clientX: 120,
+      clientY: 80,
+    });
     fireEvent.blur(await screen.findByRole("textbox", { name: "Edit text on canvas" }));
 
     // Select the text layer (Select tool becomes active via layer list click).
@@ -2202,7 +2369,9 @@ describe("ScreenshotEditor", () => {
       arc: vi.fn(),
       closePath: vi.fn(),
       setLineDash: vi.fn(),
-      measureText: () => ({ width: 40 }),
+      measureText: (text: string) => ({
+      width: Math.max(1, [...String(text ?? "")].length * 10),
+    }),
       fillText: vi.fn(),
       strokeText: vi.fn(),
       translate: vi.fn(),
