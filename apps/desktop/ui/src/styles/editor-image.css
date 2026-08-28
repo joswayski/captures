@@ -326,8 +326,10 @@
   border: 0;
 }
 
-.screenshot-canvas-bg-menu .screenshot-color-field.compact > div {
-  gap: var(--s-2);
+.screenshot-canvas-bg-menu .screenshot-color-field.compact .screenshot-color-swatches {
+  grid-template-columns: repeat(auto-fill, minmax(36px, 1fr));
+  row-gap: var(--s-3);
+  padding: var(--s-2) 0;
 }
 
 .screenshot-editor-history-actions {
@@ -2755,6 +2757,7 @@
 
 .screenshot-color-field {
   min-width: 0;
+  width: 100%;
   margin: 0;
   border: 0;
   padding: 0;
@@ -2768,10 +2771,15 @@
   font-weight: var(--weight-medium);
 }
 
-.screenshot-color-field > div {
-  display: flex;
+.screenshot-color-field .screenshot-color-swatches {
+  display: grid;
+  width: 100%;
+  grid-template-columns: repeat(auto-fill, minmax(44px, 1fr));
   align-items: center;
-  gap: var(--s-2);
+  justify-items: center;
+  column-gap: 0;
+  row-gap: var(--s-4);
+  padding: var(--s-3) 0;
 }
 
 .screenshot-color-field button,
@@ -2781,7 +2789,6 @@
   width: 24px;
   height: 24px;
   flex: 0 0 auto;
-  overflow: hidden;
   border: 1px solid var(--border-strong);
   border-radius: 50%;
   padding: 0;
@@ -2789,12 +2796,14 @@
 }
 
 .screenshot-color-field button.active {
+  z-index: 1;
   box-shadow:
     0 0 0 2px var(--editor-panel),
     0 0 0 4px var(--theme-accent);
 }
 
 .screenshot-custom-color {
+  overflow: hidden;
   border-radius: var(--r-sm);
   background: conic-gradient(#f44, #ff4, #4f4, #4ff, #44f, #f4f, #f44);
   cursor: pointer;

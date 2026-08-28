@@ -1190,6 +1190,45 @@ describe("ScreenshotEditor", () => {
     expect(within(layers).getAllByRole("button", { name: /ArrowShape/ })).toHaveLength(2);
   });
 
+  it("lets a selected drawing toggle a drop shadow", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Width");
+
+    fireEvent.click(screen.getByRole("button", { name: "Arrow (A)" }));
+    const defaults = screen.getByRole("checkbox", { name: "Drop shadow" });
+    expect(defaults).not.toBeChecked();
+
+    setCanvasZoomPercent(100);
+    const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
+    canvas.setPointerCapture = vi.fn();
+    canvas.hasPointerCapture = vi.fn(() => true);
+    canvas.releasePointerCapture = vi.fn();
+    setCanvasBounds(canvas);
+
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 90,
+      clientX: 120,
+      clientY: 180,
+    });
+    fireEvent.pointerMove(canvas, {
+      pointerId: 90,
+      clientX: 360,
+      clientY: 180,
+    });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 90,
+      clientX: 360,
+      clientY: 180,
+    });
+
+    const shadow = screen.getByRole("checkbox", { name: "Drop shadow" });
+    expect(shadow).not.toBeChecked();
+    fireEvent.click(shadow);
+    expect(shadow).toBeChecked();
+  });
+
   it("adds and removes uncapped arrow curve points without creating arrows on double-click", async () => {
     render(<ScreenshotEditor />);
     await screen.findAllByText("1440 × 900");

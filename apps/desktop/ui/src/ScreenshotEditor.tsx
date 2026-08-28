@@ -128,6 +128,8 @@ import {
   trimDocumentToContent,
   transformImageElement,
   visibleContentBounds,
+  annotationDropShadowMetrics,
+  annotationHasDropShadow,
   type AlignmentSnapGuide,
   type CanvasTrimMarginPreview,
   type ArrowHandle,
@@ -733,17 +735,58 @@ function arrowHead(
   context.stroke();
 }
 
-function drawShape(
+function applyAnnotationDropShadow(
   context: CanvasRenderingContext2D,
-  element: Extract<ScreenshotElement, { kind: "shape" }>,
+  style: ElementStyle,
 ): void {
-  const { x, y, endX, endY, shape, style } = element;
-  context.save();
+  const metrics = annotationDropShadowMetrics(style.strokeWidth);
+  context.shadowColor = "rgba(0, 0, 0, 0.45)";
+  context.shadowBlur = metrics.blur;
+  context.shadowOffsetX = metrics.offsetX;
+  context.shadowOffsetY = metrics.offsetY;
+}
+
+function clearAnnotationDropShadow(context: CanvasRenderingContext2D): void {
+  context.shadowColor = "transparent";
+  context.shadowBlur = 0;
+  context.shadowOffsetX = 0;
+  context.shadowOffsetY = 0;
+}
+
+/**
+ * Paint annotation ink, optionally as a shadow pass then a crisp pass so the
+ * fill/stroke stay their authored opacity (a single shadowed fill would darken
+ * translucent fills).
+ */
+function paintAnnotationInk(
+  context: CanvasRenderingContext2D,
+  style: ElementStyle,
+  paint: () => void,
+): void {
+  if (annotationHasDropShadow(style)) {
+    applyAnnotationDropShadow(context, style);
+    paint();
+    clearAnnotationDropShadow(context);
+  }
+  paint();
+}
+
+function configureAnnotationStroke(
+  context: CanvasRenderingContext2D,
+  style: ElementStyle,
+): void {
   context.strokeStyle = style.color;
   context.fillStyle = style.fill ?? "transparent";
   context.lineWidth = style.strokeWidth;
   context.lineCap = "round";
   context.lineJoin = "round";
+}
+
+function paintShapeGeometry(
+  context: CanvasRenderingContext2D,
+  element: Extract<ScreenshotElement, { kind: "shape" }>,
+): void {
+  const { x, y, endX, endY, shape, style } = element;
 
   if (shape === "rectangle" || shape === "ellipse") {
     const left = Math.min(x, endX);
@@ -766,7 +809,6 @@ function drawShape(
     }
     if (style.fill) context.fill();
     context.stroke();
-    context.restore();
     return;
   }
 
@@ -781,7 +823,6 @@ function drawShape(
         arrowChordLength(element),
       );
     }
-    context.restore();
     return;
   }
 
@@ -789,6 +830,15 @@ function drawShape(
   context.moveTo(x, y);
   context.lineTo(endX, endY);
   context.stroke();
+}
+
+function drawShape(
+  context: CanvasRenderingContext2D,
+  element: Extract<ScreenshotElement, { kind: "shape" }>,
+): void {
+  context.save();
+  configureAnnotationStroke(context, element.style);
+  paintAnnotationInk(context, element.style, () => paintShapeGeometry(context, element));
   context.restore();
 }
 
@@ -910,11 +960,10 @@ function paintScreenshotElement(
     return;
   }
   context.save();
-  context.strokeStyle = element.style.color;
-  context.lineWidth = element.style.strokeWidth;
-  context.lineCap = "round";
-  context.lineJoin = "round";
-  drawSmoothPath(context, element.points);
+  configureAnnotationStroke(context, element.style);
+  paintAnnotationInk(context, element.style, () => {
+    drawSmoothPath(context, element.points);
+  });
   context.restore();
 }
 
@@ -1471,6 +1520,7 @@ export function ScreenshotEditor() {
     color: "#ff3b5c",
     fill: null,
     strokeWidth: 8,
+    dropShadow: false,
   });
   const [defaultFontSize, setDefaultFontSize] = useState(48);
   const [defaultTextStyle, setDefaultTextStyle] = useState<TextStylePreset>("rounded-box");
@@ -6148,6 +6198,14 @@ export function ScreenshotEditor() {
                 ))}
               />
             </label>
+            <DropShadowCheck
+              checked={annotationHasDropShadow(selected.style)}
+              onChange={(dropShadow) => updateSelected((element) => (
+                element.kind === "shape" || element.kind === "path"
+                  ? { ...element, style: { ...element.style, dropShadow } }
+                  : element
+              ))}
+            />
             {selected.kind === "shape" && (selected.shape === "rectangle" || selected.shape === "ellipse") && (
               <>
                 <label className="screenshot-check-row">
@@ -6267,6 +6325,13 @@ export function ScreenshotEditor() {
                     }))}
                   />
                 </label>
+                <DropShadowCheck
+                  checked={annotationHasDropShadow(defaultStyle)}
+                  onChange={(dropShadow) => setDefaultStyle((style) => ({
+                    ...style,
+                    dropShadow,
+                  }))}
+                />
               </>
             )}
           </section>
@@ -6933,6 +6998,25 @@ function CanvasBackgroundPicker({
   );
 }
 
+function DropShadowCheck({
+  checked,
+  onChange,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label className="screenshot-check-row">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+      Drop shadow
+    </label>
+  );
+}
+
 function ColorField({
   label,
   value,
@@ -6948,7 +7032,7 @@ function ColorField({
   return (
     <fieldset className={["screenshot-color-field", compact ? "compact" : ""].filter(Boolean).join(" ")}>
       <legend className={compact ? "visually-hidden" : undefined}>{label}</legend>
-      <div>
+      <div className="screenshot-color-swatches">
         {COLOR_SWATCHES.map((color) => (
           <button
             key={color}
