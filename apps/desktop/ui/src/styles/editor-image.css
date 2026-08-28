@@ -327,8 +327,9 @@
 }
 
 .screenshot-canvas-bg-menu .screenshot-color-field.compact > div {
-  gap: var(--s-4);
-  padding: var(--s-2) var(--s-1);
+  grid-template-columns: repeat(auto-fill, minmax(36px, 1fr));
+  gap: var(--s-3) 0;
+  padding: var(--s-2) 0;
 }
 
 .screenshot-editor-history-actions {
@@ -2770,12 +2771,12 @@
 }
 
 .screenshot-color-field > div {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(40px, 1fr));
   align-items: center;
-  /* 10px: selection ring is 4px outside each swatch; keep a sliver between rings. */
-  gap: calc(var(--s-4) + var(--s-1));
-  padding: var(--s-2) var(--s-1);
+  justify-items: center;
+  gap: var(--s-3) 0;
+  padding: var(--s-2) 0;
 }
 
 .screenshot-color-field button,
@@ -2792,6 +2793,7 @@
 }
 
 .screenshot-color-field button.active {
+  z-index: 1;
   box-shadow:
     0 0 0 2px var(--editor-panel),
     0 0 0 4px var(--theme-accent);
