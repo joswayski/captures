@@ -18,8 +18,11 @@ const MACOS_SCREENSHOT_SAVE_AREA: u32 = 30;
 /// Screenshot and recording options (⌘⇧5).
 const MACOS_SCREENSHOT_OPTIONS: u32 = 184;
 /// Stock Screenshot chords written back when persisting a disabled hotkey.
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
 const MACOS_SCREENSHOT_SAVE_SCREEN_PARAMETERS: (u32, u32, u32) = (51, 20, 1_179_648);
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
 const MACOS_SCREENSHOT_SAVE_AREA_PARAMETERS: (u32, u32, u32) = (52, 21, 1_179_648);
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
 const MACOS_SCREENSHOT_OPTIONS_PARAMETERS: (u32, u32, u32) = (53, 23, 1_179_648);
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -1005,6 +1008,7 @@ pub fn macos_screenshot_hotkeys_conflicting_with(settings: &AppSettings) -> Vec<
 /// Direct plist edits skip the preferences daemon, so WindowServer can keep the
 /// stock Screenshot chords live until logout. Integer hotkey IDs plus a full
 /// `enabled`/`value` dict match the stock Screenshot bindings.
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
 pub(crate) fn macos_screenshot_hotkey_defaults_write_args(id: u32) -> Vec<String> {
     vec![
         "write".to_owned(),
@@ -1016,6 +1020,7 @@ pub(crate) fn macos_screenshot_hotkey_defaults_write_args(id: u32) -> Vec<String
     ]
 }
 
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
 fn macos_screenshot_hotkey_disabled_entry(id: u32) -> String {
     let parameters = match id {
         MACOS_SCREENSHOT_SAVE_SCREEN => Some(MACOS_SCREENSHOT_SAVE_SCREEN_PARAMETERS),
