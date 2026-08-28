@@ -5,6 +5,8 @@ import captureSelection from "../../../docs/images/capture-selection.jpg";
 import preferences from "../../../docs/images/preferences.jpg";
 import screenshotEditor from "../../../docs/images/screenshot-editor.jpg";
 import videoEditor from "../../../docs/images/video-editor.jpg";
+import ProductLightbox from "./ProductLightbox";
+import { galleryFrameGesture } from "./productLightbox";
 import { PRODUCT_SHOTS, type ProductShot } from "./productShots";
 
 const SHOT_SRC = {
@@ -15,15 +17,16 @@ const SHOT_SRC = {
   "video-editor.jpg": videoEditor,
 } as const satisfies Record<ProductShot["file"], string>;
 
-const SWIPE_THRESHOLD_PX = 48;
-
 export default function ProductGallery() {
   const headingId = useId();
   const captionId = useId();
   const [index, setIndex] = useState(0);
-  const swipeStartX = useRef<number | null>(null);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const swipeStart = useRef<{ x: number; y: number } | null>(null);
+  const suppressClick = useRef(false);
   const shot = PRODUCT_SHOTS[index] ?? PRODUCT_SHOTS[0];
   const lastIndex = PRODUCT_SHOTS.length - 1;
+  const src = SHOT_SRC[shot.file];
 
   const goTo = useCallback((next: number) => {
     setIndex((next + PRODUCT_SHOTS.length) % PRODUCT_SHOTS.length);
@@ -31,8 +34,10 @@ export default function ProductGallery() {
 
   const previous = useCallback(() => goTo(index - 1), [goTo, index]);
   const next = useCallback(() => goTo(index + 1), [goTo, index]);
+  const closeLightbox = useCallback(() => setLightboxOpen(false), []);
 
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (lightboxOpen) return;
     if (event.key === "ArrowLeft") {
       event.preventDefault();
       previous();
@@ -50,20 +55,35 @@ export default function ProductGallery() {
 
   function handlePointerDown(event: PointerEvent<HTMLDivElement>) {
     if (event.pointerType === "mouse" && event.button !== 0) return;
-    swipeStartX.current = event.clientX;
+    swipeStart.current = { x: event.clientX, y: event.clientY };
   }
 
   function handlePointerUp(event: PointerEvent<HTMLDivElement>) {
-    const startX = swipeStartX.current;
-    swipeStartX.current = null;
-    if (startX === null) return;
-    const delta = event.clientX - startX;
-    if (delta > SWIPE_THRESHOLD_PX) previous();
-    else if (delta < -SWIPE_THRESHOLD_PX) next();
+    const start = swipeStart.current;
+    swipeStart.current = null;
+    if (start === null) return;
+    const action = galleryFrameGesture(event.clientX - start.x, event.clientY - start.y);
+    if (action === "previous") {
+      suppressClick.current = true;
+      previous();
+    } else if (action === "next") {
+      suppressClick.current = true;
+      next();
+    } else if (action === "ignore") {
+      suppressClick.current = true;
+    }
   }
 
   function handlePointerCancel() {
-    swipeStartX.current = null;
+    swipeStart.current = null;
+  }
+
+  function handleOpenClick() {
+    if (suppressClick.current) {
+      suppressClick.current = false;
+      return;
+    }
+    setLightboxOpen(true);
   }
 
   return (
@@ -90,16 +110,28 @@ export default function ProductGallery() {
           onPointerUp={handlePointerUp}
           onPointerCancel={handlePointerCancel}
         >
-          <img
-            key={shot.file}
-            className="product-gallery-image"
-            src={SHOT_SRC[shot.file]}
-            alt={shot.alt}
-            width={shot.width}
-            height={shot.height}
-            decoding="async"
-            draggable={false}
-          />
+          <button
+            type="button"
+            className="product-gallery-open"
+            aria-haspopup="dialog"
+            aria-expanded={lightboxOpen}
+            aria-label={`Enlarge screenshot: ${shot.title}`}
+            onClick={handleOpenClick}
+          >
+            <img
+              key={shot.file}
+              className="product-gallery-image"
+              src={src}
+              alt={shot.alt}
+              width={shot.width}
+              height={shot.height}
+              decoding="async"
+              draggable={false}
+            />
+            <span className="product-gallery-zoom-hint" aria-hidden="true">
+              <ExpandIcon />
+            </span>
+          </button>
         </div>
 
         <div className="mt-4 flex items-start justify-between gap-3">
@@ -142,6 +174,8 @@ export default function ProductGallery() {
           </button>
         </div>
       </div>
+
+      <ProductLightbox open={lightboxOpen} src={src} shot={shot} onClose={closeLightbox} />
     </section>
   );
 }
@@ -160,6 +194,23 @@ function ChevronIcon({ direction }: { direction: "left" | "right" }) {
       aria-hidden="true"
     >
       {direction === "left" ? <path d="M10 3 5 8l5 5" /> : <path d="m6 3 5 5-5 5" />}
+    </svg>
+  );
+}
+
+function ExpandIcon() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="13"
+      height="13"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M3 6.5V3h3.5M13 9.5V13H9.5M13 3 9.2 6.8M3 13l3.8-3.8" />
     </svg>
   );
 }
