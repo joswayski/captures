@@ -8,6 +8,7 @@ use std::{
         Mutex,
         atomic::{AtomicBool, AtomicU8, Ordering},
     },
+    time::Duration,
 };
 
 use block2::RcBlock;
@@ -89,6 +90,38 @@ const _: () = {
     assert!(WINDOW_REVEAL_PRIME_ALPHA > 0.0);
     assert!(WINDOW_REVEAL_PRIME_ALPHA < 0.05);
 };
+const APPKIT_HOP_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// True when the calling thread is AppKit's main thread.
+pub fn is_main_thread() -> bool {
+    MainThreadMarker::new().is_some()
+}
+
+/// Runs `work` on the AppKit main thread, hopping there when needed.
+///
+/// macOS 26 traps AppKit use off the main thread (`Must only be used from the
+/// main thread`). Capture, clipboard, and overlay work often starts on a
+/// tokio worker, so hop before touching NSWindow / NSCursor / NSPasteboard.
+///
+/// Unlike Tauri's `run_on_main_thread`, this waits for `work` to finish (up to
+/// two seconds). If the hop times out, AppKit is not run on the caller — that
+/// would reintroduce the trap.
+pub fn run_on_main<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+    if is_main_thread() {
+        return Some(work());
+    }
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    DispatchQueue::main().exec_async(move || {
+        let _ = sender.send(work());
+    });
+    match receiver.recv_timeout(APPKIT_HOP_TIMEOUT) {
+        Ok(value) => Some(value),
+        Err(_) => {
+            eprintln!("timed out waiting for AppKit work on the main thread");
+            None
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -453,6 +486,9 @@ thread_local! {
 /// necessarily release its modifiers. Starting region capture during that gap
 /// lets AppKit replace the crosshair with an arrow when the modifiers come up.
 pub fn capture_shortcut_modifiers_pressed() -> bool {
+    if !is_main_thread() {
+        return run_on_main(capture_shortcut_modifiers_pressed).unwrap_or(false);
+    }
     shortcut_modifiers_pressed(NSEvent::modifierFlags_class())
 }
 
@@ -462,11 +498,18 @@ pub fn capture_shortcut_modifiers_pressed() -> bool {
 /// pasteboard, allowing Captures to notice that its last copied capture is no
 /// longer current without inspecting the user's clipboard data.
 pub fn clipboard_change_count() -> isize {
+    if !is_main_thread() {
+        return run_on_main(clipboard_change_count).unwrap_or(0);
+    }
     NSPasteboard::generalPasteboard().changeCount()
 }
 
 /// Plays a short, low-volume system sound after a capture is confirmed.
 pub fn play_capture_sound() -> Result<(), &'static str> {
+    if !is_main_thread() {
+        return run_on_main(play_capture_sound)
+            .ok_or("macOS capture sound did not run on the main thread")?;
+    }
     let sound = NSSound::soundNamed(&NSString::from_str("Tink"))
         .ok_or("macOS capture sound is unavailable")?;
     sound.setVolume(0.18);
@@ -538,6 +581,13 @@ fn configure_inactive_hover_with_cursor<P>(
 where
     P: tauri_nspanel::FromWindow<tauri::Wry> + 'static,
 {
+    if !is_main_thread() {
+        let window = window.clone();
+        return run_on_main(move || {
+            configure_inactive_hover_with_cursor::<P>(&window, initial_cursor, surface)
+        })
+        .ok_or("inactive HUD setup did not run on the main thread")?;
+    }
     let _main_thread =
         MainThreadMarker::new().ok_or("inactive HUD setup must run on the main thread")?;
     let panel = window
@@ -600,6 +650,11 @@ fn anchor_layer_contents_to_bottom(view: &NSView) {
 
 /// Shows the preview without making Captures the active application.
 pub fn show_without_activating(window: &WebviewWindow) -> Result<(), &'static str> {
+    if !is_main_thread() {
+        let window = window.clone();
+        return run_on_main(move || show_without_activating(&window))
+            .ok_or("window reveal did not run on the main thread")?;
+    }
     let _main_thread =
         MainThreadMarker::new().ok_or("window reveal must run on the main thread")?;
     let native_window = native_window(window)?;
@@ -905,6 +960,11 @@ fn display_corner_radius_on_main(display_id: &str) -> f64 {
 /// tracking areas here keeps the first capture on the same path as later ones,
 /// instead of doing one-time AppKit setup while the overlay is being focused.
 pub fn configure_capture_overlay(window: &WebviewWindow) -> Result<(), &'static str> {
+    if !is_main_thread() {
+        let window = window.clone();
+        return run_on_main(move || configure_capture_overlay(&window))
+            .ok_or("capture overlay setup did not run on the main thread")?;
+    }
     let native = native_window(window)?;
     elevate_fullscreen_capture_window(native);
     clear_transparent_window_backing(native);
@@ -917,6 +977,11 @@ pub fn configure_capture_overlay(window: &WebviewWindow) -> Result<(), &'static 
 /// display can be outlined from physical edge to physical edge, including the
 /// menu-bar strip at the top of a macOS display.
 pub fn configure_capture_selector(window: &WebviewWindow) -> Result<(), &'static str> {
+    if !is_main_thread() {
+        let window = window.clone();
+        return run_on_main(move || configure_capture_selector(&window))
+            .ok_or("capture selector setup did not run on the main thread")?;
+    }
     let _main_thread =
         MainThreadMarker::new().ok_or("capture selector setup must run on the main thread")?;
     elevate_fullscreen_capture_window(native_window(window)?);
@@ -925,6 +990,11 @@ pub fn configure_capture_selector(window: &WebviewWindow) -> Result<(), &'static
 
 /// Re-asserts the menu-bar-covering window level after Tauri show/focus.
 pub fn elevate_capture_surface(window: &WebviewWindow) -> Result<(), &'static str> {
+    if !is_main_thread() {
+        let window = window.clone();
+        return run_on_main(move || elevate_capture_surface(&window))
+            .ok_or("capture surface elevation did not run on the main thread")?;
+    }
     elevate_fullscreen_capture_window(native_window(window)?);
     Ok(())
 }
@@ -932,6 +1002,12 @@ pub fn elevate_capture_surface(window: &WebviewWindow) -> Result<(), &'static st
 /// Pins a fullscreen capture surface to the physical display, including the
 /// menu bar, and clips its content to the display's rounded corners.
 pub fn cover_display(window: &WebviewWindow, display_id: &str) -> Result<(), &'static str> {
+    if !is_main_thread() {
+        let window = window.clone();
+        let display_id = display_id.to_owned();
+        return run_on_main(move || cover_display(&window, &display_id))
+            .ok_or("fullscreen capture coverage did not run on the main thread")?;
+    }
     let mtm =
         MainThreadMarker::new().ok_or("fullscreen capture coverage must run on the main thread")?;
     let native = native_window(window)?;
@@ -950,6 +1026,11 @@ pub fn cover_display(window: &WebviewWindow, display_id: &str) -> Result<(), &'s
 /// matching the recording selector, and clear native backing so that layer
 /// cannot flash black while the frozen snapshot decodes.
 pub fn prepare_capture_overlay(window: &WebviewWindow) -> Result<(), &'static str> {
+    if !is_main_thread() {
+        let window = window.clone();
+        return run_on_main(move || prepare_capture_overlay(&window))
+            .ok_or("capture overlay prepare did not run on the main thread")?;
+    }
     let native_window = native_window(window)?;
     elevate_fullscreen_capture_window(native_window);
     clear_transparent_window_backing(native_window);
@@ -965,6 +1046,11 @@ pub fn prepare_capture_overlay(window: &WebviewWindow) -> Result<(), &'static st
 /// Tauri's `show()` uses `makeKeyAndOrderFront:`, which focuses the overlay
 /// before the snapshot has painted and can flash a black WKWebView surface.
 pub fn present_capture_overlay(window: &WebviewWindow) -> Result<(), &'static str> {
+    if !is_main_thread() {
+        let window = window.clone();
+        return run_on_main(move || present_capture_overlay(&window))
+            .ok_or("capture overlay present did not run on the main thread")?;
+    }
     prepare_capture_overlay(window)?;
     native_window(window)?.orderFront(None);
     Ok(())
@@ -975,6 +1061,11 @@ pub fn activate_capture_cursor(
     window: &WebviewWindow,
     use_crosshair: bool,
 ) -> Result<(), &'static str> {
+    if !is_main_thread() {
+        let window = window.clone();
+        return run_on_main(move || activate_capture_cursor(&window, use_crosshair))
+            .ok_or("capture cursor did not run on the main thread")?;
+    }
     let native_window = native_window(window)?;
     if use_crosshair {
         set_tracked_cursor(window, CursorMode::Crosshair, CursorSurface::CaptureOverlay)?;
@@ -1004,6 +1095,11 @@ pub fn reveal_capture_overlay(window: &WebviewWindow) -> Result<(), &'static str
 
 /// Makes a window transparent while keeping it onscreen so WebKit can paint.
 pub fn prepare_window_reveal(window: &WebviewWindow) -> Result<(), &'static str> {
+    if !is_main_thread() {
+        let window = window.clone();
+        return run_on_main(move || prepare_window_reveal(&window))
+            .ok_or("window reveal prepare did not run on the main thread")?;
+    }
     native_window(window)?.setAlphaValue(0.0);
     Ok(())
 }
@@ -1014,12 +1110,22 @@ pub fn prepare_window_reveal(window: &WebviewWindow) -> Result<(), &'static str>
 /// enough to let it paint the next frame while remaining imperceptible until
 /// `reveal_window` makes the finished surface visible.
 pub fn prime_window_reveal(window: &WebviewWindow) -> Result<(), &'static str> {
+    if !is_main_thread() {
+        let window = window.clone();
+        return run_on_main(move || prime_window_reveal(&window))
+            .ok_or("window reveal prime did not run on the main thread")?;
+    }
     native_window(window)?.setAlphaValue(WINDOW_REVEAL_PRIME_ALPHA);
     Ok(())
 }
 
 /// Reveals a window after its WebKit surface has painted.
 pub fn reveal_window(window: &WebviewWindow) -> Result<(), &'static str> {
+    if !is_main_thread() {
+        let window = window.clone();
+        return run_on_main(move || reveal_window(&window))
+            .ok_or("window reveal did not run on the main thread")?;
+    }
     native_window(window)?.setAlphaValue(1.0);
     Ok(())
 }
@@ -1027,6 +1133,11 @@ pub fn reveal_window(window: &WebviewWindow) -> Result<(), &'static str> {
 /// Activates an accessory app window and makes it key so keyboard cancellation
 /// works even when the selector was launched while another app was frontmost.
 pub fn focus_window(window: &WebviewWindow) -> Result<(), &'static str> {
+    if !is_main_thread() {
+        let window = window.clone();
+        return run_on_main(move || focus_window(&window))
+            .ok_or("window focus did not run on the main thread")?;
+    }
     remember_frontmost_app_before_activation();
     make_key_and_activate(window)
 }
@@ -1039,6 +1150,11 @@ pub fn focus_window(window: &WebviewWindow) -> Result<(), &'static str> {
 /// so WebKit's asynchronous window creation cannot leave the document surface
 /// visible but inactive.
 pub fn activate_document_window(window: &WebviewWindow) -> Result<(), &'static str> {
+    if !is_main_thread() {
+        let window = window.clone();
+        return run_on_main(move || activate_document_window(&window))
+            .ok_or("window activation did not run on the main thread")?;
+    }
     make_key_and_activate(window)?;
     let window = window.clone();
     DispatchQueue::main().exec_async(move || {
@@ -1074,6 +1190,10 @@ fn make_key_and_activate(window: &WebviewWindow) -> Result<(), &'static str> {
 /// Call this immediately before focusing the screenshot overlay or another
 /// capture UI so document windows can be returned to the background afterward.
 pub fn remember_frontmost_app_before_activation() {
+    if !is_main_thread() {
+        let _ = run_on_main(remember_frontmost_app_before_activation);
+        return;
+    }
     {
         let slot = FRONTMOST_APP_BEFORE_CAPTURE
             .lock()
@@ -1138,6 +1258,10 @@ pub fn clear_frontmost_app_anchor() {
 /// few frames. Call [`reveal_concealed_document_windows`] when the capture UI
 /// session fully ends.
 pub fn restore_frontmost_app_after_capture() {
+    if !is_main_thread() {
+        let _ = run_on_main(restore_frontmost_app_after_capture);
+        return;
+    }
     let previous = {
         let mut slot = FRONTMOST_APP_BEFORE_CAPTURE
             .lock()
@@ -1158,6 +1282,10 @@ fn current_frontmost_if_not_captures() -> Option<Retained<NSRunningApplication>>
 }
 
 fn yield_activation_to(previous: Option<Retained<NSRunningApplication>>) {
+    if !is_main_thread() {
+        let _ = run_on_main(move || yield_activation_to(previous));
+        return;
+    }
     let Some(previous) = previous else {
         return;
     };
@@ -1184,6 +1312,10 @@ fn concealment_session_is_idle() -> bool {
 /// activation is yielded back and those windows are restored without making
 /// Captures key.
 pub fn run_without_stealing_activation<F: FnOnce()>(work: F) {
+    debug_assert!(
+        is_main_thread(),
+        "run_without_stealing_activation must run on AppKit's main thread"
+    );
     let previous = current_frontmost_if_not_captures();
     let conceal = should_conceal_documents_for_capture_activation(previous.is_some())
         && concealment_session_is_idle();
@@ -1205,6 +1337,11 @@ pub fn run_without_stealing_activation<F: FnOnce()>(work: F) {
 pub fn resign_panel_key_without_raising_documents(
     window: &WebviewWindow,
 ) -> Result<(), &'static str> {
+    if !is_main_thread() {
+        let window = window.clone();
+        return run_on_main(move || resign_panel_key_without_raising_documents(&window))
+            .ok_or("panel key resign did not run on the main thread")?;
+    }
     resign_ns_window_key_without_raising_documents(native_window(window)?);
     Ok(())
 }
@@ -1234,6 +1371,10 @@ fn resign_ns_window_key_without_raising_documents(window: &NSWindow) {
 /// Borderless capture surfaces and nonactivating HUD panels are left alone.
 /// Idempotent while a concealment session is already active.
 pub fn conceal_document_windows_for_capture() {
+    if !is_main_thread() {
+        let _ = run_on_main(conceal_document_windows_for_capture);
+        return;
+    }
     let Some(main_thread) = MainThreadMarker::new() else {
         return;
     };
@@ -1259,6 +1400,10 @@ pub fn conceal_document_windows_for_capture() {
 /// and stay behind the active app. When Captures is frontmost, they reappear with
 /// the rest of the app's documents.
 pub fn reveal_concealed_document_windows() {
+    if !is_main_thread() {
+        let _ = run_on_main(reveal_concealed_document_windows);
+        return;
+    }
     if MainThreadMarker::new().is_none() {
         return;
     }
@@ -1289,6 +1434,11 @@ fn style_mask_is_titled_document(mask: NSWindowStyleMask) -> bool {
 
 /// Restores native overlay state after a capture ends.
 pub fn reset_capture_overlay(window: &WebviewWindow) -> Result<(), &'static str> {
+    if !is_main_thread() {
+        let window = window.clone();
+        return run_on_main(move || reset_capture_overlay(&window))
+            .ok_or("overlay reset did not run on the main thread")?;
+    }
     let result = (|| {
         let native_window = native_window(window)?;
         native_window.setAlphaValue(0.0);
@@ -1309,6 +1459,11 @@ pub fn resize_from_bottom(
     width: f64,
     height: f64,
 ) -> Result<(), &'static str> {
+    if !is_main_thread() {
+        let window = window.clone();
+        return run_on_main(move || resize_from_bottom(&window, width, height))
+            .ok_or("preview resize did not run on the main thread")?;
+    }
     let native_window = native_window(window)?;
     let current = native_window.frame();
     // Avoid a no-op setFrame, which can still force WKWebView to recompose.
@@ -1353,6 +1508,11 @@ pub fn set_thumbnail_cursor(
     window: &WebviewWindow,
     kind: ThumbnailCursorKind,
 ) -> Result<(), &'static str> {
+    if !is_main_thread() {
+        let window = window.clone();
+        return run_on_main(move || set_thumbnail_cursor(&window, kind))
+            .ok_or("thumbnail cursor did not run on the main thread")?;
+    }
     if capture_overlay_owns_cursor() {
         return reset_pointing_cursor_state(window);
     }
@@ -1405,6 +1565,11 @@ pub fn reassert_thumbnail_cursor(
     window: &WebviewWindow,
     kind: ThumbnailCursorKind,
 ) -> Result<(), &'static str> {
+    if !is_main_thread() {
+        let window = window.clone();
+        return run_on_main(move || reassert_thumbnail_cursor(&window, kind))
+            .ok_or("thumbnail cursor reassert did not run on the main thread")?;
+    }
     if matches!(kind, ThumbnailCursorKind::Default) {
         return reset_pointing_cursor_state(window);
     }
@@ -1441,6 +1606,11 @@ fn apply_thumbnail_ns_cursor(kind: ThumbnailCursorKind) {
 /// Clears the preview's stored pointing cursor without changing the cursor
 /// currently owned by another window.
 pub fn reset_pointing_cursor_state(window: &WebviewWindow) -> Result<(), &'static str> {
+    if !is_main_thread() {
+        let window = window.clone();
+        return run_on_main(move || reset_pointing_cursor_state(&window))
+            .ok_or("thumbnail cursor reset did not run on the main thread")?;
+    }
     let native_window = native_window(window)?;
     set_cursor_rects_enabled(native_window, true);
     set_tracked_cursor(window, CursorMode::Arrow, CursorSurface::Thumbnail)
@@ -1622,8 +1792,8 @@ mod tests {
         capture_surface_collection_behavior, capture_surface_window_level,
         clamp_display_corner_radius, corner_radius_from_bezel_path, cursor_mode_is_interactive,
         cursor_surface_can_apply, cursor_surface_can_take_key_window_with_thumbnail_allowed,
-        cursor_surface_uses_key_window, display_corner_radius_points, parse_display_id,
-        reassert_thumbnail_cursor_after_click, shortcut_modifiers_pressed,
+        cursor_surface_uses_key_window, display_corner_radius_points, is_main_thread,
+        parse_display_id, reassert_thumbnail_cursor_after_click, shortcut_modifiers_pressed,
         should_conceal_documents_for_capture_activation, should_release_thumbnail_key_after_event,
         should_reset_cursor_on_exit, style_mask_is_titled_document,
         window_corner_radius_for_major_version,
@@ -1734,6 +1904,26 @@ mod tests {
     #[test]
     fn live_display_corner_lookup_does_not_abort() {
         let radius = display_corner_radius_points("1");
+        assert!(radius.is_finite());
+        assert!(radius >= 0.0);
+    }
+
+    #[test]
+    fn background_threads_are_not_the_appkit_main_thread() {
+        let is_main = std::thread::spawn(is_main_thread)
+            .join()
+            .expect("thread should join");
+        assert!(!is_main);
+    }
+
+    #[test]
+    fn hops_display_corner_lookup_off_the_main_thread() {
+        let radius = std::thread::spawn(|| {
+            let _ = is_main_thread();
+            display_corner_radius_points("1")
+        })
+        .join()
+        .expect("background AppKit hop should not panic");
         assert!(radius.is_finite());
         assert!(radius >= 0.0);
     }

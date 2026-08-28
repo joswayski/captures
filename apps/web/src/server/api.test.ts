@@ -181,6 +181,46 @@ test("delivers normalized feedback to Discord", async () => {
   });
 });
 
+test("delivers crash reports to Discord as a distinct category", async () => {
+  const { env } = createEnv();
+  let webhookBody: unknown;
+  const response = await handleApiRequest(
+    new Request("https://captur.es/api/feedback", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "CF-Connecting-IP": "203.0.113.12",
+      },
+      body: JSON.stringify({
+        message: "Captures closed unexpectedly.\n\nException Type: EXC_BREAKPOINT (SIGTRAP)",
+        category: "crash",
+        app_version: "2026.8.2813",
+        os: "macos",
+        os_version: "26.6.1",
+        arch: "aarch64",
+        source: "desktop",
+      }),
+    }),
+    env,
+    async (_input, init) => {
+      webhookBody = JSON.parse(String(init?.body));
+      return new Response(null, { status: 204 });
+    },
+  );
+
+  assert.equal(response.status, 201);
+  assert.equal(
+    (webhookBody as { embeds: Array<{ title: string; color: number }> }).embeds[0]
+      .title,
+    "Crash report",
+  );
+  assert.equal(
+    (webhookBody as { embeds: Array<{ title: string; color: number }> }).embeds[0]
+      .color,
+    0xd29922,
+  );
+});
+
 test("keeps Discord descriptions within the embed limit", () => {
   const payload = buildDiscordPayload(
     {

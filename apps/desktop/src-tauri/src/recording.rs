@@ -3565,13 +3565,13 @@ async fn prepare_recording_selector(
     selection: &RecordingSelectionSession,
     wake_webview: bool,
 ) -> Result<(), AppError> {
-    create_recording_selector_window(app)?;
     let handle = app.clone();
     let selection = selection.clone();
     let wake_selection = selection.clone();
     let (sender, receiver) = tokio::sync::oneshot::channel();
     app.run_on_main_thread(move || {
         let result = (|| -> Result<(), String> {
+            create_recording_selector_window(&handle).map_err(|error| error.to_string())?;
             let display = &selection.display;
             let window = handle
                 .get_webview_window("recording-selector")

@@ -241,6 +241,17 @@ fn notice_can_restore(app: &AppHandle) -> bool {
 }
 
 fn update_notice_is_visible(app: &AppHandle) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        let app = app.clone();
+        captures_macos_window::run_on_main(move || update_notice_is_visible_inner(&app))
+            .unwrap_or(true)
+    }
+    #[cfg(not(target_os = "macos"))]
+    update_notice_is_visible_inner(app)
+}
+
+fn update_notice_is_visible_inner(app: &AppHandle) -> bool {
     app.get_webview_window("update")
         .is_some_and(|window| window.is_visible().unwrap_or(true))
 }
@@ -435,6 +446,7 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
     if let Err(error) = mark_update_restart_pending() {
         eprintln!("failed to remember update restart: {error}");
     }
+    crate::crash_report::mark_clean_exit();
     app.restart();
 }
 
@@ -569,6 +581,14 @@ fn set_status(app: &AppHandle, status: UpdateStatus) {
 }
 
 fn refresh_menu(app: &AppHandle) {
+    let app = app.clone();
+    let dispatch = app.clone();
+    if let Err(error) = dispatch.run_on_main_thread(move || refresh_menu_on_main(&app)) {
+        eprintln!("failed to refresh the update menu item: {error}");
+    }
+}
+
+fn refresh_menu_on_main(app: &AppHandle) {
     let coordinator = app.state::<UpdateCoordinator>();
     let label = match &*coordinator.status.lock() {
         UpdateStatus::Available {
@@ -713,12 +733,20 @@ fn update_notice_height(status: &UpdateStatus) -> f64 {
 }
 
 fn show_dialog(app: &AppHandle, title: &str, message: &str, kind: MessageDialogKind) {
-    app.dialog()
-        .message(message)
-        .title(title)
-        .buttons(MessageDialogButtons::Ok)
-        .kind(kind)
-        .show(|_| {});
+    let app = app.clone();
+    let dispatch = app.clone();
+    let title = title.to_owned();
+    let message = message.to_owned();
+    if let Err(error) = dispatch.run_on_main_thread(move || {
+        app.dialog()
+            .message(message)
+            .title(title)
+            .buttons(MessageDialogButtons::Ok)
+            .kind(kind)
+            .show(|_| {});
+    }) {
+        eprintln!("failed to show update dialog: {error}");
+    }
 }
 
 fn current_versions(app: &AppHandle) -> (String, String) {

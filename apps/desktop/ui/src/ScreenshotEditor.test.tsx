@@ -2101,7 +2101,7 @@ describe("ScreenshotEditor", () => {
     expect(screen.getByLabelText("Canvas height")).toHaveValue(height);
   });
 
-  it("can start an arrow outside the canvas and expands to fit on release", async () => {
+  it("keeps a past-edge arrow clipped until Expand canvas is clicked", async () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Canvas width");
 
@@ -2139,13 +2139,14 @@ describe("ScreenshotEditor", () => {
       clientY: 260,
     });
 
-    // While past the edge: faded overflow paint + quiet ghost with stronger left edge.
+    // While past the edge: faded overflow only — expand is opt-in, not on release.
     const overflow = viewport.querySelector(".screenshot-canvas-expand-overflow");
-    const ghost = viewport.querySelector(".screenshot-canvas-expand-ghost");
     expect(overflow).toBeTruthy();
-    expect(ghost).toBeTruthy();
-    expect(ghost?.classList.contains("edge-left")).toBe(true);
-    expect(screen.getByText("Release to expand canvas")).toBeInTheDocument();
+    expect(overflow?.classList.contains("is-live")).toBe(true);
+    expect(viewport.querySelector(".screenshot-canvas-expand-ghost")).toBeNull();
+    expect(viewport.querySelector(".screenshot-canvas-expand-particle")).toBeNull();
+    expect(screen.queryByText("Release to expand canvas")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Expand canvas" })).not.toBeInTheDocument();
 
     fireEvent.pointerUp(viewport, {
       button: 0,
@@ -2157,17 +2158,70 @@ describe("ScreenshotEditor", () => {
     expect(
       within(screen.getByRole("region", { name: "Layers" })).getByText("Arrow"),
     ).toBeInTheDocument();
-    // Preview chrome clears after release.
+    expect(screen.getByLabelText("Canvas width")).toHaveValue(1_440);
+    expect(screen.getByLabelText("Canvas height")).toHaveValue(900);
+    expect(viewport.querySelector(".screenshot-canvas-expand-overflow")).toBeTruthy();
+
+    const expand = await screen.findByRole("button", { name: "Expand canvas" });
+    expect(viewport.querySelector(".screenshot-canvas-expand-particle")).toBeNull();
+
+    fireEvent.pointerEnter(expand);
+    expect(viewport.querySelector(".screenshot-canvas-expand-ghost")?.classList.contains("edge-left"))
+      .toBe(true);
+    expect(viewport.querySelectorAll(".screenshot-canvas-expand-particle").length).toBeGreaterThan(0);
+
+    fireEvent.click(expand);
+    expect(screen.queryByRole("button", { name: "Expand canvas" })).not.toBeInTheDocument();
     expect(viewport.querySelector(".screenshot-canvas-expand-overflow")).toBeNull();
-    // Start was ~40px left of the canvas; stroke padding expands further.
-    await waitFor(() => {
-      const sizeLabels = screen.getAllByText(/\d+\s*×\s*\d+/);
-      expect(sizeLabels.some((node) => {
-        const match = node.textContent?.match(/(\d+)\s*×\s*(\d+)/);
-        if (!match) return false;
-        return Number(match[1]) > 1_440;
-      })).toBe(true);
+    expect(Number(screen.getByLabelText("Canvas width").getAttribute("value"))).toBeGreaterThan(1_440);
+  });
+
+  it("still expands when a new drawing sits fully outside the canvas", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Canvas width");
+
+    setCanvasZoomPercent(100);
+    fireEvent.click(screen.getByRole("button", { name: "Arrow (A)" }));
+    const viewport = screen.getByLabelText("Screenshot editing canvas");
+    const canvas = viewport.querySelector("canvas")!;
+    vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
+      x: 100,
+      y: 80,
+      top: 80,
+      left: 100,
+      right: 100 + 1_440,
+      bottom: 80 + 900,
+      width: 1_440,
+      height: 900,
+      toJSON: () => ({}),
     });
+    viewport.setPointerCapture = vi.fn();
+    viewport.hasPointerCapture = vi.fn(() => true);
+    viewport.releasePointerCapture = vi.fn();
+
+    fireEvent.pointerDown(viewport, {
+      button: 0,
+      pointerId: 51,
+      clientX: 60,
+      clientY: 200,
+    });
+    fireEvent.pointerMove(viewport, {
+      pointerId: 51,
+      clientX: 80,
+      clientY: 220,
+    });
+    fireEvent.pointerUp(viewport, {
+      button: 0,
+      pointerId: 51,
+      clientX: 80,
+      clientY: 220,
+    });
+
+    expect(
+      within(screen.getByRole("region", { name: "Layers" })).getByText("Arrow"),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Expand canvas" })).not.toBeInTheDocument();
+    expect(Number(screen.getByLabelText("Canvas width").getAttribute("value"))).toBeGreaterThan(1_440);
   });
 
   it("snaps image drop guides to the closest edge without a selected layer", async () => {

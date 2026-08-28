@@ -19,8 +19,8 @@ export const PRODUCT_SHOTS = [
     width: 1440,
     height: 900,
     title: "Edit screenshots",
-    description: "Text, arrows, and stickers. Drag past an edge to grow the canvas.",
-    alt: "Captures screenshot editor with a landscape, a Choke point label on the fjord, a tiger sticker half off the left edge, and an Evergreen ship dragged past the right edge",
+    description: "Text, arrows, and stickers. Hover a hanging layer to expand the canvas.",
+    alt: "Captures screenshot editor with a fjord landscape, a Choke point label, a tiger on the left cliff, and an Evergreen ship hanging off the right edge with an Expand canvas button",
   },
   {
     id: "capture-controls",
