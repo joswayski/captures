@@ -2318,78 +2318,6 @@
 
 /* -------------------------------------------- compression comparison ------ */
 
-.compression-preview-backdrop {
-  position: fixed;
-  z-index: 300;
-  inset: 0;
-  display: grid;
-  padding: var(--s-8);
-  place-items: center;
-  background: rgba(4, 4, 6, 0.62);
-  backdrop-filter: blur(10px);
-  animation: ui-pop-in var(--dur-2) var(--ease-out);
-}
-
-.compression-preview-dialog {
-  display: grid;
-  width: min(1100px, 100%);
-  max-height: 100%;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--r-2xl);
-  background: var(--surface-raised);
-  box-shadow: var(--shadow-xl);
-}
-
-.compression-preview-header {
-  display: flex;
-  padding: var(--s-6) var(--s-6) var(--s-5);
-  align-items: start;
-  justify-content: space-between;
-  gap: var(--s-6);
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.compression-preview-header h2 {
-  font-size: var(--text-lg);
-}
-
-.compression-preview-header p {
-  margin-top: 3px;
-  color: var(--text-subtle);
-  font-size: var(--text-sm);
-}
-
-.compression-preview-close {
-  display: grid;
-  width: var(--h-md);
-  height: var(--h-md);
-  place-items: center;
-  border: 0;
-  border-radius: var(--r-md);
-  color: var(--text-subtle);
-  background: transparent;
-  font-size: 20px;
-  line-height: 1;
-}
-
-.compression-preview-close:hover {
-  color: var(--text);
-  background: var(--surface-hover);
-}
-
-.compression-preview-colors {
-  display: grid;
-  padding: var(--s-4) var(--s-6);
-  grid-template-columns: 64px minmax(0, 1fr);
-  align-items: center;
-  gap: var(--s-5);
-  border-bottom: 1px solid var(--border-subtle);
-  color: var(--text-subtle);
-  font-size: var(--text-sm);
-}
-
 .compression-preview-frame {
   position: relative;
   min-height: 0;
@@ -2402,6 +2330,25 @@
     linear-gradient(-45deg, transparent 75%, var(--canvas-checker-a) 75%);
   background-position: 0 0, 0 8px, 8px -8px, -8px 0;
   background-size: 16px 16px;
+}
+
+.compression-preview-frame.is-embed {
+  position: absolute;
+  inset: 0;
+  min-height: 0;
+}
+
+.compression-preview-frame.is-live {
+  z-index: 2;
+  background: transparent;
+  background-image: none;
+  pointer-events: none;
+}
+
+.compression-preview-frame.is-cover {
+  z-index: 1;
+  background-color: #050506;
+  background-image: none;
 }
 
 .compression-preview-frame[data-pending="true"] {
@@ -2417,6 +2364,11 @@
   user-select: none;
 }
 
+.compression-preview-frame.is-live .compression-preview-image,
+.compression-preview-frame.is-cover .compression-preview-image {
+  object-fit: fill;
+}
+
 .compression-preview-empty {
   display: grid;
   min-height: 240px;
@@ -2425,27 +2377,48 @@
   font-size: var(--text-sm);
 }
 
-.compression-preview-before-clip {
+.compression-preview-before-clip,
+.compression-preview-after-clip {
   position: absolute;
   top: 0;
   bottom: 0;
-  left: 0;
   overflow: hidden;
 }
 
-.compression-preview-before-clip img {
+.compression-preview-before-clip {
+  left: 0;
+}
+
+.compression-preview-after-clip {
+  right: 0;
+  pointer-events: auto;
+}
+
+.compression-preview-before-clip img,
+.compression-preview-after-clip img {
+  position: absolute;
+  top: 0;
   height: 100%;
+  max-width: none;
   object-fit: contain;
+}
+
+.compression-preview-frame.is-live .compression-preview-after-clip img,
+.compression-preview-frame.is-cover .compression-preview-before-clip img,
+.compression-preview-frame.is-cover .compression-preview-after-clip img {
+  object-fit: fill;
 }
 
 .compression-preview-divider {
   position: absolute;
+  z-index: 1;
   top: 0;
   bottom: 0;
   width: 2px;
   background: var(--glass-text);
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
   transform: translateX(-1px);
+  pointer-events: none;
 }
 
 .compression-preview-handle {
@@ -2464,17 +2437,30 @@
   cursor: ew-resize;
   font-size: var(--text-sm);
   transform: translate(-50%, -50%);
+  pointer-events: auto;
 }
 
 .compression-preview-range {
   position: absolute;
+  z-index: 1;
   inset: auto 0 0;
   width: 100%;
+  height: 28px;
   opacity: 0;
+}
+
+.compression-preview-frame.is-live .compression-preview-range {
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  pointer-events: none;
 }
 
 .compression-preview-badge {
   position: absolute;
+  z-index: 1;
   bottom: var(--s-5);
   padding: var(--s-2) var(--s-4);
   border: 1px solid var(--glass-border);
@@ -2485,6 +2471,7 @@
   font-size: var(--text-xs);
   font-weight: var(--weight-medium);
   font-variant-numeric: tabular-nums;
+  pointer-events: none;
 }
 
 .compression-preview-badge.is-before {
@@ -2500,9 +2487,16 @@
 }
 
 .compression-preview-error {
+  position: absolute;
+  z-index: 1;
+  top: var(--s-4);
+  right: var(--s-4);
+  left: var(--s-4);
   margin: 0;
-  padding: var(--s-4) var(--s-6);
+  padding: var(--s-3) var(--s-4);
+  border-radius: var(--r-md);
   color: var(--danger-text);
   background: var(--danger-surface);
   font-size: var(--text-sm);
+  pointer-events: none;
 }

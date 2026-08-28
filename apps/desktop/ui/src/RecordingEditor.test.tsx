@@ -535,6 +535,33 @@ describe("RecordingEditor", () => {
     });
   });
 
+  it("maps GIF compress quality to palette size instead of a separate color control", async () => {
+    render(<RecordingEditor />);
+    await screen.findByRole("heading", { name: "Edit recording" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Animated GIF" }));
+    expect(screen.queryByRole("combobox", { name: "GIF palette" })).not.toBeInTheDocument();
+    const quality = screen.getByRole("combobox", { name: "Compression quality" });
+    fireEvent.click(quality);
+    fireEvent.click(screen.getByRole("option", { name: /Tiny/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Saved filename" }), {
+      target: { value: "Tiny gif" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("start_recording_export", {
+        request: expect.objectContaining({
+          export: expect.objectContaining({
+            format: "gif",
+            quality: "tiny",
+            gif_max_colors: 64,
+          }),
+        }),
+      });
+    });
+  });
+
   it("estimates the saved size in the background and shows the reduction for Compress", async () => {
     render(<RecordingEditor />);
     await screen.findByRole("heading", { name: "Edit recording" });
@@ -558,7 +585,7 @@ describe("RecordingEditor", () => {
     expect(screen.getByText("≤ 10.0 MB")).toBeInTheDocument();
   });
 
-  it("opens the before/after comparison and requests matching preview frames", async () => {
+  it("shows the before/after comparison in the preview when Compress is selected", async () => {
     const createObjectURL = vi.fn(() => "blob:recording-preview");
     const revokeObjectURL = vi.fn();
     Object.assign(URL, { createObjectURL, revokeObjectURL });
@@ -568,12 +595,15 @@ describe("RecordingEditor", () => {
 
     expect(screen.queryByRole("button", { name: "Compare before / after" }))
       .not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Compression comparison" }))
+      .not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
     fireEvent.click(screen.getByRole("option", { name: /Compress/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Compare before / after" }));
 
-    expect(await screen.findByRole("dialog", { name: "Compression preview" }))
+    expect(screen.getByRole("group", { name: "Compression comparison" }))
       .toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Compression preview" }))
+      .not.toBeInTheDocument();
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("preview_recording_export", expect.objectContaining({
         artifactId: artifact.id,
@@ -584,10 +614,8 @@ describe("RecordingEditor", () => {
     await waitFor(() => {
       expect(createObjectURL).toHaveBeenCalledTimes(2);
     });
-
-    fireEvent.click(screen.getByRole("button", { name: "Close compression preview" }));
-    expect(screen.queryByRole("dialog", { name: "Compression preview" }))
-      .not.toBeInTheDocument();
+    expect(screen.getByAltText("Before compression")).toHaveAttribute("src", "blob:recording-preview");
+    expect(screen.getByAltText("After compression")).toHaveAttribute("src", "blob:recording-preview");
   });
 
   it("uses shared accessible controls for output format and recorded-audio volume", async () => {
@@ -650,6 +678,8 @@ describe("RecordingEditor", () => {
       }
       if (command === "get_settings") return settings;
       if (command === "prepare_recording_timeline_preview") return timeline;
+      if (command === "preview_recording_export") return { beforePng: [1, 2], afterPng: [3, 4] };
+      if (command === "estimate_recording_export") return { sizeBytes: 1_680_000, exact: false };
       throw new Error(`unexpected command: ${command}`);
     });
     render(<RecordingEditor />);

@@ -14,7 +14,6 @@ import {
   useRef,
   useState,
 } from "react";
-import { createPortal } from "react-dom";
 
 import { CompressionPreview } from "./CompressionPreview";
 import { CustomSelect } from "./CustomSelect";
@@ -3065,6 +3064,20 @@ const RECORDING_QUALITY_OPTIONS = [
 
 type RecordingCompressQuality = (typeof RECORDING_QUALITY_OPTIONS)[number]["value"];
 
+/** Keep in sync with GIF palette floors in the export toolchain. */
+function gifMaxColorsForQuality(quality: RecordingCompressQuality): number {
+  switch (quality) {
+    case "tiny":
+      return 64;
+    case "small":
+      return 96;
+    case "standard":
+      return 128;
+    case "high":
+      return 256;
+  }
+}
+
 type RecordingEditorFingerprint = {
   artifact: string;
   makeCopy: boolean;
@@ -3079,7 +3092,6 @@ type RecordingEditorFingerprint = {
   outputFormat: "mp4" | "gif";
   gifFps: number;
   gifMaxWidth: number;
-  gifColors: number;
   quality: RecordingCompressQuality;
   sizeMode: "preserve" | "compress" | "maximum";
   maximumSize: string;
@@ -3118,7 +3130,6 @@ export function RecordingEditor() {
   const [outputFormat, setOutputFormat] = useState<"mp4" | "gif">("mp4");
   const [gifFps, setGifFps] = useState(15);
   const [gifMaxWidth, setGifMaxWidth] = useState(800);
-  const [gifColors, setGifColors] = useState(256);
   const [quality, setQuality] = useState<RecordingCompressQuality>("high");
   const [sizeMode, setSizeMode] = useState<"preserve" | "compress" | "maximum">("preserve");
   const [maximumSize, setMaximumSize] = useState("10");
@@ -3144,7 +3155,6 @@ export function RecordingEditor() {
   const [estimateExact, setEstimateExact] = useState(false);
   const [estimatePending, setEstimatePending] = useState(false);
   const estimateRequestRef = useRef(0);
-  const [compressPreviewOpen, setCompressPreviewOpen] = useState(false);
   const [compressPreviewPending, setCompressPreviewPending] = useState(false);
   const [compressPreviewError, setCompressPreviewError] = useState("");
   const [compressPreviewBeforeUrl, setCompressPreviewBeforeUrl] = useState<string | null>(null);
@@ -3232,7 +3242,6 @@ export function RecordingEditor() {
       const initialSizeMode = loaded.kind === "gif" ? "compress" : "preserve";
       const initialGifFps = loadedSettings?.recording.gif_fps ?? 15;
       const initialGifMaxWidth = loadedSettings?.recording.gif_max_width ?? 800;
-      const initialGifColors = loadedSettings?.recording.gif_max_colors ?? 256;
       setArtifact(loaded);
       setTrimStart(0);
       setTrimEnd(loaded.duration_ms);
@@ -3245,7 +3254,6 @@ export function RecordingEditor() {
       setOutputFormat(initialOutputFormat);
       setGifFps(initialGifFps);
       setGifMaxWidth(initialGifMaxWidth);
-      setGifColors(initialGifColors);
       setQuality("high");
       setSizeMode(initialSizeMode);
       setMaximumSize("10");
@@ -3382,7 +3390,7 @@ export function RecordingEditor() {
       quality: sizeMode === "preserve" ? "preserve" : sizeMode === "compress" ? quality : "preserve",
       max_size_bytes: maximumBytes,
       frames_per_second: outputFormat === "gif" ? gifFps : null,
-      gif_max_colors: outputFormat === "gif" ? gifColors : null,
+      gif_max_colors: outputFormat === "gif" ? gifMaxColorsForQuality(quality) : null,
     };
     return { edit, export: exportSpec, maximumBytes };
   }, [
@@ -3391,7 +3399,6 @@ export function RecordingEditor() {
     cropEnabled,
     customHeight,
     customWidth,
-    gifColors,
     gifFps,
     gifMaxWidth,
     maximumSize,
@@ -3509,16 +3516,22 @@ export function RecordingEditor() {
   }, [artifact, buildExportRequestSpecs, revokeCompressPreviewUrls]);
 
   const canPreviewCompression = sizeMode === "compress" || sizeMode === "maximum";
+  const comparePlayhead = previewPlaying ? null : playheadMs;
 
-  // Encode a fresh sample when the preview opens and whenever settings change
-  // while it stays open. The previous frames stay visible during the refresh.
+  // Encode a fresh sample whenever compress/maximum is active. Pause the
+  // playhead refresh while the preview is playing so we don't re-encode every frame.
   useEffect(() => {
-    if (!canPreviewCompression || !compressPreviewOpen) return;
+    if (!canPreviewCompression) {
+      revokeCompressPreviewUrls();
+      setCompressPreviewPending(false);
+      setCompressPreviewError("");
+      return;
+    }
     const timer = window.setTimeout(() => {
       void loadCompressPreview();
     }, 350);
     return () => window.clearTimeout(timer);
-  }, [canPreviewCompression, compressPreviewOpen, loadCompressPreview]);
+  }, [canPreviewCompression, comparePlayhead, loadCompressPreview, revokeCompressPreviewUrls]);
 
   const exportFingerprint = artifact ? recordingEditorFingerprint({
     artifact: artifact.id,
@@ -3534,7 +3547,6 @@ export function RecordingEditor() {
     outputFormat,
     gifFps,
     gifMaxWidth,
-    gifColors,
     quality,
     sizeMode,
     maximumSize,
@@ -3958,6 +3970,19 @@ export function RecordingEditor() {
             ) : (
               <img src={artifact.media_url} alt="Animated GIF preview" />
             )}
+            {canPreviewCompression && (
+              <CompressionPreview
+                className="is-embed is-cover"
+                beforeUrl={compressPreviewBeforeUrl}
+                afterUrl={compressPreviewAfterUrl}
+                beforeBytes={artifact.size_bytes}
+                afterBytes={sizeMode === "maximum"
+                  ? maximumBytesValid ? maximumBytes : null
+                  : estimatedBytes}
+                pending={compressPreviewPending}
+                error={compressPreviewError}
+              />
+            )}
             {artifact.kind === "video" && (
               <button
                 type="button"
@@ -4124,14 +4149,6 @@ export function RecordingEditor() {
                   onChange={(value) => setGifMaxWidth(Number(value))}
                 />
               </div>
-              <div className="editor-field"><span>Palette</span>
-                <CustomSelect
-                  value={String(gifColors)}
-                  ariaLabel="GIF palette"
-                  options={[64, 96, 128, 192, 256].map((value) => ({ value: String(value), label: `${value} colors` }))}
-                  onChange={(value) => setGifColors(Number(value))}
-                />
-              </div>
             </div>
           )}
         </section>
@@ -4232,8 +4249,6 @@ export function RecordingEditor() {
               onChange={(value) => {
                 const mode = value as typeof sizeMode;
                 setSizeMode(mode);
-                // Preserve mode has no compression to compare.
-                if (mode !== "compress" && mode !== "maximum") setCompressPreviewOpen(false);
               }}
             />
           </div>
@@ -4307,19 +4322,6 @@ export function RecordingEditor() {
               )}
             </strong>
           </div>
-          {canPreviewCompression && (
-            <div className="editor-field recording-compress-preview-field">
-              <span>Preview</span>
-              <button
-                type="button"
-                className="recording-compress-preview-button"
-                disabled={Boolean(exportId)}
-                onClick={() => setCompressPreviewOpen(true)}
-              >
-                Compare before / after
-              </button>
-            </div>
-          )}
         </section>
 
         {artifact.kind === "video" && outputFormat === "mp4" && hasRecordedAudio && <section className="editor-card editor-audio-card">
@@ -4462,27 +4464,6 @@ export function RecordingEditor() {
           </div>
         </div>
       </footer>
-      {compressPreviewOpen && canPreviewCompression && createPortal(
-        <CompressionPreview
-          open={compressPreviewOpen}
-          beforeUrl={compressPreviewBeforeUrl}
-          afterUrl={compressPreviewAfterUrl}
-          beforeBytes={artifact.size_bytes}
-          afterBytes={sizeMode === "maximum"
-            ? maximumBytesValid ? maximumBytes : null
-            : estimatedBytes}
-          formatLabel={outputFormat === "gif" ? "GIF" : "MP4"}
-          qualityLabel={sizeMode === "maximum"
-            ? maximumBytesValid && maximumBytes !== null
-              ? `≤ ${formatFileSize(maximumBytes)}`
-              : "Maximum file size"
-            : RECORDING_QUALITY_OPTIONS.find((option) => option.value === quality)?.label ?? ""}
-          pending={compressPreviewPending}
-          error={compressPreviewError}
-          onClose={() => setCompressPreviewOpen(false)}
-        />,
-        document.body,
-      )}
     </main>
   );
 }

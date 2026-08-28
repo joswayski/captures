@@ -653,10 +653,6 @@
   background: var(--danger-surface);
 }
 
-.recording-compress-preview-button {
-  justify-self: start;
-}
-
 .editor-audio-warning {
   border-color: var(--caution-surface);
   color: var(--caution-text);

@@ -62,8 +62,8 @@ Preview builds update after every successful merge to `main` and may contain bug
 - Pause, resume, restart, and mute while recording
 - Cursor and click highlights in recordings (where supported)
 - Built-in screenshot editor — text, shapes, drawing, crop (drag from outside the canvas to reach an edge; hold Shift to lock aspect), layers, erase to transparent; unsaved edits restore when you reopen
-- Trim, crop, resize, and adjust audio in recordings, with an estimated saved size and before/after compression preview
-- Export PNG, JPEG, or WebP with compression options, including a PNG color slider and before/after preview
+- Trim, crop, resize, and adjust audio in recordings, with an estimated saved size and an in-editor before/after compression comparison
+- Export PNG, JPEG, or WebP with Tiny through High quality presets and an in-editor before/after comparison
 - Mini previews for quick copy, save, and drag into other apps
 - Screenshots during an active recording
 - 30-day capture history, filtered by screenshots, video, or GIF

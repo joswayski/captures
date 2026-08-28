@@ -575,6 +575,28 @@ const RESPONSES: Record<string, unknown> = {
   prepared_drag_artifact_id: null,
 };
 
+async function samplePreviewPng(quality = 0.92): Promise<number[]> {
+  const image = new Image();
+  image.src = CAPTURE_URL;
+  try {
+    await image.decode();
+  } catch {
+    return [];
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = image.naturalWidth || 800;
+  canvas.height = image.naturalHeight || 500;
+  const context = canvas.getContext("2d");
+  if (!context) return [];
+  if (quality < 0.8) context.filter = "saturate(0.65) contrast(1.15)";
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  const blob = await new Promise<Blob | null>((resolve) => {
+    canvas.toBlob(resolve, "image/jpeg", quality);
+  });
+  if (!blob) return [];
+  return Array.from(new Uint8Array(await blob.arrayBuffer()));
+}
+
 /**
  * Overlay windows are transparent and normally float over the desktop. `?stage`
  * paints the sample desktop behind them so they can be reviewed in context.
@@ -593,6 +615,20 @@ export function installPreviewBackend(): void {
   mockIPC(async (command, payload) => {
     if (command === "get_recording_selection") return selection;
     if (command === "select_capture_display") return selectCaptureDisplay(payload);
+    if (command === "preview_screenshot_export") {
+      const quality = Number(
+        (payload as { jpegQuality?: number } | undefined)?.jpegQuality ?? 70,
+      );
+      const bytes = await samplePreviewPng(Math.max(0.2, quality / 100));
+      return { bytes, sizeBytes: bytes.length, format: (payload as { format?: string } | undefined)?.format ?? "png" };
+    }
+    if (command === "preview_recording_export") {
+      const [beforePng, afterPng] = await Promise.all([
+        samplePreviewPng(0.95),
+        samplePreviewPng(0.45),
+      ]);
+      return { beforePng, afterPng };
+    }
     if (command in RESPONSES) return RESPONSES[command];
     // Everything else is a side effect (show window, copy, save…) with no payload.
     return undefined;
