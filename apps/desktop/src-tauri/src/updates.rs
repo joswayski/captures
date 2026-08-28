@@ -9,9 +9,10 @@ use std::{
 };
 
 use parking_lot::Mutex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{
-    AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, menu::MenuItem, window::Color,
+    AppHandle, Emitter, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder, menu::MenuItem,
+    window::Color,
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_opener::OpenerExt;
@@ -22,7 +23,9 @@ use crate::state::AppState;
 const UPDATE_EVENT: &str = "update-status-changed";
 const RELEASES_URL: &str = "https://github.com/joswayski/captures/releases";
 const UPDATE_NOTICE_WIDTH: f64 = 440.0;
-const UPDATE_NOTICE_HEIGHT: f64 = 290.0;
+const UPDATE_NOTICE_MIN_HEIGHT: f64 = 290.0;
+const UPDATE_NOTICE_MAX_HEIGHT: f64 = 480.0;
+const UPDATE_NOTICE_STACK_HEIGHT: f64 = 72.0;
 const RESTART_COUNTDOWN_SECONDS: u8 = 3;
 const RESTART_FADE_DURATION: Duration = Duration::from_millis(400);
 const INITIAL_CHECK_DELAY: Duration = Duration::from_secs(15);
@@ -49,6 +52,7 @@ pub enum UpdateStatus {
         version: String,
         display_version: String,
         notes: Option<String>,
+        changelog: Vec<UpdateChangelogEntry>,
         installable: bool,
         manual_download_url: Option<String>,
     },
@@ -72,6 +76,13 @@ pub enum UpdateStatus {
         current_display_version: String,
         message: String,
     },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct UpdateChangelogEntry {
+    pub version: String,
+    pub display_version: String,
+    pub notes: Option<String>,
 }
 
 pub struct UpdateCoordinator {
@@ -419,6 +430,7 @@ async fn check_for_updates_inner(app: &AppHandle, manual: bool) -> Result<Update
         let version = update.version.clone();
         let display_version = display_version(&version);
         let notes = update.body.clone().filter(|notes| !notes.trim().is_empty());
+        let changelog = stacked_changelog(&update.raw_json, &current_version, &version);
         let installable = platform_update_is_installable();
         *coordinator.pending.lock() = Some(update);
         let status = UpdateStatus::Available {
@@ -427,6 +439,7 @@ async fn check_for_updates_inner(app: &AppHandle, manual: bool) -> Result<Update
             version: version.clone(),
             display_version,
             notes,
+            changelog,
             installable,
             manual_download_url: (!installable).then(|| RELEASES_URL.to_owned()),
         };
@@ -502,8 +515,9 @@ fn schedule_update_notice(app: &AppHandle, version: String) {
 }
 
 fn show_update_notice(app: &AppHandle) {
+    let status = app.state::<UpdateCoordinator>().status.lock().clone();
     let disposition = notice_disposition(
-        &app.state::<UpdateCoordinator>().status.lock(),
+        &status,
         active_capture_or_recording(&app.state::<Arc<AppState>>()),
     );
     match disposition {
@@ -521,14 +535,16 @@ fn show_update_notice(app: &AppHandle) {
         NoticeDisposition::Show => {}
     }
 
+    let height = update_notice_height(&status);
     let app = app.clone();
     let dispatch = app.clone();
     if let Err(error) = dispatch.run_on_main_thread(move || {
         if let Some(window) = app.get_webview_window("update") {
+            let _ = window.set_size(LogicalSize::new(UPDATE_NOTICE_WIDTH, height));
             let _ = window.show();
             return;
         }
-        if let Err(error) = create_update_notice(&app) {
+        if let Err(error) = create_update_notice(&app, height) {
             eprintln!("failed to show update notice: {error}");
         }
     }) {
@@ -536,7 +552,7 @@ fn show_update_notice(app: &AppHandle) {
     }
 }
 
-fn create_update_notice(app: &AppHandle) -> Result<(), tauri::Error> {
+fn create_update_notice(app: &AppHandle, height: f64) -> Result<(), tauri::Error> {
     let (x, y) = update_notice_position(app);
     let window = WebviewWindowBuilder::new(
         app,
@@ -544,7 +560,7 @@ fn create_update_notice(app: &AppHandle) -> Result<(), tauri::Error> {
         WebviewUrl::App("index.html?view=update".into()),
     )
     .title("Captures Update")
-    .inner_size(UPDATE_NOTICE_WIDTH, UPDATE_NOTICE_HEIGHT)
+    .inner_size(UPDATE_NOTICE_WIDTH, height)
     .position(x, y)
     .decorations(false)
     .always_on_top(true)
@@ -577,6 +593,15 @@ fn update_notice_position(app: &AppHandle) -> (f64, f64) {
             (right - UPDATE_NOTICE_WIDTH - 18.0, top + 30.0)
         })
         .unwrap_or((20.0, 30.0))
+}
+
+fn update_notice_height(status: &UpdateStatus) -> f64 {
+    let extra_versions = match status {
+        UpdateStatus::Available { changelog, .. } => changelog.len().saturating_sub(1),
+        _ => 0,
+    };
+    (UPDATE_NOTICE_MIN_HEIGHT + extra_versions as f64 * UPDATE_NOTICE_STACK_HEIGHT)
+        .min(UPDATE_NOTICE_MAX_HEIGHT)
 }
 
 fn show_dialog(app: &AppHandle, title: &str, message: &str, kind: MessageDialogKind) {
@@ -658,6 +683,80 @@ fn display_version(version: &str) -> String {
     format!("{year:04}.{month:02}.{day:02}.{revision}")
 }
 
+fn stacked_changelog(
+    raw_json: &serde_json::Value,
+    current_version: &str,
+    latest_version: &str,
+) -> Vec<UpdateChangelogEntry> {
+    let Some(entries) = raw_json.get("changelog").and_then(|value| value.as_array()) else {
+        return Vec::new();
+    };
+
+    let mut changelog = entries
+        .iter()
+        .filter_map(parse_changelog_entry)
+        .filter(|entry| version_is_newer_than(entry.version.as_str(), current_version))
+        .filter(|entry| !version_is_newer_than(entry.version.as_str(), latest_version))
+        .collect::<Vec<_>>();
+    changelog.sort_by(|left, right| {
+        parse_version_tuple(&right.version).cmp(&parse_version_tuple(&left.version))
+    });
+    changelog
+}
+
+fn parse_changelog_entry(value: &serde_json::Value) -> Option<UpdateChangelogEntry> {
+    #[derive(Deserialize)]
+    struct RawChangelogEntry {
+        version: String,
+        #[serde(default)]
+        display_version: Option<String>,
+        #[serde(default)]
+        notes: Option<String>,
+    }
+
+    let raw = serde_json::from_value::<RawChangelogEntry>(value.clone()).ok()?;
+    if raw.version.trim().is_empty() {
+        return None;
+    }
+    let notes = raw.notes.filter(|notes| !notes.trim().is_empty());
+    Some(UpdateChangelogEntry {
+        display_version: raw
+            .display_version
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| display_version(&raw.version)),
+        version: raw.version,
+        notes,
+    })
+}
+
+fn parse_version_tuple(version: &str) -> Option<(u64, u64, u64)> {
+    let normalized = version.trim_start_matches('v');
+    let core = normalized
+        .split_once('-')
+        .map_or(normalized, |(core, _)| core);
+    let mut parts = core.split('.');
+    let (Some(major), Some(minor), Some(patch), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return None;
+    };
+    Some((
+        major.parse().ok()?,
+        minor.parse().ok()?,
+        patch.parse().ok()?,
+    ))
+}
+
+fn version_is_newer_than(candidate: &str, baseline: &str) -> bool {
+    match (
+        parse_version_tuple(candidate),
+        parse_version_tuple(baseline),
+    ) {
+        (Some(candidate), Some(baseline)) => candidate > baseline,
+        _ => false,
+    }
+}
+
 fn platform_update_is_installable() -> bool {
     #[cfg(target_os = "linux")]
     {
@@ -711,8 +810,9 @@ mod tests {
     use std::sync::atomic::AtomicBool;
 
     use super::{
-        AtomicFlagGuard, NoticeDisposition, UpdateStatus, check_error_status, display_version,
-        notice_disposition, release_channel_enabled, restart_blocker, take_restart_marker,
+        AtomicFlagGuard, NoticeDisposition, UpdateChangelogEntry, UpdateStatus, check_error_status,
+        display_version, notice_disposition, release_channel_enabled, restart_blocker,
+        stacked_changelog, take_restart_marker, update_notice_height, version_is_newer_than,
     };
 
     #[test]
@@ -791,6 +891,7 @@ mod tests {
             version: "2026.7.1902".into(),
             display_version: "2026.07.19.2".into(),
             notes: None,
+            changelog: Vec::new(),
             installable: true,
             manual_download_url: None,
         };
@@ -806,5 +907,95 @@ mod tests {
             ),
             NoticeDisposition::Ignore
         );
+    }
+
+    #[test]
+    fn stacks_changelog_entries_between_the_installed_and_latest_versions() {
+        let manifest = serde_json::json!({
+            "version": "2026.8.2705",
+            "notes": "Five",
+            "changelog": [
+                {
+                    "version": "2026.8.2702",
+                    "display_version": "2026.08.27.2",
+                    "notes": "Two"
+                },
+                {
+                    "version": "2026.8.2703",
+                    "display_version": "2026.08.27.3",
+                    "notes": "Three"
+                },
+                {
+                    "version": "2026.8.2704",
+                    "display_version": "2026.08.27.4",
+                    "notes": "Four"
+                },
+                {
+                    "version": "2026.8.2705",
+                    "display_version": "2026.08.27.5",
+                    "notes": "Five"
+                }
+            ]
+        });
+
+        assert_eq!(
+            stacked_changelog(&manifest, "2026.8.2703", "2026.8.2705"),
+            vec![
+                UpdateChangelogEntry {
+                    version: "2026.8.2705".into(),
+                    display_version: "2026.08.27.5".into(),
+                    notes: Some("Five".into()),
+                },
+                UpdateChangelogEntry {
+                    version: "2026.8.2704".into(),
+                    display_version: "2026.08.27.4".into(),
+                    notes: Some("Four".into()),
+                },
+            ]
+        );
+        assert!(!version_is_newer_than("2026.8.2703", "2026.8.2703"));
+        assert!(version_is_newer_than("2026.8.2704", "2026.8.2703"));
+        assert!(!version_is_newer_than("2026.8.2704", "2026.8.2705"));
+    }
+
+    #[test]
+    fn keeps_a_compact_notice_for_one_version_and_grows_for_stacked_notes() {
+        let single = available_status(vec![UpdateChangelogEntry {
+            version: "2026.7.1902".into(),
+            display_version: "2026.07.19.2".into(),
+            notes: Some("Adds automatic releases.".into()),
+        }]);
+        let stacked = available_status(vec![
+            UpdateChangelogEntry {
+                version: "2026.8.2705".into(),
+                display_version: "2026.08.27.5".into(),
+                notes: Some("Five".into()),
+            },
+            UpdateChangelogEntry {
+                version: "2026.8.2704".into(),
+                display_version: "2026.08.27.4".into(),
+                notes: Some("Four".into()),
+            },
+            UpdateChangelogEntry {
+                version: "2026.8.2703".into(),
+                display_version: "2026.08.27.3".into(),
+                notes: Some("Three".into()),
+            },
+        ]);
+        assert_eq!(update_notice_height(&single), 290.0);
+        assert_eq!(update_notice_height(&stacked), 434.0);
+    }
+
+    fn available_status(changelog: Vec<UpdateChangelogEntry>) -> UpdateStatus {
+        UpdateStatus::Available {
+            current_version: "2026.7.1901".into(),
+            current_display_version: "2026.07.19.1".into(),
+            version: "2026.7.1902".into(),
+            display_version: "2026.07.19.2".into(),
+            notes: None,
+            changelog,
+            installable: true,
+            manual_download_url: None,
+        }
     }
 }

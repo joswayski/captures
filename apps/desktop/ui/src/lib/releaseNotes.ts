@@ -35,3 +35,29 @@ export function releaseNoteItems(markdown: string): string[] {
 
   return items;
 }
+
+export interface ReleaseNoteGroup {
+  version: string;
+  displayVersion: string;
+  items: string[];
+}
+
+export function stackedReleaseNotes(
+  changelog: Array<{ version: string; display_version: string; notes: string | null }> | null | undefined,
+  fallbackNotes: string | null | undefined,
+  fallbackDisplayVersion: string,
+): ReleaseNoteGroup[] {
+  if (changelog && changelog.length > 0) {
+    return changelog.map((entry) => ({
+      version: entry.version,
+      displayVersion: entry.display_version,
+      items: entry.notes ? releaseNoteItems(entry.notes) : [],
+    }));
+  }
+  if (!fallbackNotes) return [];
+  return [{
+    version: "",
+    displayVersion: fallbackDisplayVersion,
+    items: releaseNoteItems(fallbackNotes),
+  }];
+}

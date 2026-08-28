@@ -41,7 +41,7 @@ import {
 } from "../../../../shared/themes";
 import { formatFileSize } from "./lib/format";
 import { reconcileClipboardState } from "./lib/clipboard";
-import { releaseNoteItems } from "./lib/releaseNotes";
+import { stackedReleaseNotes } from "./lib/releaseNotes";
 import {
   editorCropAfterDrag,
   formatEditorTime,
@@ -497,7 +497,10 @@ export function UpdateNotice() {
   const downloading = status?.state === "downloading" ? status : null;
   const restarting = status?.state === "restarting" ? status : null;
   const error = actionError || (status?.state === "error" ? status.message : "");
-  const notes = available?.notes ? releaseNoteItems(available.notes) : [];
+  const groups = available
+    ? stackedReleaseNotes(available.changelog, available.notes, available.display_version)
+    : [];
+  const stacked = groups.length > 1;
   const progress = downloading?.total
     ? Math.min(100, Math.round((downloading.downloaded / downloading.total) * 100))
     : null;
@@ -547,12 +550,39 @@ export function UpdateNotice() {
 
       <div className={`update-notice-body${available && !error ? "" : " update-notice-body-status"}`}>
         {available && !error && (
-          <section className="update-notes" aria-label="What's new">
+          <section className={`update-notes${stacked ? " update-notes-stacked" : ""}`} aria-label="What's new">
             <h2>What’s new</h2>
-            {notes.length > 0 ? (
-              <ul>
-                {notes.map((note, index) => <li key={`${index}-${note}`}>{note}</li>)}
-              </ul>
+            {stacked && (
+              <p className="update-notes-intro">
+                This update includes all of the following changes:
+              </p>
+            )}
+            {groups.length > 0 ? (
+              <div className="update-notes-scroll">
+                {groups.map((group) => {
+                  const headingId = `update-notes-${group.version || group.displayVersion}`;
+                  return (
+                    <section
+                      key={group.version || group.displayVersion}
+                      className="update-notes-group"
+                      aria-labelledby={stacked ? headingId : undefined}
+                    >
+                      {stacked && <h3 id={headingId}>{group.displayVersion}</h3>}
+                      {group.items.length > 0 ? (
+                        <ul>
+                          {group.items.map((note, index) => (
+                            <li key={`${group.version}-${index}-${note}`}>{note}</li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="update-notes-empty">
+                          Release notes aren’t available for this Preview.
+                        </p>
+                      )}
+                    </section>
+                  );
+                })}
+              </div>
             ) : (
               <p className="update-notes-empty">Release notes aren’t available for this update.</p>
             )}
