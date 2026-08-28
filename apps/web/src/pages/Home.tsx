@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { isWithinCookingWindow } from "../cookingPreview";
 import type { PreviewDownloadId } from "../detectPreviewDownload";
+import ProductGallery from "../ProductGallery";
 
 const REPO_URL = "https://github.com/joswayski/captures";
 const RELEASES_URL = `${REPO_URL}/releases`;
@@ -177,6 +178,8 @@ export default function Home({
             )}
           </div>
         </section>
+
+        <ProductGallery />
 
         <section aria-labelledby="latest-changes-heading" className="mt-14 border-t border-border pt-10">
           <h2

@@ -2,7 +2,7 @@ import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { nitro } from "nitro/vite";
-import { defineConfig } from "vite";
+import { defineConfig, searchForWorkspaceRoot } from "vite";
 
 const REPOSITORY = "joswayski/captures";
 const CHANGE_COUNT = 10;
@@ -154,6 +154,9 @@ export default defineConfig(async () => {
     },
     server: {
       port: 5174,
+      fs: {
+        allow: [searchForWorkspaceRoot(import.meta.dirname)],
+      },
     },
   };
 });

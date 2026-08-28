@@ -10,6 +10,8 @@ apps/desktop/src-tauri
 apps/desktop/ui
 apps/desktop/assets
 docs
+!docs/images
+!docs/images/**
 scripts
 *.md
 .DS_Store
