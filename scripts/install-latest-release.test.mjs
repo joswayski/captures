@@ -7,6 +7,7 @@ import test from "node:test";
 
 import {
   expectedChecksum,
+  parseGithubNdjson,
   parseOptions,
   platformSpec,
   releaseReadiness,
@@ -123,4 +124,44 @@ test("verifies the downloaded installer against SHA256SUMS", () => {
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("parses GitHub paginated NDJSON without loading full release bodies", () => {
+  assert.deepEqual(parseGithubNdjson(""), []);
+  assert.deepEqual(parseGithubNdjson("\n"), []);
+  assert.deepEqual(
+    parseGithubNdjson([
+      '{"id":3,"tag_name":"v2026.07.31.1","draft":false,"prerelease":true,"published_at":"2026-07-31T17:00:00Z","assets":[{"name":"Captures.dmg","state":"uploaded"}]}',
+      '{"id":6,"tag_name":"preview","draft":false,"prerelease":true,"published_at":"2026-08-01T19:00:00Z","assets":[]}',
+    ].join("\n")),
+    [
+      {
+        id: 3,
+        tag_name: "v2026.07.31.1",
+        draft: false,
+        prerelease: true,
+        published_at: "2026-07-31T17:00:00Z",
+        assets: [{ name: "Captures.dmg", state: "uploaded" }],
+      },
+      {
+        id: 6,
+        tag_name: "preview",
+        draft: false,
+        prerelease: true,
+        published_at: "2026-08-01T19:00:00Z",
+        assets: [],
+      },
+    ],
+  );
+  assert.throws(() => parseGithubNdjson("{not json}"), /invalid JSON on line 1/u);
+
+  const slim = parseGithubNdjson([
+    '{"id":3,"name":"Captures Preview 2026.07.31.1","tag_name":"v2026.07.31.1","draft":false,"prerelease":true,"published_at":"2026-07-31T17:00:00Z","created_at":"2026-07-31T16:00:00Z","assets":[{"name":"Captures_2026.7.3101_aarch64.dmg","state":"uploaded"},{"name":"SHA256SUMS","state":"uploaded"}]}',
+    '{"id":6,"name":"Captures Preview — Latest","tag_name":"preview","draft":false,"prerelease":true,"published_at":"2026-08-01T19:00:00Z","created_at":"2026-08-01T19:00:00Z","assets":[]}',
+  ].join("\n"));
+  const release = latestPreviewRelease(slim);
+  assert.equal(release.id, 3);
+  const readiness = releaseReadiness(release, platformSpec("darwin", "arm64"));
+  assert.equal(readiness.ready, true);
+  assert.equal(readiness.installAsset.name, "Captures_2026.7.3101_aarch64.dmg");
 });

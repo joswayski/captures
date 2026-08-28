@@ -22,6 +22,12 @@ const REPOSITORY = "joswayski/captures";
 const COMPLETION_ASSET = "SHA256SUMS";
 const DEFAULT_WAIT_MS = 60 * 60 * 1_000;
 const POLL_MS = 15_000;
+/** Node's spawnSync default (1 MiB) is too small for GitHub's full release list. */
+const GITHUB_JSON_MAX_BUFFER = 32 * 1024 * 1024;
+const RELEASE_LIST_JQ = [
+  ".[] | {id,name,tag_name,draft,prerelease,published_at,created_at,",
+  "assets:[((.assets // [])[] | {name,state})]}",
+].join("");
 
 function log(message) {
   console.log(message);
@@ -38,6 +44,7 @@ function run(command, args, options = {}) {
     stdio: options.stdio ?? "pipe",
     env: options.env ?? process.env,
     cwd: options.cwd,
+    maxBuffer: options.maxBuffer ?? GITHUB_JSON_MAX_BUFFER,
   });
 }
 
@@ -148,17 +155,36 @@ export function verifyChecksum(assetPath, manifestPath) {
   return actual;
 }
 
-function githubJson(endpoint, paginate = false) {
-  const args = paginate
-    ? ["api", "--paginate", "--slurp", endpoint]
-    : ["api", endpoint];
-  const result = runChecked("gh", args);
+export function parseGithubNdjson(stdout) {
+  const trimmed = stdout.trim();
+  if (!trimmed) return [];
+  return trimmed.split(/\r?\n/u).map((line, index) => {
+    try {
+      return JSON.parse(line);
+    } catch {
+      throw new Error(`GitHub returned invalid JSON on line ${index + 1}`);
+    }
+  });
+}
+
+function githubJson(endpoint) {
+  const result = runChecked("gh", ["api", endpoint]);
   try {
-    const parsed = JSON.parse(result.stdout);
-    return paginate ? parsed.flat() : parsed;
+    return JSON.parse(result.stdout);
   } catch {
     throw new Error(`GitHub returned invalid JSON for ${endpoint}`);
   }
+}
+
+function listPublishedReleases() {
+  const result = runChecked("gh", [
+    "api",
+    "--paginate",
+    "--jq",
+    RELEASE_LIST_JQ,
+    `repos/${REPOSITORY}/releases?per_page=100`,
+  ]);
+  return parseGithubNdjson(result.stdout);
 }
 
 function confirmGitHubAccess() {
@@ -175,8 +201,7 @@ function confirmGitHubAccess() {
 }
 
 function fetchLatestRelease() {
-  const releases = githubJson(`repos/${REPOSITORY}/releases?per_page=100`, true);
-  const release = latestPreviewRelease(releases);
+  const release = latestPreviewRelease(listPublishedReleases());
   if (!release) throw new Error(`no published Preview releases were found in ${REPOSITORY}`);
   return release;
 }
