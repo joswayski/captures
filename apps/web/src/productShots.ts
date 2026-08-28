@@ -9,8 +9,9 @@ export const PRODUCT_SHOTS = [
     file: "capture-selection.jpg",
     width: 1600,
     height: 1000,
-    title: "Draw a region",
-    description: "Click and drag a box on the desktop, or switch to a window or full display.",
+    title: "Capture what you need",
+    description:
+      "A region, a window, or the full display — screenshot and record from the same menu.",
     alt: "Captures region capture over an aerial satellite view of the Ever Given in the Suez Canal, with a highlighted box, corner handles, and the capture menu",
   },
   {
@@ -18,8 +19,8 @@ export const PRODUCT_SHOTS = [
     file: "screenshot-editor.jpg",
     width: 1440,
     height: 900,
-    title: "Edit screenshots",
-    description: "Text, arrows, and stickers. Hover a hanging layer to expand the canvas.",
+    title: "Built-in editor",
+    description: "Add text, arrows, and stickers right after you capture.",
     alt: "Captures screenshot editor with the Suez Canal, a Choke point label, a tiger on the left bank, and an Evergreen ship hanging off the right edge with an Expand canvas button",
   },
   {
@@ -36,8 +37,8 @@ export const PRODUCT_SHOTS = [
     file: "capture-controls.jpg",
     width: 1200,
     height: 228,
-    title: "Everything in reach",
-    description: "Capture type and target controls sit together in one compact menu.",
+    title: "One compact menu",
+    description: "Screenshot or record. Region, window, and options stay together.",
     alt: "Close-up of the Captures capture menu with screenshot and recording options",
   },
   {
@@ -45,8 +46,8 @@ export const PRODUCT_SHOTS = [
     file: "preferences.jpg",
     width: 1200,
     height: 900,
-    title: "Make it yours",
-    description: "Light or dark appearance, accent colors, shortcuts, and capture defaults.",
+    title: "Fully customizable",
+    description: "Light or dark, accent colors, shortcuts, and capture defaults.",
     alt: "Captures Preferences showing the appearance, accent color, and capture settings",
   },
 ] as const;

@@ -7,14 +7,14 @@ Captures is a cross-platform screen capture utility built for quick captures and
 
 ## A quick look
 
-Edit a capture with text, arrows, and stickers. Hover a hanging layer to expand the canvas.
+A built-in editor for text, arrows, and stickers.
 
 ![Captures screenshot editor with the Suez Canal, a Choke point label, a tiger on the left bank, and an Evergreen ship hanging off the right edge with an Expand canvas button](docs/images/screenshot-editor.jpg)
 
 <p align="center">
   <img src="docs/images/capture-controls.jpg" alt="Close-up of the Captures capture menu with screenshot and recording options" width="728">
   <br>
-  <sub><strong>Everything in reach</strong> with capture type and target controls together in one compact menu.</sub>
+  <sub><strong>One compact menu</strong> with screenshot or record, and region, window, and options together.</sub>
 </p>
 
 <table>
@@ -22,7 +22,7 @@ Edit a capture with text, arrows, and stickers. Hover a hanging layer to expand 
     <td width="50%">
       <img src="docs/images/capture-selection.jpg" alt="Captures region capture over an aerial satellite view of the Ever Given in the Suez Canal, with a highlighted box, corner handles, and the capture menu" width="100%">
       <br>
-      <sub><strong>Draw a region</strong> like other screenshot tools, or pick a window or full display.</sub>
+      <sub><strong>Capture what you need</strong> — a region, a window, or the full display. Screenshot and record from the same menu.</sub>
     </td>
     <td width="50%">
       <img src="docs/images/video-editor.jpg" alt="Captures video editor trimming a total solar eclipse to a few seconds of totality, with crop handles and save controls" width="100%">
@@ -34,7 +34,7 @@ Edit a capture with text, arrows, and stickers. Hover a hanging layer to expand 
     <td colspan="2" align="center">
       <img src="docs/images/preferences.jpg" alt="Captures Preferences showing the appearance, accent color, and capture settings" width="72%">
       <br>
-      <sub><strong>Make it yours</strong> with a light or dark appearance, accent colors, shortcuts, and capture and recording defaults.</sub>
+      <sub><strong>Fully customizable</strong> with light or dark, accent colors, shortcuts, and capture defaults.</sub>
     </td>
   </tr>
 </table>
