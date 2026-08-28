@@ -9,7 +9,7 @@ Captures is a cross-platform screen capture utility built for quick captures and
 
 Edit a capture with text, arrows, and stickers. Hover a hanging layer to expand the canvas.
 
-![Captures screenshot editor with a fjord landscape, a Choke point label, a tiger on the left cliff, and an Evergreen ship hanging off the right edge with an Expand canvas button](docs/images/screenshot-editor.jpg)
+![Captures screenshot editor with the Suez Canal, a Choke point label, a tiger on the left bank, and an Evergreen ship hanging off the right edge with an Expand canvas button](docs/images/screenshot-editor.jpg)
 
 <p align="center">
   <img src="docs/images/capture-controls.jpg" alt="Close-up of the Captures capture menu with screenshot and recording options" width="728">

@@ -20,7 +20,7 @@ export const PRODUCT_SHOTS = [
     height: 900,
     title: "Edit screenshots",
     description: "Text, arrows, and stickers. Hover a hanging layer to expand the canvas.",
-    alt: "Captures screenshot editor with a fjord landscape, a Choke point label, a tiger on the left cliff, and an Evergreen ship hanging off the right edge with an Expand canvas button",
+    alt: "Captures screenshot editor with the Suez Canal, a Choke point label, a tiger on the left bank, and an Evergreen ship hanging off the right edge with an Expand canvas button",
   },
   {
     id: "capture-controls",
