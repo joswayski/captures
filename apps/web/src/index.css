@@ -354,11 +354,6 @@
     line-height: 1.4;
     text-align: center;
     pointer-events: none;
-    transition: opacity 160ms ease-out;
-  }
-
-  .product-lightbox-viewport.is-zoomed ~ .product-lightbox-hint {
-    opacity: 0;
   }
 
   .gallery-nav {
@@ -426,10 +421,6 @@
     }
 
     .product-lightbox-image.is-settling {
-      transition: none;
-    }
-
-    .product-lightbox-hint {
       transition: none;
     }
 

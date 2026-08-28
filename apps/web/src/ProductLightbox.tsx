@@ -269,6 +269,7 @@ export default function ProductLightbox({ open, src, shot, onClose }: ProductLig
             className="product-lightbox-tool"
             aria-label="Zoom out"
             disabled={atMinZoom}
+            onPointerDown={(event) => event.stopPropagation()}
             onClick={() => zoomBy(1 / ZOOM_BUTTON_FACTOR)}
           >
             <MinusIcon />
@@ -278,12 +279,18 @@ export default function ProductLightbox({ open, src, shot, onClose }: ProductLig
             className="product-lightbox-tool"
             aria-label="Zoom in"
             disabled={atMaxZoom}
+            onPointerDown={(event) => event.stopPropagation()}
             onClick={() => zoomBy(ZOOM_BUTTON_FACTOR)}
           >
             <PlusIcon />
           </button>
         </div>
-        <button type="button" className="product-lightbox-tool" onClick={onClose}>
+        <button
+          type="button"
+          className="product-lightbox-tool"
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={onClose}
+        >
           <CloseIcon />
           <span className="sr-only">Close</span>
         </button>
