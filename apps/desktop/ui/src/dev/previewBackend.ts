@@ -570,7 +570,6 @@ const RESPONSES: Record<string, unknown> = {
     sprite_width: TIMELINE_FRAMES * 120,
     sprite_height: 76,
   },
-  estimate_recording_export: { sizeBytes: 9_120_000, exact: false },
   estimate_screenshot_export: 512_000,
   prepared_drag_artifact_id: null,
 };
@@ -628,6 +627,24 @@ export function installPreviewBackend(): void {
         samplePreviewPng(0.45),
       ]);
       return { beforePng, afterPng };
+    }
+    if (command === "estimate_recording_export") {
+      const request = payload as {
+        edit?: { output_width?: number | null; output_height?: number | null };
+        export?: { quality?: string };
+      } | undefined;
+      const original = RECORDING.size_bytes;
+      if (request?.export?.quality && request.export.quality !== "preserve") {
+        return { sizeBytes: Math.round(original * 0.49), exact: false };
+      }
+      const outHeight = request?.edit?.output_height;
+      const outWidth = request?.edit?.output_width;
+      if (typeof outHeight === "number" && outHeight < RECORDING.height) {
+        const width = typeof outWidth === "number" ? outWidth : RECORDING.width;
+        const scale = (width * outHeight) / (RECORDING.width * RECORDING.height);
+        return { sizeBytes: Math.round(original * Math.max(0.18, scale)), exact: false };
+      }
+      return { sizeBytes: original, exact: true };
     }
     if (command in RESPONSES) return RESPONSES[command];
     // Everything else is a side effect (show window, copy, save…) with no payload.
