@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -353,6 +353,9 @@ describe("RecordingEditor", () => {
     expect((filename as HTMLInputElement).selectionStart).toBe(0);
     expect((filename as HTMLInputElement).selectionEnd).toBe("Captures_1140x692".length);
     expect(screen.getByRole("checkbox", { name: "Make a copy" })).not.toBeChecked();
+    expect(screen.getByRole("combobox", { name: "Format" })).toHaveTextContent(".mp4");
+    expect(filename.closest(".recording-filename-input"))
+      .toContainElement(screen.getByRole("combobox", { name: "Format" }));
     expect(screen.queryByRole("radio")).not.toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Save quality" })).toHaveTextContent(
       "Preserve quality",
@@ -607,11 +610,12 @@ describe("RecordingEditor", () => {
     render(<RecordingEditor />);
     await screen.findByRole("heading", { name: "Edit recording" });
 
-    const format = screen.getByRole("group", { name: "Output format" });
-    expect(within(format).getByRole("button", { name: "Video (MP4)" }))
-      .toHaveAttribute("aria-pressed", "true");
-    expect(within(format).getByRole("button", { name: "Animated GIF" }))
-      .toHaveAttribute("aria-pressed", "false");
+    const format = screen.getByRole("combobox", { name: "Format" });
+    expect(format).toHaveTextContent(".mp4");
+    fireEvent.click(format);
+    expect(screen.getByRole("option", { name: "MP4" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("option", { name: "GIF" })).toHaveAttribute("aria-selected", "false");
+    fireEvent.keyDown(format, { key: "Escape" });
 
     const systemVolume = screen.getByRole("slider", { name: "System audio volume" });
     const microphoneVolume = screen.getByRole("slider", { name: "Microphone volume" });
@@ -654,7 +658,9 @@ describe("RecordingEditor", () => {
     });
     render(<RecordingEditor />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Animated GIF" }));
+    fireEvent.click(await screen.findByRole("combobox", { name: "Format" }));
+    fireEvent.click(screen.getByRole("option", { name: "GIF" }));
+    expect(screen.getByRole("heading", { name: "GIF settings" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Audio" })).toBeInTheDocument();
     expect(screen.getByText("GIFs do not include recorded audio.")).toBeInTheDocument();
   });
