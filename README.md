@@ -7,9 +7,9 @@ Captures is a cross-platform screen capture utility built for quick captures and
 
 ## A quick look
 
-Open one compact menu to switch between screenshots and recordings, then choose a region, window, or full display.
+Click and drag a region like other screenshot tools, or pick a window or full display from one compact menu.
 
-![The Captures menu over a frozen desktop, with screenshot and recording controls in one bar](docs/images/capture-selection.jpg)
+![Captures region capture over a landscape, with a highlighted box, corner handles, and the capture menu](docs/images/capture-selection.jpg)
 
 <p align="center">
   <img src="docs/images/capture-controls.jpg" alt="Close-up of the Captures capture menu with screenshot and recording options" width="728">
@@ -20,12 +20,12 @@ Open one compact menu to switch between screenshots and recordings, then choose 
 <table>
   <tr>
     <td width="50%">
-      <img src="docs/images/screenshot-editor.jpg" alt="Captures screenshot editor with annotation tools, layers, and export controls" width="100%">
+      <img src="docs/images/screenshot-editor.jpg" alt="Captures screenshot editor annotating a landscape with text labels, arrows, and an expanded canvas" width="100%">
       <br>
-      <sub><strong>Edit screenshots</strong> with annotations, layers, canvas controls, and flexible export options.</sub>
+      <sub><strong>Edit screenshots</strong> with text, arrows, canvas controls, and flexible export options.</sub>
     </td>
     <td width="50%">
-      <img src="docs/images/video-editor.jpg" alt="Captures video editor with a preview, trimming timeline, and save controls" width="100%">
+      <img src="docs/images/video-editor.jpg" alt="Captures video editor with a landscape preview, crop handles, trimming timeline, and save controls" width="100%">
       <br>
       <sub><strong>Polish recordings</strong> with preview, trimming, crop and size controls, and export options.</sub>
     </td>
