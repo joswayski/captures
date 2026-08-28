@@ -195,7 +195,7 @@ describe("RecordingHud", () => {
 
     render(<StartupNotice />);
 
-    expect(screen.getByText("Captures is here whenever you need it")).toBeInTheDocument();
+    expect(screen.queryByText("Captures is here whenever you need it")).not.toBeInTheDocument();
     expect(screen.getByText(/Use the (menu bar|tray) icon, or press/)).toBeInTheDocument();
     expect(await screen.findByText("Ctrl")).toBeInTheDocument();
     expect(screen.getByText("Shift")).toBeInTheDocument();

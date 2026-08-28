@@ -36,7 +36,10 @@ body,
 /* Floating notices size themselves to the native window; never scroll. */
 html:has(.update-notice),
 body:has(.update-notice),
-#root:has(.update-notice) {
+#root:has(.update-notice),
+html:has(.startup-notice),
+body:has(.startup-notice),
+#root:has(.startup-notice) {
   overflow: hidden;
   background: var(--surface-raised);
 }

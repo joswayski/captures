@@ -307,7 +307,6 @@ export function StartupNotice() {
           <CaptureIcon />
         </div>
         <div>
-          <strong>Captures is here whenever you need it</strong>
           <p>
             Use the {trayLabel} icon, or press{" "}
             {keys.map((key, index) => (

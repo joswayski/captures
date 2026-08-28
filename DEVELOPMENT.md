@@ -55,8 +55,10 @@ module per family of surfaces from `apps/desktop/ui/src/styles/`.
 
 - Regular windows follow the light/dark/system appearance setting.
 - Surfaces that float over the desktop — capture overlay, capture menu, recording
-  controls, mini previews, transient notices — use the fixed `--glass-*` media palette
-  so they stay legible on any wallpaper.
+  controls, mini previews, saved/hidden recording notices — use the fixed `--glass-*`
+  media palette so they stay legible on any wallpaper.
+- The update and startup notices are solid `--surface-raised` cards (opaque native
+  windows) so they do not show a transparent halo.
 - Accent is reserved for the primary capture action, selection, and focus. Status
   colors keep stable meanings: signal for recording and destructive, green for saved,
   blue for progress.
