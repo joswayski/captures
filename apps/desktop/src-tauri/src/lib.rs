@@ -169,6 +169,12 @@ pub fn run() {
                 // Belt-and-suspenders if CloseRequested was prevented or skipped.
                 tauri::WindowEvent::Destroyed => {
                     clear_editor_layer_presence_for_window(window);
+                    if is_editor_window_label(window.label())
+                        || window.label() == "viewer"
+                        || window.label().starts_with(VIEWER_WINDOW_PREFIX)
+                    {
+                        updates::restore_update_notice(window.app_handle());
+                    }
                 }
                 _ => {}
             }
@@ -494,6 +500,7 @@ async fn start_capture_inner(
         hide_capture_overlay(&app);
         restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
         reveal_document_windows_after_capture(&app);
+        updates::restore_update_notice(&app);
     }
     result
 }
@@ -854,7 +861,26 @@ fn cancel_capture(
         restore_thumbnail_capture(&app, state.inner(), session.thumbnail_capture_generation);
     }
     reveal_document_windows_after_capture(&app);
+    updates::restore_update_notice(&app);
     Ok(())
+}
+
+/// Cancel screenshot capture UI so an update can restart. Failures are logged
+/// and ignored — an open overlay must not block installation.
+pub(crate) fn dismiss_capture_ui_for_update(app: &AppHandle, state: &Arc<AppState>) {
+    cancel_screenshot_countdown_inner(app, state.clone());
+    hide_capture_overlay(app);
+    let generations: Vec<u64> = state
+        .sessions
+        .lock()
+        .drain()
+        .map(|(_, session)| session.thumbnail_capture_generation)
+        .collect();
+    for generation in generations {
+        restore_thumbnail_capture(app, state, generation);
+    }
+    recording::dismiss_recording_selection_for_update(app, state);
+    reveal_document_windows_after_capture(app);
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -978,6 +1004,7 @@ pub(crate) fn cancel_screenshot_countdown_inner(app: &AppHandle, state: Arc<AppS
         restore_thumbnail_capture(app, &state, thumbnail_capture_generation);
     }
     reveal_document_windows_after_capture(app);
+    updates::restore_update_notice(app);
 }
 
 fn show_screenshot_countdown(
@@ -2265,6 +2292,7 @@ fn remove_artifact(app: &AppHandle, state: &Arc<AppState>, artifact_id: &str) ->
     }
     app.emit("artifact-removed", artifact_id)
         .map_err(|error| error.to_string())?;
+    updates::restore_update_notice(app);
     Ok(())
 }
 
@@ -3211,7 +3239,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let mut tray = TrayIconBuilder::with_id(TRAY_ICON_ID)
         .menu(&menu)
-        .tooltip("Captures is here whenever you need it");
+        .tooltip("Captures");
 
     #[cfg(target_os = "macos")]
     if let Some(icon) = macos_tray_icon() {
@@ -3397,6 +3425,10 @@ const MACOS_MICROPHONE_SETTINGS_URLS: &[&str] = &[
 /// a new window does not flash the opposite theme before the webview loads.
 const DOCUMENT_WINDOW_BACKGROUND_DARK: Color = Color(16, 16, 20, 255);
 const DOCUMENT_WINDOW_BACKGROUND_LIGHT: Color = Color(245, 245, 247, 255);
+/// `--surface-raised` for the update and startup notices so those windows stay
+/// opaque instead of showing a transparent halo around the card.
+const NOTICE_WINDOW_BACKGROUND_DARK: Color = Color(22, 22, 27, 255);
+const NOTICE_WINDOW_BACKGROUND_LIGHT: Color = Color(255, 255, 255, 255);
 
 pub(crate) fn resolve_appearance_is_dark(app: &AppHandle) -> bool {
     match app.state::<Arc<AppState>>().settings().appearance {
@@ -3419,6 +3451,15 @@ pub(crate) fn document_window_chrome(app: &AppHandle) -> (Option<Theme>, Color) 
         (Some(Theme::Dark), DOCUMENT_WINDOW_BACKGROUND_DARK)
     } else {
         (Some(Theme::Light), DOCUMENT_WINDOW_BACKGROUND_LIGHT)
+    }
+}
+
+/// Opaque fill for the update and startup notices.
+pub(crate) fn notice_window_chrome(app: &AppHandle) -> (Option<Theme>, Color) {
+    if resolve_appearance_is_dark(app) {
+        (Some(Theme::Dark), NOTICE_WINDOW_BACKGROUND_DARK)
+    } else {
+        (Some(Theme::Light), NOTICE_WINDOW_BACKGROUND_LIGHT)
     }
 }
 
@@ -3535,6 +3576,7 @@ fn create_startup_notice(
     placement: StartupNoticePlacement,
     visible_for: std::time::Duration,
 ) -> Result<(), tauri::Error> {
+    let (theme, background) = notice_window_chrome(app);
     let window = WebviewWindowBuilder::new(
         app,
         "startup",
@@ -3548,9 +3590,9 @@ fn create_startup_notice(
     .visible_on_all_workspaces(true)
     .skip_taskbar(true)
     .resizable(false)
-    .shadow(false)
-    .transparent(true)
-    .background_color(Color(0, 0, 0, 0))
+    .shadow(true)
+    .theme(theme)
+    .background_color(background)
     .focused(false)
     .visible(false)
     .build()?;
@@ -5912,6 +5954,14 @@ mod tests {
         assert_eq!(
             super::DOCUMENT_WINDOW_BACKGROUND_LIGHT,
             super::Color(245, 245, 247, 255)
+        );
+        assert_eq!(
+            super::NOTICE_WINDOW_BACKGROUND_DARK,
+            super::Color(22, 22, 27, 255)
+        );
+        assert_eq!(
+            super::NOTICE_WINDOW_BACKGROUND_LIGHT,
+            super::Color(255, 255, 255, 255)
         );
     }
 

@@ -104,6 +104,18 @@ const fn screenshot_capture_is_blocked_for(recording_state: Option<RecordingStat
     )
 }
 
+const fn recording_in_progress_for(recording_state: Option<RecordingState>) -> bool {
+    matches!(
+        recording_state,
+        Some(
+            RecordingState::Countdown
+                | RecordingState::Recording
+                | RecordingState::Paused
+                | RecordingState::Finalizing
+        )
+    )
+}
+
 pub(crate) fn recording_session_is_active(state: &AppState) -> bool {
     state
         .recording
@@ -111,6 +123,17 @@ pub(crate) fn recording_session_is_active(state: &AppState) -> bool {
         .coordinator
         .snapshot(now_ms())
         .is_some_and(|snapshot| !snapshot.state.is_terminal())
+}
+
+pub(crate) fn recording_in_progress(state: &AppState) -> bool {
+    recording_in_progress_for(
+        state
+            .recording
+            .lock()
+            .coordinator
+            .snapshot(now_ms())
+            .map(|snapshot| snapshot.state),
+    )
 }
 
 pub(crate) fn recording_controls_are_available(state: &AppState) -> bool {
@@ -255,6 +278,7 @@ pub(crate) async fn prepare_capture_selector_inner(
         }
         crate::hide_window(&app, "startup");
         crate::hide_recording_saved_notices(&app);
+        crate::updates::defer_visible_notice(&app);
         crate::hide_window(&app, "update");
         if let Err(error) = prepare_recording_selector(&app, &summary, true).await {
             *state.recording_selection.lock() = None;
@@ -541,6 +565,21 @@ fn cancel_recording_selection_inner(
     crate::set_capture_huds_protected(app, false);
     crate::restore_thumbnail_capture_ui(app, state);
     Ok(())
+}
+
+pub(crate) fn dismiss_recording_selection_for_update(app: &AppHandle, state: &Arc<AppState>) {
+    let mut selection = state.recording_selection.lock();
+    if selection.is_none() {
+        return;
+    }
+    *selection = None;
+    drop(selection);
+    destroy_recording_selector(app);
+    #[cfg(target_os = "macos")]
+    captures_macos_window::restore_frontmost_app_after_capture();
+    crate::reveal_document_windows_after_capture(app);
+    crate::set_capture_huds_protected(app, false);
+    crate::restore_thumbnail_capture_ui(app, state);
 }
 
 #[tauri::command]
@@ -3244,6 +3283,7 @@ fn restore_recording_ui(app: &AppHandle, state: &Arc<AppState>) {
     crate::reveal_document_windows_after_capture(app);
     crate::set_capture_huds_protected(app, false);
     crate::restore_thumbnail_capture_ui(app, state);
+    crate::updates::restore_update_notice(app);
 }
 
 #[cfg(target_os = "macos")]
@@ -3943,8 +3983,9 @@ mod tests {
 
     use super::{
         RECORDING_HUD_BOTTOM_MARGIN, RECORDING_HUD_FULL_WIDTH, RECORDING_HUD_HEIGHT,
-        media_target_suffix, recording_hud_logical_position, replace_recording_source,
-        replace_recording_source_at, replacement_working_path, screenshot_capture_is_blocked_for,
+        media_target_suffix, recording_hud_logical_position, recording_in_progress_for,
+        replace_recording_source, replace_recording_source_at, replacement_working_path,
+        screenshot_capture_is_blocked_for,
     };
 
     #[test]
@@ -4014,6 +4055,18 @@ mod tests {
         assert!(screenshot_capture_is_blocked_for(Some(
             RecordingState::Finalizing
         )));
+    }
+
+    #[test]
+    fn treats_live_recordings_as_in_progress_for_updates() {
+        assert!(recording_in_progress_for(Some(RecordingState::Countdown)));
+        assert!(recording_in_progress_for(Some(RecordingState::Recording)));
+        assert!(recording_in_progress_for(Some(RecordingState::Paused)));
+        assert!(recording_in_progress_for(Some(RecordingState::Finalizing)));
+        assert!(!recording_in_progress_for(Some(RecordingState::Selecting)));
+        assert!(!recording_in_progress_for(Some(RecordingState::Editor)));
+        assert!(!recording_in_progress_for(Some(RecordingState::Ready)));
+        assert!(!recording_in_progress_for(None));
     }
 
     #[test]

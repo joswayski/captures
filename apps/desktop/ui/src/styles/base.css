@@ -36,8 +36,12 @@ body,
 /* Floating notices size themselves to the native window; never scroll. */
 html:has(.update-notice),
 body:has(.update-notice),
-#root:has(.update-notice) {
+#root:has(.update-notice),
+html:has(.startup-notice),
+body:has(.startup-notice),
+#root:has(.startup-notice) {
   overflow: hidden;
+  background: var(--surface-raised);
 }
 
 h1,
@@ -143,7 +147,6 @@ kbd {
 
 .on-media kbd,
 .capture-selector-note kbd,
-.startup-notice kbd,
 .recording-controls-hidden-notice kbd {
   border-color: var(--glass-border-strong);
   color: var(--glass-text);

@@ -470,6 +470,7 @@ function updateStatus(): UpdateStatus {
     ],
     installable: true,
     manual_download_url: null,
+    will_close_open_captures: flag("captures"),
   };
 }
 
