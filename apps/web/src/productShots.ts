@@ -10,8 +10,7 @@ export const PRODUCT_SHOTS = [
     width: 1600,
     height: 1000,
     title: "Capture what you need",
-    description:
-      "A region, a window, or the full display — screenshot and record from the same menu.",
+    description: "A region, a window, or the full display. Screenshot and record from the same menu.",
     alt: "Captures region capture over an aerial satellite view of the Ever Given in the Suez Canal, with a highlighted box, corner handles, and the capture menu",
   },
   {
@@ -20,7 +19,7 @@ export const PRODUCT_SHOTS = [
     width: 1440,
     height: 900,
     title: "Built-in editor",
-    description: "Add text, arrows, and stickers right after you capture.",
+    description: "Add text, arrows, and shapes right after you capture.",
     alt: "Captures screenshot editor with the Suez Canal, a Choke point label, a tiger on the left bank, and an Evergreen ship hanging off the right edge with an Expand canvas button",
   },
   {
@@ -29,17 +28,17 @@ export const PRODUCT_SHOTS = [
     width: 1440,
     height: 980,
     title: "Polish recordings",
-    description: "Preview, trim, crop, and export video with size and audio controls.",
+    description: "Preview, trim, crop, and export video with quality and audio controls.",
     alt: "Captures video editor trimming a total solar eclipse to a few seconds of totality, with crop handles and save controls",
   },
   {
     id: "capture-controls",
     file: "capture-controls.jpg",
-    width: 1200,
-    height: 228,
+    width: 1600,
+    height: 416,
     title: "One compact menu",
     description: "Screenshot or record. Region, window, and options stay together.",
-    alt: "Close-up of the Captures capture menu with screenshot and recording options",
+    alt: "Close-up of the Captures capture menu in Record mode, with Region selected and the Start recording button highlighted",
   },
   {
     id: "preferences",
@@ -47,7 +46,7 @@ export const PRODUCT_SHOTS = [
     width: 1200,
     height: 900,
     title: "Fully customizable",
-    description: "Light or dark, accent colors, shortcuts, and capture defaults.",
+    description: "Light or dark appearance, accent colors, shortcuts, and capture defaults.",
     alt: "Captures Preferences showing the appearance, accent color, and capture settings",
   },
 ] as const;
