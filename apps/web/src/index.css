@@ -190,21 +190,29 @@
     }
   }
 
+  .product-gallery {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .product-gallery:focus {
+    outline: none;
+  }
+
   .product-gallery:focus-visible {
     @apply rounded-md outline-2 outline-offset-4 outline-accent;
   }
 
   /*
    * Size the frame to each still instead of a 16:10 crop box. A fixed ratio
-   * plus overflow:hidden clipped the editor chrome (filename, save, path)
-   * on phones, where padding made the inner box even shorter than 16:10.
+   * used to clip editor chrome on phones. The image now sizes itself; overflow
+   * is hidden so in-place pinch zoom stays inside the card.
    */
   .product-gallery-frame {
     position: relative;
     display: grid;
     place-items: center;
-    overflow: visible;
-    padding: 0.5rem;
+    overflow: hidden;
+    padding: 0.2rem;
     border: 1px solid var(--theme-web-border);
     border-radius: 0.75rem;
     background: color-mix(in srgb, var(--theme-web-ink) 4%, var(--theme-web-canvas));
@@ -215,10 +223,26 @@
     -webkit-tap-highlight-color: transparent;
   }
 
+  @media (max-width: 639px) {
+    .product-gallery {
+      margin-inline: -0.75rem;
+    }
+  }
+
   @media (min-width: 640px) {
     .product-gallery-frame {
-      padding: 0.75rem;
+      padding: 0.4rem;
     }
+  }
+
+  .product-gallery-frame.is-zoomed {
+    cursor: grab;
+    touch-action: none;
+    overscroll-behavior: contain;
+  }
+
+  .product-gallery-frame.is-zoomed:active {
+    cursor: grabbing;
   }
 
   .product-gallery-image {
@@ -228,7 +252,13 @@
     border-radius: 0.375rem;
     user-select: none;
     pointer-events: none;
+    transform-origin: center center;
+    will-change: transform;
     animation: gallery-fade 180ms ease-out;
+  }
+
+  .product-gallery-image.is-settling {
+    transition: transform 180ms ease-out;
   }
 
   .product-lightbox {
@@ -405,6 +435,10 @@
   @media (prefers-reduced-motion: reduce) {
     .product-gallery-image {
       animation: none;
+    }
+
+    .product-gallery-image.is-settling {
+      transition: none;
     }
 
     .product-lightbox-image.is-settling {

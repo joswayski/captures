@@ -6,8 +6,13 @@ import preferences from "../../../docs/images/preferences.jpg";
 import screenshotEditor from "../../../docs/images/screenshot-editor.jpg";
 import videoEditor from "../../../docs/images/video-editor.jpg";
 import ProductLightbox from "./ProductLightbox";
-import { galleryFrameGesture } from "./productLightbox";
+import {
+  galleryAllowsLightboxOpen,
+  galleryAllowsSlideGesture,
+  galleryFrameGesture,
+} from "./productLightbox";
 import { PRODUCT_SHOTS, type ProductShot } from "./productShots";
+import { useImageZoom } from "./useImageZoom";
 
 const SHOT_SRC = {
   "capture-controls.jpg": captureControls,
@@ -20,13 +25,23 @@ const SHOT_SRC = {
 export default function ProductGallery() {
   const headingId = useId();
   const captionId = useId();
+  const hintId = useId();
+  const frameRef = useRef<HTMLDivElement>(null);
+  const imageRef = useRef<HTMLImageElement>(null);
   const [index, setIndex] = useState(0);
   const [lightboxOpen, setLightboxOpen] = useState(false);
-  const swipeStart = useRef<{ x: number; y: number } | null>(null);
+  const [openedByPointer, setOpenedByPointer] = useState(false);
   const suppressClick = useRef(false);
   const shot = PRODUCT_SHOTS[index] ?? PRODUCT_SHOTS[0];
   const lastIndex = PRODUCT_SHOTS.length - 1;
   const src = SHOT_SRC[shot.file];
+  const imageZoom = useImageZoom({
+    active: !lightboxOpen,
+    resetKey: shot.file,
+    viewportRef: frameRef,
+    imageRef,
+    wheel: "modified",
+  });
 
   const goTo = useCallback((next: number) => {
     setIndex((next + PRODUCT_SHOTS.length) % PRODUCT_SHOTS.length);
@@ -35,7 +50,10 @@ export default function ProductGallery() {
   const previous = useCallback(() => goTo(index - 1), [goTo, index]);
   const next = useCallback(() => goTo(index + 1), [goTo, index]);
   const closeLightbox = useCallback(() => setLightboxOpen(false), []);
-  const openLightbox = useCallback(() => setLightboxOpen(true), []);
+  const openLightbox = useCallback((fromPointer: boolean) => {
+    setOpenedByPointer(fromPointer);
+    setLightboxOpen(true);
+  }, []);
 
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (lightboxOpen) return;
@@ -53,20 +71,30 @@ export default function ProductGallery() {
       goTo(lastIndex);
     } else if (event.key === "Enter") {
       event.preventDefault();
-      openLightbox();
+      openLightbox(false);
     }
   }
 
   function handlePointerDown(event: PointerEvent<HTMLDivElement>) {
-    if (event.pointerType === "mouse" && event.button !== 0) return;
-    swipeStart.current = { x: event.clientX, y: event.clientY };
+    imageZoom.onPointerDown(event);
+  }
+
+  function handlePointerMove(event: PointerEvent<HTMLDivElement>) {
+    imageZoom.onPointerMove(event);
   }
 
   function handlePointerUp(event: PointerEvent<HTMLDivElement>) {
-    const start = swipeStart.current;
-    swipeStart.current = null;
-    if (start === null) return;
-    const action = galleryFrameGesture(event.clientX - start.x, event.clientY - start.y);
+    const release = imageZoom.onPointerUp(event);
+    if (!release) return;
+    if (!galleryAllowsLightboxOpen(release.scale, release.pinched)) {
+      suppressClick.current = true;
+      return;
+    }
+    if (!galleryAllowsSlideGesture(release.scale)) {
+      suppressClick.current = true;
+      return;
+    }
+    const action = galleryFrameGesture(release.deltaX, release.deltaY);
     if (action === "previous") {
       suppressClick.current = true;
       previous();
@@ -79,7 +107,7 @@ export default function ProductGallery() {
   }
 
   function handlePointerCancel() {
-    swipeStart.current = null;
+    imageZoom.onPointerCancel();
   }
 
   function handleFrameClick() {
@@ -87,8 +115,12 @@ export default function ProductGallery() {
       suppressClick.current = false;
       return;
     }
-    openLightbox();
+    if (imageZoom.zoomed) return;
+    openLightbox(true);
   }
+
+  const frameClass = imageZoom.zoomed ? "product-gallery-frame is-zoomed" : "product-gallery-frame";
+  const imageClass = imageZoom.settling ? "product-gallery-image is-settling" : "product-gallery-image";
 
   return (
     <section aria-labelledby={headingId} className="mt-14 border-t border-border pt-10">
@@ -104,28 +136,34 @@ export default function ProductGallery() {
         role="region"
         aria-roledescription="carousel"
         aria-label="Product screenshots"
-        aria-describedby={captionId}
+        aria-describedby={`${captionId} ${hintId}`}
         tabIndex={0}
         onKeyDown={handleKeyDown}
       >
         <div
-          className="product-gallery-frame"
+          ref={frameRef}
+          className={frameClass}
           aria-haspopup="dialog"
           aria-expanded={lightboxOpen}
           onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
           onPointerCancel={handlePointerCancel}
           onClick={handleFrameClick}
         >
           <img
             key={shot.file}
-            className="product-gallery-image"
+            ref={imageRef}
+            className={imageClass}
             src={src}
             alt={shot.alt}
             width={shot.width}
             height={shot.height}
             decoding="async"
             draggable={false}
+            style={{
+              transform: `translate(${imageZoom.zoom.x}px, ${imageZoom.zoom.y}px) scale(${imageZoom.zoom.scale})`,
+            }}
           />
         </div>
 
@@ -139,6 +177,10 @@ export default function ProductGallery() {
             {index + 1}/{PRODUCT_SHOTS.length}
           </p>
         </div>
+        <p id={hintId} className="sr-only">
+          Pinch or use a trackpad pinch to zoom this screenshot. Tap to open a larger view. Swipe or
+          use Previous and Next to change shots.
+        </p>
         <p className="sr-only" aria-live="polite">
           Screenshot {index + 1} of {PRODUCT_SHOTS.length}: {shot.title}
         </p>
@@ -170,7 +212,13 @@ export default function ProductGallery() {
         </div>
       </div>
 
-      <ProductLightbox open={lightboxOpen} src={src} shot={shot} onClose={closeLightbox} />
+      <ProductLightbox
+        open={lightboxOpen}
+        src={src}
+        shot={shot}
+        onClose={closeLightbox}
+        suppressFocusRing={openedByPointer}
+      />
     </section>
   );
 }
@@ -192,4 +240,3 @@ function ChevronIcon({ direction }: { direction: "left" | "right" }) {
     </svg>
   );
 }
-

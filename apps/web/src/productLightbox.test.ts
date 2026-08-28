@@ -10,12 +10,18 @@ import {
   SWIPE_THRESHOLD_PX,
   clampPan,
   clampScale,
+  clearRestoredDialogFocus,
+  galleryAllowsLightboxOpen,
+  galleryAllowsSlideGesture,
   galleryFrameGesture,
   isDoubleTap,
+  isZoomed,
   pointerDistance,
   pointerMidpoint,
   scaleAroundPoint,
   shouldCloseOnSwipe,
+  shouldPreventGalleryTouchScroll,
+  shouldZoomFromWheel,
   toggleZoom,
   wheelScaleFactor,
   zoomFromCenter,
@@ -31,6 +37,33 @@ test("gallery taps open the lightbox and swipes change slides", () => {
   assert.equal(galleryFrameGesture(120, 20), "previous");
   assert.equal(galleryFrameGesture(-SWIPE_THRESHOLD_PX, 8), "next");
   assert.equal(galleryFrameGesture(20, 80), "ignore");
+});
+
+test("a zoomed gallery keeps pinch and pan instead of changing slides", () => {
+  assert.equal(isZoomed(1), false);
+  assert.equal(isZoomed(1.05), false);
+  assert.equal(isZoomed(1.06), true);
+  assert.equal(galleryAllowsSlideGesture(1), true);
+  assert.equal(galleryAllowsSlideGesture(2), false);
+  assert.equal(galleryAllowsLightboxOpen(1, false), true);
+  assert.equal(galleryAllowsLightboxOpen(1, true), false);
+  assert.equal(galleryAllowsLightboxOpen(2, false), false);
+});
+
+test("two-finger or zoomed gallery touches take over scrolling", () => {
+  assert.equal(shouldPreventGalleryTouchScroll(1, 1), false);
+  assert.equal(shouldPreventGalleryTouchScroll(2, 1), true);
+  assert.equal(shouldPreventGalleryTouchScroll(1, 2), true);
+});
+
+test("gallery wheel zoom only happens with a modifier (trackpad pinch)", () => {
+  assert.equal(shouldZoomFromWheel(false, false), false);
+  assert.equal(shouldZoomFromWheel(true, false), true);
+  assert.equal(shouldZoomFromWheel(false, true), true);
+});
+
+test("pointer-opened lightboxes can drop the restored focus ring", () => {
+  clearRestoredDialogFocus(false);
 });
 
 test("pinch helpers measure span and midpoint", () => {

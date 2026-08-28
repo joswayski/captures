@@ -6,6 +6,8 @@ import {
   MAX_SCALE,
   ZOOM_BUTTON_FACTOR,
   clampPan,
+  clearRestoredDialogFocus,
+  isZoomed,
   pointerDistance,
   pointerMidpoint,
   scaleAroundPoint,
@@ -23,9 +25,16 @@ type ProductLightboxProps = {
   src: string;
   shot: ProductShot;
   onClose: () => void;
+  suppressFocusRing?: boolean;
 };
 
-export default function ProductLightbox({ open, src, shot, onClose }: ProductLightboxProps) {
+export default function ProductLightbox({
+  open,
+  src,
+  shot,
+  onClose,
+  suppressFocusRing = false,
+}: ProductLightboxProps) {
   const titleId = useId();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -70,8 +79,14 @@ export default function ProductLightbox({ open, src, shot, onClose }: ProductLig
       setSettling(false);
     } else if (dialog.open) {
       dialog.close();
+      // Closing a modal restores focus as if it were keyboard navigation, which
+      // leaves a blue :focus-visible ring on the gallery after a tap.
+      clearRestoredDialogFocus(suppressFocusRing);
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => clearRestoredDialogFocus(suppressFocusRing));
+      });
     }
-  }, [open]);
+  }, [open, suppressFocusRing]);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -163,7 +178,7 @@ export default function ProductLightbox({ open, src, shot, onClose }: ProductLig
       }
       return;
     }
-    if (zoomRef.current.scale > 1.05) {
+    if (isZoomed(zoomRef.current.scale)) {
       panRef.current = { x: event.clientX, y: event.clientY, transform: zoomRef.current };
     }
   }
@@ -195,7 +210,7 @@ export default function ProductLightbox({ open, src, shot, onClose }: ProductLig
       return;
     }
 
-    if (panRef.current && zoomRef.current.scale > 1.05) {
+    if (panRef.current && isZoomed(zoomRef.current.scale)) {
       commit(
         {
           scale: panRef.current.transform.scale,
@@ -253,8 +268,8 @@ export default function ProductLightbox({ open, src, shot, onClose }: ProductLig
     return { x: clientX - rect.left, y: clientY - rect.top };
   }
 
-  const zoomed = zoom.scale > 1.05;
-  const atMinZoom = zoom.scale <= 1.05;
+  const zoomed = isZoomed(zoom.scale);
+  const atMinZoom = !zoomed;
   const atMaxZoom = zoom.scale >= MAX_SCALE - 0.01;
 
   return (
