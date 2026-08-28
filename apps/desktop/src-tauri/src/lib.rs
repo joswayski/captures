@@ -4245,7 +4245,6 @@ fn hide_thumbnail_window(window: &tauri::WebviewWindow) {
         if run_on_appkit_main(move || hide_thumbnail_window_inner(&window)).is_none() {
             eprintln!("failed to hide the capture thumbnail on the main thread");
         }
-        return;
     }
     #[cfg(not(target_os = "macos"))]
     hide_thumbnail_window_inner(window);
@@ -4270,7 +4269,6 @@ fn show_thumbnail_window(window: &tauri::WebviewWindow) {
         if run_on_appkit_main(move || show_thumbnail_window_inner(&window)).is_none() {
             eprintln!("failed to show the capture thumbnail on the main thread");
         }
-        return;
     }
     #[cfg(not(target_os = "macos"))]
     show_thumbnail_window_inner(window);
@@ -4898,7 +4896,6 @@ fn hide_window(app: &AppHandle, label: &str) {
         if run_on_appkit_main(move || hide_window_inner(&app, &hop_label)).is_none() {
             eprintln!("failed to hide {label} on the main thread");
         }
-        return;
     }
     #[cfg(not(target_os = "macos"))]
     hide_window_inner(app, label);
@@ -4945,11 +4942,11 @@ fn hide_capture_huds(app: &AppHandle, include_mini_previews: bool, hud_labels: &
     {
         let app = app.clone();
         let labels: Vec<String> = hud_labels.iter().map(|label| (*label).to_owned()).collect();
-        return run_on_appkit_main(move || {
+        run_on_appkit_main(move || {
             let label_refs: Vec<&str> = labels.iter().map(String::as_str).collect();
             hide_capture_huds_inner(&app, include_mini_previews, &label_refs)
         })
-        .unwrap_or(false);
+        .unwrap_or(false)
     }
     #[cfg(not(target_os = "macos"))]
     hide_capture_huds_inner(app, include_mini_previews, hud_labels)
@@ -4990,7 +4987,6 @@ fn hide_recording_saved_notices(app: &AppHandle) {
         if run_on_appkit_main(move || hide_recording_saved_notices_inner(&app)).is_none() {
             eprintln!("failed to hide recording saved notices on the main thread");
         }
-        return;
     }
     #[cfg(not(target_os = "macos"))]
     hide_recording_saved_notices_inner(app);
@@ -5017,7 +5013,6 @@ fn set_capture_huds_protected(app: &AppHandle, protected: bool) {
         if run_on_appkit_main(move || set_capture_huds_protected_inner(&app, protected)).is_none() {
             eprintln!("failed to update capture HUD protection on the main thread");
         }
-        return;
     }
     #[cfg(not(target_os = "macos"))]
     set_capture_huds_protected_inner(app, protected);
@@ -5066,7 +5061,6 @@ fn hide_capture_overlay(app: &AppHandle) {
         if run_on_appkit_main(move || hide_capture_overlay_inner(&app)).is_none() {
             eprintln!("failed to hide the capture overlay on the main thread");
         }
-        return;
     }
     #[cfg(not(target_os = "macos"))]
     hide_capture_overlay_inner(app);

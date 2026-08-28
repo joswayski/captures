@@ -61,6 +61,7 @@ import {
   arrowWithBend,
   boundedCropRect,
   cropDragAspectRatio,
+  canvasExpandButtonAnchor,
   canvasOverflowEdges,
   closestPointOnArrow,
   collectAlignmentSnapLines,
@@ -94,6 +95,7 @@ import {
   imageSizeAtHeight,
   imageSizeAtWidth,
   isCurveableStrokeShape,
+  isFullyOutsideCanvas,
   isSupportedImageFile,
   loadImageFile,
   outputDimensions,
@@ -289,7 +291,7 @@ type DropToastAnchor = {
   top: number;
 };
 
-/** Live preview while a layer is dragged/resized past the canvas edge. */
+/** Off-canvas remainder of a layer: live while dragging, idle on hover. */
 type CanvasExpandPreview = {
   edges: ImageSnapEdge[];
   /** Expanded canvas in current document coordinates (may have negative origin). */
@@ -1555,6 +1557,9 @@ export function ScreenshotEditor() {
   const [resizePreviewBounds, setResizePreviewBounds] = useState<EditorRect | null>(null);
   const [alignmentGuides, setAlignmentGuides] = useState<AlignmentSnapGuide[]>([]);
   const [canvasExpandPreview, setCanvasExpandPreview] = useState<CanvasExpandPreview | null>(null);
+  /** Overflowing layer under the pointer; idle expand affordance follows this. */
+  const [overflowHoverId, setOverflowHoverId] = useState<string | null>(null);
+  const [expandButtonHover, setExpandButtonHover] = useState(false);
   const [trimEdgesHover, setTrimEdgesHover] = useState(false);
   const [canvasCursor, setCanvasCursor] = useState<string | undefined>(undefined);
   /**
@@ -2204,6 +2209,25 @@ export function ScreenshotEditor() {
 
   const displayScale = zoomMode === "fit" ? fitScale : zoom / 100;
 
+  const idleOverflowPreview = useMemo(() => {
+    if (canvasExpandPreview || !editorDocument || !overflowHoverId) return null;
+    const element = editorDocument.elements.find((item) => item.id === overflowHoverId);
+    if (!element || !element.visible) return null;
+    return canvasExpandPreviewForBounds(elementBounds(element), editorDocument, element);
+  }, [canvasExpandPreview, editorDocument, overflowHoverId]);
+  const shownExpandPreview = canvasExpandPreview ?? idleOverflowPreview;
+  const expandPreviewIsLive = canvasExpandPreview !== null;
+  const expandPreviewArmed = !expandPreviewIsLive
+    && expandButtonHover
+    && shownExpandPreview !== null;
+  const expandActionAnchor = !expandPreviewIsLive && shownExpandPreview
+    ? canvasExpandButtonAnchor(
+      elementBounds(shownExpandPreview.element),
+      shownExpandPreview.canvas,
+      22 / Math.max(0.01, displayScale),
+    )
+    : null;
+
   const inlineTextLayout = useMemo(() => {
     if (!editingText) return null;
     const contentHeight = elementBounds(editingText).height;
@@ -2404,18 +2428,18 @@ export function ScreenshotEditor() {
     });
   }, [wandLoupe, imageRevision]);
 
-  // Faded off-canvas remainder of the active layer while expanding.
+  // Faded off-canvas remainder of a hanging layer (live drag or idle hover).
   useLayoutEffect(() => {
     const canvas = expandOverflowCanvasRef.current;
-    if (!canvas || !canvasExpandPreview) return;
-    const { rect, element } = canvasExpandPreview;
+    if (!canvas || !shownExpandPreview) return;
+    const { rect, element } = shownExpandPreview;
     if (element.kind === "image") ensureImage(element.src);
     if (canvas.width !== rect.width) canvas.width = Math.max(1, Math.ceil(rect.width));
     if (canvas.height !== rect.height) canvas.height = Math.max(1, Math.ceil(rect.height));
     const context = canvas.getContext("2d");
     if (!context) return;
-    paintCanvasExpandOverflow(context, canvasExpandPreview, imageCacheRef.current);
-  }, [canvasExpandPreview, ensureImage, imageRevision]);
+    paintCanvasExpandOverflow(context, shownExpandPreview, imageCacheRef.current);
+  }, [shownExpandPreview, ensureImage, imageRevision]);
 
   const undo = useCallback(() => {
     const current = documentRef.current;
@@ -3068,6 +3092,46 @@ export function ScreenshotEditor() {
     });
   };
 
+  const revealOverflowIfNeeded = (
+    element: ScreenshotElement | null | undefined,
+    canvas: Pick<ScreenshotDocument, "width" | "height">,
+  ) => {
+    if (
+      element
+      && element.visible
+      && canvasOverflowEdges(elementBounds(element), canvas).length > 0
+    ) {
+      setOverflowHoverId(element.id);
+      return;
+    }
+    setOverflowHoverId(null);
+  };
+
+  const syncOverflowHover = (point: EditorPoint) => {
+    if (gestureRef.current) return;
+    if (expandButtonHover) return;
+    const current = documentRef.current;
+    if (!current || tool === "crop" || tool === "remove-bg" || panActive || panReady) {
+      setOverflowHoverId(null);
+      return;
+    }
+    const interactionRadius = 10 / Math.max(0.01, displayScale);
+    const hovered = hitTestElement(current.elements, point, interactionRadius);
+    revealOverflowIfNeeded(hovered, current);
+  };
+
+  const expandCanvasToFitElement = (elementId: string) => {
+    const current = documentRef.current;
+    const element = current?.elements.find((item) => item.id === elementId);
+    if (!current || !element) return;
+    const expanded = expandDocumentToFitBounds(current, elementBounds(element), 0);
+    if (expanded === current) return;
+    commitDocument(expanded);
+    setOverflowHoverId(null);
+    setExpandButtonHover(false);
+    setCanvasExpandPreview(null);
+  };
+
   /**
    * Begin an edit gesture at a document-space point. The capture target may be
    * the canvas or the viewport chrome (so drawing can start outside the image).
@@ -3230,9 +3294,16 @@ export function ScreenshotEditor() {
           (line) => measureTextElementLine(styled, line),
         ),
       };
-      // Expand when text is placed past the canvas edge (e.g. viewport chrome).
+      // Fully off-canvas text still grows the document so the label is not lost.
       const withText = { ...current, elements: [...current.elements, element] };
-      commitDocument(expandDocumentToFitBounds(withText, elementBounds(element), 0));
+      const next = isFullyOutsideCanvas(elementBounds(element), current)
+        ? expandDocumentToFitBounds(withText, elementBounds(element), 0)
+        : withText;
+      commitDocument(next);
+      revealOverflowIfNeeded(
+        next.elements.find(({ id }) => id === element.id),
+        next,
+      );
       beginTextEditingFromPointerDown(element.id, true);
       return;
     }
@@ -3373,6 +3444,7 @@ export function ScreenshotEditor() {
     const gesture = gestureRef.current;
     const point = canvasPoint(event);
     if (!gesture || gesture.pointerId !== event.pointerId) {
+      syncOverflowHover(point);
       if (tool === "remove-bg") {
         syncRemoveBgHoverCursor(event, point);
         return;
@@ -3768,7 +3840,8 @@ export function ScreenshotEditor() {
       return;
     }
 
-    // Past-edge moves, resizes, arrow edits, and new drawings expand the canvas on release.
+    // Partial overflow stays clipped. Fully off-canvas work still grows the
+    // document so a chrome-only draw or label is not lost.
     if (
       gesture.kind === "resize"
       || gesture.kind === "move"
@@ -3778,14 +3851,26 @@ export function ScreenshotEditor() {
       const elementId = gesture.kind === "draw" ? gesture.elementId : gesture.element.id;
       const element = current.elements.find(({ id }) => id === elementId);
       if (element) {
-        const expanded = expandDocumentToFitBounds(current, elementBounds(element), 0);
-        if (expanded !== current) {
-          replaceDocument(expanded);
-          current = expanded;
+        const bounds = elementBounds(element);
+        if (isFullyOutsideCanvas(bounds, current)) {
+          const expanded = expandDocumentToFitBounds(current, bounds, 0);
+          if (expanded !== current) {
+            replaceDocument(expanded);
+            current = expanded;
+          }
+          setOverflowHoverId(null);
+        } else {
+          revealOverflowIfNeeded(element, current);
         }
+      } else {
+        setOverflowHoverId(null);
       }
+      setCanvasExpandPreview(null);
       setSaved(null);
       clearSuccess();
+    } else {
+      setCanvasExpandPreview(null);
+      setOverflowHoverId(null);
     }
 
     // Keep the just-drawn shape selected so curve/resize grips show immediately
@@ -3927,11 +4012,11 @@ export function ScreenshotEditor() {
     let next = replaceElement(current, element.id, transformed);
 
     // The common fresh-photo case should become portrait/landscape in one click.
-    // In layered compositions, preserve the canvas and expand only if this layer
-    // would otherwise be clipped; other annotations remain independent layers.
+    // Layered compositions keep the canvas; hanging overflow stays clipped until
+    // the user expands. Fully off-canvas results still grow so the layer is not lost.
     if (rotates && fillsCanvas) {
       next = trimDocumentToContent(next);
-    } else {
+    } else if (isFullyOutsideCanvas(elementBounds(transformed), next)) {
       next = expandDocumentToFitBounds(next, elementBounds(transformed), 0);
     }
 
@@ -3942,6 +4027,16 @@ export function ScreenshotEditor() {
     setTrimEdgesHover(false);
     setTool("select");
     setError("");
+    const nextElement = next.elements.find(({ id }) => id === element.id);
+    if (
+      nextElement
+      && nextElement.visible
+      && canvasOverflowEdges(elementBounds(nextElement), next).length > 0
+    ) {
+      setOverflowHoverId(nextElement.id);
+    } else {
+      setOverflowHoverId(null);
+    }
   }, [commitDocument]);
 
   /** Decode a cached layer image into natural-resolution pixels. */
@@ -4229,11 +4324,15 @@ export function ScreenshotEditor() {
           opacity: 100,
           blendMode: "source-over",
         };
-        next = expandDocumentForElement(
-          next,
-          element,
-          imageDropExpandPadding(placement.edge),
-        );
+        if (isFullyOutsideCanvas(elementBounds(element), next)) {
+          next = expandDocumentForElement(
+            next,
+            element,
+            imageDropExpandPadding(placement.edge),
+          );
+        } else {
+          next = { ...next, elements: [...next.elements, element] };
+        }
         lastId = element.id;
         const added = next.elements.find(({ id }) => id === element.id);
         if (added) {
@@ -4255,6 +4354,12 @@ export function ScreenshotEditor() {
       setTool("select");
       setImageRevision((revision) => revision + 1);
       setError("");
+      if (lastId) {
+        revealOverflowIfNeeded(
+          next.elements.find(({ id }) => id === lastId),
+          next,
+        );
+      }
     } catch (reason) {
       createdUrls.forEach((url) => {
         if (url.startsWith("blob:")) {
@@ -5009,6 +5114,17 @@ export function ScreenshotEditor() {
         onPointerMove={movePointer}
         onPointerUp={finishPointer}
         onPointerCancel={finishPointer}
+        onPointerLeave={(event) => {
+          const nextTarget = event.relatedTarget;
+          if (
+            nextTarget instanceof Node
+            && event.currentTarget.contains(nextTarget)
+          ) {
+            return;
+          }
+          if (gestureRef.current || expandButtonHover) return;
+          setOverflowHoverId(null);
+        }}
       >
         <button
           type="button"
@@ -5199,67 +5315,94 @@ export function ScreenshotEditor() {
               aria-hidden="true"
             />
           ))}
-          {canvasExpandPreview && (
+          {shownExpandPreview && (
             <>
-              <div
-                className={[
-                  "screenshot-canvas-expand-ghost",
-                  ...canvasExpandPreview.edges.map((edge) => `edge-${edge}`),
-                ].join(" ")}
-                style={{
-                  left: canvasExpandPreview.rect.x * displayScale,
-                  top: canvasExpandPreview.rect.y * displayScale,
-                  width: canvasExpandPreview.rect.width * displayScale,
-                  height: canvasExpandPreview.rect.height * displayScale,
-                  boxShadow: canvasExpandGhostBoxShadow(canvasExpandPreview.edges),
-                }}
-                aria-hidden="true"
-              />
+              {expandPreviewArmed && (
+                <div
+                  className={[
+                    "screenshot-canvas-expand-ghost",
+                    ...shownExpandPreview.edges.map((edge) => `edge-${edge}`),
+                  ].join(" ")}
+                  style={{
+                    left: shownExpandPreview.rect.x * displayScale,
+                    top: shownExpandPreview.rect.y * displayScale,
+                    width: shownExpandPreview.rect.width * displayScale,
+                    height: shownExpandPreview.rect.height * displayScale,
+                    boxShadow: canvasExpandGhostBoxShadow(shownExpandPreview.edges),
+                  }}
+                  aria-hidden="true"
+                />
+              )}
               <canvas
                 ref={expandOverflowCanvasRef}
-                className="screenshot-canvas-expand-overflow"
-                width={Math.max(1, Math.ceil(canvasExpandPreview.rect.width))}
-                height={Math.max(1, Math.ceil(canvasExpandPreview.rect.height))}
+                className={[
+                  "screenshot-canvas-expand-overflow",
+                  expandPreviewIsLive ? "is-live" : "is-idle",
+                ].join(" ")}
+                width={Math.max(1, Math.ceil(shownExpandPreview.rect.width))}
+                height={Math.max(1, Math.ceil(shownExpandPreview.rect.height))}
                 style={{
-                  left: canvasExpandPreview.rect.x * displayScale,
-                  top: canvasExpandPreview.rect.y * displayScale,
-                  width: canvasExpandPreview.rect.width * displayScale,
-                  height: canvasExpandPreview.rect.height * displayScale,
+                  left: shownExpandPreview.rect.x * displayScale,
+                  top: shownExpandPreview.rect.y * displayScale,
+                  width: shownExpandPreview.rect.width * displayScale,
+                  height: shownExpandPreview.rect.height * displayScale,
                 }}
                 aria-hidden="true"
               />
-              <div
-                className={[
-                  "screenshot-canvas-expand-hint",
-                  ...canvasExpandPreview.edges.map((edge) => `edge-${edge}`),
-                ].join(" ")}
-                aria-hidden="true"
-              >
-                {canvasExpandPreview.edges.map((edge) => (
-                  <div
-                    key={edge}
-                    className={`screenshot-canvas-expand-edge edge-${edge}`}
-                  >
-                    <div className="screenshot-canvas-expand-bloom" />
-                    <div className="screenshot-canvas-expand-particles">
-                      {DROP_SNAP_PARTICLES.map((particle) => (
-                        <i
-                          key={`${edge}-${particle.id}`}
-                          className="screenshot-canvas-expand-particle"
-                          style={{
-                            ["--snap-along" as string]: particle.along,
-                            ["--snap-travel" as string]: particle.travel,
-                            ["--snap-delay" as string]: particle.delay,
-                            ["--snap-duration" as string]: particle.duration,
-                            ["--snap-size" as string]: particle.size,
-                          }}
-                        />
-                      ))}
+              {!expandPreviewIsLive && expandActionAnchor && (
+                <button
+                  type="button"
+                  className="screenshot-canvas-expand-action"
+                  style={{
+                    left: expandActionAnchor.x * displayScale,
+                    top: expandActionAnchor.y * displayScale,
+                  }}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onPointerEnter={() => setExpandButtonHover(true)}
+                  onPointerLeave={() => setExpandButtonHover(false)}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    expandCanvasToFitElement(shownExpandPreview.element.id);
+                  }}
+                >
+                  Expand canvas
+                </button>
+              )}
+              {expandPreviewArmed && (
+                <div
+                  className={[
+                    "screenshot-canvas-expand-hint",
+                    "is-armed",
+                    ...shownExpandPreview.edges.map((edge) => `edge-${edge}`),
+                  ].join(" ")}
+                  aria-hidden="true"
+                >
+                  {shownExpandPreview.edges.map((edge) => (
+                    <div
+                      key={edge}
+                      className={`screenshot-canvas-expand-edge edge-${edge}`}
+                    >
+                      <div className="screenshot-canvas-expand-bloom" />
+                      <div className="screenshot-canvas-expand-particles">
+                        {DROP_SNAP_PARTICLES.map((particle) => (
+                          <i
+                            key={`${edge}-${particle.id}`}
+                            className="screenshot-canvas-expand-particle"
+                            style={{
+                              ["--snap-along" as string]: particle.along,
+                              ["--snap-travel" as string]: particle.travel,
+                              ["--snap-delay" as string]: particle.delay,
+                              ["--snap-duration" as string]: particle.duration,
+                              ["--snap-size" as string]: particle.size,
+                            }}
+                          />
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                ))}
-                <span>Release to expand canvas</span>
-              </div>
+                  ))}
+                </div>
+              )}
             </>
           )}
           {trimEdgesPreview && (

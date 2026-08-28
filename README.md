@@ -7,9 +7,9 @@ Captures is a cross-platform screen capture utility built for quick captures and
 
 ## A quick look
 
-Click and drag a region like other screenshot tools, or pick a window or full display from one compact menu.
+Edit a capture with text, arrows, and stickers. Hover a hanging layer to expand the canvas.
 
-![Captures region capture over a landscape, with a highlighted box, corner handles, and the capture menu](docs/images/capture-selection.jpg)
+![Captures screenshot editor with a fjord landscape, a Choke point label, a tiger on the left cliff, and an Evergreen ship hanging off the right edge with an Expand canvas button](docs/images/screenshot-editor.jpg)
 
 <p align="center">
   <img src="docs/images/capture-controls.jpg" alt="Close-up of the Captures capture menu with screenshot and recording options" width="728">
@@ -20,9 +20,9 @@ Click and drag a region like other screenshot tools, or pick a window or full di
 <table>
   <tr>
     <td width="50%">
-      <img src="docs/images/screenshot-editor.jpg" alt="Captures screenshot editor with a landscape, a Choke point label on the fjord, a tiger sticker half off the left edge, and an Evergreen ship dragged past the right edge" width="100%">
+      <img src="docs/images/capture-selection.jpg" alt="Captures region capture over a landscape, with a highlighted box, corner handles, and the capture menu" width="100%">
       <br>
-      <sub><strong>Edit screenshots</strong> with text, arrows, stickers, and a canvas that grows when you drag past the edge.</sub>
+      <sub><strong>Draw a region</strong> like other screenshot tools, or pick a window or full display.</sub>
     </td>
     <td width="50%">
       <img src="docs/images/video-editor.jpg" alt="Captures video editor with a landscape preview, crop handles, trimming timeline, and save controls" width="100%">
@@ -62,7 +62,7 @@ Preview builds update after every successful merge to `main` and may contain bug
 - Record as H.264 MP4, with desktop audio and microphone. Save or export as MP4, GIF, or WebM
 - Pause, resume, restart, and mute while recording
 - Cursor and click highlights in recordings (where supported)
-- Built-in screenshot editor — text, shapes, drawing with optional drop shadows, crop (drag from outside the canvas to reach an edge; hold Shift to lock aspect), layers, erase to transparent; unsaved edits restore when you reopen
+- Built-in screenshot editor — text, shapes, drawing with optional drop shadows, crop (drag from outside the canvas to reach an edge; hold Shift to lock aspect), layers that hang off the canvas stay clipped until you expand, erase to transparent; unsaved edits restore when you reopen
 - Trim, crop, resize, and adjust audio in recordings, with an estimated saved size and an in-editor before/after compression comparison
 - Default screenshot save format PNG, JPEG, or WebP (Capture History stays lossless PNG until you save); export with Tiny through High quality presets and an in-editor before/after comparison
 - Mini previews for quick copy, save, and drag into other apps
@@ -142,7 +142,8 @@ While selecting a capture region, pick an aspect ratio in the capture menu or ho
 `+`/`-` controls, pinch or `Ctrl`/`Cmd`+scroll, pan with `Ctrl`/`Cmd`-drag or
 middle-click, hold `Shift` while dragging a corner handle to scale
 proportionally, and duplicate layers with `Ctrl`/`Cmd`+`D`. Header W×H resizes
-the canvas. Locked layers keep size and position until unlocked; layer width
+the canvas. Hover a layer that hangs off an edge to preview the clipped part
+and expand. Locked layers keep size and position until unlocked; layer width
 and height stay proportional.
 
 ## Development
