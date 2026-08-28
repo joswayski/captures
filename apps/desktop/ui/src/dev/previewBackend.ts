@@ -125,6 +125,20 @@ function previewPlatform(): "macos" | "windows" | "linux" {
   return "macos";
 }
 
+function previewFreezeScreen(): boolean {
+  return !flag("live") && query().get("frozen") !== "0";
+}
+
+function previewScreenshotFormat(): AppSettings["screenshot_format"] {
+  const value = query().get("screenshot_format");
+  return value === "jpeg" || value === "webp" ? value : "png";
+}
+
+function previewVideoFormat(): AppSettings["recording"]["video_format"] {
+  const value = query().get("video_format");
+  return value === "gif" || value === "webm" ? value : "mp4";
+}
+
 function previewShortcutSettings(
   platform: "macos" | "windows" | "linux" = previewPlatform(),
 ): Pick<
@@ -138,6 +152,7 @@ function previewShortcutSettings(
   const recording = {
     video_fps: 60 as const,
     video_max_resolution: "original" as const,
+    video_format: previewVideoFormat(),
     gif_fps: 15,
     gif_max_width: 800,
     gif_max_colors: 256,
@@ -199,6 +214,8 @@ const SETTINGS: AppSettings = {
   pending_capture_after_restart: null,
   onboarding_completed: true,
   screenshot_countdown_seconds: 3,
+  freeze_screen: previewFreezeScreen(),
+  screenshot_format: previewScreenshotFormat(),
 };
 
 const DISPLAY: DisplayDescriptor = {
@@ -519,7 +536,8 @@ function createSelection(): RecordingSelectionSession {
     window_coordinate_scale: 1,
     window_corner_radius: 12,
     display_corner_radius: 0,
-    snapshot_url: snapshotUrlFor(DISPLAY),
+    frozen: previewFreezeScreen(),
+    snapshot_url: previewFreezeScreen() ? snapshotUrlFor(DISPLAY) : "",
     windows: WINDOWS.filter((window) => window.display_id === DISPLAY.id),
   };
 }
@@ -542,7 +560,8 @@ function selectCaptureDisplay(payload: unknown): RecordingSelectionSession {
   selection = {
     ...selection,
     display: { ...display },
-    snapshot_url: snapshotUrlFor(display),
+    frozen: previewFreezeScreen(),
+    snapshot_url: previewFreezeScreen() ? snapshotUrlFor(display) : "",
     windows: WINDOWS.filter((window) => window.display_id === display.id),
   };
   return selection;
@@ -555,7 +574,8 @@ const CAPTURE_SESSION: ActiveSession = {
   window_coordinate_scale: 1,
   window_corner_radius: 12,
   display_corner_radius: 0,
-  snapshot_url: CAPTURE_URL,
+  frozen: previewFreezeScreen(),
+  snapshot_url: previewFreezeScreen() ? CAPTURE_URL : "",
   windows: WINDOWS.filter((window) => window.display_id === DISPLAY.id),
 };
 

@@ -38,9 +38,12 @@ const settings: AppSettings = {
   pending_capture_after_restart: null,
   onboarding_completed: true,
   screenshot_countdown_seconds: 0,
+  freeze_screen: true,
+  screenshot_format: "png",
   recording: {
     video_shortcut: "Ctrl+Shift+5",
     gif_shortcut: "Ctrl+Shift+6",
+    video_format: "mp4",
     video_fps: 30,
     video_max_resolution: "p1080",
     gif_fps: 15,
@@ -378,5 +381,48 @@ describe("Preferences", () => {
     fireEvent.click(screen.getByRole("button", { name: "Check Now" }));
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("check_for_updates"));
+  });
+
+  it("can turn off freeze screen while capturing", async () => {
+    render(<Preferences />);
+
+    const freeze = await screen.findByRole("checkbox", {
+      name: /Freeze screen when capturing/,
+    });
+    expect(freeze).toBeChecked();
+    fireEvent.click(freeze);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("update_settings", {
+        settings: expect.objectContaining({ freeze_screen: false }),
+      });
+    });
+  });
+
+  it("persists default screenshot and recording file formats", async () => {
+    render(<Preferences />);
+
+    const screenshotFormat = await screen.findByRole("combobox", { name: "Screenshot format" });
+    fireEvent.click(screenshotFormat);
+    fireEvent.click(await screen.findByRole("option", { name: "JPEG" }));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("update_settings", {
+        settings: expect.objectContaining({ screenshot_format: "jpeg" }),
+      });
+    });
+
+    const recordingFormat = screen.getByRole("combobox", { name: "Recording format" });
+    fireEvent.click(recordingFormat);
+    fireEvent.click(await screen.findByRole("option", { name: "WebM" }));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("update_settings", {
+        settings: expect.objectContaining({
+          screenshot_format: "jpeg",
+          recording: expect.objectContaining({ video_format: "webm" }),
+        }),
+      });
+    });
   });
 });

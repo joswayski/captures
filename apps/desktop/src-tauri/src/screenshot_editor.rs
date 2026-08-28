@@ -20,8 +20,8 @@ use crate::{
     AppError, CommandResult,
     models::{
         ArtifactKind, CaptureArtifact, ClipboardCopyStatus, ClipboardState, HistoryEntry,
-        artifact_full_url, artifact_url, editor_draft_asset_url, history_full_url,
-        history_preview_url, screenshot_editor_drafts_directory,
+        ScreenshotFormat, artifact_full_url, artifact_url, editor_draft_asset_url,
+        history_full_url, history_preview_url, screenshot_editor_drafts_directory,
     },
     state::AppState,
     storage,
@@ -32,13 +32,7 @@ const MAX_EDITOR_PNG_BYTES: usize = 256 * 1024 * 1024;
 const MAX_EDITOR_DIMENSION: u32 = 16_384;
 const MAX_EDITOR_PIXELS: u64 = 100_000_000;
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ScreenshotEditFormat {
-    Png,
-    Jpeg,
-    Webp,
-}
+use crate::models::ScreenshotFormat as ScreenshotEditFormat;
 
 /// How aggressively to encode while keeping the user-selected format.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -53,26 +47,6 @@ pub enum ScreenshotExportQualityMode {
 impl ScreenshotExportQualityMode {
     const fn uses_compact_encode(self) -> bool {
         !matches!(self, Self::Preserve)
-    }
-}
-
-impl ScreenshotEditFormat {
-    const fn extension(self) -> &'static str {
-        match self {
-            Self::Png => "png",
-            Self::Jpeg => "jpg",
-            Self::Webp => "webp",
-        }
-    }
-
-    fn extension_matches(self, extension: &str) -> bool {
-        match self {
-            Self::Png => extension.eq_ignore_ascii_case("png"),
-            Self::Jpeg => {
-                extension.eq_ignore_ascii_case("jpg") || extension.eq_ignore_ascii_case("jpeg")
-            }
-            Self::Webp => extension.eq_ignore_ascii_case("webp"),
-        }
     }
 }
 
@@ -705,6 +679,24 @@ fn decode_editor_png(bytes: &[u8]) -> Result<RgbaImage, AppError> {
         )));
     }
     Ok(image)
+}
+
+/// Encode a captured PNG using the user's default screenshot save format.
+pub(crate) fn encode_saved_screenshot(
+    png: &[u8],
+    format: ScreenshotFormat,
+) -> Result<Vec<u8>, AppError> {
+    if matches!(format, ScreenshotFormat::Png) {
+        return Ok(png.to_vec());
+    }
+    let image = decode_editor_png(png)?;
+    encode_export(
+        &image,
+        format,
+        ScreenshotExportQualityMode::Preserve,
+        92,
+        None,
+    )
 }
 
 fn encode_export(

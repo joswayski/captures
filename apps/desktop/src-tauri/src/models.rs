@@ -71,6 +71,14 @@ pub struct AppSettings {
     pub onboarding_completed: bool,
     #[serde(default = "default_screenshot_countdown_seconds")]
     pub screenshot_countdown_seconds: u8,
+    /// Freeze the desktop while choosing a screenshot region or window so hover
+    /// states, menus, and motion stay put. Off shows the live desktop instead.
+    #[serde(default = "default_true")]
+    pub freeze_screen: bool,
+    /// Format used when saving or exporting a screenshot. Capture history stays
+    /// lossless PNG until that save.
+    #[serde(default)]
+    pub screenshot_format: ScreenshotFormat,
     #[serde(default)]
     pub recording: RecordingSettings,
 }
@@ -126,12 +134,55 @@ impl Default for CustomThemeSettings {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScreenshotFormat {
+    #[default]
+    Png,
+    Jpeg,
+    Webp,
+}
+
+impl ScreenshotFormat {
+    pub const fn extension(self) -> &'static str {
+        match self {
+            Self::Png => "png",
+            Self::Jpeg => "jpg",
+            Self::Webp => "webp",
+        }
+    }
+
+    pub fn extension_matches(self, extension: &str) -> bool {
+        match self {
+            Self::Png => extension.eq_ignore_ascii_case("png"),
+            Self::Jpeg => {
+                extension.eq_ignore_ascii_case("jpg") || extension.eq_ignore_ascii_case("jpeg")
+            }
+            Self::Webp => extension.eq_ignore_ascii_case("webp"),
+        }
+    }
+}
+
+/// Preferred container when saving or exporting a recording. Capture itself is
+/// always an H.264 MP4 master; GIF and WebM are converted on save.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoFormat {
+    #[default]
+    Mp4,
+    Gif,
+    #[serde(rename = "webm", alias = "web_m")]
+    WebM,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RecordingSettings {
     #[serde(default = "default_video_shortcut")]
     pub video_shortcut: String,
     #[serde(default = "default_gif_shortcut")]
     pub gif_shortcut: String,
+    #[serde(default)]
+    pub video_format: VideoFormat,
     #[serde(default = "default_video_fps")]
     pub video_fps: u16,
     #[serde(default)]
@@ -165,6 +216,7 @@ impl Default for RecordingSettings {
         Self {
             video_shortcut: default_video_shortcut(),
             gif_shortcut: default_gif_shortcut(),
+            video_format: VideoFormat::default(),
             video_fps: default_video_fps(),
             video_max_resolution: MaxResolution::Original,
             gif_fps: default_gif_fps(),
@@ -205,6 +257,8 @@ impl Default for AppSettings {
             pending_capture_after_restart: None,
             onboarding_completed: false,
             screenshot_countdown_seconds: default_screenshot_countdown_seconds(),
+            freeze_screen: true,
+            screenshot_format: ScreenshotFormat::default(),
             recording: RecordingSettings::default(),
         }
     }
@@ -297,6 +351,9 @@ pub struct RecordingSelectionSession {
     /// Visible display corner radius in logical points (MacBooks, etc.).
     #[serde(default)]
     pub display_corner_radius: f64,
+    /// False when the selector shows the live desktop instead of a freeze-frame.
+    #[serde(default = "default_true")]
+    pub frozen: bool,
     pub snapshot_url: String,
     pub windows: Vec<WindowDescriptor>,
 }
@@ -304,7 +361,7 @@ pub struct RecordingSelectionSession {
 #[derive(Debug)]
 pub struct RecordingSelection {
     pub summary: RecordingSelectionSession,
-    pub image: RgbaImage,
+    pub image: Option<RgbaImage>,
     pub snapshot_png: Vec<u8>,
 }
 
@@ -739,6 +796,9 @@ pub struct ActiveSession {
     /// Visible display corner radius in logical points (MacBooks, etc.).
     #[serde(default)]
     pub display_corner_radius: f64,
+    /// False when the overlay is a live, transparent selector instead of a freeze-frame.
+    #[serde(default = "default_true")]
+    pub frozen: bool,
     pub snapshot_url: String,
     pub windows: Vec<WindowDescriptor>,
 }
@@ -748,8 +808,9 @@ pub struct CaptureSession {
     pub id: Uuid,
     pub mode: CaptureMode,
     pub thumbnail_capture_generation: u64,
+    pub frozen: bool,
     pub display: DisplayDescriptor,
-    pub image: RgbaImage,
+    pub image: Option<RgbaImage>,
     pub snapshot_png: Vec<u8>,
     pub windows: Vec<WindowDescriptor>,
 }
@@ -1192,9 +1253,10 @@ mod tests {
 
     use super::{
         AppSettings, Appearance, ColorTheme, CustomThemeSettings, HistoryEntry, RecordingArtifact,
-        macos_screenshot_hotkeys_conflicting_with, migrate_output_directory, migrate_settings,
-        platform_can_exclude_recording_controls, recording_controls_are_excluded,
-        recording_media_url, recording_poster_url, recording_selection_url, snapshot_url,
+        ScreenshotFormat, VideoFormat, macos_screenshot_hotkeys_conflicting_with,
+        migrate_output_directory, migrate_settings, platform_can_exclude_recording_controls,
+        recording_controls_are_excluded, recording_media_url, recording_poster_url,
+        recording_selection_url, snapshot_url,
     };
 
     #[test]
@@ -1286,11 +1348,23 @@ mod tests {
         assert_eq!(settings.recording.gif_max_width, 800);
         assert!(settings.recording.open_editor_after_recording);
         assert_eq!(settings.screenshot_countdown_seconds, 0);
+        assert!(settings.freeze_screen);
+        assert_eq!(settings.screenshot_format, ScreenshotFormat::Png);
+        assert_eq!(settings.recording.video_format, VideoFormat::Mp4);
     }
 
     #[test]
     fn defaults_screenshot_countdown_to_off() {
         assert_eq!(AppSettings::default().screenshot_countdown_seconds, 0);
+        assert!(AppSettings::default().freeze_screen);
+        assert_eq!(
+            AppSettings::default().screenshot_format,
+            ScreenshotFormat::Png
+        );
+        assert_eq!(
+            AppSettings::default().recording.video_format,
+            VideoFormat::Mp4
+        );
     }
 
     #[test]
@@ -1392,6 +1466,7 @@ mod tests {
             super::default_video_shortcut()
         );
         assert!(settings.recording.open_editor_after_recording);
+        assert_eq!(settings.recording.video_format, VideoFormat::Mp4);
     }
 
     #[test]

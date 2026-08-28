@@ -38,9 +38,12 @@ const settings: AppSettings = {
   pending_capture_after_restart: null,
   onboarding_completed: true,
   screenshot_countdown_seconds: 0,
+  freeze_screen: true,
+  screenshot_format: "png",
   recording: {
     video_shortcut: "Ctrl+Shift+5",
     gif_shortcut: "Ctrl+Shift+6",
+    video_format: "mp4",
     video_fps: 60,
     video_max_resolution: "original",
     gif_fps: 15,
@@ -104,6 +107,7 @@ const session: RecordingSelectionSession = {
   ],
   window_coordinate_scale: 1,
   window_corner_radius: 25,
+  frozen: true,
   snapshot_url: "capture://recording-selection/selection-1",
   windows: [
     {
@@ -1106,6 +1110,19 @@ describe("RecordingSelector", () => {
       selectionId: session.id,
     });
     animationFrame.mockRestore();
+  });
+
+  it("reveals a live selector without a freeze-frame snapshot", async () => {
+    preparedSession = { ...session, frozen: false, snapshot_url: "" };
+    const { container } = render(<RecordingSelector />);
+
+    expect(await screen.findByRole("button", { name: "Start recording" })).toBeInTheDocument();
+    expect(container.querySelector(".recording-selector-snapshot")).toBeNull();
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("reveal_recording_selector", {
+        selectionId: session.id,
+      });
+    });
   });
 
   it("loads the prepared selection while event registration is still pending", async () => {

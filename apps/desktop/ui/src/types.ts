@@ -43,6 +43,9 @@ export interface WindowDescriptor {
   corner_radius?: number | null;
 }
 
+export type ScreenshotFormat = "png" | "jpeg" | "webp";
+export type VideoFormat = "mp4" | "gif" | "webm";
+
 export interface ActiveSession {
   id: string;
   mode: CaptureMode;
@@ -51,6 +54,8 @@ export interface ActiveSession {
   window_corner_radius: number;
   /** Visible display corner radius in logical points (MacBooks, etc.). */
   display_corner_radius?: number;
+  /** False when the overlay shows the live desktop instead of a freeze-frame. */
+  frozen?: boolean;
   snapshot_url: string;
   windows: WindowDescriptor[];
 }
@@ -77,6 +82,8 @@ export interface AppSettings {
   pending_capture_after_restart: CaptureMode | null;
   onboarding_completed: boolean;
   screenshot_countdown_seconds: number;
+  freeze_screen: boolean;
+  screenshot_format: ScreenshotFormat;
   recording: RecordingSettings;
 }
 
@@ -95,6 +102,7 @@ export interface OnboardingState {
 export interface RecordingSettings {
   video_shortcut: string;
   gif_shortcut: string;
+  video_format: VideoFormat;
   video_fps: number;
   video_max_resolution: MaxResolution;
   gif_fps: number;
@@ -158,6 +166,8 @@ export interface RecordingSelectionSession {
   window_corner_radius: number;
   /** Visible display corner radius in logical points (MacBooks, etc.). */
   display_corner_radius?: number;
+  /** False when the selector shows the live desktop instead of a freeze-frame. */
+  frozen?: boolean;
   snapshot_url: string;
   windows: WindowDescriptor[];
 }
@@ -235,7 +245,7 @@ export interface EditSpec {
 }
 
 export interface ExportSpec {
-  format: "mp4" | "gif" | "web_m";
+  format: "mp4" | "gif" | "webm";
   quality: "preserve" | "high" | "standard" | "small" | "tiny";
   max_size_bytes: number | null;
   frames_per_second: number | null;

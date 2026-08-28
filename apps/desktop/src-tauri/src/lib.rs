@@ -543,61 +543,98 @@ async fn prepare_capture(
     }
 
     ensure_capture_session_available()?;
+    let freeze_screen = state.settings().freeze_screen;
     let id = Uuid::new_v4();
-    let (frame, snapshot_png, mut windows) = std::thread::scope(|scope| {
-        // Window discovery is independent of the frozen display pixels. Run it
-        // beside capture + encoding so window mode pays the slower cost, not both.
-        let windows = (mode == CaptureMode::Window).then(|| scope.spawn(|| state.windows()));
-        let frame = state.backend.capture_display_at_point(pointer_position())?;
-        // The background frame is frozen now, so this capture no longer needs HUD
-        // exclusion. Release it before encoding can emit a new preview and allow a
-        // rapid follow-up capture to start with its own protection generation.
+    let session = if freeze_screen {
+        let (frame, snapshot_png, mut windows) = std::thread::scope(|scope| {
+            // Window discovery is independent of the frozen display pixels. Run it
+            // beside capture + encoding so window mode pays the slower cost, not both.
+            let windows = (mode == CaptureMode::Window).then(|| scope.spawn(|| state.windows()));
+            let frame = state.backend.capture_display_at_point(pointer_position())?;
+            // The background frame is frozen now, so this capture no longer needs HUD
+            // exclusion. Release it before encoding can emit a new preview and allow a
+            // rapid follow-up capture to start with its own protection generation.
+            set_capture_huds_protected(&app, false);
+            // Keep the selector background full-resolution and lossless. Region/window
+            // crops also come directly from `frame.image`, so no lossy stage is involved.
+            let snapshot_png = storage::encode_png(&frame.image)?;
+            let windows = windows
+                .map(|task| match task.join() {
+                    Ok(windows) => windows,
+                    Err(panic) => std::panic::resume_unwind(panic),
+                })
+                .transpose()?
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|window| window_is_capturable(window, &frame.descriptor))
+                .collect::<Vec<_>>();
+            Ok::<_, AppError>((frame, snapshot_png, windows))
+        })?;
+        if mode == CaptureMode::Window {
+            refine_window_chrome_from_snapshot(
+                &mut windows,
+                &frame.descriptor,
+                &frame.image,
+                window_corner_radius_points(),
+            );
+        }
+        CaptureSession {
+            id,
+            mode,
+            thumbnail_capture_generation,
+            frozen: true,
+            display: frame.descriptor,
+            image: Some(frame.image),
+            snapshot_png,
+            windows,
+        }
+    } else {
+        // Live overlay: skip the freeze-frame so hover states can keep changing
+        // until commit, then recapture the current desktop.
+        let display = display_under_pointer(&state)?;
+        let windows = if mode == CaptureMode::Window {
+            state
+                .windows()?
+                .into_iter()
+                .filter(|window| window_is_capturable(window, &display))
+                .collect()
+        } else {
+            Vec::new()
+        };
         set_capture_huds_protected(&app, false);
-        // Keep the selector background full-resolution and lossless. Region/window
-        // crops also come directly from `frame.image`, so no lossy stage is involved.
-        let snapshot_png = storage::encode_png(&frame.image)?;
-        let windows = windows
-            .map(|task| match task.join() {
-                Ok(windows) => windows,
-                Err(panic) => std::panic::resume_unwind(panic),
-            })
-            .transpose()?
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|window| window_is_capturable(window, &frame.descriptor))
-            .collect::<Vec<_>>();
-        Ok::<_, AppError>((frame, snapshot_png, windows))
-    })?;
-    if mode == CaptureMode::Window {
-        refine_window_chrome_from_snapshot(
-            &mut windows,
-            &frame.descriptor,
-            &frame.image,
-            window_corner_radius_points(),
-        );
-    }
-    let session = CaptureSession {
-        id,
-        mode,
-        thumbnail_capture_generation,
-        display: frame.descriptor,
-        image: frame.image,
-        snapshot_png,
-        windows,
+        CaptureSession {
+            id,
+            mode,
+            thumbnail_capture_generation,
+            frozen: false,
+            display,
+            image: None,
+            snapshot_png: Vec::new(),
+            windows,
+        }
     };
-    let active = ActiveSession {
-        id: id.to_string(),
-        mode,
+    let active = capture_session_to_active(&session);
+    state.sessions.lock().insert(id, session);
+    show_capture_window(&app, &active);
+    Ok(Some(active))
+}
+
+fn capture_session_to_active(session: &CaptureSession) -> ActiveSession {
+    ActiveSession {
+        id: session.id.to_string(),
+        mode: session.mode,
         window_coordinate_scale: window_coordinate_scale(&session.display),
         window_corner_radius: window_corner_radius_points(),
         display_corner_radius: display_corner_radius_points(&session.display.id),
         display: session.display.clone(),
-        snapshot_url: models::snapshot_url(&id.to_string()),
+        frozen: session.frozen,
+        snapshot_url: if session.frozen {
+            models::snapshot_url(&session.id.to_string())
+        } else {
+            String::new()
+        },
         windows: session.windows.clone(),
-    };
-    state.sessions.lock().insert(id, session);
-    show_capture_window(&app, &active);
-    Ok(Some(active))
+    }
 }
 
 #[tauri::command]
@@ -642,11 +679,7 @@ async fn commit_region(
             // Cancel already restored the stack and cleared HUD protection.
             return Ok(None);
         }
-        let live_image = (|| -> Result<RgbaImage, AppError> {
-            ensure_capture_session_available()?;
-            let frame = state.backend.capture_display(&session.display.id)?;
-            crop_region_from_display(&frame.descriptor, &frame.image, rect)
-        })();
+        let live_image = crop_live_region(&state, &session.display.id, rect);
         set_capture_huds_protected(&app, false);
         match live_image {
             Ok(image) => image,
@@ -655,11 +688,27 @@ async fn commit_region(
                 return Err(error.to_string());
             }
         }
-    } else {
+    } else if session.frozen {
         // Map overlay/CSS DIPs onto the capture buffer. On Windows the display
         // descriptor is physical while the overlay is logical, so do not use the
         // native-geometry scale used for window crops.
-        match crop_region_from_display(&session.display, &session.image, rect) {
+        match session
+            .image
+            .as_ref()
+            .ok_or(AppError::SessionUnavailable)
+            .and_then(|image| crop_region_from_display(&session.display, image, rect))
+        {
+            Ok(image) => image,
+            Err(error) => {
+                restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
+                return Err(error.to_string());
+            }
+        }
+    } else {
+        set_capture_huds_protected(&app, true);
+        let live_image = crop_live_region(&state, &session.display.id, rect);
+        set_capture_huds_protected(&app, false);
+        match live_image {
             Ok(image) => image,
             Err(error) => {
                 restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
@@ -746,7 +795,7 @@ async fn commit_window(
                 return Err(error.to_string());
             }
         }
-    } else {
+    } else if session.frozen {
         // Prefer cropping the freeze-frame (sharp, matches what the user saw). Live
         // CGWindow capture often returns black/empty frames for some windows on macOS.
         match crop_window_from_session(&session, &window_id) {
@@ -765,6 +814,17 @@ async fn commit_window(
                     return Err(error.to_string());
                 }
             },
+        }
+    } else {
+        set_capture_huds_protected(&app, true);
+        let live_image = capture_live_window(&state, &selected_window);
+        set_capture_huds_protected(&app, false);
+        match live_image {
+            Ok(image) => image,
+            Err(error) => {
+                restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
+                return Err(error.to_string());
+            }
         }
     };
 
@@ -982,16 +1042,11 @@ fn get_active_session(
     session_id: String,
 ) -> CommandResult<Option<ActiveSession>> {
     let id = Uuid::parse_str(&session_id).map_err(|error| error.to_string())?;
-    Ok(state.sessions.lock().get(&id).map(|session| ActiveSession {
-        id: session.id.to_string(),
-        mode: session.mode,
-        window_coordinate_scale: window_coordinate_scale(&session.display),
-        window_corner_radius: window_corner_radius_points(),
-        display_corner_radius: display_corner_radius_points(&session.display.id),
-        display: session.display.clone(),
-        snapshot_url: models::snapshot_url(&session.id.to_string()),
-        windows: session.windows.clone(),
-    }))
+    Ok(state
+        .sessions
+        .lock()
+        .get(&id)
+        .map(capture_session_to_active))
 }
 
 #[tauri::command]
@@ -1001,16 +1056,7 @@ fn get_pending_session(state: tauri::State<'_, Arc<AppState>>) -> Option<ActiveS
         .lock()
         .values()
         .next()
-        .map(|session| ActiveSession {
-            id: session.id.to_string(),
-            mode: session.mode,
-            window_coordinate_scale: window_coordinate_scale(&session.display),
-            window_corner_radius: window_corner_radius_points(),
-            display_corner_radius: display_corner_radius_points(&session.display.id),
-            display: session.display.clone(),
-            snapshot_url: models::snapshot_url(&session.id.to_string()),
-            windows: session.windows.clone(),
-        })
+        .map(capture_session_to_active)
 }
 
 #[tauri::command]
@@ -2059,8 +2105,10 @@ async fn save_artifact(
 
     if existing_path.is_none() {
         let settings = state.settings();
+        let format = settings.screenshot_format;
         let path = tauri::async_runtime::spawn_blocking(move || {
-            storage::save_encoded_capture(&png, &settings)
+            let bytes = screenshot_editor::encode_saved_screenshot(&png, format)?;
+            storage::save_encoded_capture(&bytes, &settings, format.extension())
         })
         .await
         .map_err(|error| error.to_string())?
@@ -2593,7 +2641,7 @@ fn linux_clipboard_matches(expected: ClipboardFingerprint) -> Result<bool, AppEr
     }
 }
 
-fn display_under_pointer(
+pub(crate) fn display_under_pointer(
     state: &AppState,
 ) -> Result<captures_capture::DisplayDescriptor, AppError> {
     let displays = state.monitors()?;
@@ -4960,6 +5008,16 @@ fn capture_buffer_scale(display: &captures_capture::DisplayDescriptor, image: &R
     display.scale_factor.max(1.0).max(derived)
 }
 
+fn crop_live_region(
+    state: &AppState,
+    display_id: &str,
+    rect: LogicalRect,
+) -> Result<RgbaImage, AppError> {
+    ensure_capture_session_available()?;
+    let frame = state.backend.capture_display(display_id)?;
+    crop_region_from_display(&frame.descriptor, &frame.image, rect)
+}
+
 fn crop_region_from_display(
     display: &captures_capture::DisplayDescriptor,
     image: &RgbaImage,
@@ -5015,11 +5073,12 @@ fn capture_live_window(
 }
 
 fn crop_window_from_session(session: &CaptureSession, window_id: &str) -> Option<RgbaImage> {
+    let image = session.image.as_ref()?;
     let window = session
         .windows
         .iter()
         .find(|window| window.id == window_id)?;
-    crop_window_from_display(&session.display, &session.image, window)
+    crop_window_from_display(&session.display, image, window)
 }
 
 fn crop_window_from_display(

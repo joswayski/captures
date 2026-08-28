@@ -57,13 +57,14 @@ Preview builds update after every successful merge to `main` and may contain bug
 - Capture regions, windows, or full displays
 - Draw a region from an empty screen (no pre-sized outline); lock to common aspect ratios, or hold Shift for a square
 - Optional auto-start after selecting a region or window (Preferences)
+- Optional freeze while choosing a region or window, so hover states, menus, and motion stay put (on by default; turn off in Preferences to select from the live desktop)
 - Optional countdown before screenshots and recordings
-- Record as H.264 video or GIF, with desktop audio and microphone
+- Record as H.264 MP4, with desktop audio and microphone. Save or export as MP4, GIF, or WebM
 - Pause, resume, restart, and mute while recording
 - Cursor and click highlights in recordings (where supported)
 - Built-in screenshot editor — text, shapes, drawing with optional drop shadows, crop (drag from outside the canvas to reach an edge; hold Shift to lock aspect), layers, erase to transparent; unsaved edits restore when you reopen
 - Trim, crop, resize, and adjust audio in recordings, with an estimated saved size and an in-editor before/after compression comparison
-- Export PNG, JPEG, or WebP with Tiny through High quality presets and an in-editor before/after comparison
+- Default screenshot save format PNG, JPEG, or WebP (Capture History stays lossless PNG until you save); export with Tiny through High quality presets and an in-editor before/after comparison
 - Mini previews for quick copy, save, and drag into other apps
 - Screenshots during an active recording
 - 30-day capture history, filtered by screenshots, video, or GIF
