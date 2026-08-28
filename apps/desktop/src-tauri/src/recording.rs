@@ -3283,6 +3283,7 @@ fn restore_recording_ui(app: &AppHandle, state: &Arc<AppState>) {
     crate::reveal_document_windows_after_capture(app);
     crate::set_capture_huds_protected(app, false);
     crate::restore_thumbnail_capture_ui(app, state);
+    crate::updates::restore_update_notice(app);
 }
 
 #[cfg(target_os = "macos")]

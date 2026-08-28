@@ -5,14 +5,13 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::{
     AppHandle, Emitter, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder, menu::MenuItem,
-    window::Color,
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_opener::OpenerExt;
@@ -30,6 +29,7 @@ const UPDATE_NOTICE_WARNING_HEIGHT: f64 = 56.0;
 const RESTART_COUNTDOWN_SECONDS: u8 = 3;
 const RESTART_FADE_DURATION: Duration = Duration::from_millis(400);
 const EDITOR_CLOSE_FLUSH: Duration = Duration::from_millis(500);
+const DEFER_CAPTURE_START_TIMEOUT: Duration = Duration::from_millis(1_500);
 const INITIAL_CHECK_DELAY: Duration = Duration::from_secs(15);
 const CHECK_INTERVAL: Duration = Duration::from_secs(2 * 60 * 60);
 
@@ -95,6 +95,8 @@ pub struct UpdateCoordinator {
     notified_version: Mutex<Option<String>>,
     checking: AtomicBool,
     installing: AtomicBool,
+    restoring: AtomicBool,
+    deferred: AtomicBool,
 }
 
 impl Default for UpdateCoordinator {
@@ -109,6 +111,8 @@ impl Default for UpdateCoordinator {
             notified_version: Mutex::new(None),
             checking: AtomicBool::new(false),
             installing: AtomicBool::new(false),
+            restoring: AtomicBool::new(false),
+            deferred: AtomicBool::new(false),
         }
     }
 }
@@ -120,6 +124,13 @@ enum NoticeDisposition {
     Ignore,
     Show,
     Defer,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NoticeRestorePlan {
+    Ignore,
+    Wait,
+    Show,
 }
 
 impl<'a> AtomicFlagGuard<'a> {
@@ -172,21 +183,101 @@ pub fn install_is_active(app: &AppHandle) -> bool {
 }
 
 pub fn defer_visible_notice(app: &AppHandle) {
-    let visible = app
-        .get_webview_window("update")
-        .and_then(|window| window.is_visible().ok())
-        .unwrap_or(false);
-    if !visible {
+    begin_deferred_restore(app);
+}
+
+pub fn restore_update_notice(app: &AppHandle) {
+    let restorable = notice_can_restore(app);
+    let visible = update_notice_is_visible(app);
+    let coordinator = app.state::<UpdateCoordinator>();
+    let deferred = coordinator.deferred.load(Ordering::Acquire);
+    let capture_active = active_capture_or_recording(&app.state::<Arc<AppState>>());
+    match notice_restore_plan(restorable, deferred, visible, capture_active) {
+        NoticeRestorePlan::Ignore => {}
+        NoticeRestorePlan::Wait => begin_deferred_restore(app),
+        NoticeRestorePlan::Show => {
+            coordinator.deferred.store(false, Ordering::Release);
+            show_update_notice(app);
+        }
+    }
+}
+
+fn begin_deferred_restore(app: &AppHandle) {
+    let restorable = notice_can_restore(app);
+    let visible = update_notice_is_visible(app);
+    let coordinator = app.state::<UpdateCoordinator>();
+    let already_deferred = coordinator.deferred.load(Ordering::Acquire);
+    if !should_begin_deferred_restore(restorable, visible, already_deferred) {
+        return;
+    }
+    coordinator.deferred.store(true, Ordering::Release);
+    if coordinator.restoring.swap(true, Ordering::AcqRel) {
         return;
     }
 
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        while active_capture_or_recording(&app.state::<Arc<AppState>>()) {
-            tokio::time::sleep(Duration::from_secs(1)).await;
-        }
-        show_update_notice(&app);
+        wait_for_capture_cycle(&app).await;
+        app.state::<UpdateCoordinator>()
+            .restoring
+            .store(false, Ordering::Release);
+        restore_update_notice(&app);
     });
+}
+
+fn notice_can_restore(app: &AppHandle) -> bool {
+    if app
+        .state::<UpdateCoordinator>()
+        .installing
+        .load(Ordering::Acquire)
+    {
+        return false;
+    }
+    let available = matches!(
+        *app.state::<UpdateCoordinator>().status.lock(),
+        UpdateStatus::Available { .. } | UpdateStatus::Downloading { .. }
+    );
+    available && app.get_webview_window("update").is_some()
+}
+
+fn update_notice_is_visible(app: &AppHandle) -> bool {
+    app.get_webview_window("update")
+        .is_some_and(|window| window.is_visible().unwrap_or(true))
+}
+
+fn should_begin_deferred_restore(restorable: bool, visible: bool, already_deferred: bool) -> bool {
+    restorable && (visible || already_deferred)
+}
+
+fn notice_restore_plan(
+    restorable: bool,
+    deferred: bool,
+    visible: bool,
+    capture_active: bool,
+) -> NoticeRestorePlan {
+    if !restorable || (!deferred && !visible) {
+        NoticeRestorePlan::Ignore
+    } else if capture_active {
+        NoticeRestorePlan::Wait
+    } else {
+        NoticeRestorePlan::Show
+    }
+}
+
+async fn wait_for_capture_cycle(app: &AppHandle) {
+    let started = Instant::now();
+    while !active_capture_or_recording(&app.state::<Arc<AppState>>())
+        && should_wait_for_capture_start(started.elapsed(), DEFER_CAPTURE_START_TIMEOUT)
+    {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    while active_capture_or_recording(&app.state::<Arc<AppState>>()) {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+fn should_wait_for_capture_start(elapsed: Duration, timeout: Duration) -> bool {
+    elapsed < timeout
 }
 
 pub fn handle_tray_action(app: &AppHandle) {
@@ -563,6 +654,7 @@ fn show_update_notice(app: &AppHandle) {
 
 fn create_update_notice(app: &AppHandle, height: f64) -> Result<(), tauri::Error> {
     let (x, y) = update_notice_position(app);
+    let (theme, background) = crate::notice_window_chrome(app);
     let window = WebviewWindowBuilder::new(
         app,
         "update",
@@ -577,8 +669,8 @@ fn create_update_notice(app: &AppHandle, height: f64) -> Result<(), tauri::Error
     .skip_taskbar(true)
     .resizable(false)
     .shadow(true)
-    .transparent(true)
-    .background_color(Color(0, 0, 0, 0))
+    .theme(theme)
+    .background_color(background)
     .accept_first_mouse(true)
     .focused(false)
     .visible(false)
@@ -887,11 +979,12 @@ mod tests {
     use std::{sync::atomic::AtomicBool, time::Duration};
 
     use super::{
-        AtomicFlagGuard, CHECK_INTERVAL, NoticeDisposition, UpdateChangelogEntry, UpdateStatus,
-        capture_window_should_close_for_update, check_error_status, display_version,
-        notice_disposition, open_captures_will_close_from, release_channel_enabled,
-        restart_blocker, stacked_changelog, take_restart_marker, update_notice_height,
-        version_is_newer_than,
+        AtomicFlagGuard, CHECK_INTERVAL, NoticeDisposition, NoticeRestorePlan,
+        UpdateChangelogEntry, UpdateStatus, capture_window_should_close_for_update,
+        check_error_status, display_version, notice_disposition, notice_restore_plan,
+        open_captures_will_close_from, release_channel_enabled, restart_blocker,
+        should_begin_deferred_restore, should_wait_for_capture_start, stacked_changelog,
+        take_restart_marker, update_notice_height, version_is_newer_than,
     };
 
     #[test]
@@ -1007,6 +1100,52 @@ mod tests {
                 false,
             ),
             NoticeDisposition::Ignore
+        );
+    }
+
+    #[test]
+    fn waits_for_capture_ui_to_start_before_restoring_an_update_notice() {
+        let timeout = Duration::from_millis(1_500);
+        assert!(should_wait_for_capture_start(
+            Duration::from_millis(0),
+            timeout
+        ));
+        assert!(should_wait_for_capture_start(
+            Duration::from_millis(1_499),
+            timeout
+        ));
+        assert!(!should_wait_for_capture_start(timeout, timeout));
+        assert!(!should_wait_for_capture_start(
+            Duration::from_millis(1_501),
+            timeout
+        ));
+    }
+
+    #[test]
+    fn defers_a_visible_or_already_hidden_update_notice() {
+        assert!(should_begin_deferred_restore(true, true, false));
+        assert!(should_begin_deferred_restore(true, false, true));
+        assert!(!should_begin_deferred_restore(true, false, false));
+        assert!(!should_begin_deferred_restore(false, true, true));
+    }
+
+    #[test]
+    fn later_does_not_bring_the_update_notice_back_after_a_capture() {
+        assert_eq!(
+            notice_restore_plan(true, false, false, false),
+            NoticeRestorePlan::Ignore
+        );
+        assert_eq!(
+            notice_restore_plan(true, true, false, true),
+            NoticeRestorePlan::Wait
+        );
+        assert_eq!(
+            notice_restore_plan(true, true, false, false),
+            NoticeRestorePlan::Show
+        );
+        assert_eq!(
+            notice_restore_plan(true, false, true, false),
+            NoticeRestorePlan::Show
         );
     }
 
