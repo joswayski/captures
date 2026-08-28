@@ -391,12 +391,37 @@ describe("ScreenshotEditor", () => {
 
     const disclosure = screen.getByRole("button", { name: /Export settings/ });
     expect(disclosure).toHaveAttribute("aria-expanded", "false");
+    const filename = screen.getByRole("textbox", { name: "Saved filename" });
+    const format = screen.getByRole("combobox", { name: "Format" });
+    expect(format).toHaveTextContent(".png");
+    expect(filename.closest(".recording-filename-input")).toContainElement(format);
 
     fireEvent.click(disclosure);
 
     expect(disclosure).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByLabelText("Format")).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Save quality" })).toBeInTheDocument();
+  });
+
+  it("changes screenshot format from the filename extension without opening export settings", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByRole("textbox", { name: "Saved filename" });
+
+    const disclosure = screen.getByRole("button", { name: /Export settings/ });
+    const format = screen.getByRole("combobox", { name: "Format" });
+    expect(disclosure).toHaveAttribute("aria-expanded", "false");
+    expect(format).toHaveTextContent(".png");
+    expect(disclosure).toHaveTextContent(/PNG/);
+
+    fireEvent.click(format);
+    fireEvent.click(screen.getByRole("option", { name: "JPEG" }));
+    expect(format).toHaveTextContent(".jpg");
+    expect(disclosure).toHaveAttribute("aria-expanded", "false");
+    expect(disclosure).toHaveTextContent(/JPEG/);
+
+    fireEvent.click(format);
+    fireEvent.click(screen.getByRole("option", { name: "WebP" }));
+    expect(format).toHaveTextContent(".webp");
+    expect(disclosure).toHaveTextContent(/WebP/);
   });
 
   it("clears editor presence when the original layer is deleted", async () => {
@@ -2208,7 +2233,7 @@ describe("ScreenshotEditor", () => {
     await screen.findByLabelText("Width");
 
     const format = screen.getByRole("combobox", { name: "Format" });
-    expect(format).toHaveTextContent("PNG");
+    expect(format).toHaveTextContent(".png");
     const saveQuality = screen.getByRole("combobox", { name: "Save quality" });
     expect(saveQuality).toHaveTextContent("Preserve quality");
     expect(screen.queryByRole("combobox", { name: "Compression quality" }))
@@ -2229,7 +2254,7 @@ describe("ScreenshotEditor", () => {
     fireEvent.click(compressOption);
 
     await waitFor(() => {
-      expect(format).toHaveTextContent("PNG");
+      expect(format).toHaveTextContent(".png");
     });
     expect(screen.queryByRole("combobox", { name: "Compression quality" }))
       .not.toBeInTheDocument();
@@ -2268,7 +2293,7 @@ describe("ScreenshotEditor", () => {
     expect(screen.getByRole("spinbutton", { name: "Maximum file size" })).toHaveValue(10);
     expect(screen.getByRole("combobox", { name: "Screenshot file size unit" }))
       .toHaveTextContent("MB");
-    expect(format).toHaveTextContent("JPEG");
+    expect(format).toHaveTextContent(".jpg");
 
     // Switching format keeps the quality mode; maximum works for PNG too.
     fireEvent.click(format);
@@ -2418,7 +2443,7 @@ describe("ScreenshotEditor", () => {
       fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
       fireEvent.click(screen.getByRole("option", { name: /Compress/ }));
       // PNG compress estimates go through Rust (color quantization).
-      expect(screen.getByRole("combobox", { name: "Format" })).toHaveTextContent("PNG");
+      expect(screen.getByRole("combobox", { name: "Format" })).toHaveTextContent(".png");
       await waitFor(() => {
         expect(screen.getByRole("slider", { name: "PNG palette colors" })).toBeInTheDocument();
       });
@@ -2437,7 +2462,7 @@ describe("ScreenshotEditor", () => {
       fireEvent.click(screen.getByRole("combobox", { name: "Format" }));
       fireEvent.click(screen.getByRole("option", { name: "JPEG" }));
       await waitFor(() => {
-        expect(screen.getByRole("combobox", { name: "Format" })).toHaveTextContent("JPEG");
+        expect(screen.getByRole("combobox", { name: "Format" })).toHaveTextContent(".jpg");
       });
       fireEvent.click(screen.getByRole("combobox", { name: "Compression quality" }));
       fireEvent.click(screen.getByRole("option", { name: /High/ }));
@@ -2542,7 +2567,7 @@ describe("ScreenshotEditor", () => {
       fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
       fireEvent.click(screen.getByRole("option", { name: /Maximum file size/ }));
       // Maximum size keeps the selected PNG format.
-      expect(screen.getByRole("combobox", { name: "Format" })).toHaveTextContent("PNG");
+      expect(screen.getByRole("combobox", { name: "Format" })).toHaveTextContent(".png");
       await act(async () => undefined);
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
 

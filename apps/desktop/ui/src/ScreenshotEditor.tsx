@@ -6278,19 +6278,6 @@ export function ScreenshotEditor() {
       <footer className="screenshot-export-bar">
         <div className={`screenshot-export-options${exportSettingsOpen ? " is-open" : ""}`}>
           <div id="screenshot-export-settings" className="screenshot-export-settings">
-          <div className="screenshot-export-control screenshot-export-format">
-            <span>Format</span>
-            <CustomSelect
-              value={exportFormat}
-              ariaLabel="Format"
-              options={[
-                { value: "png", label: "PNG" },
-                { value: "jpeg", label: "JPEG" },
-                { value: "webp", label: "WebP" },
-              ]}
-              onChange={(value) => applyExportFormat(value as ExportFormat)}
-            />
-          </div>
           <div className="screenshot-export-control screenshot-export-size">
             <span>Output size</span>
             <span className="screenshot-export-size-control">
@@ -6531,7 +6518,19 @@ export function ScreenshotEditor() {
                   clearSuccess();
                 }}
               />
-              <strong>.{screenshotFormatExtension(exportFormat, artifact.path)}</strong>
+              <CustomSelect
+                className="filename-format-select"
+                value={exportFormat}
+                ariaLabel="Format"
+                triggerLabel={`.${screenshotFormatExtension(exportFormat, artifact.path)}`}
+                disabled={busy !== null}
+                options={[
+                  { value: "png", label: "PNG" },
+                  { value: "jpeg", label: "JPEG" },
+                  { value: "webp", label: "WebP" },
+                ]}
+                onChange={(value) => applyExportFormat(value as ExportFormat)}
+              />
             </span>
           </div>
           <div

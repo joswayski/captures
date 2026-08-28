@@ -2828,7 +2828,7 @@
 
 /* ----------------------------------------------------------- export bar --- */
 
-/* Saving stays visible; format/quality controls expand only when needed. */
+/* Saving stays visible; size/quality controls expand only when needed. */
 .screenshot-export-bar {
   z-index: 20;
   display: flex;
@@ -2931,10 +2931,6 @@
 
 .screenshot-export-size-control .custom-select {
   min-width: 108px;
-}
-
-.screenshot-export-format {
-  width: 108px;
 }
 
 .screenshot-output-dimensions {
@@ -3406,10 +3402,15 @@
   font-size: var(--text-sm);
 }
 
-.screenshot-editor .recording-filename-input strong {
+.screenshot-editor .filename-format-select .custom-select-trigger {
   color: var(--editor-text-subtle);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-regular);
+}
+
+.screenshot-editor .filename-format-select .custom-select-trigger:hover:not(:disabled),
+.screenshot-editor .filename-format-select .custom-select-trigger:focus-visible,
+.screenshot-editor .filename-format-select.open .custom-select-trigger {
+  color: var(--editor-text);
+  background: var(--editor-control-hover);
 }
 
 .screenshot-editor .recording-destination {
