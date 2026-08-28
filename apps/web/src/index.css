@@ -260,6 +260,10 @@
     transition: transform 180ms ease-out;
   }
 
+  .product-gallery-image.is-inactive {
+    visibility: hidden;
+  }
+
   .product-gallery-stage {
     touch-action: pan-x pan-y;
   }
@@ -414,6 +418,23 @@
     line-height: 1.4;
     text-align: center;
     pointer-events: none;
+  }
+
+  .gallery-nav-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: center;
+    gap: 0.75rem;
+    margin-top: 1rem;
+  }
+
+  .gallery-nav-slot {
+    display: flex;
+    min-height: 2.25rem;
+  }
+
+  .gallery-nav-slot-end {
+    justify-content: flex-end;
   }
 
   .gallery-nav {

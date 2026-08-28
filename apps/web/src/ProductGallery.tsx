@@ -7,9 +7,12 @@ import screenshotEditor from "../../../docs/images/screenshot-editor.jpg";
 import videoEditor from "../../../docs/images/video-editor.jpg";
 import ProductLightbox from "./ProductLightbox";
 import {
+  clampGalleryIndex,
   galleryAllowsLightboxOpen,
   galleryAllowsSlideGesture,
   galleryFrameGesture,
+  galleryHasNext,
+  galleryHasPrevious,
 } from "./productLightbox";
 import { PRODUCT_SHOTS, galleryFrameAspectRatio, type ProductShot } from "./productShots";
 import { useImageZoom } from "./useImageZoom";
@@ -38,6 +41,8 @@ export default function ProductGallery() {
   const suppressClick = useRef(false);
   const shot = PRODUCT_SHOTS[index] ?? PRODUCT_SHOTS[0];
   const lastIndex = PRODUCT_SHOTS.length - 1;
+  const canPrevious = galleryHasPrevious(index);
+  const canNext = galleryHasNext(index, PRODUCT_SHOTS.length);
   const src = SHOT_SRC[shot.file];
   const imageZoom = useImageZoom({
     active: !lightboxOpen,
@@ -47,8 +52,8 @@ export default function ProductGallery() {
     wheel: "modified",
   });
 
-  const goTo = useCallback((next: number) => {
-    setIndex((next + PRODUCT_SHOTS.length) % PRODUCT_SHOTS.length);
+  const goTo = useCallback((nextIndex: number) => {
+    setIndex(clampGalleryIndex(nextIndex, PRODUCT_SHOTS.length));
   }, []);
 
   const previous = useCallback(() => goTo(index - 1), [goTo, index]);
@@ -62,9 +67,11 @@ export default function ProductGallery() {
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (lightboxOpen) return;
     if (event.key === "ArrowLeft") {
+      if (!canPrevious) return;
       event.preventDefault();
       previous();
     } else if (event.key === "ArrowRight") {
+      if (!canNext) return;
       event.preventDefault();
       next();
     } else if (event.key === "Home") {
@@ -180,19 +187,35 @@ export default function ProductGallery() {
             onPointerCancel={handleFramePointerCancel}
             onClick={handleFrameClick}
           >
-            <img
-              ref={imageRef}
-              className={imageClass}
-              src={src}
-              alt={shot.alt}
-              width={shot.width}
-              height={shot.height}
-              decoding="async"
-              draggable={false}
-              style={{
-                transform: `translate(${imageZoom.zoom.x}px, ${imageZoom.zoom.y}px) scale(${imageZoom.zoom.scale})`,
-              }}
-            />
+            {PRODUCT_SHOTS.map((item, itemIndex) => {
+              const active = itemIndex === index;
+              return (
+                <img
+                  key={item.id}
+                  ref={active ? imageRef : undefined}
+                  className={
+                    active
+                      ? imageClass
+                      : "product-gallery-image is-inactive"
+                  }
+                  src={SHOT_SRC[item.file]}
+                  alt={active ? item.alt : ""}
+                  width={item.width}
+                  height={item.height}
+                  decoding="async"
+                  fetchPriority={active ? "high" : "low"}
+                  draggable={false}
+                  aria-hidden={active ? undefined : true}
+                  style={
+                    active
+                      ? {
+                          transform: `translate(${imageZoom.zoom.x}px, ${imageZoom.zoom.y}px) scale(${imageZoom.zoom.scale})`,
+                        }
+                      : undefined
+                  }
+                />
+              );
+            })}
           </div>
 
           <div className="product-gallery-copy">
@@ -226,11 +249,15 @@ export default function ProductGallery() {
           Screenshot {index + 1} of {PRODUCT_SHOTS.length}: {shot.title}
         </p>
 
-        <div className="mt-4 flex items-center justify-between gap-3">
-          <button type="button" className="gallery-nav" onClick={previous}>
-            <ChevronIcon direction="left" />
-            Previous
-          </button>
+        <div className="gallery-nav-row">
+          <div className="gallery-nav-slot">
+            {canPrevious ? (
+              <button type="button" className="gallery-nav" onClick={previous}>
+                <ChevronIcon direction="left" />
+                Previous
+              </button>
+            ) : null}
+          </div>
           <div className="flex items-center gap-1.5" role="group" aria-label="Choose screenshot">
             {PRODUCT_SHOTS.map((item, itemIndex) => {
               const selected = itemIndex === index;
@@ -246,10 +273,14 @@ export default function ProductGallery() {
               );
             })}
           </div>
-          <button type="button" className="gallery-nav" onClick={next}>
-            Next
-            <ChevronIcon direction="right" />
-          </button>
+          <div className="gallery-nav-slot gallery-nav-slot-end">
+            {canNext ? (
+              <button type="button" className="gallery-nav" onClick={next}>
+                Next
+                <ChevronIcon direction="right" />
+              </button>
+            ) : null}
+          </div>
         </div>
       </div>
 

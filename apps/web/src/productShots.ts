@@ -14,15 +14,6 @@ export const PRODUCT_SHOTS = [
     alt: "Captures region capture over a landscape, with a highlighted box, corner handles, and the capture menu",
   },
   {
-    id: "capture-controls",
-    file: "capture-controls.jpg",
-    width: 1200,
-    height: 228,
-    title: "Everything in reach",
-    description: "Capture type and target controls sit together in one compact menu.",
-    alt: "Close-up of the Captures capture menu with screenshot and recording options",
-  },
-  {
     id: "screenshot-editor",
     file: "screenshot-editor.jpg",
     width: 1440,
@@ -30,6 +21,15 @@ export const PRODUCT_SHOTS = [
     title: "Edit screenshots",
     description: "Text, arrows, and stickers. Drag past an edge to grow the canvas.",
     alt: "Captures screenshot editor with a landscape, a Choke point label on the fjord, a tiger sticker half off the left edge, and an Evergreen ship dragged past the right edge",
+  },
+  {
+    id: "capture-controls",
+    file: "capture-controls.jpg",
+    width: 1200,
+    height: 228,
+    title: "Everything in reach",
+    description: "Capture type and target controls sit together in one compact menu.",
+    alt: "Close-up of the Captures capture menu with screenshot and recording options",
   },
   {
     id: "video-editor",

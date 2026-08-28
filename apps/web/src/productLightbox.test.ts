@@ -11,9 +11,12 @@ import {
   clampPan,
   clampScale,
   clearRestoredDialogFocus,
+  clampGalleryIndex,
   galleryAllowsLightboxOpen,
   galleryAllowsSlideGesture,
   galleryFrameGesture,
+  galleryHasNext,
+  galleryHasPrevious,
   isDoubleTap,
   isZoomed,
   pointerDistance,
@@ -37,6 +40,19 @@ test("gallery taps open the lightbox and swipes change slides", () => {
   assert.equal(galleryFrameGesture(120, 20), "previous");
   assert.equal(galleryFrameGesture(-SWIPE_THRESHOLD_PX, 8), "next");
   assert.equal(galleryFrameGesture(20, 80), "ignore");
+});
+
+test("gallery next and previous stop at the ends", () => {
+  assert.equal(clampGalleryIndex(-1, 5), 0);
+  assert.equal(clampGalleryIndex(0, 5), 0);
+  assert.equal(clampGalleryIndex(4, 5), 4);
+  assert.equal(clampGalleryIndex(5, 5), 4);
+  assert.equal(clampGalleryIndex(2, 0), 0);
+  assert.equal(galleryHasPrevious(0), false);
+  assert.equal(galleryHasPrevious(1), true);
+  assert.equal(galleryHasNext(0, 5), true);
+  assert.equal(galleryHasNext(4, 5), false);
+  assert.equal(galleryHasNext(0, 1), false);
 });
 
 test("a zoomed gallery keeps pinch and pan instead of changing slides", () => {

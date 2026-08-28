@@ -43,6 +43,19 @@ export function galleryAllowsSlideGesture(scale: number) {
   return !isZoomed(scale);
 }
 
+export function clampGalleryIndex(index: number, count: number) {
+  if (count <= 0) return 0;
+  return Math.min(Math.max(index, 0), count - 1);
+}
+
+export function galleryHasPrevious(index: number) {
+  return index > 0;
+}
+
+export function galleryHasNext(index: number, count: number) {
+  return count > 0 && index < count - 1;
+}
+
 export function galleryAllowsLightboxOpen(scale: number, pinched: boolean) {
   return !pinched && !isZoomed(scale);
 }
