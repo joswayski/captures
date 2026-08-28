@@ -28,8 +28,8 @@ export const PRODUCT_SHOTS = [
     width: 1440,
     height: 900,
     title: "Edit screenshots",
-    description: "Text, arrows, and other annotations. Drag past an edge to grow the canvas.",
-    alt: "Captures screenshot editor annotating a landscape, with an arrow dragged past the canvas edge to expand it",
+    description: "Text, arrows, and stickers. Drag past an edge to grow the canvas.",
+    alt: "Captures screenshot editor with a landscape, Water and Viewpoint labels, and a tiger sticker half off the left canvas edge",
   },
   {
     id: "video-editor",
