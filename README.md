@@ -20,7 +20,7 @@ Click and drag a region like other screenshot tools, or pick a window or full di
 <table>
   <tr>
     <td width="50%">
-      <img src="docs/images/screenshot-editor.jpg" alt="Captures screenshot editor with a landscape, Water and Viewpoint labels, and a tiger sticker half off the left canvas edge" width="100%">
+      <img src="docs/images/screenshot-editor.jpg" alt="Captures screenshot editor with a landscape, a Choke point label on the fjord, a tiger sticker half off the left edge, and an Evergreen ship dragged past the right edge" width="100%">
       <br>
       <sub><strong>Edit screenshots</strong> with text, arrows, stickers, and a canvas that grows when you drag past the edge.</sub>
     </td>
