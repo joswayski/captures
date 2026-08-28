@@ -4468,7 +4468,7 @@ export function ScreenshotEditor() {
         },
       });
       // Always adopt the saved artifact so a first Captures-folder save becomes
-      // the new original (Save overwrites it; Make a copy creates another file).
+      // the new original (Save overwrites it; Save as new file creates another file).
       setArtifact(result.artifact);
       if (result.artifact.path) {
         setMakeCopy(false);
@@ -4482,7 +4482,7 @@ export function ScreenshotEditor() {
       draftSaveGenerationRef.current += 1;
       void invoke("discard_screenshot_editor_draft", { artifactId: result.artifact.id })
         .catch(() => undefined);
-      // Window may still be keyed by the previous capture when Make a copy saved a new id.
+      // Window may still be keyed by the previous capture when Save as new file saved a new id.
       if (artifactId && artifactId !== result.artifact.id) {
         void invoke("discard_screenshot_editor_draft", { artifactId })
           .catch(() => undefined);
@@ -6671,10 +6671,10 @@ export function ScreenshotEditor() {
                       : qualityMode === "compress"
                         ? savingCopy
                           ? `Compressed ${formatLabel} saves as a new file and leaves the original untouched.`
-                          : `Compressed ${formatLabel} replaces the original; turn on Make a copy to keep it.`
+                          : `Compressed ${formatLabel} replaces the original; turn on Save as new file to keep it.`
                         : savingCopy
                           ? "Save creates a new file and leaves the original untouched."
-                          : "Save replaces the original; turn on Make a copy to keep it."}
+                          : "Save replaces the original; turn on Save as new file to keep it."}
               </div>
             )}
           </div>
@@ -6685,20 +6685,21 @@ export function ScreenshotEditor() {
                 title="Save as a new file and leave the original untouched"
               >
                 <input
-                  aria-label="Make a copy"
+                  aria-label="Save as new file"
                   type="checkbox"
                   checked={makeCopy}
                   disabled={busy !== null}
                   onChange={(event) => updateMakeCopy(event.target.checked)}
                 />
                 <span className="recording-switch" aria-hidden="true" />
-                <span>Make a copy</span>
+                <span>Save as new file</span>
               </label>
             )}
             {saved && <button type="button" onClick={() => void showSavedFile()}>Show in Folder</button>}
             <button
               type="button"
               className={success?.kind === "copy" ? "success" : undefined}
+              title="Copy the edited image to the clipboard"
               disabled={busy !== null}
               onClick={() => void copyEditedImage()}
             >

@@ -4406,18 +4406,18 @@ export function RecordingEditor() {
         <label
           className="recording-toggle recording-make-copy"
           title={formatRequiresCopy
-            ? "Changing formats always creates a copy"
+            ? "Changing formats always creates a new file"
             : "Save as a new file and leave the original untouched"}
         >
           <input
-            aria-label="Make a copy"
+            aria-label="Save as new file"
             type="checkbox"
             checked={makeCopy}
             disabled={Boolean(exportId) || formatRequiresCopy}
             onChange={(event) => updateMakeCopy(event.target.checked)}
           />
           <span className="recording-switch" aria-hidden="true" />
-          <span>Make a copy</span>
+          <span>Save as new file</span>
         </label>
         <div className="recording-save-action-area">
           <div

@@ -352,7 +352,7 @@ describe("RecordingEditor", () => {
     fireEvent.focus(filename);
     expect((filename as HTMLInputElement).selectionStart).toBe(0);
     expect((filename as HTMLInputElement).selectionEnd).toBe("Captures_1140x692".length);
-    expect(screen.getByRole("checkbox", { name: "Make a copy" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Save as new file" })).not.toBeChecked();
     expect(screen.getByRole("combobox", { name: "Format" })).toHaveTextContent(".mp4");
     expect(filename.closest(".recording-filename-input"))
       .toContainElement(screen.getByRole("combobox", { name: "Format" }));
@@ -404,9 +404,9 @@ describe("RecordingEditor", () => {
       artifactId: artifact.id,
     });
 
-    // Reset to the original name so Make a copy can apply the -edited suffix.
+    // Reset to the original name so Save as new file can apply the -edited suffix.
     fireEvent.change(filename, { target: { value: "Captures_1140x692" } });
-    fireEvent.click(screen.getByRole("checkbox", { name: "Make a copy" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Save as new file" }));
     expect(filename).toHaveValue("Captures_1140x692-edited");
     expect(filename).toBeEnabled();
     expect(screen.queryByRole("button", { name: "Show in Folder" })).not.toBeInTheDocument();
@@ -451,7 +451,7 @@ describe("RecordingEditor", () => {
       "/Users/josevalerio/Captures",
     );
     expect(screen.getByLabelText("Save location")).not.toHaveTextContent("history");
-    expect(screen.getByRole("checkbox", { name: "Make a copy" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Save as new file" })).not.toBeChecked();
 
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => {

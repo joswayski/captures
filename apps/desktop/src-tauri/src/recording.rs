@@ -2072,7 +2072,7 @@ pub fn start_recording_export(
         .and_then(|value| value.to_str())
         .unwrap_or_default();
     if request.overwrite_source && !source_extension.eq_ignore_ascii_case(extension) {
-        return Err("changing the file format requires saving a copy".to_owned());
+        return Err("changing the file format requires saving a new file".to_owned());
     }
     let selected_directory = request
         .destination_directory
@@ -2202,7 +2202,7 @@ pub fn start_recording_export(
                 let exported_path = outcome.path.to_string_lossy().into_owned();
                 let recovery_path = PathBuf::from(&source.path);
                 // Prefer the user-facing Captures path:
-                // - Make a copy / format change → the export path itself
+                // - Save as new file / format change → the export path itself
                 // - Overwrite that already landed outside recovery media → that path
                 // - Overwrite of recovery media with an existing permanent save → keep it
                 // - First history-only Save that only rewrote recovery media → promote

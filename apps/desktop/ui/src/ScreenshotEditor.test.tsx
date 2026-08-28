@@ -2354,7 +2354,7 @@ describe("ScreenshotEditor", () => {
     expect(screen.queryByRole("spinbutton", { name: "Maximum file size" }))
       .not.toBeInTheDocument();
     expect(
-      screen.getByText("Compressed PNG replaces the original; turn on Make a copy to keep it."),
+      screen.getByText("Compressed PNG replaces the original; turn on Save as new file to keep it."),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Compare before / after" })).toBeInTheDocument();
 
@@ -2594,8 +2594,8 @@ describe("ScreenshotEditor", () => {
       .toHaveValue("Captures_2026-08-08_12-00-00_000");
     expect(screen.getByLabelText("Save location"))
       .toHaveTextContent("/Users/example/Captures");
-    // No permanent original yet — Make a copy is hidden until the first save.
-    expect(screen.queryByRole("checkbox", { name: "Make a copy" }))
+    // No permanent original yet — Save as new file is hidden until the first save.
+    expect(screen.queryByRole("checkbox", { name: "Save as new file" }))
       .not.toBeInTheDocument();
     expect(invoke).toHaveBeenCalledWith("default_screenshot_edit_path", {
       artifactId: pathless.id,
@@ -2634,7 +2634,7 @@ describe("ScreenshotEditor", () => {
         .toHaveValue("capture");
       expect(screen.getByLabelText("Save location"))
         .toHaveTextContent("/Users/example/Captures");
-      expect(screen.getByRole("checkbox", { name: "Make a copy" })).not.toBeChecked();
+      expect(screen.getByRole("checkbox", { name: "Save as new file" })).not.toBeChecked();
 
       fireEvent.click(screen.getByRole("button", { name: "Change save location" }));
       await waitFor(() => {
@@ -2679,15 +2679,15 @@ describe("ScreenshotEditor", () => {
         artifactId: savedArtifact.id,
       });
       // After the first copy save, the editor treats that file as the original
-      // so later Save overwrites and Make a copy creates another file.
+      // so later Save overwrites and Save as new file creates another file.
       await waitFor(() => {
         expect(screen.getByRole("textbox", { name: "Saved filename" }))
           .toHaveValue("edited-photo");
         expect(screen.getByLabelText("Save location"))
           .toHaveTextContent("/Users/example/Pictures");
-        expect(screen.getByRole("checkbox", { name: "Make a copy" })).not.toBeChecked();
+        expect(screen.getByRole("checkbox", { name: "Save as new file" })).not.toBeChecked();
       });
-      fireEvent.click(screen.getByRole("checkbox", { name: "Make a copy" }));
+      fireEvent.click(screen.getByRole("checkbox", { name: "Save as new file" }));
       expect(screen.getByRole("textbox", { name: "Saved filename" }))
         .toHaveValue("edited-photo-edited");
     } finally {
@@ -2709,8 +2709,12 @@ describe("ScreenshotEditor", () => {
     await screen.findByLabelText("Canvas width");
 
     expect(screen.getByRole("button", { name: "Copy image" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Copy image" })).toHaveAttribute(
+      "title",
+      "Copy the edited image to the clipboard",
+    );
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
-    expect(screen.getByRole("checkbox", { name: "Make a copy" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Save as new file" })).not.toBeChecked();
     expect(
       screen.getByText("Keeps original quality as PNG and replaces the original."),
     ).toBeInTheDocument();
@@ -2730,7 +2734,7 @@ describe("ScreenshotEditor", () => {
     ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy image" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
-    expect(screen.queryByRole("checkbox", { name: "Make a copy" }))
+    expect(screen.queryByRole("checkbox", { name: "Save as new file" }))
       .not.toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
