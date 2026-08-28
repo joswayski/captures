@@ -244,8 +244,8 @@ fn update_notice_is_visible(app: &AppHandle) -> bool {
     #[cfg(target_os = "macos")]
     {
         let app = app.clone();
-        return captures_macos_window::run_on_main(move || update_notice_is_visible_inner(&app))
-            .unwrap_or(true);
+        captures_macos_window::run_on_main(move || update_notice_is_visible_inner(&app))
+            .unwrap_or(true)
     }
     #[cfg(not(target_os = "macos"))]
     update_notice_is_visible_inner(app)

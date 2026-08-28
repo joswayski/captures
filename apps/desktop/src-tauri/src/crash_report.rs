@@ -69,7 +69,7 @@ fn crash_message() -> String {
 fn latest_crash_snippet() -> Option<String> {
     #[cfg(target_os = "macos")]
     {
-        return latest_macos_crash_snippet();
+        latest_macos_crash_snippet()
     }
     #[cfg(not(target_os = "macos"))]
     None
