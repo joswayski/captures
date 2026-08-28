@@ -15,8 +15,8 @@ test("website product shots cover the README stills with unique files", () => {
     [
       "capture-selection",
       "screenshot-editor",
-      "capture-controls",
       "video-editor",
+      "capture-controls",
       "preferences",
     ],
   );
