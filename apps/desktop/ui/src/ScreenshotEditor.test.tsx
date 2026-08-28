@@ -39,6 +39,7 @@ function draftCommandResult(command: string): unknown {
   if (command === "load_screenshot_editor_draft") return null;
   if (command === "save_screenshot_editor_draft") return undefined;
   if (command === "discard_screenshot_editor_draft") return undefined;
+  if (command === "get_settings") return { screenshot_format: "png" };
   return undefined;
 }
 
@@ -2683,6 +2684,50 @@ describe("ScreenshotEditor", () => {
     expect(invoke).toHaveBeenCalledWith("default_screenshot_edit_path", {
       artifactId: pathless.id,
       format: "png",
+    });
+  });
+
+  it("defaults export format from screenshot preferences", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifact") return artifact;
+      if (command === "get_settings") return { screenshot_format: "jpeg" };
+      const draft = draftCommandResult(String(command));
+      if (draft !== undefined || String(command).includes("screenshot_editor_draft")) {
+        return draft;
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Canvas width");
+    expect(screen.getByRole("combobox", { name: "Format" })).toHaveTextContent(".jpg");
+  });
+
+  it("uses the preferred format when suggesting a first-save path", async () => {
+    const pathless: CaptureArtifact = {
+      ...artifact,
+      path: null,
+    };
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifact") return pathless;
+      if (command === "get_settings") return { screenshot_format: "webp" };
+      if (command === "default_screenshot_edit_path") {
+        return "/Users/example/Captures/Captures_2026-08-08_12-00-00_000.webp";
+      }
+      const draft = draftCommandResult(String(command));
+      if (draft !== undefined || String(command).includes("screenshot_editor_draft")) {
+        return draft;
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<ScreenshotEditor />);
+    expect(await screen.findByRole("textbox", { name: "Saved filename" }))
+      .toHaveValue("Captures_2026-08-08_12-00-00_000");
+    expect(screen.getByRole("combobox", { name: "Format" })).toHaveTextContent(".webp");
+    expect(invoke).toHaveBeenCalledWith("default_screenshot_edit_path", {
+      artifactId: pathless.id,
+      format: "webp",
     });
   });
 

@@ -75,15 +75,19 @@ fn save_settings_to(path: &Path, settings: &AppSettings) -> Result<(), AppError>
     Ok(())
 }
 
-pub fn save_encoded_capture(png: &[u8], settings: &AppSettings) -> Result<PathBuf, AppError> {
+pub fn save_encoded_capture(
+    bytes: &[u8],
+    settings: &AppSettings,
+    extension: &str,
+) -> Result<PathBuf, AppError> {
     let directory = PathBuf::from(&settings.output_directory);
     fs::create_dir_all(&directory)?;
     let stem = format!("Captures_{}", Local::now().format("%Y-%m-%d_%H-%M-%S_%3f"));
-    let path = unique_path(&directory, &stem);
+    let path = unique_path(&directory, &stem, extension);
     let temporary = directory.join(format!(".captures-{}.tmp", Uuid::new_v4()));
 
     let mut file = File::create(&temporary)?;
-    file.write_all(png)?;
+    file.write_all(bytes)?;
     drop(file);
     fs::rename(&temporary, &path)?;
     Ok(path)
@@ -968,16 +972,16 @@ fn encode_png_with_quality(
     Ok(bytes)
 }
 
-fn unique_path(directory: &Path, stem: &str) -> PathBuf {
-    let initial = directory.join(format!("{stem}.png"));
+fn unique_path(directory: &Path, stem: &str, extension: &str) -> PathBuf {
+    let initial = directory.join(format!("{stem}.{extension}"));
     if !initial.exists() {
         return initial;
     }
 
     (1_u32..)
-        .map(|suffix| directory.join(format!("{stem}-{suffix}.png")))
+        .map(|suffix| directory.join(format!("{stem}-{suffix}.{extension}")))
         .find(|candidate| !candidate.exists())
-        .unwrap_or_else(|| directory.join(format!("{stem}-{}.png", Uuid::new_v4())))
+        .unwrap_or_else(|| directory.join(format!("{stem}-{}.{extension}", Uuid::new_v4())))
 }
 
 #[cfg(test)]
@@ -1013,7 +1017,7 @@ mod tests {
         let image = RgbaImage::from_pixel(2, 3, Rgba([1, 2, 3, 255]));
 
         let png = encode_png(&image).expect("capture encoded");
-        let path = save_encoded_capture(&png, &settings).expect("capture saved");
+        let path = save_encoded_capture(&png, &settings, "png").expect("capture saved");
         let bytes = std::fs::read(&path).expect("saved capture readable");
         assert_eq!(
             image::ImageFormat::from_path(&path).unwrap(),
@@ -1021,7 +1025,7 @@ mod tests {
         );
         assert!(!bytes.is_empty());
         assert!(path.exists());
-        assert!(!unique_path(directory.path(), "Captures_test").exists());
+        assert!(!unique_path(directory.path(), "Captures_test", "png").exists());
     }
 
     #[test]

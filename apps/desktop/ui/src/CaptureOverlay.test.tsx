@@ -31,6 +31,7 @@ const session: ActiveSession = {
   },
   window_coordinate_scale: 1,
   window_corner_radius: 25,
+  frozen: true,
   snapshot_url: "capture://session/capture-1",
   windows: [],
 };
@@ -339,6 +340,22 @@ describe("CaptureOverlay guidance", () => {
     expect(snapshot).not.toBeNull();
     fireEvent.load(snapshot!);
 
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("reveal_capture_overlay", { sessionId: "capture-1" });
+    });
+  });
+
+  it("reveals a live overlay without a freeze-frame snapshot", async () => {
+    activeSession = { ...session, frozen: false, snapshot_url: "" };
+    window.history.replaceState(
+      {},
+      "",
+      "/?view=overlay&mode=region&session_id=capture-1",
+    );
+    const { container } = render(<App />);
+    await screen.findByText("Drag to select a region");
+
+    expect(container.querySelector(".capture-snapshot")).toBeNull();
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("reveal_capture_overlay", { sessionId: "capture-1" });
     });

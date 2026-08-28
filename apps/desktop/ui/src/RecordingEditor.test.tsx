@@ -86,9 +86,12 @@ const settings: AppSettings = {
   pending_capture_after_restart: null,
   onboarding_completed: true,
   screenshot_countdown_seconds: 0,
+  freeze_screen: true,
+  screenshot_format: "png",
   recording: {
     video_shortcut: "Ctrl+Shift+5",
     gif_shortcut: "Ctrl+Shift+6",
+    video_format: "mp4",
     video_fps: 60,
     video_max_resolution: "original",
     gif_fps: 15,
@@ -714,6 +717,7 @@ describe("RecordingEditor", () => {
     fireEvent.click(format);
     expect(screen.getByRole("option", { name: "MP4" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("option", { name: "GIF" })).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByRole("option", { name: "WebM" })).toHaveAttribute("aria-selected", "false");
     fireEvent.keyDown(format, { key: "Escape" });
 
     const systemVolume = screen.getByRole("slider", { name: "System audio volume" });
@@ -793,6 +797,46 @@ describe("RecordingEditor", () => {
     expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Show in Folder" })).not.toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("defaults video export format from recording preferences", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_recording_artifact") return artifact;
+      if (command === "get_settings") {
+        return { ...settings, recording: { ...settings.recording, video_format: "webm" } };
+      }
+      if (command === "prepare_recording_timeline_preview") return timeline;
+      if (command === "estimate_recording_export") return { sizeBytes: artifact.size_bytes, exact: true };
+      if (command === "preview_recording_export") return { beforePng: [1, 2], afterPng: [3, 4] };
+      throw new Error(`unexpected command: ${command}`);
+    });
+    render(<RecordingEditor />);
+    await screen.findByRole("heading", { name: "Edit recording" });
+    expect(screen.getByRole("combobox", { name: "Format" })).toHaveTextContent(".webm");
+  });
+
+  it("keeps GIF recordings as GIF even when the default video format is WebM", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_recording_artifact") {
+        return {
+          ...artifact,
+          kind: "gif",
+          path: "/Users/josevalerio/Captures/Captures_1140x692.gif",
+          saved_path: "/Users/josevalerio/Captures/Captures_1140x692.gif",
+          mime_type: "image/gif",
+        };
+      }
+      if (command === "get_settings") {
+        return { ...settings, recording: { ...settings.recording, video_format: "webm" } };
+      }
+      if (command === "prepare_recording_timeline_preview") return timeline;
+      if (command === "estimate_recording_export") return { sizeBytes: artifact.size_bytes, exact: true };
+      if (command === "preview_recording_export") return { beforePng: [1, 2], afterPng: [3, 4] };
+      throw new Error(`unexpected command: ${command}`);
+    });
+    render(<RecordingEditor />);
+    await screen.findByRole("heading", { name: "Edit recording" });
+    expect(screen.getByRole("combobox", { name: "Format" })).toHaveTextContent(".gif");
   });
 });
 

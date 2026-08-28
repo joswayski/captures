@@ -74,6 +74,7 @@ pub struct EditSpec {
 pub enum ExportFormat {
     Mp4,
     Gif,
+    #[serde(rename = "webm", alias = "web_m")]
     WebM,
 }
 

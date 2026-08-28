@@ -137,9 +137,11 @@ import type {
   RecordingSessionSnapshot,
   RecordingTarget,
   RecordingTimelinePreview,
+  ScreenshotFormat,
   ThumbnailPointerPosition,
   UpdateStatus,
   EditorLayerPresence,
+  VideoFormat,
   ViewerActivationState,
 } from "./types";
 
@@ -162,6 +164,15 @@ function query(name: string): string | null {
 
 function afterNextPaint(callback: () => void) {
   requestAnimationFrame(() => requestAnimationFrame(callback));
+}
+
+/** Frozen overlays wait for the snapshot image; live selectors use a synthetic key. */
+function freezeFrameRevealKey(session: { frozen?: boolean; snapshot_url: string }): string {
+  return session.frozen === false ? (session.snapshot_url || "live") : session.snapshot_url;
+}
+
+function sessionShowsFreezeFrame(session: { frozen?: boolean } | null | undefined): boolean {
+  return session?.frozen !== false;
 }
 
 function emitViewerActivation(artifactId: string | null, active: boolean) {
@@ -1786,7 +1797,7 @@ export function RecordingSelector() {
       sessionRef.current = selection;
       setSession(selection);
       setError(String(error));
-      revealSelector(selection.id, selection.snapshot_url);
+      revealSelector(selection.id, freezeFrameRevealKey(selection));
     });
   }, [clearRegionDrag, revealSelector]);
 
@@ -1802,8 +1813,9 @@ export function RecordingSelector() {
         && sessionRef.current?.id === selection.id
       ) {
         const previous = sessionRef.current;
-        const snapshotChanged = previous.snapshot_url !== selection.snapshot_url;
-        const revealKey = `${selection.id}:${selection.snapshot_url}`;
+        const snapshotChanged = previous.snapshot_url !== selection.snapshot_url
+          || previous.frozen !== selection.frozen;
+        const revealKey = `${selection.id}:${freezeFrameRevealKey(selection)}`;
         sessionRef.current = selection;
         setSession(selection);
         if (previous.initial_mode !== selection.initial_mode) {
@@ -1814,7 +1826,7 @@ export function RecordingSelector() {
         }
         if (!snapshotChanged && visibleSnapshotRef.current === revealKey) {
           visibleSnapshotRef.current = null;
-          revealSelector(selection.id, selection.snapshot_url);
+          revealSelector(selection.id, freezeFrameRevealKey(selection));
         }
         setSwitchingDisplay(false);
         return;
@@ -1982,13 +1994,21 @@ export function RecordingSelector() {
   // onscreen. Do not make the selector depend exclusively on the snapshot's
   // onLoad event or the window can remain hidden forever. The native surface is
   // transparent and click-through while this safety path waits for paint.
+  const selectionId = session?.id;
+  const snapshotUrl = session?.snapshot_url;
+  const selectorFrozen = session?.frozen;
   useEffect(() => {
-    if (!session?.id) return;
+    if (!selectionId) return;
+    const snapshotKey = selectorFrozen === false ? (snapshotUrl || "live") : (snapshotUrl ?? "");
+    if (selectorFrozen === false) {
+      revealSelector(selectionId, snapshotKey);
+      return;
+    }
     const timer = window.setTimeout(() => {
-      revealSelector(session.id, session.snapshot_url);
+      revealSelector(selectionId, snapshotKey);
     }, 120);
     return () => window.clearTimeout(timer);
-  }, [session?.id, session?.snapshot_url, revealSelector]);
+  }, [selectionId, snapshotUrl, selectorFrozen, revealSelector]);
 
   useEffect(() => {
     if (
@@ -2371,17 +2391,19 @@ export function RecordingSelector() {
       onPointerCancel={onPointerUp}
       onDragStart={(event) => event.preventDefault()}
     >
-      <img
-        className="recording-selector-snapshot"
-        src={session.snapshot_url}
-        alt=""
-        draggable={false}
-        onLoad={() => revealSelector(session.id, session.snapshot_url)}
-        onError={() => {
-          setError("The frozen preview could not load. You can still select from the live desktop.");
-          revealSelector(session.id, session.snapshot_url);
-        }}
-      />
+      {sessionShowsFreezeFrame(session) && session.snapshot_url ? (
+        <img
+          className="recording-selector-snapshot"
+          src={session.snapshot_url}
+          alt=""
+          draggable={false}
+          onLoad={() => revealSelector(session.id, freezeFrameRevealKey(session))}
+          onError={() => {
+            setError("The frozen preview could not load. You can still select from the live desktop.");
+            revealSelector(session.id, freezeFrameRevealKey(session));
+          }}
+        />
+      ) : null}
       <CaptureDim
         mode={targetMode}
         hole={targetMode === "display" ? null : selectedRect}
@@ -3092,7 +3114,7 @@ type RecordingEditorFingerprint = {
   resolution: "original" | "1080" | "720" | "custom";
   customWidth: number;
   customHeight: number;
-  outputFormat: "mp4" | "gif";
+  outputFormat: "mp4" | "gif" | "webm";
   gifFps: number;
   gifMaxWidth: number;
   quality: RecordingCompressQuality;
@@ -3130,7 +3152,7 @@ export function RecordingEditor() {
   const [resolution, setResolution] = useState<"original" | "1080" | "720" | "custom">("original");
   const [customWidth, setCustomWidth] = useState(1920);
   const [customHeight, setCustomHeight] = useState(1080);
-  const [outputFormat, setOutputFormat] = useState<"mp4" | "gif">("mp4");
+  const [outputFormat, setOutputFormat] = useState<"mp4" | "gif" | "webm">("mp4");
   const [gifFps, setGifFps] = useState(15);
   const [gifMaxWidth, setGifMaxWidth] = useState(800);
   const [quality, setQuality] = useState<RecordingCompressQuality>("high");
@@ -3241,8 +3263,13 @@ export function RecordingEditor() {
       });
       const initialFilenameStem = initialSave.stem;
       const initialDestinationDirectory = initialSave.directory;
-      const initialOutputFormat = loaded.kind === "gif" ? "gif" : "mp4";
-      const initialSizeMode = loaded.kind === "gif" ? "compress" : "preserve";
+      const preferredVideoFormat = loadedSettings?.recording.video_format ?? "mp4";
+      const initialOutputFormat = loaded.kind === "gif"
+        ? "gif"
+        : preferredVideoFormat === "gif" || preferredVideoFormat === "webm"
+          ? preferredVideoFormat
+          : "mp4";
+      const initialSizeMode = initialOutputFormat === "gif" ? "compress" : "preserve";
       const initialGifFps = loadedSettings?.recording.gif_fps ?? 15;
       const initialGifMaxWidth = loadedSettings?.recording.gif_max_width ?? 800;
       setArtifact(loaded);
@@ -3427,6 +3454,12 @@ export function RecordingEditor() {
     // Maximum mode shows the cap instead of a sampled estimate; the label
     // ignores any stale estimate state, so nothing is cleared here.
     if (sizeMode === "maximum") return;
+    if (outputFormat === "webm") {
+      setEstimatedBytes(null);
+      setEstimateExact(false);
+      setEstimatePending(false);
+      return;
+    }
     const request = ++estimateRequestRef.current;
     const timer = window.setTimeout(() => {
       setEstimatePending(true);
@@ -3449,7 +3482,7 @@ export function RecordingEditor() {
       })();
     }, 600);
     return () => window.clearTimeout(timer);
-  }, [artifact, buildExportRequestSpecs, exportId, sizeMode]);
+  }, [artifact, buildExportRequestSpecs, exportId, outputFormat, sizeMode]);
 
   useEffect(() => {
     playheadMsRef.current = playheadMs;
@@ -3518,7 +3551,8 @@ export function RecordingEditor() {
     }
   }, [artifact, buildExportRequestSpecs, revokeCompressPreviewUrls]);
 
-  const canPreviewCompression = sizeMode === "compress" || sizeMode === "maximum";
+  const canPreviewCompression = (sizeMode === "compress" || sizeMode === "maximum")
+    && outputFormat !== "webm";
   const showCompressCompare = canPreviewCompression && !previewPlaying;
 
   const clearCompressPreview = useCallback(() => {
@@ -3622,7 +3656,7 @@ export function RecordingEditor() {
     setToast("");
     setError("");
   };
-  const updateOutputFormat = (format: "mp4" | "gif") => {
+  const updateOutputFormat = (format: "mp4" | "gif" | "webm") => {
     setOutputFormat(format);
     if (format !== sourceFormat && !makeCopy) {
       setMakeCopy(true);
@@ -4414,8 +4448,9 @@ export function RecordingEditor() {
               options={[
                 { value: "mp4", label: "MP4" },
                 { value: "gif", label: "GIF" },
+                { value: "webm", label: "WebM" },
               ]}
-              onChange={(value) => updateOutputFormat(value as "mp4" | "gif")}
+              onChange={(value) => updateOutputFormat(value as "mp4" | "gif" | "webm")}
             />
           </span>
         </div>
@@ -4662,6 +4697,8 @@ function CaptureOverlay() {
     : { width: 0, height: 0 };
   const surfaceSize = useElementCssSize(surfaceRef, displayOverlay);
 
+  const overlayFrozen = sessionShowsFreezeFrame(session);
+
   const wakeOverlay = useCallback(() => {
     if (!sessionId) return Promise.resolve();
     return invoke("show_capture_overlay", { sessionId });
@@ -4671,7 +4708,7 @@ function CaptureOverlay() {
     if (!sessionId) return;
     if (revealingSessionIdRef.current === sessionId) return;
     revealingSessionIdRef.current = sessionId;
-    const shouldPrimeRegionOverlay = mode === "region" && !regionOverlayWarmedRef.current;
+    const shouldPrimeRegionOverlay = overlayFrozen && mode === "region" && !regionOverlayWarmedRef.current;
     void wakeOverlay().then(() => {
       if (shouldPrimeRegionOverlay) {
         // Keep the shade at rest while the snapshot paints under native alpha.
@@ -4710,7 +4747,7 @@ function CaptureOverlay() {
     }).catch(() => {
       if (revealingSessionIdRef.current === sessionId) revealingSessionIdRef.current = null;
     });
-  }, [mode, sessionId, wakeOverlay]);
+  }, [mode, overlayFrozen, sessionId, wakeOverlay]);
 
   // Wake the overlay as soon as a session exists so a hidden WKWebView will
   // load the snapshot. Do not reveal here — that used to race the image decode
@@ -4721,13 +4758,18 @@ function CaptureOverlay() {
   }, [session?.id, wakeOverlay]);
 
   // Safety: if snapshot onLoad never fires, still reveal so capture is not stuck.
+  // Live overlays have no freeze-frame, so reveal as soon as the session exists.
   useEffect(() => {
     if (!session?.id) return;
+    if (!overlayFrozen) {
+      void revealOverlay();
+      return;
+    }
     const timer = window.setTimeout(() => {
       void revealOverlay();
     }, CAPTURE_OVERLAY_REVEAL_FALLBACK_MS);
     return () => window.clearTimeout(timer);
-  }, [session?.id, revealOverlay]);
+  }, [overlayFrozen, session?.id, revealOverlay]);
 
   if (!session || !sessionId) {
     return <main className="capture-loading">Preparing capture…</main>;
@@ -4824,14 +4866,16 @@ function CaptureOverlay() {
         }
       }}
     >
-      <img
-        className="capture-snapshot"
-        src={session.snapshot_url}
-        alt=""
-        draggable={false}
-        onLoad={() => void revealOverlay()}
-        onError={() => void revealOverlay()}
-      />
+      {overlayFrozen && session.snapshot_url ? (
+        <img
+          className="capture-snapshot"
+          src={session.snapshot_url}
+          alt=""
+          draggable={false}
+          onLoad={() => void revealOverlay()}
+          onError={() => void revealOverlay()}
+        />
+      ) : null}
       <CaptureDim
         mode={mode}
         hole={dimHole}
@@ -6849,6 +6893,38 @@ function PreferencesSections({
           </span>
         </label>
 
+        <label className="check-row switch-row">
+          <input
+            type="checkbox"
+            checked={settings.freeze_screen}
+            onChange={(event) => update("freeze_screen", event.target.checked)}
+          />
+          <span>
+            Freeze screen when capturing
+            <small>
+              Holds hover states, menus, and motion still while you choose a region or window.
+              Turn this off to select from the live desktop.
+            </small>
+          </span>
+        </label>
+
+        <SettingRow
+          title="Screenshot format"
+          description="Used when you save or export. Capture History keeps a lossless PNG until then."
+          control={(
+            <CustomSelect
+              value={settings.screenshot_format}
+              ariaLabel="Screenshot format"
+              options={[
+                { value: "png", label: "PNG" },
+                { value: "jpeg", label: "JPEG" },
+                { value: "webp", label: "WebP" },
+              ]}
+              onChange={(value) => update("screenshot_format", value as ScreenshotFormat)}
+            />
+          )}
+        />
+
         <SettingRow
           title="Screenshot countdown"
           description="Wait before capturing so you can open menus or hover states. Press Esc to cancel."
@@ -6944,6 +7020,23 @@ function PreferencesSections({
           <h2 id="recording-heading">Recording</h2>
           <p>Defaults for new screen recordings. You can still change them in the capture menu.</p>
         </header>
+
+        <SettingRow
+          title="Recording format"
+          description="Recordings are captured as H.264 MP4. GIF and WebM are converted when you save or export."
+          control={(
+            <CustomSelect
+              value={settings.recording.video_format}
+              ariaLabel="Recording format"
+              options={[
+                { value: "mp4", label: "MP4" },
+                { value: "gif", label: "GIF" },
+                { value: "webm", label: "WebM" },
+              ]}
+              onChange={(value) => updateRecording("video_format", value as VideoFormat)}
+            />
+          )}
+        />
 
         <div className="setting-grid">
           <SettingRow

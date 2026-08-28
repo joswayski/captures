@@ -154,9 +154,9 @@ import {
 import { CustomSelect } from "./CustomSelect";
 import { NumberInput } from "./NumberInput";
 import { RangeSlider } from "./RangeSlider";
-import type { CaptureArtifact, EditorLayerPresence } from "./types";
+import type { AppSettings, CaptureArtifact, EditorLayerPresence, ScreenshotFormat } from "./types";
 
-type ExportFormat = "png" | "jpeg" | "webp";
+type ExportFormat = ScreenshotFormat;
 type ExportSize = "original" | "75" | "50" | "custom";
 /** Shared compress quality notches for JPEG, WebP, and PNG. */
 type ScreenshotQuality = "55" | "70" | "85" | "92";
@@ -1999,12 +1999,16 @@ export function ScreenshotEditor() {
         setError("");
         clearSuccess();
       });
-      const loaded = await invoke<CaptureArtifact | null>("get_artifact", { artifactId });
+      const [loaded, loadedSettings] = await Promise.all([
+        invoke<CaptureArtifact | null>("get_artifact", { artifactId }),
+        invoke<AppSettings>("get_settings").catch(() => null),
+      ]);
       if (!active) return;
       if (!loaded) throw new Error("The screenshot is no longer available.");
+      const preferredFormat: ExportFormat = loadedSettings?.screenshot_format ?? "png";
       const initialPath = loaded.path ?? await invoke<string>("default_screenshot_edit_path", {
         artifactId: loaded.id,
-        format: "png",
+        format: preferredFormat,
       });
       if (!active) return;
       const baseline = createScreenshotDocument(
@@ -2042,7 +2046,7 @@ export function ScreenshotEditor() {
       setDraftRestored(restoredDraft);
       setCustomExportWidth(loaded.width);
       setCustomExportHeight(loaded.height);
-      setExportFormat("png");
+      setExportFormat(preferredFormat);
       setExportSize("original");
       setQualityMode("preserve");
       setMakeCopy(!loaded.path);
