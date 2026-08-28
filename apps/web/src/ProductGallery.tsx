@@ -11,7 +11,7 @@ import {
   galleryAllowsSlideGesture,
   galleryFrameGesture,
 } from "./productLightbox";
-import { PRODUCT_SHOTS, type ProductShot } from "./productShots";
+import { PRODUCT_SHOTS, galleryFrameAspectRatio, type ProductShot } from "./productShots";
 import { useImageZoom } from "./useImageZoom";
 
 const SHOT_SRC = {
@@ -22,12 +22,16 @@ const SHOT_SRC = {
   "video-editor.jpg": videoEditor,
 } as const satisfies Record<ProductShot["file"], string>;
 
+const FRAME_ASPECT = galleryFrameAspectRatio();
+
 export default function ProductGallery() {
   const headingId = useId();
   const captionId = useId();
   const hintId = useId();
   const frameRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
+  const swipeStart = useRef<{ x: number; y: number } | null>(null);
+  const stagePointers = useRef(0);
   const [index, setIndex] = useState(0);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [openedByPointer, setOpenedByPointer] = useState(false);
@@ -75,26 +79,43 @@ export default function ProductGallery() {
     }
   }
 
-  function handlePointerDown(event: PointerEvent<HTMLDivElement>) {
+  function handleFramePointerDown(event: PointerEvent<HTMLDivElement>) {
     imageZoom.onPointerDown(event);
   }
 
-  function handlePointerMove(event: PointerEvent<HTMLDivElement>) {
+  function handleFramePointerMove(event: PointerEvent<HTMLDivElement>) {
     imageZoom.onPointerMove(event);
   }
 
-  function handlePointerUp(event: PointerEvent<HTMLDivElement>) {
+  function handleFramePointerUp(event: PointerEvent<HTMLDivElement>) {
     const release = imageZoom.onPointerUp(event);
     if (!release) return;
     if (!galleryAllowsLightboxOpen(release.scale, release.pinched)) {
       suppressClick.current = true;
-      return;
     }
-    if (!galleryAllowsSlideGesture(release.scale)) {
-      suppressClick.current = true;
-      return;
+  }
+
+  function handleFramePointerCancel() {
+    imageZoom.onPointerCancel();
+  }
+
+  function handleStagePointerDown(event: PointerEvent<HTMLDivElement>) {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    stagePointers.current += 1;
+    if (stagePointers.current === 1) {
+      swipeStart.current = { x: event.clientX, y: event.clientY };
+    } else {
+      swipeStart.current = null;
     }
-    const action = galleryFrameGesture(release.deltaX, release.deltaY);
+  }
+
+  function handleStagePointerUp(event: PointerEvent<HTMLDivElement>) {
+    stagePointers.current = Math.max(0, stagePointers.current - 1);
+    const start = swipeStart.current;
+    swipeStart.current = null;
+    if (stagePointers.current > 0 || start === null || suppressClick.current) return;
+    if (!galleryAllowsSlideGesture(imageZoom.zoom.scale)) return;
+    const action = galleryFrameGesture(event.clientX - start.x, event.clientY - start.y);
     if (action === "previous") {
       suppressClick.current = true;
       previous();
@@ -106,8 +127,9 @@ export default function ProductGallery() {
     }
   }
 
-  function handlePointerCancel() {
-    imageZoom.onPointerCancel();
+  function handleStagePointerCancel() {
+    stagePointers.current = 0;
+    swipeStart.current = null;
   }
 
   function handleFrameClick() {
@@ -141,45 +163,64 @@ export default function ProductGallery() {
         onKeyDown={handleKeyDown}
       >
         <div
-          ref={frameRef}
-          className={frameClass}
-          aria-haspopup="dialog"
-          aria-expanded={lightboxOpen}
-          onPointerDown={handlePointerDown}
-          onPointerMove={handlePointerMove}
-          onPointerUp={handlePointerUp}
-          onPointerCancel={handlePointerCancel}
-          onClick={handleFrameClick}
+          className="product-gallery-stage"
+          onPointerDown={handleStagePointerDown}
+          onPointerUp={handleStagePointerUp}
+          onPointerCancel={handleStagePointerCancel}
         >
-          <img
-            key={shot.file}
-            ref={imageRef}
-            className={imageClass}
-            src={src}
-            alt={shot.alt}
-            width={shot.width}
-            height={shot.height}
-            decoding="async"
-            draggable={false}
-            style={{
-              transform: `translate(${imageZoom.zoom.x}px, ${imageZoom.zoom.y}px) scale(${imageZoom.zoom.scale})`,
-            }}
-          />
-        </div>
+          <div
+            ref={frameRef}
+            className={frameClass}
+            style={{ aspectRatio: `1 / ${FRAME_ASPECT}` }}
+            aria-haspopup="dialog"
+            aria-expanded={lightboxOpen}
+            onPointerDown={handleFramePointerDown}
+            onPointerMove={handleFramePointerMove}
+            onPointerUp={handleFramePointerUp}
+            onPointerCancel={handleFramePointerCancel}
+            onClick={handleFrameClick}
+          >
+            <img
+              ref={imageRef}
+              className={imageClass}
+              src={src}
+              alt={shot.alt}
+              width={shot.width}
+              height={shot.height}
+              decoding="async"
+              draggable={false}
+              style={{
+                transform: `translate(${imageZoom.zoom.x}px, ${imageZoom.zoom.y}px) scale(${imageZoom.zoom.scale})`,
+              }}
+            />
+          </div>
 
-        <div className="mt-4 flex items-start justify-between gap-3">
-          <p id={captionId} className="min-w-0 text-sm leading-relaxed text-ink-muted">
-            <span className="font-medium text-ink">{shot.title}</span>
-            <span className="text-ink-soft"> · </span>
-            {shot.description}
-          </p>
-          <p className="shrink-0 pt-0.5 text-[0.625rem] tabular-nums text-ink-soft" aria-hidden="true">
-            {index + 1}/{PRODUCT_SHOTS.length}
-          </p>
+          <div className="product-gallery-copy">
+            <div className="product-gallery-captions">
+              {PRODUCT_SHOTS.map((item) => {
+                const active = item.id === shot.id;
+                return (
+                  <p
+                    key={item.id}
+                    id={active ? captionId : undefined}
+                    className="product-gallery-caption"
+                    aria-hidden={active ? undefined : "true"}
+                  >
+                    <span className="font-medium text-ink">{item.title}</span>
+                    <span className="text-ink-soft"> · </span>
+                    {item.description}
+                  </p>
+                );
+              })}
+            </div>
+            <p className="product-gallery-index" aria-hidden="true">
+              {index + 1}/{PRODUCT_SHOTS.length}
+            </p>
+          </div>
         </div>
         <p id={hintId} className="sr-only">
-          Pinch or use a trackpad pinch to zoom this screenshot. Tap to open a larger view. Swipe or
-          use Previous and Next to change shots.
+          Pinch or use a trackpad pinch to zoom this screenshot. Swipe or use Previous and Next to
+          change shots. Tap to open a larger view.
         </p>
         <p className="sr-only" aria-live="polite">
           Screenshot {index + 1} of {PRODUCT_SHOTS.length}: {shot.title}

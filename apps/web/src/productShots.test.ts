@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { PRODUCT_SHOTS } from "./productShots.ts";
+import { PRODUCT_SHOTS, galleryFrameAspectRatio } from "./productShots.ts";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../..");
 const imagesDir = join(repoRoot, "docs/images");
@@ -22,6 +22,14 @@ test("website product shots cover the README stills with unique files", () => {
     assert.ok(shot.alt.length > 20);
     assert.ok(shot.width > 0);
     assert.ok(shot.height > 0);
+  }
+});
+
+test("gallery frame aspect is as tall as every still so captions do not jump", () => {
+  const ratio = galleryFrameAspectRatio();
+  assert.ok(ratio > 0);
+  for (const shot of PRODUCT_SHOTS) {
+    assert.ok(shot.height / shot.width <= ratio + Number.EPSILON);
   }
 });
 

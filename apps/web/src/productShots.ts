@@ -52,3 +52,10 @@ export const PRODUCT_SHOTS = [
 ] as const;
 
 export type ProductShot = (typeof PRODUCT_SHOTS)[number];
+
+/** Tallest still, as height / width. The gallery card uses this so captions stay put. */
+export function galleryFrameAspectRatio(
+  shots: readonly { width: number; height: number }[] = PRODUCT_SHOTS,
+) {
+  return shots.reduce((tallest, shot) => Math.max(tallest, shot.height / shot.width), 0);
+}

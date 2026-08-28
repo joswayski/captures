@@ -3,7 +3,8 @@
 Minimal work-in-progress page with a Preview download for the visitor's OS
 (same stable `preview` release assets as the root README), a short product
 screenshot gallery (the stills in `docs/images/`, shared with the README; each
-shot shows in full, and you can pinch to zoom in place or tap for a larger view), a
+shot shows in full; swipe or use Previous/Next to change stills, pinch to zoom
+in place, or tap for a larger view), a
 View source link to [the repo](https://github.com/joswayski/captures), and
 recent changes from `main`.
 Phones, tablets, Chrome OS, and other systems without a matching installer see a
