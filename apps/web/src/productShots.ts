@@ -5,15 +5,6 @@
  */
 export const PRODUCT_SHOTS = [
   {
-    id: "screenshot-editor",
-    file: "screenshot-editor.jpg",
-    width: 1440,
-    height: 900,
-    title: "Edit screenshots",
-    description: "Text, arrows, and stickers. Hover a hanging layer to expand the canvas.",
-    alt: "Captures screenshot editor with a fjord landscape, a Choke point label, a tiger on the left cliff, and an Evergreen ship hanging off the right edge with an Expand canvas button",
-  },
-  {
     id: "capture-selection",
     file: "capture-selection.jpg",
     width: 1600,
@@ -21,6 +12,15 @@ export const PRODUCT_SHOTS = [
     title: "Draw a region",
     description: "Click and drag a box on the desktop, or switch to a window or full display.",
     alt: "Captures region capture over a landscape, with a highlighted box, corner handles, and the capture menu",
+  },
+  {
+    id: "screenshot-editor",
+    file: "screenshot-editor.jpg",
+    width: 1440,
+    height: 900,
+    title: "Edit screenshots",
+    description: "Text, arrows, and stickers. Hover a hanging layer to expand the canvas.",
+    alt: "Captures screenshot editor with a fjord landscape, a Choke point label, a tiger on the left cliff, and an Evergreen ship hanging off the right edge with an Expand canvas button",
   },
   {
     id: "capture-controls",
@@ -52,3 +52,10 @@ export const PRODUCT_SHOTS = [
 ] as const;
 
 export type ProductShot = (typeof PRODUCT_SHOTS)[number];
+
+/** Tallest still, as height / width. The gallery card uses this so captions stay put. */
+export function galleryFrameAspectRatio(
+  shots: readonly { width: number; height: number }[] = PRODUCT_SHOTS,
+) {
+  return shots.reduce((tallest, shot) => Math.max(tallest, shot.height / shot.width), 0);
+}

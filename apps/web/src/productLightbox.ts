@@ -1,5 +1,6 @@
 export const MIN_SCALE = 1;
 export const MAX_SCALE = 4;
+export const ZOOMED_SCALE = 1.05;
 export const DOUBLE_TAP_SCALE = 2.5;
 export const ZOOM_BUTTON_FACTOR = 1.4;
 export const SWIPE_THRESHOLD_PX = 48;
@@ -21,6 +22,10 @@ export function clampScale(scale: number) {
   return clamp(scale, MIN_SCALE, MAX_SCALE);
 }
 
+export function isZoomed(scale: number) {
+  return scale > ZOOMED_SCALE;
+}
+
 export function galleryFrameGesture(
   deltaX: number,
   deltaY: number,
@@ -32,6 +37,43 @@ export function galleryFrameGesture(
   }
   if (Math.hypot(deltaX, deltaY) <= tapSlop) return "open";
   return "ignore";
+}
+
+export function galleryAllowsSlideGesture(scale: number) {
+  return !isZoomed(scale);
+}
+
+export function clampGalleryIndex(index: number, count: number) {
+  if (count <= 0) return 0;
+  return Math.min(Math.max(index, 0), count - 1);
+}
+
+export function galleryHasPrevious(index: number) {
+  return index > 0;
+}
+
+export function galleryHasNext(index: number, count: number) {
+  return count > 0 && index < count - 1;
+}
+
+export function galleryAllowsLightboxOpen(scale: number, pinched: boolean) {
+  return !pinched && !isZoomed(scale);
+}
+
+export function shouldPreventGalleryTouchScroll(touchCount: number, scale: number) {
+  return touchCount >= 2 || isZoomed(scale);
+}
+
+export function shouldZoomFromWheel(ctrlKey: boolean, metaKey: boolean) {
+  return ctrlKey || metaKey;
+}
+
+export function clearRestoredDialogFocus(openedByPointer: boolean) {
+  if (!openedByPointer) return;
+  const active = document.activeElement;
+  if (active instanceof HTMLElement && active !== document.body) {
+    active.blur();
+  }
 }
 
 export function pointerDistance(a: Point, b: Point) {
@@ -86,7 +128,7 @@ export function toggleZoom(
   viewport: Size,
   fitted: Size,
 ): ZoomTransform {
-  if (current.scale > 1.05) return FIT_TRANSFORM;
+  if (isZoomed(current.scale)) return FIT_TRANSFORM;
   return scaleAroundPoint(current, DOUBLE_TAP_SCALE, pivot, viewport, fitted);
 }
 
@@ -110,7 +152,7 @@ export function wheelScaleFactor(deltaY: number) {
 }
 
 export function shouldCloseOnSwipe(deltaX: number, deltaY: number, scale: number) {
-  return scale <= 1.05 && deltaY > CLOSE_SWIPE_PX && deltaY > Math.abs(deltaX);
+  return !isZoomed(scale) && deltaY > CLOSE_SWIPE_PX && deltaY > Math.abs(deltaX);
 }
 
 export function isDoubleTap(previous: { time: number; x: number; y: number } | null, next: Point, now: number) {
