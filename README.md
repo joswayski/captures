@@ -7,9 +7,9 @@ Captures is a cross-platform screen capture utility built for quick captures and
 
 ## A quick look
 
-Click and drag a region like other screenshot tools, or pick a window or full display from one compact menu.
+Edit a capture with text, arrows, and stickers. Hover a hanging layer to expand the canvas.
 
-![Captures region capture over a landscape, with a highlighted box, corner handles, and the capture menu](docs/images/capture-selection.jpg)
+![Captures screenshot editor with a fjord landscape, a Choke point label, a tiger on the left cliff, and an Evergreen ship hanging off the right edge with an Expand canvas button](docs/images/screenshot-editor.jpg)
 
 <p align="center">
   <img src="docs/images/capture-controls.jpg" alt="Close-up of the Captures capture menu with screenshot and recording options" width="728">
@@ -20,9 +20,9 @@ Click and drag a region like other screenshot tools, or pick a window or full di
 <table>
   <tr>
     <td width="50%">
-      <img src="docs/images/screenshot-editor.jpg" alt="Captures screenshot editor with a landscape, a Choke point label on the fjord, a tiger sticker half off the left edge, and an Evergreen ship dragged past the right edge" width="100%">
+      <img src="docs/images/capture-selection.jpg" alt="Captures region capture over a landscape, with a highlighted box, corner handles, and the capture menu" width="100%">
       <br>
-      <sub><strong>Edit screenshots</strong> with text, arrows, stickers, and layers that can hang off the canvas until you expand it.</sub>
+      <sub><strong>Draw a region</strong> like other screenshot tools, or pick a window or full display.</sub>
     </td>
     <td width="50%">
       <img src="docs/images/video-editor.jpg" alt="Captures video editor with a landscape preview, crop handles, trimming timeline, and save controls" width="100%">

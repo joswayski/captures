@@ -5,6 +5,15 @@
  */
 export const PRODUCT_SHOTS = [
   {
+    id: "screenshot-editor",
+    file: "screenshot-editor.jpg",
+    width: 1440,
+    height: 900,
+    title: "Edit screenshots",
+    description: "Text, arrows, and stickers. Hover a hanging layer to expand the canvas.",
+    alt: "Captures screenshot editor with a fjord landscape, a Choke point label, a tiger on the left cliff, and an Evergreen ship hanging off the right edge with an Expand canvas button",
+  },
+  {
     id: "capture-selection",
     file: "capture-selection.jpg",
     width: 1600,
@@ -21,15 +30,6 @@ export const PRODUCT_SHOTS = [
     title: "Everything in reach",
     description: "Capture type and target controls sit together in one compact menu.",
     alt: "Close-up of the Captures capture menu with screenshot and recording options",
-  },
-  {
-    id: "screenshot-editor",
-    file: "screenshot-editor.jpg",
-    width: 1440,
-    height: 900,
-    title: "Edit screenshots",
-    description: "Text, arrows, and stickers. Hover a hanging layer to expand the canvas.",
-    alt: "Captures screenshot editor with a landscape, a Choke point label on the fjord, a tiger sticker half off the left edge, and an Evergreen ship dragged past the right edge",
   },
   {
     id: "video-editor",
