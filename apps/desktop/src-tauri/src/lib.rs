@@ -278,6 +278,7 @@ pub fn run() {
             open_captures_folder,
             open_capture_history,
             open_preferences,
+            open_macos_screenshot_shortcut_settings,
             feedback::open_feedback,
             feedback::get_feedback_context,
             feedback::submit_feedback,
@@ -2243,6 +2244,27 @@ fn open_preferences(app: AppHandle) -> CommandResult<()> {
 }
 
 #[tauri::command]
+fn open_macos_screenshot_shortcut_settings(app: AppHandle) -> CommandResult<()> {
+    #[cfg(target_os = "macos")]
+    {
+        for url in [
+            "x-apple.systempreferences:com.apple.Keyboard-Settings.extension?Shortcuts",
+            "x-apple.systempreferences:com.apple.preference.keyboard?Shortcuts",
+        ] {
+            if app.opener().open_url(url, None::<&str>).is_ok() {
+                return Ok(());
+            }
+        }
+        Err("could not open Keyboard settings".to_owned())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        Err("Keyboard shortcut settings are only available on macOS".to_owned())
+    }
+}
+
+#[tauri::command]
 fn dismiss_recording_saved_notice(
     app: AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
@@ -2772,6 +2794,8 @@ fn register_shortcuts_with(app: &AppHandle, settings: &AppSettings) -> Result<()
     app.global_shortcut()
         .unregister_all()
         .map_err(|error| AppError::Shortcut(error.to_string()))?;
+    #[cfg(target_os = "macos")]
+    disable_overlapping_macos_screenshot_shortcuts(settings);
     register_new_capture_shortcut(app, &settings.new_capture_shortcut)?;
     register_shortcut(app, &settings.region_shortcut, CaptureMode::Region)?;
     register_shortcut(app, &settings.window_shortcut, CaptureMode::Window)?;
@@ -2953,6 +2977,61 @@ fn parse_shortcut(shortcut: &str) -> Result<Shortcut, AppError> {
     shortcut
         .parse::<Shortcut>()
         .map_err(|error| AppError::Shortcut(error.to_string()))
+}
+
+#[cfg(target_os = "macos")]
+fn disable_overlapping_macos_screenshot_shortcuts(settings: &AppSettings) {
+    let ids = models::macos_screenshot_hotkeys_conflicting_with(settings);
+    if ids.is_empty() {
+        return;
+    }
+    if let Err(error) = disable_macos_screenshot_hotkeys(&ids) {
+        eprintln!("could not disable overlapping macOS Screenshot shortcuts: {error}");
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn disable_macos_screenshot_hotkeys(ids: &[u32]) -> Result<(), String> {
+    let home = std::env::var("HOME").map_err(|error| error.to_string())?;
+    let plist = PathBuf::from(home).join("Library/Preferences/com.apple.symbolichotkeys.plist");
+    let buddy = "/usr/libexec/PlistBuddy";
+    if !Path::new(buddy).is_file() {
+        return Err("PlistBuddy is unavailable".to_owned());
+    }
+    let _ = run_plist_buddy(buddy, &plist, "Add :AppleSymbolicHotKeys dict");
+    for id in ids {
+        let _ = run_plist_buddy(
+            buddy,
+            &plist,
+            &format!("Add :AppleSymbolicHotKeys:{id} dict"),
+        );
+        let enabled = format!(":AppleSymbolicHotKeys:{id}:enabled");
+        let _ = run_plist_buddy(buddy, &plist, &format!("Delete {enabled}"));
+        run_plist_buddy(buddy, &plist, &format!("Add {enabled} bool false"))?;
+    }
+    let activate = "/System/Library/PrivateFrameworks/SystemAdministration.framework/Resources/activateSettings";
+    if Path::new(activate).is_file() {
+        let _ = Command::new(activate).arg("-u").status();
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn run_plist_buddy(buddy: &str, plist: &Path, command: &str) -> Result<(), String> {
+    let path = plist
+        .to_str()
+        .ok_or_else(|| "plist path is not valid UTF-8".to_owned())?;
+    let output = Command::new(buddy)
+        .args(["-c", command, path])
+        .output()
+        .map_err(|error| error.to_string())?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        Err(if stderr.is_empty() { stdout } else { stderr })
+    }
 }
 
 fn should_trigger_shortcut(armed: &AtomicBool, state: ShortcutState) -> bool {
@@ -5704,6 +5783,17 @@ mod tests {
             parse_shortcut("Control+Shift+Digit4").expect("recorded shortcut should parse")
         );
         assert!(parse_shortcut("Ctrl+Shift+Space").is_ok());
+        assert!(parse_shortcut("CommandOrControl+Shift+4").is_ok());
+        assert_eq!(
+            parse_shortcut("CommandOrControl+Shift+4")
+                .expect("cross-platform default should parse"),
+            parse_shortcut(if cfg!(target_os = "macos") {
+                "Command+Shift+4"
+            } else {
+                "Ctrl+Shift+4"
+            })
+            .expect("platform default should parse")
+        );
     }
 
     #[test]

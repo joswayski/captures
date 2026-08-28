@@ -67,6 +67,7 @@ import {
   type SelectionPoint,
 } from "./lib/selection";
 import {
+  detectShortcutPlatform,
   isModifierCode,
   modifierDisplayTokens,
   recordShortcut,
@@ -258,7 +259,7 @@ function IdleView() {
 }
 
 export function StartupNotice() {
-  const [shortcut, setShortcut] = useState("Ctrl+Shift+Space");
+  const [shortcut, setShortcut] = useState("CommandOrControl+Shift+Space");
   const caretEdge = query("caret");
   const caretXRaw = query("caret_x");
   const caretX = caretXRaw == null ? Number.NaN : Number(caretXRaw);
@@ -417,7 +418,7 @@ export function RecordingSavedNotice() {
 }
 
 export function RecordingControlsHiddenNotice() {
-  const [shortcut, setShortcut] = useState("Ctrl+Shift+Space");
+  const [shortcut, setShortcut] = useState("CommandOrControl+Shift+Space");
 
   useEffect(() => {
     void invoke<AppSettings>("get_settings")
@@ -6844,8 +6845,29 @@ function PreferencesSections({
       <section className="settings-card" id="shortcuts" aria-labelledby="shortcuts-heading">
         <header className="settings-card-header">
           <h2 id="shortcuts-heading">Shortcuts</h2>
-          <p>Select a shortcut, then press the key combination you want. Press Esc to cancel recording.</p>
+          <p>
+            Select a shortcut, then press the key combination you want. Press Esc to cancel recording.
+            Defaults use Command on macOS and Control on Windows and Linux.
+          </p>
         </header>
+        {detectShortcutPlatform() === "macos" ? (
+          <div className="settings-utility-row">
+            <div className="settings-utility-copy">
+              <strong>macOS Screenshot shortcuts</strong>
+              <small>
+                Captures turns off overlapping Screenshot app keys (⌘⇧3, ⌘⇧4, ⌘⇧5) so they
+                reach this app. Restore them in System Settings if you want both.
+              </small>
+            </div>
+            <button
+              className="settings-utility-action"
+              type="button"
+              onClick={() => void invoke("open_macos_screenshot_shortcut_settings")}
+            >
+              Open
+            </button>
+          </div>
+        ) : null}
         <div className="shortcut-list">
           <ShortcutInput
             id="new-capture-shortcut"
