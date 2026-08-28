@@ -356,23 +356,59 @@ const ONBOARDING: OnboardingState = {
   microphone_can_request: true,
 };
 
+function previewNotes(summary: string): string {
+  return [
+    "> [!WARNING]",
+    "> This Preview is functional, but experimental.",
+    "",
+    "## What's Changed",
+    `* ${summary} by @joswayski in https://github.com/joswayski/captures/pull/1`,
+    "",
+    "**Full Changelog**: https://github.com/joswayski/captures/compare/old...new",
+  ].join("\n");
+}
+
 function updateStatus(): UpdateStatus {
   const state = query().get("update") ?? "available";
-  const base = { current_version: "0.4.1", current_display_version: "0.4.1" };
+  const base = {
+    current_version: "2026.8.2702",
+    current_display_version: "2026.08.27.2",
+  };
   if (state === "downloading") {
-    return { ...base, state: "downloading", version: "0.5.0", display_version: "0.5.0", downloaded: 7_340_032, total: 12_582_912 };
+    return {
+      ...base,
+      state: "downloading",
+      version: "2026.8.2705",
+      display_version: "2026.08.27.5",
+      downloaded: 7_340_032,
+      total: 12_582_912,
+    };
   }
   if (state === "up_to_date") return { ...base, state: "up_to_date" };
+  const latestNotes = previewNotes("Fix post-update launch notice position on macOS");
   return {
     ...base,
     state: "available",
-    version: "0.5.0",
-    display_version: "0.5.0",
-    notes: [
-      "Redesigned every Captures window around one design system.",
-      "Added a light, dark, and system appearance setting.",
-      "Capture History now filters by screenshots, video, and GIF.",
-    ].map((note) => `- ${note}`).join("\n"),
+    version: "2026.8.2705",
+    display_version: "2026.08.27.5",
+    notes: latestNotes,
+    changelog: [
+      {
+        version: "2026.8.2705",
+        display_version: "2026.08.27.5",
+        notes: latestNotes,
+      },
+      {
+        version: "2026.8.2704",
+        display_version: "2026.08.27.4",
+        notes: previewNotes("Fix capture menu display switching and the Record CTA"),
+      },
+      {
+        version: "2026.8.2703",
+        display_version: "2026.08.27.3",
+        notes: previewNotes("Redesign the desktop UI around one design system"),
+      },
+    ],
     installable: true,
     manual_download_url: null,
   };

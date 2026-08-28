@@ -9,12 +9,24 @@ export function previewVersion(tag) {
   return match.slice(1).map(Number);
 }
 
-function comparePreviewVersions(left, right) {
+export function comparePreviewVersions(left, right) {
   for (let index = 0; index < left.length; index += 1) {
     const order = left[index] - right[index];
     if (order !== 0) return order;
   }
   return 0;
+}
+
+/** Map a dated Preview tag to the Tauri SemVer and people-facing CalVer. */
+export function encodedPreviewVersion(tag) {
+  const version = previewVersion(tag);
+  if (!version) return null;
+  const [year, month, day, revision] = version;
+  return {
+    version: `${year}.${month}.${day * 100 + revision}`,
+    displayVersion: `${String(year).padStart(4, "0")}.${String(month).padStart(2, "0")}.${String(day).padStart(2, "0")}.${revision}`,
+    order: version,
+  };
 }
 
 export function latestPreviewRelease(releases) {

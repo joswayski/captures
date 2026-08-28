@@ -50,7 +50,7 @@ These links always download the **latest** validated Preview:
 | Ubuntu / Debian (x64) | [Captures-Linux-x64.deb](https://github.com/joswayski/captures/releases/download/preview/Captures-Linux-x64.deb) |
 | Other Linux (x64 AppImage) | [Captures-Linux-x64.AppImage](https://github.com/joswayski/captures/releases/download/preview/Captures-Linux-x64.AppImage) |
 
-Preview builds update after every successful merge to `main` and may contain bugs or incomplete features. Older dated builds stay in the [build archive](https://github.com/joswayski/captures/releases).
+Preview builds update after every successful merge to `main` and may contain bugs or incomplete features. Installed copies can update in the app; the notice lists every Preview published since the version you have, then installs the latest. Older dated builds stay in the [build archive](https://github.com/joswayski/captures/releases).
 
 ## Features
 

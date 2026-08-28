@@ -658,6 +658,9 @@ jobs:
           preview_assets="$(
             node scripts/preview-release-assets.mjs prepare "$channel_assets"
           )"
+          node scripts/preview-changelog.mjs apply \
+            "$channel_assets/latest.json" \
+            "$releases_file"
           macos_asset="$(jq -er .macos <<< "$preview_assets")"
           windows_asset="$(jq -er .windows <<< "$preview_assets")"
           linux_deb_asset="$(jq -er .linuxDeb <<< "$preview_assets")"

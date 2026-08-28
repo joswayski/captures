@@ -21,8 +21,33 @@ const available: UpdateStatus = {
   version: "2026.7.1902",
   display_version: "2026.07.19.2",
   notes: "> [!WARNING]\n> This Preview is experimental.\n\n## What's Changed\n* Adds automatic releases by @joswayski in https://github.com/joswayski/captures/pull/1\n\n**Full Changelog**: https://github.com/joswayski/captures/compare/old...new",
+  changelog: [],
   installable: true,
   manual_download_url: null,
+};
+
+const stacked: UpdateStatus = {
+  ...available,
+  version: "2026.8.2705",
+  display_version: "2026.08.27.5",
+  notes: "* Fix the latest Preview only",
+  changelog: [
+    {
+      version: "2026.8.2705",
+      display_version: "2026.08.27.5",
+      notes: "> [!WARNING]\n> Experimental.\n\n## What's Changed\n* Fix post-update launch notice position on macOS by @joswayski in https://github.com/example/pull/265",
+    },
+    {
+      version: "2026.8.2704",
+      display_version: "2026.08.27.4",
+      notes: "* Fix capture menu display switching and the Record CTA by @joswayski in https://github.com/example/pull/263",
+    },
+    {
+      version: "2026.8.2703",
+      display_version: "2026.08.27.3",
+      notes: "* Redesign the desktop UI around one design system by @joswayski in https://github.com/example/pull/262",
+    },
+  ],
 };
 
 describe("UpdateNotice", () => {
@@ -51,6 +76,22 @@ describe("UpdateNotice", () => {
     fireEvent.click(screen.getByRole("button", { name: "Update now" }));
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("install_update"));
+  });
+
+  it("groups skipped Preview notes by version", async () => {
+    vi.mocked(invoke).mockResolvedValue(stacked);
+
+    render(<UpdateNotice />);
+
+    expect(await screen.findByText("This update includes all of the following changes:")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "2026.08.27.5" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "2026.08.27.4" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "2026.08.27.3" })).toBeInTheDocument();
+    expect(screen.getByText("Fix post-update launch notice position on macOS")).toBeInTheDocument();
+    expect(screen.getByText("Fix capture menu display switching and the Record CTA")).toBeInTheDocument();
+    expect(screen.getByText("Redesign the desktop UI around one design system")).toBeInTheDocument();
+    expect(screen.queryByText("Fix the latest Preview only")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Version 2026.08.27.5")).toHaveLength(1);
   });
 
   it("shows download progress while installation is running", async () => {

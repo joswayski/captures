@@ -338,6 +338,12 @@ interface UpdateVersionInfo {
   current_display_version: string;
 }
 
+export interface UpdateChangelogEntry {
+  version: string;
+  display_version: string;
+  notes: string | null;
+}
+
 export type UpdateStatus =
   | (UpdateVersionInfo & { state: "idle" | "checking" | "up_to_date" })
   | (UpdateVersionInfo & {
@@ -345,6 +351,7 @@ export type UpdateStatus =
       version: string;
       display_version: string;
       notes: string | null;
+      changelog: UpdateChangelogEntry[];
       installable: boolean;
       manual_download_url: string | null;
     })

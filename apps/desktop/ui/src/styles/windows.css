@@ -1830,10 +1830,41 @@
   text-transform: uppercase;
 }
 
+.update-notes-intro {
+  margin-bottom: var(--s-4);
+  color: var(--text-subtle);
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
+}
+
+.update-notes-scroll,
+.update-notes:not(.update-notes-stacked) ul {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.update-notes-scroll {
+  padding-right: var(--s-2);
+}
+
+.update-notes-group + .update-notes-group {
+  margin-top: var(--s-6);
+  padding-top: var(--s-5);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.update-notes-group h3 {
+  margin-bottom: var(--s-3);
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+
 .update-notes ul {
   margin: 0;
   padding: 0 var(--s-2) 0 var(--s-6);
-  overflow-y: auto;
 }
 
 .update-notes li {
