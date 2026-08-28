@@ -17,6 +17,7 @@ RUN npm ci
 
 COPY apps/web apps/web
 COPY shared shared
+COPY docs/images docs/images
 
 # Each Git commit SHA invalidates this layer so the homepage history fetch is
 # not reused across deployments.
