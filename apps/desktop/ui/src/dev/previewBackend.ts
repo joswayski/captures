@@ -119,32 +119,25 @@ const CAPTURE_URL = sampleCapture(1600, 1000);
 const FILMSTRIP_URL = sampleFilmstrip(TIMELINE_FRAMES);
 const CAPTURE_TALL_URL = sampleCapture(1200, 900);
 
-const SETTINGS: AppSettings = {
-  settings_schema_version: 3,
-  appearance: readStoredAppearance(),
-  theme: "mustard",
-  custom_theme: { accent: "#32d3ff", signal: "#ff4fc3" },
-  output_directory: "/Users/alex/Pictures/Captures",
-  new_capture_shortcut: "CommandOrControl+Shift+Space",
-  region_shortcut: "CommandOrControl+Shift+4",
-  window_shortcut: "CommandOrControl+Shift+W",
-  display_shortcut: "CommandOrControl+Shift+3",
-  feedback_shortcut: "CommandOrControl+Shift+F",
-  auto_copy_to_clipboard: true,
-  auto_start_on_selection: false,
-  show_mini_previews: true,
-  include_mini_previews_in_captures: false,
-  include_recording_controls_in_captures: false,
-  launch_at_login: true,
-  last_screen_permission_request_id: null,
-  pending_capture_after_restart: null,
-  onboarding_completed: true,
-  screenshot_countdown_seconds: 3,
-  recording: {
-    video_shortcut: "CommandOrControl+Shift+5",
-    gif_shortcut: "CommandOrControl+Shift+6",
-    video_fps: 60,
-    video_max_resolution: "original",
+function previewPlatform(): "macos" | "windows" | "linux" {
+  const value = query().get("platform");
+  if (value === "windows" || value === "linux" || value === "macos") return value;
+  return "macos";
+}
+
+function previewShortcutSettings(
+  platform: "macos" | "windows" | "linux" = previewPlatform(),
+): Pick<
+  AppSettings,
+  | "new_capture_shortcut"
+  | "region_shortcut"
+  | "window_shortcut"
+  | "display_shortcut"
+  | "feedback_shortcut"
+> & { recording: AppSettings["recording"] } {
+  const recording = {
+    video_fps: 60 as const,
+    video_max_resolution: "original" as const,
     gif_fps: 15,
     gif_max_width: 800,
     gif_max_colors: 256,
@@ -156,7 +149,56 @@ const SETTINGS: AppSettings = {
     highlight_clicks: true,
     show_keystrokes: false,
     open_editor_after_recording: true,
-  },
+    gif_shortcut: "CommandOrControl+Shift+6",
+    video_shortcut: "CommandOrControl+Shift+5",
+  };
+  if (platform === "windows") {
+    return {
+      new_capture_shortcut: "CommandOrControl+Shift+Space",
+      region_shortcut: "Super+Shift+S",
+      window_shortcut: "Alt+PrintScreen",
+      display_shortcut: "PrintScreen",
+      feedback_shortcut: "CommandOrControl+Shift+F",
+      recording: { ...recording, video_shortcut: "Super+Alt+R" },
+    };
+  }
+  if (platform === "linux") {
+    return {
+      new_capture_shortcut: "PrintScreen",
+      region_shortcut: "Super+Shift+S",
+      window_shortcut: "Alt+PrintScreen",
+      display_shortcut: "Shift+PrintScreen",
+      feedback_shortcut: "CommandOrControl+Shift+F",
+      recording: { ...recording, video_shortcut: "Control+Shift+Alt+R" },
+    };
+  }
+  return {
+    new_capture_shortcut: "CommandOrControl+Shift+Space",
+    region_shortcut: "CommandOrControl+Shift+4",
+    window_shortcut: "CommandOrControl+Shift+W",
+    display_shortcut: "CommandOrControl+Shift+3",
+    feedback_shortcut: "CommandOrControl+Shift+F",
+    recording,
+  };
+}
+
+const SETTINGS: AppSettings = {
+  settings_schema_version: 4,
+  appearance: readStoredAppearance(),
+  theme: "mustard",
+  custom_theme: { accent: "#32d3ff", signal: "#ff4fc3" },
+  output_directory: "/Users/alex/Pictures/Captures",
+  ...previewShortcutSettings(),
+  auto_copy_to_clipboard: true,
+  auto_start_on_selection: false,
+  show_mini_previews: true,
+  include_mini_previews_in_captures: false,
+  include_recording_controls_in_captures: false,
+  launch_at_login: true,
+  last_screen_permission_request_id: null,
+  pending_capture_after_restart: null,
+  onboarding_completed: true,
+  screenshot_countdown_seconds: 3,
 };
 
 const DISPLAY: DisplayDescriptor = {
@@ -345,7 +387,7 @@ const AUDIO_DEVICES: AudioDevice[] = [
 ];
 
 const ONBOARDING: OnboardingState = {
-  platform: query().get("platform") ?? "macos",
+  platform: previewPlatform(),
   screen_recording_required: true,
   screen_recording_granted: flag("granted"),
   screen_recording_can_request: true,

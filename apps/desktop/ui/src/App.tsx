@@ -70,6 +70,7 @@ import {
   detectShortcutPlatform,
   isModifierCode,
   modifierDisplayTokens,
+  platformShortcutHelp,
   recordShortcut,
   shortcutDisplayTokens,
 } from "./lib/shortcut";
@@ -6647,6 +6648,7 @@ function PreferencesSections({
   chooseDirectory: () => Promise<void>;
 }) {
   const appearance = settings.appearance ?? DEFAULT_APPEARANCE;
+  const shortcutHelp = platformShortcutHelp(detectShortcutPlatform());
 
   return (
     <>
@@ -6869,27 +6871,22 @@ function PreferencesSections({
           <h2 id="shortcuts-heading">Shortcuts</h2>
           <p>
             Select a shortcut, then press the key combination you want. Press Esc to cancel recording.
-            Defaults use Command on macOS and Control on Windows and Linux.
+            {` ${shortcutHelp.intro}`}
           </p>
         </header>
-        {detectShortcutPlatform() === "macos" ? (
-          <div className="settings-utility-row">
-            <div className="settings-utility-copy">
-              <strong>macOS Screenshot shortcuts</strong>
-              <small>
-                Captures turns off overlapping Screenshot app keys (⌘⇧3, ⌘⇧4, ⌘⇧5) so they
-                reach this app. Restore them in System Settings if you want both.
-              </small>
-            </div>
-            <button
-              className="settings-utility-action"
-              type="button"
-              onClick={() => void invoke("open_macos_screenshot_shortcut_settings")}
-            >
-              Open
-            </button>
+        <div className="settings-utility-row">
+          <div className="settings-utility-copy">
+            <strong>{shortcutHelp.takeoverTitle}</strong>
+            <small>{shortcutHelp.takeoverBody}</small>
           </div>
-        ) : null}
+          <button
+            className="settings-utility-action"
+            type="button"
+            onClick={() => void invoke("open_system_screenshot_shortcut_settings")}
+          >
+            Open
+          </button>
+        </div>
         <div className="shortcut-list">
           <ShortcutInput
             id="new-capture-shortcut"

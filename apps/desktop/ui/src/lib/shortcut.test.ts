@@ -1,6 +1,7 @@
 import {
   detectShortcutPlatform,
   modifierDisplayTokens,
+  platformShortcutHelp,
   recordShortcut,
   shortcutDisplayTokens,
 } from "./shortcut";
@@ -78,12 +79,12 @@ describe("shortcut recording", () => {
     expect(recordShortcut(keyEvent("KeyQ"), "macos")).toEqual({
       kind: "invalid",
       keys: ["Q"],
-      message: "Include Ctrl, Shift, Option, or Command.",
+      message: "Include Ctrl, Shift, Option, or Command, or use Print Screen.",
     });
     expect(recordShortcut(keyEvent("KeyQ"), "windows")).toEqual({
       kind: "invalid",
       keys: ["Q"],
-      message: "Include Ctrl, Shift, Alt, or Win.",
+      message: "Include Ctrl, Shift, Alt, or Win, or use Print Screen.",
     });
     expect(recordShortcut(keyEvent("Escape", { shiftKey: true }), "linux")).toEqual({
       kind: "cancel",
@@ -99,5 +100,34 @@ describe("shortcut recording", () => {
     expect(detectShortcutPlatform("Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)")).toBe("macos");
     expect(detectShortcutPlatform("Mozilla/5.0 (Windows NT 10.0; Win64; x64)")).toBe("windows");
     expect(detectShortcutPlatform("Mozilla/5.0 (X11; Linux x86_64)")).toBe("linux");
+  });
+
+  it("accepts Print Screen without modifiers and labels native screenshot keys", () => {
+    expect(recordShortcut(keyEvent("PrintScreen"), "windows")).toEqual({
+      kind: "complete",
+      keys: ["PrtScn"],
+      shortcut: "PrintScreen",
+    });
+    expect(recordShortcut(keyEvent("PrintScreen", { altKey: true }), "linux")).toEqual({
+      kind: "complete",
+      keys: ["Alt", "PrtScn"],
+      shortcut: "Alt+PrintScreen",
+    });
+    expect(shortcutDisplayTokens("PrintScreen", "windows")).toEqual(["PrtScn"]);
+    expect(shortcutDisplayTokens("Shift+PrintScreen", "linux")).toEqual(["Shift", "PrtScn"]);
+    expect(shortcutDisplayTokens("Super+Shift+S", "windows")).toEqual(["Win", "Shift", "S"]);
+    expect(shortcutDisplayTokens("Super+Alt+R", "windows")).toEqual(["Win", "Alt", "R"]);
+    expect(shortcutDisplayTokens("Control+Shift+Alt+R", "linux")).toEqual([
+      "Ctrl",
+      "Shift",
+      "Alt",
+      "R",
+    ]);
+  });
+
+  it("describes native screenshot defaults for each platform", () => {
+    expect(platformShortcutHelp("macos").intro).toMatch(/macOS Screenshot/);
+    expect(platformShortcutHelp("windows").intro).toMatch(/Win\+Shift\+S/);
+    expect(platformShortcutHelp("linux").intro).toMatch(/GNOME\/Ubuntu/);
   });
 });

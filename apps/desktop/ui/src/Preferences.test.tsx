@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { Preferences } from "./App";
+import { detectShortcutPlatform, platformShortcutHelp } from "./lib/shortcut";
 import type { AppSettings } from "./types";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -321,14 +322,13 @@ describe("Preferences", () => {
   it("presents the unified New Capture shortcut as the primary launcher", async () => {
     render(<Preferences />);
 
+    const help = platformShortcutHelp(detectShortcutPlatform());
     const recorder = await screen.findByRole("button", { name: "New Capture" });
     expect(recorder).toHaveTextContent("Ctrl");
     expect(recorder).toHaveTextContent("Shift");
     expect(recorder).toHaveTextContent("Space");
-    expect(
-      screen.getByText(/Defaults use Command on macOS and Control on Windows and Linux/),
-    ).toBeInTheDocument();
-    expect(screen.queryByText("macOS Screenshot shortcuts")).not.toBeInTheDocument();
+    expect(screen.getByText((text) => text.includes(help.intro))).toBeInTheDocument();
+    expect(screen.getByText(help.takeoverTitle)).toBeInTheDocument();
   });
 
   it("presents recording toggles as switch rows inside the Recording card", async () => {
