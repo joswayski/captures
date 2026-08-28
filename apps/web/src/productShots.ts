@@ -11,7 +11,7 @@ export const PRODUCT_SHOTS = [
     height: 1000,
     title: "Draw a region",
     description: "Click and drag a box on the desktop, or switch to a window or full display.",
-    alt: "Captures region capture over a landscape, with a highlighted box, corner handles, and the capture menu",
+    alt: "Captures region capture over an aerial satellite view of the Ever Given in the Suez Canal, with a highlighted box, corner handles, and the capture menu",
   },
   {
     id: "screenshot-editor",
@@ -23,6 +23,15 @@ export const PRODUCT_SHOTS = [
     alt: "Captures screenshot editor with the Suez Canal, a Choke point label, a tiger on the left bank, and an Evergreen ship hanging off the right edge with an Expand canvas button",
   },
   {
+    id: "video-editor",
+    file: "video-editor.jpg",
+    width: 1440,
+    height: 980,
+    title: "Polish recordings",
+    description: "Preview, trim, crop, and export video with size and audio controls.",
+    alt: "Captures video editor trimming a total solar eclipse to a few seconds of totality, with crop handles and save controls",
+  },
+  {
     id: "capture-controls",
     file: "capture-controls.jpg",
     width: 1200,
@@ -30,15 +39,6 @@ export const PRODUCT_SHOTS = [
     title: "Everything in reach",
     description: "Capture type and target controls sit together in one compact menu.",
     alt: "Close-up of the Captures capture menu with screenshot and recording options",
-  },
-  {
-    id: "video-editor",
-    file: "video-editor.jpg",
-    width: 1440,
-    height: 980,
-    title: "Polish recordings",
-    description: "Preview, trim, crop, and export video with size and audio controls.",
-    alt: "Captures video editor with a landscape preview, crop handles, trimming timeline, and save controls",
   },
   {
     id: "preferences",

@@ -20,12 +20,12 @@ Edit a capture with text, arrows, and stickers. Hover a hanging layer to expand 
 <table>
   <tr>
     <td width="50%">
-      <img src="docs/images/capture-selection.jpg" alt="Captures region capture over a landscape, with a highlighted box, corner handles, and the capture menu" width="100%">
+      <img src="docs/images/capture-selection.jpg" alt="Captures region capture over an aerial satellite view of the Ever Given in the Suez Canal, with a highlighted box, corner handles, and the capture menu" width="100%">
       <br>
       <sub><strong>Draw a region</strong> like other screenshot tools, or pick a window or full display.</sub>
     </td>
     <td width="50%">
-      <img src="docs/images/video-editor.jpg" alt="Captures video editor with a landscape preview, crop handles, trimming timeline, and save controls" width="100%">
+      <img src="docs/images/video-editor.jpg" alt="Captures video editor trimming a total solar eclipse to a few seconds of totality, with crop handles and save controls" width="100%">
       <br>
       <sub><strong>Polish recordings</strong> with preview, trimming, crop and size controls, and export options.</sub>
     </td>
