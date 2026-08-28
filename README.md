@@ -133,7 +133,7 @@ Defaults follow each platform’s built-in screenshot keys. Captures-only action
 
 Global capture and feedback shortcuts can be changed in Preferences. Installations still on earlier factory defaults (`Ctrl`+`Shift` or the shared macOS-style number keys) are updated automatically; custom shortcuts stay as they are.
 
-On macOS, overlapping Screenshot app shortcuts (`Cmd`+`Shift`+`3` / `4` / `5`) are turned off so those keys reach Captures; restore them in System Settings → Keyboard → Keyboard Shortcuts → Screenshots if you want both. On GNOME, overlapping screenshot keybindings are cleared when `gsettings` is available. On Windows, Print Screen is turned off for Snipping Tool when Captures uses that key; `Win`+`Shift`+`S` may still open Snipping Tool until you change it in Windows keyboard settings.
+On macOS, overlapping Screenshot app shortcuts (`Cmd`+`Shift`+`3` / `4` / `5`) are unbound immediately so those keys reach Captures instead of the system overlay; restore them in System Settings → Keyboard → Keyboard Shortcuts → Screenshots if you want both. On GNOME, overlapping screenshot keybindings are cleared when `gsettings` is available. On Windows, Print Screen is turned off for Snipping Tool when Captures uses that key; `Win`+`Shift`+`S` may still open Snipping Tool until you change it in Windows keyboard settings.
 
 While selecting a capture region, pick an aspect ratio in the capture menu or hold
 `Shift` for a square. In the screenshot editor, zoom with the header slider and

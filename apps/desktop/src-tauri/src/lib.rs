@@ -2249,6 +2249,7 @@ fn open_system_screenshot_shortcut_settings(app: AppHandle) -> CommandResult<()>
     #[cfg(target_os = "macos")]
     {
         for url in [
+            "x-apple.systempreferences:com.apple.Keyboard-Settings.extension?Screenshots",
             "x-apple.systempreferences:com.apple.Keyboard-Settings.extension?Shortcuts",
             "x-apple.systempreferences:com.apple.preference.keyboard?Shortcuts",
         ] {
@@ -2811,6 +2812,10 @@ fn register_shortcuts_with(app: &AppHandle, settings: &AppSettings) -> Result<()
     app.global_shortcut()
         .unregister_all()
         .map_err(|error| AppError::Shortcut(error.to_string()))?;
+    // Unbind overlapping OS screenshot tools before Captures claims the same
+    // chords. On macOS, persist through cfprefsd and disable the live
+    // WindowServer hotkeys; writing the plist file alone does not stop
+    // Screenshot.app.
     let overlapping_macos_screenshot_hotkeys =
         models::macos_screenshot_hotkeys_conflicting_with(settings);
     #[cfg(target_os = "macos")]
@@ -3018,29 +3023,26 @@ fn parse_shortcut(shortcut: &str) -> Result<Shortcut, AppError> {
 
 #[cfg(target_os = "macos")]
 fn disable_overlapping_macos_screenshot_shortcuts(ids: &[u32]) {
-    if let Err(error) = disable_macos_screenshot_hotkeys(ids) {
+    if let Err(error) = persist_disabled_macos_screenshot_hotkeys(ids) {
+        eprintln!("could not persist disabled macOS Screenshot shortcuts: {error}");
+    }
+    if let Err(error) = captures_macos_window::disable_symbolic_hotkeys(ids) {
         eprintln!("could not disable overlapping macOS Screenshot shortcuts: {error}");
     }
 }
 
 #[cfg(target_os = "macos")]
-fn disable_macos_screenshot_hotkeys(ids: &[u32]) -> Result<(), String> {
-    let home = std::env::var("HOME").map_err(|error| error.to_string())?;
-    let plist = PathBuf::from(home).join("Library/Preferences/com.apple.symbolichotkeys.plist");
-    let buddy = "/usr/libexec/PlistBuddy";
-    if !Path::new(buddy).is_file() {
-        return Err("PlistBuddy is unavailable".to_owned());
-    }
-    let _ = run_plist_buddy(buddy, &plist, "Add :AppleSymbolicHotKeys dict");
+fn persist_disabled_macos_screenshot_hotkeys(ids: &[u32]) -> Result<(), String> {
     for id in ids {
-        let _ = run_plist_buddy(
-            buddy,
-            &plist,
-            &format!("Add :AppleSymbolicHotKeys:{id} dict"),
-        );
-        let enabled = format!(":AppleSymbolicHotKeys:{id}:enabled");
-        let _ = run_plist_buddy(buddy, &plist, &format!("Delete {enabled}"));
-        run_plist_buddy(buddy, &plist, &format!("Add {enabled} bool false"))?;
+        let output = Command::new("defaults")
+            .args(models::macos_screenshot_hotkey_defaults_write_args(*id))
+            .output()
+            .map_err(|error| error.to_string())?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+            return Err(if stderr.is_empty() { stdout } else { stderr });
+        }
     }
     let activate = "/System/Library/PrivateFrameworks/SystemAdministration.framework/Resources/activateSettings";
     if Path::new(activate).is_file() {
@@ -3109,24 +3111,6 @@ fn set_windows_print_screen_snipping_enabled(enabled: bool) -> Result<(), String
         }
     }
     Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn run_plist_buddy(buddy: &str, plist: &Path, command: &str) -> Result<(), String> {
-    let path = plist
-        .to_str()
-        .ok_or_else(|| "plist path is not valid UTF-8".to_owned())?;
-    let output = Command::new(buddy)
-        .args(["-c", command, path])
-        .output()
-        .map_err(|error| error.to_string())?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-        Err(if stderr.is_empty() { stdout } else { stderr })
-    }
 }
 
 fn should_trigger_shortcut(armed: &AtomicBool, state: ShortcutState) -> bool {

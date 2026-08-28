@@ -29,7 +29,7 @@ const UPDATE_NOTICE_STACK_HEIGHT: f64 = 72.0;
 const RESTART_COUNTDOWN_SECONDS: u8 = 3;
 const RESTART_FADE_DURATION: Duration = Duration::from_millis(400);
 const INITIAL_CHECK_DELAY: Duration = Duration::from_secs(15);
-const CHECK_INTERVAL: Duration = Duration::from_secs(4 * 60 * 60);
+const CHECK_INTERVAL: Duration = Duration::from_secs(2 * 60 * 60);
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
@@ -807,13 +807,19 @@ fn restart_blocker(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::AtomicBool;
+    use std::{sync::atomic::AtomicBool, time::Duration};
 
     use super::{
-        AtomicFlagGuard, NoticeDisposition, UpdateChangelogEntry, UpdateStatus, check_error_status,
-        display_version, notice_disposition, release_channel_enabled, restart_blocker,
-        stacked_changelog, take_restart_marker, update_notice_height, version_is_newer_than,
+        AtomicFlagGuard, CHECK_INTERVAL, NoticeDisposition, UpdateChangelogEntry, UpdateStatus,
+        check_error_status, display_version, notice_disposition, release_channel_enabled,
+        restart_blocker, stacked_changelog, take_restart_marker, update_notice_height,
+        version_is_newer_than,
     };
+
+    #[test]
+    fn checks_for_preview_updates_every_two_hours() {
+        assert_eq!(CHECK_INTERVAL, Duration::from_secs(2 * 60 * 60));
+    }
 
     #[test]
     fn enables_automatic_updates_only_for_preview_builds() {
