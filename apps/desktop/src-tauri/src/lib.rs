@@ -2794,8 +2794,14 @@ fn register_shortcuts_with(app: &AppHandle, settings: &AppSettings) -> Result<()
     app.global_shortcut()
         .unregister_all()
         .map_err(|error| AppError::Shortcut(error.to_string()))?;
+    let overlapping_macos_screenshot_hotkeys =
+        models::macos_screenshot_hotkeys_conflicting_with(settings);
     #[cfg(target_os = "macos")]
-    disable_overlapping_macos_screenshot_shortcuts(settings);
+    if !overlapping_macos_screenshot_hotkeys.is_empty() {
+        disable_overlapping_macos_screenshot_shortcuts(&overlapping_macos_screenshot_hotkeys);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = overlapping_macos_screenshot_hotkeys;
     register_new_capture_shortcut(app, &settings.new_capture_shortcut)?;
     register_shortcut(app, &settings.region_shortcut, CaptureMode::Region)?;
     register_shortcut(app, &settings.window_shortcut, CaptureMode::Window)?;
@@ -2980,12 +2986,8 @@ fn parse_shortcut(shortcut: &str) -> Result<Shortcut, AppError> {
 }
 
 #[cfg(target_os = "macos")]
-fn disable_overlapping_macos_screenshot_shortcuts(settings: &AppSettings) {
-    let ids = models::macos_screenshot_hotkeys_conflicting_with(settings);
-    if ids.is_empty() {
-        return;
-    }
-    if let Err(error) = disable_macos_screenshot_hotkeys(&ids) {
+fn disable_overlapping_macos_screenshot_shortcuts(ids: &[u32]) {
+    if let Err(error) = disable_macos_screenshot_hotkeys(ids) {
         eprintln!("could not disable overlapping macOS Screenshot shortcuts: {error}");
     }
 }
