@@ -825,6 +825,12 @@
   font-size: var(--text-sm);
 }
 
+.update-settings-warning {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
+}
+
 /* ------------------------------------------------------------ feedback ---- */
 
 .feedback {
@@ -1809,15 +1815,17 @@
 }
 
 .update-notice-body {
+  display: flex;
   min-height: 0;
   padding: 0 var(--s-7) var(--s-4);
+  flex-direction: column;
   overflow: hidden;
 }
 
 .update-notes {
   display: flex;
-  height: 100%;
   min-height: 0;
+  flex: 1;
   flex-direction: column;
 }
 
@@ -1940,6 +1948,17 @@
   max-width: 100%;
   color: var(--danger-text);
   overflow-wrap: anywhere;
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
+}
+
+.update-close-warning {
+  margin-bottom: var(--s-4);
+  padding: var(--s-4) var(--s-5);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  color: var(--text-muted);
+  background: var(--surface-sunken);
   font-size: var(--text-sm);
   line-height: var(--leading-snug);
 }

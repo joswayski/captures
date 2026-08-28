@@ -26,8 +26,10 @@ const UPDATE_NOTICE_WIDTH: f64 = 440.0;
 const UPDATE_NOTICE_MIN_HEIGHT: f64 = 290.0;
 const UPDATE_NOTICE_MAX_HEIGHT: f64 = 480.0;
 const UPDATE_NOTICE_STACK_HEIGHT: f64 = 72.0;
+const UPDATE_NOTICE_WARNING_HEIGHT: f64 = 56.0;
 const RESTART_COUNTDOWN_SECONDS: u8 = 3;
 const RESTART_FADE_DURATION: Duration = Duration::from_millis(400);
+const EDITOR_CLOSE_FLUSH: Duration = Duration::from_millis(500);
 const INITIAL_CHECK_DELAY: Duration = Duration::from_secs(15);
 const CHECK_INTERVAL: Duration = Duration::from_secs(2 * 60 * 60);
 
@@ -55,6 +57,7 @@ pub enum UpdateStatus {
         changelog: Vec<UpdateChangelogEntry>,
         installable: bool,
         manual_download_url: Option<String>,
+        will_close_open_captures: bool,
     },
     Downloading {
         current_version: String,
@@ -220,8 +223,9 @@ pub fn handle_tray_action(app: &AppHandle) {
 }
 
 #[tauri::command]
-pub fn get_update_status(state: tauri::State<'_, UpdateCoordinator>) -> UpdateStatus {
-    state.status.lock().clone()
+pub fn get_update_status(app: AppHandle) -> UpdateStatus {
+    let status = app.state::<UpdateCoordinator>().status.lock().clone();
+    annotate_status(&app, status)
 }
 
 #[tauri::command]
@@ -259,6 +263,10 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
     let Some(_install_guard) = AtomicFlagGuard::acquire(&coordinator.installing) else {
         return Err("an update is already being installed".to_owned());
     };
+    prepare_open_captures_for_update(&app, &app_state).await;
+    if let Some(message) = install_restart_blocker(&app_state) {
+        return Err(message.to_owned());
+    }
     let update = coordinator
         .pending
         .lock()
@@ -442,6 +450,7 @@ async fn check_for_updates_inner(app: &AppHandle, manual: bool) -> Result<Update
             changelog,
             installable,
             manual_download_url: (!installable).then(|| RELEASES_URL.to_owned()),
+            will_close_open_captures: false,
         };
         set_status(app, status.clone());
         schedule_update_notice(app, version);
@@ -463,7 +472,7 @@ async fn check_for_updates_inner(app: &AppHandle, manual: bool) -> Result<Update
 fn set_status(app: &AppHandle, status: UpdateStatus) {
     *app.state::<UpdateCoordinator>().status.lock() = status.clone();
     refresh_menu(app);
-    if let Err(error) = app.emit(UPDATE_EVENT, status) {
+    if let Err(error) = app.emit(UPDATE_EVENT, annotate_status(app, status)) {
         eprintln!("failed to emit update status: {error}");
     }
 }
@@ -515,7 +524,7 @@ fn schedule_update_notice(app: &AppHandle, version: String) {
 }
 
 fn show_update_notice(app: &AppHandle) {
-    let status = app.state::<UpdateCoordinator>().status.lock().clone();
+    let status = annotate_status(app, app.state::<UpdateCoordinator>().status.lock().clone());
     let disposition = notice_disposition(
         &status,
         active_capture_or_recording(&app.state::<Arc<AppState>>()),
@@ -600,7 +609,14 @@ fn update_notice_height(status: &UpdateStatus) -> f64 {
         UpdateStatus::Available { changelog, .. } => changelog.len().saturating_sub(1),
         _ => 0,
     };
-    (UPDATE_NOTICE_MIN_HEIGHT + extra_versions as f64 * UPDATE_NOTICE_STACK_HEIGHT)
+    let warning = match status {
+        UpdateStatus::Available {
+            will_close_open_captures: true,
+            ..
+        } => UPDATE_NOTICE_WARNING_HEIGHT,
+        _ => 0.0,
+    };
+    (UPDATE_NOTICE_MIN_HEIGHT + extra_versions as f64 * UPDATE_NOTICE_STACK_HEIGHT + warning)
         .min(UPDATE_NOTICE_MAX_HEIGHT)
 }
 
@@ -778,31 +794,92 @@ fn active_capture_or_recording(state: &AppState) -> bool {
     capture_is_active(state) || crate::recording::recording_session_is_active(state)
 }
 
-fn install_restart_blocker(state: &AppState) -> Option<&'static str> {
-    let capture_active = capture_is_active(state);
-    let recording_active = crate::recording::recording_session_is_active(state);
-    let has_unsaved_capture = state
-        .artifacts
-        .lock()
-        .iter()
-        .any(|artifact| artifact.path.is_none());
-    restart_blocker(capture_active, recording_active, has_unsaved_capture)
+fn annotate_status(app: &AppHandle, mut status: UpdateStatus) -> UpdateStatus {
+    if let UpdateStatus::Available {
+        will_close_open_captures,
+        ..
+    } = &mut status
+    {
+        *will_close_open_captures = open_captures_will_close(app, &app.state::<Arc<AppState>>());
+    }
+    status
 }
 
-fn restart_blocker(
-    capture_active: bool,
-    recording_active: bool,
+fn open_captures_will_close(app: &AppHandle, state: &AppState) -> bool {
+    open_captures_will_close_from(
+        capture_is_active(state) || crate::screenshot_countdown_is_active(state),
+        state
+            .artifacts
+            .lock()
+            .iter()
+            .any(|artifact| artifact.path.is_none()),
+        app.webview_windows()
+            .keys()
+            .any(|label| capture_window_should_close_for_update(label)),
+    )
+}
+
+fn open_captures_will_close_from(
+    capture_ui_active: bool,
     has_unsaved_capture: bool,
-) -> Option<&'static str> {
-    if recording_active {
-        Some("Finish or cancel the active recording before installing the update.")
-    } else if capture_active {
-        Some("Finish or cancel the active capture before installing the update.")
-    } else if has_unsaved_capture {
-        Some("Save or close every unsaved capture before installing the update.")
-    } else {
-        None
+    has_open_editor_or_viewer: bool,
+) -> bool {
+    capture_ui_active || has_unsaved_capture || has_open_editor_or_viewer
+}
+
+fn capture_window_should_close_for_update(label: &str) -> bool {
+    label == "viewer"
+        || label.starts_with(crate::VIEWER_WINDOW_PREFIX)
+        || label.starts_with(crate::screenshot_editor::SCREENSHOT_EDITOR_WINDOW_PREFIX)
+        || label.starts_with(crate::RECORDING_EDITOR_WINDOW_PREFIX)
+}
+
+fn capture_windows_are_open(app: &AppHandle) -> bool {
+    app.webview_windows()
+        .keys()
+        .any(|label| capture_window_should_close_for_update(label))
+}
+
+fn close_open_capture_windows(app: &AppHandle) {
+    let app = app.clone();
+    if let Err(error) = app.clone().run_on_main_thread(move || {
+        let labels: Vec<String> = app
+            .webview_windows()
+            .into_keys()
+            .filter(|label| capture_window_should_close_for_update(label))
+            .collect();
+        for label in labels {
+            let Some(window) = app.get_webview_window(&label) else {
+                continue;
+            };
+            if let Err(error) = window.close() {
+                eprintln!("failed to close {label} before update: {error}");
+                if let Err(error) = window.destroy() {
+                    eprintln!("failed to destroy {label} before update: {error}");
+                }
+            }
+        }
+    }) {
+        eprintln!("failed to close capture windows before update: {error}");
     }
+}
+
+async fn prepare_open_captures_for_update(app: &AppHandle, state: &Arc<AppState>) {
+    let should_wait_for_editors = capture_windows_are_open(app);
+    close_open_capture_windows(app);
+    crate::dismiss_capture_ui_for_update(app, state);
+    if should_wait_for_editors {
+        tokio::time::sleep(EDITOR_CLOSE_FLUSH).await;
+    }
+}
+
+fn install_restart_blocker(state: &AppState) -> Option<&'static str> {
+    restart_blocker(crate::recording::recording_in_progress(state))
+}
+
+fn restart_blocker(recording_in_progress: bool) -> Option<&'static str> {
+    recording_in_progress
+        .then_some("Finish or cancel the active recording before installing the update.")
 }
 
 #[cfg(test)]
@@ -811,7 +888,8 @@ mod tests {
 
     use super::{
         AtomicFlagGuard, CHECK_INTERVAL, NoticeDisposition, UpdateChangelogEntry, UpdateStatus,
-        check_error_status, display_version, notice_disposition, release_channel_enabled,
+        capture_window_should_close_for_update, check_error_status, display_version,
+        notice_disposition, open_captures_will_close_from, release_channel_enabled,
         restart_blocker, stacked_changelog, take_restart_marker, update_notice_height,
         version_is_newer_than,
     };
@@ -843,20 +921,36 @@ mod tests {
     }
 
     #[test]
-    fn blocks_restart_for_active_work_or_unsaved_captures() {
+    fn blocks_restart_only_for_an_in_progress_recording() {
         assert_eq!(
-            restart_blocker(true, false, false),
-            Some("Finish or cancel the active capture before installing the update.")
-        );
-        assert_eq!(
-            restart_blocker(false, true, false),
+            restart_blocker(true),
             Some("Finish or cancel the active recording before installing the update.")
         );
-        assert_eq!(
-            restart_blocker(false, false, true),
-            Some("Save or close every unsaved capture before installing the update.")
-        );
-        assert_eq!(restart_blocker(false, false, false), None);
+        assert_eq!(restart_blocker(false), None);
+    }
+
+    #[test]
+    fn warns_when_open_captures_will_close_for_an_update() {
+        assert!(open_captures_will_close_from(true, false, false));
+        assert!(open_captures_will_close_from(false, true, false));
+        assert!(open_captures_will_close_from(false, false, true));
+        assert!(!open_captures_will_close_from(false, false, false));
+    }
+
+    #[test]
+    fn closes_editor_and_viewer_windows_before_an_update() {
+        assert!(capture_window_should_close_for_update(
+            "screenshot-editor-capture-1"
+        ));
+        assert!(capture_window_should_close_for_update(
+            "recording-editor-clip-9"
+        ));
+        assert!(capture_window_should_close_for_update("viewer-capture-1"));
+        assert!(capture_window_should_close_for_update("viewer"));
+        assert!(!capture_window_should_close_for_update("update"));
+        assert!(!capture_window_should_close_for_update("thumbnail"));
+        assert!(!capture_window_should_close_for_update("preferences"));
+        assert!(!capture_window_should_close_for_update("history"));
     }
 
     #[test]
@@ -900,6 +994,7 @@ mod tests {
             changelog: Vec::new(),
             installable: true,
             manual_download_url: None,
+            will_close_open_captures: false,
         };
         assert_eq!(notice_disposition(&status, true), NoticeDisposition::Defer);
         assert_eq!(notice_disposition(&status, false), NoticeDisposition::Show);
@@ -990,6 +1085,22 @@ mod tests {
         ]);
         assert_eq!(update_notice_height(&single), 290.0);
         assert_eq!(update_notice_height(&stacked), 434.0);
+        let warned = UpdateStatus::Available {
+            current_version: "2026.7.1901".into(),
+            current_display_version: "2026.07.19.1".into(),
+            version: "2026.7.1902".into(),
+            display_version: "2026.07.19.2".into(),
+            notes: None,
+            changelog: vec![UpdateChangelogEntry {
+                version: "2026.7.1902".into(),
+                display_version: "2026.07.19.2".into(),
+                notes: Some("Adds automatic releases.".into()),
+            }],
+            installable: true,
+            manual_download_url: None,
+            will_close_open_captures: true,
+        };
+        assert_eq!(update_notice_height(&warned), 346.0);
     }
 
     fn available_status(changelog: Vec<UpdateChangelogEntry>) -> UpdateStatus {
@@ -1002,6 +1113,7 @@ mod tests {
             changelog,
             installable: true,
             manual_download_url: None,
+            will_close_open_captures: false,
         }
     }
 }

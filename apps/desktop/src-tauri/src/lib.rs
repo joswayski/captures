@@ -857,6 +857,24 @@ fn cancel_capture(
     Ok(())
 }
 
+/// Cancel screenshot capture UI so an update can restart. Failures are logged
+/// and ignored — an open overlay must not block installation.
+pub(crate) fn dismiss_capture_ui_for_update(app: &AppHandle, state: &Arc<AppState>) {
+    cancel_screenshot_countdown_inner(app, state.clone());
+    hide_capture_overlay(app);
+    let generations: Vec<u64> = state
+        .sessions
+        .lock()
+        .drain()
+        .map(|(_, session)| session.thumbnail_capture_generation)
+        .collect();
+    for generation in generations {
+        restore_thumbnail_capture(app, state, generation);
+    }
+    recording::dismiss_recording_selection_for_update(app, state);
+    reveal_document_windows_after_capture(app);
+}
+
 #[derive(Clone, serde::Serialize)]
 struct ScreenshotCountdownTick {
     remaining_seconds: u8,
