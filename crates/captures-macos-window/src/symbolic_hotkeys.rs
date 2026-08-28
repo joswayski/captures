@@ -41,26 +41,19 @@ fn symbolic_hotkey_set_enabled() -> Result<SetSymbolicHotKeyEnabled, String> {
 }
 
 fn load_set_enabled() -> Result<SetSymbolicHotKeyEnabled, String> {
-    let symbol = CStr::from_bytes_with_nul(b"CGSSetSymbolicHotKeyEnabled\0")
-        .expect("symbol name is a valid C string");
+    let symbol = c"CGSSetSymbolicHotKeyEnabled";
     // SAFETY: RTLD_DEFAULT searches already-loaded images. AppKit/SkyLight are
     // present in this process; a null return means we try explicit frameworks.
     let mut pointer = unsafe { libc::dlsym(libc::RTLD_DEFAULT, symbol.as_ptr()) };
     if pointer.is_null() {
         pointer = dlsym_in_framework(
-            CStr::from_bytes_with_nul(
-                b"/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight\0",
-            )
-            .expect("framework path is a valid C string"),
+            c"/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight",
             symbol,
         );
     }
     if pointer.is_null() {
         pointer = dlsym_in_framework(
-            CStr::from_bytes_with_nul(
-                b"/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices\0",
-            )
-            .expect("framework path is a valid C string"),
+            c"/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices",
             symbol,
         );
     }
