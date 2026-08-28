@@ -120,16 +120,16 @@ const FILMSTRIP_URL = sampleFilmstrip(TIMELINE_FRAMES);
 const CAPTURE_TALL_URL = sampleCapture(1200, 900);
 
 const SETTINGS: AppSettings = {
-  settings_schema_version: 2,
+  settings_schema_version: 3,
   appearance: readStoredAppearance(),
   theme: "mustard",
   custom_theme: { accent: "#32d3ff", signal: "#ff4fc3" },
   output_directory: "/Users/alex/Pictures/Captures",
-  new_capture_shortcut: "Ctrl+Shift+Space",
-  region_shortcut: "Ctrl+Shift+4",
-  window_shortcut: "Ctrl+Shift+W",
-  display_shortcut: "Ctrl+Shift+3",
-  feedback_shortcut: "Ctrl+Shift+F",
+  new_capture_shortcut: "CommandOrControl+Shift+Space",
+  region_shortcut: "CommandOrControl+Shift+4",
+  window_shortcut: "CommandOrControl+Shift+W",
+  display_shortcut: "CommandOrControl+Shift+3",
+  feedback_shortcut: "CommandOrControl+Shift+F",
   auto_copy_to_clipboard: true,
   auto_start_on_selection: false,
   show_mini_previews: true,
@@ -141,8 +141,8 @@ const SETTINGS: AppSettings = {
   onboarding_completed: true,
   screenshot_countdown_seconds: 3,
   recording: {
-    video_shortcut: "Ctrl+Shift+5",
-    gif_shortcut: "Ctrl+Shift+6",
+    video_shortcut: "CommandOrControl+Shift+5",
+    gif_shortcut: "CommandOrControl+Shift+6",
     video_fps: 60,
     video_max_resolution: "original",
     gif_fps: 15,

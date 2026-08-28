@@ -48,6 +48,16 @@ describe("shortcut recording", () => {
       "Shift",
       "4",
     ]);
+    expect(shortcutDisplayTokens("CommandOrControl+Shift+Digit4", "macos")).toEqual([
+      "Cmd",
+      "Shift",
+      "4",
+    ]);
+    expect(shortcutDisplayTokens("CommandOrControl+Shift+Space", "linux")).toEqual([
+      "Ctrl",
+      "Shift",
+      "Space",
+    ]);
   });
 
   it("labels Linux Super distinctly from Windows Win", () => {
