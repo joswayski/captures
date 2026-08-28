@@ -2757,6 +2757,7 @@
 
 .screenshot-color-field {
   min-width: 0;
+  width: 100%;
   margin: 0;
   border: 0;
   padding: 0;
@@ -2772,6 +2773,7 @@
 
 .screenshot-color-field .screenshot-color-swatches {
   display: grid;
+  width: 100%;
   grid-template-columns: repeat(auto-fill, minmax(44px, 1fr));
   align-items: center;
   justify-items: center;
