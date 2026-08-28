@@ -75,6 +75,10 @@ mod thumbnail_panel {
 use interactive_hud_panel::InteractiveHudPanel;
 use thumbnail_panel::ThumbnailPanel;
 
+mod symbolic_hotkeys;
+
+pub use symbolic_hotkeys::disable_symbolic_hotkeys;
+
 const LEGACY_WINDOW_CORNER_RADIUS_POINTS: f64 = 10.0;
 const LIQUID_GLASS_WINDOW_CORNER_RADIUS_POINTS: f64 = 25.0;
 const LIQUID_GLASS_MACOS_MAJOR_VERSION: isize = 26;

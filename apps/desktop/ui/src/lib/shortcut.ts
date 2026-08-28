@@ -189,7 +189,7 @@ export function platformShortcutHelp(platform: ShortcutPlatform): {
         "Defaults match macOS Screenshot for full screen, region, and recording. Captures-only actions keep their own shortcuts.",
       takeoverTitle: "macOS Screenshot shortcuts",
       takeoverBody:
-        "Captures turns off overlapping Screenshot app keys (⌘⇧3, ⌘⇧4, ⌘⇧5) so they reach this app. Restore them in System Settings if you want both.",
+        "Captures unbinds overlapping Screenshot app keys (⌘⇧3, ⌘⇧4, ⌘⇧5) so they reach this app instead of the system overlay. Restore them in System Settings if you want both.",
     };
   }
   if (platform === "windows") {
