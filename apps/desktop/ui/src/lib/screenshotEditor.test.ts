@@ -9,7 +9,9 @@ import {
   arrowWithBend,
   boundedCropRect,
   cropDragAspectRatio,
+  canvasExpandButtonAnchor,
   canvasOverflowEdges,
+  canvasOverflowGaps,
   closestImageSnapEdge,
   closestPointOnArrow,
   collectAlignmentSnapLines,
@@ -43,6 +45,7 @@ import {
   imageSizeAtWidth,
   insertArrowControl,
   isCurveableStrokeShape,
+  isFullyOutsideCanvas,
   isSupportedImageFile,
   loadImageFile,
   outputDimensions,
@@ -1450,6 +1453,26 @@ describe("screenshot editor geometry", () => {
       width: 100,
       height: 100,
     })).toBe(document);
+
+    expect(isFullyOutsideCanvas(overflowing, document)).toBe(false);
+    expect(isFullyOutsideCanvas({ x: -400, y: 100, width: 200, height: 100 }, document)).toBe(true);
+    expect(isFullyOutsideCanvas({ x: 10, y: 10, width: 100, height: 100 }, document)).toBe(false);
+    expect(canvasOverflowGaps(overflowing, document)).toEqual([
+      { edge: "left", rect: { x: -40, y: 100, width: 40, height: 100 } },
+    ]);
+    expect(canvasExpandButtonAnchor(overflowing, document, 24)).toEqual({
+      x: -24,
+      y: 150,
+    });
+    expect(canvasExpandButtonAnchor({
+      x: 900,
+      y: 750,
+      width: 200,
+      height: 100,
+    }, document, 24)).toEqual({
+      x: 1_024,
+      y: 800,
+    });
   });
 
   it("scales annotations when their selection box is resized", () => {

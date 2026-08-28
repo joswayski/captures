@@ -1613,6 +1613,24 @@ export function snapResizedBounds(
   };
 }
 
+/** Axis-aligned overlap. Touching edges do not count. */
+export function editorRectsIntersect(
+  a: EditorRect,
+  b: EditorRect,
+  epsilon = 0.5,
+): boolean {
+  return a.x + a.width > b.x + epsilon
+    && b.x + b.width > a.x + epsilon
+    && a.y + a.height > b.y + epsilon
+    && b.y + b.height > a.y + epsilon;
+}
+
+export function canvasDocumentRect(
+  canvas: Pick<ScreenshotDocument, "width" | "height">,
+): EditorRect {
+  return { x: 0, y: 0, width: canvas.width, height: canvas.height };
+}
+
 /** Which canvas borders a box crosses (partially outside the document). */
 export function canvasOverflowEdges(
   bounds: EditorRect,
@@ -1625,6 +1643,112 @@ export function canvasOverflowEdges(
   if (bounds.x + bounds.width > canvas.width + epsilon) edges.push("right");
   if (bounds.y + bounds.height > canvas.height + epsilon) edges.push("bottom");
   return edges;
+}
+
+/**
+ * True when `bounds` has no on-canvas pixels. Fully off-canvas placements still
+ * grow the document so the new layer is not lost in the chrome.
+ */
+export function isFullyOutsideCanvas(
+  bounds: EditorRect,
+  canvas: Pick<ScreenshotDocument, "width" | "height">,
+  epsilon = 0.5,
+): boolean {
+  return !editorRectsIntersect(bounds, canvasDocumentRect(canvas), epsilon);
+}
+
+export type CanvasOverflowGap = {
+  edge: ImageSnapEdge;
+  rect: EditorRect;
+};
+
+/**
+ * Off-canvas remainder of `bounds`, one rectangle per overflowing edge.
+ * Corner pixels can appear in two gaps; that is fine for hover/button layout.
+ */
+export function canvasOverflowGaps(
+  bounds: EditorRect,
+  canvas: Pick<ScreenshotDocument, "width" | "height">,
+  epsilon = 0.5,
+): CanvasOverflowGap[] {
+  const gaps: CanvasOverflowGap[] = [];
+  for (const edge of canvasOverflowEdges(bounds, canvas, epsilon)) {
+    if (edge === "left") {
+      const width = Math.min(bounds.width, -bounds.x);
+      if (width > epsilon) {
+        gaps.push({
+          edge,
+          rect: { x: bounds.x, y: bounds.y, width, height: bounds.height },
+        });
+      }
+    } else if (edge === "right") {
+      const x = Math.max(bounds.x, canvas.width);
+      const width = bounds.x + bounds.width - x;
+      if (width > epsilon) {
+        gaps.push({
+          edge,
+          rect: { x, y: bounds.y, width, height: bounds.height },
+        });
+      }
+    } else if (edge === "top") {
+      const height = Math.min(bounds.height, -bounds.y);
+      if (height > epsilon) {
+        gaps.push({
+          edge,
+          rect: { x: bounds.x, y: bounds.y, width: bounds.width, height },
+        });
+      }
+    } else {
+      const y = Math.max(bounds.y, canvas.height);
+      const height = bounds.y + bounds.height - y;
+      if (height > epsilon) {
+        gaps.push({
+          edge,
+          rect: { x: bounds.x, y, width: bounds.width, height },
+        });
+      }
+    }
+  }
+  return gaps;
+}
+
+export function largestCanvasOverflowGap(
+  bounds: EditorRect,
+  canvas: Pick<ScreenshotDocument, "width" | "height">,
+  epsilon = 0.5,
+): CanvasOverflowGap | null {
+  const gaps = canvasOverflowGaps(bounds, canvas, epsilon);
+  if (gaps.length === 0) return null;
+  return gaps.reduce((best, gap) => (
+    gap.rect.width * gap.rect.height > best.rect.width * best.rect.height
+      ? gap
+      : best
+  ));
+}
+
+/**
+ * Document-space center for the idle "Expand canvas" control: just outside the
+ * current canvas along the largest overflow gap, so the button sits in the
+ * hanging content rather than over the on-canvas crop.
+ */
+export function canvasExpandButtonAnchor(
+  bounds: EditorRect,
+  canvas: Pick<ScreenshotDocument, "width" | "height">,
+  inset = 24,
+): EditorPoint | null {
+  const gap = largestCanvasOverflowGap(bounds, canvas);
+  if (!gap) return null;
+  const { edge, rect } = gap;
+  if (edge === "left") {
+    return { x: -inset, y: rect.y + rect.height / 2 };
+  }
+  if (edge === "right") {
+    return { x: canvas.width + inset, y: rect.y + rect.height / 2 };
+  }
+  if (edge === "top") {
+    return { x: rect.x + rect.width / 2, y: -inset };
+  }
+  return { x: rect.x + rect.width / 2, y: canvas.height + inset };
 }
 
 export function isSupportedImageFile(file: Pick<File, "name" | "type">): boolean {
