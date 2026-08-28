@@ -25,8 +25,7 @@ use captures_recording_macos::MacRecordingSegment as NativeRecordingSegment;
 use captures_recording_xcap::XcapRecordingSegment as NativeRecordingSegment;
 use serde::{Deserialize, Serialize};
 use tauri::{
-    AppHandle, Emitter, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder,
-    webview::PageLoadEvent, window::Color,
+    AppHandle, Emitter, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder, window::Color,
 };
 use tauri_plugin_opener::OpenerExt;
 use uuid::Uuid;
@@ -3870,13 +3869,9 @@ fn show_recording_editor(app: &AppHandle, artifact_id: &str) -> Result<(), AppEr
     .background_color(background)
     .focused(false)
     .visible(false)
-    .on_page_load(|window, payload| {
-        if payload.event() == PageLoadEvent::Finished
-            && let Err(error) = crate::reveal_and_focus_document_window(&window)
-        {
-            eprintln!("failed to reveal recording editor: {error}");
-        }
-    })
+    .on_page_load(crate::document_window_page_load_handler(
+        "failed to reveal recording editor",
+    ))
     .build()?;
     Ok(())
 }

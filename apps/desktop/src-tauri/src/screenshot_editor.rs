@@ -11,9 +11,7 @@ use image::{
     codecs::jpeg::JpegEncoder,
 };
 use serde::{Deserialize, Serialize};
-use tauri::{
-    AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, webview::PageLoadEvent,
-};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use uuid::Uuid;
 
 use captures_capture::CaptureMode;
@@ -145,13 +143,9 @@ pub fn open_screenshot_editor(
     .background_color(background)
     .focused(false)
     .visible(false)
-    .on_page_load(|window, payload| {
-        if payload.event() == PageLoadEvent::Finished
-            && let Err(error) = crate::reveal_and_focus_document_window(&window)
-        {
-            eprintln!("failed to reveal screenshot editor: {error}");
-        }
-    })
+    .on_page_load(crate::document_window_page_load_handler(
+        "failed to reveal screenshot editor",
+    ))
     .build()
     .map_err(|error| error.to_string())?;
     Ok(())

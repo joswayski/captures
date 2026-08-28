@@ -366,7 +366,7 @@ fn release_thumbnail_key_window(window_address: usize) {
     };
     if cursor_surface_for_window(&window) == Some(CursorSurface::Thumbnail) && window.isKeyWindow()
     {
-        window.resignKeyWindow();
+        resign_ns_window_key_without_raising_documents(&window);
     }
 }
 
@@ -1010,12 +1010,7 @@ pub fn remember_frontmost_app_before_activation() {
             return;
         }
     }
-    let frontmost = NSWorkspace::sharedWorkspace().frontmostApplication();
-    let current = NSRunningApplication::currentApplication();
-    let previous = match frontmost {
-        Some(app) if !app.isEqual(Some(&*current)) && !app.isTerminated() => Some(app),
-        _ => None,
-    };
+    let previous = current_frontmost_if_not_captures();
     // Only order out documents when activation would pull them over another
     // app. Concealing while Captures is already key is what made open editors
     // vanish for the whole region/window selection and pop back at the end.
@@ -1077,6 +1072,20 @@ pub fn restore_frontmost_app_after_capture() {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         slot.take()
     };
+    yield_activation_to(previous);
+}
+
+fn current_frontmost_if_not_captures() -> Option<Retained<NSRunningApplication>> {
+    let frontmost = NSWorkspace::sharedWorkspace().frontmostApplication()?;
+    let current = NSRunningApplication::currentApplication();
+    if frontmost.isEqual(Some(&*current)) || frontmost.isTerminated() {
+        None
+    } else {
+        Some(frontmost)
+    }
+}
+
+fn yield_activation_to(previous: Option<Retained<NSRunningApplication>>) {
     let Some(previous) = previous else {
         return;
     };
@@ -1088,6 +1097,64 @@ pub fn restore_frontmost_app_after_capture() {
         app.yieldActivationToApplication(&previous);
     }
     let _ = previous.activateWithOptions(NSApplicationActivationOptions::empty());
+}
+
+fn concealment_session_is_idle() -> bool {
+    CONCEALED_DOCUMENT_WINDOWS.with(|concealed| concealed.borrow().is_empty())
+}
+
+/// Runs `work` without leaving Captures — and an open editor — in front of the
+/// user's current app.
+///
+/// Hiding or showing the nonactivating thumbnail panel, or resigning its key
+/// status, can activate Captures and donate key status to a titled document.
+/// When another app is frontmost, documents are ordered out for `work`, then
+/// activation is yielded back and those windows are restored without making
+/// Captures key.
+pub fn run_without_stealing_activation<F: FnOnce()>(work: F) {
+    let previous = current_frontmost_if_not_captures();
+    let conceal = should_conceal_documents_for_capture_activation(previous.is_some())
+        && concealment_session_is_idle();
+    if conceal {
+        conceal_document_windows_for_capture();
+    }
+    work();
+    yield_activation_to(previous);
+    if conceal {
+        reveal_concealed_document_windows();
+    }
+}
+
+/// Resigns key on a nonactivating panel without making an open editor key.
+///
+/// AppKit donates key status to the next window in the app when a key panel
+/// resigns. If another app is frontmost, that would activate Captures and
+/// order the screenshot or recording editor above the user's work.
+pub fn resign_panel_key_without_raising_documents(
+    window: &WebviewWindow,
+) -> Result<(), &'static str> {
+    resign_ns_window_key_without_raising_documents(native_window(window)?);
+    Ok(())
+}
+
+fn resign_ns_window_key_without_raising_documents(window: &NSWindow) {
+    if !window.isKeyWindow() {
+        return;
+    }
+    let previous = current_frontmost_if_not_captures();
+    window.resignKeyWindow();
+    if previous.is_none() {
+        return;
+    }
+    if let Some(main_thread) = MainThreadMarker::new() {
+        let app = NSApplication::sharedApplication(main_thread);
+        if let Some(key) = app.keyWindow()
+            && is_titled_document_window(&key)
+        {
+            key.resignKeyWindow();
+        }
+    }
+    yield_activation_to(previous);
 }
 
 /// Orders out titled document windows so capture activation cannot flash them.
