@@ -24,6 +24,7 @@ const available: UpdateStatus = {
   changelog: [],
   installable: true,
   manual_download_url: null,
+  will_close_open_captures: false,
 };
 
 const stacked: UpdateStatus = {
@@ -161,5 +162,50 @@ describe("UpdateNotice", () => {
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("check_for_updates"));
+  });
+
+  it("warns that open captures will close and still installs", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_update_status") {
+        return { ...available, will_close_open_captures: true } satisfies UpdateStatus;
+      }
+      if (command === "install_update") return undefined;
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<UpdateNotice />);
+
+    expect(await screen.findByText("Open captures will close. Unsaved edits are kept as drafts."))
+      .toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "An update is available" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Update now" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Update now" }));
+
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("install_update"));
+    expect(screen.queryByText("Update failed")).not.toBeInTheDocument();
+  });
+
+  it("retries installation when an available update was blocked", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_update_status") return available;
+      if (command === "install_update") {
+        throw "Finish or cancel the active recording before installing the update.";
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<UpdateNotice />);
+    fireEvent.click(await screen.findByRole("button", { name: "Update now" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Finish or cancel the active recording before installing the update.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "install_update"))
+        .toHaveLength(2);
+    });
+    expect(invoke).not.toHaveBeenCalledWith("check_for_updates");
   });
 });

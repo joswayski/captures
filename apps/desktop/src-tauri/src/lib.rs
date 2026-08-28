@@ -38,6 +38,7 @@ use tauri_plugin_opener::OpenerExt;
 use thiserror::Error;
 use uuid::Uuid;
 
+mod crash_report;
 mod feedback;
 mod models;
 mod recording;
@@ -169,6 +170,12 @@ pub fn run() {
                 // Belt-and-suspenders if CloseRequested was prevented or skipped.
                 tauri::WindowEvent::Destroyed => {
                     clear_editor_layer_presence_for_window(window);
+                    if is_editor_window_label(window.label())
+                        || window.label() == "viewer"
+                        || window.label().starts_with(VIEWER_WINDOW_PREFIX)
+                    {
+                        updates::restore_update_notice(window.app_handle());
+                    }
                 }
                 _ => {}
             }
@@ -344,6 +351,7 @@ pub fn run() {
             };
             refresh_autostart_registration(app);
             let restarted_after_update = updates::take_update_restart_pending();
+            crash_report::initialize(&handle, restarted_after_update);
             if pending_capture.is_none() {
                 let onboarding_completed =
                     app.state::<Arc<AppState>>().settings().onboarding_completed;
@@ -372,6 +380,7 @@ pub fn run() {
             tauri::RunEvent::ExitRequested {
                 code: None, api, ..
             } => api.prevent_exit(),
+            tauri::RunEvent::Exit => crash_report::mark_clean_exit(),
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => focus_or_show_primary_app_window(_app),
             _ => {}
@@ -494,6 +503,7 @@ async fn start_capture_inner(
         hide_capture_overlay(&app);
         restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
         reveal_document_windows_after_capture(&app);
+        updates::restore_update_notice(&app);
     }
     result
 }
@@ -854,7 +864,26 @@ fn cancel_capture(
         restore_thumbnail_capture(&app, state.inner(), session.thumbnail_capture_generation);
     }
     reveal_document_windows_after_capture(&app);
+    updates::restore_update_notice(&app);
     Ok(())
+}
+
+/// Cancel screenshot capture UI so an update can restart. Failures are logged
+/// and ignored — an open overlay must not block installation.
+pub(crate) fn dismiss_capture_ui_for_update(app: &AppHandle, state: &Arc<AppState>) {
+    cancel_screenshot_countdown_inner(app, state.clone());
+    hide_capture_overlay(app);
+    let generations: Vec<u64> = state
+        .sessions
+        .lock()
+        .drain()
+        .map(|(_, session)| session.thumbnail_capture_generation)
+        .collect();
+    for generation in generations {
+        restore_thumbnail_capture(app, state, generation);
+    }
+    recording::dismiss_recording_selection_for_update(app, state);
+    reveal_document_windows_after_capture(app);
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -978,6 +1007,7 @@ pub(crate) fn cancel_screenshot_countdown_inner(app: &AppHandle, state: Arc<AppS
         restore_thumbnail_capture(app, &state, thumbnail_capture_generation);
     }
     reveal_document_windows_after_capture(app);
+    updates::restore_update_notice(app);
 }
 
 fn show_screenshot_countdown(
@@ -1275,6 +1305,7 @@ fn update_onboarding_recording_audio(
 
 #[tauri::command]
 fn restart_captures_for_permissions(app: AppHandle) {
+    crash_report::mark_clean_exit();
     app.request_restart();
 }
 
@@ -2265,6 +2296,7 @@ fn remove_artifact(app: &AppHandle, state: &Arc<AppState>, artifact_id: &str) ->
     }
     app.emit("artifact-removed", artifact_id)
         .map_err(|error| error.to_string())?;
+    updates::restore_update_notice(app);
     Ok(())
 }
 
@@ -2502,6 +2534,23 @@ async fn copy_to_clipboard(app: &AppHandle, image: RgbaImage) -> Result<Clipboar
 }
 
 fn write_image_to_clipboard(app: &AppHandle, image: RgbaImage) -> Result<ClipboardWrite, AppError> {
+    #[cfg(target_os = "macos")]
+    {
+        if !captures_macos_window::is_main_thread() {
+            let app = app.clone();
+            return run_on_appkit_main(move || write_image_to_clipboard_inner(&app, image))
+                .ok_or_else(|| {
+                    AppError::Clipboard("clipboard write did not run on the main thread".to_owned())
+                })?;
+        }
+    }
+    write_image_to_clipboard_inner(app, image)
+}
+
+fn write_image_to_clipboard_inner(
+    app: &AppHandle,
+    image: RgbaImage,
+) -> Result<ClipboardWrite, AppError> {
     let width = image.width();
     let height = image.height();
     let rgba = image.into_raw();
@@ -2811,6 +2860,7 @@ fn restart_and_retry_capture(app: &AppHandle, mode: CaptureMode) -> Result<(), A
         settings.pending_capture_after_restart = Some(mode);
         storage::save_settings(&settings)?;
     }
+    crash_report::mark_clean_exit();
     app.request_restart();
     Ok(())
 }
@@ -3211,7 +3261,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let mut tray = TrayIconBuilder::with_id(TRAY_ICON_ID)
         .menu(&menu)
-        .tooltip("Captures is here whenever you need it");
+        .tooltip("Captures");
 
     #[cfg(target_os = "macos")]
     if let Some(icon) = macos_tray_icon() {
@@ -3247,6 +3297,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             updates::handle_tray_action(app);
         }
         "quit" => {
+            crash_report::mark_clean_exit();
             app.exit(0);
         }
         _ => {}
@@ -3397,6 +3448,10 @@ const MACOS_MICROPHONE_SETTINGS_URLS: &[&str] = &[
 /// a new window does not flash the opposite theme before the webview loads.
 const DOCUMENT_WINDOW_BACKGROUND_DARK: Color = Color(16, 16, 20, 255);
 const DOCUMENT_WINDOW_BACKGROUND_LIGHT: Color = Color(245, 245, 247, 255);
+/// `--surface-raised` for the update and startup notices so those windows stay
+/// opaque instead of showing a transparent halo around the card.
+const NOTICE_WINDOW_BACKGROUND_DARK: Color = Color(22, 22, 27, 255);
+const NOTICE_WINDOW_BACKGROUND_LIGHT: Color = Color(255, 255, 255, 255);
 
 pub(crate) fn resolve_appearance_is_dark(app: &AppHandle) -> bool {
     match app.state::<Arc<AppState>>().settings().appearance {
@@ -3419,6 +3474,15 @@ pub(crate) fn document_window_chrome(app: &AppHandle) -> (Option<Theme>, Color) 
         (Some(Theme::Dark), DOCUMENT_WINDOW_BACKGROUND_DARK)
     } else {
         (Some(Theme::Light), DOCUMENT_WINDOW_BACKGROUND_LIGHT)
+    }
+}
+
+/// Opaque fill for the update and startup notices.
+pub(crate) fn notice_window_chrome(app: &AppHandle) -> (Option<Theme>, Color) {
+    if resolve_appearance_is_dark(app) {
+        (Some(Theme::Dark), NOTICE_WINDOW_BACKGROUND_DARK)
+    } else {
+        (Some(Theme::Light), NOTICE_WINDOW_BACKGROUND_LIGHT)
     }
 }
 
@@ -3535,6 +3599,7 @@ fn create_startup_notice(
     placement: StartupNoticePlacement,
     visible_for: std::time::Duration,
 ) -> Result<(), tauri::Error> {
+    let (theme, background) = notice_window_chrome(app);
     let window = WebviewWindowBuilder::new(
         app,
         "startup",
@@ -3548,9 +3613,9 @@ fn create_startup_notice(
     .visible_on_all_workspaces(true)
     .skip_taskbar(true)
     .resizable(false)
-    .shadow(false)
-    .transparent(true)
-    .background_color(Color(0, 0, 0, 0))
+    .shadow(true)
+    .theme(theme)
+    .background_color(background)
     .focused(false)
     .visible(false)
     .build()?;
@@ -4174,6 +4239,19 @@ fn thumbnail_webview_needs_tauri_show(is_visible: bool) -> bool {
 }
 
 fn hide_thumbnail_window(window: &tauri::WebviewWindow) {
+    #[cfg(target_os = "macos")]
+    {
+        let window = window.clone();
+        if run_on_appkit_main(move || hide_thumbnail_window_inner(&window)).is_none() {
+            eprintln!("failed to hide the capture thumbnail on the main thread");
+        }
+        return;
+    }
+    #[cfg(not(target_os = "macos"))]
+    hide_thumbnail_window_inner(window);
+}
+
+fn hide_thumbnail_window_inner(window: &tauri::WebviewWindow) {
     // Hiding a key nonactivating panel donates key status to the next Captures
     // window — usually an open editor — and can activate the app over Chrome.
     #[cfg(target_os = "macos")]
@@ -4186,6 +4264,19 @@ fn hide_thumbnail_window(window: &tauri::WebviewWindow) {
 }
 
 fn show_thumbnail_window(window: &tauri::WebviewWindow) {
+    #[cfg(target_os = "macos")]
+    {
+        let window = window.clone();
+        if run_on_appkit_main(move || show_thumbnail_window_inner(&window)).is_none() {
+            eprintln!("failed to show the capture thumbnail on the main thread");
+        }
+        return;
+    }
+    #[cfg(not(target_os = "macos"))]
+    show_thumbnail_window_inner(window);
+}
+
+fn show_thumbnail_window_inner(window: &tauri::WebviewWindow) {
     // Sleep/resume and compositor handoffs can leave the window click-through.
     // Showing always re-arms hit testing; the JS hover poll then re-applies
     // ignore-cursor for empty stack chrome within a frame.
@@ -4800,9 +4891,23 @@ fn show_preferences(app: &AppHandle) {
 }
 
 fn hide_window(app: &AppHandle, label: &str) {
+    #[cfg(target_os = "macos")]
+    {
+        let app = app.clone();
+        let hop_label = label.to_owned();
+        if run_on_appkit_main(move || hide_window_inner(&app, &hop_label)).is_none() {
+            eprintln!("failed to hide {label} on the main thread");
+        }
+        return;
+    }
+    #[cfg(not(target_os = "macos"))]
+    hide_window_inner(app, label);
+}
+
+fn hide_window_inner(app: &AppHandle, label: &str) {
     if let Some(window) = app.get_webview_window(label) {
         if label == "thumbnail" {
-            hide_thumbnail_window(&window);
+            hide_thumbnail_window_inner(&window);
             return;
         }
         let _ = window.hide();
@@ -4824,17 +4929,8 @@ pub(crate) async fn hide_capture_huds_before_snapshot(app: &AppHandle) {
             RECORDING_SAVED_NOTICE_LABEL,
         ]
     };
-    let had_visible_hud = hud_labels.iter().any(|label| {
-        app.get_webview_window(label)
-            .is_some_and(|window| window.is_visible().unwrap_or(false))
-    });
-    if !include_mini_previews {
-        hide_window(app, "thumbnail");
-    }
-    hide_window(app, "startup");
-    hide_recording_saved_notices(app);
+    let had_visible_hud = hide_capture_huds(app, include_mini_previews, hud_labels);
     updates::defer_visible_notice(app);
-    hide_window(app, "update");
 
     // Native hide/content-protection calls return before every compositor has
     // necessarily presented the new window state. Give a previously visible
@@ -4842,6 +4938,39 @@ pub(crate) async fn hide_capture_huds_before_snapshot(app: &AppHandle) {
     if had_visible_hud {
         tokio::time::sleep(std::time::Duration::from_millis(CAPTURE_HUD_HIDE_SETTLE_MS)).await;
     }
+}
+
+fn hide_capture_huds(app: &AppHandle, include_mini_previews: bool, hud_labels: &[&str]) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        let app = app.clone();
+        let labels: Vec<String> = hud_labels.iter().map(|label| (*label).to_owned()).collect();
+        return run_on_appkit_main(move || {
+            let label_refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+            hide_capture_huds_inner(&app, include_mini_previews, &label_refs)
+        })
+        .unwrap_or(false);
+    }
+    #[cfg(not(target_os = "macos"))]
+    hide_capture_huds_inner(app, include_mini_previews, hud_labels)
+}
+
+fn hide_capture_huds_inner(
+    app: &AppHandle,
+    include_mini_previews: bool,
+    hud_labels: &[&str],
+) -> bool {
+    let had_visible_hud = hud_labels.iter().any(|label| {
+        app.get_webview_window(label)
+            .is_some_and(|window| window.is_visible().unwrap_or(false))
+    });
+    if !include_mini_previews {
+        hide_window_inner(app, "thumbnail");
+    }
+    hide_window_inner(app, "startup");
+    hide_recording_saved_notices_inner(app);
+    hide_window_inner(app, "update");
+    had_visible_hud
 }
 
 fn include_mini_previews_in_captures(app: &AppHandle) -> bool {
@@ -4855,6 +4984,19 @@ fn include_recording_controls_in_captures(app: &AppHandle) -> bool {
 }
 
 fn hide_recording_saved_notices(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    {
+        let app = app.clone();
+        if run_on_appkit_main(move || hide_recording_saved_notices_inner(&app)).is_none() {
+            eprintln!("failed to hide recording saved notices on the main thread");
+        }
+        return;
+    }
+    #[cfg(not(target_os = "macos"))]
+    hide_recording_saved_notices_inner(app);
+}
+
+fn hide_recording_saved_notices_inner(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(RECORDING_SAVED_NOTICE_LABEL) {
         let _ = window.hide();
     }
@@ -4869,6 +5011,19 @@ fn hide_recording_controls_hidden_notices(app: &AppHandle) {
 }
 
 fn set_capture_huds_protected(app: &AppHandle, protected: bool) {
+    #[cfg(target_os = "macos")]
+    {
+        let app = app.clone();
+        if run_on_appkit_main(move || set_capture_huds_protected_inner(&app, protected)).is_none() {
+            eprintln!("failed to update capture HUD protection on the main thread");
+        }
+        return;
+    }
+    #[cfg(not(target_os = "macos"))]
+    set_capture_huds_protected_inner(app, protected);
+}
+
+fn set_capture_huds_protected_inner(app: &AppHandle, protected: bool) {
     // The window server may still composite a just-hidden HUD into an
     // immediate display capture. Exclude Captures HUDs until the frozen background
     // frame has been read so they cannot reappear as pixels during fade-in.
@@ -4895,7 +5050,29 @@ fn set_capture_huds_protected(app: &AppHandle, protected: bool) {
     }
 }
 
+/// Runs `work` on AppKit's main thread and waits for it.
+///
+/// Tauri `run_on_main_thread` posts and does not wait. Async capture commands
+/// need hide/show and pasteboard writes to finish before the next snapshot.
+#[cfg(target_os = "macos")]
+fn run_on_appkit_main<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+    captures_macos_window::run_on_main(work)
+}
+
 fn hide_capture_overlay(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    {
+        let app = app.clone();
+        if run_on_appkit_main(move || hide_capture_overlay_inner(&app)).is_none() {
+            eprintln!("failed to hide the capture overlay on the main thread");
+        }
+        return;
+    }
+    #[cfg(not(target_os = "macos"))]
+    hide_capture_overlay_inner(app);
+}
+
+fn hide_capture_overlay_inner(app: &AppHandle) {
     // Restore the previous frontmost app while the overlay is still covering
     // the screen. Titled document windows stay ordered out until
     // reveal_document_windows_after_capture so they cannot flash for a frame
@@ -5912,6 +6089,14 @@ mod tests {
         assert_eq!(
             super::DOCUMENT_WINDOW_BACKGROUND_LIGHT,
             super::Color(245, 245, 247, 255)
+        );
+        assert_eq!(
+            super::NOTICE_WINDOW_BACKGROUND_DARK,
+            super::Color(22, 22, 27, 255)
+        );
+        assert_eq!(
+            super::NOTICE_WINDOW_BACKGROUND_LIGHT,
+            super::Color(255, 255, 255, 255)
         );
     }
 

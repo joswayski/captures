@@ -307,7 +307,6 @@ export function StartupNotice() {
           <CaptureIcon />
         </div>
         <div>
-          <strong>Captures is here whenever you need it</strong>
           <p>
             Use the {trayLabel} icon, or press{" "}
             {keys.map((key, index) => (
@@ -489,6 +488,9 @@ function useUpdateStatus() {
   return status;
 }
 
+const OPEN_CAPTURES_UPDATE_WARNING =
+  "Open captures will close. Unsaved edits are kept as drafts.";
+
 export function UpdateNotice() {
   const status = useUpdateStatus();
   const [actionError, setActionError] = useState("");
@@ -562,6 +564,11 @@ export function UpdateNotice() {
       </header>
 
       <div className={`update-notice-body${available && !error ? "" : " update-notice-body-status"}`}>
+        {available && !error && available.will_close_open_captures && (
+          <p className="update-close-warning" role="status">
+            {OPEN_CAPTURES_UPDATE_WARNING}
+          </p>
+        )}
         {available && !error && (
           <section className={`update-notes${stacked ? " update-notes-stacked" : ""}`} aria-label="What's new">
             <h2>What’s new</h2>
@@ -656,7 +663,11 @@ export function UpdateNotice() {
             </button>
           )}
           {error && (
-            <button className="primary" type="button" onClick={() => void run("check_for_updates")}>
+            <button
+              className="primary"
+              type="button"
+              onClick={() => void run(available ? "install_update" : "check_for_updates")}
+            >
               Try again
             </button>
           )}
@@ -751,6 +762,9 @@ function UpdatePreferences() {
           </div>
         )}
       </div>
+      {available?.will_close_open_captures && !actionError && (
+        <p className="update-settings-warning">{OPEN_CAPTURES_UPDATE_WARNING}</p>
+      )}
       {actionError && <p className="update-settings-error" role="alert">{actionError}</p>}
     </section>
   );

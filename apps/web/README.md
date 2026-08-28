@@ -79,7 +79,9 @@ The homepage is delegated to TanStack.
 
 The current API exposes `GET /api/health` and `POST /api/feedback`. Feedback is
 validated, limited to one accepted submission per client IP per minute, and sent
-to Discord. Rate limits are in-memory (one replica). Client IP prefers
+to Discord. Desktop Preview builds may also POST `category: "crash"` after an
+unexpected quit (version, OS, and a redacted exception summary — never captures).
+Rate limits are in-memory (one replica). Client IP prefers
 Cloudflare’s `CF-Connecting-IP`, then `X-Real-IP`, and never a client-spoofable
 `X-Forwarded-For` value. Set `DISCORD_WEBHOOK_URL` in the production app secret.
 

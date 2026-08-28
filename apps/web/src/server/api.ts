@@ -18,7 +18,7 @@ export type { ApiEnv };
 interface FeedbackInput {
   message: string;
   contact?: string;
-  category: "bug" | "idea" | "other";
+  category: "bug" | "idea" | "other" | "crash";
   appVersion?: string;
   os?: string;
   osVersion?: string;
@@ -212,7 +212,7 @@ function parseFeedback(value: unknown): ParseResult<FeedbackInput> {
   const category = normalizeChoice(
     input.category ?? "bug",
     "category",
-    ["bug", "idea", "other"] as const,
+    ["bug", "idea", "other", "crash"] as const,
   );
   if (!category.ok) return category;
   const source = normalizeChoice(
@@ -295,13 +295,17 @@ export function buildDiscordPayload(
       ? "Idea"
       : feedback.category === "other"
         ? "Other feedback"
-        : "Bug report";
+        : feedback.category === "crash"
+          ? "Crash report"
+          : "Bug report";
   const color =
     feedback.category === "idea"
       ? 0x58a6ff
       : feedback.category === "other"
         ? 0x8b949e
-        : 0xef4650;
+        : feedback.category === "crash"
+          ? 0xd29922
+          : 0xef4650;
 
   const fields: DiscordField[] = [
     { name: "Category", value: feedback.category, inline: true },
