@@ -21,9 +21,9 @@ use objc2::{
     sel,
 };
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationOptions, NSBezierPath, NSBezierPathElement, NSCursor,
-    NSEvent, NSEventMask, NSEventType, NSPasteboard, NSRunningApplication, NSScreen, NSSound,
-    NSStatusWindowLevel, NSTrackingArea, NSTrackingAreaOptions, NSView,
+    NSApplication, NSApplicationActivationOptions, NSBezierPath, NSBezierPathElement, NSColor,
+    NSCursor, NSEvent, NSEventMask, NSEventType, NSPasteboard, NSRunningApplication, NSScreen,
+    NSSound, NSStatusWindowLevel, NSTrackingArea, NSTrackingAreaOptions, NSView,
     NSViewLayerContentsPlacement, NSWindow, NSWindowCollectionBehavior, NSWindowStyleMask,
     NSWorkspace,
 };
@@ -78,6 +78,9 @@ use thumbnail_panel::ThumbnailPanel;
 const LEGACY_WINDOW_CORNER_RADIUS_POINTS: f64 = 10.0;
 const LIQUID_GLASS_WINDOW_CORNER_RADIUS_POINTS: f64 = 25.0;
 const LIQUID_GLASS_MACOS_MAJOR_VERSION: isize = 26;
+/// Imperceptible alpha that still keeps WKWebView compositing. Fully transparent
+/// windows (`0.0`) can suspend painting and flash black on the first opaque frame.
+const WINDOW_REVEAL_PRIME_ALPHA: f64 = 0.01;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -810,14 +813,55 @@ fn clip_content_to_display_corners(native_window: &NSWindow, radius: f64) {
     };
     view.setWantsLayer(true);
     // SAFETY: `layer` is the view's CALayer after `setWantsLayer:YES`.
-    // `setCornerRadius:` / `setMasksToBounds:` are CALayer selectors.
+    // `setCornerRadius:` / `setMasksToBounds:` / `setOpaque:` /
+    // `setBackgroundColor:` are CALayer selectors.
     let layer: Option<Retained<AnyObject>> = unsafe { msg_send![&*view, layer] };
     let Some(layer) = layer else {
         return;
     };
+    clear_layer_fill(&layer);
     let radius = radius.max(0.0);
     let _: () = unsafe { msg_send![&*layer, setCornerRadius: radius] };
     let _: () = unsafe { msg_send![&*layer, setMasksToBounds: true] };
+}
+
+fn clear_transparent_window_backing(native_window: &NSWindow) {
+    native_window.setOpaque(false);
+    native_window.setBackgroundColor(Some(&NSColor::clearColor()));
+    if let Some(view) = native_window.contentView() {
+        clear_transparent_view_backing(&view);
+    }
+}
+
+fn clear_transparent_webview_backing(window: &WebviewWindow) {
+    let _ = window.as_ref().with_webview(|platform_webview| {
+        let pointer = platform_webview.inner();
+        // SAFETY: Tauri supplies the live WKWebView, which inherits from NSView,
+        // for the duration of this callback.
+        let Some(webview) = (unsafe { pointer.cast::<NSView>().as_ref() }) else {
+            return;
+        };
+        clear_transparent_view_backing(webview);
+    });
+}
+
+fn clear_transparent_view_backing(view: &NSView) {
+    view.setWantsLayer(true);
+    // SAFETY: `layer` is the view's CALayer after `setWantsLayer:YES`.
+    let layer: Option<Retained<AnyObject>> = unsafe { msg_send![view, layer] };
+    if let Some(layer) = layer {
+        clear_layer_fill(&layer);
+    }
+}
+
+fn clear_layer_fill(layer: &AnyObject) {
+    let clear = NSColor::clearColor();
+    // SAFETY: CALayer `setOpaque:` / `setBackgroundColor:` match these
+    // selectors. `CGColor` stays alive for the `setBackgroundColor:` call
+    // because `clear` is still in scope; the layer retains it afterward.
+    let _: () = unsafe { msg_send![layer, setOpaque: false] };
+    let cg_color: *const c_void = unsafe { msg_send![&*clear, CGColor] };
+    let _: () = unsafe { msg_send![layer, setBackgroundColor: cg_color] };
 }
 
 /// Visible display corner radius in logical points for the given CGDisplay id.
@@ -855,6 +899,9 @@ fn display_corner_radius_on_main(display_id: &str) -> f64 {
 pub fn configure_capture_overlay(window: &WebviewWindow) -> Result<(), &'static str> {
     let native = native_window(window)?;
     elevate_fullscreen_capture_window(native);
+    clear_transparent_window_backing(native);
+    clear_transparent_webview_backing(window);
+    native.setAlphaValue(0.0);
     set_tracked_cursor(window, CursorMode::Arrow, CursorSurface::CaptureOverlay)
 }
 
@@ -888,13 +935,30 @@ pub fn cover_display(window: &WebviewWindow, display_id: &str) -> Result<(), &'s
     Ok(())
 }
 
-/// Makes a reused capture overlay transparent before bringing it onscreen.
+/// Makes a reused capture overlay nearly transparent before bringing it onscreen.
+///
+/// Fully transparent (`0.0`) windows can suspend WKWebView, so the first
+/// opaque frame is an unpainted black CALayer. Prime at a tiny alpha instead,
+/// matching the recording selector, and clear native backing so that layer
+/// cannot flash black while the frozen snapshot decodes.
 pub fn prepare_capture_overlay(window: &WebviewWindow) -> Result<(), &'static str> {
     let native_window = native_window(window)?;
     elevate_fullscreen_capture_window(native_window);
-    prepare_window_reveal(window)?;
+    clear_transparent_window_backing(native_window);
+    clear_transparent_webview_backing(window);
+    prime_window_reveal(window)?;
     set_cursor_rects_enabled(native_window, true);
     set_tracked_cursor(window, CursorMode::WebView, CursorSurface::CaptureOverlay)?;
+    Ok(())
+}
+
+/// Orders the primed overlay onscreen without making it key.
+///
+/// Tauri's `show()` uses `makeKeyAndOrderFront:`, which focuses the overlay
+/// before the snapshot has painted and can flash a black WKWebView surface.
+pub fn present_capture_overlay(window: &WebviewWindow) -> Result<(), &'static str> {
+    prepare_capture_overlay(window)?;
+    native_window(window)?.orderFront(None);
     Ok(())
 }
 
@@ -942,7 +1006,7 @@ pub fn prepare_window_reveal(window: &WebviewWindow) -> Result<(), &'static str>
 /// enough to let it paint the next frame while remaining imperceptible until
 /// `reveal_window` makes the finished surface visible.
 pub fn prime_window_reveal(window: &WebviewWindow) -> Result<(), &'static str> {
-    native_window(window)?.setAlphaValue(0.01);
+    native_window(window)?.setAlphaValue(WINDOW_REVEAL_PRIME_ALPHA);
     Ok(())
 }
 
@@ -1152,7 +1216,7 @@ fn style_mask_is_titled_document(mask: NSWindowStyleMask) -> bool {
 pub fn reset_capture_overlay(window: &WebviewWindow) -> Result<(), &'static str> {
     let result = (|| {
         let native_window = native_window(window)?;
-        native_window.setAlphaValue(1.0);
+        native_window.setAlphaValue(0.0);
         set_cursor_rects_enabled(native_window, true);
         set_tracked_cursor(window, CursorMode::Arrow, CursorSurface::CaptureOverlay)
     })();
@@ -1480,15 +1544,21 @@ mod tests {
 
     use super::{
         CAPTURE_OVERLAY_OWNS_CURSOR, CursorMode, CursorSurface, THUMBNAIL_CURSOR_MODE,
-        capture_surface_collection_behavior, capture_surface_window_level,
-        clamp_display_corner_radius, corner_radius_from_bezel_path, cursor_mode_is_interactive,
-        cursor_surface_can_apply, cursor_surface_can_take_key_window_with_thumbnail_allowed,
-        cursor_surface_uses_key_window, display_corner_radius_points, parse_display_id,
-        reassert_thumbnail_cursor_after_click, shortcut_modifiers_pressed,
-        should_conceal_documents_for_capture_activation, should_release_thumbnail_key_after_event,
-        should_reset_cursor_on_exit, style_mask_is_titled_document,
-        window_corner_radius_for_major_version,
+        WINDOW_REVEAL_PRIME_ALPHA, capture_surface_collection_behavior,
+        capture_surface_window_level, clamp_display_corner_radius, corner_radius_from_bezel_path,
+        cursor_mode_is_interactive, cursor_surface_can_apply,
+        cursor_surface_can_take_key_window_with_thumbnail_allowed, cursor_surface_uses_key_window,
+        display_corner_radius_points, parse_display_id, reassert_thumbnail_cursor_after_click,
+        shortcut_modifiers_pressed, should_conceal_documents_for_capture_activation,
+        should_release_thumbnail_key_after_event, should_reset_cursor_on_exit,
+        style_mask_is_titled_document, window_corner_radius_for_major_version,
     };
+
+    #[test]
+    fn primed_overlay_alpha_keeps_webkit_awake_without_being_visible() {
+        assert!(WINDOW_REVEAL_PRIME_ALPHA > 0.0);
+        assert!(WINDOW_REVEAL_PRIME_ALPHA < 0.05);
+    }
 
     #[test]
     fn conceals_documents_only_when_another_app_is_frontmost() {
