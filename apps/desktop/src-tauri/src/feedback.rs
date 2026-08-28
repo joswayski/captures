@@ -4,7 +4,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, webview::PageLoadEvent};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
 use crate::CommandResult;
 
@@ -217,13 +217,9 @@ pub fn show_feedback(app: &AppHandle) {
         .background_color(background)
         .focused(false)
         .visible(false)
-        .on_page_load(|window, payload| {
-            if payload.event() == PageLoadEvent::Finished
-                && let Err(error) = window.show().and_then(|_| window.set_focus())
-            {
-                eprintln!("failed to reveal feedback window: {error}");
-            }
-        })
+        .on_page_load(crate::document_window_page_load_handler(
+            "failed to reveal feedback window",
+        ))
         .build();
         if let Err(error) = result {
             eprintln!("failed to show feedback window: {error}");

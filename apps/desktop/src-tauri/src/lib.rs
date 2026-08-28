@@ -9,14 +9,13 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
+    time::{Duration, Instant},
 };
 
 #[cfg(target_os = "macos")]
 use std::process::Command;
 #[cfg(not(target_os = "macos"))]
 use std::sync::atomic::AtomicIsize;
-#[cfg(target_os = "linux")]
-use std::time::{Duration, Instant};
 
 use tauri::CursorIcon;
 
@@ -3228,13 +3227,9 @@ fn show_onboarding(app: &AppHandle) {
         .background_color(onboarding_background)
         .focused(false)
         .visible(false)
-        .on_page_load(|window, payload| {
-            if payload.event() == PageLoadEvent::Finished
-                && let Err(error) = reveal_and_focus_document_window(&window)
-            {
-                eprintln!("failed to reveal onboarding window: {error}");
-            }
-        })
+        .on_page_load(document_window_page_load_handler(
+            "failed to reveal onboarding window",
+        ))
         .build();
         if let Err(error) = result {
             eprintln!("failed to show onboarding window: {error}");
@@ -3884,7 +3879,7 @@ fn update_thumbnail_stack(app: &AppHandle) {
             show_mini_previews,
             include_mini_previews_in_captures,
         ) {
-            let _ = window.hide();
+            hide_thumbnail_window(&window);
             return;
         }
         let (x, y, desired_height) = thumbnail_window_geometry(&handle, count);
@@ -3953,6 +3948,22 @@ fn thumbnail_visible_window_height(
     }
 }
 
+fn thumbnail_webview_needs_tauri_show(is_visible: bool) -> bool {
+    !is_visible
+}
+
+fn hide_thumbnail_window(window: &tauri::WebviewWindow) {
+    // Hiding a key nonactivating panel donates key status to the next Captures
+    // window — usually an open editor — and can activate the app over Chrome.
+    #[cfg(target_os = "macos")]
+    captures_macos_window::run_without_stealing_activation(|| {
+        let _ = captures_macos_window::resign_panel_key_without_raising_documents(window);
+        let _ = window.hide();
+    });
+    #[cfg(not(target_os = "macos"))]
+    let _ = window.hide();
+}
+
 fn show_thumbnail_window(window: &tauri::WebviewWindow) {
     // Sleep/resume and compositor handoffs can leave the window click-through.
     // Showing always re-arms hit testing; the JS hover poll then re-applies
@@ -3960,8 +3971,17 @@ fn show_thumbnail_window(window: &tauri::WebviewWindow) {
     let _ = window.set_ignore_cursor_events(false);
     // Tauri's hide pauses the WebView lifecycle on macOS. Resume it through
     // Tauri before raising the native panel so React hover and IPC polling do
-    // not remain frozen after a capture hides the stack.
-    let _ = window.show();
+    // not remain frozen after a capture hides the stack. Skip when already
+    // visible: `show()` can activate Captures and yank an open editor forward
+    // after a mini-preview delete/dismiss.
+    if thumbnail_webview_needs_tauri_show(window.is_visible().unwrap_or(false)) {
+        #[cfg(target_os = "macos")]
+        captures_macos_window::run_without_stealing_activation(|| {
+            let _ = window.show();
+        });
+        #[cfg(not(target_os = "macos"))]
+        let _ = window.show();
+    }
 
     #[cfg(target_os = "macos")]
     if let Err(error) = captures_macos_window::show_without_activating(window) {
@@ -4313,6 +4333,47 @@ fn wayland_session() -> bool {
             .is_some_and(|session| session.to_string_lossy().eq_ignore_ascii_case("wayland"))
 }
 
+/// How long after the first `PageLoadEvent::Finished` a follow-up load may
+/// still show and focus a new document window. Covers `about:blank` → app URL.
+/// Later loads (failed capture-protocol media, WebView recovery) must not
+/// yank an already-open editor over the user's other apps.
+const DOCUMENT_WINDOW_LOAD_FOCUS_GRACE: Duration = Duration::from_millis(1_500);
+
+pub(crate) fn should_focus_document_window_on_page_load(
+    first_finished_at: Option<Instant>,
+    now: Instant,
+) -> bool {
+    match first_finished_at {
+        None => true,
+        Some(at) => now.saturating_duration_since(at) < DOCUMENT_WINDOW_LOAD_FOCUS_GRACE,
+    }
+}
+
+pub(crate) fn document_window_page_load_handler(
+    failed_log: &'static str,
+) -> impl Fn(tauri::WebviewWindow, tauri::webview::PageLoadPayload<'_>) + Send + Sync + 'static {
+    let first_finished = std::sync::Mutex::new(None::<Instant>);
+    move |window, payload| {
+        if payload.event() != PageLoadEvent::Finished {
+            return;
+        }
+        let now = Instant::now();
+        let mut first = first_finished
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !should_focus_document_window_on_page_load(*first, now) {
+            return;
+        }
+        if first.is_none() {
+            *first = Some(now);
+        }
+        drop(first);
+        if let Err(error) = reveal_and_focus_document_window(&window) {
+            eprintln!("{failed_log}: {error}");
+        }
+    }
+}
+
 /// Show, unminimize, and focus a document window so hover and cursor styles
 /// work immediately after opening from a mini-preview Edit click.
 ///
@@ -4367,13 +4428,9 @@ fn show_capture_history(app: &AppHandle) {
         .background_color(history_background)
         .focused(false)
         .visible(false)
-        .on_page_load(|window, payload| {
-            if payload.event() == PageLoadEvent::Finished
-                && let Err(error) = window.show().and_then(|_| window.set_focus())
-            {
-                eprintln!("failed to reveal capture history window: {error}");
-            }
-        })
+        .on_page_load(document_window_page_load_handler(
+            "failed to reveal capture history window",
+        ))
         .build();
         if let Err(error) = result {
             eprintln!("failed to show capture history window: {error}");
@@ -4511,13 +4568,9 @@ fn show_preferences(app: &AppHandle) {
         .background_color(preferences_background)
         .focused(false)
         .visible(false)
-        .on_page_load(|window, payload| {
-            if payload.event() == PageLoadEvent::Finished
-                && let Err(error) = window.show().and_then(|_| window.set_focus())
-            {
-                eprintln!("failed to reveal preferences window: {error}");
-            }
-        })
+        .on_page_load(document_window_page_load_handler(
+            "failed to reveal preferences window",
+        ))
         .build();
         if let Err(error) = result {
             eprintln!("failed to show preferences window: {error}");
@@ -4527,6 +4580,10 @@ fn show_preferences(app: &AppHandle) {
 
 fn hide_window(app: &AppHandle, label: &str) {
     if let Some(window) = app.get_webview_window(label) {
+        if label == "thumbnail" {
+            hide_thumbnail_window(&window);
+            return;
+        }
         let _ = window.hide();
     }
 }
@@ -5901,6 +5958,29 @@ mod tests {
         assert!(!super::is_editor_window_label("thumbnail"));
         assert!(!super::is_editor_window_label("history"));
         assert!(!super::is_editor_window_label("screenshot-countdown"));
+    }
+
+    #[test]
+    fn late_document_page_loads_do_not_steal_focus() {
+        let start = std::time::Instant::now();
+        assert!(super::should_focus_document_window_on_page_load(
+            None, start
+        ));
+        assert!(super::should_focus_document_window_on_page_load(
+            Some(start),
+            start + std::time::Duration::from_millis(400)
+        ));
+        assert!(!super::should_focus_document_window_on_page_load(
+            Some(start),
+            start + std::time::Duration::from_secs(5)
+        ));
+        assert!(super::DOCUMENT_WINDOW_LOAD_FOCUS_GRACE < std::time::Duration::from_secs(5));
+    }
+
+    #[test]
+    fn already_visible_thumbnail_does_not_need_tauri_show() {
+        assert!(super::thumbnail_webview_needs_tauri_show(false));
+        assert!(!super::thumbnail_webview_needs_tauri_show(true));
     }
 
     #[test]
