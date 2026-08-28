@@ -110,6 +110,8 @@ export default function ProductGallery() {
       >
         <div
           className="product-gallery-frame"
+          aria-haspopup="dialog"
+          aria-expanded={lightboxOpen}
           onPointerDown={handlePointerDown}
           onPointerUp={handlePointerUp}
           onPointerCancel={handlePointerCancel}
@@ -140,19 +142,6 @@ export default function ProductGallery() {
         <p className="sr-only" aria-live="polite">
           Screenshot {index + 1} of {PRODUCT_SHOTS.length}: {shot.title}
         </p>
-
-        <div className="mt-3 flex items-center justify-between gap-3">
-          <button
-            type="button"
-            className="gallery-enlarge"
-            aria-haspopup="dialog"
-            aria-expanded={lightboxOpen}
-            onClick={openLightbox}
-          >
-            <ExpandIcon />
-            Tap to enlarge
-          </button>
-        </div>
 
         <div className="mt-4 flex items-center justify-between gap-3">
           <button type="button" className="gallery-nav" onClick={previous}>
@@ -204,20 +193,3 @@ function ChevronIcon({ direction }: { direction: "left" | "right" }) {
   );
 }
 
-function ExpandIcon() {
-  return (
-    <svg
-      viewBox="0 0 16 16"
-      width="12"
-      height="12"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M3 6.5V3h3.5M13 9.5V13H9.5M13 3 9.2 6.8M3 13l3.8-3.8" />
-    </svg>
-  );
-}
