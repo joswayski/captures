@@ -1755,16 +1755,14 @@
 
 .update-notice {
   display: grid;
-  width: calc(100% - 16px);
-  height: calc(100% - 16px);
-  margin: var(--s-4);
+  width: 100%;
+  height: 100%;
   overflow: hidden;
   grid-template-rows: auto minmax(0, 1fr) auto;
   border: 1px solid var(--border);
   border-radius: var(--r-xl);
   color: var(--text);
   background: var(--surface-raised);
-  box-shadow: var(--shadow-xl);
   animation: ui-pop-in var(--dur-4) var(--ease-out);
   -webkit-user-select: none;
   user-select: none;
@@ -2032,28 +2030,26 @@
 
 .startup-notice-body {
   display: flex;
-  width: calc(100% - 16px);
-  height: calc(100% - 16px);
-  margin: var(--s-4);
+  width: 100%;
+  height: 100%;
+  margin: 0;
   padding: var(--s-5);
   align-items: center;
   gap: var(--s-5);
-  border: 1px solid var(--glass-border);
+  border: 1px solid var(--border);
   border-radius: var(--r-xl);
-  color: var(--glass-text);
-  background: var(--glass-strong);
-  box-shadow: var(--glass-shadow);
-  backdrop-filter: var(--glass-blur);
+  color: var(--text);
+  background: var(--surface-raised);
 }
 
 .startup-notice[data-caret="top"] .startup-notice-body {
-  height: calc(100% - 24px);
-  margin: 16px 8px 8px;
+  height: calc(100% - 12px);
+  margin: 12px 0 0;
 }
 
 .startup-notice[data-caret="bottom"] .startup-notice-body {
-  height: calc(100% - 24px);
-  margin: 8px 8px 16px;
+  height: calc(100% - 12px);
+  margin: 0 0 12px;
 }
 
 .startup-notice-caret {
@@ -2063,23 +2059,23 @@
   width: 14px;
   height: 14px;
   margin-left: -7px;
-  background: var(--glass-strong);
-  border-left: 1px solid var(--glass-border);
-  border-top: 1px solid var(--glass-border);
+  background: var(--surface-raised);
+  border-left: 1px solid var(--border);
+  border-top: 1px solid var(--border);
   transform: rotate(45deg);
   pointer-events: none;
 }
 
 .startup-notice[data-caret="top"] .startup-notice-caret {
-  top: 10px;
+  top: 6px;
 }
 
 .startup-notice[data-caret="bottom"] .startup-notice-caret {
-  bottom: 10px;
+  bottom: 6px;
   border-left: 0;
   border-top: 0;
-  border-right: 1px solid var(--glass-border);
-  border-bottom: 1px solid var(--glass-border);
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
 }
 
 .startup-icon {
@@ -2111,7 +2107,7 @@
 }
 
 .startup-notice p {
-  color: var(--glass-text-muted);
+  color: var(--text-muted);
   font-size: var(--text-xs);
   line-height: var(--leading-snug);
 }

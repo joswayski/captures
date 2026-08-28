@@ -3566,7 +3566,7 @@ fn create_startup_notice(
     .visible_on_all_workspaces(true)
     .skip_taskbar(true)
     .resizable(false)
-    .shadow(false)
+    .shadow(true)
     .transparent(true)
     .background_color(Color(0, 0, 0, 0))
     .focused(false)

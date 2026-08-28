@@ -576,7 +576,7 @@ fn create_update_notice(app: &AppHandle, height: f64) -> Result<(), tauri::Error
     .visible_on_all_workspaces(true)
     .skip_taskbar(true)
     .resizable(false)
-    .shadow(false)
+    .shadow(true)
     .transparent(true)
     .background_color(Color(0, 0, 0, 0))
     .accept_first_mouse(true)
