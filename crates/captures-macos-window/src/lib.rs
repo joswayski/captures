@@ -81,6 +81,10 @@ const LIQUID_GLASS_MACOS_MAJOR_VERSION: isize = 26;
 /// Imperceptible alpha that still keeps WKWebView compositing. Fully transparent
 /// windows (`0.0`) can suspend painting and flash black on the first opaque frame.
 const WINDOW_REVEAL_PRIME_ALPHA: f64 = 0.01;
+const _: () = {
+    assert!(WINDOW_REVEAL_PRIME_ALPHA > 0.0);
+    assert!(WINDOW_REVEAL_PRIME_ALPHA < 0.05);
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -1544,21 +1548,15 @@ mod tests {
 
     use super::{
         CAPTURE_OVERLAY_OWNS_CURSOR, CursorMode, CursorSurface, THUMBNAIL_CURSOR_MODE,
-        WINDOW_REVEAL_PRIME_ALPHA, capture_surface_collection_behavior,
-        capture_surface_window_level, clamp_display_corner_radius, corner_radius_from_bezel_path,
-        cursor_mode_is_interactive, cursor_surface_can_apply,
-        cursor_surface_can_take_key_window_with_thumbnail_allowed, cursor_surface_uses_key_window,
-        display_corner_radius_points, parse_display_id, reassert_thumbnail_cursor_after_click,
-        shortcut_modifiers_pressed, should_conceal_documents_for_capture_activation,
-        should_release_thumbnail_key_after_event, should_reset_cursor_on_exit,
-        style_mask_is_titled_document, window_corner_radius_for_major_version,
+        capture_surface_collection_behavior, capture_surface_window_level,
+        clamp_display_corner_radius, corner_radius_from_bezel_path, cursor_mode_is_interactive,
+        cursor_surface_can_apply, cursor_surface_can_take_key_window_with_thumbnail_allowed,
+        cursor_surface_uses_key_window, display_corner_radius_points, parse_display_id,
+        reassert_thumbnail_cursor_after_click, shortcut_modifiers_pressed,
+        should_conceal_documents_for_capture_activation, should_release_thumbnail_key_after_event,
+        should_reset_cursor_on_exit, style_mask_is_titled_document,
+        window_corner_radius_for_major_version,
     };
-
-    #[test]
-    fn primed_overlay_alpha_keeps_webkit_awake_without_being_visible() {
-        assert!(WINDOW_REVEAL_PRIME_ALPHA > 0.0);
-        assert!(WINDOW_REVEAL_PRIME_ALPHA < 0.05);
-    }
 
     #[test]
     fn conceals_documents_only_when_another_app_is_frontmost() {
