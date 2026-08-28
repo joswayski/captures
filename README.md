@@ -20,9 +20,9 @@ Click and drag a region like other screenshot tools, or pick a window or full di
 <table>
   <tr>
     <td width="50%">
-      <img src="docs/images/screenshot-editor.jpg" alt="Captures screenshot editor annotating a landscape with text labels, arrows, and an expanded canvas" width="100%">
+      <img src="docs/images/screenshot-editor.jpg" alt="Captures screenshot editor annotating a landscape, with an arrow dragged past the canvas edge to expand it" width="100%">
       <br>
-      <sub><strong>Edit screenshots</strong> with text, arrows, canvas controls, and flexible export options.</sub>
+      <sub><strong>Edit screenshots</strong> with text, arrows, and a canvas that grows when you drag past the edge.</sub>
     </td>
     <td width="50%">
       <img src="docs/images/video-editor.jpg" alt="Captures video editor with a landscape preview, crop handles, trimming timeline, and save controls" width="100%">
