@@ -74,8 +74,14 @@ describe("NumberInput", () => {
   });
 
   it("hides steppers when read-only", () => {
-    render(<NumberInput ariaLabel="Locked height" value={240} readOnly hideSteppers />);
+    render(<NumberInput ariaLabel="Locked height" value={240} readOnly />);
     expect(screen.getByRole("spinbutton", { name: "Locked height" })).toHaveAttribute("readonly");
+    expect(screen.queryByRole("button", { name: /Increase/ })).not.toBeInTheDocument();
+  });
+
+  it("hides steppers when disabled", () => {
+    render(<NumberInput ariaLabel="Layer width" value={240} disabled onChange={() => undefined} />);
+    expect(screen.getByRole("spinbutton", { name: "Layer width" })).toBeDisabled();
     expect(screen.queryByRole("button", { name: /Increase/ })).not.toBeInTheDocument();
   });
 });

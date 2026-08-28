@@ -39,6 +39,7 @@ import {
   imageDropGuideAtPoint,
   imageDropPlacementAtPoint,
   imageOrientationMatrix,
+  imageSizeAtHeight,
   imageSizeAtWidth,
   insertArrowControl,
   isCurveableStrokeShape,
@@ -850,6 +851,7 @@ describe("screenshot editor geometry", () => {
       naturalHeight: 800,
     };
     expect(imageSizeAtWidth(image, 800)).toEqual({ width: 800, height: 400 });
+    expect(imageSizeAtHeight(image, 400)).toEqual({ width: 800, height: 400 });
   });
 
   it("rotates and flips image layers losslessly around their center", () => {
@@ -882,6 +884,7 @@ describe("screenshot editor geometry", () => {
       d: 0,
     });
     expect(imageSizeAtWidth(clockwise, 200)).toEqual({ width: 200, height: 400 });
+    expect(imageSizeAtHeight(clockwise, 400)).toEqual({ width: 200, height: 400 });
 
     const mirrored = transformImageElement(clockwise, "flip-horizontal");
     expect(imageOrientationMatrix(mirrored.orientation)).toEqual({

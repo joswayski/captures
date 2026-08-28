@@ -91,6 +91,7 @@ import {
   imageDropGuideAtPoint,
   imageOrientationMatrix,
   imageSourceDisplaySize,
+  imageSizeAtHeight,
   imageSizeAtWidth,
   isCurveableStrokeShape,
   isSupportedImageFile,
@@ -4833,13 +4834,17 @@ export function ScreenshotEditor() {
         <div className="screenshot-editor-header-main">
         <div className="screenshot-editor-title">
           <div className="screenshot-canvas-toolbar" role="group" aria-label="Canvas">
+            <span className="screenshot-canvas-toolbar-label" aria-hidden="true">
+              Canvas
+            </span>
             <label className="screenshot-canvas-dim">
               <span>W</span>
               <NumberInput
                 compact
                 min={1}
                 max={16_384}
-                ariaLabel="Width"
+                ariaLabel="Canvas width"
+                title="Canvas width"
                 value={editorDocument.width}
                 onChange={(width) => commitDocument(resizeDocumentCanvas(
                   editorDocument,
@@ -4855,7 +4860,8 @@ export function ScreenshotEditor() {
                 compact
                 min={1}
                 max={16_384}
-                ariaLabel="Height"
+                ariaLabel="Canvas height"
+                title="Canvas height"
                 value={editorDocument.height}
                 onChange={(height) => commitDocument(resizeDocumentCanvas(
                   editorDocument,
@@ -6132,6 +6138,10 @@ export function ScreenshotEditor() {
                 <NumberInput
                   min={1}
                   max={16_384}
+                  ariaLabel="Layer width"
+                  title={selected.locked
+                    ? "Unlock this layer to change size and position"
+                    : "Keeps the image aspect ratio"}
                   value={Math.round(selected.width)}
                   disabled={selected.locked}
                   onChange={(width) => updateSelected((element) => {
@@ -6143,11 +6153,29 @@ export function ScreenshotEditor() {
               </label>
               <label>
                 Height
-                <NumberInput value={Math.round(selected.height)} readOnly hideSteppers />
+                <NumberInput
+                  min={1}
+                  max={16_384}
+                  ariaLabel="Layer height"
+                  title={selected.locked
+                    ? "Unlock this layer to change size and position"
+                    : "Keeps the image aspect ratio"}
+                  value={Math.round(selected.height)}
+                  disabled={selected.locked}
+                  onChange={(height) => updateSelected((element) => {
+                    if (element.kind !== "image") return element;
+                    const size = imageSizeAtHeight(element, height);
+                    return { ...element, ...size };
+                  })}
+                />
               </label>
               <label>
                 X
                 <NumberInput
+                  ariaLabel="Layer X"
+                  title={selected.locked
+                    ? "Unlock this layer to change size and position"
+                    : undefined}
                   value={Math.round(selected.x)}
                   disabled={selected.locked}
                   onChange={(x) => updateSelected((element) => (
@@ -6158,6 +6186,10 @@ export function ScreenshotEditor() {
               <label>
                 Y
                 <NumberInput
+                  ariaLabel="Layer Y"
+                  title={selected.locked
+                    ? "Unlock this layer to change size and position"
+                    : undefined}
                   value={Math.round(selected.y)}
                   disabled={selected.locked}
                   onChange={(y) => updateSelected((element) => (
@@ -6166,6 +6198,11 @@ export function ScreenshotEditor() {
                 />
               </label>
             </div>
+            <p>
+              {selected.locked
+                ? "Unlock this layer to change size and position."
+                : "Width and height stay proportional to the image."}
+            </p>
           </section>
         )}
 

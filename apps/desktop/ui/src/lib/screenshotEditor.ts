@@ -2937,20 +2937,35 @@ export async function estimateCanvasExportBytes(
   return blob.size;
 }
 
+function imageOrientedNaturalSize(
+  element: Pick<EditorImageElement, "naturalWidth" | "naturalHeight" | "orientation">,
+): { width: number; height: number } {
+  return imageOrientationSwapsAxes(element.orientation)
+    ? { width: element.naturalHeight, height: element.naturalWidth }
+    : { width: element.naturalWidth, height: element.naturalHeight };
+}
+
 export function imageSizeAtWidth(
   element: EditorImageElement,
   width: number,
 ): { width: number; height: number } {
   const nextWidth = Math.max(1, Math.round(width));
-  const naturalWidth = imageOrientationSwapsAxes(element.orientation)
-    ? element.naturalHeight
-    : element.naturalWidth;
-  const naturalHeight = imageOrientationSwapsAxes(element.orientation)
-    ? element.naturalWidth
-    : element.naturalHeight;
+  const natural = imageOrientedNaturalSize(element);
   return {
     width: nextWidth,
-    height: Math.max(1, Math.round(nextWidth * naturalHeight / naturalWidth)),
+    height: Math.max(1, Math.round(nextWidth * natural.height / natural.width)),
+  };
+}
+
+export function imageSizeAtHeight(
+  element: EditorImageElement,
+  height: number,
+): { width: number; height: number } {
+  const nextHeight = Math.max(1, Math.round(height));
+  const natural = imageOrientedNaturalSize(element);
+  return {
+    width: Math.max(1, Math.round(nextHeight * natural.width / natural.height)),
+    height: nextHeight,
   };
 }
 
