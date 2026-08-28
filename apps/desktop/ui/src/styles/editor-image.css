@@ -326,9 +326,9 @@
   border: 0;
 }
 
-.screenshot-canvas-bg-menu .screenshot-color-field.compact > div {
+.screenshot-canvas-bg-menu .screenshot-color-field.compact .screenshot-color-swatches {
   grid-template-columns: repeat(auto-fill, minmax(36px, 1fr));
-  gap: var(--s-3) 0;
+  row-gap: var(--s-3);
   padding: var(--s-2) 0;
 }
 
@@ -2770,13 +2770,14 @@
   font-weight: var(--weight-medium);
 }
 
-.screenshot-color-field > div {
+.screenshot-color-field .screenshot-color-swatches {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(40px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(44px, 1fr));
   align-items: center;
   justify-items: center;
-  gap: var(--s-3) 0;
-  padding: var(--s-2) 0;
+  column-gap: 0;
+  row-gap: var(--s-4);
+  padding: var(--s-3) 0;
 }
 
 .screenshot-color-field button,

@@ -7033,7 +7033,7 @@ function ColorField({
   return (
     <fieldset className={["screenshot-color-field", compact ? "compact" : ""].filter(Boolean).join(" ")}>
       <legend className={compact ? "visually-hidden" : undefined}>{label}</legend>
-      <div>
+      <div className="screenshot-color-swatches">
         {COLOR_SWATCHES.map((color) => (
           <button
             key={color}
