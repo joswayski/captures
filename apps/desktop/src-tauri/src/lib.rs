@@ -38,6 +38,7 @@ use tauri_plugin_opener::OpenerExt;
 use thiserror::Error;
 use uuid::Uuid;
 
+mod crash_report;
 mod feedback;
 mod models;
 mod recording;
@@ -344,6 +345,7 @@ pub fn run() {
             };
             refresh_autostart_registration(app);
             let restarted_after_update = updates::take_update_restart_pending();
+            crash_report::initialize(&handle, restarted_after_update);
             if pending_capture.is_none() {
                 let onboarding_completed =
                     app.state::<Arc<AppState>>().settings().onboarding_completed;
@@ -372,6 +374,7 @@ pub fn run() {
             tauri::RunEvent::ExitRequested {
                 code: None, api, ..
             } => api.prevent_exit(),
+            tauri::RunEvent::Exit => crash_report::mark_clean_exit(),
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => focus_or_show_primary_app_window(app),
             _ => {}
@@ -1275,6 +1278,7 @@ fn update_onboarding_recording_audio(
 
 #[tauri::command]
 fn restart_captures_for_permissions(app: AppHandle) {
+    crash_report::mark_clean_exit();
     app.request_restart();
 }
 
@@ -2828,6 +2832,7 @@ fn restart_and_retry_capture(app: &AppHandle, mode: CaptureMode) -> Result<(), A
         settings.pending_capture_after_restart = Some(mode);
         storage::save_settings(&settings)?;
     }
+    crash_report::mark_clean_exit();
     app.request_restart();
     Ok(())
 }
@@ -3264,6 +3269,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             updates::handle_tray_action(app);
         }
         "quit" => {
+            crash_report::mark_clean_exit();
             app.exit(0);
         }
         _ => {}

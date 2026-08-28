@@ -343,6 +343,7 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
     if let Err(error) = mark_update_restart_pending() {
         eprintln!("failed to remember update restart: {error}");
     }
+    crate::crash_report::mark_clean_exit();
     app.restart();
 }
 
