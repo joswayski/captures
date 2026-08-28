@@ -1560,7 +1560,6 @@ export function ScreenshotEditor() {
   /** Overflowing layer under the pointer; idle expand affordance follows this. */
   const [overflowHoverId, setOverflowHoverId] = useState<string | null>(null);
   const [expandButtonHover, setExpandButtonHover] = useState(false);
-  const [idleOverflowRevealed, setIdleOverflowRevealed] = useState(false);
   const [trimEdgesHover, setTrimEdgesHover] = useState(false);
   const [canvasCursor, setCanvasCursor] = useState<string | undefined>(undefined);
   /**
@@ -2441,20 +2440,6 @@ export function ScreenshotEditor() {
     if (!context) return;
     paintCanvasExpandOverflow(context, shownExpandPreview, imageCacheRef.current);
   }, [shownExpandPreview, ensureImage, imageRevision]);
-
-  useLayoutEffect(() => {
-    if (expandPreviewIsLive) {
-      setIdleOverflowRevealed(true);
-      return;
-    }
-    if (!idleOverflowPreview) {
-      setIdleOverflowRevealed(false);
-      return;
-    }
-    if (idleOverflowRevealed) return;
-    const frame = window.requestAnimationFrame(() => setIdleOverflowRevealed(true));
-    return () => window.cancelAnimationFrame(frame);
-  }, [expandPreviewIsLive, idleOverflowPreview, idleOverflowRevealed]);
 
   const undo = useCallback(() => {
     const current = documentRef.current;
@@ -5352,9 +5337,8 @@ export function ScreenshotEditor() {
                 ref={expandOverflowCanvasRef}
                 className={[
                   "screenshot-canvas-expand-overflow",
-                  expandPreviewIsLive ? "is-live" : "",
-                  !expandPreviewIsLive && idleOverflowRevealed ? "is-revealed" : "",
-                ].filter(Boolean).join(" ")}
+                  expandPreviewIsLive ? "is-live" : "is-idle",
+                ].join(" ")}
                 width={Math.max(1, Math.ceil(shownExpandPreview.rect.width))}
                 height={Math.max(1, Math.ceil(shownExpandPreview.rect.height))}
                 style={{

@@ -1365,12 +1365,18 @@
 }
 
 .screenshot-canvas-expand-overflow.is-live,
-.screenshot-canvas-expand-overflow.is-revealed {
+.screenshot-canvas-expand-overflow.is-idle {
   opacity: 1;
 }
 
 .screenshot-canvas-expand-overflow.is-live {
   transition: none;
+}
+
+@starting-style {
+  .screenshot-canvas-expand-overflow.is-idle {
+    opacity: 0;
+  }
 }
 
 .screenshot-canvas-expand-hint {
