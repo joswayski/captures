@@ -2813,8 +2813,9 @@ fn register_shortcuts_with(app: &AppHandle, settings: &AppSettings) -> Result<()
         .unregister_all()
         .map_err(|error| AppError::Shortcut(error.to_string()))?;
     // Unbind overlapping OS screenshot tools before Captures claims the same
-    // chords. Plist/gsettings/registry persistence alone does not stop macOS
-    // Screenshot.app; that path also disables the live WindowServer hotkeys.
+    // chords. On macOS, persist through cfprefsd and disable the live
+    // WindowServer hotkeys; writing the plist file alone does not stop
+    // Screenshot.app.
     let overlapping_macos_screenshot_hotkeys =
         models::macos_screenshot_hotkeys_conflicting_with(settings);
     #[cfg(target_os = "macos")]
