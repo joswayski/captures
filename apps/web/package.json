@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "start": "node .output/server/index.mjs",
     "typecheck": "tsc --noEmit --pretty false && tsc --noEmit -p tsconfig.node.json --pretty false",
-    "test": "node --experimental-strip-types --test src/detectPreviewDownload.test.ts src/cookingPreview.test.ts src/server/*.test.ts"
+    "test": "node --experimental-strip-types --test src/detectPreviewDownload.test.ts src/cookingPreview.test.ts src/productShots.test.ts src/server/*.test.ts"
   },
   "dependencies": {
     "@tanstack/react-router": "^1.170.29",

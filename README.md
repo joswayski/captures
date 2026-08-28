@@ -61,7 +61,7 @@ Preview builds update after every successful merge to `main` and may contain bug
 - Record as H.264 video or GIF, with desktop audio and microphone
 - Pause, resume, restart, and mute while recording
 - Cursor and click highlights in recordings (where supported)
-- Built-in screenshot editor — text, shapes, drawing, crop (drag from outside the canvas to reach an edge; hold Shift to lock aspect), layers, erase to transparent; unsaved edits restore when you reopen
+- Built-in screenshot editor — text, shapes, drawing with optional drop shadows, crop (drag from outside the canvas to reach an edge; hold Shift to lock aspect), layers, erase to transparent; unsaved edits restore when you reopen
 - Trim, crop, resize, and adjust audio in recordings, with an estimated saved size and an in-editor before/after compression comparison
 - Export PNG, JPEG, or WebP with Tiny through High quality presets and an in-editor before/after comparison
 - Mini previews for quick copy, save, and drag into other apps
@@ -108,7 +108,9 @@ selecting a capture region, pick an aspect ratio in the capture menu or hold
 `Shift` for a square. In the screenshot editor, zoom with the header slider and
 `+`/`-` controls, pinch or `Ctrl`/`Cmd`+scroll, pan with `Ctrl`/`Cmd`-drag or
 middle-click, hold `Shift` while dragging a corner handle to scale
-proportionally, and duplicate layers with `Ctrl`/`Cmd`+`D`.
+proportionally, and duplicate layers with `Ctrl`/`Cmd`+`D`. Header W×H resizes
+the canvas. Locked layers keep size and position until unlocked; layer width
+and height stay proportional.
 
 ## Development
 

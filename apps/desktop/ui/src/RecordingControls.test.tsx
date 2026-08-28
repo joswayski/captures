@@ -22,12 +22,20 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
   message: vi.fn(),
 }));
 
-function DropdownHarness() {
+function DropdownHarness({
+  className,
+  triggerLabel,
+}: {
+  className?: string;
+  triggerLabel?: string;
+} = {}) {
   const [value, setValue] = useState("one");
   return (
     <CustomSelect
       value={value}
       ariaLabel="Quality"
+      className={className}
+      triggerLabel={triggerLabel}
       options={[
         { value: "one", label: "One" },
         { value: "two", label: "Two" },
@@ -116,6 +124,17 @@ describe("CustomSelect", () => {
     expect(screen.getByRole("listbox", { name: "Quality" })).toHaveStyle({
       maxHeight: "240px",
     });
+  });
+
+  it("can show a compact trigger label without changing option names", () => {
+    render(<DropdownHarness className="filename-format-select" triggerLabel=".png" />);
+    const trigger = screen.getByRole("combobox", { name: "Quality" });
+    expect(trigger).toHaveTextContent(".png");
+    expect(trigger.closest(".custom-select")).toHaveClass("filename-format-select");
+
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole("option", { name: "Two" }));
+    expect(trigger).toHaveTextContent(".png");
   });
 });
 

@@ -26,7 +26,44 @@ export type ElementStyle = {
   color: string;
   fill: string | null;
   strokeWidth: number;
+  /**
+   * Soft contact shadow under the stroke. Omitted in older documents; treat
+   * missing as off so saved drafts keep their original look.
+   */
+  dropShadow?: boolean;
 };
+
+/** True when a drawing style opted into a drop shadow. */
+export function annotationHasDropShadow(style: ElementStyle): boolean {
+  return style.dropShadow === true;
+}
+
+/**
+ * Canvas shadow metrics in document pixels, scaled from stroke width so a
+ * thick arrow gets a slightly larger pool than a hairline.
+ */
+export function annotationDropShadowMetrics(strokeWidth: number): {
+  blur: number;
+  offsetX: number;
+  offsetY: number;
+} {
+  const width = Math.max(1, strokeWidth);
+  return {
+    blur: Math.max(6, width * 0.85),
+    offsetX: 0,
+    offsetY: Math.max(2, Math.round(width * 0.32)),
+  };
+}
+
+/**
+ * Extra bounds padding so Trim edges / export keep the painted shadow instead
+ * of clipping it at the stroke's AABB.
+ */
+export function annotationDropShadowPad(style: ElementStyle): number {
+  if (!annotationHasDropShadow(style)) return 0;
+  const { blur, offsetX, offsetY } = annotationDropShadowMetrics(style.strokeWidth);
+  return Math.ceil(blur * 2 + Math.max(Math.abs(offsetX), Math.abs(offsetY)));
+}
 
 export type LayerBlendMode =
   | "source-over"
@@ -2058,7 +2095,8 @@ function boundsFromPoints(points: EditorPoint[], padding: number): EditorRect {
  * every side of the shaft (that left large empty selection / trim margins).
  */
 function shapeElementBounds(element: EditorShapeElement): EditorRect {
-  const strokePad = strokeExtent(element.style.strokeWidth);
+  const strokePad = strokeExtent(element.style.strokeWidth)
+    + annotationDropShadowPad(element.style);
 
   if (element.shape === "rectangle" || element.shape === "ellipse") {
     const rect = normalizeRect(
@@ -2715,7 +2753,8 @@ export function elementBounds(element: ScreenshotElement): EditorRect {
   }
   const xs = element.points.map(({ x }) => x);
   const ys = element.points.map(({ y }) => y);
-  const padding = Math.max(4, element.style.strokeWidth);
+  const padding = Math.max(4, element.style.strokeWidth)
+    + annotationDropShadowPad(element.style);
   const left = Math.min(...xs);
   const top = Math.min(...ys);
   return {
@@ -2898,20 +2937,35 @@ export async function estimateCanvasExportBytes(
   return blob.size;
 }
 
+function imageOrientedNaturalSize(
+  element: Pick<EditorImageElement, "naturalWidth" | "naturalHeight" | "orientation">,
+): { width: number; height: number } {
+  return imageOrientationSwapsAxes(element.orientation)
+    ? { width: element.naturalHeight, height: element.naturalWidth }
+    : { width: element.naturalWidth, height: element.naturalHeight };
+}
+
 export function imageSizeAtWidth(
   element: EditorImageElement,
   width: number,
 ): { width: number; height: number } {
   const nextWidth = Math.max(1, Math.round(width));
-  const naturalWidth = imageOrientationSwapsAxes(element.orientation)
-    ? element.naturalHeight
-    : element.naturalWidth;
-  const naturalHeight = imageOrientationSwapsAxes(element.orientation)
-    ? element.naturalWidth
-    : element.naturalHeight;
+  const natural = imageOrientedNaturalSize(element);
   return {
     width: nextWidth,
-    height: Math.max(1, Math.round(nextWidth * naturalHeight / naturalWidth)),
+    height: Math.max(1, Math.round(nextWidth * natural.height / natural.width)),
+  };
+}
+
+export function imageSizeAtHeight(
+  element: EditorImageElement,
+  height: number,
+): { width: number; height: number } {
+  const nextHeight = Math.max(1, Math.round(height));
+  const natural = imageOrientedNaturalSize(element);
+  return {
+    width: Math.max(1, Math.round(nextHeight * natural.width / natural.height)),
+    height: nextHeight,
   };
 }
 

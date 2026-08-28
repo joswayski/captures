@@ -4110,23 +4110,9 @@ export function RecordingEditor() {
       </section>
 
       <div className="recording-editor-grid">
-        <section className="editor-card editor-output-card">
-          <h2>Output format</h2>
-          <div className="editor-segmented" role="group" aria-label="Output format">
-            <button
-              type="button"
-              className={outputFormat === "mp4" ? "active" : ""}
-              aria-pressed={outputFormat === "mp4"}
-              onClick={() => updateOutputFormat("mp4")}
-            >Video (MP4)</button>
-            <button
-              type="button"
-              className={outputFormat === "gif" ? "active" : ""}
-              aria-pressed={outputFormat === "gif"}
-              onClick={() => updateOutputFormat("gif")}
-            >Animated GIF</button>
-          </div>
-          {outputFormat === "gif" && (
+        {outputFormat === "gif" && (
+          <section className="editor-card editor-output-card">
+            <h2>GIF settings</h2>
             <div className="editor-number-grid dimensions">
               <div className="editor-field"><span>Frame rate</span>
                 <CustomSelect
@@ -4145,8 +4131,8 @@ export function RecordingEditor() {
                 />
               </div>
             </div>
-          )}
-        </section>
+          </section>
+        )}
 
         <section className="editor-card">
           <h2>Crop & size</h2>
@@ -4416,7 +4402,18 @@ export function RecordingEditor() {
                 setError("");
               }}
             />
-            <strong>.{outputFormat}</strong>
+            <CustomSelect
+              className="filename-format-select"
+              value={outputFormat}
+              ariaLabel="Format"
+              triggerLabel={`.${outputFormat}`}
+              disabled={Boolean(exportId)}
+              options={[
+                { value: "mp4", label: "MP4" },
+                { value: "gif", label: "GIF" },
+              ]}
+              onChange={(value) => updateOutputFormat(value as "mp4" | "gif")}
+            />
           </span>
         </div>
         <label

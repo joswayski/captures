@@ -18,6 +18,8 @@ export function CustomSelect({
   options,
   onChange,
   ariaLabel,
+  className,
+  triggerLabel,
   disabled = false,
   onOpen,
 }: {
@@ -25,6 +27,8 @@ export function CustomSelect({
   options: SelectOption[];
   onChange: (value: string) => void;
   ariaLabel: string;
+  className?: string;
+  triggerLabel?: string;
   disabled?: boolean;
   onOpen?: () => void;
 }) {
@@ -98,7 +102,12 @@ export function CustomSelect({
 
   return (
     <div
-      className={`custom-select${open ? " open" : ""}${open && menuLayout.placement === "above" ? " open-above" : ""}`}
+      className={[
+        "custom-select",
+        open ? "open" : "",
+        open && menuLayout.placement === "above" ? "open-above" : "",
+        className,
+      ].filter(Boolean).join(" ")}
       ref={rootRef}
     >
       <button
@@ -137,7 +146,7 @@ export function CustomSelect({
           }
         }}
       >
-        <span>{selected?.label ?? value}</span>
+        <span>{triggerLabel ?? selected?.label ?? value}</span>
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>
       </button>
       {open && (

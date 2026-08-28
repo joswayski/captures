@@ -39,6 +39,7 @@ import {
   imageDropGuideAtPoint,
   imageDropPlacementAtPoint,
   imageOrientationMatrix,
+  imageSizeAtHeight,
   imageSizeAtWidth,
   insertArrowControl,
   isCurveableStrokeShape,
@@ -72,6 +73,8 @@ import {
   arrowChordLength,
   arrowHeadLength,
   scaleArrowStrokeForLength,
+  annotationDropShadowPad,
+  annotationHasDropShadow,
   type EditorImageElement,
   type EditorShapeElement,
   type EditorTextElement,
@@ -848,6 +851,7 @@ describe("screenshot editor geometry", () => {
       naturalHeight: 800,
     };
     expect(imageSizeAtWidth(image, 800)).toEqual({ width: 800, height: 400 });
+    expect(imageSizeAtHeight(image, 400)).toEqual({ width: 800, height: 400 });
   });
 
   it("rotates and flips image layers losslessly around their center", () => {
@@ -880,6 +884,7 @@ describe("screenshot editor geometry", () => {
       d: 0,
     });
     expect(imageSizeAtWidth(clockwise, 200)).toEqual({ width: 200, height: 400 });
+    expect(imageSizeAtHeight(clockwise, 400)).toEqual({ width: 200, height: 400 });
 
     const mirrored = transformImageElement(clockwise, "flip-horizontal");
     expect(imageOrientationMatrix(mirrored.orientation)).toEqual({
@@ -1222,6 +1227,56 @@ describe("screenshot editor geometry", () => {
     expect(lineBounds.y).toBeGreaterThan(70);
     expect(lineBounds.y + lineBounds.height).toBeLessThan(310);
     expect(lineBounds.width).toBeLessThan(15);
+  });
+
+  it("expands painted bounds when a drawing has a drop shadow", () => {
+    const arrow: EditorShapeElement = {
+      ...editableLayer,
+      id: "arrow-shadow",
+      kind: "shape",
+      shape: "arrow",
+      x: 80,
+      y: 200,
+      endX: 320,
+      endY: 200,
+      controls: [],
+      style: { color: "#f00", fill: null, strokeWidth: 8 },
+    };
+    const shadowed: EditorShapeElement = {
+      ...arrow,
+      style: { ...arrow.style, dropShadow: true },
+    };
+
+    expect(annotationHasDropShadow(arrow.style)).toBe(false);
+    expect(annotationDropShadowPad(arrow.style)).toBe(0);
+    expect(annotationHasDropShadow(shadowed.style)).toBe(true);
+    expect(annotationDropShadowPad(shadowed.style)).toBeGreaterThan(0);
+
+    const plain = elementBounds(arrow);
+    const withShadow = elementBounds(shadowed);
+    expect(withShadow.x).toBeLessThan(plain.x);
+    expect(withShadow.y).toBeLessThan(plain.y);
+    expect(withShadow.width).toBeGreaterThan(plain.width);
+    expect(withShadow.height).toBeGreaterThan(plain.height);
+
+    const path = {
+      ...editableLayer,
+      id: "path-shadow",
+      kind: "path" as const,
+      x: 40,
+      y: 40,
+      points: [
+        { x: 40, y: 40 },
+        { x: 120, y: 80 },
+      ],
+      style: { color: "#0af", fill: null, strokeWidth: 6 },
+    };
+    const pathShadow = {
+      ...path,
+      style: { ...path.style, dropShadow: true },
+    };
+    expect(elementBounds(pathShadow).width).toBeGreaterThan(elementBounds(path).width);
+    expect(elementBounds(pathShadow).height).toBeGreaterThan(elementBounds(path).height);
   });
 
   it("hit-tests corner and edge resize handles and resizes from the opposite side", () => {

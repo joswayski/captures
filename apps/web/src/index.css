@@ -189,4 +189,102 @@
       transition: none;
     }
   }
+
+  .product-gallery:focus-visible {
+    @apply rounded-md outline-2 outline-offset-4 outline-accent;
+  }
+
+  .product-gallery-frame {
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    aspect-ratio: 16 / 10;
+    padding: 0.75rem;
+    border: 1px solid var(--theme-web-border);
+    border-radius: 0.75rem;
+    background: color-mix(in srgb, var(--theme-web-ink) 4%, var(--theme-web-canvas));
+    box-shadow: 0 10px 28px rgba(24, 24, 27, 0.06);
+    touch-action: pan-y;
+  }
+
+  .product-gallery-image {
+    display: block;
+    max-width: 100%;
+    max-height: 100%;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    border-radius: 0.5rem;
+    user-select: none;
+    animation: gallery-fade 180ms ease-out;
+  }
+
+  .gallery-nav {
+    @apply inline-flex min-h-9 items-center gap-1 rounded-full border border-border bg-surface px-3 py-1.5 text-[0.6875rem] font-medium text-ink-muted transition-colors duration-200 ease-out;
+  }
+
+  .gallery-nav:hover {
+    @apply border-accent/30 bg-accent-soft text-accent-readable;
+  }
+
+  .gallery-nav:focus-visible {
+    @apply outline-2 outline-offset-2 outline-accent;
+  }
+
+  .gallery-dot {
+    display: grid;
+    width: 1.75rem;
+    height: 1.75rem;
+    padding: 0;
+    border: 0;
+    border-radius: 999px;
+    place-items: center;
+    background: transparent;
+    cursor: pointer;
+    appearance: none;
+  }
+
+  .gallery-dot::before {
+    content: "";
+    width: 0.45rem;
+    height: 0.45rem;
+    border-radius: 999px;
+    background: var(--theme-web-border-strong);
+    transition:
+      background-color 160ms ease-out,
+      transform 160ms ease-out;
+  }
+
+  .gallery-dot[aria-current="true"]::before {
+    background: var(--theme-web-ink);
+    transform: scale(1.25);
+  }
+
+  .gallery-dot:hover::before {
+    background: var(--theme-web-ink-muted);
+  }
+
+  .gallery-dot:focus-visible {
+    outline: 2px solid var(--theme-accent);
+    outline-offset: 2px;
+  }
+
+  @keyframes gallery-fade {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .product-gallery-image {
+      animation: none;
+    }
+
+    .gallery-dot::before {
+      transition: none;
+    }
+  }
 }
