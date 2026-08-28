@@ -76,7 +76,29 @@ pub async fn submit_feedback(
     app: AppHandle,
     draft: FeedbackDraft,
 ) -> CommandResult<FeedbackSubmitResult> {
-    if let Some(message) = local_rate_limit_message() {
+    submit_feedback_payload(&app, draft, true).await
+}
+
+pub(crate) fn post_crash_report(app: &AppHandle, message: String) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let draft = FeedbackDraft {
+            message,
+            contact: None,
+            category: "crash".to_owned(),
+        };
+        if let Err(error) = submit_feedback_payload(&app, draft, false).await {
+            eprintln!("failed to send crash report: {error}");
+        }
+    });
+}
+
+async fn submit_feedback_payload(
+    app: &AppHandle,
+    draft: FeedbackDraft,
+    enforce_local_rate_limit: bool,
+) -> CommandResult<FeedbackSubmitResult> {
+    if enforce_local_rate_limit && let Some(message) = local_rate_limit_message() {
         return Err(message);
     }
 
@@ -105,12 +127,9 @@ pub async fn submit_feedback(
         ));
     }
 
-    let category = match draft.category.trim().to_ascii_lowercase().as_str() {
-        "bug" | "idea" | "other" => draft.category.trim().to_ascii_lowercase(),
-        _ => "bug".to_owned(),
-    };
+    let category = normalize_category(&draft.category);
 
-    let context = collect_feedback_context(&app);
+    let context = collect_feedback_context(app);
     let payload = FeedbackPayload {
         message: message.to_owned(),
         contact,
@@ -154,7 +173,9 @@ pub async fn submit_feedback(
         {
             return Err("Feedback was not accepted. Please try again.".to_owned());
         }
-        mark_local_rate_limit();
+        if enforce_local_rate_limit {
+            mark_local_rate_limit();
+        }
         return Ok(FeedbackSubmitResult { ok: true });
     }
 
@@ -284,6 +305,13 @@ fn detect_os_version() -> String {
     }
 }
 
+fn normalize_category(value: &str) -> String {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "bug" | "idea" | "other" | "crash" => value.trim().to_ascii_lowercase(),
+        _ => "bug".to_owned(),
+    }
+}
+
 fn parse_api_error(body: &str) -> Option<String> {
     #[derive(Deserialize)]
     struct ApiErr {
@@ -304,6 +332,13 @@ mod tests {
         // Ensure packaged builds have a stable default when the env var is unset.
         // Runtime env is not forced here; this locks the constant itself.
         assert_eq!(DEFAULT_FEEDBACK_URL, "https://captur.es/api/feedback");
+    }
+
+    #[test]
+    fn accepts_crash_reports_as_a_feedback_category() {
+        assert_eq!(normalize_category("CRASH"), "crash");
+        assert_eq!(normalize_category("idea"), "idea");
+        assert_eq!(normalize_category("nope"), "bug");
     }
 
     #[test]
