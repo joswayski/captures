@@ -170,7 +170,8 @@ pub fn install_is_active(app: &AppHandle) -> bool {
 
 pub fn defer_visible_notice(app: &AppHandle) {
     let app = app.clone();
-    if let Err(error) = app.run_on_main_thread(move || defer_visible_notice_on_main(&app)) {
+    let dispatch = app.clone();
+    if let Err(error) = dispatch.run_on_main_thread(move || defer_visible_notice_on_main(&app)) {
         eprintln!("failed to defer the update notice: {error}");
     }
 }
@@ -478,7 +479,8 @@ fn set_status(app: &AppHandle, status: UpdateStatus) {
 
 fn refresh_menu(app: &AppHandle) {
     let app = app.clone();
-    if let Err(error) = app.run_on_main_thread(move || refresh_menu_on_main(&app)) {
+    let dispatch = app.clone();
+    if let Err(error) = dispatch.run_on_main_thread(move || refresh_menu_on_main(&app)) {
         eprintln!("failed to refresh the update menu item: {error}");
     }
 }
@@ -621,9 +623,10 @@ fn update_notice_height(status: &UpdateStatus) -> f64 {
 
 fn show_dialog(app: &AppHandle, title: &str, message: &str, kind: MessageDialogKind) {
     let app = app.clone();
+    let dispatch = app.clone();
     let title = title.to_owned();
     let message = message.to_owned();
-    if let Err(error) = app.run_on_main_thread(move || {
+    if let Err(error) = dispatch.run_on_main_thread(move || {
         app.dialog()
             .message(message)
             .title(title)

@@ -370,13 +370,13 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building Captures")
-        .run(|app, event| match event {
+        .run(|_app, event| match event {
             tauri::RunEvent::ExitRequested {
                 code: None, api, ..
             } => api.prevent_exit(),
             tauri::RunEvent::Exit => crash_report::mark_clean_exit(),
             #[cfg(target_os = "macos")]
-            tauri::RunEvent::Reopen { .. } => focus_or_show_primary_app_window(app),
+            tauri::RunEvent::Reopen { .. } => focus_or_show_primary_app_window(_app),
             _ => {}
         });
 }

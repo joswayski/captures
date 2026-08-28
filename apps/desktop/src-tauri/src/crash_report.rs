@@ -8,6 +8,7 @@ use tauri::AppHandle;
 use crate::models::settings_path;
 
 const RUNNING_MARKER: &str = "running";
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 const MAX_CRASH_SNIPPET_CHARS: usize = 3_500;
 
 /// Records this launch and, in Preview/release builds, reports a previous
@@ -111,6 +112,7 @@ fn newest_captures_report(directory: &Path) -> Option<PathBuf> {
     newest.map(|(_, path)| path)
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn summarize_crash_report(contents: &str) -> Option<String> {
     let trimmed = contents.trim_start();
     let json_start = trimmed.find('{').unwrap_or(0);
@@ -120,6 +122,7 @@ fn summarize_crash_report(contents: &str) -> Option<String> {
     summarize_text_crash_report(contents)
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn summarize_ips_report(value: &serde_json::Value) -> Option<String> {
     let exception = value
         .get("exception")
@@ -148,6 +151,7 @@ fn summarize_ips_report(value: &serde_json::Value) -> Option<String> {
     Some(redact_user_paths(&lines.join("\n")))
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn triggered_thread_name(value: &serde_json::Value) -> Option<&str> {
     let threads = value.get("threads")?.as_array()?;
     threads
@@ -165,6 +169,7 @@ fn triggered_thread_name(value: &serde_json::Value) -> Option<&str> {
         })
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn application_specific_information(value: &serde_json::Value) -> Option<String> {
     let asi = value.get("asi")?;
     if let Some(text) = asi.as_str() {
@@ -189,6 +194,7 @@ fn application_specific_information(value: &serde_json::Value) -> Option<String>
     (!joined.trim().is_empty()).then_some(joined)
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn summarize_text_crash_report(contents: &str) -> Option<String> {
     let mut lines = Vec::new();
     for prefix in [
@@ -225,10 +231,12 @@ fn summarize_text_crash_report(contents: &str) -> Option<String> {
     Some(truncate_chars(&redacted, MAX_CRASH_SNIPPET_CHARS))
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn redact_user_paths(value: &str) -> String {
-    redact_home_prefix(redact_home_prefix(value, "/Users/"), "/home/")
+    redact_home_prefix(&redact_home_prefix(value, "/Users/"), "/home/")
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn redact_home_prefix(value: &str, prefix: &str) -> String {
     let mut output = String::with_capacity(value.len());
     let mut rest = value;
@@ -245,6 +253,7 @@ fn redact_home_prefix(value: &str, prefix: &str) -> String {
     output
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn truncate_chars(value: &str, max_chars: usize) -> String {
     let mut chars = value.chars();
     let kept: String = chars.by_ref().take(max_chars).collect();
