@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { validateAndWriteChecksums } from "./release-assets.mjs";
+import { validateAndWriteChecksums, rewriteGithubApiAssetUrls } from "./release-assets.mjs";
 
 function fixture(platforms = ["darwin-aarch64", "windows-x86_64", "linux-x86_64"]) {
   const directory = mkdtempSync(join(tmpdir(), "captures-release-assets-"));
@@ -57,10 +57,69 @@ test("rejects a release without matching FFmpeg compliance assets", () => {
   );
 });
 
-test("rejects an incomplete platform manifest", () => {
-  const directory = fixture(["darwin-aarch64", "windows-x86_64"]);
+test("rewrites GitHub API updater URLs to public Releases downloads", () => {
+  const latest = {
+    platforms: {
+      "darwin-aarch64": {
+        url: "https://api.github.com/repos/joswayski/captures/releases/assets/11",
+        signature: "mac",
+      },
+      "windows-x86_64": {
+        url: "https://api.github.com/repos/joswayski/captures/releases/assets/22",
+        signature: "win",
+      },
+      "linux-x86_64": {
+        url: "https://github.com/joswayski/captures/releases/download/v2026.08.29.4/Captures.AppImage",
+        signature: "linux",
+      },
+    },
+  };
+  const rewritten = rewriteGithubApiAssetUrls(latest, [
+    {
+      id: 11,
+      browser_download_url:
+        "https://github.com/joswayski/captures/releases/download/v2026.08.29.4/Captures.app.tar.gz",
+    },
+    {
+      id: 22,
+      browser_download_url:
+        "https://github.com/joswayski/captures/releases/download/v2026.08.29.4/Captures-setup.exe",
+    },
+  ]);
+  assert.equal(rewritten, 2);
+  assert.equal(
+    latest.platforms["darwin-aarch64"].url,
+    "https://github.com/joswayski/captures/releases/download/v2026.08.29.4/Captures.app.tar.gz",
+  );
+  assert.equal(
+    latest.platforms["windows-x86_64"].url,
+    "https://github.com/joswayski/captures/releases/download/v2026.08.29.4/Captures-setup.exe",
+  );
+  assert.equal(
+    latest.platforms["linux-x86_64"].url,
+    "https://github.com/joswayski/captures/releases/download/v2026.08.29.4/Captures.AppImage",
+  );
+});
+
+test("rejects updater manifests that still use GitHub API asset URLs", () => {
+  const directory = fixture();
+  writeFileSync(
+    join(directory, "latest.json"),
+    JSON.stringify({
+      version: "2026.7.1901",
+      notes: "Adds automated releases.",
+      platforms: {
+        "darwin-aarch64": {
+          url: "https://api.github.com/repos/joswayski/captures/releases/assets/11",
+          signature: "signed",
+        },
+        "windows-x86_64": { url: "https://example.com/windows", signature: "signed" },
+        "linux-x86_64": { url: "https://example.com/linux", signature: "signed" },
+      },
+    }),
+  );
   assert.throws(
     () => validateAndWriteChecksums(directory, "2026.7.1901"),
-    /linux-x86_64/u,
+    /GitHub API/u,
   );
 });

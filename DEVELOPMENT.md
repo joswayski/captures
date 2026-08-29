@@ -34,7 +34,8 @@ open "http://127.0.0.1:1420/?view=preferences&mock=1"
 open "http://127.0.0.1:1420/?view=recording-hud&mock=1&stage=1"
 open "http://127.0.0.1:1420/?view=mini-previews-hidden&mock=1&count=3"
 open "http://127.0.0.1:1420/?view=mini-previews-hidden&mock=1&count=1"
-open "http://127.0.0.1:1420/?view=thumbnail&mock=1"
+open "http://127.0.0.1:1420/?view=update&mock=1"
+open "http://127.0.0.1:1420/?view=update&mock=1&update=error"
 ```
 
 - `mock` installs the sample backend (`apps/desktop/ui/src/dev/previewBackend.ts`).

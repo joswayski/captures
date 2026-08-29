@@ -4,6 +4,38 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const PLATFORM_KEYS = ["darwin-aarch64", "windows-x86_64", "linux-x86_64"];
+const GITHUB_API_ASSET_URL =
+  /^https:\/\/api\.github\.com\/repos\/[^/]+\/[^/]+\/releases\/assets\/(\d+)$/u;
+
+export function isGitHubApiAssetUrl(url) {
+  return GITHUB_API_ASSET_URL.test(String(url ?? ""));
+}
+
+/**
+ * Tauri's GitHub Action writes unauthenticated GitHub API asset URLs into
+ * `latest.json`. Those downloads count against the 60-request/hour API budget
+ * and often fail with 403. Rewrite them to the public Releases download URLs.
+ */
+export function rewriteGithubApiAssetUrls(latest, assets) {
+  const urlsById = new Map(
+    (assets ?? [])
+      .filter((asset) => asset?.id != null && asset.browser_download_url)
+      .map((asset) => [String(asset.id), String(asset.browser_download_url)]),
+  );
+  const platforms = latest?.platforms ?? {};
+  let rewritten = 0;
+  for (const [platform, entry] of Object.entries(platforms)) {
+    const match = String(entry?.url ?? "").match(GITHUB_API_ASSET_URL);
+    if (!match) continue;
+    const next = urlsById.get(match[1]);
+    if (!next) {
+      throw new Error(`no Releases download URL for ${platform} asset ${match[1]}`);
+    }
+    entry.url = next;
+    rewritten += 1;
+  }
+  return rewritten;
+}
 
 export function validateAndWriteChecksums(directory, appVersion) {
   const root = resolve(directory);
@@ -55,6 +87,11 @@ export function validateAndWriteChecksums(directory, appVersion) {
     const entry = latest.platforms?.[platform];
     if (!entry?.url || !entry?.signature) {
       throw new Error(`latest.json is missing a complete ${platform} entry`);
+    }
+    if (isGitHubApiAssetUrl(entry.url)) {
+      throw new Error(
+        `latest.json ${platform} still points at the GitHub API (${entry.url}); rewrite it to a Releases download URL before publishing`,
+      );
     }
   }
 

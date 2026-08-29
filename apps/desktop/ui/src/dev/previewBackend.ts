@@ -444,6 +444,15 @@ function updateStatus(): UpdateStatus {
     };
   }
   if (state === "up_to_date") return { ...base, state: "up_to_date" };
+  if (state === "error") {
+    return {
+      ...base,
+      state: "error",
+      message:
+        "Could not install the update: Download request failed with status: 403 Forbidden",
+      retry_install: true,
+    };
+  }
   const latestNotes = previewNotes("Fix post-update launch notice position on macOS");
   return {
     ...base,

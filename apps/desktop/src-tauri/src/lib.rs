@@ -5174,16 +5174,17 @@ const CAPTURE_HUD_HIDE_SETTLE_MS: u64 = 40;
 
 pub(crate) async fn hide_capture_huds_before_snapshot(app: &AppHandle) {
     let include_mini_previews = include_mini_previews_in_captures(app);
+    let hide_update = updates::should_hide_update_notice_for_capture(app);
     set_capture_huds_protected(app, true);
-    let hud_labels: &[&str] = if include_mini_previews {
-        &[
+    let mut hud_labels = if include_mini_previews {
+        vec![
             "startup",
             "update",
             RECORDING_SAVED_NOTICE_LABEL,
             MINI_PREVIEWS_HIDDEN_LABEL,
         ]
     } else {
-        &[
+        vec![
             "thumbnail",
             "startup",
             "update",
@@ -5191,8 +5192,13 @@ pub(crate) async fn hide_capture_huds_before_snapshot(app: &AppHandle) {
             MINI_PREVIEWS_HIDDEN_LABEL,
         ]
     };
-    let had_visible_hud = hide_capture_huds(app, include_mini_previews, hud_labels);
-    updates::defer_visible_notice(app);
+    if !hide_update {
+        hud_labels.retain(|label| *label != "update");
+    }
+    let had_visible_hud = hide_capture_huds(app, include_mini_previews, &hud_labels, hide_update);
+    if hide_update {
+        updates::defer_visible_notice(app);
+    }
 
     // Native hide/content-protection calls return before every compositor has
     // necessarily presented the new window state. Give a previously visible
@@ -5209,25 +5215,31 @@ pub(crate) async fn hide_capture_huds_before_snapshot(app: &AppHandle) {
             .await;
 }
 
-fn hide_capture_huds(app: &AppHandle, include_mini_previews: bool, hud_labels: &[&str]) -> bool {
+fn hide_capture_huds(
+    app: &AppHandle,
+    include_mini_previews: bool,
+    hud_labels: &[&str],
+    hide_update: bool,
+) -> bool {
     #[cfg(target_os = "macos")]
     {
         let app = app.clone();
         let labels: Vec<String> = hud_labels.iter().map(|label| (*label).to_owned()).collect();
         run_on_appkit_main(move || {
             let label_refs: Vec<&str> = labels.iter().map(String::as_str).collect();
-            hide_capture_huds_inner(&app, include_mini_previews, &label_refs)
+            hide_capture_huds_inner(&app, include_mini_previews, &label_refs, hide_update)
         })
         .unwrap_or(false)
     }
     #[cfg(not(target_os = "macos"))]
-    hide_capture_huds_inner(app, include_mini_previews, hud_labels)
+    hide_capture_huds_inner(app, include_mini_previews, hud_labels, hide_update)
 }
 
 fn hide_capture_huds_inner(
     app: &AppHandle,
     include_mini_previews: bool,
     hud_labels: &[&str],
+    hide_update: bool,
 ) -> bool {
     let had_visible_hud = hud_labels.iter().any(|label| {
         app.get_webview_window(label)
@@ -5238,7 +5250,9 @@ fn hide_capture_huds_inner(
     }
     hide_window_inner(app, "startup");
     hide_recording_saved_notices_inner(app);
-    hide_window_inner(app, "update");
+    if hide_update {
+        hide_window_inner(app, "update");
+    }
     hide_window_inner(app, MINI_PREVIEWS_HIDDEN_LABEL);
     had_visible_hud
 }
@@ -5310,8 +5324,10 @@ fn set_capture_huds_protected_inner(app: &AppHandle, protected: bool) {
             continue;
         }
         // Keep opted-in chrome capturable when the matching preference is on.
+        // Failed update notices stay capturable so the error can be screenshotted.
         let next_protected = if (label == "thumbnail" && include_mini_previews)
             || (label == "recording-hud" && include_recording_controls)
+            || (label == "update" && !updates::should_hide_update_notice_for_capture(app))
         {
             false
         } else {

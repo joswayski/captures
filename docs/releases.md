@@ -35,7 +35,10 @@ download page, not a historical build. It holds the macOS, Windows, Debian, and
 AppImage installers plus the `latest.json` updater manifest for the greatest
 published CalVer version. That manifest includes a `changelog` of each dated
 Preview’s notes so an installed copy can list every change between its version
-and the latest Preview, not only the newest release. Installers on this channel use **stable filenames**
+and the latest Preview, not only the newest release. Platform download URLs in
+`latest.json` are rewritten from GitHub API asset endpoints to public
+`releases/download` links so in-app updates do not consume the unauthenticated
+API rate limit, which GitHub answers with HTTP 403. Installers on this channel use **stable filenames**
 (`Captures-macOS-Apple-Silicon.dmg`, `Captures-Windows-x64-setup.exe`,
 `Captures-Linux-x64.deb`, `Captures-Linux-x64.AppImage`) so the root README can
 link directly without updating URLs on every merge. Dated immutable Previews keep

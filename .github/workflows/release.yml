@@ -534,8 +534,9 @@ jobs:
         shell: bash
         run: |
           node scripts/github-release-assets.mjs download "$RELEASE_ID" release-assets
+          node scripts/github-release-assets.mjs rewrite-updater-urls "$RELEASE_ID" release-assets/latest.json
           node scripts/release-assets.mjs release-assets "$APP_VERSION"
-          node scripts/github-release-assets.mjs upload "$RELEASE_ID" release-assets/SHA256SUMS
+          node scripts/github-release-assets.mjs upload "$RELEASE_ID" release-assets/SHA256SUMS release-assets/latest.json
       - name: Confirm the release remains a draft
         env:
           GH_TOKEN: ${{ github.token }}
