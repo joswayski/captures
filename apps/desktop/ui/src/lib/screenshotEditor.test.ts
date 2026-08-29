@@ -38,6 +38,7 @@ import {
   hitTestElement,
   hitTestArrowHandle,
   hitTestResizeHandle,
+  hitTestShapeRotationHandle,
   imageDropGuideAtPoint,
   imageDropPlacementAtPoint,
   imageOrientationMatrix,
@@ -57,6 +58,12 @@ import {
   stackDropLightFocusAtPoint,
   resizeBoundsFromHandle,
   resizeElement,
+  shapeLocalBounds,
+  shapeRotation,
+  shapeRotationHandlePoint,
+  shapeWorldPoint,
+  snapShapeRotation,
+  withShapeRotation,
   shiftLockedCropAspect,
   snapResizedBounds,
   snapTranslatedBounds,
@@ -1329,6 +1336,74 @@ describe("screenshot editor geometry", () => {
       width: 200,
       height: 130,
     });
+  });
+
+  it("rotates shapes around the selection-box center and keeps resize in local space", () => {
+    const rectangle: EditorShapeElement = {
+      ...editableLayer,
+      id: "rect",
+      kind: "shape",
+      shape: "rectangle",
+      x: 100,
+      y: 80,
+      endX: 200,
+      endY: 160,
+      controls: [],
+      style: { color: "#f00", fill: "#f004", strokeWidth: 2 },
+    };
+    expect(shapeRotation(rectangle)).toBe(0);
+    expect(hitTestShapeRotationHandle(
+      rectangle,
+      shapeRotationHandlePoint(rectangle, 1),
+      8,
+      1,
+    )).toBe(true);
+    expect(hitTestShapeRotationHandle(rectangle, { x: 150, y: 120 }, 8, 1)).toBe(false);
+
+    const quarter = withShapeRotation(rectangle, Math.PI / 2);
+    expect(shapeRotation(quarter)).toBeCloseTo(Math.PI / 2, 10);
+    const unrotated = elementBounds(rectangle);
+    const rotated = elementBounds(quarter);
+    expect(rotated.width).toBeCloseTo(unrotated.height, 5);
+    expect(rotated.height).toBeCloseTo(unrotated.width, 5);
+    expect(hitTestElement([quarter], { x: 150, y: 120 }, 4)?.id).toBe("rect");
+    expect(hitTestElement([quarter], { x: 150, y: 20 }, 1)).toBeNull();
+
+    const snapped = snapShapeRotation(Math.PI / 2 + 0.04, true);
+    expect(snapped).toBeCloseTo(Math.PI / 2, 10);
+    expect(withShapeRotation(quarter, 0).rotation).toBeUndefined();
+
+    const local = shapeLocalBounds(quarter);
+    const next = {
+      ...local,
+      width: local.width * 2,
+      height: local.height,
+    };
+    const resized = resizeElement(quarter, local, next);
+    expect(resized.kind).toBe("shape");
+    if (resized.kind !== "shape") throw new Error("expected shape");
+    expect(shapeRotation(resized)).toBeCloseTo(Math.PI / 2, 10);
+    expect(resized.endX - resized.x).toBeCloseTo((rectangle.endX - rectangle.x) * 2, 5);
+  });
+
+  it("maps line and arrow handles through rotation so world drags stay on the stroke", () => {
+    const arrow: EditorShapeElement = {
+      ...editableLayer,
+      id: "arrow",
+      kind: "shape",
+      shape: "arrow",
+      x: 80,
+      y: 120,
+      endX: 280,
+      endY: 120,
+      controls: [],
+      style: { color: "#0af", fill: null, strokeWidth: 6 },
+    };
+    const rotated = withShapeRotation(arrow, Math.PI / 2);
+    const worldEnd = shapeWorldPoint(rotated, { x: arrow.endX, y: arrow.endY });
+    expect(hitTestArrowHandle(rotated, worldEnd, 10)?.kind).toBe("end");
+    const closest = closestPointOnArrow(rotated, worldEnd);
+    expect(closest.distance).toBeLessThan(1);
   });
 
   it("locks aspect ratio when resizing from a corner with Shift", () => {

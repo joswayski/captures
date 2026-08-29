@@ -669,7 +669,18 @@ export type EditorShapeElement = EditorElementBase & {
    */
   controls: EditorPoint[];
   style: ElementStyle;
+  /**
+   * Rotation in radians around the local selection-bounds center.
+   * Omitted in older documents; treat missing as 0 so drafts keep their look.
+   */
+  rotation?: number;
 };
+
+/** Screen-pixel length of the stem from the top of a selected shape to its rotate grip. */
+export const SHAPE_ROTATION_HANDLE_OFFSET_SCREEN_PX = 22;
+
+/** 15° steps when Shift is held while rotating. */
+export const SHAPE_ROTATION_SNAP_RADIANS = Math.PI / 12;
 
 /**
  * Open stroke shapes that support multi-point Bezier curve controls
@@ -2211,13 +2222,14 @@ export function closestPointOnArrow(
   point: EditorPoint,
   samplesPerSegment = 24,
 ): { point: EditorPoint; insertIndex: number; distance: number } {
+  const localPoint = shapeLocalPoint(element, point);
   const samples = sampleArrowPath(element, samplesPerSegment);
   let best = samples[0] ?? { x: element.x, y: element.y };
   let bestDistance = Number.POSITIVE_INFINITY;
   let bestSampleIndex = 0;
   for (let index = 0; index < samples.length; index += 1) {
     const sample = samples[index];
-    const distance = Math.hypot(point.x - sample.x, point.y - sample.y);
+    const distance = Math.hypot(localPoint.x - sample.x, localPoint.y - sample.y);
     if (distance < bestDistance) {
       bestDistance = distance;
       best = sample;
@@ -2236,7 +2248,7 @@ export function closestPointOnArrow(
   );
 
   return {
-    point: best,
+    point: shapeWorldPoint(element, best),
     insertIndex,
     distance: bestDistance,
   };
@@ -2342,20 +2354,70 @@ function boundsFromPoints(points: EditorPoint[], padding: number): EditorRect {
   };
 }
 
+function rectCenter(bounds: EditorRect): EditorPoint {
+  return {
+    x: bounds.x + bounds.width / 2,
+    y: bounds.y + bounds.height / 2,
+  };
+}
+
+/** Authored rotation, treating missing as unrotated. */
+export function shapeRotation(element: Pick<EditorShapeElement, "rotation">): number {
+  return element.rotation ?? 0;
+}
+
+/** Wrap to (−π, π] and collapse near-zero values so drafts omit a no-op angle. */
+export function normalizeShapeRotation(radians: number): number {
+  if (!Number.isFinite(radians)) return 0;
+  const tau = Math.PI * 2;
+  let angle = radians % tau;
+  if (angle <= -Math.PI) angle += tau;
+  if (angle > Math.PI) angle -= tau;
+  return Math.abs(angle) < 1e-10 ? 0 : angle;
+}
+
+/** Snap an absolute rotation to 15° increments when `snap` is true. */
+export function snapShapeRotation(radians: number, snap: boolean): number {
+  const angle = normalizeShapeRotation(radians);
+  if (!snap) return angle;
+  return normalizeShapeRotation(
+    Math.round(angle / SHAPE_ROTATION_SNAP_RADIANS) * SHAPE_ROTATION_SNAP_RADIANS,
+  );
+}
+
+export function withShapeRotation(
+  element: EditorShapeElement,
+  radians: number,
+): EditorShapeElement {
+  const rotation = normalizeShapeRotation(radians);
+  if (rotation === 0) {
+    if (element.rotation == null) return element;
+    return { ...element, rotation: undefined };
+  }
+  return { ...element, rotation };
+}
+
+export function rotatePointAround(
+  point: EditorPoint,
+  origin: EditorPoint,
+  radians: number,
+): EditorPoint {
+  if (radians === 0) return point;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  const dx = point.x - origin.x;
+  const dy = point.y - origin.y;
+  return {
+    x: origin.x + dx * cos - dy * sin,
+    y: origin.y + dx * sin + dy * cos,
+  };
+}
+
 /**
- * Bounds of the painted shape (stroke + arrow head), not the loose selection
- * chrome.
- *
- * Free Bezier control points sit off the stroke (the path only approaches
- * them). Including them in content bounds used to expand the canvas and block
- * **Trim edges** whenever a handle sat past an edge even though the painted
- * shaft stayed inside. Bounds therefore follow path samples for lines/arrows,
- * not the control handles.
- *
- * Arrowhead wings are measured at the tip only — never as an isotropic pad on
- * every side of the shaft (that left large empty selection / trim margins).
+ * Unrotated content box used for selection chrome and resize.
+ * Geometry stays in this space; `rotation` is applied around the box center.
  */
-function shapeElementBounds(element: EditorShapeElement): EditorRect {
+export function shapeLocalBounds(element: EditorShapeElement): EditorRect {
   const strokePad = strokeExtent(element.style.strokeWidth)
     + annotationDropShadowPad(element.style);
 
@@ -2373,7 +2435,6 @@ function shapeElementBounds(element: EditorShapeElement): EditorRect {
   }
 
   if (isCurveableStrokeShape(element)) {
-    // Dense samples so tight multi-point loops don't miss extrema.
     const samples = sampleArrowPath(element, 48);
     const points: EditorPoint[] = samples.length > 0
       ? [...samples]
@@ -2394,13 +2455,88 @@ function shapeElementBounds(element: EditorShapeElement): EditorRect {
     return boundsFromPoints(points, strokePad);
   }
 
-  // Fallback for any future open stroke without the curve model.
   return boundsFromPoints(
     [
       { x: element.x, y: element.y },
       { x: element.endX, y: element.endY },
     ],
     strokePad,
+  );
+}
+
+export function shapeRotationOrigin(element: EditorShapeElement): EditorPoint {
+  return rectCenter(shapeLocalBounds(element));
+}
+
+export function shapeWorldPoint(
+  element: EditorShapeElement,
+  localPoint: EditorPoint,
+): EditorPoint {
+  return rotatePointAround(localPoint, shapeRotationOrigin(element), shapeRotation(element));
+}
+
+export function shapeLocalPoint(
+  element: EditorShapeElement,
+  worldPoint: EditorPoint,
+): EditorPoint {
+  return rotatePointAround(worldPoint, shapeRotationOrigin(element), -shapeRotation(element));
+}
+
+export function shapeRotationHandleOffset(displayScale: number): number {
+  return SHAPE_ROTATION_HANDLE_OFFSET_SCREEN_PX / Math.max(0.01, displayScale);
+}
+
+/** World-space position of the rotate grip above the local top-center. */
+export function shapeRotationHandlePoint(
+  element: EditorShapeElement,
+  displayScale: number,
+): EditorPoint {
+  const bounds = shapeLocalBounds(element);
+  const origin = rectCenter(bounds);
+  const local = {
+    x: bounds.x + bounds.width / 2,
+    y: bounds.y - shapeRotationHandleOffset(displayScale),
+  };
+  return rotatePointAround(local, origin, shapeRotation(element));
+}
+
+export function hitTestShapeRotationHandle(
+  element: EditorShapeElement,
+  point: EditorPoint,
+  handleRadius: number,
+  displayScale: number,
+): boolean {
+  const handle = shapeRotationHandlePoint(element, displayScale);
+  const radius = Math.max(6, handleRadius * 1.25);
+  return Math.hypot(point.x - handle.x, point.y - handle.y) <= radius;
+}
+
+/**
+ * Bounds of the painted shape (stroke + arrow head), not the loose selection
+ * chrome.
+ *
+ * Free Bezier control points sit off the stroke (the path only approaches
+ * them). Including them in content bounds used to expand the canvas and block
+ * **Trim edges** whenever a handle sat past an edge even though the painted
+ * shaft stayed inside. Bounds therefore follow path samples for lines/arrows,
+ * not the control handles.
+ *
+ * Arrowhead wings are measured at the tip only — never as an isotropic pad on
+ * every side of the shaft (that left large empty selection / trim margins).
+ */
+function shapeElementBounds(element: EditorShapeElement): EditorRect {
+  const local = shapeLocalBounds(element);
+  const rotation = shapeRotation(element);
+  if (rotation === 0) return local;
+  const origin = rectCenter(local);
+  return boundsFromPoints(
+    [
+      { x: local.x, y: local.y },
+      { x: local.x + local.width, y: local.y },
+      { x: local.x + local.width, y: local.y + local.height },
+      { x: local.x, y: local.y + local.height },
+    ].map((point) => rotatePointAround(point, origin, rotation)),
+    0,
   );
 }
 
@@ -2477,10 +2613,11 @@ export function insertArrowControl(
   point: EditorPoint,
 ): EditorShapeElement | null {
   if (!isCurveableStrokeShape(element)) return null;
+  const localPoint = shapeLocalPoint(element, point);
   const { insertIndex } = closestPointOnArrow(element, point);
   const controls = [
     ...element.controls.slice(0, insertIndex),
-    { x: point.x, y: point.y },
+    { x: localPoint.x, y: localPoint.y },
     ...element.controls.slice(insertIndex),
   ];
   return { ...element, controls };
@@ -2508,19 +2645,20 @@ export function hitTestArrowHandle(
   handleRadius: number,
 ): ArrowHandle | null {
   if (!isCurveableStrokeShape(element)) return null;
+  const localPoint = shapeLocalPoint(element, point);
   const radius = Math.max(4, handleRadius);
 
   for (let index = 0; index < element.controls.length; index += 1) {
     const control = element.controls[index];
-    if (Math.hypot(point.x - control.x, point.y - control.y) <= radius) {
+    if (Math.hypot(localPoint.x - control.x, localPoint.y - control.y) <= radius) {
       return { kind: "control", index };
     }
   }
 
-  if (Math.hypot(point.x - element.x, point.y - element.y) <= radius) {
+  if (Math.hypot(localPoint.x - element.x, localPoint.y - element.y) <= radius) {
     return { kind: "start" };
   }
-  if (Math.hypot(point.x - element.endX, point.y - element.endY) <= radius) {
+  if (Math.hypot(localPoint.x - element.endX, localPoint.y - element.endY) <= radius) {
     return { kind: "end" };
   }
 
@@ -2529,7 +2667,9 @@ export function hitTestArrowHandle(
     for (let index = 0; index < starters.length; index += 1) {
       const starter = starters[index];
       // Slightly larger hit targets keep the on-path dots easy to grab.
-      if (Math.hypot(point.x - starter.x, point.y - starter.y) <= radius * 1.15) {
+      if (
+        Math.hypot(localPoint.x - starter.x, localPoint.y - starter.y) <= radius * 1.15
+      ) {
         return { kind: "starter-control", index };
       }
     }
@@ -3062,12 +3202,15 @@ export function hitTestElement(
   for (let index = elements.length - 1; index >= 0; index -= 1) {
     const element = elements[index];
     if (!element.visible || element.locked) continue;
-    const bounds = elementBounds(element);
+    const hitPoint = element.kind === "shape" ? shapeLocalPoint(element, point) : point;
+    const bounds = element.kind === "shape"
+      ? shapeLocalBounds(element)
+      : elementBounds(element);
     if (
-      point.x >= bounds.x - tolerance
-      && point.x <= bounds.x + bounds.width + tolerance
-      && point.y >= bounds.y - tolerance
-      && point.y <= bounds.y + bounds.height + tolerance
+      hitPoint.x >= bounds.x - tolerance
+      && hitPoint.x <= bounds.x + bounds.width + tolerance
+      && hitPoint.y >= bounds.y - tolerance
+      && hitPoint.y <= bounds.y + bounds.height + tolerance
     ) {
       return element;
     }
