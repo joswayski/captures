@@ -422,6 +422,10 @@ function previewNotes(summary: string): string {
     "",
     "## What's Changed",
     `* ${summary} by @joswayski in https://github.com/joswayski/captures/pull/1`,
+    "* @devin-ai-integration[bot] made their first contribution in https://github.com/joswayski/captures/pull/1",
+    "",
+    "## New Contributors",
+    "* @someone made their first contribution in https://github.com/joswayski/captures/pull/1",
     "",
     "**Full Changelog**: https://github.com/joswayski/captures/compare/old...new",
   ].join("\n");
