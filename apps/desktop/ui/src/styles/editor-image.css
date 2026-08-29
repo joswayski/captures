@@ -910,10 +910,11 @@
 }
 
 .screenshot-drop-overlay strong {
-  min-height: 14px;
+  min-height: 1.35em;
   overflow: hidden;
+  padding-block: 1px;
   font-size: var(--text-sm);
-  line-height: 1.25;
+  line-height: var(--leading-snug);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2053,6 +2054,8 @@
 .screenshot-layer-copy strong,
 .screenshot-layer-copy small {
   overflow: hidden;
+  padding-block: 1px;
+  line-height: var(--leading-snug);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2074,9 +2077,10 @@
   height: 25px;
   border: 1px solid var(--theme-accent);
   border-radius: var(--r-sm);
-  padding: 0 var(--s-3);
+  padding: 1px var(--s-3);
   color: var(--editor-text);
   background: var(--editor-field);
+  line-height: var(--leading-snug);
   outline: none;
   font: inherit;
   font-size: var(--text-sm);
@@ -2263,6 +2267,8 @@
 
 .screenshot-layer-menu-tile span {
   overflow: hidden;
+  padding-block: 1px;
+  line-height: var(--leading-snug);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2328,9 +2334,10 @@
 
 .screenshot-layer-menu-action-label {
   overflow: hidden;
+  padding-block: 1px;
   font-size: var(--text-md);
   font-weight: var(--weight-medium);
-  line-height: 1.2;
+  line-height: var(--leading-snug);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2469,6 +2476,7 @@
   background-color: var(--editor-field);
   outline: none;
   font-size: var(--text-sm);
+  line-height: var(--leading-snug);
 }
 
 .screenshot-property-section .number-input {
@@ -2873,7 +2881,9 @@
 
 .screenshot-file-name {
   overflow: hidden;
+  padding-block: 1px;
   color: var(--editor-text-muted) !important;
+  line-height: var(--leading-snug);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2937,7 +2947,7 @@
   color: var(--editor-text-muted);
   font-size: var(--text-xs);
   font-weight: var(--weight-medium);
-  line-height: 1;
+  line-height: var(--leading-snug);
   text-transform: none;
 }
 
@@ -2954,7 +2964,7 @@
   background-color: var(--editor-field);
   outline: none;
   font-size: var(--text-sm);
-  line-height: 1;
+  line-height: var(--leading-snug);
 }
 
 .screenshot-export-settings input[type="number"],
@@ -2965,7 +2975,7 @@
 }
 
 .screenshot-export-settings .number-input input[type="number"] {
-  padding: 0 var(--s-4);
+  padding: 1px var(--s-4);
   font-size: var(--text-sm);
 }
 
@@ -2989,7 +2999,7 @@
   color: var(--editor-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
-  line-height: 1;
+  line-height: var(--leading-snug);
   white-space: nowrap;
   text-transform: none;
   font-variant-numeric: tabular-nums;
@@ -3101,7 +3111,7 @@
   color: var(--editor-text-muted);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
-  line-height: 1;
+  line-height: var(--leading-snug);
   text-transform: none;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -3135,8 +3145,8 @@
 .screenshot-export-disclosure {
   display: grid;
   min-width: 0;
-  height: var(--h-lg);
-  padding: 0 var(--s-4) 0 var(--s-5);
+  min-height: var(--h-lg);
+  padding: var(--s-2) var(--s-4) var(--s-2) var(--s-5);
   grid-template-columns: minmax(0, 1fr) 15px;
   grid-template-rows: auto auto;
   align-content: center;
@@ -3159,15 +3169,18 @@
   color: inherit;
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
-  line-height: 1.1;
+  line-height: var(--leading-snug);
 }
 
 .screenshot-export-summary {
+  min-width: 0;
+  min-height: 1.35em;
   overflow: hidden;
+  padding-block: 1px;
   color: var(--editor-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
-  line-height: 1.1;
+  line-height: var(--leading-snug);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3211,11 +3224,12 @@
 }
 
 .screenshot-export-notice {
-  min-height: 12px;
+  min-height: 1.35em;
   overflow: hidden;
+  padding-block: 1px;
   font-size: var(--text-xs);
   font-weight: var(--weight-medium);
-  line-height: 1.25;
+  line-height: var(--leading-snug);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3396,7 +3410,8 @@
 }
 
 .screenshot-editor .recording-filename-heading {
-  height: 15px;
+  min-height: 16px;
+  height: auto;
 }
 
 .screenshot-editor .recording-filename-input {
@@ -3412,9 +3427,10 @@
 }
 
 .screenshot-editor .recording-filename-input input {
-  padding: 0 0 0 var(--s-4);
+  padding: 1px 0 1px var(--s-4);
   color: var(--editor-text);
   font-size: var(--text-sm);
+  line-height: var(--leading-snug);
 }
 
 .screenshot-editor .filename-format-select .custom-select-trigger {
