@@ -2413,11 +2413,11 @@ describe("ScreenshotEditor", () => {
     expect(screen.queryByRole("group", { name: "Compression comparison" }))
       .not.toBeInTheDocument();
 
-    // Compress keeps PNG and shows the same Tiny–High quality ladder as JPEG.
+    // Compress keeps PNG and shows the same Tiny–Highest quality ladder as JPEG.
     fireEvent.click(saveQuality);
     const compressOption = screen.getByRole("option", { name: /Compress/ });
     expect(compressOption).toHaveTextContent(
-      "Smaller PNG with Tiny through High quality presets.",
+      "Smaller PNG with Tiny through Highest quality presets.",
     );
     expect(compressOption).not.toHaveTextContent(/compresspng/i);
     fireEvent.click(compressOption);
@@ -2443,6 +2443,23 @@ describe("ScreenshotEditor", () => {
     expect(screen.getByRole("option", { name: /Tiny/ })).toHaveTextContent(
       "Smallest PNG with the most visible dithering.",
     );
+    expect(screen.getByRole("option", { name: /^Highest/ })).toHaveTextContent(
+      "Same pixels, tighter packing. No color reduction.",
+    );
+    fireEvent.click(screen.getByRole("option", { name: /^Highest/ }));
+    expect(quality).toHaveTextContent("Highest");
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        "preview_screenshot_export",
+        expect.objectContaining({
+          format: "png",
+          qualityMode: "compress",
+          jpegQuality: 98,
+          pngMaxColors: null,
+        }),
+      );
+    });
+    fireEvent.click(quality);
     fireEvent.click(screen.getByRole("option", { name: /Tiny/ }));
     expect(quality).toHaveTextContent("Tiny");
     await waitFor(() => {
@@ -2749,7 +2766,7 @@ describe("ScreenshotEditor", () => {
         expect(screen.getByRole("combobox", { name: "Format" })).toHaveTextContent(".jpg");
       });
       fireEvent.click(screen.getByRole("combobox", { name: "Compression quality" }));
-      fireEvent.click(screen.getByRole("option", { name: /High/ }));
+      fireEvent.click(screen.getByRole("option", { name: /^High / }));
       await waitFor(() => {
         expect(toBlob.mock.calls.some((call) => call[1] === "image/jpeg")).toBe(true);
         expect(estimate()).toHaveTextContent(/≈/);
@@ -2837,7 +2854,7 @@ describe("ScreenshotEditor", () => {
       }, { timeout: 3_000 });
 
       fireEvent.click(screen.getByRole("combobox", { name: "Compression quality" }));
-      fireEvent.click(screen.getByRole("option", { name: /High/ }));
+      fireEvent.click(screen.getByRole("option", { name: /^High / }));
       await waitFor(() => {
         expect(estimate()).toHaveTextContent("≈ 301 KB");
         expect(screen.getByText("−73%")).toBeInTheDocument();

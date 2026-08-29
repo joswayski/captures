@@ -678,6 +678,7 @@ impl MediaToolchain {
             ]);
         } else {
             let quality = match spec.quality {
+                QualityPreset::Highest => "95",
                 QualityPreset::Preserve | QualityPreset::High => "90",
                 QualityPreset::Standard => "70",
                 QualityPreset::Small => "50",
@@ -1227,7 +1228,8 @@ fn fit_openh264_dimensions(width: u32, height: u32) -> (u32, u32) {
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 fn openh264_bitrate(attempt: &VideoAttempt, spec: &ExportSpec) -> u32 {
     let bits_per_pixel_percent = match spec.quality {
-        QualityPreset::Preserve | QualityPreset::High => 12_u64,
+        QualityPreset::Highest => 18_u64,
+        QualityPreset::Preserve | QualityPreset::High => 12,
         QualityPreset::Standard => 8,
         QualityPreset::Small => 5,
         QualityPreset::Tiny => 3,

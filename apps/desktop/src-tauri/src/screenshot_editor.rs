@@ -688,11 +688,9 @@ fn encode_export(
         ScreenshotEditFormat::Png => {
             let max_colors = match quality_mode {
                 ScreenshotExportQualityMode::Preserve => None,
-                ScreenshotExportQualityMode::Compress => Some(
-                    png_max_colors
-                        .filter(|count| *count > 0)
-                        .unwrap_or_else(|| storage::png_palette_colors_for_quality(jpeg_quality)),
-                ),
+                ScreenshotExportQualityMode::Compress => png_max_colors
+                    .filter(|count| *count > 0)
+                    .or_else(|| storage::png_palette_colors_for_quality(jpeg_quality)),
                 // Maximum without a byte budget still quantizes aggressively.
                 ScreenshotExportQualityMode::Maximum => {
                     Some(png_max_colors.filter(|count| *count > 0).unwrap_or(64))
@@ -1070,6 +1068,50 @@ mod tests {
         );
         image::load_from_memory_with_format(&tiny, ImageFormat::Png)
             .expect("quantized PNG remains readable");
+    }
+
+    #[test]
+    fn png_highest_compress_keeps_truecolor_instead_of_a_palette() {
+        let image = photo_like(240, 160, true);
+        let preserve = encode_export(
+            &image,
+            ScreenshotEditFormat::Png,
+            ScreenshotExportQualityMode::Preserve,
+            100,
+            None,
+        )
+        .unwrap();
+        let highest = encode_export(
+            &image,
+            ScreenshotEditFormat::Png,
+            ScreenshotExportQualityMode::Compress,
+            98,
+            None,
+        )
+        .unwrap();
+        assert_eq!(&highest[..8], b"\x89PNG\r\n\x1a\n");
+        assert_eq!(png_color_type(&highest), png::ColorType::Rgba);
+        assert!(
+            highest.len() <= preserve.len(),
+            "highest should only pack tighter (highest={}, preserve={})",
+            highest.len(),
+            preserve.len()
+        );
+        let high = encode_export(
+            &image,
+            ScreenshotEditFormat::Png,
+            ScreenshotExportQualityMode::Compress,
+            92,
+            None,
+        )
+        .unwrap();
+        assert_eq!(png_color_type(&high), png::ColorType::Indexed);
+        assert!(
+            high.len() < highest.len(),
+            "256-color High should beat lossless Highest packing (high={}, highest={})",
+            high.len(),
+            highest.len()
+        );
     }
 
     fn png_color_type(bytes: &[u8]) -> png::ColorType {

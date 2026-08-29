@@ -765,6 +765,7 @@ export function installPreviewBackend(): void {
           small: 0.28,
           standard: 0.38,
           high: 0.49,
+          highest: 0.65,
         };
         const factor = factors[request.export.quality] ?? 0.49;
         return { sizeBytes: Math.round(original * factor), exact: false };
