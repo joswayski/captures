@@ -670,6 +670,12 @@ fn release_note_item_count(markdown: &str) -> usize {
             continue;
         }
         if line.starts_with("* ") || line.starts_with("- ") || line.starts_with("+ ") {
+            if line
+                .to_ascii_lowercase()
+                .contains("made their first contribution")
+            {
+                continue;
+            }
             count += 1;
         }
     }
@@ -1128,6 +1134,15 @@ mod tests {
             "Update Available — 1 change"
         );
         assert_eq!(update_available_menu_label(&[], None), "Update Available");
+        assert_eq!(
+            update_available_menu_label(
+                &[],
+                Some(
+                    "* Real fix by @a in https://example.com/1\n* @bot made their first contribution in https://example.com/1\n* Another fix by @b in https://example.com/2",
+                ),
+            ),
+            "Update Available — 2 changes"
+        );
         let item = tray_update_item(&UpdateStatus::Available {
             current_version: "2026.8.2702".into(),
             current_display_version: "2026.08.27.2".into(),

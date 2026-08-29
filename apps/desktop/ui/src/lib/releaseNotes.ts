@@ -7,6 +7,11 @@ function plainText(markdown: string) {
     .trim();
 }
 
+/** GitHub auto-appends these under New Contributors; they are not product changes. */
+function isFirstContributionLine(text: string) {
+  return /\bmade their first contribution\b/iu.test(text);
+}
+
 /** Turn GitHub's generated release Markdown into concise, safe toast copy. */
 export function releaseNoteItems(markdown: string): string[] {
   const items: string[] = [];
@@ -30,7 +35,8 @@ export function releaseNoteItems(markdown: string): string[] {
     }
 
     const text = plainText(line.replace(/^(?:[-*+]\s+|\d+[.)]\s+)/u, "").replace(/^>\s?/u, ""));
-    if (text) items.push(text);
+    if (!text || isFirstContributionLine(text)) continue;
+    items.push(text);
   }
 
   return items;
