@@ -499,6 +499,11 @@ static FRONTMOST_APP_BEFORE_CAPTURE: Mutex<Option<Retained<NSRunningApplication>
 thread_local! {
     static CONCEALED_DOCUMENT_WINDOWS: RefCell<Vec<Retained<NSWindow>>> =
         const { RefCell::new(Vec::new()) };
+    // When documents were ordered out because another app was frontmost, keep
+    // that app so reveal can hand activation back after `orderFront` without
+    // lifting preferences/history/feedback above the user's work.
+    static CONCEALED_DOCUMENT_REVEAL_YIELD_TO: RefCell<Option<Retained<NSRunningApplication>>> =
+        const { RefCell::new(None) };
 }
 
 /// Returns whether a standard shortcut modifier is still physically held.
@@ -1590,10 +1595,23 @@ pub fn conceal_document_windows_for_capture() {
             return;
         }
         let app = NSApplication::sharedApplication(main_thread);
+        let mut to_conceal = Vec::new();
         for window in app.windows().iter() {
             if !is_titled_document_window(&window) || !window.isVisible() {
                 continue;
             }
+            to_conceal.push(window);
+        }
+        if to_conceal.is_empty() {
+            return;
+        }
+        CONCEALED_DOCUMENT_REVEAL_YIELD_TO.with(|yield_to| {
+            let mut yield_to = yield_to.borrow_mut();
+            if yield_to.is_none() {
+                *yield_to = current_frontmost_if_not_captures();
+            }
+        });
+        for window in to_conceal {
             window.orderOut(None);
             concealed.push(window);
         }
@@ -1613,8 +1631,10 @@ pub fn reveal_concealed_document_windows() {
     if MainThreadMarker::new().is_none() {
         return;
     }
+    let yield_to = CONCEALED_DOCUMENT_REVEAL_YIELD_TO.with(|slot| slot.borrow_mut().take());
     let windows =
         CONCEALED_DOCUMENT_WINDOWS.with(|concealed| std::mem::take(&mut *concealed.borrow_mut()));
+    let keep_behind_foreign_app = yield_to.is_some();
     for window in windows {
         // Destroyed webviews drop their NSWindow; skip anything already gone or
         // already visible from another path.
@@ -1624,7 +1644,14 @@ pub fn reveal_concealed_document_windows() {
         // orderFront (not orderFrontRegardless) keeps an inactive Captures
         // behind the restored frontmost app instead of floating above it.
         window.orderFront(None);
+        if keep_behind_foreign_app {
+            // `orderFront` can still raise this document above the user's app
+            // when capture teardown briefly reactivates Captures. Push it to the
+            // back of Captures' stack before handing activation back.
+            window.orderBack(None);
+        }
     }
+    yield_activation_to(yield_to);
 }
 
 fn is_titled_document_window(window: &NSWindow) -> bool {
