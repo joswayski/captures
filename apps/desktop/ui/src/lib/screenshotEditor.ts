@@ -186,6 +186,90 @@ export type EditorTextElement = EditorElementBase & {
   roundedBackground: boolean;
 };
 
+/**
+ * CSS/canvas font stacks for screenshot text. Canvas fillText on a detached
+ * canvas (never inserted into the document) can ignore generic families such
+ * as `ui-rounded` and fall back to a different face than the live editor.
+ */
+export const EDITOR_TEXT_FONT_STACKS = {
+  sans: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+  serif: "Georgia, 'Times New Roman', serif",
+  mono: "'SFMono-Regular', Consolas, monospace",
+  rounded:
+    "ui-rounded, 'SF Pro Rounded', 'Arial Rounded MT Bold', system-ui, sans-serif",
+} as const;
+
+export function editorTextFontStack(
+  family: EditorTextElement["fontFamily"],
+): string {
+  return EDITOR_TEXT_FONT_STACKS[family];
+}
+
+/** Canvas `font` shorthand. Always includes style so parsers do not drop the family list. */
+export function editorTextCanvasFont(
+  element: Pick<EditorTextElement, "italic" | "bold" | "fontSize" | "fontFamily">,
+): string {
+  return [
+    element.italic ? "italic" : "normal",
+    element.bold ? "700" : "400",
+    `${element.fontSize}px`,
+    editorTextFontStack(element.fontFamily),
+  ].join(" ");
+}
+
+/** Hidden host so export canvases stay in the document while text is painted. */
+export const EDITOR_PAINT_CANVAS_HOST_ID = "captures-editor-paint-canvas-host";
+
+/**
+ * Create a canvas that is attached to `document.body` while we paint. WebKit
+ * (macOS Tauri) can resolve `ui-rounded` / system UI fonts on the on-screen
+ * editor canvas but fall back to a different family on a detached canvas, so
+ * the compression after-frame would show a different typeface on text blobs.
+ */
+export function createDocumentPaintCanvas(
+  width: number,
+  height: number,
+): HTMLCanvasElement {
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(width));
+  canvas.height = Math.max(1, Math.round(height));
+  if (document.body) {
+    let host = document.getElementById(EDITOR_PAINT_CANVAS_HOST_ID);
+    if (!host) {
+      host = document.createElement("div");
+      host.id = EDITOR_PAINT_CANVAS_HOST_ID;
+      host.setAttribute("aria-hidden", "true");
+      host.style.cssText = [
+        "position:fixed",
+        "left:-10000px",
+        "top:0",
+        "width:1px",
+        "height:1px",
+        "overflow:hidden",
+        "pointer-events:none",
+      ].join(";");
+      document.body.appendChild(host);
+    }
+    host.appendChild(canvas);
+  }
+  return canvas;
+}
+
+export async function loadEditorTextFonts(): Promise<void> {
+  const fonts = typeof document === "undefined" ? undefined : document.fonts;
+  if (!fonts?.load) return;
+  const specs = Object.values(EDITOR_TEXT_FONT_STACKS).flatMap((stack) => [
+    `normal 400 64px ${stack}`,
+    `normal 700 64px ${stack}`,
+    `italic 400 64px ${stack}`,
+    `italic 700 64px ${stack}`,
+  ]);
+  await Promise.all(specs.map((spec) => fonts.load(spec).catch(() => [])));
+  if (fonts.ready) {
+    await fonts.ready.catch(() => undefined);
+  }
+}
+
 export type TextStylePreset =
   | "standard"
   | "rounded"

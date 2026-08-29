@@ -64,10 +64,53 @@ describe("CompressionPreview", () => {
     );
 
     expect(screen.queryByAltText("Before compression")).not.toBeInTheDocument();
-    const after = screen.getByAltText("After compression");
+    const after = screen.getByRole("img", { name: "After compression" });
+    expect(after.tagName).toBe("CANVAS");
     expect(after.parentElement).toHaveClass("compression-preview-after-clip");
     expect(screen.getByRole("group", { name: "Compression comparison" }))
       .toHaveClass("is-live");
+  });
+
+  it("sizes the live after canvas to the editor frame so text is not stretched", () => {
+    class MockResizeObserver {
+      private readonly callback: ResizeObserverCallback;
+
+      constructor(callback: ResizeObserverCallback) {
+        this.callback = callback;
+      }
+
+      observe(target: Element) {
+        Object.defineProperty(target, "clientWidth", { configurable: true, value: 640 });
+        Object.defineProperty(target, "clientHeight", { configurable: true, value: 480 });
+        this.callback(
+          [{ target, contentRect: target.getBoundingClientRect() } as ResizeObserverEntry],
+          this,
+        );
+      }
+
+      unobserve() {}
+
+      disconnect() {}
+    }
+    const previous = globalThis.ResizeObserver;
+    vi.stubGlobal("ResizeObserver", MockResizeObserver);
+
+    try {
+      render(
+        <CompressionPreview
+          beforeUrl={null}
+          afterUrl="blob:after"
+          beforeBytes={1_700_000}
+          afterBytes={330_000}
+          pending={false}
+          liveBefore
+        />,
+      );
+      const after = screen.getByRole("img", { name: "After compression" });
+      expect(after).toHaveStyle({ width: "640px", height: "480px" });
+    } finally {
+      vi.stubGlobal("ResizeObserver", previous);
+    }
   });
 
   it("shows encoding status while the after frame is pending", () => {

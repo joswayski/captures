@@ -113,11 +113,15 @@ import {
   snapResizedBounds,
   snapTranslatedBounds,
   stackDropLightFocusAtPoint,
+  createDocumentPaintCanvas,
   defaultTextBoxWidth,
+  editorTextCanvasFont,
+  editorTextFontStack,
   estimateTextWidth,
   fitAutoWidthTextElement,
   fittedAutoWidthTextBox,
   isAutoWidthText,
+  loadEditorTextFonts,
   TEXT_LINE_HEIGHT_RATIO,
   TEXT_OPTICAL_CENTER_NUDGE_RATIO,
   textBackgroundPad,
@@ -572,12 +576,7 @@ function replaceElement(
 }
 
 function fontFamily(element: Extract<ScreenshotElement, { kind: "text" }>): string {
-  if (element.fontFamily === "serif") return "Georgia, 'Times New Roman', serif";
-  if (element.fontFamily === "mono") return "'SFMono-Regular', Consolas, monospace";
-  if (element.fontFamily === "rounded") {
-    return "ui-rounded, 'SF Pro Rounded', 'Arial Rounded MT Bold', system-ui, sans-serif";
-  }
-  return "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+  return editorTextFontStack(element.fontFamily);
 }
 
 /** Offscreen 2D context for measuring live text while typing (not the editor canvas). */
@@ -585,17 +584,15 @@ let textMetricsContext: CanvasRenderingContext2D | null | undefined;
 
 function measureTextElementLine(element: EditorTextElement, line: string): number {
   if (textMetricsContext === undefined) {
-    textMetricsContext = typeof document === "undefined"
-      ? null
-      : document.createElement("canvas").getContext("2d");
+    if (typeof document === "undefined") {
+      textMetricsContext = null;
+    } else {
+      const metricsCanvas = createDocumentPaintCanvas(1, 1);
+      textMetricsContext = metricsCanvas.getContext("2d");
+    }
   }
   if (!textMetricsContext) return estimateTextWidth(line, element.fontSize);
-  textMetricsContext.font = [
-    element.italic ? "italic" : "",
-    element.bold ? "700" : "400",
-    `${element.fontSize}px`,
-    fontFamily(element),
-  ].filter(Boolean).join(" ");
+  textMetricsContext.font = editorTextCanvasFont(element);
   const width = textMetricsContext.measureText(line || " ").width;
   return Number.isFinite(width) && width > 0
     ? width
@@ -870,12 +867,7 @@ function drawText(
   const boxWidth = Math.max(element.fontSize * 0.5, element.width);
   const lineHeight = element.fontSize * TEXT_LINE_HEIGHT_RATIO;
   context.save();
-  context.font = [
-    element.italic ? "italic" : "",
-    element.bold ? "700" : "400",
-    `${element.fontSize}px`,
-    fontFamily(element),
-  ].filter(Boolean).join(" ");
+  context.font = editorTextCanvasFont(element);
   context.textAlign = element.align;
   const lines = wrapTextLines(
     element.text,
@@ -1182,22 +1174,25 @@ function rasterizeLayersToImage(
   if (missing) {
     throw new Error(`${missing.name} has not finished loading.`);
   }
-  const canvas = window.document.createElement("canvas");
-  canvas.width = Math.max(1, Math.round(document.width));
-  canvas.height = Math.max(1, Math.round(document.height));
+  const canvas = createDocumentPaintCanvas(document.width, document.height);
   const context = canvas.getContext("2d");
-  if (!context) throw new Error("Canvas rendering is unavailable.");
+  if (!context) {
+    canvas.remove();
+    throw new Error("Canvas rendering is unavailable.");
+  }
   context.clearRect(0, 0, canvas.width, canvas.height);
   if (background) {
     context.fillStyle = background;
     context.fillRect(0, 0, canvas.width, canvas.height);
   }
   paintLayerStack(context, layers, imageCache);
-  return {
+  const raster = {
     src: canvas.toDataURL("image/png"),
     width: canvas.width,
     height: canvas.height,
   };
+  canvas.remove();
+  return raster;
 }
 
 function createMergedImageLayer(
@@ -2413,7 +2408,13 @@ export function ScreenshotEditor() {
   ]);
 
   useEffect(() => {
-    paintEditorCanvas();
+    let cancelled = false;
+    void loadEditorTextFonts().then(() => {
+      if (!cancelled) paintEditorCanvas();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [imageRevision, paintEditorCanvas]);
 
   // Paint the wand's magnified color loupe whenever the sample pixel moves.
@@ -4401,12 +4402,15 @@ export function ScreenshotEditor() {
       .filter((element): element is EditorImageElement => element.kind === "image" && element.visible)
       .find((element) => imageCacheRef.current.get(element.src)?.status !== "loaded");
     if (missing) throw new Error(`${missing.name} has not finished loading.`);
-    const source = window.document.createElement("canvas");
-    source.width = current.width;
-    source.height = current.height;
+    const source = createDocumentPaintCanvas(current.width, current.height);
     const sourceContext = source.getContext("2d");
-    if (!sourceContext) throw new Error("Canvas rendering is unavailable.");
+    if (!sourceContext) {
+      source.remove();
+      throw new Error("Canvas rendering is unavailable.");
+    }
     renderScreenshot(sourceContext, current, imageCacheRef.current);
+    // Detach after painting; the bitmap stays on the element for toBlob/export.
+    source.remove();
     const dimensions = screenshotOutputDimensions(
       current,
       exportSize,
@@ -4448,6 +4452,7 @@ export function ScreenshotEditor() {
       setEstimatePending(true);
       void (async () => {
         try {
+          await loadEditorTextFonts();
           const canvas = renderFlattened();
           // PNG color quant and lossy WebP go through Rust so Est. size matches save.
           // JPEG stays in-browser (toBlob quality matches our encoder closely enough).
@@ -4519,6 +4524,7 @@ export function ScreenshotEditor() {
     setError("");
     clearSuccess();
     try {
+      await loadEditorTextFonts();
       const imagePng = await canvasPngBytes(renderFlattened());
       await invoke("copy_screenshot_edit", { imagePng });
       showSuccess("copy", "Copied to clipboard");
@@ -4574,6 +4580,7 @@ export function ScreenshotEditor() {
       const overwriteSource = !savingCopy
         && !sourceMissing
         && artifact.path === destinationPath;
+      await loadEditorTextFonts();
       const imagePng = await canvasPngBytes(renderFlattened());
       const result = await invoke<SavedScreenshotEdit>("save_screenshot_edit", {
         request: {
@@ -4678,6 +4685,7 @@ export function ScreenshotEditor() {
     // still local by `finally` (stale response or error) gets revoked.
     let afterUrl: string | null = null;
     try {
+      await loadEditorTextFonts();
       const canvas = renderFlattened();
       const beforePng = await canvasPngBytes(canvas);
 

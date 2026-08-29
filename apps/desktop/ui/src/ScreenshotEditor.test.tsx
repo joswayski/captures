@@ -209,6 +209,7 @@ describe("ScreenshotEditor", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.clearAllMocks();
+    document.getElementById("captures-editor-paint-canvas-host")?.remove();
   });
 
   it("restores a saved editor draft and can discard it", async () => {

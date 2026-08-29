@@ -2418,7 +2418,9 @@
 }
 
 .compression-preview-before-clip img,
-.compression-preview-after-clip img {
+.compression-preview-after-clip img,
+.compression-preview-before-clip canvas,
+.compression-preview-after-clip canvas {
   position: absolute;
   top: 0;
   height: 100%;
@@ -2427,6 +2429,7 @@
 }
 
 .compression-preview-frame.is-live .compression-preview-after-clip img,
+.compression-preview-frame.is-live .compression-preview-after-clip canvas,
 .compression-preview-frame.is-cover .compression-preview-before-clip img,
 .compression-preview-frame.is-cover .compression-preview-after-clip img {
   object-fit: fill;

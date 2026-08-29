@@ -21,6 +21,73 @@ export type CompressionPreviewProps = {
   className?: string;
 };
 
+function overlayBoxStyle(
+  frameWidth: number,
+  frameHeight: number,
+  split: number,
+  origin: "before" | "after",
+): { width: number; height: number; left?: string } | undefined {
+  if (frameWidth <= 0 || frameHeight <= 0) return undefined;
+  return {
+    width: frameWidth,
+    height: frameHeight,
+    ...(origin === "after" ? { left: `${-(split / 100) * frameWidth}px` } : {}),
+  };
+}
+
+/**
+ * Paint the compressed encode into a canvas whose backing store is the file's
+ * native pixels and whose CSS box matches the live editor canvas. Scaling an
+ * `<img>` uses a different interpolator than `<canvas>`, which makes text
+ * blobs look like a different typeface at the before/after split.
+ */
+function LiveAfterCanvas({
+  url,
+  frameWidth,
+  frameHeight,
+  split,
+}: {
+  url: string;
+  frameWidth: number;
+  frameHeight: number;
+  split: number;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const image = new Image();
+    let cancelled = false;
+    image.onload = () => {
+      if (cancelled) return;
+      const width = Math.max(1, image.naturalWidth || image.width);
+      const height = Math.max(1, image.naturalHeight || image.height);
+      if (canvas.width !== width) canvas.width = width;
+      if (canvas.height !== height) canvas.height = height;
+      const context = canvas.getContext("2d");
+      if (!context) return;
+      context.imageSmoothingEnabled = false;
+      context.clearRect(0, 0, width, height);
+      context.drawImage(image, 0, 0, width, height);
+    };
+    image.src = url;
+    return () => {
+      cancelled = true;
+    };
+  }, [url]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      className="compression-preview-image compression-preview-after"
+      role="img"
+      aria-label="After compression"
+      style={overlayBoxStyle(frameWidth, frameHeight, split, "after")}
+    />
+  );
+}
+
 /**
  * Draggable before/after split for export comparison.
  * “Before” is the current canvas or source frame; “after” is the compressed encode.
@@ -46,14 +113,17 @@ export function CompressionPreview({
     });
   }, [splitKey]);
 
-  const [frameWidth, setFrameWidth] = useState(0);
+  const [frameSize, setFrameSize] = useState({ width: 0, height: 0 });
   const frameRef = useRef<HTMLDivElement>(null);
   const draggingRef = useRef(false);
 
   useLayoutEffect(() => {
     const frame = frameRef.current;
     if (!frame) return;
-    const update = () => setFrameWidth(frame.clientWidth);
+    const update = () => setFrameSize({
+      width: frame.clientWidth,
+      height: frame.clientHeight,
+    });
     if (typeof ResizeObserver === "undefined") {
       queueMicrotask(update);
       return;
@@ -86,6 +156,7 @@ export function CompressionPreview({
   const showAfter = Boolean(afterUrl);
   const showBeforeImage = Boolean(beforeUrl) && !liveBefore;
   const showSplit = showAfter && (liveBefore || showBeforeImage);
+  const { width: frameWidth, height: frameHeight } = frameSize;
 
   return (
     <div
@@ -100,19 +171,16 @@ export function CompressionPreview({
       aria-label="Compression comparison"
     >
       {liveBefore ? (
-        showAfter && (
+        showAfter && afterUrl && (
           <div
             className="compression-preview-after-clip"
             style={{ left: `${split}%` }}
           >
-            <img
-              className="compression-preview-image compression-preview-after"
-              src={afterUrl ?? undefined}
-              alt="After compression"
-              draggable={false}
-              style={frameWidth > 0
-                ? { width: frameWidth, left: `${-(split / 100) * frameWidth}px` }
-                : undefined}
+            <LiveAfterCanvas
+              url={afterUrl}
+              frameWidth={frameWidth}
+              frameHeight={frameHeight}
+              split={split}
             />
           </div>
         )
@@ -145,7 +213,7 @@ export function CompressionPreview({
                 src={beforeUrl ?? undefined}
                 alt="Before compression"
                 draggable={false}
-                style={frameWidth > 0 ? { width: frameWidth } : undefined}
+                style={overlayBoxStyle(frameWidth, frameHeight, split, "before")}
               />
             </div>
           )}
