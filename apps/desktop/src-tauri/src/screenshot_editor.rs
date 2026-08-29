@@ -1072,7 +1072,20 @@ mod tests {
 
     #[test]
     fn png_highest_compress_keeps_truecolor_instead_of_a_palette() {
-        let image = photo_like(240, 160, true);
+        // Flat UI chrome: a few solid fills. High's 256-color index beats RGBA
+        // here; photo-like noise can go the other way, which is why Highest
+        // exists as a no-quantization option.
+        let image = RgbaImage::from_fn(320, 200, |x, y| {
+            if y < 36 {
+                Rgba([28, 30, 38, 255])
+            } else if x < 72 {
+                Rgba([18, 20, 26, 255])
+            } else if (120..200).contains(&x) && (80..140).contains(&y) {
+                Rgba([47, 124, 246, 255])
+            } else {
+                Rgba([246, 247, 249, 255])
+            }
+        });
         let preserve = encode_export(
             &image,
             ScreenshotEditFormat::Png,
@@ -1108,7 +1121,7 @@ mod tests {
         assert_eq!(png_color_type(&high), png::ColorType::Indexed);
         assert!(
             high.len() < highest.len(),
-            "256-color High should beat lossless Highest packing (high={}, highest={})",
+            "256-color High should beat lossless Highest packing on flat UI (high={}, highest={})",
             high.len(),
             highest.len()
         );
