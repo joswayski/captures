@@ -201,6 +201,22 @@
   white-space: nowrap;
 }
 
+/*
+ * Native chip window is 168×48. The design harness is a full browser, so pin
+ * the chip to that size in the stack corner. The query is above the native
+ * window width so packaged builds keep filling their webview.
+ */
+@media (min-width: 200px) {
+  .mini-previews-hidden {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    width: 160px;
+    height: 40px;
+    margin: 4px;
+  }
+}
+
 @keyframes mini-previews-hidden-in {
   from {
     opacity: 0;
