@@ -3,7 +3,7 @@ function plainText(markdown: string) {
     .replace(/\[([^\]]+)\]\([^\s)]+(?:\s+"[^"]*")?\)/gu, "$1")
     .replace(/<([^>]+)>/gu, "$1")
     .replace(/[*_~`]+/gu, "")
-    .replace(/\s+by\s+@[\w-]+\s+in\s+https?:\/\/\S+\s*$/iu, "")
+    .replace(/\s+by\s+@[\w-]+(?:\[bot\])?\s+in\s+https?:\/\/\S+\s*$/iu, "")
     .trim();
 }
 

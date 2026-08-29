@@ -21,6 +21,9 @@ describe("releaseNoteItems", () => {
       "Improve capture parity",
       "Fix the region selector",
     ]);
+    expect(releaseNoteItems(
+      "* Fix Linux startup crash by @devin-ai-integration[bot] in https://github.com/joswayski/captures/pull/297\n* @devin-ai-integration[bot] made their first contribution in https://github.com/joswayski/captures/pull/297",
+    )).toEqual(["Fix Linux startup crash"]);
   });
 });
 
