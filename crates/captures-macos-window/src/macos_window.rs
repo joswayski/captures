@@ -1155,13 +1155,18 @@ fn apply_capture_cursor(window: &WebviewWindow, cursor: CaptureCursor) -> Result
         set_cursor_rects_enabled(native_window, true);
         apply_cursor_mode(mode);
         let _ = set_tracked_cursor(window, mode, CursorSurface::CaptureOverlay);
-        native_window.resetCursorRects();
-        if let Some(view) = native_window.contentView() {
-            native_window.invalidateCursorRectsForView(&view);
-        }
-        synthesize_cursor_update(native_window);
+        refresh_webkit_cursor_rects(native_window);
     }
     Ok(())
+}
+
+fn refresh_webkit_cursor_rects(native_window: &NSWindow) {
+    set_cursor_rects_enabled(native_window, true);
+    native_window.resetCursorRects();
+    if let Some(view) = native_window.contentView() {
+        native_window.invalidateCursorRectsForView(&view);
+    }
+    synthesize_cursor_update(native_window);
 }
 
 fn synthesize_cursor_update(native_window: &NSWindow) {
@@ -1191,19 +1196,36 @@ fn ensure_capture_cursor_monitor() {
     if guard.is_some() {
         return;
     }
-    // SAFETY: The block only reads process-local atomics and sets NSCursor on
-    // the main AppKit thread (local monitors run there). Returning the event
-    // pointer unchanged leaves delivery intact.
+    // SAFETY: The block only reads process-local atomics and touches NSCursor /
+    // NSWindow on the main AppKit thread (local monitors run there). Returning
+    // the event pointer unchanged leaves delivery intact.
     let block = RcBlock::new(|event: ptr::NonNull<NSEvent>| -> *mut NSEvent {
-        if capture_overlay_owns_cursor() {
-            apply_cursor_mode(stored_capture_cursor().kind.to_cursor_mode());
-        }
+        reassert_capture_cursor_after_modifier_change();
         event.as_ptr()
     });
     let monitor = unsafe {
         NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::FlagsChanged, &block)
     };
     *guard = monitor.map(MainThreadMonitor);
+}
+
+fn reassert_capture_cursor_after_modifier_change() {
+    if !capture_overlay_owns_cursor() {
+        return;
+    }
+    let cursor = stored_capture_cursor();
+    if cursor.reasserts_native_cursor_on_modifiers() {
+        apply_cursor_mode(cursor.kind.to_cursor_mode());
+        return;
+    }
+    // Selector and window capture keep CSS cursors. Forcing NSCursor here would
+    // replace panel grab/pointer until the next mouse move.
+    let Some(main_thread) = MainThreadMarker::new() else {
+        return;
+    };
+    if let Some(window) = NSApplication::sharedApplication(main_thread).keyWindow() {
+        refresh_webkit_cursor_rects(&window);
+    }
 }
 
 /// Drops capture cursor ownership without requiring the overlay window.

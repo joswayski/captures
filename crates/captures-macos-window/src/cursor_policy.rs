@@ -86,6 +86,14 @@ impl CaptureCursor {
     pub const fn disables_cursor_rects(self) -> bool {
         self.native_owned
     }
+
+    /// Shortcut-modifier transitions restore the arrow. Native-owned overlays
+    /// re-apply `NSCursor`; selector/window modes refresh WebKit rectangles so
+    /// panel grab/pointer and CSS camera cursors are not overwritten.
+    #[must_use]
+    pub const fn reasserts_native_cursor_on_modifiers(self) -> bool {
+        self.native_owned
+    }
 }
 
 #[cfg(test)]
@@ -132,5 +140,14 @@ mod tests {
         let display = CaptureCursor::selector(false, false);
         assert_eq!(display.kind, CaptureCursorKind::Arrow);
         assert!(!display.native_owned);
+    }
+
+    #[test]
+    fn modifier_changes_keep_css_cursors_on_the_capture_menu() {
+        assert!(CaptureCursor::overlay_region().reasserts_native_cursor_on_modifiers());
+        assert!(!CaptureCursor::overlay_window().reasserts_native_cursor_on_modifiers());
+        assert!(!CaptureCursor::selector_region().reasserts_native_cursor_on_modifiers());
+        assert!(!CaptureCursor::selector_window().reasserts_native_cursor_on_modifiers());
+        assert!(!CaptureCursor::selector_display().reasserts_native_cursor_on_modifiers());
     }
 }
