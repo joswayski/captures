@@ -114,9 +114,14 @@ import {
   shapeLocalPoint,
   shapeRotation,
   shapeRotationHandleOffset,
+  shapeRotationHandlePoint,
   shapeRotationOrigin,
   hitTestShapeRotationHandle,
   snapShapeRotation,
+  snapShapeRotationDegrees,
+  shapeRotationDegrees,
+  shapeRotationFromDegrees,
+  SHAPE_ROTATION_SNAP_DEGREES,
   withShapeRotation,
   snapResizedBounds,
   snapTranslatedBounds,
@@ -349,6 +354,14 @@ const TEXT_STYLE_ITEMS: Array<{ preset: TextStylePreset; label: string }> = [
   { preset: "box", label: "Box" },
   { preset: "mono-box", label: "Mono Box" },
   { preset: "rounded-box", label: "Rounded Box" },
+];
+
+const SHAPE_ROTATION_SLIDER_MARKS = [
+  { value: -180, label: "−180°", shortLabel: "−180" },
+  { value: -90, label: "−90°", shortLabel: "−90" },
+  { value: 0, label: "0°", shortLabel: "0" },
+  { value: 90, label: "90°", shortLabel: "90" },
+  { value: 180, label: "180°", shortLabel: "180" },
 ];
 
 /** Tools that draw closed or open vector shapes (not freehand). */
@@ -742,11 +755,11 @@ function drawShapeRotationHandle(
   const midX = bounds.x + bounds.width / 2;
   const offset = shapeRotationHandleOffset(1 / unit);
   const handleY = bounds.y - offset;
-  const radius = 5.25 * unit;
+  const radius = 6.5 * unit;
   context.save();
-  context.globalAlpha = 0.9;
+  context.globalAlpha = 0.94;
   context.strokeStyle = accentColor;
-  context.fillStyle = "rgba(255, 255, 255, 0.94)";
+  context.fillStyle = "rgba(255, 255, 255, 0.96)";
   context.lineWidth = 1.2 * unit;
   context.beginPath();
   context.moveTo(midX, bounds.y);
@@ -756,6 +769,26 @@ function drawShapeRotationHandle(
   context.arc(midX, handleY, radius, 0, Math.PI * 2);
   context.fill();
   context.stroke();
+  // Compact rotate glyph inside the grip so the control reads as rotation.
+  context.strokeStyle = accentColor;
+  context.fillStyle = accentColor;
+  context.lineWidth = 1.35 * unit;
+  context.lineCap = "round";
+  context.lineJoin = "round";
+  const glyphR = 3.15 * unit;
+  context.beginPath();
+  context.arc(midX, handleY, glyphR, Math.PI * 0.35, Math.PI * 1.75);
+  context.stroke();
+  const tipAngle = Math.PI * 1.75;
+  const tipX = midX + Math.cos(tipAngle) * glyphR;
+  const tipY = handleY + Math.sin(tipAngle) * glyphR;
+  const arrow = 2.15 * unit;
+  context.beginPath();
+  context.moveTo(tipX, tipY);
+  context.lineTo(tipX - arrow * 0.85, tipY - arrow * 0.15);
+  context.lineTo(tipX - arrow * 0.1, tipY + arrow * 0.9);
+  context.closePath();
+  context.fill();
   context.restore();
 }
 
@@ -2343,6 +2376,26 @@ export function ScreenshotEditor() {
 
   const displayScale = zoomMode === "fit" ? fitScale : zoom / 100;
 
+  const shapeRotateHud = useMemo(() => {
+    if (
+      !selected
+      || selected.kind !== "shape"
+      || !selected.visible
+      || selected.locked
+      || cropSelection
+    ) {
+      return null;
+    }
+    const handle = shapeRotationHandlePoint(selected, displayScale);
+    const degrees = shapeRotationDegrees(selected);
+    return {
+      handle,
+      degrees,
+      snapDegrees: snapShapeRotationDegrees(degrees),
+      placeLeft: Boolean(editorDocument && handle.x > editorDocument.width * 0.58),
+    };
+  }, [cropSelection, displayScale, editorDocument, selected]);
+
   const idleOverflowPreview = useMemo(() => {
     if (canvasExpandPreview || !editorDocument || !overflowHoverId) return null;
     const element = editorDocument.elements.find((item) => item.id === overflowHoverId);
@@ -3641,7 +3694,7 @@ export function ScreenshotEditor() {
           );
           if (annotationHit?.kind === "rotate") {
             setCurveHoverTip({
-              text: "Drag to rotate · Hold Shift for 15°",
+              text: "Drag to rotate smoothly",
               clientX: event.clientX,
               clientY: event.clientY,
             });
@@ -5421,6 +5474,44 @@ export function ScreenshotEditor() {
             }}
             onDoubleClick={handleCanvasDoubleClick}
           />
+          {shapeRotateHud && selected?.kind === "shape" && (
+            <div
+              className={[
+                "screenshot-shape-rotate-hud",
+                shapeRotateHud.placeLeft ? "is-left" : "",
+              ].filter(Boolean).join(" ")}
+              style={{
+                left: shapeRotateHud.handle.x * displayScale,
+                top: shapeRotateHud.handle.y * displayScale,
+              }}
+              onPointerDown={(event) => event.stopPropagation()}
+              onPointerMove={(event) => event.stopPropagation()}
+              onDoubleClick={(event) => event.stopPropagation()}
+            >
+              <span className="screenshot-shape-rotate-hud-icon" aria-hidden="true">
+                <EditorIcon name="rotate-clockwise" />
+              </span>
+              <RangeSlider
+                className="screenshot-shape-rotate-hud-slider"
+                ariaLabel="Shape rotation"
+                min={-180}
+                max={180}
+                step={SHAPE_ROTATION_SNAP_DEGREES}
+                value={shapeRotateHud.snapDegrees}
+                valueText={`${shapeRotateHud.degrees}°`}
+                marks={SHAPE_ROTATION_SLIDER_MARKS}
+                disabled={selected.locked}
+                onChange={(degrees) => {
+                  if (selected.kind !== "shape") return;
+                  updateSelected((element) => (
+                    element.kind === "shape"
+                      ? withShapeRotation(element, shapeRotationFromDegrees(degrees))
+                      : element
+                  ));
+                }}
+              />
+            </div>
+          )}
           {showCompressCompare && (
             <CompressionPreview
               className="is-embed is-cover"
@@ -6710,8 +6801,8 @@ export function ScreenshotEditor() {
             )}
             {selected.kind === "shape" && (
               <p>
-                Drag the circle above the selection to rotate. Hold Shift for 15°
-                steps.
+                Drag the rotate handle for a smooth spin. Use the slider beside
+                it to snap in {SHAPE_ROTATION_SNAP_DEGREES}° steps.
               </p>
             )}
           </section>

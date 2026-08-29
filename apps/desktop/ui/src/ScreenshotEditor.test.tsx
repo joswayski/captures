@@ -2029,7 +2029,9 @@ describe("ScreenshotEditor", () => {
       clientX: handle.x,
       clientY: handle.y,
     });
-    expect(screen.getByText("Drag to rotate · Hold Shift for 15°")).toBeInTheDocument();
+    expect(screen.getByText("Drag to rotate smoothly")).toBeInTheDocument();
+    const rotationSlider = screen.getByRole("slider", { name: "Shape rotation" });
+    expect(rotationSlider).toHaveAttribute("aria-valuetext", "0°");
 
     fireEvent.pointerDown(canvas, {
       button: 0,
@@ -2054,6 +2056,10 @@ describe("ScreenshotEditor", () => {
         name: /RectangleShape/,
       }),
     ).toHaveLength(1);
+
+    fireEvent.change(rotationSlider, { target: { value: "90" } });
+    expect(screen.getByRole("slider", { name: "Shape rotation" }))
+      .toHaveAttribute("aria-valuetext", "90°");
   });
 
   it("deselects the active layer when clicking the empty viewport chrome", async () => {

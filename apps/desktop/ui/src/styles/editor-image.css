@@ -879,6 +879,62 @@
   word-break: normal;
 }
 
+/* Icon + 15° snap slider parked beside the canvas rotate grip. */
+.screenshot-shape-rotate-hud {
+  position: absolute;
+  z-index: 7;
+  display: flex;
+  width: max-content;
+  max-width: 220px;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-2) var(--s-3) var(--s-2) var(--s-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  color: var(--text);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-md);
+  transform: translate(14px, -50%);
+  pointer-events: auto;
+}
+
+.screenshot-shape-rotate-hud.is-left {
+  transform: translate(calc(-100% - 14px), -50%);
+}
+
+.screenshot-shape-rotate-hud-icon {
+  display: grid;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: var(--r-sm);
+  color: var(--theme-accent);
+  background: rgba(var(--theme-accent-rgb), 0.12);
+}
+
+.screenshot-shape-rotate-hud-icon svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.screenshot-shape-rotate-hud-slider {
+  width: 148px;
+}
+
+.screenshot-shape-rotate-hud-slider.range-slider.has-marks {
+  grid-template-rows: 14px 18px 12px;
+}
+
+.screenshot-shape-rotate-hud-slider .range-slider-value output {
+  color: var(--text);
+}
+
 /* Fixed width so title swaps do not reflow the toast. */
 .screenshot-drop-overlay {
   position: fixed;

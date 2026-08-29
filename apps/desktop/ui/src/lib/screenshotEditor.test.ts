@@ -60,9 +60,12 @@ import {
   resizeElement,
   shapeLocalBounds,
   shapeRotation,
+  shapeRotationDegrees,
+  shapeRotationFromDegrees,
   shapeRotationHandlePoint,
   shapeWorldPoint,
   snapShapeRotation,
+  snapShapeRotationDegrees,
   withShapeRotation,
   shiftLockedCropAspect,
   snapResizedBounds,
@@ -1362,6 +1365,11 @@ describe("screenshot editor geometry", () => {
 
     const quarter = withShapeRotation(rectangle, Math.PI / 2);
     expect(shapeRotation(quarter)).toBeCloseTo(Math.PI / 2, 10);
+    expect(shapeRotationDegrees(quarter)).toBe(90);
+    expect(withShapeRotation(rectangle, shapeRotationFromDegrees(90)).rotation)
+      .toBeCloseTo(Math.PI / 2, 10);
+    expect(snapShapeRotationDegrees(37)).toBe(30);
+    expect(snapShapeRotationDegrees(-7)).toBe(0);
     const unrotated = elementBounds(rectangle);
     const rotated = elementBounds(quarter);
     expect(rotated.width).toBeCloseTo(unrotated.height, 5);

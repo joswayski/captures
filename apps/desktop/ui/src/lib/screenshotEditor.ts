@@ -679,8 +679,11 @@ export type EditorShapeElement = EditorElementBase & {
 /** Screen-pixel length of the stem from the top of a selected shape to its rotate grip. */
 export const SHAPE_ROTATION_HANDLE_OFFSET_SCREEN_PX = 22;
 
-/** 15° steps when Shift is held while rotating. */
-export const SHAPE_ROTATION_SNAP_RADIANS = Math.PI / 12;
+/** Discrete angle stops for the on-canvas rotation slider. */
+export const SHAPE_ROTATION_SNAP_DEGREES = 15;
+
+/** Same step in radians (Shift-drag on the rotate handle). */
+export const SHAPE_ROTATION_SNAP_RADIANS = (SHAPE_ROTATION_SNAP_DEGREES * Math.PI) / 180;
 
 /**
  * Open stroke shapes that support multi-point Bezier curve controls
@@ -2382,6 +2385,26 @@ export function snapShapeRotation(radians: number, snap: boolean): number {
   if (!snap) return angle;
   return normalizeShapeRotation(
     Math.round(angle / SHAPE_ROTATION_SNAP_RADIANS) * SHAPE_ROTATION_SNAP_RADIANS,
+  );
+}
+
+/** Signed degrees in (−180, 180], matching `normalizeShapeRotation`. */
+export function shapeRotationDegrees(
+  element: Pick<EditorShapeElement, "rotation">,
+): number {
+  return Math.round(shapeRotation(element) * (180 / Math.PI));
+}
+
+export function shapeRotationFromDegrees(degrees: number): number {
+  if (!Number.isFinite(degrees)) return 0;
+  return normalizeShapeRotation((degrees * Math.PI) / 180);
+}
+
+/** Nearest 15° stop, kept in (−180, 180]. */
+export function snapShapeRotationDegrees(degrees: number): number {
+  if (!Number.isFinite(degrees)) return 0;
+  return Math.round(
+    snapShapeRotation(shapeRotationFromDegrees(degrees), true) * (180 / Math.PI),
   );
 }
 
