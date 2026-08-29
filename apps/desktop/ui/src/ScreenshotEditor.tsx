@@ -4477,6 +4477,11 @@ export function ScreenshotEditor() {
                 : null,
             });
           } else {
+            // Compress JPEG still needs the flattened PNG length as Est. size's
+            // baseline. Preserve quality keeps the capture file as the original.
+            if (qualityMode !== "preserve") {
+              sourceBytes = (await canvasPngBytes(canvas)).length;
+            }
             const estimateQuality = exportFormat === "jpeg" && qualityMode !== "preserve"
               ? Number(jpegQuality)
               : 100;
@@ -4725,6 +4730,7 @@ export function ScreenshotEditor() {
         setCompressPreviewError(String(reason));
         setCompressPreviewAfterUrl(null);
         setCompressPreviewAfterBytes(null);
+        setCompressPreviewBeforeBytes(null);
       }
     } finally {
       if (afterUrl) URL.revokeObjectURL(afterUrl);
@@ -4801,15 +4807,15 @@ export function ScreenshotEditor() {
       : estimatedSizeIsCap
         ? `≤ ${formatFileSize(maximumSizeBytes ?? 0)}`
         : `≈ ${formatFileSize(estimatedBytes)}`;
-  // Versus the Before image (flattened canvas), not the previous quality preset
-  // or a compact file already on disk.
+  // Versus the current flattened image from this estimate, then the Before
+  // badge. Do not keep a stale preview size after the canvas or output changes.
   const estimatedDelta = estimatedSizeIsCap || estimatePending
     ? null
     : formatFileSizeDelta(
       estimatedBytes,
       fileSizeDeltaBaseline(
         artifact.size_bytes,
-        compressPreviewBeforeBytes ?? estimateSourceBytes,
+        estimateSourceBytes ?? compressPreviewBeforeBytes,
       ),
     );
   const formatLabel = exportFormat === "jpeg"
