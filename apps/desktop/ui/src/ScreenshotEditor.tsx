@@ -1647,6 +1647,11 @@ export function ScreenshotEditor() {
   /** True when this session restored a disk draft from a previous editor close. */
   const [draftRestored, setDraftRestored] = useState(false);
   const [makeCopy, setMakeCopy] = useState(false);
+  /** In-progress canvas W/H text; the resize lands once, on Enter or blur. */
+  const [canvasSizeDraft, setCanvasSizeDraft] = useState<{
+    axis: "width" | "height";
+    text: string;
+  } | null>(null);
   const [saved, setSaved] = useState<SavedScreenshotEdit | null>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
@@ -1845,6 +1850,22 @@ export function ScreenshotEditor() {
     setSaved(null);
     clearSuccess();
   }, [clearSuccess, replaceDocument]);
+
+  const commitCanvasSize = useCallback((axis: "width" | "height", text: string) => {
+    setCanvasSizeDraft(null);
+    const current = documentRef.current;
+    const parsed = Number(text);
+    if (!current || !Number.isFinite(parsed)) return;
+    const next = Math.min(
+      MAX_SCREENSHOT_OUTPUT_DIMENSION,
+      Math.max(1, Math.round(parsed)),
+    );
+    commitDocument(resizeDocumentCanvas(
+      current,
+      axis === "width" ? next : current.width,
+      axis === "height" ? next : current.height,
+    ));
+  }, [commitDocument]);
 
   const ensureImage = useCallback((src: string): CachedImage => {
     const existing = imageCacheRef.current.get(src);
@@ -4617,8 +4638,9 @@ export function ScreenshotEditor() {
       );
       try {
         await invoke("reveal_artifact", { artifactId: result.artifact.id });
-      } catch (reason) {
-        setError(`The screenshot was saved, but its folder could not open: ${String(reason)}`);
+      } catch {
+        // The file is on disk; only the file manager handoff failed.
+        showSuccess("save", `Saved ${result.path} — its folder could not be opened`);
       }
     } catch (reason) {
       setError(String(reason));
@@ -4928,15 +4950,14 @@ export function ScreenshotEditor() {
               <NumberInput
                 compact
                 min={1}
-                max={16_384}
+                max={MAX_SCREENSHOT_OUTPUT_DIMENSION}
                 ariaLabel="Canvas width"
                 title="Canvas width"
-                value={editorDocument.width}
-                onChange={(width) => commitDocument(resizeDocumentCanvas(
-                  editorDocument,
-                  width,
-                  editorDocument.height,
-                ))}
+                value={canvasSizeDraft?.axis === "width"
+                  ? canvasSizeDraft.text
+                  : editorDocument.width}
+                onTextChange={(text) => setCanvasSizeDraft({ axis: "width", text })}
+                onCommit={(text) => commitCanvasSize("width", text)}
               />
             </label>
             <span className="screenshot-canvas-dim-sep" aria-hidden="true">×</span>
@@ -4945,15 +4966,14 @@ export function ScreenshotEditor() {
               <NumberInput
                 compact
                 min={1}
-                max={16_384}
+                max={MAX_SCREENSHOT_OUTPUT_DIMENSION}
                 ariaLabel="Canvas height"
                 title="Canvas height"
-                value={editorDocument.height}
-                onChange={(height) => commitDocument(resizeDocumentCanvas(
-                  editorDocument,
-                  editorDocument.width,
-                  height,
-                ))}
+                value={canvasSizeDraft?.axis === "height"
+                  ? canvasSizeDraft.text
+                  : editorDocument.height}
+                onTextChange={(text) => setCanvasSizeDraft({ axis: "height", text })}
+                onCommit={(text) => commitCanvasSize("height", text)}
               />
             </label>
             <span className="screenshot-canvas-toolbar-split" aria-hidden="true" />

@@ -1513,6 +1513,22 @@ describe("ScreenshotEditor", () => {
     expect(within(layers).getByText("Background")).toBeInTheDocument();
   });
 
+  it("resizes the canvas once per entry so undo restores the previous size", async () => {
+    render(<ScreenshotEditor />);
+    const canvasWidth = await screen.findByLabelText("Canvas width");
+
+    for (const text of ["1", "14", "140", "1400"]) {
+      fireEvent.change(canvasWidth, { target: { value: text } });
+    }
+    expect(canvasWidth).toHaveValue(1400);
+    fireEvent.keyDown(canvasWidth, { key: "Enter" });
+    expect(canvasWidth).toHaveValue(1400);
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(canvasWidth).toHaveValue(1440);
+    expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+  });
+
   it("rotates and flips a locked image layer with undo support", async () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Canvas width");
@@ -1864,6 +1880,7 @@ describe("ScreenshotEditor", () => {
 
     // Manual canvas growth creates empty margin; trim should re-enable.
     fireEvent.change(widthInput, { target: { value: "1600" } });
+    fireEvent.keyDown(widthInput, { key: "Enter" });
     await waitFor(() => {
       expect(within(canvasToolbar).getByRole("button", { name: "Trim edges" })).toBeEnabled();
     });
@@ -1882,6 +1899,7 @@ describe("ScreenshotEditor", () => {
     const canvas = screen.getByLabelText("Screenshot editing canvas");
 
     fireEvent.change(widthInput, { target: { value: "1600" } });
+    fireEvent.keyDown(widthInput, { key: "Enter" });
     const canvasTrim = within(canvasToolbar).getByRole("button", { name: "Trim edges" });
     await waitFor(() => {
       expect(canvasTrim).toBeEnabled();
