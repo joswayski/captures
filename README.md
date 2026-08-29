@@ -7,10 +7,6 @@ Captures is a cross-platform screen capture utility built for quick captures and
 
 ## A quick look
 
-A built-in editor for text, arrows, and shapes.
-
-![Captures screenshot editor with the Suez Canal, a Choke point label, a tiger on the left bank, and an Evergreen ship hanging off the right edge with an Expand canvas button](docs/images/screenshot-editor.jpg)
-
 <table>
   <tr>
     <td width="50%">
@@ -19,16 +15,21 @@ A built-in editor for text, arrows, and shapes.
       <sub><strong>Capture what you need</strong>. A region, a window, or the full display. Screenshot and record from the same menu.</sub>
     </td>
     <td width="50%">
-      <img src="docs/images/video-editor.jpg" alt="Captures video editor trimming a total solar eclipse to a few seconds of totality, with crop handles and save controls" width="100%">
+      <img src="docs/images/screenshot-editor.jpg" alt="Captures screenshot editor with the Suez Canal, a Choke point label, a tiger on the left bank, and an Evergreen ship hanging off the right edge with an Expand canvas button" width="100%">
       <br>
-      <sub><strong>Polish recordings</strong> with preview, trimming, crop and quality controls, and export options.</sub>
+      <sub><strong>Built-in editor</strong>. Add text, arrows, and shapes right after you capture.</sub>
     </td>
   </tr>
   <tr>
-    <td colspan="2" align="center">
-      <img src="docs/images/preferences.jpg" alt="Captures Preferences showing the appearance, accent color, and capture settings" width="72%">
+    <td width="50%">
+      <img src="docs/images/video-editor.jpg" alt="Captures video editor trimming a total solar eclipse to a few seconds of totality, with crop handles and save controls" width="100%">
       <br>
-      <sub><strong>Fully customizable</strong> with light or dark appearance, accent colors, shortcuts, and capture defaults.</sub>
+      <sub><strong>Polish recordings</strong>. Preview, trim, crop, and export video with quality and audio controls.</sub>
+    </td>
+    <td width="50%">
+      <img src="docs/images/preferences.jpg" alt="Captures Preferences showing the appearance, accent color, and capture settings" width="100%">
+      <br>
+      <sub><strong>Fully customizable</strong>. Light or dark appearance, accent colors, shortcuts, and capture defaults.</sub>
     </td>
   </tr>
 </table>
