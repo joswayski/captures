@@ -163,11 +163,11 @@ export function thumbnailStackHasLiveHitTarget(root: Document = document): boole
 }
 
 /**
- * Keep the native window interactive only over a live preview card or stack
- * overflow control. After a dismiss it may stay tall (shrinking blanks
- * WKWebView), and a deleting card keeps its layout slot while its particles
- * finish. Empty space and exiting slots must pass clicks through without
- * disabling the remaining cards.
+ * Keep the native window interactive only over a live preview card, stack
+ * overflow control, or hide-previews control. After a dismiss it may stay tall
+ * (shrinking blanks WKWebView), and a deleting card keeps its layout slot while
+ * its particles finish. Empty space and exiting slots must pass clicks through
+ * without disabling the remaining cards.
  *
  * When every card is exiting (or the stack is empty), ignore the cursor even
  * without a pointer sample. Platforms that cannot poll the cursor would
@@ -181,7 +181,7 @@ export function shouldIgnoreThumbnailCursorEvents(
   if (!position.inside) return false;
   const target = root.elementFromPoint(position.x, position.y);
   if (!target) return true;
-  if (target.closest(".thumbnail-overflow-cue")) return false;
+  if (target.closest(".thumbnail-overflow-cue, .thumbnail-collapse")) return false;
   const card = target.closest(".thumbnail-card");
   return !card || card.classList.contains("thumbnail-exiting");
 }
@@ -277,10 +277,13 @@ export function applyThumbnailNativeHover(
   );
   const currentCard = root.querySelector<HTMLElement>(THUMBNAIL_NATIVE_ACTIVE_SELECTOR);
   const directTarget = root.elementFromPoint(position.x, position.y);
-  const directOverflowCue = directTarget?.closest(".thumbnail-overflow-cue");
-  const overflowCue = directOverflowCue
+  const directStackControl = directTarget?.closest(
+    ".thumbnail-overflow-cue, .thumbnail-collapse",
+  );
+  const overflowCue = directStackControl
     ?? (
-      currentButton?.classList.contains("thumbnail-overflow-cue")
+      currentButton
+      && currentButton.matches(".thumbnail-overflow-cue, .thumbnail-collapse")
       && containsPoint(currentButton, position.x, position.y)
         ? currentButton
         : null

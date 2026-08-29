@@ -277,6 +277,7 @@ pub(crate) async fn prepare_capture_selector_inner(
         if !include_mini_previews {
             crate::hide_window(&app, "thumbnail");
         }
+        crate::hide_window(&app, "mini-previews-hidden");
         crate::hide_window(&app, "startup");
         crate::hide_recording_saved_notices(&app);
         crate::updates::defer_visible_notice(&app);

@@ -60,7 +60,7 @@ Preview builds update after every successful merge to `main` and may contain bug
 - Built-in screenshot editor — text, shapes, drawing with optional drop shadows, crop (drag from outside the canvas to reach an edge; hold Shift to lock aspect), layers that hang off the canvas stay clipped until you expand, erase to transparent; unsaved edits restore when you reopen
 - Trim, crop, resize, and adjust audio in recordings, with an estimated saved size and an in-editor before/after compression comparison
 - Default screenshot save format PNG, JPEG, or WebP (Capture History stays lossless PNG until you save); export with Tiny through High quality presets and an in-editor before/after comparison
-- Mini previews for quick copy, save, and drag into other apps
+- Mini previews for quick copy, save, and drag into other apps. Hide the stack to a corner chip when it covers the desktop; a new capture brings it back
 - Screenshots during an active recording
 - 30-day capture history, filtered by screenshots, video, or GIF
 - Light, dark, or system appearance across every Captures window

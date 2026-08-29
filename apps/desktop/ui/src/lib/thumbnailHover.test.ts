@@ -292,6 +292,25 @@ describe("applyThumbnailNativeHover", () => {
       .not.toHaveAttribute("data-thumbnail-native-active");
   });
 
+  it("keeps the hide-previews control clickable without activating a preview card", () => {
+    document.body.innerHTML = `
+      <button class="thumbnail-collapse">Hide previews</button>
+      <article class="thumbnail-card" data-thumbnail-native-active="true">
+        <button>Copy</button>
+      </article>
+    `;
+    const collapse = document.querySelector<HTMLButtonElement>(".thumbnail-collapse")!;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => collapse),
+    });
+
+    expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe("pointer");
+    expectNativePointerHover(collapse, true);
+    expect(document.querySelector(".thumbnail-card"))
+      .not.toHaveAttribute("data-thumbnail-native-active");
+  });
+
   it("moves hover directly to a remaining card after the stack changes", () => {
     document.body.innerHTML = `
       <article id="removed" class="thumbnail-card"><button>Delete</button></article>
@@ -372,6 +391,21 @@ describe("shouldIgnoreThumbnailCursorEvents", () => {
     });
     expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: true })).toBe(false);
     expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: false })).toBe(false);
+  });
+
+  it("keeps the hide-previews control interactive while live cards remain", () => {
+    document.body.innerHTML = `
+      <main class="thumbnail-stack">
+        <article class="thumbnail-card"><button>Copy</button></article>
+      </main>
+      <button class="thumbnail-collapse">Hide previews</button>
+    `;
+    const collapse = document.querySelector(".thumbnail-collapse")!;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => collapse),
+    });
+    expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: true })).toBe(false);
   });
 
   it("passes through the whole stack when every preview is exiting", () => {
