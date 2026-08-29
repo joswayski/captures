@@ -109,21 +109,17 @@
   border: 1px solid var(--glass-border);
   border-radius: var(--r-md);
   color: var(--glass-text);
-  background: var(--glass-strong);
+  /* Opaque fill (no backdrop-filter): translucent glass lets Chromium punch
+     through to the grab-cursor card, which flickers pointer vs default. */
+  background: rgb(15, 15, 18);
   box-shadow: var(--glass-shadow);
-  backdrop-filter: blur(14px);
-  cursor: pointer;
-  /*
-   * Do not scale this control. Scale from center punches holes in the hit
-   * target, and unfilled SVG strokes over a grab-cursor card flicker pointer
-   * vs default as the mouse crosses the glyph.
-   */
+  cursor: pointer !important;
   transform: none;
 }
 
 .thumbnail-collapse:hover,
 .thumbnail-collapse[data-native-pointer-hover="true"] {
-  background: var(--glass-raised);
+  background: rgb(38, 38, 45);
 }
 
 .thumbnail-collapse:active {
