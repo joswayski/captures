@@ -18,7 +18,7 @@ export const Route = createRootRoute({
         content:
           "Captures — a work-in-progress, cross-platform screen capture utility by Jose Valerio.",
       },
-      { name: "theme-color", content: "#f5f7fb" },
+      { name: "theme-color", content: "#101014" },
       { title: "Captures" },
     ],
     links: [
