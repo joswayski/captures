@@ -170,6 +170,12 @@ pub fn run() {
                 // Belt-and-suspenders if CloseRequested was prevented or skipped.
                 tauri::WindowEvent::Destroyed => {
                     clear_editor_layer_presence_for_window(window);
+                    if let Some(owner_id) =
+                        window.label().strip_prefix(SCREENSHOT_EDITOR_WINDOW_PREFIX)
+                        && let Some(state) = window.app_handle().try_state::<Arc<AppState>>()
+                    {
+                        state.drop_editor_artifacts_for_owner(owner_id);
+                    }
                     if is_editor_window_label(window.label())
                         || window.label() == "viewer"
                         || window.label().starts_with(VIEWER_WINDOW_PREFIX)
@@ -2055,6 +2061,10 @@ async fn delete_history_artifact(
         .recording_artifacts
         .lock()
         .retain(|artifact| artifact.summary.id != artifact_id);
+    state.forget_editor_artifacts_for_ids(
+        std::slice::from_ref(&artifact_id),
+        &open_screenshot_editor_owner_ids(&app),
+    );
     app.emit("capture-history-changed", ())
         .map_err(|error| error.to_string())?;
     Ok(())
@@ -2092,6 +2102,7 @@ async fn clear_capture_history(
         .recording_artifacts
         .lock()
         .retain(|artifact| !ids.iter().any(|id| id == &artifact.summary.id));
+    state.forget_editor_artifacts_for_ids(&ids, &open_screenshot_editor_owner_ids(&app));
     app.emit("capture-history-changed", ())
         .map_err(|error| error.to_string())?;
     Ok(())
@@ -2325,6 +2336,17 @@ const VIEWER_WINDOW_PREFIX: &str = "viewer-";
 
 fn viewer_window_label(artifact_id: &str) -> String {
     format!("{VIEWER_WINDOW_PREFIX}{artifact_id}")
+}
+
+fn open_screenshot_editor_owner_ids(app: &AppHandle) -> Vec<String> {
+    app.webview_windows()
+        .into_keys()
+        .filter_map(|label| {
+            label
+                .strip_prefix(SCREENSHOT_EDITOR_WINDOW_PREFIX)
+                .map(str::to_owned)
+        })
+        .collect()
 }
 
 fn remove_artifact(app: &AppHandle, state: &Arc<AppState>, artifact_id: &str) -> CommandResult<()> {

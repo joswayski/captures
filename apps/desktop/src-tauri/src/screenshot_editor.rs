@@ -414,9 +414,10 @@ pub async fn save_screenshot_edit(
             .map_err(|error| error.to_string())?;
         }
     } else {
-        // A folder save is not a new capture. Keep the export available for
-        // Reveal in Folder and later overwrites, but do not open a mini preview.
-        state.store_editor_artifact(artifact.clone());
+        // A folder save is not a new capture. Keep this editor's latest export
+        // available for Reveal in Folder and later overwrites, but do not open
+        // a mini preview. Repeated Save as new file replaces the previous slot.
+        state.store_editor_artifact(&request.artifact_id, artifact.clone());
     }
     if history_saved {
         app.emit("capture-history-changed", ())
