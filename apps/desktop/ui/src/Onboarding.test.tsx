@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { Onboarding } from "./Onboarding";
 import type { OnboardingState } from "./types";
@@ -227,13 +227,16 @@ describe("Onboarding", () => {
   });
 
   it("restarts after returning from Settings when access is still missing", async () => {
-    const now = Date.now();
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
-
     render(<Onboarding />);
     fireEvent.click(await screen.findByRole("button", { name: "Allow access" }));
     expect(await screen.findByRole("button", { name: "Restart Captures" })).toBeInTheDocument();
+    // Let the returned-from-Settings listeners attach before synthesizing blur/focus.
+    await act(async () => {
+      await Promise.resolve();
+    });
 
+    const now = 1_000_000;
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
     window.dispatchEvent(new Event("blur"));
     nowSpy.mockReturnValue(now + 3_000);
     window.dispatchEvent(new Event("focus"));
