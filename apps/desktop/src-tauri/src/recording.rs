@@ -3722,6 +3722,7 @@ pub fn reveal_recording_selector(
     #[cfg(target_os = "macos")]
     {
         captures_macos_window::reveal_window(&window).map_err(str::to_owned)?;
+        captures_macos_window::conceal_documents_under_opaque_capture_surface();
         captures_macos_window::elevate_capture_surface(&window).map_err(str::to_owned)?;
     }
     crate::set_click_through(&window, false).map_err(|error| error.to_string())?;

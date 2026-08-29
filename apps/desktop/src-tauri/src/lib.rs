@@ -1045,6 +1045,8 @@ fn show_screenshot_countdown(
     window.set_content_protected(cfg!(target_os = "windows"))?;
     window.show()?;
     #[cfg(target_os = "macos")]
+    captures_macos_window::conceal_documents_under_opaque_capture_surface();
+    #[cfg(target_os = "macos")]
     recording::focus_recording_window(app, "screenshot-countdown");
     if let Err(error) = window.set_focus() {
         eprintln!("failed to focus screenshot countdown: {error}");
