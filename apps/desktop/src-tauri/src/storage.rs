@@ -735,7 +735,7 @@ fn quantette_rgb(
     // Full error diffusion: optical mixing keeps hues closer to the original
     // while the leftover error reads as speckle / pixelation instead of a
     // global wash. Disable dedup — it fights dithering on busy screenshots.
-    let ditherer = FloydSteinberg::with_error_diffusion(1.0).unwrap_or_else(FloydSteinberg::new);
+    let ditherer = FloydSteinberg::with_error_diffusion(1.0).unwrap_or_default();
     let indexed = Pipeline::new()
         .palette_size(PaletteSize::from_u16_clamped(max_colors.clamp(2, 256)))
         .ditherer(ditherer)
