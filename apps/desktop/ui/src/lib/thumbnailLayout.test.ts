@@ -12,6 +12,7 @@ import {
   shouldScrollThumbnailStackToEnd,
   thumbnailStackContentHeight,
   thumbnailStackMotionClassNames,
+  restoreThumbnailStackShiftClass,
   thumbnailStackOverflow,
   thumbnailStackShiftPx,
   THUMBNAIL_CARD_HEIGHT_PX,
@@ -446,6 +447,17 @@ describe("thumbnail stack layout", () => {
       "thumbnail-stack-shift-instant",
     ]);
     expect(thumbnailStackMotionClassNames(null)).toEqual([]);
+  });
+
+  it("restores the shifting class from a leftover stack offset", () => {
+    const card = document.createElement("article");
+    card.style.setProperty("--thumbnail-stack-shift", `${THUMBNAIL_CARD_SLOT_PX}px`);
+    restoreThumbnailStackShiftClass(card);
+    expect(card).toHaveClass("thumbnail-stack-shifting");
+    card.style.removeProperty("--thumbnail-stack-shift");
+    card.classList.remove("thumbnail-stack-shifting");
+    restoreThumbnailStackShiftClass(card);
+    expect(card).not.toHaveClass("thumbnail-stack-shifting");
   });
 
   it("follows a survivor transition when another exit retargets it", async () => {

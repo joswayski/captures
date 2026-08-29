@@ -278,6 +278,19 @@ export function thumbnailStackMotionClassNames(card: HTMLElement | null): string
 }
 
 /**
+ * React `className` rewrites drop controller tokens. If a stacked offset is
+ * still applied, put the shifting class back before paint so the card cannot
+ * flash at its untranslated layout slot.
+ */
+export function restoreThumbnailStackShiftClass(card: HTMLElement | null): void {
+  if (!card) return;
+  const shiftPx = Number.parseFloat(card.style.getPropertyValue(STACK_SHIFT_VAR).trim());
+  if (Number.isFinite(shiftPx) && shiftPx > 0) {
+    card.classList.add(STACK_SHIFTING_CLASS);
+  }
+}
+
+/**
  * Visual translateY currently on `card`, in CSS pixels.
  * Prefers the computed matrix so a mid-ease freeze matches what the user sees.
  */

@@ -106,8 +106,8 @@ import {
   createThumbnailStackShiftController,
   shouldScrollThumbnailStackToEnd,
   thumbnailStackContentHeight,
-  thumbnailStackMotionClassNames,
   thumbnailStackOverflow,
+  restoreThumbnailStackShiftClass,
   THUMBNAIL_CARD_SLOT_PX,
   waitForThumbnailStackSettle,
 } from "./lib/thumbnailLayout";
@@ -5783,6 +5783,10 @@ export function ThumbnailCard({
     };
   }, []);
 
+  useLayoutEffect(() => {
+    restoreThumbnailStackShiftClass(cardRef.current);
+  });
+
   // After presence leaves, drop leave-held labels/ring once the ease finishes,
   // then hold the plain Edit icon for a short recovery window.
   useEffect(() => {
@@ -6068,10 +6072,6 @@ export function ThumbnailCard({
         exit ? `thumbnail-exit-${exit}` : "",
         usingDust ? "thumbnail-exit-dust" : "",
         isExiting ? "thumbnail-exiting" : "",
-        // The stack controller adds these via classList; a full className
-        // rewrite would drop the translate for a frame and the card would
-        // jump back to its layout slot as delete/dismiss starts.
-        ...thumbnailStackMotionClassNames(cardRef.current),
       ].filter(Boolean).join(" ")}
       // HTML inert disables all descendant input/focus for the whole exit animation.
       inert={isExiting ? true : undefined}
