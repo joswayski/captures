@@ -474,6 +474,7 @@ export function MiniPreviewsHiddenChip() {
   useEffect(() => {
     let active = true;
     let dispose: (() => void)[] = [];
+    const urlCount = Number(query("count") ?? "0");
     void (async () => {
       dispose = await Promise.all([
         listen<number>("mini-previews-hidden-count", ({ payload }) => {
@@ -497,7 +498,7 @@ export function MiniPreviewsHiddenChip() {
       // The native window (and the harness `count` param) already know the
       // parked size. Don't replace that with a later artifact-list fetch —
       // mock stacks are a different length than `?count=`.
-      if (initialCount > 0) return;
+      if (Number.isFinite(urlCount) && urlCount > 0) return;
       const artifacts = await invoke<CaptureArtifact[]>("get_artifacts").catch(() => []);
       if (active && artifacts.length > 0) setCount(artifacts.length);
     })();
