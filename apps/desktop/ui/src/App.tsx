@@ -671,11 +671,6 @@ export function UpdateNotice() {
       </header>
 
       <div className={`update-notice-body${available && !error ? "" : " update-notice-body-status"}`}>
-        {available && !error && available.will_close_open_captures && (
-          <p className="update-close-warning" role="status">
-            {OPEN_CAPTURES_UPDATE_WARNING}
-          </p>
-        )}
         {available && !error && (
           <section className={`update-notes${stacked ? " update-notes-stacked" : ""}`} aria-label="What's new">
             <h2>What’s new</h2>
@@ -754,6 +749,13 @@ export function UpdateNotice() {
           </p>
         )}
       </div>
+
+      {available && !error && available.will_close_open_captures && (
+        <p className="update-close-warning" role="status">
+          <span className="update-close-warning-icon" aria-hidden="true"><WarningIcon /></span>
+          {OPEN_CAPTURES_UPDATE_WARNING}
+        </p>
+      )}
 
       {!downloading && !restarting && (
         <footer className="update-notice-footer">
@@ -1415,6 +1417,13 @@ function PauseResumeIcon({ paused }: { paused: boolean }) {
 
 function RestartRecordingIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11a8 8 0 1 1 2 5.3" /><path d="M4 5v6h6" /></svg>;
+}
+
+function WarningIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M10.29 4.86 1.82 19a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 4.86a2 2 0 0 0-3.42 0Z" />
+    <path d="M12 9.5v5.2M12 17.6h.01" />
+  </svg>;
 }
 
 function CaptureIcon() {

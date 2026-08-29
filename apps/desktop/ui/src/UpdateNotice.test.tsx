@@ -67,6 +67,8 @@ describe("UpdateNotice", () => {
       name: "An update is available",
     })).toBeInTheDocument();
     expect(screen.getAllByText("Version 2026.07.19.2")).toHaveLength(1);
+    expect(screen.queryByText("Open captures will close. Unsaved edits are kept as drafts."))
+      .not.toBeInTheDocument();
     expect(screen.getByText("Adds automatic releases")).toBeInTheDocument();
     expect(screen.queryByText(/first contribution/iu)).not.toBeInTheDocument();
     expect(screen.queryByText(/experimental/u)).not.toBeInTheDocument();
@@ -177,10 +179,14 @@ describe("UpdateNotice", () => {
 
     render(<UpdateNotice />);
 
-    expect(await screen.findByText("Open captures will close. Unsaved edits are kept as drafts."))
-      .toBeInTheDocument();
+    const warning = await screen.findByText("Open captures will close. Unsaved edits are kept as drafts.");
+    const notes = screen.getByRole("region", { name: "What's new" });
+    const updateNow = screen.getByRole("button", { name: "Update now" });
+    expect(warning.compareDocumentPosition(notes) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+    expect(warning.compareDocumentPosition(updateNow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(warning.querySelector("svg")).toBeInTheDocument();
     expect(screen.getByRole("dialog", { name: "An update is available" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Update now" })).toBeEnabled();
+    expect(updateNow).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Update now" }));
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("install_update"));
