@@ -94,8 +94,12 @@
 .thumbnail-collapse {
   position: absolute;
   z-index: 12;
-  top: 50%;
+  /* Sit beside the newest (bottom) card so macOS windows that stay tall after
+     a dismiss, and the full-viewport design harness, don't park this tab in
+     empty space at the vertical center of the window. */
+  top: auto;
   right: 6px;
+  bottom: calc(28px + (160px - 46px) / 2);
   display: grid;
   width: 22px;
   height: 46px;
@@ -108,17 +112,16 @@
   box-shadow: var(--glass-shadow);
   backdrop-filter: blur(14px);
   cursor: pointer;
-  transform: translateY(-50%);
 }
 
 .thumbnail-collapse:hover,
 .thumbnail-collapse[data-native-pointer-hover="true"] {
   background: var(--glass-raised);
-  transform: translateY(-50%) scale(1.05);
+  transform: scale(1.05);
 }
 
 .thumbnail-collapse:active {
-  transform: translateY(-50%) scale(0.95);
+  transform: scale(0.95);
 }
 
 .thumbnail-collapse:focus-visible {
