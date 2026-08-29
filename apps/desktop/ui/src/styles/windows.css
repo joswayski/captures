@@ -2076,6 +2076,11 @@
   box-shadow: var(--focus-ring);
 }
 
+.update-notice-footer button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
 .update-notice-footer button.primary {
   min-width: 104px;
 }
