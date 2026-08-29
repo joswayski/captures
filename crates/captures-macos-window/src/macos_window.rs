@@ -1159,6 +1159,11 @@ pub fn focus_window(window: &WebviewWindow) -> Result<(), &'static str> {
 /// click in the nonactivating thumbnail panel. Re-asserts on the next main-queue turn
 /// so WebKit's asynchronous window creation cannot leave the document surface
 /// visible but inactive.
+///
+/// Activation must not raise sibling document windows. `NSApplication.activate()`
+/// and Tauri `set_focus` (which calls `activateIgnoringOtherApps:`) bring every
+/// Captures window forward, so opening a second editor would also lift the first
+/// over the user's other apps.
 pub fn activate_document_window(window: &WebviewWindow) -> Result<(), &'static str> {
     if !is_main_thread() {
         let window = window.clone();
@@ -1173,11 +1178,30 @@ pub fn activate_document_window(window: &WebviewWindow) -> Result<(), &'static s
     Ok(())
 }
 
+/// Flags that activate Captures without `ActivateAllWindows`.
+///
+/// AppKit then brings only the key and main windows forward. Callers must make
+/// the target both key and main first so a previously focused editor stays put.
+pub(crate) fn single_window_activation_options() -> NSApplicationActivationOptions {
+    // Deprecated and ignored on macOS 14+, but still required on earlier
+    // systems to steal key from another app after a nonactivating panel click.
+    #[allow(deprecated)]
+    {
+        NSApplicationActivationOptions::ActivateIgnoringOtherApps
+    }
+}
+
 fn make_key_and_activate(window: &WebviewWindow) -> Result<(), &'static str> {
-    let main_thread = MainThreadMarker::new().ok_or("window focus must run on the main thread")?;
-    let app = NSApplication::sharedApplication(main_thread);
-    app.activate();
-    native_window(window)?.makeKeyAndOrderFront(None);
+    MainThreadMarker::new().ok_or("window focus must run on the main thread")?;
+    let native = native_window(window)?;
+    // Become main before activation so “key + main only” cannot also raise the
+    // last focused editor. `orderFrontRegardless` lifts this one window above
+    // other apps while Captures is still inactive.
+    native.makeMainWindow();
+    native.makeKeyWindow();
+    native.orderFrontRegardless();
+    let _ = NSRunningApplication::currentApplication()
+        .activateWithOptions(single_window_activation_options());
     Ok(())
 }
 
@@ -1825,8 +1849,18 @@ mod tests {
         cursor_surface_uses_key_window, display_corner_radius_points, is_main_thread,
         parse_display_id, reassert_thumbnail_cursor_after_click, shortcut_modifiers_pressed,
         should_release_thumbnail_key_after_event, should_reset_cursor_on_exit,
-        style_mask_is_titled_document, window_corner_radius_for_major_version,
+        single_window_activation_options, style_mask_is_titled_document,
+        window_corner_radius_for_major_version,
     };
+
+    #[test]
+    fn single_window_activation_does_not_raise_sibling_documents() {
+        let options = single_window_activation_options();
+        assert!(
+            !options.contains(objc2_app_kit::NSApplicationActivationOptions::ActivateAllWindows),
+            "opening one editor must not lift every other Captures window over the user's apps",
+        );
+    }
 
     #[test]
     fn titled_document_mask_matches_editors_not_capture_surfaces() {
