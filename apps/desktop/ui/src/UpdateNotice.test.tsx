@@ -208,4 +208,20 @@ describe("UpdateNotice", () => {
     });
     expect(invoke).not.toHaveBeenCalledWith("check_for_updates");
   });
+
+  it("renders a tray caret when placement is provided", async () => {
+    window.history.replaceState({}, "", "/?view=update&caret=top&caret_x=220");
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_update_status") return available;
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    const { container } = render(<UpdateNotice />);
+    expect(await screen.findByRole("dialog", { name: "An update is available" })).toBeInTheDocument();
+    const notice = container.querySelector(".tray-notice");
+    expect(notice).toHaveAttribute("data-caret", "top");
+    expect((notice as HTMLElement | null)?.style.getPropertyValue("--tray-caret-x")).toBe("220px");
+    expect(container.querySelector(".tray-notice-caret")).toBeInTheDocument();
+    window.history.replaceState({}, "", "/");
+  });
 });

@@ -558,28 +558,32 @@ fn cancel_recording_selection_inner(
     }
     *selection = None;
     drop(selection);
-    destroy_recording_selector(app);
-    #[cfg(target_os = "macos")]
-    captures_macos_window::restore_frontmost_app_after_capture();
-    crate::reveal_document_windows_after_capture(app);
-    crate::set_capture_huds_protected(app, false);
-    crate::restore_thumbnail_capture_ui(app, state);
+    restore_after_recording_selection(app, state);
     Ok(())
 }
 
-pub(crate) fn dismiss_recording_selection_for_update(app: &AppHandle, state: &Arc<AppState>) {
-    let mut selection = state.recording_selection.lock();
-    if selection.is_none() {
-        return;
-    }
-    *selection = None;
-    drop(selection);
+fn restore_after_recording_selection(app: &AppHandle, state: &Arc<AppState>) {
     destroy_recording_selector(app);
     #[cfg(target_os = "macos")]
     captures_macos_window::restore_frontmost_app_after_capture();
     crate::reveal_document_windows_after_capture(app);
     crate::set_capture_huds_protected(app, false);
     crate::restore_thumbnail_capture_ui(app, state);
+}
+
+pub(crate) fn dismiss_open_recording_selection(app: &AppHandle, state: &Arc<AppState>) -> bool {
+    let mut selection = state.recording_selection.lock();
+    if selection.is_none() {
+        return false;
+    }
+    *selection = None;
+    drop(selection);
+    restore_after_recording_selection(app, state);
+    true
+}
+
+pub(crate) fn dismiss_recording_selection_for_update(app: &AppHandle, state: &Arc<AppState>) {
+    let _ = dismiss_open_recording_selection(app, state);
 }
 
 #[tauri::command]

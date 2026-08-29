@@ -5,6 +5,7 @@ import { message, open } from "@tauri-apps/plugin-dialog";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import {
   type CSSProperties,
+  type ReactNode,
   type RefObject,
   useCallback,
   useEffect,
@@ -68,6 +69,7 @@ import {
 } from "./lib/selection";
 import {
   detectShortcutPlatform,
+  eventMatchesShortcut,
   isModifierCode,
   modifierDisplayTokens,
   platformShortcutHelp,
@@ -272,13 +274,62 @@ function IdleView() {
   );
 }
 
-export function StartupNotice() {
-  const [shortcut, setShortcut] = useState("CommandOrControl+Shift+Space");
+type TrayNoticeCaret = { edge: "top" | "bottom"; x: number };
+
+function parseTrayNoticeCaret(): TrayNoticeCaret | null {
   const caretEdge = query("caret");
   const caretXRaw = query("caret_x");
   const caretX = caretXRaw == null ? Number.NaN : Number(caretXRaw);
-  const hasCaret =
-    (caretEdge === "top" || caretEdge === "bottom") && Number.isFinite(caretX);
+  if ((caretEdge !== "top" && caretEdge !== "bottom") || !Number.isFinite(caretX)) {
+    return null;
+  }
+  return { edge: caretEdge, x: caretX };
+}
+
+function useTrayNoticeCaret() {
+  const [caret, setCaret] = useState<TrayNoticeCaret | null>(parseTrayNoticeCaret);
+
+  useEffect(() => {
+    let dispose: (() => void) | undefined;
+    void listen<TrayNoticeCaret>("notice-caret", ({ payload }) => {
+      if (payload.edge === "top" || payload.edge === "bottom") {
+        setCaret(payload);
+      }
+    }).then((unlisten) => {
+      dispose = unlisten;
+    }).catch(() => undefined);
+    return () => dispose?.();
+  }, []);
+
+  return caret;
+}
+
+function TrayNoticeShell({
+  children,
+  className,
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  const caret = useTrayNoticeCaret();
+  const caretStyle = caret
+    ? ({ "--tray-caret-x": `${caret.x}px` } as CSSProperties)
+    : undefined;
+
+  return (
+    <div
+      className={["tray-notice", className].filter(Boolean).join(" ")}
+      data-caret={caret?.edge}
+      style={caretStyle}
+    >
+      {caret ? <div className="tray-notice-caret" aria-hidden="true" /> : null}
+      {children}
+    </div>
+  );
+}
+
+export function StartupNotice() {
+  const [shortcut, setShortcut] = useState("CommandOrControl+Shift+Space");
 
   useEffect(() => {
     void invoke<AppSettings>("get_settings")
@@ -292,32 +343,26 @@ export function StartupNotice() {
 
   const keys = shortcutDisplayTokens(shortcut);
   const trayLabel = captureChromeLabel();
-  const caretStyle = hasCaret
-    ? ({ "--startup-caret-x": `${caretX}px` } as CSSProperties)
-    : undefined;
 
   return (
-    <main
-      className="startup-notice"
-      data-caret={hasCaret ? caretEdge : undefined}
-      style={caretStyle}
-    >
-      {hasCaret ? <div className="startup-notice-caret" aria-hidden="true" /> : null}
-      <div className="startup-notice-body">
-        <div className="startup-icon" aria-hidden="true">
-          <CaptureIcon />
-        </div>
-        <div>
-          <p>
-            Use the {trayLabel} icon, or press{" "}
-            {keys.map((key, index) => (
-              <kbd key={`${key}-${index}`}>{key}</kbd>
-            ))}
-            {" "}to start.
-          </p>
+    <TrayNoticeShell className="startup-notice">
+      <div className="tray-notice-card">
+        <div className="startup-notice-body">
+          <div className="startup-icon" aria-hidden="true">
+            <CaptureIcon />
+          </div>
+          <div>
+            <p>
+              Use the {trayLabel} icon, or press{" "}
+              {keys.map((key, index) => (
+                <kbd key={`${key}-${index}`}>{key}</kbd>
+              ))}
+              {" "}to start.
+            </p>
+          </div>
         </div>
       </div>
-    </main>
+    </TrayNoticeShell>
   );
 }
 
@@ -548,12 +593,13 @@ export function UpdateNotice() {
             : "This should only take a moment.";
 
   return (
-    <main
-      className={`update-notice update-notice-${visualState}`}
-      role="dialog"
-      aria-labelledby="update-notice-title"
-      aria-describedby="update-notice-description"
-    >
+    <TrayNoticeShell>
+      <div
+        className={`update-notice update-notice-${visualState} tray-notice-card`}
+        role="dialog"
+        aria-labelledby="update-notice-title"
+        aria-describedby="update-notice-description"
+      >
       <header className="update-notice-header">
         <div className="update-app-icon" aria-hidden="true">
           <CaptureIcon />
@@ -679,7 +725,8 @@ export function UpdateNotice() {
           )}
         </footer>
       )}
-    </main>
+      </div>
+    </TrayNoticeShell>
   );
 }
 
@@ -1975,11 +2022,45 @@ export function RecordingSelector() {
         cancelSelection(currentSession);
         return;
       }
+      if (event.repeat || event.isComposing) {
+        return;
+      }
+      const target = event.target;
+      const typingInField = target instanceof Element
+        && target.closest("input, textarea, select, [contenteditable]");
+      const settings = settingsRef.current;
+      if (settings && !typingInField) {
+        const shortcutEvent = {
+          code: event.code,
+          ctrlKey: event.ctrlKey,
+          shiftKey: event.shiftKey,
+          altKey: event.altKey,
+          metaKey: event.metaKey,
+        };
+        if (eventMatchesShortcut(shortcutEvent, settings.region_shortcut)) {
+          event.preventDefault();
+          void invoke("start_capture", { mode: "region" });
+          return;
+        }
+        if (eventMatchesShortcut(shortcutEvent, settings.window_shortcut)) {
+          event.preventDefault();
+          void invoke("start_capture", { mode: "window" });
+          return;
+        }
+        if (eventMatchesShortcut(shortcutEvent, settings.display_shortcut)) {
+          event.preventDefault();
+          void invoke("start_capture", { mode: "display" });
+          return;
+        }
+        if (eventMatchesShortcut(shortcutEvent, settings.recording.video_shortcut)) {
+          event.preventDefault();
+          setActionMode("recording");
+          return;
+        }
+      }
       if (
         event.key !== "Enter"
         || event.defaultPrevented
-        || event.repeat
-        || event.isComposing
         || event.altKey
         || event.ctrlKey
         || event.metaKey
@@ -1987,7 +2068,6 @@ export function RecordingSelector() {
       ) {
         return;
       }
-      const target = event.target;
       if (
         target instanceof Element
         && target.closest("button, input, select, textarea, a, [contenteditable], [role=\"combobox\"], [role=\"listbox\"]")

@@ -33,15 +33,14 @@ body,
   background: transparent;
 }
 
-/* Floating notices size themselves to the native window; never scroll. */
-html:has(.update-notice),
-body:has(.update-notice),
-#root:has(.update-notice),
-html:has(.startup-notice),
-body:has(.startup-notice),
-#root:has(.startup-notice) {
+/* Floating notices size themselves to the native window; never scroll.
+ * The native window is transparent so rounded cards are not boxed by a
+ * rectangular fill. Shadows and the tooltip caret live in the window padding. */
+html:has(.tray-notice),
+body:has(.tray-notice),
+#root:has(.tray-notice) {
   overflow: hidden;
-  background: var(--surface-raised);
+  background: transparent;
 }
 
 h1,

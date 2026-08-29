@@ -1760,16 +1760,89 @@
 
 /* ------------------------------------------------------- update notice ---- */
 
+.tray-notice {
+  --tray-caret-size: 12px;
+  --tray-caret-half: 9px;
+  --tray-frame-pad: 16px;
+  position: relative;
+  display: flex;
+  width: 100%;
+  height: 100%;
+  padding: var(--tray-frame-pad);
+  flex-direction: column;
+  overflow: visible;
+  background: transparent;
+}
+
+.tray-notice[data-caret="top"] {
+  padding-top: var(--tray-caret-size);
+}
+
+.tray-notice[data-caret="bottom"] {
+  padding-bottom: var(--tray-caret-size);
+}
+
+.tray-notice-card {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  color: var(--text);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-md);
+}
+
+.tray-notice-caret {
+  position: absolute;
+  z-index: 2;
+  left: var(--tray-caret-x, 50%);
+  width: 0;
+  height: 0;
+  border-right: var(--tray-caret-half) solid transparent;
+  border-left: var(--tray-caret-half) solid transparent;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.tray-notice-caret::after {
+  content: "";
+  position: absolute;
+  left: calc(1px - var(--tray-caret-half));
+  width: 0;
+  height: 0;
+  border-right: calc(var(--tray-caret-half) - 1px) solid transparent;
+  border-left: calc(var(--tray-caret-half) - 1px) solid transparent;
+}
+
+.tray-notice[data-caret="top"] .tray-notice-caret {
+  top: 1px;
+  border-bottom: var(--tray-caret-size) solid var(--border);
+}
+
+.tray-notice[data-caret="top"] .tray-notice-caret::after {
+  top: 1px;
+  border-bottom: calc(var(--tray-caret-size) - 1px) solid var(--surface-raised);
+}
+
+.tray-notice[data-caret="bottom"] .tray-notice-caret {
+  bottom: 1px;
+  border-top: var(--tray-caret-size) solid var(--border);
+}
+
+.tray-notice[data-caret="bottom"] .tray-notice-caret::after {
+  bottom: 1px;
+  border-top: calc(var(--tray-caret-size) - 1px) solid var(--surface-raised);
+}
+
 .update-notice {
   display: grid;
   width: 100%;
   height: 100%;
   overflow: hidden;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  border: 1px solid var(--border);
-  border-radius: var(--r-xl);
-  color: var(--text);
-  background: var(--surface-raised);
   animation: ui-pop-in var(--dur-4) var(--ease-out);
   -webkit-user-select: none;
   user-select: none;
@@ -2023,16 +2096,6 @@
 /* ------------------------------------------------- transient notices ------ */
 
 .startup-notice {
-  position: relative;
-  display: flex;
-  width: 100%;
-  height: 100%;
-  flex-direction: column;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--r-xl);
-  color: var(--text);
-  background: var(--surface-raised);
   animation: startup-arrive var(--dur-4) var(--ease-out);
 }
 
@@ -2048,42 +2111,6 @@
   padding: var(--s-5);
   align-items: center;
   gap: var(--s-5);
-}
-
-.startup-notice[data-caret="top"] .startup-notice-body {
-  height: calc(100% - 12px);
-  margin: 12px 0 0;
-}
-
-.startup-notice[data-caret="bottom"] .startup-notice-body {
-  height: calc(100% - 12px);
-  margin: 0 0 12px;
-}
-
-.startup-notice-caret {
-  position: absolute;
-  z-index: 1;
-  left: var(--startup-caret-x, 50%);
-  width: 14px;
-  height: 14px;
-  margin-left: -7px;
-  background: var(--surface-raised);
-  border-left: 1px solid var(--border);
-  border-top: 1px solid var(--border);
-  transform: rotate(45deg);
-  pointer-events: none;
-}
-
-.startup-notice[data-caret="top"] .startup-notice-caret {
-  top: 6px;
-}
-
-.startup-notice[data-caret="bottom"] .startup-notice-caret {
-  bottom: 6px;
-  border-left: 0;
-  border-top: 0;
-  border-right: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
 }
 
 .startup-icon {

@@ -259,6 +259,75 @@ export function shortcutDisplayTokens(
     .filter(Boolean);
 }
 
+function canonicalShortcutToken(token: string): string {
+  const normalized = token.trim().toLowerCase();
+  if (normalized === "control" || normalized === "ctrl") return "control";
+  if (normalized === "shift") return "shift";
+  if (normalized === "alt" || normalized === "option") return "alt";
+  if (
+    normalized === "super"
+    || normalized === "cmd"
+    || normalized === "command"
+    || normalized === "meta"
+    || normalized === "win"
+  ) {
+    return "super";
+  }
+  if (
+    normalized === "commandorcontrol"
+    || normalized === "commandorctrl"
+    || normalized === "cmdorctrl"
+    || normalized === "cmdorcontrol"
+  ) {
+    return "commandorcontrol";
+  }
+  if (
+    normalized === "printscreen"
+    || normalized === "prtscn"
+    || normalized === "prtsc"
+    || normalized === "print"
+  ) {
+    return "printscreen";
+  }
+  if (normalized.startsWith("digit") && normalized.length === 6) return normalized.slice(5);
+  if (normalized.startsWith("key") && normalized.length === 4) return normalized.slice(3);
+  return normalized;
+}
+
+function expandCommandOrControl(
+  modifiers: Set<string>,
+  platform: ShortcutPlatform,
+): Set<string> {
+  const next = new Set(modifiers);
+  if (next.delete("commandorcontrol")) {
+    next.add(platform === "macos" ? "super" : "control");
+  }
+  return next;
+}
+
+/** True when a key event matches a stored global shortcut, including factory CommandOrControl chords. */
+export function eventMatchesShortcut(
+  event: ShortcutKeyEvent,
+  shortcut: string,
+  platform: ShortcutPlatform = detectShortcutPlatform(),
+): boolean {
+  const tokens = shortcut
+    .split("+")
+    .map(canonicalShortcutToken)
+    .filter(Boolean);
+  const key = tokens.pop();
+  if (!key) return false;
+  const expected = expandCommandOrControl(new Set(tokens), platform);
+  const actual = new Set(canonicalModifiers(event).map(canonicalShortcutToken));
+  if (canonicalShortcutToken(event.code) !== key || actual.size !== expected.size) {
+    return false;
+  }
+  for (const modifier of expected) {
+    if (!actual.has(modifier)) return false;
+  }
+  return true;
+}
+
 export function recordShortcut(
   event: ShortcutKeyEvent,
   platform: ShortcutPlatform = detectShortcutPlatform(),

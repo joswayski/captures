@@ -196,6 +196,7 @@ describe("RecordingSelector", () => {
         command === "reveal_recording_selector"
         || command === "capture_selection_screenshot"
         || command === "start_recording"
+        || command === "start_capture"
         || command === "cancel_recording_selection"
       ) {
         return undefined;
@@ -1198,6 +1199,39 @@ describe("RecordingSelector", () => {
           + "100px 120px, 100px 340px, 400px 340px, 400px 120px, 100px 120px)",
       });
     });
+  });
+
+  it("starts a screenshot from the matching shortcut while the capture menu is open", async () => {
+    render(<RecordingSelector />);
+    expect(await screen.findByRole("button", { name: "Close capture controls" })).toBeInTheDocument();
+
+    fireEvent.keyDown(window, {
+      key: "4",
+      code: "Digit4",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("start_capture", { mode: "region" });
+    });
+  });
+
+  it("switches to Record mode from the recording shortcut while the capture menu is open", async () => {
+    render(<RecordingSelector />);
+    fireEvent.click(await screen.findByRole("button", { name: "Screenshot" }));
+    expect(screen.getByRole("button", { name: "Screenshot", pressed: true })).toBeInTheDocument();
+
+    fireEvent.keyDown(window, {
+      key: "5",
+      code: "Digit5",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+
+    expect(await screen.findByRole("button", { name: "Record", pressed: true })).toBeInTheDocument();
+    expect(invoke).not.toHaveBeenCalledWith("start_recording", expect.anything());
+    expect(invoke).not.toHaveBeenCalledWith("start_capture", expect.anything());
   });
 
   it("does not discard a prepared selection after a transient reveal failure", async () => {
