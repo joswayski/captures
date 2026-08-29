@@ -1623,6 +1623,7 @@ export function ScreenshotEditor() {
   const [compressPreviewPending, setCompressPreviewPending] = useState(false);
   const [compressPreviewError, setCompressPreviewError] = useState("");
   const [compressPreviewAfterUrl, setCompressPreviewAfterUrl] = useState<string | null>(null);
+  const [compressPreviewBeforeUrl, setCompressPreviewBeforeUrl] = useState<string | null>(null);
   const [compressPreviewBeforeBytes, setCompressPreviewBeforeBytes] = useState<number | null>(null);
   const [compressPreviewAfterBytes, setCompressPreviewAfterBytes] = useState<number | null>(null);
   const compressPreviewUrlsRef = useRef<{ before: string | null; after: string | null }>({
@@ -4673,6 +4674,7 @@ export function ScreenshotEditor() {
     if (before) URL.revokeObjectURL(before);
     if (after) URL.revokeObjectURL(after);
     compressPreviewUrlsRef.current = { before: null, after: null };
+    setCompressPreviewBeforeUrl(null);
     setCompressPreviewAfterUrl(null);
   }, []);
 
@@ -4683,11 +4685,14 @@ export function ScreenshotEditor() {
     setCompressPreviewError("");
     // Local until ownership transfers to compressPreviewUrlsRef; anything
     // still local by `finally` (stale response or error) gets revoked.
+    let beforeUrl: string | null = null;
     let afterUrl: string | null = null;
     try {
       await loadEditorTextFonts();
       const canvas = renderFlattened();
       const beforePng = await canvasPngBytes(canvas);
+      const beforeBlob = new Blob([new Uint8Array(beforePng)], { type: "image/png" });
+      beforeUrl = URL.createObjectURL(beforeBlob);
 
       const maxSizeBytes = qualityMode === "maximum"
         ? Number(maximumFileSize) * SCREENSHOT_FILE_SIZE_UNIT_BYTES[maximumFileSizeUnit]
@@ -4718,18 +4723,22 @@ export function ScreenshotEditor() {
 
       if (compressPreviewRequestRef.current !== request) return;
       revokeCompressPreviewUrls();
-      compressPreviewUrlsRef.current = { before: null, after: afterUrl };
+      compressPreviewUrlsRef.current = { before: beforeUrl, after: afterUrl };
+      setCompressPreviewBeforeUrl(beforeUrl);
       setCompressPreviewAfterUrl(afterUrl);
       setCompressPreviewBeforeBytes(beforePng.length);
       setCompressPreviewAfterBytes(preview.sizeBytes);
+      beforeUrl = null;
       afterUrl = null;
     } catch (reason) {
       if (compressPreviewRequestRef.current === request) {
         setCompressPreviewError(String(reason));
+        setCompressPreviewBeforeUrl(null);
         setCompressPreviewAfterUrl(null);
         setCompressPreviewAfterBytes(null);
       }
     } finally {
+      if (beforeUrl) URL.revokeObjectURL(beforeUrl);
       if (afterUrl) URL.revokeObjectURL(afterUrl);
       if (compressPreviewRequestRef.current === request) {
         setCompressPreviewPending(false);
@@ -5185,9 +5194,8 @@ export function ScreenshotEditor() {
           />
           {canPreviewCompression && (
             <CompressionPreview
-              className="is-embed"
-              liveBefore
-              beforeUrl={null}
+              className="is-embed is-cover"
+              beforeUrl={compressPreviewBeforeUrl}
               afterUrl={compressPreviewAfterUrl}
               beforeBytes={compressPreviewBeforeBytes}
               afterBytes={compressPreviewAfterBytes}
