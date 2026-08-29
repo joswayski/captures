@@ -1225,12 +1225,21 @@ fn fit_openh264_dimensions(width: u32, height: u32) -> (u32, u32) {
     )
 }
 
+/// Windows/Linux capture masters use 12% bits-per-pixel (`recording_bitrate`
+/// in captures-recording-xcap). Compress re-encodes must stay at or below
+/// that so a quality preset cannot enlarge the file.
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+const CAPTURE_MASTER_BITS_PER_PIXEL_PERCENT: u64 = 12;
+
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 fn openh264_bitrate(attempt: &VideoAttempt, spec: &ExportSpec) -> u32 {
     let bits_per_pixel_percent = match spec.quality {
-        QualityPreset::Highest => 18_u64,
-        QualityPreset::Preserve | QualityPreset::High => 12,
-        QualityPreset::Standard => 8,
+        QualityPreset::Preserve => CAPTURE_MASTER_BITS_PER_PIXEL_PERCENT,
+        // Modest cut under the capture master. Must stay below 12% or Highest
+        // is a larger, lossier file than the recording it came from.
+        QualityPreset::Highest => 10,
+        QualityPreset::High => 8,
+        QualityPreset::Standard => 6,
         QualityPreset::Small => 5,
         QualityPreset::Tiny => 3,
     };
@@ -1623,10 +1632,10 @@ struct FfprobeFormat {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
-    use super::RecordingSegmentInput;
     #[cfg(target_os = "macos")]
     use super::TimelineSpriteSpec;
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    use super::{CAPTURE_MASTER_BITS_PER_PIXEL_PERCENT, RecordingSegmentInput, openh264_bitrate};
     use super::{
         CancelToken, MediaToolchain, RecordingAudioLayout, VideoAttempt,
         aac_centered_stereo_layout_filter, aac_output_layout_filter, audio_edit_is_identity,
@@ -1677,6 +1686,69 @@ mod tests {
         assert_eq!(attempts[3].frames_per_second, 15);
         assert_eq!(attempts[3].audio_bitrate, 64_000);
         assert!(attempts[3].force_mono);
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    fn bitrate_probe_attempt() -> VideoAttempt {
+        VideoAttempt {
+            width: 1_920,
+            height: 1_080,
+            frames_per_second: 30,
+            video_bitrate: None,
+            audio_bitrate: 128_000,
+            has_audio: false,
+            system_audio: false,
+            microphone_audio: false,
+            audio_stream_count: 0,
+            force_mono: false,
+            gif_colors: 256,
+        }
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    fn bitrate_spec(quality: QualityPreset) -> ExportSpec {
+        ExportSpec {
+            format: ExportFormat::Mp4,
+            quality,
+            max_size_bytes: None,
+            frames_per_second: Some(30),
+            gif_max_colors: None,
+        }
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    #[test]
+    fn compress_bitrates_stay_below_the_capture_master() {
+        let attempt = bitrate_probe_attempt();
+        let master = u64::from(attempt.width)
+            * u64::from(attempt.height)
+            * u64::from(attempt.frames_per_second)
+            * CAPTURE_MASTER_BITS_PER_PIXEL_PERCENT
+            / 100;
+        let highest = u64::from(openh264_bitrate(
+            &attempt,
+            &bitrate_spec(QualityPreset::Highest),
+        ));
+        let high = u64::from(openh264_bitrate(
+            &attempt,
+            &bitrate_spec(QualityPreset::High),
+        ));
+        let standard = u64::from(openh264_bitrate(
+            &attempt,
+            &bitrate_spec(QualityPreset::Standard),
+        ));
+        assert!(
+            highest <= master,
+            "Highest ({highest}) must not exceed the 12% capture master ({master})"
+        );
+        assert!(
+            high < highest,
+            "High ({high}) should be a stronger compress than Highest ({highest})"
+        );
+        assert!(
+            standard < high,
+            "Balanced ({standard}) should be stronger than High ({high})"
+        );
     }
 
     #[test]
