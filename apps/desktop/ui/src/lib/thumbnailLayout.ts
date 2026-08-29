@@ -62,6 +62,11 @@ export type ThumbnailStackCardMotionState = {
    * to the stacked shift of live cards above it.
    */
   motionReady: boolean;
+  /**
+   * Shift already applied to this card, in CSS pixels. Exiting cards keep this
+   * value instead of sliding into holes that opened after they started exiting.
+   */
+  currentShiftPx?: number;
 };
 
 /**
@@ -89,8 +94,25 @@ export function thumbnailStackShiftPx(slots: number): number {
 }
 
 /**
+ * Live cards follow the stacked hole distance. Exiting cards keep any shift
+ * they already have so a delete/dismiss that starts after a settle does not
+ * snap back to the untranslated layout slot; they never pick up holes that
+ * opened after they started exiting.
+ */
+export function resolveThumbnailStackShiftPx(
+  livePx: number,
+  currentShiftPx: number,
+  exiting: boolean,
+): number {
+  const live = Math.max(0, livePx);
+  if (!exiting) return live;
+  return Math.min(Math.max(0, currentShiftPx), live);
+}
+
+/**
  * Compute the target translateY (px) for every card in order.
- * Exiting cards never carry a shift — only live survivors slide.
+ * Live survivors slide into motion-ready holes; exiting cards keep the shift
+ * they already had until those holes are removed from layout.
  */
 export function computeThumbnailStackShifts(
   cards: readonly ThumbnailStackCardMotionState[],
@@ -101,7 +123,12 @@ export function computeThumbnailStackShifts(
   let readySlotsBelow = 0;
   for (let index = cards.length - 1; index >= 0; index -= 1) {
     const card = cards[index];
-    shifts[index] = card?.exiting ? 0 : thumbnailStackShiftPx(readySlotsBelow);
+    const livePx = thumbnailStackShiftPx(readySlotsBelow);
+    shifts[index] = resolveThumbnailStackShiftPx(
+      livePx,
+      card?.currentShiftPx ?? 0,
+      Boolean(card?.exiting),
+    );
     if (card?.holdsLayoutSlot && card.motionReady) readySlotsBelow += 1;
   }
   return shifts;
@@ -237,8 +264,44 @@ export function animateThumbnailStackScroll(
 }
 
 const STACK_SHIFT_VAR = "--thumbnail-stack-shift";
-const STACK_SHIFTING_CLASS = "thumbnail-stack-shifting";
-const STACK_SHIFT_INSTANT_CLASS = "thumbnail-stack-shift-instant";
+export const THUMBNAIL_STACK_SHIFTING_CLASS = "thumbnail-stack-shifting";
+export const THUMBNAIL_STACK_SHIFT_INSTANT_CLASS = "thumbnail-stack-shift-instant";
+const STACK_SHIFTING_CLASS = THUMBNAIL_STACK_SHIFTING_CLASS;
+const STACK_SHIFT_INSTANT_CLASS = THUMBNAIL_STACK_SHIFT_INSTANT_CLASS;
+
+/** Classes the stack controller owns; React must preserve them across renders. */
+export function thumbnailStackMotionClassNames(card: HTMLElement | null): string[] {
+  if (!card) return [];
+  return [STACK_SHIFTING_CLASS, STACK_SHIFT_INSTANT_CLASS].filter((name) => (
+    card.classList.contains(name)
+  ));
+}
+
+/**
+ * Visual translateY currently on `card`, in CSS pixels.
+ * Prefers the computed matrix so a mid-ease freeze matches what the user sees.
+ */
+export function readComputedTranslateY(card: HTMLElement): number | null {
+  if (typeof getComputedStyle !== "function") return null;
+  try {
+    const style = getComputedStyle(card);
+    const transform = style.transform;
+    if (transform && transform !== "none") {
+      const matrix = new DOMMatrixReadOnly(transform);
+      if (Number.isFinite(matrix.f)) return matrix.f;
+    }
+    const translate = style.translate;
+    if (translate && translate !== "none") {
+      const parts = translate.trim().split(/\s+/);
+      const yToken = parts.length >= 2 ? parts[1] : "0";
+      const parsed = Number.parseFloat(yToken);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
 
 function isDustDeleteCard(card: HTMLElement): boolean {
   return card.classList.contains("thumbnail-exit-delete")
@@ -270,18 +333,43 @@ function readStackShiftPx(card: HTMLElement): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function writeTranslatePx(card: HTMLElement, shiftPx: number): void {
+  card.style.setProperty(STACK_SHIFT_VAR, `${shiftPx}px`);
+  // Inline `translate` survives React className rewrites that drop the shifting
+  // class for a frame; it also composes with dismiss `transform: translateX`.
+  card.style.setProperty("translate", `0 ${shiftPx}px`);
+}
+
+function clearTranslatePx(card: HTMLElement): void {
+  card.style.removeProperty(STACK_SHIFT_VAR);
+  card.style.removeProperty("translate");
+}
+
 function writeStackShiftPx(card: HTMLElement, shiftPx: number, animate: boolean): void {
   if (shiftPx <= 0) {
+    const hadVisualShift = card.classList.contains(STACK_SHIFTING_CLASS)
+      || readStackShiftPx(card) > 0
+      || Boolean(card.style.translate);
+    if (hadVisualShift) {
+      // Snap with layout reflow. An ease here would slide the card back up
+      // while a hole below is collapsing.
+      card.classList.add(STACK_SHIFT_INSTANT_CLASS);
+      card.classList.remove(STACK_SHIFTING_CLASS);
+      clearTranslatePx(card);
+      void card.offsetWidth;
+      card.classList.remove(STACK_SHIFT_INSTANT_CLASS);
+      return;
+    }
     card.classList.remove(STACK_SHIFTING_CLASS);
     card.classList.remove(STACK_SHIFT_INSTANT_CLASS);
-    card.style.removeProperty(STACK_SHIFT_VAR);
+    clearTranslatePx(card);
     return;
   }
 
   if (!animate) {
     card.classList.add(STACK_SHIFT_INSTANT_CLASS);
     card.classList.add(STACK_SHIFTING_CLASS);
-    card.style.setProperty(STACK_SHIFT_VAR, `${shiftPx}px`);
+    writeTranslatePx(card, shiftPx);
     // Force the browser to commit the snapped value before re-enabling easing
     // so a later increase still transitions from the correct origin.
     void card.offsetWidth;
@@ -291,7 +379,7 @@ function writeStackShiftPx(card: HTMLElement, shiftPx: number, animate: boolean)
 
   card.classList.remove(STACK_SHIFT_INSTANT_CLASS);
   card.classList.add(STACK_SHIFTING_CLASS);
-  card.style.setProperty(STACK_SHIFT_VAR, `${shiftPx}px`);
+  writeTranslatePx(card, shiftPx);
 }
 
 type StackTransition = Animation & {
@@ -411,10 +499,24 @@ export function createThumbnailStackShiftController(stack: HTMLElement): () => v
       const motionReady = holdsLayoutSlot
         && startedAt !== undefined
         && now - startedAt >= delayMs;
+      const exiting = isExitingCard(card);
+      let currentShiftPx = readStackShiftPx(card);
+      if (exiting && currentShiftPx > 0) {
+        // Freeze mid-ease so delete/dismiss starts where the card actually is,
+        // not at the still-animating target slot. Ignore a 0/identity matrix —
+        // jsdom and some WebViews report no visual translate even while the
+        // CSS variable still holds the stacked offset.
+        const visualPx = readComputedTranslateY(card);
+        if (visualPx !== null && visualPx > 0.5 && Math.abs(visualPx - currentShiftPx) > 0.5) {
+          writeStackShiftPx(card, visualPx, false);
+          currentShiftPx = visualPx;
+        }
+      }
       return {
-        exiting: isExitingCard(card),
+        exiting,
         holdsLayoutSlot,
         motionReady,
+        currentShiftPx,
       };
     });
 
@@ -469,7 +571,7 @@ export function createThumbnailStackShiftController(stack: HTMLElement): () => v
     for (const card of stack.querySelectorAll<HTMLElement>(":scope > .thumbnail-card")) {
       card.classList.remove(STACK_SHIFTING_CLASS);
       card.classList.remove(STACK_SHIFT_INSTANT_CLASS);
-      card.style.removeProperty(STACK_SHIFT_VAR);
+      clearTranslatePx(card);
     }
   };
 }

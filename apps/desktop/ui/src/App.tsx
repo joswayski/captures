@@ -106,6 +106,7 @@ import {
   createThumbnailStackShiftController,
   shouldScrollThumbnailStackToEnd,
   thumbnailStackContentHeight,
+  thumbnailStackMotionClassNames,
   thumbnailStackOverflow,
   THUMBNAIL_CARD_SLOT_PX,
   waitForThumbnailStackSettle,
@@ -6067,6 +6068,10 @@ export function ThumbnailCard({
         exit ? `thumbnail-exit-${exit}` : "",
         usingDust ? "thumbnail-exit-dust" : "",
         isExiting ? "thumbnail-exiting" : "",
+        // The stack controller adds these via classList; a full className
+        // rewrite would drop the translate for a frame and the card would
+        // jump back to its layout slot as delete/dismiss starts.
+        ...thumbnailStackMotionClassNames(cardRef.current),
       ].filter(Boolean).join(" ")}
       // HTML inert disables all descendant input/focus for the whole exit animation.
       inert={isExiting ? true : undefined}

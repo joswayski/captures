@@ -7,9 +7,11 @@ import {
   computeThumbnailStackShifts,
   countMotionReadySlotsBelow,
   easeOutCubic,
+  resolveThumbnailStackShiftPx,
   shouldAnimateThumbnailStackShift,
   shouldScrollThumbnailStackToEnd,
   thumbnailStackContentHeight,
+  thumbnailStackMotionClassNames,
   thumbnailStackOverflow,
   thumbnailStackShiftPx,
   THUMBNAIL_CARD_HEIGHT_PX,
@@ -245,6 +247,51 @@ describe("thumbnail stack layout", () => {
       .toBe(false);
   });
 
+  it("clamps exiting cards to their current shift so they cannot jump up or chase new holes", () => {
+    expect(resolveThumbnailStackShiftPx(thumbnailStackShiftPx(1), thumbnailStackShiftPx(1), true))
+      .toBe(thumbnailStackShiftPx(1));
+    expect(resolveThumbnailStackShiftPx(thumbnailStackShiftPx(1), 0, true)).toBe(0);
+    expect(resolveThumbnailStackShiftPx(0, thumbnailStackShiftPx(1), true)).toBe(0);
+    expect(resolveThumbnailStackShiftPx(thumbnailStackShiftPx(1), 0, false))
+      .toBe(thumbnailStackShiftPx(1));
+  });
+
+  it("keeps an exiting card's existing shift until holes below it close", () => {
+    const cards = [
+      card({ exiting: true, currentShiftPx: thumbnailStackShiftPx(1) }),
+      card({ exiting: true, holdsLayoutSlot: true, motionReady: true }),
+    ];
+    expect(computeThumbnailStackShifts(cards)).toEqual([
+      thumbnailStackShiftPx(1),
+      0,
+    ]);
+  });
+
+  it("does not pull an already-exiting card into a hole that opens later", () => {
+    const cards = [
+      card({ exiting: true, currentShiftPx: 0 }),
+      card({ exiting: true, holdsLayoutSlot: true, motionReady: true }),
+    ];
+    expect(computeThumbnailStackShifts(cards)).toEqual([0, 0]);
+  });
+
+  it("snaps an exiting card's shift down when a hole below is removed", () => {
+    const cards = [
+      card({ exiting: true, currentShiftPx: thumbnailStackShiftPx(1) }),
+      card({}),
+    ];
+    expect(computeThumbnailStackShifts(cards)).toEqual([0, 0]);
+  });
+
+  it("shifts stacked cards with the translate property so dismiss transform can compose", () => {
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-card\.thumbnail-stack-shifting\s*\{[^}]*translate:\s*0 var\(--thumbnail-stack-shift/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-card\.thumbnail-stack-shifting\.thumbnail-exiting\s*\{[^}]*filter:\s*none/,
+    );
+  });
+
   it("holds dismiss layout long enough for the shared settle ease", () => {
     expect(THUMBNAIL_DISMISS_HOLD_MS).toBe(
       THUMBNAIL_DISMISS_STACK_MOTION_DELAY_MS + THUMBNAIL_STACK_MOTION_DURATION_MS,
@@ -292,6 +339,113 @@ describe("thumbnail stack layout", () => {
       globalThis.MutationObserver = originalMutationObserver;
       vi.useRealTimers();
     }
+  });
+
+  it("keeps a settled survivor's shift when that card itself starts exiting", async () => {
+    vi.useFakeTimers();
+    const stack = document.createElement("main");
+    const survivor = document.createElement("article");
+    survivor.className = "thumbnail-card";
+    const exiting = document.createElement("article");
+    exiting.className = "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
+    stack.append(survivor, exiting);
+    document.body.append(stack);
+    const dispose = createThumbnailStackShiftController(stack);
+
+    try {
+      await Promise.resolve();
+      vi.advanceTimersByTime(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16);
+      expect(survivor).toHaveClass("thumbnail-stack-shifting");
+      expect(survivor.style.getPropertyValue("--thumbnail-stack-shift")).toBe(
+        `${THUMBNAIL_CARD_SLOT_PX}px`,
+      );
+      expect(survivor.style.translate).toBe(`0 ${THUMBNAIL_CARD_SLOT_PX}px`);
+
+      // React className rewrites drop controller tokens unless the card copies
+      // them back. Simulate the wipe, then the exit classes landing.
+      survivor.className = "thumbnail-card thumbnail-exit-delete thumbnail-exit-dust thumbnail-exiting";
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(survivor).toHaveClass("thumbnail-stack-shifting");
+      expect(survivor).toHaveClass("thumbnail-exiting");
+      expect(survivor.style.getPropertyValue("--thumbnail-stack-shift")).toBe(
+        `${THUMBNAIL_CARD_SLOT_PX}px`,
+      );
+      expect(survivor.style.translate).toBe(`0 ${THUMBNAIL_CARD_SLOT_PX}px`);
+    } finally {
+      dispose();
+      stack.remove();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not slide an already-exiting card when a hole below becomes ready", async () => {
+    vi.useFakeTimers();
+    const stack = document.createElement("main");
+    const upper = document.createElement("article");
+    upper.className = "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
+    const lower = document.createElement("article");
+    lower.className = "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
+    stack.append(upper, lower);
+    const dispose = createThumbnailStackShiftController(stack);
+
+    try {
+      await Promise.resolve();
+      vi.advanceTimersByTime(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16);
+      expect(upper).not.toHaveClass("thumbnail-stack-shifting");
+      expect(upper.style.getPropertyValue("--thumbnail-stack-shift")).toBe("");
+    } finally {
+      dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("snaps an exiting survivor's shift off when the hole below is removed", async () => {
+    vi.useFakeTimers();
+    const stack = document.createElement("main");
+    const survivor = document.createElement("article");
+    survivor.className = "thumbnail-card";
+    const exiting = document.createElement("article");
+    exiting.className = "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
+    stack.append(survivor, exiting);
+    const dispose = createThumbnailStackShiftController(stack);
+
+    try {
+      await Promise.resolve();
+      vi.advanceTimersByTime(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16);
+      expect(survivor).toHaveClass("thumbnail-stack-shifting");
+
+      survivor.classList.add("thumbnail-exiting", "thumbnail-exit-delete", "thumbnail-exit-dust");
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(survivor.style.getPropertyValue("--thumbnail-stack-shift")).toBe(
+        `${THUMBNAIL_CARD_SLOT_PX}px`,
+      );
+
+      exiting.remove();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(survivor).not.toHaveClass("thumbnail-stack-shifting");
+      expect(survivor.style.getPropertyValue("--thumbnail-stack-shift")).toBe("");
+      expect(survivor.style.translate).toBe("");
+    } finally {
+      dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("copies live stack-motion classes so React can preserve them", () => {
+    const card = document.createElement("article");
+    expect(thumbnailStackMotionClassNames(card)).toEqual([]);
+    card.classList.add("thumbnail-stack-shifting");
+    expect(thumbnailStackMotionClassNames(card)).toEqual(["thumbnail-stack-shifting"]);
+    card.classList.add("thumbnail-stack-shift-instant");
+    expect(thumbnailStackMotionClassNames(card)).toEqual([
+      "thumbnail-stack-shifting",
+      "thumbnail-stack-shift-instant",
+    ]);
+    expect(thumbnailStackMotionClassNames(null)).toEqual([]);
   });
 
   it("follows a survivor transition when another exit retargets it", async () => {

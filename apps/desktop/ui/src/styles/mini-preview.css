@@ -223,8 +223,11 @@
   }
 }
 
-/* Isolate exit animations so surviving cards do not inherit transition flicker. */
-.thumbnail-card:not([class*="thumbnail-exit-"]):not(.thumbnail-stack-shifting) {
+/*
+ * Isolate idle and exiting-unshifted cards so leftover transform/translate
+ * easing cannot flicker survivors or slide a delete back to its layout slot.
+ */
+.thumbnail-card:not(.thumbnail-stack-shifting) {
   transition: box-shadow 0.22s ease;
   will-change: auto;
 }
@@ -941,15 +944,28 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 /*
  * Multi-slot stack settle is driven in JS (createThumbnailStackShiftController).
  * Delete and dismiss both hold layout; survivors ease by N × slot with the same
- * transition. Finished holes snap the transform down with layout reflow.
+ * transition. Finished holes snap the translate down with layout reflow.
+ *
+ * Use the `translate` property (not `transform`) so dismiss `translateX` and
+ * delete dust transforms still compose when a shifted card itself starts exiting.
  */
 .thumbnail-card.thumbnail-stack-shifting {
-  transform: translateY(var(--thumbnail-stack-shift, 0px));
+  translate: 0 var(--thumbnail-stack-shift, 0px);
   transition:
-    transform 0.58s cubic-bezier(0.4, 0, 0.2, 1),
+    translate 0.58s cubic-bezier(0.4, 0, 0.2, 1),
     filter 0.58s cubic-bezier(0.4, 0, 0.2, 1);
-  will-change: transform, filter;
+  will-change: translate, filter;
   filter: blur(0);
+}
+
+/*
+ * A parent `filter` flattens dust chips into one compositor surface, which
+ * WebView2 then often fails to animate. Drop the settle filter once this card
+ * is the one dissolving / dismissing.
+ */
+.thumbnail-card.thumbnail-stack-shifting.thumbnail-exiting {
+  filter: none;
+  will-change: translate;
 }
 
 .thumbnail-card.thumbnail-stack-shift-instant {
