@@ -5880,6 +5880,7 @@ export function Thumbnail() {
         type="button"
         className="thumbnail-collapse"
         aria-label="Hide previews"
+        data-tooltip="Hide previews"
         onClick={() => void invoke("collapse_mini_previews")}
       >
         <ThumbnailCollapseIcon />
@@ -5919,7 +5920,8 @@ function ThumbnailOverflowChevron({ direction }: { direction: "up" | "down" }) {
 function ThumbnailCollapseIcon() {
   return (
     <svg viewBox="0 0 16 16" aria-hidden="true">
-      <path d="M10 3.5 5.5 8 10 12.5" />
+      <path d="M4 6.5 8 10.5 12 6.5" />
+      <path d="M3.5 13h9" />
     </svg>
   );
 }
