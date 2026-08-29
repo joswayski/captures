@@ -252,6 +252,19 @@ test("keeps Discord descriptions within the embed limit", () => {
   assert.match(payload.embeds[0].description, /…$/u);
 });
 
+test("keeps crash Discord descriptions within the embed limit when the intro is huge", () => {
+  const payload = buildDiscordPayload(
+    {
+      message: `${"a".repeat(8_000)}\n\nPanic:\nboom`,
+      category: "crash",
+      source: "desktop",
+    },
+    "client",
+  );
+
+  assert.ok(Array.from(payload.embeds[0].description).length <= 4_000);
+});
+
 test("refunds the rate limit when Discord delivery fails", async () => {
   const env: ApiEnv = {
     DISCORD_WEBHOOK_URL: "https://discord.com/api/webhooks/123/example-token",

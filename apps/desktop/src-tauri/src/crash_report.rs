@@ -50,7 +50,12 @@ pub fn install_panic_hook() {
 }
 
 pub fn mark_clean_exit() {
-    let _ = fs::remove_file(session_marker_path());
+    mark_clean_exit_at(&session_marker_path(), &last_panic_path());
+}
+
+fn mark_clean_exit_at(session_marker: &Path, panic_file: &Path) {
+    let _ = fs::remove_file(session_marker);
+    let _ = fs::remove_file(panic_file);
 }
 
 fn mark_session_started() {
@@ -280,7 +285,7 @@ fn latest_wer_snippet_from(
     }
     let (_, path) = newest?;
     let contents = read_report_text(&path)?;
-    summarize_wer_report(&contents)
+    summarize_os_report(&contents)
 }
 
 #[cfg_attr(target_os = "windows", allow(dead_code))]
@@ -773,8 +778,78 @@ fn signal_name(code: &str) -> &'static str {
 }
 
 fn redact_user_paths(value: &str) -> String {
-    let unix = redact_home_prefix(&redact_home_prefix(value, "/Users/"), "/home/");
+    redact_user_paths_with_homes(value, &configured_home_directories())
+}
+
+fn configured_home_directories() -> Vec<String> {
+    ["HOME", "USERPROFILE"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .map(|value| value.to_string_lossy().into_owned())
+        .filter(|value| value.trim_end_matches(['/', '\\']).len() >= 3)
+        .collect()
+}
+
+fn redact_user_paths_with_homes(value: &str, homes: &[String]) -> String {
+    let with_homes = homes.iter().fold(value.to_owned(), |current, home| {
+        path_slash_variants(home)
+            .into_iter()
+            .fold(current, |value, variant| {
+                redact_exact_home(&value, &variant)
+            })
+    });
+    let unix = redact_home_prefix(&redact_home_prefix(&with_homes, "/Users/"), "/home/");
     redact_windows_user_path(&redact_windows_user_path(&unix, "\\Users\\"), "/Users/")
+}
+
+fn path_slash_variants(home: &str) -> Vec<String> {
+    let trimmed = home.trim_end_matches(['/', '\\']);
+    let mut variants = vec![trimmed.to_owned()];
+    if trimmed.contains('\\') {
+        variants.push(trimmed.replace('\\', "/"));
+    }
+    if trimmed.contains('/') {
+        variants.push(trimmed.replace('/', "\\"));
+    }
+    variants.sort();
+    variants.dedup();
+    variants
+}
+
+fn redact_exact_home(value: &str, home: &str) -> String {
+    if home.len() < 3 {
+        return value.to_owned();
+    }
+    let lower = value.to_ascii_lowercase();
+    let needle = home.to_ascii_lowercase();
+    let mut output = String::with_capacity(value.len());
+    let mut last_copy = 0;
+    let mut search_from = 0;
+    while let Some(relative) = lower[search_from..].find(&needle) {
+        let index = search_from + relative;
+        let after_index = index + home.len();
+        let at_boundary = index == 0
+            || value[..index]
+                .chars()
+                .next_back()
+                .is_none_or(|ch| !is_path_continue_char(ch));
+        let after_ok = after_index == value.len()
+            || matches!(value.as_bytes().get(after_index), Some(b'/' | b'\\'));
+        if at_boundary && after_ok {
+            output.push_str(&value[last_copy..index]);
+            output.push('~');
+            last_copy = after_index;
+            search_from = after_index;
+        } else {
+            search_from = index + 1;
+        }
+    }
+    output.push_str(&value[last_copy..]);
+    output
+}
+
+fn is_path_continue_char(ch: char) -> bool {
+    ch.is_alphanumeric() || matches!(ch, '_' | '-' | '.' | ':' | '?' | '\\' | '/')
 }
 
 fn redact_home_prefix(value: &str, prefix: &str) -> String {
@@ -851,7 +926,8 @@ fn truncate_lines(value: &str, max_lines: usize) -> String {
 mod tests {
     use super::{
         RUNNING_MARKER, decode_report_bytes, format_crash_message, format_panic_report,
-        latest_wer_snippet_from, redact_user_paths, summarize_os_report, take_dirty_shutdown_at,
+        latest_wer_snippet_from, mark_clean_exit_at, redact_user_paths,
+        redact_user_paths_with_homes, summarize_os_report, take_dirty_shutdown_at,
         take_last_panic_at,
     };
     use std::time::{Duration, SystemTime};
@@ -889,6 +965,41 @@ mod tests {
             redact_user_paths(r"from C:\Users\jose\AppData\Local\Captures"),
             r"from ~\AppData\Local\Captures"
         );
+        assert_eq!(
+            redact_user_paths_with_homes(
+                "core dump in /var/home/alice/.cache/captures/last-panic",
+                &["/var/home/alice".to_owned()]
+            ),
+            "core dump in ~/.cache/captures/last-panic"
+        );
+        assert_eq!(
+            redact_user_paths_with_homes(
+                r"from D:\Profiles\alice\AppData\Local\Captures",
+                &[r"D:\Profiles\alice".to_owned()]
+            ),
+            r"from ~\AppData\Local\Captures"
+        );
+        assert_eq!(
+            redact_user_paths_with_homes(
+                "from D:/Profiles/alice/AppData/Local",
+                &[r"D:\Profiles\alice".to_owned()]
+            ),
+            "from ~/AppData/Local"
+        );
+    }
+
+    #[test]
+    fn clean_exit_discards_a_caught_panic_file() {
+        let directory = tempfile::tempdir().expect("temporary directory should exist");
+        let marker = directory.path().join("session-running");
+        let panic = directory.path().join("last-panic");
+        std::fs::write(&marker, RUNNING_MARKER).expect("marker should be written");
+        std::fs::write(&panic, "Panic:\ncaught in a worker").expect("panic file should be written");
+
+        mark_clean_exit_at(&marker, &panic);
+
+        assert!(!marker.exists());
+        assert!(!panic.exists());
     }
 
     #[test]

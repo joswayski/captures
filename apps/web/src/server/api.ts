@@ -343,20 +343,28 @@ function formatDiscordDescription(feedback: FeedbackInput): string {
   }
 
   const split = message.indexOf("\n\n");
-  if (split === -1) {
-    return truncate(message, DISCORD_DESCRIPTION_MAX);
-  }
-
-  const intro = message.slice(0, split).trim();
-  const detail = message.slice(split).trim();
+  const intro = (split === -1 ? message : message.slice(0, split)).trim();
+  const detail = split === -1 ? "" : message.slice(split).trim();
   if (!detail) {
     return truncate(intro, DISCORD_DESCRIPTION_MAX);
   }
 
-  const wrapperLength = "\n\n```\n\n```".length;
-  const budget = Math.max(0, DISCORD_DESCRIPTION_MAX - intro.length - wrapperLength);
+  const fenceOpen = "\n\n```\n";
+  const fenceClose = "\n```";
+  const wrapperLength = fenceOpen.length + fenceClose.length;
+  const boundedIntro = truncate(
+    intro,
+    Math.max(0, DISCORD_DESCRIPTION_MAX - wrapperLength),
+  );
+  const detailBudget = Math.max(
+    0,
+    DISCORD_DESCRIPTION_MAX - Array.from(boundedIntro).length - wrapperLength,
+  );
+  if (detailBudget === 0) {
+    return boundedIntro;
+  }
   const safeDetail = detail.replaceAll("```", "'''");
-  return `${intro}\n\n\`\`\`\n${truncate(safeDetail, budget)}\n\`\`\``;
+  return `${boundedIntro}${fenceOpen}${truncate(safeDetail, detailBudget)}${fenceClose}`;
 }
 
 function truncate(value: string, maxCharacters: number): string {
