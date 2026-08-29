@@ -4989,6 +4989,13 @@ pub(crate) async fn hide_capture_huds_before_snapshot(app: &AppHandle) {
     if had_visible_hud {
         tokio::time::sleep(std::time::Duration::from_millis(CAPTURE_HUD_HIDE_SETTLE_MS)).await;
     }
+
+    // Opening Captures from the Windows Start menu starts a capture immediately.
+    // Wait until Start / Search have actually left the screen so they do not
+    // freeze into the screenshot. No-op on other platforms.
+    let _ =
+        tokio::task::spawn_blocking(captures_session::dismiss_transient_shell_ui_before_capture)
+            .await;
 }
 
 fn hide_capture_huds(app: &AppHandle, include_mini_previews: bool, hud_labels: &[&str]) -> bool {
