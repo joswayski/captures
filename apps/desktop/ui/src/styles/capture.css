@@ -73,6 +73,22 @@ html.capture-window-cursor * {
 }
 
 /*
+ * Capture menu: set the mode cursor on `html` so it exists before the first
+ * mouse move. Do not use `*` here — the panel still needs grab/pointer.
+ */
+html.capture-selector-region {
+  cursor: crosshair;
+}
+
+html.capture-selector-window {
+  cursor: var(--capture-action-cursor);
+}
+
+html.capture-selector-display {
+  cursor: default;
+}
+
+/*
  * Soft dim only — never blur. Square region holes use a closed evenodd CSS
  * clip-path in the same CSS pixels as the marquee; rounded window holes use one
  * evenodd SVG path. Closing the hole ring matters: an open polygon auto-closes
@@ -337,6 +353,10 @@ html.capture-window-cursor * {
 
 .recording-target-region {
   cursor: crosshair;
+}
+
+.recording-target-window {
+  cursor: var(--capture-action-cursor);
 }
 
 .recording-selector .capture-shade,

@@ -301,6 +301,7 @@ pub fn run() {
             recording::select_capture_display,
             recording::show_recording_selector,
             recording::reveal_recording_selector,
+            recording::sync_selector_cursor,
             recording::cancel_recording_selection,
             recording::capture_selection_screenshot,
             recording::list_recording_audio_devices,
@@ -1097,6 +1098,32 @@ fn get_pending_session(state: tauri::State<'_, Arc<AppState>>) -> Option<ActiveS
         .map(capture_session_to_active)
 }
 
+#[cfg_attr(all(target_os = "macos", not(test)), allow(dead_code))]
+fn capture_cursor_icon(mode: CaptureMode) -> CursorIcon {
+    if mode == CaptureMode::Region {
+        CursorIcon::Crosshair
+    } else {
+        CursorIcon::Default
+    }
+}
+
+fn apply_overlay_capture_cursor(
+    window: &tauri::WebviewWindow,
+    mode: CaptureMode,
+) -> CommandResult<()> {
+    #[cfg(not(target_os = "macos"))]
+    window
+        .set_cursor_icon(capture_cursor_icon(mode))
+        .map_err(|error| error.to_string())?;
+    #[cfg(target_os = "macos")]
+    captures_macos_window::activate_capture_cursor(
+        window,
+        captures_macos_window::CaptureCursor::overlay(mode == CaptureMode::Region),
+    )
+    .map_err(str::to_owned)?;
+    Ok(())
+}
+
 /// GTK creates the underlying GDK window only when a window is first shown, and
 /// tao unwraps it while handling a cursor-ignore request, so asking a window
 /// that has never been shown to become click-through takes down the whole event
@@ -1132,15 +1159,7 @@ fn show_capture_overlay(
         .ok_or_else(|| AppError::SessionUnavailable.to_string())?;
     if let Some(window) = app.get_webview_window("overlay") {
         #[cfg(not(target_os = "macos"))]
-        let cursor = if mode == CaptureMode::Region {
-            CursorIcon::Crosshair
-        } else {
-            CursorIcon::Default
-        };
-        #[cfg(not(target_os = "macos"))]
-        window
-            .set_cursor_icon(cursor)
-            .map_err(|error| error.to_string())?;
+        apply_overlay_capture_cursor(&window, mode)?;
         // Keep the overlay click-through until the frozen snapshot is painted.
         // Otherwise an early wake (needed so WKWebView will load the image)
         // steals pointer events from the desktop.
@@ -1194,14 +1213,16 @@ fn reveal_capture_overlay(
         if let Err(error) = captures_macos_window::elevate_capture_surface(&window) {
             eprintln!("failed to keep the capture overlay above the menu bar: {error}");
         }
-        if let Err(error) = window.set_focus() {
+        if let Err(error) = captures_macos_window::focus_window(&window) {
             eprintln!("failed to focus capture overlay: {error}");
         }
-        captures_macos_window::activate_capture_cursor(&window, mode == CaptureMode::Region)
-            .map_err(str::to_owned)?;
+        apply_overlay_capture_cursor(&window, mode)?;
     }
     #[cfg(not(target_os = "macos"))]
-    let _ = mode;
+    {
+        window.set_focus().map_err(|error| error.to_string())?;
+        apply_overlay_capture_cursor(&window, mode)?;
+    }
     Ok(())
 }
 
@@ -1221,12 +1242,7 @@ fn sync_capture_cursor(
     let window = app
         .get_webview_window("overlay")
         .ok_or_else(|| "capture overlay is unavailable".to_owned())?;
-    #[cfg(target_os = "macos")]
-    captures_macos_window::activate_capture_cursor(&window, mode == CaptureMode::Region)
-        .map_err(str::to_owned)?;
-    #[cfg(not(target_os = "macos"))]
-    let _ = (window, mode);
-    Ok(())
+    apply_overlay_capture_cursor(&window, mode)
 }
 
 #[tauri::command]
@@ -5774,7 +5790,7 @@ mod tests {
         STARTUP_NOTICE_HEIGHT, STARTUP_NOTICE_TRAY_OVERLAP, STARTUP_NOTICE_WIDTH,
         StartupNoticeCaret, THUMBNAIL_AUTO_HIDE_RESERVE, THUMBNAIL_SYSTEM_CHROME_GAP,
         ThumbnailCursorAction, ThumbnailCursorKind, ThumbnailMonitorBounds, ThumbnailPointerSpace,
-        ThumbnailWindowFrame, click_through_applies, clipboard_fingerprint,
+        ThumbnailWindowFrame, capture_cursor_icon, click_through_applies, clipboard_fingerprint,
         display_contains_pointer, fallback_startup_notice, mask_macos_window_corners,
         parse_shortcut, place_startup_notice, primary_app_window_priority,
         refine_window_chrome_from_snapshot, resolve_startup_notice_placement,
@@ -6742,5 +6758,24 @@ mod tests {
         let below_panel = fallback_startup_notice(monitor, top_panel, StartupNoticeCaret::Top);
         assert_eq!(below_panel.y, 38.0);
         assert_eq!(below_panel.x, 1502.0);
+    }
+
+    #[test]
+    fn region_capture_uses_the_crosshair_cursor_icon() {
+        use captures_capture::CaptureMode;
+        use tauri::CursorIcon;
+
+        assert_eq!(
+            capture_cursor_icon(CaptureMode::Region),
+            CursorIcon::Crosshair
+        );
+        assert_eq!(
+            capture_cursor_icon(CaptureMode::Window),
+            CursorIcon::Default
+        );
+        assert_eq!(
+            capture_cursor_icon(CaptureMode::Display),
+            CursorIcon::Default
+        );
     }
 }

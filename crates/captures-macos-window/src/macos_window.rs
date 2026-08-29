@@ -1,4 +1,5 @@
 use crate::conceal_policy::should_conceal_documents_for_capture_activation;
+use crate::cursor_policy::{CaptureCursor, CaptureCursorKind};
 
 use std::{
     cell::{Cell, RefCell},
@@ -146,6 +147,16 @@ impl CursorMode {
     }
 }
 
+impl CaptureCursorKind {
+    fn to_cursor_mode(self) -> CursorMode {
+        match self {
+            Self::Crosshair => CursorMode::Crosshair,
+            Self::WebView => CursorMode::WebView,
+            Self::Arrow => CursorMode::Arrow,
+        }
+    }
+}
+
 /// Cursor shown over the always-on-top capture previews.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ThumbnailCursorKind {
@@ -228,6 +239,11 @@ impl CursorTrackingOwner {
         self.ivars().mode.set(mode);
         if self.ivars().surface == CursorSurface::Thumbnail {
             publish_thumbnail_cursor_mode(mode);
+        }
+        // Capture surfaces appear under a stationary pointer. Apply immediately
+        // so the mode does not wait for the next mouseEntered / cursorUpdate.
+        if self.ivars().surface == CursorSurface::CaptureOverlay && capture_overlay_owns_cursor() {
+            self.apply_cursor(None);
         }
     }
 
@@ -464,6 +480,9 @@ static CURSOR_TRACKER_WINDOW_ASSOCIATION_KEY: u8 = 0;
 // NSCursor is application-wide, so a hidden preview must not replace the
 // cursor selected by the active capture overlay.
 static CAPTURE_OVERLAY_OWNS_CURSOR: AtomicBool = AtomicBool::new(false);
+static CAPTURE_CURSOR_KIND: AtomicU8 = AtomicU8::new(0);
+static CAPTURE_CURSOR_NATIVE_OWNED: AtomicBool = AtomicBool::new(false);
+static CAPTURE_CURSOR_MONITOR: Mutex<Option<MainThreadMonitor>> = Mutex::new(None);
 // When a transient capture surface activates Captures (region/window overlay,
 // recording selector, countdown), sibling document windows such as the
 // screenshot editor are ordered front with the app. Remember the user's
@@ -1059,35 +1078,168 @@ pub fn present_capture_overlay(window: &WebviewWindow) -> Result<(), &'static st
 }
 
 /// Applies the capture cursor after the overlay becomes the key window.
+///
+/// AppKit does not send mouseEntered/cursorUpdate when a fullscreen surface
+/// appears under a stationary pointer, and becoming key or releasing shortcut
+/// modifiers can restore the arrow afterwards. Set the cursor immediately, then
+/// re-assert on the next two main-queue turns and on flags-changed.
 pub fn activate_capture_cursor(
     window: &WebviewWindow,
-    use_crosshair: bool,
+    cursor: CaptureCursor,
 ) -> Result<(), &'static str> {
     if !is_main_thread() {
         let window = window.clone();
-        return run_on_main(move || activate_capture_cursor(&window, use_crosshair))
+        return run_on_main(move || activate_capture_cursor(&window, cursor))
             .ok_or("capture cursor did not run on the main thread")?;
     }
+    CAPTURE_OVERLAY_OWNS_CURSOR.store(true, Ordering::Release);
+    store_capture_cursor(cursor);
+    apply_capture_cursor(window, cursor)?;
+    ensure_capture_cursor_monitor();
+    let window = window.clone();
+    DispatchQueue::main().exec_async(move || {
+        reassert_stored_capture_cursor(&window);
+        let window = window.clone();
+        DispatchQueue::main().exec_async(move || {
+            reassert_stored_capture_cursor(&window);
+        });
+    });
+    Ok(())
+}
+
+fn store_capture_cursor(cursor: CaptureCursor) {
+    CAPTURE_CURSOR_KIND.store(cursor.kind as u8, Ordering::Release);
+    CAPTURE_CURSOR_NATIVE_OWNED.store(cursor.native_owned, Ordering::Release);
+}
+
+fn stored_capture_cursor() -> CaptureCursor {
+    CaptureCursor {
+        kind: match CAPTURE_CURSOR_KIND.load(Ordering::Acquire) {
+            0 => CaptureCursorKind::Arrow,
+            2 => CaptureCursorKind::WebView,
+            _ => CaptureCursorKind::Crosshair,
+        },
+        native_owned: CAPTURE_CURSOR_NATIVE_OWNED.load(Ordering::Acquire),
+    }
+}
+
+fn reassert_stored_capture_cursor(window: &WebviewWindow) {
+    if !capture_overlay_owns_cursor() {
+        return;
+    }
+    let _ = apply_capture_cursor(window, stored_capture_cursor());
+}
+
+fn apply_capture_cursor(window: &WebviewWindow, cursor: CaptureCursor) -> Result<(), &'static str> {
     let native_window = native_window(window)?;
-    if use_crosshair {
-        set_tracked_cursor(window, CursorMode::Crosshair, CursorSurface::CaptureOverlay)?;
-        CAPTURE_OVERLAY_OWNS_CURSOR.store(true, Ordering::Release);
-        // WebKit and AppKit both rebuild cursor rectangles when focus or
-        // modifier-key state changes. Disabling those rectangles while region
-        // capture owns the cursor prevents the arrow from being installed for
-        // a frame between two crosshair updates.
+    let mode = cursor.kind.to_cursor_mode();
+    NSCursor::setHiddenUntilMouseMoves(false);
+    // Apply the native cursor even if the WKWebView tracker is not ready yet.
+    // The capture menu is created per session; a missing tracker must not leave
+    // the arrow on screen until the pointer moves.
+    if cursor.disables_cursor_rects() {
         set_cursor_rects_enabled(native_window, false);
-        NSCursor::crosshairCursor().set();
+        native_window.discardCursorRects();
+        apply_cursor_mode(mode);
+        let _ = set_tracked_cursor(window, mode, CursorSurface::CaptureOverlay);
+        synthesize_cursor_update(native_window);
+        // Becoming key / cursorUpdate can re-enable WebKit rectangles. Re-assert
+        // the native cursor before returning so a stationary pointer keeps it.
+        set_cursor_rects_enabled(native_window, false);
+        apply_cursor_mode(mode);
     } else {
-        // Window capture uses a custom CSS camera cursor, so WebKit remains the
-        // cursor owner in this mode. Refresh its rectangles after the overlay
-        // becomes key and after its fade-in completes.
+        // Window capture and the capture menu keep CSS cursors (camera cursor,
+        // panel grab/pointer). Set the mode's native cursor first so something
+        // is visible before WebKit evaluates rectangles, then force that
+        // evaluation without waiting for a mouse move.
         set_cursor_rects_enabled(native_window, true);
-        set_tracked_cursor(window, CursorMode::WebView, CursorSurface::CaptureOverlay)?;
-        CAPTURE_OVERLAY_OWNS_CURSOR.store(true, Ordering::Release);
-        native_window.resetCursorRects();
+        apply_cursor_mode(mode);
+        let _ = set_tracked_cursor(window, mode, CursorSurface::CaptureOverlay);
+        refresh_webkit_cursor_rects(native_window);
     }
     Ok(())
+}
+
+fn refresh_webkit_cursor_rects(native_window: &NSWindow) {
+    set_cursor_rects_enabled(native_window, true);
+    native_window.resetCursorRects();
+    if let Some(view) = native_window.contentView() {
+        native_window.invalidateCursorRectsForView(&view);
+    }
+    synthesize_cursor_update(native_window);
+}
+
+fn synthesize_cursor_update(native_window: &NSWindow) {
+    let Some(event) = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+        NSEventType::MouseMoved,
+        native_window.mouseLocationOutsideOfEventStream(),
+        objc2_app_kit::NSEventModifierFlags::empty(),
+        NSProcessInfo::processInfo().systemUptime(),
+        native_window.windowNumber(),
+        None,
+        0,
+        0,
+        0.0_f32,
+    ) else {
+        return;
+    };
+    native_window.cursorUpdate(&event);
+    if let Some(view) = native_window.contentView() {
+        view.cursorUpdate(&event);
+    }
+}
+
+fn ensure_capture_cursor_monitor() {
+    let Ok(mut guard) = CAPTURE_CURSOR_MONITOR.lock() else {
+        return;
+    };
+    if guard.is_some() {
+        return;
+    }
+    // SAFETY: The block only reads process-local atomics and touches NSCursor /
+    // NSWindow on the main AppKit thread (local monitors run there). Returning
+    // the event pointer unchanged leaves delivery intact.
+    let block = RcBlock::new(|event: ptr::NonNull<NSEvent>| -> *mut NSEvent {
+        reassert_capture_cursor_after_modifier_change();
+        event.as_ptr()
+    });
+    let monitor = unsafe {
+        NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::FlagsChanged, &block)
+    };
+    *guard = monitor.map(MainThreadMonitor);
+}
+
+fn reassert_capture_cursor_after_modifier_change() {
+    if !capture_overlay_owns_cursor() {
+        return;
+    }
+    let cursor = stored_capture_cursor();
+    if cursor.reasserts_native_cursor_on_modifiers() {
+        apply_cursor_mode(cursor.kind.to_cursor_mode());
+        return;
+    }
+    // Selector and window capture keep CSS cursors. Forcing NSCursor here would
+    // replace panel grab/pointer until the next mouse move.
+    let Some(main_thread) = MainThreadMarker::new() else {
+        return;
+    };
+    if let Some(window) = NSApplication::sharedApplication(main_thread).keyWindow() {
+        refresh_webkit_cursor_rects(&window);
+    }
+}
+
+/// Drops capture cursor ownership without requiring the overlay window.
+///
+/// The capture menu is destroyed rather than reused, so hide/reset may not run
+/// on a live `WebviewWindow`.
+pub fn release_capture_cursor() {
+    if !is_main_thread() {
+        let _ = run_on_main(release_capture_cursor);
+        return;
+    }
+    CAPTURE_OVERLAY_OWNS_CURSOR.store(false, Ordering::Release);
+    NSCursor::setHiddenUntilMouseMoves(false);
+    NSCursor::arrowCursor().set();
 }
 
 /// Reveals the overlay after WebKit has painted its reset state.
@@ -1499,8 +1651,7 @@ pub fn reset_capture_overlay(window: &WebviewWindow) -> Result<(), &'static str>
         set_cursor_rects_enabled(native_window, true);
         set_tracked_cursor(window, CursorMode::Arrow, CursorSurface::CaptureOverlay)
     })();
-    NSCursor::arrowCursor().set();
-    CAPTURE_OVERLAY_OWNS_CURSOR.store(false, Ordering::Release);
+    release_capture_cursor();
     result
 }
 
@@ -1696,10 +1847,8 @@ fn install_cursor_tracker(webview: &NSView, mode: CursorMode, surface: CursorSur
     }
 
     let owner = CursorTrackingOwner::new(mode, surface);
-    let options = NSTrackingAreaOptions::MouseEnteredAndExited
-        | NSTrackingAreaOptions::MouseMoved
-        | NSTrackingAreaOptions::ActiveAlways
-        | NSTrackingAreaOptions::InVisibleRect;
+    let options = pointer_tracking_options(surface);
+    let cursor_options = cursor_update_tracking_options(surface);
     // SAFETY: The owner implements each callback requested by these options.
     // The view retains the tracking area, and the association below retains
     // its owner for exactly as long as the WKWebView lives.
@@ -1713,10 +1862,6 @@ fn install_cursor_tracker(webview: &NSView, mode: CursorMode, surface: CursorSur
         )
     };
     webview.addTrackingArea(&area);
-
-    let cursor_options = NSTrackingAreaOptions::CursorUpdate
-        | NSTrackingAreaOptions::ActiveInKeyWindow
-        | NSTrackingAreaOptions::InVisibleRect;
     // Cursor updates cannot share the `ActiveAlways` tracking area above.
     // Key-capable inactive HUDs and the thumbnail use this second area for
     // standard cursor-update callbacks while hovered. The `ActiveAlways`
@@ -1753,6 +1898,34 @@ fn install_cursor_tracker(webview: &NSView, mode: CursorMode, surface: CursorSur
             );
         }
     }
+}
+
+fn pointer_tracking_options(surface: CursorSurface) -> NSTrackingAreaOptions {
+    let mut options = NSTrackingAreaOptions::MouseEnteredAndExited
+        | NSTrackingAreaOptions::MouseMoved
+        | NSTrackingAreaOptions::ActiveAlways
+        | NSTrackingAreaOptions::InVisibleRect;
+    if surface_assumes_pointer_inside(surface) {
+        options |= NSTrackingAreaOptions::AssumeInside;
+    }
+    options
+}
+
+fn cursor_update_tracking_options(surface: CursorSurface) -> NSTrackingAreaOptions {
+    let mut options = NSTrackingAreaOptions::CursorUpdate
+        | NSTrackingAreaOptions::ActiveInKeyWindow
+        | NSTrackingAreaOptions::InVisibleRect;
+    if surface_assumes_pointer_inside(surface) {
+        options |= NSTrackingAreaOptions::AssumeInside;
+    }
+    options
+}
+
+fn surface_assumes_pointer_inside(surface: CursorSurface) -> bool {
+    // A fullscreen capture surface is created under the existing pointer, so
+    // AppKit will not send mouseEntered until the mouse moves unless we treat
+    // the pointer as already inside the tracking area.
+    surface == CursorSurface::CaptureOverlay
 }
 
 fn associated_cursor_tracker(webview: &NSView) -> Option<&CursorTrackingOwner> {
@@ -1837,7 +2010,8 @@ mod tests {
 
     use objc2::sel;
     use objc2_app_kit::{
-        NSBezierPath, NSEventModifierFlags, NSEventType, NSMainMenuWindowLevel, NSWindowStyleMask,
+        NSBezierPath, NSEventModifierFlags, NSEventType, NSMainMenuWindowLevel,
+        NSTrackingAreaOptions, NSWindowStyleMask,
     };
     use objc2_foundation::{NSObjectProtocol, NSPoint, NSRect, NSSize};
 
@@ -1846,11 +2020,12 @@ mod tests {
         capture_surface_collection_behavior, capture_surface_window_level,
         clamp_display_corner_radius, corner_radius_from_bezel_path, cursor_mode_is_interactive,
         cursor_surface_can_apply, cursor_surface_can_take_key_window_with_thumbnail_allowed,
-        cursor_surface_uses_key_window, display_corner_radius_points, is_main_thread,
-        parse_display_id, reassert_thumbnail_cursor_after_click, shortcut_modifiers_pressed,
+        cursor_surface_uses_key_window, cursor_update_tracking_options,
+        display_corner_radius_points, is_main_thread, parse_display_id, pointer_tracking_options,
+        reassert_thumbnail_cursor_after_click, shortcut_modifiers_pressed,
         should_release_thumbnail_key_after_event, should_reset_cursor_on_exit,
         single_window_activation_options, style_mask_is_titled_document,
-        window_corner_radius_for_major_version,
+        surface_assumes_pointer_inside, window_corner_radius_for_major_version,
     };
 
     #[test]
@@ -2071,5 +2246,26 @@ mod tests {
 
         CAPTURE_OVERLAY_OWNS_CURSOR.store(previous_overlay, Ordering::Release);
         THUMBNAIL_CURSOR_MODE.store(previous_mode, Ordering::Release);
+    }
+
+    #[test]
+    fn capture_overlay_tracking_assumes_the_pointer_is_already_inside() {
+        assert!(surface_assumes_pointer_inside(
+            CursorSurface::CaptureOverlay
+        ));
+        assert!(!surface_assumes_pointer_inside(CursorSurface::Thumbnail));
+        assert!(!surface_assumes_pointer_inside(CursorSurface::InactiveHud));
+        assert!(
+            pointer_tracking_options(CursorSurface::CaptureOverlay)
+                .contains(NSTrackingAreaOptions::AssumeInside)
+        );
+        assert!(
+            cursor_update_tracking_options(CursorSurface::CaptureOverlay)
+                .contains(NSTrackingAreaOptions::AssumeInside)
+        );
+        assert!(
+            !pointer_tracking_options(CursorSurface::Thumbnail)
+                .contains(NSTrackingAreaOptions::AssumeInside)
+        );
     }
 }
