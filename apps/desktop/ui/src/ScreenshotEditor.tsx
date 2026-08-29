@@ -427,14 +427,14 @@ const SCREENSHOT_QUALITY_OPTIONS = [
     label: "Tiny",
     jpegDescription: "Smallest file with the most visible compression.",
     webpDescription: "Smallest lossy WebP with the most visible compression.",
-    pngDescription: "Smallest PNG with the most visible compression.",
+    pngDescription: "Smallest PNG with the most visible dithering.",
   },
   {
     value: "70",
     label: "Smaller",
     jpegDescription: "Very small file with more visible compression.",
     webpDescription: "Very small lossy WebP with more visible compression.",
-    pngDescription: "Very small PNG with more visible compression.",
+    pngDescription: "Very small PNG with more visible dithering.",
   },
   {
     value: "85",
