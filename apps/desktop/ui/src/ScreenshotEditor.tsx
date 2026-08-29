@@ -1735,10 +1735,29 @@ export function ScreenshotEditor() {
     };
   }, [dragActive, refreshDropToastAnchor]);
 
+  const revokeCompressPreviewUrls = useCallback(() => {
+    const { before, after } = compressPreviewUrlsRef.current;
+    if (before) URL.revokeObjectURL(before);
+    if (after) URL.revokeObjectURL(after);
+    compressPreviewUrlsRef.current = { before: null, after: null };
+    setCompressPreviewBeforeUrl(null);
+    setCompressPreviewAfterUrl(null);
+  }, []);
+
+  const invalidateCompressPreview = useCallback(() => {
+    // Cancel in-flight encodes even when URLs are already empty, otherwise a
+    // stale flatten can cover the live canvas after the next keystroke/drag.
+    compressPreviewRequestRef.current += 1;
+    revokeCompressPreviewUrls();
+    setCompressPreviewPending(true);
+    setCompressPreviewError("");
+  }, [revokeCompressPreviewUrls]);
+
   const replaceDocument = useCallback((next: ScreenshotDocument) => {
     documentRef.current = next;
     setEditorDocument(next);
-  }, []);
+    invalidateCompressPreview();
+  }, [invalidateCompressPreview]);
 
   const clearSuccess = useCallback(() => {
     if (successTimerRef.current !== null) {
@@ -1878,15 +1897,17 @@ export function ScreenshotEditor() {
     image.onload = () => {
       cached.status = "loaded";
       setImageRevision((revision) => revision + 1);
+      invalidateCompressPreview();
     };
     image.onerror = () => {
       cached.status = "error";
       setError("One of the images in this edit could not be loaded.");
       setImageRevision((revision) => revision + 1);
+      invalidateCompressPreview();
     };
     image.src = src;
     return cached;
-  }, []);
+  }, [invalidateCompressPreview]);
 
   /** Encode any document image URL to PNG bytes for draft persistence. */
   const pngBytesForSource = useCallback(async (src: string): Promise<number[]> => {
@@ -4701,15 +4722,6 @@ export function ScreenshotEditor() {
   // Hooks must stay above the loading early-return.
   const canPreviewCompression = qualityMode === "compress" || qualityMode === "maximum";
 
-  const revokeCompressPreviewUrls = useCallback(() => {
-    const { before, after } = compressPreviewUrlsRef.current;
-    if (before) URL.revokeObjectURL(before);
-    if (after) URL.revokeObjectURL(after);
-    compressPreviewUrlsRef.current = { before: null, after: null };
-    setCompressPreviewBeforeUrl(null);
-    setCompressPreviewAfterUrl(null);
-  }, []);
-
   const loadCompressPreview = useCallback(async () => {
     if (!canPreviewCompression || !editorDocument || !artifact) return;
     const request = ++compressPreviewRequestRef.current;
@@ -4789,20 +4801,6 @@ export function ScreenshotEditor() {
     renderFlattened,
     revokeCompressPreviewUrls,
   ]);
-
-  // Drop the last flatten as soon as the document changes so the live canvas
-  // is visible while the next encode is debounced. Quality-only refreshes keep
-  // the overlay and show Encoding… on the After badge.
-  useEffect(() => {
-    if (!canPreviewCompression) return;
-    if (!compressPreviewUrlsRef.current.before && !compressPreviewUrlsRef.current.after) {
-      return;
-    }
-    compressPreviewRequestRef.current += 1;
-    revokeCompressPreviewUrls();
-    setCompressPreviewPending(true);
-    setCompressPreviewError("");
-  }, [canPreviewCompression, editorDocument, imageRevision, revokeCompressPreviewUrls]);
 
   useEffect(() => {
     if (!canPreviewCompression) return;
