@@ -136,8 +136,14 @@ describe("CaptureHistory", () => {
     expect(await screen.findByRole("button", { name: "Delete all captures" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Delete all captures" }));
     expect(screen.getByRole("button", { name: "Confirm delete all captures" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel delete all captures" })).toBeInTheDocument();
     expect(invoke).not.toHaveBeenCalledWith("clear_capture_history");
 
+    fireEvent.click(screen.getByRole("button", { name: "Cancel delete all captures" }));
+    expect(screen.getByRole("button", { name: "Delete all captures" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel delete all captures" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete all captures" }));
     fireEvent.click(screen.getByRole("button", { name: "Confirm delete all captures" }));
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("clear_capture_history");
@@ -145,6 +151,23 @@ describe("CaptureHistory", () => {
     await waitFor(() => {
       expect(screen.queryByRole("button", { name: "Delete all captures" })).not.toBeInTheDocument();
       expect(screen.queryByText("1440 × 900 · 250 KB")).not.toBeInTheDocument();
+    });
+  });
+
+  it("opens a screenshot from its preview before opening the editor", async () => {
+    render(<CaptureHistory />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open screenshot in editor" }));
+
+    await waitFor(() => {
+      const restoreCall = vi.mocked(invoke).mock.calls.findIndex(
+        ([command]) => command === "restore_history_artifact",
+      );
+      const editorCall = vi.mocked(invoke).mock.calls.findIndex(
+        ([command]) => command === "open_screenshot_editor",
+      );
+      expect(restoreCall).toBeGreaterThanOrEqual(0);
+      expect(editorCall).toBeGreaterThan(restoreCall);
     });
   });
 

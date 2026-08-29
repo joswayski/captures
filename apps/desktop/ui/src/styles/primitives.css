@@ -11,7 +11,9 @@
 :is(
   .settings-utility-action,
   .directory-input button,
+  .history-edit,
   .history-reveal,
+  .history-delete,
   .viewer-toolbar-actions button,
   .recording-recovery-row button,
   .custom-theme-editor-heading button,
@@ -47,7 +49,9 @@
 :is(
   .settings-utility-action,
   .directory-input button,
+  .history-edit,
   .history-reveal,
+  .history-delete,
   .viewer-toolbar-actions button,
   .recording-recovery-row button,
   .custom-theme-editor-heading button,
@@ -63,6 +67,7 @@
 .ui-btn:active:not(:disabled),
 :is(
   .settings-utility-action,
+  .history-edit,
   .history-reveal,
   .recording-save-actions button,
   .onboarding-permission-button
@@ -74,7 +79,9 @@
 :is(
   .settings-utility-action,
   .directory-input button,
+  .history-edit,
   .history-reveal,
+  .history-delete,
   .viewer-toolbar-actions button,
   .recording-recovery-row button,
   .onboarding-permission-button,
