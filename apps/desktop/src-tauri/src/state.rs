@@ -35,6 +35,8 @@ pub struct ThumbnailVisibility {
     suppressed_capture_generation: Option<u64>,
     pending_artifact_id: Option<String>,
     capture_ui_suppressed: bool,
+    /// Session-only: the user parked the stack behind the restore chip.
+    user_collapsed: bool,
 }
 
 impl ThumbnailVisibility {
@@ -62,6 +64,8 @@ impl ThumbnailVisibility {
         }
         self.pending_artifact_id = None;
         self.suppressed_capture_generation = None;
+        // A new capture should bring the stack back; parking is temporary.
+        self.user_collapsed = false;
         true
     }
 
@@ -89,6 +93,18 @@ impl ThumbnailVisibility {
 
     pub fn restore_capture_ui(&mut self) {
         self.capture_ui_suppressed = false;
+    }
+
+    pub fn collapse(&mut self) {
+        self.user_collapsed = true;
+    }
+
+    pub fn expand(&mut self) {
+        self.user_collapsed = false;
+    }
+
+    pub fn is_collapsed(&self) -> bool {
+        self.user_collapsed
     }
 
     pub fn is_suppressed(&self) -> bool {
@@ -414,6 +430,33 @@ mod tests {
         assert!(visibility.is_suppressed());
 
         visibility.restore_capture_ui();
+        assert!(!visibility.is_suppressed());
+    }
+
+    #[test]
+    fn collapsing_the_stack_is_session_state_until_a_new_preview_arrives() {
+        let mut visibility = ThumbnailVisibility::default();
+        visibility.collapse();
+        assert!(visibility.is_collapsed());
+
+        visibility.expand();
+        assert!(!visibility.is_collapsed());
+
+        visibility.collapse();
+        let capture = visibility.begin_capture().expect("capture should start");
+        assert!(visibility.is_collapsed());
+        assert!(visibility.wait_for_artifact(capture, "artifact".to_owned()));
+        assert!(visibility.mark_artifact_ready("artifact"));
+        assert!(!visibility.is_collapsed());
+    }
+
+    #[test]
+    fn cancelling_a_capture_keeps_the_stack_collapsed() {
+        let mut visibility = ThumbnailVisibility::default();
+        visibility.collapse();
+        let capture = visibility.begin_capture().expect("capture should start");
+        assert!(visibility.restore_capture(capture));
+        assert!(visibility.is_collapsed());
         assert!(!visibility.is_suppressed());
     }
 

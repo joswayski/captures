@@ -32,6 +32,8 @@ mocked backend with representative sample data so any window can be reviewed in 
 npm run dev --workspace @captures/desktop
 open "http://127.0.0.1:1420/?view=preferences&mock=1"
 open "http://127.0.0.1:1420/?view=recording-hud&mock=1&stage=1"
+open "http://127.0.0.1:1420/?view=mini-previews-hidden&mock=1&count=3"
+open "http://127.0.0.1:1420/?view=thumbnail&mock=1"
 ```
 
 - `mock` installs the sample backend (`apps/desktop/ui/src/dev/previewBackend.ts`).

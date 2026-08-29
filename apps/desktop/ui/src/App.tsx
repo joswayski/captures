@@ -247,6 +247,7 @@ export function App() {
   if (view === "screenshot-editor") return <ScreenshotEditor />;
   if (view === "recording-saved") return <RecordingSavedNotice />;
   if (view === "recording-controls-hidden") return <RecordingControlsHiddenNotice />;
+  if (view === "mini-previews-hidden") return <MiniPreviewsHiddenChip />;
   if (view === "thumbnail") return <Thumbnail />;
   if (view === "viewer") return <ArtifactViewer />;
   if (view === "history") return <CaptureHistory />;
@@ -460,6 +461,64 @@ export function RecordingControlsHiddenNotice() {
         </p>
       </div>
     </main>
+  );
+}
+
+export function miniPreviewsHiddenLabel(count: number): string {
+  if (count <= 0) return "Previews";
+  if (count === 1) return "1 preview";
+  return `${count} previews`;
+}
+
+export function MiniPreviewsHiddenChip() {
+  const initialCount = Number(query("count") ?? "0");
+  const [count, setCount] = useState(
+    Number.isFinite(initialCount) && initialCount > 0 ? initialCount : 0,
+  );
+
+  useEffect(() => {
+    let active = true;
+    let dispose: (() => void)[] = [];
+    void (async () => {
+      dispose = await Promise.all([
+        listen<number>("mini-previews-hidden-count", ({ payload }) => {
+          if (typeof payload === "number") setCount(payload);
+        }),
+        listen<CaptureArtifact>("capture-completed", () => {
+          void invoke<CaptureArtifact[]>("get_artifacts")
+            .then((artifacts) => {
+              if (active) setCount(artifacts.length);
+            })
+            .catch(() => undefined);
+        }),
+        listen<string>("artifact-removed", () => {
+          void invoke<CaptureArtifact[]>("get_artifacts")
+            .then((artifacts) => {
+              if (active) setCount(artifacts.length);
+            })
+            .catch(() => undefined);
+        }),
+      ]);
+      const artifacts = await invoke<CaptureArtifact[]>("get_artifacts").catch(() => []);
+      if (active && artifacts.length > 0) setCount(artifacts.length);
+    })();
+    return () => {
+      active = false;
+      dispose.forEach((unlisten) => unlisten());
+    };
+  }, []);
+
+  return (
+    <button
+      type="button"
+      className="mini-previews-hidden"
+      aria-label={`Show ${miniPreviewsHiddenLabel(count)}`}
+      onClick={() => void invoke("restore_mini_previews")}
+    >
+      <span className="mini-previews-hidden-icon" aria-hidden="true"><CaptureIcon /></span>
+      <strong>{miniPreviewsHiddenLabel(count)}</strong>
+      <ThumbnailOverflowChevron direction="up" />
+    </button>
   );
 }
 
@@ -5642,6 +5701,14 @@ export function Thumbnail() {
           />
         ))}
       </main>
+      <button
+        type="button"
+        className="thumbnail-collapse"
+        aria-label="Hide previews"
+        onClick={() => void invoke("collapse_mini_previews")}
+      >
+        <ThumbnailCollapseIcon />
+      </button>
       {stackOverflow.hasOlder && (
         <button
           type="button"
@@ -5670,6 +5737,14 @@ function ThumbnailOverflowChevron({ direction }: { direction: "up" | "down" }) {
   return (
     <svg viewBox="0 0 16 16" aria-hidden="true">
       <path d={direction === "up" ? "M3.5 10 8 5.5 12.5 10" : "M3.5 6 8 10.5 12.5 6"} />
+    </svg>
+  );
+}
+
+function ThumbnailCollapseIcon() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M10 3.5 5.5 8 10 12.5" />
     </svg>
   );
 }

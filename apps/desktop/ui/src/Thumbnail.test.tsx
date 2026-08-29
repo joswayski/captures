@@ -598,4 +598,11 @@ describe("Thumbnail", () => {
     });
     expect(nativeClickThrough).toBe(false);
   });
+
+  it("offers a control to park the preview stack", async () => {
+    render(<Thumbnail />);
+    const hide = await screen.findByRole("button", { name: "Hide previews" });
+    fireEvent.click(hide);
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith("collapse_mini_previews");
+  });
 });
