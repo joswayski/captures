@@ -202,6 +202,11 @@ pub struct AppState {
     pub settings: RwLock<AppSettings>,
     pub sessions: Mutex<HashMap<Uuid, CaptureSession>>,
     pub artifacts: Mutex<Vec<CaptureArtifact>>,
+    /// Latest folder export from each open screenshot editor, keyed by the
+    /// editor window's capture id. Available for reveal, overwrite, and asset
+    /// URLs, but not shown in the mini-preview stack. At most one full image is
+    /// retained per editor; the slot is dropped when that window closes.
+    pub editor_artifacts: Mutex<HashMap<String, CaptureArtifact>>,
     pub recording_artifacts: Mutex<Vec<RecordingArtifactData>>,
     pub recording_timeline_sprites: Mutex<HashMap<String, Vec<u8>>>,
     pub recording_selection: Mutex<Option<RecordingSelection>>,
@@ -239,6 +244,7 @@ impl AppState {
             settings: RwLock::new(storage::load_settings()),
             sessions: Mutex::new(HashMap::new()),
             artifacts: Mutex::new(Vec::new()),
+            editor_artifacts: Mutex::new(HashMap::new()),
             recording_artifacts: Mutex::new(recording_artifacts),
             recording_timeline_sprites: Mutex::new(HashMap::new()),
             recording_selection: Mutex::new(None),
@@ -258,6 +264,72 @@ impl AppState {
 
     pub fn settings(&self) -> AppSettings {
         self.settings.read().clone()
+    }
+
+    pub fn find_artifact(&self, id: &str) -> Option<CaptureArtifact> {
+        self.artifacts
+            .lock()
+            .iter()
+            .find(|artifact| artifact.id == id)
+            .cloned()
+            .or_else(|| {
+                self.editor_artifacts
+                    .lock()
+                    .values()
+                    .find(|artifact| artifact.id == id)
+                    .cloned()
+            })
+    }
+
+    /// Keep this editor's latest folder export without adding a mini preview.
+    ///
+    /// `source_id` is the capture the editor is saving from. Repeated "Save as
+    /// new file" in the same window replaces the previous retained export.
+    pub fn store_editor_artifact(&self, source_id: &str, artifact: CaptureArtifact) {
+        let mut retained = self.editor_artifacts.lock();
+        let owner_id = retained
+            .iter()
+            .find(|(_, entry)| entry.id == source_id)
+            .map(|(owner, _)| owner.clone())
+            .unwrap_or_else(|| source_id.to_owned());
+        retained.insert(owner_id, artifact);
+    }
+
+    pub fn drop_editor_artifacts_for_owner(&self, owner_id: &str) {
+        self.editor_artifacts.lock().remove(owner_id);
+    }
+
+    /// Drop retained exports whose owner or artifact id is in `ids`, except
+    /// slots still needed by an open editor (`keep_owners`).
+    pub fn forget_editor_artifacts_for_ids(&self, ids: &[String], keep_owners: &[String]) {
+        self.editor_artifacts.lock().retain(|owner, entry| {
+            keep_owners.iter().any(|keep| keep == owner)
+                || !ids.iter().any(|id| id == owner || id == &entry.id)
+        });
+    }
+
+    /// Replace a capture already on the mini-preview stack or retained from an
+    /// editor export. Returns false when neither store has this id.
+    pub fn replace_artifact(&self, artifact: CaptureArtifact) -> bool {
+        {
+            let mut artifacts = self.artifacts.lock();
+            if let Some(existing) = artifacts
+                .iter_mut()
+                .find(|existing| existing.id == artifact.id)
+            {
+                *existing = artifact;
+                return true;
+            }
+        }
+        let mut editor_artifacts = self.editor_artifacts.lock();
+        if let Some(existing) = editor_artifacts
+            .values_mut()
+            .find(|existing| existing.id == artifact.id)
+        {
+            *existing = artifact;
+            return true;
+        }
+        false
     }
 
     pub fn monitors(&self) -> Result<Vec<DisplayDescriptor>, crate::AppError> {
@@ -393,5 +465,145 @@ mod tests {
         assert_eq!(ownership.current_artifact(42).as_deref(), Some("second"));
         assert!(ownership.clear_if_revision(42));
         assert!(ownership.current_artifact(42).is_none());
+    }
+
+    #[test]
+    fn editor_exports_are_findable_without_joining_the_preview_stack() {
+        use captures_capture::CaptureMode;
+
+        use crate::models::{CaptureArtifact, ClipboardCopyStatus};
+
+        use super::AppState;
+
+        let state = AppState::new();
+        let original = CaptureArtifact {
+            id: "capture-1".to_owned(),
+            path: None,
+            preview_url: String::new(),
+            full_url: String::new(),
+            width: 8,
+            height: 8,
+            size_bytes: 12,
+            created_at: "2026-08-29T00:00:00Z".to_owned(),
+            mode: CaptureMode::Region,
+            history_saved: true,
+            clipboard_copy_status: ClipboardCopyStatus::Skipped,
+            image_png: vec![1],
+            preview_png: vec![2],
+        };
+        let saved = CaptureArtifact {
+            id: "saved-1".to_owned(),
+            path: Some("/tmp/saved.png".to_owned()),
+            ..original.clone()
+        };
+        state.artifacts.lock().push(original);
+        state.store_editor_artifact("capture-1", saved);
+
+        assert_eq!(state.artifacts.lock().len(), 1);
+        assert_eq!(state.artifacts.lock()[0].id, "capture-1");
+        assert_eq!(state.editor_artifacts.lock().len(), 1);
+        assert_eq!(
+            state
+                .find_artifact("saved-1")
+                .and_then(|artifact| artifact.path),
+            Some("/tmp/saved.png".to_owned())
+        );
+
+        let saved_again = CaptureArtifact {
+            id: "saved-2".to_owned(),
+            path: Some("/tmp/saved-2.png".to_owned()),
+            preview_url: String::new(),
+            full_url: String::new(),
+            width: 8,
+            height: 8,
+            size_bytes: 12,
+            created_at: "2026-08-29T00:00:00Z".to_owned(),
+            mode: CaptureMode::Region,
+            history_saved: true,
+            clipboard_copy_status: ClipboardCopyStatus::Skipped,
+            image_png: vec![5],
+            preview_png: vec![6],
+        };
+        state.store_editor_artifact("saved-1", saved_again);
+        assert_eq!(state.editor_artifacts.lock().len(), 1);
+        assert!(state.find_artifact("saved-1").is_none());
+        assert_eq!(
+            state
+                .find_artifact("saved-2")
+                .and_then(|artifact| artifact.path),
+            Some("/tmp/saved-2.png".to_owned())
+        );
+
+        let other = CaptureArtifact {
+            id: "saved-other".to_owned(),
+            path: Some("/tmp/other.png".to_owned()),
+            preview_url: String::new(),
+            full_url: String::new(),
+            width: 8,
+            height: 8,
+            size_bytes: 12,
+            created_at: "2026-08-29T00:00:00Z".to_owned(),
+            mode: CaptureMode::Region,
+            history_saved: true,
+            clipboard_copy_status: ClipboardCopyStatus::Skipped,
+            image_png: vec![7],
+            preview_png: vec![8],
+        };
+        state.store_editor_artifact("capture-2", other);
+        assert_eq!(state.editor_artifacts.lock().len(), 2);
+
+        state.drop_editor_artifacts_for_owner("capture-1");
+        assert!(state.find_artifact("saved-2").is_none());
+        assert!(state.find_artifact("saved-other").is_some());
+
+        state.forget_editor_artifacts_for_ids(&["saved-other".to_owned()], &[]);
+        assert!(state.find_artifact("saved-other").is_none());
+        assert!(state.editor_artifacts.lock().is_empty());
+
+        state.store_editor_artifact(
+            "capture-1",
+            CaptureArtifact {
+                id: "saved-keep".to_owned(),
+                path: Some("/tmp/keep.png".to_owned()),
+                preview_url: String::new(),
+                full_url: String::new(),
+                width: 8,
+                height: 8,
+                size_bytes: 12,
+                created_at: "2026-08-29T00:00:00Z".to_owned(),
+                mode: CaptureMode::Region,
+                history_saved: true,
+                clipboard_copy_status: ClipboardCopyStatus::Skipped,
+                image_png: vec![9],
+                preview_png: vec![10],
+            },
+        );
+        state
+            .forget_editor_artifacts_for_ids(&["saved-keep".to_owned()], &["capture-1".to_owned()]);
+        assert!(state.find_artifact("saved-keep").is_some());
+
+        let overwritten = CaptureArtifact {
+            id: "saved-keep".to_owned(),
+            path: Some("/tmp/keep-again.png".to_owned()),
+            preview_url: String::new(),
+            full_url: String::new(),
+            width: 8,
+            height: 8,
+            size_bytes: 12,
+            created_at: "2026-08-29T00:00:00Z".to_owned(),
+            mode: CaptureMode::Region,
+            history_saved: true,
+            clipboard_copy_status: ClipboardCopyStatus::Skipped,
+            image_png: vec![3],
+            preview_png: vec![4],
+        };
+        assert!(state.replace_artifact(overwritten));
+        assert_eq!(state.artifacts.lock().len(), 1);
+        assert_eq!(
+            state
+                .find_artifact("saved-keep")
+                .and_then(|artifact| artifact.path),
+            Some("/tmp/keep-again.png".to_owned())
+        );
     }
 }

@@ -1,3 +1,6 @@
+use crate::conceal_policy::should_conceal_documents_for_capture_activation;
+use crate::cursor_policy::{CaptureCursor, CaptureCursorKind};
+
 use std::{
     cell::{Cell, RefCell},
     ffi::c_void,
@@ -21,18 +24,16 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationOptions, NSBezierPath, NSBezierPathElement, NSColor,
-    NSCursor, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType, NSPasteboard,
-    NSRunningApplication, NSScreen, NSSound, NSStatusWindowLevel, NSTrackingArea,
-    NSTrackingAreaOptions, NSView, NSViewLayerContentsPlacement, NSWindow,
-    NSWindowCollectionBehavior, NSWindowStyleMask, NSWorkspace,
+    NSCursor, NSEvent, NSEventMask, NSEventType, NSPasteboard, NSRunningApplication, NSScreen,
+    NSSound, NSStatusWindowLevel, NSTrackingArea, NSTrackingAreaOptions, NSView,
+    NSViewLayerContentsPlacement, NSWindow, NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSWorkspace,
 };
 use objc2_foundation::{
     NSNumber, NSObject, NSObjectProtocol, NSPoint, NSProcessInfo, NSRect, NSSize, NSString,
 };
 use tauri::WebviewWindow;
 use tauri_nspanel::WebviewWindowExt;
-
-use crate::cursor_policy::{CaptureCursor, CaptureCursorKind};
 
 mod interactive_hud_panel {
     use tauri::Manager;
@@ -486,6 +487,7 @@ static CAPTURE_CURSOR_MONITOR: Mutex<Option<MainThreadMonitor>> = Mutex::new(Non
 // recording selector, countdown), sibling document windows such as the
 // screenshot editor are ordered front with the app. Remember the user's
 // previous frontmost app so we can hand focus back after the surface dismisses.
+// Order those documents out only after the capture surface is opaque.
 static FRONTMOST_APP_BEFORE_CAPTURE: Mutex<Option<Retained<NSRunningApplication>>> =
     Mutex::new(None);
 // Titled document windows ordered out for the duration of a capture UI session.
@@ -1166,7 +1168,7 @@ fn synthesize_cursor_update(native_window: &NSWindow) {
     let Some(event) = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
         NSEventType::MouseMoved,
         native_window.mouseLocationOutsideOfEventStream(),
-        NSEventModifierFlags::empty(),
+        objc2_app_kit::NSEventModifierFlags::empty(),
         NSProcessInfo::processInfo().systemUptime(),
         native_window.windowNumber(),
         None,
@@ -1219,8 +1221,14 @@ pub fn release_capture_cursor() {
 }
 
 /// Reveals the overlay after WebKit has painted its reset state.
+///
+/// Makes the frozen frame fully opaque first, then orders out titled documents
+/// so an open editor cannot vanish for a frame while this surface is still
+/// transparent.
 pub fn reveal_capture_overlay(window: &WebviewWindow) -> Result<(), &'static str> {
-    reveal_window(window)
+    reveal_window(window)?;
+    conceal_documents_under_opaque_capture_surface();
+    Ok(())
 }
 
 /// Makes a window transparent while keeping it onscreen so WebKit can paint.
@@ -1269,6 +1277,8 @@ pub fn focus_window(window: &WebviewWindow) -> Result<(), &'static str> {
             .ok_or("window focus did not run on the main thread")?;
     }
     remember_frontmost_app_before_activation();
+    // Countdown / recording selector callers show the covering surface first.
+    conceal_documents_under_opaque_capture_surface();
     make_key_and_activate(window)
 }
 
@@ -1279,6 +1289,11 @@ pub fn focus_window(window: &WebviewWindow) -> Result<(), &'static str> {
 /// click in the nonactivating thumbnail panel. Re-asserts on the next main-queue turn
 /// so WebKit's asynchronous window creation cannot leave the document surface
 /// visible but inactive.
+///
+/// Activation must not raise sibling document windows. `NSApplication.activate()`
+/// and Tauri `set_focus` (which calls `activateIgnoringOtherApps:`) bring every
+/// Captures window forward, so opening a second editor would also lift the first
+/// over the user's other apps.
 pub fn activate_document_window(window: &WebviewWindow) -> Result<(), &'static str> {
     if !is_main_thread() {
         let window = window.clone();
@@ -1293,11 +1308,30 @@ pub fn activate_document_window(window: &WebviewWindow) -> Result<(), &'static s
     Ok(())
 }
 
+/// Flags that activate Captures without `ActivateAllWindows`.
+///
+/// AppKit then brings only the key and main windows forward. Callers must make
+/// the target both key and main first so a previously focused editor stays put.
+pub(crate) fn single_window_activation_options() -> NSApplicationActivationOptions {
+    // Deprecated and ignored on macOS 14+, but still required on earlier
+    // systems to steal key from another app after a nonactivating panel click.
+    #[allow(deprecated)]
+    {
+        NSApplicationActivationOptions::ActivateIgnoringOtherApps
+    }
+}
+
 fn make_key_and_activate(window: &WebviewWindow) -> Result<(), &'static str> {
-    let main_thread = MainThreadMarker::new().ok_or("window focus must run on the main thread")?;
-    let app = NSApplication::sharedApplication(main_thread);
-    app.activate();
-    native_window(window)?.makeKeyAndOrderFront(None);
+    MainThreadMarker::new().ok_or("window focus must run on the main thread")?;
+    let native = native_window(window)?;
+    // Become main before activation so “key + main only” cannot also raise the
+    // last focused editor. `orderFrontRegardless` lifts this one window above
+    // other apps while Captures is still inactive.
+    native.makeMainWindow();
+    native.makeKeyWindow();
+    native.orderFrontRegardless();
+    let _ = NSRunningApplication::currentApplication()
+        .activateWithOptions(single_window_activation_options());
     Ok(())
 }
 
@@ -1306,19 +1340,16 @@ fn make_key_and_activate(window: &WebviewWindow) -> Result<(), &'static str> {
 /// session already recorded an anchor (selector → countdown should not clobber
 /// the original frontmost app).
 ///
-/// When another app is frontmost, also conceals open titled document windows
-/// (editors, history, preferences) so app activation cannot flash them above
-/// the user's work. When Captures is already frontmost — the usual case with an
-/// editor open — documents stay visible so region/window selection does not
-/// hide and re-show them for the whole capture UI session. The always-on-top
-/// overlay still covers them on the capture display.
+/// Does **not** order out titled documents. Call
+/// [`conceal_documents_under_opaque_capture_surface`] after the overlay,
+/// selector, or countdown is opaque so an open editor cannot blink off while
+/// the surface is still at prime alpha. When Captures already holds focus —
+/// the usual case with an editor open — documents stay visible under the
+/// always-on-top overlay for the whole capture UI session.
 ///
 /// Call [`reveal_concealed_document_windows`] only when the full capture UI
 /// session ends — not on intermediate frontmost restores (for example overlay →
 /// countdown).
-///
-/// Call this immediately before focusing the screenshot overlay or another
-/// capture UI so document windows can be returned to the background afterward.
 pub fn remember_frontmost_app_before_activation() {
     if !is_main_thread() {
         let _ = run_on_main(remember_frontmost_app_before_activation);
@@ -1333,12 +1364,6 @@ pub fn remember_frontmost_app_before_activation() {
         }
     }
     let previous = current_frontmost_if_not_captures();
-    // Only order out documents when activation would pull them over another
-    // app. Concealing while Captures is already key is what made open editors
-    // vanish for the whole region/window selection and pop back at the end.
-    if should_conceal_documents_for_capture_activation(previous.is_some()) {
-        conceal_document_windows_for_capture();
-    }
     let mut slot = FRONTMOST_APP_BEFORE_CAPTURE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1349,14 +1374,30 @@ pub fn remember_frontmost_app_before_activation() {
     *slot = previous;
 }
 
-/// Whether titled documents should be ordered out for this capture activation.
+/// Orders out titled documents once a capture surface is already opaque.
 ///
-/// `other_app_is_frontmost` is true when the workspace frontmost app is not
-/// Captures (and is still running). Pure helper for unit tests.
-pub(crate) fn should_conceal_documents_for_capture_activation(
-    other_app_is_frontmost: bool,
-) -> bool {
-    other_app_is_frontmost
+/// [`remember_frontmost_app_before_activation`] only records the previous app.
+/// Ordering editors out while the overlay is still at prime alpha made them
+/// vanish, then the freeze-frame (which still contains the editor) painted and
+/// they appeared to pop back. Call this after `reveal_window` / opaque show,
+/// and before `makeKeyAndOrderFront`, so activation cannot raise them above
+/// Chrome while they stay covered on the capture display.
+pub fn conceal_documents_under_opaque_capture_surface() {
+    if !is_main_thread() {
+        let _ = run_on_main(conceal_documents_under_opaque_capture_surface);
+        return;
+    }
+    if !should_conceal_documents_now() {
+        return;
+    }
+    conceal_document_windows_for_capture();
+}
+
+fn should_conceal_documents_now() -> bool {
+    should_conceal_documents_for_capture_activation(
+        current_frontmost_if_not_captures().is_some(),
+        captures_holds_user_focus(),
+    )
 }
 
 /// Drops a remembered frontmost app without restoring it.
@@ -1402,13 +1443,38 @@ pub fn restore_frontmost_app_after_capture() {
 }
 
 fn current_frontmost_if_not_captures() -> Option<Retained<NSRunningApplication>> {
+    if captures_holds_user_focus() {
+        return None;
+    }
     let frontmost = NSWorkspace::sharedWorkspace().frontmostApplication()?;
     let current = NSRunningApplication::currentApplication();
-    if frontmost.isEqual(Some(&*current)) || frontmost.isTerminated() {
+    if running_apps_are_same(&frontmost, &current) || frontmost.isTerminated() {
         None
     } else {
         Some(frontmost)
     }
+}
+
+fn running_apps_are_same(left: &NSRunningApplication, right: &NSRunningApplication) -> bool {
+    left.processIdentifier() == right.processIdentifier()
+}
+
+/// True when the user is already working in Captures (an editor or other
+/// titled document is key, or the app is active).
+///
+/// NSWorkspace can still name another app as frontmost for an LSUIElement
+/// agent, which previously made capture startup order out the editor and
+/// immediately show it again.
+fn captures_holds_user_focus() -> bool {
+    let Some(main_thread) = MainThreadMarker::new() else {
+        return false;
+    };
+    let app = NSApplication::sharedApplication(main_thread);
+    if app.isActive() {
+        return true;
+    }
+    app.keyWindow()
+        .is_some_and(|window| is_titled_document_window(&window))
 }
 
 fn yield_activation_to(previous: Option<Retained<NSRunningApplication>>) {
@@ -1429,34 +1495,22 @@ fn yield_activation_to(previous: Option<Retained<NSRunningApplication>>) {
     let _ = previous.activateWithOptions(NSApplicationActivationOptions::empty());
 }
 
-fn concealment_session_is_idle() -> bool {
-    CONCEALED_DOCUMENT_WINDOWS.with(|concealed| concealed.borrow().is_empty())
-}
-
 /// Runs `work` without leaving Captures — and an open editor — in front of the
 /// user's current app.
 ///
 /// Hiding or showing the nonactivating thumbnail panel, or resigning its key
 /// status, can activate Captures and donate key status to a titled document.
-/// When another app is frontmost, documents are ordered out for `work`, then
-/// activation is yielded back and those windows are restored without making
-/// Captures key.
+/// Yield activation back afterward. Do not order out editors for this short
+/// panel hop: hide-then-show is visible as a flash when an editor is already
+/// on screen.
 pub fn run_without_stealing_activation<F: FnOnce()>(work: F) {
     debug_assert!(
         is_main_thread(),
         "run_without_stealing_activation must run on AppKit's main thread"
     );
     let previous = current_frontmost_if_not_captures();
-    let conceal = should_conceal_documents_for_capture_activation(previous.is_some())
-        && concealment_session_is_idle();
-    if conceal {
-        conceal_document_windows_for_capture();
-    }
     work();
     yield_activation_to(previous);
-    if conceal {
-        reveal_concealed_document_windows();
-    }
 }
 
 /// Resigns key on a nonactivating panel without making an open editor key.
@@ -1786,7 +1840,6 @@ fn install_cursor_tracker(webview: &NSView, mode: CursorMode, surface: CursorSur
         )
     };
     webview.addTrackingArea(&area);
-
     // Cursor updates cannot share the `ActiveAlways` tracking area above.
     // Key-capable inactive HUDs and the thumbnail use this second area for
     // standard cursor-update callbacks while hovered. The `ActiveAlways`
@@ -1948,19 +2001,18 @@ mod tests {
         cursor_surface_uses_key_window, cursor_update_tracking_options,
         display_corner_radius_points, is_main_thread, parse_display_id, pointer_tracking_options,
         reassert_thumbnail_cursor_after_click, shortcut_modifiers_pressed,
-        should_conceal_documents_for_capture_activation, should_release_thumbnail_key_after_event,
-        should_reset_cursor_on_exit, style_mask_is_titled_document, surface_assumes_pointer_inside,
-        window_corner_radius_for_major_version,
+        should_release_thumbnail_key_after_event, should_reset_cursor_on_exit,
+        single_window_activation_options, style_mask_is_titled_document,
+        surface_assumes_pointer_inside, window_corner_radius_for_major_version,
     };
 
     #[test]
-    fn conceals_documents_only_when_another_app_is_frontmost() {
-        // Editor open + capture shortcut: Captures is already frontmost — keep
-        // the editor on screen for the whole selection session.
-        assert!(!should_conceal_documents_for_capture_activation(false));
-        // Capture while Chrome/Discord is key: order out so activation cannot
-        // flash editors above the user's work when the overlay dismisses.
-        assert!(should_conceal_documents_for_capture_activation(true));
+    fn single_window_activation_does_not_raise_sibling_documents() {
+        let options = single_window_activation_options();
+        assert!(
+            !options.contains(objc2_app_kit::NSApplicationActivationOptions::ActivateAllWindows),
+            "opening one editor must not lift every other Captures window over the user's apps",
+        );
     }
 
     #[test]

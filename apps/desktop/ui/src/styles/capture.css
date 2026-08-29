@@ -296,6 +296,7 @@ html.capture-selector-display {
   opacity: 0;
   font-size: var(--text-xs);
   font-weight: var(--weight-medium);
+  line-height: var(--leading-snug);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1150,6 +1151,7 @@ html.capture-selector-display {
   overflow: hidden;
   color: var(--theme-signal-text);
   font-size: var(--text-2xs);
+  line-height: var(--leading-snug);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
