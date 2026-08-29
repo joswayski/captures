@@ -1782,12 +1782,7 @@ fn get_artifact(
     state: tauri::State<'_, Arc<AppState>>,
     artifact_id: String,
 ) -> Option<CaptureArtifact> {
-    state
-        .artifacts
-        .lock()
-        .iter()
-        .find(|artifact| artifact.id == artifact_id)
-        .cloned()
+    state.find_artifact(&artifact_id)
 }
 
 #[derive(serde::Serialize)]
@@ -2226,11 +2221,7 @@ fn reveal_artifact(
     artifact_id: String,
 ) -> CommandResult<()> {
     let artifact = state
-        .artifacts
-        .lock()
-        .iter()
-        .find(|artifact| artifact.id == artifact_id)
-        .cloned()
+        .find_artifact(&artifact_id)
         .ok_or_else(|| "artifact is no longer available".to_owned())?;
     let path = artifact
         .path
@@ -5193,18 +5184,12 @@ fn resolve_asset(state: &AppState, path: &str) -> Option<Vec<u8>> {
                 .get(&id)
                 .map(|session| session.snapshot_png.clone())
         }),
-        (Some("artifact"), Some(id)) => state
-            .artifacts
-            .lock()
-            .iter()
-            .find(|artifact| artifact.id == id)
-            .map(|artifact| artifact.preview_png.clone()),
-        (Some("artifact-full"), Some(id)) => state
-            .artifacts
-            .lock()
-            .iter()
-            .find(|artifact| artifact.id == id)
-            .map(|artifact| artifact.image_png.clone()),
+        (Some("artifact"), Some(id)) => {
+            state.find_artifact(id).map(|artifact| artifact.preview_png)
+        }
+        (Some("artifact-full"), Some(id)) => {
+            state.find_artifact(id).map(|artifact| artifact.image_png)
+        }
         (Some("history-preview"), Some(id)) => {
             let available = state.history.lock().iter().any(|entry| entry.id == id);
             available

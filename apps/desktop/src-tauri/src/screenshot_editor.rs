@@ -80,12 +80,7 @@ pub fn open_screenshot_editor(
     state: tauri::State<'_, Arc<AppState>>,
     artifact_id: String,
 ) -> CommandResult<()> {
-    let available = state
-        .artifacts
-        .lock()
-        .iter()
-        .any(|artifact| artifact.id == artifact_id);
-    if !available {
+    if state.find_artifact(&artifact_id).is_none() {
         return Err("the screenshot is no longer available".to_owned());
     }
 
@@ -135,12 +130,7 @@ pub fn default_screenshot_edit_path(
     // restore). Suggest a normal Captures name — not an `-edited` copy suffix.
     // The frontend only appends `-edited` when Save as new file is turned on for an
     // already-saved original.
-    let artifact = state
-        .artifacts
-        .lock()
-        .iter()
-        .find(|artifact| artifact.id == artifact_id)
-        .cloned();
+    let artifact = state.find_artifact(&artifact_id);
     let history_saved_path = state
         .history
         .lock()
@@ -265,12 +255,7 @@ pub async fn save_screenshot_edit(
     // Export is based on the in-memory editor canvas, not the original file.
     // If the user deleted the source capture while the editor is open, still
     // allow saving a new copy from the edited pixels.
-    let source = state
-        .artifacts
-        .lock()
-        .iter()
-        .find(|artifact| artifact.id == request.artifact_id)
-        .cloned();
+    let source = state.find_artifact(&request.artifact_id);
     let destination = validated_destination(&request.destination_path, request.format)
         .map_err(|error| error.to_string())?;
     let source_path = source
@@ -409,13 +394,9 @@ pub async fn save_screenshot_edit(
         }
     }
     if overwrite_source {
-        let mut artifacts = state.artifacts.lock();
-        let existing = artifacts
-            .iter_mut()
-            .find(|existing| existing.id == artifact_id)
-            .ok_or_else(|| "the original screenshot is no longer available".to_owned())?;
-        *existing = artifact.clone();
-        drop(artifacts);
+        if !state.replace_artifact(artifact.clone()) {
+            return Err("the original screenshot is no longer available".to_owned());
+        }
         app.emit("artifact-updated", &artifact)
             .map_err(|error| error.to_string())?;
         if state
@@ -433,10 +414,9 @@ pub async fn save_screenshot_edit(
             .map_err(|error| error.to_string())?;
         }
     } else {
-        state.artifacts.lock().push(artifact.clone());
-        app.emit("capture-completed", &artifact)
-            .map_err(|error| error.to_string())?;
-        super::refresh_thumbnail_stack(&app);
+        // A folder save is not a new capture. Keep the export available for
+        // Reveal in Folder and later overwrites, but do not open a mini preview.
+        state.store_editor_artifact(artifact.clone());
     }
     if history_saved {
         app.emit("capture-history-changed", ())
