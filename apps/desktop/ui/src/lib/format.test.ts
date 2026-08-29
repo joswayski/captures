@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatFileSize, formatFileSizeDelta } from "./format";
+import { fileSizeDeltaBaseline, formatFileSize, formatFileSizeDelta } from "./format";
 
 describe("formatFileSize", () => {
   it("uses compact decimal units", () => {
@@ -13,6 +13,14 @@ describe("formatFileSize", () => {
   it("handles missing or invalid byte counts", () => {
     expect(formatFileSize(0)).toBe("0 B");
     expect(formatFileSize(Number.NaN)).toBe("0 B");
+  });
+});
+
+describe("fileSizeDeltaBaseline", () => {
+  it("uses the flattened source image when present so compact files are not the original", () => {
+    expect(fileSizeDeltaBaseline(188_000, 1_100_000)).toBe(1_100_000);
+    expect(fileSizeDeltaBaseline(1_100_000, null)).toBe(1_100_000);
+    expect(fileSizeDeltaBaseline(250_000, 0)).toBe(250_000);
   });
 });
 

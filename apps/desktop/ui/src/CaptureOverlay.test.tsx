@@ -112,6 +112,11 @@ describe("CaptureOverlay guidance", () => {
 
   afterEach(() => {
     window.history.replaceState({}, "", "/");
+    document.documentElement.classList.remove(
+      "capture-region-cursor",
+      "capture-window-cursor",
+      "capture-display-cursor",
+    );
     vi.restoreAllMocks();
     vi.clearAllMocks();
   });
@@ -343,6 +348,9 @@ describe("CaptureOverlay guidance", () => {
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("reveal_capture_overlay", { sessionId: "capture-1" });
     });
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("sync_capture_cursor", { sessionId: "capture-1" });
+    });
   });
 
   it("reveals a live overlay without a freeze-frame snapshot", async () => {
@@ -359,5 +367,31 @@ describe("CaptureOverlay guidance", () => {
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("reveal_capture_overlay", { sessionId: "capture-1" });
     });
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("sync_capture_cursor", { sessionId: "capture-1" });
+    });
+  });
+
+  it("applies the region cursor class as soon as the session is ready", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/?view=overlay&mode=region&session_id=capture-1",
+    );
+    render(<App />);
+    await screen.findByText("Drag to select a region");
+    expect(document.documentElement).toHaveClass("capture-region-cursor");
+  });
+
+  it("applies the window cursor class for window capture", async () => {
+    activeSession = { ...session, mode: "window" };
+    window.history.replaceState(
+      {},
+      "",
+      "/?view=overlay&mode=window&session_id=capture-1",
+    );
+    render(<App />);
+    await screen.findByText("Select a window to continue");
+    expect(document.documentElement).toHaveClass("capture-window-cursor");
   });
 });

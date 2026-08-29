@@ -91,6 +91,143 @@
   stroke-linejoin: round;
 }
 
+.thumbnail-collapse {
+  position: absolute;
+  z-index: 12;
+  /* Sit beside the newest (bottom) card so macOS windows that stay tall after
+     a dismiss, and the full-viewport design harness, don't park this tab in
+     empty space at the vertical center of the window. */
+  top: auto;
+  right: 6px;
+  bottom: calc(28px + (160px - 46px) / 2);
+  display: grid;
+  width: 22px;
+  height: 46px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-lg) 0 0 var(--r-lg);
+  color: var(--glass-text);
+  background: var(--glass-strong);
+  box-shadow: var(--glass-shadow);
+  backdrop-filter: blur(14px);
+  cursor: pointer;
+}
+
+.thumbnail-collapse:hover,
+.thumbnail-collapse[data-native-pointer-hover="true"] {
+  background: var(--glass-raised);
+  transform: scale(1.05);
+}
+
+.thumbnail-collapse:active {
+  transform: scale(0.95);
+}
+
+.thumbnail-collapse:focus-visible {
+  outline: 2px solid var(--theme-accent);
+  outline-offset: 2px;
+}
+
+.thumbnail-collapse svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.mini-previews-hidden {
+  display: flex;
+  width: calc(100% - 8px);
+  height: calc(100% - 8px);
+  margin: 4px;
+  padding: 0 var(--s-4) 0 var(--s-3);
+  align-items: center;
+  gap: var(--s-3);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-xl);
+  color: var(--glass-text);
+  background: var(--glass-strong);
+  box-shadow: var(--glass-shadow);
+  backdrop-filter: var(--glass-blur);
+  cursor: pointer;
+  animation: mini-previews-hidden-in var(--dur-3) var(--ease-out) both;
+}
+
+.mini-previews-hidden:hover,
+.mini-previews-hidden:focus-visible {
+  background: var(--glass-raised);
+}
+
+.mini-previews-hidden:focus-visible {
+  outline: 2px solid var(--theme-accent);
+  outline-offset: 2px;
+}
+
+.mini-previews-hidden-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: var(--r-md);
+  color: var(--theme-accent-ink);
+  background: var(--theme-accent);
+}
+
+.mini-previews-hidden-icon svg,
+.mini-previews-hidden > svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.mini-previews-hidden > svg {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.mini-previews-hidden strong {
+  min-width: 0;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+
+/*
+ * Native chip window is 168×48. The design harness is a full browser, so pin
+ * the chip to that size in the stack corner. The query is above the native
+ * window width so packaged builds keep filling their webview.
+ */
+@media (min-width: 200px) {
+  .mini-previews-hidden {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    width: 160px;
+    height: 40px;
+    margin: 4px;
+  }
+}
+
+@keyframes mini-previews-hidden-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 @keyframes thumbnail-overflow-cue-in {
   from {
     opacity: 0;
@@ -223,8 +360,11 @@
   }
 }
 
-/* Isolate exit animations so surviving cards do not inherit transition flicker. */
-.thumbnail-card:not([class*="thumbnail-exit-"]):not(.thumbnail-stack-shifting) {
+/*
+ * Isolate idle and exiting-unshifted cards so leftover transform/translate
+ * easing cannot flicker survivors or slide a delete back to its layout slot.
+ */
+.thumbnail-card:not(.thumbnail-stack-shifting) {
   transition: box-shadow 0.22s ease;
   will-change: auto;
 }
@@ -941,15 +1081,28 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 /*
  * Multi-slot stack settle is driven in JS (createThumbnailStackShiftController).
  * Delete and dismiss both hold layout; survivors ease by N × slot with the same
- * transition. Finished holes snap the transform down with layout reflow.
+ * transition. Finished holes snap the translate down with layout reflow.
+ *
+ * Use the `translate` property (not `transform`) so dismiss `translateX` and
+ * delete dust transforms still compose when a shifted card itself starts exiting.
  */
 .thumbnail-card.thumbnail-stack-shifting {
-  transform: translateY(var(--thumbnail-stack-shift, 0px));
+  translate: 0 var(--thumbnail-stack-shift, 0px);
   transition:
-    transform 0.58s cubic-bezier(0.4, 0, 0.2, 1),
+    translate 0.58s cubic-bezier(0.4, 0, 0.2, 1),
     filter 0.58s cubic-bezier(0.4, 0, 0.2, 1);
-  will-change: transform, filter;
+  will-change: translate, filter;
   filter: blur(0);
+}
+
+/*
+ * A parent `filter` flattens dust chips into one compositor surface, which
+ * WebView2 then often fails to animate. Drop the settle filter once this card
+ * is the one dissolving / dismissing.
+ */
+.thumbnail-card.thumbnail-stack-shifting.thumbnail-exiting {
+  filter: none;
+  will-change: translate;
 }
 
 .thumbnail-card.thumbnail-stack-shift-instant {
@@ -1299,5 +1452,9 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
 
   .thumbnail-dust {
     opacity: 0;
+  }
+
+  .mini-previews-hidden {
+    animation: none;
   }
 }

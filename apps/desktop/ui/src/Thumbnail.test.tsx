@@ -3,6 +3,10 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 
 import { Thumbnail } from "./App";
 import type { CaptureArtifact } from "./types";
+import {
+  THUMBNAIL_CARD_SLOT_PX,
+  THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS,
+} from "./lib/thumbnailLayout";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -380,6 +384,57 @@ describe("Thumbnail", () => {
     expect(cards[1]).toHaveClass("thumbnail-exit-delete");
   });
 
+  it("keeps a slid preview in place when it is deleted before the hole below is removed", async () => {
+    const secondArtifact = {
+      ...artifact,
+      id: "capture-2",
+      preview_url: "captures-capture://artifact/capture-2",
+      full_url: "captures-capture://artifact-full/capture-2",
+    };
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifacts") return [artifact, secondArtifact];
+      if (command === "get_clipboard_state") {
+        return { revision: 0, artifact_id: secondArtifact.id };
+      }
+      if (command === "get_thumbnail_pointer_position") return null;
+      return undefined;
+    });
+
+    render(<Thumbnail />);
+    const cards = await screen.findAllByRole("article");
+    expect(cards).toHaveLength(2);
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(within(cards[1]).getByRole("button", { name: "Delete" }));
+      expect(cards[1]).toHaveClass("thumbnail-exiting");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16);
+      });
+      expect(cards[0]).toHaveClass("thumbnail-stack-shifting");
+      expect(cards[0].style.getPropertyValue("--thumbnail-stack-shift")).toBe(
+        `${THUMBNAIL_CARD_SLOT_PX}px`,
+      );
+
+      fireEvent.click(within(cards[0]).getByRole("button", { name: "Delete" }));
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(cards[0]).toHaveClass("thumbnail-exit-delete");
+      expect(cards[0]).toHaveClass("thumbnail-exiting");
+      expect(cards[0]).toHaveClass("thumbnail-stack-shifting");
+      expect(cards[0].style.getPropertyValue("--thumbnail-stack-shift")).toBe(
+        `${THUMBNAIL_CARD_SLOT_PX}px`,
+      );
+      expect(cards[0].style.translate).toBe(`0 ${THUMBNAIL_CARD_SLOT_PX}px`);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("re-arms native preview hit testing as soon as deletion completes", async () => {
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "get_artifacts") return [artifact];
@@ -597,5 +652,12 @@ describe("Thumbnail", () => {
       expect(ignoreCalls.at(-1)?.[1]).toEqual({ ignore: false });
     });
     expect(nativeClickThrough).toBe(false);
+  });
+
+  it("offers a control to park the preview stack", async () => {
+    render(<Thumbnail />);
+    const hide = await screen.findByRole("button", { name: "Hide previews" });
+    fireEvent.click(hide);
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith("collapse_mini_previews");
   });
 });

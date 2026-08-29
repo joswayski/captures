@@ -95,6 +95,8 @@ const RECORDING_EDITOR_WINDOW_PREFIX: &str = "recording-editor-";
 const RECORDING_SAVED_NOTICE_LABEL: &str = "recording-saved";
 const RECORDING_SAVED_NOTICE_EVENT: &str = "recording-saved-artifact";
 const RECORDING_CONTROLS_HIDDEN_NOTICE_PREFIX: &str = "recording-controls-hidden-";
+const MINI_PREVIEWS_HIDDEN_LABEL: &str = "mini-previews-hidden";
+const MINI_PREVIEWS_HIDDEN_EVENT: &str = "mini-previews-hidden-count";
 /// Mini-preview stack listens for this to clear “In editor” when a window dies.
 const EDITOR_LAYERS_CHANGED_EVENT: &str = "editor-layers-changed";
 #[cfg(any(target_os = "macos", test))]
@@ -126,6 +128,7 @@ struct ClipboardWrite {
 }
 
 pub fn run() {
+    crash_report::install_panic_hook();
     let state = AppState::new();
     let protocol_state = state.clone();
 
@@ -170,6 +173,12 @@ pub fn run() {
                 // Belt-and-suspenders if CloseRequested was prevented or skipped.
                 tauri::WindowEvent::Destroyed => {
                     clear_editor_layer_presence_for_window(window);
+                    if let Some(owner_id) =
+                        window.label().strip_prefix(SCREENSHOT_EDITOR_WINDOW_PREFIX)
+                        && let Some(state) = window.app_handle().try_state::<Arc<AppState>>()
+                    {
+                        state.drop_editor_artifacts_for_owner(owner_id);
+                    }
                     if is_editor_window_label(window.label())
                         || window.label() == "viewer"
                         || window.label().starts_with(VIEWER_WINDOW_PREFIX)
@@ -274,6 +283,8 @@ pub fn run() {
             sync_capture_cursor,
             thumbnail_ready,
             sync_thumbnail_stack,
+            collapse_mini_previews,
+            restore_mini_previews,
             get_thumbnail_pointer_position,
             set_thumbnail_cursor,
             reassert_thumbnail_cursor,
@@ -295,6 +306,7 @@ pub fn run() {
             recording::select_capture_display,
             recording::show_recording_selector,
             recording::reveal_recording_selector,
+            recording::sync_selector_cursor,
             recording::cancel_recording_selection,
             recording::capture_selection_screenshot,
             recording::list_recording_audio_devices,
@@ -1052,6 +1064,8 @@ fn show_screenshot_countdown(
     window.set_content_protected(cfg!(target_os = "windows"))?;
     window.show()?;
     #[cfg(target_os = "macos")]
+    captures_macos_window::conceal_documents_under_opaque_capture_surface();
+    #[cfg(target_os = "macos")]
     recording::focus_recording_window(app, "screenshot-countdown");
     if let Err(error) = window.set_focus() {
         eprintln!("failed to focus screenshot countdown: {error}");
@@ -1096,6 +1110,32 @@ fn get_pending_session(state: tauri::State<'_, Arc<AppState>>) -> Option<ActiveS
         .map(capture_session_to_active)
 }
 
+#[cfg_attr(all(target_os = "macos", not(test)), allow(dead_code))]
+fn capture_cursor_icon(mode: CaptureMode) -> CursorIcon {
+    if mode == CaptureMode::Region {
+        CursorIcon::Crosshair
+    } else {
+        CursorIcon::Default
+    }
+}
+
+fn apply_overlay_capture_cursor(
+    window: &tauri::WebviewWindow,
+    mode: CaptureMode,
+) -> CommandResult<()> {
+    #[cfg(not(target_os = "macos"))]
+    window
+        .set_cursor_icon(capture_cursor_icon(mode))
+        .map_err(|error| error.to_string())?;
+    #[cfg(target_os = "macos")]
+    captures_macos_window::activate_capture_cursor(
+        window,
+        captures_macos_window::CaptureCursor::overlay(mode == CaptureMode::Region),
+    )
+    .map_err(str::to_owned)?;
+    Ok(())
+}
+
 /// GTK creates the underlying GDK window only when a window is first shown, and
 /// tao unwraps it while handling a cursor-ignore request, so asking a window
 /// that has never been shown to become click-through takes down the whole event
@@ -1131,15 +1171,7 @@ fn show_capture_overlay(
         .ok_or_else(|| AppError::SessionUnavailable.to_string())?;
     if let Some(window) = app.get_webview_window("overlay") {
         #[cfg(not(target_os = "macos"))]
-        let cursor = if mode == CaptureMode::Region {
-            CursorIcon::Crosshair
-        } else {
-            CursorIcon::Default
-        };
-        #[cfg(not(target_os = "macos"))]
-        window
-            .set_cursor_icon(cursor)
-            .map_err(|error| error.to_string())?;
+        apply_overlay_capture_cursor(&window, mode)?;
         // Keep the overlay click-through until the frozen snapshot is painted.
         // Otherwise an early wake (needed so WKWebView will load the image)
         // steals pointer events from the desktop.
@@ -1193,14 +1225,16 @@ fn reveal_capture_overlay(
         if let Err(error) = captures_macos_window::elevate_capture_surface(&window) {
             eprintln!("failed to keep the capture overlay above the menu bar: {error}");
         }
-        if let Err(error) = window.set_focus() {
+        if let Err(error) = captures_macos_window::focus_window(&window) {
             eprintln!("failed to focus capture overlay: {error}");
         }
-        captures_macos_window::activate_capture_cursor(&window, mode == CaptureMode::Region)
-            .map_err(str::to_owned)?;
+        apply_overlay_capture_cursor(&window, mode)?;
     }
     #[cfg(not(target_os = "macos"))]
-    let _ = mode;
+    {
+        window.set_focus().map_err(|error| error.to_string())?;
+        apply_overlay_capture_cursor(&window, mode)?;
+    }
     Ok(())
 }
 
@@ -1220,12 +1254,7 @@ fn sync_capture_cursor(
     let window = app
         .get_webview_window("overlay")
         .ok_or_else(|| "capture overlay is unavailable".to_owned())?;
-    #[cfg(target_os = "macos")]
-    captures_macos_window::activate_capture_cursor(&window, mode == CaptureMode::Region)
-        .map_err(str::to_owned)?;
-    #[cfg(not(target_os = "macos"))]
-    let _ = (window, mode);
-    Ok(())
+    apply_overlay_capture_cursor(&window, mode)
 }
 
 #[tauri::command]
@@ -1578,6 +1607,8 @@ fn refresh_thumbnail_interactivity(
         // window can keep eating clicks after hide() unless click-through is
         // applied first (hide_thumbnail_window does that).
         hide_thumbnail_window(&window);
+        hide_mini_previews_hidden_chip(&app);
+        state.thumbnail_visibility.lock().expand();
         return Ok(());
     }
     // Always re-enable hit testing first — a stuck click-through state is the
@@ -1585,8 +1616,8 @@ fn refresh_thumbnail_interactivity(
     let _ = set_click_through(&window, false);
     let _ = window.set_always_on_top(true);
     if !suppressed {
-        show_thumbnail_window(&window);
         // Re-apply geometry after display sleep (DPI / work area can change).
+        // Honors a parked stack so a collapsed session does not flash back.
         update_thumbnail_stack(&app);
     }
     Ok(())
@@ -1770,10 +1801,9 @@ fn update_settings(
     *state.settings.write() = settings.clone();
     if mini_preview_setting_changed {
         if !settings.show_mini_previews {
-            state
-                .thumbnail_visibility
-                .lock()
-                .stop_waiting_for_artifact();
+            let mut visibility = state.thumbnail_visibility.lock();
+            visibility.stop_waiting_for_artifact();
+            visibility.expand();
         }
         // When including mini previews in captures, keep the stack shareable.
         if settings.include_mini_previews_in_captures
@@ -1807,12 +1837,7 @@ fn get_artifact(
     state: tauri::State<'_, Arc<AppState>>,
     artifact_id: String,
 ) -> Option<CaptureArtifact> {
-    state
-        .artifacts
-        .lock()
-        .iter()
-        .find(|artifact| artifact.id == artifact_id)
-        .cloned()
+    state.find_artifact(&artifact_id)
 }
 
 #[derive(serde::Serialize)]
@@ -2053,6 +2078,7 @@ async fn restore_history_artifact(
 
     app.emit("capture-completed", &artifact)
         .map_err(|error| error.to_string())?;
+    state.thumbnail_visibility.lock().expand();
     refresh_thumbnail_stack(&app);
     Ok(artifact)
 }
@@ -2085,6 +2111,10 @@ async fn delete_history_artifact(
         .recording_artifacts
         .lock()
         .retain(|artifact| artifact.summary.id != artifact_id);
+    state.forget_editor_artifacts_for_ids(
+        std::slice::from_ref(&artifact_id),
+        &open_screenshot_editor_owner_ids(&app),
+    );
     app.emit("capture-history-changed", ())
         .map_err(|error| error.to_string())?;
     Ok(())
@@ -2122,6 +2152,7 @@ async fn clear_capture_history(
         .recording_artifacts
         .lock()
         .retain(|artifact| !ids.iter().any(|id| id == &artifact.summary.id));
+    state.forget_editor_artifacts_for_ids(&ids, &open_screenshot_editor_owner_ids(&app));
     app.emit("capture-history-changed", ())
         .map_err(|error| error.to_string())?;
     Ok(())
@@ -2251,11 +2282,7 @@ fn reveal_artifact(
     artifact_id: String,
 ) -> CommandResult<()> {
     let artifact = state
-        .artifacts
-        .lock()
-        .iter()
-        .find(|artifact| artifact.id == artifact_id)
-        .cloned()
+        .find_artifact(&artifact_id)
         .ok_or_else(|| "artifact is no longer available".to_owned())?;
     let path = artifact
         .path
@@ -2359,6 +2386,17 @@ const VIEWER_WINDOW_PREFIX: &str = "viewer-";
 
 fn viewer_window_label(artifact_id: &str) -> String {
     format!("{VIEWER_WINDOW_PREFIX}{artifact_id}")
+}
+
+fn open_screenshot_editor_owner_ids(app: &AppHandle) -> Vec<String> {
+    app.webview_windows()
+        .into_keys()
+        .filter_map(|label| {
+            label
+                .strip_prefix(SCREENSHOT_EDITOR_WINDOW_PREFIX)
+                .map(str::to_owned)
+        })
+        .collect()
 }
 
 fn remove_artifact(app: &AppHandle, state: &Arc<AppState>, artifact_id: &str) -> CommandResult<()> {
@@ -4468,6 +4506,8 @@ const THUMBNAIL_WIDTH: f64 = 340.0;
 const THUMBNAIL_CARD_HEIGHT: f64 = 160.0;
 const THUMBNAIL_GAP: f64 = 24.0;
 const THUMBNAIL_PADDING: f64 = 28.0;
+const MINI_PREVIEWS_HIDDEN_WIDTH: f64 = 168.0;
+const MINI_PREVIEWS_HIDDEN_HEIGHT: f64 = 48.0;
 
 fn update_thumbnail_stack(app: &AppHandle) {
     let app = app.clone();
@@ -4475,67 +4515,78 @@ fn update_thumbnail_stack(app: &AppHandle) {
     let _ = app.run_on_main_thread(move || {
         let state = handle.state::<Arc<AppState>>().inner().clone();
         let count = state.artifacts.lock().len();
-        let suppressed = state.thumbnail_visibility.lock().is_suppressed();
         let settings = state.settings();
         let show_mini_previews = settings.show_mini_previews;
         let include_mini_previews_in_captures = settings.include_mini_previews_in_captures;
-        let Some(window) = handle.get_webview_window("thumbnail") else {
-            if let Err(error) = create_thumbnail_window(
-                &handle,
-                thumbnail_stack_should_be_visible(
-                    count,
-                    suppressed,
-                    show_mini_previews,
-                    include_mini_previews_in_captures,
-                ),
-            ) {
-                eprintln!("failed to create capture thumbnail stack: {error}");
+        let (suppressed, collapsed) = {
+            let mut visibility = state.thumbnail_visibility.lock();
+            if count == 0 || !show_mini_previews {
+                visibility.expand();
             }
-            return;
+            (visibility.is_suppressed(), visibility.is_collapsed())
         };
-        if !thumbnail_stack_should_be_visible(
+        let show_stack = thumbnail_stack_should_be_visible(
             count,
             suppressed,
             show_mini_previews,
             include_mini_previews_in_captures,
-        ) {
-            hide_thumbnail_window(&window);
-            return;
-        }
-        let (x, y, desired_height) = thumbnail_window_geometry(&handle, count);
-        let visible = window.is_visible().unwrap_or(false);
-        // WKWebView blanks every painted card when its NSWindow shrinks. Keep
-        // the taller frame on macOS, where native hit testing makes the empty
-        // top space click-through. Other platforms shrink normally so an
-        // invisible window area cannot block desktop clicks.
-        let height = thumbnail_visible_window_height(
-            desired_height,
-            visible
-                .then(|| thumbnail_window_logical_height(&window))
-                .flatten(),
-            cfg!(target_os = "macos"),
+            collapsed,
         );
-        if visible {
-            #[cfg(target_os = "macos")]
-            if let Err(error) =
-                captures_macos_window::resize_from_bottom(&window, THUMBNAIL_WIDTH, height)
-            {
-                eprintln!("failed to resize capture thumbnail stack: {error}");
-                let _ = window.set_size(LogicalSize::new(THUMBNAIL_WIDTH, height));
-                let _ = window.set_position(tauri::LogicalPosition::new(x, y));
-            }
+        let show_chip = mini_previews_hidden_should_be_visible(
+            count,
+            suppressed,
+            show_mini_previews,
+            collapsed,
+        );
+        update_thumbnail_stack_window(&handle, count, show_stack);
+        update_mini_previews_hidden_chip(&handle, count, show_chip);
+    });
+}
 
-            #[cfg(not(target_os = "macos"))]
-            {
-                let _ = window.set_size(LogicalSize::new(THUMBNAIL_WIDTH, height));
-                let _ = window.set_position(tauri::LogicalPosition::new(x, y));
-            }
-        } else {
+fn update_thumbnail_stack_window(handle: &AppHandle, count: usize, show_stack: bool) {
+    let Some(window) = handle.get_webview_window("thumbnail") else {
+        if let Err(error) = create_thumbnail_window(handle, show_stack) {
+            eprintln!("failed to create capture thumbnail stack: {error}");
+        }
+        return;
+    };
+    if !show_stack {
+        hide_thumbnail_window(&window);
+        return;
+    }
+    let (x, y, desired_height) = thumbnail_window_geometry(handle, count);
+    let visible = window.is_visible().unwrap_or(false);
+    // WKWebView blanks every painted card when its NSWindow shrinks. Keep
+    // the taller frame on macOS, where native hit testing makes the empty
+    // top space click-through. Other platforms shrink normally so an
+    // invisible window area cannot block desktop clicks.
+    let height = thumbnail_visible_window_height(
+        desired_height,
+        visible
+            .then(|| thumbnail_window_logical_height(&window))
+            .flatten(),
+        cfg!(target_os = "macos"),
+    );
+    if visible {
+        #[cfg(target_os = "macos")]
+        if let Err(error) =
+            captures_macos_window::resize_from_bottom(&window, THUMBNAIL_WIDTH, height)
+        {
+            eprintln!("failed to resize capture thumbnail stack: {error}");
             let _ = window.set_size(LogicalSize::new(THUMBNAIL_WIDTH, height));
             let _ = window.set_position(tauri::LogicalPosition::new(x, y));
-            show_thumbnail_window(&window);
         }
-    });
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = window.set_size(LogicalSize::new(THUMBNAIL_WIDTH, height));
+            let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+        }
+    } else {
+        let _ = window.set_size(LogicalSize::new(THUMBNAIL_WIDTH, height));
+        let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+        show_thumbnail_window(&window);
+    }
 }
 
 fn thumbnail_stack_should_be_visible(
@@ -4543,10 +4594,24 @@ fn thumbnail_stack_should_be_visible(
     suppressed: bool,
     show_mini_previews: bool,
     include_mini_previews_in_captures: bool,
+    collapsed: bool,
 ) -> bool {
     // Capture flows suppress the stack so it does not appear in screenshots or
     // recordings. Opting in keeps it visible for self-capture / feedback.
-    count > 0 && show_mini_previews && (!suppressed || include_mini_previews_in_captures)
+    // Parking the stack behind the restore chip is session-only.
+    count > 0
+        && show_mini_previews
+        && !collapsed
+        && (!suppressed || include_mini_previews_in_captures)
+}
+
+fn mini_previews_hidden_should_be_visible(
+    count: usize,
+    suppressed: bool,
+    show_mini_previews: bool,
+    collapsed: bool,
+) -> bool {
+    count > 0 && show_mini_previews && collapsed && !suppressed
 }
 
 fn thumbnail_window_logical_height(window: &tauri::WebviewWindow) -> Option<f64> {
@@ -4701,6 +4766,29 @@ fn sync_thumbnail_stack(app: AppHandle) -> CommandResult<()> {
     Ok(())
 }
 
+#[tauri::command]
+fn collapse_mini_previews(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> CommandResult<()> {
+    if state.artifacts.lock().is_empty() || !state.settings().show_mini_previews {
+        return Ok(());
+    }
+    state.thumbnail_visibility.lock().collapse();
+    update_thumbnail_stack(&app);
+    Ok(())
+}
+
+#[tauri::command]
+fn restore_mini_previews(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> CommandResult<()> {
+    state.thumbnail_visibility.lock().expand();
+    update_thumbnail_stack(&app);
+    Ok(())
+}
+
 fn thumbnail_window_geometry(app: &AppHandle, count: usize) -> (f64, f64, f64) {
     app.primary_monitor()
         .ok()
@@ -4789,6 +4877,101 @@ fn thumbnail_geometry(bounds: ThumbnailMonitorBounds, count: usize) -> (f64, f64
         bottom_aligned.max(top),
         stack_height,
     )
+}
+
+fn mini_previews_hidden_geometry(bounds: ThumbnailMonitorBounds) -> (f64, f64) {
+    let (x, y, height) = thumbnail_geometry(bounds, 1);
+    (x, (y + height - MINI_PREVIEWS_HIDDEN_HEIGHT).max(y))
+}
+
+fn mini_previews_hidden_window_geometry(app: &AppHandle) -> (f64, f64) {
+    app.primary_monitor()
+        .ok()
+        .flatten()
+        .map(|monitor| {
+            let work_area = monitor.work_area();
+            let full_position = *monitor.position();
+            let full_size = *monitor.size();
+            mini_previews_hidden_geometry(ThumbnailMonitorBounds {
+                work_x: work_area.position.x,
+                work_y: work_area.position.y,
+                work_width: work_area.size.width,
+                work_height: work_area.size.height,
+                full_x: full_position.x,
+                full_y: full_position.y,
+                full_width: full_size.width,
+                full_height: full_size.height,
+                scale_factor: monitor.scale_factor(),
+            })
+        })
+        .unwrap_or((20.0, 20.0))
+}
+
+fn update_mini_previews_hidden_chip(app: &AppHandle, count: usize, visible: bool) {
+    if !visible {
+        hide_mini_previews_hidden_chip(app);
+        return;
+    }
+    if let Err(error) = show_mini_previews_hidden_chip(app, count) {
+        eprintln!("failed to show mini preview restore chip: {error}");
+    }
+}
+
+fn hide_mini_previews_hidden_chip(app: &AppHandle) {
+    hide_window_inner(app, MINI_PREVIEWS_HIDDEN_LABEL);
+}
+
+fn show_mini_previews_hidden_chip(app: &AppHandle, count: usize) -> Result<(), tauri::Error> {
+    let (x, y) = mini_previews_hidden_window_geometry(app);
+    let window = if let Some(window) = app.get_webview_window(MINI_PREVIEWS_HIDDEN_LABEL) {
+        let _ = window.emit(MINI_PREVIEWS_HIDDEN_EVENT, count);
+        window
+    } else {
+        WebviewWindowBuilder::new(
+            app,
+            MINI_PREVIEWS_HIDDEN_LABEL,
+            WebviewUrl::App(format!("index.html?view=mini-previews-hidden&count={count}").into()),
+        )
+        .title("Mini previews hidden")
+        .inner_size(MINI_PREVIEWS_HIDDEN_WIDTH, MINI_PREVIEWS_HIDDEN_HEIGHT)
+        .position(x, y)
+        .decorations(false)
+        .always_on_top(true)
+        .visible_on_all_workspaces(true)
+        .skip_taskbar(true)
+        .resizable(false)
+        .shadow(false)
+        .transparent(true)
+        .background_color(Color(0, 0, 0, 0))
+        .accept_first_mouse(true)
+        .focusable(false)
+        .focused(false)
+        .visible(false)
+        .build()?
+    };
+    let _ = window.set_content_protected(true);
+    let _ = window.set_ignore_cursor_events(false);
+    let _ = window.set_size(LogicalSize::new(
+        MINI_PREVIEWS_HIDDEN_WIDTH,
+        MINI_PREVIEWS_HIDDEN_HEIGHT,
+    ));
+    let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+
+    #[cfg(target_os = "macos")]
+    {
+        captures_macos_window::configure_inactive_hover(&window)
+            .map_err(|error| tauri::Error::Anyhow(anyhow::anyhow!(error)))?;
+        captures_macos_window::show_without_activating(&window)
+            .map_err(|error| tauri::Error::Anyhow(anyhow::anyhow!(error)))?;
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = window.set_always_on_top(true);
+        window.show()?;
+    }
+
+    Ok(())
 }
 
 fn report_capture_error(app: &AppHandle, error: &AppError, mode: CaptureMode) {
@@ -5245,6 +5428,9 @@ fn hide_window_inner(app: &AppHandle, label: &str) {
             hide_thumbnail_window_inner(&window);
             return;
         }
+        if label == MINI_PREVIEWS_HIDDEN_LABEL {
+            let _ = window.set_ignore_cursor_events(true);
+        }
         let _ = window.hide();
     }
 }
@@ -5255,13 +5441,19 @@ pub(crate) async fn hide_capture_huds_before_snapshot(app: &AppHandle) {
     let include_mini_previews = include_mini_previews_in_captures(app);
     set_capture_huds_protected(app, true);
     let hud_labels: &[&str] = if include_mini_previews {
-        &["startup", "update", RECORDING_SAVED_NOTICE_LABEL]
+        &[
+            "startup",
+            "update",
+            RECORDING_SAVED_NOTICE_LABEL,
+            MINI_PREVIEWS_HIDDEN_LABEL,
+        ]
     } else {
         &[
             "thumbnail",
             "startup",
             "update",
             RECORDING_SAVED_NOTICE_LABEL,
+            MINI_PREVIEWS_HIDDEN_LABEL,
         ]
     };
     let had_visible_hud = hide_capture_huds(app, include_mini_previews, hud_labels);
@@ -5312,6 +5504,7 @@ fn hide_capture_huds_inner(
     hide_window_inner(app, "startup");
     hide_recording_saved_notices_inner(app);
     hide_window_inner(app, "update");
+    hide_window_inner(app, MINI_PREVIEWS_HIDDEN_LABEL);
     had_visible_hud
 }
 
@@ -5372,7 +5565,12 @@ fn set_capture_huds_protected_inner(app: &AppHandle, protected: bool) {
     for (label, window) in app.webview_windows() {
         if !matches!(
             label.as_str(),
-            "thumbnail" | "startup" | "update" | "recording-hud" | RECORDING_SAVED_NOTICE_LABEL
+            "thumbnail"
+                | "startup"
+                | "update"
+                | "recording-hud"
+                | RECORDING_SAVED_NOTICE_LABEL
+                | MINI_PREVIEWS_HIDDEN_LABEL
         ) {
             continue;
         }
@@ -5477,18 +5675,12 @@ fn resolve_asset(state: &AppState, path: &str) -> Option<Vec<u8>> {
                 .get(&id)
                 .map(|session| session.snapshot_png.clone())
         }),
-        (Some("artifact"), Some(id)) => state
-            .artifacts
-            .lock()
-            .iter()
-            .find(|artifact| artifact.id == id)
-            .map(|artifact| artifact.preview_png.clone()),
-        (Some("artifact-full"), Some(id)) => state
-            .artifacts
-            .lock()
-            .iter()
-            .find(|artifact| artifact.id == id)
-            .map(|artifact| artifact.image_png.clone()),
+        (Some("artifact"), Some(id)) => {
+            state.find_artifact(id).map(|artifact| artifact.preview_png)
+        }
+        (Some("artifact-full"), Some(id)) => {
+            state.find_artifact(id).map(|artifact| artifact.image_png)
+        }
         (Some("history-preview"), Some(id)) => {
             let available = state.history.lock().iter().any(|entry| entry.id == id);
             available
@@ -6025,14 +6217,15 @@ mod tests {
     #[cfg(target_os = "macos")]
     use super::macos_window_is_capture_overlay;
     use super::{
-        AppError, LogicalRect, STARTUP_NOTICE_AFTER_SETUP_VISIBLE,
+        AppError, LogicalRect, MINI_PREVIEWS_HIDDEN_HEIGHT, STARTUP_NOTICE_AFTER_SETUP_VISIBLE,
         STARTUP_NOTICE_AUTOSTART_VISIBLE, STARTUP_NOTICE_HEIGHT, STARTUP_NOTICE_WIDTH,
         StartupNoticeCaret, THUMBNAIL_AUTO_HIDE_RESERVE, THUMBNAIL_SYSTEM_CHROME_GAP,
         TRAY_NOTICE_CARET_INSET, TRAY_NOTICE_CARET_SIZE, TRAY_NOTICE_FRAME_PAD,
         TRAY_NOTICE_SCREEN_MARGIN, TRAY_NOTICE_TRAY_OVERLAP, ThumbnailCursorAction,
         ThumbnailCursorKind, ThumbnailMonitorBounds, ThumbnailPointerSpace, ThumbnailWindowFrame,
-        click_through_applies, clipboard_fingerprint, display_contains_pointer,
-        fallback_startup_notice, mask_macos_window_corners, parse_shortcut, place_startup_notice,
+        capture_cursor_icon, click_through_applies, clipboard_fingerprint, display_contains_pointer,
+        fallback_startup_notice, mask_macos_window_corners, mini_previews_hidden_geometry,
+        mini_previews_hidden_should_be_visible, parse_shortcut, place_startup_notice,
         primary_app_window_priority, refine_window_chrome_from_snapshot,
         resolve_startup_notice_placement, should_trigger_shortcut,
         startup_notice_fallback_edge_from_insets, startup_notice_url, thumbnail_cursor_action,
@@ -6647,17 +6840,63 @@ mod tests {
 
     #[test]
     fn keeps_mini_previews_hidden_when_the_preference_is_disabled() {
-        assert!(thumbnail_stack_should_be_visible(1, false, true, false));
-        assert!(!thumbnail_stack_should_be_visible(1, true, true, false));
-        assert!(!thumbnail_stack_should_be_visible(1, false, false, false));
-        assert!(!thumbnail_stack_should_be_visible(0, false, true, false));
+        assert!(thumbnail_stack_should_be_visible(
+            1, false, true, false, false
+        ));
+        assert!(!thumbnail_stack_should_be_visible(
+            1, true, true, false, false
+        ));
+        assert!(!thumbnail_stack_should_be_visible(
+            1, false, false, false, false
+        ));
+        assert!(!thumbnail_stack_should_be_visible(
+            0, false, true, false, false
+        ));
+        assert!(!thumbnail_stack_should_be_visible(
+            1, false, true, false, true
+        ));
     }
 
     #[test]
     fn keeps_mini_previews_visible_during_capture_when_included() {
-        assert!(thumbnail_stack_should_be_visible(1, true, true, true));
-        assert!(!thumbnail_stack_should_be_visible(1, true, false, true));
-        assert!(!thumbnail_stack_should_be_visible(0, true, true, true));
+        assert!(thumbnail_stack_should_be_visible(
+            1, true, true, true, false
+        ));
+        assert!(!thumbnail_stack_should_be_visible(
+            1, true, false, true, false
+        ));
+        assert!(!thumbnail_stack_should_be_visible(
+            0, true, true, true, false
+        ));
+        assert!(!thumbnail_stack_should_be_visible(
+            1, true, true, true, true
+        ));
+    }
+
+    #[test]
+    fn parks_the_stack_behind_the_restore_chip_until_capture_ui_clears() {
+        assert!(mini_previews_hidden_should_be_visible(2, false, true, true));
+        assert!(!mini_previews_hidden_should_be_visible(2, true, true, true));
+        assert!(!mini_previews_hidden_should_be_visible(
+            2, false, false, true
+        ));
+        assert!(!mini_previews_hidden_should_be_visible(
+            0, false, true, true
+        ));
+        assert!(!mini_previews_hidden_should_be_visible(
+            2, false, true, false
+        ));
+    }
+
+    #[test]
+    fn sits_the_restore_chip_on_the_stack_bottom_left() {
+        let (x, y) =
+            mini_previews_hidden_geometry(bounds((0, 0, 1_920, 1_040), (0, 0, 1_920, 1_080), 1.0));
+        let (stack_x, stack_y, stack_height) =
+            thumbnail_geometry(bounds((0, 0, 1_920, 1_040), (0, 0, 1_920, 1_080), 1.0), 1);
+        assert_eq!(x, stack_x);
+        assert_eq!(y + MINI_PREVIEWS_HIDDEN_HEIGHT, stack_y + stack_height);
+        assert_eq!(x, 0.0);
     }
 
     #[test]
@@ -7059,6 +7298,25 @@ mod tests {
         assert_eq!(
             tray_accelerator("Control+Shift+Space").as_deref(),
             Some("Control+Shift+Space")
+        );
+    }
+
+    #[test]
+    fn region_capture_uses_the_crosshair_cursor_icon() {
+        use captures_capture::CaptureMode;
+        use tauri::CursorIcon;
+
+        assert_eq!(
+            capture_cursor_icon(CaptureMode::Region),
+            CursorIcon::Crosshair
+        );
+        assert_eq!(
+            capture_cursor_icon(CaptureMode::Window),
+            CursorIcon::Default
+        );
+        assert_eq!(
+            capture_cursor_icon(CaptureMode::Display),
+            CursorIcon::Default
         );
     }
 }
