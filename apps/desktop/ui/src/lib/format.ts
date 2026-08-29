@@ -16,7 +16,24 @@ export function formatFileSize(bytes: number): string {
 }
 
 /**
- * Percent change from the original file to an estimated export, or null when
+ * Byte count Est. size % should compare against.
+ *
+ * Pass the flattened source from the current estimate first, then the Before
+ * badge, so a compact file on disk, a previous quality preset, or a stale
+ * preview after a failed refresh is not treated as the original.
+ */
+export function fileSizeDeltaBaseline(
+  originalFileBytes: number,
+  sourceImageBytes: number | null,
+): number {
+  if (sourceImageBytes !== null && sourceImageBytes > 0) {
+    return sourceImageBytes;
+  }
+  return originalFileBytes;
+}
+
+/**
+ * Percent change from the original image to an estimated export, or null when
  * the change is unknown or rounds to zero.
  */
 export function formatFileSizeDelta(

@@ -6,19 +6,19 @@
  * closer to Apple / Tailscale / Ente than a loud SaaS gradient layout.
  */
 :root {
-  --theme-accent: #3f74e8;
-  --theme-accent-hover: #2f62d4;
-  --theme-accent-ink: #fcfcfc;
-  --theme-accent-readable: #2f5cc4;
-  --theme-accent-rgb: 63, 116, 232;
+  --theme-accent: #5b8cf0;
+  --theme-accent-hover: #7aa3f4;
+  --theme-accent-ink: #101014;
+  --theme-accent-readable: #8fb2f5;
+  --theme-accent-rgb: 91, 140, 240;
 
-  --theme-web-canvas: #f5f7fb;
-  --theme-web-surface: #ffffff;
-  --theme-web-border: #e2e7f0;
-  --theme-web-border-strong: #c9d3e4;
-  --theme-web-ink: #18181b;
-  --theme-web-ink-muted: #52525b;
-  --theme-web-ink-soft: #71717a;
+  --theme-web-canvas: #101014;
+  --theme-web-surface: #16161b;
+  --theme-web-border: rgba(255, 255, 255, 0.1);
+  --theme-web-border-strong: rgba(255, 255, 255, 0.18);
+  --theme-web-ink: #f2f2f4;
+  --theme-web-ink-muted: #b9b9c4;
+  --theme-web-ink-soft: #8b8b98;
 }
 
 @theme {
@@ -40,7 +40,7 @@
 
 @layer base {
   html {
-    color-scheme: light;
+    color-scheme: dark;
   }
 
   body {
@@ -73,12 +73,12 @@
   }
 
   .download-button {
-    @apply inline-flex w-full max-w-full items-center justify-center gap-2.5 rounded-full bg-ink px-5 py-3 text-sm font-medium text-surface no-underline transition-colors duration-200 ease-out sm:w-auto;
-    box-shadow: 0 8px 20px rgba(24, 24, 27, 0.14);
+    @apply inline-flex w-full max-w-full items-center justify-center gap-2.5 rounded-full bg-ink px-5 py-3 text-sm font-medium text-canvas no-underline transition-colors duration-200 ease-out sm:w-auto;
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
   }
 
   .download-button:hover {
-    background: #2a2a2f;
+    background: #ffffff;
   }
 
   .download-button:focus-visible {
@@ -99,8 +99,10 @@
 
   /* Match the desktop app mark: dark tile, light glyph. Blue is only an accent. */
   .brand-mark {
-    @apply grid h-8 w-8 shrink-0 place-items-center rounded-md bg-ink text-surface;
-    box-shadow: 0 4px 12px rgba(24, 24, 27, 0.12);
+    @apply grid h-8 w-8 shrink-0 place-items-center rounded-md;
+    background: #18181b;
+    color: #f4f4f5;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
   }
 
   .brand-mark svg {
@@ -152,7 +154,7 @@
     text-transform: none;
     text-align: left;
     white-space: normal;
-    box-shadow: 0 6px 18px rgba(24, 24, 27, 0.1);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
     transform: translateX(-50%) translateY(0.15rem);
     opacity: 0;
     visibility: hidden;
@@ -215,7 +217,7 @@
     border: 1px solid var(--theme-web-border);
     border-radius: 0.75rem;
     background: color-mix(in srgb, var(--theme-web-ink) 4%, var(--theme-web-canvas));
-    box-shadow: 0 10px 28px rgba(24, 24, 27, 0.06);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
     cursor: zoom-in;
     touch-action: pan-x pan-y;
     -webkit-touch-callout: none;
@@ -321,7 +323,7 @@
     border: 0;
     outline: none;
     background: rgba(24, 24, 27, 0.92);
-    color: var(--theme-web-surface);
+    color: #f4f4f5;
     overscroll-behavior: none;
   }
 
@@ -446,6 +448,7 @@
 
   .gallery-nav {
     @apply inline-flex min-h-9 items-center gap-1 rounded-full border border-border bg-surface px-3 py-1.5 text-[0.6875rem] font-medium text-ink-muted transition-colors duration-200 ease-out;
+    cursor: pointer;
   }
 
   .gallery-nav:hover {

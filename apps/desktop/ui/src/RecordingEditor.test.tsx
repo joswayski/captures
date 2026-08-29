@@ -129,6 +129,9 @@ describe("RecordingEditor", () => {
           export?: { quality?: string };
         } | undefined;
         if (request?.export?.quality && request.export.quality !== "preserve") {
+          if (request.export.quality === "tiny") {
+            return { sizeBytes: 800_000, exact: false };
+          }
           return { sizeBytes: 1_680_000, exact: false };
         }
         if (
@@ -603,6 +606,21 @@ describe("RecordingEditor", () => {
       artifactId: artifact.id,
       export: expect.objectContaining({ format: "mp4", quality: "high" }),
     }));
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Compression quality" }));
+    fireEvent.click(screen.getByRole("option", { name: /Tiny/ }));
+    await waitFor(() => {
+      expect(screen.getByText("≈ 800 KB")).toBeInTheDocument();
+      expect(screen.getByText("−81%")).toBeInTheDocument();
+    }, { timeout: 3_000 });
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Compression quality" }));
+    fireEvent.click(screen.getByRole("option", { name: /High/ }));
+    await waitFor(() => {
+      expect(screen.getByText("≈ 1.7 MB")).toBeInTheDocument();
+      expect(screen.getByText("−60%")).toBeInTheDocument();
+    }, { timeout: 3_000 });
+    expect(screen.queryByText("+110%")).not.toBeInTheDocument();
 
     // Maximum mode shows the cap instead of a sampled estimate.
     fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));

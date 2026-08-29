@@ -6,10 +6,7 @@ use std::{
 };
 
 use chrono::{Local, Utc};
-use image::{
-    ExtendedColorType, ImageEncoder, ImageFormat, Rgb, RgbImage, RgbaImage,
-    codecs::jpeg::JpegEncoder,
-};
+use image::{ImageFormat, Rgb, RgbImage, RgbaImage};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use uuid::Uuid;
@@ -80,12 +77,7 @@ pub fn open_screenshot_editor(
     state: tauri::State<'_, Arc<AppState>>,
     artifact_id: String,
 ) -> CommandResult<()> {
-    let available = state
-        .artifacts
-        .lock()
-        .iter()
-        .any(|artifact| artifact.id == artifact_id);
-    if !available {
+    if state.find_artifact(&artifact_id).is_none() {
         return Err("the screenshot is no longer available".to_owned());
     }
 
@@ -135,12 +127,7 @@ pub fn default_screenshot_edit_path(
     // restore). Suggest a normal Captures name — not an `-edited` copy suffix.
     // The frontend only appends `-edited` when Save as new file is turned on for an
     // already-saved original.
-    let artifact = state
-        .artifacts
-        .lock()
-        .iter()
-        .find(|artifact| artifact.id == artifact_id)
-        .cloned();
+    let artifact = state.find_artifact(&artifact_id);
     let history_saved_path = state
         .history
         .lock()
@@ -265,12 +252,7 @@ pub async fn save_screenshot_edit(
     // Export is based on the in-memory editor canvas, not the original file.
     // If the user deleted the source capture while the editor is open, still
     // allow saving a new copy from the edited pixels.
-    let source = state
-        .artifacts
-        .lock()
-        .iter()
-        .find(|artifact| artifact.id == request.artifact_id)
-        .cloned();
+    let source = state.find_artifact(&request.artifact_id);
     let destination = validated_destination(&request.destination_path, request.format)
         .map_err(|error| error.to_string())?;
     let source_path = source
@@ -409,13 +391,9 @@ pub async fn save_screenshot_edit(
         }
     }
     if overwrite_source {
-        let mut artifacts = state.artifacts.lock();
-        let existing = artifacts
-            .iter_mut()
-            .find(|existing| existing.id == artifact_id)
-            .ok_or_else(|| "the original screenshot is no longer available".to_owned())?;
-        *existing = artifact.clone();
-        drop(artifacts);
+        if !state.replace_artifact(artifact.clone()) {
+            return Err("the original screenshot is no longer available".to_owned());
+        }
         app.emit("artifact-updated", &artifact)
             .map_err(|error| error.to_string())?;
         if state
@@ -433,10 +411,10 @@ pub async fn save_screenshot_edit(
             .map_err(|error| error.to_string())?;
         }
     } else {
-        state.artifacts.lock().push(artifact.clone());
-        app.emit("capture-completed", &artifact)
-            .map_err(|error| error.to_string())?;
-        super::refresh_thumbnail_stack(&app);
+        // A folder save is not a new capture. Keep this editor's latest export
+        // available for Reveal in Folder and later overwrites, but do not open
+        // a mini preview. Repeated Save as new file replaces the previous slot.
+        state.store_editor_artifact(&request.artifact_id, artifact.clone());
     }
     if history_saved {
         app.emit("capture-history-changed", ())
@@ -797,15 +775,20 @@ fn encode_export_with_limit(
         ScreenshotEditFormat::Png => {
             // Walk down the color budget until the file fits (same idea as quality notches).
             let mut best: Option<Vec<u8>> = None;
-            for colors in storage::PNG_MAXIMUM_COLOR_STEPS {
-                let candidate = storage::encode_png_export(image, true, Some(colors))?;
-                if u64::try_from(candidate.len()).unwrap_or(u64::MAX) <= maximum {
+            'palettes: for colors in storage::PNG_MAXIMUM_COLOR_STEPS {
+                // Dither first (matches Compress). If Floyd–Steinberg noise makes
+                // every indexed file larger than lossless, try the undithered
+                // palette so a size cap can still be met with posterization.
+                for dither in [true, false] {
+                    let candidate =
+                        storage::encode_png_export_dithered(image, true, Some(colors), dither)?;
+                    let fits = u64::try_from(candidate.len()).unwrap_or(u64::MAX) <= maximum;
+                    if fits {
+                        best = Some(candidate);
+                        break 'palettes;
+                    }
                     best = Some(candidate);
-                    // Keep trying fewer colors? Prefer the highest quality that still fits.
-                    // First success in the descending list is the largest palette that fits.
-                    break;
                 }
-                best = Some(candidate);
             }
             let best = best.ok_or_else(|| {
                 AppError::Image(
@@ -853,14 +836,23 @@ fn encode_export_with_limit(
 }
 
 fn encode_jpeg(image: &RgbImage, quality: u8) -> Result<Vec<u8>, AppError> {
+    let width = u16::try_from(image.width())
+        .map_err(|_| AppError::Image("JPEG width is too large to encode".to_owned()))?;
+    let height = u16::try_from(image.height())
+        .map_err(|_| AppError::Image("JPEG height is too large to encode".to_owned()))?;
     let mut bytes = Vec::new();
-    JpegEncoder::new_with_quality(&mut bytes, quality.clamp(40, 100))
-        .write_image(
-            image.as_raw(),
-            image.width(),
-            image.height(),
-            ExtendedColorType::Rgb8,
-        )
+    let mut encoder = jpeg_encoder::Encoder::new(&mut bytes, quality.clamp(40, 100));
+    // Keep full-resolution chroma and use the same quant table for luma and
+    // color. The previous encoder discarded chroma first, so Compress looked
+    // faded while edges stayed crisp. Matched tables show blocking / ringing
+    // instead of a color wash.
+    encoder.set_sampling_factor(jpeg_encoder::SamplingFactor::F_1_1);
+    encoder.set_quantization_tables(
+        jpeg_encoder::QuantizationTableType::ImageMagick,
+        jpeg_encoder::QuantizationTableType::ImageMagick,
+    );
+    encoder
+        .encode(image.as_raw(), width, height, jpeg_encoder::ColorType::Rgb)
         .map_err(|error| AppError::Image(error.to_string()))?;
     Ok(bytes)
 }
@@ -878,9 +870,18 @@ fn encode_webp(image: &RgbaImage, quality: Option<u8>) -> Result<Vec<u8>, AppErr
         None => encoder
             .encode_simple(true, 100.0)
             .map_err(|error| AppError::Image(format!("WebP lossless encode failed: {error:?}")))?,
-        Some(q) => encoder
-            .encode_simple(false, f32::from(q.clamp(1, 100)))
-            .map_err(|error| AppError::Image(format!("WebP lossy encode failed: {error:?}")))?,
+        Some(q) => {
+            let mut config = webp::WebPConfig::new()
+                .map_err(|error| AppError::Image(format!("WebP config failed: {error:?}")))?;
+            config.lossless = 0;
+            config.quality = f32::from(q.clamp(1, 100));
+            // Sharp RGB→YUV keeps saturated colors instead of the default
+            // conversion's grayish shift; remaining loss is spatial.
+            config.use_sharp_yuv = 1;
+            encoder
+                .encode_advanced(&config)
+                .map_err(|error| AppError::Image(format!("WebP lossy encode failed: {error:?}")))?
+        }
     };
     Ok(encoded.to_vec())
 }
@@ -1234,6 +1235,86 @@ mod tests {
         assert_eq!(output.get_pixel(1, 0).0, [20, 80, 160]);
     }
 
+    fn mean_saturation_rgb(image: &image::RgbImage) -> f64 {
+        let mut total = 0.0_f64;
+        let mut count = 0.0_f64;
+        for pixel in image.pixels() {
+            let red = f64::from(pixel[0]);
+            let green = f64::from(pixel[1]);
+            let blue = f64::from(pixel[2]);
+            let max = red.max(green).max(blue);
+            let min = red.min(green).min(blue);
+            if max > 0.0 {
+                total += (max - min) / max;
+                count += 1.0;
+            }
+        }
+        total / count.max(1.0)
+    }
+
+    fn saturated_orange() -> RgbaImage {
+        RgbaImage::from_fn(96, 64, |x, _y| {
+            let t = f64::from(x) / 95.0;
+            Rgba([
+                235,
+                (70.0 + 40.0 * (1.0 - t)) as u8,
+                (18.0 + 12.0 * t) as u8,
+                255,
+            ])
+        })
+    }
+
+    #[test]
+    fn jpeg_compress_keeps_saturated_chroma_instead_of_washing_it() {
+        let image = saturated_orange();
+        let original = composite_onto_white(&image);
+        let original_saturation = mean_saturation_rgb(&original);
+        let bytes = encode_export(
+            &image,
+            ScreenshotEditFormat::Jpeg,
+            ScreenshotExportQualityMode::Compress,
+            55,
+            None,
+        )
+        .expect("tiny JPEG");
+        let decoded = image::load_from_memory_with_format(&bytes, ImageFormat::Jpeg)
+            .expect("tiny JPEG is readable")
+            .to_rgb8();
+        let compressed_saturation = mean_saturation_rgb(&decoded);
+        let center = decoded.get_pixel(48, 32).0;
+        assert!(
+            center[0] > center[1].saturating_add(80),
+            "orange should stay clearly redder than green after JPEG compress ({center:?})"
+        );
+        assert!(
+            compressed_saturation > original_saturation * 0.85,
+            "JPEG compress should not discard chroma first (original={original_saturation}, compressed={compressed_saturation})"
+        );
+    }
+
+    #[test]
+    fn lossy_webp_compress_keeps_saturated_chroma() {
+        let image = saturated_orange();
+        let original = composite_onto_white(&image);
+        let original_saturation = mean_saturation_rgb(&original);
+        let bytes = encode_export(
+            &image,
+            ScreenshotEditFormat::Webp,
+            ScreenshotExportQualityMode::Compress,
+            55,
+            None,
+        )
+        .expect("tiny WebP");
+        let decoded = image::load_from_memory_with_format(&bytes, ImageFormat::WebP)
+            .expect("tiny WebP is readable")
+            .to_rgb8();
+        let compressed_saturation = mean_saturation_rgb(&decoded);
+        assert!(
+            compressed_saturation > original_saturation * 0.85,
+            "lossy WebP should keep saturated hues (original={original_saturation}, compressed={compressed_saturation})"
+        );
+    }
+
     #[test]
     fn jpeg_quality_falls_until_the_requested_file_limit_is_met() {
         let image = detailed_sample();
@@ -1269,6 +1350,47 @@ mod tests {
         assert!(u64::try_from(limited.len()).unwrap() <= maximum);
         image::load_from_memory_with_format(&limited, ImageFormat::Jpeg)
             .expect("limited JPEG remains readable");
+    }
+
+    #[test]
+    fn png_maximum_can_use_undithered_palette_to_meet_a_size_cap() {
+        let image = RgbaImage::from_fn(320, 120, |x, _y| {
+            let t = ((x * 255) / 319) as u8;
+            Rgba([t, 80, 200_u8.saturating_sub(t / 2), 255])
+        });
+        let lossless = encode_export(
+            &image,
+            ScreenshotEditFormat::Png,
+            ScreenshotExportQualityMode::Preserve,
+            100,
+            None,
+        )
+        .unwrap();
+        let dithered = crate::storage::encode_png_export_dithered(&image, true, Some(8), true)
+            .expect("dithered 8-color");
+        let undithered = crate::storage::encode_png_export_dithered(&image, true, Some(8), false)
+            .expect("undithered 8-color");
+        assert!(
+            undithered.len() < dithered.len().min(lossless.len()),
+            "undithered 8-color should undercut dither/lossless (undithered={}, dithered={}, lossless={})",
+            undithered.len(),
+            dithered.len(),
+            lossless.len()
+        );
+        let maximum =
+            u64::try_from((undithered.len() + dithered.len().min(lossless.len())) / 2).unwrap();
+        let limited = encode_export_with_limit(
+            &image,
+            ScreenshotEditFormat::Png,
+            ScreenshotExportQualityMode::Maximum,
+            100,
+            Some(maximum),
+            None,
+        )
+        .expect("undithered palette should meet the cap");
+        assert!(u64::try_from(limited.len()).unwrap() <= maximum);
+        image::load_from_memory_with_format(&limited, ImageFormat::Png)
+            .expect("limited PNG remains readable");
     }
 
     #[test]

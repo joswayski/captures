@@ -2,6 +2,7 @@ import {
   useCallback,
   useId,
   type ChangeEvent,
+  type FocusEvent,
   type InputHTMLAttributes,
   type KeyboardEvent,
 } from "react";
@@ -28,6 +29,12 @@ export type NumberInputProps = {
    * When set, typing calls this; steppers still adjust by `step` and write a string.
    */
   onTextChange?: (value: string) => void;
+  /**
+   * Fields whose value should only take effect once (canvas size, …): typing
+   * reports through `onTextChange`, and Enter, blur, or a stepper commits here
+   * so a four-digit entry is one change instead of four.
+   */
+  onCommit?: (value: string) => void;
 };
 
 function decimalPlaces(step: number): number {
@@ -94,18 +101,21 @@ export function NumberInput({
   title,
   onChange,
   onTextChange,
+  onCommit,
 }: NumberInputProps) {
   const inputId = useId();
   const showSteppers = !hideSteppers && !readOnly && !disabled;
   const canEdit = !disabled && !readOnly;
 
   const emitValue = useCallback((next: number) => {
-    if (onTextChange) {
-      onTextChange(formatStepped(next, step));
+    if (onTextChange || onCommit) {
+      const text = formatStepped(next, step);
+      onTextChange?.(text);
+      onCommit?.(text);
       return;
     }
     onChange?.(next);
-  }, [onChange, onTextChange, step]);
+  }, [onChange, onCommit, onTextChange, step]);
 
   const handleInput = useCallback((event: ChangeEvent<HTMLInputElement>) => {
     if (!canEdit) return;
@@ -121,8 +131,19 @@ export function NumberInput({
     emitValue(stepFrom(value, step, direction, min, max));
   }, [canEdit, emitValue, max, min, step, value]);
 
+  const handleBlur = useCallback((event: FocusEvent<HTMLInputElement>) => {
+    if (!canEdit) return;
+    onCommit?.(event.currentTarget.value);
+  }, [canEdit, onCommit]);
+
   const handleKeyDown = useCallback((event: KeyboardEvent<HTMLInputElement>) => {
-    if (!canEdit || !showSteppers) return;
+    if (!canEdit) return;
+    if (event.key === "Enter" && onCommit) {
+      event.preventDefault();
+      onCommit(event.currentTarget.value);
+      return;
+    }
+    if (!showSteppers) return;
     if (event.key === "ArrowUp") {
       event.preventDefault();
       nudge(1);
@@ -130,7 +151,7 @@ export function NumberInput({
       event.preventDefault();
       nudge(-1);
     }
-  }, [canEdit, nudge, showSteppers]);
+  }, [canEdit, nudge, onCommit, showSteppers]);
 
   const current = parseCurrent(value);
   const atMin = min !== undefined && Number.isFinite(current) && current <= min;
@@ -160,6 +181,7 @@ export function NumberInput({
         title={title}
         inputMode={inputMode}
         onChange={handleInput}
+        onBlur={handleBlur}
         onKeyDown={handleKeyDown}
       />
       {showSteppers && (

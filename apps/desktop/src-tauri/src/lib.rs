@@ -170,6 +170,12 @@ pub fn run() {
                 // Belt-and-suspenders if CloseRequested was prevented or skipped.
                 tauri::WindowEvent::Destroyed => {
                     clear_editor_layer_presence_for_window(window);
+                    if let Some(owner_id) =
+                        window.label().strip_prefix(SCREENSHOT_EDITOR_WINDOW_PREFIX)
+                        && let Some(state) = window.app_handle().try_state::<Arc<AppState>>()
+                    {
+                        state.drop_editor_artifacts_for_owner(owner_id);
+                    }
                     if is_editor_window_label(window.label())
                         || window.label() == "viewer"
                         || window.label().starts_with(VIEWER_WINDOW_PREFIX)
@@ -1045,6 +1051,8 @@ fn show_screenshot_countdown(
     window.set_content_protected(cfg!(target_os = "windows"))?;
     window.show()?;
     #[cfg(target_os = "macos")]
+    captures_macos_window::conceal_documents_under_opaque_capture_surface();
+    #[cfg(target_os = "macos")]
     recording::focus_recording_window(app, "screenshot-countdown");
     if let Err(error) = window.set_focus() {
         eprintln!("failed to focus screenshot countdown: {error}");
@@ -1089,6 +1097,26 @@ fn get_pending_session(state: tauri::State<'_, Arc<AppState>>) -> Option<ActiveS
         .map(capture_session_to_active)
 }
 
+/// GTK creates the underlying GDK window only when a window is first shown, and
+/// tao unwraps it while handling a cursor-ignore request, so asking a window
+/// that has never been shown to become click-through takes down the whole event
+/// loop. macOS and Windows accept the call while hidden, which the capture
+/// surfaces and notices rely on so their first frame cannot steal desktop
+/// clicks.
+const fn click_through_applies(visible: bool) -> bool {
+    !cfg!(target_os = "linux") || visible
+}
+
+/// Pass pointer events through a window, tolerating platforms that cannot apply
+/// click-through before the window exists onscreen. Callers that build a hidden
+/// window repeat the call after `show()` so Linux still gets the state.
+pub(crate) fn set_click_through(window: &tauri::WebviewWindow, ignore: bool) -> tauri::Result<()> {
+    if !click_through_applies(window.is_visible().unwrap_or(false)) {
+        return Ok(());
+    }
+    window.set_ignore_cursor_events(ignore)
+}
+
 #[tauri::command]
 fn show_capture_overlay(
     app: AppHandle,
@@ -1116,9 +1144,7 @@ fn show_capture_overlay(
         // Keep the overlay click-through until the frozen snapshot is painted.
         // Otherwise an early wake (needed so WKWebView will load the image)
         // steals pointer events from the desktop.
-        window
-            .set_ignore_cursor_events(true)
-            .map_err(|error| error.to_string())?;
+        set_click_through(&window, true).map_err(|error| error.to_string())?;
         #[cfg(target_os = "macos")]
         {
             // Focusing the overlay activates Captures and would otherwise leave
@@ -1133,6 +1159,7 @@ fn show_capture_overlay(
         #[cfg(not(target_os = "macos"))]
         {
             window.show().map_err(|error| error.to_string())?;
+            set_click_through(&window, true).map_err(|error| error.to_string())?;
             window.set_focus().map_err(|error| error.to_string())?;
             let _ = mode;
         }
@@ -1158,9 +1185,7 @@ fn reveal_capture_overlay(
     let window = app
         .get_webview_window("overlay")
         .ok_or_else(|| "capture overlay is unavailable".to_owned())?;
-    window
-        .set_ignore_cursor_events(false)
-        .map_err(|error| error.to_string())?;
+    set_click_through(&window, false).map_err(|error| error.to_string())?;
     #[cfg(target_os = "macos")]
     {
         // Opaque frozen frame first, then take key focus so sibling document
@@ -1532,9 +1557,7 @@ fn set_thumbnail_ignore_cursor_events(
     let window = app
         .get_webview_window("thumbnail")
         .ok_or_else(|| "capture thumbnail is unavailable".to_owned())?;
-    window
-        .set_ignore_cursor_events(ignore)
-        .map_err(|error| error.to_string())
+    set_click_through(&window, ignore).map_err(|error| error.to_string())
 }
 
 /// Re-arm the preview stack after sleep/resume or a hung WebView.
@@ -1560,7 +1583,7 @@ fn refresh_thumbnail_interactivity(
     }
     // Always re-enable hit testing first — a stuck click-through state is the
     // usual "frozen previews" symptom after sleep.
-    let _ = window.set_ignore_cursor_events(false);
+    let _ = set_click_through(&window, false);
     let _ = window.set_always_on_top(true);
     if !suppressed {
         show_thumbnail_window(&window);
@@ -1782,12 +1805,7 @@ fn get_artifact(
     state: tauri::State<'_, Arc<AppState>>,
     artifact_id: String,
 ) -> Option<CaptureArtifact> {
-    state
-        .artifacts
-        .lock()
-        .iter()
-        .find(|artifact| artifact.id == artifact_id)
-        .cloned()
+    state.find_artifact(&artifact_id)
 }
 
 #[derive(serde::Serialize)]
@@ -2060,6 +2078,10 @@ async fn delete_history_artifact(
         .recording_artifacts
         .lock()
         .retain(|artifact| artifact.summary.id != artifact_id);
+    state.forget_editor_artifacts_for_ids(
+        std::slice::from_ref(&artifact_id),
+        &open_screenshot_editor_owner_ids(&app),
+    );
     app.emit("capture-history-changed", ())
         .map_err(|error| error.to_string())?;
     Ok(())
@@ -2097,6 +2119,7 @@ async fn clear_capture_history(
         .recording_artifacts
         .lock()
         .retain(|artifact| !ids.iter().any(|id| id == &artifact.summary.id));
+    state.forget_editor_artifacts_for_ids(&ids, &open_screenshot_editor_owner_ids(&app));
     app.emit("capture-history-changed", ())
         .map_err(|error| error.to_string())?;
     Ok(())
@@ -2226,11 +2249,7 @@ fn reveal_artifact(
     artifact_id: String,
 ) -> CommandResult<()> {
     let artifact = state
-        .artifacts
-        .lock()
-        .iter()
-        .find(|artifact| artifact.id == artifact_id)
-        .cloned()
+        .find_artifact(&artifact_id)
         .ok_or_else(|| "artifact is no longer available".to_owned())?;
     let path = artifact
         .path
@@ -2334,6 +2353,17 @@ const VIEWER_WINDOW_PREFIX: &str = "viewer-";
 
 fn viewer_window_label(artifact_id: &str) -> String {
     format!("{VIEWER_WINDOW_PREFIX}{artifact_id}")
+}
+
+fn open_screenshot_editor_owner_ids(app: &AppHandle) -> Vec<String> {
+    app.webview_windows()
+        .into_keys()
+        .filter_map(|label| {
+            label
+                .strip_prefix(SCREENSHOT_EDITOR_WINDOW_PREFIX)
+                .map(str::to_owned)
+        })
+        .collect()
 }
 
 fn remove_artifact(app: &AppHandle, state: &Arc<AppState>, artifact_id: &str) -> CommandResult<()> {
@@ -3670,7 +3700,7 @@ fn create_startup_notice(
     .focused(false)
     .visible(false)
     .build()?;
-    window.set_ignore_cursor_events(true)?;
+    set_click_through(&window, true)?;
     // Builder `.position` is not enough on macOS: a borderless NSWindow is
     // anchored at its bottom-left, and a hidden window can keep the default
     // origin (the bottom-left of the display). Size first, then position.
@@ -3683,6 +3713,7 @@ fn create_startup_notice(
     #[cfg(not(target_os = "macos"))]
     window.show()?;
 
+    set_click_through(&window, true)?;
     apply_startup_notice_position(&window, placement)?;
 
     let timer_app = app.clone();
@@ -4085,7 +4116,7 @@ fn show_recording_controls_hidden_notice(
     .visible(false)
     .build()?;
     let _ = window.set_content_protected(true);
-    window.set_ignore_cursor_events(true)?;
+    set_click_through(&window, true)?;
 
     #[cfg(target_os = "macos")]
     captures_macos_window::show_without_activating(&window)
@@ -4093,6 +4124,8 @@ fn show_recording_controls_hidden_notice(
 
     #[cfg(not(target_os = "macos"))]
     window.show()?;
+
+    set_click_through(&window, true)?;
 
     let timer_app = app.clone();
     std::thread::spawn(move || {
@@ -4304,7 +4337,7 @@ fn hide_thumbnail_window(window: &tauri::WebviewWindow) {
 fn hide_thumbnail_window_inner(window: &tauri::WebviewWindow) {
     // Click-through first so a transparent always-on-top window cannot keep
     // eating desktop clicks while hide() is still committing (Windows).
-    let _ = window.set_ignore_cursor_events(true);
+    let _ = set_click_through(window, true);
     // Hiding a key nonactivating panel donates key status to the next Captures
     // window — usually an open editor — and can activate the app over Chrome.
     #[cfg(target_os = "macos")]
@@ -4332,7 +4365,7 @@ fn show_thumbnail_window_inner(window: &tauri::WebviewWindow) {
     // Sleep/resume and compositor handoffs can leave the window click-through.
     // Showing always re-arms hit testing; the JS hover poll then re-applies
     // ignore-cursor for empty stack chrome within a frame.
-    let _ = window.set_ignore_cursor_events(false);
+    let _ = set_click_through(window, false);
     // Tauri's hide pauses the WebView lifecycle on macOS. Resume it through
     // Tauri before raising the native panel so React hover and IPC polling do
     // not remain frozen after a capture hides the stack. Skip when already
@@ -4741,17 +4774,18 @@ pub(crate) fn document_window_page_load_handler(
 /// Show, unminimize, and focus a document window so hover and cursor styles
 /// work immediately after opening from a mini-preview Edit click.
 ///
-/// On macOS, Tauri `set_focus` alone is not enough when the always-on-top
-/// thumbnail panel just handled the click: the app must activate and the
-/// editor must become key for WebKit CSS `:hover` / `cursor` to update.
+/// On macOS, Tauri `set_focus` calls `activateIgnoringOtherApps:`, which raises
+/// every Captures window. Activate only the target document instead so a second
+/// Edit click does not also lift an already-open editor over the user's other apps.
 pub(crate) fn reveal_and_focus_document_window(
     window: &tauri::WebviewWindow,
 ) -> Result<(), tauri::Error> {
     window.show()?;
     window.unminimize()?;
-    window.set_focus()?;
     #[cfg(target_os = "macos")]
     schedule_document_window_activation(window);
+    #[cfg(not(target_os = "macos"))]
+    window.set_focus()?;
     Ok(())
 }
 
@@ -5135,7 +5169,7 @@ fn hide_capture_overlay_inner(app: &AppHandle) {
     #[cfg(target_os = "macos")]
     captures_macos_window::restore_frontmost_app_after_capture();
     if let Some(window) = app.get_webview_window("overlay") {
-        let _ = window.set_ignore_cursor_events(false);
+        let _ = set_click_through(&window, false);
         let _ = window.hide();
         let _ = window.set_cursor_icon(CursorIcon::Default);
         #[cfg(target_os = "macos")]
@@ -5193,18 +5227,12 @@ fn resolve_asset(state: &AppState, path: &str) -> Option<Vec<u8>> {
                 .get(&id)
                 .map(|session| session.snapshot_png.clone())
         }),
-        (Some("artifact"), Some(id)) => state
-            .artifacts
-            .lock()
-            .iter()
-            .find(|artifact| artifact.id == id)
-            .map(|artifact| artifact.preview_png.clone()),
-        (Some("artifact-full"), Some(id)) => state
-            .artifacts
-            .lock()
-            .iter()
-            .find(|artifact| artifact.id == id)
-            .map(|artifact| artifact.image_png.clone()),
+        (Some("artifact"), Some(id)) => {
+            state.find_artifact(id).map(|artifact| artifact.preview_png)
+        }
+        (Some("artifact-full"), Some(id)) => {
+            state.find_artifact(id).map(|artifact| artifact.image_png)
+        }
         (Some("history-preview"), Some(id)) => {
             let available = state.history.lock().iter().any(|entry| entry.id == id);
             available
@@ -5746,15 +5774,15 @@ mod tests {
         STARTUP_NOTICE_HEIGHT, STARTUP_NOTICE_TRAY_OVERLAP, STARTUP_NOTICE_WIDTH,
         StartupNoticeCaret, THUMBNAIL_AUTO_HIDE_RESERVE, THUMBNAIL_SYSTEM_CHROME_GAP,
         ThumbnailCursorAction, ThumbnailCursorKind, ThumbnailMonitorBounds, ThumbnailPointerSpace,
-        ThumbnailWindowFrame, clipboard_fingerprint, display_contains_pointer,
-        fallback_startup_notice, mask_macos_window_corners, parse_shortcut, place_startup_notice,
-        primary_app_window_priority, refine_window_chrome_from_snapshot,
-        resolve_startup_notice_placement, should_trigger_shortcut,
-        startup_notice_fallback_edge_from_insets, startup_notice_url, thumbnail_cursor_action,
-        thumbnail_geometry, thumbnail_pointer_in_space, thumbnail_pointer_position,
-        thumbnail_stack_should_be_visible, thumbnail_visible_window_height,
-        track_shortcut_suppression, tray_icon_rect_is_usable, viewer_window_label,
-        window_is_capturable, windows_window_is_capture_overlay,
+        ThumbnailWindowFrame, click_through_applies, clipboard_fingerprint,
+        display_contains_pointer, fallback_startup_notice, mask_macos_window_corners,
+        parse_shortcut, place_startup_notice, primary_app_window_priority,
+        refine_window_chrome_from_snapshot, resolve_startup_notice_placement,
+        should_trigger_shortcut, startup_notice_fallback_edge_from_insets, startup_notice_url,
+        thumbnail_cursor_action, thumbnail_geometry, thumbnail_pointer_in_space,
+        thumbnail_pointer_position, thumbnail_stack_should_be_visible,
+        thumbnail_visible_window_height, track_shortcut_suppression, tray_icon_rect_is_usable,
+        viewer_window_label, window_is_capturable, windows_window_is_capture_overlay,
     };
 
     fn bounds(
@@ -6448,6 +6476,16 @@ mod tests {
 
         assert!(display_contains_pointer(&display, 4_400, 800, 2.0));
         assert!(!display_contains_pointer(&display, 1_000, 800, 2.0));
+    }
+
+    #[test]
+    fn click_through_waits_for_a_realized_window_only_on_linux() {
+        assert!(click_through_applies(true));
+        assert_eq!(
+            click_through_applies(false),
+            !cfg!(target_os = "linux"),
+            "GTK panics when a window that was never shown is asked to pass clicks through"
+        );
     }
 
     #[test]

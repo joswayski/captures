@@ -3305,7 +3305,7 @@ fn destroy_recording_selector(app: &AppHandle) {
     let Some(window) = app.get_webview_window("recording-selector") else {
         return;
     };
-    if let Err(error) = window.set_ignore_cursor_events(true) {
+    if let Err(error) = crate::set_click_through(&window, true) {
         eprintln!("failed to disable recording selector pointer events: {error}");
     }
     // Hidden WKWebViews can suspend before processing the next selection.
@@ -3600,12 +3600,11 @@ async fn prepare_recording_selector(
             // imperceptible alpha while pointer events still pass through.
             // React reveals the window only after the new snapshot has painted,
             // so a cached region or window highlight can never flash onscreen.
-            window
-                .set_ignore_cursor_events(true)
-                .map_err(|error| error.to_string())?;
+            crate::set_click_through(&window, true).map_err(|error| error.to_string())?;
             #[cfg(target_os = "macos")]
             captures_macos_window::prime_window_reveal(&window).map_err(str::to_owned)?;
             window.show().map_err(|error| error.to_string())?;
+            crate::set_click_through(&window, true).map_err(|error| error.to_string())?;
             handle
                 .emit("recording-selection-ready", &selection)
                 .map_err(|error| error.to_string())?;
@@ -3697,10 +3696,9 @@ pub fn show_recording_selector(
     let window = app
         .get_webview_window("recording-selector")
         .ok_or_else(|| "recording selector is unavailable".to_owned())?;
-    window
-        .set_ignore_cursor_events(true)
-        .map_err(|error| error.to_string())?;
+    crate::set_click_through(&window, true).map_err(|error| error.to_string())?;
     window.show().map_err(|error| error.to_string())?;
+    crate::set_click_through(&window, true).map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -3724,12 +3722,12 @@ pub fn reveal_recording_selector(
     #[cfg(target_os = "macos")]
     {
         captures_macos_window::reveal_window(&window).map_err(str::to_owned)?;
+        captures_macos_window::conceal_documents_under_opaque_capture_surface();
         captures_macos_window::elevate_capture_surface(&window).map_err(str::to_owned)?;
     }
-    window
-        .set_ignore_cursor_events(false)
-        .map_err(|error| error.to_string())?;
+    crate::set_click_through(&window, false).map_err(|error| error.to_string())?;
     window.show().map_err(|error| error.to_string())?;
+    crate::set_click_through(&window, false).map_err(|error| error.to_string())?;
     #[cfg(target_os = "macos")]
     focus_recording_window(&app, "recording-selector");
     // Focus is helpful for Escape-key handling, but macOS can temporarily

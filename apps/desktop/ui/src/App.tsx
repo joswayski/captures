@@ -3241,11 +3241,10 @@ export function RecordingEditor() {
           setExported(payload.artifact);
           setSavedFingerprint(pendingExportFingerprintRef.current);
           setToast(
-            `${payload.artifact.kind === "gif" ? "GIF" : "Video"} saved — ${formatFileSize(payload.artifact.size_bytes)}.`,
+            `${payload.artifact.kind === "gif" ? "GIF" : "Video"} saved — ${formatFileSize(payload.artifact.size_bytes)}.${
+              payload.reveal_error ? " Its folder could not be opened." : ""
+            }`,
           );
-          if (payload.reveal_error) {
-            setError(`The recording was saved, but its folder could not open: ${payload.reveal_error}`);
-          }
           setProgress({ stage: "complete", completed_per_mille: 1000, attempt: 1, message: null });
           setExportId(null);
           exportIdRef.current = null;

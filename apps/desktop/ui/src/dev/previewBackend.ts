@@ -633,9 +633,21 @@ const RESPONSES: Record<string, unknown> = {
     sprite_width: TIMELINE_FRAMES * 120,
     sprite_height: 76,
   },
-  estimate_screenshot_export: 512_000,
   prepared_drag_artifact_id: null,
 };
+
+function mockScreenshotExportBytes(payload: unknown): number {
+  const request = payload as {
+    pngMaxColors?: number;
+    jpegQuality?: number;
+  } | undefined;
+  const colors = Number(request?.pngMaxColors);
+  if (Number.isFinite(colors) && colors > 0) {
+    return Math.round(140_000 + colors * 630);
+  }
+  const quality = Number(request?.jpegQuality ?? 92);
+  return Math.round(120_000 + Math.max(20, quality) * 2_000);
+}
 
 async function samplePreviewPng(quality = 0.92): Promise<number[]> {
   const image = new Image();
@@ -650,8 +662,24 @@ async function samplePreviewPng(quality = 0.92): Promise<number[]> {
   canvas.height = image.naturalHeight || 500;
   const context = canvas.getContext("2d");
   if (!context) return [];
-  if (quality < 0.8) context.filter = "saturate(0.65) contrast(1.15)";
-  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  // Match the real encoder: keep hues and show spatial loss (blockiness /
+  // pixelation) instead of a global desaturation wash.
+  if (quality < 0.85) {
+    const block = Math.max(2, Math.round((1 - quality) * 10));
+    const smallWidth = Math.max(1, Math.round(canvas.width / block));
+    const smallHeight = Math.max(1, Math.round(canvas.height / block));
+    const scratch = document.createElement("canvas");
+    scratch.width = smallWidth;
+    scratch.height = smallHeight;
+    const scratchContext = scratch.getContext("2d");
+    if (!scratchContext) return [];
+    scratchContext.imageSmoothingEnabled = false;
+    scratchContext.drawImage(image, 0, 0, smallWidth, smallHeight);
+    context.imageSmoothingEnabled = false;
+    context.drawImage(scratch, 0, 0, canvas.width, canvas.height);
+  } else {
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  }
   const blob = await new Promise<Blob | null>((resolve) => {
     canvas.toBlob(resolve, "image/jpeg", quality);
   });
@@ -677,6 +705,9 @@ export function installPreviewBackend(): void {
   mockIPC(async (command, payload) => {
     if (command === "get_recording_selection") return selection;
     if (command === "select_capture_display") return selectCaptureDisplay(payload);
+    if (command === "estimate_screenshot_export") {
+      return mockScreenshotExportBytes(payload);
+    }
     if (command === "preview_screenshot_export") {
       const request = payload as {
         imagePng?: number[];
@@ -698,7 +729,7 @@ export function installPreviewBackend(): void {
       const bytes = await samplePreviewPng(Math.max(0.2, quality / 100));
       return {
         bytes,
-        sizeBytes: bytes.length,
+        sizeBytes: mockScreenshotExportBytes(payload),
         format: request?.format ?? "png",
       };
     }
@@ -716,7 +747,14 @@ export function installPreviewBackend(): void {
       } | undefined;
       const original = RECORDING.size_bytes;
       if (request?.export?.quality && request.export.quality !== "preserve") {
-        return { sizeBytes: Math.round(original * 0.49), exact: false };
+        const factors: Record<string, number> = {
+          tiny: 0.18,
+          small: 0.28,
+          standard: 0.38,
+          high: 0.49,
+        };
+        const factor = factors[request.export.quality] ?? 0.49;
+        return { sizeBytes: Math.round(original * factor), exact: false };
       }
       const outHeight = request?.edit?.output_height;
       const outWidth = request?.edit?.output_width;
