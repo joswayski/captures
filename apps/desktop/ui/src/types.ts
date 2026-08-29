@@ -379,4 +379,4 @@ export type UpdateStatus =
       display_version: string;
       seconds_remaining: number;
     })
-  | (UpdateVersionInfo & { state: "error"; message: string });
+  | (UpdateVersionInfo & { state: "error"; message: string; retry_install: boolean });

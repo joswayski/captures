@@ -1,6 +1,7 @@
-import { createReadStream, createWriteStream } from "node:fs";
+import { createReadStream, createWriteStream, readFileSync, writeFileSync } from "node:fs";
 import { mkdir, readdir, stat } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
+import { rewriteGithubApiAssetUrls } from "./release-assets.mjs";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { pathToFileURL } from "node:url";
@@ -52,6 +53,17 @@ async function releaseAssets(releaseId) {
 
 async function deleteAsset(assetId) {
   await githubRequest(apiUrl(`releases/assets/${assetId}`), { method: "DELETE" });
+}
+
+export async function rewriteUpdaterManifestUrls(releaseId, latestPath) {
+  const latest = JSON.parse(readFileSync(latestPath, "utf8"));
+  const rewritten = rewriteGithubApiAssetUrls(latest, await releaseAssets(releaseId));
+  writeFileSync(latestPath, `${JSON.stringify(latest, null, 2)}\n`);
+  process.stdout.write(
+    rewritten === 0
+      ? `Updater manifest already uses Releases download URLs.\n`
+      : `Rewrote ${rewritten} updater download URL${rewritten === 1 ? "" : "s"} to GitHub Releases.\n`,
+  );
 }
 
 export async function uploadReleaseAssets(releaseId, paths) {
@@ -155,8 +167,15 @@ async function main(args) {
     await syncReleaseAssets(releaseId, rest[0]);
     return;
   }
+  if (command === "rewrite-updater-urls") {
+    if (rest.length !== 1) {
+      throw new Error("rewrite-updater-urls requires exactly one latest.json path");
+    }
+    await rewriteUpdaterManifestUrls(releaseId, rest[0]);
+    return;
+  }
   throw new Error(
-    "usage: node scripts/github-release-assets.mjs <upload|download|sync> <release-id> <paths...>",
+    "usage: node scripts/github-release-assets.mjs <upload|download|sync|rewrite-updater-urls> <release-id> <paths...>",
   );
 }
 

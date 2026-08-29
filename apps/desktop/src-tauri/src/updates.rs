@@ -30,6 +30,8 @@ const EDITOR_CLOSE_FLUSH: Duration = Duration::from_millis(500);
 const DEFER_CAPTURE_START_TIMEOUT: Duration = Duration::from_millis(1_500);
 const INITIAL_CHECK_DELAY: Duration = Duration::from_secs(15);
 const CHECK_INTERVAL: Duration = Duration::from_secs(2 * 60 * 60);
+const DOWNLOAD_ATTEMPTS: u32 = 3;
+const DOWNLOAD_RETRY_BASE_DELAY: Duration = Duration::from_millis(400);
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
@@ -76,6 +78,7 @@ pub enum UpdateStatus {
         current_version: String,
         current_display_version: String,
         message: String,
+        retry_install: bool,
     },
 }
 
@@ -177,6 +180,10 @@ pub fn defer_visible_notice(app: &AppHandle) {
     begin_deferred_restore(app);
 }
 
+pub fn should_hide_update_notice_for_capture(app: &AppHandle) -> bool {
+    should_hide_update_notice_status(&app.state::<UpdateCoordinator>().status.lock())
+}
+
 pub fn restore_update_notice(app: &AppHandle) {
     let restorable = notice_can_restore(app);
     let visible = update_notice_is_visible(app);
@@ -224,11 +231,13 @@ fn notice_can_restore(app: &AppHandle) -> bool {
     {
         return false;
     }
-    let available = matches!(
+    let restorable_status = matches!(
         *app.state::<UpdateCoordinator>().status.lock(),
-        UpdateStatus::Available { .. } | UpdateStatus::Downloading { .. }
+        UpdateStatus::Available { .. }
+            | UpdateStatus::Downloading { .. }
+            | UpdateStatus::Error { .. }
     );
-    available && app.get_webview_window("update").is_some()
+    restorable_status && app.get_webview_window("update").is_some()
 }
 
 fn update_notice_is_visible(app: &AppHandle) -> bool {
@@ -385,35 +394,61 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
     let progress_current_display_version = current_display_version.clone();
     let progress_version = version.clone();
     let progress_display_version = display_version.clone();
-    let mut downloaded = 0_u64;
-    let result = update
-        .download_and_install(
-            move |chunk_length, total| {
-                downloaded = downloaded.saturating_add(chunk_length as u64);
-                set_status(
-                    &progress_app,
-                    UpdateStatus::Downloading {
-                        current_version: progress_current_version.clone(),
-                        current_display_version: progress_current_display_version.clone(),
-                        version: progress_version.clone(),
-                        display_version: progress_display_version.clone(),
-                        downloaded,
-                        total,
-                    },
+    let mut result = Err("the update download did not run".to_owned());
+    for attempt in 1..=DOWNLOAD_ATTEMPTS {
+        let mut downloaded = 0_u64;
+        let progress_app = progress_app.clone();
+        let progress_current_version = progress_current_version.clone();
+        let progress_current_display_version = progress_current_display_version.clone();
+        let progress_version = progress_version.clone();
+        let progress_display_version = progress_display_version.clone();
+        let attempt_result = update
+            .download_and_install(
+                move |chunk_length, total| {
+                    downloaded = downloaded.saturating_add(chunk_length as u64);
+                    set_status(
+                        &progress_app,
+                        UpdateStatus::Downloading {
+                            current_version: progress_current_version.clone(),
+                            current_display_version: progress_current_display_version.clone(),
+                            version: progress_version.clone(),
+                            display_version: progress_display_version.clone(),
+                            downloaded,
+                            total,
+                        },
+                    );
+                },
+                || {},
+            )
+            .await;
+        match attempt_result {
+            Ok(()) => {
+                result = Ok(());
+                break;
+            }
+            Err(error) => {
+                let message = error.to_string();
+                if attempt == DOWNLOAD_ATTEMPTS || !download_error_is_retryable(&message) {
+                    result = Err(message);
+                    break;
+                }
+                eprintln!(
+                    "update download failed ({message}); retrying ({attempt}/{DOWNLOAD_ATTEMPTS})"
                 );
-            },
-            || {},
-        )
-        .await;
+                tokio::time::sleep(download_retry_delay(attempt)).await;
+            }
+        }
+    }
 
     if let Err(error) = result {
-        let message = format!("Could not install the update: {error}");
+        let message = install_error_message(&error);
         set_status(
             &app,
             UpdateStatus::Error {
                 current_version,
                 current_display_version,
                 message: message.clone(),
+                retry_install: true,
             },
         );
         return Err(message);
@@ -566,8 +601,24 @@ async fn check_for_updates_inner(app: &AppHandle, manual: bool) -> Result<Update
 fn set_status(app: &AppHandle, status: UpdateStatus) {
     *app.state::<UpdateCoordinator>().status.lock() = status.clone();
     crate::refresh_tray_menu(app);
+    apply_update_notice_capture_policy(app);
     if let Err(error) = app.emit(UPDATE_EVENT, annotate_status(app, status)) {
         eprintln!("failed to emit update status: {error}");
+    }
+}
+
+fn apply_update_notice_capture_policy(app: &AppHandle) {
+    let protected = should_hide_update_notice_for_capture(app);
+    let app = app.clone();
+    let dispatch = app.clone();
+    if let Err(error) = dispatch.run_on_main_thread(move || {
+        if let Some(window) = app.get_webview_window("update")
+            && let Err(error) = window.set_content_protected(protected)
+        {
+            eprintln!("failed to update notice capture protection: {error}");
+        }
+    }) {
+        eprintln!("failed to schedule update notice capture protection: {error}");
     }
 }
 
@@ -846,11 +897,40 @@ fn check_error_status(
         current_version,
         current_display_version,
         message,
+        retry_install: false,
     })
 }
 
+fn should_hide_update_notice_status(status: &UpdateStatus) -> bool {
+    !matches!(status, UpdateStatus::Error { .. })
+}
+
+fn download_error_is_retryable(error: &str) -> bool {
+    let normalized = error.to_ascii_lowercase();
+    normalized.contains("403")
+        || normalized.contains("429")
+        || normalized.contains("forbidden")
+        || normalized.contains("too many requests")
+}
+
+fn download_retry_delay(attempt: u32) -> Duration {
+    DOWNLOAD_RETRY_BASE_DELAY.saturating_mul(2u32.pow(attempt.saturating_sub(1)))
+}
+
+fn install_error_message(error: &str) -> String {
+    if download_error_is_retryable(error) {
+        format!(
+            "Could not install the update: GitHub temporarily refused the download ({error}). This is often a short rate limit; wait a moment and try again."
+        )
+    } else {
+        format!("Could not install the update: {error}")
+    }
+}
+
 fn notice_disposition(status: &UpdateStatus, capture_active: bool) -> NoticeDisposition {
-    if !matches!(
+    if matches!(status, UpdateStatus::Error { .. }) {
+        NoticeDisposition::Show
+    } else if !matches!(
         status,
         UpdateStatus::Available { .. } | UpdateStatus::Downloading { .. }
     ) {
@@ -995,6 +1075,9 @@ fn annotate_status(app: &AppHandle, mut status: UpdateStatus) -> UpdateStatus {
     {
         *will_close_open_captures = open_captures_will_close(app, &app.state::<Arc<AppState>>());
     }
+    if let UpdateStatus::Error { retry_install, .. } = &mut status {
+        *retry_install = app.state::<UpdateCoordinator>().pending.lock().is_some();
+    }
     status
 }
 
@@ -1080,13 +1163,14 @@ mod tests {
     use std::{sync::atomic::AtomicBool, time::Duration};
 
     use super::{
-        AtomicFlagGuard, CHECK_INTERVAL, NoticeDisposition, NoticeRestorePlan,
+        AtomicFlagGuard, CHECK_INTERVAL, DOWNLOAD_ATTEMPTS, NoticeDisposition, NoticeRestorePlan,
         UpdateChangelogEntry, UpdateStatus, capture_window_should_close_for_update,
-        check_error_status, display_version, notice_disposition, notice_restore_plan,
+        check_error_status, display_version, download_error_is_retryable, download_retry_delay,
+        install_error_message, notice_disposition, notice_restore_plan,
         open_captures_will_close_from, release_channel_enabled, restart_blocker,
-        should_begin_deferred_restore, should_wait_for_capture_start, stacked_changelog,
-        take_restart_marker, tray_update_item, update_available_menu_label, update_notice_height,
-        version_is_newer_than,
+        should_begin_deferred_restore, should_hide_update_notice_status,
+        should_wait_for_capture_start, stacked_changelog, take_restart_marker, tray_update_item,
+        update_available_menu_label, update_notice_height, version_is_newer_than,
     };
 
     #[test]
@@ -1225,8 +1309,44 @@ mod tests {
         );
         assert!(matches!(
             check_error_status(true, "1.0.0".into(), "1.0.0".into(), "offline".into()),
-            Some(UpdateStatus::Error { message, .. }) if message == "offline"
+            Some(UpdateStatus::Error { message, retry_install, .. })
+                if message == "offline" && !retry_install
         ));
+    }
+
+    #[test]
+    fn keeps_failed_update_notices_visible_during_capture() {
+        let error = UpdateStatus::Error {
+            current_version: "2026.7.1901".into(),
+            current_display_version: "2026.07.19.1".into(),
+            message: "Download request failed with status: 403 Forbidden".into(),
+            retry_install: true,
+        };
+        assert!(!should_hide_update_notice_status(&error));
+        assert_eq!(notice_disposition(&error, true), NoticeDisposition::Show);
+        assert_eq!(notice_disposition(&error, false), NoticeDisposition::Show);
+        assert!(should_hide_update_notice_status(&UpdateStatus::UpToDate {
+            current_version: "2026.7.1901".into(),
+            current_display_version: "2026.07.19.1".into(),
+        }));
+    }
+
+    #[test]
+    fn retries_github_rate_limit_download_failures() {
+        assert!(download_error_is_retryable(
+            "Download request failed with status: 403 Forbidden"
+        ));
+        assert!(download_error_is_retryable(
+            "Download request failed with status: 429 Too Many Requests"
+        ));
+        assert!(!download_error_is_retryable("invalid signature"));
+        assert_eq!(DOWNLOAD_ATTEMPTS, 3);
+        assert_eq!(download_retry_delay(1), Duration::from_millis(400));
+        assert_eq!(download_retry_delay(2), Duration::from_millis(800));
+        assert!(
+            install_error_message("Download request failed with status: 403 Forbidden")
+                .contains("GitHub temporarily refused the download")
+        );
     }
 
     #[test]

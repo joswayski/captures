@@ -773,7 +773,13 @@ export function UpdateNotice() {
             <button
               className="primary"
               type="button"
-              onClick={() => void run(available ? "install_update" : "check_for_updates")}
+              onClick={() =>
+                void run(
+                  available || (status?.state === "error" && status.retry_install)
+                    ? "install_update"
+                    : "check_for_updates",
+                )
+              }
             >
               Try again
             </button>
@@ -847,7 +853,13 @@ function UpdatePreferences() {
           className="settings-utility-action"
           type="button"
           disabled={Boolean(status?.state === "checking" || downloading || restarting)}
-          onClick={() => void run(available ? "install_update" : "check_for_updates")}
+          onClick={() =>
+            void run(
+              available || (status?.state === "error" && status.retry_install)
+                ? "install_update"
+                : "check_for_updates",
+            )
+          }
         >
           {restarting
             ? "Restarting…"

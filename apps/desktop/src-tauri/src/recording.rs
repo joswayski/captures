@@ -280,8 +280,10 @@ pub(crate) async fn prepare_capture_selector_inner(
         crate::hide_window(&app, "mini-previews-hidden");
         crate::hide_window(&app, "startup");
         crate::hide_recording_saved_notices(&app);
-        crate::updates::defer_visible_notice(&app);
-        crate::hide_window(&app, "update");
+        if crate::updates::should_hide_update_notice_for_capture(&app) {
+            crate::updates::defer_visible_notice(&app);
+            crate::hide_window(&app, "update");
+        }
         if let Err(error) = prepare_recording_selector(&app, &summary, true).await {
             *state.recording_selection.lock() = None;
             restore_recording_ui(&app, &state);

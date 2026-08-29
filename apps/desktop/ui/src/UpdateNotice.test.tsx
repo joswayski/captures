@@ -151,6 +151,7 @@ describe("UpdateNotice", () => {
           current_version: "2026.7.1901",
           current_display_version: "2026.07.19.1",
           message: "GitHub is unavailable",
+          retry_install: false,
         } satisfies UpdateStatus;
       }
       if (command === "check_for_updates") return available;
@@ -207,6 +208,31 @@ describe("UpdateNotice", () => {
       expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "install_update"))
         .toHaveLength(2);
     });
+    expect(invoke).not.toHaveBeenCalledWith("check_for_updates");
+  });
+
+  it("retries a failed download instead of checking for updates again", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_update_status") {
+        return {
+          state: "error",
+          current_version: "2026.7.1901",
+          current_display_version: "2026.07.19.1",
+          message: "Could not install the update: Download request failed with status: 403 Forbidden",
+          retry_install: true,
+        } satisfies UpdateStatus;
+      }
+      if (command === "install_update") return undefined;
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<UpdateNotice />);
+
+    expect(await screen.findByText("Update failed")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("403 Forbidden");
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("install_update"));
     expect(invoke).not.toHaveBeenCalledWith("check_for_updates");
   });
 
