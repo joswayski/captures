@@ -1354,38 +1354,29 @@ fn get_thumbnail_pointer_position(
     app: AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Option<ThumbnailPointerPosition> {
-    #[cfg(target_os = "macos")]
-    {
-        if state.thumbnail_visibility.lock().is_suppressed() {
-            return None;
-        }
-        let window = app.get_webview_window("thumbnail")?;
-        if !window.is_visible().ok()? {
-            return None;
-        }
-        let position = window.outer_position().ok()?;
-        let size = window.inner_size().ok()?;
-        let scale = window.scale_factor().ok()?.max(1.0);
-        let (mouse_x, mouse_y) = match Mouse::get_mouse_position() {
-            Mouse::Position { x, y } => (f64::from(x), f64::from(y)),
-            Mouse::Error => return None,
-        };
-        Some(thumbnail_pointer_position(
-            mouse_x,
-            mouse_y,
-            position.x,
-            position.y,
-            size.width,
-            size.height,
+    if state.thumbnail_visibility.lock().is_suppressed() {
+        return None;
+    }
+    let window = app.get_webview_window("thumbnail")?;
+    if !window.is_visible().ok()? {
+        return None;
+    }
+    let position = window.outer_position().ok()?;
+    let size = window.inner_size().ok()?;
+    let scale = window.scale_factor().ok()?.max(1.0);
+    let (mouse_x, mouse_y) = pointer_position().map(|(x, y)| (f64::from(x), f64::from(y)))?;
+    Some(thumbnail_pointer_in_space(
+        mouse_x,
+        mouse_y,
+        ThumbnailWindowFrame {
+            x: position.x,
+            y: position.y,
+            width: size.width,
+            height: size.height,
             scale,
-        ))
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = (app, state);
-        None
-    }
+        },
+        thumbnail_pointer_space(),
+    ))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize)]
@@ -1560,11 +1551,18 @@ fn refresh_thumbnail_interactivity(
     let Some(window) = app.get_webview_window("thumbnail") else {
         return Ok(());
     };
+    if count == 0 {
+        // Do not re-arm an empty stack. On Windows a transparent always-on-top
+        // window can keep eating clicks after hide() unless click-through is
+        // applied first (hide_thumbnail_window does that).
+        hide_thumbnail_window(&window);
+        return Ok(());
+    }
     // Always re-enable hit testing first — a stuck click-through state is the
     // usual "frozen previews" symptom after sleep.
     let _ = window.set_ignore_cursor_events(false);
     let _ = window.set_always_on_top(true);
-    if count > 0 && !suppressed {
+    if !suppressed {
         show_thumbnail_window(&window);
         // Re-apply geometry after display sleep (DPI / work area can change).
         update_thumbnail_stack(&app);
@@ -1572,7 +1570,32 @@ fn refresh_thumbnail_interactivity(
     Ok(())
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ThumbnailPointerSpace {
+    /// macOS `CGEvent` locations are logical points; Tauri window origin is physical.
+    LogicalMouse,
+    /// Windows `GetCursorPos` and X11 `XQueryPointer` match Tauri's physical origin.
+    PhysicalMouse,
+}
+
+const fn thumbnail_pointer_space() -> ThumbnailPointerSpace {
+    if cfg!(target_os = "macos") {
+        ThumbnailPointerSpace::LogicalMouse
+    } else {
+        ThumbnailPointerSpace::PhysicalMouse
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ThumbnailWindowFrame {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    scale: f64,
+}
+
+#[cfg(test)]
 fn thumbnail_pointer_position(
     mouse_x: f64,
     mouse_y: f64,
@@ -1582,11 +1605,39 @@ fn thumbnail_pointer_position(
     window_height: u32,
     scale: f64,
 ) -> ThumbnailPointerPosition {
-    let scale = scale.max(1.0);
-    let x = mouse_x - f64::from(window_x) / scale;
-    let y = mouse_y - f64::from(window_y) / scale;
-    let width = f64::from(window_width) / scale;
-    let height = f64::from(window_height) / scale;
+    thumbnail_pointer_in_space(
+        mouse_x,
+        mouse_y,
+        ThumbnailWindowFrame {
+            x: window_x,
+            y: window_y,
+            width: window_width,
+            height: window_height,
+            scale,
+        },
+        ThumbnailPointerSpace::LogicalMouse,
+    )
+}
+
+fn thumbnail_pointer_in_space(
+    mouse_x: f64,
+    mouse_y: f64,
+    frame: ThumbnailWindowFrame,
+    space: ThumbnailPointerSpace,
+) -> ThumbnailPointerPosition {
+    let scale = frame.scale.max(1.0);
+    let window_x = f64::from(frame.x);
+    let window_y = f64::from(frame.y);
+    let (x, y) = match space {
+        ThumbnailPointerSpace::LogicalMouse => {
+            (mouse_x - window_x / scale, mouse_y - window_y / scale)
+        }
+        ThumbnailPointerSpace::PhysicalMouse => {
+            ((mouse_x - window_x) / scale, (mouse_y - window_y) / scale)
+        }
+    };
+    let width = f64::from(frame.width) / scale;
+    let height = f64::from(frame.height) / scale;
     ThumbnailPointerPosition {
         x,
         y,
@@ -4251,6 +4302,9 @@ fn hide_thumbnail_window(window: &tauri::WebviewWindow) {
 }
 
 fn hide_thumbnail_window_inner(window: &tauri::WebviewWindow) {
+    // Click-through first so a transparent always-on-top window cannot keep
+    // eating desktop clicks while hide() is still committing (Windows).
+    let _ = window.set_ignore_cursor_events(true);
     // Hiding a key nonactivating panel donates key status to the next Captures
     // window — usually an open editor — and can activate the app over Chrome.
     #[cfg(target_os = "macos")]
@@ -5684,12 +5738,13 @@ mod tests {
         STARTUP_NOTICE_AUTOSTART_VISIBLE, STARTUP_NOTICE_CARET_INSET, STARTUP_NOTICE_CARET_SPACE,
         STARTUP_NOTICE_HEIGHT, STARTUP_NOTICE_TRAY_OVERLAP, STARTUP_NOTICE_WIDTH,
         StartupNoticeCaret, THUMBNAIL_AUTO_HIDE_RESERVE, THUMBNAIL_SYSTEM_CHROME_GAP,
-        ThumbnailCursorAction, ThumbnailCursorKind, ThumbnailMonitorBounds, clipboard_fingerprint,
-        display_contains_pointer, fallback_startup_notice, mask_macos_window_corners,
-        parse_shortcut, place_startup_notice, primary_app_window_priority,
-        refine_window_chrome_from_snapshot, resolve_startup_notice_placement,
-        should_trigger_shortcut, startup_notice_fallback_edge_from_insets, startup_notice_url,
-        thumbnail_cursor_action, thumbnail_geometry, thumbnail_pointer_position,
+        ThumbnailCursorAction, ThumbnailCursorKind, ThumbnailMonitorBounds, ThumbnailPointerSpace,
+        ThumbnailWindowFrame, clipboard_fingerprint, display_contains_pointer,
+        fallback_startup_notice, mask_macos_window_corners, parse_shortcut, place_startup_notice,
+        primary_app_window_priority, refine_window_chrome_from_snapshot,
+        resolve_startup_notice_placement, should_trigger_shortcut,
+        startup_notice_fallback_edge_from_insets, startup_notice_url, thumbnail_cursor_action,
+        thumbnail_geometry, thumbnail_pointer_in_space, thumbnail_pointer_position,
         thumbnail_stack_should_be_visible, thumbnail_visible_window_height,
         track_shortcut_suppression, tray_icon_rect_is_usable, viewer_window_label,
         window_is_capturable, windows_window_is_capture_overlay,
@@ -6335,6 +6390,39 @@ mod tests {
         assert!(pointer.inside);
 
         let outside = thumbnail_pointer_position(10.0, 10.0, 48, 120, 600, 352, 2.0);
+        assert!(!outside.inside);
+    }
+
+    #[test]
+    fn maps_physical_pointer_into_scaled_thumbnail_coordinates() {
+        let pointer = thumbnail_pointer_in_space(
+            448.0,
+            280.0,
+            ThumbnailWindowFrame {
+                x: 400,
+                y: 200,
+                width: 600,
+                height: 352,
+                scale: 2.0,
+            },
+            ThumbnailPointerSpace::PhysicalMouse,
+        );
+        assert_eq!(pointer.x, 24.0);
+        assert_eq!(pointer.y, 40.0);
+        assert!(pointer.inside);
+
+        let outside = thumbnail_pointer_in_space(
+            10.0,
+            10.0,
+            ThumbnailWindowFrame {
+                x: 400,
+                y: 200,
+                width: 600,
+                height: 352,
+                scale: 2.0,
+            },
+            ThumbnailPointerSpace::PhysicalMouse,
+        );
         assert!(!outside.inside);
     }
 

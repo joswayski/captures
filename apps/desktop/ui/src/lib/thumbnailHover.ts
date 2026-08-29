@@ -147,16 +147,37 @@ export function clearThumbnailCssCursor(
 }
 
 /**
+ * True when any preview card still needs mouse input.
+ * Exiting cards keep a layout slot for the dissolve / dismiss animation, but
+ * they must not keep the always-on-top window hit-testable — on Windows and
+ * Linux that otherwise blocks the desktop for the whole ~3s delete.
+ * Overflow cues only matter while a live card remains; an exiting-only stack
+ * should pass every click through, including those controls.
+ */
+export function thumbnailStackHasLiveHitTarget(root: Document = document): boolean {
+  const cards = root.querySelectorAll(".thumbnail-card");
+  for (const card of cards) {
+    if (!card.classList.contains("thumbnail-exiting")) return true;
+  }
+  return false;
+}
+
+/**
  * Keep the native window interactive only over a live preview card or stack
  * overflow control. After a dismiss it may stay tall (shrinking blanks
  * WKWebView), and a deleting card keeps its layout slot while its particles
  * finish. Empty space and exiting slots must pass clicks through without
  * disabling the remaining cards.
+ *
+ * When every card is exiting (or the stack is empty), ignore the cursor even
+ * without a pointer sample. Platforms that cannot poll the cursor would
+ * otherwise leave the native window blocking clicks until the animation ends.
  */
 export function shouldIgnoreThumbnailCursorEvents(
   position: ThumbnailPointerPosition,
   root: Document = document,
 ): boolean {
+  if (!thumbnailStackHasLiveHitTarget(root)) return true;
   if (!position.inside) return false;
   const target = root.elementFromPoint(position.x, position.y);
   if (!target) return true;

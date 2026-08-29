@@ -11,6 +11,7 @@ import {
   shouldRecoverThumbnailAfterNullPolls,
   thumbnailCssCursor,
   thumbnailCursorSyncAction,
+  thumbnailStackHasLiveHitTarget,
   THUMBNAIL_CURSOR_HANDOFF_REASSERT_DELAYS_MS,
   THUMBNAIL_CURSOR_KIND_ATTRIBUTE,
   THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS,
@@ -371,6 +372,38 @@ describe("shouldIgnoreThumbnailCursorEvents", () => {
     });
     expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: true })).toBe(false);
     expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: false })).toBe(false);
+  });
+
+  it("passes through the whole stack when every preview is exiting", () => {
+    document.body.innerHTML = `
+      <main class="thumbnail-stack">
+        <article class="thumbnail-card thumbnail-exiting"><button>Delete</button></article>
+      </main>
+    `;
+    expect(thumbnailStackHasLiveHitTarget()).toBe(false);
+    expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: true })).toBe(true);
+    expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: false })).toBe(true);
+  });
+
+  it("does not treat overflow cues as a reason to keep an exiting-only stack interactive", () => {
+    document.body.innerHTML = `
+      <main class="thumbnail-stack">
+        <article class="thumbnail-card thumbnail-exiting"><button>Delete</button></article>
+      </main>
+      <button class="thumbnail-overflow-cue">Show newer captures</button>
+    `;
+    expect(thumbnailStackHasLiveHitTarget()).toBe(false);
+    expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: true })).toBe(true);
+  });
+
+  it("treats a remaining live card as a hit target even while a sibling exits", () => {
+    document.body.innerHTML = `
+      <main class="thumbnail-stack">
+        <article class="thumbnail-card"><button>Copy</button></article>
+        <article class="thumbnail-card thumbnail-exiting"><button>Delete</button></article>
+      </main>
+    `;
+    expect(thumbnailStackHasLiveHitTarget()).toBe(true);
   });
 });
 

@@ -85,6 +85,7 @@ import {
   shouldIgnoreThumbnailCursorEvents,
   shouldRecoverThumbnailAfterNullPolls,
   thumbnailCursorSyncAction,
+  thumbnailStackHasLiveHitTarget,
   withThumbnailPointerTimeout,
   THUMBNAIL_CURSOR_HANDOFF_REASSERT_DELAYS_MS,
   type ThumbnailCursorKind,
@@ -5339,6 +5340,14 @@ export function Thumbnail() {
       });
     };
 
+    const applyStackClickThrough = () => {
+      // Last remaining cards keep their layout slot for the dissolve / dismiss
+      // animation. Without this, Windows/Linux leave the always-on-top window
+      // hit-testable for the whole ~3s delete because pointer polls used to
+      // return null on those platforms.
+      setIgnoreCursorEvents(!thumbnailStackHasLiveHitTarget(), true);
+    };
+
     const invalidatePointerPoll = () => {
       pointerPollGeneration += 1;
       polling = false;
@@ -5392,6 +5401,13 @@ export function Thumbnail() {
       clearNativeClasses();
       clearThumbnailCssCursor();
       cursorKind = "default";
+      if (!thumbnailStackHasLiveHitTarget()) {
+        // Exiting-only stacks must stay click-through. Re-arming here would
+        // undo the Close/Delete pass-through for ~3s on Windows/Linux.
+        setIgnoreCursorEvents(true, true);
+        schedulePoll(0);
+        return;
+      }
       setIgnoreCursorEvents(false, true);
       if (refreshNative) {
         void invoke("refresh_thumbnail_interactivity").catch(() => undefined);
@@ -5413,9 +5429,41 @@ export function Thumbnail() {
         if (cancelled || generation !== pointerPollGeneration) return;
         if (!position) {
           consecutiveNullPolls += 1;
-          // Platforms without native pointer samples (Windows/Linux today) always
-          // return null — only recover when we are already in a click-through or
-          // native-tracking state that null samples cannot clear themselves.
+          if (!thumbnailStackHasLiveHitTarget()) {
+            setIgnoreCursorEvents(true);
+            delay = 40;
+          } else {
+            // Wayland (and hung IPC) can still return null. Only recover when
+            // we are already in a click-through or native-tracking state that
+            // null samples cannot clear themselves — and never while the last
+            // preview is still dissolving, which must stay click-through.
+            const needsRecovery = ignoringCursorEvents
+              || document.documentElement.classList.contains("thumbnail-native-tracking");
+            if (
+              needsRecovery
+              && shouldRecoverThumbnailAfterNullPolls(consecutiveNullPolls)
+            ) {
+              recovered = true;
+              recoverInteractivity();
+              return;
+            }
+            // A focus handoff can briefly make the native pointer query
+            // unavailable. Preserve the last presentation until a real sample
+            // confirms that the pointer moved away so the card cannot flash.
+            delay = 40;
+          }
+        } else {
+          consecutiveNullPolls = 0;
+          applyNativeHover(position);
+          delay = 40;
+        }
+      } catch {
+        if (cancelled || generation !== pointerPollGeneration) return;
+        consecutiveNullPolls += 1;
+        if (!thumbnailStackHasLiveHitTarget()) {
+          setIgnoreCursorEvents(true);
+          delay = 40;
+        } else {
           const needsRecovery = ignoringCursorEvents
             || document.documentElement.classList.contains("thumbnail-native-tracking");
           if (
@@ -5426,29 +5474,8 @@ export function Thumbnail() {
             recoverInteractivity();
             return;
           }
-          // A focus handoff can briefly make the native pointer query
-          // unavailable. Preserve the last presentation until a real sample
-          // confirms that the pointer moved away so the card cannot flash.
-          delay = 40;
-        } else {
-          consecutiveNullPolls = 0;
-          applyNativeHover(position);
           delay = 40;
         }
-      } catch {
-        if (cancelled || generation !== pointerPollGeneration) return;
-        consecutiveNullPolls += 1;
-        const needsRecovery = ignoringCursorEvents
-          || document.documentElement.classList.contains("thumbnail-native-tracking");
-        if (
-          needsRecovery
-          && shouldRecoverThumbnailAfterNullPolls(consecutiveNullPolls)
-        ) {
-          recovered = true;
-          recoverInteractivity();
-          return;
-        }
-        delay = 40;
       } finally {
         if (!cancelled && generation === pointerPollGeneration) {
           polling = false;
@@ -5484,10 +5511,15 @@ export function Thumbnail() {
 
     const updateThumbnailHitTest = () => {
       clearNativeHover();
-      // Re-arm the whole native window before sampling the changed DOM. The
-      // immediate poll can still make genuinely empty space click-through.
-      setIgnoreCursorEvents(false, true);
-      pollImmediately();
+      const applyHitTest = () => {
+        // Wait a microtask so React can commit `.thumbnail-exiting` from the
+        // Close/Delete click before we decide whether the window must pass
+        // clicks through. Re-arming first left Windows/Linux blocking the
+        // desktop for the whole exit animation.
+        applyStackClickThrough();
+        pollImmediately();
+      };
+      queueMicrotask(applyHitTest);
     };
 
     const onPointerActivity = (event: Event) => {

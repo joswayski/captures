@@ -411,6 +411,84 @@ describe("Thumbnail", () => {
     }
   });
 
+  it("passes desktop clicks through as soon as the last preview starts exiting", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifacts") return [artifact];
+      if (command === "get_clipboard_state") {
+        return { revision: 0, artifact_id: artifact.id };
+      }
+      if (command === "get_thumbnail_pointer_position") return null;
+      return undefined;
+    });
+
+    render(<Thumbnail />);
+    const card = await screen.findByRole("article");
+    fireEvent.click(within(card).getByRole("button", { name: "Delete" }));
+    expect(card).toHaveClass("thumbnail-exiting");
+
+    await waitFor(() => {
+      const ignoreCalls = vi.mocked(invoke).mock.calls
+        .filter(([command]) => command === "set_thumbnail_ignore_cursor_events");
+      expect(ignoreCalls.at(-1)?.[1]).toEqual({ ignore: true });
+    });
+  });
+
+  it("passes desktop clicks through as soon as the last saved preview is closed", async () => {
+    const saved = {
+      ...artifact,
+      path: "/tmp/Captures_2026-07-19_18-00-00_000.png",
+    };
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifacts") return [saved];
+      if (command === "get_clipboard_state") {
+        return { revision: 0, artifact_id: saved.id };
+      }
+      if (command === "get_thumbnail_pointer_position") return null;
+      return undefined;
+    });
+
+    render(<Thumbnail />);
+    const card = await screen.findByRole("article");
+    fireEvent.click(within(card).getByRole("button", { name: "Close" }));
+    expect(card).toHaveClass("thumbnail-exit-dismiss");
+
+    await waitFor(() => {
+      const ignoreCalls = vi.mocked(invoke).mock.calls
+        .filter(([command]) => command === "set_thumbnail_ignore_cursor_events");
+      expect(ignoreCalls.at(-1)?.[1]).toEqual({ ignore: true });
+    });
+  });
+
+  it("does not re-arm from null pointer polls while the last preview is exiting", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifacts") return [artifact];
+      if (command === "get_clipboard_state") {
+        return { revision: 0, artifact_id: artifact.id };
+      }
+      if (command === "get_thumbnail_pointer_position") return null;
+      return undefined;
+    });
+
+    render(<Thumbnail />);
+    const card = await screen.findByRole("article");
+    fireEvent.click(within(card).getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => {
+      const ignoreCalls = vi.mocked(invoke).mock.calls
+        .filter(([command]) => command === "set_thumbnail_ignore_cursor_events");
+      expect(ignoreCalls.at(-1)?.[1]).toEqual({ ignore: true });
+    });
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 600));
+    });
+
+    const ignoreCalls = vi.mocked(invoke).mock.calls
+      .filter(([command]) => command === "set_thumbnail_ignore_cursor_events");
+    expect(ignoreCalls.at(-1)?.[1]).toEqual({ ignore: true });
+    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith("refresh_thumbnail_interactivity");
+  });
+
   it("ignores an older pointer poll after deletion has re-armed the surviving previews", async () => {
     type PointerSample = { x: number; y: number; inside: boolean } | null;
     const pointerPolls: Array<(sample: PointerSample) => void> = [];
