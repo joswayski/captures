@@ -2,7 +2,7 @@ use std::{cell::Cell, ffi::c_void, ptr, thread, time::Instant};
 
 use windows_sys::{
     Win32::{
-        Foundation::{BOOL, CloseHandle, HWND, LPARAM, RECT},
+        Foundation::{CloseHandle, HWND, LPARAM, RECT},
         Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute},
         System::{
             Com::{
@@ -29,7 +29,7 @@ use windows_sys::{
             },
         },
     },
-    core::GUID,
+    core::{BOOL, GUID},
 };
 
 use crate::shell_ui::{
