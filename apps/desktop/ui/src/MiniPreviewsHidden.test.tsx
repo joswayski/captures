@@ -77,6 +77,20 @@ describe("MiniPreviewsHiddenChip", () => {
     expect(vi.mocked(invoke)).toHaveBeenCalledWith("restore_mini_previews");
   });
 
+  it("keeps a singular URL count instead of the mock artifact list", async () => {
+    window.history.replaceState({}, "", "/?view=mini-previews-hidden&count=1");
+    render(<MiniPreviewsHiddenChip />);
+
+    expect(screen.getByRole("button", { name: "Show 1 preview" })).toHaveTextContent(
+      "1 preview",
+    );
+    await waitFor(() => expect(vi.mocked(listen)).toHaveBeenCalled());
+    expect(screen.getByRole("button", { name: "Show 1 preview" })).toHaveTextContent(
+      "1 preview",
+    );
+    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith("get_artifacts");
+  });
+
   it("updates the count when the parked stack changes", async () => {
     type CountHandler = (event: { payload: number }) => void;
     const countHandler: { current: CountHandler | null } = { current: null };

@@ -494,6 +494,10 @@ export function MiniPreviewsHiddenChip() {
             .catch(() => undefined);
         }),
       ]);
+      // The native window (and the harness `count` param) already know the
+      // parked size. Don't replace that with a later artifact-list fetch —
+      // mock stacks are a different length than `?count=`.
+      if (initialCount > 0) return;
       const artifacts = await invoke<CaptureArtifact[]>("get_artifacts").catch(() => []);
       if (active && artifacts.length > 0) setCount(artifacts.length);
     })();
