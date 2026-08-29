@@ -1618,7 +1618,7 @@ export function ScreenshotEditor() {
   const [customExportWidth, setCustomExportWidth] = useState(1_920);
   const [customExportHeight, setCustomExportHeight] = useState(1_080);
   const [exportAspectLocked, setExportAspectLocked] = useState(true);
-  const [jpegQuality, setJpegQuality] = useState<ScreenshotQuality>("92");
+  const [jpegQuality, setJpegQuality] = useState<ScreenshotQuality>("98");
   const [qualityMode, setQualityMode] =
     useState<ScreenshotQualityMode>("preserve");
   const [maximumFileSize, setMaximumFileSize] = useState("10");

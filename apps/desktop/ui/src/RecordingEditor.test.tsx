@@ -132,6 +132,9 @@ describe("RecordingEditor", () => {
           if (request.export.quality === "tiny") {
             return { sizeBytes: 800_000, exact: false };
           }
+          if (request.export.quality === "highest") {
+            return { sizeBytes: 2_730_000, exact: false };
+          }
           return { sizeBytes: 1_680_000, exact: false };
         }
         if (
@@ -532,7 +535,7 @@ describe("RecordingEditor", () => {
     fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
     fireEvent.click(screen.getByRole("option", { name: /Compress/ }));
     const quality = screen.getByRole("combobox", { name: "Compression quality" });
-    expect(quality).toHaveTextContent("High");
+    expect(quality).toHaveTextContent("Highest");
     expect(screen.queryByRole("slider", { name: "Compression quality" }))
       .not.toBeInTheDocument();
 
@@ -598,14 +601,14 @@ describe("RecordingEditor", () => {
     fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
     fireEvent.click(screen.getByRole("option", { name: /Compress/ }));
 
-    // 1.68 MB estimate against the 4.2 MB source: ≈ value plus a −60% badge.
+    // Default compress preset is Highest. 2.73 MB vs the 4.2 MB source is −35%.
     await waitFor(() => {
-      expect(screen.getByText("≈ 1.7 MB")).toBeInTheDocument();
+      expect(screen.getByText("≈ 2.7 MB")).toBeInTheDocument();
     }, { timeout: 3_000 });
-    expect(screen.getByText("−60%")).toBeInTheDocument();
+    expect(screen.getByText("−35%")).toBeInTheDocument();
     expect(invoke).toHaveBeenCalledWith("estimate_recording_export", expect.objectContaining({
       artifactId: artifact.id,
-      export: expect.objectContaining({ format: "mp4", quality: "high" }),
+      export: expect.objectContaining({ format: "mp4", quality: "highest" }),
     }));
 
     fireEvent.click(screen.getByRole("combobox", { name: "Compression quality" }));
@@ -687,7 +690,7 @@ describe("RecordingEditor", () => {
       expect(invoke).toHaveBeenCalledWith("preview_recording_export", expect.objectContaining({
         artifactId: artifact.id,
         atMs: 0,
-        export: expect.objectContaining({ format: "mp4", quality: "high" }),
+        export: expect.objectContaining({ format: "mp4", quality: "highest" }),
       }));
     }, { timeout: 3_000 });
     await waitFor(() => {

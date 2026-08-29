@@ -3340,7 +3340,7 @@ export function RecordingEditor() {
   const [outputFormat, setOutputFormat] = useState<"mp4" | "gif" | "webm">("mp4");
   const [gifFps, setGifFps] = useState(15);
   const [gifMaxWidth, setGifMaxWidth] = useState(800);
-  const [quality, setQuality] = useState<RecordingCompressQuality>("high");
+  const [quality, setQuality] = useState<RecordingCompressQuality>("highest");
   const [sizeMode, setSizeMode] = useState<"preserve" | "compress" | "maximum">("preserve");
   const [maximumSize, setMaximumSize] = useState("10");
   const [maximumUnit, setMaximumUnit] = useState<FileSizeUnit>("mb");
@@ -3468,7 +3468,7 @@ export function RecordingEditor() {
       setOutputFormat(initialOutputFormat);
       setGifFps(initialGifFps);
       setGifMaxWidth(initialGifMaxWidth);
-      setQuality("high");
+      setQuality("highest");
       setSizeMode(initialSizeMode);
       setMaximumSize("10");
       setMaximumUnit("mb");
