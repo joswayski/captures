@@ -2766,7 +2766,7 @@ describe("ScreenshotEditor", () => {
         expect(screen.getByRole("combobox", { name: "Format" })).toHaveTextContent(".jpg");
       });
       fireEvent.click(screen.getByRole("combobox", { name: "Compression quality" }));
-      fireEvent.click(screen.getByRole("option", { name: /^High / }));
+      fireEvent.click(screen.getByRole("option", { name: /^High(?!est)/ }));
       await waitFor(() => {
         expect(toBlob.mock.calls.some((call) => call[1] === "image/jpeg")).toBe(true);
         expect(estimate()).toHaveTextContent(/≈/);
@@ -2854,7 +2854,7 @@ describe("ScreenshotEditor", () => {
       }, { timeout: 3_000 });
 
       fireEvent.click(screen.getByRole("combobox", { name: "Compression quality" }));
-      fireEvent.click(screen.getByRole("option", { name: /^High / }));
+      fireEvent.click(screen.getByRole("option", { name: /^High(?!est)/ }));
       await waitFor(() => {
         expect(estimate()).toHaveTextContent("≈ 301 KB");
         expect(screen.getByText("−73%")).toBeInTheDocument();

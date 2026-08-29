@@ -540,7 +540,7 @@ describe("RecordingEditor", () => {
     expect(screen.getByRole("option", { name: /Tiny/ })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: /Smaller/ })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: /Balanced/ })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: /^High / })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /^High(?!est)/ })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: /^Highest/ })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("option", { name: /Balanced/ }));
     expect(quality).toHaveTextContent("Balanced");
@@ -616,7 +616,7 @@ describe("RecordingEditor", () => {
     }, { timeout: 3_000 });
 
     fireEvent.click(screen.getByRole("combobox", { name: "Compression quality" }));
-    fireEvent.click(screen.getByRole("option", { name: /^High / }));
+    fireEvent.click(screen.getByRole("option", { name: /^High(?!est)/ }));
     await waitFor(() => {
       expect(screen.getByText("≈ 1.7 MB")).toBeInTheDocument();
       expect(screen.getByText("−60%")).toBeInTheDocument();
