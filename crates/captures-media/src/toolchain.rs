@@ -310,58 +310,15 @@ impl MediaToolchain {
         });
 
         let duration = seconds(segment.duration_ms.max(1));
-        let mut filters = Vec::new();
-        let mut audio_labels = Vec::new();
-        let independent_tracks = audio.system_audio && audio.microphone_audio;
-        let system_output = if independent_tracks {
-            "[system-source]"
-        } else {
-            "[system]"
-        };
-        let microphone_output = if independent_tracks {
-            "[microphone-source]"
-        } else {
-            "[microphone]"
-        };
-        if audio.system_audio {
-            if let Some(input) = system_audio_input {
-                let delay = segment.system_audio_offset_ms.max(0);
-                filters.push(format!(
-                    "[{input}:a:0]adelay={delay}:all=1,aresample=48000:async=1:first_pts=0,apad,atrim=duration={duration}{system_output}"
-                ));
-            } else if embedded_system_audio {
-                filters.push(format!(
-                    "[0:a:0]aresample=48000:async=1:first_pts=0,apad,atrim=duration={duration}{system_output}"
-                ));
-            } else {
-                filters.push(format!(
-                    "anullsrc=r=48000:cl=stereo,atrim=duration={duration}{system_output}"
-                ));
-            }
-            audio_labels.push(("[system]", "System Audio"));
-        }
-        if audio.microphone_audio {
-            if let Some(input) = microphone_input {
-                let delay = segment.microphone_offset_ms.max(0);
-                filters.push(format!(
-                    "[{input}:a:0]adelay={delay}:all=1,aresample=48000:async=1:first_pts=0,apad,atrim=duration={duration}{microphone_output}"
-                ));
-            } else {
-                filters.push(format!(
-                    "anullsrc=r=48000:cl=stereo,atrim=duration={duration}{microphone_output}"
-                ));
-            }
-            audio_labels.push(("[microphone]", "Microphone"));
-        }
-
-        if independent_tracks {
-            filters.push("[system-source]asplit=2[system-playback][system]".to_owned());
-            filters.push("[microphone-source]asplit=2[microphone-playback][microphone]".to_owned());
-            filters.push(
-                "[system-playback][microphone-playback]amix=inputs=2:normalize=0:dropout_transition=0[playback]".to_owned(),
-            );
-            audio_labels.insert(0, ("[playback]", "System Audio + Microphone"));
-        }
+        let (filters, audio_labels) = recording_segment_audio_graph(
+            &duration,
+            audio,
+            system_audio_input,
+            microphone_input,
+            embedded_system_audio,
+            segment.system_audio_offset_ms,
+            segment.microphone_offset_ms,
+        );
 
         command.args(["-filter_complex", &filters.join(";")]);
         command.args(["-map", "0:v:0", "-c:v", "copy"]);
@@ -378,6 +335,8 @@ impl MediaToolchain {
             "48000",
             "-b:a",
             "128k",
+            "-ch_layout:a",
+            aac_encoder_channel_layout(false),
             "-movflags",
             "+faststart",
         ]);
@@ -729,10 +688,11 @@ impl MediaToolchain {
         if attempt.has_audio {
             let audio_filter = audio_filter(edit, attempt)?;
             command.args(["-filter_complex", &audio_filter, "-map", "[audio_out]"]);
-            command.args(["-c:a", "aac", "-b:a", &attempt.audio_bitrate.to_string()]);
-            if edit.audio.mono_output || attempt.force_mono {
-                command.args(["-ac", "1"]);
-            }
+            apply_aac_encoder(
+                &mut command,
+                &attempt.audio_bitrate.to_string(),
+                edit.audio.mono_output || attempt.force_mono,
+            );
         } else {
             command.arg("-an");
         }
@@ -910,25 +870,22 @@ impl MediaToolchain {
             ]);
         }
         let audio_filter = audio_filter(edit, attempt)?;
-        command
-            .args([
-                "-filter_complex",
-                &audio_filter,
-                "-map",
-                "1:v:0",
-                "-map",
-                "[audio_out]",
-                "-c:v",
-                "copy",
-                "-c:a",
-                "aac",
-                "-b:a",
-                &attempt.audio_bitrate.to_string(),
-            ])
-            .args(["-movflags", "+faststart"]);
-        if edit.audio.mono_output || attempt.force_mono {
-            command.args(["-ac", "1"]);
-        }
+        command.args([
+            "-filter_complex",
+            &audio_filter,
+            "-map",
+            "1:v:0",
+            "-map",
+            "[audio_out]",
+            "-c:v",
+            "copy",
+        ]);
+        apply_aac_encoder(
+            &mut command,
+            &attempt.audio_bitrate.to_string(),
+            edit.audio.mono_output || attempt.force_mono,
+        );
+        command.args(["-movflags", "+faststart"]);
         command.arg(output);
         run_command(&mut command, cancel, "FFmpeg")
     }
@@ -949,12 +906,12 @@ impl MediaToolchain {
             .args(["-map", "0:v:0", "-c:v", "copy"]);
         if attempt.has_audio {
             let audio_filter = audio_filter(edit, attempt)?;
-            command
-                .args(["-filter_complex", &audio_filter, "-map", "[audio_out]"])
-                .args(["-c:a", "aac", "-b:a", &attempt.audio_bitrate.to_string()]);
-            if edit.audio.mono_output || attempt.force_mono {
-                command.args(["-ac", "1"]);
-            }
+            command.args(["-filter_complex", &audio_filter, "-map", "[audio_out]"]);
+            apply_aac_encoder(
+                &mut command,
+                &attempt.audio_bitrate.to_string(),
+                edit.audio.mono_output || attempt.force_mono,
+            );
         } else {
             command.arg("-an");
         }
@@ -1284,6 +1241,98 @@ fn openh264_bitrate(attempt: &VideoAttempt, spec: &ExportSpec) -> u32 {
     u32::try_from(bitrate.clamp(250_000, 50_000_000)).unwrap_or(50_000_000)
 }
 
+fn apply_aac_encoder(command: &mut Command, bitrate: &str, mono: bool) {
+    command.args([
+        "-c:a",
+        "aac",
+        "-b:a",
+        bitrate,
+        "-ch_layout:a",
+        aac_encoder_channel_layout(mono),
+    ]);
+}
+
+fn aac_encoder_channel_layout(mono: bool) -> &'static str {
+    if mono { "mono" } else { "stereo" }
+}
+
+/// Native AAC rejects a 1-channel Front Left layout, which is how FFmpeg
+/// labels many microphone captures. Rematrix through stereo so the encoder
+/// always receives `stereo` or centered `mono` instead of `FL`.
+fn aac_output_layout_filter(mono: bool) -> &'static str {
+    if mono {
+        ",aformat=sample_fmts=fltp:channel_layouts=stereo,aformat=channel_layouts=mono"
+    } else {
+        ",aformat=sample_fmts=fltp:channel_layouts=stereo"
+    }
+}
+
+fn recording_segment_audio_graph(
+    duration: &str,
+    audio: RecordingAudioLayout,
+    system_audio_input: Option<usize>,
+    microphone_input: Option<usize>,
+    embedded_system_audio: bool,
+    system_audio_offset_ms: i64,
+    microphone_offset_ms: i64,
+) -> (Vec<String>, Vec<(&'static str, &'static str)>) {
+    let mut filters = Vec::new();
+    let mut audio_labels = Vec::new();
+    let independent_tracks = audio.system_audio && audio.microphone_audio;
+    let layout = aac_output_layout_filter(false);
+    let system_output = if independent_tracks {
+        "[system-source]"
+    } else {
+        "[system]"
+    };
+    let microphone_output = if independent_tracks {
+        "[microphone-source]"
+    } else {
+        "[microphone]"
+    };
+    if audio.system_audio {
+        if let Some(input) = system_audio_input {
+            let delay = system_audio_offset_ms.max(0);
+            filters.push(format!(
+                "[{input}:a:0]adelay={delay}:all=1,aresample=48000:async=1:first_pts=0,apad,atrim=duration={duration}{layout}{system_output}"
+            ));
+        } else if embedded_system_audio {
+            filters.push(format!(
+                "[0:a:0]aresample=48000:async=1:first_pts=0,apad,atrim=duration={duration}{layout}{system_output}"
+            ));
+        } else {
+            filters.push(format!(
+                "anullsrc=r=48000:cl=stereo,atrim=duration={duration}{layout}{system_output}"
+            ));
+        }
+        audio_labels.push(("[system]", "System Audio"));
+    }
+    if audio.microphone_audio {
+        if let Some(input) = microphone_input {
+            let delay = microphone_offset_ms.max(0);
+            filters.push(format!(
+                "[{input}:a:0]adelay={delay}:all=1,aresample=48000:async=1:first_pts=0,apad,atrim=duration={duration}{layout}{microphone_output}"
+            ));
+        } else {
+            filters.push(format!(
+                "anullsrc=r=48000:cl=stereo,atrim=duration={duration}{layout}{microphone_output}"
+            ));
+        }
+        audio_labels.push(("[microphone]", "Microphone"));
+    }
+
+    if independent_tracks {
+        filters.push("[system-source]asplit=2[system-playback][system]".to_owned());
+        filters.push("[microphone-source]asplit=2[microphone-playback][microphone]".to_owned());
+        filters.push(
+            "[system-playback][microphone-playback]amix=inputs=2:normalize=0:dropout_transition=0[playback]".to_owned(),
+        );
+        audio_labels.insert(0, ("[playback]", "System Audio + Microphone"));
+    }
+
+    (filters, audio_labels)
+}
+
 fn video_filter(edit: &EditSpec, width: u32, height: u32, fps: u16) -> String {
     let mut filters = Vec::new();
     if let Some(crop) = edit.crop {
@@ -1334,24 +1383,18 @@ fn audio_filter(edit: &EditSpec, attempt: &VideoAttempt) -> Result<String, Media
     match labels.as_slice() {
         [] => Err(MediaToolError::IncompleteMetadata),
         [label] => {
-            let mono = if mono_output {
-                ",aformat=channel_layouts=mono"
-            } else {
-                ""
-            };
-            filters.push(format!("{label}anull{mono}[audio_out]"));
+            filters.push(format!(
+                "{label}anull{}[audio_out]",
+                aac_output_layout_filter(mono_output)
+            ));
             Ok(filters.join(";"))
         }
         _ => {
-            let mono = if mono_output {
-                ",aformat=channel_layouts=mono"
-            } else {
-                ""
-            };
             filters.push(format!(
-                "{}amix=inputs={}:normalize=0{mono}[audio_out]",
+                "{}amix=inputs={}:normalize=0{}[audio_out]",
                 labels.join(""),
-                labels.len()
+                labels.len(),
+                aac_output_layout_filter(mono_output)
             ));
             Ok(filters.join(";"))
         }
@@ -1359,12 +1402,10 @@ fn audio_filter(edit: &EditSpec, attempt: &VideoAttempt) -> Result<String, Media
 }
 
 fn single_audio_filter(index: usize, volume: f32, mono: bool) -> String {
-    let mono = if mono {
-        ",aformat=channel_layouts=mono"
-    } else {
-        ""
-    };
-    format!("[0:a:{index}]volume={volume:.3},aresample=48000:async=1:first_pts=0{mono}[audio_out]")
+    format!(
+        "[0:a:{index}]volume={volume:.3},aresample=48000:async=1:first_pts=0{}[audio_out]",
+        aac_output_layout_filter(mono)
+    )
 }
 
 fn gif_export_filter(edit: &EditSpec, attempt: &VideoAttempt) -> String {
@@ -1564,15 +1605,16 @@ struct FfprobeFormat {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    use super::RecordingSegmentInput;
     #[cfg(target_os = "macos")]
     use super::TimelineSpriteSpec;
     use super::{
-        CancelToken, MediaToolchain, VideoAttempt, audio_edit_is_identity, audio_filter,
-        escape_concat_path, export_attempts, fit_even, gif_export_filter, gif_filter, seconds,
-        validate_edit_spec, visual_edit_is_identity,
+        CancelToken, MediaToolchain, RecordingAudioLayout, VideoAttempt, aac_output_layout_filter,
+        audio_edit_is_identity, audio_filter, escape_concat_path, export_attempts, fit_even,
+        gif_export_filter, gif_filter, recording_segment_audio_graph, seconds, validate_edit_spec,
+        visual_edit_is_identity,
     };
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
-    use super::{RecordingAudioLayout, RecordingSegmentInput};
     use crate::{
         AudioEdit, CropRect, EditSpec, ExportFormat, ExportSpec, MediaKind, MediaMetadata,
         QualityPreset, toolchain::ProbeResult,
@@ -1688,6 +1730,64 @@ mod tests {
         assert!(filter.contains("[0:a:1]volume=0.500"));
         assert!(filter.contains("[0:a:2]volume=1.500"));
         assert!(filter.contains("amix=inputs=2"));
+        assert!(filter.contains("channel_layouts=stereo"));
+    }
+
+    #[test]
+    fn recording_and_export_audio_graphs_rematrix_front_left_sources() {
+        assert_eq!(
+            aac_output_layout_filter(false),
+            ",aformat=sample_fmts=fltp:channel_layouts=stereo"
+        );
+        assert!(aac_output_layout_filter(true).contains("channel_layouts=stereo"));
+        assert!(aac_output_layout_filter(true).ends_with("channel_layouts=mono"));
+
+        let (filters, labels) = recording_segment_audio_graph(
+            "1.000",
+            RecordingAudioLayout {
+                system_audio: false,
+                microphone_audio: true,
+            },
+            None,
+            Some(1),
+            false,
+            0,
+            12,
+        );
+        assert_eq!(labels, vec![("[microphone]", "Microphone")]);
+        assert_eq!(filters.len(), 1);
+        assert!(
+            filters[0].contains("aformat=sample_fmts=fltp:channel_layouts=stereo[microphone]"),
+            "microphone graph should rematrix before AAC: {}",
+            filters[0]
+        );
+
+        let (filters, labels) = recording_segment_audio_graph(
+            "2.500",
+            RecordingAudioLayout {
+                system_audio: true,
+                microphone_audio: true,
+            },
+            Some(1),
+            Some(2),
+            false,
+            0,
+            0,
+        );
+        assert_eq!(
+            labels,
+            vec![
+                ("[playback]", "System Audio + Microphone"),
+                ("[system]", "System Audio"),
+                ("[microphone]", "Microphone"),
+            ]
+        );
+        assert!(filters.iter().any(|filter| {
+            filter.contains("aformat=sample_fmts=fltp:channel_layouts=stereo[system-source]")
+        }));
+        assert!(filters.iter().any(|filter| {
+            filter.contains("aformat=sample_fmts=fltp:channel_layouts=stereo[microphone-source]")
+        }));
     }
 
     #[test]
@@ -1743,6 +1843,7 @@ mod tests {
         .expect("attempts");
         let filter =
             audio_filter(&edit, attempts.last().expect("floor attempt")).expect("audio filter");
+        assert!(filter.contains("channel_layouts=stereo"));
         assert!(filter.contains("channel_layouts=mono"));
     }
 
@@ -2223,7 +2324,7 @@ mod tests {
         toolchain
             .assemble_recording_segments(
                 &[RecordingSegmentInput {
-                    video_path: source,
+                    video_path: source.clone(),
                     system_audio_path: Some(system_audio),
                     system_audio_offset_ms: 0,
                     microphone_path: Some(microphone),
@@ -2245,5 +2346,54 @@ mod tests {
                 .audio_stream_count,
             3
         );
+
+        let front_left_mic = directory.path().join("microphone-fl.wav");
+        let status = std::process::Command::new(&ffmpeg)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=48000",
+                "-t",
+                "1",
+                "-ac",
+                "1",
+                "-ch_layout",
+                "FL",
+                "-c:a",
+                "pcm_f32le",
+            ])
+            .arg(&front_left_mic)
+            .status()
+            .expect("front-left microphone fixture generated");
+        assert!(status.success());
+        let assembled_front_left = directory.path().join("assembled-fl.mp4");
+        toolchain
+            .assemble_recording_segments(
+                &[RecordingSegmentInput {
+                    video_path: source,
+                    system_audio_path: None,
+                    system_audio_offset_ms: 0,
+                    microphone_path: Some(front_left_mic),
+                    microphone_offset_ms: 0,
+                    duration_ms: 1_000,
+                }],
+                &assembled_front_left,
+                RecordingAudioLayout {
+                    system_audio: false,
+                    microphone_audio: true,
+                },
+                &CancelToken::default(),
+            )
+            .expect("front-left microphone audio assembled");
+        let probe = toolchain
+            .probe(&assembled_front_left)
+            .expect("front-left recording probe");
+        assert!(probe.has_audio);
+        assert_eq!(probe.audio_stream_count, 1);
     }
 }
