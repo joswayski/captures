@@ -107,6 +107,7 @@ import {
   shouldScrollThumbnailStackToEnd,
   thumbnailStackContentHeight,
   thumbnailStackOverflow,
+  restoreThumbnailStackShiftClass,
   THUMBNAIL_CARD_SLOT_PX,
   waitForThumbnailStackSettle,
 } from "./lib/thumbnailLayout";
@@ -5780,6 +5781,10 @@ export function ThumbnailCard({
       if (exitFallbackTimer.current) clearTimeout(exitFallbackTimer.current);
     };
   }, []);
+
+  useLayoutEffect(() => {
+    restoreThumbnailStackShiftClass(cardRef.current);
+  });
 
   // After presence leaves, drop leave-held labels/ring once the ease finishes,
   // then hold the plain Edit icon for a short recovery window.

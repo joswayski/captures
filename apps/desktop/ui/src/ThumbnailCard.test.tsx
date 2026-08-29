@@ -708,6 +708,31 @@ describe("ThumbnailCard", () => {
     expect(source).toHaveClass("thumbnail-dust-source");
   });
 
+  it("keeps a stacked translate when delete starts after the card settled into a hole", () => {
+    render(
+      <ThumbnailCard
+        artifact={artifact(null)}
+        clipboardCurrent={false}
+        viewerActive={false}
+        onRemoved={() => undefined}
+      />,
+    );
+    const card = screen.getByRole("article");
+    card.classList.add("thumbnail-stack-shifting");
+    card.style.setProperty("--thumbnail-stack-shift", "184px");
+    card.style.setProperty("translate", "0 184px");
+
+    act(() => {
+      screen.getByRole("button", { name: "Delete" }).click();
+    });
+
+    expect(card).toHaveClass("thumbnail-exit-delete");
+    expect(card).toHaveClass("thumbnail-exiting");
+    expect(card).toHaveClass("thumbnail-stack-shifting");
+    expect(card.style.getPropertyValue("--thumbnail-stack-shift")).toBe("184px");
+    expect(card.style.translate).toBe("0 184px");
+  });
+
   it("keeps the in-editor control expanded during delete so it can fade with chrome", () => {
     const { rerender } = render(
       <ThumbnailCard
