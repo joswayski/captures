@@ -1368,11 +1368,13 @@ fn get_thumbnail_pointer_position(
     Some(thumbnail_pointer_in_space(
         mouse_x,
         mouse_y,
-        position.x,
-        position.y,
-        size.width,
-        size.height,
-        scale,
+        ThumbnailWindowFrame {
+            x: position.x,
+            y: position.y,
+            width: size.width,
+            height: size.height,
+            scale,
+        },
         thumbnail_pointer_space(),
     ))
 }
@@ -1584,6 +1586,15 @@ const fn thumbnail_pointer_space() -> ThumbnailPointerSpace {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ThumbnailWindowFrame {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    scale: f64,
+}
+
 #[cfg(test)]
 fn thumbnail_pointer_position(
     mouse_x: f64,
@@ -1597,11 +1608,13 @@ fn thumbnail_pointer_position(
     thumbnail_pointer_in_space(
         mouse_x,
         mouse_y,
-        window_x,
-        window_y,
-        window_width,
-        window_height,
-        scale,
+        ThumbnailWindowFrame {
+            x: window_x,
+            y: window_y,
+            width: window_width,
+            height: window_height,
+            scale,
+        },
         ThumbnailPointerSpace::LogicalMouse,
     )
 }
@@ -1609,16 +1622,12 @@ fn thumbnail_pointer_position(
 fn thumbnail_pointer_in_space(
     mouse_x: f64,
     mouse_y: f64,
-    window_x: i32,
-    window_y: i32,
-    window_width: u32,
-    window_height: u32,
-    scale: f64,
+    frame: ThumbnailWindowFrame,
     space: ThumbnailPointerSpace,
 ) -> ThumbnailPointerPosition {
-    let scale = scale.max(1.0);
-    let window_x = f64::from(window_x);
-    let window_y = f64::from(window_y);
+    let scale = frame.scale.max(1.0);
+    let window_x = f64::from(frame.x);
+    let window_y = f64::from(frame.y);
     let (x, y) = match space {
         ThumbnailPointerSpace::LogicalMouse => {
             (mouse_x - window_x / scale, mouse_y - window_y / scale)
@@ -1627,8 +1636,8 @@ fn thumbnail_pointer_in_space(
             ((mouse_x - window_x) / scale, (mouse_y - window_y) / scale)
         }
     };
-    let width = f64::from(window_width) / scale;
-    let height = f64::from(window_height) / scale;
+    let width = f64::from(frame.width) / scale;
+    let height = f64::from(frame.height) / scale;
     ThumbnailPointerPosition {
         x,
         y,
@@ -5730,8 +5739,8 @@ mod tests {
         STARTUP_NOTICE_HEIGHT, STARTUP_NOTICE_TRAY_OVERLAP, STARTUP_NOTICE_WIDTH,
         StartupNoticeCaret, THUMBNAIL_AUTO_HIDE_RESERVE, THUMBNAIL_SYSTEM_CHROME_GAP,
         ThumbnailCursorAction, ThumbnailCursorKind, ThumbnailMonitorBounds, ThumbnailPointerSpace,
-        clipboard_fingerprint, display_contains_pointer, fallback_startup_notice,
-        mask_macos_window_corners, parse_shortcut, place_startup_notice,
+        ThumbnailWindowFrame, clipboard_fingerprint, display_contains_pointer,
+        fallback_startup_notice, mask_macos_window_corners, parse_shortcut, place_startup_notice,
         primary_app_window_priority, refine_window_chrome_from_snapshot,
         resolve_startup_notice_placement, should_trigger_shortcut,
         startup_notice_fallback_edge_from_insets, startup_notice_url, thumbnail_cursor_action,
@@ -6389,11 +6398,13 @@ mod tests {
         let pointer = thumbnail_pointer_in_space(
             448.0,
             280.0,
-            400,
-            200,
-            600,
-            352,
-            2.0,
+            ThumbnailWindowFrame {
+                x: 400,
+                y: 200,
+                width: 600,
+                height: 352,
+                scale: 2.0,
+            },
             ThumbnailPointerSpace::PhysicalMouse,
         );
         assert_eq!(pointer.x, 24.0);
@@ -6403,11 +6414,13 @@ mod tests {
         let outside = thumbnail_pointer_in_space(
             10.0,
             10.0,
-            400,
-            200,
-            600,
-            352,
-            2.0,
+            ThumbnailWindowFrame {
+                x: 400,
+                y: 200,
+                width: 600,
+                height: 352,
+                scale: 2.0,
+            },
             ThumbnailPointerSpace::PhysicalMouse,
         );
         assert!(!outside.inside);
