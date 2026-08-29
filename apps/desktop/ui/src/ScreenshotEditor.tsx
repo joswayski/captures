@@ -16,7 +16,7 @@ import { createPortal } from "react-dom";
 
 import { CompressionPreview } from "./CompressionPreview";
 import { sameSortedIds } from "./lib/editorPresence";
-import { formatFileSize, formatFileSizeDelta } from "./lib/format";
+import { fileSizeDeltaBaseline, formatFileSize, formatFileSizeDelta } from "./lib/format";
 import {
   buildScreenshotEditorDraftPayload,
   collectDocumentImageSources,
@@ -1624,6 +1624,7 @@ export function ScreenshotEditor() {
   const [filenameStem, setFilenameStem] = useState("");
   const [destinationDirectory, setDestinationDirectory] = useState("");
   const [estimatedBytes, setEstimatedBytes] = useState<number | null>(null);
+  const [estimateSourceBytes, setEstimateSourceBytes] = useState<number | null>(null);
   const [estimatePending, setEstimatePending] = useState(false);
   const [compressPreviewPending, setCompressPreviewPending] = useState(false);
   const [compressPreviewError, setCompressPreviewError] = useState("");
@@ -4442,6 +4443,7 @@ export function ScreenshotEditor() {
         qualityMode,
       )) {
         setEstimatedBytes(artifact.size_bytes);
+        setEstimateSourceBytes(artifact.size_bytes);
         setEstimatePending(false);
         return;
       }
@@ -4452,11 +4454,13 @@ export function ScreenshotEditor() {
           // PNG color quant and lossy WebP go through Rust so Est. size matches save.
           // JPEG stays in-browser (toBlob quality matches our encoder closely enough).
           let bytes: number;
+          let sourceBytes: number | null = null;
           if (
             (exportFormat === "png" || exportFormat === "webp")
             && qualityMode !== "preserve"
           ) {
             const imagePng = await canvasPngBytes(canvas);
+            sourceBytes = imagePng.length;
             const maxSizeBytes = qualityMode === "maximum"
               ? Number(maximumFileSize) * SCREENSHOT_FILE_SIZE_UNIT_BYTES[maximumFileSizeUnit]
               : null;
@@ -4483,6 +4487,7 @@ export function ScreenshotEditor() {
             );
           }
           if (!cancelled) {
+            if (sourceBytes !== null) setEstimateSourceBytes(sourceBytes);
             setEstimatedBytes(bytes);
             setEstimatePending(false);
           }
@@ -4796,10 +4801,17 @@ export function ScreenshotEditor() {
       : estimatedSizeIsCap
         ? `≤ ${formatFileSize(maximumSizeBytes ?? 0)}`
         : `≈ ${formatFileSize(estimatedBytes)}`;
-  // Versus the original file — shrinking pixels, compressing, or both.
+  // Versus the Before image (flattened canvas), not the previous quality preset
+  // or a compact file already on disk.
   const estimatedDelta = estimatedSizeIsCap || estimatePending
     ? null
-    : formatFileSizeDelta(estimatedBytes, artifact.size_bytes);
+    : formatFileSizeDelta(
+      estimatedBytes,
+      fileSizeDeltaBaseline(
+        artifact.size_bytes,
+        compressPreviewBeforeBytes ?? estimateSourceBytes,
+      ),
+    );
   const formatLabel = exportFormat === "jpeg"
     ? "JPEG"
     : exportFormat === "webp"
@@ -4822,6 +4834,7 @@ export function ScreenshotEditor() {
       setCompressPreviewError("");
       setCompressPreviewBeforeBytes(null);
       setCompressPreviewAfterBytes(null);
+      setEstimateSourceBytes(null);
     }
     setSaved(null);
     clearSuccess();
@@ -6682,7 +6695,7 @@ export function ScreenshotEditor() {
               {estimatedDelta && (
                 <span
                   className={`screenshot-output-estimate-delta${estimatedDelta.percent < 0 ? " is-smaller" : " is-larger"}`}
-                  title="Change from the original file size"
+                  title="Change versus the original image, before this export"
                 >
                   {estimatedDelta.label}
                 </span>
