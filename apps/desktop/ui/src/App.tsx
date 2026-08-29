@@ -1128,24 +1128,40 @@ export function CaptureHistory() {
             <p>Screenshots, videos, GIFs, and interrupted recordings you can recover all appear here for 30 days.</p>
           </div>
           {!loading && entries.length > 0 && (
-            <button
-              type="button"
-              className={confirmingClearAll
-                ? "history-clear-all history-clear-all-confirm"
-                : "history-clear-all"}
-              aria-label={confirmingClearAll
-                ? "Confirm delete all captures"
-                : "Delete all captures"}
-              disabled={clearingAll}
-              onClick={() => void clearAllHistory()}
-            >
-              <TrashIcon />
-              {clearingAll
-                ? "Deleting…"
-                : confirmingClearAll
-                  ? "Delete all forever"
-                  : "Delete all"}
-            </button>
+            <div className="history-header-actions">
+              {confirmingClearAll && (
+                <button
+                  type="button"
+                  className="history-clear-all-cancel"
+                  aria-label="Cancel delete all captures"
+                  disabled={clearingAll}
+                  onClick={() => {
+                    setConfirmingClearAll(false);
+                    if (clearAllTimer.current) clearTimeout(clearAllTimer.current);
+                  }}
+                >
+                  Cancel
+                </button>
+              )}
+              <button
+                type="button"
+                className={confirmingClearAll
+                  ? "history-clear-all history-clear-all-confirm"
+                  : "history-clear-all"}
+                aria-label={confirmingClearAll
+                  ? "Confirm delete all captures"
+                  : "Delete all captures"}
+                disabled={clearingAll}
+                onClick={() => void clearAllHistory()}
+              >
+                <TrashIcon />
+                {clearingAll
+                  ? "Deleting…"
+                  : confirmingClearAll
+                    ? "Delete all forever"
+                    : "Delete all"}
+              </button>
+            </div>
           )}
         </header>
 
@@ -1166,9 +1182,6 @@ export function CaptureHistory() {
                 </button>
               ))}
             </div>
-            <span className="history-count">
-              {entries.length} {entries.length === 1 ? "capture" : "captures"}
-            </span>
           </div>
         )}
 
@@ -1320,18 +1333,45 @@ export function HistoryCard({
     }
   };
 
+  const openCapture = async () => {
+    if (busy) return;
+    if (entry.kind === "screenshot") {
+      await editScreenshot();
+      return;
+    }
+    if (!entry.missing) {
+      await openRecording();
+    }
+  };
+
+  const previewDisabled = busy !== null || (entry.kind !== "screenshot" && entry.missing);
+  const previewLabel = entry.kind === "screenshot"
+    ? "Open screenshot in editor"
+    : entry.missing
+      ? undefined
+      : `Open ${entry.kind === "gif" ? "GIF" : "video"} in editor`;
+
   return (
     <article className="history-card">
-      <div className={`history-image-wrap${entry.kind !== "screenshot" && entry.missing ? " history-image-missing" : ""}`}>
+      <button
+        type="button"
+        className={[
+          "history-image-wrap",
+          entry.kind !== "screenshot" && entry.missing ? "history-image-missing" : "",
+          previewDisabled ? "" : "history-image-open",
+        ].filter(Boolean).join(" ")}
+        disabled={previewDisabled}
+        aria-label={previewLabel}
+        onClick={() => void openCapture()}
+      >
         <img
           src={entry.kind === "screenshot" ? entry.preview_url : entry.poster_url}
           alt={entry.kind === "screenshot" ? "Screenshot from capture history" : `${entry.kind === "gif" ? "GIF" : "Video"} recording poster`}
           loading="lazy"
           draggable={false}
         />
-        <span className="history-mode">{entry.kind === "screenshot" ? formatCaptureMode(entry.mode) : entry.kind.toUpperCase()}</span>
         {entry.kind !== "screenshot" && entry.missing && <span className="history-missing-label">File missing</span>}
-      </div>
+      </button>
       <div className="history-card-body">
         <time dateTime={entry.created_at}>{formatHistoryDate(entry.created_at)}</time>
         <p>
@@ -1428,11 +1468,6 @@ function formatHistoryDate(value: string): string {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(date);
-}
-
-function formatCaptureMode(mode: CaptureMode): string {
-  if (mode === "display") return "Full screen";
-  return mode[0].toUpperCase() + mode.slice(1);
 }
 
 function HistoryIcon() {
