@@ -633,9 +633,21 @@ const RESPONSES: Record<string, unknown> = {
     sprite_width: TIMELINE_FRAMES * 120,
     sprite_height: 76,
   },
-  estimate_screenshot_export: 512_000,
   prepared_drag_artifact_id: null,
 };
+
+function mockScreenshotExportBytes(payload: unknown): number {
+  const request = payload as {
+    pngMaxColors?: number;
+    jpegQuality?: number;
+  } | undefined;
+  const colors = Number(request?.pngMaxColors);
+  if (Number.isFinite(colors) && colors > 0) {
+    return Math.round(140_000 + colors * 630);
+  }
+  const quality = Number(request?.jpegQuality ?? 92);
+  return Math.round(120_000 + Math.max(20, quality) * 2_000);
+}
 
 async function samplePreviewPng(quality = 0.92): Promise<number[]> {
   const image = new Image();
@@ -677,12 +689,19 @@ export function installPreviewBackend(): void {
   mockIPC(async (command, payload) => {
     if (command === "get_recording_selection") return selection;
     if (command === "select_capture_display") return selectCaptureDisplay(payload);
+    if (command === "estimate_screenshot_export") {
+      return mockScreenshotExportBytes(payload);
+    }
     if (command === "preview_screenshot_export") {
       const quality = Number(
         (payload as { jpegQuality?: number } | undefined)?.jpegQuality ?? 70,
       );
       const bytes = await samplePreviewPng(Math.max(0.2, quality / 100));
-      return { bytes, sizeBytes: bytes.length, format: (payload as { format?: string } | undefined)?.format ?? "png" };
+      return {
+        bytes,
+        sizeBytes: mockScreenshotExportBytes(payload),
+        format: (payload as { format?: string } | undefined)?.format ?? "png",
+      };
     }
     if (command === "preview_recording_export") {
       const [beforePng, afterPng] = await Promise.all([
@@ -698,7 +717,14 @@ export function installPreviewBackend(): void {
       } | undefined;
       const original = RECORDING.size_bytes;
       if (request?.export?.quality && request.export.quality !== "preserve") {
-        return { sizeBytes: Math.round(original * 0.49), exact: false };
+        const factors: Record<string, number> = {
+          tiny: 0.18,
+          small: 0.28,
+          standard: 0.38,
+          high: 0.49,
+        };
+        const factor = factors[request.export.quality] ?? 0.49;
+        return { sizeBytes: Math.round(original * factor), exact: false };
       }
       const outHeight = request?.edit?.output_height;
       const outWidth = request?.edit?.output_width;

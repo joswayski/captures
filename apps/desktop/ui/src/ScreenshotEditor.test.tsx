@@ -2728,6 +2728,157 @@ describe("ScreenshotEditor", () => {
     }
   });
 
+  it("compares Est. size to the original image when switching Tiny back to High", async () => {
+    const restoreCanvas = installExportableCanvas();
+    const compact: CaptureArtifact = { ...artifact, size_bytes: 188_000 };
+    const sourcePngBytes = 1_100_000;
+    const tinyBytes = 188_000;
+    const highBytes = 301_000;
+
+    Object.defineProperty(HTMLCanvasElement.prototype, "toBlob", {
+      configurable: true,
+      value: (callback: BlobCallback, type?: string) => {
+        const size = type === "image/png" ? sourcePngBytes : 64;
+        const bytes = new Uint8Array(size);
+        const blob = new Blob([bytes], { type: type ?? "image/png" });
+        if (typeof blob.arrayBuffer !== "function") {
+          Object.defineProperty(blob, "arrayBuffer", {
+            value: async () => bytes.buffer,
+          });
+        }
+        callback(blob);
+      },
+    });
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "get_artifact") return compact;
+      if (command === "estimate_screenshot_export" || command === "preview_screenshot_export") {
+        const colors = Number((args as { pngMaxColors?: number } | undefined)?.pngMaxColors ?? 256);
+        const sizeBytes = colors <= 32 ? tinyBytes : highBytes;
+        if (command === "estimate_screenshot_export") return sizeBytes;
+        return {
+          bytes: [1, 2, 3],
+          sizeBytes,
+          format: "png",
+        };
+      }
+      const draft = draftCommandResult(String(command));
+      if (draft !== undefined || String(command).includes("screenshot_editor_draft")) {
+        return draft;
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    try {
+      render(<ScreenshotEditor />);
+      await screen.findByLabelText("Canvas width");
+
+      fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
+      fireEvent.click(screen.getByRole("option", { name: /Compress/ }));
+
+      const estimate = () => screen.getByTitle(
+        "Estimated export file size for the current format, quality, and output size",
+      );
+
+      // Default compress preset is High. 301 KB vs the 1.1 MB Before image is −73%,
+      // not +60% versus the compact 188 KB file (or a previous Tiny estimate).
+      await waitFor(() => {
+        expect(estimate()).toHaveTextContent("≈ 301 KB");
+        expect(screen.getByText("−73%")).toBeInTheDocument();
+      }, { timeout: 3_000 });
+      expect(screen.getByText("−73%")).toHaveClass("screenshot-output-estimate-delta", "is-smaller");
+      expect(screen.queryByText("+60%")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("combobox", { name: "Compression quality" }));
+      fireEvent.click(screen.getByRole("option", { name: /Tiny/ }));
+      await waitFor(() => {
+        expect(estimate()).toHaveTextContent("≈ 188 KB");
+        expect(screen.getByText("−83%")).toBeInTheDocument();
+      }, { timeout: 3_000 });
+
+      fireEvent.click(screen.getByRole("combobox", { name: "Compression quality" }));
+      fireEvent.click(screen.getByRole("option", { name: /High/ }));
+      await waitFor(() => {
+        expect(estimate()).toHaveTextContent("≈ 301 KB");
+        expect(screen.getByText("−73%")).toBeInTheDocument();
+      }, { timeout: 3_000 });
+      expect(screen.queryByText("+60%")).not.toBeInTheDocument();
+    } finally {
+      restoreCanvas();
+    }
+  });
+
+  it("uses the current estimate baseline when a later compression preview fails", async () => {
+    const restoreCanvas = installExportableCanvas();
+    const compact: CaptureArtifact = { ...artifact, size_bytes: 188_000 };
+    const fullPngBytes = 100_000;
+    const halfPngBytes = 25_000;
+    let failPreview = false;
+
+    Object.defineProperty(HTMLCanvasElement.prototype, "toBlob", {
+      configurable: true,
+      value: function toBlob(this: HTMLCanvasElement, callback: BlobCallback, type?: string) {
+        const size = type === "image/png"
+          ? (this.width >= 1_000 ? fullPngBytes : halfPngBytes)
+          : 64;
+        const bytes = new Uint8Array(size);
+        const blob = new Blob([bytes], { type: type ?? "image/png" });
+        if (typeof blob.arrayBuffer !== "function") {
+          Object.defineProperty(blob, "arrayBuffer", {
+            value: async () => bytes.buffer,
+          });
+        }
+        callback(blob);
+      },
+    });
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "get_artifact") return compact;
+      if (command === "preview_screenshot_export") {
+        if (failPreview) throw new Error("preview encode failed");
+        const imagePng = (args as { imagePng?: number[] } | undefined)?.imagePng;
+        const sizeBytes = Math.round((imagePng?.length ?? fullPngBytes) / 2);
+        return { bytes: [1, 2, 3], sizeBytes, format: "png" };
+      }
+      if (command === "estimate_screenshot_export") {
+        const imagePng = (args as { imagePng?: number[] } | undefined)?.imagePng;
+        return Math.round((imagePng?.length ?? fullPngBytes) / 2);
+      }
+      const draft = draftCommandResult(String(command));
+      if (draft !== undefined || String(command).includes("screenshot_editor_draft")) {
+        return draft;
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    try {
+      render(<ScreenshotEditor />);
+      await screen.findByLabelText("Canvas width");
+      fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
+      fireEvent.click(screen.getByRole("option", { name: /Compress/ }));
+
+      const estimate = () => screen.getByTitle(
+        "Estimated export file size for the current format, quality, and output size",
+      );
+      await waitFor(() => {
+        expect(estimate()).toHaveTextContent("≈ 50.0 KB");
+        expect(screen.getByText("−50%")).toBeInTheDocument();
+      }, { timeout: 3_000 });
+
+      failPreview = true;
+      fireEvent.click(screen.getByRole("combobox", { name: "Output size" }));
+      fireEvent.click(screen.getByRole("option", { name: /half the pixel width/ }));
+
+      // Half-size source is 25 KB; estimate 12.5 KB is −50% versus that canvas,
+      // not −88% versus the stale full-size Before bytes.
+      await waitFor(() => {
+        expect(estimate()).toHaveTextContent("≈ 12.5 KB");
+        expect(screen.getByText("−50%")).toBeInTheDocument();
+      }, { timeout: 3_000 });
+      expect(screen.queryByText("−88%")).not.toBeInTheDocument();
+    } finally {
+      restoreCanvas();
+    }
+  });
+
   it("defaults path-less captures to a plain filename without an -edited suffix", async () => {
     const pathless: CaptureArtifact = {
       ...artifact,
