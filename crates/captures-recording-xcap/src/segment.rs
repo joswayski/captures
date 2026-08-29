@@ -594,6 +594,8 @@ fn frame_image(frame: Frame) -> XcapRecordingResult<RgbaImage> {
 }
 
 fn recording_bitrate(width: u32, height: u32, frame_rate: u16) -> u32 {
+    // 12% bits-per-pixel. Compress exports on Windows/Linux must stay at or
+    // below this (see `openh264_bitrate`) or Highest can enlarge the file.
     let estimated = u64::from(width)
         .saturating_mul(u64::from(height))
         .saturating_mul(u64::from(frame_rate))

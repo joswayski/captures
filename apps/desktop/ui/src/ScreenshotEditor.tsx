@@ -165,7 +165,7 @@ import type { AppSettings, CaptureArtifact, EditorLayerPresence, ScreenshotForma
 type ExportFormat = ScreenshotFormat;
 type ExportSize = "original" | "75" | "50" | "custom";
 /** Shared compress quality notches for JPEG, WebP, and PNG. */
-type ScreenshotQuality = "55" | "70" | "85" | "92";
+type ScreenshotQuality = "55" | "70" | "85" | "92" | "98";
 /** Matches the recording editor: preserve by default, compress with presets, or cap size. */
 type ScreenshotQualityMode = "preserve" | "compress" | "maximum";
 type ScreenshotFileSizeUnit = "kb" | "mb" | "gb";
@@ -422,8 +422,8 @@ const COLOR_SWATCHES = [
 const DEFAULT_CANVAS_BACKGROUND = "#f7f7f5";
 
 /**
- * Shared compress presets. JPEG / WebP use encode quality; PNG maps the same
- * notches onto palette size plus compact packing.
+ * Shared compress presets. JPEG / WebP use encode quality; PNG maps Tiny–High
+ * onto palette size, and Highest onto compact lossless packing only.
  */
 const SCREENSHOT_QUALITY_OPTIONS = [
   {
@@ -450,14 +450,21 @@ const SCREENSHOT_QUALITY_OPTIONS = [
   {
     value: "92",
     label: "High",
-    jpegDescription: "Larger file with the least quality loss.",
-    webpDescription: "Larger lossy WebP with the least quality loss.",
-    pngDescription: "Larger PNG with the least quality loss.",
+    jpegDescription: "Much smaller file with little visible quality loss.",
+    webpDescription: "Much smaller lossy WebP with little visible quality loss.",
+    pngDescription: "Much smaller PNG by reducing colors; usually looks similar.",
   },
-] as const;
+  {
+    value: "98",
+    label: "Highest",
+    jpegDescription: "Light JPEG compression. Near-original quality, a modest size cut.",
+    webpDescription: "Light lossy WebP. Near-original quality, a modest size cut.",
+    pngDescription: "Same pixels, tighter packing. No color reduction.",
+  },
+  ] as const;
 
 /** Keep in sync with `png_palette_colors_for_quality` in the Rust encoder. */
-function pngMaxColorsForQuality(quality: ScreenshotQuality): number {
+function pngMaxColorsForQuality(quality: ScreenshotQuality): number | null {
   switch (quality) {
     case "55":
       return 32;
@@ -467,6 +474,8 @@ function pngMaxColorsForQuality(quality: ScreenshotQuality): number {
       return 128;
     case "92":
       return 256;
+    case "98":
+      return null;
   }
 }
 
@@ -1609,7 +1618,7 @@ export function ScreenshotEditor() {
   const [customExportWidth, setCustomExportWidth] = useState(1_920);
   const [customExportHeight, setCustomExportHeight] = useState(1_080);
   const [exportAspectLocked, setExportAspectLocked] = useState(true);
-  const [jpegQuality, setJpegQuality] = useState<ScreenshotQuality>("92");
+  const [jpegQuality, setJpegQuality] = useState<ScreenshotQuality>("98");
   const [qualityMode, setQualityMode] =
     useState<ScreenshotQualityMode>("preserve");
   const [maximumFileSize, setMaximumFileSize] = useState("10");
@@ -6674,10 +6683,10 @@ export function ScreenshotEditor() {
                   value: "compress",
                   label: "Compress",
                   description: exportFormat === "png"
-                    ? "Smaller PNG with Tiny through High quality presets."
+                    ? "Smaller PNG with Tiny through Highest quality presets."
                     : exportFormat === "webp"
-                      ? "Smaller lossy WebP with Tiny through High quality presets."
-                      : "Smaller JPEG with Tiny through High quality presets.",
+                      ? "Smaller lossy WebP with Tiny through Highest quality presets."
+                      : "Smaller JPEG with Tiny through Highest quality presets.",
                 },
                 {
                   value: "maximum",

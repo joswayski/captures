@@ -83,6 +83,8 @@ pub enum ExportFormat {
 pub enum QualityPreset {
     #[default]
     Preserve,
+    /// Lightest compress preset (near-original quality, modest size cut).
+    Highest,
     High,
     Standard,
     Small,

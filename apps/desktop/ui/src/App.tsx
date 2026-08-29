@@ -3242,7 +3242,7 @@ type EditorCropDrag = {
 
 type FileSizeUnit = "kb" | "mb" | "gb";
 
-/** Compress presets for the video editor (mirrors photo Tiny → High ladder). */
+/** Compress presets for the video editor (mirrors photo Tiny → Highest ladder). */
 const RECORDING_QUALITY_OPTIONS = [
   {
     value: "tiny",
@@ -3262,7 +3262,12 @@ const RECORDING_QUALITY_OPTIONS = [
   {
     value: "high",
     label: "High",
-    description: "Larger file with the least quality loss.",
+    description: "Much smaller file with little visible quality loss.",
+  },
+  {
+    value: "highest",
+    label: "Highest",
+    description: "Light compression. Near-original quality, a modest size cut.",
   },
 ] as const;
 
@@ -3278,6 +3283,7 @@ function gifMaxColorsForQuality(quality: RecordingCompressQuality): number {
     case "standard":
       return 128;
     case "high":
+    case "highest":
       return 256;
   }
 }
@@ -3334,7 +3340,7 @@ export function RecordingEditor() {
   const [outputFormat, setOutputFormat] = useState<"mp4" | "gif" | "webm">("mp4");
   const [gifFps, setGifFps] = useState(15);
   const [gifMaxWidth, setGifMaxWidth] = useState(800);
-  const [quality, setQuality] = useState<RecordingCompressQuality>("high");
+  const [quality, setQuality] = useState<RecordingCompressQuality>("highest");
   const [sizeMode, setSizeMode] = useState<"preserve" | "compress" | "maximum">("preserve");
   const [maximumSize, setMaximumSize] = useState("10");
   const [maximumUnit, setMaximumUnit] = useState<FileSizeUnit>("mb");
@@ -3462,7 +3468,7 @@ export function RecordingEditor() {
       setOutputFormat(initialOutputFormat);
       setGifFps(initialGifFps);
       setGifMaxWidth(initialGifMaxWidth);
-      setQuality("high");
+      setQuality("highest");
       setSizeMode(initialSizeMode);
       setMaximumSize("10");
       setMaximumUnit("mb");
@@ -4444,7 +4450,7 @@ export function RecordingEditor() {
                 {
                   value: "compress",
                   label: "Compress",
-                  description: "Choose a smaller file with Tiny through High quality presets.",
+                  description: "Choose a smaller file with Tiny through Highest quality presets.",
                 },
                 {
                   value: "maximum",
@@ -4465,7 +4471,7 @@ export function RecordingEditor() {
             {sizeMode === "preserve"
               ? "Original quality with no extra compression unless an edit requires it."
               : sizeMode === "compress"
-                ? "Choose a smaller file with Tiny through High quality presets."
+                ? "Choose a smaller file with Tiny through Highest quality presets."
                 : "Set a hard size limit for the saved file."}
           </p>
           {sizeMode === "compress" && (

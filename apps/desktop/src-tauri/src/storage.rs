@@ -622,13 +622,15 @@ pub fn encode_png_export_dithered(
 }
 
 /// Map the shared compress quality notch (also used for JPEG) to a PNG palette size.
-/// Higher quality → more colors kept → larger file.
-pub fn png_palette_colors_for_quality(quality: u8) -> u16 {
+/// Higher quality → more colors kept → larger file. `None` means compact lossless
+/// packing only (Highest): same pixels, no color quantization.
+pub fn png_palette_colors_for_quality(quality: u8) -> Option<u16> {
     match quality {
-        0..=59 => 32,   // Tiny (~55)
-        60..=77 => 64,  // Smaller (~70)
-        78..=88 => 128, // Balanced (~85)
-        _ => 256,       // High (~92+)
+        0..=59 => Some(32),   // Tiny (~55)
+        60..=77 => Some(64),  // Smaller (~70)
+        78..=88 => Some(128), // Balanced (~85)
+        89..=94 => Some(256), // High (~92)
+        _ => None,            // Highest (~98): tighter packing, no palette
     }
 }
 
@@ -1957,10 +1959,11 @@ mod tests {
 
     #[test]
     fn png_palette_tracks_the_shared_quality_notches() {
-        assert_eq!(png_palette_colors_for_quality(55), 32);
-        assert_eq!(png_palette_colors_for_quality(70), 64);
-        assert_eq!(png_palette_colors_for_quality(85), 128);
-        assert_eq!(png_palette_colors_for_quality(92), 256);
+        assert_eq!(png_palette_colors_for_quality(55), Some(32));
+        assert_eq!(png_palette_colors_for_quality(70), Some(64));
+        assert_eq!(png_palette_colors_for_quality(85), Some(128));
+        assert_eq!(png_palette_colors_for_quality(92), Some(256));
+        assert_eq!(png_palette_colors_for_quality(98), None);
     }
 
     #[test]

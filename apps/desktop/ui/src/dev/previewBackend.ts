@@ -658,7 +658,7 @@ function mockScreenshotExportBytes(payload: unknown): number {
   if (Number.isFinite(colors) && colors > 0) {
     return Math.round(140_000 + colors * 630);
   }
-  const quality = Number(request?.jpegQuality ?? 92);
+  const quality = Number(request?.jpegQuality ?? 98);
   return Math.round(120_000 + Math.max(20, quality) * 2_000);
 }
 
@@ -765,6 +765,7 @@ export function installPreviewBackend(): void {
           small: 0.28,
           standard: 0.38,
           high: 0.49,
+          highest: 0.65,
         };
         const factor = factors[request.export.quality] ?? 0.49;
         return { sizeBytes: Math.round(original * factor), exact: false };

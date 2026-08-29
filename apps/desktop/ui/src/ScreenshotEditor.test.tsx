@@ -2413,11 +2413,11 @@ describe("ScreenshotEditor", () => {
     expect(screen.queryByRole("group", { name: "Compression comparison" }))
       .not.toBeInTheDocument();
 
-    // Compress keeps PNG and shows the same Tiny–High quality ladder as JPEG.
+    // Compress keeps PNG and shows the same Tiny–Highest quality ladder as JPEG.
     fireEvent.click(saveQuality);
     const compressOption = screen.getByRole("option", { name: /Compress/ });
     expect(compressOption).toHaveTextContent(
-      "Smaller PNG with Tiny through High quality presets.",
+      "Smaller PNG with Tiny through Highest quality presets.",
     );
     expect(compressOption).not.toHaveTextContent(/compresspng/i);
     fireEvent.click(compressOption);
@@ -2426,7 +2426,7 @@ describe("ScreenshotEditor", () => {
       expect(format).toHaveTextContent(".png");
     });
     const quality = screen.getByRole("combobox", { name: "Compression quality" });
-    expect(quality).toHaveTextContent("High");
+    expect(quality).toHaveTextContent("Highest");
     expect(screen.queryByRole("slider", { name: "PNG palette colors" }))
       .not.toBeInTheDocument();
     expect(screen.queryByRole("spinbutton", { name: "Maximum file size" }))
@@ -2443,6 +2443,23 @@ describe("ScreenshotEditor", () => {
     expect(screen.getByRole("option", { name: /Tiny/ })).toHaveTextContent(
       "Smallest PNG with the most visible dithering.",
     );
+    expect(screen.getByRole("option", { name: /^Highest/ })).toHaveTextContent(
+      "Same pixels, tighter packing. No color reduction.",
+    );
+    fireEvent.click(screen.getByRole("option", { name: /^Highest/ }));
+    expect(quality).toHaveTextContent("Highest");
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        "preview_screenshot_export",
+        expect.objectContaining({
+          format: "png",
+          qualityMode: "compress",
+          jpegQuality: 98,
+          pngMaxColors: null,
+        }),
+      );
+    });
+    fireEvent.click(quality);
     fireEvent.click(screen.getByRole("option", { name: /Tiny/ }));
     expect(quality).toHaveTextContent("Tiny");
     await waitFor(() => {
@@ -2749,7 +2766,7 @@ describe("ScreenshotEditor", () => {
         expect(screen.getByRole("combobox", { name: "Format" })).toHaveTextContent(".jpg");
       });
       fireEvent.click(screen.getByRole("combobox", { name: "Compression quality" }));
-      fireEvent.click(screen.getByRole("option", { name: /High/ }));
+      fireEvent.click(screen.getByRole("option", { name: /^High(?!est)/ }));
       await waitFor(() => {
         expect(toBlob.mock.calls.some((call) => call[1] === "image/jpeg")).toBe(true);
         expect(estimate()).toHaveTextContent(/≈/);
@@ -2775,6 +2792,7 @@ describe("ScreenshotEditor", () => {
     const sourcePngBytes = 1_100_000;
     const tinyBytes = 188_000;
     const highBytes = 301_000;
+    const highestBytes = 715_000;
 
     Object.defineProperty(HTMLCanvasElement.prototype, "toBlob", {
       configurable: true,
@@ -2793,8 +2811,10 @@ describe("ScreenshotEditor", () => {
     vi.mocked(invoke).mockImplementation(async (command, args) => {
       if (command === "get_artifact") return compact;
       if (command === "estimate_screenshot_export" || command === "preview_screenshot_export") {
-        const colors = Number((args as { pngMaxColors?: number } | undefined)?.pngMaxColors ?? 256);
-        const sizeBytes = colors <= 32 ? tinyBytes : highBytes;
+        const pngMaxColors = (args as { pngMaxColors?: number | null } | undefined)?.pngMaxColors;
+        const sizeBytes = typeof pngMaxColors === "number" && pngMaxColors > 0
+          ? (pngMaxColors <= 32 ? tinyBytes : highBytes)
+          : highestBytes;
         if (command === "estimate_screenshot_export") return sizeBytes;
         return {
           bytes: [1, 2, 3],
@@ -2820,13 +2840,13 @@ describe("ScreenshotEditor", () => {
         "Estimated export file size for the current format, quality, and output size",
       );
 
-      // Default compress preset is High. 301 KB vs the 1.1 MB Before image is −73%,
+      // Default compress preset is Highest. 715 KB vs the 1.1 MB Before image is −35%,
       // not +60% versus the compact 188 KB file (or a previous Tiny estimate).
       await waitFor(() => {
-        expect(estimate()).toHaveTextContent("≈ 301 KB");
-        expect(screen.getByText("−73%")).toBeInTheDocument();
+        expect(estimate()).toHaveTextContent("≈ 715 KB");
+        expect(screen.getByText("−35%")).toBeInTheDocument();
       }, { timeout: 3_000 });
-      expect(screen.getByText("−73%")).toHaveClass("screenshot-output-estimate-delta", "is-smaller");
+      expect(screen.getByText("−35%")).toHaveClass("screenshot-output-estimate-delta", "is-smaller");
       expect(screen.queryByText("+60%")).not.toBeInTheDocument();
 
       fireEvent.click(screen.getByRole("combobox", { name: "Compression quality" }));
@@ -2837,7 +2857,7 @@ describe("ScreenshotEditor", () => {
       }, { timeout: 3_000 });
 
       fireEvent.click(screen.getByRole("combobox", { name: "Compression quality" }));
-      fireEvent.click(screen.getByRole("option", { name: /High/ }));
+      fireEvent.click(screen.getByRole("option", { name: /^High(?!est)/ }));
       await waitFor(() => {
         expect(estimate()).toHaveTextContent("≈ 301 KB");
         expect(screen.getByText("−73%")).toBeInTheDocument();

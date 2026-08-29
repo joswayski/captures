@@ -246,7 +246,7 @@ export interface EditSpec {
 
 export interface ExportSpec {
   format: "mp4" | "gif" | "webm";
-  quality: "preserve" | "high" | "standard" | "small" | "tiny";
+  quality: "preserve" | "highest" | "high" | "standard" | "small" | "tiny";
   max_size_bytes: number | null;
   frames_per_second: number | null;
   gif_max_colors: number | null;
