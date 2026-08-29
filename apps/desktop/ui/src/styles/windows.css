@@ -1765,7 +1765,8 @@
   --tray-caret-span: 22px;
   --tray-caret-diamond: 14px;
   --tray-caret-overlap: 2px;
-  --tray-frame-pad: 16px;
+  /* Match TRAY_NOTICE_FRAME_PAD: dark --shadow-md is 0 8px 20px (28px down). */
+  --tray-frame-pad: 28px;
   --tray-caret-stroke: color-mix(in srgb, var(--text) 50%, transparent);
   position: relative;
   display: flex;

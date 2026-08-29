@@ -3676,8 +3676,9 @@ fn create_overlay_window(app: &AppHandle) -> Result<(), tauri::Error> {
 
 const STARTUP_NOTICE_WIDTH: f64 = 400.0;
 const STARTUP_NOTICE_HEIGHT: f64 = 118.0;
-/// Transparent padding around the rounded card so CSS shadows are not clipped.
-const TRAY_NOTICE_FRAME_PAD: f64 = 16.0;
+/// Transparent padding around the rounded card so `--shadow-md` is not clipped.
+/// Dark `--shadow-md` is `0 8px 20px`, so the blur plus Y offset needs 28px.
+const TRAY_NOTICE_FRAME_PAD: f64 = 28.0;
 /// Extra window height reserved for the tray-pointing caret.
 const TRAY_NOTICE_CARET_SIZE: f64 = 12.0;
 /// Keep the caret off the rounded corners of the notice.
@@ -6223,10 +6224,10 @@ mod tests {
         TRAY_NOTICE_CARET_INSET, TRAY_NOTICE_CARET_SIZE, TRAY_NOTICE_FRAME_PAD,
         TRAY_NOTICE_SCREEN_MARGIN, TRAY_NOTICE_TRAY_OVERLAP, ThumbnailCursorAction,
         ThumbnailCursorKind, ThumbnailMonitorBounds, ThumbnailPointerSpace, ThumbnailWindowFrame,
-        capture_cursor_icon, click_through_applies, clipboard_fingerprint, display_contains_pointer,
-        fallback_startup_notice, mask_macos_window_corners, mini_previews_hidden_geometry,
-        mini_previews_hidden_should_be_visible, parse_shortcut, place_startup_notice,
-        primary_app_window_priority, refine_window_chrome_from_snapshot,
+        capture_cursor_icon, click_through_applies, clipboard_fingerprint,
+        display_contains_pointer, fallback_startup_notice, mask_macos_window_corners,
+        mini_previews_hidden_geometry, mini_previews_hidden_should_be_visible, parse_shortcut,
+        place_startup_notice, primary_app_window_priority, refine_window_chrome_from_snapshot,
         resolve_startup_notice_placement, should_trigger_shortcut,
         startup_notice_fallback_edge_from_insets, startup_notice_url, thumbnail_cursor_action,
         thumbnail_geometry, thumbnail_pointer_in_space, thumbnail_pointer_position,
