@@ -20,6 +20,12 @@ const CATEGORIES: Array<{ id: FeedbackCategory; label: string; description: stri
   { id: "other", label: "Other", description: "Anything else" },
 ];
 
+const MESSAGE_PLACEHOLDERS: Record<FeedbackCategory, string> = {
+  bug: "What happened? What did you expect?",
+  idea: "What's the idea? What problem would it solve?",
+  other: "What would you like us to know?",
+};
+
 function formatOsLabel(context: FeedbackContext): string {
   const parts = [context.os, context.os_version, context.arch].filter(Boolean);
   return parts.join(" · ");
@@ -58,6 +64,8 @@ export function Feedback() {
     () => message.trim().length > 0 && status !== "sending",
     [message, status],
   );
+
+  const messagePlaceholder = MESSAGE_PLACEHOLDERS[category];
 
   const submit = async () => {
     if (!canSubmit) return;
@@ -129,7 +137,7 @@ export function Feedback() {
                 setMessage(event.target.value);
                 if (status === "sent" || status === "error") setStatus("idle");
               }}
-              placeholder="What happened? What did you expect?"
+              placeholder={messagePlaceholder}
               rows={7}
               maxLength={8_000}
               disabled={status === "sending"}
@@ -151,7 +159,9 @@ export function Feedback() {
               autoComplete="off"
               spellCheck={false}
             />
-            <p className="help-text">Only if you want a reply. Leave blank to stay anonymous.</p>
+            <p className="help-text">
+              Optional — we may use this if we need to ask a follow-up question.
+            </p>
           </div>
         </section>
 
