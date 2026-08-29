@@ -16,11 +16,10 @@ test("website product shots cover the README stills with unique files", () => {
       "capture-selection",
       "screenshot-editor",
       "video-editor",
-      "capture-controls",
       "preferences",
     ],
   );
-  assert.equal(PRODUCT_SHOTS.length, 5);
+  assert.equal(PRODUCT_SHOTS.length, 4);
   const files = new Set(PRODUCT_SHOTS.map((shot) => shot.file));
   const ids = new Set(PRODUCT_SHOTS.map((shot) => shot.id));
   assert.equal(files.size, PRODUCT_SHOTS.length);

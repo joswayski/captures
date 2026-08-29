@@ -1,6 +1,5 @@
 import { useCallback, useId, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 
-import captureControls from "../../../docs/images/capture-controls.jpg";
 import captureSelection from "../../../docs/images/capture-selection.jpg";
 import preferences from "../../../docs/images/preferences.jpg";
 import screenshotEditor from "../../../docs/images/screenshot-editor.jpg";
@@ -18,7 +17,6 @@ import { PRODUCT_SHOTS, galleryFrameAspectRatio, type ProductShot } from "./prod
 import { useImageZoom } from "./useImageZoom";
 
 const SHOT_SRC = {
-  "capture-controls.jpg": captureControls,
   "capture-selection.jpg": captureSelection,
   "preferences.jpg": preferences,
   "screenshot-editor.jpg": screenshotEditor,
