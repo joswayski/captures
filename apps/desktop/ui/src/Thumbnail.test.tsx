@@ -658,7 +658,7 @@ describe("Thumbnail", () => {
     render(<Thumbnail />);
     const hide = await screen.findByRole("button", { name: "Hide previews" });
     expect(hide).toHaveAttribute("data-tooltip", "Hide previews");
-    expect(hide.querySelectorAll("path")).toHaveLength(2);
+    expect(hide.querySelector("path")?.getAttribute("d")).toContain("10.5");
     fireEvent.click(hide);
     expect(vi.mocked(invoke)).toHaveBeenCalledWith("collapse_mini_previews");
   });

@@ -89,20 +89,21 @@
   stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
+  pointer-events: none;
 }
 
 .thumbnail-collapse {
   position: absolute;
-  z-index: 12;
-  /* Park in the same corner as the restore chip: a left-edge tab with a left
-     chevron read as "collapse into the card", not "minimize to the chip". */
+  z-index: 20;
+  /* Same corner as the restore chip. A down chevron pairs with that chip's
+     up chevron instead of a left tab that read as "collapse into the card". */
   top: auto;
   left: 6px;
   right: auto;
   bottom: 6px;
   display: grid;
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   padding: 0;
   place-items: center;
   border: 1px solid var(--glass-border);
@@ -1042,6 +1043,16 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging,
 html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   cursor: -webkit-grabbing !important;
   cursor: grabbing !important;
+}
+
+/*
+ * Stack chrome sits over grab-source cards. The document-wide grab/default
+ * rules would otherwise win on every native poll that misses the control and
+ * flicker pointer vs arrow while the mouse is still on the button.
+ */
+html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-collapse, .thumbnail-overflow-cue),
+html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-collapse, .thumbnail-overflow-cue) * {
+  cursor: pointer !important;
 }
 
 .thumbnail-main-actions svg,
