@@ -288,7 +288,9 @@ describe("RecordingSelector", () => {
       expect(image).not.toBeNull();
       return image!;
     });
-    expect(document.documentElement).toHaveClass("capture-selector-region");
+    await waitFor(() => {
+      expect(document.documentElement).toHaveClass("capture-selector-region");
+    });
     fireEvent.load(snapshot);
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("reveal_recording_selector", {
