@@ -1257,13 +1257,27 @@ fn aac_encoder_channel_layout(mono: bool) -> &'static str {
 }
 
 /// Native AAC rejects a 1-channel Front Left layout, which is how FFmpeg
-/// labels many microphone captures. Rematrix through stereo so the encoder
-/// always receives `stereo` or centered `mono` instead of `FL`.
+/// labels many microphone captures. Relabel those sources as centered mono
+/// before expanding to stereo so the signal is in both ears; going straight
+/// to stereo can keep Front Left identity (left channel only). Do not run
+/// this on stereo system audio, which would collapse left/right.
+fn aac_centered_stereo_layout_filter() -> &'static str {
+    ",aformat=sample_fmts=fltp:channel_layouts=mono,aformat=channel_layouts=stereo"
+}
+
+fn aac_stereo_layout_filter() -> &'static str {
+    ",aformat=sample_fmts=fltp:channel_layouts=stereo"
+}
+
+fn aac_mono_layout_filter() -> &'static str {
+    ",aformat=sample_fmts=fltp:channel_layouts=mono"
+}
+
 fn aac_output_layout_filter(mono: bool) -> &'static str {
     if mono {
-        ",aformat=sample_fmts=fltp:channel_layouts=stereo,aformat=channel_layouts=mono"
+        aac_mono_layout_filter()
     } else {
-        ",aformat=sample_fmts=fltp:channel_layouts=stereo"
+        aac_stereo_layout_filter()
     }
 }
 
@@ -1279,7 +1293,8 @@ fn recording_segment_audio_graph(
     let mut filters = Vec::new();
     let mut audio_labels = Vec::new();
     let independent_tracks = audio.system_audio && audio.microphone_audio;
-    let layout = aac_output_layout_filter(false);
+    let system_layout = aac_stereo_layout_filter();
+    let microphone_layout = aac_centered_stereo_layout_filter();
     let system_output = if independent_tracks {
         "[system-source]"
     } else {
@@ -1294,15 +1309,15 @@ fn recording_segment_audio_graph(
         if let Some(input) = system_audio_input {
             let delay = system_audio_offset_ms.max(0);
             filters.push(format!(
-                "[{input}:a:0]adelay={delay}:all=1,aresample=48000:async=1:first_pts=0,apad,atrim=duration={duration}{layout}{system_output}"
+                "[{input}:a:0]adelay={delay}:all=1,aresample=48000:async=1:first_pts=0,apad,atrim=duration={duration}{system_layout}{system_output}"
             ));
         } else if embedded_system_audio {
             filters.push(format!(
-                "[0:a:0]aresample=48000:async=1:first_pts=0,apad,atrim=duration={duration}{layout}{system_output}"
+                "[0:a:0]aresample=48000:async=1:first_pts=0,apad,atrim=duration={duration}{system_layout}{system_output}"
             ));
         } else {
             filters.push(format!(
-                "anullsrc=r=48000:cl=stereo,atrim=duration={duration}{layout}{system_output}"
+                "anullsrc=r=48000:cl=stereo,atrim=duration={duration}{system_layout}{system_output}"
             ));
         }
         audio_labels.push(("[system]", "System Audio"));
@@ -1311,11 +1326,11 @@ fn recording_segment_audio_graph(
         if let Some(input) = microphone_input {
             let delay = microphone_offset_ms.max(0);
             filters.push(format!(
-                "[{input}:a:0]adelay={delay}:all=1,aresample=48000:async=1:first_pts=0,apad,atrim=duration={duration}{layout}{microphone_output}"
+                "[{input}:a:0]adelay={delay}:all=1,aresample=48000:async=1:first_pts=0,apad,atrim=duration={duration}{microphone_layout}{microphone_output}"
             ));
         } else {
             filters.push(format!(
-                "anullsrc=r=48000:cl=stereo,atrim=duration={duration}{layout}{microphone_output}"
+                "anullsrc=r=48000:cl=stereo,atrim=duration={duration}{microphone_layout}{microphone_output}"
             ));
         }
         audio_labels.push(("[microphone]", "Microphone"));
@@ -1375,8 +1390,9 @@ fn audio_filter(edit: &EditSpec, attempt: &VideoAttempt) -> Result<String, Media
     if attempt.microphone_audio && !audio.mute_microphone {
         let index = separate_track_offset + usize::from(attempt.system_audio);
         filters.push(format!(
-            "[0:a:{index}]volume={:.3},aresample=48000:async=1:first_pts=0[microphone_edit]",
-            audio.microphone_volume.clamp(0.0, 2.0)
+            "[0:a:{index}]volume={:.3},aresample=48000:async=1:first_pts=0{}[microphone_edit]",
+            audio.microphone_volume.clamp(0.0, 2.0),
+            aac_centered_stereo_layout_filter()
         ));
         labels.push("[microphone_edit]");
     }
@@ -1610,10 +1626,10 @@ mod tests {
     #[cfg(target_os = "macos")]
     use super::TimelineSpriteSpec;
     use super::{
-        CancelToken, MediaToolchain, RecordingAudioLayout, VideoAttempt, aac_output_layout_filter,
-        audio_edit_is_identity, audio_filter, escape_concat_path, export_attempts, fit_even,
-        gif_export_filter, gif_filter, recording_segment_audio_graph, seconds, validate_edit_spec,
-        visual_edit_is_identity,
+        CancelToken, MediaToolchain, RecordingAudioLayout, VideoAttempt,
+        aac_centered_stereo_layout_filter, aac_output_layout_filter, audio_edit_is_identity,
+        audio_filter, escape_concat_path, export_attempts, fit_even, gif_export_filter, gif_filter,
+        recording_segment_audio_graph, seconds, validate_edit_spec, visual_edit_is_identity,
     };
     use crate::{
         AudioEdit, CropRect, EditSpec, ExportFormat, ExportSpec, MediaKind, MediaMetadata,
@@ -1730,6 +1746,12 @@ mod tests {
         assert!(filter.contains("[0:a:1]volume=0.500"));
         assert!(filter.contains("[0:a:2]volume=1.500"));
         assert!(filter.contains("amix=inputs=2"));
+        assert!(filter.contains(
+            "[0:a:2]volume=1.500,aresample=48000:async=1:first_pts=0,aformat=sample_fmts=fltp:channel_layouts=mono,aformat=channel_layouts=stereo[microphone_edit]"
+        ));
+        assert!(
+            !filter.contains("[0:a:1]volume=0.500,aresample=48000:async=1:first_pts=0,aformat")
+        );
         assert!(filter.contains("channel_layouts=stereo"));
     }
 
@@ -1739,8 +1761,14 @@ mod tests {
             aac_output_layout_filter(false),
             ",aformat=sample_fmts=fltp:channel_layouts=stereo"
         );
-        assert!(aac_output_layout_filter(true).contains("channel_layouts=stereo"));
-        assert!(aac_output_layout_filter(true).ends_with("channel_layouts=mono"));
+        assert_eq!(
+            aac_output_layout_filter(true),
+            ",aformat=sample_fmts=fltp:channel_layouts=mono"
+        );
+        assert_eq!(
+            aac_centered_stereo_layout_filter(),
+            ",aformat=sample_fmts=fltp:channel_layouts=mono,aformat=channel_layouts=stereo"
+        );
 
         let (filters, labels) = recording_segment_audio_graph(
             "1.000",
@@ -1757,8 +1785,10 @@ mod tests {
         assert_eq!(labels, vec![("[microphone]", "Microphone")]);
         assert_eq!(filters.len(), 1);
         assert!(
-            filters[0].contains("aformat=sample_fmts=fltp:channel_layouts=stereo[microphone]"),
-            "microphone graph should rematrix before AAC: {}",
+            filters[0].contains(
+                "aformat=sample_fmts=fltp:channel_layouts=mono,aformat=channel_layouts=stereo[microphone]"
+            ),
+            "microphone graph should center Front Left before stereo AAC: {}",
             filters[0]
         );
 
@@ -1782,11 +1812,19 @@ mod tests {
                 ("[microphone]", "Microphone"),
             ]
         );
+        let system = filters
+            .iter()
+            .find(|filter| filter.contains("[system-source]"))
+            .expect("system source");
+        assert!(system.contains("aformat=sample_fmts=fltp:channel_layouts=stereo[system-source]"));
+        assert!(
+            !system.contains("channel_layouts=mono"),
+            "system audio must stay stereo: {system}"
+        );
         assert!(filters.iter().any(|filter| {
-            filter.contains("aformat=sample_fmts=fltp:channel_layouts=stereo[system-source]")
-        }));
-        assert!(filters.iter().any(|filter| {
-            filter.contains("aformat=sample_fmts=fltp:channel_layouts=stereo[microphone-source]")
+            filter.contains(
+                "aformat=sample_fmts=fltp:channel_layouts=mono,aformat=channel_layouts=stereo[microphone-source]",
+            )
         }));
     }
 
@@ -1843,8 +1881,8 @@ mod tests {
         .expect("attempts");
         let filter =
             audio_filter(&edit, attempts.last().expect("floor attempt")).expect("audio filter");
-        assert!(filter.contains("channel_layouts=stereo"));
         assert!(filter.contains("channel_layouts=mono"));
+        assert!(!filter.contains("channel_layouts=stereo"));
     }
 
     #[test]
@@ -2395,5 +2433,50 @@ mod tests {
             .expect("front-left recording probe");
         assert!(probe.has_audio);
         assert_eq!(probe.audio_stream_count, 1);
+        let (left_rms, right_rms) =
+            stereo_channel_rms(&ffmpeg, &assembled_front_left).expect("channel energy");
+        assert!(
+            left_rms > 0.01 && right_rms > 0.01,
+            "centered microphone should be audible on both channels, got L={left_rms} R={right_rms}"
+        );
+        let louder = left_rms.max(right_rms);
+        let quieter = left_rms.min(right_rms);
+        assert!(
+            quieter / louder > 0.9,
+            "Front Left microphone should be duplicated, not left-only, got L={left_rms} R={right_rms}"
+        );
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    fn stereo_channel_rms(
+        ffmpeg: &std::path::Path,
+        input: &std::path::Path,
+    ) -> Result<(f32, f32), String> {
+        let output = std::process::Command::new(ffmpeg)
+            .args(["-hide_banner", "-loglevel", "error", "-i"])
+            .arg(input)
+            .args(["-map", "0:a:0", "-f", "f32le", "-ac", "2", "-"])
+            .output()
+            .map_err(|error| error.to_string())?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).into_owned());
+        }
+        let samples = output
+            .stdout
+            .chunks_exact(4)
+            .map(|bytes| f32::from_le_bytes(bytes.try_into().expect("f32le sample")))
+            .collect::<Vec<_>>();
+        if samples.len() < 2 {
+            return Err("PCM dump was empty".to_owned());
+        }
+        let mut left_sum = 0.0_f32;
+        let mut right_sum = 0.0_f32;
+        let mut frames = 0.0_f32;
+        for pair in samples.chunks_exact(2) {
+            left_sum += pair[0] * pair[0];
+            right_sum += pair[1] * pair[1];
+            frames += 1.0;
+        }
+        Ok(((left_sum / frames).sqrt(), (right_sum / frames).sqrt()))
     }
 }
