@@ -7,6 +7,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const scriptPath = fileURLToPath(new URL("./wait-preview-queue.sh", import.meta.url));
+const workflowPath = fileURLToPath(new URL("../.github/workflows/release.yml", import.meta.url));
 
 function writeMockGh(program) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wait-preview-queue-"));
@@ -28,6 +29,14 @@ function runWait(env, mockProgram) {
     },
   });
 }
+
+test("Preview concurrency queues pending main pushes instead of dropping intermediates", () => {
+  const workflow = fs.readFileSync(workflowPath, "utf8");
+  assert.match(
+    workflow,
+    /concurrency:\n  group: captures-preview-main\n  cancel-in-progress: false\n  queue: max\n/,
+  );
+});
 
 test("retries a GitHub 502 instead of failing the Preview queue", () => {
   const stateFile = path.join(os.tmpdir(), `wait-preview-queue-${process.pid}.count`);

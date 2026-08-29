@@ -10,9 +10,12 @@ on:
         required: false
         type: string
 
+# cancel-in-progress: false only protects the running run. queue: max keeps
+# later main pushes pending (up to 100) instead of cancelling the middle SHA.
 concurrency:
   group: captures-preview-main
   cancel-in-progress: false
+  queue: max
 
 permissions:
   contents: read
