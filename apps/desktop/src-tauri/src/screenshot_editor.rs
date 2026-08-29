@@ -794,15 +794,20 @@ fn encode_export_with_limit(
         ScreenshotEditFormat::Png => {
             // Walk down the color budget until the file fits (same idea as quality notches).
             let mut best: Option<Vec<u8>> = None;
-            for colors in storage::PNG_MAXIMUM_COLOR_STEPS {
-                let candidate = storage::encode_png_export(image, true, Some(colors))?;
-                if u64::try_from(candidate.len()).unwrap_or(u64::MAX) <= maximum {
+            'palettes: for colors in storage::PNG_MAXIMUM_COLOR_STEPS {
+                // Dither first (matches Compress). If Floyd–Steinberg noise makes
+                // every indexed file larger than lossless, try the undithered
+                // palette so a size cap can still be met with posterization.
+                for dither in [true, false] {
+                    let candidate =
+                        storage::encode_png_export_dithered(image, true, Some(colors), dither)?;
+                    let fits = u64::try_from(candidate.len()).unwrap_or(u64::MAX) <= maximum;
+                    if fits {
+                        best = Some(candidate);
+                        break 'palettes;
+                    }
                     best = Some(candidate);
-                    // Keep trying fewer colors? Prefer the highest quality that still fits.
-                    // First success in the descending list is the largest palette that fits.
-                    break;
                 }
-                best = Some(candidate);
             }
             let best = best.ok_or_else(|| {
                 AppError::Image(
@@ -1364,6 +1369,47 @@ mod tests {
         assert!(u64::try_from(limited.len()).unwrap() <= maximum);
         image::load_from_memory_with_format(&limited, ImageFormat::Jpeg)
             .expect("limited JPEG remains readable");
+    }
+
+    #[test]
+    fn png_maximum_can_use_undithered_palette_to_meet_a_size_cap() {
+        let image = RgbaImage::from_fn(320, 120, |x, _y| {
+            let t = ((x * 255) / 319) as u8;
+            Rgba([t, 80, 200_u8.saturating_sub(t / 2), 255])
+        });
+        let lossless = encode_export(
+            &image,
+            ScreenshotEditFormat::Png,
+            ScreenshotExportQualityMode::Preserve,
+            100,
+            None,
+        )
+        .unwrap();
+        let dithered = crate::storage::encode_png_export_dithered(&image, true, Some(8), true)
+            .expect("dithered 8-color");
+        let undithered = crate::storage::encode_png_export_dithered(&image, true, Some(8), false)
+            .expect("undithered 8-color");
+        assert!(
+            undithered.len() < dithered.len().min(lossless.len()),
+            "undithered 8-color should undercut dither/lossless (undithered={}, dithered={}, lossless={})",
+            undithered.len(),
+            dithered.len(),
+            lossless.len()
+        );
+        let maximum =
+            u64::try_from((undithered.len() + dithered.len().min(lossless.len())) / 2).unwrap();
+        let limited = encode_export_with_limit(
+            &image,
+            ScreenshotEditFormat::Png,
+            ScreenshotExportQualityMode::Maximum,
+            100,
+            Some(maximum),
+            None,
+        )
+        .expect("undithered palette should meet the cap");
+        assert!(u64::try_from(limited.len()).unwrap() <= maximum);
+        image::load_from_memory_with_format(&limited, ImageFormat::Png)
+            .expect("limited PNG remains readable");
     }
 
     #[test]

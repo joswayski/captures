@@ -589,8 +589,20 @@ pub fn encode_png_export(
     compact: bool,
     max_colors: Option<u16>,
 ) -> Result<Vec<u8>, AppError> {
+    encode_png_export_dithered(image, compact, max_colors, true)
+}
+
+/// Same as [`encode_png_export`], with control over Floyd–Steinberg dithering.
+/// Maximum-size search tries the undithered variant when dither noise inflates
+/// the deflate stream past the lossless encode.
+pub fn encode_png_export_dithered(
+    image: &RgbaImage,
+    compact: bool,
+    max_colors: Option<u16>,
+    dither: bool,
+) -> Result<Vec<u8>, AppError> {
     if let Some(colors) = max_colors.filter(|count| *count > 0) {
-        let quantized = encode_png_quantized(image, colors)?;
+        let quantized = encode_png_quantized(image, colors, dither)?;
         // Quantization is not guaranteed to shrink already-efficient images
         // (flat UI screenshots often deflate better as full RGBA than as a
         // dithered palette). Never let Compress produce a bigger file than the
@@ -623,7 +635,11 @@ pub fn png_palette_colors_for_quality(quality: u8) -> u16 {
 /// Palette sizes tried when a hard maximum file size is requested for PNG.
 pub const PNG_MAXIMUM_COLOR_STEPS: [u16; 10] = [256, 192, 128, 96, 64, 48, 32, 24, 16, 8];
 
-fn encode_png_quantized(image: &RgbaImage, max_colors: u16) -> Result<Vec<u8>, AppError> {
+fn encode_png_quantized(
+    image: &RgbaImage,
+    max_colors: u16,
+    dither: bool,
+) -> Result<Vec<u8>, AppError> {
     let width = image.width();
     let height = image.height();
     if width == 0 || height == 0 {
@@ -631,7 +647,7 @@ fn encode_png_quantized(image: &RgbaImage, max_colors: u16) -> Result<Vec<u8>, A
     }
 
     let colors = max_colors.clamp(2, 256);
-    let (palette, indices) = match index_image(image, colors) {
+    let (palette, indices) = match index_image(image, colors, dither) {
         Ok(indexed) => indexed,
         Err(_) => {
             return encode_png_with_quality(image, CompressionType::Best, FilterType::Adaptive);
@@ -643,20 +659,24 @@ fn encode_png_quantized(image: &RgbaImage, max_colors: u16) -> Result<Vec<u8>, A
     encode_indexed_png(width, height, &palette, &indices)
 }
 
-fn index_image(image: &RgbaImage, max_colors: u16) -> Result<(Vec<[u8; 4]>, Vec<u8>), AppError> {
+fn index_image(
+    image: &RgbaImage,
+    max_colors: u16,
+    dither: bool,
+) -> Result<(Vec<[u8; 4]>, Vec<u8>), AppError> {
     if let Some(exact) = exact_indexed_rgba(image, max_colors) {
         return Ok(exact);
     }
 
     let has_transparency = image.pixels().any(|pixel| pixel[3] < 255);
     if !has_transparency {
-        return quantette_rgb_indexed(image, max_colors);
+        return quantette_rgb_indexed(image, max_colors, dither);
     }
     let has_partial_alpha = image.pixels().any(|pixel| pixel[3] > 0 && pixel[3] < 255);
     if has_partial_alpha {
-        Ok(median_cut_rgba(image, max_colors))
+        Ok(median_cut_rgba(image, max_colors, dither))
     } else {
-        quantette_rgb_binary_alpha(image, max_colors)
+        quantette_rgb_binary_alpha(image, max_colors, dither)
     }
 }
 
@@ -684,8 +704,9 @@ fn exact_indexed_rgba(image: &RgbaImage, max_colors: u16) -> Option<(Vec<[u8; 4]
 fn quantette_rgb_indexed(
     image: &RgbaImage,
     max_colors: u16,
+    dither: bool,
 ) -> Result<(Vec<[u8; 4]>, Vec<u8>), AppError> {
-    let indexed = quantette_rgb(image, max_colors)?;
+    let indexed = quantette_rgb(image, max_colors, dither)?;
     let palette = indexed
         .palette()
         .iter()
@@ -697,9 +718,10 @@ fn quantette_rgb_indexed(
 fn quantette_rgb_binary_alpha(
     image: &RgbaImage,
     max_colors: u16,
+    dither: bool,
 ) -> Result<(Vec<[u8; 4]>, Vec<u8>), AppError> {
     let budget = max_colors.saturating_sub(1).clamp(2, 255);
-    let indexed = quantette_rgb(image, budget)?;
+    let indexed = quantette_rgb(image, budget, dither)?;
     let mut palette = Vec::with_capacity(indexed.palette().len() + 1);
     palette.push([0, 0, 0, 0]);
     palette.extend(
@@ -722,6 +744,7 @@ fn quantette_rgb_binary_alpha(
 fn quantette_rgb(
     image: &RgbaImage,
     max_colors: u16,
+    dither: bool,
 ) -> Result<quantette::IndexedImage<quantette::deps::palette::Srgb<u8>>, AppError> {
     let rgb = RgbImage::from_fn(image.width(), image.height(), |x, y| {
         let pixel = image.get_pixel(x, y);
@@ -732,15 +755,19 @@ fn quantette_rgb(
             "could not prepare image for PNG compression: {error}"
         ))
     })?;
+    let pipeline = Pipeline::new()
+        .palette_size(PaletteSize::from_u16_clamped(max_colors.clamp(2, 256)))
+        .parallel(true);
     // Full error diffusion: optical mixing keeps hues closer to the original
     // while the leftover error reads as speckle / pixelation instead of a
     // global wash. Disable dedup — it fights dithering on busy screenshots.
-    let ditherer = FloydSteinberg::with_error_diffusion(1.0).unwrap_or_default();
-    let indexed = Pipeline::new()
-        .palette_size(PaletteSize::from_u16_clamped(max_colors.clamp(2, 256)))
-        .ditherer(ditherer)
-        .dedup(false)
-        .parallel(true)
+    let pipeline = if dither {
+        let ditherer = FloydSteinberg::with_error_diffusion(1.0).unwrap_or_default();
+        pipeline.ditherer(ditherer).dedup(false)
+    } else {
+        pipeline.ditherer(None)
+    };
+    let indexed = pipeline
         .input_image(quant_image.as_ref())
         .output_srgb8_indexed_image();
     if indexed.palette().is_empty() || indexed.indices().is_empty() {
@@ -756,7 +783,7 @@ fn rgba_pixel_count(image: &RgbaImage) -> usize {
         .unwrap_or(usize::MAX)
 }
 
-fn median_cut_rgba(image: &RgbaImage, max_colors: u16) -> (Vec<[u8; 4]>, Vec<u8>) {
+fn median_cut_rgba(image: &RgbaImage, max_colors: u16, dither: bool) -> (Vec<[u8; 4]>, Vec<u8>) {
     let pixel_count = rgba_pixel_count(image);
     let target = usize::from(max_colors)
         .clamp(2, 256)
@@ -788,7 +815,11 @@ fn median_cut_rgba(image: &RgbaImage, max_colors: u16) -> (Vec<[u8; 4]>, Vec<u8>
     if palette.is_empty() {
         palette.push([0, 0, 0, 255]);
     }
-    let indices = dither_rgba_indices(image, &palette);
+    let indices = if dither {
+        dither_rgba_indices(image, &palette)
+    } else {
+        nearest_rgba_indices(image, &palette)
+    };
     (palette, indices)
 }
 
@@ -876,8 +907,138 @@ fn rgba_dist2(left: [u8; 4], right: [u8; 4]) -> u32 {
     })
 }
 
+/// Nearest palette lookup. Linear scan is enough for tiny palettes; a 4D k-d
+/// tree keeps High (256 colors) from doing a full scan on every pixel.
+struct PaletteIndex<'a> {
+    colors: &'a [[u8; 4]],
+    nodes: Vec<KdNode>,
+}
+
+struct KdNode {
+    color_index: u8,
+    axis: u8,
+    left: Option<u16>,
+    right: Option<u16>,
+}
+
+impl<'a> PaletteIndex<'a> {
+    fn new(colors: &'a [[u8; 4]]) -> Self {
+        let mut nodes = Vec::with_capacity(colors.len());
+        if !colors.is_empty() {
+            let mut order: Vec<u8> = (0..colors.len())
+                .filter_map(|index| u8::try_from(index).ok())
+                .collect();
+            build_kd_node(colors, &mut order, 0, &mut nodes);
+        }
+        Self { colors, nodes }
+    }
+
+    fn nearest(&self, query: [u8; 4]) -> u8 {
+        if self.colors.is_empty() {
+            return 0;
+        }
+        if self.colors.len() <= 16 || self.nodes.is_empty() {
+            return nearest_linear(self.colors, query);
+        }
+        let mut best_index = self.nodes[0].color_index;
+        let mut best_dist = rgba_dist2(query, self.colors[usize::from(best_index)]);
+        search_kd(self, 0, query, &mut best_index, &mut best_dist);
+        best_index
+    }
+}
+
+fn nearest_linear(colors: &[[u8; 4]], query: [u8; 4]) -> u8 {
+    let mut best_index = 0_u8;
+    let mut best_dist = u32::MAX;
+    for (palette_index, candidate) in colors.iter().enumerate() {
+        let dist = rgba_dist2(query, *candidate);
+        if dist < best_dist {
+            best_dist = dist;
+            best_index = u8::try_from(palette_index).unwrap_or(255);
+        }
+    }
+    best_index
+}
+
+fn build_kd_node(
+    colors: &[[u8; 4]],
+    order: &mut [u8],
+    depth: usize,
+    nodes: &mut Vec<KdNode>,
+) -> Option<u16> {
+    if order.is_empty() {
+        return None;
+    }
+    let axis = u8::try_from(depth % 4).unwrap_or(0);
+    order.sort_unstable_by_key(|&index| colors[usize::from(index)][usize::from(axis)]);
+    let mid = order.len() / 2;
+    let node_id = u16::try_from(nodes.len()).ok()?;
+    nodes.push(KdNode {
+        color_index: order[mid],
+        axis,
+        left: None,
+        right: None,
+    });
+    let left = build_kd_node(colors, &mut order[..mid], depth.saturating_add(1), nodes);
+    let right = build_kd_node(
+        colors,
+        &mut order[mid.saturating_add(1)..],
+        depth.saturating_add(1),
+        nodes,
+    );
+    if let Some(node) = nodes.get_mut(usize::from(node_id)) {
+        node.left = left;
+        node.right = right;
+    }
+    Some(node_id)
+}
+
+fn search_kd(
+    index: &PaletteIndex<'_>,
+    node_id: usize,
+    query: [u8; 4],
+    best_index: &mut u8,
+    best_dist: &mut u32,
+) {
+    let Some(node) = index.nodes.get(node_id) else {
+        return;
+    };
+    let color = index.colors[usize::from(node.color_index)];
+    let dist = rgba_dist2(query, color);
+    if dist < *best_dist {
+        *best_dist = dist;
+        *best_index = node.color_index;
+    }
+    let axis = usize::from(node.axis);
+    let delta = i32::from(query[axis]) - i32::from(color[axis]);
+    let (near, far) = if delta <= 0 {
+        (node.left, node.right)
+    } else {
+        (node.right, node.left)
+    };
+    if let Some(child) = near {
+        search_kd(index, usize::from(child), query, best_index, best_dist);
+    }
+    let plane = u32::try_from(delta.saturating_mul(delta)).unwrap_or(u32::MAX);
+    if let Some(child) = far
+        && plane < *best_dist
+    {
+        search_kd(index, usize::from(child), query, best_index, best_dist);
+    }
+}
+
+fn nearest_rgba_indices(image: &RgbaImage, palette: &[[u8; 4]]) -> Vec<u8> {
+    let lookup = PaletteIndex::new(palette);
+    image
+        .pixels()
+        .map(|pixel| lookup.nearest(pixel.0))
+        .collect()
+}
+
 /// Floyd–Steinberg remap so partial-alpha screenshots get speckle instead of a
-/// flat, desaturated nearest-color assignment.
+/// flat, desaturated nearest-color assignment. Only the current and next rows
+/// of diffusion error are kept, so a 4K window capture does not allocate an
+/// 800 MB error plane.
 fn dither_rgba_indices(image: &RgbaImage, palette: &[[u8; 4]]) -> Vec<u8> {
     let width = usize::try_from(image.width()).unwrap_or(0);
     let height = usize::try_from(image.height()).unwrap_or(0);
@@ -886,67 +1047,51 @@ fn dither_rgba_indices(image: &RgbaImage, palette: &[[u8; 4]]) -> Vec<u8> {
     if palette.is_empty() || width == 0 || height == 0 {
         return indices;
     }
-    let mut error = vec![[0_i16; 4]; pixel_count];
+    let lookup = PaletteIndex::new(palette);
+    let mut current_error = vec![[0_i16; 4]; width];
+    let mut next_error = vec![[0_i16; 4]; width];
     for y in 0..height {
         for x in 0..width {
             let offset = y * width + x;
             let pixel = image.get_pixel(x as u32, y as u32).0;
             let mut color = [0_i16; 4];
             for channel in 0..4 {
-                color[channel] = (i16::from(pixel[channel]) + error[offset][channel]).clamp(0, 255);
+                color[channel] =
+                    (i16::from(pixel[channel]) + current_error[x][channel]).clamp(0, 255);
             }
-            let mut best_index = 0_u8;
-            let mut best_dist = u32::MAX;
-            for (palette_index, candidate) in palette.iter().enumerate() {
-                let dist = rgba_dist2(
-                    [
-                        color[0] as u8,
-                        color[1] as u8,
-                        color[2] as u8,
-                        color[3] as u8,
-                    ],
-                    *candidate,
-                );
-                if dist < best_dist {
-                    best_dist = dist;
-                    best_index = u8::try_from(palette_index).unwrap_or(255);
-                }
-            }
+            let query = [
+                color[0] as u8,
+                color[1] as u8,
+                color[2] as u8,
+                color[3] as u8,
+            ];
+            let best_index = lookup.nearest(query);
             indices[offset] = best_index;
             let chosen = palette[usize::from(best_index)];
             let mut quant_error = [0_i16; 4];
             for channel in 0..4 {
                 quant_error[channel] = color[channel] - i16::from(chosen[channel]);
             }
-            spread_dither_error(&mut error, width, height, x, y, quant_error);
+            add_row_error(&mut current_error, x.saturating_add(1), quant_error, 7);
+            if x > 0 {
+                add_row_error(&mut next_error, x - 1, quant_error, 3);
+            }
+            add_row_error(&mut next_error, x, quant_error, 5);
+            add_row_error(&mut next_error, x.saturating_add(1), quant_error, 1);
         }
+        std::mem::swap(&mut current_error, &mut next_error);
+        next_error.fill([0; 4]);
     }
     indices
 }
 
-fn spread_dither_error(
-    error: &mut [[i16; 4]],
-    width: usize,
-    height: usize,
-    x: usize,
-    y: usize,
-    quant_error: [i16; 4],
-) {
-    let mut add = |nx: usize, ny: usize, numerator: i16| {
-        if nx >= width || ny >= height {
-            return;
-        }
-        let slot = &mut error[ny * width + nx];
-        for channel in 0..4 {
-            slot[channel] = slot[channel].saturating_add((quant_error[channel] * numerator) / 16);
-        }
+fn add_row_error(row: &mut [[i16; 4]], x: usize, quant_error: [i16; 4], numerator: i16) {
+    let Some(slot) = row.get_mut(x) else {
+        return;
     };
-    add(x.saturating_add(1), y, 7);
-    if x > 0 {
-        add(x - 1, y.saturating_add(1), 3);
+    for channel in 0..4 {
+        slot[channel] = slot[channel].saturating_add((quant_error[channel] * numerator) / 16);
     }
-    add(x, y.saturating_add(1), 5);
-    add(x.saturating_add(1), y.saturating_add(1), 1);
 }
 
 fn rgba_at(image: &RgbaImage, index: u32) -> [u8; 4] {
@@ -1131,9 +1276,9 @@ mod tests {
     use super::{
         DRAG_EXPORT_DIRECTORY, DRAG_ICON_FILE, DRAG_ICON_HEIGHT, DRAG_ICON_WIDTH,
         HISTORY_IMAGE_FILE, HISTORY_PREVIEW_FILE, clear_drag_exports_in, encode_drag_icon_png,
-        encode_png, encode_png_export, encode_preview_png, encode_thumbnail_png,
-        load_capture_history_from, png_palette_colors_for_quality, prepare_artifact_drag_in,
-        recording_destination_path, recording_destination_path_in,
+        encode_png, encode_png_export, encode_png_export_dithered, encode_preview_png,
+        encode_thumbnail_png, load_capture_history_from, png_palette_colors_for_quality,
+        prepare_artifact_drag_in, recording_destination_path, recording_destination_path_in,
         recording_replacement_destination_path_in,
         recording_replacement_destination_path_in_with_replaceable, save_encoded_capture,
         save_history_capture_in, save_history_entry_in, save_settings_to, unique_path,
@@ -1866,6 +2011,72 @@ mod tests {
         assert!(
             compressed_speckle > original_speckle * 1.4,
             "32-color PNG should show dither speckle instead of a flat remap (original={original_speckle}, compressed={compressed_speckle})"
+        );
+    }
+
+    #[test]
+    fn palette_kd_tree_matches_linear_nearest() {
+        let palette: Vec<[u8; 4]> = (0..32_u8)
+            .map(|index| {
+                [
+                    index.wrapping_mul(7),
+                    index.wrapping_mul(11),
+                    index.wrapping_mul(3),
+                    255 - index,
+                ]
+            })
+            .collect();
+        let lookup = super::PaletteIndex::new(&palette);
+        for red in (0..=255).step_by(19) {
+            for green in (0..=255).step_by(23) {
+                for blue in (0..=255).step_by(29) {
+                    let query = [red, green, blue, 200];
+                    let kd = lookup.nearest(query);
+                    let linear = super::nearest_linear(&palette, query);
+                    assert_eq!(
+                        super::rgba_dist2(query, palette[usize::from(kd)]),
+                        super::rgba_dist2(query, palette[usize::from(linear)]),
+                        "kd-tree must find a nearest color for {query:?} (kd={kd}, linear={linear})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn undithered_indexed_png_can_beat_dither_on_a_smooth_gradient() {
+        let image = RgbaImage::from_fn(240, 80, |x, _y| {
+            let t = ((x * 255) / 239) as u8;
+            Rgba([t, 48, 220_u8.saturating_sub(t / 2), 255])
+        });
+        let dithered = encode_png_export_dithered(&image, true, Some(8), true).expect("dithered");
+        let undithered =
+            encode_png_export_dithered(&image, true, Some(8), false).expect("undithered");
+        assert!(
+            undithered.len() < dithered.len(),
+            "posterized 8-color PNG should deflate smaller than a dithered one (undithered={}, dithered={})",
+            undithered.len(),
+            dithered.len()
+        );
+        assert_eq!(png_color_type(&undithered), png::ColorType::Indexed);
+    }
+
+    #[test]
+    fn partial_alpha_dither_uses_two_row_error_and_keeps_saturation() {
+        let mut image = saturated_illustration();
+        for x in 0..image.width() {
+            image.put_pixel(x, 0, Rgba([0, 0, 0, 0]));
+            image.put_pixel(x, image.height() - 1, Rgba([40, 80, 160, 120]));
+        }
+        let original_saturation = mean_saturation(&image);
+        let bytes = encode_png_export(&image, true, Some(32)).expect("partial-alpha tiny PNG");
+        assert_eq!(png_color_type(&bytes), png::ColorType::Indexed);
+        let compressed = image::load_from_memory(&bytes)
+            .expect("readable")
+            .to_rgba8();
+        assert!(
+            mean_saturation(&compressed) > original_saturation * 0.8,
+            "partial-alpha dither should not wash colors"
         );
     }
 }
