@@ -593,9 +593,12 @@
 }
 
 .custom-select-trigger > span {
+  display: flex;
   min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  align-self: stretch;
   overflow: hidden;
-  padding-block: 2px;
   line-height: var(--leading-snug);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -760,6 +763,7 @@
   min-width: 0;
   height: auto;
   flex: 1 1 auto;
+  align-self: stretch;
   border: 0 !important;
   border-radius: 0;
   padding: var(--s-3) var(--s-4);

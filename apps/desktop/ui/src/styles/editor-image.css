@@ -40,7 +40,10 @@
 .screenshot-editor input,
 .screenshot-editor select,
 .screenshot-editor textarea {
-  font: inherit;
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  letter-spacing: inherit;
 }
 
 /*
@@ -3427,7 +3430,7 @@
 }
 
 .screenshot-editor .recording-filename-input input {
-  padding: 1px 0 1px var(--s-4);
+  padding: 0 0 0 var(--s-4);
   color: var(--editor-text);
   font-size: var(--text-sm);
   line-height: var(--leading-snug);
