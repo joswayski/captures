@@ -4018,6 +4018,7 @@ fn tray_notice_caret_x(window_width: f64, window_x: f64, tray_center_x: f64) -> 
     (tray_center_x - window_x).clamp(min, max)
 }
 
+#[cfg(test)]
 fn resolve_startup_notice_placement(
     monitor: LogicalRect,
     work_area: LogicalRect,
@@ -4124,6 +4125,7 @@ fn startup_notice_fallback_edge_from_insets(
     }
 }
 
+#[cfg(test)]
 fn fallback_startup_notice(
     monitor: LogicalRect,
     work_area: LogicalRect,
@@ -4174,6 +4176,7 @@ fn fallback_tray_notice(
     }
 }
 
+#[cfg(test)]
 fn place_startup_notice(monitor: LogicalRect, tray: Option<LogicalRect>) -> StartupNoticePlacement {
     match tray {
         Some(tray) => place_tray_notice(monitor, tray, STARTUP_NOTICE_WIDTH, STARTUP_NOTICE_HEIGHT),
