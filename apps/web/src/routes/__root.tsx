@@ -63,11 +63,11 @@ function NotFound() {
 
 function RootDocument({ children }: Readonly<{ children: ReactNode }>) {
   return (
-    <html lang="en">
+    <html lang="en" style={{ colorScheme: "dark", backgroundColor: "#101014" }}>
       <head>
         <HeadContent />
       </head>
-      <body>
+      <body style={{ backgroundColor: "#101014", color: "#f2f2f4" }}>
         {children}
         <Scripts />
       </body>
