@@ -4,9 +4,10 @@ Every push to `main` runs `.github/workflows/release.yml`. Preview workflows wai
 in commit order without cancelling older pushes, run the frontend and Rust
 quality gates, and then build macOS Apple Silicon, Windows x64, and Linux x64
 packages. A Preview is published only when every job succeeds. Later runs share a
-GitHub concurrency group so they stay queued instead of cancelling an older
-build, and the wait job retries transient GitHub API errors instead of failing
-the Preview.
+GitHub concurrency group with `queue: max` so they stay queued instead of
+cancelling an older or intermediate build (`cancel-in-progress: false` alone
+still drops pending runs when a third push arrives). The wait job retries
+transient GitHub API errors instead of failing the Preview.
 
 Previews are GitHub pre-releases with CalVer versions in `YYYY.MM.DD.N` form,
 using the
