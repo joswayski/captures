@@ -25,7 +25,8 @@ use captures_recording_macos::MacRecordingSegment as NativeRecordingSegment;
 use captures_recording_xcap::XcapRecordingSegment as NativeRecordingSegment;
 use serde::{Deserialize, Serialize};
 use tauri::{
-    AppHandle, Emitter, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder, window::Color,
+    AppHandle, CursorIcon, Emitter, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder,
+    window::Color,
 };
 use tauri_plugin_opener::OpenerExt;
 use uuid::Uuid;
@@ -3314,6 +3315,8 @@ fn destroy_recording_selector(app: &AppHandle) {
     if let Err(error) = window.destroy() {
         eprintln!("failed to destroy recording selector: {error}");
     }
+    #[cfg(target_os = "macos")]
+    captures_macos_window::release_capture_cursor();
 }
 
 fn replacement_working_path(source: &Path, extension: &str) -> io::Result<PathBuf> {
@@ -3704,20 +3707,48 @@ pub fn show_recording_selector(
     Ok(())
 }
 
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn selector_cursor_icon(mode: CaptureMode) -> CursorIcon {
+    if mode == CaptureMode::Region {
+        CursorIcon::Crosshair
+    } else {
+        CursorIcon::Default
+    }
+}
+
+fn apply_selector_capture_cursor(
+    window: &tauri::WebviewWindow,
+    mode: CaptureMode,
+) -> Result<(), String> {
+    #[cfg(not(target_os = "macos"))]
+    window
+        .set_cursor_icon(selector_cursor_icon(mode))
+        .map_err(|error| error.to_string())?;
+    #[cfg(target_os = "macos")]
+    captures_macos_window::activate_capture_cursor(
+        window,
+        captures_macos_window::CaptureCursor::selector(
+            mode == CaptureMode::Region,
+            mode == CaptureMode::Window,
+        ),
+    )
+    .map_err(str::to_owned)?;
+    Ok(())
+}
+
 #[tauri::command]
 pub fn reveal_recording_selector(
     app: AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
     selection_id: String,
 ) -> Result<(), String> {
-    let available = state
+    let mode = state
         .recording_selection
         .lock()
         .as_ref()
-        .is_some_and(|selection| selection.summary.id == selection_id);
-    if !available {
-        return Err(AppError::SessionUnavailable.to_string());
-    }
+        .filter(|selection| selection.summary.id == selection_id)
+        .map(|selection| selection.summary.initial_target)
+        .ok_or_else(|| AppError::SessionUnavailable.to_string())?;
     let window = app
         .get_webview_window("recording-selector")
         .ok_or_else(|| "recording selector is unavailable".to_owned())?;
@@ -3731,14 +3762,42 @@ pub fn reveal_recording_selector(
         .map_err(|error| error.to_string())?;
     window.show().map_err(|error| error.to_string())?;
     #[cfg(target_os = "macos")]
-    focus_recording_window(&app, "recording-selector");
+    {
+        // Wait for activation on this thread so the cursor is applied after
+        // Captures is frontmost. NSCursor.set() is ignored while inactive.
+        if let Err(error) = captures_macos_window::focus_window(&window) {
+            eprintln!("failed to activate recording selector: {error}");
+        }
+    }
     // Focus is helpful for Escape-key handling, but macOS can temporarily
     // reject it for an accessory app. The selector is already visible and
     // interactive, so do not turn that harmless failure into a hidden window.
     if let Err(error) = window.set_focus() {
         eprintln!("failed to focus recording selector: {error}");
     }
+    apply_selector_capture_cursor(&window, mode)?;
     Ok(())
+}
+
+#[tauri::command]
+pub fn sync_selector_cursor(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    selection_id: String,
+    mode: CaptureMode,
+) -> Result<(), String> {
+    let available = state
+        .recording_selection
+        .lock()
+        .as_ref()
+        .is_some_and(|selection| selection.summary.id == selection_id);
+    if !available {
+        return Err(AppError::SessionUnavailable.to_string());
+    }
+    let window = app
+        .get_webview_window("recording-selector")
+        .ok_or_else(|| "recording selector is unavailable".to_owned())?;
+    apply_selector_capture_cursor(&window, mode)
 }
 
 fn recording_hud_position(display: &DisplayDescriptor) -> (f64, f64) {

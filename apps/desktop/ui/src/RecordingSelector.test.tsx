@@ -194,6 +194,7 @@ describe("RecordingSelector", () => {
       }
       if (
         command === "reveal_recording_selector"
+        || command === "sync_selector_cursor"
         || command === "capture_selection_screenshot"
         || command === "start_recording"
         || command === "cancel_recording_selection"
@@ -210,6 +211,11 @@ describe("RecordingSelector", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.clearAllMocks();
+    document.documentElement.classList.remove(
+      "capture-selector-region",
+      "capture-selector-window",
+      "capture-selector-display",
+    );
   });
 
   it("reveals after the snapshot paints and preloads microphones before first use", async () => {
@@ -271,6 +277,50 @@ describe("RecordingSelector", () => {
             highlight_clicks: true,
           }),
         }),
+      });
+    });
+  });
+
+  it("applies a capture cursor for the current target without waiting for mouse movement", async () => {
+    const { container } = render(<RecordingSelector />);
+    const snapshot = await waitFor(() => {
+      const image = container.querySelector<HTMLImageElement>(".recording-selector-snapshot");
+      expect(image).not.toBeNull();
+      return image!;
+    });
+    expect(document.documentElement).toHaveClass("capture-selector-region");
+    fireEvent.load(snapshot);
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("reveal_recording_selector", {
+        selectionId: session.id,
+      });
+    });
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("sync_selector_cursor", {
+        selectionId: session.id,
+        mode: "region",
+      });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Window" }));
+    await waitFor(() => {
+      expect(document.documentElement).toHaveClass("capture-selector-window");
+    });
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("sync_selector_cursor", {
+        selectionId: session.id,
+        mode: "window",
+      });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Full screen" }));
+    await waitFor(() => {
+      expect(document.documentElement).toHaveClass("capture-selector-display");
+    });
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("sync_selector_cursor", {
+        selectionId: session.id,
+        mode: "display",
       });
     });
   });

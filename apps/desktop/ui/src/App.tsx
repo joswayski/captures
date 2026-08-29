@@ -2026,6 +2026,18 @@ export function RecordingSelector() {
   }, [selectionId, snapshotUrl, selectorFrozen, revealSelector]);
 
   useEffect(() => {
+    if (!session?.id) return;
+    const cursorClass = `capture-selector-${targetMode}`;
+    document.documentElement.classList.add(cursorClass);
+    return () => document.documentElement.classList.remove(cursorClass);
+  }, [session?.id, targetMode]);
+
+  useEffect(() => {
+    if (!session?.id || focusVisibleSessionId !== session.id) return;
+    void invoke("sync_selector_cursor", { selectionId: session.id, mode: targetMode });
+  }, [focusVisibleSessionId, session?.id, targetMode]);
+
+  useEffect(() => {
     if (
       !session?.id
       || actionMode !== "recording"
@@ -4658,13 +4670,11 @@ function CaptureOverlay() {
   }, [sessionId]);
 
   useEffect(() => {
-    if (mode === "region" && (!sessionId || visibleSessionId !== sessionId || primingSessionId === sessionId)) {
-      return;
-    }
+    if (!sessionId) return;
     const cursorClass = `capture-${mode}-cursor`;
     document.documentElement.classList.add(cursorClass);
     return () => document.documentElement.classList.remove(cursorClass);
-  }, [mode, primingSessionId, sessionId, visibleSessionId]);
+  }, [mode, sessionId]);
 
   const rect = useMemo(
     () => (start && current ? selectionRect(start, current) : null),
@@ -4737,6 +4747,7 @@ function CaptureOverlay() {
         // focuses the overlay under cover of that frame (macOS). Fade only the
         // shade / chrome after that so open editors cannot shimmer.
         void invoke("reveal_capture_overlay", { sessionId }).then(() => {
+          void invoke("sync_capture_cursor", { sessionId });
           if (shouldPrimeRegionOverlay) regionOverlayWarmedRef.current = true;
           requestAnimationFrame(() => {
             if (activeSessionIdRef.current !== sessionId) return;
