@@ -2521,7 +2521,9 @@ describe("ScreenshotEditor", () => {
       expect(frame).toHaveClass("is-cover");
       expect(frame).not.toHaveClass("is-waiting");
 
-      fireEvent.change(screen.getByLabelText("Canvas width"), { target: { value: "1200" } });
+      // Canvas W/H only commits on blur, Enter, or a stepper; typing a draft
+      // must not hide the compare overlay on every digit.
+      fireEvent.click(screen.getByRole("button", { name: "Increase Canvas width" }));
 
       expect(screen.queryByAltText("Before compression")).not.toBeInTheDocument();
       expect(screen.queryByAltText("After compression")).not.toBeInTheDocument();
