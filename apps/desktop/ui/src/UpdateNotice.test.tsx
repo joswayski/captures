@@ -279,4 +279,30 @@ describe("UpdateNotice", () => {
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.getByRole("dialog", { name: "Updating Captures" })).toBeInTheDocument();
   });
+
+  it("blocks dismiss as soon as Update now is clicked, before download status arrives", async () => {
+    let finishInstall: (value?: undefined) => void = () => undefined;
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_update_status") return available;
+      if (command === "install_update") {
+        await new Promise<undefined>((resolve) => {
+          finishInstall = resolve;
+        });
+        return undefined;
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<UpdateNotice />);
+    fireEvent.click(await screen.findByRole("button", { name: "Update now" }));
+
+    expect(await screen.findByRole("button", { name: "Later" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Update now" })).toBeDisabled();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.getByRole("dialog", { name: "An update is available" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Later" })).toBeDisabled();
+
+    finishInstall();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Later" })).toBeEnabled());
+  });
 });

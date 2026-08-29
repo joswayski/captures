@@ -600,6 +600,7 @@ const OPEN_CAPTURES_UPDATE_WARNING =
 export function UpdateNotice() {
   const status = useUpdateStatus();
   const [actionError, setActionError] = useState("");
+  const [installing, setInstalling] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
 
   const close = () => {
@@ -608,10 +609,13 @@ export function UpdateNotice() {
   };
   const run = async (command: "check_for_updates" | "install_update") => {
     setActionError("");
+    if (command === "install_update") setInstalling(true);
     try {
       await invoke(command);
     } catch (error) {
       setActionError(String(error));
+    } finally {
+      if (command === "install_update") setInstalling(false);
     }
   };
 
@@ -652,6 +656,7 @@ export function UpdateNotice() {
           : status?.state === "up_to_date"
             ? `Version ${status.current_display_version}`
             : "This should only take a moment.";
+  const dismissBlocked = Boolean(downloading || restarting || installing);
 
   useLayoutEffect(() => {
     const root = dialogRef.current;
@@ -664,13 +669,13 @@ export function UpdateNotice() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      if (downloading || restarting) return;
+      if (dismissBlocked) return;
       event.preventDefault();
       close();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [downloading, restarting]);
+  }, [dismissBlocked]);
 
   return (
     <TrayNoticeShell>
@@ -782,12 +787,18 @@ export function UpdateNotice() {
           <button
             className="update-dismiss"
             type="button"
+            disabled={installing}
             onClick={close}
           >
             {available ? "Later" : "Close"}
           </button>
           {available && !error && (
-            <button className="primary" type="button" onClick={() => void run("install_update")}>
+            <button
+              className="primary"
+              type="button"
+              disabled={installing}
+              onClick={() => void run("install_update")}
+            >
               {available.installable ? "Update now" : "View release"}
             </button>
           )}
@@ -795,6 +806,7 @@ export function UpdateNotice() {
             <button
               className="primary"
               type="button"
+              disabled={installing}
               onClick={() =>
                 void run(
                   available || (status?.state === "error" && status.retry_install)
