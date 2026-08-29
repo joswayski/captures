@@ -205,7 +205,64 @@ export function editorTextFontStack(
   return EDITOR_TEXT_FONT_STACKS[family];
 }
 
-/** Canvas `font` shorthand. Always includes style so parsers do not drop the family list. */
+const SAMPLE_TEXT_FOR_FONT_PROBE = "Czadadsasd";
+
+function canvasFamilyWidth(
+  context: CanvasRenderingContext2D | null,
+  family: string,
+): number {
+  if (!context) return 0;
+  context.font = `700 48px ${family}`;
+  const width = context.measureText(SAMPLE_TEXT_FOR_FONT_PROBE).width;
+  return Number.isFinite(width) && width > 0 ? width : 0;
+}
+
+/**
+ * Canvas treats unknown `font-family` names (including `ui-rounded` when the
+ * OS has no rounded UI face) as missing fonts and paints Times/serif. CSS
+ * stacks still work for the inline editor. Pick the first stack entry whose
+ * glyph width is not the serif fallback (or the serif fallback when serif
+ * was requested).
+ */
+export function resolveEditorTextCanvasFamily(
+  family: EditorTextElement["fontFamily"],
+): string {
+  const stack = editorTextFontStack(family).split(",").map((part) => part.trim());
+  const generic = family === "serif" ? "serif" : "sans-serif";
+  if (typeof document === "undefined") return stack.at(-1) ?? generic;
+  const probe = createDocumentPaintCanvas(8, 8);
+  const context = probe.getContext("2d");
+  try {
+    const serifWidth = canvasFamilyWidth(context, "serif");
+    const sansWidth = canvasFamilyWidth(context, "sans-serif");
+    const preferSans = family !== "serif";
+    for (const face of stack) {
+      const width = canvasFamilyWidth(context, face);
+      if (width <= 0) continue;
+      if (
+        preferSans
+        && serifWidth > 0
+        && Math.abs(width - serifWidth) < 0.75
+        && Math.abs(width - sansWidth) > 1
+      ) {
+        continue;
+      }
+      if (
+        !preferSans
+        && sansWidth > 0
+        && Math.abs(width - sansWidth) < 0.75
+      ) {
+        continue;
+      }
+      return face;
+    }
+    return generic;
+  } finally {
+    probe.remove();
+  }
+}
+
+/** Canvas `font` shorthand using a single family canvas will actually paint. */
 export function editorTextCanvasFont(
   element: Pick<EditorTextElement, "italic" | "bold" | "fontSize" | "fontFamily">,
 ): string {
@@ -213,7 +270,7 @@ export function editorTextCanvasFont(
     element.italic ? "italic" : "normal",
     element.bold ? "700" : "400",
     `${element.fontSize}px`,
-    editorTextFontStack(element.fontFamily),
+    resolveEditorTextCanvasFamily(element.fontFamily),
   ].join(" ");
 }
 
@@ -221,10 +278,9 @@ export function editorTextCanvasFont(
 export const EDITOR_PAINT_CANVAS_HOST_ID = "captures-editor-paint-canvas-host";
 
 /**
- * Create a canvas that is attached to `document.body` while we paint. WebKit
- * (macOS Tauri) can resolve `ui-rounded` / system UI fonts on the on-screen
- * editor canvas but fall back to a different family on a detached canvas, so
- * the compression after-frame would show a different typeface on text blobs.
+ * Create a canvas that is attached to `document.body` while we paint. Keep it
+ * off-screen but at real pixel size — a 1×1 overflow clip makes some engines
+ * ignore the font stack and fillText with the serif fallback.
  */
 export function createDocumentPaintCanvas(
   width: number,
@@ -243,9 +299,6 @@ export function createDocumentPaintCanvas(
         "position:fixed",
         "left:-10000px",
         "top:0",
-        "width:1px",
-        "height:1px",
-        "overflow:hidden",
         "pointer-events:none",
       ].join(";");
       document.body.appendChild(host);

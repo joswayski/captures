@@ -80,6 +80,7 @@ import {
   annotationHasDropShadow,
   editorTextCanvasFont,
   editorTextFontStack,
+  resolveEditorTextCanvasFamily,
   createDocumentPaintCanvas,
   EDITOR_PAINT_CANVAS_HOST_ID,
   loadEditorTextFonts,
@@ -1809,15 +1810,47 @@ describe("screenshot editor geometry", () => {
       bold: true,
       fontSize: 48,
       fontFamily: "rounded",
-    })).toBe(
-      "normal 700 48px ui-rounded, 'SF Pro Rounded', 'Arial Rounded MT Bold', system-ui, sans-serif",
-    );
+    })).toMatch(/^normal 700 48px /);
     expect(editorTextCanvasFont({
       italic: true,
       bold: false,
       fontSize: 22,
       fontFamily: "serif",
-    })).toBe("italic 400 22px Georgia, 'Times New Roman', serif");
+    })).toMatch(/^italic 400 22px /);
+  });
+
+  it("skips canvas families that paint as Times when rounded was requested", () => {
+    const widths: Record<string, number> = {
+      serif: 245.41,
+      "sans-serif": 288.1,
+      "ui-rounded": 245.41,
+      "'SF Pro Rounded'": 245.41,
+      "'Arial Rounded MT Bold'": 245.41,
+      "system-ui": 291.14,
+      Georgia: 245.41,
+    };
+    const spy = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => {
+      const context = {
+        font: "10px sans-serif",
+        measureText() {
+          const family = context.font.replace(/^700 48px /, "");
+          return { width: widths[family] ?? 0 };
+        },
+      };
+      return context as unknown as CanvasRenderingContext2D;
+    });
+    try {
+      expect(resolveEditorTextCanvasFamily("rounded")).toBe("system-ui");
+      expect(editorTextCanvasFont({
+        italic: false,
+        bold: true,
+        fontSize: 48,
+        fontFamily: "rounded",
+      })).toBe("normal 700 48px system-ui");
+      expect(resolveEditorTextCanvasFamily("serif")).toBe("Georgia");
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("paints export canvases while they are attached to the document", () => {
