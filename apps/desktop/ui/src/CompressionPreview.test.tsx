@@ -149,4 +149,122 @@ describe("CompressionPreview", () => {
     expect(screen.queryByAltText("After compression")).not.toBeInTheDocument();
     expect(screen.getByText("After · Encoding…")).toBeInTheDocument();
   });
+
+  it("keeps the split when the after image is replaced during a refresh", () => {
+    const { rerender } = render(
+      <CompressionPreview
+        beforeUrl="blob:before"
+        afterUrl="blob:after-1"
+        beforeBytes={1_000_000}
+        afterBytes={250_000}
+        pending={false}
+      />,
+    );
+
+    const split = screen.getByRole("slider", { name: "Before and after comparison" });
+    fireEvent.change(split, { target: { value: "72" } });
+    expect(split).toHaveValue("72");
+
+    rerender(
+      <CompressionPreview
+        beforeUrl="blob:before"
+        afterUrl="blob:after-2"
+        beforeBytes={1_000_000}
+        afterBytes={180_000}
+        pending={false}
+      />,
+    );
+
+    expect(screen.getByRole("slider", { name: "Before and after comparison" }))
+      .toHaveValue("72");
+    expect(screen.getByAltText("After compression")).toHaveAttribute("src", "blob:after-2");
+  });
+
+  it("keeps the last comparison visible while a refresh is pending", () => {
+    render(
+      <CompressionPreview
+        className="is-embed is-cover"
+        beforeUrl="blob:before"
+        afterUrl="blob:after"
+        beforeBytes={1_000_000}
+        afterBytes={250_000}
+        pending
+      />,
+    );
+
+    const frame = screen.getByRole("group", { name: "Compression comparison" });
+    expect(frame).toHaveAttribute("data-pending", "true");
+    expect(frame).not.toHaveClass("is-waiting");
+    expect(screen.getByAltText("Before compression")).toBeInTheDocument();
+    expect(screen.getByAltText("After compression")).toBeInTheDocument();
+    expect(screen.getByText("After · Encoding…")).toBeInTheDocument();
+  });
+
+  it("shows a cursor hint on the compressed side while a drawing tool is active", () => {
+    render(
+      <CompressionPreview
+        beforeUrl="blob:before"
+        afterUrl="blob:after"
+        beforeBytes={1_000_000}
+        afterBytes={250_000}
+        pending={false}
+        afterHint="Edits apply to the original. This side updates after you finish."
+      />,
+    );
+
+    const frame = screen.getByRole("group", { name: "Compression comparison" });
+    vi.spyOn(frame, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 200,
+      bottom: 100,
+      width: 200,
+      height: 100,
+      toJSON: () => ({}),
+    });
+
+    fireEvent.pointerMove(window, { clientX: 160, clientY: 40 });
+    expect(screen.getByRole("tooltip")).toHaveTextContent(
+      "Edits apply to the original. This side updates after you finish.",
+    );
+
+    fireEvent.pointerMove(window, { clientX: 20, clientY: 40 });
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
+  it("can hide the comparison without changing save quality", () => {
+    const onDismiss = vi.fn();
+    render(
+      <CompressionPreview
+        beforeUrl="blob:before"
+        afterUrl="blob:after"
+        beforeBytes={1_000_000}
+        afterBytes={250_000}
+        pending={false}
+        onDismiss={onDismiss}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Hide compression comparison" }));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it("fades the overlay away while the editor is drawing underneath", () => {
+    render(
+      <CompressionPreview
+        className="is-embed is-cover"
+        beforeUrl="blob:before"
+        afterUrl="blob:after"
+        beforeBytes={1_000_000}
+        afterBytes={250_000}
+        pending={false}
+        suppressed
+      />,
+    );
+
+    expect(screen.getByRole("group", { name: "Compression comparison" }))
+      .toHaveClass("is-suppressed");
+  });
 });

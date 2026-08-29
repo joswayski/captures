@@ -3137,6 +3137,22 @@
   color: var(--danger-text);
 }
 
+.screenshot-show-comparison {
+  height: var(--h-md);
+  padding: 0 var(--s-4);
+  border: 1px solid var(--control-border);
+  border-radius: var(--r-md);
+  color: var(--editor-text);
+  background: var(--editor-control);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.screenshot-show-comparison:hover {
+  border-color: var(--border-strong);
+  background: var(--editor-control-hover);
+}
+
 .screenshot-save-row {
   display: grid;
   min-width: 0;

@@ -684,6 +684,8 @@ describe("RecordingEditor", () => {
 
     expect(screen.getByRole("group", { name: "Compression comparison" }))
       .toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Hide compression comparison" }))
+      .toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: "Compression preview" }))
       .not.toBeInTheDocument();
     await waitFor(() => {

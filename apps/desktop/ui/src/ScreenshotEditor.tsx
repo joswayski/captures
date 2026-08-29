@@ -342,6 +342,14 @@ function isShapeDrawTool(tool: ScreenshotTool): boolean {
     || tool === "arrow";
 }
 
+/** Tools whose strokes would not appear on the frozen compressed side. */
+function isAnnotationDrawTool(tool: ScreenshotTool): boolean {
+  return tool === "text"
+    || tool === "pen"
+    || tool === "remove-bg"
+    || isShapeDrawTool(tool);
+}
+
 /**
  * Hit-test resize / curve handles on the selected annotation.
  * Curveable strokes prefer path handles so the mid control stays easy to grab
@@ -1636,6 +1644,8 @@ export function ScreenshotEditor() {
   const [compressPreviewBeforeUrl, setCompressPreviewBeforeUrl] = useState<string | null>(null);
   const [compressPreviewBeforeBytes, setCompressPreviewBeforeBytes] = useState<number | null>(null);
   const [compressPreviewAfterBytes, setCompressPreviewAfterBytes] = useState<number | null>(null);
+  const [compressCompareDismissed, setCompressCompareDismissed] = useState(false);
+  const [compressComparePaused, setCompressComparePaused] = useState(false);
   const compressPreviewUrlsRef = useRef<{ before: string | null; after: string | null }>({
     before: null,
     after: null,
@@ -1754,13 +1764,13 @@ export function ScreenshotEditor() {
   }, []);
 
   const invalidateCompressPreview = useCallback(() => {
-    // Cancel in-flight encodes even when URLs are already empty, otherwise a
-    // stale flatten can cover the live canvas after the next keystroke/drag.
+    // Cancel in-flight encodes so a stale flatten cannot replace a newer one.
+    // Keep the last comparison on screen; the overlay veils it until the next
+    // encode lands, and the split stays where the user left it.
     compressPreviewRequestRef.current += 1;
-    revokeCompressPreviewUrls();
     setCompressPreviewPending(true);
     setCompressPreviewError("");
-  }, [revokeCompressPreviewUrls]);
+  }, []);
 
   const replaceDocument = useCallback((next: ScreenshotDocument) => {
     documentRef.current = next;
@@ -3186,6 +3196,11 @@ export function ScreenshotEditor() {
     setCanvasExpandPreview(null);
   };
 
+  const startCanvasGesture = (next: NonNullable<typeof gestureRef.current>) => {
+    gestureRef.current = next;
+    setCompressComparePaused(true);
+  };
+
   /**
    * Begin an edit gesture at a document-space point. The capture target may be
    * the canvas or the viewport chrome (so drawing can start outside the image).
@@ -3231,7 +3246,7 @@ export function ScreenshotEditor() {
           interactionRadius,
         );
         if (annotationHit?.kind === "resize") {
-          gestureRef.current = {
+          startCanvasGesture({
             kind: "resize",
             pointerId: event.pointerId,
             handle: annotationHit.handle,
@@ -3239,7 +3254,7 @@ export function ScreenshotEditor() {
             initialBounds: annotationHit.bounds,
             currentBounds: annotationHit.bounds,
             initialDocument: current,
-          };
+          });
           setResizePreviewBounds(annotationHit.bounds);
           setCanvasCursor(resizeCursor(annotationHit.handle));
           capturePointerTarget(event.currentTarget, event.pointerId);
@@ -3249,13 +3264,13 @@ export function ScreenshotEditor() {
           annotationHit?.kind === "arrow-handle"
           && selectedElement.kind === "shape"
         ) {
-          gestureRef.current = {
+          startCanvasGesture({
             kind: "arrow-handle",
             pointerId: event.pointerId,
             handle: annotationHit.handle,
             element: selectedElement,
             initialDocument: current,
-          };
+          });
           setCanvasCursor("grabbing");
           setCurveHoverTip(null);
           capturePointerTarget(event.currentTarget, event.pointerId);
@@ -3267,7 +3282,7 @@ export function ScreenshotEditor() {
       setSelectedId(element?.id ?? null);
       setCurveHoverTip(null);
       if (element) {
-        gestureRef.current = {
+        startCanvasGesture({
           kind: "move",
           pointerId: event.pointerId,
           origin: point,
@@ -3275,7 +3290,7 @@ export function ScreenshotEditor() {
           wasSelected: element.id === selectedId,
           didMove: false,
           initialDocument: current,
-        };
+        });
         setCanvasCursor("move");
         capturePointerTarget(event.currentTarget, event.pointerId);
       } else {
@@ -3297,13 +3312,13 @@ export function ScreenshotEditor() {
       });
       const rect = boundedCropRect(point, point, current, next.aspectRatio);
       setCropSelection(rect);
-      gestureRef.current = {
+      startCanvasGesture({
         kind: "crop",
         pointerId: event.pointerId,
         origin: point,
         shiftAspect: next.shiftAspect,
         lastRect: rect,
-      };
+      });
       capturePointerTarget(event.currentTarget, event.pointerId);
       return;
     }
@@ -3375,7 +3390,7 @@ export function ScreenshotEditor() {
           interactionRadius,
         );
         if (annotationHit?.kind === "resize") {
-          gestureRef.current = {
+          startCanvasGesture({
             kind: "resize",
             pointerId: event.pointerId,
             handle: annotationHit.handle,
@@ -3383,7 +3398,7 @@ export function ScreenshotEditor() {
             initialBounds: annotationHit.bounds,
             currentBounds: annotationHit.bounds,
             initialDocument: current,
-          };
+          });
           setResizePreviewBounds(annotationHit.bounds);
           setCanvasCursor(resizeCursor(annotationHit.handle));
           capturePointerTarget(event.currentTarget, event.pointerId);
@@ -3393,13 +3408,13 @@ export function ScreenshotEditor() {
           annotationHit?.kind === "arrow-handle"
           && selectedElement.kind === "shape"
         ) {
-          gestureRef.current = {
+          startCanvasGesture({
             kind: "arrow-handle",
             pointerId: event.pointerId,
             handle: annotationHit.handle,
             element: selectedElement,
             initialDocument: current,
-          };
+          });
           setCanvasCursor("grabbing");
           setCurveHoverTip(null);
           capturePointerTarget(event.currentTarget, event.pointerId);
@@ -3414,7 +3429,7 @@ export function ScreenshotEditor() {
           && selectedElement.shape === tool
           && hitTestSelectedShapeBody(selectedElement, point, interactionRadius)
         ) {
-          gestureRef.current = {
+          startCanvasGesture({
             kind: "move",
             pointerId: event.pointerId,
             origin: point,
@@ -3422,7 +3437,7 @@ export function ScreenshotEditor() {
             wasSelected: true,
             didMove: false,
             initialDocument: current,
-          };
+          });
           setCanvasCursor("move");
           setCurveHoverTip(null);
           capturePointerTarget(event.currentTarget, event.pointerId);
@@ -3464,12 +3479,12 @@ export function ScreenshotEditor() {
         opacity: 100,
         blendMode: "source-over",
       };
-    gestureRef.current = {
+    startCanvasGesture({
       kind: "draw",
       pointerId: event.pointerId,
       elementId,
       initialDocument: current,
-    };
+    });
     replaceDocument({ ...current, elements: [...current.elements, element] });
     capturePointerTarget(event.currentTarget, event.pointerId);
   };
@@ -3808,6 +3823,7 @@ export function ScreenshotEditor() {
   const finishPointer = (event: React.PointerEvent<Element>) => {
     const gesture = gestureRef.current;
     if (!gesture || gesture.pointerId !== event.pointerId) return;
+    setCompressComparePaused(false);
     setResizePreviewBounds(null);
     setAlignmentGuides([]);
     setCanvasExpandPreview(null);
@@ -4192,7 +4208,7 @@ export function ScreenshotEditor() {
       // upload the small dirty rectangle touched by the next brush segment.
       const workingCanvas = imageDataToCanvas(workingData);
       removeBgLiveRef.current = { elementId: element.id, canvas: workingCanvas };
-      gestureRef.current = {
+      startCanvasGesture({
         kind: "remove-bg",
         pointerId: event.pointerId,
         mode,
@@ -4206,7 +4222,7 @@ export function ScreenshotEditor() {
         lastPixel: pixel,
         pendingPixel: null,
         changed: stamped > 0,
-      };
+      });
       setSelectedId(element.id);
       paintEditorCanvas();
       setCanvasCursor("none");
@@ -4730,6 +4746,9 @@ export function ScreenshotEditor() {
 
   // Hooks must stay above the loading early-return.
   const canPreviewCompression = qualityMode === "compress" || qualityMode === "maximum";
+  const showCompressCompare = canPreviewCompression
+    && exportSettingsOpen
+    && !compressCompareDismissed;
 
   const loadCompressPreview = useCallback(async () => {
     if (!canPreviewCompression || !editorDocument || !artifact) return;
@@ -4786,10 +4805,6 @@ export function ScreenshotEditor() {
     } catch (reason) {
       if (compressPreviewRequestRef.current === request) {
         setCompressPreviewError(String(reason));
-        setCompressPreviewBeforeUrl(null);
-        setCompressPreviewAfterUrl(null);
-        setCompressPreviewAfterBytes(null);
-        setCompressPreviewBeforeBytes(null);
       }
     } finally {
       if (beforeUrl) URL.revokeObjectURL(beforeUrl);
@@ -4901,6 +4916,10 @@ export function ScreenshotEditor() {
       setCompressPreviewBeforeBytes(null);
       setCompressPreviewAfterBytes(null);
       setEstimateSourceBytes(null);
+      setCompressCompareDismissed(false);
+      setCompressComparePaused(false);
+    } else {
+      setCompressCompareDismissed(false);
     }
     setSaved(null);
     clearSuccess();
@@ -5252,17 +5271,20 @@ export function ScreenshotEditor() {
             }}
             onDoubleClick={handleCanvasDoubleClick}
           />
-          {canPreviewCompression && (
+          {showCompressCompare && (
             <CompressionPreview
-              className={compressPreviewBeforeUrl && compressPreviewAfterUrl
-                ? "is-embed is-cover"
-                : "is-embed is-live"}
+              className="is-embed is-cover"
               beforeUrl={compressPreviewBeforeUrl}
               afterUrl={compressPreviewAfterUrl}
               beforeBytes={compressPreviewBeforeBytes}
               afterBytes={compressPreviewAfterBytes}
               pending={compressPreviewPending}
               error={compressPreviewError}
+              suppressed={compressComparePaused || Boolean(editingTextId)}
+              afterHint={isAnnotationDrawTool(tool)
+                ? "Edits apply to the original. This side updates after you finish."
+                : undefined}
+              onDismiss={() => setCompressCompareDismissed(true)}
             />
           )}
           {editingText && inlineTextLayout && (
@@ -6767,6 +6789,18 @@ export function ScreenshotEditor() {
               )}
             </strong>
           </div>
+          {canPreviewCompression && compressCompareDismissed && (
+            <div className="screenshot-export-control">
+              <span>Comparison</span>
+              <button
+                type="button"
+                className="screenshot-show-comparison"
+                onClick={() => setCompressCompareDismissed(false)}
+              >
+                Show before / after
+              </button>
+            </div>
+          )}
           </div>
         </div>
         <div className="screenshot-save-row">
