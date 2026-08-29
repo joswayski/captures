@@ -42,6 +42,11 @@ describe("Feedback", () => {
 
     const bug = screen.getByRole("radio", { name: /Bug/i });
     expect(bug).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByLabelText("Message")).toHaveAttribute(
+      "placeholder",
+      "What happened? What did you expect?",
+    );
+    expect(screen.getByText(/follow-up question/i)).toBeInTheDocument();
 
     const submit = screen.getByRole("button", { name: "Send feedback" });
     expect(submit).toBeDisabled();
@@ -66,5 +71,20 @@ describe("Feedback", () => {
       });
     });
     expect(await screen.findByText(/feedback sent/i)).toBeInTheDocument();
+  });
+
+  it("updates the message placeholder when the category changes", () => {
+    render(<Feedback />);
+
+    const message = screen.getByLabelText("Message");
+
+    fireEvent.click(screen.getByRole("radio", { name: /Idea/i }));
+    expect(message).toHaveAttribute("placeholder", "What's the idea? What problem would it solve?");
+
+    fireEvent.click(screen.getByRole("radio", { name: /Other/i }));
+    expect(message).toHaveAttribute("placeholder", "What would you like us to know?");
+
+    fireEvent.click(screen.getByRole("radio", { name: /Bug/i }));
+    expect(message).toHaveAttribute("placeholder", "What happened? What did you expect?");
   });
 });

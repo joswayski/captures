@@ -7500,10 +7500,7 @@ function PreferencesSections({
         <div className="settings-utility-row">
           <div className="settings-utility-copy">
             <strong>Send feedback</strong>
-            <small>
-              Report a bug or share an idea. Captures includes app version and system details only —
-              never your captures.
-            </small>
+            <small>Report a bug or share an idea.</small>
           </div>
           <button className="settings-utility-action" type="button" onClick={() => void invoke("open_feedback")}>
             Open
