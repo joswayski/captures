@@ -19,6 +19,11 @@ test("website product shots cover the README stills with unique files", () => {
       "preferences",
     ],
   );
+  const readme = readFileSync(join(repoRoot, "README.md"), "utf8");
+  const readmeFiles = [...readme.matchAll(/docs\/images\/([a-z0-9-]+\.jpg)/gu)].map(
+    (match) => match[1],
+  );
+  assert.deepEqual(readmeFiles, PRODUCT_SHOTS.map((shot) => shot.file));
   assert.equal(PRODUCT_SHOTS.length, 4);
   const files = new Set(PRODUCT_SHOTS.map((shot) => shot.file));
   const ids = new Set(PRODUCT_SHOTS.map((shot) => shot.id));
