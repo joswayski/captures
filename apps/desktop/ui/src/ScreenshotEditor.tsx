@@ -4790,6 +4790,20 @@ export function ScreenshotEditor() {
     revokeCompressPreviewUrls,
   ]);
 
+  // Drop the last flatten as soon as the document changes so the live canvas
+  // is visible while the next encode is debounced. Quality-only refreshes keep
+  // the overlay and show Encoding… on the After badge.
+  useEffect(() => {
+    if (!canPreviewCompression) return;
+    if (!compressPreviewUrlsRef.current.before && !compressPreviewUrlsRef.current.after) {
+      return;
+    }
+    compressPreviewRequestRef.current += 1;
+    revokeCompressPreviewUrls();
+    setCompressPreviewPending(true);
+    setCompressPreviewError("");
+  }, [canPreviewCompression, editorDocument, imageRevision, revokeCompressPreviewUrls]);
+
   useEffect(() => {
     if (!canPreviewCompression) return;
     const timer = window.setTimeout(() => {
@@ -5233,7 +5247,9 @@ export function ScreenshotEditor() {
           />
           {canPreviewCompression && (
             <CompressionPreview
-              className="is-embed is-cover"
+              className={compressPreviewBeforeUrl && compressPreviewAfterUrl
+                ? "is-embed is-cover"
+                : "is-embed is-live"}
               beforeUrl={compressPreviewBeforeUrl}
               afterUrl={compressPreviewAfterUrl}
               beforeBytes={compressPreviewBeforeBytes}

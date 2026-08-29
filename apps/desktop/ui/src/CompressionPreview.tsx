@@ -156,6 +156,11 @@ export function CompressionPreview({
   const showAfter = Boolean(afterUrl);
   const showBeforeImage = Boolean(beforeUrl) && !liveBefore;
   const showSplit = showAfter && (liveBefore || showBeforeImage);
+  const waiting = !showAfter && !showBeforeImage;
+  const embedded = liveBefore
+    || className.includes("is-embed")
+    || className.includes("is-cover")
+    || className.includes("is-live");
   const { width: frameWidth, height: frameHeight } = frameSize;
 
   return (
@@ -164,6 +169,7 @@ export function CompressionPreview({
       className={[
         "compression-preview-frame",
         liveBefore ? "is-live" : "",
+        waiting ? "is-waiting" : "",
         className,
       ].filter(Boolean).join(" ")}
       data-pending={pending ? "true" : undefined}
@@ -200,9 +206,9 @@ export function CompressionPreview({
               alt="Before compression"
               draggable={false}
             />
-          ) : (
+          ) : waiting && !embedded ? (
             <div className="compression-preview-empty">Preparing preview…</div>
-          )}
+          ) : null}
           {showBeforeImage && (
             <div
               className="compression-preview-before-clip"

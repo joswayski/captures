@@ -2504,6 +2504,41 @@ describe("ScreenshotEditor", () => {
     }
   });
 
+  it("reveals the live canvas while compression compare refreshes after an edit", async () => {
+    const restoreCanvas = installExportableCanvas();
+    try {
+      render(<ScreenshotEditor />);
+      await screen.findByLabelText("Canvas width");
+
+      fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
+      fireEvent.click(screen.getByRole("option", { name: /Compress/ }));
+
+      const frame = await screen.findByRole("group", { name: "Compression comparison" });
+      await waitFor(() => {
+        expect(screen.getByAltText("Before compression")).toBeInTheDocument();
+        expect(screen.getByAltText("After compression")).toBeInTheDocument();
+      });
+      expect(frame).toHaveClass("is-cover");
+      expect(frame).not.toHaveClass("is-waiting");
+
+      fireEvent.change(screen.getByLabelText("Canvas width"), { target: { value: "1200" } });
+
+      expect(screen.queryByAltText("Before compression")).not.toBeInTheDocument();
+      expect(screen.queryByAltText("After compression")).not.toBeInTheDocument();
+      expect(frame).toHaveClass("is-live");
+      expect(frame).not.toHaveClass("is-cover");
+      expect(screen.getByText("After · Encoding…")).toBeInTheDocument();
+
+      await waitFor(() => {
+        expect(screen.getByAltText("Before compression")).toBeInTheDocument();
+        expect(screen.getByAltText("After compression")).toBeInTheDocument();
+      });
+      expect(frame).toHaveClass("is-cover");
+    } finally {
+      restoreCanvas();
+    }
+  });
+
   it("uses the original file size when export is original + preserve quality and unedited", async () => {
     const toBlob = vi.fn((callback: BlobCallback) => {
       callback(new Blob([new Uint8Array(999_999)], { type: "image/png" }));

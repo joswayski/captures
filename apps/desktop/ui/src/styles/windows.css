@@ -2373,6 +2373,10 @@
   pointer-events: none;
 }
 
+.compression-preview-frame.is-cover.is-waiting {
+  background-color: transparent;
+}
+
 .compression-preview-frame.is-cover .compression-preview-after-clip {
   pointer-events: none;
 }

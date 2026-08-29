@@ -129,4 +129,24 @@ describe("CompressionPreview", () => {
     expect(screen.queryByRole("slider", { name: "Before and after comparison" }))
       .not.toBeInTheDocument();
   });
+
+  it("does not cover the editor while the before/after images are empty", () => {
+    render(
+      <CompressionPreview
+        className="is-embed is-cover"
+        beforeUrl={null}
+        afterUrl={null}
+        beforeBytes={null}
+        afterBytes={null}
+        pending
+      />,
+    );
+
+    const frame = screen.getByRole("group", { name: "Compression comparison" });
+    expect(frame).toHaveClass("is-cover", "is-waiting");
+    expect(screen.queryByText("Preparing preview…")).not.toBeInTheDocument();
+    expect(screen.queryByAltText("Before compression")).not.toBeInTheDocument();
+    expect(screen.queryByAltText("After compression")).not.toBeInTheDocument();
+    expect(screen.getByText("After · Encoding…")).toBeInTheDocument();
+  });
 });
