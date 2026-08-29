@@ -709,14 +709,28 @@ export function installPreviewBackend(): void {
       return mockScreenshotExportBytes(payload);
     }
     if (command === "preview_screenshot_export") {
-      const quality = Number(
-        (payload as { jpegQuality?: number } | undefined)?.jpegQuality ?? 70,
-      );
+      const request = payload as {
+        imagePng?: number[];
+        jpegQuality?: number;
+        format?: string;
+      } | undefined;
+      // Use the flattened editor canvas so text blobs keep the same glyphs as
+      // the live before view. Falling back to the sample still would overlay a
+      // different image and look like the typeface changed at the split.
+      const imagePng = request?.imagePng;
+      if (imagePng && imagePng.length > 0) {
+        return {
+          bytes: imagePng,
+          sizeBytes: Math.max(256, Math.round(imagePng.length * 0.4)),
+          format: request?.format ?? "png",
+        };
+      }
+      const quality = Number(request?.jpegQuality ?? 70);
       const bytes = await samplePreviewPng(Math.max(0.2, quality / 100));
       return {
         bytes,
         sizeBytes: mockScreenshotExportBytes(payload),
-        format: (payload as { format?: string } | undefined)?.format ?? "png",
+        format: request?.format ?? "png",
       };
     }
     if (command === "preview_recording_export") {

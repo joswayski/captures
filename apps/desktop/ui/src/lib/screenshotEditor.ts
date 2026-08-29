@@ -186,6 +186,143 @@ export type EditorTextElement = EditorElementBase & {
   roundedBackground: boolean;
 };
 
+/**
+ * CSS/canvas font stacks for screenshot text. Canvas fillText on a detached
+ * canvas (never inserted into the document) can ignore generic families such
+ * as `ui-rounded` and fall back to a different face than the live editor.
+ */
+export const EDITOR_TEXT_FONT_STACKS = {
+  sans: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+  serif: "Georgia, 'Times New Roman', serif",
+  mono: "'SFMono-Regular', Consolas, monospace",
+  rounded:
+    "ui-rounded, 'SF Pro Rounded', 'Arial Rounded MT Bold', system-ui, sans-serif",
+} as const;
+
+export function editorTextFontStack(
+  family: EditorTextElement["fontFamily"],
+): string {
+  return EDITOR_TEXT_FONT_STACKS[family];
+}
+
+const SAMPLE_TEXT_FOR_FONT_PROBE = "Czadadsasd";
+
+function canvasFamilyWidth(
+  context: CanvasRenderingContext2D | null,
+  family: string,
+): number {
+  if (!context) return 0;
+  context.font = `700 48px ${family}`;
+  const width = context.measureText(SAMPLE_TEXT_FOR_FONT_PROBE).width;
+  return Number.isFinite(width) && width > 0 ? width : 0;
+}
+
+/**
+ * Canvas treats unknown `font-family` names (including `ui-rounded` when the
+ * OS has no rounded UI face) as missing fonts and paints Times/serif. CSS
+ * stacks still work for the inline editor. Pick the first stack entry whose
+ * glyph width is not the serif fallback (or the serif fallback when serif
+ * was requested).
+ */
+export function resolveEditorTextCanvasFamily(
+  family: EditorTextElement["fontFamily"],
+): string {
+  const stack = editorTextFontStack(family).split(",").map((part) => part.trim());
+  const generic = family === "serif" ? "serif" : "sans-serif";
+  if (typeof document === "undefined") return stack.at(-1) ?? generic;
+  const probe = createDocumentPaintCanvas(8, 8);
+  const context = probe.getContext("2d");
+  try {
+    const serifWidth = canvasFamilyWidth(context, "serif");
+    const sansWidth = canvasFamilyWidth(context, "sans-serif");
+    const preferSans = family !== "serif";
+    for (const face of stack) {
+      const width = canvasFamilyWidth(context, face);
+      if (width <= 0) continue;
+      if (
+        preferSans
+        && serifWidth > 0
+        && Math.abs(width - serifWidth) < 0.75
+        && Math.abs(width - sansWidth) > 1
+      ) {
+        continue;
+      }
+      if (
+        !preferSans
+        && sansWidth > 0
+        && Math.abs(width - sansWidth) < 0.75
+      ) {
+        continue;
+      }
+      return face;
+    }
+    return generic;
+  } finally {
+    probe.remove();
+  }
+}
+
+/** Canvas `font` shorthand using a single family canvas will actually paint. */
+export function editorTextCanvasFont(
+  element: Pick<EditorTextElement, "italic" | "bold" | "fontSize" | "fontFamily">,
+): string {
+  return [
+    element.italic ? "italic" : "normal",
+    element.bold ? "700" : "400",
+    `${element.fontSize}px`,
+    resolveEditorTextCanvasFamily(element.fontFamily),
+  ].join(" ");
+}
+
+/** Hidden host so export canvases stay in the document while text is painted. */
+export const EDITOR_PAINT_CANVAS_HOST_ID = "captures-editor-paint-canvas-host";
+
+/**
+ * Create a canvas that is attached to `document.body` while we paint. Keep it
+ * off-screen but at real pixel size — a 1×1 overflow clip makes some engines
+ * ignore the font stack and fillText with the serif fallback.
+ */
+export function createDocumentPaintCanvas(
+  width: number,
+  height: number,
+): HTMLCanvasElement {
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(width));
+  canvas.height = Math.max(1, Math.round(height));
+  if (document.body) {
+    let host = document.getElementById(EDITOR_PAINT_CANVAS_HOST_ID);
+    if (!host) {
+      host = document.createElement("div");
+      host.id = EDITOR_PAINT_CANVAS_HOST_ID;
+      host.setAttribute("aria-hidden", "true");
+      host.style.cssText = [
+        "position:fixed",
+        "left:-10000px",
+        "top:0",
+        "pointer-events:none",
+      ].join(";");
+      document.body.appendChild(host);
+    }
+    host.appendChild(canvas);
+  }
+  return canvas;
+}
+
+export async function loadEditorTextFonts(): Promise<void> {
+  const fonts = typeof document === "undefined" ? undefined : document.fonts;
+  if (!fonts?.load) return;
+  const specs = Object.values(EDITOR_TEXT_FONT_STACKS).flatMap((stack) => [
+    `normal 400 64px ${stack}`,
+    `normal 700 64px ${stack}`,
+    `italic 400 64px ${stack}`,
+    `italic 700 64px ${stack}`,
+  ]);
+  await Promise.all(specs.map((spec) => fonts.load(spec).catch(() => [])));
+  if (fonts.ready) {
+    await fonts.ready.catch(() => undefined);
+  }
+}
+
 export type TextStylePreset =
   | "standard"
   | "rounded"

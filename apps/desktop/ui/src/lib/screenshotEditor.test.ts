@@ -78,6 +78,12 @@ import {
   scaleArrowStrokeForLength,
   annotationDropShadowPad,
   annotationHasDropShadow,
+  editorTextCanvasFont,
+  editorTextFontStack,
+  resolveEditorTextCanvasFamily,
+  createDocumentPaintCanvas,
+  EDITOR_PAINT_CANVAS_HOST_ID,
+  loadEditorTextFonts,
   type EditorImageElement,
   type EditorShapeElement,
   type EditorTextElement,
@@ -1794,6 +1800,91 @@ describe("screenshot editor geometry", () => {
         bold: true,
       });
       expect(textStylePreset(styled)).toBe(preset);
+    }
+  });
+
+  it("builds a complete canvas font shorthand so rounded blobs keep their family", () => {
+    expect(editorTextFontStack("rounded")).toContain("ui-rounded");
+    expect(editorTextCanvasFont({
+      italic: false,
+      bold: true,
+      fontSize: 48,
+      fontFamily: "rounded",
+    })).toMatch(/^normal 700 48px /);
+    expect(editorTextCanvasFont({
+      italic: true,
+      bold: false,
+      fontSize: 22,
+      fontFamily: "serif",
+    })).toMatch(/^italic 400 22px /);
+  });
+
+  it("skips canvas families that paint as Times when rounded was requested", () => {
+    const widths: Record<string, number> = {
+      serif: 245.41,
+      "sans-serif": 288.1,
+      "ui-rounded": 245.41,
+      "'SF Pro Rounded'": 245.41,
+      "'Arial Rounded MT Bold'": 245.41,
+      "system-ui": 291.14,
+      Georgia: 245.41,
+    };
+    const spy = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => {
+      const context = {
+        font: "10px sans-serif",
+        measureText() {
+          const family = context.font.replace(/^700 48px /, "");
+          return { width: widths[family] ?? 0 };
+        },
+      };
+      return context as unknown as CanvasRenderingContext2D;
+    });
+    try {
+      expect(resolveEditorTextCanvasFamily("rounded")).toBe("system-ui");
+      expect(editorTextCanvasFont({
+        italic: false,
+        bold: true,
+        fontSize: 48,
+        fontFamily: "rounded",
+      })).toBe("normal 700 48px system-ui");
+      expect(resolveEditorTextCanvasFamily("serif")).toBe("Georgia");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("paints export canvases while they are attached to the document", () => {
+    const canvas = createDocumentPaintCanvas(12, 8);
+    const host = document.getElementById(EDITOR_PAINT_CANVAS_HOST_ID);
+    expect(host).not.toBeNull();
+    expect(canvas.parentElement).toBe(host);
+    expect(canvas.width).toBe(12);
+    expect(canvas.height).toBe(8);
+    canvas.remove();
+    host?.remove();
+  });
+
+  it("asks the document to load every text family before measuring", async () => {
+    const loaded: string[] = [];
+    const fonts = {
+      load: vi.fn(async (spec: string) => {
+        loaded.push(spec);
+        return [];
+      }),
+      ready: Promise.resolve(),
+    };
+    const original = Object.getOwnPropertyDescriptor(document, "fonts");
+    Object.defineProperty(document, "fonts", {
+      configurable: true,
+      value: fonts,
+    });
+    try {
+      await loadEditorTextFonts();
+      expect(fonts.load).toHaveBeenCalled();
+      expect(loaded.some((spec) => spec.includes("ui-rounded"))).toBe(true);
+      expect(loaded.some((spec) => spec.includes("Georgia"))).toBe(true);
+    } finally {
+      if (original) Object.defineProperty(document, "fonts", original);
     }
   });
 

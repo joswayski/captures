@@ -209,6 +209,7 @@ describe("ScreenshotEditor", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.clearAllMocks();
+    document.getElementById("captures-editor-paint-canvas-host")?.remove();
   });
 
   it("restores a saved editor draft and can discard it", async () => {
@@ -2498,6 +2499,43 @@ describe("ScreenshotEditor", () => {
       .not.toBeInTheDocument();
     expect(screen.queryByRole("combobox", { name: "Compression quality" }))
       .not.toBeInTheDocument();
+    } finally {
+      restoreCanvas();
+    }
+  });
+
+  it("reveals the live canvas while compression compare refreshes after an edit", async () => {
+    const restoreCanvas = installExportableCanvas();
+    try {
+      render(<ScreenshotEditor />);
+      await screen.findByLabelText("Canvas width");
+
+      fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
+      fireEvent.click(screen.getByRole("option", { name: /Compress/ }));
+
+      const frame = await screen.findByRole("group", { name: "Compression comparison" });
+      await waitFor(() => {
+        expect(screen.getByAltText("Before compression")).toBeInTheDocument();
+        expect(screen.getByAltText("After compression")).toBeInTheDocument();
+      });
+      expect(frame).toHaveClass("is-cover");
+      expect(frame).not.toHaveClass("is-waiting");
+
+      // Canvas W/H only commits on blur, Enter, or a stepper; typing a draft
+      // must not hide the compare overlay on every digit.
+      fireEvent.click(screen.getByRole("button", { name: "Increase Canvas width" }));
+
+      expect(screen.queryByAltText("Before compression")).not.toBeInTheDocument();
+      expect(screen.queryByAltText("After compression")).not.toBeInTheDocument();
+      expect(frame).toHaveClass("is-live");
+      expect(frame).not.toHaveClass("is-cover");
+      expect(screen.getByText("After · Encoding…")).toBeInTheDocument();
+
+      await waitFor(() => {
+        expect(screen.getByAltText("Before compression")).toBeInTheDocument();
+        expect(screen.getByAltText("After compression")).toBeInTheDocument();
+      });
+      expect(frame).toHaveClass("is-cover");
     } finally {
       restoreCanvas();
     }
