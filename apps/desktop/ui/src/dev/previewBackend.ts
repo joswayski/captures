@@ -650,8 +650,24 @@ async function samplePreviewPng(quality = 0.92): Promise<number[]> {
   canvas.height = image.naturalHeight || 500;
   const context = canvas.getContext("2d");
   if (!context) return [];
-  if (quality < 0.8) context.filter = "saturate(0.65) contrast(1.15)";
-  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  // Match the real encoder: keep hues and show spatial loss (blockiness /
+  // pixelation) instead of a global desaturation wash.
+  if (quality < 0.85) {
+    const block = Math.max(2, Math.round((1 - quality) * 10));
+    const smallWidth = Math.max(1, Math.round(canvas.width / block));
+    const smallHeight = Math.max(1, Math.round(canvas.height / block));
+    const scratch = document.createElement("canvas");
+    scratch.width = smallWidth;
+    scratch.height = smallHeight;
+    const scratchContext = scratch.getContext("2d");
+    if (!scratchContext) return [];
+    scratchContext.imageSmoothingEnabled = false;
+    scratchContext.drawImage(image, 0, 0, smallWidth, smallHeight);
+    context.imageSmoothingEnabled = false;
+    context.drawImage(scratch, 0, 0, canvas.width, canvas.height);
+  } else {
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  }
   const blob = await new Promise<Blob | null>((resolve) => {
     canvas.toBlob(resolve, "image/jpeg", quality);
   });

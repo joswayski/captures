@@ -6,10 +6,7 @@ use std::{
 };
 
 use chrono::{Local, Utc};
-use image::{
-    ExtendedColorType, ImageEncoder, ImageFormat, Rgb, RgbImage, RgbaImage,
-    codecs::jpeg::JpegEncoder,
-};
+use image::{ImageFormat, Rgb, RgbImage, RgbaImage};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use uuid::Uuid;
@@ -853,14 +850,23 @@ fn encode_export_with_limit(
 }
 
 fn encode_jpeg(image: &RgbImage, quality: u8) -> Result<Vec<u8>, AppError> {
+    let width = u16::try_from(image.width())
+        .map_err(|_| AppError::Image("JPEG width is too large to encode".to_owned()))?;
+    let height = u16::try_from(image.height())
+        .map_err(|_| AppError::Image("JPEG height is too large to encode".to_owned()))?;
     let mut bytes = Vec::new();
-    JpegEncoder::new_with_quality(&mut bytes, quality.clamp(40, 100))
-        .write_image(
-            image.as_raw(),
-            image.width(),
-            image.height(),
-            ExtendedColorType::Rgb8,
-        )
+    let mut encoder = jpeg_encoder::Encoder::new(&mut bytes, quality.clamp(40, 100));
+    // Keep full-resolution chroma and use the same quant table for luma and
+    // color. The previous encoder discarded chroma first, so Compress looked
+    // faded while edges stayed crisp. Matched tables show blocking / ringing
+    // instead of a color wash.
+    encoder.set_sampling_factor(jpeg_encoder::SamplingFactor::F_1_1);
+    encoder.set_quantization_tables(
+        jpeg_encoder::QuantizationTableType::ImageMagick,
+        jpeg_encoder::QuantizationTableType::ImageMagick,
+    );
+    encoder
+        .encode(image.as_raw(), width, height, jpeg_encoder::ColorType::Rgb)
         .map_err(|error| AppError::Image(error.to_string()))?;
     Ok(bytes)
 }
@@ -878,9 +884,18 @@ fn encode_webp(image: &RgbaImage, quality: Option<u8>) -> Result<Vec<u8>, AppErr
         None => encoder
             .encode_simple(true, 100.0)
             .map_err(|error| AppError::Image(format!("WebP lossless encode failed: {error:?}")))?,
-        Some(q) => encoder
-            .encode_simple(false, f32::from(q.clamp(1, 100)))
-            .map_err(|error| AppError::Image(format!("WebP lossy encode failed: {error:?}")))?,
+        Some(q) => {
+            let mut config = webp::WebPConfig::new()
+                .map_err(|error| AppError::Image(format!("WebP config failed: {error:?}")))?;
+            config.lossless = 0;
+            config.quality = f32::from(q.clamp(1, 100));
+            // Sharp RGB→YUV keeps saturated colors instead of the default
+            // conversion's grayish shift; remaining loss is spatial.
+            config.use_sharp_yuv = 1;
+            encoder
+                .encode_advanced(&config)
+                .map_err(|error| AppError::Image(format!("WebP lossy encode failed: {error:?}")))?
+        }
     };
     Ok(encoded.to_vec())
 }
@@ -1232,6 +1247,86 @@ mod tests {
         let output = composite_onto_white(&sample());
         assert_eq!(output.get_pixel(0, 0).0, [255, 127, 127]);
         assert_eq!(output.get_pixel(1, 0).0, [20, 80, 160]);
+    }
+
+    fn mean_saturation_rgb(image: &image::RgbImage) -> f64 {
+        let mut total = 0.0_f64;
+        let mut count = 0.0_f64;
+        for pixel in image.pixels() {
+            let red = f64::from(pixel[0]);
+            let green = f64::from(pixel[1]);
+            let blue = f64::from(pixel[2]);
+            let max = red.max(green).max(blue);
+            let min = red.min(green).min(blue);
+            if max > 0.0 {
+                total += (max - min) / max;
+                count += 1.0;
+            }
+        }
+        total / count.max(1.0)
+    }
+
+    fn saturated_orange() -> RgbaImage {
+        RgbaImage::from_fn(96, 64, |x, _y| {
+            let t = f64::from(x) / 95.0;
+            Rgba([
+                235,
+                (70.0 + 40.0 * (1.0 - t)) as u8,
+                (18.0 + 12.0 * t) as u8,
+                255,
+            ])
+        })
+    }
+
+    #[test]
+    fn jpeg_compress_keeps_saturated_chroma_instead_of_washing_it() {
+        let image = saturated_orange();
+        let original = composite_onto_white(&image);
+        let original_saturation = mean_saturation_rgb(&original);
+        let bytes = encode_export(
+            &image,
+            ScreenshotEditFormat::Jpeg,
+            ScreenshotExportQualityMode::Compress,
+            55,
+            None,
+        )
+        .expect("tiny JPEG");
+        let decoded = image::load_from_memory_with_format(&bytes, ImageFormat::Jpeg)
+            .expect("tiny JPEG is readable")
+            .to_rgb8();
+        let compressed_saturation = mean_saturation_rgb(&decoded);
+        let center = decoded.get_pixel(48, 32).0;
+        assert!(
+            center[0] > center[1].saturating_add(80),
+            "orange should stay clearly redder than green after JPEG compress ({center:?})"
+        );
+        assert!(
+            compressed_saturation > original_saturation * 0.85,
+            "JPEG compress should not discard chroma first (original={original_saturation}, compressed={compressed_saturation})"
+        );
+    }
+
+    #[test]
+    fn lossy_webp_compress_keeps_saturated_chroma() {
+        let image = saturated_orange();
+        let original = composite_onto_white(&image);
+        let original_saturation = mean_saturation_rgb(&original);
+        let bytes = encode_export(
+            &image,
+            ScreenshotEditFormat::Webp,
+            ScreenshotExportQualityMode::Compress,
+            55,
+            None,
+        )
+        .expect("tiny WebP");
+        let decoded = image::load_from_memory_with_format(&bytes, ImageFormat::WebP)
+            .expect("tiny WebP is readable")
+            .to_rgb8();
+        let compressed_saturation = mean_saturation_rgb(&decoded);
+        assert!(
+            compressed_saturation > original_saturation * 0.85,
+            "lossy WebP should keep saturated hues (original={original_saturation}, compressed={compressed_saturation})"
+        );
     }
 
     #[test]

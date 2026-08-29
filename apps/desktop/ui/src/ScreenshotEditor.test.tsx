@@ -2421,6 +2421,9 @@ describe("ScreenshotEditor", () => {
       .toBeInTheDocument();
 
     fireEvent.click(quality);
+    expect(screen.getByRole("option", { name: /Tiny/ })).toHaveTextContent(
+      "Smallest PNG with the most visible dithering.",
+    );
     fireEvent.click(screen.getByRole("option", { name: /Tiny/ }));
     expect(quality).toHaveTextContent("Tiny");
     await waitFor(() => {

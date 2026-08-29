@@ -7,10 +7,10 @@ use std::{
 
 use chrono::{DateTime, Duration, Local, Utc};
 use image::{
-    ExtendedColorType, ImageEncoder, RgbImage, RgbaImage,
-    codecs::png::{CompressionType, FilterType, PngEncoder},
+    RgbImage, RgbaImage,
+    codecs::png::{CompressionType, FilterType},
 };
-use quantette::{ImageBuf, PaletteSize, Pipeline};
+use quantette::{ImageBuf, PaletteSize, Pipeline, dither::FloydSteinberg};
 use uuid::Uuid;
 
 use crate::{
@@ -579,10 +579,11 @@ pub fn encode_png(image: &RgbaImage) -> Result<Vec<u8>, AppError> {
 ///
 /// - Preserve (`compact = false`): fast lossless packing, identical pixels.
 /// - Compact without a color budget: stronger lossless packing only.
-/// - Compact with `max_colors`: lossy **color quantization** (fewer colors), then
-///   an indexed PNG (1 byte/pixel) with optional `tRNS` for alpha. Window
-///   shadows and transparent canvas padding stay palettized instead of falling
-///   back to 32-bit RGBA.
+/// - Compact with `max_colors`: lossy **dithered** color quantization, then an
+///   indexed PNG (1 byte/pixel) with optional `tRNS` for alpha. Window shadows
+///   and transparent canvas padding stay palettized instead of falling back to
+///   32-bit RGBA. Files are tagged sRGB so the compressed preview does not pick
+///   up a gamma wash on color-managed displays.
 pub fn encode_png_export(
     image: &RgbaImage,
     compact: bool,
@@ -731,8 +732,14 @@ fn quantette_rgb(
             "could not prepare image for PNG compression: {error}"
         ))
     })?;
+    // Full error diffusion: optical mixing keeps hues closer to the original
+    // while the leftover error reads as speckle / pixelation instead of a
+    // global wash. Disable dedup — it fights dithering on busy screenshots.
+    let ditherer = FloydSteinberg::with_error_diffusion(1.0).unwrap_or_else(FloydSteinberg::new);
     let indexed = Pipeline::new()
         .palette_size(PaletteSize::from_u16_clamped(max_colors.clamp(2, 256)))
+        .ditherer(ditherer)
+        .dedup(false)
         .parallel(true)
         .input_image(quant_image.as_ref())
         .output_srgb8_indexed_image();
@@ -775,19 +782,13 @@ fn median_cut_rgba(image: &RgbaImage, max_colors: u16) -> (Vec<[u8; 4]>, Vec<u8>
     }
 
     let mut palette = Vec::with_capacity(boxes.len());
-    let mut indices = vec![0_u8; pixel_count];
-    for (box_index, color_box) in boxes.iter().enumerate() {
-        let palette_index = u8::try_from(box_index).unwrap_or(255);
-        palette.push(box_centroid(image, &color_box.members));
-        for &member in &color_box.members {
-            if let Some(slot) = indices.get_mut(member as usize) {
-                *slot = palette_index;
-            }
-        }
+    for color_box in &boxes {
+        palette.push(box_representative(image, &color_box.members));
     }
     if palette.is_empty() {
         palette.push([0, 0, 0, 255]);
     }
+    let indices = dither_rgba_indices(image, &palette);
     (palette, indices)
 }
 
@@ -849,11 +850,124 @@ fn box_centroid(image: &RgbaImage, members: &[u32]) -> [u8; 4] {
     ]
 }
 
+/// Prefer a real pixel from the box over the RGB mean. Averages of saturated
+/// colors drift toward gray; a medoid keeps the original hue.
+fn box_representative(image: &RgbaImage, members: &[u32]) -> [u8; 4] {
+    if members.is_empty() {
+        return [0, 0, 0, 255];
+    }
+    let centroid = box_centroid(image, members);
+    let mut best = members[0];
+    let mut best_dist = u32::MAX;
+    for &member in members {
+        let dist = rgba_dist2(rgba_at(image, member), centroid);
+        if dist < best_dist {
+            best_dist = dist;
+            best = member;
+        }
+    }
+    rgba_at(image, best)
+}
+
+fn rgba_dist2(left: [u8; 4], right: [u8; 4]) -> u32 {
+    (0..4).fold(0_u32, |sum, channel| {
+        let delta = i32::from(left[channel]) - i32::from(right[channel]);
+        sum.saturating_add(u32::try_from(delta.saturating_mul(delta)).unwrap_or(u32::MAX))
+    })
+}
+
+/// Floyd–Steinberg remap so partial-alpha screenshots get speckle instead of a
+/// flat, desaturated nearest-color assignment.
+fn dither_rgba_indices(image: &RgbaImage, palette: &[[u8; 4]]) -> Vec<u8> {
+    let width = usize::try_from(image.width()).unwrap_or(0);
+    let height = usize::try_from(image.height()).unwrap_or(0);
+    let pixel_count = width.saturating_mul(height);
+    let mut indices = vec![0_u8; pixel_count];
+    if palette.is_empty() || width == 0 || height == 0 {
+        return indices;
+    }
+    let mut error = vec![[0_i16; 4]; pixel_count];
+    for y in 0..height {
+        for x in 0..width {
+            let offset = y * width + x;
+            let pixel = image.get_pixel(x as u32, y as u32).0;
+            let mut color = [0_i16; 4];
+            for channel in 0..4 {
+                color[channel] = (i16::from(pixel[channel]) + error[offset][channel]).clamp(0, 255);
+            }
+            let mut best_index = 0_u8;
+            let mut best_dist = u32::MAX;
+            for (palette_index, candidate) in palette.iter().enumerate() {
+                let dist = rgba_dist2(
+                    [
+                        color[0] as u8,
+                        color[1] as u8,
+                        color[2] as u8,
+                        color[3] as u8,
+                    ],
+                    *candidate,
+                );
+                if dist < best_dist {
+                    best_dist = dist;
+                    best_index = u8::try_from(palette_index).unwrap_or(255);
+                }
+            }
+            indices[offset] = best_index;
+            let chosen = palette[usize::from(best_index)];
+            let mut quant_error = [0_i16; 4];
+            for channel in 0..4 {
+                quant_error[channel] = color[channel] - i16::from(chosen[channel]);
+            }
+            spread_dither_error(&mut error, width, height, x, y, quant_error);
+        }
+    }
+    indices
+}
+
+fn spread_dither_error(
+    error: &mut [[i16; 4]],
+    width: usize,
+    height: usize,
+    x: usize,
+    y: usize,
+    quant_error: [i16; 4],
+) {
+    let mut add = |nx: usize, ny: usize, numerator: i16| {
+        if nx >= width || ny >= height {
+            return;
+        }
+        let slot = &mut error[ny * width + nx];
+        for channel in 0..4 {
+            slot[channel] = slot[channel].saturating_add((quant_error[channel] * numerator) / 16);
+        }
+    };
+    add(x.saturating_add(1), y, 7);
+    if x > 0 {
+        add(x - 1, y.saturating_add(1), 3);
+    }
+    add(x, y.saturating_add(1), 5);
+    add(x.saturating_add(1), y.saturating_add(1), 1);
+}
+
 fn rgba_at(image: &RgbaImage, index: u32) -> [u8; 4] {
     let width = image.width().max(1);
     let x = index % width;
     let y = index / width;
     image.get_pixel(x, y).0
+}
+
+/// Tag PNG output as sRGB with matching gAMA/cHRM. Untagged PNGs are treated as
+/// generic RGB (gamma 1.8) on macOS ColorSync, so the compressed `<img>` preview
+/// looks washed out next to the sRGB canvas even when the pixels did not change.
+fn mark_png_as_srgb(encoder: &mut png::Encoder<&mut Vec<u8>>) {
+    encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
+    encoder.set_source_gamma(png::ScaledFloat::from_scaled(45_455));
+    encoder.set_source_chromaticities(png::SourceChromaticities::new(
+        (0.3127, 0.3290),
+        (0.6400, 0.3300),
+        (0.3000, 0.6000),
+        (0.1500, 0.0600),
+    ));
 }
 
 fn encode_indexed_png(
@@ -888,6 +1002,7 @@ fn encode_indexed_png(
         // filters like Paeth add noise and inflate the deflate stream, which
         // could make a "compressed" PNG larger than the original.
         encoder.set_filter(png::FilterType::NoFilter);
+        mark_png_as_srgb(&mut encoder);
         encoder.set_palette(palette);
         if has_transparency {
             encoder.set_trns(trns);
@@ -961,14 +1076,35 @@ fn encode_png_with_quality(
     filter: FilterType,
 ) -> Result<Vec<u8>, AppError> {
     let mut bytes = Vec::new();
-    PngEncoder::new_with_quality(&mut bytes, compression, filter)
-        .write_image(
-            image.as_raw(),
-            image.width(),
-            image.height(),
-            ExtendedColorType::Rgba8,
-        )
-        .map_err(|error| AppError::Image(error.to_string()))?;
+    {
+        let mut encoder = png::Encoder::new(&mut bytes, image.width(), image.height());
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_compression(match compression {
+            CompressionType::Best => png::Compression::Best,
+            CompressionType::Default => png::Compression::Default,
+            _ => png::Compression::Fast,
+        });
+        match filter {
+            FilterType::Adaptive => {
+                encoder.set_adaptive_filter(png::AdaptiveFilterType::Adaptive);
+                encoder.set_filter(png::FilterType::Paeth);
+            }
+            FilterType::Sub => encoder.set_filter(png::FilterType::Sub),
+            FilterType::NoFilter => encoder.set_filter(png::FilterType::NoFilter),
+            FilterType::Up => encoder.set_filter(png::FilterType::Up),
+            FilterType::Avg => encoder.set_filter(png::FilterType::Avg),
+            FilterType::Paeth => encoder.set_filter(png::FilterType::Paeth),
+            _ => encoder.set_filter(png::FilterType::Paeth),
+        }
+        mark_png_as_srgb(&mut encoder);
+        let mut writer = encoder
+            .write_header()
+            .map_err(|error| AppError::Image(error.to_string()))?;
+        writer
+            .write_image_data(image.as_raw())
+            .map_err(|error| AppError::Image(error.to_string()))?;
+    }
     Ok(bytes)
 }
 
@@ -1546,6 +1682,77 @@ mod tests {
             .color_type
     }
 
+    fn png_has_srgb_chunk(bytes: &[u8]) -> bool {
+        bytes.windows(4).any(|window| window == b"sRGB")
+    }
+
+    fn png_srgb_intent(bytes: &[u8]) -> Option<png::SrgbRenderingIntent> {
+        png::Decoder::new(std::io::Cursor::new(bytes))
+            .read_info()
+            .expect("png header")
+            .info()
+            .srgb
+    }
+
+    fn mean_saturation(image: &RgbaImage) -> f64 {
+        let mut total = 0.0_f64;
+        let mut count = 0.0_f64;
+        for pixel in image.pixels() {
+            let red = f64::from(pixel[0]);
+            let green = f64::from(pixel[1]);
+            let blue = f64::from(pixel[2]);
+            let max = red.max(green).max(blue);
+            let min = red.min(green).min(blue);
+            if max > 0.0 {
+                total += (max - min) / max;
+                count += 1.0;
+            }
+        }
+        total / count.max(1.0)
+    }
+
+    fn mean_horizontal_neighbor_diff(image: &RgbaImage) -> f64 {
+        let mut total = 0.0_f64;
+        let mut count = 0.0_f64;
+        for y in 0..image.height() {
+            for x in 0..image.width().saturating_sub(1) {
+                let left = image.get_pixel(x, y).0;
+                let right = image.get_pixel(x + 1, y).0;
+                total += (0..3)
+                    .map(|channel| {
+                        f64::from(
+                            (i16::from(left[channel]) - i16::from(right[channel])).unsigned_abs(),
+                        )
+                    })
+                    .sum::<f64>();
+                count += 1.0;
+            }
+        }
+        total / count.max(1.0)
+    }
+
+    /// Smooth saturated illustration: orange wash plus a green “eye”.
+    /// Enough unique colors to force quantization at Tiny (32), but still a
+    /// gradient so dithering shows up as neighbor speckle instead of a hue shift.
+    fn saturated_illustration() -> RgbaImage {
+        RgbaImage::from_fn(160, 96, |x, y| {
+            let dx = i32::try_from(x).unwrap_or(i32::MAX) - 40;
+            let dy = i32::try_from(y).unwrap_or(i32::MAX) - 48;
+            if dx.saturating_mul(dx) + dy.saturating_mul(dy) < 14 * 14 {
+                let tint = (y % 20) as u8;
+                Rgba([30, 200, 70 + tint, 255])
+            } else {
+                let t = f64::from(x) / 159.0;
+                Rgba([
+                    255,
+                    (40.0 + 80.0 * (1.0 - t)) as u8,
+                    (12.0 + 20.0 * t) as u8,
+                    255,
+                ])
+            }
+        })
+    }
+
     #[test]
     fn quantized_png_stays_indexed_when_a_pixel_is_transparent() {
         let mut image = RgbaImage::from_pixel(64, 48, Rgba([40, 80, 160, 255]));
@@ -1609,5 +1816,56 @@ mod tests {
         assert_eq!(png_palette_colors_for_quality(70), 64);
         assert_eq!(png_palette_colors_for_quality(85), 128);
         assert_eq!(png_palette_colors_for_quality(92), 256);
+    }
+
+    #[test]
+    fn exported_pngs_are_tagged_srgb() {
+        let image = saturated_illustration();
+        let preserve = encode_png_export(&image, false, None).expect("preserve");
+        let compact = encode_png_export(&image, true, None).expect("compact");
+        let quantized = encode_png_export(&image, true, Some(32)).expect("quantized");
+        for (label, bytes) in [
+            ("preserve", preserve.as_slice()),
+            ("compact", compact.as_slice()),
+            ("quantized", quantized.as_slice()),
+        ] {
+            assert!(
+                png_has_srgb_chunk(bytes),
+                "{label} PNG must include an sRGB chunk so color-managed viewers match the canvas"
+            );
+            assert_eq!(
+                png_srgb_intent(bytes),
+                Some(png::SrgbRenderingIntent::Perceptual),
+                "{label} PNG should declare perceptual sRGB"
+            );
+        }
+    }
+
+    #[test]
+    fn quantized_png_keeps_saturation_and_adds_dither_speckle() {
+        let image = saturated_illustration();
+        let original_saturation = mean_saturation(&image);
+        let original_speckle = mean_horizontal_neighbor_diff(&image);
+        assert!(
+            original_saturation > 0.7,
+            "fixture should start saturated (sat={original_saturation})"
+        );
+
+        let bytes = encode_png_export(&image, true, Some(32)).expect("tiny PNG");
+        assert_eq!(png_color_type(&bytes), png::ColorType::Indexed);
+        let compressed = image::load_from_memory(&bytes)
+            .expect("tiny PNG is readable")
+            .to_rgba8();
+        let compressed_saturation = mean_saturation(&compressed);
+        let compressed_speckle = mean_horizontal_neighbor_diff(&compressed);
+
+        assert!(
+            compressed_saturation > original_saturation * 0.85,
+            "palette compression should not wash colors (original={original_saturation}, compressed={compressed_saturation})"
+        );
+        assert!(
+            compressed_speckle > original_speckle * 1.4,
+            "32-color PNG should show dither speckle instead of a flat remap (original={original_speckle}, compressed={compressed_speckle})"
+        );
     }
 }
