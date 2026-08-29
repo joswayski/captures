@@ -7,6 +7,10 @@ const sampleNotes = [
   "## What's Changed",
   "* Improve capture parity by @joswayski in https://github.com/joswayski/captures/pull/249",
   "* **Fix** the `[region](https://example.com)` selector",
+  "* @devin-ai-integration[bot] made their first contribution in https://github.com/joswayski/captures/pull/297",
+  "",
+  "## New Contributors",
+  "* @someone made their first contribution in https://github.com/joswayski/captures/pull/1",
   "",
   "**Full Changelog**: https://github.com/joswayski/captures/compare/old...new",
 ].join("\n");
@@ -17,6 +21,9 @@ describe("releaseNoteItems", () => {
       "Improve capture parity",
       "Fix the region selector",
     ]);
+    expect(releaseNoteItems(
+      "* Fix Linux startup crash by @devin-ai-integration[bot] in https://github.com/joswayski/captures/pull/297\n* @devin-ai-integration[bot] made their first contribution in https://github.com/joswayski/captures/pull/297",
+    )).toEqual(["Fix Linux startup crash"]);
   });
 });
 

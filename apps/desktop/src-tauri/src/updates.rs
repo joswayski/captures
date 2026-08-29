@@ -10,9 +10,7 @@ use std::{
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use tauri::{
-    AppHandle, Emitter, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder, menu::MenuItem,
-};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_updater::{Update, UpdaterExt};
@@ -94,7 +92,6 @@ pub struct UpdateChangelogEntry {
 pub struct UpdateCoordinator {
     status: Mutex<UpdateStatus>,
     pending: Mutex<Option<Update>>,
-    menu_item: Mutex<Option<MenuItem<tauri::Wry>>>,
     notified_version: Mutex<Option<String>>,
     checking: AtomicBool,
     installing: AtomicBool,
@@ -110,7 +107,6 @@ impl Default for UpdateCoordinator {
                 current_display_version: String::new(),
             }),
             pending: Mutex::new(None),
-            menu_item: Mutex::new(None),
             notified_version: Mutex::new(None),
             checking: AtomicBool::new(false),
             installing: AtomicBool::new(false),
@@ -172,11 +168,6 @@ pub fn initialize(app: &AppHandle) {
             tokio::time::sleep(CHECK_INTERVAL).await;
         }
     });
-}
-
-pub fn register_menu_item(app: &AppHandle, item: MenuItem<tauri::Wry>) {
-    *app.state::<UpdateCoordinator>().menu_item.lock() = Some(item);
-    refresh_menu(app);
 }
 
 pub fn install_is_active(app: &AppHandle) -> bool {
@@ -609,7 +600,7 @@ async fn check_for_updates_inner(app: &AppHandle, manual: bool) -> Result<Update
 
 fn set_status(app: &AppHandle, status: UpdateStatus) {
     *app.state::<UpdateCoordinator>().status.lock() = status.clone();
-    refresh_menu(app);
+    crate::refresh_tray_menu(app);
     apply_update_notice_capture_policy(app);
     if let Err(error) = app.emit(UPDATE_EVENT, annotate_status(app, status)) {
         eprintln!("failed to emit update status: {error}");
@@ -631,30 +622,115 @@ fn apply_update_notice_capture_policy(app: &AppHandle) {
     }
 }
 
-fn refresh_menu(app: &AppHandle) {
-    let app = app.clone();
-    let dispatch = app.clone();
-    if let Err(error) = dispatch.run_on_main_thread(move || refresh_menu_on_main(&app)) {
-        eprintln!("failed to refresh the update menu item: {error}");
+pub(crate) fn current_status(app: &AppHandle) -> UpdateStatus {
+    app.state::<UpdateCoordinator>().status.lock().clone()
+}
+
+pub(crate) struct TrayUpdateItem {
+    pub label: String,
+    pub enabled: bool,
+    pub pin_first: bool,
+}
+
+pub(crate) fn tray_update_item(status: &UpdateStatus) -> TrayUpdateItem {
+    match status {
+        UpdateStatus::Available {
+            changelog, notes, ..
+        } => TrayUpdateItem {
+            label: update_available_menu_label(changelog, notes.as_deref()),
+            enabled: true,
+            pin_first: true,
+        },
+        UpdateStatus::Downloading { .. } => TrayUpdateItem {
+            label: "Installing Update…".to_owned(),
+            enabled: false,
+            pin_first: true,
+        },
+        UpdateStatus::Restarting { .. } => TrayUpdateItem {
+            label: "Restarting Captures…".to_owned(),
+            enabled: false,
+            pin_first: true,
+        },
+        UpdateStatus::Checking { .. } => TrayUpdateItem {
+            label: "Checking for Updates…".to_owned(),
+            enabled: false,
+            pin_first: false,
+        },
+        _ => TrayUpdateItem {
+            label: "Check for Updates…".to_owned(),
+            enabled: true,
+            pin_first: false,
+        },
     }
 }
 
-fn refresh_menu_on_main(app: &AppHandle) {
-    let coordinator = app.state::<UpdateCoordinator>();
-    let label = match &*coordinator.status.lock() {
-        UpdateStatus::Available {
-            display_version, ..
-        } => format!("Update Available — {display_version}…"),
-        UpdateStatus::Downloading { .. } => "Installing Update…".to_owned(),
-        UpdateStatus::Restarting { .. } => "Restarting Captures…".to_owned(),
-        UpdateStatus::Checking { .. } => "Checking for Updates…".to_owned(),
-        _ => "Check for Updates…".to_owned(),
-    };
-    if let Some(item) = coordinator.menu_item.lock().as_ref()
-        && let Err(error) = item.set_text(label)
-    {
-        eprintln!("failed to update tray update item: {error}");
+pub(crate) fn tray_tooltip(status: &UpdateStatus) -> &'static str {
+    match status {
+        UpdateStatus::Available { .. } => "Captures — Update available",
+        UpdateStatus::Downloading { .. } | UpdateStatus::Restarting { .. } => {
+            "Captures — Installing update"
+        }
+        _ => "Captures",
     }
+}
+
+fn update_available_menu_label(changelog: &[UpdateChangelogEntry], notes: Option<&str>) -> String {
+    match changelog_change_count(changelog, notes) {
+        0 => "Update Available".to_owned(),
+        1 => "Update Available — 1 change".to_owned(),
+        count => format!("Update Available — {count} changes"),
+    }
+}
+
+fn changelog_change_count(changelog: &[UpdateChangelogEntry], notes: Option<&str>) -> usize {
+    let from_changelog: usize = changelog
+        .iter()
+        .map(|entry| {
+            entry
+                .notes
+                .as_deref()
+                .map(release_note_item_count)
+                .unwrap_or(0)
+        })
+        .sum();
+    if from_changelog > 0 {
+        from_changelog
+    } else {
+        notes.map(release_note_item_count).unwrap_or(0)
+    }
+}
+
+fn release_note_item_count(markdown: &str) -> usize {
+    let mut skipping_alert = false;
+    let mut count = 0usize;
+    for source_line in markdown.lines() {
+        let line = source_line.trim();
+        if line.starts_with("> [!") || (line.starts_with('>') && line.contains("[!")) {
+            skipping_alert = true;
+            continue;
+        }
+        if skipping_alert && line.starts_with('>') {
+            continue;
+        }
+        if line.is_empty() {
+            skipping_alert = false;
+            continue;
+        }
+        skipping_alert = false;
+        if line.starts_with('#') || line.to_ascii_lowercase().contains("full changelog") {
+            continue;
+        }
+        if line.starts_with("* ") || line.starts_with("- ") || line.starts_with("+ ") {
+            if line
+                .to_ascii_lowercase()
+                .contains("made their first contribution")
+            {
+                continue;
+            }
+            count += 1;
+        }
+    }
+    count
 }
 
 fn schedule_update_notice(app: &AppHandle, version: String) {
@@ -706,16 +782,24 @@ fn show_update_notice(app: &AppHandle) {
         NoticeDisposition::Show => {}
     }
 
-    let height = update_notice_height(&status);
+    let card_height = update_notice_height(&status);
     let app = app.clone();
     let dispatch = app.clone();
     if let Err(error) = dispatch.run_on_main_thread(move || {
+        let placement =
+            crate::tray_anchored_notice_placement(&app, UPDATE_NOTICE_WIDTH, card_height);
         if let Some(window) = app.get_webview_window("update") {
-            let _ = window.set_size(LogicalSize::new(UPDATE_NOTICE_WIDTH, height));
+            let _ = crate::apply_tray_notice_position(&window, placement);
+            if let Some(caret) = crate::notice_caret_payload(&placement)
+                && let Err(error) = window.emit(crate::NOTICE_CARET_EVENT, caret)
+            {
+                eprintln!("failed to update the update notice caret: {error}");
+            }
             let _ = window.show();
+            let _ = crate::apply_tray_notice_position(&window, placement);
             return;
         }
-        if let Err(error) = create_update_notice(&app, height) {
+        if let Err(error) = create_update_notice(&app, placement) {
             eprintln!("failed to show update notice: {error}");
         }
     }) {
@@ -723,23 +807,26 @@ fn show_update_notice(app: &AppHandle) {
     }
 }
 
-fn create_update_notice(app: &AppHandle, height: f64) -> Result<(), tauri::Error> {
-    let (x, y) = update_notice_position(app);
+fn create_update_notice(
+    app: &AppHandle,
+    placement: crate::StartupNoticePlacement,
+) -> Result<(), tauri::Error> {
     let (theme, background) = crate::notice_window_chrome(app);
     let window = WebviewWindowBuilder::new(
         app,
         "update",
-        WebviewUrl::App("index.html?view=update".into()),
+        WebviewUrl::App(crate::tray_notice_url("update", placement).into()),
     )
     .title("Captures Update")
-    .inner_size(UPDATE_NOTICE_WIDTH, height)
-    .position(x, y)
+    .inner_size(placement.width, placement.height)
+    .position(placement.x, placement.y)
     .decorations(false)
     .always_on_top(true)
     .visible_on_all_workspaces(true)
     .skip_taskbar(true)
     .resizable(false)
-    .shadow(true)
+    .shadow(false)
+    .transparent(true)
     .theme(theme)
     .background_color(background)
     .accept_first_mouse(true)
@@ -747,24 +834,10 @@ fn create_update_notice(app: &AppHandle, height: f64) -> Result<(), tauri::Error
     .visible(false)
     .build()?;
     let _ = window.set_content_protected(true);
+    crate::apply_tray_notice_position(&window, placement)?;
     window.show()?;
+    crate::apply_tray_notice_position(&window, placement)?;
     Ok(())
-}
-
-fn update_notice_position(app: &AppHandle) -> (f64, f64) {
-    app.primary_monitor()
-        .ok()
-        .flatten()
-        .map(|monitor| {
-            let scale = monitor.scale_factor().max(1.0);
-            let position = monitor.position();
-            let size = monitor.size();
-            let left = f64::from(position.x) / scale;
-            let top = f64::from(position.y) / scale;
-            let right = left + f64::from(size.width) / scale;
-            (right - UPDATE_NOTICE_WIDTH - 18.0, top + 30.0)
-        })
-        .unwrap_or((20.0, 30.0))
 }
 
 fn update_notice_height(status: &UpdateStatus) -> f64 {
@@ -1096,8 +1169,8 @@ mod tests {
         install_error_message, notice_disposition, notice_restore_plan,
         open_captures_will_close_from, release_channel_enabled, restart_blocker,
         should_begin_deferred_restore, should_hide_update_notice_status,
-        should_wait_for_capture_start, stacked_changelog, take_restart_marker,
-        update_notice_height, version_is_newer_than,
+        should_wait_for_capture_start, stacked_changelog, take_restart_marker, tray_update_item,
+        update_available_menu_label, update_notice_height, version_is_newer_than,
     };
 
     #[test]
@@ -1117,6 +1190,57 @@ mod tests {
     fn formats_encoded_calver_for_people() {
         assert_eq!(display_version("2026.7.1901"), "2026.07.19.1");
         assert_eq!(display_version("2026.12.3109"), "2026.12.31.9");
+    }
+
+    #[test]
+    fn tray_update_label_uses_change_count_instead_of_a_version() {
+        let notes = Some(
+            "> [!WARNING]\n> Experimental.\n\n## What's Changed\n* First fix by @a in https://example.com/1\n* Second fix by @b in https://example.com/2\n\n**Full Changelog**: https://example.com",
+        );
+        let changelog = vec![
+            UpdateChangelogEntry {
+                version: "2026.8.2705".into(),
+                display_version: "2026.08.27.5".into(),
+                notes: notes.map(str::to_owned),
+            },
+            UpdateChangelogEntry {
+                version: "2026.8.2704".into(),
+                display_version: "2026.08.27.4".into(),
+                notes: Some("* Third fix by @c in https://example.com/3".into()),
+            },
+        ];
+        assert_eq!(
+            update_available_menu_label(&changelog, notes),
+            "Update Available — 3 changes"
+        );
+        assert_eq!(
+            update_available_menu_label(&[], Some("* One change by @a in https://example.com/1")),
+            "Update Available — 1 change"
+        );
+        assert_eq!(update_available_menu_label(&[], None), "Update Available");
+        assert_eq!(
+            update_available_menu_label(
+                &[],
+                Some(
+                    "* Real fix by @a in https://example.com/1\n* @bot made their first contribution in https://example.com/1\n* Another fix by @b in https://example.com/2",
+                ),
+            ),
+            "Update Available — 2 changes"
+        );
+        let item = tray_update_item(&UpdateStatus::Available {
+            current_version: "2026.8.2702".into(),
+            current_display_version: "2026.08.27.2".into(),
+            version: "2026.8.2705".into(),
+            display_version: "2026.08.27.5".into(),
+            notes: notes.map(str::to_owned),
+            changelog,
+            installable: true,
+            manual_download_url: None,
+            will_close_open_captures: false,
+        });
+        assert!(item.pin_first);
+        assert!(item.enabled);
+        assert_eq!(item.label, "Update Available — 3 changes");
     }
 
     #[test]

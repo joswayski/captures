@@ -10,6 +10,10 @@ on:
         required: false
         type: string
 
+concurrency:
+  group: captures-preview-main
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
@@ -58,20 +62,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
-        run: |
-          while true; do
-            blocker="$(
-              gh api \
-                -H "X-GitHub-Api-Version: 2022-11-28" \
-                "/repos/${GITHUB_REPOSITORY}/actions/workflows/release.yml/runs?branch=main&per_page=100" \
-                --jq "[.workflow_runs[] | select(.id < ${GITHUB_RUN_ID} and .status != \"completed\") | .id] | min // empty"
-            )"
-            if [[ -z "$blocker" ]]; then
-              break
-            fi
-            echo "Waiting for earlier Preview workflow ${blocker} to finish."
-            sleep 30
-          done
+        run: bash scripts/wait-preview-queue.sh
 
   version:
     name: Choose Preview version

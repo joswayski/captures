@@ -20,7 +20,7 @@ const available: UpdateStatus = {
   current_display_version: "2026.07.19.1",
   version: "2026.7.1902",
   display_version: "2026.07.19.2",
-  notes: "> [!WARNING]\n> This Preview is experimental.\n\n## What's Changed\n* Adds automatic releases by @joswayski in https://github.com/joswayski/captures/pull/1\n\n**Full Changelog**: https://github.com/joswayski/captures/compare/old...new",
+  notes: "> [!WARNING]\n> This Preview is experimental.\n\n## What's Changed\n* Adds automatic releases by @joswayski in https://github.com/joswayski/captures/pull/1\n* @devin-ai-integration[bot] made their first contribution in https://github.com/joswayski/captures/pull/1\n\n**Full Changelog**: https://github.com/joswayski/captures/compare/old...new",
   changelog: [],
   installable: true,
   manual_download_url: null,
@@ -68,6 +68,7 @@ describe("UpdateNotice", () => {
     })).toBeInTheDocument();
     expect(screen.getAllByText("Version 2026.07.19.2")).toHaveLength(1);
     expect(screen.getByText("Adds automatic releases")).toBeInTheDocument();
+    expect(screen.queryByText(/first contribution/iu)).not.toBeInTheDocument();
     expect(screen.queryByText(/experimental/u)).not.toBeInTheDocument();
     expect(screen.queryByText(/Full Changelog/u)).not.toBeInTheDocument();
     expect(screen.queryByText(/highlights/u)).not.toBeInTheDocument();
@@ -233,5 +234,21 @@ describe("UpdateNotice", () => {
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("install_update"));
     expect(invoke).not.toHaveBeenCalledWith("check_for_updates");
+  });
+
+  it("renders a tray caret when placement is provided", async () => {
+    window.history.replaceState({}, "", "/?view=update&caret=top&caret_x=220");
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_update_status") return available;
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    const { container } = render(<UpdateNotice />);
+    expect(await screen.findByRole("dialog", { name: "An update is available" })).toBeInTheDocument();
+    const notice = container.querySelector(".tray-notice");
+    expect(notice).toHaveAttribute("data-caret", "top");
+    expect((notice as HTMLElement | null)?.style.getPropertyValue("--tray-caret-x")).toBe("220px");
+    expect(container.querySelector(".tray-notice-caret")).toBeInTheDocument();
+    window.history.replaceState({}, "", "/");
   });
 });

@@ -202,7 +202,7 @@ describe("RecordingHud", () => {
     expect(screen.getByText("Space")).toBeInTheDocument();
     expect(screen.getByText(/to start/)).toBeInTheDocument();
     expect(screen.queryByText("Captures is running")).not.toBeInTheDocument();
-    expect(document.querySelector(".startup-notice-caret")).not.toBeInTheDocument();
+    expect(document.querySelector(".tray-notice-caret")).not.toBeInTheDocument();
   });
 
   it("renders a caret pointing at the tray when placement is provided", () => {
@@ -220,10 +220,10 @@ describe("RecordingHud", () => {
     const notice = container.querySelector(".startup-notice");
 
     expect(notice).toHaveAttribute("data-caret", "top");
-    expect((notice as HTMLElement | null)?.style.getPropertyValue("--startup-caret-x")).toBe(
+    expect((notice as HTMLElement | null)?.style.getPropertyValue("--tray-caret-x")).toBe(
       "180px",
     );
-    expect(container.querySelector(".startup-notice-caret")).toBeInTheDocument();
+    expect(container.querySelector(".tray-notice-caret")).toBeInTheDocument();
   });
 
   it("offers history recovery wording until a recording is permanently saved", () => {
