@@ -96,8 +96,7 @@ export function Feedback() {
             <h1>Send feedback</h1>
             <p className="help-text feedback-intro">
               Tell us what broke, what is missing, or what you wish worked better. Captures sends
-              only what you type here plus the app and system details listed below — never your
-              screenshots or recordings.
+              what you type here plus the app and system details listed below.
             </p>
           </div>
         </header>
