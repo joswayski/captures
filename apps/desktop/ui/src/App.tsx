@@ -600,6 +600,8 @@ const OPEN_CAPTURES_UPDATE_WARNING =
 export function UpdateNotice() {
   const status = useUpdateStatus();
   const [actionError, setActionError] = useState("");
+  const [installing, setInstalling] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   const close = () => {
     setActionError("");
@@ -607,10 +609,13 @@ export function UpdateNotice() {
   };
   const run = async (command: "check_for_updates" | "install_update") => {
     setActionError("");
+    if (command === "install_update") setInstalling(true);
     try {
       await invoke(command);
     } catch (error) {
       setActionError(String(error));
+    } finally {
+      if (command === "install_update") setInstalling(false);
     }
   };
 
@@ -651,12 +656,34 @@ export function UpdateNotice() {
           : status?.state === "up_to_date"
             ? `Version ${status.current_display_version}`
             : "This should only take a moment.";
+  const dismissBlocked = Boolean(downloading || restarting || installing);
+
+  useLayoutEffect(() => {
+    const root = dialogRef.current;
+    if (!root) return;
+    const primary = root.querySelector<HTMLButtonElement>("button.primary");
+    const dismiss = root.querySelector<HTMLButtonElement>("button.update-dismiss");
+    (primary ?? dismiss ?? root).focus({ preventScroll: true });
+  }, [visualState, available, error, downloading, restarting]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (dismissBlocked) return;
+      event.preventDefault();
+      close();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [dismissBlocked]);
 
   return (
     <TrayNoticeShell>
       <div
+        ref={dialogRef}
         className={`update-notice update-notice-${visualState} tray-notice-card`}
         role="dialog"
+        tabIndex={-1}
         aria-labelledby="update-notice-title"
         aria-describedby="update-notice-description"
       >
@@ -760,12 +787,18 @@ export function UpdateNotice() {
           <button
             className="update-dismiss"
             type="button"
+            disabled={installing}
             onClick={close}
           >
             {available ? "Later" : "Close"}
           </button>
           {available && !error && (
-            <button className="primary" type="button" onClick={() => void run("install_update")}>
+            <button
+              className="primary"
+              type="button"
+              disabled={installing}
+              onClick={() => void run("install_update")}
+            >
               {available.installable ? "Update now" : "View release"}
             </button>
           )}
@@ -773,6 +806,7 @@ export function UpdateNotice() {
             <button
               className="primary"
               type="button"
+              disabled={installing}
               onClick={() =>
                 void run(
                   available || (status?.state === "error" && status.retry_install)

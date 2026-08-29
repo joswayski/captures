@@ -797,6 +797,7 @@ fn show_update_notice(app: &AppHandle) {
             }
             let _ = window.show();
             let _ = crate::apply_tray_notice_position(&window, placement);
+            crate::focus_single_window(&window);
             return;
         }
         if let Err(error) = create_update_notice(&app, placement) {
@@ -832,11 +833,15 @@ fn create_update_notice(
     .accept_first_mouse(true)
     .focused(false)
     .visible(false)
+    .on_page_load(crate::document_window_page_load_handler(
+        "failed to reveal the update notice",
+    ))
     .build()?;
     let _ = window.set_content_protected(true);
     crate::apply_tray_notice_position(&window, placement)?;
     window.show()?;
     crate::apply_tray_notice_position(&window, placement)?;
+    crate::focus_single_window(&window);
     Ok(())
 }
 
