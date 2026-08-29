@@ -658,7 +658,7 @@ export function UpdateNotice() {
     if (!root) return;
     const primary = root.querySelector<HTMLButtonElement>("button.primary");
     const dismiss = root.querySelector<HTMLButtonElement>("button.update-dismiss");
-    (primary ?? dismiss ?? root).focus();
+    (primary ?? dismiss ?? root).focus({ preventScroll: true });
   }, [visualState, available, error, downloading, restarting]);
 
   useEffect(() => {

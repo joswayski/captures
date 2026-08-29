@@ -2071,6 +2071,11 @@
   cursor: pointer;
 }
 
+.update-notice-footer button:focus {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
 .update-notice-footer button.primary {
   min-width: 104px;
 }
