@@ -328,12 +328,35 @@ export function buildDiscordPayload(
     embeds: [
       {
         title,
-        description: truncate(feedback.message, DISCORD_DESCRIPTION_MAX),
+        description: formatDiscordDescription(feedback),
         color,
         fields,
       },
     ],
   };
+}
+
+function formatDiscordDescription(feedback: FeedbackInput): string {
+  const message = feedback.message.trim();
+  if (feedback.category !== "crash") {
+    return truncate(message, DISCORD_DESCRIPTION_MAX);
+  }
+
+  const split = message.indexOf("\n\n");
+  if (split === -1) {
+    return truncate(message, DISCORD_DESCRIPTION_MAX);
+  }
+
+  const intro = message.slice(0, split).trim();
+  const detail = message.slice(split).trim();
+  if (!detail) {
+    return truncate(intro, DISCORD_DESCRIPTION_MAX);
+  }
+
+  const wrapperLength = "\n\n```\n\n```".length;
+  const budget = Math.max(0, DISCORD_DESCRIPTION_MAX - intro.length - wrapperLength);
+  const safeDetail = detail.replaceAll("```", "'''");
+  return `${intro}\n\n\`\`\`\n${truncate(safeDetail, budget)}\n\`\`\``;
 }
 
 function truncate(value: string, maxCharacters: number): string {

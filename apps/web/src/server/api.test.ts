@@ -209,16 +209,33 @@ test("delivers crash reports to Discord as a distinct category", async () => {
   );
 
   assert.equal(response.status, 201);
-  assert.equal(
-    (webhookBody as { embeds: Array<{ title: string; color: number }> }).embeds[0]
-      .title,
-    "Crash report",
+  const embed = (
+    webhookBody as { embeds: Array<{ title: string; color: number; description: string }> }
+  ).embeds[0];
+  assert.equal(embed.title, "Crash report");
+  assert.equal(embed.color, 0xd29922);
+  assert.match(embed.description, /Exception Type: EXC_BREAKPOINT \(SIGTRAP\)/u);
+  assert.match(embed.description, /```[\s\S]*EXC_BREAKPOINT/u);
+});
+
+test("puts crash exception details in a Discord code block", () => {
+  const payload = buildDiscordPayload(
+    {
+      message:
+        "Captures closed unexpectedly. This is an automatic crash diagnostic; it does not include captures.\n\nPanic:\nthread 'main' panicked at src/lib.rs:1:1:\nboom",
+      category: "crash",
+      source: "desktop",
+      appVersion: "2026.8.2820",
+      os: "windows",
+      osVersion: "Windows_NT",
+      arch: "x86_64",
+    },
+    "client",
   );
-  assert.equal(
-    (webhookBody as { embeds: Array<{ title: string; color: number }> }).embeds[0]
-      .color,
-    0xd29922,
-  );
+
+  assert.match(payload.embeds[0].description, /```\nPanic:/u);
+  assert.match(payload.embeds[0].description, /thread 'main' panicked/u);
+  assert.match(payload.embeds[0].description, /boom/u);
 });
 
 test("keeps Discord descriptions within the embed limit", () => {

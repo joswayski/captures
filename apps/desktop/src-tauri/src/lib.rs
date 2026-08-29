@@ -126,6 +126,7 @@ struct ClipboardWrite {
 }
 
 pub fn run() {
+    crash_report::install_panic_hook();
     let state = AppState::new();
     let protocol_state = state.clone();
 

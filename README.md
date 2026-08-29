@@ -66,7 +66,7 @@ Preview builds update after every successful merge to `main` and may contain bug
 - Customizable shortcuts and accent colors
 - Capture UI and capture actions stay disabled while the desktop session is locked or inactive
 - Optional in-app feedback (never includes your captures)
-- After an unexpected quit, Preview may send a crash diagnostic (app version, OS, exception) through the same feedback channel; it never includes captures or home-directory paths
+- After an unexpected quit, Preview may send a crash diagnostic (app version, OS, and a redacted panic or OS crash summary) through the same feedback channel; it never includes captures or home-directory paths
 
 ## Wishlist
 
