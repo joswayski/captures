@@ -141,10 +141,7 @@ export function CompressionPreview({
   }, [beforeUrl, afterUrl, liveBefore]);
 
   useLayoutEffect(() => {
-    if (!afterHint || suppressed) {
-      setAfterHintPos(null);
-      return;
-    }
+    if (!afterHint || suppressed) return;
     const updateHint = (clientX: number, clientY: number) => {
       const frame = frameRef.current;
       if (!frame) return;
