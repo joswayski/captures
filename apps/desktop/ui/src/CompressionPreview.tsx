@@ -5,6 +5,30 @@ import { formatFileSize } from "./lib/format";
 // Keep the divider handle clear of the Before/After badges at the frame edges.
 const MIN_SPLIT_PERCENT = 6;
 const MAX_SPLIT_PERCENT = 94;
+const AFTER_HINT_PAD = 8;
+const AFTER_HINT_FALLBACK_WIDTH = 220;
+const AFTER_HINT_FALLBACK_HEIGHT = 40;
+
+/** Keep the After-side cursor hint fully inside the comparison frame. */
+function compressionAfterHintPosition(
+  localX: number,
+  localY: number,
+  frameWidth: number,
+  frameHeight: number,
+  hintWidth: number,
+  hintHeight: number,
+): { x: number; y: number } {
+  const width = Math.min(hintWidth, Math.max(1, frameWidth - AFTER_HINT_PAD * 2));
+  const height = Math.min(hintHeight, Math.max(1, frameHeight - AFTER_HINT_PAD * 2));
+  let x = localX + 12;
+  let y = localY + 14;
+  if (x + width + AFTER_HINT_PAD > frameWidth) x = localX - width - AFTER_HINT_PAD;
+  if (y + height + AFTER_HINT_PAD > frameHeight) y = localY - height - AFTER_HINT_PAD;
+  return {
+    x: Math.min(frameWidth - width - AFTER_HINT_PAD, Math.max(AFTER_HINT_PAD, x)),
+    y: Math.min(frameHeight - height - AFTER_HINT_PAD, Math.max(AFTER_HINT_PAD, y)),
+  };
+}
 
 export type CompressionPreviewProps = {
   beforeUrl: string | null;
@@ -18,6 +42,20 @@ export type CompressionPreviewProps = {
    * is clipped to the right of the divider so it sits on the canvas or preview.
    */
   liveBefore?: boolean;
+  /** Fade the comparison away so the live canvas can be edited underneath. */
+  suppressed?: boolean;
+  /**
+   * Cursor-following hint while the pointer is on the compressed (after) side.
+   * Drawing still goes to the original; this side is a frozen encode.
+   */
+  afterHint?: string;
+  /** Hide the comparison overlay without changing save quality. */
+  onDismiss?: () => void;
+  /** Starting split when this overlay mounts. */
+  initialSplit?: number;
+  onSplitChange?: (split: number) => void;
+  /** When false, the divider handle ignores pointers so drawing can pass through. */
+  splitDragEnabled?: boolean;
   className?: string;
 };
 
@@ -100,21 +138,27 @@ export function CompressionPreview({
   pending,
   error = "",
   liveBefore = false,
+  suppressed = false,
+  afterHint = "",
+  onDismiss,
+  initialSplit = 50,
+  onSplitChange,
+  splitDragEnabled = true,
   className = "",
 }: CompressionPreviewProps) {
-  // Reset the split when the after image identity changes without a setState-in-effect.
-  const splitKey = afterUrl ?? (liveBefore ? "live" : "empty");
-  const [splitState, setSplitState] = useState({ key: splitKey, split: 50 });
-  const split = splitState.key === splitKey ? splitState.split : 50;
+  const [split, setSplitState] = useState(() => (
+    Math.min(MAX_SPLIT_PERCENT, Math.max(MIN_SPLIT_PERCENT, initialSplit))
+  ));
   const setSplit = useCallback((value: number) => {
-    setSplitState({
-      key: splitKey,
-      split: Math.min(MAX_SPLIT_PERCENT, Math.max(MIN_SPLIT_PERCENT, value)),
-    });
-  }, [splitKey]);
+    const next = Math.min(MAX_SPLIT_PERCENT, Math.max(MIN_SPLIT_PERCENT, value));
+    setSplitState(next);
+    onSplitChange?.(next);
+  }, [onSplitChange]);
 
   const [frameSize, setFrameSize] = useState({ width: 0, height: 0 });
+  const [afterHintPos, setAfterHintPos] = useState<{ x: number; y: number } | null>(null);
   const frameRef = useRef<HTMLDivElement>(null);
+  const afterHintRef = useRef<HTMLDivElement>(null);
   const draggingRef = useRef(false);
 
   useLayoutEffect(() => {
@@ -132,6 +176,48 @@ export function CompressionPreview({
     observer.observe(frame);
     return () => observer.disconnect();
   }, [beforeUrl, afterUrl, liveBefore]);
+
+  useLayoutEffect(() => {
+    if (!afterHint || suppressed) return;
+    const updateHint = (clientX: number, clientY: number) => {
+      const frame = frameRef.current;
+      if (!frame) return;
+      const bounds = frame.getBoundingClientRect();
+      if (
+        clientX < bounds.left
+        || clientX > bounds.right
+        || clientY < bounds.top
+        || clientY > bounds.bottom
+      ) {
+        setAfterHintPos(null);
+        return;
+      }
+      const percent = ((clientX - bounds.left) / Math.max(1, bounds.width)) * 100;
+      if (percent <= split) {
+        setAfterHintPos(null);
+        return;
+      }
+      const hint = afterHintRef.current;
+      setAfterHintPos(compressionAfterHintPosition(
+        clientX - bounds.left,
+        clientY - bounds.top,
+        bounds.width,
+        bounds.height,
+        hint?.offsetWidth || AFTER_HINT_FALLBACK_WIDTH,
+        hint?.offsetHeight || AFTER_HINT_FALLBACK_HEIGHT,
+      ));
+    };
+    const onPointerMove = (event: PointerEvent) => {
+      updateHint(event.clientX, event.clientY);
+    };
+    const onPointerLeave = () => setAfterHintPos(null);
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("blur", onPointerLeave);
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("blur", onPointerLeave);
+    };
+  }, [afterHint, split, suppressed]);
 
   const setSplitFromClientX = useCallback((clientX: number) => {
     const frame = frameRef.current;
@@ -162,6 +248,7 @@ export function CompressionPreview({
     || className.includes("is-cover")
     || className.includes("is-live");
   const { width: frameWidth, height: frameHeight } = frameSize;
+  const showAfterHint = Boolean(afterHint && afterHintPos && !suppressed && showSplit);
 
   return (
     <div
@@ -170,6 +257,8 @@ export function CompressionPreview({
         "compression-preview-frame",
         liveBefore ? "is-live" : "",
         waiting ? "is-waiting" : "",
+        suppressed ? "is-suppressed" : "",
+        splitDragEnabled ? "" : "is-draw-locked",
         className,
       ].filter(Boolean).join(" ")}
       data-pending={pending ? "true" : undefined}
@@ -225,6 +314,7 @@ export function CompressionPreview({
           )}
         </>
       )}
+      <div className="compression-preview-veil" aria-hidden="true" />
       {showSplit && (
         <>
           <div
@@ -284,6 +374,29 @@ export function CompressionPreview({
             </>
           )}
       </span>
+      {onDismiss && (
+        <button
+          type="button"
+          className="compression-preview-dismiss"
+          aria-label="Hide compression comparison"
+          onClick={(event) => {
+            event.stopPropagation();
+            onDismiss();
+          }}
+        >
+          Hide
+        </button>
+      )}
+      {showAfterHint && afterHintPos && (
+        <div
+          ref={afterHintRef}
+          className="compression-preview-after-hint"
+          role="tooltip"
+          style={{ left: afterHintPos.x, top: afterHintPos.y }}
+        >
+          {afterHint}
+        </div>
+      )}
       {error && <p className="compression-preview-error">{error}</p>}
     </div>
   );

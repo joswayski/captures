@@ -160,6 +160,10 @@ function installExportableCanvas(): () => void {
   };
 }
 
+function openExportSettings() {
+  fireEvent.click(screen.getByRole("button", { name: /Export settings/ }));
+}
+
 function setCanvasBounds(canvas: HTMLCanvasElement, width = 1_440, height = 900): void {
   vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
     x: 0,
@@ -2398,6 +2402,7 @@ describe("ScreenshotEditor", () => {
     try {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Canvas width");
+    openExportSettings();
 
     const format = screen.getByRole("combobox", { name: "Format" });
     expect(format).toHaveTextContent(".png");
@@ -2521,11 +2526,12 @@ describe("ScreenshotEditor", () => {
     }
   });
 
-  it("reveals the live canvas while compression compare refreshes after an edit", async () => {
+  it("keeps the comparison while compression refreshes after an edit", async () => {
     const restoreCanvas = installExportableCanvas();
     try {
       render(<ScreenshotEditor />);
       await screen.findByLabelText("Canvas width");
+      openExportSettings();
 
       fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
       fireEvent.click(screen.getByRole("option", { name: /Compress/ }));
@@ -2538,21 +2544,39 @@ describe("ScreenshotEditor", () => {
       expect(frame).toHaveClass("is-cover");
       expect(frame).not.toHaveClass("is-waiting");
 
+      const split = screen.getByRole("slider", { name: "Before and after comparison" });
+      fireEvent.change(split, { target: { value: "68" } });
+
       // Canvas W/H only commits on blur, Enter, or a stepper; typing a draft
       // must not hide the compare overlay on every digit.
       fireEvent.click(screen.getByRole("button", { name: "Increase Canvas width" }));
 
-      expect(screen.queryByAltText("Before compression")).not.toBeInTheDocument();
-      expect(screen.queryByAltText("After compression")).not.toBeInTheDocument();
-      expect(frame).toHaveClass("is-live");
-      expect(frame).not.toHaveClass("is-cover");
+      expect(screen.getByAltText("Before compression")).toBeInTheDocument();
+      expect(screen.getByAltText("After compression")).toBeInTheDocument();
+      expect(frame).toHaveAttribute("data-pending", "true");
+      expect(frame).toHaveClass("is-cover");
       expect(screen.getByText("After · Encoding…")).toBeInTheDocument();
+      expect(split).toHaveValue("68");
 
       await waitFor(() => {
+        expect(frame).not.toHaveAttribute("data-pending");
         expect(screen.getByAltText("Before compression")).toBeInTheDocument();
         expect(screen.getByAltText("After compression")).toBeInTheDocument();
       });
+      expect(screen.getByRole("slider", { name: "Before and after comparison" }))
+        .toHaveValue("68");
       expect(frame).toHaveClass("is-cover");
+
+      fireEvent.click(screen.getByRole("button", { name: "Hide compression comparison" }));
+      expect(screen.queryByRole("group", { name: "Compression comparison" }))
+        .not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Show before / after" }));
+      expect(screen.getByRole("group", { name: "Compression comparison" }))
+        .toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: /Export settings/ }));
+      expect(screen.queryByRole("group", { name: "Compression comparison" }))
+        .not.toBeInTheDocument();
     } finally {
       restoreCanvas();
     }

@@ -2437,6 +2437,7 @@
   background-color: #050506;
   background-image: none;
   pointer-events: none;
+  transition: opacity var(--dur-2) var(--ease-standard);
 }
 
 .compression-preview-frame.is-cover.is-waiting {
@@ -2451,8 +2452,35 @@
   pointer-events: auto;
 }
 
-.compression-preview-frame[data-pending="true"] {
-  opacity: 0.75;
+.compression-preview-frame.is-draw-locked .compression-preview-handle,
+.compression-preview-frame.is-draw-locked .compression-preview-range {
+  pointer-events: none;
+}
+
+.compression-preview-frame.is-suppressed {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.compression-preview-veil {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: var(--glass-veil);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-2) var(--ease-standard);
+}
+
+.compression-preview-frame[data-pending="true"]:not(.is-waiting) .compression-preview-veil {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .compression-preview-frame.is-cover,
+  .compression-preview-veil {
+    transition: none;
+  }
 }
 
 .compression-preview-image {
@@ -2583,6 +2611,45 @@
 
 .compression-preview-badge.is-after {
   right: var(--s-5);
+}
+
+.compression-preview-dismiss {
+  position: absolute;
+  z-index: 3;
+  top: var(--s-5);
+  right: var(--s-5);
+  padding: var(--s-2) var(--s-4);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-pill);
+  color: var(--glass-text);
+  background: var(--glass-strong);
+  backdrop-filter: blur(12px);
+  cursor: pointer;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  pointer-events: auto;
+}
+
+.compression-preview-dismiss:hover {
+  border-color: var(--glass-border-strong);
+  background: var(--glass-raised);
+}
+
+.compression-preview-after-hint {
+  position: absolute;
+  z-index: 4;
+  width: max-content;
+  max-width: min(220px, calc(100% - 16px));
+  padding: 5px 8px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-sm);
+  color: var(--glass-text);
+  background: var(--glass-strong);
+  box-shadow: var(--glass-shadow);
+  pointer-events: none;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  line-height: 1.35;
 }
 
 .compression-preview-savings {

@@ -3412,6 +3412,8 @@ export function RecordingEditor() {
   const [compressPreviewError, setCompressPreviewError] = useState("");
   const [compressPreviewBeforeUrl, setCompressPreviewBeforeUrl] = useState<string | null>(null);
   const [compressPreviewAfterUrl, setCompressPreviewAfterUrl] = useState<string | null>(null);
+  const [compressCompareDismissed, setCompressCompareDismissed] = useState(false);
+  const [compressSplit, setCompressSplit] = useState(50);
   const compressPreviewUrlsRef = useRef<{ before: string | null; after: string | null }>({
     before: null,
     after: null,
@@ -3775,7 +3777,9 @@ export function RecordingEditor() {
 
   const canPreviewCompression = (sizeMode === "compress" || sizeMode === "maximum")
     && outputFormat !== "webm";
-  const showCompressCompare = canPreviewCompression && !previewPlaying;
+  const showCompressCompare = canPreviewCompression
+    && !previewPlaying
+    && !compressCompareDismissed;
 
   const clearCompressPreview = useCallback(() => {
     compressPreviewRequestRef.current += 1;
@@ -4237,6 +4241,9 @@ export function RecordingEditor() {
                   : estimatedBytes}
                 pending={compressPreviewPending}
                 error={compressPreviewError}
+                initialSplit={compressSplit}
+                onSplitChange={setCompressSplit}
+                onDismiss={() => setCompressCompareDismissed(true)}
               />
             )}
             {artifact.kind === "video" && (
@@ -4506,6 +4513,10 @@ export function RecordingEditor() {
                 setSizeMode(mode);
                 if (mode === "preserve") {
                   clearCompressPreview();
+                  setCompressCompareDismissed(false);
+                  setCompressSplit(50);
+                } else {
+                  setCompressCompareDismissed(false);
                 }
               }}
             />
@@ -4530,6 +4541,17 @@ export function RecordingEditor() {
                 }))}
                 onChange={(value) => setQuality(value as RecordingCompressQuality)}
               />
+            </div>
+          )}
+          {canPreviewCompression && compressCompareDismissed && (
+            <div className="editor-field">
+              <span>Comparison</span>
+              <button
+                type="button"
+                onClick={() => setCompressCompareDismissed(false)}
+              >
+                Show before / after
+              </button>
             </div>
           )}
           {sizeMode === "maximum" && (
