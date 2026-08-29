@@ -75,6 +75,7 @@ describe("UpdateNotice", () => {
     expect(screen.queryByText(/Captures Preview/u)).not.toBeInTheDocument();
     expect(screen.queryByText(/Signed Preview/u)).not.toBeInTheDocument();
     expect(screen.queryByText("2026.07.19.1")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Update now" })).toHaveFocus();
     fireEvent.click(screen.getByRole("button", { name: "Update now" }));
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("install_update"));
@@ -115,6 +116,7 @@ describe("UpdateNotice", () => {
       "25",
     );
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Updating Captures" })).toHaveFocus();
   });
 
   it("keeps the available state useful when release notes are missing", async () => {
@@ -250,5 +252,31 @@ describe("UpdateNotice", () => {
     expect((notice as HTMLElement | null)?.style.getPropertyValue("--tray-caret-x")).toBe("220px");
     expect(container.querySelector(".tray-notice-caret")).toBeInTheDocument();
     window.history.replaceState({}, "", "/");
+  });
+
+  it("focuses Update now instead of Later when an update is available", async () => {
+    vi.mocked(invoke).mockResolvedValue(available);
+
+    render(<UpdateNotice />);
+
+    expect(await screen.findByRole("button", { name: "Update now" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Later" })).not.toHaveFocus();
+  });
+
+  it("does not let Escape dismiss an in-progress installation", async () => {
+    vi.mocked(invoke).mockResolvedValue({
+      state: "downloading",
+      current_version: "2026.7.1901",
+      current_display_version: "2026.07.19.1",
+      version: "2026.7.1902",
+      display_version: "2026.07.19.2",
+      downloaded: 25,
+      total: 100,
+    } satisfies UpdateStatus);
+
+    render(<UpdateNotice />);
+    expect(await screen.findByRole("dialog", { name: "Updating Captures" })).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.getByRole("dialog", { name: "Updating Captures" })).toBeInTheDocument();
   });
 });

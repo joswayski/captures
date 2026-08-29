@@ -600,6 +600,7 @@ const OPEN_CAPTURES_UPDATE_WARNING =
 export function UpdateNotice() {
   const status = useUpdateStatus();
   const [actionError, setActionError] = useState("");
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   const close = () => {
     setActionError("");
@@ -652,11 +653,32 @@ export function UpdateNotice() {
             ? `Version ${status.current_display_version}`
             : "This should only take a moment.";
 
+  useLayoutEffect(() => {
+    const root = dialogRef.current;
+    if (!root) return;
+    const primary = root.querySelector<HTMLButtonElement>("button.primary");
+    const dismiss = root.querySelector<HTMLButtonElement>("button.update-dismiss");
+    (primary ?? dismiss ?? root).focus();
+  }, [visualState, available, error, downloading, restarting]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (downloading || restarting) return;
+      event.preventDefault();
+      close();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [downloading, restarting]);
+
   return (
     <TrayNoticeShell>
       <div
+        ref={dialogRef}
         className={`update-notice update-notice-${visualState} tray-notice-card`}
         role="dialog"
+        tabIndex={-1}
         aria-labelledby="update-notice-title"
         aria-describedby="update-notice-description"
       >

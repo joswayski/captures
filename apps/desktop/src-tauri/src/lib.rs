@@ -5205,22 +5205,30 @@ pub(crate) fn document_window_page_load_handler(
     }
 }
 
-/// Show, unminimize, and focus a document window so hover and cursor styles
-/// work immediately after opening from a mini-preview Edit click.
+/// Show, unminimize, and focus a window so hover and cursor styles work
+/// immediately after opening.
 ///
 /// On macOS, Tauri `set_focus` calls `activateIgnoringOtherApps:`, which raises
-/// every Captures window. Activate only the target document instead so a second
-/// Edit click does not also lift an already-open editor over the user's other apps.
+/// every Captures window. Activate only the target window instead so a second
+/// Edit click or an update notice does not also lift an already-open editor
+/// over the user's other apps.
 pub(crate) fn reveal_and_focus_document_window(
     window: &tauri::WebviewWindow,
 ) -> Result<(), tauri::Error> {
     window.show()?;
     window.unminimize()?;
+    focus_single_window(window);
+    Ok(())
+}
+
+/// Makes a visible window key without showing it again.
+pub(crate) fn focus_single_window(window: &tauri::WebviewWindow) {
     #[cfg(target_os = "macos")]
     schedule_document_window_activation(window);
     #[cfg(not(target_os = "macos"))]
-    window.set_focus()?;
-    Ok(())
+    if let Err(error) = window.set_focus() {
+        eprintln!("failed to focus window: {error}");
+    }
 }
 
 #[cfg(target_os = "macos")]
