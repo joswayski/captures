@@ -18,7 +18,7 @@ export const Route = createRootRoute({
         content:
           "Captures — a work-in-progress, cross-platform screen capture utility by Jose Valerio.",
       },
-      { name: "theme-color", content: "#f5f7fb" },
+      { name: "theme-color", content: "#101014" },
       { title: "Captures" },
     ],
     links: [
@@ -63,11 +63,11 @@ function NotFound() {
 
 function RootDocument({ children }: Readonly<{ children: ReactNode }>) {
   return (
-    <html lang="en">
+    <html lang="en" style={{ colorScheme: "dark", backgroundColor: "#101014" }}>
       <head>
         <HeadContent />
       </head>
-      <body>
+      <body style={{ backgroundColor: "#101014", color: "#f2f2f4" }}>
         {children}
         <Scripts />
       </body>
