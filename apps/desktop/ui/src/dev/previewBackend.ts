@@ -651,12 +651,15 @@ const RESPONSES: Record<string, unknown> = {
 
 function mockScreenshotExportBytes(payload: unknown): number {
   const request = payload as {
+    imagePng?: number[];
     pngMaxColors?: number;
     jpegQuality?: number;
     maxSizeBytes?: number | null;
     qualityMode?: string;
   } | undefined;
-  const preserveBytes = 1_200_000;
+  const preserveBytes = Array.isArray(request?.imagePng) && request.imagePng.length > 0
+    ? request.imagePng.length
+    : 1_200_000;
   const colors = Number(request?.pngMaxColors);
   const qualityEncoded = Number.isFinite(colors) && colors > 0
     ? Math.round(140_000 + colors * 630)
@@ -664,7 +667,7 @@ function mockScreenshotExportBytes(payload: unknown): number {
   const maximum = Number(request?.maxSizeBytes);
   if (request?.qualityMode === "maximum" && Number.isFinite(maximum) && maximum > 0) {
     if (preserveBytes <= maximum) return preserveBytes;
-    return Math.min(qualityEncoded, Math.max(10_000, Math.floor(maximum * 0.94)));
+    return Math.max(10_000, Math.floor(maximum * 0.94));
   }
   return qualityEncoded;
 }
@@ -729,6 +732,7 @@ export function installPreviewBackend(): void {
       return mockScreenshotExportBytes(payload);
     }
     if (command === "preview_screenshot_export") {
+      await new Promise((resolve) => window.setTimeout(resolve, 650));
       const request = payload as {
         imagePng?: number[];
         jpegQuality?: number;
