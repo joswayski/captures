@@ -11,16 +11,10 @@ A built-in editor for text, arrows, and shapes.
 
 ![Captures screenshot editor with the Suez Canal, a Choke point label, a tiger on the left bank, and an Evergreen ship hanging off the right edge with an Expand canvas button](docs/images/screenshot-editor.jpg)
 
-<p align="center">
-  <img src="docs/images/capture-controls.jpg" alt="Close-up of the Captures capture menu in Record mode, with Region selected and the Start recording button highlighted" width="728">
-  <br>
-  <sub><strong>One compact menu</strong> with screenshot or record, and region, window, and options together.</sub>
-</p>
-
 <table>
   <tr>
     <td width="50%">
-      <img src="docs/images/capture-selection.jpg" alt="Captures region capture over an aerial satellite view of the Ever Given in the Suez Canal, with a highlighted box, corner handles, and the capture menu" width="100%">
+      <img src="docs/images/capture-selection.jpg" alt="Captures region recording over an aerial satellite view of the Ever Given in the Suez Canal, with a highlighted box and the full Record menu showing Start recording" width="100%">
       <br>
       <sub><strong>Capture what you need</strong>. A region, a window, or the full display. Screenshot and record from the same menu.</sub>
     </td>

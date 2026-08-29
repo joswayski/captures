@@ -11,7 +11,7 @@ export const PRODUCT_SHOTS = [
     height: 1000,
     title: "Capture what you need",
     description: "A region, a window, or the full display. Screenshot and record from the same menu.",
-    alt: "Captures region capture over an aerial satellite view of the Ever Given in the Suez Canal, with a highlighted box, corner handles, and the capture menu",
+    alt: "Captures region recording over an aerial satellite view of the Ever Given in the Suez Canal, with a highlighted box and the full Record menu showing Start recording",
   },
   {
     id: "screenshot-editor",
@@ -30,15 +30,6 @@ export const PRODUCT_SHOTS = [
     title: "Polish recordings",
     description: "Preview, trim, crop, and export video with quality and audio controls.",
     alt: "Captures video editor trimming a total solar eclipse to a few seconds of totality, with crop handles and save controls",
-  },
-  {
-    id: "capture-controls",
-    file: "capture-controls.jpg",
-    width: 1600,
-    height: 416,
-    title: "One compact menu",
-    description: "Screenshot or record. Region, window, and options stay together.",
-    alt: "Close-up of the Captures capture menu in Record mode, with Region selected and the Start recording button highlighted",
   },
   {
     id: "preferences",
