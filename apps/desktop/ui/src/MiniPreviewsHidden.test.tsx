@@ -4,8 +4,8 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import {
   MiniPreviewsHiddenChip,
-  miniPreviewsHiddenLabel,
 } from "./App";
+import { miniPreviewsHiddenLabel } from "./lib/miniPreviewsHidden";
 import type { CaptureArtifact } from "./types";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -79,10 +79,10 @@ describe("MiniPreviewsHiddenChip", () => {
 
   it("updates the count when the parked stack changes", async () => {
     type CountHandler = (event: { payload: number }) => void;
-    let countHandler: CountHandler | null = null;
+    const countHandler: { current: CountHandler | null } = { current: null };
     vi.mocked(listen).mockImplementation(async (event, handler) => {
       if (event === "mini-previews-hidden-count") {
-        countHandler = handler as CountHandler;
+        countHandler.current = handler as CountHandler;
       }
       return () => undefined;
     });
@@ -90,8 +90,8 @@ describe("MiniPreviewsHiddenChip", () => {
     render(<MiniPreviewsHiddenChip />);
     expect(screen.getByRole("button", { name: "Show 2 previews" })).toBeInTheDocument();
 
-    await waitFor(() => expect(countHandler).not.toBeNull());
-    countHandler?.({ payload: 1 });
+    await waitFor(() => expect(countHandler.current).not.toBeNull());
+    countHandler.current?.({ payload: 1 });
 
     expect(await screen.findByRole("button", { name: "Show 1 preview" })).toBeInTheDocument();
   });

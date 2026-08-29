@@ -117,6 +117,7 @@ import {
   reconcileEditorPresence,
 } from "./lib/editorPresence";
 import { reconcileActiveViewer } from "./lib/viewerActivation";
+import { miniPreviewsHiddenLabel } from "./lib/miniPreviewsHidden";
 import type {
   ActiveSession,
   AudioDevice,
@@ -462,12 +463,6 @@ export function RecordingControlsHiddenNotice() {
       </div>
     </main>
   );
-}
-
-export function miniPreviewsHiddenLabel(count: number): string {
-  if (count <= 0) return "Previews";
-  if (count === 1) return "1 preview";
-  return `${count} previews`;
 }
 
 export function MiniPreviewsHiddenChip() {
