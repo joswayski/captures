@@ -28,7 +28,9 @@ use objc2_app_kit::{
     NSViewLayerContentsPlacement, NSWindow, NSWindowCollectionBehavior, NSWindowStyleMask,
     NSWorkspace,
 };
-use objc2_foundation::{NSNumber, NSObject, NSPoint, NSProcessInfo, NSRect, NSSize, NSString};
+use objc2_foundation::{
+    NSNumber, NSObject, NSObjectProtocol, NSPoint, NSProcessInfo, NSRect, NSSize, NSString,
+};
 use tauri::WebviewWindow;
 use tauri_nspanel::WebviewWindowExt;
 
@@ -74,6 +76,7 @@ mod thumbnail_panel {
 use interactive_hud_panel::InteractiveHudPanel;
 use thumbnail_panel::ThumbnailPanel;
 
+#[path = "symbolic_hotkeys.rs"]
 mod symbolic_hotkeys;
 
 pub use symbolic_hotkeys::disable_symbolic_hotkeys;
