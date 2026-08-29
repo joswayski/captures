@@ -2556,7 +2556,8 @@ describe("ScreenshotEditor", () => {
       expect(frame).toHaveAttribute("data-pending", "true");
       expect(frame).toHaveClass("is-cover", "is-processing");
       expect(screen.getByText("After · Processing…")).toBeInTheDocument();
-      expect(screen.getByRole("status")).toHaveTextContent("Processing");
+      expect(screen.getByRole("status", { name: "Compression processing" }))
+        .toHaveTextContent("Processing");
       expect(split).toBeDisabled();
       expect(split).toHaveValue("68");
 

@@ -409,7 +409,12 @@ export function CompressionPreview({
         </div>
       )}
       {processing && (
-        <div className="compression-preview-processing" role="status" aria-live="polite">
+        <div
+          className="compression-preview-processing"
+          role="status"
+          aria-label="Compression processing"
+          aria-live="polite"
+        >
           <span className="compression-preview-spinner" aria-hidden="true" />
           Processing
         </div>

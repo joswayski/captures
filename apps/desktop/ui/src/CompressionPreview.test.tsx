@@ -199,7 +199,8 @@ describe("CompressionPreview", () => {
     expect(screen.getByAltText("Before compression")).toBeInTheDocument();
     expect(screen.getByAltText("After compression")).toBeInTheDocument();
     expect(screen.getByText("After · Processing…")).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("Processing");
+    expect(screen.getByRole("status", { name: "Compression processing" }))
+      .toHaveTextContent("Processing");
     const split = screen.getByRole("slider", { name: "Before and after comparison" });
     expect(split).toBeDisabled();
     expect(screen.getByRole("button", { name: "Drag to compare before and after" })).toBeDisabled();
