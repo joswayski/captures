@@ -1182,9 +1182,7 @@ pub(crate) fn single_window_activation_options() -> NSApplicationActivationOptio
 }
 
 fn make_key_and_activate(window: &WebviewWindow) -> Result<(), &'static str> {
-    if MainThreadMarker::new().is_none() {
-        return Err("window focus must run on the main thread");
-    }
+    MainThreadMarker::new().ok_or("window focus must run on the main thread")?;
     let native = native_window(window)?;
     // Become main before activation so “key + main only” cannot also raise the
     // last focused editor. `orderFrontRegardless` lifts this one window above
