@@ -1646,6 +1646,7 @@ export function ScreenshotEditor() {
   const [compressPreviewAfterBytes, setCompressPreviewAfterBytes] = useState<number | null>(null);
   const [compressCompareDismissed, setCompressCompareDismissed] = useState(false);
   const [compressComparePaused, setCompressComparePaused] = useState(false);
+  const [compressSplit, setCompressSplit] = useState(50);
   const compressPreviewUrlsRef = useRef<{ before: string | null; after: string | null }>({
     before: null,
     after: null,
@@ -4918,6 +4919,7 @@ export function ScreenshotEditor() {
       setEstimateSourceBytes(null);
       setCompressCompareDismissed(false);
       setCompressComparePaused(false);
+      setCompressSplit(50);
     } else {
       setCompressCompareDismissed(false);
     }
@@ -5284,6 +5286,9 @@ export function ScreenshotEditor() {
               afterHint={isAnnotationDrawTool(tool)
                 ? "Edits apply to the original. This side updates after you finish."
                 : undefined}
+              initialSplit={compressSplit}
+              onSplitChange={setCompressSplit}
+              splitDragEnabled={!isAnnotationDrawTool(tool)}
               onDismiss={() => setCompressCompareDismissed(true)}
             />
           )}

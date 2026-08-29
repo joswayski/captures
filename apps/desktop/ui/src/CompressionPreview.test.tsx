@@ -267,4 +267,40 @@ describe("CompressionPreview", () => {
     expect(screen.getByRole("group", { name: "Compression comparison" }))
       .toHaveClass("is-suppressed");
   });
+
+  it("restores a saved split and locks the handle while drawing", () => {
+    const onSplitChange = vi.fn();
+    const { rerender } = render(
+      <CompressionPreview
+        beforeUrl="blob:before"
+        afterUrl="blob:after"
+        beforeBytes={1_000_000}
+        afterBytes={250_000}
+        pending={false}
+        initialSplit={72}
+        onSplitChange={onSplitChange}
+        splitDragEnabled={false}
+      />,
+    );
+
+    const frame = screen.getByRole("group", { name: "Compression comparison" });
+    expect(frame).toHaveClass("is-draw-locked");
+    expect(screen.getByRole("slider", { name: "Before and after comparison" }))
+      .toHaveValue("72");
+
+    rerender(
+      <CompressionPreview
+        beforeUrl="blob:before"
+        afterUrl="blob:after-2"
+        beforeBytes={1_000_000}
+        afterBytes={180_000}
+        pending={false}
+        initialSplit={72}
+        onSplitChange={onSplitChange}
+        splitDragEnabled={false}
+      />,
+    );
+    expect(screen.getByRole("slider", { name: "Before and after comparison" }))
+      .toHaveValue("72");
+  });
 });

@@ -3413,6 +3413,7 @@ export function RecordingEditor() {
   const [compressPreviewBeforeUrl, setCompressPreviewBeforeUrl] = useState<string | null>(null);
   const [compressPreviewAfterUrl, setCompressPreviewAfterUrl] = useState<string | null>(null);
   const [compressCompareDismissed, setCompressCompareDismissed] = useState(false);
+  const [compressSplit, setCompressSplit] = useState(50);
   const compressPreviewUrlsRef = useRef<{ before: string | null; after: string | null }>({
     before: null,
     after: null,
@@ -4240,6 +4241,8 @@ export function RecordingEditor() {
                   : estimatedBytes}
                 pending={compressPreviewPending}
                 error={compressPreviewError}
+                initialSplit={compressSplit}
+                onSplitChange={setCompressSplit}
                 onDismiss={() => setCompressCompareDismissed(true)}
               />
             )}
@@ -4511,6 +4514,7 @@ export function RecordingEditor() {
                 if (mode === "preserve") {
                   clearCompressPreview();
                   setCompressCompareDismissed(false);
+                  setCompressSplit(50);
                 } else {
                   setCompressCompareDismissed(false);
                 }

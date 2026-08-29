@@ -27,6 +27,11 @@ export type CompressionPreviewProps = {
   afterHint?: string;
   /** Hide the comparison overlay without changing save quality. */
   onDismiss?: () => void;
+  /** Starting split when this overlay mounts. */
+  initialSplit?: number;
+  onSplitChange?: (split: number) => void;
+  /** When false, the divider handle ignores pointers so drawing can pass through. */
+  splitDragEnabled?: boolean;
   className?: string;
 };
 
@@ -112,12 +117,19 @@ export function CompressionPreview({
   suppressed = false,
   afterHint = "",
   onDismiss,
+  initialSplit = 50,
+  onSplitChange,
+  splitDragEnabled = true,
   className = "",
 }: CompressionPreviewProps) {
-  const [split, setSplitState] = useState(50);
+  const [split, setSplitState] = useState(() => (
+    Math.min(MAX_SPLIT_PERCENT, Math.max(MIN_SPLIT_PERCENT, initialSplit))
+  ));
   const setSplit = useCallback((value: number) => {
-    setSplitState(Math.min(MAX_SPLIT_PERCENT, Math.max(MIN_SPLIT_PERCENT, value)));
-  }, []);
+    const next = Math.min(MAX_SPLIT_PERCENT, Math.max(MIN_SPLIT_PERCENT, value));
+    setSplitState(next);
+    onSplitChange?.(next);
+  }, [onSplitChange]);
 
   const [frameSize, setFrameSize] = useState({ width: 0, height: 0 });
   const [afterHintPos, setAfterHintPos] = useState<{ x: number; y: number } | null>(null);
@@ -216,6 +228,7 @@ export function CompressionPreview({
         liveBefore ? "is-live" : "",
         waiting ? "is-waiting" : "",
         suppressed ? "is-suppressed" : "",
+        splitDragEnabled ? "" : "is-draw-locked",
         className,
       ].filter(Boolean).join(" ")}
       data-pending={pending ? "true" : undefined}
