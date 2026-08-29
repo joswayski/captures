@@ -234,6 +234,41 @@ describe("CompressionPreview", () => {
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 
+  it("keeps the after-side hint inside the preview near the far edge", () => {
+    render(
+      <CompressionPreview
+        beforeUrl="blob:before"
+        afterUrl="blob:after"
+        beforeBytes={1_000_000}
+        afterBytes={250_000}
+        pending={false}
+        afterHint="Edits apply to the original. This side updates after you finish."
+      />,
+    );
+
+    const frame = screen.getByRole("group", { name: "Compression comparison" });
+    vi.spyOn(frame, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 200,
+      bottom: 100,
+      width: 200,
+      height: 100,
+      toJSON: () => ({}),
+    });
+
+    fireEvent.pointerMove(window, { clientX: 190, clientY: 92 });
+    const hint = screen.getByRole("tooltip");
+    const left = Number.parseFloat(hint.style.left);
+    const top = Number.parseFloat(hint.style.top);
+    expect(left).toBeGreaterThanOrEqual(8);
+    expect(top).toBeGreaterThanOrEqual(8);
+    expect(left).toBeLessThanOrEqual(192);
+    expect(top).toBeLessThanOrEqual(92);
+  });
+
   it("can hide the comparison without changing save quality", () => {
     const onDismiss = vi.fn();
     render(

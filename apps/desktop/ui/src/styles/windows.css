@@ -2466,7 +2466,7 @@
   position: absolute;
   inset: 0;
   z-index: 2;
-  background: rgba(5, 5, 6, 0.38);
+  background: var(--glass-veil);
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--dur-2) var(--ease-standard);
@@ -2639,7 +2639,7 @@
   position: absolute;
   z-index: 4;
   width: max-content;
-  max-width: 220px;
+  max-width: min(220px, calc(100% - 16px));
   padding: 5px 8px;
   border: 1px solid var(--glass-border);
   border-radius: var(--r-sm);
@@ -2650,7 +2650,6 @@
   font-size: var(--text-xs);
   font-weight: var(--weight-medium);
   line-height: 1.35;
-  transform: translate(-8px, -4px);
 }
 
 .compression-preview-savings {

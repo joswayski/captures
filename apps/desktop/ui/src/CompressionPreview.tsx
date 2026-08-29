@@ -5,6 +5,30 @@ import { formatFileSize } from "./lib/format";
 // Keep the divider handle clear of the Before/After badges at the frame edges.
 const MIN_SPLIT_PERCENT = 6;
 const MAX_SPLIT_PERCENT = 94;
+const AFTER_HINT_PAD = 8;
+const AFTER_HINT_FALLBACK_WIDTH = 220;
+const AFTER_HINT_FALLBACK_HEIGHT = 40;
+
+/** Keep the After-side cursor hint fully inside the comparison frame. */
+function compressionAfterHintPosition(
+  localX: number,
+  localY: number,
+  frameWidth: number,
+  frameHeight: number,
+  hintWidth: number,
+  hintHeight: number,
+): { x: number; y: number } {
+  const width = Math.min(hintWidth, Math.max(1, frameWidth - AFTER_HINT_PAD * 2));
+  const height = Math.min(hintHeight, Math.max(1, frameHeight - AFTER_HINT_PAD * 2));
+  let x = localX + 12;
+  let y = localY + 14;
+  if (x + width + AFTER_HINT_PAD > frameWidth) x = localX - width - AFTER_HINT_PAD;
+  if (y + height + AFTER_HINT_PAD > frameHeight) y = localY - height - AFTER_HINT_PAD;
+  return {
+    x: Math.min(frameWidth - width - AFTER_HINT_PAD, Math.max(AFTER_HINT_PAD, x)),
+    y: Math.min(frameHeight - height - AFTER_HINT_PAD, Math.max(AFTER_HINT_PAD, y)),
+  };
+}
 
 export type CompressionPreviewProps = {
   beforeUrl: string | null;
@@ -134,6 +158,7 @@ export function CompressionPreview({
   const [frameSize, setFrameSize] = useState({ width: 0, height: 0 });
   const [afterHintPos, setAfterHintPos] = useState<{ x: number; y: number } | null>(null);
   const frameRef = useRef<HTMLDivElement>(null);
+  const afterHintRef = useRef<HTMLDivElement>(null);
   const draggingRef = useRef(false);
 
   useLayoutEffect(() => {
@@ -172,10 +197,15 @@ export function CompressionPreview({
         setAfterHintPos(null);
         return;
       }
-      setAfterHintPos({
-        x: Math.min(bounds.width - 12, Math.max(12, clientX - bounds.left + 14)),
-        y: Math.min(bounds.height - 12, Math.max(12, clientY - bounds.top + 16)),
-      });
+      const hint = afterHintRef.current;
+      setAfterHintPos(compressionAfterHintPosition(
+        clientX - bounds.left,
+        clientY - bounds.top,
+        bounds.width,
+        bounds.height,
+        hint?.offsetWidth || AFTER_HINT_FALLBACK_WIDTH,
+        hint?.offsetHeight || AFTER_HINT_FALLBACK_HEIGHT,
+      ));
     };
     const onPointerMove = (event: PointerEvent) => {
       updateHint(event.clientX, event.clientY);
@@ -359,6 +389,7 @@ export function CompressionPreview({
       )}
       {showAfterHint && afterHintPos && (
         <div
+          ref={afterHintRef}
           className="compression-preview-after-hint"
           role="tooltip"
           style={{ left: afterHintPos.x, top: afterHintPos.y }}
