@@ -2554,8 +2554,10 @@ describe("ScreenshotEditor", () => {
       expect(screen.getByAltText("Before compression")).toBeInTheDocument();
       expect(screen.getByAltText("After compression")).toBeInTheDocument();
       expect(frame).toHaveAttribute("data-pending", "true");
-      expect(frame).toHaveClass("is-cover");
-      expect(screen.getByText("After · Encoding…")).toBeInTheDocument();
+      expect(frame).toHaveClass("is-cover", "is-processing");
+      expect(screen.getByText("After · Processing…")).toBeInTheDocument();
+      expect(screen.getByRole("status")).toHaveTextContent("Processing");
+      expect(split).toBeDisabled();
       expect(split).toHaveValue("68");
 
       await waitFor(() => {

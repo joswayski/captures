@@ -2457,6 +2457,16 @@
   pointer-events: none;
 }
 
+.compression-preview-frame.is-processing .compression-preview-badge {
+  z-index: 3;
+}
+
+.compression-preview-frame.is-processing .compression-preview-handle,
+.compression-preview-frame.is-processing .compression-preview-range,
+.compression-preview-frame.is-cover.is-processing .compression-preview-range {
+  pointer-events: none;
+}
+
 .compression-preview-frame.is-suppressed {
   opacity: 0;
   pointer-events: none;
@@ -2466,13 +2476,51 @@
   position: absolute;
   inset: 0;
   z-index: 2;
-  background: var(--glass-veil);
+  background:
+    radial-gradient(ellipse at center, rgba(15, 15, 18, 0.18) 0%, var(--glass-veil) 62%, rgba(8, 8, 10, 0.72) 100%);
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--dur-2) var(--ease-standard);
 }
 
-.compression-preview-frame[data-pending="true"]:not(.is-waiting) .compression-preview-veil {
+.compression-preview-frame.is-processing .compression-preview-veil {
+  opacity: 1;
+  pointer-events: auto;
+  cursor: wait;
+}
+
+.compression-preview-processing {
+  position: absolute;
+  z-index: 3;
+  top: 50%;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  padding: var(--s-4) var(--s-6);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-pill);
+  color: var(--glass-text);
+  background: var(--glass-strong);
+  box-shadow: var(--glass-shadow);
+  backdrop-filter: blur(12px);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.compression-preview-spinner {
+  display: block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: preferences-status-spin 0.72s linear infinite;
+}
+
+.compression-preview-frame[data-pending="true"]:not(.is-waiting):not(.is-processing) .compression-preview-veil {
   opacity: 1;
 }
 
@@ -2480,6 +2528,11 @@
   .compression-preview-frame.is-cover,
   .compression-preview-veil {
     transition: none;
+  }
+
+  .compression-preview-spinner {
+    animation: none;
+    border-right-color: currentColor;
   }
 }
 

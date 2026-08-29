@@ -719,6 +719,10 @@ fn encode_export(
     }
 }
 
+fn encoded_len(bytes: &[u8]) -> u64 {
+    u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+}
+
 fn encode_export_with_limit(
     image: &RgbaImage,
     format: ScreenshotEditFormat,
@@ -727,25 +731,35 @@ fn encode_export_with_limit(
     max_size_bytes: Option<u64>,
     png_max_colors: Option<u16>,
 ) -> Result<Vec<u8>, AppError> {
-    let effective_mode = if max_size_bytes.is_some() {
-        ScreenshotExportQualityMode::Maximum
-    } else {
-        quality_mode
-    };
-    let output = encode_export(image, format, effective_mode, jpeg_quality, png_max_colors)?;
     let Some(maximum) = max_size_bytes else {
-        return Ok(output);
+        return encode_export(image, format, quality_mode, jpeg_quality, png_max_colors);
     };
-    if u64::try_from(output.len()).unwrap_or(u64::MAX) <= maximum {
-        return Ok(output);
+
+    // Highest quality that still fits: start from an uncompressed/preserve
+    // encode. A large cap (500 MB on a 4 MB original) must not keep a previous
+    // 64-color PNG or q80 WebP just because that already fit.
+    let preserve = encode_export(
+        image,
+        format,
+        ScreenshotExportQualityMode::Preserve,
+        100,
+        None,
+    )?;
+    if encoded_len(&preserve) <= maximum {
+        return Ok(preserve);
     }
+
+    let quality_ceiling = match quality_mode {
+        ScreenshotExportQualityMode::Compress => jpeg_quality,
+        ScreenshotExportQualityMode::Preserve | ScreenshotExportQualityMode::Maximum => 100,
+    };
 
     match format {
         ScreenshotEditFormat::Jpeg => {
             let rgb = composite_onto_white(image);
-            let maximum_quality = jpeg_quality.clamp(40, 100);
+            let maximum_quality = quality_ceiling.clamp(40, 100);
             let minimum = encode_jpeg(&rgb, 40)?;
-            if u64::try_from(minimum.len()).unwrap_or(u64::MAX) > maximum {
+            if encoded_len(&minimum) > maximum {
                 return Err(AppError::Image(
                     "JPEG cannot meet the requested maximum at the supported quality range; reduce the output size or raise the limit"
                         .to_owned(),
@@ -758,7 +772,7 @@ fn encode_export_with_limit(
             while low <= high {
                 let quality = low + (high - low) / 2;
                 let candidate = encode_jpeg(&rgb, quality)?;
-                if u64::try_from(candidate.len()).unwrap_or(u64::MAX) <= maximum {
+                if encoded_len(&candidate) <= maximum {
                     best = candidate;
                     low = quality.saturating_add(1);
                 } else {
@@ -780,7 +794,7 @@ fn encode_export_with_limit(
                 for dither in [true, false] {
                     let candidate =
                         storage::encode_png_export_dithered(image, true, Some(colors), dither)?;
-                    let fits = u64::try_from(candidate.len()).unwrap_or(u64::MAX) <= maximum;
+                    let fits = encoded_len(&candidate) <= maximum;
                     if fits {
                         best = Some(candidate);
                         break 'palettes;
@@ -794,7 +808,7 @@ fn encode_export_with_limit(
                         .to_owned(),
                 )
             })?;
-            if u64::try_from(best.len()).unwrap_or(u64::MAX) <= maximum {
+            if encoded_len(&best) <= maximum {
                 Ok(best)
             } else {
                 Err(AppError::Image(
@@ -804,9 +818,8 @@ fn encode_export_with_limit(
             }
         }
         ScreenshotEditFormat::Webp => {
-            let maximum_quality = jpeg_quality.clamp(1, 100);
             let minimum = encode_webp(image, Some(1))?;
-            if u64::try_from(minimum.len()).unwrap_or(u64::MAX) > maximum {
+            if encoded_len(&minimum) > maximum {
                 return Err(AppError::Image(
                     "WebP cannot meet the requested maximum at the supported quality range; reduce the output size or raise the limit"
                         .to_owned(),
@@ -814,11 +827,11 @@ fn encode_export_with_limit(
             }
             let mut best = minimum;
             let mut low = 2_u8;
-            let mut high = maximum_quality;
+            let mut high = quality_ceiling.clamp(1, 100);
             while low <= high {
                 let quality = low + (high - low) / 2;
                 let candidate = encode_webp(image, Some(quality))?;
-                if u64::try_from(candidate.len()).unwrap_or(u64::MAX) <= maximum {
+                if encoded_len(&candidate) <= maximum {
                     best = candidate;
                     low = quality.saturating_add(1);
                 } else {
@@ -970,7 +983,7 @@ mod tests {
 
     use super::{
         ScreenshotEditFormat, ScreenshotExportQualityMode, composite_onto_white, encode_export,
-        encode_export_with_limit, resolve_editor_draft_asset, unique_export_path,
+        encode_export_with_limit, encoded_len, resolve_editor_draft_asset, unique_export_path,
         validate_draft_component_id, validated_destination, write_export_atomically,
     };
 
@@ -1446,6 +1459,77 @@ mod tests {
         assert!(u64::try_from(limited.len()).unwrap() <= maximum);
         image::load_from_memory_with_format(&limited, ImageFormat::Png)
             .expect("limited PNG remains readable");
+    }
+
+    #[test]
+    fn maximum_file_size_keeps_preserve_quality_when_the_original_already_fits() {
+        let image = detailed_sample();
+        for format in [
+            ScreenshotEditFormat::Png,
+            ScreenshotEditFormat::Jpeg,
+            ScreenshotEditFormat::Webp,
+        ] {
+            let preserve = encode_export(
+                &image,
+                format,
+                ScreenshotExportQualityMode::Preserve,
+                100,
+                None,
+            )
+            .unwrap();
+            let limited = encode_export_with_limit(
+                &image,
+                format,
+                ScreenshotExportQualityMode::Maximum,
+                100,
+                Some(encoded_len(&preserve).saturating_mul(8)),
+                None,
+            )
+            .expect("a generous cap should keep original quality");
+            assert_eq!(
+                limited, preserve,
+                "{format:?} should not compress when preserve already fits"
+            );
+        }
+    }
+
+    #[test]
+    fn jpeg_maximum_stays_just_under_a_tight_size_cap() {
+        let image = detailed_sample();
+        let high = encode_export(
+            &image,
+            ScreenshotEditFormat::Jpeg,
+            ScreenshotExportQualityMode::Preserve,
+            100,
+            None,
+        )
+        .unwrap();
+        let low = encode_export(
+            &image,
+            ScreenshotEditFormat::Jpeg,
+            ScreenshotExportQualityMode::Compress,
+            40,
+            None,
+        )
+        .unwrap();
+        assert!(high.len() > low.len());
+        let maximum = u64::try_from((high.len() + low.len()) / 2).unwrap();
+        let limited = encode_export_with_limit(
+            &image,
+            ScreenshotEditFormat::Jpeg,
+            ScreenshotExportQualityMode::Maximum,
+            100,
+            Some(maximum),
+            None,
+        )
+        .expect("JPEG fits the requested maximum");
+        assert!(encoded_len(&limited) <= maximum);
+        assert!(
+            encoded_len(&limited) > encoded_len(&low),
+            "should keep more quality than the floor when the cap allows it (limited={}, low={}, max={maximum})",
+            limited.len(),
+            low.len()
+        );
     }
 
     #[test]

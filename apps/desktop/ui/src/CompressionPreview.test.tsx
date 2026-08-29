@@ -125,7 +125,7 @@ describe("CompressionPreview", () => {
       />,
     );
 
-    expect(screen.getByText("After · Encoding…")).toBeInTheDocument();
+    expect(screen.getByText("After · Processing…")).toBeInTheDocument();
     expect(screen.queryByRole("slider", { name: "Before and after comparison" }))
       .not.toBeInTheDocument();
   });
@@ -147,7 +147,7 @@ describe("CompressionPreview", () => {
     expect(screen.queryByText("Preparing preview…")).not.toBeInTheDocument();
     expect(screen.queryByAltText("Before compression")).not.toBeInTheDocument();
     expect(screen.queryByAltText("After compression")).not.toBeInTheDocument();
-    expect(screen.getByText("After · Encoding…")).toBeInTheDocument();
+    expect(screen.getByText("After · Processing…")).toBeInTheDocument();
   });
 
   it("keeps the split when the after image is replaced during a refresh", () => {
@@ -194,10 +194,17 @@ describe("CompressionPreview", () => {
 
     const frame = screen.getByRole("group", { name: "Compression comparison" });
     expect(frame).toHaveAttribute("data-pending", "true");
+    expect(frame).toHaveClass("is-processing", "is-draw-locked");
     expect(frame).not.toHaveClass("is-waiting");
     expect(screen.getByAltText("Before compression")).toBeInTheDocument();
     expect(screen.getByAltText("After compression")).toBeInTheDocument();
-    expect(screen.getByText("After · Encoding…")).toBeInTheDocument();
+    expect(screen.getByText("After · Processing…")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Processing");
+    const split = screen.getByRole("slider", { name: "Before and after comparison" });
+    expect(split).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Drag to compare before and after" })).toBeDisabled();
+    fireEvent.change(split, { target: { value: "80" } });
+    expect(split).toHaveValue("50");
   });
 
   it("shows a cursor hint on the compressed side while a drawing tool is active", () => {

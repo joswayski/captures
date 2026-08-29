@@ -3083,12 +3083,12 @@
 }
 
 .screenshot-maximum-size {
-  width: 184px;
+  width: 212px;
 }
 
 .screenshot-maximum-size-control {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 58px;
+  grid-template-columns: minmax(0, 1fr) 72px;
   gap: var(--s-2);
   align-items: center;
 }
@@ -3099,8 +3099,19 @@
 }
 
 .screenshot-maximum-size .custom-select {
-  min-width: 0;
-  width: 58px;
+  min-width: 72px;
+  width: 72px;
+}
+
+.screenshot-maximum-size .custom-select-trigger {
+  padding: 0 var(--s-3);
+  gap: var(--s-2);
+}
+
+.screenshot-maximum-size .custom-select-trigger > span {
+  overflow: visible;
+  flex: 0 1 auto;
+  line-height: 1;
 }
 
 .screenshot-output-estimate-control {
@@ -3538,6 +3549,6 @@
   }
 
   .screenshot-maximum-size {
-    width: 124px;
+    width: 176px;
   }
 }
