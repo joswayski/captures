@@ -231,7 +231,7 @@ html.capture-selector-display {
 }
 
 .selection-dimensions[data-screen-edge="top"] {
-  top: 6px;
+  top: var(--s-3);
 }
 
 .window-targets {
