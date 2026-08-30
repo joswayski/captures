@@ -137,11 +137,11 @@ describe("Preferences", () => {
     });
   });
 
-  it("can enable auto-start after region or window selection", async () => {
+  it("can enable auto-start after target selection", async () => {
     render(<Preferences />);
 
     const autoStart = await screen.findByRole("checkbox", {
-      name: /Start capture as soon as a region or window is selected/,
+      name: /Start capture as soon as a target is selected/,
     });
     expect(autoStart).not.toBeChecked();
     fireEvent.click(autoStart);
