@@ -2030,6 +2030,13 @@
   font-variant-numeric: tabular-nums;
 }
 
+.update-progress-label small {
+  margin-left: var(--s-2);
+  color: var(--text-faint);
+  font-size: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
 .update-progress {
   position: relative;
   height: 6px;

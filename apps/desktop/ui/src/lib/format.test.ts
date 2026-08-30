@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { fileSizeDeltaBaseline, formatFileSize, formatFileSizeDelta } from "./format";
+import {
+  fileSizeDeltaBaseline,
+  formatFileSize,
+  formatFileSizeDelta,
+  formatUpdateSize,
+} from "./format";
 
 describe("formatFileSize", () => {
   it("uses compact decimal units", () => {
@@ -13,6 +18,15 @@ describe("formatFileSize", () => {
   it("handles missing or invalid byte counts", () => {
     expect(formatFileSize(0)).toBe("0 B");
     expect(formatFileSize(Number.NaN)).toBe("0 B");
+  });
+});
+
+describe("formatUpdateSize", () => {
+  it("never exposes raw byte counts in updater copy", () => {
+    expect(formatUpdateSize(0)).toBe("0 KB");
+    expect(formatUpdateSize(500)).toBe("0.5 KB");
+    expect(formatUpdateSize(7_340_032)).toBe("7.3 MB");
+    expect(formatUpdateSize(2_400_000_000)).toBe("2.4 GB");
   });
 });
 

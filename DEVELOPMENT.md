@@ -37,6 +37,7 @@ open "http://127.0.0.1:1420/?view=mini-previews-hidden&mock=1&count=3"
 open "http://127.0.0.1:1420/?view=mini-previews-hidden&mock=1&count=1"
 open "http://127.0.0.1:1420/?view=update&mock=1"
 open "http://127.0.0.1:1420/?view=update&mock=1&captures=1"
+open "http://127.0.0.1:1420/?view=update&mock=1&update=downloading"
 open "http://127.0.0.1:1420/?view=update&mock=1&update=error"
 open "http://127.0.0.1:1420/?view=startup&mock=1"
 ```

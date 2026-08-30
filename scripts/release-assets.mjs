@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -150,7 +150,13 @@ export function validateAndWriteChecksums(directory, appVersion) {
         `latest.json ${platform} still points at a draft untagged download (${entry.url}); rewrite it to the published tag URL before publishing`,
       );
     }
+    const assetName = updaterAssetName(entry.url, new Map());
+    if (!assetName || !names.includes(assetName)) {
+      throw new Error(`latest.json ${platform} does not identify a staged updater asset`);
+    }
+    entry.size = statSync(join(root, assetName)).size;
   }
+  writeFileSync(join(root, "latest.json"), `${JSON.stringify(latest, null, 2)}\n`);
 
   const checksumNames = names.filter((name) => name !== "SHA256SUMS");
   const checksums = checksumNames.map((name) => {

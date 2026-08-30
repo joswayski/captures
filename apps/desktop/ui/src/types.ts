@@ -363,6 +363,7 @@ export type UpdateStatus =
       changelog: UpdateChangelogEntry[];
       installable: boolean;
       manual_download_url: string | null;
+      download_size: number | null;
       will_close_open_captures: boolean;
     })
   | (UpdateVersionInfo & {

@@ -15,6 +15,12 @@ export function formatFileSize(bytes: number): string {
   return `${value.toFixed(precision)} ${FILE_SIZE_UNITS[unitIndex]}`;
 }
 
+export function formatUpdateSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 KB";
+  if (bytes < 1_000) return `${(bytes / 1_000).toFixed(1)} KB`;
+  return formatFileSize(bytes);
+}
+
 /**
  * Byte count Est. size % should compare against.
  *

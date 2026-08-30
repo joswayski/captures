@@ -479,6 +479,7 @@ function updateStatus(): UpdateStatus {
     ],
     installable: true,
     manual_download_url: null,
+    download_size: 12_582_912,
     will_close_open_captures: flag("captures"),
   };
 }
