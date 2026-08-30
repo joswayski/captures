@@ -301,6 +301,7 @@ pub fn run() {
             updates::get_update_status,
             updates::check_for_updates,
             updates::install_update,
+            updates::dismiss_update_notice,
             recording::prepare_recording,
             recording::get_recording_selection,
             recording::select_capture_display,
@@ -5418,7 +5419,7 @@ fn show_preferences(app: &AppHandle) {
     });
 }
 
-fn hide_window(app: &AppHandle, label: &str) {
+pub(crate) fn hide_window(app: &AppHandle, label: &str) {
     #[cfg(target_os = "macos")]
     {
         let app = app.clone();
@@ -6608,6 +6609,29 @@ mod tests {
                 "viewer capability should grant {permission}"
             );
         }
+    }
+
+    #[test]
+    fn update_notice_cannot_hide_itself_through_the_window_api() {
+        // Later/Close used Window.hide, which is a no-op without allow-hide.
+        // Dismiss goes through the dismiss_update_notice command instead.
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json"))
+                .expect("desktop capability should be valid JSON");
+        let windows = capability["windows"]
+            .as_array()
+            .expect("desktop capability should target windows");
+        let permissions = capability["permissions"]
+            .as_array()
+            .expect("desktop capability should grant permissions");
+
+        assert!(windows.iter().any(|window| window == "update"));
+        assert!(
+            !permissions
+                .iter()
+                .any(|granted| granted == "core:window:allow-hide"),
+            "update notice must not rely on Window.hide from the webview"
+        );
     }
 
     #[test]

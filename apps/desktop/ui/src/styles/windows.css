@@ -2130,6 +2130,16 @@
   cursor: pointer;
 }
 
+/* Opaque fill so macOS WKWebView hit-tests Later/Close. Transparent pixels in
+ * this borderless window punch through to the desktop. */
+.update-notice-footer .update-dismiss {
+  background: var(--surface-raised);
+}
+
+.update-notice-footer .update-dismiss:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 8%, var(--surface-raised));
+}
+
 .update-notice-footer button:focus {
   outline: none;
   box-shadow: var(--focus-ring);

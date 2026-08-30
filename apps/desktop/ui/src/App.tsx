@@ -605,7 +605,7 @@ export function UpdateNotice() {
 
   const close = () => {
     setActionError("");
-    void currentWindow?.hide();
+    void invoke("dismiss_update_notice");
   };
   const run = async (command: "check_for_updates" | "install_update") => {
     setActionError("");
