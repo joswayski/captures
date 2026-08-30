@@ -110,6 +110,22 @@ import {
   resizeHandlePoint,
   isResizeCornerHandle,
   scaleArrowStrokeForLength,
+  shapeLocalBounds,
+  shapeLocalPoint,
+  shapeRotation,
+  shapeRotationHandleOffset,
+  shapeRotationHandlePoint,
+  shapeRotationOrigin,
+  hitTestShapeRotationHandle,
+  shapeRotationHandleFitsCanvas,
+  preserveShapeWorldPoint,
+  oppositeResizeHandle,
+  snapShapeRotation,
+  snapShapeRotationDegrees,
+  shapeRotationDegrees,
+  shapeRotationFromDegrees,
+  SHAPE_ROTATION_SNAP_DEGREES,
+  withShapeRotation,
   snapResizedBounds,
   snapTranslatedBounds,
   stackDropLightFocusAtPoint,
@@ -214,6 +230,15 @@ type EditorGesture =
     pointerId: number;
     handle: ArrowHandle;
     element: Extract<ScreenshotElement, { kind: "shape" }>;
+    initialDocument: ScreenshotDocument;
+  }
+  | {
+    kind: "rotate";
+    pointerId: number;
+    element: Extract<ScreenshotElement, { kind: "shape" }>;
+    origin: EditorPoint;
+    startAngle: number;
+    initialRotation: number;
     initialDocument: ScreenshotDocument;
   }
   | {
@@ -334,6 +359,14 @@ const TEXT_STYLE_ITEMS: Array<{ preset: TextStylePreset; label: string }> = [
   { preset: "rounded-box", label: "Rounded Box" },
 ];
 
+const SHAPE_ROTATION_SLIDER_MARKS = [
+  { value: -180, label: "−180°", shortLabel: "−180" },
+  { value: -90, label: "−90°", shortLabel: "−90" },
+  { value: 0, label: "0°", shortLabel: "0" },
+  { value: 90, label: "90°", shortLabel: "90" },
+  { value: 180, label: "180°", shortLabel: "180" },
+];
+
 /** Tools that draw closed or open vector shapes (not freehand). */
 function isShapeDrawTool(tool: ScreenshotTool): boolean {
   return tool === "rectangle"
@@ -359,16 +392,31 @@ function hitTestSelectedAnnotation(
   selected: ScreenshotElement,
   point: EditorPoint,
   interactionRadius: number,
+  displayScale: number,
+  canvas?: Pick<ScreenshotDocument, "width" | "height">,
 ): (
   | { kind: "resize"; handle: ResizeHandle; bounds: EditorRect }
   | { kind: "arrow-handle"; handle: ArrowHandle }
+  | { kind: "rotate" }
   | null
 ) {
   if (selected.locked || !selected.visible) return null;
-  const bounds = elementBounds(selected);
+  if (
+    selected.kind === "shape"
+    && (!canvas || shapeRotationHandleFitsCanvas(selected, displayScale, canvas))
+    && hitTestShapeRotationHandle(selected, point, interactionRadius, displayScale)
+  ) {
+    return { kind: "rotate" };
+  }
+  const localPoint = selected.kind === "shape"
+    ? shapeLocalPoint(selected, point)
+    : point;
+  const bounds = selected.kind === "shape"
+    ? shapeLocalBounds(selected)
+    : elementBounds(selected);
   const handle = hitTestResizeHandle(
     bounds,
-    point,
+    localPoint,
     interactionRadius,
     selected.kind === "text" ? "corners" : "all",
   );
@@ -703,6 +751,52 @@ function strokeArrowPath(
 }
 
 /** Compact endpoint grip for line/arrow ends (kept smaller than full resize corners). */
+function drawShapeRotationHandle(
+  context: CanvasRenderingContext2D,
+  bounds: EditorRect,
+  unit: number,
+  accentColor: string,
+): void {
+  const midX = bounds.x + bounds.width / 2;
+  const offset = shapeRotationHandleOffset(1 / unit);
+  const handleY = bounds.y - offset;
+  const radius = 8 * unit;
+  context.save();
+  context.globalAlpha = 1;
+  context.strokeStyle = accentColor;
+  context.fillStyle = "rgba(255, 255, 255, 0.98)";
+  context.lineWidth = 1.6 * unit;
+  context.beginPath();
+  context.moveTo(midX, bounds.y);
+  context.lineTo(midX, handleY);
+  context.stroke();
+  context.beginPath();
+  context.arc(midX, handleY, radius, 0, Math.PI * 2);
+  context.fill();
+  context.stroke();
+  // Compact rotate glyph inside the grip so the control reads as rotation.
+  context.strokeStyle = accentColor;
+  context.fillStyle = accentColor;
+  context.lineWidth = 1.35 * unit;
+  context.lineCap = "round";
+  context.lineJoin = "round";
+  const glyphR = 3.15 * unit;
+  context.beginPath();
+  context.arc(midX, handleY, glyphR, Math.PI * 0.35, Math.PI * 1.75);
+  context.stroke();
+  const tipAngle = Math.PI * 1.75;
+  const tipX = midX + Math.cos(tipAngle) * glyphR;
+  const tipY = handleY + Math.sin(tipAngle) * glyphR;
+  const arrow = 2.15 * unit;
+  context.beginPath();
+  context.moveTo(tipX, tipY);
+  context.lineTo(tipX - arrow * 0.85, tipY - arrow * 0.15);
+  context.lineTo(tipX - arrow * 0.1, tipY + arrow * 0.9);
+  context.closePath();
+  context.fill();
+  context.restore();
+}
+
 function drawArrowEndpointHandle(
   context: CanvasRenderingContext2D,
   point: EditorPoint,
@@ -872,6 +966,13 @@ function drawShape(
   element: Extract<ScreenshotElement, { kind: "shape" }>,
 ): void {
   context.save();
+  const rotation = shapeRotation(element);
+  if (rotation !== 0) {
+    const origin = shapeRotationOrigin(element);
+    context.translate(origin.x, origin.y);
+    context.rotate(rotation);
+    context.translate(-origin.x, -origin.y);
+  }
   configureAnnotationStroke(context, element.style);
   paintAnnotationInk(context, element.style, () => paintShapeGeometry(context, element));
   context.restore();
@@ -1281,13 +1382,22 @@ function drawEditorOverlays(
 ): void {
   const unit = 1 / Math.max(0.01, displayScale);
   if ((selected?.visible ?? false) || selectionBoundsOverride) {
+    const shape = selected?.kind === "shape" ? selected : null;
     const bounds = selectionBoundsOverride
-      ?? (selected ? elementBounds(selected) : null);
+      ?? (shape ? shapeLocalBounds(shape) : selected ? elementBounds(selected) : null);
     if (bounds) {
-      const curveable = selected?.kind === "shape" && isCurveableStrokeShape(selected);
+      const curveable = Boolean(shape && isCurveableStrokeShape(shape));
       // Text labels scale as a sticker: corner grips only, no independent stretch.
       const cornerGripsOnly = curveable || selected?.kind === "text";
       context.save();
+      const rotation = shape ? shapeRotation(shape) : 0;
+      if (rotation !== 0) {
+        const originX = bounds.x + bounds.width / 2;
+        const originY = bounds.y + bounds.height / 2;
+        context.translate(originX, originY);
+        context.rotate(rotation);
+        context.translate(-originX, -originY);
+      }
       // Lighter selection chrome so post-place curve grips stay the focus.
       context.globalAlpha = curveable ? 0.55 : 0.9;
       context.strokeStyle = accentColor;
@@ -1356,6 +1466,9 @@ function drawEditorOverlays(
             });
           }
         }
+      }
+      if (shape && shapeRotationHandleFitsCanvas(shape, displayScale, document)) {
+        drawShapeRotationHandle(context, bounds, unit, accentColor);
       }
       context.restore();
     }
@@ -2267,6 +2380,26 @@ export function ScreenshotEditor() {
   }, [editingTextId]);
 
   const displayScale = zoomMode === "fit" ? fitScale : zoom / 100;
+
+  const shapeRotateHud = useMemo(() => {
+    if (
+      !selected
+      || selected.kind !== "shape"
+      || !selected.visible
+      || selected.locked
+      || cropSelection
+    ) {
+      return null;
+    }
+    const handle = shapeRotationHandlePoint(selected, displayScale);
+    const degrees = shapeRotationDegrees(selected);
+    return {
+      handle,
+      degrees,
+      snapDegrees: snapShapeRotationDegrees(degrees),
+      placeLeft: Boolean(editorDocument && handle.x > editorDocument.width * 0.58),
+    };
+  }, [cropSelection, displayScale, editorDocument, selected]);
 
   const idleOverflowPreview = useMemo(() => {
     if (canvasExpandPreview || !editorDocument || !overflowHoverId) return null;
@@ -3245,7 +3378,24 @@ export function ScreenshotEditor() {
           selectedElement,
           point,
           interactionRadius,
+          displayScale,
+          current,
         );
+        if (annotationHit?.kind === "rotate" && selectedElement.kind === "shape") {
+          const origin = shapeRotationOrigin(selectedElement);
+          startCanvasGesture({
+            kind: "rotate",
+            pointerId: event.pointerId,
+            element: selectedElement,
+            origin,
+            startAngle: Math.atan2(point.y - origin.y, point.x - origin.x),
+            initialRotation: shapeRotation(selectedElement),
+            initialDocument: current,
+          });
+          setCanvasCursor("grabbing");
+          capturePointerTarget(event.currentTarget, event.pointerId);
+          return;
+        }
         if (annotationHit?.kind === "resize") {
           startCanvasGesture({
             kind: "resize",
@@ -3389,7 +3539,24 @@ export function ScreenshotEditor() {
           selectedElement,
           point,
           interactionRadius,
+          displayScale,
+          current,
         );
+        if (annotationHit?.kind === "rotate" && selectedElement.kind === "shape") {
+          const origin = shapeRotationOrigin(selectedElement);
+          startCanvasGesture({
+            kind: "rotate",
+            pointerId: event.pointerId,
+            element: selectedElement,
+            origin,
+            startAngle: Math.atan2(point.y - origin.y, point.x - origin.x),
+            initialRotation: shapeRotation(selectedElement),
+            initialDocument: current,
+          });
+          setCanvasCursor("grabbing");
+          capturePointerTarget(event.currentTarget, event.pointerId);
+          return;
+        }
         if (annotationHit?.kind === "resize") {
           startCanvasGesture({
             kind: "resize",
@@ -3530,7 +3697,18 @@ export function ScreenshotEditor() {
             selectedElement,
             point,
             interactionRadius,
+            displayScale,
+            current ?? undefined,
           );
+          if (annotationHit?.kind === "rotate") {
+            setCurveHoverTip({
+              text: "Drag to rotate smoothly",
+              clientX: event.clientX,
+              clientY: event.clientY,
+            });
+            setCanvasCursor("grab");
+            return;
+          }
           if (
             selectedElement.kind === "shape"
             && isCurveableStrokeShape(selectedElement)
@@ -3641,26 +3819,64 @@ export function ScreenshotEditor() {
     }
     if (gesture.kind === "arrow-handle") {
       const handle = gesture.handle;
+      const local = shapeLocalPoint(gesture.element, point);
       let next = gesture.element;
       if (handle.kind === "start") {
-        next = { ...gesture.element, x: point.x, y: point.y };
+        next = { ...gesture.element, x: local.x, y: local.y };
       } else if (handle.kind === "end") {
-        next = { ...gesture.element, endX: point.x, endY: point.y };
+        next = { ...gesture.element, endX: local.x, endY: local.y };
       } else if (handle.kind === "starter-control") {
         const controls = arrowStarterControls(gesture.element);
-        controls[handle.index] = { x: point.x, y: point.y };
-        next = { ...gesture.element, controls };
+        controls[handle.index] = { x: local.x, y: local.y };
+        next = preserveShapeWorldPoint(
+          gesture.element,
+          { ...gesture.element, controls },
+          { x: gesture.element.x, y: gesture.element.y },
+        );
       } else {
         const controlIndex = handle.index;
         const controls = gesture.element.controls.map((control, index) => (
-          index === controlIndex ? { x: point.x, y: point.y } : control
+          index === controlIndex ? { x: local.x, y: local.y } : control
         ));
-        next = { ...gesture.element, controls };
+        next = preserveShapeWorldPoint(
+          gesture.element,
+          { ...gesture.element, controls },
+          { x: gesture.element.x, y: gesture.element.y },
+        );
       }
       if (handle.kind === "start" || handle.kind === "end") {
         next = scaleArrowStrokeForLength(gesture.element, next);
+        next = preserveShapeWorldPoint(
+          gesture.element,
+          next,
+          handle.kind === "start"
+            ? { x: gesture.element.endX, y: gesture.element.endY }
+            : { x: gesture.element.x, y: gesture.element.y },
+        );
       }
       setCanvasCursor("grabbing");
+      setCanvasExpandPreview(canvasExpandPreviewForBounds(
+        elementBounds(next),
+        gesture.initialDocument,
+        next,
+      ));
+      replaceDocument(replaceElement(
+        gesture.initialDocument,
+        gesture.element.id,
+        next,
+      ));
+      return;
+    }
+    if (gesture.kind === "rotate") {
+      setCanvasCursor("grabbing");
+      const angle = Math.atan2(point.y - gesture.origin.y, point.x - gesture.origin.x);
+      const next = withShapeRotation(
+        gesture.element,
+        snapShapeRotation(
+          gesture.initialRotation + (angle - gesture.startAngle),
+          event.shiftKey,
+        ),
+      );
       setCanvasExpandPreview(canvasExpandPreviewForBounds(
         elementBounds(next),
         gesture.initialDocument,
@@ -3736,10 +3952,15 @@ export function ScreenshotEditor() {
       // Text labels always scale as a unit so the plate cannot stretch
       // independently of the glyphs (including outline drags mapped to corners).
       const lockAspectRatio = event.shiftKey || gesture.element.kind === "text";
+      const pointer = gesture.element.kind === "shape"
+        ? shapeLocalPoint(gesture.element, point)
+        : point;
+      const rotatedShape = gesture.element.kind === "shape"
+        && shapeRotation(gesture.element) !== 0;
       const freeBounds = resizeBoundsFromHandle(
         gesture.initialBounds,
         gesture.handle,
-        point,
+        pointer,
         minSize,
         lockAspectRatio,
       );
@@ -3747,14 +3968,16 @@ export function ScreenshotEditor() {
         gesture.initialDocument,
         gesture.element.id,
       );
-      const snapped = snapResizedBounds(
-        gesture.initialBounds,
-        gesture.handle,
-        freeBounds,
-        lines,
-        snapThreshold,
-        minSize,
-      );
+      const snapped = rotatedShape
+        ? { bounds: freeBounds, guides: [] as AlignmentSnapGuide[] }
+        : snapResizedBounds(
+          gesture.initialBounds,
+          gesture.handle,
+          freeBounds,
+          lines,
+          snapThreshold,
+          minSize,
+        );
       // Snap can nudge axes independently; re-apply the lock so Shift stays fixed-ratio.
       const nextBounds = lockAspectRatio
         ? resizeBoundsFromHandle(
@@ -3765,18 +3988,33 @@ export function ScreenshotEditor() {
           true,
         )
         : snapped.bounds;
-      const resized = resizeElement(
+      let resized = resizeElement(
         gesture.element,
         gesture.initialBounds,
         nextBounds,
       );
+      if (
+        resized.kind === "shape"
+        && gesture.element.kind === "shape"
+        && shapeRotation(resized) !== 0
+      ) {
+        const anchor = resizeHandlePoint(
+          gesture.initialBounds,
+          oppositeResizeHandle(gesture.handle),
+        );
+        resized = preserveShapeWorldPoint(gesture.element, resized, anchor);
+      }
       gestureRef.current = { ...gesture, currentBounds: nextBounds };
       setResizePreviewBounds(
-        resized.kind === "text" ? elementBounds(resized) : nextBounds,
+        resized.kind === "text"
+          ? elementBounds(resized)
+          : resized.kind === "shape"
+            ? shapeLocalBounds(resized)
+            : nextBounds,
       );
       setAlignmentGuides(snapped.guides);
       setCanvasExpandPreview(canvasExpandPreviewForBounds(
-        nextBounds,
+        resized.kind === "shape" ? elementBounds(resized) : nextBounds,
         gesture.initialDocument,
         resized,
       ));
@@ -3917,6 +4155,7 @@ export function ScreenshotEditor() {
       gesture.kind === "resize"
       || gesture.kind === "move"
       || gesture.kind === "arrow-handle"
+      || gesture.kind === "rotate"
       || gesture.kind === "draw"
     ) {
       const elementId = gesture.kind === "draw" ? gesture.elementId : gesture.element.id;
@@ -5273,6 +5512,65 @@ export function ScreenshotEditor() {
             }}
             onDoubleClick={handleCanvasDoubleClick}
           />
+          {shapeRotateHud && selected?.kind === "shape" && (
+            <div
+              className={[
+                "screenshot-shape-rotate-hud",
+                shapeRotateHud.placeLeft ? "is-left" : "",
+              ].filter(Boolean).join(" ")}
+              style={{
+                left: shapeRotateHud.handle.x * displayScale,
+                top: shapeRotateHud.handle.y * displayScale,
+              }}
+              onPointerDown={(event) => event.stopPropagation()}
+              onPointerMove={(event) => event.stopPropagation()}
+              onDoubleClick={(event) => event.stopPropagation()}
+            >
+              <span className="screenshot-shape-rotate-hud-icon" aria-hidden="true">
+                <EditorIcon name="rotate-clockwise" />
+              </span>
+              <RangeSlider
+                className="screenshot-shape-rotate-hud-slider"
+                ariaLabel="Shape rotation"
+                min={-180}
+                max={180}
+                step={SHAPE_ROTATION_SNAP_DEGREES}
+                value={shapeRotateHud.snapDegrees}
+                valueText={`${shapeRotateHud.degrees}°`}
+                marks={SHAPE_ROTATION_SLIDER_MARKS}
+                disabled={selected.locked}
+                onChange={(degrees) => {
+                  if (selected.kind !== "shape") return;
+                  const snapped = snapShapeRotationDegrees(degrees);
+                  updateSelected((element) => (
+                    element.kind === "shape"
+                      ? withShapeRotation(element, shapeRotationFromDegrees(snapped))
+                      : element
+                  ));
+                }}
+              />
+              <div className="screenshot-shape-rotate-hud-snaps" role="group" aria-label="Snap rotation">
+                {[-90, 0, 45, 90, 180].map((degrees) => (
+                  <button
+                    key={degrees}
+                    type="button"
+                    className={shapeRotateHud.snapDegrees === degrees ? "is-active" : ""}
+                    aria-pressed={shapeRotateHud.snapDegrees === degrees}
+                    aria-label={`Snap to ${degrees} degrees`}
+                    onClick={() => {
+                      updateSelected((element) => (
+                        element.kind === "shape"
+                          ? withShapeRotation(element, shapeRotationFromDegrees(degrees))
+                          : element
+                      ));
+                    }}
+                  >
+                    {degrees}°
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           {showCompressCompare && (
             <CompressionPreview
               className="is-embed is-cover"
@@ -6559,6 +6857,13 @@ export function ScreenshotEditor() {
                   points; double-click a point to remove it.
                 </p>
               </>
+            )}
+            {selected.kind === "shape" && (
+              <p>
+                Drag the rotate handle for a smooth spin. Use the slider or
+                angle chips beside it to snap in {SHAPE_ROTATION_SNAP_DEGREES}°
+                steps.
+              </p>
             )}
           </section>
         )}

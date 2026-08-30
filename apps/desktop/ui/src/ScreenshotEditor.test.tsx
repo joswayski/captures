@@ -8,6 +8,7 @@ import {
   createScreenshotDocument,
   elementBounds,
   resizeHandlePoint,
+  shapeRotationHandlePoint,
   type EditorShapeElement,
 } from "./lib/screenshotEditor";
 import { ScreenshotEditor } from "./ScreenshotEditor";
@@ -1973,6 +1974,96 @@ describe("ScreenshotEditor", () => {
         name: /RectangleShape/,
       }),
     ).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("rotates a selected rectangle from the handle above the selection box", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Canvas width");
+
+    setCanvasZoomPercent(100);
+    fireEvent.click(screen.getByRole("button", { name: "Rectangle (R)" }));
+    const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
+    canvas.setPointerCapture = vi.fn();
+    canvas.hasPointerCapture = vi.fn(() => true);
+    canvas.releasePointerCapture = vi.fn();
+    setCanvasBounds(canvas);
+
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 90,
+      clientX: 100,
+      clientY: 100,
+    });
+    fireEvent.pointerMove(canvas, {
+      pointerId: 90,
+      clientX: 300,
+      clientY: 240,
+    });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 90,
+      clientX: 300,
+      clientY: 240,
+    });
+
+    const placed: EditorShapeElement = {
+      id: "placed-rect",
+      kind: "shape",
+      shape: "rectangle",
+      x: 100,
+      y: 100,
+      endX: 300,
+      endY: 240,
+      controls: [],
+      style: { color: "#ff3b5c", fill: null, strokeWidth: 8 },
+      locked: false,
+      visible: true,
+      opacity: 100,
+      blendMode: "source-over",
+    };
+    const handle = shapeRotationHandlePoint(placed, 1);
+    const originX = (placed.x + placed.endX) / 2;
+    const originY = (placed.y + placed.endY) / 2;
+
+    fireEvent.pointerMove(canvas, {
+      clientX: handle.x,
+      clientY: handle.y,
+    });
+    expect(screen.getByText("Drag to rotate smoothly")).toBeInTheDocument();
+    const rotationSlider = screen.getByRole("slider", { name: "Shape rotation" });
+    expect(rotationSlider).toHaveAttribute("aria-valuetext", "0°");
+
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 91,
+      clientX: handle.x,
+      clientY: handle.y,
+    });
+    fireEvent.pointerMove(canvas, {
+      pointerId: 91,
+      clientX: originX + 120,
+      clientY: originY,
+    });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 91,
+      clientX: originX + 120,
+      clientY: originY,
+    });
+
+    expect(
+      within(screen.getByRole("region", { name: "Layers" })).getAllByRole("button", {
+        name: /RectangleShape/,
+      }),
+    ).toHaveLength(1);
+
+    fireEvent.change(rotationSlider, { target: { value: "90" } });
+    expect(screen.getByRole("slider", { name: "Shape rotation" }))
+      .toHaveAttribute("aria-valuetext", "90°");
+
+    fireEvent.click(screen.getByRole("button", { name: "Snap to 45 degrees" }));
+    expect(screen.getByRole("slider", { name: "Shape rotation" }))
+      .toHaveAttribute("aria-valuetext", "45°");
   });
 
   it("deselects the active layer when clicking the empty viewport chrome", async () => {
