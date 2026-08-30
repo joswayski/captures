@@ -778,6 +778,37 @@ describe("RecordingSelector", () => {
     });
   });
 
+  it("auto-starts when Full screen is already selected", async () => {
+    preparedSession = {
+      ...session,
+      initial_mode: "screenshot",
+      initial_target: "display",
+    };
+    const defaultInvoke = vi.mocked(invoke).getMockImplementation();
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "get_settings") {
+        return { ...settings, auto_start_on_selection: true };
+      }
+      return defaultInvoke?.(command, args);
+    });
+
+    render(<RecordingSelector />);
+    const fullScreen = await screen.findByRole("button", {
+      name: "Full screen",
+      pressed: true,
+    });
+    fireEvent.click(fullScreen);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("capture_selection_screenshot", {
+        request: {
+          selection_id: preparedSession.id,
+          target: { type: "display", display_id: preparedSession.display.id },
+        },
+      });
+    });
+  });
+
   it("animates the controls panel to its recording dimensions", async () => {
     preparedSession = {
       ...session,

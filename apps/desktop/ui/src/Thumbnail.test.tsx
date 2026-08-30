@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import { Thumbnail } from "./App";
@@ -477,6 +478,51 @@ describe("Thumbnail", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("re-arms hit testing when a preview appears after the stack was empty", async () => {
+    type CaptureCompletedHandler = (event: { payload: CaptureArtifact }) => void;
+    type PointerSample = { x: number; y: number; inside: boolean };
+    let onCaptureCompleted: CaptureCompletedHandler | null = null;
+    const pointerResolver = {
+      current: null as ((sample: PointerSample) => void) | null,
+    };
+    vi.mocked(listen).mockImplementation(async (event, handler) => {
+      if (event === "capture-completed") {
+        onCaptureCompleted = handler as CaptureCompletedHandler;
+      }
+      return () => undefined;
+    });
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifacts") return [];
+      if (command === "get_clipboard_state") {
+        return { revision: 0, artifact_id: null };
+      }
+      if (command === "get_thumbnail_pointer_position") {
+        return new Promise<PointerSample>((resolve) => {
+          pointerResolver.current = resolve;
+        });
+      }
+      return undefined;
+    });
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => document.querySelector(".thumbnail-card")),
+    });
+
+    render(<Thumbnail />);
+    await waitFor(() => expect(onCaptureCompleted).not.toBeNull());
+    act(() => onCaptureCompleted?.({ payload: artifact }));
+    await screen.findByRole("article");
+    await waitFor(() => expect(pointerResolver.current).not.toBeNull());
+    pointerResolver.current?.({ x: 40, y: 40, inside: true });
+
+    await waitFor(() => {
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith(
+        "set_thumbnail_ignore_cursor_events",
+        { ignore: false },
+      );
+    });
   });
 
   it("passes desktop clicks through as soon as the last preview starts exiting", async () => {

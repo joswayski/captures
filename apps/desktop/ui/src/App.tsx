@@ -2855,7 +2855,11 @@ export function RecordingSelector() {
                   setTargetMode(mode);
                   setHoveredWindow(null);
                   if (mode === "display" && settingsRef.current?.auto_start_on_selection) {
-                    autoStartAfterSelectionRef.current = true;
+                    if (targetMode === "display") {
+                      void start();
+                    } else {
+                      autoStartAfterSelectionRef.current = true;
+                    }
                   }
                 }}
               >
@@ -5647,6 +5651,7 @@ export function Thumbnail() {
     let pointerPollGeneration = 0;
     let cursorKind: ThumbnailCursorKind = "default";
     let ignoringCursorEvents = false;
+    let ignoreCursorEventsSynced = false;
     let ignoreCursorUpdate: Promise<void> = Promise.resolve();
     let lastCursorSyncAt = 0;
     let consecutiveNullPolls = 0;
@@ -5716,8 +5721,12 @@ export function Thumbnail() {
     };
 
     const setIgnoreCursorEvents = (ignore: boolean, force = false) => {
-      if (!force && ignoringCursorEvents === ignore) return;
+      // A restarted tracker does not know the native state left by its prior
+      // lifetime. Always send the first sample, even when it matches the local
+      // default, then deduplicate ordinary polling updates.
+      if (!force && ignoreCursorEventsSynced && ignoringCursorEvents === ignore) return;
       ignoringCursorEvents = ignore;
+      ignoreCursorEventsSynced = true;
       // After dismiss the window may stay tall; empty space above the stack
       // must pass clicks through so it does not block the desktop.
       // Serialize whole-window hit-test updates. A delayed `true` from an old

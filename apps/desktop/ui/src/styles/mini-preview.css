@@ -130,11 +130,10 @@
 .thumbnail-collapse:hover,
 .thumbnail-collapse[data-native-pointer-hover="true"] {
   background: var(--glass-raised-solid);
-  border-color: rgba(var(--theme-accent-rgb), 0.72);
+  border-color: var(--glass-border-strong);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.09),
-    0 1px 3px rgba(0, 0, 0, 0.46),
-    0 0 0 2px rgba(var(--theme-accent-rgb), 0.2);
+    0 1px 3px rgba(0, 0, 0, 0.46);
 }
 
 .thumbnail-collapse:active {

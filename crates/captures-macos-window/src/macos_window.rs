@@ -511,6 +511,10 @@ static FRONTMOST_APP_BEFORE_CAPTURE: Mutex<Option<Retained<NSRunningApplication>
 // raises that editor over the app the user was working in.
 static FRONTMOST_APP_BEFORE_UPDATE_NOTICE: Mutex<Option<Retained<NSRunningApplication>>> =
     Mutex::new(None);
+// `Some(None)` means the update notice most recently yielded to another
+// Captures window; the nested option distinguishes that from no focus handoff.
+static PENDING_UPDATE_NOTICE_REFOCUS_TARGET: Mutex<Option<Option<Retained<NSRunningApplication>>>> =
+    Mutex::new(None);
 // A thumbnail click can make Captures active before its handler hides the
 // panel. Preserve the external app while hover first gives the panel key status
 // so AppKit cannot donate focus to an open editor during collapse.
@@ -1440,10 +1444,65 @@ pub fn remember_frontmost_app_before_update_notice_activation() {
         return;
     }
     let previous = current_frontmost_if_not_captures();
+    let mut pending = PENDING_UPDATE_NOTICE_REFOCUS_TARGET
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *pending = None;
+    drop(pending);
     let mut slot = FRONTMOST_APP_BEFORE_UPDATE_NOTICE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     *slot = previous;
+}
+
+/// Refreshes the handoff target when a visible update notice loses and later
+/// regains focus. A status refresh is not involved in that user-driven path,
+/// so the source recorded when the notice was first shown is otherwise stale.
+pub fn update_notice_focus_changed(is_focused: bool) {
+    if !is_main_thread() {
+        let _ = run_on_main(move || update_notice_focus_changed(is_focused));
+        return;
+    }
+
+    if !is_focused {
+        // AppKit can publish the window event just before NSWorkspace switches
+        // its frontmost application. Sample on the next main-queue turn.
+        DispatchQueue::main().exec_async(|| {
+            let current = current_frontmost_if_not_captures();
+            let mut pending = PENDING_UPDATE_NOTICE_REFOCUS_TARGET
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let _ = notice_activation_source_after_focus_change(false, &mut pending, current);
+        });
+        return;
+    }
+
+    let current = current_frontmost_if_not_captures();
+    let next = {
+        let mut pending = PENDING_UPDATE_NOTICE_REFOCUS_TARGET
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        notice_activation_source_after_focus_change(true, &mut pending, current)
+    };
+    if let Some(next) = next {
+        let mut slot = FRONTMOST_APP_BEFORE_UPDATE_NOTICE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *slot = next;
+    }
+}
+
+fn notice_activation_source_after_focus_change<T>(
+    is_focused: bool,
+    pending: &mut Option<Option<T>>,
+    current_external: Option<T>,
+) -> Option<Option<T>> {
+    if !is_focused {
+        *pending = Some(current_external);
+        return None;
+    }
+    let previous = pending.take()?;
+    Some(current_external.or(previous))
 }
 
 /// Hides the interactive update notice and hands activation back to the app it
@@ -2253,12 +2312,12 @@ mod tests {
         clamp_display_corner_radius, corner_radius_from_bezel_path, cursor_mode_is_interactive,
         cursor_surface_can_apply, cursor_surface_can_take_key_window_with_thumbnail_allowed,
         cursor_surface_uses_key_window, cursor_update_tracking_options,
-        display_corner_radius_points, is_main_thread, parse_display_id, pointer_tracking_options,
-        reassert_thumbnail_cursor_after_click, shortcut_modifiers_pressed,
-        should_rearm_thumbnail_key_window, should_release_thumbnail_key_after_event,
-        should_reset_cursor_on_exit, single_window_activation_options,
-        style_mask_is_titled_document, surface_assumes_pointer_inside,
-        window_corner_radius_for_major_version,
+        display_corner_radius_points, is_main_thread, notice_activation_source_after_focus_change,
+        parse_display_id, pointer_tracking_options, reassert_thumbnail_cursor_after_click,
+        shortcut_modifiers_pressed, should_rearm_thumbnail_key_window,
+        should_release_thumbnail_key_after_event, should_reset_cursor_on_exit,
+        single_window_activation_options, style_mask_is_titled_document,
+        surface_assumes_pointer_inside, window_corner_radius_for_major_version,
     };
 
     #[test]
@@ -2267,6 +2326,31 @@ mod tests {
         assert!(
             !options.contains(objc2_app_kit::NSApplicationActivationOptions::ActivateAllWindows),
             "opening one editor must not lift every other Captures window over the user's apps",
+        );
+    }
+
+    #[test]
+    fn update_notice_refreshes_the_target_after_user_driven_refocus() {
+        let mut pending = None;
+        assert_eq!(
+            notice_activation_source_after_focus_change(false, &mut pending, Some("browser")),
+            None
+        );
+        assert_eq!(pending, Some(Some("browser")));
+        assert_eq!(
+            notice_activation_source_after_focus_change(true, &mut pending, None),
+            Some(Some("browser"))
+        );
+        assert_eq!(pending, None);
+
+        let mut editor_handoff = None;
+        assert_eq!(
+            notice_activation_source_after_focus_change(false, &mut editor_handoff, None::<&str>),
+            None
+        );
+        assert_eq!(
+            notice_activation_source_after_focus_change(true, &mut editor_handoff, None),
+            Some(None)
         );
     }
 
