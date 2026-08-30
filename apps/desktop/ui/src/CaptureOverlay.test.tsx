@@ -516,6 +516,9 @@ describe("CaptureOverlay guidance", () => {
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("sync_capture_cursor", { sessionId: "capture-1" });
     });
+    expect(vi.mocked(invoke).mock.calls.filter(([command]) => (
+      command === "show_capture_overlay"
+    ))).toHaveLength(1);
   });
 
   it("reveals a live overlay without a freeze-frame snapshot", async () => {

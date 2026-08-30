@@ -1146,9 +1146,21 @@ pub fn present_capture_overlay(window: &WebviewWindow) -> Result<(), &'static st
         return run_on_main(move || present_capture_overlay(&window))
             .ok_or("capture overlay present did not run on the main thread")?;
     }
+    let native = native_window(window)?;
+    // Session delivery and snapshot onLoad can both ask to wake the same
+    // overlay. Re-preparing an already-present WKWebView clears and reattaches
+    // its backing layer immediately before reveal, which can produce a one-frame
+    // scale snap. Only the hidden -> visible edge needs native preparation.
+    if !capture_overlay_needs_presentation(native.isVisible()) {
+        return Ok(());
+    }
     prepare_capture_overlay(window)?;
-    native_window(window)?.orderFront(None);
+    native.orderFront(None);
     Ok(())
+}
+
+fn capture_overlay_needs_presentation(is_visible: bool) -> bool {
+    !is_visible
 }
 
 /// Applies the capture cursor after the overlay becomes the key window.
@@ -2236,16 +2248,17 @@ mod tests {
 
     use super::{
         CAPTURE_OVERLAY_OWNS_CURSOR, CursorMode, CursorSurface, THUMBNAIL_CURSOR_MODE,
-        activation_handoff_target, capture_surface_collection_behavior,
-        capture_surface_window_level, clamp_display_corner_radius, corner_radius_from_bezel_path,
-        cursor_mode_is_interactive, cursor_surface_can_apply,
-        cursor_surface_can_take_key_window_with_thumbnail_allowed, cursor_surface_uses_key_window,
-        cursor_update_tracking_options, display_corner_radius_points, is_main_thread,
-        parse_display_id, pointer_tracking_options, reassert_thumbnail_cursor_after_click,
-        shortcut_modifiers_pressed, should_rearm_thumbnail_key_window,
-        should_release_thumbnail_key_after_event, should_reset_cursor_on_exit,
-        single_window_activation_options, style_mask_is_titled_document,
-        surface_assumes_pointer_inside, window_corner_radius_for_major_version,
+        activation_handoff_target, capture_overlay_needs_presentation,
+        capture_surface_collection_behavior, capture_surface_window_level,
+        clamp_display_corner_radius, corner_radius_from_bezel_path, cursor_mode_is_interactive,
+        cursor_surface_can_apply, cursor_surface_can_take_key_window_with_thumbnail_allowed,
+        cursor_surface_uses_key_window, cursor_update_tracking_options,
+        display_corner_radius_points, is_main_thread, parse_display_id, pointer_tracking_options,
+        reassert_thumbnail_cursor_after_click, shortcut_modifiers_pressed,
+        should_rearm_thumbnail_key_window, should_release_thumbnail_key_after_event,
+        should_reset_cursor_on_exit, single_window_activation_options,
+        style_mask_is_titled_document, surface_assumes_pointer_inside,
+        window_corner_radius_for_major_version,
     };
 
     #[test]
@@ -2315,6 +2328,12 @@ mod tests {
         let behavior = capture_surface_collection_behavior();
         assert!(behavior.contains(objc2_app_kit::NSWindowCollectionBehavior::CanJoinAllSpaces));
         assert!(behavior.contains(objc2_app_kit::NSWindowCollectionBehavior::FullScreenAuxiliary));
+    }
+
+    #[test]
+    fn capture_overlay_is_only_prepared_on_the_hidden_to_visible_edge() {
+        assert!(capture_overlay_needs_presentation(false));
+        assert!(!capture_overlay_needs_presentation(true));
     }
 
     #[test]
