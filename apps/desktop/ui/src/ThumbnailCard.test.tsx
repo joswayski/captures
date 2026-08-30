@@ -752,6 +752,7 @@ describe("ThumbnailCard", () => {
     const card = screen.getByRole("article");
     expect(card).toHaveClass("thumbnail-exit-delete");
     expect(card).toHaveClass("thumbnail-exiting");
+    expect(card).toHaveClass("thumbnail-editor-active");
     // Frozen chrome keeps the expanded control for the exit fade.
     const editorControl = screen.getByRole("button", { name: "Show in editor" });
     expect(editorControl).toHaveClass("is-present");
@@ -767,6 +768,28 @@ describe("ThumbnailCard", () => {
       />,
     );
     expect(screen.getByRole("button", { name: "Show in editor" })).toHaveClass("is-present");
+    expect(card).toHaveClass("thumbnail-editor-active");
+  });
+
+  it("keeps the viewer outline in the frame fade when delete begins", () => {
+    render(
+      <ThumbnailCard
+        artifact={artifact(null)}
+        clipboardCurrent={false}
+        viewerActive
+        onRemoved={() => undefined}
+      />,
+    );
+
+    const card = screen.getByRole("article");
+    expect(card).toHaveClass("thumbnail-viewer-active");
+
+    act(() => {
+      screen.getByRole("button", { name: "Delete" }).click();
+    });
+
+    expect(card).toHaveClass("thumbnail-exit-delete");
+    expect(card).toHaveClass("thumbnail-viewer-active");
   });
 
   it("starts the delete disintegration animation when Delete is clicked after save", () => {

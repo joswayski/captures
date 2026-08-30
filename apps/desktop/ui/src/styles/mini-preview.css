@@ -399,8 +399,10 @@
     0 0 0 1px rgba(var(--theme-accent-rgb), 0.85),
     0 0 18px rgba(var(--theme-accent-rgb), 0.24);
   content: "";
+  filter: opacity(1);
   opacity: 0;
   pointer-events: none;
+  transition: filter 0.95s cubic-bezier(0.22, 0.1, 0.25, 1);
 }
 
 .thumbnail-card.thumbnail-capture-highlight::after {
@@ -1134,17 +1136,28 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-collapse, .
   will-change: filter, transform;
 }
 
-.thumbnail-exit-delete {
+.thumbnail-card.thumbnail-exit-delete {
   overflow: visible;
   /*
    * Keep the outgoing slot at full size for the entire dissolve so its particle
    * layer never shifts. Cards above animate into place independently, then
    * removing this card swaps their translated pose for the real layout position.
    */
-  animation: thumbnail-delete 2.9s linear forwards;
+  animation:
+    thumbnail-delete 2.9s linear forwards,
+    thumbnail-delete-frame-fade 0.95s cubic-bezier(0.22, 0.1, 0.25, 1) forwards;
   pointer-events: none;
-  box-shadow: none;
   border-radius: 12px;
+}
+
+/*
+ * Elevation and outline are part of the preview silhouette, so let them leave
+ * with the dust front instead of dropping to the plain rectangular card as
+ * soon as Delete is clicked. The outline uses filter rather than opacity so a
+ * partially faded capture highlight can keep its current animation progress.
+ */
+.thumbnail-card.thumbnail-exit-delete::after {
+  filter: opacity(0);
 }
 
 /*
@@ -1445,6 +1458,12 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-collapse, .
   }
 }
 
+@keyframes thumbnail-delete-frame-fade {
+  to {
+    box-shadow: none;
+  }
+}
+
 @keyframes thumbnail-stack-interaction-guard {
   from {
     pointer-events: none;
@@ -1457,7 +1476,9 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-collapse, .
 /* Fallback when dust is disabled (reduced motion or a failed particle build). */
 .thumbnail-exit-delete:not(.thumbnail-exit-dust) {
   overflow: hidden;
-  animation: thumbnail-delete-fallback 0.68s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  animation:
+    thumbnail-delete-fallback 0.68s cubic-bezier(0.4, 0, 0.2, 1) forwards,
+    thumbnail-delete-frame-fade 0.68s cubic-bezier(0.4, 0, 0.2, 1) forwards;
 }
 
 @keyframes thumbnail-delete-fallback {
