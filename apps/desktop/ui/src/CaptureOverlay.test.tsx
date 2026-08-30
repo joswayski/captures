@@ -111,6 +111,7 @@ describe("CaptureOverlay guidance", () => {
         command === "show_capture_overlay"
         || command === "reveal_capture_overlay"
         || command === "sync_capture_cursor"
+        || command === "cancel_capture"
       ) {
         return undefined;
       }
@@ -310,6 +311,28 @@ describe("CaptureOverlay guidance", () => {
     expect(commitCall).toBeGreaterThanOrEqual(0);
     expect(hideCurrentWindow.mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(invoke).mock.invocationCallOrder[commitCall],
+    );
+  });
+
+  it("starts hiding the native overlay as soon as Escape cancels the session", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/?view=overlay&mode=region&session_id=capture-1",
+    );
+    render(<App />);
+    await screen.findByText("Drag to select a region");
+
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(hideCurrentWindow).toHaveBeenCalledOnce();
+    expect(invoke).toHaveBeenCalledWith("cancel_capture", { sessionId: "capture-1" });
+    const cancelCall = vi.mocked(invoke).mock.calls.findIndex(([command]) => (
+      command === "cancel_capture"
+    ));
+    expect(cancelCall).toBeGreaterThanOrEqual(0);
+    expect(hideCurrentWindow.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(invoke).mock.invocationCallOrder[cancelCall],
     );
   });
 

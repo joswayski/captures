@@ -1297,6 +1297,9 @@ pub fn reveal_window(window: &WebviewWindow) -> Result<(), &'static str> {
 
 /// Activates an accessory app window and makes it key so keyboard cancellation
 /// works even when the selector was launched while another app was frontmost.
+/// Re-asserts on the next main-queue turn because AppKit activation is
+/// asynchronous and can otherwise leave the newly revealed capture surface
+/// visible but unable to receive Escape.
 pub fn focus_window(window: &WebviewWindow) -> Result<(), &'static str> {
     if !is_main_thread() {
         let window = window.clone();
@@ -1306,7 +1309,16 @@ pub fn focus_window(window: &WebviewWindow) -> Result<(), &'static str> {
     remember_frontmost_app_before_activation();
     // Countdown / recording selector callers show the covering surface first.
     conceal_documents_under_opaque_capture_surface();
-    make_key_and_activate(window)
+    make_key_and_activate(window)?;
+    let window = window.clone();
+    DispatchQueue::main().exec_async(move || {
+        // Escape can hide the surface before this queued retry runs. Never
+        // order a cancelled overlay or selector back onscreen.
+        if window.is_visible().unwrap_or(false) {
+            let _ = make_key_and_activate(&window);
+        }
+    });
+    Ok(())
 }
 
 /// Activates Captures and makes a document window key without recording a
