@@ -894,12 +894,12 @@
   color: var(--text);
   background: var(--surface-raised);
   box-shadow: var(--shadow-md);
-  transform: translate(14px, -50%);
+  transform: translate(28px, -50%);
   pointer-events: auto;
 }
 
 .screenshot-shape-rotate-hud.is-left {
-  transform: translate(calc(-100% - 14px), -50%);
+  transform: translate(calc(-100% - 28px), -50%);
 }
 
 .screenshot-shape-rotate-hud-icon {

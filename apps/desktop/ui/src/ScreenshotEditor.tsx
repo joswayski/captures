@@ -755,12 +755,12 @@ function drawShapeRotationHandle(
   const midX = bounds.x + bounds.width / 2;
   const offset = shapeRotationHandleOffset(1 / unit);
   const handleY = bounds.y - offset;
-  const radius = 6.5 * unit;
+  const radius = 8 * unit;
   context.save();
-  context.globalAlpha = 0.94;
+  context.globalAlpha = 1;
   context.strokeStyle = accentColor;
-  context.fillStyle = "rgba(255, 255, 255, 0.96)";
-  context.lineWidth = 1.2 * unit;
+  context.fillStyle = "rgba(255, 255, 255, 0.98)";
+  context.lineWidth = 1.6 * unit;
   context.beginPath();
   context.moveTo(midX, bounds.y);
   context.lineTo(midX, handleY);
@@ -5503,9 +5503,10 @@ export function ScreenshotEditor() {
                 disabled={selected.locked}
                 onChange={(degrees) => {
                   if (selected.kind !== "shape") return;
+                  const snapped = snapShapeRotationDegrees(degrees);
                   updateSelected((element) => (
                     element.kind === "shape"
-                      ? withShapeRotation(element, shapeRotationFromDegrees(degrees))
+                      ? withShapeRotation(element, shapeRotationFromDegrees(snapped))
                       : element
                   ));
                 }}

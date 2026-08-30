@@ -677,7 +677,7 @@ export type EditorShapeElement = EditorElementBase & {
 };
 
 /** Screen-pixel length of the stem from the top of a selected shape to its rotate grip. */
-export const SHAPE_ROTATION_HANDLE_OFFSET_SCREEN_PX = 22;
+export const SHAPE_ROTATION_HANDLE_OFFSET_SCREEN_PX = 28;
 
 /** Discrete angle stops for the on-canvas rotation slider. */
 export const SHAPE_ROTATION_SNAP_DEGREES = 15;
