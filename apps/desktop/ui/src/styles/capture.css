@@ -393,8 +393,8 @@ html.capture-selector-display {
 .recording-region-indicator .capture-shade-full {
   z-index: 1;
   opacity: 1;
-  fill: rgba(4, 5, 8, 0.38);
-  background: rgba(4, 5, 8, 0.38);
+  fill: var(--glass-veil);
+  background: var(--glass-veil);
 }
 
 .recording-region-indicator-frame {
