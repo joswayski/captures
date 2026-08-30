@@ -1893,15 +1893,19 @@ export function ScreenshotEditor() {
     invalidateCompressPreview();
   }, [invalidateCompressPreview]);
 
-  const clearSuccess = useCallback(() => {
+  const clearSuccessTimer = useCallback(() => {
     if (successTimerRef.current !== null) {
       window.clearTimeout(successTimerRef.current);
       successTimerRef.current = null;
     }
-    setSuccess(null);
   }, []);
 
-  const showSuccess = useCallback((kind: "copy" | "save", message: string) => {
+  const clearSuccess = useCallback(() => {
+    clearSuccessTimer();
+    setSuccess(null);
+  }, [clearSuccessTimer]);
+
+  const showSuccess = useCallback((kind: "copy" | "save", message = "") => {
     if (successTimerRef.current !== null) {
       window.clearTimeout(successTimerRef.current);
     }
@@ -4841,15 +4845,23 @@ export function ScreenshotEditor() {
 
   const copyEditedImage = async () => {
     if (busy) return;
+    const keepCopiedState = success?.kind === "copy";
     setBusy("copying");
     setError("");
-    clearSuccess();
+    if (keepCopiedState) {
+      // Keep the compact confirmation in place while a repeat copy runs. This
+      // avoids swapping back to the wider "Copying…" label and moving the hint.
+      clearSuccessTimer();
+    } else {
+      clearSuccess();
+    }
     try {
       await loadEditorTextFonts();
       const imagePng = await canvasPngBytes(renderFlattened());
       await invoke("copy_screenshot_edit", { imagePng });
-      showSuccess("copy", "Copied to clipboard");
+      showSuccess("copy");
     } catch (reason) {
+      clearSuccess();
       setError(String(reason));
     } finally {
       setBusy(null);
@@ -5141,6 +5153,7 @@ export function ScreenshotEditor() {
     : exportFormat === "webp"
       ? "WebP"
       : "PNG";
+  const exportNotice = error || (success?.kind === "save" ? success.message : "");
   const showCompressQuality = qualityMode === "compress";
 
   const applyExportFormat = (format: ExportFormat) => {
@@ -7184,18 +7197,18 @@ export function ScreenshotEditor() {
             className={[
               "screenshot-export-status",
               error ? "has-error" : "",
-              !error && success ? "has-success" : "",
+              !error && success?.kind === "save" ? "has-success" : "",
             ].filter(Boolean).join(" ")}
           >
             <div
               className={[
                 "screenshot-export-notice",
-                error ? "error" : success ? "success" : "idle",
+                error ? "error" : exportNotice ? "success" : "idle",
               ].join(" ")}
-              role={error ? "alert" : success ? "status" : undefined}
+              role={error ? "alert" : exportNotice ? "status" : undefined}
               aria-live={error ? "assertive" : "polite"}
             >
-              {error || success?.message || "\u00a0"}
+              {exportNotice || "\u00a0"}
             </div>
             {!error && (
               <div className="screenshot-export-hint">
@@ -7249,10 +7262,10 @@ export function ScreenshotEditor() {
               onClick={() => void copyEditedImage()}
             >
               <EditorIcon name={success?.kind === "copy" ? "check" : "copy"} />
-              {busy === "copying"
-                ? "Copying…"
-                : success?.kind === "copy"
-                  ? "Copied"
+              {success?.kind === "copy"
+                ? "Copied"
+                : busy === "copying"
+                  ? "Copying…"
                   : "Copy image"}
             </button>
             <button

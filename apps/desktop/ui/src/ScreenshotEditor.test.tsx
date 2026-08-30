@@ -3277,11 +3277,21 @@ describe("ScreenshotEditor", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("shows a success state for copy without replacing the export hint", async () => {
+  it("keeps repeat-copy feedback compact without replacing the export hint", async () => {
     const restoreCanvas = installExportableCanvas();
+    let copyCount = 0;
+    let finishSecondCopy!: () => void;
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "get_artifact") return artifact;
-      if (command === "copy_screenshot_edit") return undefined;
+      if (command === "copy_screenshot_edit") {
+        copyCount += 1;
+        if (copyCount === 2) {
+          return new Promise<void>((resolve) => {
+            finishSecondCopy = resolve;
+          });
+        }
+        return undefined;
+      }
       const draft = draftCommandResult(String(command));
       if (draft !== undefined || String(command).includes("screenshot_editor_draft")) {
         return draft;
@@ -3301,9 +3311,23 @@ describe("ScreenshotEditor", () => {
       await waitFor(() => {
         expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
       });
-      expect(screen.getByText("Copied to clipboard")).toHaveClass("success");
+      expect(screen.queryByText("Copied to clipboard")).not.toBeInTheDocument();
       // Hint stays put so the footer does not reflow around a status swap.
       expect(screen.getByText(hint)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Copied" }));
+
+      expect(screen.getByRole("button", { name: "Copied" })).toBeDisabled();
+      expect(screen.queryByRole("button", { name: "Copying…" })).not.toBeInTheDocument();
+      expect(screen.getByText(hint)).toBeInTheDocument();
+
+      await waitFor(() => {
+        expect(copyCount).toBe(2);
+      });
+      finishSecondCopy();
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: "Copied" })).toBeEnabled();
+      });
       expect(invoke).toHaveBeenCalledWith("copy_screenshot_edit", {
         imagePng: expect.any(Array),
       });
