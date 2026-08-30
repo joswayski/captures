@@ -21,7 +21,10 @@ The workflow stages a draft Preview at the exact tested commit. Each platform
 builds and validates its pinned LGPL FFmpeg sidecars, then uploads its installer,
 updater archive, and updater signature. The macOS job also verifies the sidecars
 inside `Captures.app` and uploads the shared FFmpeg source archive, detached
-signature, build configuration, LGPL license, and notice. The final job requires
+signature, build configuration, LGPL license, and notice. When packaging an
+older `target_sha`, that job overlays `scripts/github-release-assets.mjs` and
+`scripts/release-assets.mjs` from the workflow commit so the stapled DMG upload
+uses the current helper, including its local import. The final job requires
 those files plus a DMG, NSIS installer, AppImage, Debian package, complete
 `latest.json`, and `SHA256SUMS`, confirms the release is still staged, and then
 publishes it as a pre-release. A failed build removes its draft and tag, leaving
