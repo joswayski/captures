@@ -54,6 +54,7 @@ Preview builds update after every successful merge to `main` and may contain bug
 - Optional auto-start after selecting a region or window (Preferences)
 - Optional freeze while choosing a region or window, so hover states, menus, and motion stay put (on by default; turn off in Preferences to select from the live desktop)
 - Optional countdown before screenshots and recordings
+- Region recordings keep the selected area highlighted on screen while recording
 - Record as H.264 MP4, with desktop audio and microphone. Save or export as MP4, GIF, or WebM
 - Pause, resume, restart, and mute while recording
 - Cursor and click highlights in recordings (where supported)

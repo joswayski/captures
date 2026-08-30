@@ -378,6 +378,45 @@ html.capture-selector-display {
   background: rgba(4, 5, 8, 0.3);
 }
 
+/* ------------------------------------------------ recording region guide -- */
+
+.recording-region-indicator {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+}
+
+.recording-region-indicator .capture-shade,
+.recording-region-indicator .capture-shade-full {
+  z-index: 1;
+  opacity: 1;
+  fill: rgba(4, 5, 8, 0.38);
+  background: rgba(4, 5, 8, 0.38);
+}
+
+.recording-region-indicator-frame {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+}
+
+/*
+ * The pseudo-element is two pixels larger on every side and paints its border
+ * inward, keeping every visible guide pixel outside the recorded rectangle.
+ */
+.recording-region-indicator-frame::before {
+  position: absolute;
+  inset: -2px;
+  border: 2px solid var(--theme-accent);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.45),
+    0 0 12px rgba(var(--theme-accent-rgb), 0.28);
+  content: "";
+}
+
 .recording-target-region .capture-shade,
 .recording-target-window .capture-shade {
   opacity: 0;

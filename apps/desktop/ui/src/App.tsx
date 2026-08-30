@@ -245,6 +245,7 @@ export function App() {
   const view = query("view");
   if (view === "overlay") return <CaptureOverlay />;
   if (view === "recording-selector") return <RecordingSelector />;
+  if (view === "recording-region-indicator") return <RecordingRegionIndicator />;
   if (view === "recording-countdown") return <RecordingCountdown />;
   if (view === "screenshot-countdown") return <ScreenshotCountdown />;
   if (view === "recording-hud") return <RecordingHud />;
@@ -1825,6 +1826,40 @@ export function RecordingCountdown() {
         <strong>{count}</strong>
         <small>{cancelling ? "Cancelling…" : "Press Esc to cancel"}</small>
       </div>
+    </main>
+  );
+}
+
+function recordingRegionIndicatorRect(): RecordingRect | null {
+  const values = ["x", "y", "width", "height"].map((name) => Number(query(name)));
+  if (values.some((value) => !Number.isFinite(value))) return null;
+  const [x, y, width, height] = values;
+  if (width < 1 || height < 1) return null;
+  return {
+    x: Math.max(0, x),
+    y: Math.max(0, y),
+    width,
+    height,
+  };
+}
+
+/**
+ * Passive region boundary shown for the lifetime of a region recording.
+ * The dim and frame stay outside the transparent hole, so the selected pixels
+ * remain clean even on platforms that cannot exclude overlay windows.
+ */
+export function RecordingRegionIndicator() {
+  const rect = recordingRegionIndicatorRect();
+  if (!rect) {
+    return <main className="recording-region-indicator" aria-hidden="true" />;
+  }
+  return (
+    <main className="recording-region-indicator" aria-hidden="true">
+      <CaptureDim mode="region" hole={rect} bounds={{ width: 0, height: 0 }} />
+      <div
+        className="recording-region-indicator-frame"
+        style={{ left: rect.x, top: rect.y, width: rect.width, height: rect.height }}
+      />
     </main>
   );
 }

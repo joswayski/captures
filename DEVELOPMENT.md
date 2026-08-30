@@ -32,6 +32,7 @@ mocked backend with representative sample data so any window can be reviewed in 
 npm run dev --workspace @captures/desktop
 open "http://127.0.0.1:1420/?view=preferences&mock=1"
 open "http://127.0.0.1:1420/?view=recording-hud&mock=1&stage=1"
+open "http://127.0.0.1:1420/?view=recording-region-indicator&mock=1&stage=1&target=region&x=260&y=180&width=1000&height=640"
 open "http://127.0.0.1:1420/?view=mini-previews-hidden&mock=1&count=3"
 open "http://127.0.0.1:1420/?view=mini-previews-hidden&mock=1&count=1"
 open "http://127.0.0.1:1420/?view=update&mock=1"

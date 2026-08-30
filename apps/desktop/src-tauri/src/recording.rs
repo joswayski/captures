@@ -49,6 +49,8 @@ const RECORDING_STATE_EVENT: &str = "recording-state-changed";
 const RECORDING_COUNTDOWN_EVENT: &str = "recording-countdown";
 const RECORDING_WARNING_EVENT: &str = "recording-warning";
 const RECORDING_ARTIFACT_EVENT: &str = "recording-artifact-ready";
+pub(crate) const RECORDING_REGION_INDICATOR_LABEL: &str = "recording-region-indicator";
+pub(crate) const RECORDING_REGION_INDICATOR_TITLE: &str = "Captures Recording Region";
 #[cfg(target_os = "macos")]
 const RECORDING_COUNTDOWN_FADE_OUT_MS: u64 = 180;
 const RECORDING_HUD_FULL_WIDTH: f64 = 430.0;
@@ -850,16 +852,17 @@ async fn start_recording_inner(
         }
     };
     emit_snapshot(&app, &snapshot);
-    if let Err(error) = prepare_recording_hud(&app, &selected_display)
-        .await
-        .and_then(|()| {
-            if snapshot.options.countdown_seconds > 0 {
-                show_recording_countdown(&app, &selected_display)
-            } else {
-                Ok(())
-            }
-        })
-    {
+    let recording_ui = async {
+        prepare_recording_hud(&app, &selected_display).await?;
+        prepare_recording_region_indicator(&app, &selected_display, &snapshot.options.target)
+            .await?;
+        if snapshot.options.countdown_seconds > 0 {
+            show_recording_countdown(&app, &selected_display)?;
+        }
+        Ok::<_, AppError>(())
+    }
+    .await;
+    if let Err(error) = recording_ui {
         fail_session(&app, &state, &snapshot.id, error.to_string());
         restore_recording_ui(&app, &state);
         return Err(error);
@@ -1475,6 +1478,7 @@ async fn stop_recording_inner(
         )
     };
     emit_snapshot(&app, &finalizing);
+    destroy_recording_region_indicator(&app);
 
     if let Some(segment) = active {
         let info = stop_native_segment(segment).await?;
@@ -1701,6 +1705,7 @@ async fn discard_recording_inner(
         .remove(session_id)
         .map_err(|error| AppError::Task(error.to_string()))?;
     emit_snapshot(&app, &snapshot);
+    destroy_recording_region_indicator(&app);
     destroy_recording_countdown(&app);
     crate::hide_window(&app, "recording-hud");
     crate::restore_thumbnail_capture_ui(&app, &state);
@@ -3278,12 +3283,14 @@ fn fail_session(app: &AppHandle, state: &AppState, session_id: &str, message: St
             message,
         },
     );
+    destroy_recording_region_indicator(app);
     destroy_recording_countdown(app);
     crate::hide_window(app, "recording-hud");
 }
 
 fn restore_recording_ui(app: &AppHandle, state: &Arc<AppState>) {
     destroy_recording_selector(app);
+    destroy_recording_region_indicator(app);
     destroy_recording_countdown(app);
     crate::hide_window(app, "recording-hud");
     #[cfg(target_os = "macos")]
@@ -3810,6 +3817,92 @@ fn recording_hud_position(display: &DisplayDescriptor) -> (f64, f64) {
     recording_hud_logical_position(x, y, width, height)
 }
 
+fn recording_region_indicator_url(target: &RecordingTarget) -> Option<String> {
+    let RecordingTarget::Region { rect, .. } = target else {
+        return None;
+    };
+    rect.is_valid().then(|| {
+        format!(
+            "index.html?view=recording-region-indicator&x={}&y={}&width={}&height={}",
+            rect.x, rect.y, rect.width, rect.height
+        )
+    })
+}
+
+async fn prepare_recording_region_indicator(
+    app: &AppHandle,
+    display: &DisplayDescriptor,
+    target: &RecordingTarget,
+) -> Result<(), AppError> {
+    let Some(url) = recording_region_indicator_url(target) else {
+        destroy_recording_region_indicator(app);
+        return Ok(());
+    };
+    let handle = app.clone();
+    let display = display.clone();
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || {
+        let result = (|| -> Result<(), String> {
+            destroy_recording_region_indicator(&handle);
+            let (x, y, width, height) = display.overlay_geometry();
+            let window = WebviewWindowBuilder::new(
+                &handle,
+                RECORDING_REGION_INDICATOR_LABEL,
+                WebviewUrl::App(url.into()),
+            )
+            .title(RECORDING_REGION_INDICATOR_TITLE)
+            .inner_size(width, height)
+            .position(x, y)
+            .decorations(false)
+            .always_on_top(true)
+            .visible_on_all_workspaces(true)
+            .skip_taskbar(true)
+            .shadow(false)
+            .resizable(false)
+            .transparent(true)
+            .background_color(Color(0, 0, 0, 0))
+            .focused(false)
+            .visible(false)
+            .build()
+            .map_err(|error| error.to_string())?;
+            // Keep the overlay passive and permanently excluded where the
+            // platform supports protected windows. Its shade and frame are
+            // also painted wholly outside the recorded rectangle.
+            window
+                .set_content_protected(true)
+                .map_err(|error| error.to_string())?;
+            crate::set_click_through(&window, true).map_err(|error| error.to_string())?;
+            #[cfg(target_os = "macos")]
+            {
+                captures_macos_window::configure_capture_selector(&window)
+                    .map_err(str::to_owned)?;
+                captures_macos_window::cover_display(&window, &display.id)
+                    .map_err(str::to_owned)?;
+                // Status level keeps this above apps but below the later
+                // countdown and the recording HUD.
+                captures_macos_window::show_without_activating(&window).map_err(str::to_owned)?;
+            }
+            #[cfg(not(target_os = "macos"))]
+            window.show().map_err(|error| error.to_string())?;
+            crate::set_click_through(&window, true).map_err(|error| error.to_string())?;
+            Ok(())
+        })();
+        let _ = sender.send(result);
+    })?;
+    receiver
+        .await
+        .map_err(|_| AppError::Task("recording region setup was interrupted".to_owned()))?
+        .map_err(AppError::Task)
+}
+
+fn destroy_recording_region_indicator(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(RECORDING_REGION_INDICATOR_LABEL)
+        && let Err(error) = window.destroy()
+    {
+        eprintln!("failed to close recording region indicator: {error}");
+    }
+}
+
 fn recording_hud_logical_position(x: f64, y: f64, width: f64, height: f64) -> (f64, f64) {
     (
         x + (width - RECORDING_HUD_FULL_WIDTH) / 2.0,
@@ -3980,6 +4073,9 @@ fn show_recording_countdown(app: &AppHandle, display: &DisplayDescriptor) -> Res
     window.set_content_protected(recording_overlay_content_protected(app))?;
     window.show()?;
     #[cfg(target_os = "macos")]
+    captures_macos_window::elevate_capture_surface(&window)
+        .map_err(|error| AppError::Task(error.to_owned()))?;
+    #[cfg(target_os = "macos")]
     focus_recording_window(app, "recording-countdown");
     if let Err(error) = window.set_focus() {
         eprintln!("failed to focus recording countdown: {error}");
@@ -4042,15 +4138,50 @@ fn show_recording_editor(app: &AppHandle, artifact_id: &str) -> Result<(), AppEr
 
 #[cfg(test)]
 mod tests {
-    use captures_recording::RecordingState;
+    use captures_recording::{CaptureRect, RecordingState, RecordingTarget};
     use tempfile::tempdir;
 
     use super::{
         RECORDING_HUD_BOTTOM_MARGIN, RECORDING_HUD_FULL_WIDTH, RECORDING_HUD_HEIGHT,
         media_target_suffix, recording_hud_logical_position, recording_in_progress_for,
-        replace_recording_source, replace_recording_source_at, replacement_working_path,
-        screenshot_capture_is_blocked_for,
+        recording_region_indicator_url, replace_recording_source, replace_recording_source_at,
+        replacement_working_path, screenshot_capture_is_blocked_for,
     };
+
+    #[test]
+    fn builds_a_region_indicator_only_for_valid_region_targets() {
+        let region = RecordingTarget::Region {
+            display_id: "display-1".to_owned(),
+            rect: CaptureRect {
+                x: 120,
+                y: 80,
+                width: 640,
+                height: 360,
+            },
+        };
+        assert_eq!(
+            recording_region_indicator_url(&region).as_deref(),
+            Some("index.html?view=recording-region-indicator&x=120&y=80&width=640&height=360")
+        );
+        assert!(
+            recording_region_indicator_url(&RecordingTarget::Display {
+                display_id: "display-1".to_owned(),
+            })
+            .is_none()
+        );
+        assert!(
+            recording_region_indicator_url(&RecordingTarget::Region {
+                display_id: "display-1".to_owned(),
+                rect: CaptureRect {
+                    x: 0,
+                    y: 0,
+                    width: 0,
+                    height: 360,
+                },
+            })
+            .is_none()
+        );
+    }
 
     #[test]
     fn recording_hud_uses_overlay_dips_not_physical_pixels() {
