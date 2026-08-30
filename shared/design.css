@@ -90,6 +90,10 @@
   --glass: rgba(20, 20, 24, 0.82);
   --glass-strong: rgba(15, 15, 18, 0.93);
   --glass-raised: rgba(38, 38, 45, 0.94);
+  /* Opaque siblings for hit-tested chrome over grab-source cards. Same RGB as
+     strong/raised, without alpha, so WebKit cannot punch through the fill. */
+  --glass-strong-solid: rgb(15, 15, 18);
+  --glass-raised-solid: rgb(38, 38, 45);
   --glass-hover: rgba(255, 255, 255, 0.09);
   --glass-active: rgba(255, 255, 255, 0.14);
   --glass-border: rgba(255, 255, 255, 0.11);
