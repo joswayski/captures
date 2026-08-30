@@ -3993,7 +3993,11 @@ export function ScreenshotEditor() {
         gesture.initialBounds,
         nextBounds,
       );
-      if (resized.kind === "shape" && shapeRotation(resized) !== 0) {
+      if (
+        resized.kind === "shape"
+        && gesture.element.kind === "shape"
+        && shapeRotation(resized) !== 0
+      ) {
         const anchor = resizeHandlePoint(
           gesture.initialBounds,
           oppositeResizeHandle(gesture.handle),
