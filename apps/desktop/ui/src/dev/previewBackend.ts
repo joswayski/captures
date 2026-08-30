@@ -484,12 +484,19 @@ function updateStatus(): UpdateStatus {
 }
 
 function recordingSnapshot(): RecordingSessionSnapshot {
+  const target = query().get("target") === "region"
+    ? {
+        type: "region" as const,
+        display_id: "display-1",
+        rect: { x: 260, y: 180, width: 1_000, height: 640 },
+      }
+    : { type: "display" as const, display_id: "display-1" };
   return {
     id: "session-1",
     state: (query().get("state") as RecordingSessionSnapshot["state"]) ?? "recording",
     options: {
       kind: "video",
-      target: { type: "display", display_id: "display-1" },
+      target,
       frames_per_second: 60,
       max_resolution: "original",
       countdown_seconds: 3,

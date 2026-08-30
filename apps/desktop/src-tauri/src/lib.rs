@@ -5563,6 +5563,7 @@ fn set_capture_huds_protected_inner(app: &AppHandle, protected: bool) {
                 | "startup"
                 | "update"
                 | "recording-hud"
+                | recording::RECORDING_REGION_INDICATOR_LABEL
                 | RECORDING_SAVED_NOTICE_LABEL
                 | MINI_PREVIEWS_HIDDEN_LABEL
         ) {
@@ -5570,7 +5571,9 @@ fn set_capture_huds_protected_inner(app: &AppHandle, protected: bool) {
         }
         // Keep opted-in chrome capturable when the matching preference is on.
         // Failed update notices stay capturable so the error can be screenshotted.
-        let next_protected = if (label == "thumbnail" && include_mini_previews)
+        let next_protected = if label == recording::RECORDING_REGION_INDICATOR_LABEL {
+            true
+        } else if (label == "thumbnail" && include_mini_previews)
             || (label == "recording-hud" && include_recording_controls)
             || (label == "update" && !updates::should_hide_update_notice_for_capture(app))
         {
@@ -6266,6 +6269,7 @@ fn captures_window_is_internal(window: &captures_capture::WindowDescriptor) -> b
         "Captures is running",
         "Captures Recording Controls",
         "Captures Recording Countdown",
+        recording::RECORDING_REGION_INDICATOR_TITLE,
         "Captures Update",
         "Recording saved",
     ];
@@ -6306,7 +6310,8 @@ mod tests {
         capture_cursor_icon, click_through_applies, clipboard_fingerprint,
         display_contains_pointer, fallback_startup_notice, mask_macos_window_corners,
         mini_previews_hidden_geometry, mini_previews_hidden_should_be_visible, parse_shortcut,
-        place_startup_notice, primary_app_window_priority, refine_window_chrome_from_snapshot,
+        place_startup_notice, primary_app_window_priority,
+        recording::RECORDING_REGION_INDICATOR_TITLE, refine_window_chrome_from_snapshot,
         resolve_startup_notice_placement, resolve_window_capture, should_trigger_shortcut,
         startup_notice_fallback_edge_from_insets, startup_notice_url, thumbnail_cursor_action,
         thumbnail_geometry, thumbnail_pointer_in_space, thumbnail_pointer_position,
@@ -6724,6 +6729,7 @@ mod tests {
             "Captures is running",
             "Captures Recording Controls",
             "Captures Recording Countdown",
+            RECORDING_REGION_INDICATOR_TITLE,
             "Captures Update",
             "Recording saved",
         ] {

@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useState } from "react";
 
-import { RecordingCountdown, ScreenshotCountdown } from "./App";
+import { RecordingCountdown, RecordingRegionIndicator, ScreenshotCountdown } from "./App";
 import { CustomSelect } from "./CustomSelect";
 import type { RecordingSessionSnapshot } from "./types";
 
@@ -205,6 +205,41 @@ describe("RecordingCountdown", () => {
     expect(container.querySelector(".recording-countdown")).toHaveClass("exiting");
     expect(screen.getByText("1", { selector: "strong" })).toBeInTheDocument();
     expect(screen.queryByText("3", { selector: "strong" })).not.toBeInTheDocument();
+  });
+});
+
+describe("RecordingRegionIndicator", () => {
+  afterEach(() => {
+    window.history.replaceState({}, "", "/");
+  });
+
+  it("keeps the selected region clear while shading and framing its exterior", () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/?view=recording-region-indicator&x=120&y=80&width=640&height=360",
+    );
+
+    const { container } = render(<RecordingRegionIndicator />);
+
+    expect(container.querySelector(".capture-shade-full")).toHaveStyle({
+      clipPath: expect.stringContaining("120px 80px"),
+    });
+    expect(container.querySelector(".recording-region-indicator-frame")).toHaveStyle({
+      left: "120px",
+      top: "80px",
+      width: "640px",
+      height: "360px",
+    });
+  });
+
+  it("stays transparent when its native window has no valid region", () => {
+    window.history.replaceState({}, "", "/?view=recording-region-indicator");
+
+    const { container } = render(<RecordingRegionIndicator />);
+
+    expect(container.querySelector(".capture-shade-full")).not.toBeInTheDocument();
+    expect(container.querySelector(".recording-region-indicator-frame")).not.toBeInTheDocument();
   });
 });
 
