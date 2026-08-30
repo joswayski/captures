@@ -883,11 +883,12 @@
 .screenshot-shape-rotate-hud {
   position: absolute;
   z-index: 7;
-  display: flex;
+  display: grid;
   width: max-content;
-  max-width: 220px;
+  max-width: 240px;
+  grid-template-columns: auto 1fr;
   align-items: center;
-  gap: var(--s-3);
+  gap: var(--s-2) var(--s-3);
   padding: var(--s-2) var(--s-3) var(--s-2) var(--s-2);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
@@ -905,6 +906,7 @@
 .screenshot-shape-rotate-hud-icon {
   display: grid;
   flex: 0 0 auto;
+  grid-row: 1 / span 2;
   width: 22px;
   height: 22px;
   place-items: center;
@@ -924,15 +926,52 @@
 }
 
 .screenshot-shape-rotate-hud-slider {
-  width: 148px;
+  width: 160px;
+  --range-thumb-size: 16px;
+  --range-track-height: 6px;
 }
 
 .screenshot-shape-rotate-hud-slider.range-slider.has-marks {
-  grid-template-rows: 14px 18px 12px;
+  grid-template-rows: 14px 22px 12px;
+}
+
+.screenshot-shape-rotate-hud-slider .range-slider-track {
+  height: 22px;
 }
 
 .screenshot-shape-rotate-hud-slider .range-slider-value output {
   color: var(--text);
+}
+
+.screenshot-shape-rotate-hud-snaps {
+  display: flex;
+  grid-column: 2;
+  flex-wrap: nowrap;
+  gap: 2px;
+}
+
+.screenshot-shape-rotate-hud-snaps button {
+  margin: 0;
+  padding: 2px 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text-subtle);
+  background: var(--surface);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.screenshot-shape-rotate-hud-snaps button:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.screenshot-shape-rotate-hud-snaps button.is-active {
+  border-color: var(--theme-accent);
+  color: var(--theme-accent);
+  background: rgba(var(--theme-accent-rgb), 0.12);
 }
 
 /* Fixed width so title swaps do not reflow the toast. */

@@ -5511,6 +5511,26 @@ export function ScreenshotEditor() {
                   ));
                 }}
               />
+              <div className="screenshot-shape-rotate-hud-snaps" role="group" aria-label="Snap rotation">
+                {[-90, 0, 45, 90, 180].map((degrees) => (
+                  <button
+                    key={degrees}
+                    type="button"
+                    className={shapeRotateHud.snapDegrees === degrees ? "is-active" : ""}
+                    aria-pressed={shapeRotateHud.snapDegrees === degrees}
+                    aria-label={`Snap to ${degrees} degrees`}
+                    onClick={() => {
+                      updateSelected((element) => (
+                        element.kind === "shape"
+                          ? withShapeRotation(element, shapeRotationFromDegrees(degrees))
+                          : element
+                      ));
+                    }}
+                  >
+                    {degrees}°
+                  </button>
+                ))}
+              </div>
             </div>
           )}
           {showCompressCompare && (
@@ -6802,8 +6822,9 @@ export function ScreenshotEditor() {
             )}
             {selected.kind === "shape" && (
               <p>
-                Drag the rotate handle for a smooth spin. Use the slider beside
-                it to snap in {SHAPE_ROTATION_SNAP_DEGREES}° steps.
+                Drag the rotate handle for a smooth spin. Use the slider or
+                angle chips beside it to snap in {SHAPE_ROTATION_SNAP_DEGREES}°
+                steps.
               </p>
             )}
           </section>

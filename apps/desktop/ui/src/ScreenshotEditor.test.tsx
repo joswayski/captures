@@ -2060,6 +2060,10 @@ describe("ScreenshotEditor", () => {
     fireEvent.change(rotationSlider, { target: { value: "90" } });
     expect(screen.getByRole("slider", { name: "Shape rotation" }))
       .toHaveAttribute("aria-valuetext", "90°");
+
+    fireEvent.click(screen.getByRole("button", { name: "Snap to 45 degrees" }));
+    expect(screen.getByRole("slider", { name: "Shape rotation" }))
+      .toHaveAttribute("aria-valuetext", "45°");
   });
 
   it("deselects the active layer when clicking the empty viewport chrome", async () => {
