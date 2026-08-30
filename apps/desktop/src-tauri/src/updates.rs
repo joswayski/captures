@@ -202,6 +202,33 @@ pub fn restore_update_notice(app: &AppHandle) {
     }
 }
 
+/// Sync dynamic status and geometry without showing, raising, or focusing the notice.
+pub fn refresh_update_notice(app: &AppHandle) {
+    let restorable = notice_can_restore(app);
+    let visible = update_notice_is_visible(app);
+    if !should_refresh_update_notice(restorable, visible) {
+        return;
+    }
+
+    let status = annotate_status(app, app.state::<UpdateCoordinator>().status.lock().clone());
+    let card_height = update_notice_height(&status);
+    let app = app.clone();
+    let dispatch = app.clone();
+    if let Err(error) = dispatch.run_on_main_thread(move || {
+        let Some(window) = app.get_webview_window("update") else {
+            return;
+        };
+        if !window.is_visible().unwrap_or(false) {
+            return;
+        }
+        let placement =
+            crate::tray_anchored_notice_placement(&app, UPDATE_NOTICE_WIDTH, card_height);
+        sync_update_notice_window(&window, &status, placement);
+    }) {
+        eprintln!("failed to schedule update notice refresh: {error}");
+    }
+}
+
 fn begin_deferred_restore(app: &AppHandle) {
     let restorable = notice_can_restore(app);
     let visible = update_notice_is_visible(app);
@@ -260,6 +287,10 @@ fn update_notice_is_visible_inner(app: &AppHandle) -> bool {
 
 fn should_begin_deferred_restore(restorable: bool, visible: bool, already_deferred: bool) -> bool {
     restorable && (visible || already_deferred)
+}
+
+fn should_refresh_update_notice(restorable: bool, visible: bool) -> bool {
+    restorable && visible
 }
 
 fn notice_restore_plan(
@@ -817,12 +848,7 @@ fn show_update_notice(app: &AppHandle) {
             if should_refresh_notice_activation_source(window.is_focused().unwrap_or(false)) {
                 remember_notice_activation_source();
             }
-            let _ = crate::apply_tray_notice_position(&window, placement);
-            if let Some(caret) = crate::notice_caret_payload(&placement)
-                && let Err(error) = window.emit(crate::NOTICE_CARET_EVENT, caret)
-            {
-                eprintln!("failed to update the update notice caret: {error}");
-            }
+            sync_update_notice_window(&window, &status, placement);
             let _ = window.show();
             let _ = crate::apply_tray_notice_position(&window, placement);
             crate::focus_single_window(&window);
@@ -833,6 +859,22 @@ fn show_update_notice(app: &AppHandle) {
         }
     }) {
         eprintln!("failed to schedule update notice: {error}");
+    }
+}
+
+fn sync_update_notice_window(
+    window: &tauri::WebviewWindow,
+    status: &UpdateStatus,
+    placement: crate::StartupNoticePlacement,
+) {
+    if let Err(error) = window.emit(UPDATE_EVENT, status.clone()) {
+        eprintln!("failed to refresh update notice status: {error}");
+    }
+    let _ = crate::apply_tray_notice_position(window, placement);
+    if let Some(caret) = crate::notice_caret_payload(&placement)
+        && let Err(error) = window.emit(crate::NOTICE_CARET_EVENT, caret)
+    {
+        eprintln!("failed to update the update notice caret: {error}");
     }
 }
 
@@ -1132,17 +1174,22 @@ fn annotate_status(app: &AppHandle, mut status: UpdateStatus) -> UpdateStatus {
 }
 
 fn open_captures_will_close(app: &AppHandle, state: &AppState) -> bool {
+    let has_unsaved_capture = state
+        .artifacts
+        .lock()
+        .iter()
+        .any(|artifact| artifact.path.is_none());
     open_captures_will_close_from(
         capture_is_active(state) || crate::screenshot_countdown_is_active(state),
-        state
-            .artifacts
-            .lock()
-            .iter()
-            .any(|artifact| artifact.path.is_none()),
+        unsaved_mini_previews_are_open(has_unsaved_capture, state.settings().show_mini_previews),
         app.webview_windows()
             .keys()
             .any(|label| capture_window_should_close_for_update(label)),
     )
+}
+
+fn unsaved_mini_previews_are_open(has_unsaved_capture: bool, show_mini_previews: bool) -> bool {
+    has_unsaved_capture && show_mini_previews
 }
 
 fn open_captures_will_close_from(
@@ -1220,7 +1267,8 @@ mod tests {
         notice_disposition, notice_restore_plan, open_captures_will_close_from,
         release_channel_enabled, restart_blocker, should_begin_deferred_restore,
         should_hide_update_notice_status, should_refresh_notice_activation_source,
-        should_wait_for_capture_start, stacked_changelog, take_restart_marker, tray_update_item,
+        should_refresh_update_notice, should_wait_for_capture_start, stacked_changelog,
+        take_restart_marker, tray_update_item, unsaved_mini_previews_are_open,
         update_available_menu_label, update_notice_height, version_is_newer_than,
     };
 
@@ -1316,6 +1364,13 @@ mod tests {
         assert!(open_captures_will_close_from(false, true, false));
         assert!(open_captures_will_close_from(false, false, true));
         assert!(!open_captures_will_close_from(false, false, false));
+    }
+
+    #[test]
+    fn warns_only_for_unsaved_captures_with_mini_previews_enabled() {
+        assert!(unsaved_mini_previews_are_open(true, true));
+        assert!(!unsaved_mini_previews_are_open(true, false));
+        assert!(!unsaved_mini_previews_are_open(false, true));
     }
 
     #[test]
@@ -1451,6 +1506,13 @@ mod tests {
         assert!(should_begin_deferred_restore(true, false, true));
         assert!(!should_begin_deferred_restore(true, false, false));
         assert!(!should_begin_deferred_restore(false, true, true));
+    }
+
+    #[test]
+    fn refreshes_only_an_existing_visible_update_notice() {
+        assert!(should_refresh_update_notice(true, true));
+        assert!(!should_refresh_update_notice(true, false));
+        assert!(!should_refresh_update_notice(false, true));
     }
 
     #[test]

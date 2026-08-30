@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { listen } from "@tauri-apps/api/event";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { UpdateNotice } from "./App";
 import type { UpdateStatus } from "./types";
@@ -52,7 +53,10 @@ const stacked: UpdateStatus = {
 };
 
 describe("UpdateNotice", () => {
-  afterEach(() => vi.clearAllMocks());
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(listen).mockImplementation(async () => () => undefined);
+  });
 
   it("presents an available update without repeating metadata", async () => {
     vi.mocked(invoke).mockImplementation(async (command) => {
@@ -209,6 +213,36 @@ describe("UpdateNotice", () => {
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("install_update"));
     expect(screen.queryByText("Update failed")).not.toBeInTheDocument();
+  });
+
+  it("clears a stale open-captures warning when native state is refreshed", async () => {
+    let updateStatusChanged: ((event: { payload: UpdateStatus }) => void) | undefined;
+    vi.mocked(listen).mockImplementation(async (event, handler) => {
+      if (event === "update-status-changed") {
+        updateStatusChanged = handler as (event: { payload: UpdateStatus }) => void;
+      }
+      return () => undefined;
+    });
+    vi.mocked(invoke).mockResolvedValue({
+      ...available,
+      will_close_open_captures: true,
+    } satisfies UpdateStatus);
+
+    render(<UpdateNotice />);
+
+    expect(await screen.findByText("Open captures will close. Unsaved edits are kept as drafts."))
+      .toBeInTheDocument();
+    await waitFor(() => expect(updateStatusChanged).toBeDefined());
+    await act(async () => {
+      updateStatusChanged?.({
+        payload: { ...available, will_close_open_captures: false },
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("Open captures will close. Unsaved edits are kept as drafts."))
+        .not.toBeInTheDocument();
+    });
   });
 
   it("retries installation when an available update was blocked", async () => {
