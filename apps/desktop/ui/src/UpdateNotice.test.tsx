@@ -83,6 +83,19 @@ describe("UpdateNotice", () => {
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("install_update"));
   });
 
+  it("dismisses Later through a native command instead of Window.hide", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_update_status") return available;
+      if (command === "dismiss_update_notice") return undefined;
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<UpdateNotice />);
+    fireEvent.click(await screen.findByRole("button", { name: "Later" }));
+
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("dismiss_update_notice"));
+  });
+
   it("groups skipped Preview notes by version", async () => {
     vi.mocked(invoke).mockResolvedValue(stacked);
 
@@ -97,6 +110,8 @@ describe("UpdateNotice", () => {
     expect(screen.getByText("Redesign the desktop UI around one design system")).toBeInTheDocument();
     expect(screen.queryByText("Fix the latest Preview only")).not.toBeInTheDocument();
     expect(screen.getAllByText("Version 2026.08.27.5")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Later" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("dismiss_update_notice"));
   });
 
   it("shows download progress while installation is running", async () => {

@@ -330,6 +330,13 @@ pub fn get_update_status(app: AppHandle) -> UpdateStatus {
     annotate_status(&app, status)
 }
 
+/// Hides the update notice from Rust. The webview cannot call `Window.hide`
+/// because the update window is not granted `core:window:allow-hide`.
+#[tauri::command]
+pub fn dismiss_update_notice(app: AppHandle) {
+    crate::hide_window(&app, "update");
+}
+
 #[tauri::command]
 pub async fn check_for_updates(app: AppHandle) -> Result<UpdateStatus, String> {
     check_for_updates_inner(&app, true).await
