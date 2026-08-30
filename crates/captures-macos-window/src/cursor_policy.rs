@@ -87,6 +87,18 @@ impl CaptureCursor {
         self.native_owned
     }
 
+    /// Cursor kind for the native mouse-move tracker. When WebKit owns cursor
+    /// rectangles, its CSS must be the only per-move writer or menu cursors
+    /// flicker between the target cursor and grab/pointer controls.
+    #[must_use]
+    pub const fn tracked_kind(self) -> CaptureCursorKind {
+        if self.native_owned {
+            self.kind
+        } else {
+            CaptureCursorKind::WebView
+        }
+    }
+
     /// Shortcut-modifier transitions restore the arrow. Native-owned overlays
     /// re-apply `NSCursor`; selector/window modes refresh WebKit rectangles so
     /// panel grab/pointer and CSS camera cursors are not overwritten.
@@ -127,6 +139,7 @@ mod tests {
     fn selector_region_shows_a_crosshair_without_locking_out_panel_css() {
         let cursor = CaptureCursor::selector(true, false);
         assert_eq!(cursor.kind, CaptureCursorKind::Crosshair);
+        assert_eq!(cursor.tracked_kind(), CaptureCursorKind::WebView);
         assert!(!cursor.native_owned);
         assert!(!cursor.disables_cursor_rects());
     }
@@ -135,10 +148,12 @@ mod tests {
     fn selector_window_and_display_keep_css_cursor_rects() {
         let window = CaptureCursor::selector(false, true);
         assert_eq!(window.kind, CaptureCursorKind::WebView);
+        assert_eq!(window.tracked_kind(), CaptureCursorKind::WebView);
         assert!(!window.native_owned);
 
         let display = CaptureCursor::selector(false, false);
         assert_eq!(display.kind, CaptureCursorKind::Arrow);
+        assert_eq!(display.tracked_kind(), CaptureCursorKind::WebView);
         assert!(!display.native_owned);
     }
 

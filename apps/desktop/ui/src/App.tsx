@@ -63,10 +63,10 @@ import {
   REGION_ASPECT_PRESETS,
   roundedRectPath,
   selectionBorderRadiusCss,
-  selectionRect,
   type RegionAspectPreset,
   type SelectionDragMode,
   type SelectionPoint,
+  type SelectionRect,
 } from "./lib/selection";
 import {
   detectShortcutPlatform,
@@ -2277,28 +2277,6 @@ export function RecordingSelector() {
           return;
         }
       }
-      if (
-        event.key !== "Enter"
-        || event.defaultPrevented
-        || event.altKey
-        || event.ctrlKey
-        || event.metaKey
-        || event.shiftKey
-      ) {
-        return;
-      }
-      if (
-        target instanceof Element
-        && target.closest("button, input, select, textarea, a, [contenteditable], [role=\"combobox\"], [role=\"listbox\"]")
-      ) {
-        return;
-      }
-      const primaryAction = panelRef.current?.querySelector<HTMLButtonElement>(
-        ".capture-selector-primary:not(:disabled)",
-      );
-      if (!primaryAction) return;
-      event.preventDefault();
-      primaryAction.click();
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
@@ -2405,7 +2383,7 @@ export function RecordingSelector() {
     || (targetMode === "region" && Boolean(region && region.width >= 2 && region.height >= 2))
   );
 
-  // Preference: finish selecting a region or window → start capture without Enter.
+  // Preference: selecting any target starts the capture immediately.
   useEffect(() => {
     if (!autoStartAfterSelectionRef.current || !canStartSelection || starting || switchingDisplay) {
       return;
@@ -2878,6 +2856,9 @@ export function RecordingSelector() {
                 onClick={() => {
                   setTargetMode(mode);
                   setHoveredWindow(null);
+                  if (mode === "display" && settingsRef.current?.auto_start_on_selection) {
+                    autoStartAfterSelectionRef.current = true;
+                  }
                 }}
               >
                 <CaptureTargetIcon mode={mode} />
@@ -2915,7 +2896,6 @@ export function RecordingSelector() {
             className={`recording-start capture-selector-primary capture-selector-primary-${actionMode}`}
             type="button"
             aria-label={actionMode === "screenshot" ? "Take screenshot" : "Start recording"}
-            aria-keyshortcuts="Enter"
             disabled={!canStart || starting}
             onClick={() => void start()}
           >
@@ -3043,10 +3023,10 @@ export function RecordingSelector() {
             controlsExcluded ?? session.recording_capabilities.controls_excluded,
             actionMode,
           )}{" "}
-          <span aria-hidden="true">·</span>{" "}
-          {settings.auto_start_on_selection
-            ? <>Region and window captures start when selected · Press <kbd>Enter</kbd> for full screen</>
-            : <>Press <kbd>Enter</kbd> to confirm</>}
+          {settings.auto_start_on_selection && <>
+            <span aria-hidden="true">·</span>{" "}
+            Captures start when a target is selected
+          </>}
         </p>
         {error && <p className="recording-selector-error" role="alert">{error}</p>}
       </section>
@@ -4933,6 +4913,7 @@ function CaptureOverlay() {
   const [primingSessionId, setPrimingSessionId] = useState<string | null>(null);
   const [start, setStart] = useState<SelectionPoint | null>(null);
   const [current, setCurrent] = useState<SelectionPoint | null>(null);
+  const [regionForceSquare, setRegionForceSquare] = useState(false);
   const [hoveredWindow, setHoveredWindow] = useState<string | null>(null);
   const [selectionFeedback, setSelectionFeedback] = useState(0);
   const surfaceRef = useRef<HTMLDivElement>(null);
@@ -4957,6 +4938,7 @@ function CaptureOverlay() {
         setSession(payload);
         setStart(null);
         setCurrent(null);
+        setRegionForceSquare(false);
         setHoveredWindow(null);
         if (selectionFeedbackTimerRef.current) {
           clearTimeout(selectionFeedbackTimerRef.current);
@@ -5003,16 +4985,24 @@ function CaptureOverlay() {
   }, [sessionId]);
 
   useEffect(() => {
+    const onShift = (event: KeyboardEvent) => {
+      if (event.key !== "Shift" || mode !== "region" || !start) return;
+      setRegionForceSquare(event.type === "keydown");
+    };
+    window.addEventListener("keydown", onShift, true);
+    window.addEventListener("keyup", onShift, true);
+    return () => {
+      window.removeEventListener("keydown", onShift, true);
+      window.removeEventListener("keyup", onShift, true);
+    };
+  }, [mode, start]);
+
+  useEffect(() => {
     if (!sessionId) return;
     const cursorClass = `capture-${mode}-cursor`;
     document.documentElement.classList.add(cursorClass);
     return () => document.documentElement.classList.remove(cursorClass);
   }, [mode, sessionId]);
-
-  const rect = useMemo(
-    () => (start && current ? selectionRect(start, current) : null),
-    [current, start],
-  );
 
   const hoveredWindowLayout = useMemo(() => {
     if (mode !== "window" || !hoveredWindow || !session) return null;
@@ -5051,6 +5041,19 @@ function CaptureOverlay() {
     ? displayOverlaySize(session.display, session.window_coordinate_scale)
     : { width: 0, height: 0 };
   const surfaceSize = useElementCssSize(surfaceRef, displayOverlay);
+  const rect = useMemo(
+    () => (start && current
+      ? dragSelectionRect(
+          "create",
+          start,
+          current,
+          { x: start.x, y: start.y, width: 0, height: 0 },
+          surfaceSize,
+          { forceSquare: regionForceSquare },
+        )
+      : null),
+    [current, regionForceSquare, start, surfaceSize],
+  );
 
   const overlayFrozen = sessionShowsFreezeFrame(session);
 
@@ -5137,15 +5140,15 @@ function CaptureOverlay() {
     return { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
   };
 
-  const commitRegion = (): boolean => {
-    if (!isCapturableSelection(rect)) return false;
+  const commitRegion = (selection: SelectionRect | null): boolean => {
+    if (!isCapturableSelection(selection)) return false;
     // Tauri's built-in window command reaches the native window directly. Start
     // hiding on pointer release instead of waiting for the async capture command
     // to be scheduled and hop back to the platform UI thread first. The backend
     // repeats this hide before it touches pixels, so live captures remain safe if
     // this best-effort fast path has not completed yet.
     void currentWindow?.hide().catch(() => undefined);
-    void invoke("commit_region", { sessionId, rect });
+    void invoke("commit_region", { sessionId, rect: selection });
     return true;
   };
 
@@ -5180,6 +5183,7 @@ function CaptureOverlay() {
     reassertRegionCursor();
     event.currentTarget.setPointerCapture(event.pointerId);
     const point = pointFromEvent(event);
+    setRegionForceSquare(event.shiftKey);
     setStart(point);
     setCurrent(point);
   };
@@ -5188,14 +5192,26 @@ function CaptureOverlay() {
     if (mode !== "region") return;
     reassertRegionCursor();
     if (!start) return;
+    setRegionForceSquare(event.shiftKey);
     setCurrent(pointFromEvent(event));
   };
 
-  const onPointerUp = () => {
+  const onPointerUp = (event: React.PointerEvent) => {
     if (mode !== "region" || !start) return;
-    if (!commitRegion()) showSelectionFeedback();
+    const finalRect = current
+      ? dragSelectionRect(
+          "create",
+          start,
+          current,
+          { x: start.x, y: start.y, width: 0, height: 0 },
+          surfaceSize,
+          { forceSquare: event.shiftKey },
+        )
+      : null;
+    if (!commitRegion(finalRect)) showSelectionFeedback();
     setStart(null);
     setCurrent(null);
+    setRegionForceSquare(false);
   };
 
   const hasSelection = Boolean(rect && rect.width > 0 && rect.height > 0);
@@ -7251,10 +7267,10 @@ function PreferencesSections({
             onChange={(event) => update("auto_start_on_selection", event.target.checked)}
           />
           <span>
-            Start capture as soon as a region or window is selected
+            Start capture as soon as a target is selected
             <small>
-              Skip pressing Enter after drawing a region or picking a window.
-              Full screen still waits so you can adjust options first.
+              Drawing a region, choosing a window, or clicking Full screen
+              immediately starts the capture.
             </small>
           </span>
         </label>

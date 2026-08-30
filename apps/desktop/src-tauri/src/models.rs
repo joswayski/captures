@@ -43,9 +43,8 @@ pub struct AppSettings {
     pub display_shortcut: String,
     #[serde(default = "default_auto_copy_to_clipboard")]
     pub auto_copy_to_clipboard: bool,
-    /// When true, finishing a region drag or clicking a window starts the
-    /// screenshot/recording immediately (no Enter). Full screen still waits
-    /// so capture options can be adjusted first.
+    /// When true, selecting a region, window, or full display starts the
+    /// screenshot/recording immediately.
     #[serde(default)]
     pub auto_start_on_selection: bool,
     #[serde(default = "default_true")]

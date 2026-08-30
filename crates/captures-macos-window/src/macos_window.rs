@@ -1144,6 +1144,7 @@ fn reassert_stored_capture_cursor(window: &WebviewWindow) {
 fn apply_capture_cursor(window: &WebviewWindow, cursor: CaptureCursor) -> Result<(), &'static str> {
     let native_window = native_window(window)?;
     let mode = cursor.kind.to_cursor_mode();
+    let tracked_mode = cursor.tracked_kind().to_cursor_mode();
     NSCursor::setHiddenUntilMouseMoves(false);
     // Apply the native cursor even if the WKWebView tracker is not ready yet.
     // The capture menu is created per session; a missing tracker must not leave
@@ -1152,7 +1153,7 @@ fn apply_capture_cursor(window: &WebviewWindow, cursor: CaptureCursor) -> Result
         set_cursor_rects_enabled(native_window, false);
         native_window.discardCursorRects();
         apply_cursor_mode(mode);
-        let _ = set_tracked_cursor(window, mode, CursorSurface::CaptureOverlay);
+        let _ = set_tracked_cursor(window, tracked_mode, CursorSurface::CaptureOverlay);
         synthesize_cursor_update(native_window);
         // Becoming key / cursorUpdate can re-enable WebKit rectangles. Re-assert
         // the native cursor before returning so a stationary pointer keeps it.
@@ -1165,7 +1166,9 @@ fn apply_capture_cursor(window: &WebviewWindow, cursor: CaptureCursor) -> Result
         // evaluation without waiting for a mouse move.
         set_cursor_rects_enabled(native_window, true);
         apply_cursor_mode(mode);
-        let _ = set_tracked_cursor(window, mode, CursorSurface::CaptureOverlay);
+        // WebKit owns the root target cursor plus panel grab/pointer cursors.
+        // A native per-move tracker would race those cursor rectangles.
+        let _ = set_tracked_cursor(window, tracked_mode, CursorSurface::CaptureOverlay);
         refresh_webkit_cursor_rects(native_window);
     }
     Ok(())

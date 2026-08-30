@@ -51,7 +51,7 @@ Preview builds update after every successful merge to `main` and may contain bug
 
 - Capture regions, windows, or full displays
 - Draw a region from an empty screen (no pre-sized outline); lock to common aspect ratios, or hold Shift for a square
-- Optional auto-start after selecting a region or window (Preferences)
+- Optional auto-start after selecting a region, window, or full display (Preferences)
 - Optional freeze while choosing a region or window, so hover states, menus, and motion stay put (on by default; turn off in Preferences to select from the live desktop)
 - Optional countdown before screenshots and recordings
 - Region recordings keep the selected area highlighted on screen while recording
