@@ -490,6 +490,12 @@ static CAPTURE_CURSOR_MONITOR: Mutex<Option<MainThreadMonitor>> = Mutex::new(Non
 // Order those documents out only after the capture surface is opaque.
 static FRONTMOST_APP_BEFORE_CAPTURE: Mutex<Option<Retained<NSRunningApplication>>> =
     Mutex::new(None);
+// The interactive update notice activates Captures so its buttons and keyboard
+// focus work. Keep its activation handoff separate from capture overlays: when
+// the notice hides, AppKit otherwise donates key status to an open editor and
+// raises that editor over the app the user was working in.
+static FRONTMOST_APP_BEFORE_UPDATE_NOTICE: Mutex<Option<Retained<NSRunningApplication>>> =
+    Mutex::new(None);
 // Titled document windows ordered out for the duration of a capture UI session.
 // Kept separate from frontmost-app restore so intermediate restores (overlay →
 // countdown) do not put editors back on screen for a frame.
@@ -1344,6 +1350,63 @@ pub fn activate_document_window(window: &WebviewWindow) -> Result<(), &'static s
     DispatchQueue::main().exec_async(move || {
         let _ = make_key_and_activate(&window);
     });
+    Ok(())
+}
+
+/// Remembers the external app that an interactive update notice is about to
+/// cover. Call only when the notice is taking focus; status refreshes while it
+/// is already key must preserve the original handoff target.
+pub fn remember_frontmost_app_before_update_notice_activation() {
+    if !is_main_thread() {
+        let _ = run_on_main(remember_frontmost_app_before_update_notice_activation);
+        return;
+    }
+    let previous = current_frontmost_if_not_captures();
+    let mut slot = FRONTMOST_APP_BEFORE_UPDATE_NOTICE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *slot = previous;
+}
+
+/// Hides the interactive update notice and hands activation back to the app it
+/// covered. AppKit may make an open editor key as the notice disappears, so
+/// resign that donated key window before yielding to the external app.
+pub fn dismiss_update_notice(window: &WebviewWindow) -> Result<(), &'static str> {
+    if !is_main_thread() {
+        let window = window.clone();
+        return run_on_main(move || dismiss_update_notice(&window))
+            .ok_or("update notice dismissal did not run on the main thread")?;
+    }
+
+    let native = native_window(window)?;
+    let previous = {
+        let mut slot = FRONTMOST_APP_BEFORE_UPDATE_NOTICE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        slot.take()
+    };
+    if native.isKeyWindow() {
+        native.resignKeyWindow();
+    }
+    if previous.is_some()
+        && let Some(main_thread) = MainThreadMarker::new()
+    {
+        let app = NSApplication::sharedApplication(main_thread);
+        if let Some(key) = app.keyWindow()
+            && is_titled_document_window(&key)
+        {
+            key.resignKeyWindow();
+        }
+    }
+    if window.hide().is_err() {
+        let mut slot = FRONTMOST_APP_BEFORE_UPDATE_NOTICE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *slot = previous;
+        native.makeKeyWindow();
+        return Err("failed to hide update notice");
+    }
+    yield_activation_to(previous);
     Ok(())
 }
 
