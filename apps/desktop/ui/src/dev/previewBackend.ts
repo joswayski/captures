@@ -147,7 +147,6 @@ function previewShortcutSettings(
   | "region_shortcut"
   | "window_shortcut"
   | "display_shortcut"
-  | "feedback_shortcut"
 > & { recording: AppSettings["recording"] } {
   const recording = {
     video_fps: 60 as const,
@@ -173,7 +172,6 @@ function previewShortcutSettings(
       region_shortcut: "Super+Shift+S",
       window_shortcut: "Alt+PrintScreen",
       display_shortcut: "PrintScreen",
-      feedback_shortcut: "CommandOrControl+Shift+F",
       recording: { ...recording, video_shortcut: "Super+Alt+R" },
     };
   }
@@ -183,7 +181,6 @@ function previewShortcutSettings(
       region_shortcut: "Super+Shift+S",
       window_shortcut: "Alt+PrintScreen",
       display_shortcut: "Shift+PrintScreen",
-      feedback_shortcut: "CommandOrControl+Shift+F",
       recording: { ...recording, video_shortcut: "Control+Shift+Alt+R" },
     };
   }
@@ -192,7 +189,6 @@ function previewShortcutSettings(
     region_shortcut: "CommandOrControl+Shift+4",
     window_shortcut: "CommandOrControl+Shift+W",
     display_shortcut: "CommandOrControl+Shift+3",
-    feedback_shortcut: "CommandOrControl+Shift+F",
     recording,
   };
 }

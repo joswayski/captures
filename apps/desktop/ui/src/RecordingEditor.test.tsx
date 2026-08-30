@@ -75,7 +75,6 @@ const settings: AppSettings = {
   region_shortcut: "Ctrl+Shift+4",
   window_shortcut: "Ctrl+Shift+W",
   display_shortcut: "Ctrl+Shift+3",
-  feedback_shortcut: "Ctrl+Shift+F",
   auto_copy_to_clipboard: true,
   auto_start_on_selection: false,
   show_mini_previews: true,

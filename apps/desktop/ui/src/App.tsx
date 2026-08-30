@@ -7378,14 +7378,6 @@ function PreferencesSections({
             onRecordingChange={(recording) => setShortcutRecording("video-shortcut", recording)}
             onChange={(value) => updateRecording("video_shortcut", value)}
           />
-          <ShortcutInput
-            id="feedback-shortcut"
-            label="Send Feedback"
-            value={settings.feedback_shortcut}
-            recording={recordingShortcut === "feedback-shortcut"}
-            onRecordingChange={(recording) => setShortcutRecording("feedback-shortcut", recording)}
-            onChange={(value) => update("feedback_shortcut", value)}
-          />
         </div>
       </section>
 

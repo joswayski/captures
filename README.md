@@ -101,7 +101,6 @@ Defaults follow each platform’s built-in screenshot keys. Captures-only action
 | `Cmd`+`Shift`+`W` | Capture a window |
 | `Cmd`+`Shift`+`3` | Choose a display for a full-screen screenshot |
 | `Cmd`+`Shift`+`5` | Record the screen, then save video or GIF |
-| `Cmd`+`Shift`+`F` | Open Send Feedback |
 | `Esc` | Cancel an active capture, screenshot countdown, or recording countdown |
 
 ### Windows
@@ -113,7 +112,6 @@ Defaults follow each platform’s built-in screenshot keys. Captures-only action
 | `Alt`+`PrtScn` | Capture a window |
 | `PrtScn` | Choose a display for a full-screen screenshot |
 | `Win`+`Alt`+`R` | Record the screen, then save video or GIF |
-| `Ctrl`+`Shift`+`F` | Open Send Feedback |
 | `Esc` | Cancel an active capture, screenshot countdown, or recording countdown |
 
 ### Linux (GNOME / Ubuntu)
@@ -125,10 +123,9 @@ Defaults follow each platform’s built-in screenshot keys. Captures-only action
 | `Alt`+`PrtScn` | Capture a window |
 | `Shift`+`PrtScn` | Choose a display for a full-screen screenshot |
 | `Ctrl`+`Shift`+`Alt`+`R` | Record the screen, then save video or GIF |
-| `Ctrl`+`Shift`+`F` | Open Send Feedback |
 | `Esc` | Cancel an active capture, screenshot countdown, or recording countdown |
 
-Global capture and feedback shortcuts can be changed in Preferences. Installations still on earlier factory defaults (`Ctrl`+`Shift` or the shared macOS-style number keys) are updated automatically; custom shortcuts stay as they are.
+Global capture shortcuts can be changed in Preferences. Installations still on earlier factory defaults (`Ctrl`+`Shift` or the shared macOS-style number keys) are updated automatically; custom shortcuts stay as they are.
 
 On macOS, overlapping Screenshot app shortcuts (`Cmd`+`Shift`+`3` / `4` / `5`) are unbound immediately so those keys reach Captures instead of the system overlay; restore them in System Settings → Keyboard → Keyboard Shortcuts → Screenshots if you want both. On GNOME, overlapping screenshot keybindings are cleared when `gsettings` is available. On Windows, Print Screen is turned off for Snipping Tool when Captures uses that key; `Win`+`Shift`+`S` may still open Snipping Tool until you change it in Windows keyboard settings. Opening Captures from the Start menu waits for Start and Search to close before the overlay freezes the desktop, so those flyouts do not appear in the screenshot.
 

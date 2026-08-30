@@ -41,8 +41,6 @@ pub struct AppSettings {
     pub region_shortcut: String,
     pub window_shortcut: String,
     pub display_shortcut: String,
-    #[serde(default = "default_feedback_shortcut")]
-    pub feedback_shortcut: String,
     #[serde(default = "default_auto_copy_to_clipboard")]
     pub auto_copy_to_clipboard: bool,
     /// When true, finishing a region drag or clicking a window starts the
@@ -246,7 +244,6 @@ impl Default for AppSettings {
             region_shortcut: default_region_shortcut(),
             window_shortcut: default_window_shortcut(),
             display_shortcut: default_display_shortcut(),
-            feedback_shortcut: default_feedback_shortcut(),
             auto_copy_to_clipboard: true,
             auto_start_on_selection: false,
             show_mini_previews: true,
@@ -735,10 +732,6 @@ fn default_display_shortcut() -> String {
     }
 }
 
-fn default_feedback_shortcut() -> String {
-    captures_extra_shortcut("F")
-}
-
 fn default_video_shortcut() -> String {
     #[cfg(target_os = "macos")]
     {
@@ -901,11 +894,6 @@ fn migrate_control_shift_factory_shortcuts(settings: &mut AppSettings) {
         "CommandOrControl+Shift+3",
     );
     replace_factory_shortcut(
-        &mut settings.feedback_shortcut,
-        &["Ctrl+Shift+F"],
-        "CommandOrControl+Shift+F",
-    );
-    replace_factory_shortcut(
         &mut settings.recording.video_shortcut,
         &["Ctrl+Shift+5"],
         "CommandOrControl+Shift+5",
@@ -937,11 +925,6 @@ fn migrate_to_platform_native_shortcuts(settings: &mut AppSettings) {
         &mut settings.display_shortcut,
         &["Ctrl+Shift+3", "CommandOrControl+Shift+3"],
         default_display_shortcut(),
-    );
-    replace_factory_shortcut(
-        &mut settings.feedback_shortcut,
-        &["Ctrl+Shift+F", "CommandOrControl+Shift+F"],
-        default_feedback_shortcut(),
     );
     replace_factory_shortcut(
         &mut settings.recording.video_shortcut,
@@ -1015,13 +998,12 @@ fn shortcut_matches(shortcut: &str, modifiers: &[&str], key: &str) -> bool {
     parsed_key == canonical_shortcut_token(key) && mods == expected
 }
 
-fn capture_shortcut_values(settings: &AppSettings) -> [&str; 7] {
+fn capture_shortcut_values(settings: &AppSettings) -> [&str; 6] {
     [
         settings.new_capture_shortcut.as_str(),
         settings.region_shortcut.as_str(),
         settings.window_shortcut.as_str(),
         settings.display_shortcut.as_str(),
-        settings.feedback_shortcut.as_str(),
         settings.recording.video_shortcut.as_str(),
         settings.recording.gif_shortcut.as_str(),
     ]
@@ -1338,7 +1320,6 @@ mod tests {
             settings.new_capture_shortcut,
             super::default_new_capture_shortcut()
         );
-        assert_eq!(settings.feedback_shortcut, "CommandOrControl+Shift+F");
         assert_eq!(settings.recording.video_fps, 60);
         assert_eq!(
             settings.recording.video_max_resolution,
@@ -1689,7 +1670,6 @@ mod tests {
             window_shortcut: "Alt+Shift+W".to_owned(),
             display_shortcut: "Ctrl+Shift+3".to_owned(),
             new_capture_shortcut: "Ctrl+Shift+Space".to_owned(),
-            feedback_shortcut: "Control+Shift+KeyF".to_owned(),
             ..AppSettings::default()
         };
         settings.recording.video_shortcut = "Ctrl+Shift+5".to_owned();
@@ -1704,7 +1684,6 @@ mod tests {
         assert_eq!(settings.region_shortcut, super::default_region_shortcut());
         assert_eq!(settings.window_shortcut, "Alt+Shift+W");
         assert_eq!(settings.display_shortcut, super::default_display_shortcut());
-        assert_eq!(settings.feedback_shortcut, "CommandOrControl+Shift+F");
         assert_eq!(
             settings.recording.video_shortcut,
             super::default_video_shortcut()
@@ -1724,7 +1703,6 @@ mod tests {
             region_shortcut: "CommandOrControl+Shift+4".to_owned(),
             window_shortcut: "Alt+Shift+W".to_owned(),
             display_shortcut: "CommandOrControl+Shift+3".to_owned(),
-            feedback_shortcut: "CommandOrControl+Shift+F".to_owned(),
             ..AppSettings::default()
         };
         settings.recording.video_shortcut = "CommandOrControl+Shift+5".to_owned();
@@ -1813,7 +1791,6 @@ mod tests {
             region_shortcut: "CommandOrControl+Shift+4".to_owned(),
             window_shortcut: "CommandOrControl+Shift+W".to_owned(),
             display_shortcut: "CommandOrControl+Shift+3".to_owned(),
-            feedback_shortcut: "CommandOrControl+Shift+F".to_owned(),
             ..AppSettings::default()
         };
         settings.recording.video_shortcut = "CommandOrControl+Shift+5".to_owned();
@@ -1836,7 +1813,6 @@ mod tests {
             display_shortcut: "Ctrl+Shift+3".to_owned(),
             new_capture_shortcut: "Ctrl+Shift+Space".to_owned(),
             window_shortcut: "Ctrl+Shift+W".to_owned(),
-            feedback_shortcut: "Ctrl+Shift+F".to_owned(),
             ..AppSettings::default()
         };
         control_defaults.recording.video_shortcut = "Ctrl+Shift+5".to_owned();
@@ -1874,7 +1850,6 @@ mod tests {
             region_shortcut: "Command+Shift+4".to_owned(),
             window_shortcut: "CommandOrControl+Shift+W".to_owned(),
             display_shortcut: "Alt+Shift+3".to_owned(),
-            feedback_shortcut: "CommandOrControl+Shift+F".to_owned(),
             ..AppSettings::default()
         };
         settings.recording.video_shortcut = "Alt+Shift+5".to_owned();
@@ -1892,7 +1867,6 @@ mod tests {
             region_shortcut: "Alt+Shift+4".to_owned(),
             window_shortcut: "CommandOrControl+Shift+W".to_owned(),
             display_shortcut: "Command+Shift+3".to_owned(),
-            feedback_shortcut: "CommandOrControl+Shift+F".to_owned(),
             ..AppSettings::default()
         };
         settings.recording.video_shortcut = "Alt+Shift+5".to_owned();
@@ -1978,7 +1952,6 @@ mod tests {
             region_shortcut: "Super+Shift+S".to_owned(),
             window_shortcut: "CommandOrControl+Shift+W".to_owned(),
             display_shortcut: "CommandOrControl+Shift+3".to_owned(),
-            feedback_shortcut: "CommandOrControl+Shift+F".to_owned(),
             recording: {
                 let mut recording = AppSettings::default().recording;
                 recording.video_shortcut = "Super+Alt+R".to_owned();

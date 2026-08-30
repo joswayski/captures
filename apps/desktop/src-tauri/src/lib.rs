@@ -1712,7 +1712,6 @@ fn update_settings(
         || settings.region_shortcut.trim().is_empty()
         || settings.window_shortcut.trim().is_empty()
         || settings.display_shortcut.trim().is_empty()
-        || settings.feedback_shortcut.trim().is_empty()
         || settings.recording.video_shortcut.trim().is_empty()
     {
         return Err("all shortcuts must be set".to_owned());
@@ -1725,8 +1724,6 @@ fn update_settings(
         parse_shortcut(&settings.window_shortcut).map_err(|error| error.to_string())?;
     let display_shortcut =
         parse_shortcut(&settings.display_shortcut).map_err(|error| error.to_string())?;
-    let feedback_shortcut =
-        parse_shortcut(&settings.feedback_shortcut).map_err(|error| error.to_string())?;
     let video_shortcut =
         parse_shortcut(&settings.recording.video_shortcut).map_err(|error| error.to_string())?;
     let shortcuts = [
@@ -1734,7 +1731,6 @@ fn update_settings(
         region_shortcut,
         window_shortcut,
         display_shortcut,
-        feedback_shortcut,
         video_shortcut,
     ];
     if shortcuts
@@ -1770,7 +1766,6 @@ fn update_settings(
         || settings.region_shortcut != previous_settings.region_shortcut
         || settings.window_shortcut != previous_settings.window_shortcut
         || settings.display_shortcut != previous_settings.display_shortcut
-        || settings.feedback_shortcut != previous_settings.feedback_shortcut
         || settings.recording.video_shortcut != previous_settings.recording.video_shortcut;
     if shortcuts_changed && let Err(error) = register_shortcuts_with(&app, &settings) {
         let _ = register_shortcuts_with(&app, &previous_settings);
@@ -3053,31 +3048,8 @@ fn register_shortcuts_with(app: &AppHandle, settings: &AppSettings) -> Result<()
     register_shortcut(app, &settings.region_shortcut, CaptureMode::Region)?;
     register_shortcut(app, &settings.window_shortcut, CaptureMode::Window)?;
     register_shortcut(app, &settings.display_shortcut, CaptureMode::Display)?;
-    register_feedback_shortcut(app, &settings.feedback_shortcut)?;
     register_recording_shortcut(app, &settings.recording.video_shortcut)?;
     Ok(())
-}
-
-fn register_feedback_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), AppError> {
-    let parsed = parse_shortcut(shortcut)?;
-    let armed = AtomicBool::new(false);
-    app.global_shortcut()
-        .on_shortcut(parsed, move |app, _shortcut, event| {
-            if !should_trigger_shortcut(&armed, event.state()) {
-                return;
-            }
-            if app
-                .get_webview_window("preferences")
-                .is_some_and(|window| window.is_focused().unwrap_or(false))
-                || app
-                    .get_webview_window("feedback")
-                    .is_some_and(|window| window.is_focused().unwrap_or(false))
-            {
-                return;
-            }
-            feedback::show_feedback(app);
-        })
-        .map_err(|error| AppError::Shortcut(error.to_string()))
 }
 
 fn register_new_capture_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), AppError> {
