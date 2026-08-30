@@ -2241,10 +2241,9 @@ mod tests {
         cursor_update_tracking_options, display_corner_radius_points, is_main_thread,
         parse_display_id, pointer_tracking_options, reassert_thumbnail_cursor_after_click,
         shortcut_modifiers_pressed, should_rearm_thumbnail_key_window,
-        should_release_thumbnail_key_after_event,
-        should_reset_cursor_on_exit, single_window_activation_options,
-        style_mask_is_titled_document, surface_assumes_pointer_inside,
-        window_corner_radius_for_major_version,
+        should_release_thumbnail_key_after_event, should_reset_cursor_on_exit,
+        single_window_activation_options, style_mask_is_titled_document,
+        surface_assumes_pointer_inside, window_corner_radius_for_major_version,
     };
 
     #[test]

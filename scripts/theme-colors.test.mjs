@@ -141,7 +141,7 @@ test("preferences keeps presets compact and gives Custom a full-spectrum treatme
   );
 });
 
-test("mini-preview hide control uses opaque glass tokens", async () => {
+test("mini-preview hide control uses opaque glass tokens and contained shadows", async () => {
   const [designCss, desktopCss] = await Promise.all([
     readFile(designCssPath, "utf8"),
     readDesktopCss(),
@@ -153,6 +153,12 @@ test("mini-preview hide control uses opaque glass tokens", async () => {
   assert.ok(collapse, "missing .thumbnail-collapse rule");
   assert.match(collapse, /background:\s*var\(--glass-strong-solid\)/u);
   assert.doesNotMatch(collapse, /rgb\(/u);
+  assert.doesNotMatch(collapse, /var\(--glass-shadow\)/u);
+  assert.match(collapse, /0 1px 3px rgba\(0, 0, 0, 0\.46\)/u);
+  assert.match(
+    desktopCss,
+    /--thumbnail-card-shadow:\s*0 6px 14px[\s\S]*?0 2px 5px/u,
+  );
   assert.match(
     desktopCss,
     /\.thumbnail-collapse:hover[\s\S]*?background:\s*var\(--glass-raised-solid\)/u,
