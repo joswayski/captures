@@ -1806,6 +1806,7 @@ fn update_settings(
             let _ = window.set_content_protected(false);
         }
         update_thumbnail_stack(&app);
+        updates::restore_update_notice(&app);
     }
     if recording_controls_setting_changed
         && let Some(window) = app.get_webview_window("recording-hud")
@@ -2266,6 +2267,7 @@ async fn save_artifact(
         .ok_or_else(|| "artifact is no longer available".to_owned())?;
     app.emit("artifact-updated", &artifact)
         .map_err(|error| error.to_string())?;
+    updates::restore_update_notice(&app);
     Ok(artifact)
 }
 
