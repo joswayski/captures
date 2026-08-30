@@ -336,6 +336,13 @@ pub fn get_update_status(app: AppHandle) -> UpdateStatus {
 /// because the update window is not granted `core:window:allow-hide`.
 #[tauri::command]
 pub fn dismiss_update_notice(app: AppHandle) {
+    #[cfg(target_os = "macos")]
+    if let Some(window) = app.get_webview_window("update")
+        && let Err(error) = captures_macos_window::dismiss_update_notice(&window)
+    {
+        eprintln!("failed to dismiss update notice: {error}");
+    }
+    #[cfg(not(target_os = "macos"))]
     crate::hide_window(&app, "update");
 }
 
@@ -807,6 +814,9 @@ fn show_update_notice(app: &AppHandle) {
         let placement =
             crate::tray_anchored_notice_placement(&app, UPDATE_NOTICE_WIDTH, card_height);
         if let Some(window) = app.get_webview_window("update") {
+            if should_refresh_notice_activation_source(window.is_focused().unwrap_or(false)) {
+                remember_notice_activation_source();
+            }
             let _ = crate::apply_tray_notice_position(&window, placement);
             if let Some(caret) = crate::notice_caret_payload(&placement)
                 && let Err(error) = window.emit(crate::NOTICE_CARET_EVENT, caret)
@@ -830,6 +840,7 @@ fn create_update_notice(
     app: &AppHandle,
     placement: crate::StartupNoticePlacement,
 ) -> Result<(), tauri::Error> {
+    remember_notice_activation_source();
     let (theme, background) = crate::notice_window_chrome(app);
     let window = WebviewWindowBuilder::new(
         app,
@@ -861,6 +872,15 @@ fn create_update_notice(
     crate::apply_tray_notice_position(&window, placement)?;
     crate::focus_single_window(&window);
     Ok(())
+}
+
+fn should_refresh_notice_activation_source(is_focused: bool) -> bool {
+    !is_focused
+}
+
+fn remember_notice_activation_source() {
+    #[cfg(target_os = "macos")]
+    captures_macos_window::remember_frontmost_app_before_update_notice_activation();
 }
 
 fn update_notice_height(status: &UpdateStatus) -> f64 {
@@ -1199,9 +1219,9 @@ mod tests {
         download_error_is_retryable, download_retry_delay, install_error_message,
         notice_disposition, notice_restore_plan, open_captures_will_close_from,
         release_channel_enabled, restart_blocker, should_begin_deferred_restore,
-        should_hide_update_notice_status, should_wait_for_capture_start, stacked_changelog,
-        take_restart_marker, tray_update_item, update_available_menu_label, update_notice_height,
-        version_is_newer_than,
+        should_hide_update_notice_status, should_refresh_notice_activation_source,
+        should_wait_for_capture_start, stacked_changelog, take_restart_marker, tray_update_item,
+        update_available_menu_label, update_notice_height, version_is_newer_than,
     };
 
     #[test]
@@ -1451,6 +1471,12 @@ mod tests {
             notice_restore_plan(true, false, true, false),
             NoticeRestorePlan::Show
         );
+    }
+
+    #[test]
+    fn update_notice_preserves_its_activation_source_while_already_focused() {
+        assert!(should_refresh_notice_activation_source(false));
+        assert!(!should_refresh_notice_activation_source(true));
     }
 
     #[test]
