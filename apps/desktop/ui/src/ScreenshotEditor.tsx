@@ -6743,8 +6743,8 @@ export function ScreenshotEditor() {
             <div
               className="screenshot-export-control screenshot-maximum-size"
               title={exportFormat === "jpeg" || exportFormat === "webp"
-                ? `${formatLabel} quality is lowered only when needed to meet this limit.`
-                : `Uses stronger ${formatLabel} compression. If still over the limit, reduce dimensions or switch format.`}
+                ? `${formatLabel} quality is lowered only when needed to meet this limit. If the original already fits, it stays uncompressed.`
+                : `Uses stronger ${formatLabel} compression only when the original exceeds this limit.`}
             >
               <span>Maximum file size</span>
               <span className="screenshot-maximum-size-control">

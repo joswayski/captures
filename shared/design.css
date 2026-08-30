@@ -100,6 +100,8 @@
   --glass-shadow: 0 16px 44px rgba(0, 0, 0, 0.44), 0 2px 8px rgba(0, 0, 0, 0.3);
   --glass-blur: blur(24px) saturate(1.4);
   --glass-veil: rgba(15, 15, 18, 0.38);
+  --glass-veil-soft: rgba(15, 15, 18, 0.18);
+  --glass-veil-heavy: rgba(15, 15, 18, 0.72);
 
   /* Status hues. Accent/signal come from the selected color theme. */
   --positive: #35a35d;

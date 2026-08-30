@@ -651,15 +651,25 @@ const RESPONSES: Record<string, unknown> = {
 
 function mockScreenshotExportBytes(payload: unknown): number {
   const request = payload as {
+    imagePng?: number[];
     pngMaxColors?: number;
     jpegQuality?: number;
+    maxSizeBytes?: number | null;
+    qualityMode?: string;
   } | undefined;
+  const preserveBytes = Array.isArray(request?.imagePng) && request.imagePng.length > 0
+    ? request.imagePng.length
+    : 1_200_000;
   const colors = Number(request?.pngMaxColors);
-  if (Number.isFinite(colors) && colors > 0) {
-    return Math.round(140_000 + colors * 630);
+  const qualityEncoded = Number.isFinite(colors) && colors > 0
+    ? Math.round(140_000 + colors * 630)
+    : Math.round(120_000 + Math.max(20, Number(request?.jpegQuality ?? 98)) * 2_000);
+  const maximum = Number(request?.maxSizeBytes);
+  if (request?.qualityMode === "maximum" && Number.isFinite(maximum) && maximum > 0) {
+    if (preserveBytes <= maximum) return preserveBytes;
+    return Math.max(10_000, Math.floor(maximum * 0.94));
   }
-  const quality = Number(request?.jpegQuality ?? 98);
-  return Math.round(120_000 + Math.max(20, quality) * 2_000);
+  return qualityEncoded;
 }
 
 async function samplePreviewPng(quality = 0.92): Promise<number[]> {
@@ -722,6 +732,7 @@ export function installPreviewBackend(): void {
       return mockScreenshotExportBytes(payload);
     }
     if (command === "preview_screenshot_export") {
+      await new Promise((resolve) => window.setTimeout(resolve, 650));
       const request = payload as {
         imagePng?: number[];
         jpegQuality?: number;
@@ -731,10 +742,11 @@ export function installPreviewBackend(): void {
       // the live before view. Falling back to the sample still would overlay a
       // different image and look like the typeface changed at the split.
       const imagePng = request?.imagePng;
+      const sizeBytes = mockScreenshotExportBytes(payload);
       if (imagePng && imagePng.length > 0) {
         return {
           bytes: imagePng,
-          sizeBytes: Math.max(256, Math.round(imagePng.length * 0.4)),
+          sizeBytes,
           format: request?.format ?? "png",
         };
       }
