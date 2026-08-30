@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, posix } from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -30,7 +30,7 @@ test("macOS historical helper sparse checkout includes every local import", () =
   const listed = macosHelperSparseCheckout();
   assert.ok(listed.includes("scripts/github-release-assets.mjs"));
   for (const specifier of localImports(helperPath)) {
-    const relativePath = join("scripts", specifier.replace(/^\.\//u, ""));
+    const relativePath = posix.join("scripts", specifier.replace(/^\.\//u, ""));
     assert.ok(
       listed.includes(relativePath),
       `${relativePath} is imported by github-release-assets.mjs but missing from the macOS helper sparse checkout`,
