@@ -5607,9 +5607,13 @@ export function Thumbnail() {
   }, [hasThumbnailCards]);
 
   useEffect(() => {
+    // The macOS panel stays ordered onscreen at zero alpha when the stack is
+    // empty so AppKit cannot transfer focus to an open editor. Do not leave the
+    // pointer poll running against that transparent, click-through WebView.
+    if (!hasThumbnailCards) return;
     // Keep one native hover tracker for the lifetime of the thumbnail window.
-    // Restarting it when a card is added or removed briefly clears the hover
-    // presentation and releases the native interactive cursor.
+    // Restart only when the stack crosses between empty and non-empty; ordinary
+    // card additions/removals preserve hover presentation and native cursors.
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let polling = false;
@@ -5727,7 +5731,7 @@ export function Thumbnail() {
       document.documentElement.classList.remove("thumbnail-native-tracking");
       clearNativeHover();
       clearThumbnailCssCursor();
-      setIgnoreCursorEvents(false, true);
+      setIgnoreCursorEvents(true, true);
     };
 
     const applyNativeHover = (position: ThumbnailPointerPosition) => {
@@ -5937,7 +5941,7 @@ export function Thumbnail() {
       );
       stopNativeTracking();
     };
-  }, []);
+  }, [hasThumbnailCards]);
 
   useEffect(() => {
     return () => {

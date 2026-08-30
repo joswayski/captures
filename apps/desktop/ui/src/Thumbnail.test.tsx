@@ -436,17 +436,22 @@ describe("Thumbnail", () => {
   });
 
   it("re-arms native preview hit testing as soon as deletion completes", async () => {
+    let pointerPolls = 0;
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "get_artifacts") return [artifact];
       if (command === "get_clipboard_state") {
         return { revision: 0, artifact_id: artifact.id };
       }
-      if (command === "get_thumbnail_pointer_position") return null;
+      if (command === "get_thumbnail_pointer_position") {
+        pointerPolls += 1;
+        return null;
+      }
       return undefined;
     });
 
     render(<Thumbnail />);
     const card = await screen.findByRole("article");
+    await waitFor(() => expect(pointerPolls).toBeGreaterThan(0));
     vi.useFakeTimers();
     try {
       fireEvent.click(within(card).getByRole("button", { name: "Delete" }));
@@ -461,6 +466,14 @@ describe("Thumbnail", () => {
       expect(vi.mocked(invoke)).toHaveBeenCalledWith(
         "refresh_thumbnail_interactivity",
       );
+      const pollsAfterRemoval = pointerPolls;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      expect(pointerPolls).toBe(pollsAfterRemoval);
+      const ignoreCalls = vi.mocked(invoke).mock.calls
+        .filter(([command]) => command === "set_thumbnail_ignore_cursor_events");
+      expect(ignoreCalls.at(-1)?.[1]).toEqual({ ignore: true });
     } finally {
       vi.useRealTimers();
     }

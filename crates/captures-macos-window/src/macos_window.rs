@@ -328,6 +328,10 @@ fn cursor_mode_is_interactive(mode: CursorMode) -> bool {
     )
 }
 
+fn should_rearm_thumbnail_key_window(interactive: bool, mode_changed: bool) -> bool {
+    interactive && mode_changed
+}
+
 /// Last AppKit cursor mode published for the always-on-top thumbnail stack.
 ///
 /// Click handling lives in WebKit, which resets `NSCursor` to the arrow on
@@ -339,6 +343,10 @@ static THUMBNAIL_CURSOR_MODE: AtomicU8 = AtomicU8::new(CursorMode::Arrow as u8);
 // visually inactive under a stationary pointer. Leaving/re-entering the card or
 // moving to a different cursor region rearms key-on-hover.
 static THUMBNAIL_KEY_WINDOW_ALLOWED: AtomicBool = AtomicBool::new(true);
+// The thumbnail WebView stays ordered onscreen on macOS when concealed. This
+// avoids AppKit donating key status to an open editor when the final preview is
+// removed, while still letting the desktop layer make the panel click-through.
+static THUMBNAIL_PRESENTED: AtomicBool = AtomicBool::new(false);
 static THUMBNAIL_CLICK_CURSOR_MONITOR: Mutex<Option<MainThreadMonitor>> = Mutex::new(None);
 
 /// Retains an AppKit event monitor installed only on the main thread.
@@ -598,6 +606,7 @@ pub fn configure_webview_inactive_hover(window: &WebviewWindow) -> Result<(), &'
 /// can display its cursor, then releases key status after click delivery and on
 /// exit so the application underneath stays active.
 pub fn configure_thumbnail_inactive_hover(window: &WebviewWindow) -> Result<(), &'static str> {
+    THUMBNAIL_PRESENTED.store(false, Ordering::Release);
     configure_inactive_hover_with_cursor::<ThumbnailPanel>(
         window,
         CursorMode::Arrow,
@@ -693,6 +702,46 @@ pub fn show_without_activating(window: &WebviewWindow) -> Result<(), &'static st
     native_window.setLevel(NSStatusWindowLevel);
     native_window.orderFrontRegardless();
     Ok(())
+}
+
+/// Reveals the mini-preview panel without activating Captures.
+pub fn show_thumbnail_without_activating(window: &WebviewWindow) -> Result<(), &'static str> {
+    if !is_main_thread() {
+        let window = window.clone();
+        return run_on_main(move || show_thumbnail_without_activating(&window))
+            .ok_or("thumbnail reveal did not run on the main thread")?;
+    }
+    native_window(window)?.setAlphaValue(1.0);
+    show_without_activating(window)?;
+    THUMBNAIL_PRESENTED.store(true, Ordering::Release);
+    Ok(())
+}
+
+/// Makes the mini-preview panel transparent without ordering it out.
+///
+/// Ordering out a key-capable nonactivating panel can make AppKit donate key
+/// status to an open editor and activate Captures over the user's current app.
+/// Keeping the click-through panel onscreen at zero alpha avoids that focus
+/// handoff; the WebView is paused separately while it has no live cards.
+pub fn conceal_thumbnail_without_hiding(window: &WebviewWindow) -> Result<(), &'static str> {
+    if !is_main_thread() {
+        let window = window.clone();
+        return run_on_main(move || conceal_thumbnail_without_hiding(&window))
+            .ok_or("thumbnail conceal did not run on the main thread")?;
+    }
+    THUMBNAIL_PRESENTED.store(false, Ordering::Release);
+    THUMBNAIL_KEY_WINDOW_ALLOWED.store(false, Ordering::Release);
+    let native_window = native_window(window)?;
+    native_window.setAlphaValue(0.0);
+    set_cursor_rects_enabled(native_window, true);
+    set_tracked_cursor(window, CursorMode::Arrow, CursorSurface::Thumbnail)?;
+    resign_ns_window_key_without_raising_documents(native_window);
+    Ok(())
+}
+
+/// Whether the mini-preview panel is currently visible to the user.
+pub fn thumbnail_is_presented() -> bool {
+    THUMBNAIL_PRESENTED.load(Ordering::Acquire)
 }
 
 /// Returns the standard visible window-corner radius for the current macOS
@@ -1647,6 +1696,10 @@ fn resign_ns_window_key_without_raising_documents(window: &NSWindow) {
             && is_titled_document_window(&key)
         {
             key.resignKeyWindow();
+            // Key donation can also raise the editor inside Captures' inactive
+            // window stack. Put it behind the user's frontmost app before
+            // returning activation so it cannot remain visually promoted.
+            key.orderBack(None);
         }
     }
     yield_activation_to(previous);
@@ -1830,7 +1883,7 @@ pub fn set_thumbnail_cursor(
         ThumbnailCursorKind::Pointer => CursorMode::PointingHand,
         ThumbnailCursorKind::Grab => CursorMode::OpenHand,
     };
-    if !interactive || mode != thumbnail_cursor_mode() {
+    if should_rearm_thumbnail_key_window(interactive, mode != thumbnail_cursor_mode()) {
         THUMBNAIL_KEY_WINDOW_ALLOWED.store(true, Ordering::Release);
     }
     // A nonactivating panel can become key without activating Captures. AppKit
@@ -1918,6 +1971,7 @@ pub fn reset_pointing_cursor_state(window: &WebviewWindow) -> Result<(), &'stati
         return run_on_main(move || reset_pointing_cursor_state(&window))
             .ok_or("thumbnail cursor reset did not run on the main thread")?;
     }
+    THUMBNAIL_KEY_WINDOW_ALLOWED.store(false, Ordering::Release);
     let native_window = native_window(window)?;
     set_cursor_rects_enabled(native_window, true);
     set_tracked_cursor(window, CursorMode::Arrow, CursorSurface::Thumbnail)
@@ -2125,9 +2179,10 @@ mod tests {
         cursor_surface_uses_key_window, cursor_update_tracking_options,
         display_corner_radius_points, is_main_thread, parse_display_id, pointer_tracking_options,
         reassert_thumbnail_cursor_after_click, shortcut_modifiers_pressed,
-        should_release_thumbnail_key_after_event, should_reset_cursor_on_exit,
-        single_window_activation_options, style_mask_is_titled_document,
-        surface_assumes_pointer_inside, window_corner_radius_for_major_version,
+        should_rearm_thumbnail_key_window, should_release_thumbnail_key_after_event,
+        should_reset_cursor_on_exit, single_window_activation_options,
+        style_mask_is_titled_document, surface_assumes_pointer_inside,
+        window_corner_radius_for_major_version,
     };
 
     #[test]
@@ -2328,6 +2383,13 @@ mod tests {
         assert!(cursor_mode_is_interactive(CursorMode::Crosshair));
         assert!(!cursor_mode_is_interactive(CursorMode::Arrow));
         assert!(!cursor_mode_is_interactive(CursorMode::WebView));
+    }
+
+    #[test]
+    fn default_cursor_updates_do_not_rearm_a_concealed_thumbnail() {
+        assert!(!should_rearm_thumbnail_key_window(false, true));
+        assert!(!should_rearm_thumbnail_key_window(true, false));
+        assert!(should_rearm_thumbnail_key_window(true, true));
     }
 
     #[test]
