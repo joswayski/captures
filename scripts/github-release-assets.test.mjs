@@ -38,6 +38,18 @@ test("macOS historical helper sparse checkout includes every local import", () =
   }
 });
 
+test("updater URL rewrite uses the workflow CalVer tag, not GitHub draft tag_name", () => {
+  const workflow = readFileSync(workflowPath, "utf8");
+  assert.match(
+    workflow,
+    /rewrite-updater-urls "\$RELEASE_ID" release-assets\/latest\.json "\$TAG"/u,
+  );
+  assert.match(
+    workflow,
+    /rewrite-updater-urls \\\n\s+"\$newest_id" \\\n\s+"\$channel_assets\/latest\.json" \\\n\s+"\$newest_tag"/u,
+  );
+});
+
 test("the sparse helper checkout can load without the rest of the repository", async () => {
   const listed = macosHelperSparseCheckout();
   const directory = mkdtempSync(join(tmpdir(), "captures-release-tools-"));

@@ -530,12 +530,14 @@ jobs:
           APP_VERSION: ${{ needs.prepare.outputs.app_version }}
           GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
+          TAG: ${{ needs.prepare.outputs.tag }}
         shell: bash
         run: |
           node scripts/github-release-assets.mjs download "$RELEASE_ID" release-assets
-          # Draft asset URLs use untagged-* paths that 404 after publish. Rewrite
-          # latest.json against the CalVer tag before checksums are frozen.
-          node scripts/github-release-assets.mjs rewrite-updater-urls "$RELEASE_ID" release-assets/latest.json
+          # GitHub draft releases report tag_name as untagged-* even when the
+          # CalVer git tag already exists. Pass that tag explicitly so latest.json
+          # keeps publishable download URLs before checksums are frozen.
+          node scripts/github-release-assets.mjs rewrite-updater-urls "$RELEASE_ID" release-assets/latest.json "$TAG"
           node scripts/release-assets.mjs release-assets "$APP_VERSION"
           node scripts/github-release-assets.mjs upload "$RELEASE_ID" release-assets/SHA256SUMS release-assets/latest.json
       - name: Confirm the release remains a draft
@@ -666,7 +668,8 @@ jobs:
           newest_id="$(jq -er .id <<< "$newest_release")"
           node scripts/github-release-assets.mjs rewrite-updater-urls \
             "$newest_id" \
-            "$channel_assets/latest.json"
+            "$channel_assets/latest.json" \
+            "$newest_tag"
           macos_asset="$(jq -er .macos <<< "$preview_assets")"
           windows_asset="$(jq -er .windows <<< "$preview_assets")"
           linux_deb_asset="$(jq -er .linuxDeb <<< "$preview_assets")"
