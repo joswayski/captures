@@ -3570,7 +3570,11 @@ fn create_recording_selector_window(app: &AppHandle) -> Result<(), AppError> {
     .transparent(true)
     .background_color(Color(0, 0, 0, 0))
     .focused(false)
-    .visible(true)
+    // Keep the new 1x1 window offscreen while it is resized and moved over the
+    // selected display. Showing it here lets WebKit composite that geometry
+    // change at full alpha before prepare_recording_selector primes the native
+    // reveal, which reads as a brief fullscreen zoom/flash.
+    .visible(false)
     .build()?;
     // Selector sits over the desktop; keep it out of secondary captures.
     window.set_content_protected(cfg!(target_os = "windows"))?;

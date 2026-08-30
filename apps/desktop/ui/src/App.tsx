@@ -4917,6 +4917,10 @@ function CaptureOverlay() {
   const surfaceRef = useRef<HTMLDivElement>(null);
   const activeSessionIdRef = useRef<string | null>(null);
   const revealingSessionIdRef = useRef<string | null>(null);
+  const overlayWakeRef = useRef<{
+    sessionId: string;
+    promise: Promise<unknown>;
+  } | null>(null);
   const regionOverlayWarmedRef = useRef(false);
   const selectionFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastRegionCursorSyncAtRef = useRef(0);
@@ -5057,7 +5061,14 @@ function CaptureOverlay() {
 
   const wakeOverlay = useCallback(() => {
     if (!sessionId) return Promise.resolve();
-    return invoke("show_capture_overlay", { sessionId });
+    const existing = overlayWakeRef.current;
+    if (existing?.sessionId === sessionId) return existing.promise;
+    const promise = invoke("show_capture_overlay", { sessionId }).catch((error) => {
+      if (overlayWakeRef.current?.promise === promise) overlayWakeRef.current = null;
+      throw error;
+    });
+    overlayWakeRef.current = { sessionId, promise };
+    return promise;
   }, [sessionId]);
 
   const revealOverlay = useCallback(() => {
