@@ -385,6 +385,49 @@ describe("CaptureOverlay guidance", () => {
     );
   });
 
+  it("keeps a top-left region square and moves its dimensions on-screen", async () => {
+    activeSession = { ...session, display_corner_radius: 40 };
+    window.history.replaceState(
+      {},
+      "",
+      "/?view=overlay&mode=region&session_id=capture-1",
+    );
+    const { container } = render(<App />);
+    await screen.findByText("Drag to select a region");
+
+    const surface = container.querySelector<HTMLElement>(".capture-surface");
+    expect(surface).not.toBeNull();
+    surface!.setPointerCapture = vi.fn();
+    vi.spyOn(surface!, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 1440,
+      bottom: 900,
+      width: 1440,
+      height: 900,
+      toJSON: () => undefined,
+    });
+
+    fireEvent.pointerDown(surface!, { pointerId: 2, clientX: 0, clientY: 0 });
+    fireEvent.pointerMove(surface!, { pointerId: 2, clientX: 320, clientY: 180 });
+
+    await waitFor(() => {
+      const selection = container.querySelector<HTMLElement>(".selection-box");
+      expect(selection).toHaveStyle({
+        left: "0px",
+        top: "0px",
+        width: "320px",
+        height: "180px",
+      });
+      expect(surface!.style.borderRadius).toBe("");
+      expect(selection!.style.borderRadius).toBe("");
+      expect(selection!.querySelector(".selection-dimensions"))
+        .toHaveAttribute("data-screen-edge", "top");
+    });
+  });
+
   it("keeps the region dim hole aligned with the marquee under Windows DPI scale", async () => {
     // Physical 1920×1080 @ 150% → logical overlay DIPs 1280×720. A mismatched
     // SVG viewBox used to scale the cutout away from the CSS marquee.

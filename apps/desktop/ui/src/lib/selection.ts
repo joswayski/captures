@@ -149,60 +149,6 @@ export function isCapturableSelection(
   return rect !== null && rect.width >= 2 && rect.height >= 2;
 }
 
-/** Treat a selection as flush with a display edge within this many CSS pixels. */
-export const DISPLAY_EDGE_EPSILON_PX = 1.5;
-
-export type CornerRadii = {
-  topLeft: number;
-  topRight: number;
-  bottomRight: number;
-  bottomLeft: number;
-};
-
-/**
- * Display-corner radii for a selection that is flush with one or more screen
- * edges. Square interior corners stay 0 so a mid-screen region does not pick
- * up the monitor curve.
- */
-export function displayAlignedCornerRadii(
-  rect: SelectionRect,
-  bounds: { width: number; height: number },
-  radius: number,
-  epsilon = DISPLAY_EDGE_EPSILON_PX,
-): CornerRadii {
-  const next = Math.max(0, radius);
-  if (next === 0 || bounds.width <= 0 || bounds.height <= 0) {
-    return { topLeft: 0, topRight: 0, bottomRight: 0, bottomLeft: 0 };
-  }
-  const left = rect.x <= epsilon;
-  const top = rect.y <= epsilon;
-  const right = rect.x + rect.width >= bounds.width - epsilon;
-  const bottom = rect.y + rect.height >= bounds.height - epsilon;
-  return {
-    topLeft: left && top ? next : 0,
-    topRight: right && top ? next : 0,
-    bottomRight: right && bottom ? next : 0,
-    bottomLeft: left && bottom ? next : 0,
-  };
-}
-
-/** CSS `border-radius` that follows display corners when a region is flush. */
-export function selectionBorderRadiusCss(
-  rect: SelectionRect,
-  bounds: { width: number; height: number },
-  displayRadius: number,
-  innerRadius = 3,
-): string {
-  const aligned = displayAlignedCornerRadii(rect, bounds, displayRadius);
-  const fallback = Math.max(0, innerRadius);
-  return [
-    aligned.topLeft || fallback,
-    aligned.topRight || fallback,
-    aligned.bottomRight || fallback,
-    aligned.bottomLeft || fallback,
-  ].map((value) => `${value}px`).join(" ");
-}
-
 export function roundedRectPath(rect: SelectionRect, cornerRadius: number): string {
   const left = rect.x;
   const top = rect.y;

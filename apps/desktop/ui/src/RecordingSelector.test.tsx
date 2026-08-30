@@ -440,7 +440,7 @@ describe("RecordingSelector", () => {
     });
   });
 
-  it("rounds the full-display outline to the monitor corner radius", async () => {
+  it("keeps the selector rectangular while rounding the full-display outline", async () => {
     preparedSession = {
       ...session,
       initial_mode: "screenshot",
@@ -451,12 +451,59 @@ describe("RecordingSelector", () => {
 
     expect(await screen.findByRole("button", { name: "Full screen", pressed: true }))
       .toBeInTheDocument();
-    expect(container.querySelector(".recording-selector")).toHaveStyle({
-      borderRadius: "40px",
-    });
+    expect((container.querySelector<HTMLElement>(".recording-selector"))?.style.borderRadius)
+      .toBe("");
     expect(container.querySelector(".recording-display-outline")).toHaveStyle({
       borderRadius: "40px",
     });
+  });
+
+  it("draws from the top-left corner with a square frame and visible dimensions", async () => {
+    preparedSession = {
+      ...session,
+      initial_mode: "recording",
+      display_corner_radius: 40,
+    };
+    const { container } = render(<RecordingSelector />);
+    await screen.findByRole("button", { name: "Record", pressed: true });
+
+    const surface = container.querySelector<HTMLElement>(".recording-selector");
+    expect(surface).not.toBeNull();
+    surface!.setPointerCapture = vi.fn();
+    surface!.hasPointerCapture = vi.fn(() => true);
+    surface!.releasePointerCapture = vi.fn();
+    vi.spyOn(surface!, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 1440,
+      bottom: 900,
+      width: 1440,
+      height: 900,
+      toJSON: () => undefined,
+    });
+
+    fireEvent.pointerDown(surface!, { pointerId: 20, clientX: 0, clientY: 0 });
+    fireEvent.pointerMove(surface!, { pointerId: 20, clientX: 400, clientY: 240 });
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+    });
+    fireEvent.pointerUp(surface!, { pointerId: 20, clientX: 400, clientY: 240 });
+
+    const selection = container.querySelector<HTMLElement>(".recording-selection-frame");
+    expect(selection).toHaveStyle({
+      left: "0px",
+      top: "0px",
+      width: "400px",
+      height: "240px",
+    });
+    expect(surface!.style.borderRadius).toBe("");
+    expect(selection!.style.borderRadius).toBe("");
+    expect(selection!.querySelector(".selection-dimensions"))
+      .toHaveAttribute("data-screen-edge", "top");
   });
 
   it("starts full-screen capture on the current display and can switch displays before capture", async () => {

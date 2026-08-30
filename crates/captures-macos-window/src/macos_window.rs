@@ -951,7 +951,7 @@ fn corner_radius_from_bezel_path(path: &NSBezierPath, frame: NSRect) -> f64 {
     }
 }
 
-fn clip_content_to_display_corners(native_window: &NSWindow, radius: f64) {
+fn keep_content_rectangular(native_window: &NSWindow) {
     let Some(view) = native_window.contentView() else {
         return;
     };
@@ -964,9 +964,11 @@ fn clip_content_to_display_corners(native_window: &NSWindow, radius: f64) {
         return;
     };
     clear_layer_fill(&layer);
-    let radius = radius.max(0.0);
-    let _: () = unsafe { msg_send![&*layer, setCornerRadius: radius] };
-    let _: () = unsafe { msg_send![&*layer, setMasksToBounds: true] };
+    // The physical panel can have rounded bezel corners, but the capture image
+    // and pointer coordinate space are rectangular. Clipping this layer to the
+    // bezel made those extreme pixels impossible to start a region from.
+    let _: () = unsafe { msg_send![&*layer, setCornerRadius: 0.0] };
+    let _: () = unsafe { msg_send![&*layer, setMasksToBounds: false] };
 }
 
 fn clear_transparent_window_backing(native_window: &NSWindow) {
@@ -1081,7 +1083,7 @@ pub fn elevate_capture_surface(window: &WebviewWindow) -> Result<(), &'static st
 }
 
 /// Pins a fullscreen capture surface to the physical display, including the
-/// menu bar, and clips its content to the display's rounded corners.
+/// menu bar, while keeping its rectangular capture and pointer coordinate space.
 pub fn cover_display(window: &WebviewWindow, display_id: &str) -> Result<(), &'static str> {
     if !is_main_thread() {
         let window = window.clone();
@@ -1095,7 +1097,7 @@ pub fn cover_display(window: &WebviewWindow, display_id: &str) -> Result<(), &'s
     elevate_fullscreen_capture_window(native);
     if let Some(screen) = screen_for_display_id(mtm, display_id) {
         native.setFrame_display(screen.frame(), true);
-        clip_content_to_display_corners(native, screen_corner_radius(&screen));
+        keep_content_rectangular(native);
     }
     Ok(())
 }

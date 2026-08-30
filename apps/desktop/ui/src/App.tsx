@@ -62,7 +62,6 @@ import {
   parseAspectRatioPreset,
   REGION_ASPECT_PRESETS,
   roundedRectPath,
-  selectionBorderRadiusCss,
   type RegionAspectPreset,
   type SelectionDragMode,
   type SelectionPoint,
@@ -2688,7 +2687,6 @@ export function RecordingSelector() {
     <main
       ref={surfaceRef}
       className={`recording-selector recording-target-${targetMode}${focusVisibleSessionId === session.id ? " recording-focus-visible" : ""}`}
-      style={displayCornerRadius > 0 ? { borderRadius: displayCornerRadius } : undefined}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -2744,14 +2742,14 @@ export function RecordingSelector() {
             top: selectedRect.y,
             width: selectedRect.width,
             height: selectedRect.height,
-            borderRadius: selectionBorderRadiusCss(
-              selectedRect,
-              surfaceSize,
-              displayCornerRadius,
-            ),
           }}
         >
-          <span>{Math.round(selectedRect.width)} × {Math.round(selectedRect.height)}</span>
+          <span
+            className="selection-dimensions"
+            data-screen-edge={selectedRect.y < 30 ? "top" : undefined}
+          >
+            {Math.round(selectedRect.width)} × {Math.round(selectedRect.height)}
+          </span>
           {targetMode === "region" && <>
             <i className="handle nw" data-selection-handle="nw" />
             <i className="handle ne" data-selection-handle="ne" />
@@ -5215,7 +5213,6 @@ function CaptureOverlay() {
   };
 
   const hasSelection = Boolean(rect && rect.width > 0 && rect.height > 0);
-  const displayCornerRadius = Math.max(0, session.display_corner_radius ?? 0);
   const dimHole = mode === "region" && hasSelection && rect
     ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
     : mode === "window"
@@ -5227,7 +5224,6 @@ function CaptureOverlay() {
       key={sessionId}
       ref={surfaceRef}
       className={`capture-surface capture-${mode}${visibleSessionId === sessionId ? " capture-visible" : ""}${primingSessionId === sessionId ? " capture-priming" : ""}`}
-      style={displayCornerRadius > 0 ? { borderRadius: displayCornerRadius } : undefined}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -5274,10 +5270,14 @@ function CaptureOverlay() {
             top: rect.y,
             width: rect.width,
             height: rect.height,
-            borderRadius: selectionBorderRadiusCss(rect, surfaceSize, displayCornerRadius, 0),
           }}
         >
-          <span>{Math.round(rect.width)} × {Math.round(rect.height)}</span>
+          <span
+            className="selection-dimensions"
+            data-screen-edge={rect.y < 30 ? "top" : undefined}
+          >
+            {Math.round(rect.width)} × {Math.round(rect.height)}
+          </span>
         </div>
       )}
       {mode === "window" && (
