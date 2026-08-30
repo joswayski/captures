@@ -66,6 +66,8 @@ import {
   shapeWorldPoint,
   snapShapeRotation,
   snapShapeRotationDegrees,
+  shapeRotationHandleFitsCanvas,
+  preserveShapeWorldPoint,
   withShapeRotation,
   shiftLockedCropAspect,
   snapResizedBounds,
@@ -1392,6 +1394,78 @@ describe("screenshot editor geometry", () => {
     if (resized.kind !== "shape") throw new Error("expected shape");
     expect(shapeRotation(resized)).toBeCloseTo(Math.PI / 2, 10);
     expect(resized.endX - resized.x).toBeCloseTo((rectangle.endX - rectangle.x) * 2, 5);
+
+    const worldNw = shapeWorldPoint(quarter, { x: local.x, y: local.y });
+    const preserved = preserveShapeWorldPoint(
+      quarter,
+      resized,
+      { x: local.x, y: local.y },
+    );
+    const preservedAnchor = {
+      x: local.x + (preserved.x - resized.x),
+      y: local.y + (preserved.y - resized.y),
+    };
+    const preservedNw = shapeWorldPoint(preserved, preservedAnchor);
+    expect(preservedNw.x).toBeCloseTo(worldNw.x, 5);
+    expect(preservedNw.y).toBeCloseTo(worldNw.y, 5);
+  });
+
+  it("keeps the rotation-handle hit radius at 6 screen pixels when zoomed in", () => {
+    const rectangle: EditorShapeElement = {
+      ...editableLayer,
+      id: "rect",
+      kind: "shape",
+      shape: "rectangle",
+      x: 80,
+      y: 80,
+      endX: 200,
+      endY: 160,
+      controls: [],
+      style: { color: "#fff", fill: "transparent", strokeWidth: 2 },
+    };
+    const displayScale = 8;
+    const handleRadius = 10 / displayScale;
+    const handle = shapeRotationHandlePoint(rectangle, displayScale);
+    expect(
+      hitTestShapeRotationHandle(
+        rectangle,
+        { x: handle.x, y: handle.y - 4 },
+        handleRadius,
+        displayScale,
+      ),
+    ).toBe(false);
+    expect(
+      hitTestShapeRotationHandle(rectangle, handle, handleRadius, displayScale),
+    ).toBe(true);
+  });
+
+  it("hides the canvas rotation handle when it would clip off the document", () => {
+    const clipped: EditorShapeElement = {
+      ...editableLayer,
+      id: "rect",
+      kind: "shape",
+      shape: "rectangle",
+      x: 8,
+      y: 8,
+      endX: 48,
+      endY: 32,
+      controls: [],
+      style: { color: "#fff", fill: "transparent", strokeWidth: 2 },
+    };
+    expect(
+      shapeRotationHandleFitsCanvas(clipped, 1, { width: 400, height: 300 }),
+    ).toBe(false);
+
+    const inset: EditorShapeElement = {
+      ...clipped,
+      x: 80,
+      y: 80,
+      endX: 200,
+      endY: 160,
+    };
+    expect(
+      shapeRotationHandleFitsCanvas(inset, 1, { width: 400, height: 300 }),
+    ).toBe(true);
   });
 
   it("maps line and arrow handles through rotation so world drags stay on the stroke", () => {

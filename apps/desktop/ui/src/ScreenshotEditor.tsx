@@ -117,6 +117,9 @@ import {
   shapeRotationHandlePoint,
   shapeRotationOrigin,
   hitTestShapeRotationHandle,
+  shapeRotationHandleFitsCanvas,
+  preserveShapeWorldPoint,
+  oppositeResizeHandle,
   snapShapeRotation,
   snapShapeRotationDegrees,
   shapeRotationDegrees,
@@ -390,6 +393,7 @@ function hitTestSelectedAnnotation(
   point: EditorPoint,
   interactionRadius: number,
   displayScale: number,
+  canvas?: Pick<ScreenshotDocument, "width" | "height">,
 ): (
   | { kind: "resize"; handle: ResizeHandle; bounds: EditorRect }
   | { kind: "arrow-handle"; handle: ArrowHandle }
@@ -399,6 +403,7 @@ function hitTestSelectedAnnotation(
   if (selected.locked || !selected.visible) return null;
   if (
     selected.kind === "shape"
+    && (!canvas || shapeRotationHandleFitsCanvas(selected, displayScale, canvas))
     && hitTestShapeRotationHandle(selected, point, interactionRadius, displayScale)
   ) {
     return { kind: "rotate" };
@@ -1462,7 +1467,7 @@ function drawEditorOverlays(
           }
         }
       }
-      if (shape) {
+      if (shape && shapeRotationHandleFitsCanvas(shape, displayScale, document)) {
         drawShapeRotationHandle(context, bounds, unit, accentColor);
       }
       context.restore();
@@ -3374,6 +3379,7 @@ export function ScreenshotEditor() {
           point,
           interactionRadius,
           displayScale,
+          current,
         );
         if (annotationHit?.kind === "rotate" && selectedElement.kind === "shape") {
           const origin = shapeRotationOrigin(selectedElement);
@@ -3534,6 +3540,7 @@ export function ScreenshotEditor() {
           point,
           interactionRadius,
           displayScale,
+          current,
         );
         if (annotationHit?.kind === "rotate" && selectedElement.kind === "shape") {
           const origin = shapeRotationOrigin(selectedElement);
@@ -3691,6 +3698,7 @@ export function ScreenshotEditor() {
             point,
             interactionRadius,
             displayScale,
+            current ?? undefined,
           );
           if (annotationHit?.kind === "rotate") {
             setCurveHoverTip({
@@ -3820,16 +3828,31 @@ export function ScreenshotEditor() {
       } else if (handle.kind === "starter-control") {
         const controls = arrowStarterControls(gesture.element);
         controls[handle.index] = { x: local.x, y: local.y };
-        next = { ...gesture.element, controls };
+        next = preserveShapeWorldPoint(
+          gesture.element,
+          { ...gesture.element, controls },
+          { x: gesture.element.x, y: gesture.element.y },
+        );
       } else {
         const controlIndex = handle.index;
         const controls = gesture.element.controls.map((control, index) => (
           index === controlIndex ? { x: local.x, y: local.y } : control
         ));
-        next = { ...gesture.element, controls };
+        next = preserveShapeWorldPoint(
+          gesture.element,
+          { ...gesture.element, controls },
+          { x: gesture.element.x, y: gesture.element.y },
+        );
       }
       if (handle.kind === "start" || handle.kind === "end") {
         next = scaleArrowStrokeForLength(gesture.element, next);
+        next = preserveShapeWorldPoint(
+          gesture.element,
+          next,
+          handle.kind === "start"
+            ? { x: gesture.element.endX, y: gesture.element.endY }
+            : { x: gesture.element.x, y: gesture.element.y },
+        );
       }
       setCanvasCursor("grabbing");
       setCanvasExpandPreview(canvasExpandPreviewForBounds(
@@ -3965,14 +3988,25 @@ export function ScreenshotEditor() {
           true,
         )
         : snapped.bounds;
-      const resized = resizeElement(
+      let resized = resizeElement(
         gesture.element,
         gesture.initialBounds,
         nextBounds,
       );
+      if (resized.kind === "shape" && shapeRotation(resized) !== 0) {
+        const anchor = resizeHandlePoint(
+          gesture.initialBounds,
+          oppositeResizeHandle(gesture.handle),
+        );
+        resized = preserveShapeWorldPoint(gesture.element, resized, anchor);
+      }
       gestureRef.current = { ...gesture, currentBounds: nextBounds };
       setResizePreviewBounds(
-        resized.kind === "text" ? elementBounds(resized) : nextBounds,
+        resized.kind === "text"
+          ? elementBounds(resized)
+          : resized.kind === "shape"
+            ? shapeLocalBounds(resized)
+            : nextBounds,
       );
       setAlignmentGuides(snapped.guides);
       setCanvasExpandPreview(canvasExpandPreviewForBounds(

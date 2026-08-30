@@ -2505,6 +2505,26 @@ export function shapeLocalPoint(
   return rotatePointAround(worldPoint, shapeRotationOrigin(element), -shapeRotation(element));
 }
 
+/**
+ * After local-space resize or endpoint edits, the bounds center (rotation
+ * pivot) moves. Translate so `localAnchor` stays put in world space — the
+ * opposite resize corner, or the undragged arrow endpoint.
+ */
+export function preserveShapeWorldPoint(
+  initial: EditorShapeElement,
+  next: EditorShapeElement,
+  localAnchor: EditorPoint,
+): EditorShapeElement {
+  const rotation = shapeRotation(next);
+  if (rotation === 0 && shapeRotation(initial) === 0) return next;
+  const before = shapeWorldPoint(initial, localAnchor);
+  const after = shapeWorldPoint(next, localAnchor);
+  const deltaX = before.x - after.x;
+  const deltaY = before.y - after.y;
+  if (Math.abs(deltaX) < 1e-9 && Math.abs(deltaY) < 1e-9) return next;
+  return translateElement(next, deltaX, deltaY) as EditorShapeElement;
+}
+
 export function shapeRotationHandleOffset(displayScale: number): number {
   return SHAPE_ROTATION_HANDLE_OFFSET_SCREEN_PX / Math.max(0.01, displayScale);
 }
@@ -2530,8 +2550,23 @@ export function hitTestShapeRotationHandle(
   displayScale: number,
 ): boolean {
   const handle = shapeRotationHandlePoint(element, displayScale);
-  const radius = Math.max(6, handleRadius * 1.25);
+  const minRadius = 6 / Math.max(0.01, displayScale);
+  const radius = Math.max(minRadius, handleRadius * 1.25);
   return Math.hypot(point.x - handle.x, point.y - handle.y) <= radius;
+}
+
+/** False when the rotate grip would be clipped by the document bitmap. */
+export function shapeRotationHandleFitsCanvas(
+  element: EditorShapeElement,
+  displayScale: number,
+  canvas: Pick<ScreenshotDocument, "width" | "height">,
+): boolean {
+  const handle = shapeRotationHandlePoint(element, displayScale);
+  const pad = 8 / Math.max(0.01, displayScale);
+  return handle.x >= pad
+    && handle.y >= pad
+    && handle.x <= canvas.width - pad
+    && handle.y <= canvas.height - pad;
 }
 
 /**
