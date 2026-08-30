@@ -12,7 +12,7 @@ import {
   galleryFrameGesture,
   galleryHasNext,
   galleryHasPrevious,
-} from "./productLightbox";
+} from "./productLightboxModel";
 import { PRODUCT_SHOTS, galleryFrameAspectRatio, type ProductShot } from "./productShots";
 import { useImageZoom } from "./useImageZoom";
 

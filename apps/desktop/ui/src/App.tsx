@@ -41,6 +41,7 @@ import {
 } from "../../../../shared/themes";
 import { formatFileSize, formatFileSizeDelta } from "./lib/format";
 import { reconcileClipboardState } from "./lib/clipboard";
+import { createCleanupRegistry } from "./lib/cleanupRegistry";
 import { stackedReleaseNotes } from "./lib/releaseNotes";
 import {
   editorCropAfterDrag,
@@ -293,15 +294,19 @@ function useTrayNoticeCaret() {
   const [caret, setCaret] = useState<TrayNoticeCaret | null>(parseTrayNoticeCaret);
 
   useEffect(() => {
-    let dispose: (() => void) | undefined;
+    let active = true;
+    const cleanup = createCleanupRegistry();
     void listen<TrayNoticeCaret>("notice-caret", ({ payload }) => {
-      if (payload.edge === "top" || payload.edge === "bottom") {
+      if (active && (payload.edge === "top" || payload.edge === "bottom")) {
         setCaret(payload);
       }
     }).then((unlisten) => {
-      dispose = unlisten;
+      cleanup.add(unlisten);
     }).catch(() => undefined);
-    return () => dispose?.();
+    return () => {
+      active = false;
+      cleanup.dispose();
+    };
   }, []);
 
   return caret;
@@ -380,19 +385,24 @@ export function RecordingSavedNotice() {
   const artifactId = notice.artifactId;
 
   useEffect(() => {
-    let dispose: (() => void) | undefined;
+    let active = true;
+    const cleanup = createCleanupRegistry();
     void listen<{ artifact_id: string; generation: number }>(
       "recording-saved-artifact",
       ({ payload }) => {
+        if (!active) return;
         setNotice({ artifactId: payload.artifact_id, generation: payload.generation });
         setBusy(false);
         setError("");
         setPermanentlySaved(false);
       },
     ).then((unlisten) => {
-      dispose = unlisten;
+      cleanup.add(unlisten);
     }).catch(() => undefined);
-    return () => dispose?.();
+    return () => {
+      active = false;
+      cleanup.dispose();
+    };
   }, []);
 
   useEffect(() => {
@@ -519,14 +529,15 @@ export function MiniPreviewsHiddenChip() {
 
   useEffect(() => {
     let active = true;
-    let dispose: (() => void)[] = [];
+    const cleanup = createCleanupRegistry();
     const urlCount = Number(query("count") ?? "0");
     void (async () => {
-      dispose = await Promise.all([
+      const listeners = await Promise.all([
         listen<number>("mini-previews-hidden-count", ({ payload }) => {
-          if (typeof payload === "number") setCount(payload);
+          if (active && typeof payload === "number") setCount(payload);
         }),
         listen<CaptureArtifact>("capture-completed", () => {
+          if (!active) return;
           void invoke<CaptureArtifact[]>("get_artifacts")
             .then((artifacts) => {
               if (active) setCount(artifacts.length);
@@ -534,6 +545,7 @@ export function MiniPreviewsHiddenChip() {
             .catch(() => undefined);
         }),
         listen<string>("artifact-removed", () => {
+          if (!active) return;
           void invoke<CaptureArtifact[]>("get_artifacts")
             .then((artifacts) => {
               if (active) setCount(artifacts.length);
@@ -541,6 +553,7 @@ export function MiniPreviewsHiddenChip() {
             .catch(() => undefined);
         }),
       ]);
+      if (!cleanup.add(...listeners)) return;
       // The native window (and the harness `count` param) already know the
       // parked size. Don't replace that with a later artifact-list fetch —
       // mock stacks are a different length than `?count=`.
@@ -550,7 +563,7 @@ export function MiniPreviewsHiddenChip() {
     })();
     return () => {
       active = false;
-      dispose.forEach((unlisten) => unlisten());
+      cleanup.dispose();
     };
   }, []);
 
@@ -935,15 +948,17 @@ function ArtifactViewer() {
 
   useEffect(() => {
     let active = true;
-    let dispose: (() => void)[] = [];
+    const cleanup = createCleanupRegistry();
     void (async () => {
-      dispose = await Promise.all([
+      const listeners = await Promise.all([
         listen<string>("artifact-removed", ({ payload }) => {
+          if (!active) return;
           if (artifactId !== payload) return;
           emitViewerActivation(artifactId, false);
           void currentWindow?.close();
         }),
       ]);
+      if (!cleanup.add(...listeners)) return;
       if (!artifactId) return;
       const initialArtifact = await invoke<CaptureArtifact | null>("get_artifact", { artifactId });
       if (active) {
@@ -952,14 +967,14 @@ function ArtifactViewer() {
     })();
     return () => {
       active = false;
-      dispose.forEach((unlisten) => unlisten());
+      cleanup.dispose();
     };
   }, [artifactId]);
 
   useEffect(() => {
     if (!currentWindow) return;
     let active = true;
-    let dispose: (() => void)[] = [];
+    const cleanup = createCleanupRegistry();
 
     void (async () => {
       const stopListening = await Promise.all([
@@ -970,18 +985,14 @@ function ArtifactViewer() {
           if (active) emitViewerActivation(artifactId, false);
         }),
       ]);
-      if (!active) {
-        stopListening.forEach((unlisten) => unlisten());
-        return;
-      }
-      dispose = stopListening;
+      if (!cleanup.add(...stopListening)) return;
       const focused = await currentWindow.isFocused();
       if (active && focused) emitViewerActivation(artifactId, true);
     })();
 
     return () => {
       active = false;
-      dispose.forEach((unlisten) => unlisten());
+      cleanup.dispose();
     };
   }, [artifactId]);
 
@@ -1065,19 +1076,20 @@ export function CaptureHistory() {
   }, []);
 
   useEffect(() => {
-    let dispose: (() => void) | undefined;
+    const cleanup = createCleanupRegistry();
     activeRef.current = true;
 
     void (async () => {
-      dispose = await listen("capture-history-changed", () => {
-        void refresh();
+      const unlisten = await listen("capture-history-changed", () => {
+        if (activeRef.current) void refresh();
       });
+      if (!cleanup.add(unlisten)) return;
       await refresh();
     })();
 
     return () => {
       activeRef.current = false;
-      dispose?.();
+      cleanup.dispose();
       if (clearAllTimer.current) clearTimeout(clearAllTimer.current);
     };
   }, [refresh]);
@@ -3477,9 +3489,9 @@ export function RecordingEditor() {
 
   useEffect(() => {
     let active = true;
-    let dispose: (() => void)[] = [];
+    const cleanup = createCleanupRegistry();
     void (async () => {
-      dispose = await Promise.all([
+      const listeners = await Promise.all([
         listen<{ export_id: string; progress: ExportProgress }>("recording-export-progress", ({ payload }) => {
           if (active && payload.export_id === exportIdRef.current) setProgress(payload.progress);
         }),
@@ -3511,6 +3523,7 @@ export function RecordingEditor() {
           exportIdRef.current = null;
         }),
       ]);
+      if (!cleanup.add(...listeners)) return;
       if (!artifactId) return;
       const [loaded, loadedSettings] = await Promise.all([
         invoke<RecordingArtifact | null>("get_recording_artifact", { artifactId }),
@@ -3575,7 +3588,7 @@ export function RecordingEditor() {
     });
     return () => {
       active = false;
-      dispose.forEach((unlisten) => unlisten());
+      cleanup.dispose();
     };
   }, [artifactId]);
 
@@ -4876,9 +4889,10 @@ function CaptureOverlay() {
 
   useEffect(() => {
     let active = true;
-    let dispose: (() => void) | undefined;
+    const cleanup = createCleanupRegistry();
     void (async () => {
-      dispose = await listen<ActiveSession>("capture-session-ready", ({ payload }) => {
+      const unlisten = await listen<ActiveSession>("capture-session-ready", ({ payload }) => {
+        if (!active) return;
         activeSessionIdRef.current = payload.id;
         revealingSessionIdRef.current = null;
         setVisibleSessionId(null);
@@ -4894,6 +4908,7 @@ function CaptureOverlay() {
         setSelectionFeedback(0);
         lastRegionCursorSyncAtRef.current = 0;
       });
+      if (!cleanup.add(unlisten)) return;
       const initialSession = query("session_id")
         ? await invoke<ActiveSession | null>("get_active_session", { sessionId: query("session_id") })
         : await invoke<ActiveSession | null>("get_pending_session");
@@ -4907,7 +4922,7 @@ function CaptureOverlay() {
     })();
     return () => {
       active = false;
-      dispose?.();
+      cleanup.dispose();
     };
   }, []);
 
@@ -5361,34 +5376,41 @@ export function Thumbnail() {
 
   useEffect(() => {
     let active = true;
-    let dispose: (() => void)[] = [];
+    const cleanup = createCleanupRegistry();
     void (async () => {
       const removedArtifactIds = new Set<string>();
-      dispose = await Promise.all([
+      const listeners = await Promise.all([
         listen<CaptureArtifact>("capture-completed", ({ payload }) => {
+          if (!active) return;
           removedArtifactIds.delete(payload.id);
           setArtifacts((current) => current.some(({ id }) => id === payload.id)
             ? current
             : [...current, payload]);
         }),
         listen<CaptureArtifact>("artifact-updated", ({ payload }) => {
+          if (!active) return;
           setArtifacts((current) => current.map((artifact) => artifact.id === payload.id ? payload : artifact));
         }),
         listen<string>("artifact-removed", ({ payload }) => {
+          if (!active) return;
           removedArtifactIds.add(payload);
           setArtifacts((current) => current.filter(({ id }) => id !== payload));
           setActiveViewerArtifactId((current) => current === payload ? null : current);
         }),
         listen<ClipboardState>("clipboard-owner-changed", ({ payload }) => {
+          if (!active) return;
           applyClipboardState(payload);
         }),
         listen<ViewerActivationState>("viewer-activation-changed", ({ payload }) => {
+          if (!active) return;
           setActiveViewerArtifactId((current) => reconcileActiveViewer(current, payload));
         }),
         listen<EditorLayerPresence>("editor-layers-changed", ({ payload }) => {
+          if (!active) return;
           setEditorPresence((current) => reconcileEditorPresence(current, payload));
         }),
       ]);
+      if (!cleanup.add(...listeners)) return;
       const initialArtifacts = await invoke<CaptureArtifact[]>("get_artifacts");
       if (active) {
         setArtifacts((current) => {
@@ -5404,7 +5426,7 @@ export function Thumbnail() {
     })();
     return () => {
       active = false;
-      dispose.forEach((unlisten) => unlisten());
+      cleanup.dispose();
     };
   }, [applyClipboardState]);
 

@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import {
   MiniPreviewsHiddenChip,
@@ -108,5 +108,25 @@ describe("MiniPreviewsHiddenChip", () => {
     countHandler.current?.({ payload: 1 });
 
     expect(await screen.findByRole("button", { name: "Show 1 preview" })).toBeInTheDocument();
+  });
+
+  it("cleans up listeners that finish registering after unmount", async () => {
+    type Unlisten = () => void;
+    const pendingListeners: Array<(unlisten: Unlisten) => void> = [];
+    const unlisten = vi.fn();
+    vi.mocked(listen).mockImplementation(
+      () => new Promise<Unlisten>((resolve) => pendingListeners.push(resolve)),
+    );
+
+    const { unmount } = render(<MiniPreviewsHiddenChip />);
+    await waitFor(() => expect(pendingListeners).toHaveLength(3));
+    unmount();
+
+    await act(async () => {
+      pendingListeners.forEach((resolve) => resolve(unlisten));
+      await Promise.resolve();
+    });
+
+    expect(unlisten).toHaveBeenCalledTimes(3);
   });
 });

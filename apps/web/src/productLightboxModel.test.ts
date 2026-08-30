@@ -28,7 +28,7 @@ import {
   toggleZoom,
   wheelScaleFactor,
   zoomFromCenter,
-} from "./productLightbox.ts";
+} from "./productLightboxModel.ts";
 
 const viewport = { width: 400, height: 800 };
 const fitted = { width: 360, height: 240 };
