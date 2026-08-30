@@ -307,12 +307,17 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.prepare.outputs.release_sha }}
+      # Historical package jobs check out the tested SHA, then overlay the
+      # current upload helper so URL rewriting stays current. Include every
+      # local import of github-release-assets.mjs or Node cannot load it.
       - name: Load the current release asset helper
         if: runner.os == 'macOS'
         uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
-          sparse-checkout: scripts/github-release-assets.mjs
+          sparse-checkout: |
+            scripts/github-release-assets.mjs
+            scripts/release-assets.mjs
           sparse-checkout-cone-mode: false
           path: release-tools
       - name: Install Linux build dependencies
