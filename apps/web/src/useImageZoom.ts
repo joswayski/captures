@@ -22,7 +22,7 @@ import {
   type Point,
   type Size,
   type ZoomTransform,
-} from "./productLightbox";
+} from "./productLightboxModel";
 
 export type ImageZoomRelease = {
   deltaX: number;

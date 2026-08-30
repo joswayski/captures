@@ -15,6 +15,7 @@ import {
 import { createPortal } from "react-dom";
 
 import { CompressionPreview } from "./CompressionPreview";
+import { createCleanupRegistry } from "./lib/cleanupRegistry";
 import { sameSortedIds } from "./lib/editorPresence";
 import { fileSizeDeltaBaseline, formatFileSize, formatFileSizeDelta } from "./lib/format";
 import {
@@ -2164,11 +2165,12 @@ export function ScreenshotEditor() {
 
   useEffect(() => {
     let active = true;
-    let unlisten: (() => void) | undefined;
+    const cleanup = createCleanupRegistry();
     const objectUrls = objectUrlsRef.current;
     void (async () => {
       if (!artifactId) throw new Error("No screenshot was selected.");
-      unlisten = await listen<string>("artifact-removed", ({ payload }) => {
+      const unlisten = await listen<string>("artifact-removed", ({ payload }) => {
+        if (!active) return;
         if (payload !== artifactId) return;
         // The canvas still holds the edited image — copy/save remain available.
         setSourceMissing(true);
@@ -2176,6 +2178,7 @@ export function ScreenshotEditor() {
         setError("");
         clearSuccess();
       });
+      if (!cleanup.add(unlisten)) return;
       const [loaded, loadedSettings] = await Promise.all([
         invoke<CaptureArtifact | null>("get_artifact", { artifactId }),
         invoke<AppSettings>("get_settings").catch(() => null),
@@ -2235,7 +2238,7 @@ export function ScreenshotEditor() {
     });
     return () => {
       active = false;
-      unlisten?.();
+      cleanup.dispose();
       objectUrls.forEach((url) => URL.revokeObjectURL(url));
       objectUrls.clear();
     };

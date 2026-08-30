@@ -18,7 +18,7 @@ import {
   type Point,
   type Size,
   type ZoomTransform,
-} from "./productLightbox";
+} from "./productLightboxModel";
 
 type ProductLightboxProps = {
   open: boolean;
