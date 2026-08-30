@@ -55,6 +55,21 @@ describe("thumbnail stack layout", () => {
     expect(arrival?.[2]).not.toMatch(/\b(?:both|forwards)\b/);
   });
 
+  it("keeps the blurred source above delete dust during the handoff", () => {
+    const sourceLayer = thumbnailStyles.match(
+      /\.thumbnail-exit-delete\.thumbnail-exit-dust \.thumbnail-media\s*\{[^}]*z-index:\s*(\d+)/,
+    );
+    const dustLayer = thumbnailStyles.match(
+      /\.thumbnail-exit-delete\.thumbnail-exit-dust \.thumbnail-dust-layer\s*\{[^}]*z-index:\s*(\d+)/,
+    );
+    const sourceFade = thumbnailStyles.match(
+      /@keyframes thumbnail-delete-img-fade\s*\{([\s\S]*?)\n\}/,
+    );
+
+    expect(Number(sourceLayer?.[1])).toBeGreaterThan(Number(dustLayer?.[1]));
+    expect(sourceFade?.[1]).toMatch(/filter:\s*blur\(2px\) brightness\(0\.5\)/);
+  });
+
   it("scrolls to reveal newly added captures", () => {
     expect(shouldScrollThumbnailStackToEnd(1, 2)).toBe(true);
   });
