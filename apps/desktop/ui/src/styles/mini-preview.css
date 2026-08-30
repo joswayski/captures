@@ -112,14 +112,29 @@
   /* Opaque fill (no backdrop-filter): translucent glass lets Chromium punch
      through to the grab-cursor card, which flickers pointer vs default. */
   background: var(--glass-strong-solid);
-  box-shadow: var(--glass-shadow);
+  /* This control sits only 6px from the transparent native-window edges. Keep
+     its elevation inside that gutter so a clipped glass blur cannot become a
+     rectangular gray seam against light desktops. */
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 1px 3px rgba(0, 0, 0, 0.46);
   cursor: pointer !important;
   transform: none;
+  transition:
+    background-color var(--dur-2) var(--ease-out),
+    border-color var(--dur-2) var(--ease-out),
+    box-shadow var(--dur-2) var(--ease-out),
+    color var(--dur-2) var(--ease-out);
 }
 
 .thumbnail-collapse:hover,
 .thumbnail-collapse[data-native-pointer-hover="true"] {
   background: var(--glass-raised-solid);
+  border-color: rgba(var(--theme-accent-rgb), 0.72);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.09),
+    0 1px 3px rgba(0, 0, 0, 0.46),
+    0 0 0 2px rgba(var(--theme-accent-rgb), 0.2);
 }
 
 .thumbnail-collapse:active {
@@ -141,6 +156,17 @@
   stroke-linecap: round;
   stroke-linejoin: round;
   pointer-events: none;
+  transition: transform var(--dur-2) var(--ease-out);
+}
+
+.thumbnail-collapse:hover svg,
+.thumbnail-collapse[data-native-pointer-hover="true"] svg,
+.thumbnail-collapse:focus-visible svg {
+  transform: translateY(1px);
+}
+
+.thumbnail-collapse:active svg {
+  transform: translateY(2px);
 }
 
 .thumbnail-collapse::after {
@@ -277,6 +303,10 @@
  * user-select:none stops click-drag from painting a text/image selection.
  */
 .thumbnail-card {
+  --thumbnail-card-shadow:
+    0 6px 14px rgba(0, 0, 0, 0.38),
+    0 2px 5px rgba(0, 0, 0, 0.26);
+
   position: relative;
   isolation: isolate;
   overflow: visible;
@@ -287,8 +317,7 @@
   background: transparent;
   border-radius: 12px;
   box-shadow:
-    0 10px 24px rgba(0, 0, 0, 0.4),
-    0 2px 6px rgba(0, 0, 0, 0.28),
+    var(--thumbnail-card-shadow),
     0 0 0 1px rgba(255, 255, 255, 0.08);
   cursor: -webkit-grab;
   cursor: grab;
@@ -346,18 +375,16 @@
 
 .thumbnail-card.thumbnail-viewer-active {
   box-shadow:
-    0 10px 24px rgba(0, 0, 0, 0.4),
-    0 2px 6px rgba(0, 0, 0, 0.28),
+    var(--thumbnail-card-shadow),
     0 0 0 1px rgba(var(--theme-accent-rgb), 0.85);
 }
 
 /* One solid ring for an open editor; a second faded stroke flashed on hover blur. */
 .thumbnail-card.thumbnail-editor-active {
   box-shadow:
-    0 10px 24px rgba(0, 0, 0, 0.4),
-    0 2px 6px rgba(0, 0, 0, 0.28),
+    var(--thumbnail-card-shadow),
     0 0 0 2px rgba(var(--theme-accent-rgb), 0.9),
-    0 0 22px rgba(var(--theme-accent-rgb), 0.28);
+    0 0 14px rgba(var(--theme-accent-rgb), 0.28);
 }
 
 .thumbnail-card.thumbnail-editor-leaving {

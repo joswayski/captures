@@ -265,6 +265,9 @@ impl CursorTrackingOwner {
         if let Some(window) = event.window(main_thread)
             && !window.isKeyWindow()
         {
+            if self.ivars().surface == CursorSurface::Thumbnail {
+                remember_frontmost_app_before_thumbnail_key();
+            }
             window.makeKeyWindow();
             // Becoming key lets WebKit re-enable cursor rectangles. Keep them
             // off while AppKit owns an interactive grab/pointer cursor so the
@@ -287,7 +290,11 @@ impl CursorTrackingOwner {
         if let Some(window) = event.window(main_thread)
             && window.isKeyWindow()
         {
-            window.resignKeyWindow();
+            if self.ivars().surface == CursorSurface::Thumbnail {
+                resign_ns_window_key_without_raising_documents(&window);
+            } else {
+                window.resignKeyWindow();
+            }
         }
     }
 
@@ -503,6 +510,11 @@ static FRONTMOST_APP_BEFORE_CAPTURE: Mutex<Option<Retained<NSRunningApplication>
 // the notice hides, AppKit otherwise donates key status to an open editor and
 // raises that editor over the app the user was working in.
 static FRONTMOST_APP_BEFORE_UPDATE_NOTICE: Mutex<Option<Retained<NSRunningApplication>>> =
+    Mutex::new(None);
+// A thumbnail click can make Captures active before its handler hides the
+// panel. Preserve the external app while hover first gives the panel key status
+// so AppKit cannot donate focus to an open editor during collapse.
+static FRONTMOST_APP_BEFORE_THUMBNAIL_KEY: Mutex<Option<Retained<NSRunningApplication>>> =
     Mutex::new(None);
 // Titled document windows ordered out for the duration of a capture UI session.
 // Kept separate from frontmost-app restore so intermediate restores (overlay →
@@ -1600,6 +1612,10 @@ fn current_frontmost_if_not_captures() -> Option<Retained<NSRunningApplication>>
     if captures_holds_user_focus() {
         return None;
     }
+    frontmost_app_other_than_captures()
+}
+
+fn frontmost_app_other_than_captures() -> Option<Retained<NSRunningApplication>> {
     let frontmost = NSWorkspace::sharedWorkspace().frontmostApplication()?;
     let current = NSRunningApplication::currentApplication();
     if running_apps_are_same(&frontmost, &current) || frontmost.isTerminated() {
@@ -1649,6 +1665,44 @@ fn yield_activation_to(previous: Option<Retained<NSRunningApplication>>) {
     let _ = previous.activateWithOptions(NSApplicationActivationOptions::empty());
 }
 
+fn activation_handoff_target<T>(current: Option<T>, remembered: Option<T>) -> Option<T> {
+    current.or(remembered)
+}
+
+fn remember_frontmost_app_before_thumbnail_key() {
+    debug_assert!(
+        is_main_thread(),
+        "thumbnail frontmost-app capture must run on AppKit's main thread"
+    );
+    let previous = frontmost_app_other_than_captures();
+    let mut slot = FRONTMOST_APP_BEFORE_THUMBNAIL_KEY
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *slot = previous;
+}
+
+fn remembered_frontmost_app_before_thumbnail_key() -> Option<Retained<NSRunningApplication>> {
+    FRONTMOST_APP_BEFORE_THUMBNAIL_KEY
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+        .cloned()
+}
+
+fn clear_frontmost_app_before_thumbnail_key() {
+    let mut slot = FRONTMOST_APP_BEFORE_THUMBNAIL_KEY
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *slot = None;
+}
+
+fn thumbnail_activation_handoff_target() -> Option<Retained<NSRunningApplication>> {
+    activation_handoff_target(
+        current_frontmost_if_not_captures(),
+        remembered_frontmost_app_before_thumbnail_key(),
+    )
+}
+
 /// Runs `work` without leaving Captures — and an open editor — in front of the
 /// user's current app.
 ///
@@ -1662,8 +1716,9 @@ pub fn run_without_stealing_activation<F: FnOnce()>(work: F) {
         is_main_thread(),
         "run_without_stealing_activation must run on AppKit's main thread"
     );
-    let previous = current_frontmost_if_not_captures();
+    let previous = thumbnail_activation_handoff_target();
     work();
+    clear_frontmost_app_before_thumbnail_key();
     yield_activation_to(previous);
 }
 
@@ -1686,14 +1741,14 @@ pub fn resign_panel_key_without_raising_documents(
 
 fn resign_ns_window_key_without_raising_documents(window: &NSWindow) {
     if !window.isKeyWindow() {
+        clear_frontmost_app_before_thumbnail_key();
         return;
     }
-    let previous = current_frontmost_if_not_captures();
+    let previous = thumbnail_activation_handoff_target();
     window.resignKeyWindow();
-    if previous.is_none() {
-        return;
-    }
-    if let Some(main_thread) = MainThreadMarker::new() {
+    if previous.is_some()
+        && let Some(main_thread) = MainThreadMarker::new()
+    {
         let app = NSApplication::sharedApplication(main_thread);
         if let Some(key) = app.keyWindow()
             && is_titled_document_window(&key)
@@ -1705,6 +1760,7 @@ fn resign_ns_window_key_without_raising_documents(window: &NSWindow) {
             key.orderBack(None);
         }
     }
+    clear_frontmost_app_before_thumbnail_key();
     yield_activation_to(previous);
 }
 
@@ -1896,9 +1952,10 @@ pub fn set_thumbnail_cursor(
         && cursor_surface_can_take_key_window(CursorSurface::Thumbnail)
         && !native_window.isKeyWindow()
     {
+        remember_frontmost_app_before_thumbnail_key();
         native_window.makeKeyWindow();
     } else if !interactive && native_window.isKeyWindow() {
-        native_window.resignKeyWindow();
+        resign_ns_window_key_without_raising_documents(native_window);
     }
     set_cursor_rects_enabled(native_window, !interactive);
     set_tracked_cursor(window, mode, CursorSurface::Thumbnail)?;
@@ -1942,6 +1999,7 @@ pub fn reassert_thumbnail_cursor(
     let native_window = native_window(window)?;
     if cursor_surface_can_take_key_window(CursorSurface::Thumbnail) && !native_window.isKeyWindow()
     {
+        remember_frontmost_app_before_thumbnail_key();
         native_window.makeKeyWindow();
     }
     set_cursor_rects_enabled(native_window, false);
@@ -2176,16 +2234,16 @@ mod tests {
 
     use super::{
         CAPTURE_OVERLAY_OWNS_CURSOR, CursorMode, CursorSurface, THUMBNAIL_CURSOR_MODE,
-        capture_surface_collection_behavior, capture_surface_window_level,
-        clamp_display_corner_radius, corner_radius_from_bezel_path, cursor_mode_is_interactive,
-        cursor_surface_can_apply, cursor_surface_can_take_key_window_with_thumbnail_allowed,
-        cursor_surface_uses_key_window, cursor_update_tracking_options,
-        display_corner_radius_points, is_main_thread, parse_display_id, pointer_tracking_options,
-        reassert_thumbnail_cursor_after_click, shortcut_modifiers_pressed,
-        should_rearm_thumbnail_key_window, should_release_thumbnail_key_after_event,
-        should_reset_cursor_on_exit, single_window_activation_options,
-        style_mask_is_titled_document, surface_assumes_pointer_inside,
-        window_corner_radius_for_major_version,
+        activation_handoff_target, capture_surface_collection_behavior,
+        capture_surface_window_level, clamp_display_corner_radius, corner_radius_from_bezel_path,
+        cursor_mode_is_interactive, cursor_surface_can_apply,
+        cursor_surface_can_take_key_window_with_thumbnail_allowed, cursor_surface_uses_key_window,
+        cursor_update_tracking_options, display_corner_radius_points, is_main_thread,
+        parse_display_id, pointer_tracking_options, reassert_thumbnail_cursor_after_click,
+        shortcut_modifiers_pressed, should_rearm_thumbnail_key_window,
+        should_release_thumbnail_key_after_event, should_reset_cursor_on_exit,
+        single_window_activation_options, style_mask_is_titled_document,
+        surface_assumes_pointer_inside, window_corner_radius_for_major_version,
     };
 
     #[test]
@@ -2195,6 +2253,19 @@ mod tests {
             !options.contains(objc2_app_kit::NSApplicationActivationOptions::ActivateAllWindows),
             "opening one editor must not lift every other Captures window over the user's apps",
         );
+    }
+
+    #[test]
+    fn thumbnail_activation_handoff_falls_back_to_the_pre_key_app() {
+        assert_eq!(
+            activation_handoff_target(Some("current"), Some("remembered")),
+            Some("current")
+        );
+        assert_eq!(
+            activation_handoff_target(None, Some("remembered")),
+            Some("remembered")
+        );
+        assert_eq!(activation_handoff_target::<&str>(None, None), None);
     }
 
     #[test]
