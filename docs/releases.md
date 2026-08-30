@@ -31,6 +31,9 @@ publishes it as a pre-release. A failed build removes its draft and tag, leaving
 published Previews untouched. If draft creation itself is interrupted, the next run
 removes only stale drafts with its generated tag before retrying.
 
+If an in-app update download fails, the notice keeps the error on screen and
+offers **download from captur.es**, which opens the website installer section.
+
 Creating the draft early is only a private staging step. The **Publish Preview**
 job runs only after **Validate staged release** succeeds and `SHA256SUMS` is
 present; that marker means every required macOS, Windows, and Linux artifact was

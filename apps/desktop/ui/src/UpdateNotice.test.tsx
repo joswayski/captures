@@ -180,6 +180,7 @@ describe("UpdateNotice", () => {
     render(<UpdateNotice />);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("GitHub is unavailable");
+    expect(screen.getByRole("button", { name: "download from captur.es" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("check_for_updates"));
@@ -246,6 +247,7 @@ describe("UpdateNotice", () => {
         } satisfies UpdateStatus;
       }
       if (command === "install_update") return undefined;
+      if (command === "open_update_download_page") return undefined;
       throw new Error(`unexpected command: ${command}`);
     });
 
@@ -253,6 +255,8 @@ describe("UpdateNotice", () => {
 
     expect(await screen.findByText("Update failed")).toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent("403 Forbidden");
+    fireEvent.click(screen.getByRole("button", { name: "download from captur.es" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("open_update_download_page"));
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("install_update"));
@@ -281,6 +285,7 @@ describe("UpdateNotice", () => {
     render(<UpdateNotice />);
 
     expect(await screen.findByRole("button", { name: "Update now" })).toHaveFocus();
+    expect(screen.queryByRole("button", { name: "download from captur.es" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Later" })).not.toHaveFocus();
   });
 

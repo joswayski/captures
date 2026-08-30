@@ -19,11 +19,13 @@ use crate::state::AppState;
 
 const UPDATE_EVENT: &str = "update-status-changed";
 const RELEASES_URL: &str = "https://github.com/joswayski/captures/releases";
+const DOWNLOAD_PAGE_URL: &str = "https://captur.es/#download";
 const UPDATE_NOTICE_WIDTH: f64 = 440.0;
 const UPDATE_NOTICE_MIN_HEIGHT: f64 = 290.0;
 const UPDATE_NOTICE_MAX_HEIGHT: f64 = 480.0;
 const UPDATE_NOTICE_STACK_HEIGHT: f64 = 72.0;
 const UPDATE_NOTICE_WARNING_HEIGHT: f64 = 56.0;
+const UPDATE_NOTICE_ERROR_FALLBACK_HEIGHT: f64 = 40.0;
 const RESTART_COUNTDOWN_SECONDS: u8 = 3;
 const RESTART_FADE_DURATION: Duration = Duration::from_millis(400);
 const EDITOR_CLOSE_FLUSH: Duration = Duration::from_millis(500);
@@ -335,6 +337,15 @@ pub fn get_update_status(app: AppHandle) -> UpdateStatus {
 #[tauri::command]
 pub fn dismiss_update_notice(app: AppHandle) {
     crate::hide_window(&app, "update");
+}
+
+/// Opens the public website download section. The update window has no opener
+/// permission, so failed in-app updates use this command instead of an `<a>`.
+#[tauri::command]
+pub fn open_update_download_page(app: AppHandle) -> Result<(), String> {
+    app.opener()
+        .open_url(DOWNLOAD_PAGE_URL, None::<&str>)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -864,7 +875,14 @@ fn update_notice_height(status: &UpdateStatus) -> f64 {
         } => UPDATE_NOTICE_WARNING_HEIGHT,
         _ => 0.0,
     };
-    (UPDATE_NOTICE_MIN_HEIGHT + extra_versions as f64 * UPDATE_NOTICE_STACK_HEIGHT + warning)
+    let error_fallback = match status {
+        UpdateStatus::Error { .. } => UPDATE_NOTICE_ERROR_FALLBACK_HEIGHT,
+        _ => 0.0,
+    };
+    (UPDATE_NOTICE_MIN_HEIGHT
+        + extra_versions as f64 * UPDATE_NOTICE_STACK_HEIGHT
+        + warning
+        + error_fallback)
         .min(UPDATE_NOTICE_MAX_HEIGHT)
 }
 
@@ -1175,14 +1193,15 @@ mod tests {
     use std::{sync::atomic::AtomicBool, time::Duration};
 
     use super::{
-        AtomicFlagGuard, CHECK_INTERVAL, DOWNLOAD_ATTEMPTS, NoticeDisposition, NoticeRestorePlan,
-        UpdateChangelogEntry, UpdateStatus, capture_window_should_close_for_update,
-        check_error_status, display_version, download_error_is_retryable, download_retry_delay,
-        install_error_message, notice_disposition, notice_restore_plan,
-        open_captures_will_close_from, release_channel_enabled, restart_blocker,
-        should_begin_deferred_restore, should_hide_update_notice_status,
-        should_wait_for_capture_start, stacked_changelog, take_restart_marker, tray_update_item,
-        update_available_menu_label, update_notice_height, version_is_newer_than,
+        AtomicFlagGuard, CHECK_INTERVAL, DOWNLOAD_ATTEMPTS, DOWNLOAD_PAGE_URL, NoticeDisposition,
+        NoticeRestorePlan, RELEASES_URL, UpdateChangelogEntry, UpdateStatus,
+        capture_window_should_close_for_update, check_error_status, display_version,
+        download_error_is_retryable, download_retry_delay, install_error_message,
+        notice_disposition, notice_restore_plan, open_captures_will_close_from,
+        release_channel_enabled, restart_blocker, should_begin_deferred_restore,
+        should_hide_update_notice_status, should_wait_for_capture_start, stacked_changelog,
+        take_restart_marker, tray_update_item, update_available_menu_label, update_notice_height,
+        version_is_newer_than,
     };
 
     #[test]
@@ -1525,6 +1544,21 @@ mod tests {
             will_close_open_captures: true,
         };
         assert_eq!(update_notice_height(&warned), 346.0);
+        let failed = UpdateStatus::Error {
+            current_version: "2026.7.1901".into(),
+            current_display_version: "2026.07.19.1".into(),
+            message:
+                "Could not install the update: Download request failed with status: 404 Not Found"
+                    .into(),
+            retry_install: true,
+        };
+        assert_eq!(update_notice_height(&failed), 330.0);
+    }
+
+    #[test]
+    fn failed_updates_open_the_website_download_page() {
+        assert_eq!(DOWNLOAD_PAGE_URL, "https://captur.es/#download");
+        assert_ne!(DOWNLOAD_PAGE_URL, RELEASES_URL);
     }
 
     fn available_status(changelog: Vec<UpdateChangelogEntry>) -> UpdateStatus {

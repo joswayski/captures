@@ -302,6 +302,7 @@ pub fn run() {
             updates::check_for_updates,
             updates::install_update,
             updates::dismiss_update_notice,
+            updates::open_update_download_page,
             recording::prepare_recording,
             recording::get_recording_selection,
             recording::select_capture_display,
