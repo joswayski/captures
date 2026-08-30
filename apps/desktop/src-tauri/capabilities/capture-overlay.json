@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "capture-overlay",
+  "description": "Allow the region capture overlay to hide immediately after a completed selection",
+  "windows": ["overlay"],
+  "permissions": [
+    "core:window:allow-hide"
+  ]
+}

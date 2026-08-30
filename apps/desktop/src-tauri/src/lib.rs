@@ -6614,6 +6614,24 @@ mod tests {
     }
 
     #[test]
+    fn capture_overlay_can_hide_itself_after_a_region_selection() {
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/capture-overlay.json"))
+                .expect("capture overlay capability should be valid JSON");
+        let permissions = capability["permissions"]
+            .as_array()
+            .expect("capture overlay capability should grant permissions");
+
+        assert_eq!(capability["windows"], serde_json::json!(["overlay"]));
+        assert!(
+            permissions
+                .iter()
+                .any(|granted| granted == "core:window:allow-hide"),
+            "capture overlay fast hide requires core:window:allow-hide"
+        );
+    }
+
+    #[test]
     fn update_notice_cannot_hide_itself_through_the_window_api() {
         // Later/Close used Window.hide, which is a no-op without allow-hide.
         // Dismiss goes through the dismiss_update_notice command instead.
