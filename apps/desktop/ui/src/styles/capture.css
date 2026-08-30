@@ -215,8 +215,7 @@ html.capture-selector-display {
   pointer-events: none;
 }
 
-.selection-box span,
-.recording-selection-frame > span {
+.selection-dimensions {
   position: absolute;
   top: -30px;
   left: 0;
@@ -229,6 +228,10 @@ html.capture-selector-display {
   font-weight: var(--weight-semibold);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.selection-dimensions[data-screen-edge="top"] {
+  top: var(--s-3);
 }
 
 .window-targets {
@@ -505,7 +508,7 @@ html.capture-selector-display {
   cursor: move;
 }
 
-.recording-selection-frame > span {
+.recording-selection-frame > .selection-dimensions {
   left: 50%;
   transform: translateX(-50%);
 }
