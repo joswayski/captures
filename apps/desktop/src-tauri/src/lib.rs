@@ -1786,8 +1786,9 @@ fn update_settings(
         }
     }
     storage::save_settings(&settings).map_err(|error| error.to_string())?;
-    let mini_preview_setting_changed = settings.show_mini_previews
-        != previous_settings.show_mini_previews
+    let show_mini_previews_changed =
+        settings.show_mini_previews != previous_settings.show_mini_previews;
+    let mini_preview_setting_changed = show_mini_previews_changed
         || settings.include_mini_previews_in_captures
             != previous_settings.include_mini_previews_in_captures;
     let recording_controls_setting_changed = settings.include_recording_controls_in_captures
@@ -1806,7 +1807,9 @@ fn update_settings(
             let _ = window.set_content_protected(false);
         }
         update_thumbnail_stack(&app);
-        updates::restore_update_notice(&app);
+    }
+    if show_mini_previews_changed {
+        updates::refresh_update_notice(&app);
     }
     if recording_controls_setting_changed
         && let Some(window) = app.get_webview_window("recording-hud")
@@ -2236,7 +2239,8 @@ async fn save_artifact(
         .map(|artifact| (artifact.image_png.clone(), artifact.path.clone()))
         .ok_or_else(|| "artifact is no longer available".to_owned())?;
 
-    if existing_path.is_none() {
+    let was_unsaved = existing_path.is_none();
+    if was_unsaved {
         let settings = state.settings();
         let format = settings.screenshot_format;
         let path = tauri::async_runtime::spawn_blocking(move || {
@@ -2267,7 +2271,9 @@ async fn save_artifact(
         .ok_or_else(|| "artifact is no longer available".to_owned())?;
     app.emit("artifact-updated", &artifact)
         .map_err(|error| error.to_string())?;
-    updates::restore_update_notice(&app);
+    if was_unsaved {
+        updates::refresh_update_notice(&app);
+    }
     Ok(artifact)
 }
 
