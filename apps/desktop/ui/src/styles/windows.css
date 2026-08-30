@@ -2477,7 +2477,12 @@
   inset: 0;
   z-index: 2;
   background:
-    radial-gradient(ellipse at center, rgba(15, 15, 18, 0.18) 0%, var(--glass-veil) 62%, rgba(8, 8, 10, 0.72) 100%);
+    radial-gradient(
+      ellipse at center,
+      var(--glass-veil-soft) 0%,
+      var(--glass-veil) 62%,
+      var(--glass-veil-heavy) 100%
+    );
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--dur-2) var(--ease-standard);
