@@ -5100,6 +5100,12 @@ function CaptureOverlay() {
 
   const commitRegion = (): boolean => {
     if (!isCapturableSelection(rect)) return false;
+    // Tauri's built-in window command reaches the native window directly. Start
+    // hiding on pointer release instead of waiting for the async capture command
+    // to be scheduled and hop back to the platform UI thread first. The backend
+    // repeats this hide before it touches pixels, so live captures remain safe if
+    // this best-effort fast path has not completed yet.
+    void currentWindow?.hide().catch(() => undefined);
     void invoke("commit_region", { sessionId, rect });
     return true;
   };
