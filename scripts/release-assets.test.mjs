@@ -39,7 +39,17 @@ function fixture(platforms = ["darwin-aarch64", "windows-x86_64", "linux-x86_64"
       version: "2026.7.1901",
       notes: "Adds automated releases.",
       platforms: Object.fromEntries(
-        platforms.map((platform) => [platform, { url: `https://example.com/${platform}`, signature: "signed" }]),
+        platforms.map((platform) => {
+          const asset = {
+            "darwin-aarch64": "Captures.app.tar.gz",
+            "windows-x86_64": "Captures-setup.exe",
+            "linux-x86_64": "Captures.AppImage",
+          }[platform];
+          return [platform, {
+            url: `https://github.com/joswayski/captures/releases/download/v2026.07.19.1/${asset}`,
+            signature: "signed",
+          }];
+        }),
       ),
     }),
   );
@@ -51,6 +61,10 @@ test("validates complete updater metadata and writes deterministic checksums", (
   const result = validateAndWriteChecksums(directory, "2026.7.1901");
   assert.equal(result.checksums.length, 14);
   assert.match(readFileSync(join(directory, "SHA256SUMS"), "utf8"), /Captures\.dmg/u);
+  const latest = JSON.parse(readFileSync(join(directory, "latest.json"), "utf8"));
+  assert.equal(latest.platforms["darwin-aarch64"].size, "Captures.app.tar.gz".length);
+  assert.equal(latest.platforms["windows-x86_64"].size, "Captures-setup.exe".length);
+  assert.equal(latest.platforms["linux-x86_64"].size, "Captures.AppImage".length);
 });
 
 test("rejects a release without matching FFmpeg compliance assets", () => {

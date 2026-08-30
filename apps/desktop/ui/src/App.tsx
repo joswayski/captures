@@ -39,7 +39,7 @@ import {
   normalizeCustomThemeColors,
   normalizeHexColor,
 } from "../../../../shared/themes";
-import { formatFileSize, formatFileSizeDelta } from "./lib/format";
+import { formatFileSize, formatFileSizeDelta, formatUpdateSize } from "./lib/format";
 import { reconcileClipboardState } from "./lib/clipboard";
 import { createCleanupRegistry } from "./lib/cleanupRegistry";
 import { stackedReleaseNotes } from "./lib/releaseNotes";
@@ -659,6 +659,11 @@ export function UpdateNotice() {
   const progress = downloading?.total
     ? Math.min(100, Math.round((downloading.downloaded / downloading.total) * 100))
     : null;
+  const downloadProgress = downloading
+    ? downloading.total
+      ? `${formatUpdateSize(downloading.downloaded)} / ${formatUpdateSize(downloading.total)}`
+      : `${formatUpdateSize(downloading.downloaded)} downloaded`
+    : "";
   const state = status?.state ?? "loading";
   const visualState = error ? "error" : state;
   const title = restarting
@@ -681,7 +686,7 @@ export function UpdateNotice() {
       : error
         ? "Your current version was not changed."
         : available
-          ? `Version ${available.display_version}`
+          ? `Version ${available.display_version}${available.download_size ? ` · ${formatUpdateSize(available.download_size)}` : ""}`
           : status?.state === "up_to_date"
             ? `Version ${status.current_display_version}`
             : "This should only take a moment.";
@@ -770,7 +775,7 @@ export function UpdateNotice() {
         {downloading && (
           <section className="update-download" aria-label="Update installation progress">
             <div className="update-progress-label">
-              <span>Downloading</span>
+              <span>Downloading <small>{downloadProgress}</small></span>
               {progress !== null && <strong>{progress}%</strong>}
             </div>
             <div
@@ -780,7 +785,7 @@ export function UpdateNotice() {
               aria-valuemin={0}
               aria-valuemax={100}
               aria-valuenow={progress ?? undefined}
-              aria-valuetext={progress === null ? "Downloading update" : `${progress}% downloaded`}
+              aria-valuetext={progress === null ? downloadProgress : `${downloadProgress}, ${progress}% downloaded`}
             >
               <span style={{ width: `${progress ?? 34}%` }} />
             </div>
@@ -876,6 +881,11 @@ function UpdatePreferences() {
   const progress = downloading?.total
     ? Math.min(100, Math.round((downloading.downloaded / downloading.total) * 100))
     : null;
+  const downloadProgress = downloading
+    ? downloading.total
+      ? `${formatUpdateSize(downloading.downloaded)} / ${formatUpdateSize(downloading.total)}`
+      : `${formatUpdateSize(downloading.downloaded)} downloaded`
+    : "";
   const heading = available
     ? `Version ${available.display_version} is available`
     : downloading
@@ -888,15 +898,17 @@ function UpdatePreferences() {
             ? "Couldn’t check for updates"
             : `Version ${currentVersion}`;
   const detail = downloading
-    ? progress === null ? "Downloading…" : `${progress}% downloaded`
+    ? progress === null ? downloadProgress : `${downloadProgress} · ${progress}%`
     : restarting
       ? "Reopening Captures…"
       : status?.state === "up_to_date"
         ? "Up to date."
         : status?.state === "error"
           ? status.message
-          : available || status?.state === "checking"
-            ? ""
+          : available
+            ? available.download_size ? `${formatUpdateSize(available.download_size)} download` : ""
+            : status?.state === "checking"
+              ? ""
             : "Updates are checked automatically.";
 
   const run = async (command: "check_for_updates" | "install_update") => {

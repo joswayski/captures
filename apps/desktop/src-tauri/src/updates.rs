@@ -59,6 +59,7 @@ pub enum UpdateStatus {
         changelog: Vec<UpdateChangelogEntry>,
         installable: bool,
         manual_download_url: Option<String>,
+        download_size: Option<u64>,
         will_close_open_captures: bool,
     },
     Downloading {
@@ -430,6 +431,8 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
         .lock()
         .clone()
         .ok_or_else(|| "the available update needs to be checked again".to_owned())?;
+    let expected_download_size =
+        manifest_download_size(&update.raw_json, update.download_url.as_str());
     let version = update.version.clone();
     let display_version = display_version(&version);
     let (current_version, current_display_version) = current_versions(&app);
@@ -441,7 +444,7 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
             version: version.clone(),
             display_version: display_version.clone(),
             downloaded: 0,
-            total: None,
+            total: expected_download_size,
         },
     );
 
@@ -470,7 +473,7 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
                             version: progress_version.clone(),
                             display_version: progress_display_version.clone(),
                             downloaded,
-                            total,
+                            total: total.or(expected_download_size),
                         },
                     );
                 },
@@ -624,6 +627,7 @@ async fn check_for_updates_inner(app: &AppHandle, manual: bool) -> Result<Update
         let display_version = display_version(&version);
         let notes = update.body.clone().filter(|notes| !notes.trim().is_empty());
         let changelog = stacked_changelog(&update.raw_json, &current_version, &version);
+        let download_size = manifest_download_size(&update.raw_json, update.download_url.as_str());
         let installable = platform_update_is_installable();
         *coordinator.pending.lock() = Some(update);
         let status = UpdateStatus::Available {
@@ -635,6 +639,7 @@ async fn check_for_updates_inner(app: &AppHandle, manual: bool) -> Result<Update
             changelog,
             installable,
             manual_download_url: (!installable).then(|| RELEASES_URL.to_owned()),
+            download_size,
             will_close_open_captures: false,
         };
         set_status(app, status.clone());
@@ -1149,6 +1154,21 @@ fn platform_update_is_installable() -> bool {
     }
 }
 
+fn manifest_download_size(raw_json: &serde_json::Value, download_url: &str) -> Option<u64> {
+    let size = raw_json
+        .get("platforms")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|platforms| {
+            platforms.values().find(|entry| {
+                entry.get("url").and_then(serde_json::Value::as_str) == Some(download_url)
+            })
+        })
+        .and_then(|entry| entry.get("size"))
+        .or_else(|| raw_json.get("size"))
+        .and_then(serde_json::Value::as_u64);
+    size.filter(|size| *size > 0)
+}
+
 fn capture_is_active(state: &AppState) -> bool {
     state.thumbnail_visibility.lock().is_suppressed()
         || !state.sessions.lock().is_empty()
@@ -1264,12 +1284,13 @@ mod tests {
         NoticeRestorePlan, RELEASES_URL, UpdateChangelogEntry, UpdateStatus,
         capture_window_should_close_for_update, check_error_status, display_version,
         download_error_is_retryable, download_retry_delay, install_error_message,
-        notice_disposition, notice_restore_plan, open_captures_will_close_from,
-        release_channel_enabled, restart_blocker, should_begin_deferred_restore,
-        should_hide_update_notice_status, should_refresh_notice_activation_source,
-        should_refresh_update_notice, should_wait_for_capture_start, stacked_changelog,
-        take_restart_marker, tray_update_item, unsaved_mini_previews_are_open,
-        update_available_menu_label, update_notice_height, version_is_newer_than,
+        manifest_download_size, notice_disposition, notice_restore_plan,
+        open_captures_will_close_from, release_channel_enabled, restart_blocker,
+        should_begin_deferred_restore, should_hide_update_notice_status,
+        should_refresh_notice_activation_source, should_refresh_update_notice,
+        should_wait_for_capture_start, stacked_changelog, take_restart_marker, tray_update_item,
+        unsaved_mini_previews_are_open, update_available_menu_label, update_notice_height,
+        version_is_newer_than,
     };
 
     #[test]
@@ -1289,6 +1310,34 @@ mod tests {
     fn formats_encoded_calver_for_people() {
         assert_eq!(display_version("2026.7.1901"), "2026.07.19.1");
         assert_eq!(display_version("2026.12.3109"), "2026.12.31.9");
+    }
+
+    #[test]
+    fn reads_the_selected_platform_size_from_updater_metadata() {
+        let manifest = serde_json::json!({
+            "version": "2026.8.3001",
+            "platforms": {
+                "darwin-aarch64": {
+                    "url": "https://example.com/Captures.app.tar.gz",
+                    "signature": "mac",
+                    "size": 42_000_000
+                },
+                "windows-x86_64": {
+                    "url": "https://example.com/Captures-setup.exe",
+                    "signature": "windows",
+                    "size": 55_000_000
+                }
+            }
+        });
+
+        assert_eq!(
+            manifest_download_size(&manifest, "https://example.com/Captures-setup.exe"),
+            Some(55_000_000)
+        );
+        assert_eq!(
+            manifest_download_size(&manifest, "https://example.com/missing"),
+            None
+        );
     }
 
     #[test]
@@ -1335,6 +1384,7 @@ mod tests {
             changelog,
             installable: true,
             manual_download_url: None,
+            download_size: Some(42_000_000),
             will_close_open_captures: false,
         });
         assert!(item.pin_first);
@@ -1466,6 +1516,7 @@ mod tests {
             changelog: Vec::new(),
             installable: true,
             manual_download_url: None,
+            download_size: None,
             will_close_open_captures: false,
         };
         assert_eq!(notice_disposition(&status, true), NoticeDisposition::Defer);
@@ -1629,6 +1680,7 @@ mod tests {
             }],
             installable: true,
             manual_download_url: None,
+            download_size: None,
             will_close_open_captures: true,
         };
         assert_eq!(update_notice_height(&warned), 346.0);
@@ -1659,6 +1711,7 @@ mod tests {
             changelog,
             installable: true,
             manual_download_url: None,
+            download_size: None,
             will_close_open_captures: false,
         }
     }

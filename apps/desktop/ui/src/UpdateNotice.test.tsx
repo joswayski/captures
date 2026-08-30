@@ -25,6 +25,7 @@ const available: UpdateStatus = {
   changelog: [],
   installable: true,
   manual_download_url: null,
+  download_size: 12_582_912,
   will_close_open_captures: false,
 };
 
@@ -70,7 +71,7 @@ describe("UpdateNotice", () => {
     expect(await screen.findByRole("dialog", {
       name: "An update is available",
     })).toBeInTheDocument();
-    expect(screen.getAllByText("Version 2026.07.19.2")).toHaveLength(1);
+    expect(screen.getByText("Version 2026.07.19.2 · 12.6 MB")).toBeInTheDocument();
     expect(screen.queryByText("Open captures will close. Unsaved edits are kept as drafts."))
       .not.toBeInTheDocument();
     expect(screen.getByText("Adds automatic releases")).toBeInTheDocument();
@@ -113,7 +114,7 @@ describe("UpdateNotice", () => {
     expect(screen.getByText("Fix capture menu display switching and the Record CTA")).toBeInTheDocument();
     expect(screen.getByText("Redesign the desktop UI around one design system")).toBeInTheDocument();
     expect(screen.queryByText("Fix the latest Preview only")).not.toBeInTheDocument();
-    expect(screen.getAllByText("Version 2026.08.27.5")).toHaveLength(1);
+    expect(screen.getByText("Version 2026.08.27.5 · 12.6 MB")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Later" }));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("dismiss_update_notice"));
   });
@@ -125,16 +126,17 @@ describe("UpdateNotice", () => {
       current_display_version: "2026.07.19.1",
       version: "2026.7.1902",
       display_version: "2026.07.19.2",
-      downloaded: 25,
-      total: 100,
+      downloaded: 7_340_032,
+      total: 12_582_912,
     } satisfies UpdateStatus);
 
     render(<UpdateNotice />);
 
-    expect(await screen.findByText("25%")).toBeInTheDocument();
+    expect(await screen.findByText("58%")).toBeInTheDocument();
+    expect(screen.getByText("7.3 MB / 12.6 MB")).toBeInTheDocument();
     expect(screen.getByRole("progressbar", { name: "Downloading update" })).toHaveAttribute(
       "aria-valuenow",
-      "25",
+      "58",
     );
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
     expect(screen.getByRole("dialog", { name: "Updating Captures" })).toHaveFocus();
