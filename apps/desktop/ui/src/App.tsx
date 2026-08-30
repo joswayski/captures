@@ -4955,6 +4955,10 @@ function CaptureOverlay() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || !sessionId) return;
+      // Match the region commit fast path: hide the native surface before the
+      // async command crosses into Rust. The backend repeats the hide while it
+      // restores the previous app and capture UI, so this remains best-effort.
+      void currentWindow?.hide().catch(() => undefined);
       void invoke("cancel_capture", { sessionId });
     };
     window.addEventListener("keydown", onKeyDown, true);
