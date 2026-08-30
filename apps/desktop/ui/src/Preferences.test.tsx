@@ -27,7 +27,6 @@ const settings: AppSettings = {
   region_shortcut: "Ctrl+Shift+4",
   window_shortcut: "Ctrl+Shift+W",
   display_shortcut: "Ctrl+Shift+3",
-  feedback_shortcut: "Ctrl+Shift+F",
   auto_copy_to_clipboard: true,
   auto_start_on_selection: false,
   show_mini_previews: true,
@@ -78,6 +77,14 @@ describe("Preferences", () => {
     document.documentElement.removeAttribute("data-capture-theme");
     document.documentElement.removeAttribute("style");
     window.localStorage.clear();
+  });
+
+  it("does not offer a global feedback shortcut", async () => {
+    render(<Preferences />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Shortcuts" }));
+    await screen.findByRole("heading", { name: "Shortcuts" });
+    expect(screen.queryByText("Send Feedback")).not.toBeInTheDocument();
   });
 
   it("automatically persists changes and reports that they were saved", async () => {
