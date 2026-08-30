@@ -56,8 +56,17 @@ async function deleteAsset(assetId) {
 }
 
 export async function rewriteUpdaterManifestUrls(releaseId, latestPath) {
+  const { repository } = configuration();
+  const currentRelease = await release(releaseId);
+  const tag = currentRelease.tag_name;
+  if (!tag || tag.startsWith("untagged-")) {
+    throw new Error(`release ${releaseId} is missing a public download tag`);
+  }
   const latest = JSON.parse(readFileSync(latestPath, "utf8"));
-  const rewritten = rewriteGithubApiAssetUrls(latest, await releaseAssets(releaseId));
+  const rewritten = rewriteGithubApiAssetUrls(latest, await releaseAssets(releaseId), {
+    repository,
+    tag,
+  });
   writeFileSync(latestPath, `${JSON.stringify(latest, null, 2)}\n`);
   process.stdout.write(
     rewritten === 0

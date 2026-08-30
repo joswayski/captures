@@ -44,8 +44,9 @@ published CalVer version. That manifest includes a `changelog` of each dated
 Preview’s notes so an installed copy can list every change between its version
 and the latest Preview, not only the newest release. Platform download URLs in
 `latest.json` are rewritten from GitHub API asset endpoints to public
-`releases/download` links so in-app updates do not consume the unauthenticated
-API rate limit, which GitHub answers with HTTP 403. Installers on this channel use **stable filenames**
+`releases/download/<CalVer-tag>/…` links so in-app updates do not consume the
+unauthenticated API rate limit (HTTP 403) and do not keep draft `untagged-*`
+paths that 404 after the Preview is published. Installers on this channel use **stable filenames**
 (`Captures-macOS-Apple-Silicon.dmg`, `Captures-Windows-x64-setup.exe`,
 `Captures-Linux-x64.deb`, `Captures-Linux-x64.AppImage`) so the root README can
 link directly without updating URLs on every merge. Dated immutable Previews keep

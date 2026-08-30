@@ -6,33 +6,85 @@ import { pathToFileURL } from "node:url";
 const PLATFORM_KEYS = ["darwin-aarch64", "windows-x86_64", "linux-x86_64"];
 const GITHUB_API_ASSET_URL =
   /^https:\/\/api\.github\.com\/repos\/[^/]+\/[^/]+\/releases\/assets\/(\d+)$/u;
+const GITHUB_RELEASE_DOWNLOAD_URL =
+  /^https:\/\/github\.com\/([^/]+\/[^/]+)\/releases\/download\/([^/]+)\/([^/?#]+)$/u;
 
 export function isGitHubApiAssetUrl(url) {
   return GITHUB_API_ASSET_URL.test(String(url ?? ""));
 }
 
+export function isGitHubUntaggedDownloadUrl(url) {
+  const match = String(url ?? "").match(GITHUB_RELEASE_DOWNLOAD_URL);
+  return Boolean(match && decodeURIComponent(match[2]).startsWith("untagged-"));
+}
+
+/**
+ * Public GitHub Releases download URL for a published tag. Draft releases expose
+ * `untagged-*` `browser_download_url`s that 404 after the tag is published, so
+ * the updater must never persist those.
+ */
+export function publicGithubReleaseDownloadUrl(repository, tag, assetName) {
+  if (!repository || !/^[^/\s]+\/[^/\s]+$/u.test(repository)) {
+    throw new Error("repository must identify owner/name");
+  }
+  if (!tag || /\s/u.test(tag) || tag.includes("/") || tag.startsWith("untagged-")) {
+    throw new Error(`release tag is not a public download tag: ${tag}`);
+  }
+  if (!assetName || /[/\\]/u.test(assetName)) {
+    throw new Error(`unsafe release asset name: ${assetName}`);
+  }
+  return `https://github.com/${repository}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(assetName)}`;
+}
+
+function updaterAssetName(url, assetsById) {
+  const value = String(url ?? "");
+  const apiMatch = value.match(GITHUB_API_ASSET_URL);
+  if (apiMatch) {
+    const asset = assetsById.get(apiMatch[1]);
+    if (!asset?.name) {
+      throw new Error(`no Releases download URL for asset ${apiMatch[1]}`);
+    }
+    return String(asset.name);
+  }
+  const downloadMatch = value.match(GITHUB_RELEASE_DOWNLOAD_URL);
+  if (!downloadMatch) return null;
+  return decodeURIComponent(downloadMatch[3]);
+}
+
 /**
  * Tauri's GitHub Action writes unauthenticated GitHub API asset URLs into
  * `latest.json`. Those downloads count against the 60-request/hour API budget
- * and often fail with 403. Rewrite them to the public Releases download URLs.
+ * and often fail with 403. Rewrite them to public `releases/download/<tag>/…`
+ * links using the CalVer tag, not the draft's temporary `untagged-*` URL.
  */
-export function rewriteGithubApiAssetUrls(latest, assets) {
-  const urlsById = new Map(
+export function rewriteGithubApiAssetUrls(latest, assets, options = {}) {
+  const repository = options.repository;
+  const tag = options.tag;
+  if (!repository || !tag) {
+    throw new Error("rewriteGithubApiAssetUrls requires repository and tag");
+  }
+
+  const assetsById = new Map(
     (assets ?? [])
-      .filter((asset) => asset?.id != null && asset.browser_download_url)
-      .map((asset) => [String(asset.id), String(asset.browser_download_url)]),
+      .filter((asset) => asset?.id != null)
+      .map((asset) => [String(asset.id), asset]),
   );
   const platforms = latest?.platforms ?? {};
   let rewritten = 0;
   for (const [platform, entry] of Object.entries(platforms)) {
-    const match = String(entry?.url ?? "").match(GITHUB_API_ASSET_URL);
-    if (!match) continue;
-    const next = urlsById.get(match[1]);
-    if (!next) {
-      throw new Error(`no Releases download URL for ${platform} asset ${match[1]}`);
+    let name;
+    try {
+      name = updaterAssetName(entry?.url, assetsById);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`${detail} for ${platform}`);
     }
-    entry.url = next;
-    rewritten += 1;
+    if (!name) continue;
+    const next = publicGithubReleaseDownloadUrl(repository, tag, name);
+    if (entry.url !== next) {
+      entry.url = next;
+      rewritten += 1;
+    }
   }
   return rewritten;
 }
@@ -91,6 +143,11 @@ export function validateAndWriteChecksums(directory, appVersion) {
     if (isGitHubApiAssetUrl(entry.url)) {
       throw new Error(
         `latest.json ${platform} still points at the GitHub API (${entry.url}); rewrite it to a Releases download URL before publishing`,
+      );
+    }
+    if (isGitHubUntaggedDownloadUrl(entry.url)) {
+      throw new Error(
+        `latest.json ${platform} still points at a draft untagged download (${entry.url}); rewrite it to the published tag URL before publishing`,
       );
     }
   }

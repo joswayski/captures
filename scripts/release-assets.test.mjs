@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { validateAndWriteChecksums, rewriteGithubApiAssetUrls } from "./release-assets.mjs";
+import {
+  isGitHubUntaggedDownloadUrl,
+  publicGithubReleaseDownloadUrl,
+  validateAndWriteChecksums,
+  rewriteGithubApiAssetUrls,
+} from "./release-assets.mjs";
 
 function fixture(platforms = ["darwin-aarch64", "windows-x86_64", "linux-x86_64"]) {
   const directory = mkdtempSync(join(tmpdir(), "captures-release-assets-"));
@@ -74,18 +79,24 @@ test("rewrites GitHub API updater URLs to public Releases downloads", () => {
       },
     },
   };
-  const rewritten = rewriteGithubApiAssetUrls(latest, [
-    {
-      id: 11,
-      browser_download_url:
-        "https://github.com/joswayski/captures/releases/download/v2026.08.29.4/Captures.app.tar.gz",
-    },
-    {
-      id: 22,
-      browser_download_url:
-        "https://github.com/joswayski/captures/releases/download/v2026.08.29.4/Captures-setup.exe",
-    },
-  ]);
+  const rewritten = rewriteGithubApiAssetUrls(
+    latest,
+    [
+      {
+        id: 11,
+        name: "Captures.app.tar.gz",
+        browser_download_url:
+          "https://github.com/joswayski/captures/releases/download/untagged-abc/Captures.app.tar.gz",
+      },
+      {
+        id: 22,
+        name: "Captures-setup.exe",
+        browser_download_url:
+          "https://github.com/joswayski/captures/releases/download/untagged-abc/Captures-setup.exe",
+      },
+    ],
+    { repository: "joswayski/captures", tag: "v2026.08.29.4" },
+  );
   assert.equal(rewritten, 2);
   assert.equal(
     latest.platforms["darwin-aarch64"].url,
@@ -98,6 +109,59 @@ test("rewrites GitHub API updater URLs to public Releases downloads", () => {
   assert.equal(
     latest.platforms["linux-x86_64"].url,
     "https://github.com/joswayski/captures/releases/download/v2026.08.29.4/Captures.AppImage",
+  );
+});
+
+test("rewrites draft untagged updater URLs to the published CalVer tag", () => {
+  const latest = {
+    platforms: {
+      "darwin-aarch64": {
+        url: "https://github.com/joswayski/captures/releases/download/untagged-0e059f9bf616cf50d9a3/Captures_2026.8.2916_aarch64.app.tar.gz",
+        signature: "mac",
+      },
+      "windows-x86_64": {
+        url: "https://github.com/joswayski/captures/releases/download/untagged-0e059f9bf616cf50d9a3/Captures_2026.8.2916_x64-setup.exe",
+        signature: "win",
+      },
+      "linux-x86_64": {
+        url: "https://github.com/joswayski/captures/releases/download/untagged-0e059f9bf616cf50d9a3/Captures_2026.8.2916_amd64.AppImage",
+        signature: "linux",
+      },
+    },
+  };
+  const rewritten = rewriteGithubApiAssetUrls(latest, [], {
+    repository: "joswayski/captures",
+    tag: "v2026.08.29.16",
+  });
+  assert.equal(rewritten, 3);
+  assert.equal(
+    latest.platforms["darwin-aarch64"].url,
+    "https://github.com/joswayski/captures/releases/download/v2026.08.29.16/Captures_2026.8.2916_aarch64.app.tar.gz",
+  );
+  assert.equal(
+    latest.platforms["windows-x86_64"].url,
+    "https://github.com/joswayski/captures/releases/download/v2026.08.29.16/Captures_2026.8.2916_x64-setup.exe",
+  );
+  assert.equal(
+    latest.platforms["linux-x86_64"].url,
+    "https://github.com/joswayski/captures/releases/download/v2026.08.29.16/Captures_2026.8.2916_amd64.AppImage",
+  );
+  assert.ok(
+    isGitHubUntaggedDownloadUrl(
+      "https://github.com/joswayski/captures/releases/download/untagged-0e059f9bf616cf50d9a3/Captures.app.tar.gz",
+    ),
+  );
+  assert.equal(
+    publicGithubReleaseDownloadUrl(
+      "joswayski/captures",
+      "v2026.08.29.16",
+      "Captures_2026.8.2916_aarch64.app.tar.gz",
+    ),
+    "https://github.com/joswayski/captures/releases/download/v2026.08.29.16/Captures_2026.8.2916_aarch64.app.tar.gz",
+  );
+  assert.throws(
+    () => publicGithubReleaseDownloadUrl("joswayski/captures", "untagged-abc", "Captures.app.tar.gz"),
+    /public download tag/u,
   );
 });
 
@@ -121,5 +185,28 @@ test("rejects updater manifests that still use GitHub API asset URLs", () => {
   assert.throws(
     () => validateAndWriteChecksums(directory, "2026.7.1901"),
     /GitHub API/u,
+  );
+});
+
+test("rejects updater manifests that still use draft untagged download URLs", () => {
+  const directory = fixture();
+  writeFileSync(
+    join(directory, "latest.json"),
+    JSON.stringify({
+      version: "2026.7.1901",
+      notes: "Adds automated releases.",
+      platforms: {
+        "darwin-aarch64": {
+          url: "https://github.com/joswayski/captures/releases/download/untagged-abc/Captures.app.tar.gz",
+          signature: "signed",
+        },
+        "windows-x86_64": { url: "https://example.com/windows", signature: "signed" },
+        "linux-x86_64": { url: "https://example.com/linux", signature: "signed" },
+      },
+    }),
+  );
+  assert.throws(
+    () => validateAndWriteChecksums(directory, "2026.7.1901"),
+    /untagged/u,
   );
 });
