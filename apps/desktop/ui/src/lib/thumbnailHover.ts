@@ -40,6 +40,7 @@ const THUMBNAIL_NATIVE_ACTIVE_SELECTOR = `[${THUMBNAIL_NATIVE_ACTIVE_ATTRIBUTE}=
 export const THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE = "data-native-pointer-hover";
 const THUMBNAIL_NATIVE_POINTER_HOVER_SELECTOR =
   `[${THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE}="true"]`;
+const THUMBNAIL_STACK_CONTROL_SELECTOR = ".thumbnail-overflow-cue, .thumbnail-collapse";
 
 /**
  * Keeps a freshly opened editor control in its passive “In editor” state until
@@ -180,8 +181,8 @@ export function shouldIgnoreThumbnailCursorEvents(
   if (!thumbnailStackHasLiveHitTarget(root)) return true;
   if (!position.inside) return false;
   const target = root.elementFromPoint(position.x, position.y);
+  if (thumbnailStackControlAtPoint(position.x, position.y, target, root)) return false;
   if (!target) return true;
-  if (target.closest(".thumbnail-overflow-cue, .thumbnail-collapse")) return false;
   const card = target.closest(".thumbnail-card");
   return !card || card.classList.contains("thumbnail-exiting");
 }
@@ -245,6 +246,29 @@ function containsPoint(element: Element, x: number, y: number): boolean {
 }
 
 /**
+ * Finds stack chrome by its own geometry instead of relying only on
+ * `elementFromPoint()`. The hide button overlaps the preview card by a few
+ * pixels, and an inactive WKWebView can intermittently report that grab-source
+ * card while the pointer is still inside the button. Treating the control's
+ * stable bounds as authoritative prevents native pointer/grab cursor churn.
+ */
+function thumbnailStackControlAtPoint(
+  x: number,
+  y: number,
+  directTarget: Element | null,
+  root: Document = document,
+): HTMLElement | null {
+  const directControl = directTarget?.closest<HTMLElement>(THUMBNAIL_STACK_CONTROL_SELECTOR);
+  if (directControl) return directControl;
+
+  const controls = root.querySelectorAll<HTMLElement>(THUMBNAIL_STACK_CONTROL_SELECTOR);
+  for (const control of controls) {
+    if (containsPoint(control, x, y)) return control;
+  }
+  return null;
+}
+
+/**
  * Activates the hovered preview card and returns which cursor to show.
  *
  * - `pointer` over action buttons
@@ -277,27 +301,22 @@ export function applyThumbnailNativeHover(
   );
   const currentCard = root.querySelector<HTMLElement>(THUMBNAIL_NATIVE_ACTIVE_SELECTOR);
   const directTarget = root.elementFromPoint(position.x, position.y);
-  const directStackControl = directTarget?.closest(
-    ".thumbnail-overflow-cue, .thumbnail-collapse",
+  const stackControl = thumbnailStackControlAtPoint(
+    position.x,
+    position.y,
+    directTarget,
+    root,
   );
-  const overflowCue = directStackControl
-    ?? (
-      currentButton
-      && currentButton.matches(".thumbnail-overflow-cue, .thumbnail-collapse")
-      && containsPoint(currentButton, position.x, position.y)
-        ? currentButton
-        : null
-    );
-  if (overflowCue) {
+  if (stackControl) {
     root.querySelectorAll(THUMBNAIL_NATIVE_ACTIVE_SELECTOR)
       .forEach((element) => element.removeAttribute(THUMBNAIL_NATIVE_ACTIVE_ATTRIBUTE));
     root.querySelectorAll(THUMBNAIL_NATIVE_POINTER_HOVER_SELECTOR)
       .forEach((element) => {
-        if (element !== overflowCue) {
+        if (element !== stackControl) {
           element.removeAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE);
         }
       });
-    overflowCue.setAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE, "true");
+    stackControl.setAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE, "true");
     return "pointer";
   }
   const card = directTarget?.closest(".thumbnail-card")

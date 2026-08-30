@@ -311,6 +311,34 @@ describe("applyThumbnailNativeHover", () => {
       .not.toHaveAttribute("data-thumbnail-native-active");
   });
 
+  it("keeps the hide-previews pointer when WebKit reports the card underneath", () => {
+    document.body.innerHTML = `
+      <button class="thumbnail-collapse">Hide previews</button>
+      <article class="thumbnail-card"><button>Copy</button></article>
+    `;
+    const collapse = document.querySelector<HTMLButtonElement>(".thumbnail-collapse")!;
+    const card = document.querySelector<HTMLElement>(".thumbnail-card")!;
+    vi.spyOn(collapse, "getBoundingClientRect").mockReturnValue({
+      x: 6,
+      y: 6,
+      top: 6,
+      right: 42,
+      bottom: 42,
+      left: 6,
+      width: 36,
+      height: 36,
+      toJSON: () => ({}),
+    });
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => card),
+    });
+
+    expect(applyThumbnailNativeHover({ x: 20, y: 20, inside: true })).toBe("pointer");
+    expectNativePointerHover(collapse, true);
+    expect(card).not.toHaveAttribute("data-thumbnail-native-active");
+  });
+
   it("moves hover directly to a remaining card after the stack changes", () => {
     document.body.innerHTML = `
       <article id="removed" class="thumbnail-card"><button>Delete</button></article>
@@ -406,6 +434,34 @@ describe("shouldIgnoreThumbnailCursorEvents", () => {
       value: vi.fn(() => collapse),
     });
     expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: true })).toBe(false);
+  });
+
+  it("keeps hide-previews interactive when elementFromPoint reports empty stack chrome", () => {
+    document.body.innerHTML = `
+      <main class="thumbnail-stack">
+        <article class="thumbnail-card"><button>Copy</button></article>
+      </main>
+      <button class="thumbnail-collapse">Hide previews</button>
+    `;
+    const stack = document.querySelector<HTMLElement>(".thumbnail-stack")!;
+    const collapse = document.querySelector<HTMLButtonElement>(".thumbnail-collapse")!;
+    vi.spyOn(collapse, "getBoundingClientRect").mockReturnValue({
+      x: 6,
+      y: 6,
+      top: 6,
+      right: 42,
+      bottom: 42,
+      left: 6,
+      width: 36,
+      height: 36,
+      toJSON: () => ({}),
+    });
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => stack),
+    });
+
+    expect(shouldIgnoreThumbnailCursorEvents({ x: 20, y: 20, inside: true })).toBe(false);
   });
 
   it("passes through the whole stack when every preview is exiting", () => {

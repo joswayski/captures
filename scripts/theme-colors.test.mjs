@@ -157,6 +157,14 @@ test("mini-preview hide control uses opaque glass tokens", async () => {
     desktopCss,
     /\.thumbnail-collapse:hover[\s\S]*?background:\s*var\(--glass-raised-solid\)/u,
   );
+  assert.match(
+    desktopCss,
+    /\.thumbnail-collapse:hover[\s\S]*?border-color:\s*rgba\(var\(--theme-accent-rgb\), 0\.72\)/u,
+  );
+  assert.match(
+    desktopCss,
+    /\.thumbnail-collapse:hover svg[\s\S]*?transform:\s*translateY\(1px\)/u,
+  );
 });
 
 test("preset accent and signal values are not duplicated outside the shared palette", async () => {
