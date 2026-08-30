@@ -19,7 +19,7 @@ use objc2::{
     ffi::{OBJC_ASSOCIATION_RETAIN_NONATOMIC, objc_getAssociatedObject, objc_setAssociatedObject},
     msg_send,
     rc::Retained,
-    runtime::AnyObject,
+    runtime::{AnyObject, ProtocolObject},
     sel,
 };
 use objc2_app_kit::{
@@ -27,10 +27,11 @@ use objc2_app_kit::{
     NSCursor, NSEvent, NSEventMask, NSEventType, NSPasteboard, NSRunningApplication, NSScreen,
     NSSound, NSStatusWindowLevel, NSTrackingArea, NSTrackingAreaOptions, NSView,
     NSViewLayerContentsPlacement, NSWindow, NSWindowCollectionBehavior, NSWindowStyleMask,
-    NSWorkspace,
+    NSWorkspace, NSWorkspaceDidActivateApplicationNotification,
 };
 use objc2_foundation::{
-    NSNumber, NSObject, NSObjectProtocol, NSPoint, NSProcessInfo, NSRect, NSSize, NSString,
+    NSNotification, NSNumber, NSObject, NSObjectProtocol, NSOperationQueue, NSPoint, NSProcessInfo,
+    NSRect, NSSize, NSString,
 };
 use tauri::WebviewWindow;
 use tauri_nspanel::WebviewWindowExt;
@@ -534,6 +535,11 @@ thread_local! {
     // lifting preferences/history/feedback above the user's work.
     static CONCEALED_DOCUMENT_REVEAL_YIELD_TO: RefCell<Option<Retained<NSRunningApplication>>> =
         const { RefCell::new(None) };
+    // NSWorkspace retains the block-backed observer, while this token keeps the
+    // registration discoverable and prevents duplicate observers.
+    static UPDATE_NOTICE_WORKSPACE_OBSERVER:
+        RefCell<Option<Retained<ProtocolObject<dyn NSObjectProtocol>>>> =
+            const { RefCell::new(None) };
 }
 
 /// Returns whether a standard shortcut modifier is still physically held.
@@ -1443,6 +1449,7 @@ pub fn remember_frontmost_app_before_update_notice_activation() {
         let _ = run_on_main(remember_frontmost_app_before_update_notice_activation);
         return;
     }
+    ensure_update_notice_workspace_observer();
     let previous = current_frontmost_if_not_captures();
     let mut pending = PENDING_UPDATE_NOTICE_REFOCUS_TARGET
         .lock()
@@ -1453,6 +1460,41 @@ pub fn remember_frontmost_app_before_update_notice_activation() {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     *slot = previous;
+}
+
+fn ensure_update_notice_workspace_observer() {
+    debug_assert!(is_main_thread());
+    UPDATE_NOTICE_WORKSPACE_OBSERVER.with_borrow_mut(|slot| {
+        if slot.is_some() {
+            return;
+        }
+        let block = RcBlock::new(|_notification: ptr::NonNull<NSNotification>| {
+            refresh_update_notice_target_after_workspace_activation();
+        });
+        let center = NSWorkspace::sharedWorkspace().notificationCenter();
+        let queue = NSOperationQueue::mainQueue();
+        // SAFETY: The notification name and object types match NSWorkspace's
+        // activation notification, and the main operation queue serializes the
+        // callback with the AppKit-only handoff state below.
+        let observer = unsafe {
+            center.addObserverForName_object_queue_usingBlock(
+                Some(NSWorkspaceDidActivateApplicationNotification),
+                None,
+                Some(&queue),
+                &block,
+            )
+        };
+        *slot = Some(observer);
+    });
+}
+
+fn refresh_update_notice_target_after_workspace_activation() {
+    debug_assert!(is_main_thread());
+    let current = current_frontmost_if_not_captures();
+    let mut pending = PENDING_UPDATE_NOTICE_REFOCUS_TARGET
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    refresh_notice_activation_source_while_unfocused(&mut pending, current);
 }
 
 /// Refreshes the handoff target when a visible update notice loses and later
@@ -1503,6 +1545,17 @@ fn notice_activation_source_after_focus_change<T>(
     }
     let previous = pending.take()?;
     Some(current_external.or(previous))
+}
+
+fn refresh_notice_activation_source_while_unfocused<T>(
+    pending: &mut Option<Option<T>>,
+    current_external: Option<T>,
+) {
+    if pending.is_some()
+        && let Some(current_external) = current_external
+    {
+        *pending = Some(Some(current_external));
+    }
 }
 
 /// Hides the interactive update notice and hands activation back to the app it
@@ -2314,10 +2367,11 @@ mod tests {
         cursor_surface_uses_key_window, cursor_update_tracking_options,
         display_corner_radius_points, is_main_thread, notice_activation_source_after_focus_change,
         parse_display_id, pointer_tracking_options, reassert_thumbnail_cursor_after_click,
-        shortcut_modifiers_pressed, should_rearm_thumbnail_key_window,
-        should_release_thumbnail_key_after_event, should_reset_cursor_on_exit,
-        single_window_activation_options, style_mask_is_titled_document,
-        surface_assumes_pointer_inside, window_corner_radius_for_major_version,
+        refresh_notice_activation_source_while_unfocused, shortcut_modifiers_pressed,
+        should_rearm_thumbnail_key_window, should_release_thumbnail_key_after_event,
+        should_reset_cursor_on_exit, single_window_activation_options,
+        style_mask_is_titled_document, surface_assumes_pointer_inside,
+        window_corner_radius_for_major_version,
     };
 
     #[test]
@@ -2342,6 +2396,23 @@ mod tests {
             Some(Some("browser"))
         );
         assert_eq!(pending, None);
+
+        let mut switched_app_handoff = None;
+        assert_eq!(
+            notice_activation_source_after_focus_change(
+                false,
+                &mut switched_app_handoff,
+                Some("app-a"),
+            ),
+            None
+        );
+        refresh_notice_activation_source_while_unfocused(&mut switched_app_handoff, Some("app-b"));
+        refresh_notice_activation_source_while_unfocused(&mut switched_app_handoff, None);
+        assert_eq!(switched_app_handoff, Some(Some("app-b")));
+        assert_eq!(
+            notice_activation_source_after_focus_change(true, &mut switched_app_handoff, None),
+            Some(Some("app-b"))
+        );
 
         let mut editor_handoff = None;
         assert_eq!(
