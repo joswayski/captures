@@ -2069,6 +2069,38 @@
   line-height: var(--leading-snug);
 }
 
+.update-download-fallback {
+  margin-top: var(--s-3);
+  color: var(--text-subtle);
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
+}
+
+.update-settings .update-download-fallback {
+  margin-top: var(--s-2);
+}
+
+.update-download-fallback-link {
+  padding: 0;
+  border: 0;
+  color: var(--text);
+  background: transparent;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 0.16em;
+  cursor: pointer;
+}
+
+.update-download-fallback-link:hover {
+  color: var(--text-muted);
+}
+
+.update-download-fallback-link:focus {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--r-sm);
+}
+
 .update-close-warning {
   display: flex;
   margin: 0 var(--s-7) var(--s-3);

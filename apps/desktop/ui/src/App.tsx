@@ -610,6 +610,22 @@ function useUpdateStatus() {
 const OPEN_CAPTURES_UPDATE_WARNING =
   "Open captures will close. Unsaved edits are kept as drafts.";
 
+function UpdateDownloadFallback() {
+  return (
+    <p className="update-download-fallback">
+      You can also{" "}
+      <button
+        type="button"
+        className="update-download-fallback-link"
+        onClick={() => void invoke("open_update_download_page")}
+      >
+        download from captur.es
+      </button>
+      .
+    </p>
+  );
+}
+
 export function UpdateNotice() {
   const status = useUpdateStatus();
   const [actionError, setActionError] = useState("");
@@ -777,7 +793,12 @@ export function UpdateNotice() {
           </p>
         )}
 
-        {error && <p className="update-error" role="alert">{error}</p>}
+        {error && (
+          <>
+            <p className="update-error" role="alert">{error}</p>
+            <UpdateDownloadFallback />
+          </>
+        )}
 
         {!available && !downloading && !restarting && !error && status?.state === "up_to_date" && (
           <p className="update-status-message" role="status">No updates are available.</p>
@@ -935,6 +956,7 @@ function UpdatePreferences() {
         <p className="update-settings-warning">{OPEN_CAPTURES_UPDATE_WARNING}</p>
       )}
       {actionError && <p className="update-settings-error" role="alert">{actionError}</p>}
+      {(actionError || status?.state === "error") && <UpdateDownloadFallback />}
     </section>
   );
 }

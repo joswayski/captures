@@ -378,9 +378,34 @@ describe("Preferences", () => {
     render(<Preferences />);
 
     expect(await screen.findByText("Version 0.1.0")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "download from captur.es" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Check Now" }));
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("check_for_updates"));
+  });
+
+  it("links a failed update to the website download page", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_settings") return settings;
+      if (command === "get_update_status") {
+        return {
+          state: "error",
+          current_version: "0.1.0",
+          current_display_version: "0.1.0",
+          message: "Could not install the update: Download request failed with status: 404 Not Found",
+          retry_install: true,
+        };
+      }
+      if (command === "set_shortcut_capture_suppressed") return undefined;
+      if (command === "open_update_download_page") return undefined;
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<Preferences />);
+
+    expect(await screen.findByText("Couldn’t check for updates")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "download from captur.es" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("open_update_download_page"));
   });
 
   it("can turn off freeze screen while capturing", async () => {

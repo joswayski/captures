@@ -108,7 +108,7 @@ export default function Home({
             .
           </p>
 
-          <div className="mt-12 border-t border-border pt-10">
+          <div className="mt-12 border-t border-border pt-10" id="download">
             {detectedDownload ? (
               <>
                 <h2 className="text-base font-medium tracking-tight text-ink sm:text-lg">
