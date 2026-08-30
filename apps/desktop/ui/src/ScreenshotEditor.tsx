@@ -1772,6 +1772,7 @@ export function ScreenshotEditor() {
   const [busy, setBusy] = useState<"copying" | "saving" | null>(null);
   /** Transient success for copy/save — does not replace the stable export hint. */
   const [success, setSuccess] = useState<{ kind: "copy" | "save"; message: string } | null>(null);
+  const [copyAnnouncement, setCopyAnnouncement] = useState("");
   const [error, setError] = useState("");
   /** Original capture was deleted after the editor opened; the edit is still exportable. */
   const [sourceMissing, setSourceMissing] = useState(false);
@@ -1903,6 +1904,7 @@ export function ScreenshotEditor() {
   const clearSuccess = useCallback(() => {
     clearSuccessTimer();
     setSuccess(null);
+    setCopyAnnouncement("");
   }, [clearSuccessTimer]);
 
   const showSuccess = useCallback((kind: "copy" | "save", message = "") => {
@@ -1910,8 +1912,10 @@ export function ScreenshotEditor() {
       window.clearTimeout(successTimerRef.current);
     }
     setSuccess({ kind, message });
+    setCopyAnnouncement(kind === "copy" ? "Copied to clipboard" : "");
     successTimerRef.current = window.setTimeout(() => {
       setSuccess(null);
+      if (kind === "copy") setCopyAnnouncement("");
       successTimerRef.current = null;
     }, 4_000);
   }, []);
@@ -4848,6 +4852,9 @@ export function ScreenshotEditor() {
     const keepCopiedState = success?.kind === "copy";
     setBusy("copying");
     setError("");
+    // Empty the live region so completing a repeat copy announces the same
+    // confirmation again without adding visible footer text.
+    setCopyAnnouncement("");
     if (keepCopiedState) {
       // Keep the compact confirmation in place while a repeat copy runs. This
       // avoids swapping back to the wider "Copying…" label and moving the hint.
@@ -7209,6 +7216,14 @@ export function ScreenshotEditor() {
               aria-live={error ? "assertive" : "polite"}
             >
               {exportNotice || "\u00a0"}
+            </div>
+            <div
+              className="visually-hidden"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              {copyAnnouncement}
             </div>
             {!error && (
               <div className="screenshot-export-hint">

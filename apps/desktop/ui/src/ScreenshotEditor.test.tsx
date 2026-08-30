@@ -3311,7 +3311,8 @@ describe("ScreenshotEditor", () => {
       await waitFor(() => {
         expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
       });
-      expect(screen.queryByText("Copied to clipboard")).not.toBeInTheDocument();
+      expect(screen.getByText("Copied to clipboard")).toHaveClass("visually-hidden");
+      expect(screen.getByText("Copied to clipboard")).toHaveAttribute("role", "status");
       // Hint stays put so the footer does not reflow around a status swap.
       expect(screen.getByText(hint)).toBeInTheDocument();
 
@@ -3319,6 +3320,7 @@ describe("ScreenshotEditor", () => {
 
       expect(screen.getByRole("button", { name: "Copied" })).toBeDisabled();
       expect(screen.queryByRole("button", { name: "Copying…" })).not.toBeInTheDocument();
+      expect(screen.queryByText("Copied to clipboard")).not.toBeInTheDocument();
       expect(screen.getByText(hint)).toBeInTheDocument();
 
       await waitFor(() => {
@@ -3328,6 +3330,7 @@ describe("ScreenshotEditor", () => {
       await waitFor(() => {
         expect(screen.getByRole("button", { name: "Copied" })).toBeEnabled();
       });
+      expect(screen.getByText("Copied to clipboard")).toHaveClass("visually-hidden");
       expect(invoke).toHaveBeenCalledWith("copy_screenshot_edit", {
         imagePng: expect.any(Array),
       });
