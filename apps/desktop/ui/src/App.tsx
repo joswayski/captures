@@ -5915,9 +5915,10 @@ export function Thumbnail() {
         type="button"
         className="thumbnail-collapse"
         aria-label="Hide previews"
+        data-tooltip="Hide previews"
         onClick={() => void invoke("collapse_mini_previews")}
       >
-        <ThumbnailCollapseIcon />
+        <ThumbnailOverflowChevron direction="down" />
       </button>
       {stackOverflow.hasOlder && (
         <button
@@ -5947,14 +5948,6 @@ function ThumbnailOverflowChevron({ direction }: { direction: "up" | "down" }) {
   return (
     <svg viewBox="0 0 16 16" aria-hidden="true">
       <path d={direction === "up" ? "M3.5 10 8 5.5 12.5 10" : "M3.5 6 8 10.5 12.5 6"} />
-    </svg>
-  );
-}
-
-function ThumbnailCollapseIcon() {
-  return (
-    <svg viewBox="0 0 16 16" aria-hidden="true">
-      <path d="M10 3.5 5.5 8 10 12.5" />
     </svg>
   );
 }

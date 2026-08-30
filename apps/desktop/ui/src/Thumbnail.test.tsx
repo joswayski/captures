@@ -657,6 +657,8 @@ describe("Thumbnail", () => {
   it("offers a control to park the preview stack", async () => {
     render(<Thumbnail />);
     const hide = await screen.findByRole("button", { name: "Hide previews" });
+    expect(hide).toHaveAttribute("data-tooltip", "Hide previews");
+    expect(hide.querySelector("path")?.getAttribute("d")).toContain("10.5");
     fireEvent.click(hide);
     expect(vi.mocked(invoke)).toHaveBeenCalledWith("collapse_mini_previews");
   });

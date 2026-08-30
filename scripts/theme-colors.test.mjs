@@ -141,6 +141,24 @@ test("preferences keeps presets compact and gives Custom a full-spectrum treatme
   );
 });
 
+test("mini-preview hide control uses opaque glass tokens", async () => {
+  const [designCss, desktopCss] = await Promise.all([
+    readFile(designCssPath, "utf8"),
+    readDesktopCss(),
+  ]);
+  assert.match(designCss, /--glass-strong-solid:\s*rgb\(15, 15, 18\)/u);
+  assert.match(designCss, /--glass-raised-solid:\s*rgb\(38, 38, 45\)/u);
+
+  const collapse = desktopCss.match(/\.thumbnail-collapse\s*\{([\s\S]*?)\n\}/u)?.[1];
+  assert.ok(collapse, "missing .thumbnail-collapse rule");
+  assert.match(collapse, /background:\s*var\(--glass-strong-solid\)/u);
+  assert.doesNotMatch(collapse, /rgb\(/u);
+  assert.match(
+    desktopCss,
+    /\.thumbnail-collapse:hover[\s\S]*?background:\s*var\(--glass-raised-solid\)/u,
+  );
+});
+
 test("preset accent and signal values are not duplicated outside the shared palette", async () => {
   const [sharedCss, desktopCss, webCss] = await Promise.all([
     readFile(sharedCssPath, "utf8"),
