@@ -6,14 +6,22 @@ import { App } from "./App";
 import { isPointerOverCaptureGuidance } from "./lib/captureGuidance";
 import type { ActiveSession } from "./types";
 
+const { hideCurrentWindow } = vi.hoisted(() => ({
+  hideCurrentWindow: vi.fn(async () => undefined),
+}));
+
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
-  isTauri: () => false,
+  isTauri: () => true,
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
   emit: vi.fn(),
   listen: vi.fn(async () => () => undefined),
+}));
+
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({ hide: hideCurrentWindow }),
 }));
 
 const session: ActiveSession = {
@@ -261,6 +269,48 @@ describe("CaptureOverlay guidance", () => {
 
     fireEvent.pointerDown(surface!, { pointerId: 1, clientX: 200, clientY: 150 });
     expect(guidance).toHaveAttribute("data-faded", "true");
+  });
+
+  it("starts hiding the native overlay as soon as a region drag is released", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/?view=overlay&mode=region&session_id=capture-1",
+    );
+    const { container } = render(<App />);
+    await screen.findByText("Drag to select a region");
+
+    const surface = container.querySelector<HTMLElement>(".capture-surface");
+    expect(surface).not.toBeNull();
+    surface!.setPointerCapture = vi.fn();
+    vi.spyOn(surface!, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 1440,
+      bottom: 900,
+      width: 1440,
+      height: 900,
+      toJSON: () => undefined,
+    });
+
+    fireEvent.pointerDown(surface!, { pointerId: 1, clientX: 120, clientY: 80 });
+    fireEvent.pointerMove(surface!, { pointerId: 1, clientX: 620, clientY: 480 });
+    fireEvent.pointerUp(surface!, { pointerId: 1, clientX: 620, clientY: 480 });
+
+    expect(hideCurrentWindow).toHaveBeenCalledOnce();
+    expect(invoke).toHaveBeenCalledWith("commit_region", {
+      sessionId: "capture-1",
+      rect: { x: 120, y: 80, width: 500, height: 400 },
+    });
+    const commitCall = vi.mocked(invoke).mock.calls.findIndex(([command]) => (
+      command === "commit_region"
+    ));
+    expect(commitCall).toBeGreaterThanOrEqual(0);
+    expect(hideCurrentWindow.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(invoke).mock.invocationCallOrder[commitCall],
+    );
   });
 
   it("keeps the region dim hole aligned with the marquee under Windows DPI scale", async () => {

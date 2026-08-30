@@ -5637,12 +5637,11 @@ fn hide_capture_overlay(app: &AppHandle) {
 }
 
 fn hide_capture_overlay_inner(app: &AppHandle) {
-    // Restore the previous frontmost app while the overlay is still covering
-    // the screen. Titled document windows stay ordered out until
-    // reveal_document_windows_after_capture so they cannot flash for a frame
-    // when the overlay hides (including the overlay → countdown handoff).
-    #[cfg(target_os = "macos")]
-    captures_macos_window::restore_frontmost_app_after_capture();
+    // Hide before handing activation back. macOS focus restoration can take a
+    // variable amount of time, and doing it first left the completed marquee on
+    // screen after pointer release. Titled document windows stay ordered out
+    // until reveal_document_windows_after_capture, so this ordering cannot flash
+    // an editor during the overlay → countdown handoff.
     if let Some(window) = app.get_webview_window("overlay") {
         let _ = set_click_through(&window, false);
         let _ = window.hide();
@@ -5652,6 +5651,8 @@ fn hide_capture_overlay_inner(app: &AppHandle) {
             eprintln!("failed to reset capture overlay: {error}");
         }
     }
+    #[cfg(target_os = "macos")]
+    captures_macos_window::restore_frontmost_app_after_capture();
 }
 
 /// Re-shows document windows ordered out while a capture surface was active.
