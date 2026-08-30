@@ -796,7 +796,7 @@ async fn commit_window(
         }
     };
     let countdown_seconds = state.settings().screenshot_countdown_seconds;
-    let display_crop_is_unoccluded = !window_is_occluded(&selected_window, &session.windows);
+    let display_crop_is_safe = window_display_crop_is_safe(&selected_window, &session.windows);
     let image = if countdown_seconds > 0 {
         set_capture_huds_protected(&app, true);
         let completed = match run_screenshot_countdown(
@@ -829,14 +829,13 @@ async fn commit_window(
             }
         }
     } else if session.frozen {
-        // The frozen frame contains the whole composited desktop, so cropping it
-        // would also include any windows sitting above the selected one. Capture
-        // the native window surface first and use the frozen pixels only when the
-        // selected bounds were unobstructed.
+        // Preserve the exact frozen pixels when the selected bounds are clear or
+        // contain only an app-owned transient such as a menu. If another app/window
+        // covers the target, use the native surface so that occluder is not saved.
         match resolve_window_capture(
-            state.backend.capture_window(&window_id),
-            display_crop_is_unoccluded,
+            display_crop_is_safe,
             || crop_window_from_session(&session, &window_id),
+            || state.backend.capture_window(&window_id),
         ) {
             Ok(image) => image,
             Err(error) => {
@@ -5786,14 +5785,12 @@ fn capture_live_window(
                 .cloned()
         })
         .unwrap_or_else(|| selected_window.clone());
-    let display_crop_is_unoccluded = current_windows.as_ref().is_some_and(|windows| {
-        windows.iter().any(|window| window.id == current_window.id)
-            && !window_is_occluded(&current_window, windows)
-    });
+    let display_crop_is_safe = current_windows
+        .as_ref()
+        .is_some_and(|windows| window_display_crop_is_safe(&current_window, windows));
 
     resolve_window_capture(
-        state.backend.capture_window(&current_window.id),
-        display_crop_is_unoccluded,
+        display_crop_is_safe,
         || {
             state
                 .backend
@@ -5803,51 +5800,75 @@ fn capture_live_window(
                     crop_window_from_display(&frame.descriptor, &frame.image, &current_window)
                 })
         },
+        || state.backend.capture_window(&current_window.id),
     )
 }
 
 fn resolve_window_capture(
-    native_capture: Result<RgbaImage, CaptureError>,
-    display_crop_is_unoccluded: bool,
+    display_crop_is_safe: bool,
     display_crop: impl FnOnce() -> Option<RgbaImage>,
+    native_capture: impl FnOnce() -> Result<RgbaImage, CaptureError>,
 ) -> Result<RgbaImage, AppError> {
-    let native_error = match native_capture {
+    if display_crop_is_safe
+        && let Some(image) = display_crop()
+        && !image_is_effectively_blank(&image)
+    {
+        return Ok(image);
+    }
+
+    let native_error = match native_capture() {
         Ok(image) if !image_is_effectively_blank(&image) => return Ok(image),
         Ok(_) => None,
         Err(error) => Some(error),
     };
 
-    if !display_crop_is_unoccluded {
+    if !display_crop_is_safe {
         return Err(AppError::Task(
             "Could not isolate that window while another window was covering it. Bring the window forward and try again."
                 .to_owned(),
         ));
     }
 
-    if let Some(image) = display_crop()
-        && !image_is_effectively_blank(&image)
-    {
-        return Ok(image);
-    }
-
     match native_error {
-        Some(error) => Err(error.into()),
         None => Err(AppError::Task(
             "Could not capture that window (empty frame). Try Region capture.".to_owned(),
         )),
+        Some(error) => Err(error.into()),
     }
 }
 
-fn window_is_occluded(
+fn window_display_crop_is_safe(
     selected: &captures_capture::WindowDescriptor,
     windows: &[captures_capture::WindowDescriptor],
 ) -> bool {
-    windows.iter().any(|candidate| {
-        candidate.id != selected.id
-            && candidate.display_id == selected.display_id
-            && candidate.z_order > selected.z_order
-            && window_rects_overlap(selected, candidate)
-    })
+    windows.iter().any(|candidate| candidate.id == selected.id)
+        && !windows.iter().any(|candidate| {
+            candidate.id != selected.id
+                && candidate.display_id == selected.display_id
+                && candidate.z_order > selected.z_order
+                && window_rects_overlap(selected, candidate)
+                && !window_is_associated_transient(selected, candidate)
+        })
+}
+
+fn window_is_associated_transient(
+    selected: &captures_capture::WindowDescriptor,
+    candidate: &captures_capture::WindowDescriptor,
+) -> bool {
+    // xcap exposes app-owned menus, popovers, and similar transient surfaces as
+    // separate untitled windows. Keeping those in an otherwise safe display crop
+    // preserves frozen/countdown states without admitting another document window.
+    candidate.title.trim().is_empty()
+        && selected
+            .app_name
+            .as_deref()
+            .zip(candidate.app_name.as_deref())
+            .is_some_and(|(selected_app, candidate_app)| {
+                !selected_app.trim().is_empty()
+                    && selected_app
+                        .trim()
+                        .eq_ignore_ascii_case(candidate_app.trim())
+            })
 }
 
 fn window_rects_overlap(
@@ -6318,8 +6339,8 @@ mod tests {
         thumbnail_geometry, thumbnail_pointer_in_space, thumbnail_pointer_position,
         thumbnail_stack_should_be_visible, thumbnail_visible_window_height,
         track_shortcut_suppression, tray_accelerator, tray_icon_rect_is_usable,
-        tray_notice_window_size, viewer_window_label, window_is_capturable, window_is_occluded,
-        windows_window_is_capture_overlay,
+        tray_notice_window_size, viewer_window_label, window_display_crop_is_safe,
+        window_is_capturable, windows_window_is_capture_overlay,
     };
 
     fn bounds(
@@ -6353,66 +6374,93 @@ mod tests {
     }
 
     #[test]
-    fn window_capture_prefers_native_pixels_over_the_composited_display_crop() {
+    fn safe_window_capture_preserves_the_composited_display_crop() {
         let native = patterned_window_image([10, 20, 30, 255], [200, 210, 220, 255]);
         let display_crop = patterned_window_image([80, 10, 10, 255], [90, 20, 20, 255]);
-        let mut display_crop_used = false;
+        let mut native_capture_used = false;
 
-        let captured = resolve_window_capture(Ok(native.clone()), true, || {
-            display_crop_used = true;
-            Some(display_crop)
-        })
-        .expect("native window capture should succeed");
+        let captured = resolve_window_capture(
+            true,
+            || Some(display_crop.clone()),
+            || {
+                native_capture_used = true;
+                Ok(native)
+            },
+        )
+        .expect("the unobstructed display crop should succeed");
 
-        assert_eq!(captured, native);
-        assert!(!display_crop_used);
+        assert_eq!(captured, display_crop);
+        assert!(!native_capture_used);
     }
 
     #[test]
-    fn window_capture_only_uses_an_unoccluded_display_crop_as_fallback() {
+    fn window_capture_falls_back_to_native_pixels_when_the_display_crop_is_unsafe_or_blank() {
         let blank = RgbaImage::from_pixel(8, 8, Rgba([0, 0, 0, 255]));
-        let fallback = patterned_window_image([10, 90, 30, 255], [180, 40, 220, 255]);
-        let captured = resolve_window_capture(Ok(blank.clone()), true, || Some(fallback.clone()))
-            .expect("an unoccluded display crop should remain a valid fallback");
-        assert_eq!(captured, fallback);
+        let native = patterned_window_image([10, 90, 30, 255], [180, 40, 220, 255]);
+        let captured = resolve_window_capture(true, || Some(blank.clone()), || Ok(native.clone()))
+            .expect("a blank safe crop should fall back to the native window");
+        assert_eq!(captured, native);
 
         let mut display_crop_used = false;
-        let error = resolve_window_capture(Ok(blank), false, || {
-            display_crop_used = true;
-            Some(patterned_window_image(
-                [240, 240, 240, 255],
-                [10, 10, 10, 255],
-            ))
-        })
-        .expect_err("an occluded display crop must not be saved as the selected window");
+        let captured = resolve_window_capture(
+            false,
+            || {
+                display_crop_used = true;
+                Some(patterned_window_image(
+                    [240, 240, 240, 255],
+                    [10, 10, 10, 255],
+                ))
+            },
+            || Ok(native.clone()),
+        )
+        .expect("an unsafe crop should use the native window");
 
+        assert_eq!(captured, native);
         assert!(!display_crop_used);
+
+        let error = resolve_window_capture(false, || None, || Ok(blank))
+            .expect_err("an empty native capture must not fall back to occluded pixels");
         assert!(error.to_string().contains("another window was covering it"));
     }
 
     #[test]
-    fn detects_only_overlapping_windows_above_the_selected_window() {
-        let window = |id: &str, z_order: i32, x: i32, y: i32| WindowDescriptor {
-            id: id.to_owned(),
-            title: id.to_owned(),
-            app_name: Some("App".to_owned()),
-            z_order,
-            x,
-            y,
-            width: 100,
-            height: 80,
-            display_id: "display".to_owned(),
-            corner_radius: None,
+    fn display_crop_allows_app_transients_but_rejects_unrelated_occluders() {
+        let window = |id: &str, app_name: &str, title: &str, z_order: i32, x: i32, y: i32| {
+            WindowDescriptor {
+                id: id.to_owned(),
+                title: title.to_owned(),
+                app_name: Some(app_name.to_owned()),
+                z_order,
+                x,
+                y,
+                width: 100,
+                height: 80,
+                display_id: "display".to_owned(),
+                corner_radius: None,
+            }
         };
-        let selected = window("selected", 5, 100, 100);
-        let covering = window("covering", 6, 150, 120);
-        let behind = window("behind", 4, 120, 110);
-        let adjacent = window("adjacent", 7, 200, 100);
+        let selected = window("selected", "Browser", "Page", 5, 100, 100);
+        let covering = window("covering", "Editor", "Code", 6, 150, 120);
+        let behind = window("behind", "Editor", "Code", 4, 120, 110);
+        let adjacent = window("adjacent", "Editor", "Code", 7, 200, 100);
+        let transient = window("menu", "Browser", "", 7, 130, 110);
+        let same_app_document = window("other-page", "Browser", "Other page", 6, 140, 120);
 
-        assert!(window_is_occluded(&selected, &[selected.clone(), covering]));
-        assert!(!window_is_occluded(
+        assert!(!window_display_crop_is_safe(
+            &selected,
+            &[selected.clone(), covering]
+        ));
+        assert!(window_display_crop_is_safe(
             &selected,
             &[selected.clone(), behind, adjacent]
+        ));
+        assert!(window_display_crop_is_safe(
+            &selected,
+            &[selected.clone(), transient]
+        ));
+        assert!(!window_display_crop_is_safe(
+            &selected,
+            &[selected.clone(), same_app_document]
         ));
     }
 
