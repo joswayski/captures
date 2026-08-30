@@ -46,7 +46,10 @@ and the latest Preview, not only the newest release. Platform download URLs in
 `latest.json` are rewritten from GitHub API asset endpoints to public
 `releases/download/<CalVer-tag>/…` links so in-app updates do not consume the
 unauthenticated API rate limit (HTTP 403) and do not keep draft `untagged-*`
-paths that 404 after the Preview is published. Installers on this channel use **stable filenames**
+paths that 404 after the Preview is published. Validation passes the workflow’s
+CalVer tag into that rewrite because GitHub draft releases keep reporting
+`tag_name` as `untagged-*` until they are published, even when the git tag
+already exists. Installers on this channel use **stable filenames**
 (`Captures-macOS-Apple-Silicon.dmg`, `Captures-Windows-x64-setup.exe`,
 `Captures-Linux-x64.deb`, `Captures-Linux-x64.AppImage`) so the root README can
 link directly without updating URLs on every merge. Dated immutable Previews keep

@@ -55,13 +55,10 @@ async function deleteAsset(assetId) {
   await githubRequest(apiUrl(`releases/assets/${assetId}`), { method: "DELETE" });
 }
 
-export async function rewriteUpdaterManifestUrls(releaseId, latestPath) {
+export async function rewriteUpdaterManifestUrls(releaseId, latestPath, tag) {
+  // Draft GitHub releases report tag_name as untagged-*; callers must pass the
+  // public CalVer (or channel) tag the assets will be downloaded from after publish.
   const { repository } = configuration();
-  const currentRelease = await release(releaseId);
-  const tag = currentRelease.tag_name;
-  if (!tag || tag.startsWith("untagged-")) {
-    throw new Error(`release ${releaseId} is missing a public download tag`);
-  }
   const latest = JSON.parse(readFileSync(latestPath, "utf8"));
   const rewritten = rewriteGithubApiAssetUrls(latest, await releaseAssets(releaseId), {
     repository,
@@ -177,10 +174,10 @@ async function main(args) {
     return;
   }
   if (command === "rewrite-updater-urls") {
-    if (rest.length !== 1) {
-      throw new Error("rewrite-updater-urls requires exactly one latest.json path");
+    if (rest.length !== 2) {
+      throw new Error("rewrite-updater-urls requires a latest.json path and a public download tag");
     }
-    await rewriteUpdaterManifestUrls(releaseId, rest[0]);
+    await rewriteUpdaterManifestUrls(releaseId, rest[0], rest[1]);
     return;
   }
   throw new Error(
