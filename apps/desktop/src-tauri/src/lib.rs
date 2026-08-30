@@ -1410,7 +1410,7 @@ fn get_thumbnail_pointer_position(
         return None;
     }
     let window = app.get_webview_window("thumbnail")?;
-    if !window.is_visible().ok()? {
+    if !thumbnail_window_is_presented(&window) {
         return None;
     }
     let position = window.outer_position().ok()?;
@@ -1503,8 +1503,8 @@ fn set_thumbnail_cursor(
         let cursor_window = window.clone();
         app.run_on_main_thread(move || {
             let suppressed = state.thumbnail_visibility.lock().is_suppressed();
-            let visible = cursor_window.is_visible().unwrap_or(false);
-            let result = match thumbnail_cursor_action(suppressed, visible, kind) {
+            let presented = thumbnail_window_is_presented(&cursor_window);
+            let result = match thumbnail_cursor_action(suppressed, presented, kind) {
                 // NSCursor is application-wide. Do not even invalidate the
                 // hidden preview's cursor rectangles while capture owns it.
                 ThumbnailCursorAction::Ignore => return,
@@ -1547,8 +1547,8 @@ fn reassert_thumbnail_cursor(
         let state = state.inner().clone();
         app.run_on_main_thread(move || {
             let suppressed = state.thumbnail_visibility.lock().is_suppressed();
-            let visible = window.is_visible().unwrap_or(false);
-            let result = match thumbnail_cursor_action(suppressed, visible, kind) {
+            let presented = thumbnail_window_is_presented(&window);
+            let result = match thumbnail_cursor_action(suppressed, presented, kind) {
                 ThumbnailCursorAction::Ignore => return,
                 ThumbnailCursorAction::Reset => {
                     let _ = window.set_cursor_icon(CursorIcon::Default);
@@ -4536,6 +4536,7 @@ fn update_thumbnail_stack_window(handle: &AppHandle, count: usize, show_stack: b
     }
     let (x, y, desired_height) = thumbnail_window_geometry(handle, count);
     let visible = window.is_visible().unwrap_or(false);
+    let presented = thumbnail_window_is_presented(&window);
     // WKWebView blanks every painted card when its NSWindow shrinks. Keep
     // the taller frame on macOS, where native hit testing makes the empty
     // top space click-through. Other platforms shrink normally so an
@@ -4565,6 +4566,8 @@ fn update_thumbnail_stack_window(handle: &AppHandle, count: usize, show_stack: b
     } else {
         let _ = window.set_size(LogicalSize::new(THUMBNAIL_WIDTH, height));
         let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+    }
+    if !presented {
         show_thumbnail_window(&window);
     }
 }
@@ -4617,6 +4620,16 @@ fn thumbnail_webview_needs_tauri_show(is_visible: bool) -> bool {
     !is_visible
 }
 
+fn thumbnail_window_is_presented(window: &tauri::WebviewWindow) -> bool {
+    if !window.is_visible().unwrap_or(false) {
+        return false;
+    }
+    #[cfg(target_os = "macos")]
+    return captures_macos_window::thumbnail_is_presented();
+    #[cfg(not(target_os = "macos"))]
+    true
+}
+
 fn hide_thumbnail_window(window: &tauri::WebviewWindow) {
     #[cfg(target_os = "macos")]
     {
@@ -4633,13 +4646,14 @@ fn hide_thumbnail_window_inner(window: &tauri::WebviewWindow) {
     // Click-through first so a transparent always-on-top window cannot keep
     // eating desktop clicks while hide() is still committing (Windows).
     let _ = set_click_through(window, true);
-    // Hiding a key nonactivating panel donates key status to the next Captures
-    // window — usually an open editor — and can activate the app over Chrome.
+    // Ordering out a key-capable nonactivating panel donates key status to the
+    // next Captures window — usually an open editor — and can activate the app
+    // over Chrome. Keep the click-through panel ordered onscreen at zero alpha;
+    // showing it again only needs a native reveal, not another focus handoff.
     #[cfg(target_os = "macos")]
-    captures_macos_window::run_without_stealing_activation(|| {
-        let _ = captures_macos_window::resign_panel_key_without_raising_documents(window);
-        let _ = window.hide();
-    });
+    if let Err(error) = captures_macos_window::conceal_thumbnail_without_hiding(window) {
+        eprintln!("failed to conceal the capture thumbnail: {error}");
+    }
     #[cfg(not(target_os = "macos"))]
     let _ = window.hide();
 }
@@ -4676,7 +4690,7 @@ fn show_thumbnail_window_inner(window: &tauri::WebviewWindow) {
     }
 
     #[cfg(target_os = "macos")]
-    if let Err(error) = captures_macos_window::show_without_activating(window) {
+    if let Err(error) = captures_macos_window::show_thumbnail_without_activating(window) {
         eprintln!("failed to raise capture thumbnail stack: {error}");
     }
 
@@ -6933,6 +6947,10 @@ mod tests {
         assert_eq!(
             thumbnail_cursor_action(false, true, ThumbnailCursorKind::Grab),
             ThumbnailCursorAction::Apply(ThumbnailCursorKind::Grab)
+        );
+        assert_eq!(
+            thumbnail_cursor_action(false, false, ThumbnailCursorKind::Pointer),
+            ThumbnailCursorAction::Reset
         );
     }
 
