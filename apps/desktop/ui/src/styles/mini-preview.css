@@ -1236,9 +1236,24 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-collapse, .
 }
 
 .thumbnail-exit-delete.thumbnail-exit-dust .thumbnail-dust-source {
-  /* Fade the live image beneath the generated dust chips. */
+  /* Fade the frozen hover image over the generated dust chips. */
   animation: thumbnail-delete-img-fade 0.55s cubic-bezier(0.22, 0.1, 0.25, 1) both !important;
   pointer-events: none !important;
+}
+
+/*
+ * Keep the blurred live image above the initially sharp dust copy while the two
+ * cross-fade. Filtering the whole dust layer used to preserve this handoff, but
+ * it flattened every chip into one compositor surface and broke particle motion
+ * in WebView2. This ordering keeps the first delete frame identical to hover,
+ * then reveals independently animated chips without filtering their parent.
+ */
+.thumbnail-exit-delete.thumbnail-exit-dust .thumbnail-media {
+  z-index: 7;
+}
+
+.thumbnail-exit-delete.thumbnail-exit-dust .thumbnail-dust-layer {
+  z-index: 6;
 }
 
 @keyframes thumbnail-chrome-fade-top {
