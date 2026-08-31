@@ -97,6 +97,8 @@ const RECORDING_SAVED_NOTICE_EVENT: &str = "recording-saved-artifact";
 const RECORDING_CONTROLS_HIDDEN_NOTICE_PREFIX: &str = "recording-controls-hidden-";
 const MINI_PREVIEWS_HIDDEN_LABEL: &str = "mini-previews-hidden";
 const MINI_PREVIEWS_HIDDEN_EVENT: &str = "mini-previews-hidden-count";
+const PREFERENCES_TARGET_EVENT: &str = "preferences-target";
+const AUTO_START_PREFERENCE_TARGET: &str = "auto-start-on-selection";
 /// Mini-preview stack listens for this to clear “In editor” when a window dies.
 const EDITOR_LAYERS_CHANGED_EVENT: &str = "editor-layers-changed";
 #[cfg(any(target_os = "macos", test))]
@@ -2439,8 +2441,8 @@ fn open_capture_history(app: AppHandle) -> CommandResult<()> {
 }
 
 #[tauri::command(async)]
-fn open_preferences(app: AppHandle) -> CommandResult<()> {
-    show_preferences(&app);
+fn open_preferences(app: AppHandle, target: Option<String>) -> CommandResult<()> {
+    show_preferences_target(&app, target.as_deref());
     Ok(())
 }
 
@@ -5385,33 +5387,47 @@ fn x11_display_available() -> bool {
 }
 
 fn show_preferences(app: &AppHandle) {
+    show_preferences_target(app, None);
+}
+
+fn preferences_url(target: Option<&str>) -> String {
+    if target == Some(AUTO_START_PREFERENCE_TARGET) {
+        format!("index.html?view=preferences&target={AUTO_START_PREFERENCE_TARGET}")
+    } else {
+        "index.html?view=preferences".to_owned()
+    }
+}
+
+fn show_preferences_target(app: &AppHandle, target: Option<&str>) {
+    let target = target.filter(|candidate| *candidate == AUTO_START_PREFERENCE_TARGET);
     if let Some(window) = app.get_webview_window("preferences") {
         let _ = window.show();
+        let _ = window.unminimize();
         let _ = window.set_focus();
+        if let Some(target) = target {
+            let _ = window.emit(PREFERENCES_TARGET_EVENT, target);
+        }
         return;
     }
     let app = app.clone();
     let handle = app.clone();
+    let url = preferences_url(target);
     let _ = app.run_on_main_thread(move || {
         let (preferences_theme, preferences_background) = document_window_chrome(&handle);
-        let result = WebviewWindowBuilder::new(
-            &handle,
-            "preferences",
-            WebviewUrl::App("index.html?view=preferences".into()),
-        )
-        .title("Captures Preferences")
-        .inner_size(880.0, 660.0)
-        .min_inner_size(560.0, 440.0)
-        .center()
-        .resizable(true)
-        .theme(preferences_theme)
-        .background_color(preferences_background)
-        .focused(false)
-        .visible(false)
-        .on_page_load(document_window_page_load_handler(
-            "failed to reveal preferences window",
-        ))
-        .build();
+        let result = WebviewWindowBuilder::new(&handle, "preferences", WebviewUrl::App(url.into()))
+            .title("Captures Preferences")
+            .inner_size(880.0, 660.0)
+            .min_inner_size(560.0, 440.0)
+            .center()
+            .resizable(true)
+            .theme(preferences_theme)
+            .background_color(preferences_background)
+            .focused(false)
+            .visible(false)
+            .on_page_load(document_window_page_load_handler(
+                "failed to reveal preferences window",
+            ))
+            .build();
         if let Err(error) = result {
             eprintln!("failed to show preferences window: {error}");
         }
@@ -6339,7 +6355,7 @@ mod tests {
         capture_cursor_icon, click_through_applies, clipboard_fingerprint,
         display_contains_pointer, fallback_startup_notice, mask_macos_window_corners,
         mini_previews_hidden_geometry, mini_previews_hidden_should_be_visible, parse_shortcut,
-        place_startup_notice, primary_app_window_priority,
+        place_startup_notice, preferences_url, primary_app_window_priority,
         recording::RECORDING_REGION_INDICATOR_TITLE, refine_window_chrome_from_snapshot,
         resolve_startup_notice_placement, resolve_window_capture, should_trigger_shortcut,
         startup_notice_fallback_edge_from_insets, startup_notice_url, thumbnail_cursor_action,
@@ -6349,6 +6365,19 @@ mod tests {
         tray_notice_window_size, viewer_window_label, window_display_crop_is_safe,
         window_is_capturable, windows_window_is_capture_overlay,
     };
+
+    #[test]
+    fn preferences_url_only_accepts_known_targets() {
+        assert_eq!(
+            preferences_url(Some("auto-start-on-selection")),
+            "index.html?view=preferences&target=auto-start-on-selection"
+        );
+        assert_eq!(
+            preferences_url(Some("unknown")),
+            "index.html?view=preferences"
+        );
+        assert_eq!(preferences_url(None), "index.html?view=preferences");
+    }
 
     fn bounds(
         work: (i32, i32, u32, u32),

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { Preferences } from "./App";
@@ -59,8 +60,14 @@ const settings: AppSettings = {
   },
 };
 
+const originalScrollIntoView = Object.getOwnPropertyDescriptor(
+  HTMLElement.prototype,
+  "scrollIntoView",
+);
+
 describe("Preferences", () => {
   beforeEach(() => {
+    vi.mocked(listen).mockImplementation(async () => () => undefined);
     vi.mocked(invoke).mockImplementation(async (command, args) => {
       if (command === "get_settings") return settings;
       if (command === "get_update_status") {
@@ -77,6 +84,12 @@ describe("Preferences", () => {
     document.documentElement.removeAttribute("data-capture-theme");
     document.documentElement.removeAttribute("style");
     window.localStorage.clear();
+    window.history.replaceState({}, "", "/");
+    if (originalScrollIntoView) {
+      Object.defineProperty(HTMLElement.prototype, "scrollIntoView", originalScrollIntoView);
+    } else {
+      delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
+    }
   });
 
   it("does not offer a global feedback shortcut", async () => {
@@ -150,6 +163,55 @@ describe("Preferences", () => {
       expect(invoke).toHaveBeenCalledWith("update_settings", {
         settings: expect.objectContaining({ auto_start_on_selection: true }),
       });
+    });
+  });
+
+  it("scrolls to and highlights auto-capture when opened with that target", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/?view=preferences&target=auto-start-on-selection",
+    );
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+
+    render(<Preferences />);
+
+    const autoStart = await screen.findByRole("checkbox", {
+      name: /Start capture as soon as a target is selected/,
+    });
+    await waitFor(() => {
+      expect(autoStart.closest("label")).toHaveClass("preference-target-highlight");
+      expect(autoStart).toHaveFocus();
+      expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center" });
+      expect(screen.getByRole("button", { name: "Capture" })).toHaveAttribute(
+        "aria-current",
+        "true",
+      );
+    });
+  });
+
+  it("retargets an existing Preferences window from the native event", async () => {
+    let targetHandler: ((event: { payload: string }) => void) | undefined;
+    vi.mocked(listen).mockImplementation(async (event, handler) => {
+      if (event === "preferences-target") {
+        targetHandler = handler as (event: { payload: string }) => void;
+      }
+      return () => undefined;
+    });
+
+    render(<Preferences />);
+    const autoStart = await screen.findByRole("checkbox", {
+      name: /Start capture as soon as a target is selected/,
+    });
+    targetHandler?.({ payload: "auto-start-on-selection" });
+
+    await waitFor(() => {
+      expect(autoStart.closest("label")).toHaveClass("preference-target-highlight");
+      expect(autoStart).toHaveFocus();
     });
   });
 

@@ -45,6 +45,7 @@ open "http://127.0.0.1:1420/?view=startup&mock=1"
 - `mock` installs the sample backend (`apps/desktop/ui/src/dev/previewBackend.ts`).
 - `stage` paints a sample desktop behind transparent overlay windows.
 - Other parameters set variants: `mode`, `target`, `state`, `update`, `platform`, `granted`, `drafts`, `captures`, `count`.
+- `auto=1` enables automatic capture in the selector harness so its compact controls and Preferences link can be reviewed.
 - `live=1` or `frozen=0` shows the capture overlay and recording selector over the live desktop instead of a freeze-frame.
 - `screenshot_format` and `video_format` set the Preferences defaults used by the editor harness (`png`/`jpeg`/`webp` and `mp4`/`gif`/`webm`).
 - `platform` selects macOS, Windows, or Linux shortcut defaults and copy in the Preferences harness (`?view=preferences&mock=1&platform=windows`).
