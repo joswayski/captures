@@ -123,9 +123,9 @@ import {
   preserveShapeWorldPoint,
   oppositeResizeHandle,
   snapShapeRotation,
+  snapShapeRotationDegrees,
   shapeRotationDegrees,
   shapeRotationFromDegrees,
-  SHAPE_ROTATION_SNAP_DEGREES,
   withShapeRotation,
   snapResizedBounds,
   snapTranslatedBounds,
@@ -260,12 +260,6 @@ type EditorGesture =
 
 type RemoveBackgroundGesture = Extract<EditorGesture, { kind: "remove-bg" }>;
 
-type RotationDialGesture = {
-  pointerId: number;
-  elementId: string;
-  initialDocument: ScreenshotDocument;
-};
-
 type PanGesture = {
   pointerId: number;
   clientX: number;
@@ -366,34 +360,7 @@ const TEXT_STYLE_ITEMS: Array<{ preset: TextStylePreset; label: string }> = [
   { preset: "rounded-box", label: "Rounded Box" },
 ];
 
-const SHAPE_ROTATION_DIAL_TICKS = Array.from(
-  { length: 360 / SHAPE_ROTATION_SNAP_DEGREES },
-  (_, index) => index * SHAPE_ROTATION_SNAP_DEGREES,
-);
-const SHAPE_ROTATION_DIAL_MAGNET_DEGREES = 3;
-
-function rotationDialDegreesAtPoint(
-  clientX: number,
-  clientY: number,
-  bounds: Pick<DOMRect, "left" | "top" | "width" | "height">,
-): number | null {
-  const centerX = bounds.left + bounds.width / 2;
-  const centerY = bounds.top + bounds.height / 2;
-  const offsetX = clientX - centerX;
-  const offsetY = clientY - centerY;
-  if (Math.hypot(offsetX, offsetY) < Math.min(bounds.width, bounds.height) * 0.18) {
-    return null;
-  }
-  const rawDegrees = Math.round(Math.atan2(offsetY, offsetX) * (180 / Math.PI) + 90);
-  let degrees = ((rawDegrees + 180) % 360 + 360) % 360 - 180;
-  if (degrees === -180) degrees = 180;
-  const nearestDetent = Math.round(degrees / SHAPE_ROTATION_SNAP_DEGREES)
-    * SHAPE_ROTATION_SNAP_DEGREES;
-  if (Math.abs(degrees - nearestDetent) <= SHAPE_ROTATION_DIAL_MAGNET_DEGREES) {
-    degrees = nearestDetent === -180 ? 180 : nearestDetent;
-  }
-  return degrees;
-}
+const SHAPE_ROTATION_ROLODEX_STOPS = [0, 15, 45, 90] as const;
 
 /** Tools that draw closed or open vector shapes (not freehand). */
 function isShapeDrawTool(tool: ScreenshotTool): boolean {
@@ -1753,10 +1720,6 @@ export function ScreenshotEditor() {
   const [viewPan, setViewPan] = useState({ x: 0, y: 0 });
   const [canvasOffscreen, setCanvasOffscreen] = useState(false);
   const [rotateHudBelow, setRotateHudBelow] = useState(false);
-  const [rotationDialAnchor, setRotationDialAnchor] = useState<{
-    handle: EditorPoint;
-    placeLeft: boolean;
-  } | null>(null);
   const [layerDropTarget, setLayerDropTarget] = useState<LayerDropTarget | null>(null);
   /** Which layer row's settings popover is open (⋯ menu). */
   const [layerMenuId, setLayerMenuId] = useState<string | null>(null);
@@ -1838,7 +1801,6 @@ export function ScreenshotEditor() {
   const flushEditorDraftRef = useRef<() => Promise<void>>(async () => undefined);
   const objectUrlsRef = useRef(new Set<string>());
   const gestureRef = useRef<EditorGesture | null>(null);
-  const rotationDialGestureRef = useRef<RotationDialGesture | null>(null);
   /** Live natural-resolution canvas drawn over the target layer during brush strokes. */
   const removeBgLiveRef = useRef<{
     elementId: string;
@@ -2441,15 +2403,15 @@ export function ScreenshotEditor() {
     ) {
       return null;
     }
-    const naturalHandle = shapeRotationHandlePoint(selected, displayScale);
+    const handle = shapeRotationHandlePoint(selected, displayScale);
     const degrees = shapeRotationDegrees(selected);
     return {
-      handle: rotationDialAnchor?.handle ?? naturalHandle,
+      handle,
       degrees,
-      placeLeft: rotationDialAnchor?.placeLeft
-        ?? Boolean(editorDocument && naturalHandle.x > editorDocument.width * 0.58),
+      snapDegrees: snapShapeRotationDegrees(degrees),
+      placeLeft: Boolean(editorDocument && handle.x > editorDocument.width * 0.58),
     };
-  }, [cropSelection, displayScale, editorDocument, rotationDialAnchor, selected]);
+  }, [cropSelection, displayScale, editorDocument, selected]);
 
   useLayoutEffect(() => {
     const hud = rotateHudRef.current;
@@ -4551,83 +4513,6 @@ export function ScreenshotEditor() {
     commitDocument(replaceElement(current, element.id, updater(element)));
   };
 
-  const updateRotationFromDialPointer = (event: React.PointerEvent<HTMLDivElement>) => {
-    const gesture = rotationDialGestureRef.current;
-    if (!gesture || gesture.pointerId !== event.pointerId) return;
-    const degrees = rotationDialDegreesAtPoint(
-      event.clientX,
-      event.clientY,
-      event.currentTarget.getBoundingClientRect(),
-    );
-    if (degrees === null) return;
-    const element = gesture.initialDocument.elements.find(
-      ({ id }) => id === gesture.elementId,
-    );
-    if (!element || element.kind !== "shape") return;
-    replaceDocument(replaceElement(
-      gesture.initialDocument,
-      element.id,
-      withShapeRotation(element, shapeRotationFromDegrees(degrees)),
-    ));
-  };
-
-  const beginRotationDial = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0) return;
-    const current = documentRef.current;
-    const element = current?.elements.find(({ id }) => id === selectedId);
-    if (!current || !element || element.kind !== "shape" || element.locked) return;
-    rotationDialGestureRef.current = {
-      pointerId: event.pointerId,
-      elementId: element.id,
-      initialDocument: current,
-    };
-    if (shapeRotateHud) {
-      setRotationDialAnchor({
-        handle: shapeRotateHud.handle,
-        placeLeft: shapeRotateHud.placeLeft,
-      });
-    }
-    setCompressComparePaused(true);
-    event.currentTarget.setPointerCapture?.(event.pointerId);
-    updateRotationFromDialPointer(event);
-  };
-
-  const finishRotationDial = (event: React.PointerEvent<HTMLDivElement>) => {
-    const gesture = rotationDialGestureRef.current;
-    if (!gesture || gesture.pointerId !== event.pointerId) return;
-    rotationDialGestureRef.current = null;
-    setRotationDialAnchor(null);
-    setCompressComparePaused(false);
-    releasePointerTarget(event.currentTarget, event.pointerId);
-    const current = documentRef.current;
-    if (!current || JSON.stringify(current) === JSON.stringify(gesture.initialDocument)) return;
-    setUndoStack((stack) => [...stack.slice(-99), gesture.initialDocument]);
-    setRedoStack([]);
-    setSaved(null);
-    clearSuccess();
-  };
-
-  const handleRotationDialKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    const step = event.shiftKey ? SHAPE_ROTATION_SNAP_DEGREES : 1;
-    let delta = 0;
-    if (event.key === "ArrowRight" || event.key === "ArrowUp") delta = step;
-    else if (event.key === "ArrowLeft" || event.key === "ArrowDown") delta = -step;
-    else if (event.key === "PageUp") delta = SHAPE_ROTATION_SNAP_DEGREES;
-    else if (event.key === "PageDown") delta = -SHAPE_ROTATION_SNAP_DEGREES;
-    else if (event.key !== "Home") return;
-    event.preventDefault();
-    updateSelected((element) => (
-      element.kind === "shape"
-        ? withShapeRotation(
-          element,
-          shapeRotationFromDegrees(event.key === "Home"
-            ? 0
-            : shapeRotationDegrees(element) + delta),
-        )
-        : element
-    ));
-  };
-
   const updateLayer = (
     elementId: string,
     updater: (element: ScreenshotElement) => ScreenshotElement,
@@ -5686,41 +5571,37 @@ export function ScreenshotEditor() {
               onPointerMove={(event) => event.stopPropagation()}
               onDoubleClick={(event) => event.stopPropagation()}
             >
-              <div
-                className="screenshot-shape-rotate-dial"
-                role="slider"
-                aria-label="Shape rotation dial"
-                aria-valuemin={-180}
-                aria-valuemax={180}
-                aria-valuenow={shapeRotateHud.degrees}
-                aria-valuetext={`${shapeRotateHud.degrees}°`}
-                tabIndex={0}
-                title="Drag to rotate. The dial settles into 15° detents."
-                onPointerDown={beginRotationDial}
-                onPointerMove={updateRotationFromDialPointer}
-                onPointerUp={finishRotationDial}
-                onPointerCancel={finishRotationDial}
-                onKeyDown={handleRotationDialKeyDown}
+              <svg
+                className="screenshot-shape-rotate-hud-arc"
+                viewBox="0 0 128 100"
+                preserveAspectRatio="none"
+                aria-hidden="true"
               >
-                <span className="screenshot-shape-rotate-dial-ring" aria-hidden="true" />
-                <span className="screenshot-shape-rotate-dial-ticks" aria-hidden="true">
-                  {SHAPE_ROTATION_DIAL_TICKS.map((degrees) => (
-                    <i
-                      key={degrees}
-                      className={degrees % 45 === 0 ? "is-major" : undefined}
-                      style={{ transform: `rotate(${degrees}deg) translateY(calc(-1 * var(--rotation-dial-radius)))` }}
-                    />
-                  ))}
-                </span>
-                <span
-                  className="screenshot-shape-rotate-dial-indicator"
-                  style={{ transform: `rotate(${shapeRotateHud.degrees}deg)` }}
-                  aria-hidden="true"
-                >
-                  <i />
-                </span>
-                <output>{shapeRotateHud.degrees}°</output>
-                <small>{SHAPE_ROTATION_SNAP_DEGREES}° detents</small>
+                <path d="M 8 88 C 20 50, 58 12, 98 10" />
+              </svg>
+              <div role="group" aria-label="Rotation angle shortcuts">
+                {SHAPE_ROTATION_ROLODEX_STOPS.map((degrees) => (
+                  <button
+                    key={degrees}
+                    type="button"
+                    className={[
+                      "screenshot-shape-rotate-hud-stop",
+                      `is-angle-${degrees}`,
+                      shapeRotateHud.snapDegrees === degrees ? "is-active" : "",
+                    ].filter(Boolean).join(" ")}
+                    aria-pressed={shapeRotateHud.snapDegrees === degrees}
+                    aria-label={`Set rotation to ${degrees} degrees`}
+                    onClick={() => {
+                      updateSelected((element) => (
+                        element.kind === "shape"
+                          ? withShapeRotation(element, shapeRotationFromDegrees(degrees))
+                          : element
+                      ));
+                    }}
+                  >
+                    {degrees}°
+                  </button>
+                ))}
               </div>
             </div>
           )}
@@ -7035,8 +6916,8 @@ export function ScreenshotEditor() {
             )}
             {selected.kind === "shape" && (
               <p>
-                Drag the rotate handle for a smooth spin, or tweak the circular
-                dial beside it. The dial settles into {SHAPE_ROTATION_SNAP_DEGREES}° detents.
+                Drag the rotate handle for a smooth spin, or use the curved
+                angle stops around it for common rotations.
               </p>
             )}
           </section>

@@ -917,17 +917,19 @@
   word-break: normal;
 }
 
-/* One compact instrument: a smooth dial with magnetic 15° detents. */
+/* A compact arc of common angles that fans inward from the canvas rotate grip. */
 .screenshot-shape-rotate-hud {
-  --rotation-dial-size: calc(var(--s-12) + var(--s-9) + var(--s-4));
-  --rotation-dial-radius: calc(var(--s-11) - var(--s-1));
-  --rotation-hud-anchor-gap: var(--s-5);
+  --rotation-hud-inline-size: calc(var(--s-12) + var(--s-12));
+  --rotation-hud-block-size: calc(var(--s-12) + var(--s-9) + var(--s-2));
+  --rotation-hud-anchor-gap: var(--s-4);
   --rotation-hud-inline-shift: var(--rotation-hud-anchor-gap);
   --rotation-hud-block-shift: -100%;
+  --rotation-arc-scale-x: 1;
+  --rotation-arc-scale-y: 1;
   position: absolute;
   z-index: 7;
-  width: var(--rotation-dial-size);
-  height: var(--rotation-dial-size);
+  width: var(--rotation-hud-inline-size);
+  height: var(--rotation-hud-block-size);
   color: var(--text);
   transform: translate(var(--rotation-hud-inline-shift), var(--rotation-hud-block-shift));
   pointer-events: none;
@@ -935,133 +937,88 @@
 
 .screenshot-shape-rotate-hud.is-left {
   --rotation-hud-inline-shift: calc(-100% - var(--rotation-hud-anchor-gap));
+  --rotation-arc-scale-x: -1;
 }
 
 .screenshot-shape-rotate-hud.is-below {
   --rotation-hud-block-shift: var(--rotation-hud-anchor-gap);
+  --rotation-arc-scale-y: -1;
 }
 
-.screenshot-shape-rotate-dial {
-  position: relative;
+.screenshot-shape-rotate-hud-arc {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  fill: none;
+  stroke: rgba(var(--theme-accent-rgb), 0.5);
+  stroke-width: var(--s-1);
+  stroke-linecap: round;
+  transform: scale(var(--rotation-arc-scale-x), var(--rotation-arc-scale-y));
+}
+
+.screenshot-shape-rotate-hud-stop {
+  position: absolute;
   display: grid;
-  width: 100%;
-  height: 100%;
-  place-content: center;
+  min-width: calc(var(--h-md) + var(--s-1));
+  height: var(--h-xs);
+  margin: 0;
+  padding: 0 var(--s-3);
+  place-items: center;
   border: 1px solid var(--border);
   border-radius: var(--r-pill);
-  outline: none;
-  color: var(--text);
-  background: var(--surface-raised);
-  box-shadow: var(--shadow-md), inset 0 0 0 var(--s-1) rgba(var(--theme-accent-rgb), 0.05);
-  cursor: grab;
-  pointer-events: auto;
-  touch-action: none;
-  transition:
-    border-color var(--motion-fast) var(--ease-standard),
-    box-shadow var(--motion-fast) var(--ease-standard),
-    transform var(--motion-fast) var(--ease-standard);
-}
-
-.screenshot-shape-rotate-dial:hover {
-  border-color: rgba(var(--theme-accent-rgb), 0.54);
-  box-shadow: var(--shadow-lg), inset 0 0 0 var(--s-1) rgba(var(--theme-accent-rgb), 0.08);
-}
-
-.screenshot-shape-rotate-dial:focus-visible {
-  border-color: var(--theme-accent);
-  box-shadow:
-    var(--shadow-md),
-    0 0 0 var(--s-1) rgba(var(--theme-accent-rgb), 0.28);
-}
-
-.screenshot-shape-rotate-dial:active {
-  cursor: grabbing;
-  transform: scale(0.985);
-}
-
-.screenshot-shape-rotate-dial-ring {
-  position: absolute;
-  inset: var(--s-5);
-  border: 1px solid rgba(var(--theme-accent-rgb), 0.22);
-  border-radius: inherit;
-  background: radial-gradient(
-    circle,
-    transparent 62%,
-    rgba(var(--theme-accent-rgb), 0.05) 63%,
-    transparent 72%
-  );
-}
-
-.screenshot-shape-rotate-dial-ticks,
-.screenshot-shape-rotate-dial-indicator {
-  position: absolute;
-  inset: 50%;
-  pointer-events: none;
-}
-
-.screenshot-shape-rotate-dial-ticks i {
-  position: absolute;
-  top: calc(var(--s-1) / -2);
-  left: calc(var(--s-1) / -2);
-  width: var(--s-1);
-  height: var(--s-2);
-  border-radius: var(--r-pill);
-  background: var(--text-faint);
-  transform-origin: center;
-}
-
-.screenshot-shape-rotate-dial-ticks i.is-major {
-  height: var(--s-4);
-  background: rgba(var(--theme-accent-rgb), 0.62);
-}
-
-.screenshot-shape-rotate-dial-indicator {
-  transition: transform 80ms linear;
-}
-
-.screenshot-shape-rotate-dial-indicator::before {
-  position: absolute;
-  bottom: 0;
-  left: calc(var(--s-1) / -2);
-  width: var(--s-1);
-  height: calc(var(--rotation-dial-radius) - var(--s-5));
-  border-radius: var(--r-pill);
-  background: linear-gradient(to top, transparent, rgba(var(--theme-accent-rgb), 0.76));
-  content: "";
-}
-
-.screenshot-shape-rotate-dial-indicator i {
-  position: absolute;
-  top: calc(-1 * var(--rotation-dial-radius) - var(--s-3));
-  left: calc(-1 * var(--s-3));
-  width: var(--s-5);
-  height: var(--s-5);
-  border: var(--s-1) solid var(--surface-raised);
-  border-radius: var(--r-pill);
-  background: var(--theme-accent);
-  box-shadow: var(--shadow-sm);
-}
-
-.screenshot-shape-rotate-dial output,
-.screenshot-shape-rotate-dial small {
-  position: relative;
-  z-index: 1;
-  text-align: center;
-  pointer-events: none;
-}
-
-.screenshot-shape-rotate-dial output {
-  font-size: var(--text-sm);
-  font-weight: var(--weight-semibold);
-  font-variant-numeric: tabular-nums;
-  line-height: 1.1;
-}
-
-.screenshot-shape-rotate-dial small {
-  margin-top: var(--s-1);
   color: var(--text-subtle);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-sm);
   font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
   line-height: 1;
+  top: var(--rotation-stop-block);
+  left: var(--rotation-stop-inline);
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+}
+
+.screenshot-shape-rotate-hud-stop.is-angle-0 {
+  --rotation-stop-block: calc(var(--s-12) + var(--s-5) + var(--s-1));
+  --rotation-stop-inline: var(--s-5);
+}
+
+.screenshot-shape-rotate-hud-stop.is-angle-15 {
+  --rotation-stop-block: calc(var(--s-11) + var(--s-4));
+  --rotation-stop-inline: calc(var(--s-8) + var(--s-2));
+}
+
+.screenshot-shape-rotate-hud-stop.is-angle-45 {
+  --rotation-stop-block: calc(var(--s-8) + var(--s-2));
+  --rotation-stop-inline: calc(var(--s-11) + var(--s-4) + var(--s-1));
+}
+
+.screenshot-shape-rotate-hud-stop.is-angle-90 {
+  --rotation-stop-block: calc(var(--s-4) + var(--s-1));
+  --rotation-stop-inline: calc(var(--s-12) + var(--s-9) + var(--s-1));
+}
+
+.screenshot-shape-rotate-hud.is-left .screenshot-shape-rotate-hud-stop {
+  right: var(--rotation-stop-inline);
+  left: auto;
+  transform: translate(50%, -50%);
+}
+
+.screenshot-shape-rotate-hud.is-below .screenshot-shape-rotate-hud-stop {
+  top: calc(var(--rotation-hud-block-size) - var(--rotation-stop-block));
+}
+
+.screenshot-shape-rotate-hud-stop:hover {
+  border-color: rgba(var(--theme-accent-rgb), 0.48);
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.screenshot-shape-rotate-hud-stop.is-active {
+  border-color: var(--theme-accent);
+  color: var(--theme-accent);
+  background: rgba(var(--theme-accent-rgb), 0.12);
 }
 
 /* Fixed width so title swaps do not reflow the toast. */
