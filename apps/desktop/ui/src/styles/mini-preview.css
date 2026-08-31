@@ -143,17 +143,17 @@
 }
 
 /*
- * Isometric manila folder drawn in 2D (SVG parallelograms + skewed sheets).
- * Do not put a transform on this control: that flattens any child 3D and
- * previously turned the gold folder into a sliver. Cards fly into the pocket;
- * the front flap sits above the sheets so they read as files standing inside.
+ * Isometric manila folder drawn with 2D layers (back, tab, sheets, front flap).
+ * Solid accent fills — not SVG url(#gradient) or CSS 3D — so the gold pocket
+ * stays readable at 48px. Cards fly into the pocket; the flap sits above the
+ * sheets so they read as files standing inside.
  */
 .mini-preview-folder {
   position: relative;
   display: block;
-  width: 42px;
-  height: 38px;
-  flex: 0 0 42px;
+  width: 44px;
+  height: 40px;
+  flex: 0 0 44px;
   overflow: visible;
   pointer-events: none;
   transition:
@@ -163,9 +163,9 @@
 
 .mini-preview-folder[data-pose="open"],
 .mini-preview-folder[data-pose="parked"] {
-  width: 72px;
-  height: 50px;
-  flex-basis: 72px;
+  width: 74px;
+  height: 52px;
+  flex-basis: 74px;
 }
 
 .mini-preview-folder-scene {
@@ -173,62 +173,77 @@
   width: 100%;
   height: 100%;
   overflow: visible;
-  transform: skewX(-10deg);
   transform-origin: 50% 100%;
   transition: transform 0.42s cubic-bezier(0.22, 0.72, 0.2, 1);
 }
 
-.mini-preview-folder[data-pose="open"] .mini-preview-folder-scene,
-.mini-preview-folder[data-pose="parked"] .mini-preview-folder-scene {
-  transform: skewX(-12deg) scale(1.04);
-}
-
-.mini-preview-folder-body,
-.mini-preview-folder-flap {
+.mini-preview-folder-back {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  overflow: visible;
-  filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.35));
+  left: 4px;
+  top: 9px;
+  width: 36px;
+  height: 28px;
+  border-radius: 4px;
+  background: var(--theme-accent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4);
+  clip-path: polygon(6% 0, 100% 0, 94% 100%, 0 100%);
 }
 
-.mini-preview-folder-body {
-  z-index: 0;
-}
-
-.mini-preview-folder-stop-light {
-  stop-color: var(--theme-accent-hover);
-}
-
-.mini-preview-folder-stop-mid {
-  stop-color: var(--theme-accent);
-}
-
-.mini-preview-folder-stop-dark {
-  stop-color: var(--theme-accent-strong);
-}
-
-.mini-preview-folder-edge {
-  fill: var(--theme-accent-strong);
+.mini-preview-folder[data-pose="open"] .mini-preview-folder-back,
+.mini-preview-folder[data-pose="parked"] .mini-preview-folder-back {
+  width: 64px;
+  height: 40px;
 }
 
 .mini-preview-folder-tab {
-  stroke: transparent;
+  position: absolute;
+  top: 2px;
+  left: 22px;
+  width: 16px;
+  height: 10px;
+  border-radius: 3px 3px 0 0;
+  background: var(--theme-accent-hover);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45);
+}
+
+.mini-preview-folder[data-pose="open"] .mini-preview-folder-tab,
+.mini-preview-folder[data-pose="parked"] .mini-preview-folder-tab {
+  left: 42px;
+  width: 20px;
+  height: 11px;
 }
 
 .mini-preview-folder-well {
-  fill: rgba(0, 0, 0, 0.28);
+  position: absolute;
+  z-index: 0;
+  left: 8px;
+  top: 14px;
+  width: 28px;
+  height: 16px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.mini-preview-folder[data-pose="open"] .mini-preview-folder-well,
+.mini-preview-folder[data-pose="parked"] .mini-preview-folder-well {
+  width: 52px;
+  height: 22px;
 }
 
 .mini-preview-folder-pocket {
   position: absolute;
   z-index: 1;
-  left: 22%;
-  right: 16%;
-  top: 12%;
-  height: 58%;
+  left: 8px;
+  top: 6px;
+  width: 28px;
+  height: 22px;
   overflow: visible;
+}
+
+.mini-preview-folder[data-pose="open"] .mini-preview-folder-pocket,
+.mini-preview-folder[data-pose="parked"] .mini-preview-folder-pocket {
+  width: 52px;
+  height: 28px;
 }
 
 .mini-preview-folder-sheet {
@@ -236,15 +251,15 @@
 
   position: absolute;
   left: calc(var(--sheet-i) * 2px);
-  right: calc(var(--sheet-i) * -1.5px);
-  top: 10px;
-  height: 78%;
+  right: calc(var(--sheet-i) * -1px);
+  top: 8px;
+  height: 18px;
   overflow: hidden;
-  border: 1px solid var(--glass-border-strong);
+  border: 1px solid rgba(255, 255, 255, 0.4);
   border-radius: 2px;
-  background: var(--glass-raised-solid);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.32);
-  clip-path: polygon(10% 10%, 100% 0, 96% 100%, 0 100%);
+  background: var(--theme-accent-text-strong);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
+  clip-path: polygon(8% 8%, 100% 0, 96% 100%, 0 100%);
   transform: translateY(calc(var(--sheet-i) * -2.5px));
   transition:
     transform 0.42s cubic-bezier(0.22, 0.72, 0.2, 1),
@@ -252,13 +267,14 @@
 }
 
 .mini-preview-folder-sheet:nth-child(even) {
-  background: var(--glass-strong-solid);
+  background: var(--theme-accent-text);
 }
 
 .mini-preview-folder[data-pose="open"] .mini-preview-folder-sheet,
 .mini-preview-folder[data-pose="parked"] .mini-preview-folder-sheet {
   top: 0;
-  transform: translateY(calc(var(--sheet-i) * -4.5px));
+  height: 24px;
+  transform: translateY(calc(var(--sheet-i) * -4px));
 }
 
 .mini-preview-folder-sheet img {
@@ -271,42 +287,58 @@
 }
 
 .mini-preview-folder-flap {
+  position: absolute;
   z-index: 2;
-  transition: transform 0.42s cubic-bezier(0.22, 0.72, 0.2, 1);
+  left: 2px;
+  top: 20px;
+  width: 40px;
+  height: 18px;
+  border-radius: 4px;
+  background: var(--theme-accent-strong);
+  clip-path: polygon(0 16%, 100% 0, 100% 100%, 4% 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.48),
+    0 2px 4px rgba(0, 0, 0, 0.38);
+  transition:
+    top 0.42s cubic-bezier(0.22, 0.72, 0.2, 1),
+    width 0.42s cubic-bezier(0.22, 0.72, 0.2, 1),
+    height 0.42s cubic-bezier(0.22, 0.72, 0.2, 1);
+}
+
+.mini-preview-folder-flap::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+  background: linear-gradient(115deg, rgba(255, 255, 255, 0.35) 0%, transparent 46%);
+  pointer-events: none;
+}
+
+.mini-preview-folder[data-pose="open"] .mini-preview-folder-flap,
+.mini-preview-folder[data-pose="parked"] .mini-preview-folder-flap {
+  width: 70px;
+  height: 22px;
 }
 
 .mini-preview-folder[data-pose="idle"] .mini-preview-folder-flap {
-  transform: translateY(-3px);
+  top: 20px;
 }
 
 .mini-preview-folder[data-pose="open"] .mini-preview-folder-flap {
-  transform: translateY(7px);
+  top: 30px;
 }
 
 .mini-preview-folder[data-pose="parked"] .mini-preview-folder-flap {
-  transform: translateY(5px);
-}
-
-.mini-preview-folder-gloss {
-  fill: #fff;
-  opacity: 0.3;
+  top: 28px;
 }
 
 .thumbnail-collapse:hover .mini-preview-folder-scene,
 .thumbnail-collapse[data-native-pointer-hover="true"] .mini-preview-folder-scene,
 .thumbnail-collapse:focus-visible .mini-preview-folder-scene {
-  transform: skewX(-10deg) translateY(-1px);
-}
-
-.thumbnail-collapse:hover .mini-preview-folder[data-pose="open"] .mini-preview-folder-scene,
-.thumbnail-collapse:focus-visible .mini-preview-folder[data-pose="open"] .mini-preview-folder-scene,
-.thumbnail-collapse:hover .mini-preview-folder[data-pose="parked"] .mini-preview-folder-scene,
-.thumbnail-collapse:focus-visible .mini-preview-folder[data-pose="parked"] .mini-preview-folder-scene {
-  transform: skewX(-12deg) translateY(-1px) scale(1.04);
+  transform: translateY(-1px);
 }
 
 .thumbnail-collapse:active .mini-preview-folder-scene {
-  transform: skewX(-10deg) scale(0.98);
+  transform: scale(0.98);
 }
 
 .thumbnail-collapse.thumbnail-collapse-collapsing,
@@ -504,11 +536,11 @@
 
 .mini-previews-hidden:hover .mini-preview-folder-scene,
 .mini-previews-hidden:focus-visible .mini-preview-folder-scene {
-  transform: skewX(-12deg) translateY(-1px) scale(1.04);
+  transform: translateY(-1px);
 }
 
 .mini-previews-hidden:active .mini-preview-folder-scene {
-  transform: skewX(-12deg) scale(1.02);
+  transform: scale(0.98);
 }
 
 .mini-previews-hidden-restoring {

@@ -123,7 +123,7 @@ describe("MiniPreviewsHiddenChip", () => {
   });
 
   it("opens a 3D folder instead of stretching a label pill", () => {
-    expect(miniPreviewStyles).toMatch(/skewX\(-12deg\)/);
+    expect(miniPreviewStyles).toMatch(/clip-path:\s*polygon/);
     expect(miniPreviewStyles).toMatch(/data-pose="parked"/);
     expect(miniPreviewStyles).not.toMatch(
       /\.thumbnail-collapse\.thumbnail-collapse-collapsing\s*\{[^}]*width:\s*160px/s,
