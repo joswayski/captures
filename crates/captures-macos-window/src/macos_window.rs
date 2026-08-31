@@ -275,9 +275,10 @@ impl CursorTrackingOwner {
         }
         // Capture surfaces and mini previews appear under a stationary pointer.
         // Apply immediately so the mode does not wait for mouseEntered.
-        if self.ivars().surface == CursorSurface::CaptureOverlay && capture_overlay_owns_cursor() {
-            self.apply_cursor(None);
-        } else if self.ivars().surface == CursorSurface::Thumbnail {
+        if self.ivars().surface == CursorSurface::Thumbnail
+            || (self.ivars().surface == CursorSurface::CaptureOverlay
+                && capture_overlay_owns_cursor())
+        {
             self.apply_cursor(None);
         }
     }
