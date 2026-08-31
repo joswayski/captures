@@ -480,8 +480,12 @@ async fn start_capture_inner(
     state: Arc<AppState>,
     mode: CaptureMode,
 ) -> Result<Option<ActiveSession>, AppError> {
-    ensure_capture_session_available()?;
+    if let Err(error) = ensure_capture_session_available() {
+        release_claimed_region_capture_cursor();
+        return Err(error);
+    }
     if updates::install_is_active(&app) {
+        release_claimed_region_capture_cursor();
         return Err(AppError::UpdateInstalling);
     }
     if recording::screenshot_capture_is_blocked(&state) || screenshot_countdown_is_active(&state) {
@@ -510,8 +514,17 @@ async fn start_capture_inner(
         drop(visibility);
         hide_capture_overlay(&app);
     }
+    if mode == CaptureMode::Region {
+        claim_region_capture_cursor(&app);
+    }
 
-    let thumbnail_capture_generation = begin_thumbnail_capture(&state)?;
+    let thumbnail_capture_generation = match begin_thumbnail_capture(&state) {
+        Ok(generation) => generation,
+        Err(error) => {
+            hide_capture_overlay(&app);
+            return Err(error);
+        }
+    };
     hide_capture_huds_before_snapshot(&app).await;
     if dismissed_selector {
         tokio::time::sleep(std::time::Duration::from_millis(CAPTURE_HUD_HIDE_SETTLE_MS)).await;
@@ -1122,6 +1135,29 @@ fn capture_cursor_icon(mode: CaptureMode) -> CursorIcon {
     } else {
         CursorIcon::Default
     }
+}
+
+fn claim_region_capture_cursor(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    {
+        let cursor = captures_macos_window::CaptureCursor::overlay_region();
+        if let Some(window) = app.get_webview_window("overlay") {
+            if let Err(error) = captures_macos_window::activate_capture_cursor(&window, cursor) {
+                eprintln!("failed to claim the region capture cursor: {error}");
+            }
+        } else {
+            captures_macos_window::claim_capture_cursor(cursor);
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    if let Some(window) = app.get_webview_window("overlay") {
+        let _ = window.set_cursor_icon(CursorIcon::Crosshair);
+    }
+}
+
+fn release_claimed_region_capture_cursor() {
+    #[cfg(target_os = "macos")]
+    captures_macos_window::release_capture_cursor();
 }
 
 fn apply_overlay_capture_cursor(
@@ -3085,7 +3121,6 @@ fn register_new_capture_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), 
             }
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
-                wait_for_capture_shortcut_release().await;
                 open_capture_controls(&app, CaptureSelectorMode::Screenshot);
             });
         })
@@ -3106,14 +3141,27 @@ fn register_shortcut(app: &AppHandle, shortcut: &str, mode: CaptureMode) -> Resu
                 return;
             }
             let suppressed = shortcut_capture_is_suppressed(app, &state);
+            if event.state() == ShortcutState::Pressed
+                && !suppressed
+                && mode == CaptureMode::Region
+                && !recording::screenshot_capture_is_blocked(&state)
+                && !screenshot_countdown_is_active(&state)
+            {
+                claim_region_capture_cursor(app);
+            }
             let trigger_is_suppressed =
                 track_shortcut_suppression(&suppressed_while_pressed, event.state(), suppressed);
             if !should_trigger_shortcut(&armed, event.state()) || trigger_is_suppressed {
+                if event.state() == ShortcutState::Released
+                    && trigger_is_suppressed
+                    && mode == CaptureMode::Region
+                {
+                    release_claimed_region_capture_cursor();
+                }
                 return;
             }
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
-                wait_for_capture_shortcut_release().await;
                 if mode == CaptureMode::Display && !recording::recording_session_is_active(&state) {
                     open_capture_controls_with_target(
                         &app,
@@ -3153,7 +3201,6 @@ fn register_recording_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), Ap
             }
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
-                wait_for_capture_shortcut_release().await;
                 if let Err(error) = recording::prepare_recording_inner(app.clone(), state).await
                     && !matches!(&error, AppError::CaptureInProgress)
                 {
@@ -3191,24 +3238,6 @@ fn track_shortcut_suppression(
         ShortcutState::Released => {
             suppressed_while_pressed.swap(false, Ordering::AcqRel) || currently_suppressed
         }
-    }
-}
-
-async fn wait_for_capture_shortcut_release() {
-    #[cfg(target_os = "macos")]
-    {
-        use std::time::Duration;
-
-        const MODIFIER_POLL_INTERVAL: Duration = Duration::from_millis(5);
-        const APPKIT_RELEASE_SETTLE_TIME: Duration = Duration::from_millis(16);
-
-        while captures_macos_window::capture_shortcut_modifiers_pressed() {
-            tokio::time::sleep(MODIFIER_POLL_INTERVAL).await;
-        }
-        // `modifierFlags` becomes clear during the flags-changed event. Give
-        // AppKit one display beat to finish its arrow-cursor restoration before
-        // the capture overlay claims the cursor exactly once.
-        tokio::time::sleep(APPKIT_RELEASE_SETTLE_TIME).await;
     }
 }
 
@@ -3384,8 +3413,10 @@ fn start_capture_from_tray(app: &AppHandle, mode: CaptureMode) {
         return;
     }
     let app = app.clone();
+    if mode == CaptureMode::Region {
+        claim_region_capture_cursor(&app);
+    }
     tauri::async_runtime::spawn(async move {
-        wait_for_capture_shortcut_release().await;
         if mode == CaptureMode::Display && !recording::recording_session_is_active(&state) {
             open_capture_controls_with_target(
                 &app,
@@ -3410,7 +3441,6 @@ fn start_recording_from_tray(app: &AppHandle) {
     }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        wait_for_capture_shortcut_release().await;
         if let Err(error) = recording::prepare_recording_inner(app.clone(), state).await
             && !matches!(&error, AppError::CaptureInProgress)
         {
@@ -5687,6 +5717,9 @@ fn hide_capture_overlay_inner(app: &AppHandle) {
         if let Err(error) = captures_macos_window::reset_capture_overlay(&window) {
             eprintln!("failed to reset capture overlay: {error}");
         }
+    } else {
+        #[cfg(target_os = "macos")]
+        captures_macos_window::release_capture_cursor();
     }
     #[cfg(target_os = "macos")]
     captures_macos_window::restore_frontmost_app_after_capture();
@@ -6983,6 +7016,29 @@ mod tests {
                 .is_some_and(|permissions| permissions
                     .iter()
                     .any(|permission| permission == "core:window:allow-close"))
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn region_shortcut_claims_the_crosshair_on_press() {
+        assert!(captures_macos_window::region_shortcut_claims_cursor_on_press());
+        assert!(captures_macos_window::overlay_prepare_keeps_native_cursor(
+            captures_macos_window::CaptureCursor::overlay_region().native_owned
+        ));
+        assert_eq!(
+            captures_macos_window::thumbnail_unpolled_hover_when_inactive(
+                false,
+                captures_macos_window::ThumbnailHoverCursor::Default,
+            ),
+            captures_macos_window::ThumbnailHoverCursor::Pointer
+        );
+        assert_eq!(
+            captures_macos_window::thumbnail_unpolled_hover_when_inactive(
+                true,
+                captures_macos_window::ThumbnailHoverCursor::Default,
+            ),
+            captures_macos_window::ThumbnailHoverCursor::Default
         );
     }
 

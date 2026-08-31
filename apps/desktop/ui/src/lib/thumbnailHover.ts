@@ -10,9 +10,11 @@ export const THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS = 0;
 /**
  * Extra reassert delays (ms) after a click or focus handoff. Immediate (0) covers
  * the next task; later ticks cover WebKit's post-click arrow install and the
- * key-window steal when Edit opens the screenshot editor.
+ * key-window steal when Edit opens the screenshot editor. Native AppKit also
+ * reasserts across the following main-queue turns so the arrow cannot flash
+ * between these JS ticks.
  */
-export const THUMBNAIL_CURSOR_HANDOFF_REASSERT_DELAYS_MS = [0, 16, 48] as const;
+export const THUMBNAIL_CURSOR_HANDOFF_REASSERT_DELAYS_MS = [0, 8, 16, 48, 96] as const;
 
 /** DOM marker mirroring the native cursor kind while pointer polling is active. */
 export const THUMBNAIL_CURSOR_KIND_ATTRIBUTE = "data-thumbnail-cursor";

@@ -108,9 +108,88 @@ impl CaptureCursor {
     }
 }
 
+/// Mini-preview cursor kinds mirrored by the native AppKit tracker.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ThumbnailHoverCursor {
+    Default,
+    Pointer,
+    Grab,
+}
+
+impl ThumbnailHoverCursor {
+    #[must_use]
+    pub const fn is_interactive(self) -> bool {
+        !matches!(self, Self::Default)
+    }
+
+    /// Pointer is already over the stack, but JS may not have hit-tested yet
+    /// (inactive WKWebView timers are frozen). Show a pointing hand immediately
+    /// instead of leaving the frontmost app's arrow until the panel is focused.
+    #[must_use]
+    pub const fn unpolled_hover(self) -> Self {
+        match self {
+            Self::Default => Self::Pointer,
+            other => other,
+        }
+    }
+}
+
+/// Frozen JS poll only happens while Captures is inactive. Trust the hit-tested
+/// kind once the app is active so empty stack chrome can keep the arrow.
+#[must_use]
+pub const fn thumbnail_unpolled_hover_when_inactive(
+    app_is_active: bool,
+    kind: ThumbnailHoverCursor,
+) -> ThumbnailHoverCursor {
+    if app_is_active {
+        kind
+    } else {
+        kind.unpolled_hover()
+    }
+}
+
+/// Priming a reused overlay must not re-enable WebKit cursor rectangles after a
+/// native-owned region crosshair has already been claimed.
+#[must_use]
+pub const fn overlay_prepare_keeps_native_cursor(native_owned: bool) -> bool {
+    native_owned
+}
+
+/// Region screenshot (⌘⇧4) claims the crosshair on key-down, not after
+/// modifiers come up or the freeze-frame paints.
+#[must_use]
+pub const fn region_shortcut_claims_cursor_on_press() -> bool {
+    true
+}
+
+/// After a thumbnail click, key-on-hover stays latched off so an opening
+/// editor can keep keyboard focus. Hovering from another app must still be
+/// allowed to take key status without waiting for a click.
+#[must_use]
+pub const fn thumbnail_may_take_key_window(allowed_after_click: bool, app_is_active: bool) -> bool {
+    allowed_after_click || !app_is_active
+}
+
+/// A titled editor's cursor rectangles reset `NSCursor` to the arrow while the
+/// pointer is still on a mini-preview control. Disable them for that window
+/// until the pointer leaves the stack.
+#[must_use]
+pub const fn suppress_document_cursor_rects_for_thumbnail(
+    thumbnail_cursor_interactive: bool,
+    key_window_is_thumbnail: bool,
+    key_window_is_titled_document: bool,
+) -> bool {
+    thumbnail_cursor_interactive && !key_window_is_thumbnail && key_window_is_titled_document
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{CaptureCursor, CaptureCursorKind};
+    use super::{
+        CaptureCursor, CaptureCursorKind, ThumbnailHoverCursor,
+        overlay_prepare_keeps_native_cursor, region_shortcut_claims_cursor_on_press,
+        suppress_document_cursor_rects_for_thumbnail, thumbnail_may_take_key_window,
+        thumbnail_unpolled_hover_when_inactive,
+    };
 
     #[test]
     fn kind_discriminants_match_the_atomic_storage_map() {
@@ -164,5 +243,70 @@ mod tests {
         assert!(!CaptureCursor::selector_region().reasserts_native_cursor_on_modifiers());
         assert!(!CaptureCursor::selector_window().reasserts_native_cursor_on_modifiers());
         assert!(!CaptureCursor::selector_display().reasserts_native_cursor_on_modifiers());
+    }
+
+    #[test]
+    fn priming_a_region_overlay_keeps_the_native_crosshair() {
+        assert!(overlay_prepare_keeps_native_cursor(
+            CaptureCursor::overlay_region().native_owned
+        ));
+        assert!(!overlay_prepare_keeps_native_cursor(
+            CaptureCursor::overlay_window().native_owned
+        ));
+        assert!(region_shortcut_claims_cursor_on_press());
+    }
+
+    #[test]
+    fn unpolled_thumbnail_hover_uses_a_pointing_hand() {
+        assert_eq!(
+            ThumbnailHoverCursor::Default.unpolled_hover(),
+            ThumbnailHoverCursor::Pointer
+        );
+        assert_eq!(
+            ThumbnailHoverCursor::Pointer.unpolled_hover(),
+            ThumbnailHoverCursor::Pointer
+        );
+        assert_eq!(
+            ThumbnailHoverCursor::Grab.unpolled_hover(),
+            ThumbnailHoverCursor::Grab
+        );
+        assert!(ThumbnailHoverCursor::Pointer.is_interactive());
+        assert!(!ThumbnailHoverCursor::Default.is_interactive());
+        assert_eq!(
+            thumbnail_unpolled_hover_when_inactive(false, ThumbnailHoverCursor::Default),
+            ThumbnailHoverCursor::Pointer
+        );
+        assert_eq!(
+            thumbnail_unpolled_hover_when_inactive(true, ThumbnailHoverCursor::Default),
+            ThumbnailHoverCursor::Default
+        );
+        assert_eq!(
+            thumbnail_unpolled_hover_when_inactive(false, ThumbnailHoverCursor::Grab),
+            ThumbnailHoverCursor::Grab
+        );
+    }
+
+    #[test]
+    fn thumbnail_key_window_is_available_when_another_app_is_frontmost() {
+        assert!(thumbnail_may_take_key_window(true, true));
+        assert!(thumbnail_may_take_key_window(true, false));
+        assert!(thumbnail_may_take_key_window(false, false));
+        assert!(!thumbnail_may_take_key_window(false, true));
+    }
+
+    #[test]
+    fn editor_cursor_rects_are_suppressed_while_a_preview_control_is_hovered() {
+        assert!(suppress_document_cursor_rects_for_thumbnail(
+            true, false, true
+        ));
+        assert!(!suppress_document_cursor_rects_for_thumbnail(
+            true, true, true
+        ));
+        assert!(!suppress_document_cursor_rects_for_thumbnail(
+            false, false, true
+        ));
+        assert!(!suppress_document_cursor_rects_for_thumbnail(
+            true, false, false
+        ));
     }
 }
