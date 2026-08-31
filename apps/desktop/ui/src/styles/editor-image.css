@@ -879,96 +879,105 @@
   word-break: normal;
 }
 
-/* Icon + 15° snap slider parked beside the canvas rotate grip. */
+/* A compact arc of common angles that fans inward from the canvas rotate grip. */
 .screenshot-shape-rotate-hud {
   position: absolute;
   z-index: 7;
-  display: grid;
-  width: max-content;
-  max-width: 240px;
-  grid-template-columns: auto 1fr;
-  align-items: center;
-  gap: var(--s-2) var(--s-3);
-  padding: var(--s-2) var(--s-3) var(--s-2) var(--s-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
+  width: 128px;
+  height: 100px;
   color: var(--text);
-  background: var(--surface-raised);
-  box-shadow: var(--shadow-md);
-  transform: translate(28px, -50%);
-  pointer-events: auto;
+  transform: translate(8px, -100%);
+  pointer-events: none;
 }
 
 .screenshot-shape-rotate-hud.is-left {
-  transform: translate(calc(-100% - 28px), -50%);
+  transform: translate(calc(-100% - 8px), -100%);
 }
 
-.screenshot-shape-rotate-hud-icon {
-  display: grid;
-  flex: 0 0 auto;
-  grid-row: 1 / span 2;
-  width: 22px;
-  height: 22px;
-  place-items: center;
-  border-radius: var(--r-sm);
-  color: var(--theme-accent);
-  background: rgba(var(--theme-accent-rgb), 0.12);
-}
-
-.screenshot-shape-rotate-hud-icon svg {
-  width: 14px;
-  height: 14px;
-  stroke: currentColor;
+.screenshot-shape-rotate-hud-arc {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
   fill: none;
-  stroke-width: 1.8;
+  stroke: rgba(var(--theme-accent-rgb), 0.5);
+  stroke-width: 1.5;
   stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
-.screenshot-shape-rotate-hud-slider {
-  width: 160px;
-  --range-thumb-size: 16px;
-  --range-track-height: 6px;
+.screenshot-shape-rotate-hud.is-left .screenshot-shape-rotate-hud-arc {
+  transform: scaleX(-1);
 }
 
-.screenshot-shape-rotate-hud-slider.range-slider.has-marks {
-  grid-template-rows: 14px 22px 12px;
-}
-
-.screenshot-shape-rotate-hud-slider .range-slider-track {
-  height: 22px;
-}
-
-.screenshot-shape-rotate-hud-slider .range-slider-value output {
-  color: var(--text);
-}
-
-.screenshot-shape-rotate-hud-snaps {
-  display: flex;
-  grid-column: 2;
-  flex-wrap: nowrap;
-  gap: 2px;
-}
-
-.screenshot-shape-rotate-hud-snaps button {
+.screenshot-shape-rotate-hud-stop {
+  position: absolute;
+  display: grid;
+  min-width: 34px;
+  height: 24px;
   margin: 0;
-  padding: 2px 5px;
+  padding: 0 6px;
+  place-items: center;
   border: 1px solid var(--border);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-pill);
   color: var(--text-subtle);
-  background: var(--surface);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-sm);
   font-size: var(--text-2xs);
   font-weight: var(--weight-medium);
   font-variant-numeric: tabular-nums;
-  line-height: 1.2;
+  line-height: 1;
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
 }
 
-.screenshot-shape-rotate-hud-snaps button:hover {
+.screenshot-shape-rotate-hud-stop.is-angle-0 {
+  top: 78px;
+  left: 12px;
+}
+
+.screenshot-shape-rotate-hud-stop.is-angle-15 {
+  top: 56px;
+  left: 28px;
+}
+
+.screenshot-shape-rotate-hud-stop.is-angle-45 {
+  top: 28px;
+  left: 58px;
+}
+
+.screenshot-shape-rotate-hud-stop.is-angle-90 {
+  top: 10px;
+  left: 98px;
+}
+
+.screenshot-shape-rotate-hud.is-left .screenshot-shape-rotate-hud-stop {
+  right: var(--rotation-stop-inline);
+  left: auto;
+  transform: translate(50%, -50%);
+}
+
+.screenshot-shape-rotate-hud.is-left .screenshot-shape-rotate-hud-stop.is-angle-0 {
+  --rotation-stop-inline: 12px;
+}
+
+.screenshot-shape-rotate-hud.is-left .screenshot-shape-rotate-hud-stop.is-angle-15 {
+  --rotation-stop-inline: 28px;
+}
+
+.screenshot-shape-rotate-hud.is-left .screenshot-shape-rotate-hud-stop.is-angle-45 {
+  --rotation-stop-inline: 58px;
+}
+
+.screenshot-shape-rotate-hud.is-left .screenshot-shape-rotate-hud-stop.is-angle-90 {
+  --rotation-stop-inline: 98px;
+}
+
+.screenshot-shape-rotate-hud-stop:hover {
+  border-color: rgba(var(--theme-accent-rgb), 0.48);
   color: var(--text);
   background: var(--surface-hover);
 }
 
-.screenshot-shape-rotate-hud-snaps button.is-active {
+.screenshot-shape-rotate-hud-stop.is-active {
   border-color: var(--theme-accent);
   color: var(--theme-accent);
   background: rgba(var(--theme-accent-rgb), 0.12);

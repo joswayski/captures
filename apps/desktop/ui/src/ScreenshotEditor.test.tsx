@@ -2030,8 +2030,13 @@ describe("ScreenshotEditor", () => {
       clientY: handle.y,
     });
     expect(screen.getByText("Drag to rotate smoothly")).toBeInTheDocument();
-    const rotationSlider = screen.getByRole("slider", { name: "Shape rotation" });
-    expect(rotationSlider).toHaveAttribute("aria-valuetext", "0°");
+    const rotationShortcuts = screen.getByRole("group", {
+      name: "Rotation angle shortcuts",
+    });
+    expect(screen.queryByRole("slider", { name: "Shape rotation" })).not.toBeInTheDocument();
+    expect(within(rotationShortcuts).getByRole("button", {
+      name: "Set rotation to 0 degrees",
+    })).toHaveAttribute("aria-pressed", "true");
 
     fireEvent.pointerDown(canvas, {
       button: 0,
@@ -2057,13 +2062,16 @@ describe("ScreenshotEditor", () => {
       }),
     ).toHaveLength(1);
 
-    fireEvent.change(rotationSlider, { target: { value: "90" } });
-    expect(screen.getByRole("slider", { name: "Shape rotation" }))
-      .toHaveAttribute("aria-valuetext", "90°");
+    expect(within(rotationShortcuts).getByRole("button", {
+      name: "Set rotation to 90 degrees",
+    })).toHaveAttribute("aria-pressed", "true");
 
-    fireEvent.click(screen.getByRole("button", { name: "Snap to 45 degrees" }));
-    expect(screen.getByRole("slider", { name: "Shape rotation" }))
-      .toHaveAttribute("aria-valuetext", "45°");
+    fireEvent.click(within(rotationShortcuts).getByRole("button", {
+      name: "Set rotation to 15 degrees",
+    }));
+    expect(within(rotationShortcuts).getByRole("button", {
+      name: "Set rotation to 15 degrees",
+    })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("deselects the active layer when clicking the empty viewport chrome", async () => {
