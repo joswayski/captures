@@ -3340,7 +3340,17 @@ export function elementLocalBounds(element: ScreenshotElement): EditorRect {
 
 /** Painted axis-aligned bounds after applying the element's authored rotation. */
 export function elementBounds(element: ScreenshotElement): EditorRect {
-  return rotatedBounds(elementLocalBounds(element), elementRotation(element));
+  const rotation = elementRotation(element);
+  if (element.kind === "path" && element.points.length > 0 && rotation !== 0) {
+    const origin = elementRotationOrigin(element);
+    const padding = Math.max(4, element.style.strokeWidth)
+      + annotationDropShadowPad(element.style);
+    return boundsFromPoints(
+      element.points.map((point) => rotatePointAround(point, origin, rotation)),
+      padding,
+    );
+  }
+  return rotatedBounds(elementLocalBounds(element), rotation);
 }
 
 /** CSS size of each Layers-panel thumbnail (matches `.screenshot-layer-preview`). */

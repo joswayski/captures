@@ -2415,7 +2415,7 @@ export function ScreenshotEditor() {
 
   const inlineTextLayout = useMemo(() => {
     if (!editingText) return null;
-    const contentHeight = elementBounds(editingText).height;
+    const localBounds = elementLocalBounds(editingText);
     const pad = textHasBackgroundPlate(editingText)
       ? textBackgroundPad(editingText.fontSize)
       : { x: 0, y: 0 };
@@ -2426,16 +2426,15 @@ export function ScreenshotEditor() {
     const padY = pad.y * displayScale;
     return {
       frame: {
-        left: (editingText.x - pad.x) * displayScale,
-        top: (editingText.y - pad.y) * displayScale,
+        left: localBounds.x * displayScale,
+        top: localBounds.y * displayScale,
         width: Math.max(
           48,
-          (editingText.width + pad.x * 2) * displayScale + border,
+          localBounds.width * displayScale + border,
         ),
         height: Math.max(
           28,
-          // elementBounds already includes pad when a plate is present.
-          contentHeight * displayScale + border,
+          localBounds.height * displayScale + border,
         ),
       },
       padding: `${padY + optical}px ${pad.x * displayScale}px ${Math.max(0, padY - optical)}px`,
@@ -5562,11 +5561,8 @@ export function ScreenshotEditor() {
                   borderRadius: editingText.roundedBackground
                     ? textBackgroundRadius(
                       editingText,
-                      (editingText.width
-                        + (textHasBackgroundPlate(editingText)
-                          ? textBackgroundPad(editingText.fontSize).x * 2
-                          : 0)),
-                      elementBounds(editingText).height,
+                      elementLocalBounds(editingText).width,
+                      elementLocalBounds(editingText).height,
                     ) * displayScale
                     : undefined,
                   caretColor: editingText.color,

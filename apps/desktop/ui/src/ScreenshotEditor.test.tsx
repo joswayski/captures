@@ -868,6 +868,75 @@ describe("ScreenshotEditor", () => {
       .toHaveValue("Hello from the screenshot editor");
   });
 
+  it("sizes the inline editor from a rotated text layer's local bounds", async () => {
+    const draftDocument = createScreenshotDocument(
+      "captures-capture://localhost/editor-draft/capture-1/asset-1",
+      1_440,
+      900,
+      "capture-1",
+    );
+    draftDocument.elements.push({
+      id: "rotated-text",
+      kind: "text",
+      text: "Rotate me",
+      fontSize: 32,
+      width: 200,
+      fontFamily: "sans",
+      bold: false,
+      italic: false,
+      align: "left",
+      color: "#fff",
+      background: null,
+      outlined: false,
+      roundedBackground: false,
+      x: 120,
+      y: 100,
+      rotation: Math.PI / 2,
+      locked: false,
+      visible: true,
+      opacity: 100,
+      blendMode: "source-over",
+    });
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "get_artifact") return artifact;
+      if (command === "load_screenshot_editor_draft") {
+        return { document: draftDocument, updated_at_ms: 1 };
+      }
+      if (command === "estimate_screenshot_export") {
+        const colors = Number(
+          (args as { pngMaxColors?: number } | undefined)?.pngMaxColors ?? 128,
+        );
+        return Math.max(8_000, Math.round(1_200 * colors));
+      }
+      const draft = draftCommandResult(String(command));
+      if (draft !== undefined || String(command).includes("screenshot_editor_draft")) {
+        return draft;
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<ScreenshotEditor />);
+    await screen.findByText("Restored unsaved edits from last time.");
+    setCanvasZoomPercent(100);
+    const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
+    setCanvasBounds(canvas);
+    fireEvent.doubleClick(canvas, {
+      button: 0,
+      clientX: 220,
+      clientY: 120,
+    });
+
+    const inlineEditor = await screen.findByRole("textbox", {
+      name: "Edit text on canvas",
+    });
+    const inlineFrame = inlineEditor.closest(".screenshot-inline-text-frame") as HTMLElement;
+    expect(Number.parseFloat(inlineFrame.style.left)).toBeCloseTo(120, 5);
+    expect(Number.parseFloat(inlineFrame.style.top)).toBeCloseTo(100, 5);
+    expect(Number.parseFloat(inlineFrame.style.width)).toBeCloseTo(202, 5);
+    expect(Number.parseFloat(inlineFrame.style.height)).toBeLessThan(60);
+    expect(inlineFrame.style.transform).toContain("rotate(1.570796");
+  });
+
   it("creates text with any of the seven visual style presets", async () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Canvas width");

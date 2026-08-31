@@ -1509,6 +1509,19 @@ describe("screenshot editor geometry", () => {
     expect(elementRotationHandleFitsCanvas(fullCanvasImage, 1, canvas)).toBe(true);
     expect(hitTestElementRotationHandle(fullCanvasImage, insetHandle, 8, 1, canvas))
       .toBe(true);
+
+    const diagonalPath = withElementRotation({
+      ...editableLayer,
+      id: "diagonal",
+      kind: "path" as const,
+      x: 0,
+      y: 0,
+      points: [{ x: 0, y: 0 }, { x: 100, y: 100 }],
+      style: { color: "#fff", fill: null, strokeWidth: 2 },
+    }, -Math.PI / 4);
+    const diagonalBounds = elementBounds(diagonalPath);
+    expect(diagonalBounds.width).toBeCloseTo(100 * Math.SQRT2 + 8, 5);
+    expect(diagonalBounds.height).toBe(9);
   });
 
   it("keeps the rotation-handle hit radius at 6 screen pixels when zoomed in", () => {
