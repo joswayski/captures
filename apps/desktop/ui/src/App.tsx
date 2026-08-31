@@ -149,6 +149,9 @@ import type {
   RecordingTarget,
   RecordingTimelinePreview,
   ScreenshotFormat,
+  ShareResult,
+  ShareUploadProgress,
+  SharingAuthStatus,
   ThumbnailPointerPosition,
   UpdateStatus,
   EditorLayerPresence,
@@ -1254,6 +1257,8 @@ export function CaptureHistory() {
           )}
         </header>
 
+        <SharingAccount />
+
         {!loading && entries.length > 0 && (
           <div className="history-toolbar">
             <div className="history-filters" role="group" aria-label="Filter captures">
@@ -1305,6 +1310,117 @@ export function CaptureHistory() {
   );
 }
 
+export function SharingAccount() {
+  const [auth, setAuth] = useState<SharingAuthStatus | null>(null);
+  const [email, setEmail] = useState("");
+  const [code, setCode] = useState("");
+  const [codeSent, setCodeSent] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    void invoke<SharingAuthStatus>("sharing_auth_status")
+      .then((status) => { if (active) setAuth(status); })
+      .catch(() => { if (active) setAuth({ signed_in: false, email: null }); });
+    return () => { active = false; };
+  }, []);
+
+  const start = async () => {
+    if (!email.trim() || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await invoke("sharing_start_email", { email: email.trim() });
+      setCodeSent(true);
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const verify = async () => {
+    if (!/^\d{6}$/u.test(code) || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const status = await invoke<SharingAuthStatus>("sharing_verify_email", {
+        email: email.trim(),
+        code,
+      });
+      setAuth(status);
+      setCode("");
+      setCodeSent(false);
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const signOut = async () => {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await invoke("sharing_sign_out");
+      setAuth({ signed_in: false, email: null });
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="history-account" aria-labelledby="history-account-title">
+      <div>
+        <p className="eyebrow">Remote sharing</p>
+        <h2 id="history-account-title">{auth?.signed_in ? "Signed in" : "Sign in to share"}</h2>
+        <p>
+          {auth?.signed_in
+            ? `${auth.email} · Remote deletion never removes local history.`
+            : "Only captures you explicitly share leave this device."}
+        </p>
+      </div>
+      {auth?.signed_in ? (
+        <button type="button" disabled={busy} onClick={() => void signOut()}>Sign out</button>
+      ) : auth === null ? (
+        <span className="history-account-loading">Checking account…</span>
+      ) : (
+        <div className="history-account-form">
+          <input
+            type="email"
+            value={email}
+            placeholder="Email"
+            aria-label="Email for Captures sharing"
+            disabled={busy || codeSent}
+            onChange={(event) => setEmail(event.target.value)}
+          />
+          {codeSent && (
+            <input
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              maxLength={6}
+              value={code}
+              placeholder="6-digit code"
+              aria-label="Captures sign-in code"
+              disabled={busy}
+              onChange={(event) => setCode(event.target.value.replace(/\D/gu, ""))}
+            />
+          )}
+          <button type="button" disabled={busy} onClick={() => void (codeSent ? verify() : start())}>
+            {busy ? "Please wait…" : codeSent ? "Sign in" : "Email code"}
+          </button>
+        </div>
+      )}
+      {error && <p className="history-account-error" role="alert">{error}</p>}
+    </section>
+  );
+}
+
 export function HistoryCard({
   entry,
   onDeleted,
@@ -1312,13 +1428,19 @@ export function HistoryCard({
   entry: ArtifactSummary;
   onDeleted: (artifactId: string) => void;
 }) {
-  const [busy, setBusy] = useState<"restoring" | "editing" | "opening" | "revealing" | "saving" | "deleting" | null>(null);
+  const [busy, setBusy] = useState<"restoring" | "editing" | "opening" | "revealing" | "saving" | "sharing" | "unsharing" | "remote-deleting" | "deleting" | null>(null);
   const [restored, setRestored] = useState(false);
   const [saved, setSaved] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [confirmingRemoteDelete, setConfirmingRemoteDelete] = useState(false);
   const [error, setError] = useState("");
+  const [shareExpiry, setShareExpiry] = useState("never");
+  const [customShareExpiry, setCustomShareExpiry] = useState("");
+  const [shareProgress, setShareProgress] = useState<ShareUploadProgress | null>(null);
+  const [shareFeedback, setShareFeedback] = useState("");
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const deleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const remoteDeleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const recordingPermanentlySaved = entry.kind !== "screenshot"
     && Boolean(entry.saved_path)
     && !entry.missing;
@@ -1326,7 +1448,17 @@ export function HistoryCard({
   useEffect(() => () => {
     if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
     if (deleteTimer.current) clearTimeout(deleteTimer.current);
+    if (remoteDeleteTimer.current) clearTimeout(remoteDeleteTimer.current);
   }, []);
+
+  useEffect(() => {
+    if (!isTauri()) return undefined;
+    const cleanup = createCleanupRegistry();
+    void listen<ShareUploadProgress>("share-upload-progress", ({ payload }) => {
+      if (payload.artifact_id === entry.id) setShareProgress(payload);
+    }).then((dispose) => { cleanup.add(dispose); });
+    return () => cleanup.dispose();
+  }, [entry.id]);
 
   const restore = async () => {
     if (busy || entry.kind !== "screenshot") return;
@@ -1400,6 +1532,39 @@ export function HistoryCard({
     }
   };
 
+  const share = async () => {
+    if (busy) return;
+    setBusy("sharing");
+    setError("");
+    setShareFeedback("");
+    setShareProgress(null);
+    let expiresInSeconds: number | null = null;
+    if (shareExpiry === "custom") {
+      const expiry = new Date(customShareExpiry);
+      expiresInSeconds = Math.floor((expiry.getTime() - Date.now()) / 1_000);
+      if (!customShareExpiry || !Number.isFinite(expiresInSeconds) || expiresInSeconds < 60) {
+        setError("Choose a custom expiry at least one minute in the future");
+        setBusy(null);
+        return;
+      }
+    } else if (shareExpiry !== "never") {
+      expiresInSeconds = Number(shareExpiry) * 24 * 60 * 60;
+    }
+    try {
+      const result = await invoke<ShareResult>("share_history_artifact", {
+        artifactId: entry.id,
+        expiresInSeconds,
+      });
+      await copyText(result.share_url);
+      setShareFeedback("Shared link copied");
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setBusy(null);
+      setShareProgress(null);
+    }
+  };
+
   const deleteFromHistory = async () => {
     if (busy) return;
     const requiresConfirmation = entry.kind === "screenshot" || !entry.missing;
@@ -1419,6 +1584,44 @@ export function HistoryCard({
       setError(String(error));
       setBusy(null);
       setConfirmingDelete(false);
+    }
+  };
+
+  const makeRemotePrivate = async () => {
+    if (busy || !entry.remote_asset_id) return;
+    setBusy("unsharing");
+    setError("");
+    setShareFeedback("");
+    try {
+      await invoke("make_history_artifact_private", { artifactId: entry.id });
+      setShareFeedback("Shared link disabled · Remote capture kept private");
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const deleteRemote = async () => {
+    if (busy || !entry.remote_asset_id) return;
+    if (!confirmingRemoteDelete) {
+      setConfirmingRemoteDelete(true);
+      if (remoteDeleteTimer.current) clearTimeout(remoteDeleteTimer.current);
+      remoteDeleteTimer.current = setTimeout(() => setConfirmingRemoteDelete(false), 4_000);
+      return;
+    }
+    setBusy("remote-deleting");
+    setError("");
+    setShareFeedback("");
+    try {
+      await invoke("delete_remote_history_artifact", { artifactId: entry.id });
+      setConfirmingRemoteDelete(false);
+      setShareFeedback("Deleted online · Local capture kept");
+    } catch (error) {
+      setError(String(error));
+      setConfirmingRemoteDelete(false);
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -1525,6 +1728,71 @@ export function HistoryCard({
               )}
             </>
           ) : null}
+          {(entry.kind === "screenshot" || !entry.missing) && (
+            <div className="history-share-controls">
+              <select
+                value={shareExpiry}
+                aria-label="Shared link expiry"
+                disabled={busy !== null}
+                onChange={(event) => setShareExpiry(event.target.value)}
+              >
+                <option value="never">No expiry</option>
+                <option value="1">1 day</option>
+                <option value="7">7 days</option>
+                <option value="30">30 days</option>
+                <option value="custom">Custom</option>
+              </select>
+              <button
+                type="button"
+                className="history-share"
+                disabled={busy !== null}
+                onClick={() => void share()}
+              >
+                <ShareIcon />
+                {busy === "sharing"
+                  ? shareProgress?.stage === "uploading" && shareProgress.total_bytes > 0
+                    ? `Uploading ${Math.round((shareProgress.completed_bytes / shareProgress.total_bytes) * 100)}%`
+                    : "Sharing…"
+                  : entry.remote_share_url
+                    ? "Share again"
+                    : "Share"}
+              </button>
+              {shareExpiry === "custom" && (
+                <input
+                  type="datetime-local"
+                  value={customShareExpiry}
+                  aria-label="Custom shared link expiry"
+                  disabled={busy !== null}
+                  onChange={(event) => setCustomShareExpiry(event.target.value)}
+                />
+              )}
+            </div>
+          )}
+          {entry.remote_asset_id && (
+            <div className="history-remote-controls">
+              {entry.remote_share_url && (
+                <button
+                  type="button"
+                  disabled={busy !== null}
+                  onClick={() => void makeRemotePrivate()}
+                >
+                  {busy === "unsharing" ? "Making private…" : "Make private"}
+                </button>
+              )}
+              <button
+                type="button"
+                className={confirmingRemoteDelete ? "history-remote-delete history-delete-confirm" : "history-remote-delete"}
+                disabled={busy !== null}
+                onClick={() => void deleteRemote()}
+              >
+                {busy === "remote-deleting"
+                  ? "Deleting online…"
+                  : confirmingRemoteDelete
+                    ? "Confirm online delete"
+                    : "Delete online"}
+              </button>
+            </div>
+          )}
           <button
             type="button"
             className={confirmingDelete ? "history-delete history-delete-confirm" : "history-delete"}
@@ -1544,6 +1812,7 @@ export function HistoryCard({
                 : "Delete"}
           </button>
         </div>
+        {shareFeedback && <p className="history-share-feedback" role="status">{shareFeedback}</p>}
         {error && <p className="history-card-error" role="alert">{error}</p>}
       </div>
     </article>
@@ -1559,12 +1828,31 @@ function formatHistoryDate(value: string): string {
   }).format(date);
 }
 
+async function copyText(value: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+  const input = document.createElement("textarea");
+  input.value = value;
+  input.style.position = "fixed";
+  input.style.opacity = "0";
+  document.body.appendChild(input);
+  input.select();
+  document.execCommand("copy");
+  input.remove();
+}
+
 function HistoryIcon() {
   return <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5M12 7v5l3 2" /></svg>;
 }
 
 function RestoreIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8" /><path d="M4 4v4h4" /></svg>;
+}
+
+function ShareIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 12h8M13 7l5 5-5 5" /><path d="M18 4h2v16h-2M6 4H4v16h2" /></svg>;
 }
 
 function PauseResumeIcon({ paused }: { paused: boolean }) {
@@ -6285,8 +6573,9 @@ export function ThumbnailCard({
   onExitChange?: (artifactId: string, exiting: boolean) => void;
 }) {
   const [feedback, setFeedback] = useState<"saved" | null>(null);
-  const [busy, setBusy] = useState<"copied" | "saved" | null>(null);
+  const [busy, setBusy] = useState<"copied" | "saved" | "shared" | null>(null);
   const [error, setError] = useState("");
+  const [shareProgress, setShareProgress] = useState<ShareUploadProgress | null>(null);
   const [thumbnailReady, setThumbnailReady] = useState(false);
   const [fileDragging, setFileDragging] = useState(false);
   const [exit, setExit] = useState<"dismiss" | "delete" | null>(null);
@@ -6377,6 +6666,15 @@ export function ThumbnailCard({
     };
   }, []);
 
+  useEffect(() => {
+    if (!isTauri()) return undefined;
+    const cleanup = createCleanupRegistry();
+    void listen<ShareUploadProgress>("share-upload-progress", ({ payload }) => {
+      if (!isExitLocked() && payload.artifact_id === artifact.id) setShareProgress(payload);
+    }).then((dispose) => { cleanup.add(dispose); });
+    return () => cleanup.dispose();
+  }, [artifact.id]);
+
   useLayoutEffect(() => {
     restoreThumbnailStackShiftClass(cardRef.current);
   });
@@ -6451,6 +6749,33 @@ export function ThumbnailCard({
       return false;
     } finally {
       if (success && !isExitLocked()) setBusy(null);
+    }
+  };
+
+  const shareCapture = async () => {
+    if (busy || isExitLocked() || isExiting) return;
+    setBusy("shared");
+    setError("");
+    setShareProgress(null);
+    try {
+      const result = await invoke<ShareResult>("share_history_artifact", {
+        artifactId: artifact.id,
+        expiresInSeconds: null,
+      });
+      if (!isExitLocked()) await copyText(result.share_url);
+    } catch (error) {
+      if (!isExitLocked()) {
+        const message = String(error);
+        setError(message);
+        if (message.toLowerCase().includes("sign in")) {
+          void invoke("open_capture_history").catch(() => undefined);
+        }
+      }
+    } finally {
+      if (!isExitLocked()) {
+        setBusy(null);
+        setShareProgress(null);
+      }
     }
   };
 
@@ -6780,6 +7105,18 @@ export function ThumbnailCard({
         )}
       </button>
       <div className="thumbnail-main-actions">
+        <button
+          type="button"
+          disabled={busy !== null || isExiting}
+          onClick={() => void shareCapture()}
+        >
+          <ShareIcon />
+          {busy === "shared"
+            ? shareProgress?.stage === "uploading" && shareProgress.total_bytes > 0
+              ? `${Math.round((shareProgress.completed_bytes / shareProgress.total_bytes) * 100)}%`
+              : "Sharing…"
+            : "Share"}
+        </button>
         {!chrome.clipboardCurrent && (
           <button
             type="button"

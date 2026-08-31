@@ -229,6 +229,7 @@ pub struct AppState {
     pub recording: Mutex<RecordingRuntime>,
     pub screenshot_countdown: Mutex<ScreenshotCountdownRuntime>,
     pub history: Mutex<Vec<HistoryEntry>>,
+    pub sharing: Mutex<crate::sharing::SharingRuntime>,
     pub clipboard_ownership: Mutex<ClipboardOwnership>,
     pub thumbnail_visibility: Mutex<ThumbnailVisibility>,
     /// Last full-resolution PNG prepared for a preview file drag.
@@ -267,6 +268,7 @@ impl AppState {
             recording: Mutex::new(RecordingRuntime::default()),
             screenshot_countdown: Mutex::new(ScreenshotCountdownRuntime::default()),
             history: Mutex::new(history),
+            sharing: Mutex::new(crate::sharing::SharingRuntime::default()),
             clipboard_ownership: Mutex::new(ClipboardOwnership::default()),
             thumbnail_visibility: Mutex::new(ThumbnailVisibility::default()),
             prepared_artifact_drag: Mutex::new(None),

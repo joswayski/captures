@@ -292,6 +292,8 @@ interface ArtifactSummaryBase {
   height: number;
   size_bytes: number;
   created_at: string;
+  remote_asset_id?: string | null;
+  remote_share_url?: string | null;
 }
 
 export interface ScreenshotArtifactSummary extends ArtifactSummaryBase {
@@ -328,6 +330,23 @@ export interface ClipboardState {
 export interface ViewerActivationState {
   artifact_id: string;
   active: boolean;
+}
+
+export interface SharingAuthStatus {
+  signed_in: boolean;
+  email: string | null;
+}
+
+export interface ShareResult {
+  asset_id: string;
+  share_url: string;
+}
+
+export interface ShareUploadProgress {
+  artifact_id: string;
+  stage: "preparing" | "reserving" | "uploading" | "finalizing" | "complete";
+  completed_bytes: number;
+  total_bytes: number;
 }
 
 /** Which capture artifacts still appear as layers in a given editor window. */

@@ -60,6 +60,256 @@
 }
 
 @layer components {
+  .account-shell {
+    @apply mx-auto grid min-h-dvh w-full max-w-xl place-items-center px-6 py-16;
+  }
+
+  .account-card {
+    @apply w-full rounded-xl border border-border bg-surface p-6 sm:p-8;
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
+  }
+
+  .account-brand {
+    @apply inline-flex text-sm font-semibold tracking-tight text-ink no-underline;
+  }
+
+  .account-card .eyebrow {
+    @apply mt-10 text-[0.6875rem] font-semibold uppercase tracking-[0.14em] text-accent-readable;
+  }
+
+  .account-card h1 {
+    @apply mt-2 text-2xl font-medium tracking-tight text-ink;
+  }
+
+  .account-copy {
+    @apply mt-3 text-sm leading-relaxed text-ink-muted;
+  }
+
+  .account-form {
+    @apply mt-8 flex flex-col gap-3;
+  }
+
+  .account-form label {
+    @apply text-xs font-medium text-ink-muted;
+  }
+
+  .account-form input {
+    @apply w-full rounded-md border border-border-strong bg-canvas px-3.5 py-3 text-sm text-ink outline-none transition-colors;
+  }
+
+  .account-form input:focus {
+    @apply border-accent;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--theme-accent) 18%, transparent);
+  }
+
+  .account-form button,
+  .account-google {
+    @apply inline-flex min-h-11 items-center justify-center rounded-md border border-transparent bg-ink px-4 py-2.5 text-sm font-semibold text-canvas no-underline transition-colors;
+  }
+
+  .account-form button:hover,
+  .account-google:hover {
+    @apply bg-white;
+  }
+
+  .account-form button:disabled {
+    @apply cursor-wait opacity-60;
+  }
+
+  .account-form .account-secondary {
+    @apply border-border bg-transparent text-ink-muted;
+  }
+
+  .account-form .account-secondary:hover {
+    @apply border-border-strong bg-canvas text-ink;
+  }
+
+  .account-error {
+    @apply mt-4 rounded-md border border-red-400/30 bg-red-400/10 px-3 py-2.5 text-xs leading-relaxed text-red-200;
+  }
+
+  .account-divider {
+    @apply my-5 flex items-center gap-3 text-[0.6875rem] uppercase tracking-wider text-ink-soft;
+  }
+
+  .account-divider::before,
+  .account-divider::after {
+    @apply h-px flex-1 bg-border;
+    content: "";
+  }
+
+  .account-google {
+    @apply w-full border-border-strong bg-transparent text-ink;
+  }
+
+  .account-google:hover {
+    @apply border-accent/30 bg-accent-soft text-accent-readable;
+  }
+
+  .library-shell {
+    @apply mx-auto min-h-dvh w-full max-w-5xl px-6 py-12 sm:py-16;
+  }
+
+  .library-header {
+    @apply flex items-start justify-between gap-6 border-b border-border pb-8;
+  }
+
+  .library-header h1 {
+    @apply mt-6 text-3xl font-medium tracking-tight text-ink;
+  }
+
+  .library-header p {
+    @apply mt-2 text-sm text-ink-muted;
+  }
+
+  .library-signout {
+    @apply rounded-md border border-border bg-surface px-3 py-2 text-xs font-medium text-ink-muted transition-colors hover:border-border-strong hover:text-ink;
+  }
+
+  .quota-card {
+    @apply mt-8 rounded-lg border border-border bg-surface p-4;
+  }
+
+  .quota-card > div:first-child {
+    @apply flex items-center justify-between gap-4 text-xs text-ink-muted;
+  }
+
+  .quota-card strong {
+    @apply font-medium text-ink;
+  }
+
+  .quota-track {
+    @apply mt-3 h-1.5 overflow-hidden rounded-full bg-canvas;
+  }
+
+  .quota-track span {
+    @apply block h-full rounded-full bg-accent transition-[width];
+  }
+
+  .quota-card p {
+    @apply mt-2 text-[0.6875rem] text-ink-soft;
+  }
+
+  .library-empty {
+    @apply mt-10 rounded-xl border border-dashed border-border p-12 text-center;
+  }
+
+  .library-empty h2 {
+    @apply text-base font-medium text-ink;
+  }
+
+  .library-empty p {
+    @apply mx-auto mt-2 max-w-md text-sm leading-relaxed text-ink-muted;
+  }
+
+  .library-grid {
+    @apply mt-10 grid gap-5 sm:grid-cols-2;
+  }
+
+  .library-load-more {
+    @apply mx-auto mt-8 block rounded-md border border-border bg-surface px-4 py-2 text-sm font-medium text-ink-muted transition-colors hover:border-border-strong hover:text-ink disabled:cursor-wait disabled:opacity-60;
+  }
+
+  .library-card {
+    @apply overflow-hidden rounded-xl border border-border bg-surface;
+  }
+
+  .library-preview {
+    @apply grid aspect-video place-items-center overflow-hidden border-b border-border bg-canvas text-xs uppercase tracking-wider text-ink-soft;
+  }
+
+  .library-preview img,
+  .library-preview video {
+    @apply h-full w-full object-contain;
+  }
+
+  .library-card-body {
+    @apply p-4;
+  }
+
+  .library-card-meta {
+    @apply flex items-start justify-between gap-3;
+  }
+
+  .library-card-meta strong {
+    @apply text-sm font-medium text-ink;
+  }
+
+  .library-card-meta span {
+    @apply text-right text-[0.6875rem] text-ink-soft;
+  }
+
+  .library-actions {
+    @apply mt-4 flex flex-wrap gap-2;
+  }
+
+  .library-actions button {
+    @apply rounded border border-border-strong bg-canvas px-2.5 py-1.5 text-[0.6875rem] font-medium text-ink-muted transition-colors hover:border-accent/40 hover:text-accent-readable disabled:opacity-50;
+  }
+
+  .library-actions button.danger {
+    @apply hover:border-red-400/40 hover:text-red-300;
+  }
+
+  .library-share-options {
+    @apply flex w-full flex-wrap gap-2;
+  }
+
+  .library-share-options select,
+  .library-share-options input {
+    @apply min-h-8 min-w-0 flex-1 rounded border border-border-strong bg-canvas px-2 text-[0.6875rem] text-ink-muted;
+  }
+
+  .library-share-state,
+  .library-message {
+    @apply mt-3 text-[0.6875rem] leading-relaxed text-ink-soft;
+  }
+
+  .library-message {
+    @apply text-accent-readable;
+  }
+
+  .shared-shell {
+    @apply mx-auto flex min-h-dvh w-full max-w-6xl flex-col px-5 py-6 sm:px-8 sm:py-8;
+  }
+
+  .shared-header {
+    @apply flex flex-wrap items-end justify-between gap-6 border-b border-border pb-5;
+  }
+
+  .shared-header h1,
+  .shared-state h1 {
+    @apply text-xl font-medium tracking-tight text-ink;
+  }
+
+  .shared-header p,
+  .shared-state p,
+  .shared-expiry {
+    @apply mt-1 text-xs text-ink-muted;
+  }
+
+  .shared-media {
+    @apply mt-6 grid min-h-0 flex-1 place-items-center overflow-hidden rounded-xl border border-border bg-black/30 p-2;
+  }
+
+  .shared-media img,
+  .shared-media video {
+    max-height: calc(100dvh - 11rem);
+    @apply max-w-full rounded-lg object-contain;
+  }
+
+  .shared-state {
+    @apply justify-center;
+  }
+
+  .shared-state .account-brand {
+    @apply mb-8;
+  }
+
+  .shared-expiry {
+    @apply py-3 text-center;
+  }
+
   .inline-chip {
     @apply inline-flex translate-y-px cursor-pointer items-center gap-1.5 rounded border border-border bg-surface px-1.5 py-0.5 text-[0.8125rem] font-medium leading-none text-ink no-underline transition-colors duration-200 ease-out;
   }

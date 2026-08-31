@@ -22,8 +22,10 @@ captures-media = { path = "../../../crates/captures-media" }
 captures-recording = { path = "../../../crates/captures-recording" }
 captures-session = { path = "../../../crates/captures-session" }
 anyhow = "1"
+base64 = "0.22"
 chrono.workspace = true
 image.workspace = true
+keyring = "4.2"
 parking_lot.workspace = true
 png = "0.17"
 quantette = { version = "0.6", default-features = false, features = ["image", "std", "threads"] }
@@ -48,8 +50,10 @@ tauri-plugin-single-instance = "2"
 tempfile = "3"
 tauri-plugin-updater = "2.10.1"
 trash = "5"
-tokio = { version = "1", features = ["time"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["fs", "io-util", "time"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+sha2 = "0.10"
+tokio-util = { version = "0.7", features = ["io"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 captures-macos-window = { path = "../../../crates/captures-macos-window" }

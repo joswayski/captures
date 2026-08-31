@@ -466,6 +466,11 @@ pub struct HistoryEntry {
     pub has_microphone_audio: bool,
     #[serde(default)]
     pub dropped_frames: u64,
+    /// Remote asset created by an explicit Share action. Local deletion remains independent.
+    #[serde(default)]
+    pub remote_asset_id: Option<String>,
+    #[serde(default)]
+    pub remote_share_url: Option<String>,
 }
 
 impl HistoryEntry {
@@ -488,6 +493,8 @@ impl HistoryEntry {
             has_system_audio: artifact.has_system_audio,
             has_microphone_audio: artifact.has_microphone_audio,
             dropped_frames: artifact.dropped_frames,
+            remote_asset_id: None,
+            remote_share_url: None,
         }
     }
 
@@ -541,6 +548,8 @@ impl HistoryEntry {
                 size_bytes: self.size_bytes,
                 created_at: self.created_at.clone(),
                 mode: self.mode?,
+                remote_asset_id: self.remote_asset_id.clone(),
+                remote_share_url: self.remote_share_url.clone(),
             }),
             ArtifactKind::Video | ArtifactKind::Gif => {
                 let artifact = self.recording_artifact()?;
@@ -560,6 +569,8 @@ impl HistoryEntry {
                     created_at: artifact.created_at,
                     target: artifact.target,
                     missing: artifact.missing,
+                    remote_asset_id: self.remote_asset_id.clone(),
+                    remote_share_url: self.remote_share_url.clone(),
                 };
                 Some(if self.kind == ArtifactKind::Video {
                     ArtifactSummary::Video { fields }
@@ -635,6 +646,8 @@ pub struct RecordingArtifactSummaryFields {
     pub created_at: String,
     pub target: RecordingTarget,
     pub missing: bool,
+    pub remote_asset_id: Option<String>,
+    pub remote_share_url: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -649,6 +662,8 @@ pub enum ArtifactSummary {
         size_bytes: u64,
         created_at: String,
         mode: CaptureMode,
+        remote_asset_id: Option<String>,
+        remote_share_url: Option<String>,
     },
     Video {
         #[serde(flatten)]

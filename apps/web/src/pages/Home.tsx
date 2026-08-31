@@ -88,11 +88,19 @@ export default function Home({
     <div className="flex min-h-dvh flex-col">
       <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col px-6 py-16 sm:py-24">
         <section>
-          <div className="flex items-center gap-3">
-            <span className="brand-mark" aria-hidden="true">
-              <CaptureIcon className="h-4 w-4" />
-            </span>
-            <h1 className="text-2xl font-medium tracking-tight text-ink sm:text-3xl">Captures</h1>
+          <div className="flex items-center justify-between gap-5">
+            <div className="flex items-center gap-3">
+              <span className="brand-mark" aria-hidden="true">
+                <CaptureIcon className="h-4 w-4" />
+              </span>
+              <h1 className="text-2xl font-medium tracking-tight text-ink sm:text-3xl">Captures</h1>
+            </div>
+            <a
+              href="/library"
+              className="rounded-md border border-border bg-surface px-3 py-2 text-xs font-medium text-ink-muted no-underline transition-colors hover:border-accent/30 hover:text-accent-readable"
+            >
+              Your library
+            </a>
           </div>
 
           <p className="mt-5 max-w-xl text-sm leading-relaxed text-ink-muted sm:text-[0.9375rem]">

@@ -61,7 +61,24 @@ export async function handleApiRequest(
     if (request.method !== "GET") {
       return methodNotAllowed(request, ["GET"]);
     }
-    return json(request, { status: "ok" });
+    try {
+      await env.SHARING_READY;
+      return json(request, { status: "ok" });
+    } catch {
+      return json(request, { error: "service is not ready" }, 503);
+    }
+  }
+
+  if (url.pathname === "/api/ready") {
+    if (request.method !== "GET") {
+      return methodNotAllowed(request, ["GET"]);
+    }
+    try {
+      await env.SHARING_READY;
+      return json(request, { status: "ready" });
+    } catch {
+      return json(request, { error: "sharing service is not ready" }, 503);
+    }
   }
 
   if (url.pathname === "/api/feedback") {
@@ -72,6 +89,11 @@ export async function handleApiRequest(
       return methodNotAllowed(request, ["POST", "OPTIONS"]);
     }
     return createFeedback(request, env, fetcher);
+  }
+
+  if (env.SHARING_API) {
+    const sharingResponse = await env.SHARING_API.handle(request);
+    if (sharingResponse) return sharingResponse;
   }
 
   return json(request, { error: "not found" }, 404);
