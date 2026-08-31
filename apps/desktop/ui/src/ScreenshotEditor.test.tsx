@@ -9,9 +9,8 @@ import { resolve } from "node:path";
 import {
   createScreenshotDocument,
   elementBounds,
+  elementRotationHandlePoint,
   resizeHandlePoint,
-  rotationHudShouldOpenBelow,
-  shapeRotationHandlePoint,
   type EditorShapeElement,
 } from "./lib/screenshotEditor";
 import { ScreenshotEditor } from "./ScreenshotEditor";
@@ -223,12 +222,6 @@ describe("ScreenshotEditor", () => {
     vi.restoreAllMocks();
     vi.clearAllMocks();
     document.getElementById("captures-editor-paint-canvas-host")?.remove();
-  });
-
-  it("opens rotation shortcuts on the side with more viewport space", () => {
-    expect(rotationHudShouldOpenBelow(40, 0, 600, 100)).toBe(true);
-    expect(rotationHudShouldOpenBelow(180, 0, 600, 100)).toBe(false);
-    expect(rotationHudShouldOpenBelow(40, 0, 60, 100)).toBe(false);
   });
 
   it("restores a saved editor draft and can discard it", async () => {
@@ -2021,7 +2014,7 @@ describe("ScreenshotEditor", () => {
     ).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("rotates a selected rectangle from the handle above the selection box", async () => {
+  it("rotates from the handle and configures Shift snapping with a number input", async () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Canvas width");
 
@@ -2066,7 +2059,7 @@ describe("ScreenshotEditor", () => {
       opacity: 100,
       blendMode: "source-over",
     };
-    const handle = shapeRotationHandlePoint(placed, 1);
+    const handle = elementRotationHandlePoint(placed, 1);
     const originX = (placed.x + placed.endX) / 2;
     const originY = (placed.y + placed.endY) / 2;
 
@@ -2074,14 +2067,16 @@ describe("ScreenshotEditor", () => {
       clientX: handle.x,
       clientY: handle.y,
     });
-    expect(screen.getByText("Drag to rotate smoothly")).toBeInTheDocument();
-    const rotationShortcuts = screen.getByRole("group", {
+    expect(screen.getByText("Drag to rotate. Hold Shift to snap by 15°")).toBeInTheDocument();
+    expect(screen.queryByRole("group", {
       name: "Rotation angle shortcuts",
-    });
-    expect(screen.queryByRole("slider", { name: "Shape rotation" })).not.toBeInTheDocument();
-    expect(within(rotationShortcuts).getByRole("button", {
-      name: "Set rotation to 0 degrees",
-    })).toHaveAttribute("aria-pressed", "true");
+    })).not.toBeInTheDocument();
+
+    const snapInput = screen.getByRole("spinbutton", { name: "Shift rotation snap" });
+    expect(snapInput).toHaveValue(15);
+    fireEvent.change(snapInput, { target: { value: "30" } });
+    expect(snapInput).toHaveValue(30);
+    expect(screen.getByText(/snap in 30° increments/i)).toBeInTheDocument();
 
     fireEvent.pointerDown(canvas, {
       button: 0,
@@ -2093,6 +2088,7 @@ describe("ScreenshotEditor", () => {
       pointerId: 91,
       clientX: originX + 120,
       clientY: originY,
+      shiftKey: true,
     });
     fireEvent.pointerUp(canvas, {
       button: 0,
@@ -2107,16 +2103,7 @@ describe("ScreenshotEditor", () => {
       }),
     ).toHaveLength(1);
 
-    expect(within(rotationShortcuts).getByRole("button", {
-      name: "Set rotation to 90 degrees",
-    })).toHaveAttribute("aria-pressed", "true");
-
-    fireEvent.click(within(rotationShortcuts).getByRole("button", {
-      name: "Set rotation to 15 degrees",
-    }));
-    expect(within(rotationShortcuts).getByRole("button", {
-      name: "Set rotation to 15 degrees",
-    })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByText(/angle stops/i)).not.toBeInTheDocument();
   });
 
   it("deselects the active layer when clicking the empty viewport chrome", async () => {

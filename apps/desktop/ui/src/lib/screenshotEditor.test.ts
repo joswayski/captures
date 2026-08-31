@@ -27,6 +27,11 @@ import {
   curveStrokeHoverHint,
   duplicateScreenshotElement,
   elementBounds,
+  elementLocalPoint,
+  elementRotation,
+  elementRotationHandleFitsCanvas,
+  elementRotationHandlePoint,
+  elementWorldPoint,
   LAYER_PREVIEW_SIZE,
   mergedLayerName,
   previewTransformForBounds,
@@ -36,6 +41,7 @@ import {
   expandDocumentToFitBounds,
   previewExpandedCanvasRect,
   hitTestElement,
+  hitTestElementRotationHandle,
   hitTestArrowHandle,
   hitTestResizeHandle,
   hitTestShapeRotationHandle,
@@ -69,6 +75,7 @@ import {
   shapeRotationHandleFitsCanvas,
   preserveShapeWorldPoint,
   withShapeRotation,
+  withElementRotation,
   shiftLockedCropAspect,
   snapResizedBounds,
   snapTranslatedBounds,
@@ -99,6 +106,7 @@ import {
   type EditorImageElement,
   type EditorShapeElement,
   type EditorTextElement,
+  type ScreenshotElement,
 } from "./screenshotEditor";
 
 const editableLayer = {
@@ -1381,6 +1389,8 @@ describe("screenshot editor geometry", () => {
 
     const snapped = snapShapeRotation(Math.PI / 2 + 0.04, true);
     expect(snapped).toBeCloseTo(Math.PI / 2, 10);
+    expect(snapShapeRotation(52 * Math.PI / 180, true, 30))
+      .toBeCloseTo(Math.PI / 3, 10);
     expect(withShapeRotation(quarter, 0).rotation).toBeUndefined();
 
     const local = shapeLocalBounds(quarter);
@@ -1408,6 +1418,97 @@ describe("screenshot editor geometry", () => {
     const preservedNw = shapeWorldPoint(preserved, preservedAnchor);
     expect(preservedNw.x).toBeCloseTo(worldNw.x, 5);
     expect(preservedNw.y).toBeCloseTo(worldNw.y, 5);
+  });
+
+  it("rotates image, text, shape, and freehand elements through shared geometry", () => {
+    const elements: ScreenshotElement[] = [
+      {
+        ...editableLayer,
+        id: "image",
+        kind: "image",
+        source: "imported",
+        src: "image.png",
+        originalSrc: null,
+        name: "Image",
+        x: 100,
+        y: 80,
+        width: 100,
+        height: 40,
+        naturalWidth: 100,
+        naturalHeight: 40,
+      },
+      {
+        ...editableLayer,
+        id: "text",
+        kind: "text",
+        x: 100,
+        y: 80,
+        text: "Rotate me",
+        fontSize: 24,
+        width: 140,
+        fontFamily: "sans",
+        bold: false,
+        italic: false,
+        align: "left",
+        color: "#fff",
+        background: null,
+        outlined: false,
+        roundedBackground: false,
+      },
+      {
+        ...editableLayer,
+        id: "shape",
+        kind: "shape",
+        shape: "rectangle",
+        x: 100,
+        y: 80,
+        endX: 200,
+        endY: 120,
+        controls: [],
+        style: { color: "#fff", fill: null, strokeWidth: 2 },
+      },
+      {
+        ...editableLayer,
+        id: "path",
+        kind: "path",
+        x: 100,
+        y: 80,
+        points: [{ x: 100, y: 80 }, { x: 200, y: 120 }],
+        style: { color: "#fff", fill: null, strokeWidth: 2 },
+      },
+    ];
+
+    for (const element of elements) {
+      const rotated = withElementRotation(element, Math.PI / 4);
+      expect(elementRotation(rotated)).toBeCloseTo(Math.PI / 4, 10);
+      const handle = elementRotationHandlePoint(rotated, 1);
+      expect(hitTestElementRotationHandle(rotated, handle, 8, 1)).toBe(true);
+      const local = elementLocalPoint(rotated, handle);
+      const world = elementWorldPoint(rotated, local);
+      expect(world.x).toBeCloseTo(handle.x, 8);
+      expect(world.y).toBeCloseTo(handle.y, 8);
+    }
+
+    const image = withElementRotation(elements[0], Math.PI / 2);
+    const bounds = elementBounds(image);
+    expect(bounds.width).toBeCloseTo(40, 5);
+    expect(bounds.height).toBeCloseTo(100, 5);
+    expect(hitTestElement([image], { x: 150, y: 55 }, 0)?.id).toBe("image");
+    expect(hitTestElement([image], { x: 105, y: 100 }, 0)).toBeNull();
+
+    const fullCanvasImage = {
+      ...(elements[0] as EditorImageElement),
+      x: 0,
+      y: 0,
+      width: 400,
+      height: 300,
+    };
+    const canvas = { width: 400, height: 300 };
+    const insetHandle = elementRotationHandlePoint(fullCanvasImage, 1, canvas);
+    expect(insetHandle).toEqual({ x: 200, y: 28 });
+    expect(elementRotationHandleFitsCanvas(fullCanvasImage, 1, canvas)).toBe(true);
+    expect(hitTestElementRotationHandle(fullCanvasImage, insetHandle, 8, 1, canvas))
+      .toBe(true);
   });
 
   it("keeps the rotation-handle hit radius at 6 screen pixels when zoomed in", () => {
@@ -1439,7 +1540,7 @@ describe("screenshot editor geometry", () => {
     ).toBe(true);
   });
 
-  it("hides the canvas rotation handle when it would clip off the document", () => {
+  it("moves the rotation handle inside when the outside grip would clip", () => {
     const clipped: EditorShapeElement = {
       ...editableLayer,
       id: "rect",
@@ -1454,7 +1555,13 @@ describe("screenshot editor geometry", () => {
     };
     expect(
       shapeRotationHandleFitsCanvas(clipped, 1, { width: 400, height: 300 }),
-    ).toBe(false);
+    ).toBe(true);
+    const clippedHandle = elementRotationHandlePoint(
+      clipped,
+      1,
+      { width: 400, height: 300 },
+    );
+    expect(clippedHandle.y).toBeGreaterThan(8);
 
     const inset: EditorShapeElement = {
       ...clipped,

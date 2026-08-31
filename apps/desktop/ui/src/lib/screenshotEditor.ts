@@ -105,6 +105,8 @@ type EditorElementBase = {
   id: string;
   x: number;
   y: number;
+  /** Rotation in radians around the element's local selection-box center. */
+  rotation?: number;
   locked: boolean;
   visible: boolean;
   opacity: number;
@@ -669,32 +671,16 @@ export type EditorShapeElement = EditorElementBase & {
    */
   controls: EditorPoint[];
   style: ElementStyle;
-  /**
-   * Rotation in radians around the local selection-bounds center.
-   * Omitted in older documents; treat missing as 0 so drafts keep their look.
-   */
-  rotation?: number;
 };
 
 /** Screen-pixel length of the stem from the top of a selected shape to its rotate grip. */
 export const SHAPE_ROTATION_HANDLE_OFFSET_SCREEN_PX = 28;
 
-/** Discrete angle stops for the on-canvas rotation slider. */
+/** Default Shift-drag snap increment for element rotation. */
 export const SHAPE_ROTATION_SNAP_DEGREES = 15;
 
 /** Same step in radians (Shift-drag on the rotate handle). */
 export const SHAPE_ROTATION_SNAP_RADIANS = (SHAPE_ROTATION_SNAP_DEGREES * Math.PI) / 180;
-
-export function rotationHudShouldOpenBelow(
-  anchorClientY: number,
-  viewportTop: number,
-  viewportBottom: number,
-  hudHeight: number,
-): boolean {
-  const spaceAbove = anchorClientY - viewportTop;
-  const spaceBelow = viewportBottom - anchorClientY;
-  return spaceAbove < hudHeight && spaceBelow > spaceAbove;
-}
 
 /**
  * Open stroke shapes that support multi-point Bezier curve controls
@@ -2376,8 +2362,13 @@ function rectCenter(bounds: EditorRect): EditorPoint {
 }
 
 /** Authored rotation, treating missing as unrotated. */
-export function shapeRotation(element: Pick<EditorShapeElement, "rotation">): number {
+export function elementRotation(element: { rotation?: number }): number {
   return element.rotation ?? 0;
+}
+
+/** Backward-compatible shape-specific name used by shape geometry helpers. */
+export function shapeRotation(element: Pick<EditorShapeElement, "rotation">): number {
+  return elementRotation(element);
 }
 
 /** Wrap to (−π, π] and collapse near-zero values so drafts omit a no-op angle. */
@@ -2390,20 +2381,32 @@ export function normalizeShapeRotation(radians: number): number {
   return Math.abs(angle) < 1e-10 ? 0 : angle;
 }
 
-/** Snap an absolute rotation to 15° increments when `snap` is true. */
-export function snapShapeRotation(radians: number, snap: boolean): number {
+/** Snap an absolute rotation to the configured increment when `snap` is true. */
+export function snapShapeRotation(
+  radians: number,
+  snap: boolean,
+  snapDegrees = SHAPE_ROTATION_SNAP_DEGREES,
+): number {
   const angle = normalizeShapeRotation(radians);
   if (!snap) return angle;
+  const finiteDegrees = Number.isFinite(snapDegrees)
+    ? Math.min(180, Math.max(1, snapDegrees))
+    : SHAPE_ROTATION_SNAP_DEGREES;
+  const snapRadians = finiteDegrees * Math.PI / 180;
   return normalizeShapeRotation(
-    Math.round(angle / SHAPE_ROTATION_SNAP_RADIANS) * SHAPE_ROTATION_SNAP_RADIANS,
+    Math.round(angle / snapRadians) * snapRadians,
   );
 }
 
 /** Signed degrees in (−180, 180], matching `normalizeShapeRotation`. */
-export function shapeRotationDegrees(
-  element: Pick<EditorShapeElement, "rotation">,
+export function elementRotationDegrees(
+  element: { rotation?: number },
 ): number {
-  return Math.round(shapeRotation(element) * (180 / Math.PI));
+  return Math.round(elementRotation(element) * (180 / Math.PI));
+}
+
+export function shapeRotationDegrees(element: Pick<EditorShapeElement, "rotation">): number {
+  return elementRotationDegrees(element);
 }
 
 export function shapeRotationFromDegrees(degrees: number): number {
@@ -2423,12 +2426,19 @@ export function withShapeRotation(
   element: EditorShapeElement,
   radians: number,
 ): EditorShapeElement {
+  return withElementRotation(element, radians);
+}
+
+export function withElementRotation<T extends ScreenshotElement>(
+  element: T,
+  radians: number,
+): T {
   const rotation = normalizeShapeRotation(radians);
   if (rotation === 0) {
     if (element.rotation == null) return element;
-    return { ...element, rotation: undefined };
+    return { ...element, rotation: undefined } as T;
   }
-  return { ...element, rotation };
+  return { ...element, rotation } as T;
 }
 
 export function rotatePointAround(
@@ -2499,21 +2509,39 @@ export function shapeLocalBounds(element: EditorShapeElement): EditorRect {
 }
 
 export function shapeRotationOrigin(element: EditorShapeElement): EditorPoint {
-  return rectCenter(shapeLocalBounds(element));
+  return elementRotationOrigin(element);
+}
+
+export function elementRotationOrigin(element: ScreenshotElement): EditorPoint {
+  return rectCenter(elementLocalBounds(element));
 }
 
 export function shapeWorldPoint(
   element: EditorShapeElement,
   localPoint: EditorPoint,
 ): EditorPoint {
-  return rotatePointAround(localPoint, shapeRotationOrigin(element), shapeRotation(element));
+  return elementWorldPoint(element, localPoint);
 }
 
 export function shapeLocalPoint(
   element: EditorShapeElement,
   worldPoint: EditorPoint,
 ): EditorPoint {
-  return rotatePointAround(worldPoint, shapeRotationOrigin(element), -shapeRotation(element));
+  return elementLocalPoint(element, worldPoint);
+}
+
+export function elementWorldPoint(
+  element: ScreenshotElement,
+  localPoint: EditorPoint,
+): EditorPoint {
+  return rotatePointAround(localPoint, elementRotationOrigin(element), elementRotation(element));
+}
+
+export function elementLocalPoint(
+  element: ScreenshotElement,
+  worldPoint: EditorPoint,
+): EditorPoint {
+  return rotatePointAround(worldPoint, elementRotationOrigin(element), -elementRotation(element));
 }
 
 /**
@@ -2526,14 +2554,22 @@ export function preserveShapeWorldPoint(
   next: EditorShapeElement,
   localAnchor: EditorPoint,
 ): EditorShapeElement {
-  const rotation = shapeRotation(next);
-  if (rotation === 0 && shapeRotation(initial) === 0) return next;
-  const before = shapeWorldPoint(initial, localAnchor);
-  const after = shapeWorldPoint(next, localAnchor);
+  return preserveElementWorldPoint(initial, next, localAnchor) as EditorShapeElement;
+}
+
+export function preserveElementWorldPoint<T extends ScreenshotElement>(
+  initial: T,
+  next: T,
+  localAnchor: EditorPoint,
+): T {
+  const rotation = elementRotation(next);
+  if (rotation === 0 && elementRotation(initial) === 0) return next;
+  const before = elementWorldPoint(initial, localAnchor);
+  const after = elementWorldPoint(next, localAnchor);
   const deltaX = before.x - after.x;
   const deltaY = before.y - after.y;
   if (Math.abs(deltaX) < 1e-9 && Math.abs(deltaY) < 1e-9) return next;
-  return translateElement(next, deltaX, deltaY) as EditorShapeElement;
+  return translateElement(next, deltaX, deltaY) as T;
 }
 
 export function shapeRotationHandleOffset(displayScale: number): number {
@@ -2545,13 +2581,63 @@ export function shapeRotationHandlePoint(
   element: EditorShapeElement,
   displayScale: number,
 ): EditorPoint {
-  const bounds = shapeLocalBounds(element);
+  return elementRotationHandlePoint(element, displayScale);
+}
+
+function elementRotationHandleGeometry(
+  element: ScreenshotElement,
+  displayScale: number,
+  canvas?: Pick<ScreenshotDocument, "width" | "height">,
+): { anchor: EditorPoint; handle: EditorPoint } {
+  const bounds = elementLocalBounds(element);
   const origin = rectCenter(bounds);
-  const local = {
-    x: bounds.x + bounds.width / 2,
-    y: bounds.y - shapeRotationHandleOffset(displayScale),
-  };
-  return rotatePointAround(local, origin, shapeRotation(element));
+  const offset = shapeRotationHandleOffset(displayScale);
+  const midX = bounds.x + bounds.width / 2;
+  const candidates = [
+    {
+      anchor: { x: midX, y: bounds.y },
+      handle: { x: midX, y: bounds.y - offset },
+    },
+    {
+      anchor: { x: midX, y: bounds.y + bounds.height },
+      handle: { x: midX, y: bounds.y + bounds.height + offset },
+    },
+    {
+      anchor: { x: midX, y: bounds.y },
+      handle: { x: midX, y: bounds.y + offset },
+    },
+    {
+      anchor: { x: midX, y: bounds.y + bounds.height },
+      handle: { x: midX, y: bounds.y + bounds.height - offset },
+    },
+  ].map(({ anchor, handle }) => ({
+    anchor: rotatePointAround(anchor, origin, elementRotation(element)),
+    handle: rotatePointAround(handle, origin, elementRotation(element)),
+  }));
+  if (!canvas) return candidates[0];
+  const pad = 8 / Math.max(0.01, displayScale);
+  return candidates.find(({ handle }) => (
+    handle.x >= pad
+    && handle.y >= pad
+    && handle.x <= canvas.width - pad
+    && handle.y <= canvas.height - pad
+  )) ?? candidates[0];
+}
+
+export function elementRotationHandlePoint(
+  element: ScreenshotElement,
+  displayScale: number,
+  canvas?: Pick<ScreenshotDocument, "width" | "height">,
+): EditorPoint {
+  return elementRotationHandleGeometry(element, displayScale, canvas).handle;
+}
+
+export function elementRotationHandleAnchorPoint(
+  element: ScreenshotElement,
+  displayScale: number,
+  canvas?: Pick<ScreenshotDocument, "width" | "height">,
+): EditorPoint {
+  return elementRotationHandleGeometry(element, displayScale, canvas).anchor;
 }
 
 export function hitTestShapeRotationHandle(
@@ -2560,7 +2646,17 @@ export function hitTestShapeRotationHandle(
   handleRadius: number,
   displayScale: number,
 ): boolean {
-  const handle = shapeRotationHandlePoint(element, displayScale);
+  return hitTestElementRotationHandle(element, point, handleRadius, displayScale);
+}
+
+export function hitTestElementRotationHandle(
+  element: ScreenshotElement,
+  point: EditorPoint,
+  handleRadius: number,
+  displayScale: number,
+  canvas?: Pick<ScreenshotDocument, "width" | "height">,
+): boolean {
+  const handle = elementRotationHandlePoint(element, displayScale, canvas);
   const minRadius = 6 / Math.max(0.01, displayScale);
   const radius = Math.max(minRadius, handleRadius * 1.25);
   return Math.hypot(point.x - handle.x, point.y - handle.y) <= radius;
@@ -2572,7 +2668,15 @@ export function shapeRotationHandleFitsCanvas(
   displayScale: number,
   canvas: Pick<ScreenshotDocument, "width" | "height">,
 ): boolean {
-  const handle = shapeRotationHandlePoint(element, displayScale);
+  return elementRotationHandleFitsCanvas(element, displayScale, canvas);
+}
+
+export function elementRotationHandleFitsCanvas(
+  element: ScreenshotElement,
+  displayScale: number,
+  canvas: Pick<ScreenshotDocument, "width" | "height">,
+): boolean {
+  const handle = elementRotationHandlePoint(element, displayScale, canvas);
   const pad = 8 / Math.max(0.01, displayScale);
   return handle.x >= pad
     && handle.y >= pad
@@ -2593,9 +2697,7 @@ export function shapeRotationHandleFitsCanvas(
  * Arrowhead wings are measured at the tip only — never as an isotropic pad on
  * every side of the shaft (that left large empty selection / trim margins).
  */
-function shapeElementBounds(element: EditorShapeElement): EditorRect {
-  const local = shapeLocalBounds(element);
-  const rotation = shapeRotation(element);
+function rotatedBounds(local: EditorRect, rotation: number): EditorRect {
   if (rotation === 0) return local;
   const origin = rectCenter(local);
   return boundsFromPoints(
@@ -3187,7 +3289,8 @@ export function resizeCursor(handle: ResizeHandle): string {
   return "nesw-resize";
 }
 
-export function elementBounds(element: ScreenshotElement): EditorRect {
+/** Unrotated selection/content bounds used for local-space interaction. */
+export function elementLocalBounds(element: ScreenshotElement): EditorRect {
   if (element.kind === "image") {
     return {
       x: element.x,
@@ -3216,7 +3319,7 @@ export function elementBounds(element: ScreenshotElement): EditorRect {
     };
   }
   if (element.kind === "shape") {
-    return shapeElementBounds(element);
+    return shapeLocalBounds(element);
   }
   if (element.points.length === 0) {
     return { x: element.x, y: element.y, width: 1, height: 1 };
@@ -3233,6 +3336,11 @@ export function elementBounds(element: ScreenshotElement): EditorRect {
     width: Math.max(1, Math.max(...xs) - left) + padding * 2,
     height: Math.max(1, Math.max(...ys) - top) + padding * 2,
   };
+}
+
+/** Painted axis-aligned bounds after applying the element's authored rotation. */
+export function elementBounds(element: ScreenshotElement): EditorRect {
+  return rotatedBounds(elementLocalBounds(element), elementRotation(element));
 }
 
 /** CSS size of each Layers-panel thumbnail (matches `.screenshot-layer-preview`). */
@@ -3271,10 +3379,8 @@ export function hitTestElement(
   for (let index = elements.length - 1; index >= 0; index -= 1) {
     const element = elements[index];
     if (!element.visible || element.locked) continue;
-    const hitPoint = element.kind === "shape" ? shapeLocalPoint(element, point) : point;
-    const bounds = element.kind === "shape"
-      ? shapeLocalBounds(element)
-      : elementBounds(element);
+    const hitPoint = elementLocalPoint(element, point);
+    const bounds = elementLocalBounds(element);
     if (
       hitPoint.x >= bounds.x - tolerance
       && hitPoint.x <= bounds.x + bounds.width + tolerance

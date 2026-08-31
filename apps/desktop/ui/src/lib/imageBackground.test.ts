@@ -22,6 +22,7 @@ import {
 import {
   createScreenshotDocument,
   transformImageElement,
+  withElementRotation,
   type EditorImageElement,
   type ScreenshotElement,
 } from "./screenshotEditor";
@@ -132,6 +133,20 @@ describe("documentPointToImagePixel", () => {
       x: 0,
       y: 99,
     });
+  });
+
+  it("maps freely rotated image coordinates back to source pixels", () => {
+    const rotated = withElementRotation(imageElement(), Math.PI / 2);
+    expect(documentPointToImagePixel(rotated, { x: 74.9, y: -24.9 })).toEqual({
+      x: 0,
+      y: 0,
+    });
+    expect(documentPointToImagePixel(rotated, { x: 50, y: 25 })).toEqual({
+      x: 100,
+      y: 50,
+    });
+    expect(hitTestImageElement([rotated], { x: 50, y: -20 })?.id).toBe("img-1");
+    expect(hitTestImageElement([rotated], { x: 5, y: 25 })).toBeNull();
   });
 });
 
