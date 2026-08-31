@@ -109,6 +109,7 @@ import {
   resizeDocumentCanvas,
   resizeElement,
   resizeHandlePoint,
+  rotationHudShouldOpenBelow,
   isResizeCornerHandle,
   scaleArrowStrokeForLength,
   shapeLocalBounds,
@@ -125,7 +126,6 @@ import {
   snapShapeRotationDegrees,
   shapeRotationDegrees,
   shapeRotationFromDegrees,
-  SHAPE_ROTATION_SNAP_DEGREES,
   withShapeRotation,
   snapResizedBounds,
   snapTranslatedBounds,
@@ -360,13 +360,7 @@ const TEXT_STYLE_ITEMS: Array<{ preset: TextStylePreset; label: string }> = [
   { preset: "rounded-box", label: "Rounded Box" },
 ];
 
-const SHAPE_ROTATION_SLIDER_MARKS = [
-  { value: -180, label: "−180°", shortLabel: "−180" },
-  { value: -90, label: "−90°", shortLabel: "−90" },
-  { value: 0, label: "0°", shortLabel: "0" },
-  { value: 90, label: "90°", shortLabel: "90" },
-  { value: 180, label: "180°", shortLabel: "180" },
-];
+const SHAPE_ROTATION_ROLODEX_STOPS = [0, 15, 45, 90] as const;
 
 /** Tools that draw closed or open vector shapes (not freehand). */
 function isShapeDrawTool(tool: ScreenshotTool): boolean {
@@ -763,9 +757,13 @@ function drawShapeRotationHandle(
   const handleY = bounds.y - offset;
   const radius = 8 * unit;
   context.save();
+  context.globalAlpha = 0.22;
+  context.fillStyle = accentColor;
+  context.beginPath();
+  context.arc(midX, handleY, radius, 0, Math.PI * 2);
+  context.fill();
   context.globalAlpha = 1;
   context.strokeStyle = accentColor;
-  context.fillStyle = "rgba(255, 255, 255, 0.98)";
   context.lineWidth = 1.6 * unit;
   context.beginPath();
   context.moveTo(midX, bounds.y);
@@ -773,7 +771,6 @@ function drawShapeRotationHandle(
   context.stroke();
   context.beginPath();
   context.arc(midX, handleY, radius, 0, Math.PI * 2);
-  context.fill();
   context.stroke();
   // Compact rotate glyph inside the grip so the control reads as rotation.
   context.strokeStyle = accentColor;
@@ -1721,6 +1718,7 @@ export function ScreenshotEditor() {
   /** Free view offset (CSS px) so the canvas can be dragged fully off-screen. */
   const [viewPan, setViewPan] = useState({ x: 0, y: 0 });
   const [canvasOffscreen, setCanvasOffscreen] = useState(false);
+  const [rotateHudBelow, setRotateHudBelow] = useState(false);
   const [layerDropTarget, setLayerDropTarget] = useState<LayerDropTarget | null>(null);
   /** Which layer row's settings popover is open (⋯ menu). */
   const [layerMenuId, setLayerMenuId] = useState<string | null>(null);
@@ -1788,6 +1786,7 @@ export function ScreenshotEditor() {
   const viewportRef = useRef<HTMLDivElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const rotateHudRef = useRef<HTMLDivElement>(null);
   const expandOverflowCanvasRef = useRef<HTMLCanvasElement>(null);
   const brushCursorElementRef = useRef<HTMLDivElement>(null);
   const brushCursorPositionRef = useRef({ clientX: 0, clientY: 0 });
@@ -2411,6 +2410,23 @@ export function ScreenshotEditor() {
       placeLeft: Boolean(editorDocument && handle.x > editorDocument.width * 0.58),
     };
   }, [cropSelection, displayScale, editorDocument, selected]);
+
+  useLayoutEffect(() => {
+    const hud = rotateHudRef.current;
+    const viewport = viewportRef.current;
+    const surface = surfaceRef.current;
+    if (!shapeRotateHud || !hud || !viewport || !surface) return;
+    const viewportBounds = viewport.getBoundingClientRect();
+    const surfaceBounds = surface.getBoundingClientRect();
+    const anchorClientY = surfaceBounds.top + shapeRotateHud.handle.y * displayScale;
+    const nextBelow = rotationHudShouldOpenBelow(
+      anchorClientY,
+      viewportBounds.top,
+      viewportBounds.bottom,
+      hud.offsetHeight,
+    );
+    setRotateHudBelow((current) => current === nextBelow ? current : nextBelow);
+  }, [displayScale, shapeRotateHud, viewPan]);
 
   const idleOverflowPreview = useMemo(() => {
     if (canvasExpandPreview || !editorDocument || !overflowHoverId) return null;
@@ -5537,9 +5553,11 @@ export function ScreenshotEditor() {
           />
           {shapeRotateHud && selected?.kind === "shape" && (
             <div
+              ref={rotateHudRef}
               className={[
                 "screenshot-shape-rotate-hud",
                 shapeRotateHud.placeLeft ? "is-left" : "",
+                rotateHudBelow ? "is-below" : "",
               ].filter(Boolean).join(" ")}
               style={{
                 left: shapeRotateHud.handle.x * displayScale,
@@ -5549,37 +5567,26 @@ export function ScreenshotEditor() {
               onPointerMove={(event) => event.stopPropagation()}
               onDoubleClick={(event) => event.stopPropagation()}
             >
-              <span className="screenshot-shape-rotate-hud-icon" aria-hidden="true">
-                <EditorIcon name="rotate-clockwise" />
-              </span>
-              <RangeSlider
-                className="screenshot-shape-rotate-hud-slider"
-                ariaLabel="Shape rotation"
-                min={-180}
-                max={180}
-                step={SHAPE_ROTATION_SNAP_DEGREES}
-                value={shapeRotateHud.snapDegrees}
-                valueText={`${shapeRotateHud.degrees}°`}
-                marks={SHAPE_ROTATION_SLIDER_MARKS}
-                disabled={selected.locked}
-                onChange={(degrees) => {
-                  if (selected.kind !== "shape") return;
-                  const snapped = snapShapeRotationDegrees(degrees);
-                  updateSelected((element) => (
-                    element.kind === "shape"
-                      ? withShapeRotation(element, shapeRotationFromDegrees(snapped))
-                      : element
-                  ));
-                }}
-              />
-              <div className="screenshot-shape-rotate-hud-snaps" role="group" aria-label="Snap rotation">
-                {[-90, 0, 45, 90, 180].map((degrees) => (
+              <svg
+                className="screenshot-shape-rotate-hud-arc"
+                viewBox="0 0 128 100"
+                preserveAspectRatio="none"
+                aria-hidden="true"
+              >
+                <path d="M 8 88 C 20 50, 58 12, 98 10" />
+              </svg>
+              <div role="group" aria-label="Rotation angle shortcuts">
+                {SHAPE_ROTATION_ROLODEX_STOPS.map((degrees) => (
                   <button
                     key={degrees}
                     type="button"
-                    className={shapeRotateHud.snapDegrees === degrees ? "is-active" : ""}
+                    className={[
+                      "screenshot-shape-rotate-hud-stop",
+                      `is-angle-${degrees}`,
+                      shapeRotateHud.snapDegrees === degrees ? "is-active" : "",
+                    ].filter(Boolean).join(" ")}
                     aria-pressed={shapeRotateHud.snapDegrees === degrees}
-                    aria-label={`Snap to ${degrees} degrees`}
+                    aria-label={`Set rotation to ${degrees} degrees`}
                     onClick={() => {
                       updateSelected((element) => (
                         element.kind === "shape"
@@ -6883,9 +6890,8 @@ export function ScreenshotEditor() {
             )}
             {selected.kind === "shape" && (
               <p>
-                Drag the rotate handle for a smooth spin. Use the slider or
-                angle chips beside it to snap in {SHAPE_ROTATION_SNAP_DEGREES}°
-                steps.
+                Drag the rotate handle for a smooth spin, or use the curved
+                angle stops around it for common rotations.
               </p>
             )}
           </section>
