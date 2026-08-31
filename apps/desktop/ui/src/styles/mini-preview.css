@@ -99,12 +99,12 @@
   left: 8px;
   right: auto;
   bottom: 8px;
-  display: flex;
+  display: grid;
   width: 40px;
   height: 40px;
-  padding: 0 6px;
-  align-items: center;
-  gap: var(--s-3);
+  padding: 0;
+  place-items: center;
+  overflow: visible;
   border: 1px solid var(--glass-border);
   border-radius: var(--r-xl);
   color: var(--glass-text);
@@ -116,10 +116,8 @@
   opacity: 1;
   transform: translateY(0) scale(1);
   transition:
-    width 0.42s cubic-bezier(0.22, 0.72, 0.2, 1),
     opacity var(--dur-2) var(--ease-out),
     transform var(--dur-3) var(--ease-out),
-    filter var(--dur-2) var(--ease-out),
     background-color var(--dur-2) var(--ease-out),
     border-color var(--dur-2) var(--ease-out),
     box-shadow var(--dur-2) var(--ease-out),
@@ -137,7 +135,6 @@
 
 .thumbnail-collapse:active {
   background: var(--glass-raised-solid);
-  filter: brightness(0.94);
 }
 
 .thumbnail-collapse:focus-visible {
@@ -145,123 +142,167 @@
   outline-offset: 2px;
 }
 
-.mini-preview-folder-icon {
+/*
+ * Isometric 3D folder. Cards fly into the measured pocket; the front flap
+ * sits in this stacking context so arriving miniatures disappear behind it.
+ */
+.mini-preview-folder {
   position: relative;
-  display: grid;
-  width: 28px;
-  height: 28px;
-  flex: 0 0 28px;
-  place-items: center;
-  transform-origin: center bottom;
-  transition: transform var(--dur-2) var(--ease-out);
-}
-
-.mini-preview-folder-icon > svg {
   display: block;
   width: 28px;
   height: 28px;
-  overflow: visible;
+  flex: 0 0 28px;
+  perspective: 132px;
+  perspective-origin: 42% 78%;
+  transform-origin: center bottom;
+  pointer-events: none;
+}
+
+.mini-preview-folder-scene {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  transform-origin: 50% 100%;
+  transform-style: preserve-3d;
+  transform: rotateX(18deg) rotateY(-30deg) rotateZ(-8deg);
+  transition: transform 0.42s cubic-bezier(0.22, 0.72, 0.2, 1);
+}
+
+.mini-preview-folder[data-pose="open"] .mini-preview-folder-scene,
+.mini-preview-folder[data-pose="parked"] .mini-preview-folder-scene {
+  transform: rotateX(26deg) rotateY(-38deg) rotateZ(-10deg) scale(1.16);
+}
+
+.mini-preview-folder-back,
+.mini-preview-folder-front {
+  position: absolute;
+  border-radius: 2px 3px 3px 3px;
+  background:
+    linear-gradient(
+      155deg,
+      var(--theme-accent-hover) 0%,
+      var(--theme-accent) 46%,
+      var(--theme-accent-strong) 100%
+    );
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.32);
+  backface-visibility: hidden;
+}
+
+.mini-preview-folder-back {
+  left: 3px;
+  right: 1px;
+  top: 5px;
+  bottom: 1px;
+  transform: translateZ(-8px);
+}
+
+.mini-preview-folder-tab {
+  position: absolute;
+  top: -5px;
+  right: 1px;
+  width: 11px;
+  height: 6px;
+  border-radius: 2px 2px 0 0;
+  background: var(--theme-accent-hover);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.34);
+}
+
+.mini-preview-folder-side {
+  position: absolute;
+  left: 3px;
+  top: 5px;
+  bottom: 1px;
+  width: 9px;
+  border-radius: 1px;
+  background: var(--theme-accent-strong);
+  transform: rotateY(90deg);
+  transform-origin: left center;
+  backface-visibility: hidden;
+}
+
+.mini-preview-folder-pocket {
+  position: absolute;
+  inset: 1px 4px 7px 4px;
+  transform-style: preserve-3d;
 }
 
 .mini-preview-folder-sheet {
-  fill: var(--glass-raised-solid);
-  stroke: var(--glass-border-strong);
-  stroke-width: 1;
-}
+  --sheet-i: 0;
 
-.mini-preview-folder-sheet-back {
-  opacity: 0.72;
-  transform: rotate(4deg);
-  transform-origin: center;
-}
-
-.mini-preview-folder-face {
-  fill: var(--theme-accent);
-  stroke: rgba(var(--theme-accent-rgb), 0.82);
-  stroke-width: 1;
-}
-
-.mini-preview-folder-mark {
-  fill: none;
-  stroke: var(--theme-accent-ink);
-  stroke-width: 1.35;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.mini-preview-folder-compact-chevron {
   position: absolute;
-  right: 3px;
-  bottom: 3px;
-  display: grid;
-  width: 12px;
-  height: 12px;
-  place-items: center;
-  border-radius: var(--r-pill);
-  color: var(--glass-text);
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 15px;
+  overflow: hidden;
+  border: 1px solid var(--glass-border-strong);
+  border-radius: 1.5px;
+  background: var(--glass-raised-solid);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
+  transform:
+    translate3d(
+      calc(var(--sheet-i) * 0.55px),
+      calc(var(--sheet-i) * -1.4px),
+      calc(-5px + var(--sheet-i) * 2.2px)
+    );
+  transition: transform 0.42s cubic-bezier(0.22, 0.72, 0.2, 1);
+}
+
+.mini-preview-folder-sheet:nth-child(even) {
   background: var(--glass-strong-solid);
-  opacity: 1;
+}
+
+.mini-preview-folder[data-pose="open"] .mini-preview-folder-sheet,
+.mini-preview-folder[data-pose="parked"] .mini-preview-folder-sheet {
+  transform:
+    translate3d(
+      calc(var(--sheet-i) * 0.8px),
+      calc(-4px + var(--sheet-i) * -2.1px),
+      calc(-3px + var(--sheet-i) * 3.1px)
+    );
+}
+
+.mini-preview-folder-sheet img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top center;
   pointer-events: none;
+}
+
+.mini-preview-folder-front {
+  left: 2px;
+  right: 0;
+  top: 12px;
+  bottom: 0;
+  transform-origin: center bottom;
+  transform: translateZ(8px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.38),
+    0 2px 3px rgba(0, 0, 0, 0.34);
   transition:
-    opacity var(--dur-2) var(--ease-out),
-    transform var(--dur-2) var(--ease-out);
+    transform 0.42s cubic-bezier(0.22, 0.72, 0.2, 1),
+    top 0.42s cubic-bezier(0.22, 0.72, 0.2, 1);
 }
 
-.mini-preview-folder-compact-chevron svg {
-  width: 9px;
-  height: 9px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+.mini-preview-folder[data-pose="open"] .mini-preview-folder-front {
+  top: 16px;
+  transform: translateZ(11px) rotateX(-22deg);
 }
 
-.thumbnail-collapse-label {
-  max-width: 0;
-  overflow: hidden;
-  flex: 0 1 auto;
-  opacity: 0;
-  font-size: var(--text-xs);
-  font-weight: var(--weight-semibold);
-  white-space: nowrap;
-  transition:
-    max-width 0.38s cubic-bezier(0.22, 0.72, 0.2, 1),
-    opacity var(--dur-2) var(--ease-out);
+.mini-preview-folder[data-pose="parked"] .mini-preview-folder-front {
+  top: 15px;
+  transform: translateZ(10px) rotateX(-12deg);
 }
 
-.thumbnail-collapse-chevron {
-  display: grid;
-  width: 0;
-  overflow: hidden;
-  flex: 0 0 auto;
-  place-items: center;
-  opacity: 0;
-  transition:
-    width 0.32s var(--ease-out),
-    opacity var(--dur-2) var(--ease-out),
-    transform var(--dur-2) var(--ease-out);
-}
-
-.thumbnail-collapse-chevron svg {
-  width: 16px;
-  height: 16px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  pointer-events: none;
-  transition: transform var(--dur-2) var(--ease-out);
-}
-
-.thumbnail-collapse:hover .mini-preview-folder-icon,
-.thumbnail-collapse[data-native-pointer-hover="true"] .mini-preview-folder-icon,
-.thumbnail-collapse:focus-visible .mini-preview-folder-icon {
+.thumbnail-collapse:hover .mini-preview-folder,
+.thumbnail-collapse[data-native-pointer-hover="true"] .mini-preview-folder,
+.thumbnail-collapse:focus-visible .mini-preview-folder {
   transform: translateY(-1px) scale(1.03);
 }
 
-.thumbnail-collapse:active .mini-preview-folder-icon {
+.thumbnail-collapse:active .mini-preview-folder {
   transform: translateY(1px) scale(0.98);
 }
 
@@ -294,27 +335,10 @@
   transform: translateY(0);
 }
 
-.thumbnail-collapse.thumbnail-collapse-collapsing {
-  width: 160px;
+.thumbnail-collapse.thumbnail-collapse-collapsing,
+.thumbnail-collapse.thumbnail-collapse-parked,
+.thumbnail-collapse.thumbnail-collapse-restoring {
   pointer-events: none;
-}
-
-.thumbnail-collapse-collapsing .mini-preview-folder-compact-chevron {
-  opacity: 0;
-  transform: scale(0.7);
-}
-
-.thumbnail-collapse-collapsing .thumbnail-collapse-label {
-  max-width: 86px;
-  opacity: 1;
-  transition-delay: 0.12s;
-}
-
-.thumbnail-collapse-collapsing .thumbnail-collapse-chevron {
-  width: 16px;
-  margin-left: auto;
-  opacity: 1;
-  transition-delay: 0.18s;
 }
 
 @property --thumbnail-folder-dissolve-radius {
@@ -419,13 +443,15 @@
 }
 
 .mini-previews-hidden {
-  position: relative;
-  display: flex;
-  width: calc(100% - var(--s-6));
-  height: calc(100% - var(--s-6));
-  margin: var(--s-4);
-  padding: 0 var(--s-3);
-  align-items: center;
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  display: grid;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  place-items: center;
+  overflow: visible;
   border: 1px solid var(--glass-border);
   border-radius: var(--r-xl);
   color: var(--glass-text);
@@ -440,7 +466,6 @@
   cursor: pointer !important;
   animation: mini-previews-hidden-in var(--dur-3) var(--ease-out) both;
   transition:
-    width 0.26s cubic-bezier(0.4, 0, 0.2, 1),
     background-color var(--dur-2) var(--ease-out),
     border-color var(--dur-2) var(--ease-out),
     box-shadow var(--dur-2) var(--ease-out);
@@ -448,16 +473,6 @@
 
 .mini-previews-hidden > * {
   pointer-events: none;
-}
-
-.mini-previews-hidden-content {
-  display: flex;
-  width: 100%;
-  min-width: 0;
-  align-items: center;
-  gap: var(--s-3);
-  /* Keep the shadow-bearing button stationary inside its native gutter. */
-  animation: mini-previews-hidden-content-in var(--dur-3) var(--ease-out) both;
 }
 
 .mini-previews-hidden:hover,
@@ -471,7 +486,6 @@
 
 .mini-previews-hidden:active {
   background: var(--glass-raised-solid);
-  filter: brightness(0.94);
 }
 
 .mini-previews-hidden:focus-visible {
@@ -479,102 +493,21 @@
   outline-offset: 2px;
 }
 
-.mini-previews-hidden-chevron {
-  display: grid;
-  width: 16px;
-  overflow: hidden;
-  margin-left: auto;
-  flex: 0 0 auto;
-  place-items: center;
-  opacity: 1;
-  transition:
-    width var(--dur-2) var(--ease-out),
-    opacity var(--dur-2) var(--ease-out),
-    transform var(--dur-2) var(--ease-out);
-}
-
-.mini-previews-hidden-chevron svg {
-  width: 16px;
-  height: 16px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.mini-previews-hidden:hover .mini-preview-folder-icon,
-.mini-previews-hidden:focus-visible .mini-preview-folder-icon,
-.mini-previews-hidden:hover .mini-previews-hidden-chevron,
-.mini-previews-hidden:focus-visible .mini-previews-hidden-chevron {
+.mini-previews-hidden:hover .mini-preview-folder,
+.mini-previews-hidden:focus-visible .mini-preview-folder {
   transform: translateY(-1px);
 }
 
-.mini-previews-hidden:active .mini-preview-folder-icon {
+.mini-previews-hidden:active .mini-preview-folder {
   transform: scale(0.98);
 }
 
-.mini-previews-hidden:active .mini-previews-hidden-chevron {
-  transform: translateY(0);
-}
-
-.mini-previews-hidden strong {
-  min-width: 0;
-  max-width: 92px;
-  overflow: hidden;
-  opacity: 1;
-  font-size: var(--text-xs);
-  font-weight: var(--weight-semibold);
-  white-space: nowrap;
-  transition:
-    max-width 0.22s var(--ease-out),
-    opacity var(--dur-2) var(--ease-out);
-}
-
-.mini-previews-hidden .mini-preview-folder-compact-chevron {
-  opacity: 0;
-  transform: scale(0.7);
-}
-
 .mini-previews-hidden-restoring {
-  width: 40px;
   pointer-events: none;
 }
 
-.mini-previews-hidden-restoring strong {
-  max-width: 0;
-  opacity: 0;
-}
-
-.mini-previews-hidden-restoring .mini-previews-hidden-chevron {
-  width: 0;
-  opacity: 0;
-}
-
-.mini-previews-hidden-restoring .mini-preview-folder-compact-chevron {
-  opacity: 1;
-  transform: scale(1);
-}
-
-.mini-previews-hidden-from-folder,
-.mini-previews-hidden-from-folder .mini-previews-hidden-content {
+.mini-previews-hidden-from-folder {
   animation: none;
-}
-
-/*
- * Native chip window is 176×56. The design harness is a full browser, so pin
- * the chip to that size in the stack corner. The query is above the native
- * window width so packaged builds keep filling their webview.
- */
-@media (min-width: 200px) {
-  .mini-previews-hidden {
-    position: absolute;
-    left: 0;
-    bottom: 0;
-    width: 160px;
-    height: 40px;
-    margin: 8px;
-  }
 }
 
 @keyframes mini-previews-hidden-in {
@@ -583,15 +516,6 @@
   }
   to {
     opacity: 1;
-  }
-}
-
-@keyframes mini-previews-hidden-content-in {
-  from {
-    transform: translateY(var(--s-3)) scale(0.96);
-  }
-  to {
-    transform: translateY(0) scale(1);
   }
 }
 
@@ -1842,22 +1766,37 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-collapse, .
 
 /*
  * Apple-style folder motion: each real preview keeps its own measured path so
- * scrolled stacks and short monitors still converge on the exact same icon.
+ * scrolled stacks and short monitors still converge on the exact same pocket.
  */
 .thumbnail-stack-collapsing,
-.thumbnail-stack-restoring {
-  overflow: hidden;
+.thumbnail-stack-restoring,
+.thumbnail-stack-parked {
+  overflow: visible;
   pointer-events: none;
+  perspective: 900px;
 }
 
 .thumbnail-stack.thumbnail-stack-collapsing > .thumbnail-card,
-.thumbnail-stack.thumbnail-stack-restoring > .thumbnail-card {
+.thumbnail-stack.thumbnail-stack-restoring > .thumbnail-card,
+.thumbnail-stack.thumbnail-stack-parked > .thumbnail-card {
   transform-origin: top left;
   will-change: opacity, transform, filter;
 }
 
 .thumbnail-stack.thumbnail-stack-collapsing > .thumbnail-card {
   animation: thumbnail-card-into-folder 0.52s var(--thumbnail-folder-delay, 0ms) cubic-bezier(0.4, 0, 0.14, 1) both;
+}
+
+.thumbnail-stack.thumbnail-stack-parked > .thumbnail-card {
+  opacity: 0;
+  transform: translate3d(
+      var(--thumbnail-folder-x, -14px),
+      var(--thumbnail-folder-y, 0),
+      0
+    )
+    rotateX(18deg) rotateY(-26deg)
+    scale(var(--thumbnail-folder-scale, 0.08));
+  filter: blur(1px) brightness(0.72);
 }
 
 .thumbnail-stack.thumbnail-stack-restoring > .thumbnail-card {
@@ -1867,7 +1806,7 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-collapse, .
 @keyframes thumbnail-card-into-folder {
   0% {
     opacity: 1;
-    transform: translate3d(0, 0, 0) scale(1);
+    transform: translate3d(0, 0, 0) rotateX(0deg) rotateY(0deg) scale(1);
     filter: blur(0) brightness(1);
   }
   68% {
@@ -1879,10 +1818,12 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-collapse, .
   100% {
     opacity: 0;
     transform: translate3d(
-      var(--thumbnail-folder-x, -14px),
-      var(--thumbnail-folder-y, 0),
-      0
-    ) scale(var(--thumbnail-folder-scale, 0.1));
+        var(--thumbnail-folder-x, -14px),
+        var(--thumbnail-folder-y, 0),
+        0
+      )
+      rotateX(18deg) rotateY(-26deg)
+      scale(var(--thumbnail-folder-scale, 0.08));
     filter: blur(1px) brightness(0.72);
   }
 }
@@ -1891,10 +1832,12 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-collapse, .
   0% {
     opacity: 0;
     transform: translate3d(
-      var(--thumbnail-folder-x, -14px),
-      var(--thumbnail-folder-y, 0),
-      0
-    ) scale(var(--thumbnail-folder-scale, 0.1));
+        var(--thumbnail-folder-x, -14px),
+        var(--thumbnail-folder-y, 0),
+        0
+      )
+      rotateX(18deg) rotateY(-26deg)
+      scale(var(--thumbnail-folder-scale, 0.08));
     filter: blur(1px) brightness(0.72);
   }
   18% {
@@ -1902,7 +1845,7 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-collapse, .
   }
   100% {
     opacity: 1;
-    transform: translate3d(0, 0, 0) scale(1);
+    transform: translate3d(0, 0, 0) rotateX(0deg) rotateY(0deg) scale(1);
     filter: blur(0) brightness(1);
   }
 }
@@ -1932,6 +1875,12 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-collapse, .
     animation: none;
   }
 
+  .mini-preview-folder-scene,
+  .mini-preview-folder-sheet,
+  .mini-preview-folder-front {
+    transition: none;
+  }
+
   .thumbnail-card.thumbnail-exit-dismiss img {
     animation: none;
     filter: blur(2px) brightness(0.5);
@@ -1943,10 +1892,6 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-collapse, .
   }
 
   .mini-previews-hidden {
-    animation: none;
-  }
-
-  .mini-previews-hidden-content {
     animation: none;
   }
 }

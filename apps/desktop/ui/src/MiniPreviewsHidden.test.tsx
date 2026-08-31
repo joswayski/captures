@@ -9,7 +9,6 @@ import {
 } from "./App";
 import {
   miniPreviewsHiddenLabel,
-  MINI_PREVIEW_FOLDER_RESTORE_LEAD_MS,
 } from "./lib/miniPreviewsHidden";
 import type { CaptureArtifact } from "./types";
 
@@ -105,21 +104,30 @@ describe("MiniPreviewsHiddenChip", () => {
     const rootAnimation = miniPreviewStyles.match(
       /@keyframes mini-previews-hidden-in\s*\{([\s\S]*?)\n\}/,
     );
-    const contentAnimation = miniPreviewStyles.match(
-      /@keyframes mini-previews-hidden-content-in\s*\{([\s\S]*?)\n\}/,
+    const restoringRule = miniPreviewStyles.match(
+      /\.mini-previews-hidden-restoring\s*\{([\s\S]*?)\n\}/,
     );
 
-    expect(baseRule?.[1]).toMatch(/width:\s*calc\(100% - var\(--s-6\)\)/);
-    expect(baseRule?.[1]).toMatch(/height:\s*calc\(100% - var\(--s-6\)\)/);
-    expect(baseRule?.[1]).toMatch(/margin:\s*var\(--s-4\)/);
+    expect(baseRule?.[1]).toMatch(/width:\s*40px/);
+    expect(baseRule?.[1]).toMatch(/height:\s*40px/);
+    expect(baseRule?.[1]).toMatch(/left:\s*8px/);
+    expect(baseRule?.[1]).toMatch(/bottom:\s*8px/);
     expect(baseRule?.[1]).toMatch(
       /0 var\(--s-1\) var\(--s-3\) rgba\(0, 0, 0, 0\.34\)/,
     );
     expect(baseRule?.[1]).not.toMatch(/var\(--glass-shadow\)/);
     expect(rootAnimation?.[1]).not.toMatch(/transform:/);
-    expect(contentAnimation?.[1]).toMatch(
-      /transform:\s*translateY\(var\(--s-3\)\) scale\(0\.96\)/,
+    expect(restoringRule?.[1]).not.toMatch(/width:/);
+  });
+
+  it("opens a 3D folder instead of stretching a label pill", () => {
+    expect(miniPreviewStyles).toMatch(/transform-style:\s*preserve-3d/);
+    expect(miniPreviewStyles).toMatch(/data-pose="parked"/);
+    expect(miniPreviewStyles).not.toMatch(
+      /\.thumbnail-collapse\.thumbnail-collapse-collapsing\s*\{[^}]*width:\s*160px/s,
     );
+    expect(miniPreviewStyles).toMatch(/\.mini-preview-folder-front/);
+    expect(miniPreviewStyles).toMatch(/\.mini-preview-folder-pocket/);
   });
 
   it("dissolves the folder from its top-right card contact point", () => {
@@ -132,19 +140,15 @@ describe("MiniPreviewsHiddenChip", () => {
     expect(miniPreviewStyles).toMatch(/\.thumbnail-collapse-dust/);
   });
 
-  it("restores the stack from the parked count chip", async () => {
-    vi.useFakeTimers();
+  it("restores the stack from the parked folder without shrinking first", async () => {
     render(<MiniPreviewsHiddenChip />);
 
     const chip = screen.getByRole("button", { name: "Show 2 previews" });
-    expect(chip).toHaveTextContent("2 previews");
+    expect(chip.querySelector(".mini-preview-folder")).toHaveAttribute("data-pose", "parked");
     fireEvent.click(chip);
     expect(chip).toHaveClass("mini-previews-hidden-restoring");
+    expect(chip.querySelector(".mini-preview-folder")).toHaveAttribute("data-pose", "parked");
     expect(chip).toBeDisabled();
-    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith("restore_mini_previews");
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(MINI_PREVIEW_FOLDER_RESTORE_LEAD_MS);
-    });
     expect(vi.mocked(invoke)).toHaveBeenCalledWith("restore_mini_previews");
   });
 
@@ -152,14 +156,11 @@ describe("MiniPreviewsHiddenChip", () => {
     window.history.replaceState({}, "", "/?view=mini-previews-hidden&count=1");
     render(<MiniPreviewsHiddenChip />);
 
-    expect(screen.getByRole("button", { name: "Show 1 preview" })).toHaveTextContent(
-      "1 preview",
-    );
+    expect(screen.getByRole("button", { name: "Show 1 preview" })).toBeInTheDocument();
     await waitFor(() => expect(vi.mocked(listen)).toHaveBeenCalled());
-    expect(screen.getByRole("button", { name: "Show 1 preview" })).toHaveTextContent(
-      "1 preview",
-    );
-    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith("get_artifacts");
+    expect(screen.getByRole("button", { name: "Show 1 preview" })).toBeInTheDocument();
+    await waitFor(() => expect(vi.mocked(invoke)).toHaveBeenCalledWith("get_artifacts"));
+    expect(screen.getByRole("button", { name: "Show 1 preview" })).toBeInTheDocument();
   });
 
   it("updates the count when the parked stack changes", async () => {

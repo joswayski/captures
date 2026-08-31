@@ -1,4 +1,6 @@
 import {
+  miniPreviewFolderPlaceholderSheets,
+  miniPreviewFolderSheets,
   miniPreviewsHiddenLabel,
   prepareMiniPreviewFolderMotion,
 } from "./miniPreviewsHidden";
@@ -25,8 +27,39 @@ describe("miniPreviewsHiddenLabel", () => {
   });
 });
 
+describe("miniPreviewFolderSheets", () => {
+  it("keeps the newest captures in front of the pocket", () => {
+    expect(miniPreviewFolderSheets([
+      { id: "older", preview_url: "older.png" },
+      { id: "newer", preview_url: "newer.png" },
+    ])).toEqual([
+      { id: "newer", src: "newer.png" },
+      { id: "older", src: "older.png" },
+    ]);
+  });
+
+  it("caps stacked sheets so the folder stays readable", () => {
+    const sheets = miniPreviewFolderSheets(
+      Array.from({ length: 6 }, (_, index) => ({
+        id: `capture-${index}`,
+        preview_url: `${index}.png`,
+      })),
+    );
+    expect(sheets).toHaveLength(4);
+    expect(sheets[0]?.id).toBe("capture-5");
+  });
+
+  it("builds empty placeholder sheets from a parked count", () => {
+    expect(miniPreviewFolderPlaceholderSheets(3)).toEqual([
+      { id: "preview-sheet-0", src: null },
+      { id: "preview-sheet-1", src: null },
+      { id: "preview-sheet-2", src: null },
+    ]);
+  });
+});
+
 describe("prepareMiniPreviewFolderMotion", () => {
-  it("converges cards on the measured bottom-left folder anchor", () => {
+  it("converges cards on the measured folder pocket", () => {
     document.body.innerHTML = `
       <main>
         <article class="thumbnail-card"></article>
@@ -42,12 +75,16 @@ describe("prepareMiniPreviewFolderMotion", () => {
     vi.spyOn(folder, "getBoundingClientRect").mockReturnValue(rect(14, 332, 28, 28));
 
     expect(prepareMiniPreviewFolderMotion(stack, folder)).toBe(2);
-    expect(cards[0].style.getPropertyValue("--thumbnail-folder-x")).toBe("-14.5px");
-    expect(cards[0].style.getPropertyValue("--thumbnail-folder-y")).toBe("309.5px");
-    expect(cards[1].style.getPropertyValue("--thumbnail-folder-x")).toBe("-13px");
-    expect(cards[1].style.getPropertyValue("--thumbnail-folder-y")).toBe("127px");
+    expect(Number.parseFloat(cards[0].style.getPropertyValue("--thumbnail-folder-x")))
+      .toBeCloseTo(-10.04, 2);
+    expect(Number.parseFloat(cards[0].style.getPropertyValue("--thumbnail-folder-y")))
+      .toBeCloseTo(311.44, 2);
+    expect(Number.parseFloat(cards[1].style.getPropertyValue("--thumbnail-folder-x")))
+      .toBeCloseTo(-7.84, 2);
+    expect(Number.parseFloat(cards[1].style.getPropertyValue("--thumbnail-folder-y")))
+      .toBeCloseTo(130.24, 2);
     expect(Number(cards[1].style.getPropertyValue("--thumbnail-folder-scale")))
-      .toBeCloseTo(0.1056, 3);
+      .toBeCloseTo(0.0775, 3);
     expect(cards[1].style.getPropertyValue("--thumbnail-folder-delay")).toBe("0ms");
   });
 
