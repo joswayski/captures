@@ -5,6 +5,7 @@ import {
   constrainSelectionToAspect,
   dragSelectionRect,
   effectiveDragAspectRatio,
+  frontmostWindowAtPoint,
   frontToBackWindows,
   isCapturableSelection,
   parseAspectRatioPreset,
@@ -26,6 +27,40 @@ describe("frontToBackWindows", () => {
       { id: "first", z_order: 4 },
       { id: "second", z_order: 4 },
     ]).map(({ id }) => id)).toEqual(["first", "second"]);
+  });
+});
+
+describe("frontmostWindowAtPoint", () => {
+  const origin = { x: 0, y: 0 };
+  const front = { id: "front", z_order: 20, x: 0, y: 0, width: 200, height: 200 };
+  const rear = { id: "rear", z_order: 10, x: 50, y: 50, width: 200, height: 200 };
+
+  it("returns the frontmost overlapping window, not the first in the array", () => {
+    expect(frontmostWindowAtPoint([rear, front], { x: 100, y: 100 }, origin)?.id).toBe("front");
+  });
+
+  it("falls through to a rear window when the pointer is outside the front frame", () => {
+    expect(frontmostWindowAtPoint([rear, front], { x: 220, y: 220 }, origin)?.id).toBe("rear");
+  });
+
+  it("converts Quartz window bounds into overlay space", () => {
+    expect(frontmostWindowAtPoint(
+      [{ id: "prefs", z_order: 5, x: 100, y: 80, width: 800, height: 600 }],
+      { x: 50, y: 40 },
+      { x: 50, y: 40 },
+      1,
+    )?.id).toBe("prefs");
+  });
+
+  it("uses half-open edges so a shared boundary belongs to the next window", () => {
+    const left = { id: "left", z_order: 2, x: 0, y: 0, width: 100, height: 100 };
+    const right = { id: "right", z_order: 1, x: 100, y: 0, width: 100, height: 100 };
+    expect(frontmostWindowAtPoint([left, right], { x: 100, y: 10 }, origin)?.id).toBe("right");
+    expect(frontmostWindowAtPoint([left, right], { x: 99.9, y: 10 }, origin)?.id).toBe("left");
+  });
+
+  it("returns null when the pointer is not over any window", () => {
+    expect(frontmostWindowAtPoint([front, rear], { x: 400, y: 400 }, origin)).toBeNull();
   });
 });
 

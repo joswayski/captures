@@ -112,6 +112,8 @@ describe("CaptureOverlay guidance", () => {
         || command === "reveal_capture_overlay"
         || command === "sync_capture_cursor"
         || command === "cancel_capture"
+        || command === "commit_window"
+        || command === "commit_region"
       ) {
         return undefined;
       }
@@ -561,5 +563,74 @@ describe("CaptureOverlay guidance", () => {
     render(<App />);
     await screen.findByText("Select a window to continue");
     expect(document.documentElement).toHaveClass("capture-window-cursor");
+  });
+
+  it("hit-tests the frontmost window under the pointer instead of CSS hover", async () => {
+    activeSession = {
+      ...session,
+      mode: "window",
+      windows: [
+        {
+          id: "prefs",
+          title: "Captures Preferences",
+          app_name: "Captures",
+          z_order: 30,
+          x: 100,
+          y: 80,
+          width: 800,
+          height: 600,
+          display_id: "display-1",
+          corner_radius: 12,
+        },
+        {
+          id: "notes",
+          title: "Notes",
+          app_name: "Notes",
+          z_order: 10,
+          x: 300,
+          y: 160,
+          width: 900,
+          height: 640,
+          display_id: "display-1",
+        },
+      ],
+    };
+    window.history.replaceState(
+      {},
+      "",
+      "/?view=overlay&mode=window&session_id=capture-1",
+    );
+    const { container } = render(<App />);
+    await screen.findByText("Select a window to continue");
+
+    const surface = container.querySelector<HTMLElement>(".capture-surface");
+    expect(surface).not.toBeNull();
+    vi.spyOn(surface!, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 1440,
+      bottom: 900,
+      width: 1440,
+      height: 900,
+      toJSON: () => undefined,
+    } as DOMRect);
+
+    fireEvent.pointerMove(surface!, { clientX: 150, clientY: 100 });
+    const prefs = screen.getByTitle("Captures Preferences");
+    const notes = screen.getByTitle("Notes");
+    expect(prefs).toHaveClass("window-target-hovered");
+    expect(notes).not.toHaveClass("window-target-hovered");
+
+    fireEvent.pointerMove(surface!, { clientX: 950, clientY: 400 });
+    expect(notes).toHaveClass("window-target-hovered");
+    expect(prefs).not.toHaveClass("window-target-hovered");
+
+    fireEvent.pointerUp(surface!, { clientX: 950, clientY: 400 });
+    expect(invoke).toHaveBeenCalledWith("commit_window", {
+      sessionId: "capture-1",
+      windowId: "notes",
+    });
   });
 });

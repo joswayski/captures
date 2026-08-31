@@ -130,6 +130,8 @@ Global capture shortcuts can be changed in Preferences. Installations still on e
 
 On macOS, overlapping Screenshot app shortcuts (`Cmd`+`Shift`+`3` / `4` / `5`) are unbound immediately so those keys reach Captures instead of the system overlay; restore them in System Settings → Keyboard → Keyboard Shortcuts → Screenshots if you want both. On GNOME, overlapping screenshot keybindings are cleared when `gsettings` is available. On Windows, Print Screen is turned off for Snipping Tool when Captures uses that key; `Win`+`Shift`+`S` may still open Snipping Tool until you change it in Windows keyboard settings. Opening Captures from the Start menu waits for Start and Search to close before the overlay freezes the desktop, so those flyouts do not appear in the screenshot.
 
+While New Capture is open, the region, window, and display screenshot shortcuts switch that overlay in place. They do not dismiss the menu or bring Preferences and other windows forward.
+
 While selecting a capture region, pick an aspect ratio in the capture menu or hold
 `Shift` for a square. In the screenshot editor, zoom with the header slider and
 `+`/`-` controls, pinch or `Ctrl`/`Cmd`+scroll, pan with `Ctrl`/`Cmd`-drag or

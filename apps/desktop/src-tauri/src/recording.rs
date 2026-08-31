@@ -273,25 +273,13 @@ pub(crate) async fn prepare_capture_selector_inner(
         })
     };
     if let Some(summary) = pending_selection {
-        let include_mini_previews = state.settings().include_mini_previews_in_captures;
-        crate::suppress_thumbnail_capture_ui(&state);
-        crate::set_capture_huds_protected(&app, true);
-        if !include_mini_previews {
-            crate::hide_window(&app, "thumbnail");
+        if app.get_webview_window("recording-selector").is_some() {
+            if let Err(error) = app.emit("recording-selection-ready", &summary) {
+                eprintln!("failed to update the open capture menu: {error}");
+            }
+            return Ok(summary);
         }
-        crate::hide_window(&app, "mini-previews-hidden");
-        crate::hide_window(&app, "startup");
-        crate::hide_recording_saved_notices(&app);
-        if crate::updates::should_hide_update_notice_for_capture(&app) {
-            crate::updates::defer_visible_notice(&app);
-            crate::hide_window(&app, "update");
-        }
-        if let Err(error) = prepare_recording_selector(&app, &summary, true).await {
-            *state.recording_selection.lock() = None;
-            restore_recording_ui(&app, &state);
-            return Err(error);
-        }
-        return Ok(summary);
+        *state.recording_selection.lock() = None;
     }
 
     let request_permission = crate::mark_screen_permission_request(&state)?;
@@ -574,6 +562,7 @@ fn restore_after_recording_selection(app: &AppHandle, state: &Arc<AppState>) {
     captures_macos_window::restore_frontmost_app_after_capture();
     crate::reveal_document_windows_after_capture(app);
     crate::set_capture_huds_protected(app, false);
+    crate::restore_excluded_recording_chrome(app);
     crate::restore_thumbnail_capture_ui(app, state);
 }
 
@@ -585,6 +574,31 @@ pub(crate) fn dismiss_open_recording_selection(app: &AppHandle, state: &Arc<AppS
     *selection = None;
     drop(selection);
     restore_after_recording_selection(app, state);
+    true
+}
+
+/// Switch an already-open capture menu to screenshot + `target` without tearing
+/// it down. Keeps the freeze-frame and leaves document windows where they are.
+pub(crate) fn switch_open_capture_selector_to_screenshot(
+    app: &AppHandle,
+    state: &Arc<AppState>,
+    target: CaptureMode,
+) -> bool {
+    let mut selection = state.recording_selection.lock();
+    let Some(current) = selection.as_mut() else {
+        return false;
+    };
+    if app.get_webview_window("recording-selector").is_none() {
+        *selection = None;
+        return false;
+    }
+    current.summary.initial_mode = CaptureSelectorMode::Screenshot;
+    current.summary.initial_target = target;
+    let summary = current.summary.clone();
+    drop(selection);
+    if let Err(error) = app.emit("recording-selection-ready", &summary) {
+        eprintln!("failed to switch the capture menu: {error}");
+    }
     true
 }
 
@@ -3577,7 +3591,7 @@ fn create_recording_selector_window(app: &AppHandle) -> Result<(), AppError> {
     .visible(false)
     .build()?;
     // Selector sits over the desktop; keep it out of secondary captures.
-    window.set_content_protected(cfg!(target_os = "windows"))?;
+    window.set_content_protected(true)?;
     Ok(())
 }
 
@@ -3614,7 +3628,7 @@ async fn prepare_recording_selector(
             #[cfg(target_os = "macos")]
             captures_macos_window::cover_display(&window, &display.id).map_err(str::to_owned)?;
             window
-                .set_content_protected(cfg!(target_os = "windows"))
+                .set_content_protected(true)
                 .map_err(|error| error.to_string())?;
             // A hidden or zero-alpha WKWebView can be suspended before React
             // installs its recording-selection listener. Wake it at a tiny,
@@ -3958,6 +3972,12 @@ async fn prepare_recording_hud(
                 captures_macos_window::configure_webview_inactive_hover(&window)
                     .map_err(str::to_owned)?;
             }
+            #[cfg(target_os = "macos")]
+            captures_macos_window::set_excluded_from_capture(
+                &window,
+                recording_overlay_content_protected(&handle),
+            )
+            .map_err(str::to_owned)?;
             window
                 .set_size(tauri::LogicalSize::new(
                     RECORDING_HUD_FULL_WIDTH,
@@ -4033,6 +4053,12 @@ async fn show_recording_hud(app: &AppHandle) -> Result<(), AppError> {
                 .set_content_protected(recording_overlay_content_protected(&handle))
                 .map_err(|error| error.to_string())?;
             #[cfg(target_os = "macos")]
+            captures_macos_window::set_excluded_from_capture(
+                &window,
+                recording_overlay_content_protected(&handle),
+            )
+            .map_err(str::to_owned)?;
+            #[cfg(target_os = "macos")]
             captures_macos_window::show_without_activating(&window).map_err(str::to_owned)?;
             #[cfg(not(target_os = "macos"))]
             window.show().map_err(|error| error.to_string())?;
@@ -4075,6 +4101,12 @@ fn show_recording_countdown(app: &AppHandle, display: &DisplayDescriptor) -> Res
     window.set_size(tauri::LogicalSize::new(width, height))?;
     window.set_position(tauri::LogicalPosition::new(x, y))?;
     window.set_content_protected(recording_overlay_content_protected(app))?;
+    #[cfg(target_os = "macos")]
+    captures_macos_window::set_excluded_from_capture(
+        &window,
+        recording_overlay_content_protected(app),
+    )
+    .map_err(|error| AppError::Task(error.to_owned()))?;
     window.show()?;
     #[cfg(target_os = "macos")]
     captures_macos_window::elevate_capture_surface(&window)
@@ -4096,11 +4128,9 @@ fn destroy_recording_countdown(app: &AppHandle) {
 }
 
 fn recording_overlay_content_protected(app: &AppHandle) -> bool {
-    // Windows content protection is the exclusion mechanism for recording chrome.
-    // When the user opts into including recording controls, leave them capturable.
-    if !cfg!(target_os = "windows") {
-        return false;
-    }
+    // Exclude recording chrome from screenshots and recordings unless the user
+    // opted to include it. Windows uses display affinity; macOS uses window
+    // sharing. Linux has no exclusion API, so this is a no-op there.
     app.try_state::<Arc<AppState>>().is_none_or(|state| {
         controls_excluded_for_preference(state.settings().include_recording_controls_in_captures)
     })

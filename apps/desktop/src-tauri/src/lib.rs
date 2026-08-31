@@ -493,10 +493,13 @@ async fn start_capture_inner(
     if recording::screenshot_capture_is_blocked(&state) || screenshot_countdown_is_active(&state) {
         return Err(AppError::CaptureInProgress);
     }
-    // Screenshot shortcuts must work while the capture menu is open. Dismiss it
-    // first so the overlay is not trapped underneath, then wait a beat so the
-    // selector is gone from the snapshot.
-    let dismissed_selector = recording::dismiss_open_recording_selection(&app, &state);
+    // Screenshot shortcuts must work while the capture menu is open. Stay on
+    // that overlay and switch target instead of tearing it down — dismissing
+    // revealed Preferences and other documents, then recaptured a ghost of the
+    // menu into the freeze-frame.
+    if recording::switch_open_capture_selector_to_screenshot(&app, &state, mode) {
+        return Ok(None);
+    }
     // A failed overlay (image never loaded, webview stuck, etc.) leaves a session
     // behind. CaptureInProgress was silent on the shortcut path, so region mode
     // appeared completely dead until restart. Drop the stale session and retry.
@@ -528,9 +531,6 @@ async fn start_capture_inner(
         }
     };
     hide_capture_huds_before_snapshot(&app).await;
-    if dismissed_selector {
-        tokio::time::sleep(std::time::Duration::from_millis(CAPTURE_HUD_HIDE_SETTLE_MS)).await;
-    }
 
     let result = prepare_capture(
         app.clone(),
@@ -1080,8 +1080,11 @@ fn show_screenshot_countdown(
         .ok_or_else(|| AppError::Task("screenshot countdown is unavailable".to_owned()))?;
     window.set_size(tauri::LogicalSize::new(width, height))?;
     window.set_position(tauri::LogicalPosition::new(x, y))?;
-    // Keep the countdown out of Captures' own recordings on Windows.
-    window.set_content_protected(cfg!(target_os = "windows"))?;
+    // Keep the countdown out of Captures' own screenshots and recordings.
+    window.set_content_protected(true)?;
+    #[cfg(target_os = "macos")]
+    captures_macos_window::set_excluded_from_capture(&window, true)
+        .map_err(|error| AppError::Task(error.to_owned()))?;
     window.show()?;
     #[cfg(target_os = "macos")]
     captures_macos_window::conceal_documents_under_opaque_capture_surface();
@@ -1917,10 +1920,12 @@ fn update_settings(
     if recording_controls_setting_changed
         && let Some(window) = app.get_webview_window("recording-hud")
     {
-        // Keep or restore content protection for the live control bar.
-        let protected =
-            cfg!(target_os = "windows") && !settings.include_recording_controls_in_captures;
-        let _ = window.set_content_protected(protected);
+        let excluded = !settings.include_recording_controls_in_captures;
+        let _ = window.set_content_protected(excluded);
+        #[cfg(target_os = "macos")]
+        if let Err(error) = captures_macos_window::set_excluded_from_capture(&window, excluded) {
+            eprintln!("failed to update recording controls capture sharing: {error}");
+        }
     }
     if let Err(error) = app.emit("settings-changed", &settings) {
         eprintln!("failed to broadcast updated settings: {error}");
@@ -2600,6 +2605,7 @@ async fn finish_capture(
     image: RgbaImage,
     thumbnail_capture_generation: u64,
 ) -> Result<CaptureArtifact, AppError> {
+    restore_excluded_recording_chrome(app);
     // Re-show capture-concealed editors only after the capture session ends so
     // they cannot flash above the restored frontmost app for a few frames.
     let _reveal_documents = RevealDocumentWindowsOnDrop::new(app);
@@ -3115,6 +3121,38 @@ pub(crate) fn display_corner_radius_points(display_id: &str) -> f64 {
     {
         let _ = display_id;
         0.0
+    }
+}
+
+/// Prefer AppKit `NSWindow.frame` over xcap's `kCGWindowBounds`.
+/// Quartz window bounds include the drop shadow, which makes the window
+/// selector overlay miss the real chrome (especially Settings/Preferences).
+pub(crate) fn apply_native_window_frames(windows: &mut [captures_capture::WindowDescriptor]) {
+    #[cfg(target_os = "macos")]
+    {
+        let frames = captures_macos_window::visible_window_frames();
+        if frames.is_empty() {
+            return;
+        }
+        for window in windows {
+            let Ok(window_number) = window.id.parse::<u32>() else {
+                continue;
+            };
+            let Some(frame) = frames
+                .iter()
+                .find(|frame| frame.window_number == window_number)
+            else {
+                continue;
+            };
+            window.x = frame.x;
+            window.y = frame.y;
+            window.width = frame.width;
+            window.height = frame.height;
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = windows;
     }
 }
 
@@ -4826,6 +4864,7 @@ fn restore_thumbnail_capture_ui(app: &AppHandle, state: &Arc<AppState>) {
 }
 
 fn restore_thumbnail_capture(app: &AppHandle, state: &Arc<AppState>, capture_generation: u64) {
+    restore_excluded_recording_chrome(app);
     if state
         .thumbnail_visibility
         .lock()
@@ -5582,9 +5621,12 @@ fn hide_window_inner(app: &AppHandle, label: &str) {
 }
 
 const CAPTURE_HUD_HIDE_SETTLE_MS: u64 = 40;
+static RESTORE_RECORDING_HUD_AFTER_CAPTURE: AtomicBool = AtomicBool::new(false);
+static RESTORE_HIDDEN_CONTROLS_NOTICE_AFTER_CAPTURE: AtomicBool = AtomicBool::new(false);
 
 pub(crate) async fn hide_capture_huds_before_snapshot(app: &AppHandle) {
     let include_mini_previews = include_mini_previews_in_captures(app);
+    let include_recording_controls = include_recording_controls_in_captures(app);
     let hide_update = updates::should_hide_update_notice_for_capture(app);
     set_capture_huds_protected(app, true);
     let mut hud_labels = if include_mini_previews {
@@ -5603,10 +5645,19 @@ pub(crate) async fn hide_capture_huds_before_snapshot(app: &AppHandle) {
             MINI_PREVIEWS_HIDDEN_LABEL,
         ]
     };
+    if !include_recording_controls {
+        hud_labels.push("recording-hud");
+    }
     if !hide_update {
         hud_labels.retain(|label| *label != "update");
     }
-    let had_visible_hud = hide_capture_huds(app, include_mini_previews, &hud_labels, hide_update);
+    let had_visible_hud = hide_capture_huds(
+        app,
+        include_mini_previews,
+        include_recording_controls,
+        &hud_labels,
+        hide_update,
+    );
     if hide_update {
         updates::defer_visible_notice(app);
     }
@@ -5629,6 +5680,7 @@ pub(crate) async fn hide_capture_huds_before_snapshot(app: &AppHandle) {
 fn hide_capture_huds(
     app: &AppHandle,
     include_mini_previews: bool,
+    include_recording_controls: bool,
     hud_labels: &[&str],
     hide_update: bool,
 ) -> bool {
@@ -5638,26 +5690,56 @@ fn hide_capture_huds(
         let labels: Vec<String> = hud_labels.iter().map(|label| (*label).to_owned()).collect();
         run_on_appkit_main(move || {
             let label_refs: Vec<&str> = labels.iter().map(String::as_str).collect();
-            hide_capture_huds_inner(&app, include_mini_previews, &label_refs, hide_update)
+            hide_capture_huds_inner(
+                &app,
+                include_mini_previews,
+                include_recording_controls,
+                &label_refs,
+                hide_update,
+            )
         })
         .unwrap_or(false)
     }
     #[cfg(not(target_os = "macos"))]
-    hide_capture_huds_inner(app, include_mini_previews, hud_labels, hide_update)
+    hide_capture_huds_inner(
+        app,
+        include_mini_previews,
+        include_recording_controls,
+        hud_labels,
+        hide_update,
+    )
 }
 
 fn hide_capture_huds_inner(
     app: &AppHandle,
     include_mini_previews: bool,
+    include_recording_controls: bool,
     hud_labels: &[&str],
     hide_update: bool,
 ) -> bool {
     let had_visible_hud = hud_labels.iter().any(|label| {
         app.get_webview_window(label)
             .is_some_and(|window| window.is_visible().unwrap_or(false))
-    });
+    }) || (!include_recording_controls
+        && app.webview_windows().iter().any(|(label, window)| {
+            label.starts_with(RECORDING_CONTROLS_HIDDEN_NOTICE_PREFIX)
+                && window.is_visible().unwrap_or(false)
+        }));
     if !include_mini_previews {
         hide_window_inner(app, "thumbnail");
+    }
+    if !include_recording_controls {
+        let hud_visible = app
+            .get_webview_window("recording-hud")
+            .is_some_and(|window| window.is_visible().unwrap_or(false));
+        let notice_visible = app.webview_windows().iter().any(|(label, window)| {
+            label.starts_with(RECORDING_CONTROLS_HIDDEN_NOTICE_PREFIX)
+                && window.is_visible().unwrap_or(false)
+        });
+        RESTORE_RECORDING_HUD_AFTER_CAPTURE.store(hud_visible, Ordering::SeqCst);
+        RESTORE_HIDDEN_CONTROLS_NOTICE_AFTER_CAPTURE.store(notice_visible, Ordering::SeqCst);
+        hide_window_inner(app, "recording-hud");
+        hide_recording_controls_hidden_notices(app);
     }
     hide_window_inner(app, "startup");
     hide_recording_saved_notices_inner(app);
@@ -5676,18 +5758,6 @@ fn include_mini_previews_in_captures(app: &AppHandle) -> bool {
 fn include_recording_controls_in_captures(app: &AppHandle) -> bool {
     app.try_state::<Arc<AppState>>()
         .is_some_and(|state| state.settings().include_recording_controls_in_captures)
-}
-
-fn hide_recording_saved_notices(app: &AppHandle) {
-    #[cfg(target_os = "macos")]
-    {
-        let app = app.clone();
-        if run_on_appkit_main(move || hide_recording_saved_notices_inner(&app)).is_none() {
-            eprintln!("failed to hide recording saved notices on the main thread");
-        }
-    }
-    #[cfg(not(target_os = "macos"))]
-    hide_recording_saved_notices_inner(app);
 }
 
 fn hide_recording_saved_notices_inner(app: &AppHandle) {
@@ -5732,17 +5802,21 @@ fn set_capture_huds_protected_inner(app: &AppHandle, protected: bool) {
                 | recording::RECORDING_REGION_INDICATOR_LABEL
                 | RECORDING_SAVED_NOTICE_LABEL
                 | MINI_PREVIEWS_HIDDEN_LABEL
-        ) {
+        ) && !label.starts_with(RECORDING_CONTROLS_HIDDEN_NOTICE_PREFIX)
+        {
             continue;
         }
         // Keep opted-in chrome capturable when the matching preference is on.
         // Failed update notices stay capturable so the error can be screenshotted.
+        // Recording controls stay excluded unless the user opted them in — releasing
+        // HUD protection after a freeze-frame used to make Cmd+Shift+4 capture them.
         let next_protected = if label == recording::RECORDING_REGION_INDICATOR_LABEL {
             true
-        } else if (label == "thumbnail" && include_mini_previews)
-            || (label == "recording-hud" && include_recording_controls)
-            || (label == "update" && !updates::should_hide_update_notice_for_capture(app))
-        {
+        } else if label == "thumbnail" && include_mini_previews {
+            false
+        } else if label == "recording-hud" {
+            !include_recording_controls
+        } else if label == "update" && !updates::should_hide_update_notice_for_capture(app) {
             false
         } else {
             protected
@@ -5750,6 +5824,67 @@ fn set_capture_huds_protected_inner(app: &AppHandle, protected: bool) {
         if let Err(error) = window.set_content_protected(next_protected) {
             eprintln!("failed to update {label} capture protection: {error}");
         }
+        #[cfg(target_os = "macos")]
+        if let Err(error) =
+            captures_macos_window::set_excluded_from_capture(&window, next_protected)
+        {
+            eprintln!("failed to update {label} capture sharing: {error}");
+        }
+    }
+}
+
+/// Re-show recording chrome that was hidden so it would not freeze into a snapshot.
+///
+/// Does not focus the HUD. Skip restore when the user had already hidden the
+/// controls (the hidden-controls notice was showing instead).
+pub(crate) fn restore_excluded_recording_chrome(app: &AppHandle) {
+    let restore_notice = RESTORE_HIDDEN_CONTROLS_NOTICE_AFTER_CAPTURE.swap(false, Ordering::SeqCst);
+    let restore_hud = RESTORE_RECORDING_HUD_AFTER_CAPTURE.swap(false, Ordering::SeqCst);
+    if restore_notice {
+        for (label, window) in app.webview_windows() {
+            if !label.starts_with(RECORDING_CONTROLS_HIDDEN_NOTICE_PREFIX) {
+                continue;
+            }
+            #[cfg(target_os = "macos")]
+            if let Err(error) = captures_macos_window::show_without_activating(&window) {
+                eprintln!("failed to restore hidden recording controls notice: {error}");
+            }
+            #[cfg(not(target_os = "macos"))]
+            if let Err(error) = window.show() {
+                eprintln!("failed to restore hidden recording controls notice: {error}");
+            }
+        }
+        return;
+    }
+    if !restore_hud {
+        return;
+    }
+    let recording_is_active = app
+        .try_state::<Arc<AppState>>()
+        .is_some_and(|state| recording::recording_controls_are_available(state.inner()));
+    if !recording_is_active {
+        return;
+    }
+    let Some(hud) = app.get_webview_window("recording-hud") else {
+        return;
+    };
+    if hud.is_visible().unwrap_or(false) {
+        return;
+    }
+    let excluded = !include_recording_controls_in_captures(app);
+    let _ = hud.set_content_protected(excluded);
+    #[cfg(target_os = "macos")]
+    {
+        if let Err(error) = captures_macos_window::set_excluded_from_capture(&hud, excluded) {
+            eprintln!("failed to restore recording controls capture sharing: {error}");
+        }
+        if let Err(error) = captures_macos_window::show_without_activating(&hud) {
+            eprintln!("failed to restore recording controls: {error}");
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    if let Err(error) = hud.show() {
+        eprintln!("failed to restore recording controls: {error}");
     }
 }
 
