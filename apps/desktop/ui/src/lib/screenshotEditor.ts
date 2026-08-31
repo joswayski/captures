@@ -2305,9 +2305,12 @@ export function editorCanvasPaintScale(
   documentHeight = 1,
 ): number {
   const dpr = Math.max(1, devicePixelRatio);
+  const cssScale = Math.max(0.01, displayScale);
+  // 2× supersample so thin diagonals anti-alias on 1× displays; zoom and DPR
+  // can raise this further, then the pixel cap keeps the buffer bounded.
   let scale = Math.min(
     EDITOR_CANVAS_MAX_DEVICE_SCALE,
-    Math.max(0.01, displayScale) * dpr,
+    cssScale * dpr * 2,
   );
   const area = Math.max(1, documentWidth) * Math.max(1, documentHeight) * scale * scale;
   if (area > EDITOR_CANVAS_MAX_BACKING_PIXELS) {

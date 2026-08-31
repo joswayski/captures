@@ -2056,8 +2056,8 @@ describe("screenshot editor geometry", () => {
   });
 
   it("paints the editor canvas sharper than 1:1 on retina without unbounded zoom buffers", () => {
-    expect(editorCanvasPaintScale(1, 1, 800, 600)).toBe(1);
-    expect(editorCanvasPaintScale(1, 2, 800, 600)).toBe(2);
+    expect(editorCanvasPaintScale(1, 1, 800, 600)).toBe(2);
+    expect(editorCanvasPaintScale(1, 2, 800, 600)).toBe(4);
     expect(editorCanvasPaintScale(4, 2, 800, 600)).toBe(4);
     const huge = editorCanvasPaintScale(4, 3, 8_000, 6_000);
     expect(huge).toBeLessThan(4);
