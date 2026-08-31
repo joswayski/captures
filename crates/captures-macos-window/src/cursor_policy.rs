@@ -106,6 +106,57 @@ impl CaptureCursor {
     pub const fn reasserts_native_cursor_on_modifiers(self) -> bool {
         self.native_owned
     }
+
+    /// Mouse-move monitors keep a native-owned region crosshair from snapping
+    /// back to the arrow. CSS-owned surfaces must not rewrite `NSCursor` or
+    /// rebuild WebKit rectangles on every move — that races panel grab/pointer
+    /// with the default arrow.
+    #[must_use]
+    pub const fn reasserts_native_cursor_on_mouse_move(self) -> bool {
+        self.native_owned
+    }
+}
+
+/// Capture-cursor event kinds mirrored by the AppKit local/global monitors.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CaptureCursorEvent {
+    FlagsChanged,
+    MouseMoved,
+}
+
+/// Work a capture-cursor monitor should do for one AppKit event.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CaptureCursorMonitorAction {
+    Ignore,
+    ReassertNative,
+    RefreshWebKitRects,
+}
+
+/// Selector region uses `CaptureCursorKind::Crosshair` with `native_owned:
+/// false` so the dimmed surface can show a crosshair in CSS without locking
+/// out panel grab/pointer. Callers must not treat Crosshair as "always
+/// reassert native."
+#[must_use]
+pub const fn capture_cursor_monitor_action(
+    event: CaptureCursorEvent,
+    cursor: CaptureCursor,
+) -> CaptureCursorMonitorAction {
+    match event {
+        CaptureCursorEvent::FlagsChanged => {
+            if cursor.reasserts_native_cursor_on_modifiers() {
+                CaptureCursorMonitorAction::ReassertNative
+            } else {
+                CaptureCursorMonitorAction::RefreshWebKitRects
+            }
+        }
+        CaptureCursorEvent::MouseMoved => {
+            if cursor.reasserts_native_cursor_on_mouse_move() {
+                CaptureCursorMonitorAction::ReassertNative
+            } else {
+                CaptureCursorMonitorAction::Ignore
+            }
+        }
+    }
 }
 
 /// Mini-preview cursor kinds mirrored by the native AppKit tracker.
@@ -185,10 +236,10 @@ pub const fn suppress_document_cursor_rects_for_thumbnail(
 #[cfg(test)]
 mod tests {
     use super::{
-        CaptureCursor, CaptureCursorKind, ThumbnailHoverCursor,
-        overlay_prepare_keeps_native_cursor, region_shortcut_claims_cursor_on_press,
-        suppress_document_cursor_rects_for_thumbnail, thumbnail_may_take_key_window,
-        thumbnail_unpolled_hover_when_inactive,
+        CaptureCursor, CaptureCursorEvent, CaptureCursorKind, CaptureCursorMonitorAction,
+        ThumbnailHoverCursor, capture_cursor_monitor_action, overlay_prepare_keeps_native_cursor,
+        region_shortcut_claims_cursor_on_press, suppress_document_cursor_rects_for_thumbnail,
+        thumbnail_may_take_key_window, thumbnail_unpolled_hover_when_inactive,
     };
 
     #[test]
@@ -243,6 +294,51 @@ mod tests {
         assert!(!CaptureCursor::selector_region().reasserts_native_cursor_on_modifiers());
         assert!(!CaptureCursor::selector_window().reasserts_native_cursor_on_modifiers());
         assert!(!CaptureCursor::selector_display().reasserts_native_cursor_on_modifiers());
+    }
+
+    #[test]
+    fn selector_crosshair_does_not_reassert_native_cursor_on_mouse_move() {
+        let cursor = CaptureCursor::selector_region();
+        assert_eq!(cursor.kind, CaptureCursorKind::Crosshair);
+        assert!(!cursor.native_owned);
+        assert!(!cursor.reasserts_native_cursor_on_mouse_move());
+        assert_eq!(
+            capture_cursor_monitor_action(CaptureCursorEvent::MouseMoved, cursor),
+            CaptureCursorMonitorAction::Ignore,
+        );
+    }
+
+    #[test]
+    fn capture_menu_mouse_moves_leave_css_cursors_alone() {
+        for cursor in [
+            CaptureCursor::selector_region(),
+            CaptureCursor::selector_window(),
+            CaptureCursor::selector_display(),
+            CaptureCursor::overlay_window(),
+        ] {
+            assert_eq!(
+                capture_cursor_monitor_action(CaptureCursorEvent::MouseMoved, cursor),
+                CaptureCursorMonitorAction::Ignore,
+            );
+            assert_eq!(
+                capture_cursor_monitor_action(CaptureCursorEvent::FlagsChanged, cursor),
+                CaptureCursorMonitorAction::RefreshWebKitRects,
+            );
+        }
+    }
+
+    #[test]
+    fn region_overlay_reasserts_native_crosshair_on_mouse_move() {
+        let cursor = CaptureCursor::overlay_region();
+        assert!(cursor.reasserts_native_cursor_on_mouse_move());
+        assert_eq!(
+            capture_cursor_monitor_action(CaptureCursorEvent::MouseMoved, cursor),
+            CaptureCursorMonitorAction::ReassertNative,
+        );
+        assert_eq!(
+            capture_cursor_monitor_action(CaptureCursorEvent::FlagsChanged, cursor),
+            CaptureCursorMonitorAction::ReassertNative,
+        );
     }
 
     #[test]

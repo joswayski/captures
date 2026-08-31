@@ -1,6 +1,7 @@
 use crate::conceal_policy::should_conceal_documents_for_capture_activation;
 use crate::cursor_policy::{
-    CaptureCursor, CaptureCursorKind, ThumbnailHoverCursor, overlay_prepare_keeps_native_cursor,
+    CaptureCursor, CaptureCursorEvent, CaptureCursorKind, CaptureCursorMonitorAction,
+    ThumbnailHoverCursor, capture_cursor_monitor_action, overlay_prepare_keeps_native_cursor,
     suppress_document_cursor_rects_for_thumbnail, thumbnail_may_take_key_window,
     thumbnail_unpolled_hover_when_inactive,
 };
@@ -684,7 +685,7 @@ fn ensure_global_cursor_monitor() {
 
 fn handle_global_cursor_event(event: &NSEvent) {
     if capture_overlay_owns_cursor() {
-        reassert_claimed_capture_cursor();
+        apply_capture_cursor_monitor_event(event);
         return;
     }
     if event.r#type() == NSEventType::FlagsChanged {
@@ -836,6 +837,10 @@ fn hide_cursor_claim_panel() {
 /// be key while another app stays frontmost, so `NSCursor.set` is not ignored
 /// and does not wait for a move. Window sharing is disabled so the panel is
 /// omitted from the freeze-frame.
+///
+/// CSS-owned surfaces (the capture menu, window capture) skip the native seed.
+/// Seeding a crosshair or arrow there races panel grab/pointer on every
+/// reassert, including mouse-move monitors.
 pub fn claim_capture_cursor(cursor: CaptureCursor) {
     if !is_main_thread() {
         let _ = run_on_main(move || claim_capture_cursor(cursor));
@@ -846,12 +851,14 @@ pub fn claim_capture_cursor(cursor: CaptureCursor) {
     ensure_capture_cursor_monitor();
     ensure_global_cursor_monitor();
     NSCursor::setHiddenUntilMouseMoves(false);
-    show_cursor_claim_panel();
-    apply_cursor_mode(cursor.kind.to_cursor_mode());
-    DispatchQueue::main().exec_async(|| {
-        reassert_claimed_capture_cursor();
-        DispatchQueue::main().exec_async(reassert_claimed_capture_cursor);
-    });
+    if cursor.native_owned {
+        show_cursor_claim_panel();
+        apply_cursor_mode(cursor.kind.to_cursor_mode());
+        DispatchQueue::main().exec_async(|| {
+            reassert_claimed_capture_cursor();
+            DispatchQueue::main().exec_async(reassert_claimed_capture_cursor);
+        });
+    }
 }
 
 fn reassert_claimed_capture_cursor() {
@@ -859,8 +866,7 @@ fn reassert_claimed_capture_cursor() {
         return;
     }
     let cursor = stored_capture_cursor();
-    if cursor.reasserts_native_cursor_on_modifiers() || cursor.kind == CaptureCursorKind::Crosshair
-    {
+    if cursor.reasserts_native_cursor_on_modifiers() {
         show_cursor_claim_panel();
         apply_cursor_mode(cursor.kind.to_cursor_mode());
     }
@@ -1772,9 +1778,8 @@ fn apply_capture_cursor(window: &WebviewWindow, cursor: CaptureCursor) -> Result
     let mode = cursor.kind.to_cursor_mode();
     let tracked_mode = cursor.tracked_kind().to_cursor_mode();
     NSCursor::setHiddenUntilMouseMoves(false);
-    // Apply the native cursor even if the WKWebView tracker is not ready yet.
-    // The capture menu is created per session; a missing tracker must not leave
-    // the arrow on screen until the pointer moves.
+    // Native-owned overlays apply NSCursor even if the WKWebView tracker is
+    // not ready yet, so a stationary pointer keeps the crosshair.
     if cursor.disables_cursor_rects() {
         set_cursor_rects_enabled(native_window, false);
         native_window.discardCursorRects();
@@ -1787,11 +1792,9 @@ fn apply_capture_cursor(window: &WebviewWindow, cursor: CaptureCursor) -> Result
         apply_cursor_mode(mode);
     } else {
         // Window capture and the capture menu keep CSS cursors (camera cursor,
-        // panel grab/pointer). Set the mode's native cursor first so something
-        // is visible before WebKit evaluates rectangles, then force that
-        // evaluation without waiting for a mouse move.
+        // panel grab/pointer). Do not seed NSCursor here: a native crosshair or
+        // arrow races those rectangles until the next WebKit evaluation.
         set_cursor_rects_enabled(native_window, true);
-        apply_cursor_mode(mode);
         // WebKit owns the root target cursor plus panel grab/pointer cursors.
         // A native per-move tracker would race those cursor rectangles.
         let _ = set_tracked_cursor(window, tracked_mode, CursorSurface::CaptureOverlay);
@@ -1840,7 +1843,9 @@ fn ensure_capture_cursor_monitor() {
     // NSWindow on the main AppKit thread (local monitors run there). Returning
     // the event pointer unchanged leaves delivery intact.
     let block = RcBlock::new(|event: ptr::NonNull<NSEvent>| -> *mut NSEvent {
-        reassert_capture_cursor_after_modifier_change();
+        // SAFETY: AppKit supplies a live NSEvent for the duration of the local
+        // monitor callback.
+        apply_capture_cursor_monitor_event(unsafe { event.as_ref() });
         event.as_ptr()
     });
     let monitor = unsafe {
@@ -1852,23 +1857,33 @@ fn ensure_capture_cursor_monitor() {
     *guard = monitor.map(MainThreadMonitor);
 }
 
-fn reassert_capture_cursor_after_modifier_change() {
+fn apply_capture_cursor_monitor_event(event: &NSEvent) {
     if !capture_overlay_owns_cursor() {
         return;
     }
-    let cursor = stored_capture_cursor();
-    if cursor.reasserts_native_cursor_on_modifiers() {
-        show_cursor_claim_panel();
-        apply_cursor_mode(cursor.kind.to_cursor_mode());
-        return;
-    }
-    // Selector and window capture keep CSS cursors. Forcing NSCursor here would
-    // replace panel grab/pointer until the next mouse move.
-    let Some(main_thread) = MainThreadMarker::new() else {
-        return;
+    let event_kind = match event.r#type() {
+        NSEventType::FlagsChanged => CaptureCursorEvent::FlagsChanged,
+        NSEventType::MouseMoved => CaptureCursorEvent::MouseMoved,
+        _ => return,
     };
-    if let Some(window) = NSApplication::sharedApplication(main_thread).keyWindow() {
-        refresh_webkit_cursor_rects(&window);
+    match capture_cursor_monitor_action(event_kind, stored_capture_cursor()) {
+        CaptureCursorMonitorAction::Ignore => {}
+        CaptureCursorMonitorAction::ReassertNative => {
+            show_cursor_claim_panel();
+            apply_cursor_mode(stored_capture_cursor().kind.to_cursor_mode());
+        }
+        CaptureCursorMonitorAction::RefreshWebKitRects => {
+            // Selector and window capture keep CSS cursors. Rebuild rectangles
+            // only when modifiers change so releasing ⌘⇧ does not leave a stuck
+            // arrow. Doing this on MouseMoved races panel grab/pointer with the
+            // default arrow on every pixel.
+            let Some(main_thread) = MainThreadMarker::new() else {
+                return;
+            };
+            if let Some(window) = NSApplication::sharedApplication(main_thread).keyWindow() {
+                refresh_webkit_cursor_rects(&window);
+            }
+        }
     }
 }
 
