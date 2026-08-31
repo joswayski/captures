@@ -198,6 +198,7 @@ describe("RecordingSelector", () => {
         || command === "start_recording"
         || command === "start_capture"
         || command === "cancel_recording_selection"
+        || command === "open_preferences"
       ) {
         return undefined;
       }
@@ -679,8 +680,9 @@ describe("RecordingSelector", () => {
     const { container } = render(<RecordingSelector />);
     await screen.findByRole("button", { name: "Screenshot", pressed: true });
     expect(container.querySelector(".capture-selector-note")).toHaveTextContent(
-      "Captures start when a target is selected",
+      "Auto-capture is on. Selecting a target starts immediately.",
     );
+    expect(screen.queryByRole("button", { name: "Take screenshot" })).not.toBeInTheDocument();
 
     const surface = container.querySelector<HTMLElement>(".recording-selector");
     expect(surface).not.toBeNull();
@@ -718,6 +720,33 @@ describe("RecordingSelector", () => {
             rect: { x: 80, y: 90, width: 200, height: 160 },
           },
         },
+      });
+    });
+  });
+
+  it("opens and targets the auto-capture preference from the selector note", async () => {
+    preparedSession = {
+      ...session,
+      initial_mode: "screenshot",
+    };
+    const defaultInvoke = vi.mocked(invoke).getMockImplementation();
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "get_settings") {
+        return { ...settings, auto_start_on_selection: true };
+      }
+      return defaultInvoke?.(command, args);
+    });
+
+    render(<RecordingSelector />);
+    const change = await screen.findByRole("button", { name: "Change…" });
+    fireEvent.click(change);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("cancel_recording_selection", {
+        selectionId: preparedSession.id,
+      });
+      expect(invoke).toHaveBeenCalledWith("open_preferences", {
+        target: "auto-start-on-selection",
       });
     });
   });
@@ -807,6 +836,62 @@ describe("RecordingSelector", () => {
         },
       });
     });
+  });
+
+  it("auto-starts after choosing another full-screen display", async () => {
+    preparedSession = {
+      ...session,
+      initial_mode: "screenshot",
+      initial_target: "display",
+    };
+    const defaultInvoke = vi.mocked(invoke).getMockImplementation();
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "get_settings") {
+        return { ...settings, auto_start_on_selection: true };
+      }
+      return defaultInvoke?.(command, args);
+    });
+
+    render(<RecordingSelector />);
+    await screen.findByRole("button", { name: "Full screen", pressed: true });
+    fireEvent.click(screen.getByRole("combobox", { name: "Display" }));
+    fireEvent.click(screen.getByRole("option", { name: /Studio Display/ }));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("capture_selection_screenshot", {
+        request: {
+          selection_id: preparedSession.id,
+          target: { type: "display", display_id: "display-2" },
+        },
+      });
+    });
+  });
+
+  it("reveals a retry action when auto-capture fails", async () => {
+    preparedSession = {
+      ...session,
+      initial_mode: "screenshot",
+    };
+    const defaultInvoke = vi.mocked(invoke).getMockImplementation();
+    let captureAttempts = 0;
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "get_settings") {
+        return { ...settings, auto_start_on_selection: true };
+      }
+      if (command === "capture_selection_screenshot") {
+        captureAttempts += 1;
+        if (captureAttempts === 1) throw new Error("capture failed");
+        return undefined;
+      }
+      return defaultInvoke?.(command, args);
+    });
+
+    render(<RecordingSelector />);
+    fireEvent.click(await screen.findByRole("button", { name: "Full screen" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("capture failed");
+    fireEvent.click(screen.getByRole("button", { name: "Retry capture" }));
+    await waitFor(() => expect(captureAttempts).toBe(2));
   });
 
   it("animates the controls panel to its recording dimensions", async () => {

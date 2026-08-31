@@ -201,7 +201,7 @@ const SETTINGS: AppSettings = {
   output_directory: "/Users/alex/Pictures/Captures",
   ...previewShortcutSettings(),
   auto_copy_to_clipboard: true,
-  auto_start_on_selection: false,
+  auto_start_on_selection: flag("auto"),
   show_mini_previews: true,
   include_mini_previews_in_captures: false,
   include_recording_controls_in_captures: false,

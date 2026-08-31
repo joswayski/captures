@@ -161,6 +161,10 @@ const THUMBNAIL_HIT_TEST_CHANGED_EVENT = "captures-thumbnail-hit-test-changed";
 const RECORDING_SELECTOR_REVEAL_FALLBACK_MS = 200;
 const CAPTURE_OVERLAY_REVEAL_FALLBACK_MS = 400;
 const RECORDING_COUNTDOWN_FADE_OUT_MS = 180;
+const PREFERENCES_TARGET_EVENT = "preferences-target";
+const AUTO_START_PREFERENCE_TARGET = "auto-start-on-selection";
+const AUTO_START_PREFERENCE_ID = "auto-start-on-selection-setting";
+const PREFERENCE_HIGHLIGHT_MS = 2_400;
 const COUNTDOWN_SECONDS = Array.from({ length: 11 }, (_, seconds) => seconds);
 
 function query(name: string): string | null {
@@ -2067,7 +2071,10 @@ export function RecordingSelector() {
     });
   }, []);
 
-  const cancelSelection = useCallback((selection: RecordingSelectionSession) => {
+  const cancelSelection = useCallback((
+    selection: RecordingSelectionSession,
+    onCancelled?: () => void,
+  ) => {
     if (activeSessionIdRef.current !== selection.id) return;
     activeSessionIdRef.current = null;
     sessionRef.current = null;
@@ -2081,16 +2088,18 @@ export function RecordingSelector() {
     setStarting(false);
     setSwitchingDisplay(false);
     setError("");
-    void invoke("cancel_recording_selection", { selectionId: selection.id }).catch((error) => {
-      // A new selector may already be active by the time a stale cancellation
-      // fails. Never replace that newer session with the one being dismissed.
-      if (activeSessionIdRef.current !== null) return;
-      activeSessionIdRef.current = selection.id;
-      sessionRef.current = selection;
-      setSession(selection);
-      setError(String(error));
-      revealSelector(selection.id, freezeFrameRevealKey(selection));
-    });
+    void invoke("cancel_recording_selection", { selectionId: selection.id })
+      .then(() => onCancelled?.())
+      .catch((error) => {
+        // A new selector may already be active by the time a stale cancellation
+        // fails. Never replace that newer session with the one being dismissed.
+        if (activeSessionIdRef.current !== null) return;
+        activeSessionIdRef.current = selection.id;
+        sessionRef.current = selection;
+        setSession(selection);
+        setError(String(error));
+        revealSelector(selection.id, freezeFrameRevealKey(selection));
+      });
   }, [clearRegionDrag, revealSelector]);
 
   useEffect(() => {
@@ -2553,6 +2562,9 @@ export function RecordingSelector() {
       autoStartAfterSelectionRef.current = false;
       setSelectedWindow(null);
       setHoveredWindow(null);
+      if (targetMode === "display" && settingsRef.current?.auto_start_on_selection) {
+        autoStartAfterSelectionRef.current = true;
+      }
     } catch (error) {
       setError(String(error));
     } finally {
@@ -2694,6 +2706,20 @@ export function RecordingSelector() {
     }
     setActionMode(mode);
   };
+  const openAutoStartPreference = () => {
+    cancelSelection(session, () => {
+      void invoke("open_preferences", { target: AUTO_START_PREFERENCE_TARGET });
+    });
+  };
+  const retryingAutoStart = settings.auto_start_on_selection && Boolean(error);
+  const primaryActionLabel = starting
+    ? actionMode === "screenshot" ? "Capturing…" : "Starting…"
+    : switchingDisplay ? "Switching…"
+    : retryingAutoStart ? actionMode === "screenshot" ? "Retry capture" : "Retry recording"
+    : actionMode === "screenshot" ? "Capture" : "Start recording";
+  const primaryActionAriaLabel = retryingAutoStart
+    ? actionMode === "screenshot" ? "Retry capture" : "Retry recording"
+    : actionMode === "screenshot" ? "Take screenshot" : "Start recording";
 
   return (
     <main
@@ -2909,17 +2935,15 @@ export function RecordingSelector() {
           <button
             className={`recording-start capture-selector-primary capture-selector-primary-${actionMode}`}
             type="button"
-            aria-label={actionMode === "screenshot" ? "Take screenshot" : "Start recording"}
+            aria-label={primaryActionAriaLabel}
             disabled={!canStart || starting}
+            hidden={settings.auto_start_on_selection && !starting && !error}
             onClick={() => void start()}
           >
             {actionMode === "screenshot"
               ? <CaptureIcon />
               : <span className="capture-record-dot" aria-hidden="true" />}
-            {starting
-              ? actionMode === "screenshot" ? "Capturing…" : "Starting…"
-              : switchingDisplay ? "Switching…"
-              : actionMode === "screenshot" ? "Capture" : "Start recording"}
+            {primaryActionLabel}
           </button>
         </div>
         {actionMode === "recording" && (
@@ -3039,7 +3063,12 @@ export function RecordingSelector() {
           )}{" "}
           {settings.auto_start_on_selection && <>
             <span aria-hidden="true">·</span>{" "}
-            Captures start when a target is selected
+            <span>Auto-capture is on. Selecting a target starts immediately.</span>
+            <button
+              className="capture-selector-preferences-link"
+              type="button"
+              onClick={openAutoStartPreference}
+            >Change…</button>
           </>}
         </p>
         {error && <p className="recording-selector-error" role="alert">{error}</p>}
@@ -6900,6 +6929,10 @@ export function Preferences() {
   const [recordingDevices, setRecordingDevices] = useState<AudioDevice[]>([]);
   const [saveStatus, setSaveStatus] = useState<PreferencesSaveStatus>({ kind: "idle", message: "" });
   const [recordingShortcut, setRecordingShortcut] = useState<string | null>(null);
+  const [requestedPreferenceTarget, setRequestedPreferenceTarget] = useState<string | null>(
+    () => query("target"),
+  );
+  const [highlightedPreference, setHighlightedPreference] = useState<string | null>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const [visibleSection, setVisibleSection] = useVisibleSection(scrollerRef);
   const settingsRef = useRef<AppSettings | null>(null);
@@ -6908,6 +6941,22 @@ export function Preferences() {
   const savedStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveInFlightRef = useRef<Promise<void> | null>(null);
   const activeRef = useRef(true);
+  const preferenceHighlightTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    let dispose: (() => void) | undefined;
+    void listen<string>(PREFERENCES_TARGET_EVENT, ({ payload }) => {
+      if (active) setRequestedPreferenceTarget(payload);
+    }).then((unlisten) => {
+      if (active) dispose = unlisten;
+      else unlisten();
+    }).catch(() => undefined);
+    return () => {
+      active = false;
+      dispose?.();
+    };
+  }, []);
 
   const setShortcutRecording = useCallback((id: string, recording: boolean) => {
     setRecordingShortcut(recording ? id : null);
@@ -7015,6 +7064,35 @@ export function Preferences() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!settings || requestedPreferenceTarget !== AUTO_START_PREFERENCE_TARGET) return;
+    const frame = window.requestAnimationFrame(() => {
+      setVisibleSection("capture");
+      const target = scrollerRef.current?.querySelector<HTMLElement>(`#${AUTO_START_PREFERENCE_ID}`);
+      if (!target) return;
+      if (typeof target.scrollIntoView === "function") {
+        target.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+      target.querySelector<HTMLInputElement>("input")?.focus({ preventScroll: true });
+      setHighlightedPreference(AUTO_START_PREFERENCE_TARGET);
+      if (preferenceHighlightTimerRef.current) {
+        window.clearTimeout(preferenceHighlightTimerRef.current);
+      }
+      preferenceHighlightTimerRef.current = window.setTimeout(() => {
+        setHighlightedPreference(null);
+        setRequestedPreferenceTarget(null);
+        preferenceHighlightTimerRef.current = null;
+      }, PREFERENCE_HIGHLIGHT_MS);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [requestedPreferenceTarget, setVisibleSection, settings]);
+
+  useEffect(() => () => {
+    if (preferenceHighlightTimerRef.current) {
+      window.clearTimeout(preferenceHighlightTimerRef.current);
+    }
+  }, []);
+
   if (!settings) return <main className="preferences loading">Loading preferences…</main>;
 
   const update = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
@@ -7113,6 +7191,7 @@ export function Preferences() {
           <div className="preferences-sections">
             <PreferencesSections
               settings={settings}
+              highlightedPreference={highlightedPreference}
               recordingDevices={recordingDevices}
               recordingShortcut={recordingShortcut}
               setRecordingShortcut={setRecordingShortcut}
@@ -7132,6 +7211,7 @@ export function Preferences() {
 
 function PreferencesSections({
   settings,
+  highlightedPreference,
   recordingDevices,
   recordingShortcut,
   setRecordingShortcut,
@@ -7143,6 +7223,7 @@ function PreferencesSections({
   chooseDirectory,
 }: {
   settings: AppSettings;
+  highlightedPreference: string | null;
   recordingDevices: AudioDevice[];
   recordingShortcut: string | null;
   setRecordingShortcut: (id: string | null) => void;
@@ -7296,7 +7377,12 @@ function PreferencesSections({
           </span>
         </label>
 
-        <label className="check-row switch-row">
+        <label
+          id={AUTO_START_PREFERENCE_ID}
+          className={`check-row switch-row${highlightedPreference === AUTO_START_PREFERENCE_TARGET
+            ? " preference-target-highlight"
+            : ""}`}
+        >
           <input
             type="checkbox"
             checked={settings.auto_start_on_selection}
