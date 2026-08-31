@@ -54,7 +54,6 @@ export function readSharingConfig(
       ),
       allowedCidrs: csv(environment.AUTH_ALLOWED_CIDRS),
       publicSignup: bool(environment.AUTH_PUBLIC_SIGNUP),
-      turnstileSecret: optional(environment.TURNSTILE_SECRET_KEY),
       googleClientId: optional(environment.GOOGLE_CLIENT_ID),
       googleClientSecret: optional(environment.GOOGLE_CLIENT_SECRET),
     },
@@ -85,12 +84,13 @@ export function validateSharingConfig(config: SharingConfig): string[] {
   if (!config.auth.codeHmacKey || config.auth.codeHmacKey.byteLength < 32) {
     missing.push("AUTH_CODE_HMAC_KEY (base64, at least 32 bytes)");
   }
-  if (!config.auth.publicSignup) {
-    if (config.auth.allowedEmails.size === 0) missing.push("AUTH_ALLOWED_EMAILS");
-    if (config.auth.allowedCidrs.length === 0) missing.push("AUTH_ALLOWED_CIDRS");
-  } else if (!config.auth.turnstileSecret) {
-    missing.push("TURNSTILE_SECRET_KEY");
+  if (config.auth.publicSignup) {
+    missing.push(
+      "AUTH_PUBLIC_SIGNUP must remain false until web and desktop Turnstile flows are implemented",
+    );
   }
+  if (config.auth.allowedEmails.size === 0) missing.push("AUTH_ALLOWED_EMAILS");
+  if (config.auth.allowedCidrs.length === 0) missing.push("AUTH_ALLOWED_CIDRS");
   if (!config.mail.host) missing.push("SES_SMTP_HOST");
   if (!config.mail.user) missing.push("SES_SMTP_USERNAME");
   if (!config.mail.password) missing.push("SES_SMTP_PASSWORD");

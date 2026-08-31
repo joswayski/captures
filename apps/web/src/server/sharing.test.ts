@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { verifyLoginCodeAttempt } from "./sharing/auth.ts";
 import { clientIpAllowed, readSharingConfig, validateSharingConfig } from "./sharing/config.ts";
 import { clientIpHmac, loginCodeHmac, safeEqual } from "./sharing/crypto.ts";
 import { extractSuppressionEvents, type SnsEnvelope } from "./sharing/sns.ts";
@@ -41,6 +42,30 @@ test("private beta config requires allowlists and every external dependency", ()
     "SES_SMTP_USERNAME",
     "SES_SMTP_PASSWORD",
     "SES_SNS_TOPIC_ARN",
+  ]);
+});
+
+test("public signup fails closed until both clients implement Turnstile", () => {
+  const config = readSharingConfig({
+    SHARING_ENABLED: "true",
+    DATABASE_URL: "postgresql://runtime",
+    DATABASE_MIGRATION_URL: "postgresql://migration",
+    STORAGE_ENDPOINT: "https://storage.example.com",
+    STORAGE_BUCKET: "captures",
+    STORAGE_ACCESS_KEY_ID: "access",
+    STORAGE_SECRET_ACCESS_KEY: "secret",
+    AUTH_CODE_HMAC_KEY: Buffer.alloc(32, 1).toString("base64"),
+    AUTH_ALLOWED_EMAILS: "owner@example.com",
+    AUTH_ALLOWED_CIDRS: "203.0.113.8/32",
+    AUTH_PUBLIC_SIGNUP: "true",
+    SES_SMTP_HOST: "email-smtp.us-east-1.amazonaws.com",
+    SES_SMTP_USERNAME: "smtp-user",
+    SES_SMTP_PASSWORD: "smtp-password",
+    SES_SNS_TOPIC_ARN: "arn:aws:sns:us-east-1:123456789012:captures",
+  });
+
+  assert.deepEqual(validateSharingConfig(config), [
+    "AUTH_PUBLIC_SIGNUP must remain false until web and desktop Turnstile flows are implemented",
   ]);
 });
 
@@ -89,6 +114,49 @@ test("login codes and client IPs use purpose-separated HMACs", () => {
   const ip = clientIpHmac(key, "203.0.113.8");
   assert.equal(safeEqual(code, same), true);
   assert.equal(safeEqual(code, ip), false);
+});
+
+test("an invalid login code commits its failed-attempt increment", async () => {
+  const email = "owner@example.com";
+  const hmacKey = Buffer.alloc(32, 7);
+  let attempts = 0;
+  let transactionOutcome = "";
+  async function withTransaction<T>(work: (client: object) => Promise<T>): Promise<T> {
+    try {
+      const result = await work({});
+      transactionOutcome = "commit";
+      return result;
+    } catch (error) {
+      transactionOutcome = "rollback";
+      throw error;
+    }
+  }
+  const issued = await withTransaction((client) =>
+    verifyLoginCodeAttempt(client, {
+      async findLoginCode() {
+        return {
+          id: "login-code",
+          codeHmac: loginCodeHmac(hmacKey, email, "654321"),
+          attempts,
+          expiresAt: new Date(Date.now() + 60_000),
+        };
+      },
+      expectedCodeHmac: loginCodeHmac(hmacKey, email, "123456"),
+      async recordFailedAttempt() {
+        attempts += 1;
+      },
+      async consumeLoginCode() {
+        assert.fail("an invalid code must not be consumed");
+      },
+      async onSuccess() {
+        assert.fail("an invalid code must not issue a session");
+      },
+    }),
+  );
+
+  assert.equal(issued, null);
+  assert.equal(attempts, 1);
+  assert.equal(transactionOutcome, "commit");
 });
 
 test("share expiry rejects unsafe or unrepresentable durations", () => {

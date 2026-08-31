@@ -1,5 +1,6 @@
 import { createHash, createHmac } from "node:crypto";
 import { clientKeyFromRequest } from "../env.ts";
+import { verifyLoginCodeAttempt } from "./auth.ts";
 import { clientIpAllowed, normalizeEmail, validateSharingConfig } from "./config.ts";
 import {
   clearWebSessionCookie,
@@ -277,22 +278,24 @@ class SharingApiImpl implements SharingApi {
     }
 
     try {
-      const issued = await this.#database.withTransaction(async (client) => {
-        const loginCode = await this.#database.latestLoginCode(client, email, clientKind);
-        const expected = loginCodeHmac(this.#config.auth.codeHmacKey!, email, code);
-        if (
-          !loginCode ||
-          loginCode.expiresAt.getTime() <= Date.now() ||
-          loginCode.attempts >= 5 ||
-          !safeEqual(loginCode.codeHmac, expected)
-        ) {
-          if (loginCode) await this.#database.recordFailedLoginAttempt(client, loginCode.id);
-          throw new Error("invalid_login_code");
-        }
-        await this.#database.consumeLoginCode(client, loginCode.id);
-        const user = await this.#database.upsertUser(client, newId(), email);
-        return this.#issueSession(client, user, clientKind);
-      });
+      const issued = await this.#database.withTransaction((client) =>
+        verifyLoginCodeAttempt(client, {
+          findLoginCode: (transaction) =>
+            this.#database.latestLoginCode(transaction, email, clientKind),
+          expectedCodeHmac: loginCodeHmac(this.#config.auth.codeHmacKey!, email, code),
+          recordFailedAttempt: (transaction, id) =>
+            this.#database.recordFailedLoginAttempt(transaction, id),
+          consumeLoginCode: (transaction, id) =>
+            this.#database.consumeLoginCode(transaction, id),
+          onSuccess: async (transaction) => {
+            const user = await this.#database.upsertUser(transaction, newId(), email);
+            return this.#issueSession(transaction, user, clientKind);
+          },
+        }),
+      );
+      if (!issued) {
+        return json({ error: "the sign-in code is invalid or expired" }, 400);
+      }
       return sessionResponse(issued, clientKind);
     } catch (error) {
       if (error instanceof Error && error.message === "account_suspended") {
@@ -308,14 +311,8 @@ class SharingApiImpl implements SharingApi {
       return json({ error: "Google sign-in is not configured" }, 503);
     }
     const ip = clientKeyFromRequest(request);
-    if (!this.#config.auth.publicSignup && !clientIpAllowed(ip, this.#config.auth.allowedCidrs)) {
+    if (!clientIpAllowed(ip, this.#config.auth.allowedCidrs)) {
       return json({ error: "not found" }, 404);
-    }
-    if (this.#config.auth.publicSignup) {
-      const turnstileToken = new URL(request.url).searchParams.get("turnstile_token") ?? "";
-      if (!(await this.#turnstileAllowed(turnstileToken, ip))) {
-        return json({ error: "human verification is required" }, 403);
-      }
     }
     const state = newOpaqueToken();
     const verifier = `${newOpaqueToken()}${newOpaqueToken()}`;
@@ -384,7 +381,7 @@ class SharingApiImpl implements SharingApi {
         identity?.email_verified !== "true" ||
         !validEmail(email) ||
         !subject ||
-        (!this.#config.auth.publicSignup && !this.#config.auth.allowedEmails.has(email))
+        !this.#config.auth.allowedEmails.has(email)
       ) {
         throw new Error("Google account is not allowed");
       }
@@ -774,38 +771,10 @@ class SharingApiImpl implements SharingApi {
   async #interactiveAuthAllowed(
     email: string,
     ip: string,
-    input: Record<string, unknown> | undefined,
+    _input: Record<string, unknown> | undefined,
   ): Promise<boolean> {
-    if (!this.#config.auth.publicSignup) {
-      return this.#config.auth.allowedEmails.has(email) &&
-        clientIpAllowed(ip, this.#config.auth.allowedCidrs);
-    }
-    const token = string(input?.turnstile_token);
-    return token ? this.#turnstileAllowed(token, ip) : false;
-  }
-
-  async #turnstileAllowed(token: string, ip: string): Promise<boolean> {
-    if (!token || !this.#config.auth.turnstileSecret) return false;
-    try {
-      const response = await this.#fetch(
-        "https://challenges.cloudflare.com/turnstile/v0/siteverify",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: new URLSearchParams({
-            secret: this.#config.auth.turnstileSecret,
-            response: token,
-            remoteip: ip,
-          }),
-          signal: AbortSignal.timeout(10_000),
-        },
-      );
-      const result = record(await response.json());
-      return response.ok && result?.success === true;
-    } catch (error) {
-      console.warn("Turnstile verification failed", error);
-      return false;
-    }
+    return this.#config.auth.allowedEmails.has(email) &&
+      clientIpAllowed(ip, this.#config.auth.allowedCidrs);
   }
 
   async #verifyStoredAsset(asset: AssetRecord): Promise<void> {

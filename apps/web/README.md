@@ -112,10 +112,9 @@ Required configuration:
 | `STORAGE_BUCKET` | Private asset bucket |
 | `STORAGE_ACCESS_KEY_ID` / `STORAGE_SECRET_ACCESS_KEY` | Bucket-scoped S3 credentials |
 | `AUTH_CODE_HMAC_KEY` | Base64 encoding of at least 32 random bytes; generated once |
-| `AUTH_PUBLIC_SIGNUP` | `false` for the private beta; `true` requires Turnstile |
+| `AUTH_PUBLIC_SIGNUP` | Must remain `false`; enabling it fails startup until both clients implement Turnstile |
 | `AUTH_ALLOWED_EMAILS` | Comma-separated private-beta emails |
 | `AUTH_ALLOWED_CIDRS` | Comma-separated private-beta IPs or CIDRs |
-| `TURNSTILE_SECRET_KEY` | Required only when public signup is enabled |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Optional Google OAuth credentials |
 | `SES_SMTP_HOST` / `SES_SMTP_PORT` / `SES_SMTP_SECURE` | SES SMTP connection |
 | `SES_SMTP_USERNAME` / `SES_SMTP_PASSWORD` | Captures-only SES SMTP credential |
@@ -126,8 +125,9 @@ Required configuration:
 
 The private beta checks both the email allowlist and the trusted client IP. The
 public source code and route names are not treated as protection. Public signup
-uses Turnstile plus database-backed per-email and per-IP limits. Login codes are
-six digits, expire after ten minutes, and are stored only as keyed hashes.
+is intentionally rejected at startup until both the web and desktop clients have
+a complete Turnstile attestation flow. Login codes are six digits, expire after
+ten minutes, and are stored only as keyed hashes.
 
 The important routes are:
 

@@ -87,8 +87,10 @@ session tokens are SHA-256 hashes.
 Email login codes are stored as HMACs using `AUTH_CODE_HMAC_KEY`; this is a
 long-lived application secret, not a password pepper and not a scheduled-rotation
 credential. Private beta login requires both an allowed email and an allowed
-client IP/CIDR. Public signup later adds Turnstile while retaining database-backed
-email/IP rate limits.
+client IP/CIDR. Setting `AUTH_PUBLIC_SIGNUP=true` currently fails startup instead
+of exposing a half-configured flow. Public signup requires Turnstile support in
+both shipped clients before that guard can be removed, while retaining the
+database-backed email/IP rate limits.
 
 Captures sends through its own SES tenant, verified identity, configuration set,
 and SMTP IAM user. Other projects do not share its SMTP credentials or sending

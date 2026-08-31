@@ -695,20 +695,44 @@ fn persist_remote_metadata(
     remote_asset_id: Option<&str>,
     remote_share_url: Option<&str>,
 ) -> Result<(), SharingError> {
-    let updated = {
-        let mut history = state.history.lock();
-        let entry = history
-            .iter_mut()
-            .find(|entry| entry.id == artifact_id)
-            .ok_or_else(|| SharingError::Message("capture history entry is unavailable".into()))?;
-        entry.remote_asset_id = remote_asset_id.map(str::to_owned);
-        entry.remote_share_url = remote_share_url.map(str::to_owned);
-        entry.clone()
-    };
-    if let Err(error) = storage::update_history_entry_metadata(&updated) {
-        eprintln!("failed to persist remote share metadata: {error}");
-    }
+    update_remote_metadata(
+        &state.history,
+        artifact_id,
+        remote_asset_id,
+        remote_share_url,
+        |updated| {
+            storage::update_history_entry_metadata(updated).map_err(|error| {
+                SharingError::Message(format!("could not persist remote share metadata: {error}"))
+            })
+        },
+    )?;
     let _ = app.emit("capture-history-changed", ());
+    Ok(())
+}
+
+fn update_remote_metadata<F>(
+    history: &parking_lot::Mutex<Vec<HistoryEntry>>,
+    artifact_id: &str,
+    remote_asset_id: Option<&str>,
+    remote_share_url: Option<&str>,
+    persist: F,
+) -> Result<(), SharingError>
+where
+    F: FnOnce(&HistoryEntry) -> Result<(), SharingError>,
+{
+    let mut history = history.lock();
+    let entry = history
+        .iter_mut()
+        .find(|entry| entry.id == artifact_id)
+        .ok_or_else(|| SharingError::Message("capture history entry is unavailable".into()))?;
+    let mut updated = entry.clone();
+    updated.remote_asset_id = remote_asset_id.map(str::to_owned);
+    updated.remote_share_url = remote_share_url.map(str::to_owned);
+
+    // Persist before changing memory. If the filesystem write fails, callers
+    // see the error and the in-memory history remains consistent with disk.
+    persist(&updated)?;
+    *entry = updated;
     Ok(())
 }
 
@@ -940,5 +964,43 @@ mod tests {
             assert_eq!(content.part(2, 4).await.unwrap(), vec![4, 5, 6, 7]);
             assert_eq!(content.part(3, 4).await.unwrap(), vec![8, 9]);
         });
+    }
+
+    #[test]
+    fn failed_remote_metadata_write_does_not_mutate_history() {
+        let history = parking_lot::Mutex::new(vec![HistoryEntry {
+            id: "capture-1".into(),
+            kind: ArtifactKind::Screenshot,
+            preview_url: "preview".into(),
+            full_url: "full".into(),
+            width: 1,
+            height: 1,
+            size_bytes: 1,
+            created_at: "2026-08-30T00:00:00Z".into(),
+            mode: None,
+            saved_path: None,
+            mime_type: None,
+            duration_ms: None,
+            target: None,
+            has_system_audio: false,
+            has_microphone_audio: false,
+            dropped_frames: 0,
+            remote_asset_id: None,
+            remote_share_url: None,
+        }]);
+
+        let error = update_remote_metadata(
+            &history,
+            "capture-1",
+            Some("remote-1"),
+            Some("https://captur.es/share-1"),
+            |_| Err(SharingError::Message("disk full".into())),
+        )
+        .expect_err("persistence failure must be returned");
+
+        assert_eq!(error.to_string(), "disk full");
+        let entry = history.lock().first().cloned().expect("history entry");
+        assert_eq!(entry.remote_asset_id, None);
+        assert_eq!(entry.remote_share_url, None);
     }
 }

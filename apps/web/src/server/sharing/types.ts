@@ -27,7 +27,6 @@ export interface SharingConfig {
     allowedEmails: Set<string>;
     allowedCidrs: string[];
     publicSignup: boolean;
-    turnstileSecret?: string;
     googleClientId?: string;
     googleClientSecret?: string;
   };
