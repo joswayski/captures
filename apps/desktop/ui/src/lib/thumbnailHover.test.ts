@@ -475,6 +475,44 @@ describe("shouldIgnoreThumbnailCursorEvents", () => {
     expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: false })).toBe(true);
   });
 
+  it("passes through the stack while previews fold into the parked folder", () => {
+    document.body.innerHTML = `
+      <main class="thumbnail-stack thumbnail-stack-collapsing">
+        <article class="thumbnail-card"><button>Copy</button></article>
+      </main>
+      <button class="thumbnail-collapse thumbnail-collapse-collapsing">Hide previews</button>
+    `;
+    const card = document.querySelector(".thumbnail-card")!;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => card),
+    });
+    expect(thumbnailStackHasLiveHitTarget()).toBe(false);
+    expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: true })).toBe(true);
+    expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: false })).toBe(true);
+  });
+
+  it("passes through a parked or restoring stack whose cards are still in the DOM", () => {
+    document.body.innerHTML = `
+      <main class="thumbnail-stack thumbnail-stack-parked">
+        <article class="thumbnail-card"><button>Copy</button></article>
+      </main>
+      <button class="thumbnail-collapse thumbnail-collapse-parked">Show 1 preview</button>
+    `;
+    const card = document.querySelector(".thumbnail-card")!;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => card),
+    });
+    expect(thumbnailStackHasLiveHitTarget()).toBe(false);
+    expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: true })).toBe(true);
+
+    document.querySelector(".thumbnail-stack")!.className =
+      "thumbnail-stack thumbnail-stack-restoring";
+    expect(thumbnailStackHasLiveHitTarget()).toBe(false);
+    expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: false })).toBe(true);
+  });
+
   it("does not treat overflow cues as a reason to keep an exiting-only stack interactive", () => {
     document.body.innerHTML = `
       <main class="thumbnail-stack">
@@ -562,7 +600,7 @@ describe("thumbnailCursorSyncAction", () => {
   });
 
   it("covers click and editor focus handoffs with short reassert delays", () => {
-    expect([...THUMBNAIL_CURSOR_HANDOFF_REASSERT_DELAYS_MS]).toEqual([0, 16, 48]);
+    expect([...THUMBNAIL_CURSOR_HANDOFF_REASSERT_DELAYS_MS]).toEqual([0, 8, 16, 48, 96]);
   });
 });
 

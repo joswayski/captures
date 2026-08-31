@@ -1,3 +1,9 @@
+import type { ThumbnailPointerPosition } from "../types";
+import {
+  buildThumbnailDustParticles,
+  type ThumbnailDustParticle,
+} from "./thumbnailExit";
+
 /** Copy for the parked mini-preview restore chip. */
 export function miniPreviewsHiddenLabel(count: number): string {
   if (count <= 0) return "Previews";
@@ -24,6 +30,38 @@ export const MINI_PREVIEW_FOLDER_POCKET_INSET_LEFT = 20;
 export const MINI_PREVIEW_FOLDER_POCKET_INSET_TOP = 10;
 export const MINI_PREVIEW_FOLDER_SHEET_WIDTH = 22;
 export const MINI_PREVIEW_FOLDER_SHEET_HEIGHT = 26;
+
+/** Compact folder control used when the last preview dissolves the hide button. */
+export const MINI_PREVIEW_FOLDER_SIZE_PX = MINI_PREVIEW_FOLDER_IDLE_WIDTH;
+
+/** Hold the folder together until the outgoing card reaches its top-right edge. */
+export const MINI_PREVIEW_FOLDER_DUST_LEAD_MS = 420;
+
+/** A shorter copy of the card dissolve wave, scaled to the compact control. */
+export const MINI_PREVIEW_FOLDER_DUST_WAVE_MS = 420;
+
+/**
+ * Slice the complete folder control into real chips using the same breakup and
+ * cross-platform WAAPI flight as a deleted mini preview. The wave still begins
+ * at the folder's top-right card contact point instead of the trash button.
+ */
+export function buildMiniPreviewFolderDustParticles(
+  random: () => number = Math.random,
+): ThumbnailDustParticle[] {
+  return buildThumbnailDustParticles(
+    MINI_PREVIEW_FOLDER_SIZE_PX,
+    MINI_PREVIEW_FOLDER_SIZE_PX,
+    {
+      cols: 6,
+      rows: 6,
+      random,
+      waveMs: MINI_PREVIEW_FOLDER_DUST_WAVE_MS,
+      originX: MINI_PREVIEW_FOLDER_SIZE_PX,
+      originY: 0,
+      chromeLeadMs: MINI_PREVIEW_FOLDER_DUST_LEAD_MS,
+    },
+  );
+}
 
 /** DOM event emitted by the native restore command once the stack is onscreen. */
 export const MINI_PREVIEWS_RESTORED_EVENT = "captures-mini-previews-restored";
@@ -75,6 +113,28 @@ export function miniPreviewFolderSheets(
       id: artifact.id,
       src: artifact.preview_url,
     }));
+}
+
+/**
+ * The restore chip sits in a larger transparent window so its shadow can fade
+ * out. Empty gutter, and the restoring pose, must pass clicks through
+ * to the desktop underneath.
+ */
+export function shouldIgnoreMiniPreviewsHiddenCursorEvents(
+  position: ThumbnailPointerPosition,
+  root: Document = document,
+): boolean {
+  const chip = root.querySelector(".mini-previews-hidden");
+  if (!chip || chip.classList.contains("mini-previews-hidden-restoring")) {
+    return true;
+  }
+  if (!position.inside) return false;
+  return !elementContainsPoint(chip, position.x, position.y);
+}
+
+function elementContainsPoint(element: Element, x: number, y: number): boolean {
+  const bounds = element.getBoundingClientRect();
+  return x >= bounds.left && x <= bounds.right && y >= bounds.top && y <= bounds.bottom;
 }
 
 /**

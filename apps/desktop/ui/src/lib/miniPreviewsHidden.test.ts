@@ -1,10 +1,14 @@
 import {
+  buildMiniPreviewFolderDustParticles,
   miniPreviewFolderPlaceholderSheets,
   miniPreviewFolderSheets,
   miniPreviewsHiddenLabel,
   markMiniPreviewRestorePending,
   prepareMiniPreviewFolderMotion,
   takeMiniPreviewRestorePending,
+  shouldIgnoreMiniPreviewsHiddenCursorEvents,
+  MINI_PREVIEW_FOLDER_DUST_LEAD_MS,
+  MINI_PREVIEW_FOLDER_SIZE_PX,
 } from "./miniPreviewsHidden";
 
 function rect(left: number, top: number, width: number, height: number): DOMRect {
@@ -57,6 +61,33 @@ describe("miniPreviewFolderSheets", () => {
       { id: "preview-sheet-1", src: null },
       { id: "preview-sheet-2", src: null },
     ]);
+  });
+});
+
+describe("buildMiniPreviewFolderDustParticles", () => {
+  it("uses the shared chip breakup from the folder's top-right contact point", () => {
+    const particles = buildMiniPreviewFolderDustParticles(() => 0.5);
+
+    expect(particles).toHaveLength(36);
+    expect(particles.every(({ dy }) => dy < 0)).toBe(true);
+    expect(particles.every(({ delayMs }) => (
+      delayMs >= MINI_PREVIEW_FOLDER_DUST_LEAD_MS
+    ))).toBe(true);
+
+    const distanceFromContact = ({ sourceLeft, sourceTop, width, height }: typeof particles[number]) => (
+      Math.hypot(
+        sourceLeft + width / 2 - MINI_PREVIEW_FOLDER_SIZE_PX,
+        sourceTop + height / 2,
+      )
+    );
+    const nearest = particles.reduce((best, particle) => (
+      distanceFromContact(particle) < distanceFromContact(best) ? particle : best
+    ));
+    const farthest = particles.reduce((best, particle) => (
+      distanceFromContact(particle) > distanceFromContact(best) ? particle : best
+    ));
+
+    expect(nearest.delayMs).toBeLessThan(farthest.delayMs);
   });
 });
 
@@ -113,5 +144,36 @@ describe("pending mini-preview restore", () => {
     markMiniPreviewRestorePending();
     expect(takeMiniPreviewRestorePending()).toBe(true);
     expect(takeMiniPreviewRestorePending()).toBe(false);
+  });
+});
+
+describe("shouldIgnoreMiniPreviewsHiddenCursorEvents", () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+  });
+
+  it("keeps the visible chip interactive and passes the shadow gutter through", () => {
+    document.body.innerHTML = `<button class="mini-previews-hidden">2 previews</button>`;
+    const chip = document.querySelector(".mini-previews-hidden")!;
+    vi.spyOn(chip, "getBoundingClientRect").mockReturnValue(rect(8, 8, 80, 56));
+
+    expect(shouldIgnoreMiniPreviewsHiddenCursorEvents({ x: 20, y: 20, inside: true }))
+      .toBe(false);
+    expect(shouldIgnoreMiniPreviewsHiddenCursorEvents({ x: 4, y: 4, inside: true }))
+      .toBe(true);
+    expect(shouldIgnoreMiniPreviewsHiddenCursorEvents({ x: 0, y: 0, inside: false }))
+      .toBe(false);
+  });
+
+  it("passes the whole restore window through while the chip is restoring", () => {
+    document.body.innerHTML =
+      `<button class="mini-previews-hidden mini-previews-hidden-restoring">2 previews</button>`;
+    const chip = document.querySelector(".mini-previews-hidden")!;
+    vi.spyOn(chip, "getBoundingClientRect").mockReturnValue(rect(8, 8, 80, 56));
+
+    expect(shouldIgnoreMiniPreviewsHiddenCursorEvents({ x: 20, y: 20, inside: true }))
+      .toBe(true);
+    expect(shouldIgnoreMiniPreviewsHiddenCursorEvents({ x: 0, y: 0, inside: false }))
+      .toBe(true);
   });
 });

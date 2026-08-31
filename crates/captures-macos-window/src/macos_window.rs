@@ -1,5 +1,9 @@
 use crate::conceal_policy::should_conceal_documents_for_capture_activation;
-use crate::cursor_policy::{CaptureCursor, CaptureCursorKind};
+use crate::cursor_policy::{
+    CaptureCursor, CaptureCursorKind, ThumbnailHoverCursor, overlay_prepare_keeps_native_cursor,
+    suppress_document_cursor_rects_for_thumbnail, thumbnail_may_take_key_window,
+    thumbnail_unpolled_hover_when_inactive,
+};
 
 use std::{
     cell::{Cell, RefCell},
@@ -15,7 +19,7 @@ use std::{
 use block2::RcBlock;
 use dispatch2::DispatchQueue;
 use objc2::{
-    AllocAnyThread, DefinedClass, MainThreadMarker, define_class,
+    AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class,
     ffi::{OBJC_ASSOCIATION_RETAIN_NONATOMIC, objc_getAssociatedObject, objc_setAssociatedObject},
     msg_send,
     rc::Retained,
@@ -23,15 +27,16 @@ use objc2::{
     sel,
 };
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationOptions, NSBezierPath, NSBezierPathElement, NSColor,
-    NSCursor, NSEvent, NSEventMask, NSEventType, NSPasteboard, NSRunningApplication, NSScreen,
-    NSSound, NSStatusWindowLevel, NSTrackingArea, NSTrackingAreaOptions, NSView,
-    NSViewLayerContentsPlacement, NSWindow, NSWindowCollectionBehavior, NSWindowStyleMask,
-    NSWorkspace, NSWorkspaceDidActivateApplicationNotification,
+    NSApplication, NSApplicationActivationOptions, NSApplicationDidResignActiveNotification,
+    NSBackingStoreType, NSBezierPath, NSBezierPathElement, NSColor, NSCursor, NSEvent, NSEventMask,
+    NSEventType, NSPanel, NSPasteboard, NSRunningApplication, NSScreen, NSSound,
+    NSStatusWindowLevel, NSTrackingArea, NSTrackingAreaOptions, NSView,
+    NSViewLayerContentsPlacement, NSWindow, NSWindowCollectionBehavior, NSWindowSharingType,
+    NSWindowStyleMask, NSWorkspace, NSWorkspaceDidActivateApplicationNotification,
 };
 use objc2_foundation::{
-    NSNotification, NSNumber, NSObject, NSObjectProtocol, NSOperationQueue, NSPoint, NSProcessInfo,
-    NSRect, NSSize, NSString,
+    NSNotification, NSNotificationCenter, NSNumber, NSObject, NSObjectProtocol, NSOperationQueue,
+    NSPoint, NSProcessInfo, NSRect, NSSize, NSString,
 };
 use tauri::WebviewWindow;
 use tauri_nspanel::WebviewWindowExt;
@@ -176,6 +181,7 @@ enum CursorSurface {
 struct CursorTrackingIvars {
     mode: Cell<CursorMode>,
     surface: CursorSurface,
+    view: Cell<Option<ptr::NonNull<NSView>>>,
 }
 
 define_class!(
@@ -227,6 +233,7 @@ impl CursorTrackingOwner {
         let this = Self::alloc().set_ivars(CursorTrackingIvars {
             mode: Cell::new(mode),
             surface,
+            view: Cell::new(None),
         });
         // SAFETY: `NSObject`'s `init` method has this signature.
         let owner = unsafe { msg_send![super(this), init] };
@@ -236,14 +243,42 @@ impl CursorTrackingOwner {
         owner
     }
 
+    fn set_view(&self, view: &NSView) {
+        self.ivars().view.set(Some(ptr::NonNull::from(view)));
+        if self.ivars().surface == CursorSurface::Thumbnail
+            && let Some(window) = view.window()
+        {
+            remember_thumbnail_window(&window);
+        }
+    }
+
+    fn tracked_window(&self) -> Option<Retained<NSWindow>> {
+        let view = self.ivars().view.get()?;
+        // SAFETY: `set_view` stores the live WKWebView that owns this tracker.
+        unsafe { view.as_ref() }.window()
+    }
+
+    fn event_or_tracked_window(&self, event: Option<&NSEvent>) -> Option<Retained<NSWindow>> {
+        let main_thread = MainThreadMarker::new()?;
+        if let Some(event) = event
+            && let Some(window) = event.window(main_thread)
+        {
+            return Some(window);
+        }
+        self.tracked_window()
+    }
+
     fn set_mode(&self, mode: CursorMode) {
         self.ivars().mode.set(mode);
         if self.ivars().surface == CursorSurface::Thumbnail {
             publish_thumbnail_cursor_mode(mode);
         }
-        // Capture surfaces appear under a stationary pointer. Apply immediately
-        // so the mode does not wait for the next mouseEntered / cursorUpdate.
-        if self.ivars().surface == CursorSurface::CaptureOverlay && capture_overlay_owns_cursor() {
+        // Capture surfaces and mini previews appear under a stationary pointer.
+        // Apply immediately so the mode does not wait for mouseEntered.
+        if self.ivars().surface == CursorSurface::Thumbnail
+            || (self.ivars().surface == CursorSurface::CaptureOverlay
+                && capture_overlay_owns_cursor())
+        {
             self.apply_cursor(None);
         }
     }
@@ -260,10 +295,7 @@ impl CursorTrackingOwner {
         {
             return;
         }
-        let Some(main_thread) = MainThreadMarker::new() else {
-            return;
-        };
-        if let Some(window) = event.window(main_thread)
+        if let Some(window) = self.event_or_tracked_window(Some(event))
             && !window.isKeyWindow()
         {
             if self.ivars().surface == CursorSurface::Thumbnail {
@@ -273,7 +305,7 @@ impl CursorTrackingOwner {
             // Becoming key lets WebKit re-enable cursor rectangles. Keep them
             // off while AppKit owns an interactive grab/pointer cursor so the
             // arrow and CSS pointer cannot alternate every mouse event.
-            if cursor_mode_is_interactive(self.ivars().mode.get()) {
+            if cursor_mode_is_interactive(self.effective_thumbnail_cursor_mode()) {
                 set_cursor_rects_enabled(&window, false);
             }
         }
@@ -285,13 +317,11 @@ impl CursorTrackingOwner {
         {
             return;
         }
-        let Some(main_thread) = MainThreadMarker::new() else {
-            return;
-        };
-        if let Some(window) = event.window(main_thread)
+        if let Some(window) = self.event_or_tracked_window(Some(event))
             && window.isKeyWindow()
         {
             if self.ivars().surface == CursorSurface::Thumbnail {
+                restore_competing_cursor_rects();
                 resign_ns_window_key_without_raising_documents(&window);
             } else {
                 window.resignKeyWindow();
@@ -299,31 +329,34 @@ impl CursorTrackingOwner {
         }
     }
 
+    fn effective_thumbnail_cursor_mode(&self) -> CursorMode {
+        let mode = self.ivars().mode.get();
+        if self.ivars().surface != CursorSurface::Thumbnail {
+            return mode;
+        }
+        let hover = cursor_mode_to_thumbnail_hover(mode);
+        let hover = if pointer_inside_thumbnail_window() {
+            thumbnail_unpolled_hover_when_inactive(app_is_active(), hover)
+        } else {
+            hover
+        };
+        thumbnail_hover_to_cursor_mode(hover)
+    }
+
     fn apply_cursor(&self, event: Option<&NSEvent>) {
         if !cursor_surface_can_apply(self.ivars().surface, capture_overlay_owns_cursor()) {
             return;
         }
-        let mode = self.ivars().mode.get();
-        // WebKit may re-enable cursor rectangles after focus or layer updates.
-        // Re-disable on every interactive apply so CSS cannot flash the default
-        // arrow between AppKit open-hand / pointing-hand updates.
-        if cursor_mode_is_interactive(mode)
-            && let Some(event) = event
-            && let Some(main_thread) = MainThreadMarker::new()
-            && let Some(window) = event.window(main_thread)
-        {
-            set_cursor_rects_enabled(&window, false);
-        }
-        // Thumbnail: JS poll owns the cursor kind (grab on the image, pointer
-        // on buttons). Forcing the arrow on every mouseMoved while mode is
-        // still Arrow races the first open-hand update and also suppresses CSS
-        // `grab` over the drag source before that poll. Capture overlay still
-        // needs an explicit arrow when requested.
-        if matches!(mode, CursorMode::Arrow)
-            && self.ivars().surface == CursorSurface::Thumbnail
-            && event.is_some()
-        {
-            return;
+        let mode = if self.ivars().surface == CursorSurface::Thumbnail {
+            self.effective_thumbnail_cursor_mode()
+        } else {
+            self.ivars().mode.get()
+        };
+        if let Some(window) = self.event_or_tracked_window(event) {
+            if cursor_mode_is_interactive(mode) {
+                set_cursor_rects_enabled(&window, false);
+            }
+            suppress_competing_cursor_rects_if_needed(mode);
         }
         apply_cursor_mode(mode);
     }
@@ -356,6 +389,10 @@ static THUMBNAIL_KEY_WINDOW_ALLOWED: AtomicBool = AtomicBool::new(true);
 // removed, while still letting the desktop layer make the panel click-through.
 static THUMBNAIL_PRESENTED: AtomicBool = AtomicBool::new(false);
 static THUMBNAIL_CLICK_CURSOR_MONITOR: Mutex<Option<MainThreadMonitor>> = Mutex::new(None);
+static GLOBAL_CURSOR_MONITOR: Mutex<Option<MainThreadMonitor>> = Mutex::new(None);
+static CURSOR_CLAIM_PANEL: Mutex<Option<MainThreadPanel>> = Mutex::new(None);
+static THUMBNAIL_WINDOW_PTR: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
 
 /// Retains an AppKit event monitor installed only on the main thread.
 ///
@@ -372,6 +409,16 @@ struct MainThreadMonitor(Retained<AnyObject>);
 unsafe impl Send for MainThreadMonitor {}
 // SAFETY: Same as `Send` — access is main-thread-only via AppKit callbacks.
 unsafe impl Sync for MainThreadMonitor {}
+
+/// Same Send/Sync contract as [`MainThreadMonitor`] for the cursor-claim
+/// NSPanel used while the capture overlay is not yet key.
+#[allow(dead_code)]
+struct MainThreadPanel(Retained<NSPanel>);
+
+// SAFETY: Created and used only on AppKit's main thread.
+unsafe impl Send for MainThreadPanel {}
+// SAFETY: Same as `Send`.
+unsafe impl Sync for MainThreadPanel {}
 
 fn publish_thumbnail_cursor_mode(mode: CursorMode) {
     THUMBNAIL_CURSOR_MODE.store(mode as u8, Ordering::Release);
@@ -394,18 +441,89 @@ fn apply_cursor_mode(mode: CursorMode) {
     }
 }
 
+fn cursor_mode_to_thumbnail_hover(mode: CursorMode) -> ThumbnailHoverCursor {
+    match mode {
+        CursorMode::PointingHand => ThumbnailHoverCursor::Pointer,
+        CursorMode::OpenHand => ThumbnailHoverCursor::Grab,
+        _ => ThumbnailHoverCursor::Default,
+    }
+}
+
+fn thumbnail_hover_to_cursor_mode(kind: ThumbnailHoverCursor) -> CursorMode {
+    match kind {
+        ThumbnailHoverCursor::Default => CursorMode::Arrow,
+        ThumbnailHoverCursor::Pointer => CursorMode::PointingHand,
+        ThumbnailHoverCursor::Grab => CursorMode::OpenHand,
+    }
+}
+
+fn thumbnail_kind_to_hover(kind: ThumbnailCursorKind) -> ThumbnailHoverCursor {
+    match kind {
+        ThumbnailCursorKind::Default => ThumbnailHoverCursor::Default,
+        ThumbnailCursorKind::Pointer => ThumbnailHoverCursor::Pointer,
+        ThumbnailCursorKind::Grab => ThumbnailHoverCursor::Grab,
+    }
+}
+
+fn remember_thumbnail_window(window: &NSWindow) {
+    THUMBNAIL_WINDOW_PTR.store(ptr::from_ref(window) as usize, Ordering::Release);
+}
+
+fn thumbnail_ns_window() -> Option<&'static NSWindow> {
+    let pointer = THUMBNAIL_WINDOW_PTR.load(Ordering::Acquire) as *const NSWindow;
+    // SAFETY: The thumbnail NSWindow is process-lived; `configure_thumbnail_inactive_hover`
+    // stores it and the panel is never destroyed for the rest of the session.
+    unsafe { pointer.as_ref() }
+}
+
+fn point_in_ns_rect(point: NSPoint, rect: NSRect) -> bool {
+    point.x >= rect.origin.x
+        && point.y >= rect.origin.y
+        && point.x < rect.origin.x + rect.size.width
+        && point.y < rect.origin.y + rect.size.height
+}
+
+fn pointer_inside_thumbnail_window() -> bool {
+    let Some(window) = thumbnail_ns_window() else {
+        return false;
+    };
+    point_in_ns_rect(NSEvent::mouseLocation(), window.frame())
+}
+
+fn app_is_active() -> bool {
+    let Some(main_thread) = MainThreadMarker::new() else {
+        return false;
+    };
+    NSApplication::sharedApplication(main_thread).isActive()
+}
+
 /// Re-apply the interactive thumbnail cursor after a click/key-window handoff.
 ///
 /// Returns whether an interactive cursor was reasserted (for tests).
 fn reassert_thumbnail_cursor_after_click() -> bool {
+    apply_interactive_thumbnail_cursor(false)
+}
+
+fn apply_unpolled_thumbnail_hover_cursor() -> bool {
+    apply_interactive_thumbnail_cursor(true)
+}
+
+fn apply_interactive_thumbnail_cursor(promote_unpolled: bool) -> bool {
     if capture_overlay_owns_cursor() {
         return false;
     }
-    let mode = thumbnail_cursor_mode();
+    let stored = cursor_mode_to_thumbnail_hover(thumbnail_cursor_mode());
+    let hover = if promote_unpolled {
+        stored.unpolled_hover()
+    } else {
+        stored
+    };
+    let mode = thumbnail_hover_to_cursor_mode(hover);
     if !cursor_mode_is_interactive(mode) {
         return false;
     }
     apply_cursor_mode(mode);
+    suppress_competing_cursor_rects_if_needed(mode);
     true
 }
 
@@ -461,31 +579,291 @@ fn ensure_thumbnail_click_cursor_monitor() {
         // SAFETY: AppKit supplies a live NSEvent for the duration of the local
         // monitor callback.
         let event_ref = unsafe { event.as_ref() };
+        let event_type = event_ref.r#type();
+        let click_handoff =
+            event_type == NSEventType::LeftMouseDown || event_type == NSEventType::LeftMouseUp;
+        let over_thumbnail = pointer_inside_thumbnail_window();
         let thumbnail_window = thumbnail_key_window_for_mouse_up(event_ref);
         if thumbnail_window.is_some() {
             THUMBNAIL_KEY_WINDOW_ALLOWED.store(false, Ordering::Release);
         }
-        let reasserted = reassert_thumbnail_cursor_after_click();
-        if reasserted || thumbnail_window.is_some() {
-            // WebKit installs the arrow while handling the click. Reassert again
-            // on the next main-queue turn, then release thumbnail key status so
-            // a Copy/Save/Delete click cannot leave the app underneath inactive.
+        if !click_handoff && !over_thumbnail {
+            return event.as_ptr();
+        }
+        let reasserted = if over_thumbnail && (click_handoff || !app_is_active()) {
+            apply_unpolled_thumbnail_hover_cursor()
+        } else {
+            reassert_thumbnail_cursor_after_click()
+        };
+        if click_handoff && (reasserted || thumbnail_window.is_some()) {
+            // WebKit installs the arrow while handling the click, then an
+            // opening editor's cursor rectangles can restore it again. Reassert
+            // across the next main-queue turns, and release thumbnail key
+            // status so a Copy/Save/Delete click cannot leave the app
+            // underneath inactive.
             DispatchQueue::main().exec_async(move || {
-                let _ = reassert_thumbnail_cursor_after_click();
+                let _ = apply_unpolled_thumbnail_hover_cursor();
                 if let Some(window_address) = thumbnail_window {
                     release_thumbnail_key_window(window_address);
                 }
+                DispatchQueue::main().exec_async(|| {
+                    let _ = apply_unpolled_thumbnail_hover_cursor();
+                    DispatchQueue::main().exec_async(|| {
+                        let _ = apply_unpolled_thumbnail_hover_cursor();
+                    });
+                });
             });
         }
         event.as_ptr()
     });
     let monitor = unsafe {
         NSEvent::addLocalMonitorForEventsMatchingMask_handler(
-            NSEventMask::LeftMouseDown | NSEventMask::LeftMouseUp,
+            NSEventMask::LeftMouseDown
+                | NSEventMask::LeftMouseUp
+                | NSEventMask::LeftMouseDragged
+                | NSEventMask::MouseMoved,
             &block,
         )
     };
     *guard = monitor.map(MainThreadMonitor);
+}
+
+fn suppress_competing_cursor_rects_if_needed(mode: CursorMode) {
+    if capture_overlay_owns_cursor() {
+        return;
+    }
+    let Some(main_thread) = MainThreadMarker::new() else {
+        return;
+    };
+    let Some(key) = NSApplication::sharedApplication(main_thread).keyWindow() else {
+        return;
+    };
+    let is_thumbnail = cursor_surface_for_window(&key) == Some(CursorSurface::Thumbnail);
+    if !suppress_document_cursor_rects_for_thumbnail(
+        cursor_mode_is_interactive(mode),
+        is_thumbnail,
+        is_titled_document_window(&key),
+    ) {
+        return;
+    }
+    set_cursor_rects_enabled(&key, false);
+    SUPPRESSED_CURSOR_RECT_WINDOW.with(|slot| {
+        *slot.borrow_mut() = Some(key);
+    });
+}
+
+fn restore_competing_cursor_rects() {
+    SUPPRESSED_CURSOR_RECT_WINDOW.with(|slot| {
+        if let Some(window) = slot.borrow_mut().take() {
+            set_cursor_rects_enabled(&window, true);
+        }
+    });
+}
+
+fn ensure_global_cursor_monitor() {
+    let Ok(mut guard) = GLOBAL_CURSOR_MONITOR.lock() else {
+        return;
+    };
+    if guard.is_some() {
+        return;
+    }
+    let block = RcBlock::new(|event: ptr::NonNull<NSEvent>| {
+        // SAFETY: AppKit supplies a live NSEvent for the duration of the global
+        // monitor callback.
+        handle_global_cursor_event(unsafe { event.as_ref() });
+    });
+    let monitor = NSEvent::addGlobalMonitorForEventsMatchingMask_handler(
+        NSEventMask::MouseMoved
+            | NSEventMask::LeftMouseDown
+            | NSEventMask::LeftMouseUp
+            | NSEventMask::FlagsChanged,
+        &block,
+    );
+    *guard = monitor.map(MainThreadMonitor);
+}
+
+fn handle_global_cursor_event(event: &NSEvent) {
+    if capture_overlay_owns_cursor() {
+        reassert_claimed_capture_cursor();
+        return;
+    }
+    if event.r#type() == NSEventType::FlagsChanged {
+        return;
+    }
+    apply_thumbnail_hover_from_global_pointer();
+}
+
+fn apply_thumbnail_hover_from_global_pointer() {
+    if !thumbnail_is_presented() || capture_overlay_owns_cursor() {
+        return;
+    }
+    let Some(window) = thumbnail_ns_window() else {
+        return;
+    };
+    if !point_in_ns_rect(NSEvent::mouseLocation(), window.frame()) {
+        return;
+    }
+    // Frozen JS poll can leave the stack click-through. Tracking areas do not
+    // fire on a window that ignores mouse events, so enable them before hover.
+    window.setIgnoresMouseEvents(false);
+    THUMBNAIL_KEY_WINDOW_ALLOWED.store(true, Ordering::Release);
+    if cursor_surface_can_take_key_window(CursorSurface::Thumbnail) && !window.isKeyWindow() {
+        remember_frontmost_app_before_thumbnail_key();
+        window.makeKeyWindow();
+    }
+    let _ = apply_unpolled_thumbnail_hover_cursor();
+}
+
+fn ensure_thumbnail_resign_active_observer() {
+    debug_assert!(is_main_thread());
+    THUMBNAIL_RESIGN_ACTIVE_OBSERVER.with_borrow_mut(|slot| {
+        if slot.is_some() {
+            return;
+        }
+        let block = RcBlock::new(|_notification: ptr::NonNull<NSNotification>| {
+            THUMBNAIL_KEY_WINDOW_ALLOWED.store(true, Ordering::Release);
+            apply_thumbnail_hover_from_global_pointer();
+        });
+        let center = NSNotificationCenter::defaultCenter();
+        let queue = NSOperationQueue::mainQueue();
+        // SAFETY: The notification name matches NSApplication's resign-active
+        // notification, and the main queue serializes AppKit cursor state.
+        let observer = unsafe {
+            center.addObserverForName_object_queue_usingBlock(
+                Some(NSApplicationDidResignActiveNotification),
+                None,
+                Some(&queue),
+                &block,
+            )
+        };
+        *slot = Some(observer);
+    });
+}
+
+fn capture_overlay_is_key() -> bool {
+    let Some(main_thread) = MainThreadMarker::new() else {
+        return false;
+    };
+    NSApplication::sharedApplication(main_thread)
+        .keyWindow()
+        .is_some_and(|window| {
+            cursor_surface_for_window(&window) == Some(CursorSurface::CaptureOverlay)
+        })
+}
+
+fn screen_frame_containing_mouse(mtm: MainThreadMarker) -> NSRect {
+    let mouse = NSEvent::mouseLocation();
+    NSScreen::screens(mtm)
+        .into_iter()
+        .find(|screen| point_in_ns_rect(mouse, screen.frame()))
+        .map(|screen| screen.frame())
+        .unwrap_or_else(|| NSRect::new(mouse, NSSize::new(1.0, 1.0)))
+}
+
+fn show_cursor_claim_panel() {
+    if capture_overlay_is_key() {
+        hide_cursor_claim_panel();
+        return;
+    }
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let target_frame = screen_frame_containing_mouse(mtm);
+    let Ok(mut guard) = CURSOR_CLAIM_PANEL.lock() else {
+        return;
+    };
+    let panel = if let Some(MainThreadPanel(panel)) = guard.as_ref() {
+        panel.clone()
+    } else {
+        let panel = NSPanel::initWithContentRect_styleMask_backing_defer(
+            NSPanel::alloc(mtm),
+            target_frame,
+            NSWindowStyleMask::Borderless | NSWindowStyleMask::NonactivatingPanel,
+            NSBackingStoreType::Buffered,
+            false,
+        );
+        panel.setFloatingPanel(true);
+        panel.setBecomesKeyOnlyIfNeeded(false);
+        panel.setHidesOnDeactivate(false);
+        panel.setWorksWhenModal(true);
+        panel.setLevel(capture_surface_window_level());
+        panel.setOpaque(false);
+        panel.setBackgroundColor(Some(&NSColor::clearColor()));
+        panel.setHasShadow(false);
+        // Eat mouse events so the frontmost app cannot keep writing its cursor
+        // while modifiers come up. Sharing-none keeps this surface out of the
+        // freeze-frame.
+        panel.setIgnoresMouseEvents(false);
+        panel.setSharingType(NSWindowSharingType::None);
+        panel.setAcceptsMouseMovedEvents(true);
+        unsafe {
+            panel.setReleasedWhenClosed(false);
+        }
+        panel.setCollectionBehavior(capture_surface_collection_behavior());
+        panel.setAlphaValue(WINDOW_REVEAL_PRIME_ALPHA);
+        *guard = Some(MainThreadPanel(panel.clone()));
+        panel
+    };
+    drop(guard);
+    let already_ready = panel.isVisible()
+        && panel.isKeyWindow()
+        && point_in_ns_rect(NSEvent::mouseLocation(), panel.frame());
+    if already_ready {
+        return;
+    }
+    panel.setFrame_display(target_frame, false);
+    panel.orderFrontRegardless();
+    panel.makeKeyWindow();
+}
+
+fn hide_cursor_claim_panel() {
+    let Ok(guard) = CURSOR_CLAIM_PANEL.lock() else {
+        return;
+    };
+    if let Some(MainThreadPanel(panel)) = guard.as_ref() {
+        if !panel.isVisible() {
+            return;
+        }
+        if panel.isKeyWindow() {
+            panel.resignKeyWindow();
+        }
+        panel.orderOut(None);
+    }
+}
+
+/// Claims the capture cursor before the overlay paints or shortcut modifiers
+/// come up. A nonactivating panel covering the display under the pointer can
+/// be key while another app stays frontmost, so `NSCursor.set` is not ignored
+/// and does not wait for a move. Window sharing is disabled so the panel is
+/// omitted from the freeze-frame.
+pub fn claim_capture_cursor(cursor: CaptureCursor) {
+    if !is_main_thread() {
+        let _ = run_on_main(move || claim_capture_cursor(cursor));
+        return;
+    }
+    CAPTURE_OVERLAY_OWNS_CURSOR.store(true, Ordering::Release);
+    store_capture_cursor(cursor);
+    ensure_capture_cursor_monitor();
+    ensure_global_cursor_monitor();
+    NSCursor::setHiddenUntilMouseMoves(false);
+    show_cursor_claim_panel();
+    apply_cursor_mode(cursor.kind.to_cursor_mode());
+    DispatchQueue::main().exec_async(|| {
+        reassert_claimed_capture_cursor();
+        DispatchQueue::main().exec_async(reassert_claimed_capture_cursor);
+    });
+}
+
+fn reassert_claimed_capture_cursor() {
+    if !capture_overlay_owns_cursor() {
+        return;
+    }
+    let cursor = stored_capture_cursor();
+    if cursor.reasserts_native_cursor_on_modifiers() || cursor.kind == CaptureCursorKind::Crosshair
+    {
+        show_cursor_claim_panel();
+        apply_cursor_mode(cursor.kind.to_cursor_mode());
+    }
 }
 
 // The address of this byte is used as the Objective-C association key.
@@ -540,6 +918,11 @@ thread_local! {
     static UPDATE_NOTICE_WORKSPACE_OBSERVER:
         RefCell<Option<Retained<ProtocolObject<dyn NSObjectProtocol>>>> =
             const { RefCell::new(None) };
+    static THUMBNAIL_RESIGN_ACTIVE_OBSERVER:
+        RefCell<Option<Retained<ProtocolObject<dyn NSObjectProtocol>>>> =
+            const { RefCell::new(None) };
+    static SUPPRESSED_CURSOR_RECT_WINDOW: RefCell<Option<Retained<NSWindow>>> =
+        const { RefCell::new(None) };
 }
 
 /// Returns whether a standard shortcut modifier is still physically held.
@@ -640,12 +1023,26 @@ pub fn configure_pointing_inactive_hover(window: &WebviewWindow) -> Result<(), &
 /// can display its cursor, then releases key status after click delivery and on
 /// exit so the application underneath stays active.
 pub fn configure_thumbnail_inactive_hover(window: &WebviewWindow) -> Result<(), &'static str> {
+    if !is_main_thread() {
+        let window = window.clone();
+        return run_on_main(move || configure_thumbnail_inactive_hover(&window))
+            .ok_or("inactive HUD setup did not run on the main thread")?;
+    }
     THUMBNAIL_PRESENTED.store(false, Ordering::Release);
-    configure_inactive_hover_with_cursor::<ThumbnailPanel>(
+    let result = configure_inactive_hover_with_cursor::<ThumbnailPanel>(
         window,
         CursorMode::Arrow,
         CursorSurface::Thumbnail,
-    )
+    );
+    if result.is_ok() {
+        ensure_global_cursor_monitor();
+        ensure_thumbnail_resign_active_observer();
+        ensure_thumbnail_click_cursor_monitor();
+        if let Ok(native) = native_window(window) {
+            remember_thumbnail_window(native);
+        }
+    }
+    result
 }
 
 fn configure_inactive_hover_with_cursor<P>(
@@ -748,6 +1145,7 @@ pub fn show_thumbnail_without_activating(window: &WebviewWindow) -> Result<(), &
     native_window(window)?.setAlphaValue(1.0);
     show_without_activating(window)?;
     THUMBNAIL_PRESENTED.store(true, Ordering::Release);
+    THUMBNAIL_KEY_WINDOW_ALLOWED.store(true, Ordering::Release);
     Ok(())
 }
 
@@ -765,6 +1163,7 @@ pub fn conceal_thumbnail_without_hiding(window: &WebviewWindow) -> Result<(), &'
     }
     THUMBNAIL_PRESENTED.store(false, Ordering::Release);
     THUMBNAIL_KEY_WINDOW_ALLOWED.store(false, Ordering::Release);
+    restore_competing_cursor_rects();
     let native_window = native_window(window)?;
     native_window.setAlphaValue(0.0);
     set_cursor_rects_enabled(native_window, true);
@@ -1153,8 +1552,22 @@ pub fn prepare_capture_overlay(window: &WebviewWindow) -> Result<(), &'static st
     clear_transparent_window_backing(native_window);
     clear_transparent_webview_backing(window);
     prime_window_reveal(window)?;
-    set_cursor_rects_enabled(native_window, true);
-    set_tracked_cursor(window, CursorMode::WebView, CursorSurface::CaptureOverlay)?;
+    if overlay_prepare_keeps_native_cursor(stored_capture_cursor().native_owned)
+        && capture_overlay_owns_cursor()
+    {
+        let cursor = stored_capture_cursor();
+        set_cursor_rects_enabled(native_window, false);
+        native_window.discardCursorRects();
+        set_tracked_cursor(
+            window,
+            cursor.tracked_kind().to_cursor_mode(),
+            CursorSurface::CaptureOverlay,
+        )?;
+        apply_cursor_mode(cursor.kind.to_cursor_mode());
+    } else {
+        set_cursor_rects_enabled(native_window, true);
+        set_tracked_cursor(window, CursorMode::WebView, CursorSurface::CaptureOverlay)?;
+    }
     Ok(())
 }
 
@@ -1178,6 +1591,9 @@ pub fn present_capture_overlay(window: &WebviewWindow) -> Result<(), &'static st
     }
     prepare_capture_overlay(window)?;
     native.orderFront(None);
+    if capture_overlay_owns_cursor() {
+        reassert_claimed_capture_cursor();
+    }
     Ok(())
 }
 
@@ -1200,10 +1616,12 @@ pub fn activate_capture_cursor(
         return run_on_main(move || activate_capture_cursor(&window, cursor))
             .ok_or("capture cursor did not run on the main thread")?;
     }
-    CAPTURE_OVERLAY_OWNS_CURSOR.store(true, Ordering::Release);
-    store_capture_cursor(cursor);
+    claim_capture_cursor(cursor);
     apply_capture_cursor(window, cursor)?;
-    ensure_capture_cursor_monitor();
+    if native_window(window)?.isKeyWindow() {
+        hide_cursor_claim_panel();
+        apply_capture_cursor(window, cursor)?;
+    }
     let window = window.clone();
     DispatchQueue::main().exec_async(move || {
         reassert_stored_capture_cursor(&window);
@@ -1236,6 +1654,12 @@ fn reassert_stored_capture_cursor(window: &WebviewWindow) {
         return;
     }
     let _ = apply_capture_cursor(window, stored_capture_cursor());
+    if native_window(window).is_ok_and(|native| native.isKeyWindow()) {
+        hide_cursor_claim_panel();
+        let _ = apply_capture_cursor(window, stored_capture_cursor());
+    } else {
+        reassert_claimed_capture_cursor();
+    }
 }
 
 fn apply_capture_cursor(window: &WebviewWindow, cursor: CaptureCursor) -> Result<(), &'static str> {
@@ -1315,7 +1739,10 @@ fn ensure_capture_cursor_monitor() {
         event.as_ptr()
     });
     let monitor = unsafe {
-        NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::FlagsChanged, &block)
+        NSEvent::addLocalMonitorForEventsMatchingMask_handler(
+            NSEventMask::FlagsChanged | NSEventMask::MouseMoved,
+            &block,
+        )
     };
     *guard = monitor.map(MainThreadMonitor);
 }
@@ -1326,6 +1753,7 @@ fn reassert_capture_cursor_after_modifier_change() {
     }
     let cursor = stored_capture_cursor();
     if cursor.reasserts_native_cursor_on_modifiers() {
+        show_cursor_claim_panel();
         apply_cursor_mode(cursor.kind.to_cursor_mode());
         return;
     }
@@ -1349,6 +1777,7 @@ pub fn release_capture_cursor() {
         return;
     }
     CAPTURE_OVERLAY_OWNS_CURSOR.store(false, Ordering::Release);
+    hide_cursor_claim_panel();
     NSCursor::setHiddenUntilMouseMoves(false);
     NSCursor::arrowCursor().set();
 }
@@ -2074,7 +2503,8 @@ pub fn set_thumbnail_cursor(
         return reset_pointing_cursor_state(window);
     }
     let native_window = native_window(window)?;
-    let interactive = !matches!(kind, ThumbnailCursorKind::Default);
+    remember_thumbnail_window(native_window);
+    let interactive = thumbnail_kind_to_hover(kind).is_interactive();
     let mode = match kind {
         ThumbnailCursorKind::Default => CursorMode::Arrow,
         ThumbnailCursorKind::Pointer => CursorMode::PointingHand,
@@ -2093,6 +2523,7 @@ pub fn set_thumbnail_cursor(
         remember_frontmost_app_before_thumbnail_key();
         native_window.makeKeyWindow();
     } else if !interactive && native_window.isKeyWindow() {
+        restore_competing_cursor_rects();
         resign_ns_window_key_without_raising_documents(native_window);
     }
     set_cursor_rects_enabled(native_window, !interactive);
@@ -2103,6 +2534,7 @@ pub fn set_thumbnail_cursor(
     if interactive {
         set_cursor_rects_enabled(native_window, false);
         apply_thumbnail_ns_cursor(kind);
+        suppress_competing_cursor_rects_if_needed(mode);
     }
     Ok(())
 }
@@ -2150,6 +2582,7 @@ pub fn reassert_thumbnail_cursor(
     apply_thumbnail_ns_cursor(kind);
     set_cursor_rects_enabled(native_window, false);
     apply_thumbnail_ns_cursor(kind);
+    suppress_competing_cursor_rects_if_needed(mode);
     Ok(())
 }
 
@@ -2171,6 +2604,7 @@ pub fn reset_pointing_cursor_state(window: &WebviewWindow) -> Result<(), &'stati
             .ok_or("thumbnail cursor reset did not run on the main thread")?;
     }
     THUMBNAIL_KEY_WINDOW_ALLOWED.store(false, Ordering::Release);
+    restore_competing_cursor_rects();
     let native_window = native_window(window)?;
     set_cursor_rects_enabled(native_window, true);
     set_tracked_cursor(window, CursorMode::Arrow, CursorSurface::Thumbnail)
@@ -2197,11 +2631,13 @@ fn set_tracked_cursor(
 
 fn install_cursor_tracker(webview: &NSView, mode: CursorMode, surface: CursorSurface) {
     if let Some(owner) = associated_cursor_tracker(webview) {
+        owner.set_view(webview);
         owner.set_mode(mode);
         return;
     }
 
     let owner = CursorTrackingOwner::new(mode, surface);
+    owner.set_view(webview);
     let options = pointer_tracking_options(surface);
     let cursor_options = cursor_update_tracking_options(surface);
     // SAFETY: The owner implements each callback requested by these options.
@@ -2267,9 +2703,17 @@ fn pointer_tracking_options(surface: CursorSurface) -> NSTrackingAreaOptions {
 }
 
 fn cursor_update_tracking_options(surface: CursorSurface) -> NSTrackingAreaOptions {
-    let mut options = NSTrackingAreaOptions::CursorUpdate
-        | NSTrackingAreaOptions::ActiveInKeyWindow
-        | NSTrackingAreaOptions::InVisibleRect;
+    let mut options = NSTrackingAreaOptions::CursorUpdate | NSTrackingAreaOptions::InVisibleRect;
+    if matches!(
+        surface,
+        CursorSurface::CaptureOverlay | CursorSurface::Thumbnail
+    ) {
+        // Overlay and mini previews must update the cursor while another app
+        // is frontmost. ActiveInKeyWindow waits for a click/focus.
+        options |= NSTrackingAreaOptions::ActiveAlways;
+    } else {
+        options |= NSTrackingAreaOptions::ActiveInKeyWindow;
+    }
     if surface_assumes_pointer_inside(surface) {
         options |= NSTrackingAreaOptions::AssumeInside;
     }
@@ -2334,15 +2778,18 @@ fn cursor_surface_uses_key_window(surface: CursorSurface) -> bool {
 fn cursor_surface_can_take_key_window_with_thumbnail_allowed(
     surface: CursorSurface,
     thumbnail_allowed: bool,
+    app_is_active: bool,
 ) -> bool {
     cursor_surface_uses_key_window(surface)
-        && (surface != CursorSurface::Thumbnail || thumbnail_allowed)
+        && (surface != CursorSurface::Thumbnail
+            || thumbnail_may_take_key_window(thumbnail_allowed, app_is_active))
 }
 
 fn cursor_surface_can_take_key_window(surface: CursorSurface) -> bool {
     cursor_surface_can_take_key_window_with_thumbnail_allowed(
         surface,
         THUMBNAIL_KEY_WINDOW_ALLOWED.load(Ordering::Acquire),
+        app_is_active(),
     )
 }
 
@@ -2372,18 +2819,19 @@ mod tests {
 
     use super::{
         CAPTURE_OVERLAY_OWNS_CURSOR, CursorMode, CursorSurface, THUMBNAIL_CURSOR_MODE,
-        activation_handoff_target, capture_overlay_needs_presentation,
-        capture_surface_collection_behavior, capture_surface_window_level,
-        clamp_display_corner_radius, corner_radius_from_bezel_path, cursor_mode_is_interactive,
-        cursor_surface_can_apply, cursor_surface_can_take_key_window_with_thumbnail_allowed,
-        cursor_surface_uses_key_window, cursor_update_tracking_options,
-        display_corner_radius_points, is_main_thread, notice_activation_source_after_focus_change,
-        parse_display_id, pointer_tracking_options, reassert_thumbnail_cursor_after_click,
+        activation_handoff_target, apply_unpolled_thumbnail_hover_cursor,
+        capture_overlay_needs_presentation, capture_surface_collection_behavior,
+        capture_surface_window_level, clamp_display_corner_radius, corner_radius_from_bezel_path,
+        cursor_mode_is_interactive, cursor_mode_to_thumbnail_hover, cursor_surface_can_apply,
+        cursor_surface_can_take_key_window_with_thumbnail_allowed, cursor_surface_uses_key_window,
+        cursor_update_tracking_options, display_corner_radius_points, is_main_thread,
+        notice_activation_source_after_focus_change, parse_display_id, point_in_ns_rect,
+        pointer_tracking_options, reassert_thumbnail_cursor_after_click,
         refresh_notice_activation_source_while_unfocused, shortcut_modifiers_pressed,
         should_rearm_thumbnail_key_window, should_release_thumbnail_key_after_event,
         should_reset_cursor_on_exit, single_window_activation_options,
         style_mask_is_titled_document, surface_assumes_pointer_inside,
-        window_corner_radius_for_major_version,
+        thumbnail_hover_to_cursor_mode, window_corner_radius_for_major_version,
     };
 
     #[test]
@@ -2612,15 +3060,23 @@ mod tests {
         ));
         assert!(!cursor_surface_can_take_key_window_with_thumbnail_allowed(
             CursorSurface::Thumbnail,
+            false,
+            true
+        ));
+        assert!(cursor_surface_can_take_key_window_with_thumbnail_allowed(
+            CursorSurface::Thumbnail,
+            false,
             false
         ));
         assert!(cursor_surface_can_take_key_window_with_thumbnail_allowed(
             CursorSurface::Thumbnail,
+            true,
             true
         ));
         assert!(cursor_surface_can_take_key_window_with_thumbnail_allowed(
             CursorSurface::InactiveHud,
-            false
+            false,
+            true
         ));
     }
 
@@ -2660,6 +3116,7 @@ mod tests {
         let previous_overlay = CAPTURE_OVERLAY_OWNS_CURSOR.swap(false, Ordering::AcqRel);
 
         assert!(!reassert_thumbnail_cursor_after_click());
+        assert!(apply_unpolled_thumbnail_hover_cursor());
 
         THUMBNAIL_CURSOR_MODE.store(CursorMode::PointingHand as u8, Ordering::Release);
         assert!(reassert_thumbnail_cursor_after_click());
@@ -2693,5 +3150,43 @@ mod tests {
             !pointer_tracking_options(CursorSurface::Thumbnail)
                 .contains(NSTrackingAreaOptions::AssumeInside)
         );
+        assert!(
+            cursor_update_tracking_options(CursorSurface::Thumbnail)
+                .contains(NSTrackingAreaOptions::ActiveAlways)
+        );
+        assert!(
+            cursor_update_tracking_options(CursorSurface::CaptureOverlay)
+                .contains(NSTrackingAreaOptions::ActiveAlways)
+        );
+        assert!(
+            !cursor_update_tracking_options(CursorSurface::InactiveHud)
+                .contains(NSTrackingAreaOptions::ActiveAlways)
+        );
+    }
+
+    #[test]
+    fn unpolled_thumbnail_hover_promotes_the_arrow_to_a_pointing_hand() {
+        assert_eq!(
+            thumbnail_hover_to_cursor_mode(
+                cursor_mode_to_thumbnail_hover(CursorMode::Arrow).unpolled_hover()
+            ),
+            CursorMode::PointingHand
+        );
+        assert_eq!(
+            thumbnail_hover_to_cursor_mode(
+                cursor_mode_to_thumbnail_hover(CursorMode::OpenHand).unpolled_hover()
+            ),
+            CursorMode::OpenHand
+        );
+    }
+
+    #[test]
+    fn screen_point_in_window_frame_uses_half_open_edges() {
+        let frame = NSRect::new(NSPoint::new(10.0, 20.0), NSSize::new(100.0, 40.0));
+        assert!(point_in_ns_rect(NSPoint::new(10.0, 20.0), frame));
+        assert!(point_in_ns_rect(NSPoint::new(109.9, 59.9), frame));
+        assert!(!point_in_ns_rect(NSPoint::new(110.0, 20.0), frame));
+        assert!(!point_in_ns_rect(NSPoint::new(10.0, 60.0), frame));
+        assert!(!point_in_ns_rect(NSPoint::new(0.0, 20.0), frame));
     }
 }

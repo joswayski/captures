@@ -550,6 +550,8 @@ describe("Thumbnail", () => {
     expect(card).toHaveClass("thumbnail-exiting");
     expect(hidePreviews).toHaveClass("thumbnail-collapse-leaving");
     expect(hidePreviews).toBeDisabled();
+    expect(document.querySelectorAll(".thumbnail-collapse-dust-chip")).toHaveLength(36);
+    expect(document.querySelectorAll(".thumbnail-collapse-dust-surface")).toHaveLength(36);
 
     await waitFor(() => {
       const ignoreCalls = vi.mocked(invoke).mock.calls
@@ -753,6 +755,34 @@ describe("Thumbnail", () => {
     expect(show).not.toHaveClass("thumbnail-collapse-parked");
     expect(show.querySelector(".mini-preview-folder")).toHaveAttribute("data-pose", "open");
     expect(vi.mocked(invoke)).toHaveBeenCalledWith("restore_mini_previews");
+  });
+
+  it("does not re-arm a parked stack after empty pointer samples", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifacts") return [artifact];
+      if (command === "get_clipboard_state") {
+        return { revision: 0, artifact_id: artifact.id };
+      }
+      if (command === "get_thumbnail_pointer_position") return null;
+      return undefined;
+    });
+
+    render(<Thumbnail />);
+    const hide = await screen.findByRole("button", { name: "Hide previews" });
+    vi.useFakeTimers();
+    fireEvent.click(hide);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(MINI_PREVIEW_FOLDER_MORPH_MS);
+    });
+    vi.mocked(invoke).mockClear();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith("refresh_thumbnail_interactivity");
+    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith(
+      "set_thumbnail_ignore_cursor_events",
+      { ignore: false },
+    );
   });
 
   it("rolls parked previews back out from the same folder anchor", async () => {

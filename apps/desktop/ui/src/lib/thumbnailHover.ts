@@ -10,9 +10,11 @@ export const THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS = 0;
 /**
  * Extra reassert delays (ms) after a click or focus handoff. Immediate (0) covers
  * the next task; later ticks cover WebKit's post-click arrow install and the
- * key-window steal when Edit opens the screenshot editor.
+ * key-window steal when Edit opens the screenshot editor. Native AppKit also
+ * reasserts across the following main-queue turns so the arrow cannot flash
+ * between these JS ticks.
  */
-export const THUMBNAIL_CURSOR_HANDOFF_REASSERT_DELAYS_MS = [0, 16, 48] as const;
+export const THUMBNAIL_CURSOR_HANDOFF_REASSERT_DELAYS_MS = [0, 8, 16, 48, 96] as const;
 
 /** DOM marker mirroring the native cursor kind while pointer polling is active. */
 export const THUMBNAIL_CURSOR_KIND_ATTRIBUTE = "data-thumbnail-cursor";
@@ -154,8 +156,16 @@ export function clearThumbnailCssCursor(
  * Linux that otherwise blocks the desktop for the whole ~3s delete.
  * Overflow cues only matter while a live card remains; an exiting-only stack
  * should pass every click through, including those controls.
+ * Folding into the parked chip also has to pass clicks through: macOS keeps the
+ * concealed stack onscreen at zero alpha, and a later interactivity recovery
+ * would otherwise turn that invisible panel into a click shield.
  */
 export function thumbnailStackHasLiveHitTarget(root: Document = document): boolean {
+  if (root.querySelector(
+    ".thumbnail-stack-collapsing, .thumbnail-stack-parked, .thumbnail-stack-restoring",
+  )) {
+    return false;
+  }
   const cards = root.querySelectorAll(".thumbnail-card");
   for (const card of cards) {
     if (!card.classList.contains("thumbnail-exiting")) return true;

@@ -121,11 +121,13 @@ import {
 } from "./lib/editorPresence";
 import { reconcileActiveViewer } from "./lib/viewerActivation";
 import {
+  buildMiniPreviewFolderDustParticles,
   markMiniPreviewRestorePending,
   miniPreviewFolderPlaceholderSheets,
   miniPreviewFolderSheets,
   miniPreviewsHiddenLabel,
   prepareMiniPreviewFolderMotion,
+  shouldIgnoreMiniPreviewsHiddenCursorEvents,
   takeMiniPreviewRestorePending,
   MINI_PREVIEW_FOLDER_MORPH_MS,
   MINI_PREVIEWS_RESTORED_EVENT,
@@ -595,8 +597,65 @@ export function MiniPreviewsHiddenChip() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!isTauri()) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let ignoringCursorEvents = false;
+    let ignoreCursorEventsSynced = false;
+
+    const setIgnoreCursorEvents = (ignore: boolean) => {
+      if (ignoreCursorEventsSynced && ignoringCursorEvents === ignore) return;
+      ignoringCursorEvents = ignore;
+      ignoreCursorEventsSynced = true;
+      void invoke("set_mini_previews_hidden_ignore_cursor_events", { ignore })
+        .catch(() => undefined);
+    };
+
+    const poll = async () => {
+      if (cancelled) return;
+      try {
+        const position = await withThumbnailPointerTimeout(
+          invoke<ThumbnailPointerPosition | null>(
+            "get_mini_previews_hidden_pointer_position",
+          ),
+        );
+        if (cancelled) return;
+        if (!position) {
+          setIgnoreCursorEvents(true);
+        } else {
+          setIgnoreCursorEvents(shouldIgnoreMiniPreviewsHiddenCursorEvents(position));
+        }
+      } catch {
+        if (!cancelled) setIgnoreCursorEvents(true);
+      } finally {
+        if (!cancelled) {
+          timer = setTimeout(() => {
+            timer = null;
+            void poll();
+          }, 40);
+        }
+      }
+    };
+
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      setIgnoreCursorEvents(true);
+    };
+  }, []);
+
   const restoreStack = () => {
     if (restoring) return;
+    if (isTauri()) {
+      void invoke("set_mini_previews_hidden_ignore_cursor_events", { ignore: true })
+        .catch(() => undefined);
+    }
+    if (prefersReducedMotion()) {
+      void invoke("restore_mini_previews");
+      return;
+    }
     setRestoring(true);
     markMiniPreviewRestorePending();
     void invoke("restore_mini_previews").finally(() => setRestoring(false));
@@ -5535,6 +5594,10 @@ export function Thumbnail() {
   });
   const stackRef = useRef<HTMLElement>(null);
   const collapseRef = useRef<HTMLButtonElement>(null);
+  const folderDustLayerRef = useRef<HTMLSpanElement>(null);
+  const [folderDustParticles] = useState<ThumbnailDustParticle[]>(
+    buildMiniPreviewFolderDustParticles,
+  );
   const folderMotionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const previousArtifactCount = useRef(0);
   const cancelStackScroll = useRef<(() => void) | null>(null);
@@ -5725,6 +5788,19 @@ export function Thumbnail() {
   }, [artifacts.length, refreshStackOverflow]);
 
   const hasThumbnailCards = artifacts.length > 0;
+  const collapseLeaving = hasThumbnailCards
+    && artifacts.every(({ id }) => exitingArtifactIds.has(id));
+
+  useEffect(() => {
+    if (!collapseLeaving || prefersReducedMotion()) return;
+    const layer = folderDustLayerRef.current;
+    if (!layer) return;
+    return playThumbnailDustAnimations(
+      layer.querySelectorAll(".thumbnail-collapse-dust-chip"),
+      folderDustParticles,
+    );
+  }, [collapseLeaving, folderDustParticles]);
+
   useEffect(() => {
     // Dust-delete and dismiss both hold layout; survivors above slide by N
     // slots with the same ease. Pure CSS only moved one fixed step (or reflowed
@@ -6140,9 +6216,12 @@ export function Thumbnail() {
     }, MINI_PREVIEW_FOLDER_MORPH_MS);
   }, [folderMotion]);
 
+  useEffect(() => {
+    window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
+  }, [folderMotion]);
+
   if (artifacts.length === 0) return null;
 
-  const collapseLeaving = artifacts.every(({ id }) => exitingArtifactIds.has(id));
   const folderBusy = folderMotion === "collapsing" || folderMotion === "restoring";
 
   const restoreFromFolderPose = () => {
@@ -6161,19 +6240,26 @@ export function Thumbnail() {
     }
   };
 
+  const parkStack = () => {
+    setFolderMotion("collapsing");
+    window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
+    void invoke("collapse_mini_previews").catch(() => setFolderMotion("idle"));
+  };
+
   const collapseIntoFolder = () => {
     if (collapseLeaving || folderMotion !== "idle") return;
     if (prefersReducedMotion()) {
-      void invoke("collapse_mini_previews");
+      parkStack();
       return;
     }
     const stack = stackRef.current;
     const folder = collapseRef.current?.querySelector(".mini-preview-folder");
     if (!stack || !folder || prepareMiniPreviewFolderMotion(stack, folder) === 0) {
-      void invoke("collapse_mini_previews");
+      parkStack();
       return;
     }
     setFolderMotion("collapsing");
+    window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
     folderMotionTimer.current = setTimeout(() => {
       folderMotionTimer.current = null;
       setFolderMotion("parked");
@@ -6263,9 +6349,10 @@ export function Thumbnail() {
         />
       </button>
       {collapseLeaving && (
-        <span className="thumbnail-collapse-dust" aria-hidden="true">
-          {Array.from({ length: 9 }, (_, index) => <i key={index} />)}
-        </span>
+        <MiniPreviewFolderDust
+          layerRef={folderDustLayerRef}
+          particles={folderDustParticles}
+        />
       )}
       {stackOverflow.hasOlder && (
         <button
@@ -6330,6 +6417,41 @@ function MiniPreviewFolder({
         </span>
         <span className="mini-preview-folder-flap" />
       </span>
+    </span>
+  );
+}
+
+function MiniPreviewFolderDust({
+  layerRef,
+  particles,
+}: {
+  layerRef: RefObject<HTMLSpanElement | null>;
+  particles: readonly ThumbnailDustParticle[];
+}) {
+  return (
+    <span ref={layerRef} className="thumbnail-collapse-dust-layer" aria-hidden="true">
+      {particles.map((particle) => (
+        <span
+          key={particle.id}
+          className="thumbnail-dust thumbnail-collapse-dust-chip"
+          style={{
+            left: particle.left,
+            top: particle.top,
+            width: particle.width,
+            height: particle.height,
+          }}
+        >
+          <span
+            className="thumbnail-collapse-dust-surface"
+            style={{
+              left: -particle.sourceLeft,
+              top: -particle.sourceTop,
+            }}
+          >
+            <MiniPreviewFolder pose="idle" sheets={[]} />
+          </span>
+        </span>
+      ))}
     </span>
   );
 }

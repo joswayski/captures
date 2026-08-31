@@ -4,6 +4,7 @@
  */
 
 import {
+  elementLocalPoint,
   imageOrientationMatrix,
   imageOrientationSwapsAxes,
   imageSourceDisplaySize,
@@ -48,11 +49,12 @@ export function hitTestImageElement(
   for (let index = elements.length - 1; index >= 0; index -= 1) {
     const element = elements[index];
     if (!element.visible || element.kind !== "image") continue;
+    const localPoint = elementLocalPoint(element, point);
     if (
-      point.x >= element.x
-      && point.x < element.x + element.width
-      && point.y >= element.y
-      && point.y < element.y + element.height
+      localPoint.x >= element.x
+      && localPoint.x < element.x + element.width
+      && localPoint.y >= element.y
+      && localPoint.y < element.y + element.height
     ) {
       return element;
     }
@@ -69,8 +71,9 @@ export function documentPointToImagePixel(
   point: EditorPoint,
 ): { x: number; y: number } | null {
   if (element.width <= 0 || element.height <= 0) return null;
-  const localX = point.x - element.x;
-  const localY = point.y - element.y;
+  const localPoint = elementLocalPoint(element, point);
+  const localX = localPoint.x - element.x;
+  const localY = localPoint.y - element.y;
   if (
     localX < 0
     || localY < 0

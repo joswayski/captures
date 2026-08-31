@@ -77,6 +77,13 @@ import {
   cropDocument,
   duplicateScreenshotElement,
   elementBounds,
+  elementLocalBounds,
+  elementLocalPoint,
+  elementRotation,
+  elementRotationHandleAnchorPoint,
+  elementRotationHandleFitsCanvas,
+  elementRotationHandlePoint,
+  elementRotationOrigin,
   LAYER_PREVIEW_SIZE,
   mergedLayerName,
   estimateCanvasExportBytes,
@@ -109,24 +116,16 @@ import {
   resizeDocumentCanvas,
   resizeElement,
   resizeHandlePoint,
-  rotationHudShouldOpenBelow,
+  hitTestElementRotationHandle,
   isResizeCornerHandle,
   scaleArrowStrokeForLength,
-  shapeLocalBounds,
   shapeLocalPoint,
-  shapeRotation,
-  shapeRotationHandleOffset,
-  shapeRotationHandlePoint,
-  shapeRotationOrigin,
-  hitTestShapeRotationHandle,
-  shapeRotationHandleFitsCanvas,
+  SHAPE_ROTATION_SNAP_DEGREES,
+  preserveElementWorldPoint,
   preserveShapeWorldPoint,
   oppositeResizeHandle,
   snapShapeRotation,
-  shapeRotationDegrees,
-  shapeRotationFromDegrees,
-  SHAPE_ROTATION_SNAP_DEGREES,
-  withShapeRotation,
+  withElementRotation,
   snapResizedBounds,
   snapTranslatedBounds,
   stackDropLightFocusAtPoint,
@@ -236,7 +235,7 @@ type EditorGesture =
   | {
     kind: "rotate";
     pointerId: number;
-    element: Extract<ScreenshotElement, { kind: "shape" }>;
+    element: ScreenshotElement;
     origin: EditorPoint;
     startAngle: number;
     initialRotation: number;
@@ -259,12 +258,6 @@ type EditorGesture =
   };
 
 type RemoveBackgroundGesture = Extract<EditorGesture, { kind: "remove-bg" }>;
-
-type RotationDialGesture = {
-  pointerId: number;
-  elementId: string;
-  initialDocument: ScreenshotDocument;
-};
 
 type PanGesture = {
   pointerId: number;
@@ -366,35 +359,6 @@ const TEXT_STYLE_ITEMS: Array<{ preset: TextStylePreset; label: string }> = [
   { preset: "rounded-box", label: "Rounded Box" },
 ];
 
-const SHAPE_ROTATION_DIAL_TICKS = Array.from(
-  { length: 360 / SHAPE_ROTATION_SNAP_DEGREES },
-  (_, index) => index * SHAPE_ROTATION_SNAP_DEGREES,
-);
-const SHAPE_ROTATION_DIAL_MAGNET_DEGREES = 3;
-
-function rotationDialDegreesAtPoint(
-  clientX: number,
-  clientY: number,
-  bounds: Pick<DOMRect, "left" | "top" | "width" | "height">,
-): number | null {
-  const centerX = bounds.left + bounds.width / 2;
-  const centerY = bounds.top + bounds.height / 2;
-  const offsetX = clientX - centerX;
-  const offsetY = clientY - centerY;
-  if (Math.hypot(offsetX, offsetY) < Math.min(bounds.width, bounds.height) * 0.18) {
-    return null;
-  }
-  const rawDegrees = Math.round(Math.atan2(offsetY, offsetX) * (180 / Math.PI) + 90);
-  let degrees = ((rawDegrees + 180) % 360 + 360) % 360 - 180;
-  if (degrees === -180) degrees = 180;
-  const nearestDetent = Math.round(degrees / SHAPE_ROTATION_SNAP_DEGREES)
-    * SHAPE_ROTATION_SNAP_DEGREES;
-  if (Math.abs(degrees - nearestDetent) <= SHAPE_ROTATION_DIAL_MAGNET_DEGREES) {
-    degrees = nearestDetent === -180 ? 180 : nearestDetent;
-  }
-  return degrees;
-}
-
 /** Tools that draw closed or open vector shapes (not freehand). */
 function isShapeDrawTool(tool: ScreenshotTool): boolean {
   return tool === "rectangle"
@@ -430,18 +394,19 @@ function hitTestSelectedAnnotation(
 ) {
   if (selected.locked || !selected.visible) return null;
   if (
-    selected.kind === "shape"
-    && (!canvas || shapeRotationHandleFitsCanvas(selected, displayScale, canvas))
-    && hitTestShapeRotationHandle(selected, point, interactionRadius, displayScale)
+    (!canvas || elementRotationHandleFitsCanvas(selected, displayScale, canvas))
+    && hitTestElementRotationHandle(
+      selected,
+      point,
+      interactionRadius,
+      displayScale,
+      canvas,
+    )
   ) {
     return { kind: "rotate" };
   }
-  const localPoint = selected.kind === "shape"
-    ? shapeLocalPoint(selected, point)
-    : point;
-  const bounds = selected.kind === "shape"
-    ? shapeLocalBounds(selected)
-    : elementBounds(selected);
+  const localPoint = elementLocalPoint(selected, point);
+  const bounds = elementLocalBounds(selected);
   const handle = hitTestResizeHandle(
     bounds,
     localPoint,
@@ -781,29 +746,27 @@ function strokeArrowPath(
 /** Compact endpoint grip for line/arrow ends (kept smaller than full resize corners). */
 function drawShapeRotationHandle(
   context: CanvasRenderingContext2D,
-  bounds: EditorRect,
+  anchor: EditorPoint,
+  handle: EditorPoint,
   unit: number,
   accentColor: string,
 ): void {
-  const midX = bounds.x + bounds.width / 2;
-  const offset = shapeRotationHandleOffset(1 / unit);
-  const handleY = bounds.y - offset;
   const radius = 8 * unit;
   context.save();
   context.globalAlpha = 0.22;
   context.fillStyle = accentColor;
   context.beginPath();
-  context.arc(midX, handleY, radius, 0, Math.PI * 2);
+  context.arc(handle.x, handle.y, radius, 0, Math.PI * 2);
   context.fill();
   context.globalAlpha = 1;
   context.strokeStyle = accentColor;
   context.lineWidth = 1.6 * unit;
   context.beginPath();
-  context.moveTo(midX, bounds.y);
-  context.lineTo(midX, handleY);
+  context.moveTo(anchor.x, anchor.y);
+  context.lineTo(handle.x, handle.y);
   context.stroke();
   context.beginPath();
-  context.arc(midX, handleY, radius, 0, Math.PI * 2);
+  context.arc(handle.x, handle.y, radius, 0, Math.PI * 2);
   context.stroke();
   // Compact rotate glyph inside the grip so the control reads as rotation.
   context.strokeStyle = accentColor;
@@ -813,11 +776,11 @@ function drawShapeRotationHandle(
   context.lineJoin = "round";
   const glyphR = 3.15 * unit;
   context.beginPath();
-  context.arc(midX, handleY, glyphR, Math.PI * 0.35, Math.PI * 1.75);
+  context.arc(handle.x, handle.y, glyphR, Math.PI * 0.35, Math.PI * 1.75);
   context.stroke();
   const tipAngle = Math.PI * 1.75;
-  const tipX = midX + Math.cos(tipAngle) * glyphR;
-  const tipY = handleY + Math.sin(tipAngle) * glyphR;
+  const tipX = handle.x + Math.cos(tipAngle) * glyphR;
+  const tipY = handle.y + Math.sin(tipAngle) * glyphR;
   const arrow = 2.15 * unit;
   context.beginPath();
   context.moveTo(tipX, tipY);
@@ -997,13 +960,6 @@ function drawShape(
   element: Extract<ScreenshotElement, { kind: "shape" }>,
 ): void {
   context.save();
-  const rotation = shapeRotation(element);
-  if (rotation !== 0) {
-    const origin = shapeRotationOrigin(element);
-    context.translate(origin.x, origin.y);
-    context.rotate(rotation);
-    context.translate(-origin.x, -origin.y);
-  }
   configureAnnotationStroke(context, element.style);
   paintAnnotationInk(context, element.style, () => paintShapeGeometry(context, element));
   context.restore();
@@ -1106,26 +1062,31 @@ function paintScreenshotElement(
   element: ScreenshotElement,
   imageCache: Map<string, CachedImage>,
 ): void {
+  context.save();
+  const rotation = elementRotation(element);
+  if (rotation !== 0) {
+    const origin = elementRotationOrigin(element);
+    context.translate(origin.x, origin.y);
+    context.rotate(rotation);
+    context.translate(-origin.x, -origin.y);
+  }
   if (element.kind === "image") {
     const cached = imageCache.get(element.src);
     if (cached?.status === "loaded") {
       paintImageElementSource(context, element, cached.image);
     }
-    return;
-  }
-  if (element.kind === "text") {
+  } else if (element.kind === "text") {
     drawText(context, element);
-    return;
-  }
-  if (element.kind === "shape") {
+  } else if (element.kind === "shape") {
     drawShape(context, element);
-    return;
+  } else {
+    context.save();
+    configureAnnotationStroke(context, element.style);
+    paintAnnotationInk(context, element.style, () => {
+      drawSmoothPath(context, element.points);
+    });
+    context.restore();
   }
-  context.save();
-  configureAnnotationStroke(context, element.style);
-  paintAnnotationInk(context, element.style, () => {
-    drawSmoothPath(context, element.points);
-  });
   context.restore();
 }
 
@@ -1415,13 +1376,13 @@ function drawEditorOverlays(
   if ((selected?.visible ?? false) || selectionBoundsOverride) {
     const shape = selected?.kind === "shape" ? selected : null;
     const bounds = selectionBoundsOverride
-      ?? (shape ? shapeLocalBounds(shape) : selected ? elementBounds(selected) : null);
+      ?? (selected ? elementLocalBounds(selected) : null);
     if (bounds) {
       const curveable = Boolean(shape && isCurveableStrokeShape(shape));
       // Text labels scale as a sticker: corner grips only, no independent stretch.
       const cornerGripsOnly = curveable || selected?.kind === "text";
       context.save();
-      const rotation = shape ? shapeRotation(shape) : 0;
+      const rotation = selected ? elementRotation(selected) : 0;
       if (rotation !== 0) {
         const originX = bounds.x + bounds.width / 2;
         const originY = bounds.y + bounds.height / 2;
@@ -1498,10 +1459,16 @@ function drawEditorOverlays(
           }
         }
       }
-      if (shape && shapeRotationHandleFitsCanvas(shape, displayScale, document)) {
-        drawShapeRotationHandle(context, bounds, unit, accentColor);
-      }
       context.restore();
+      if (selected && elementRotationHandleFitsCanvas(selected, displayScale, document)) {
+        drawShapeRotationHandle(
+          context,
+          elementRotationHandleAnchorPoint(selected, displayScale, document),
+          elementRotationHandlePoint(selected, displayScale, document),
+          unit,
+          accentColor,
+        );
+      }
     }
   }
 
@@ -1686,6 +1653,7 @@ export function ScreenshotEditor() {
   const [tool, setTool] = useState<ScreenshotTool>("select");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
+  const [subduedInlineSelectionId, setSubduedInlineSelectionId] = useState<string | null>(null);
   const [cropSelection, setCropSelection] = useState<EditorRect | null>(null);
   const [cropAspect, setCropAspect] = useState("free");
   const [removeBgMode, setRemoveBgMode] = useState<RemoveBackgroundMode>("wand");
@@ -1701,6 +1669,9 @@ export function ScreenshotEditor() {
   });
   const [defaultFontSize, setDefaultFontSize] = useState(48);
   const [defaultTextStyle, setDefaultTextStyle] = useState<TextStylePreset>("rounded-box");
+  const [rotationSnapDegrees, setRotationSnapDegrees] = useState(
+    SHAPE_ROTATION_SNAP_DEGREES,
+  );
   const [fitScale, setFitScale] = useState(1);
   const [zoomMode, setZoomMode] = useState<"fit" | "manual">("fit");
   const [zoom, setZoom] = useState(100);
@@ -1751,11 +1722,6 @@ export function ScreenshotEditor() {
   /** Free view offset (CSS px) so the canvas can be dragged fully off-screen. */
   const [viewPan, setViewPan] = useState({ x: 0, y: 0 });
   const [canvasOffscreen, setCanvasOffscreen] = useState(false);
-  const [rotateHudBelow, setRotateHudBelow] = useState(false);
-  const [rotationDialAnchor, setRotationDialAnchor] = useState<{
-    handle: EditorPoint;
-    placeLeft: boolean;
-  } | null>(null);
   const [layerDropTarget, setLayerDropTarget] = useState<LayerDropTarget | null>(null);
   /** Which layer row's settings popover is open (⋯ menu). */
   const [layerMenuId, setLayerMenuId] = useState<string | null>(null);
@@ -1823,7 +1789,6 @@ export function ScreenshotEditor() {
   const viewportRef = useRef<HTMLDivElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const rotateHudRef = useRef<HTMLDivElement>(null);
   const expandOverflowCanvasRef = useRef<HTMLCanvasElement>(null);
   const brushCursorElementRef = useRef<HTMLDivElement>(null);
   const brushCursorPositionRef = useRef({ clientX: 0, clientY: 0 });
@@ -1837,7 +1802,6 @@ export function ScreenshotEditor() {
   const flushEditorDraftRef = useRef<() => Promise<void>>(async () => undefined);
   const objectUrlsRef = useRef(new Set<string>());
   const gestureRef = useRef<EditorGesture | null>(null);
-  const rotationDialGestureRef = useRef<RotationDialGesture | null>(null);
   /** Live natural-resolution canvas drawn over the target layer during brush strokes. */
   const removeBgLiveRef = useRef<{
     elementId: string;
@@ -2390,6 +2354,7 @@ export function ScreenshotEditor() {
 
   const beginTextEditing = useCallback((elementId: string, selectAll = false) => {
     selectInlineTextRef.current = selectAll;
+    setSubduedInlineSelectionId(selectAll ? elementId : null);
     setSelectedId(elementId);
     setEditingTextId(elementId);
     setTool("select");
@@ -2429,43 +2394,6 @@ export function ScreenshotEditor() {
 
   const displayScale = zoomMode === "fit" ? fitScale : zoom / 100;
 
-  const shapeRotateHud = useMemo(() => {
-    if (
-      !selected
-      || selected.kind !== "shape"
-      || !selected.visible
-      || selected.locked
-      || cropSelection
-    ) {
-      return null;
-    }
-    const naturalHandle = shapeRotationHandlePoint(selected, displayScale);
-    const degrees = shapeRotationDegrees(selected);
-    return {
-      handle: rotationDialAnchor?.handle ?? naturalHandle,
-      degrees,
-      placeLeft: rotationDialAnchor?.placeLeft
-        ?? Boolean(editorDocument && naturalHandle.x > editorDocument.width * 0.58),
-    };
-  }, [cropSelection, displayScale, editorDocument, rotationDialAnchor, selected]);
-
-  useLayoutEffect(() => {
-    const hud = rotateHudRef.current;
-    const viewport = viewportRef.current;
-    const surface = surfaceRef.current;
-    if (!shapeRotateHud || !hud || !viewport || !surface) return;
-    const viewportBounds = viewport.getBoundingClientRect();
-    const surfaceBounds = surface.getBoundingClientRect();
-    const anchorClientY = surfaceBounds.top + shapeRotateHud.handle.y * displayScale;
-    const nextBelow = rotationHudShouldOpenBelow(
-      anchorClientY,
-      viewportBounds.top,
-      viewportBounds.bottom,
-      hud.offsetHeight,
-    );
-    setRotateHudBelow((current) => current === nextBelow ? current : nextBelow);
-  }, [displayScale, shapeRotateHud, viewPan]);
-
   const idleOverflowPreview = useMemo(() => {
     if (canvasExpandPreview || !editorDocument || !overflowHoverId) return null;
     const element = editorDocument.elements.find((item) => item.id === overflowHoverId);
@@ -2487,7 +2415,7 @@ export function ScreenshotEditor() {
 
   const inlineTextLayout = useMemo(() => {
     if (!editingText) return null;
-    const contentHeight = elementBounds(editingText).height;
+    const localBounds = elementLocalBounds(editingText);
     const pad = textHasBackgroundPlate(editingText)
       ? textBackgroundPad(editingText.fontSize)
       : { x: 0, y: 0 };
@@ -2497,17 +2425,18 @@ export function ScreenshotEditor() {
     const optical = editingText.fontSize * TEXT_OPTICAL_CENTER_NUDGE_RATIO * displayScale;
     const padY = pad.y * displayScale;
     return {
-      left: (editingText.x - pad.x) * displayScale,
-      top: (editingText.y - pad.y) * displayScale,
-      width: Math.max(
-        48,
-        (editingText.width + pad.x * 2) * displayScale + border,
-      ),
-      height: Math.max(
-        28,
-        // elementBounds already includes pad when a plate is present.
-        contentHeight * displayScale + border,
-      ),
+      frame: {
+        left: localBounds.x * displayScale,
+        top: localBounds.y * displayScale,
+        width: Math.max(
+          48,
+          localBounds.width * displayScale + border,
+        ),
+        height: Math.max(
+          28,
+          localBounds.height * displayScale + border,
+        ),
+      },
       padding: `${padY + optical}px ${pad.x * displayScale}px ${Math.max(0, padY - optical)}px`,
     };
   }, [displayScale, editingText]);
@@ -3446,15 +3375,15 @@ export function ScreenshotEditor() {
           displayScale,
           current,
         );
-        if (annotationHit?.kind === "rotate" && selectedElement.kind === "shape") {
-          const origin = shapeRotationOrigin(selectedElement);
+        if (annotationHit?.kind === "rotate") {
+          const origin = elementRotationOrigin(selectedElement);
           startCanvasGesture({
             kind: "rotate",
             pointerId: event.pointerId,
             element: selectedElement,
             origin,
             startAngle: Math.atan2(point.y - origin.y, point.x - origin.x),
-            initialRotation: shapeRotation(selectedElement),
+            initialRotation: elementRotation(selectedElement),
             initialDocument: current,
           });
           setCanvasCursor("grabbing");
@@ -3607,15 +3536,15 @@ export function ScreenshotEditor() {
           displayScale,
           current,
         );
-        if (annotationHit?.kind === "rotate" && selectedElement.kind === "shape") {
-          const origin = shapeRotationOrigin(selectedElement);
+        if (annotationHit?.kind === "rotate") {
+          const origin = elementRotationOrigin(selectedElement);
           startCanvasGesture({
             kind: "rotate",
             pointerId: event.pointerId,
             element: selectedElement,
             origin,
             startAngle: Math.atan2(point.y - origin.y, point.x - origin.x),
-            initialRotation: shapeRotation(selectedElement),
+            initialRotation: elementRotation(selectedElement),
             initialDocument: current,
           });
           setCanvasCursor("grabbing");
@@ -3767,7 +3696,7 @@ export function ScreenshotEditor() {
           );
           if (annotationHit?.kind === "rotate") {
             setCurveHoverTip({
-              text: "Drag to rotate smoothly",
+              text: `Drag to rotate. Hold Shift to snap by ${rotationSnapDegrees}°`,
               clientX: event.clientX,
               clientY: event.clientY,
             });
@@ -3935,11 +3864,12 @@ export function ScreenshotEditor() {
     if (gesture.kind === "rotate") {
       setCanvasCursor("grabbing");
       const angle = Math.atan2(point.y - gesture.origin.y, point.x - gesture.origin.x);
-      const next = withShapeRotation(
+      const next = withElementRotation(
         gesture.element,
         snapShapeRotation(
           gesture.initialRotation + (angle - gesture.startAngle),
           event.shiftKey,
+          rotationSnapDegrees,
         ),
       );
       setCanvasExpandPreview(canvasExpandPreviewForBounds(
@@ -4017,11 +3947,8 @@ export function ScreenshotEditor() {
       // Text labels always scale as a unit so the plate cannot stretch
       // independently of the glyphs (including outline drags mapped to corners).
       const lockAspectRatio = event.shiftKey || gesture.element.kind === "text";
-      const pointer = gesture.element.kind === "shape"
-        ? shapeLocalPoint(gesture.element, point)
-        : point;
-      const rotatedShape = gesture.element.kind === "shape"
-        && shapeRotation(gesture.element) !== 0;
+      const pointer = elementLocalPoint(gesture.element, point);
+      const rotatedElement = elementRotation(gesture.element) !== 0;
       const freeBounds = resizeBoundsFromHandle(
         gesture.initialBounds,
         gesture.handle,
@@ -4033,7 +3960,7 @@ export function ScreenshotEditor() {
         gesture.initialDocument,
         gesture.element.id,
       );
-      const snapped = rotatedShape
+      const snapped = rotatedElement
         ? { bounds: freeBounds, guides: [] as AlignmentSnapGuide[] }
         : snapResizedBounds(
           gesture.initialBounds,
@@ -4058,28 +3985,18 @@ export function ScreenshotEditor() {
         gesture.initialBounds,
         nextBounds,
       );
-      if (
-        resized.kind === "shape"
-        && gesture.element.kind === "shape"
-        && shapeRotation(resized) !== 0
-      ) {
+      if (elementRotation(resized) !== 0) {
         const anchor = resizeHandlePoint(
           gesture.initialBounds,
           oppositeResizeHandle(gesture.handle),
         );
-        resized = preserveShapeWorldPoint(gesture.element, resized, anchor);
+        resized = preserveElementWorldPoint(gesture.element, resized, anchor);
       }
       gestureRef.current = { ...gesture, currentBounds: nextBounds };
-      setResizePreviewBounds(
-        resized.kind === "text"
-          ? elementBounds(resized)
-          : resized.kind === "shape"
-            ? shapeLocalBounds(resized)
-            : nextBounds,
-      );
+      setResizePreviewBounds(elementLocalBounds(resized));
       setAlignmentGuides(snapped.guides);
       setCanvasExpandPreview(canvasExpandPreviewForBounds(
-        resized.kind === "shape" ? elementBounds(resized) : nextBounds,
+        elementBounds(resized),
         gesture.initialDocument,
         resized,
       ));
@@ -4545,83 +4462,6 @@ export function ScreenshotEditor() {
     const element = current?.elements.find(({ id }) => id === selectedId);
     if (!current || !element) return;
     commitDocument(replaceElement(current, element.id, updater(element)));
-  };
-
-  const updateRotationFromDialPointer = (event: React.PointerEvent<HTMLDivElement>) => {
-    const gesture = rotationDialGestureRef.current;
-    if (!gesture || gesture.pointerId !== event.pointerId) return;
-    const degrees = rotationDialDegreesAtPoint(
-      event.clientX,
-      event.clientY,
-      event.currentTarget.getBoundingClientRect(),
-    );
-    if (degrees === null) return;
-    const element = gesture.initialDocument.elements.find(
-      ({ id }) => id === gesture.elementId,
-    );
-    if (!element || element.kind !== "shape") return;
-    replaceDocument(replaceElement(
-      gesture.initialDocument,
-      element.id,
-      withShapeRotation(element, shapeRotationFromDegrees(degrees)),
-    ));
-  };
-
-  const beginRotationDial = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0) return;
-    const current = documentRef.current;
-    const element = current?.elements.find(({ id }) => id === selectedId);
-    if (!current || !element || element.kind !== "shape" || element.locked) return;
-    rotationDialGestureRef.current = {
-      pointerId: event.pointerId,
-      elementId: element.id,
-      initialDocument: current,
-    };
-    if (shapeRotateHud) {
-      setRotationDialAnchor({
-        handle: shapeRotateHud.handle,
-        placeLeft: shapeRotateHud.placeLeft,
-      });
-    }
-    setCompressComparePaused(true);
-    event.currentTarget.setPointerCapture?.(event.pointerId);
-    updateRotationFromDialPointer(event);
-  };
-
-  const finishRotationDial = (event: React.PointerEvent<HTMLDivElement>) => {
-    const gesture = rotationDialGestureRef.current;
-    if (!gesture || gesture.pointerId !== event.pointerId) return;
-    rotationDialGestureRef.current = null;
-    setRotationDialAnchor(null);
-    setCompressComparePaused(false);
-    releasePointerTarget(event.currentTarget, event.pointerId);
-    const current = documentRef.current;
-    if (!current || JSON.stringify(current) === JSON.stringify(gesture.initialDocument)) return;
-    setUndoStack((stack) => [...stack.slice(-99), gesture.initialDocument]);
-    setRedoStack([]);
-    setSaved(null);
-    clearSuccess();
-  };
-
-  const handleRotationDialKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    const step = event.shiftKey ? SHAPE_ROTATION_SNAP_DEGREES : 1;
-    let delta = 0;
-    if (event.key === "ArrowRight" || event.key === "ArrowUp") delta = step;
-    else if (event.key === "ArrowLeft" || event.key === "ArrowDown") delta = -step;
-    else if (event.key === "PageUp") delta = SHAPE_ROTATION_SNAP_DEGREES;
-    else if (event.key === "PageDown") delta = -SHAPE_ROTATION_SNAP_DEGREES;
-    else if (event.key !== "Home") return;
-    event.preventDefault();
-    updateSelected((element) => (
-      element.kind === "shape"
-        ? withShapeRotation(
-          element,
-          shapeRotationFromDegrees(event.key === "Home"
-            ? 0
-            : shapeRotationDegrees(element) + delta),
-        )
-        : element
-    ));
   };
 
   const updateLayer = (
@@ -5666,60 +5506,6 @@ export function ScreenshotEditor() {
             }}
             onDoubleClick={handleCanvasDoubleClick}
           />
-          {shapeRotateHud && selected?.kind === "shape" && (
-            <div
-              ref={rotateHudRef}
-              className={[
-                "screenshot-shape-rotate-hud",
-                shapeRotateHud.placeLeft ? "is-left" : "",
-                rotateHudBelow ? "is-below" : "",
-              ].filter(Boolean).join(" ")}
-              style={{
-                left: shapeRotateHud.handle.x * displayScale,
-                top: shapeRotateHud.handle.y * displayScale,
-              }}
-              onPointerDown={(event) => event.stopPropagation()}
-              onPointerMove={(event) => event.stopPropagation()}
-              onDoubleClick={(event) => event.stopPropagation()}
-            >
-              <div
-                className="screenshot-shape-rotate-dial"
-                role="slider"
-                aria-label="Shape rotation dial"
-                aria-valuemin={-180}
-                aria-valuemax={180}
-                aria-valuenow={shapeRotateHud.degrees}
-                aria-valuetext={`${shapeRotateHud.degrees}°`}
-                tabIndex={0}
-                title="Drag to rotate. The dial settles into 15° detents."
-                onPointerDown={beginRotationDial}
-                onPointerMove={updateRotationFromDialPointer}
-                onPointerUp={finishRotationDial}
-                onPointerCancel={finishRotationDial}
-                onKeyDown={handleRotationDialKeyDown}
-              >
-                <span className="screenshot-shape-rotate-dial-ring" aria-hidden="true" />
-                <span className="screenshot-shape-rotate-dial-ticks" aria-hidden="true">
-                  {SHAPE_ROTATION_DIAL_TICKS.map((degrees) => (
-                    <i
-                      key={degrees}
-                      className={degrees % 45 === 0 ? "is-major" : undefined}
-                      style={{ transform: `rotate(${degrees}deg) translateY(calc(-1 * var(--rotation-dial-radius)))` }}
-                    />
-                  ))}
-                </span>
-                <span
-                  className="screenshot-shape-rotate-dial-indicator"
-                  style={{ transform: `rotate(${shapeRotateHud.degrees}deg)` }}
-                  aria-hidden="true"
-                >
-                  <i />
-                </span>
-                <output>{shapeRotateHud.degrees}°</output>
-                <small>{SHAPE_ROTATION_SNAP_DEGREES}° detents</small>
-              </div>
-            </div>
-          )}
           {showCompressCompare && (
             <CompressionPreview
               className="is-embed is-cover"
@@ -5740,77 +5526,102 @@ export function ScreenshotEditor() {
             />
           )}
           {editingText && inlineTextLayout && (
-            <textarea
-              ref={inlineTextRef}
-              className={[
-                "screenshot-inline-text-editor",
-                isAutoWidthText(editingText) ? "is-auto-width" : "",
-              ].filter(Boolean).join(" ")}
-              aria-label="Edit text on canvas"
-              autoFocus
-              value={editingText.text}
-              wrap={isAutoWidthText(editingText) ? "off" : "soft"}
-              spellCheck
+            <div
+              className="screenshot-inline-text-frame"
               style={{
-                ...inlineTextLayout,
-                color: editingText.outlined ? "transparent" : editingText.color,
-                backgroundColor: editingText.background ?? "transparent",
-                borderRadius: editingText.roundedBackground
-                  ? textBackgroundRadius(
-                    editingText,
-                    (editingText.width
-                      + (textHasBackgroundPlate(editingText)
-                        ? textBackgroundPad(editingText.fontSize).x * 2
-                        : 0)),
-                    elementBounds(editingText).height,
-                  ) * displayScale
-                  : undefined,
-                caretColor: editingText.color,
-                fontFamily: fontFamily(editingText),
-                fontSize: editingText.fontSize * displayScale,
-                fontWeight: editingText.bold ? 700 : 400,
-                fontStyle: editingText.italic ? "italic" : "normal",
-                lineHeight: TEXT_LINE_HEIGHT_RATIO,
-                textAlign: editingText.align,
-                WebkitTextStroke: editingText.outlined
-                  ? `${textOutlineWidth(editingText.fontSize) * displayScale}px ${editingText.color}`
-                  : undefined,
-                opacity: editingText.opacity / 100,
-                mixBlendMode: editingText.blendMode === "source-over"
-                  ? "normal"
-                  : editingText.blendMode,
-              }}
-              onChange={(event) => {
-                const nextText = event.target.value;
-                updateLayer(editingText.id, (element) => (
-                  element.kind === "text"
-                    ? fitLiveText({ ...element, text: nextText })
-                    : element
-                ));
+                ...inlineTextLayout.frame,
+                transform: elementRotation(editingText) === 0
+                  ? undefined
+                  : `rotate(${elementRotation(editingText)}rad)`,
+                transformOrigin: "center",
               }}
               onPointerDown={(event) => event.stopPropagation()}
-              onBlur={(event) => {
-                // The placing canvas click can steal focus after the textarea mounts.
-                // Ignore only real pointer-driven blurs until that click finishes.
-                if (suppressInlineTextBlurRef.current && event.nativeEvent.isTrusted) {
-                  const input = inlineTextRef.current;
-                  window.requestAnimationFrame(() => {
-                    if (!input) return;
-                    input.focus({ preventScroll: true });
-                    if (selectInlineTextRef.current) input.select();
-                  });
-                  return;
-                }
-                setEditingTextId((current) => (
-                  current === editingText.id ? null : current
-                ));
-              }}
-              onKeyDown={(event) => {
-                if (event.key !== "Escape") return;
-                event.preventDefault();
-                event.currentTarget.blur();
-              }}
-            />
+            >
+              <textarea
+                ref={inlineTextRef}
+                className={[
+                  "screenshot-inline-text-editor",
+                  isAutoWidthText(editingText) ? "is-auto-width" : "",
+                  subduedInlineSelectionId === editingText.id
+                    ? "is-placeholder-selected"
+                    : "",
+                ].filter(Boolean).join(" ")}
+                aria-label="Edit text on canvas"
+                autoFocus
+                value={editingText.text}
+                wrap={isAutoWidthText(editingText) ? "off" : "soft"}
+                spellCheck
+                style={{
+                  ["--inline-text-selection-color" as string]: editingText.outlined
+                    ? "transparent"
+                    : editingText.color,
+                  padding: inlineTextLayout.padding,
+                  color: editingText.outlined ? "transparent" : editingText.color,
+                  backgroundColor: editingText.background ?? "transparent",
+                  borderRadius: editingText.roundedBackground
+                    ? textBackgroundRadius(
+                      editingText,
+                      elementLocalBounds(editingText).width,
+                      elementLocalBounds(editingText).height,
+                    ) * displayScale
+                    : undefined,
+                  caretColor: editingText.color,
+                  fontFamily: fontFamily(editingText),
+                  fontSize: editingText.fontSize * displayScale,
+                  fontWeight: editingText.bold ? 700 : 400,
+                  fontStyle: editingText.italic ? "italic" : "normal",
+                  lineHeight: TEXT_LINE_HEIGHT_RATIO,
+                  textAlign: editingText.align,
+                  WebkitTextStroke: editingText.outlined
+                    ? `${textOutlineWidth(editingText.fontSize) * displayScale}px ${editingText.color}`
+                    : undefined,
+                  opacity: editingText.opacity / 100,
+                  mixBlendMode: editingText.blendMode === "source-over"
+                    ? "normal"
+                    : editingText.blendMode,
+                }}
+                onChange={(event) => {
+                  const nextText = event.target.value;
+                  setSubduedInlineSelectionId(null);
+                  updateLayer(editingText.id, (element) => (
+                    element.kind === "text"
+                      ? fitLiveText({ ...element, text: nextText })
+                      : element
+                  ));
+                }}
+                onPointerDown={(event) => event.stopPropagation()}
+                onSelect={(event) => {
+                  if (subduedInlineSelectionId !== editingText.id) return;
+                  const input = event.currentTarget;
+                  if (input.selectionStart === 0 && input.selectionEnd === input.value.length) {
+                    return;
+                  }
+                  setSubduedInlineSelectionId(null);
+                }}
+                onBlur={(event) => {
+                  // The placing canvas click can steal focus after the textarea mounts.
+                  // Ignore only real pointer-driven blurs until that click finishes.
+                  if (suppressInlineTextBlurRef.current && event.nativeEvent.isTrusted) {
+                    const input = inlineTextRef.current;
+                    window.requestAnimationFrame(() => {
+                      if (!input) return;
+                      input.focus({ preventScroll: true });
+                      if (selectInlineTextRef.current) input.select();
+                    });
+                    return;
+                  }
+                  setSubduedInlineSelectionId(null);
+                  setEditingTextId((current) => (
+                    current === editingText.id ? null : current
+                  ));
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== "Escape") return;
+                  event.preventDefault();
+                  event.currentTarget.blur();
+                }}
+              />
+            </div>
           )}
           {dragActive && imageDropGuide && (
             <div
@@ -6137,6 +5948,7 @@ export function ScreenshotEditor() {
               const previewOrientation = element.kind === "image"
                 ? imageOrientationMatrix(element.orientation)
                 : null;
+              const previewRotation = elementRotation(element);
               const dropPlacement = layerDropTarget?.id === element.id
                 ? layerDropTarget.placement
                 : null;
@@ -6238,9 +6050,14 @@ export function ScreenshotEditor() {
                             alt=""
                             draggable={false}
                             style={{
-                              transform: previewOrientation
-                                ? `matrix(${previewOrientation.a}, ${previewOrientation.b}, ${previewOrientation.c}, ${previewOrientation.d}, 0, 0)`
-                                : undefined,
+                              transform: [
+                                previewRotation === 0
+                                  ? ""
+                                  : `rotate(${previewRotation}rad)`,
+                                previewOrientation
+                                  ? `matrix(${previewOrientation.a}, ${previewOrientation.b}, ${previewOrientation.c}, ${previewOrientation.d}, 0, 0)`
+                                  : "",
+                              ].filter(Boolean).join(" ") || undefined,
                             }}
                           />
                         )
@@ -6558,6 +6375,26 @@ export function ScreenshotEditor() {
           <div className="screenshot-properties-heading">
             <strong>{selected ? elementLabel(selected) : toolLabel(tool)}</strong>
           </div>
+        )}
+
+        {selected && (
+          <section className="screenshot-property-section">
+            <label>
+              Shift rotation snap
+              <NumberInput
+                min={1}
+                max={180}
+                ariaLabel="Shift rotation snap"
+                value={rotationSnapDegrees}
+                onChange={(degrees) => setRotationSnapDegrees(
+                  Math.min(180, Math.max(1, Math.round(degrees))),
+                )}
+              />
+            </label>
+            <p>
+              Hold Shift while dragging the rotate handle to snap in {rotationSnapDegrees}° increments.
+            </p>
+          </section>
         )}
 
         {tool === "crop" && (
@@ -7006,12 +6843,6 @@ export function ScreenshotEditor() {
                   points; double-click a point to remove it.
                 </p>
               </>
-            )}
-            {selected.kind === "shape" && (
-              <p>
-                Drag the rotate handle for a smooth spin, or tweak the circular
-                dial beside it. The dial settles into {SHAPE_ROTATION_SNAP_DEGREES}° detents.
-              </p>
             )}
           </section>
         )}

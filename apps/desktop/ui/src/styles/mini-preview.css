@@ -382,28 +382,8 @@
   pointer-events: none;
 }
 
-@property --thumbnail-folder-dissolve-radius {
-  syntax: "<length>";
-  inherits: false;
-  initial-value: 0px;
-}
-
 .thumbnail-collapse.thumbnail-collapse-leaving {
-  --thumbnail-folder-dissolve-radius: 0px;
-
-  animation: thumbnail-folder-contact-dissolve 0.9s 0.42s linear both;
-  -webkit-mask-image: radial-gradient(
-    circle at 100% 0,
-    transparent 0 var(--thumbnail-folder-dissolve-radius),
-    rgba(0, 0, 0, 0.5) calc(var(--thumbnail-folder-dissolve-radius) + 4px),
-    #000 calc(var(--thumbnail-folder-dissolve-radius) + 8px)
-  );
-  mask-image: radial-gradient(
-    circle at 100% 0,
-    transparent 0 var(--thumbnail-folder-dissolve-radius),
-    rgba(0, 0, 0, 0.5) calc(var(--thumbnail-folder-dissolve-radius) + 4px),
-    #000 calc(var(--thumbnail-folder-dissolve-radius) + 8px)
-  );
+  animation: thumbnail-folder-source-fade 0.18s 0.42s linear both;
   pointer-events: none;
 }
 
@@ -412,75 +392,54 @@
   transform: translateY(4px);
 }
 
-@keyframes thumbnail-folder-contact-dissolve {
-  0% {
-    --thumbnail-folder-dissolve-radius: 0px;
-    opacity: 1;
-    transform: translateY(0) scale(1);
-    filter: blur(0);
-  }
-  72% {
-    opacity: 0.82;
-  }
-  100% {
-    --thumbnail-folder-dissolve-radius: 68px;
-    opacity: 0;
-    transform: translate(-4px, 7px) scale(0.9);
-    filter: blur(2px);
-  }
+@keyframes thumbnail-folder-source-fade {
+  from { opacity: 1; }
+  to { opacity: 0; }
 }
 
-.thumbnail-collapse-dust {
+/*
+ * A real chipped copy of the compact control. Positions use the same 120px
+ * padded coordinate system as deleted preview dust, so the shared WAAPI flight
+ * can move every clipped piece independently without caging it in the button.
+ */
+.thumbnail-collapse-dust-layer {
+  --dust-pad: 120px;
   position: absolute;
   z-index: 21;
-  left: 8px;
-  bottom: 8px;
-  width: 48px;
-  height: 48px;
+  left: calc(8px - var(--dust-pad));
+  bottom: calc(8px - var(--dust-pad));
+  width: calc(48px + var(--dust-pad) + var(--dust-pad));
+  height: calc(48px + var(--dust-pad) + var(--dust-pad));
+  overflow: visible;
   pointer-events: none;
 }
 
-.thumbnail-collapse-dust i {
-  --folder-dust-x: -8px;
-  --folder-dust-y: 12px;
-  --folder-dust-delay: 0ms;
+.thumbnail-collapse-dust-chip {
+  filter: none;
+}
 
+.thumbnail-collapse-dust-surface {
   position: absolute;
-  top: 2px;
-  right: 2px;
-  width: 4px;
-  height: 4px;
-  border-radius: 1px;
-  background: var(--glass-raised-solid);
-  opacity: 0;
-  animation: thumbnail-folder-dust 0.7s calc(0.42s + var(--folder-dust-delay)) var(--ease-out) both;
+  display: grid;
+  box-sizing: border-box;
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-xl);
+  color: var(--glass-text);
+  background: var(--glass-strong-solid);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 1px 3px rgba(0, 0, 0, 0.46);
+  overflow: hidden;
+  pointer-events: none;
 }
 
-.thumbnail-collapse-dust i:nth-child(2) { --folder-dust-x: -17px; --folder-dust-y: 7px; --folder-dust-delay: 45ms; top: 7px; right: 5px; }
-.thumbnail-collapse-dust i:nth-child(3) { --folder-dust-x: -5px; --folder-dust-y: 20px; --folder-dust-delay: 80ms; top: 4px; right: 12px; }
-.thumbnail-collapse-dust i:nth-child(4) { --folder-dust-x: -22px; --folder-dust-y: 15px; --folder-dust-delay: 115ms; top: 13px; right: 2px; }
-.thumbnail-collapse-dust i:nth-child(5) { --folder-dust-x: -12px; --folder-dust-y: 25px; --folder-dust-delay: 145ms; top: 17px; right: 8px; }
-.thumbnail-collapse-dust i:nth-child(6) { --folder-dust-x: -28px; --folder-dust-y: 18px; --folder-dust-delay: 170ms; top: 9px; right: 16px; }
-.thumbnail-collapse-dust i:nth-child(7) { --folder-dust-x: -18px; --folder-dust-y: 30px; --folder-dust-delay: 205ms; top: 22px; right: 3px; }
-.thumbnail-collapse-dust i:nth-child(8) { --folder-dust-x: -31px; --folder-dust-y: 24px; --folder-dust-delay: 235ms; top: 18px; right: 15px; }
-.thumbnail-collapse-dust i:nth-child(9) { --folder-dust-x: -24px; --folder-dust-y: 34px; --folder-dust-delay: 265ms; top: 28px; right: 8px; }
-
-.thumbnail-collapse-dust i:nth-child(3n) {
-  background: var(--theme-accent);
-}
-
-@keyframes thumbnail-folder-dust {
-  0% {
-    opacity: 0;
-    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
-  }
-  16% {
-    opacity: 0.9;
-  }
-  100% {
-    opacity: 0;
-    transform: translate3d(var(--folder-dust-x), var(--folder-dust-y), 0) rotate(-38deg) scale(0.25);
-  }
+.thumbnail-collapse-dust-surface .mini-preview-folder {
+  transform: none;
+  transition: none;
 }
 
 .mini-previews-hidden {
@@ -1911,8 +1870,7 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-collapse, .
 @media (prefers-reduced-motion: reduce) {
   .thumbnail-stack.thumbnail-stack-collapsing > .thumbnail-card,
   .thumbnail-stack.thumbnail-stack-restoring > .thumbnail-card,
-  .thumbnail-collapse.thumbnail-collapse-leaving,
-  .thumbnail-collapse-dust i {
+  .thumbnail-collapse.thumbnail-collapse-leaving {
     animation: none;
   }
 

@@ -299,7 +299,7 @@
   border-radius: var(--r-xl);
   background: var(--surface-overlay);
   box-shadow: var(--shadow-lg);
-  color: var(--editor-text);
+  color: var(--text);
 }
 
 .screenshot-canvas-bg-menu {
@@ -853,177 +853,68 @@
   transform: translate(-50%, 0);
 }
 
-/* Single edit chrome (border + soft outline); canvas selection is suppressed while editing. */
-.screenshot-inline-text-editor {
+/*
+ * Keep editing chrome independent from the annotation treatment. The text can
+ * still be a pill, square plate, or bare glyphs while one calm rectangular
+ * frame identifies the editable region.
+ */
+.screenshot-inline-text-frame {
   position: absolute;
   z-index: 6;
+  min-width: 0;
+  min-height: 0;
+}
+
+.screenshot-inline-text-frame::after {
+  position: absolute;
+  inset: calc(-1 * var(--s-3));
+  border: 1px solid var(--theme-accent);
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-sm);
+  content: "";
+  pointer-events: none;
+}
+
+.screenshot-inline-text-editor {
+  -webkit-appearance: none;
+  position: absolute;
+  inset: 0;
   display: block;
+  width: 100%;
+  height: 100%;
   box-sizing: border-box;
   margin: 0;
-  padding: 0;
   overflow: hidden;
-  border: 1px solid var(--theme-accent);
-  border-radius: 3px;
-  outline: 2px solid rgba(var(--theme-accent-rgb), 0.28);
+  border: 0;
+  outline: 0;
   resize: none;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
+  appearance: none;
+  background-clip: padding-box;
   caret-color: currentColor;
-  box-shadow: var(--shadow-md);
+  box-shadow: none;
+}
+
+.screenshot-editor .screenshot-inline-text-editor:focus-visible {
+  outline: 0;
+}
+
+/* Keep select-all useful for replacing “Text” without hiding the style itself. */
+.screenshot-inline-text-editor::selection {
+  color: var(--inline-text-selection-color);
+  background: rgba(var(--theme-accent-rgb), 0.2);
+}
+
+.screenshot-inline-text-editor.is-placeholder-selected::selection {
+  background: transparent;
 }
 
 .screenshot-inline-text-editor.is-auto-width {
   white-space: pre;
   overflow-wrap: normal;
   word-break: normal;
-}
-
-/* One compact instrument: a smooth dial with magnetic 15° detents. */
-.screenshot-shape-rotate-hud {
-  --rotation-dial-size: calc(var(--s-12) + var(--s-9) + var(--s-4));
-  --rotation-dial-radius: calc(var(--s-11) - var(--s-1));
-  --rotation-hud-anchor-gap: var(--s-5);
-  --rotation-hud-inline-shift: var(--rotation-hud-anchor-gap);
-  --rotation-hud-block-shift: -100%;
-  position: absolute;
-  z-index: 7;
-  width: var(--rotation-dial-size);
-  height: var(--rotation-dial-size);
-  color: var(--text);
-  transform: translate(var(--rotation-hud-inline-shift), var(--rotation-hud-block-shift));
-  pointer-events: none;
-}
-
-.screenshot-shape-rotate-hud.is-left {
-  --rotation-hud-inline-shift: calc(-100% - var(--rotation-hud-anchor-gap));
-}
-
-.screenshot-shape-rotate-hud.is-below {
-  --rotation-hud-block-shift: var(--rotation-hud-anchor-gap);
-}
-
-.screenshot-shape-rotate-dial {
-  position: relative;
-  display: grid;
-  width: 100%;
-  height: 100%;
-  place-content: center;
-  border: 1px solid var(--border);
-  border-radius: var(--r-pill);
-  outline: none;
-  color: var(--text);
-  background: var(--surface-raised);
-  box-shadow: var(--shadow-md), inset 0 0 0 var(--s-1) rgba(var(--theme-accent-rgb), 0.05);
-  cursor: grab;
-  pointer-events: auto;
-  touch-action: none;
-  transition:
-    border-color var(--motion-fast) var(--ease-standard),
-    box-shadow var(--motion-fast) var(--ease-standard),
-    transform var(--motion-fast) var(--ease-standard);
-}
-
-.screenshot-shape-rotate-dial:hover {
-  border-color: rgba(var(--theme-accent-rgb), 0.54);
-  box-shadow: var(--shadow-lg), inset 0 0 0 var(--s-1) rgba(var(--theme-accent-rgb), 0.08);
-}
-
-.screenshot-shape-rotate-dial:focus-visible {
-  border-color: var(--theme-accent);
-  box-shadow:
-    var(--shadow-md),
-    0 0 0 var(--s-1) rgba(var(--theme-accent-rgb), 0.28);
-}
-
-.screenshot-shape-rotate-dial:active {
-  cursor: grabbing;
-  transform: scale(0.985);
-}
-
-.screenshot-shape-rotate-dial-ring {
-  position: absolute;
-  inset: var(--s-5);
-  border: 1px solid rgba(var(--theme-accent-rgb), 0.22);
-  border-radius: inherit;
-  background: radial-gradient(
-    circle,
-    transparent 62%,
-    rgba(var(--theme-accent-rgb), 0.05) 63%,
-    transparent 72%
-  );
-}
-
-.screenshot-shape-rotate-dial-ticks,
-.screenshot-shape-rotate-dial-indicator {
-  position: absolute;
-  inset: 50%;
-  pointer-events: none;
-}
-
-.screenshot-shape-rotate-dial-ticks i {
-  position: absolute;
-  top: calc(var(--s-1) / -2);
-  left: calc(var(--s-1) / -2);
-  width: var(--s-1);
-  height: var(--s-2);
-  border-radius: var(--r-pill);
-  background: var(--text-faint);
-  transform-origin: center;
-}
-
-.screenshot-shape-rotate-dial-ticks i.is-major {
-  height: var(--s-4);
-  background: rgba(var(--theme-accent-rgb), 0.62);
-}
-
-.screenshot-shape-rotate-dial-indicator {
-  transition: transform 80ms linear;
-}
-
-.screenshot-shape-rotate-dial-indicator::before {
-  position: absolute;
-  bottom: 0;
-  left: calc(var(--s-1) / -2);
-  width: var(--s-1);
-  height: calc(var(--rotation-dial-radius) - var(--s-5));
-  border-radius: var(--r-pill);
-  background: linear-gradient(to top, transparent, rgba(var(--theme-accent-rgb), 0.76));
-  content: "";
-}
-
-.screenshot-shape-rotate-dial-indicator i {
-  position: absolute;
-  top: calc(-1 * var(--rotation-dial-radius) - var(--s-3));
-  left: calc(-1 * var(--s-3));
-  width: var(--s-5);
-  height: var(--s-5);
-  border: var(--s-1) solid var(--surface-raised);
-  border-radius: var(--r-pill);
-  background: var(--theme-accent);
-  box-shadow: var(--shadow-sm);
-}
-
-.screenshot-shape-rotate-dial output,
-.screenshot-shape-rotate-dial small {
-  position: relative;
-  z-index: 1;
-  text-align: center;
-  pointer-events: none;
-}
-
-.screenshot-shape-rotate-dial output {
-  font-size: var(--text-sm);
-  font-weight: var(--weight-semibold);
-  font-variant-numeric: tabular-nums;
-  line-height: 1.1;
-}
-
-.screenshot-shape-rotate-dial small {
-  margin-top: var(--s-1);
-  color: var(--text-subtle);
-  font-size: var(--text-2xs);
-  line-height: 1;
 }
 
 /* Fixed width so title swaps do not reflow the toast. */
@@ -2852,8 +2743,8 @@
   gap: var(--s-4);
   border: 1px solid transparent;
   border-radius: var(--r-md);
-  color: var(--editor-text-muted);
-  background: var(--editor-control);
+  color: var(--text-muted);
+  background: var(--control);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
   text-align: left;
@@ -2863,14 +2754,14 @@
   width: 100%;
   grid-template-columns: 82px minmax(0, 1fr) 14px;
   border-color: var(--control-border);
-  background: var(--editor-field);
+  background: var(--surface-field);
 }
 
 .screenshot-text-style-trigger:hover,
 .screenshot-text-style-menu button:hover {
   border-color: var(--border-strong);
-  color: var(--editor-text);
-  background: var(--editor-control-hover);
+  color: var(--text);
+  background: var(--control-hover);
 }
 
 .screenshot-text-style-trigger[aria-expanded="true"] {
@@ -2908,7 +2799,7 @@
 
 .screenshot-text-style-menu button.active {
   border-color: var(--theme-accent);
-  color: var(--editor-text);
+  color: var(--text);
   background: var(--surface-selected);
 }
 
@@ -2920,7 +2811,7 @@
   place-items: center;
   justify-self: center;
   box-sizing: border-box;
-  color: var(--editor-text-muted);
+  color: var(--text);
   font-size: 17px;
   font-weight: var(--weight-bold);
   line-height: 1;
@@ -2942,18 +2833,54 @@
 
 .screenshot-text-style-preview.style-outlined {
   color: transparent;
-  -webkit-text-stroke: 1.2px var(--editor-text-muted);
+  -webkit-text-stroke: 1.2px var(--text);
 }
 
 .screenshot-text-style-preview.style-box,
 .screenshot-text-style-preview.style-mono-box,
 .screenshot-text-style-preview.style-rounded-box {
-  color: var(--surface-raised);
-  background: var(--editor-text-muted);
+  color: var(--solid-ink);
+  background: var(--solid);
 }
 
 .screenshot-text-style-preview.style-rounded-box {
   border-radius: var(--r-pill);
+}
+
+@media (prefers-contrast: more) {
+  .screenshot-text-style-menu {
+    border-color: var(--text);
+  }
+
+  .screenshot-text-style-preview.style-outlined {
+    -webkit-text-stroke-width: 1.6px;
+  }
+
+  .screenshot-text-style-preview.style-box,
+  .screenshot-text-style-preview.style-mono-box,
+  .screenshot-text-style-preview.style-rounded-box {
+    outline: 1px solid var(--solid-ink);
+  }
+}
+
+@media (forced-colors: active) {
+  .screenshot-inline-text-frame::after {
+    border-color: Highlight;
+    box-shadow: none;
+  }
+
+  .screenshot-text-style-preview.style-outlined {
+    -webkit-text-stroke-color: CanvasText;
+  }
+
+  .screenshot-text-style-preview.style-box,
+  .screenshot-text-style-preview.style-mono-box,
+  .screenshot-text-style-preview.style-rounded-box {
+    color: Canvas;
+    background: CanvasText;
+    outline: 1px solid CanvasText;
+    forced-color-adjust: none;
+  }
 }
 
 .screenshot-color-field {
