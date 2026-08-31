@@ -4957,7 +4957,10 @@ fn show_mini_previews_hidden_chip(app: &AppHandle, count: usize) -> Result<(), t
 
     #[cfg(target_os = "macos")]
     {
-        captures_macos_window::configure_inactive_hover(&window)
+        // This chip is one large WebView button, so let its CSS own the hand
+        // cursor. The arrow fallback races `cursor: pointer` on mouse-move and
+        // visibly flips between the two while crossing the chip's children.
+        captures_macos_window::configure_webview_inactive_hover(&window)
             .map_err(|error| tauri::Error::Anyhow(anyhow::anyhow!(error)))?;
         captures_macos_window::show_without_activating(&window)
             .map_err(|error| tauri::Error::Anyhow(anyhow::anyhow!(error)))?;

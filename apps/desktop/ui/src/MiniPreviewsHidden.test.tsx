@@ -1,12 +1,19 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 import {
   MiniPreviewsHiddenChip,
 } from "./App";
 import { miniPreviewsHiddenLabel } from "./lib/miniPreviewsHidden";
 import type { CaptureArtifact } from "./types";
+
+const miniPreviewStyles = readFileSync(
+  resolve(process.cwd(), "ui/src/styles/mini-preview.css"),
+  "utf8",
+);
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -66,6 +73,23 @@ describe("MiniPreviewsHiddenChip", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("keeps the full restore chip pointer-stable with visible hover feedback", () => {
+    const baseRule = miniPreviewStyles.match(
+      /\.mini-previews-hidden\s*\{([\s\S]*?)\n\}/,
+    );
+    const childRule = miniPreviewStyles.match(
+      /\.mini-previews-hidden > \*\s*\{([\s\S]*?)\n\}/,
+    );
+    const hoverRule = miniPreviewStyles.match(
+      /\.mini-previews-hidden:hover,[\s\S]*?\{([\s\S]*?)\n\}/,
+    );
+
+    expect(baseRule?.[1]).toMatch(/cursor:\s*pointer !important/);
+    expect(childRule?.[1]).toMatch(/pointer-events:\s*none/);
+    expect(hoverRule?.[1]).toMatch(/border-color:\s*var\(--glass-border-strong\)/);
+    expect(hoverRule?.[1]).toMatch(/rgba\(var\(--theme-accent-rgb\), 0\.2\)/);
   });
 
   it("restores the stack from the parked count chip", async () => {
