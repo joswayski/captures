@@ -881,17 +881,30 @@
 
 /* A compact arc of common angles that fans inward from the canvas rotate grip. */
 .screenshot-shape-rotate-hud {
+  --rotation-hud-inline-size: calc(var(--s-12) + var(--s-12));
+  --rotation-hud-block-size: calc(var(--s-12) + var(--s-9) + var(--s-2));
+  --rotation-hud-anchor-gap: var(--s-4);
+  --rotation-hud-inline-shift: var(--rotation-hud-anchor-gap);
+  --rotation-hud-block-shift: -100%;
+  --rotation-arc-scale-x: 1;
+  --rotation-arc-scale-y: 1;
   position: absolute;
   z-index: 7;
-  width: 128px;
-  height: 100px;
+  width: var(--rotation-hud-inline-size);
+  height: var(--rotation-hud-block-size);
   color: var(--text);
-  transform: translate(8px, -100%);
+  transform: translate(var(--rotation-hud-inline-shift), var(--rotation-hud-block-shift));
   pointer-events: none;
 }
 
 .screenshot-shape-rotate-hud.is-left {
-  transform: translate(calc(-100% - 8px), -100%);
+  --rotation-hud-inline-shift: calc(-100% - var(--rotation-hud-anchor-gap));
+  --rotation-arc-scale-x: -1;
+}
+
+.screenshot-shape-rotate-hud.is-below {
+  --rotation-hud-block-shift: var(--rotation-hud-anchor-gap);
+  --rotation-arc-scale-y: -1;
 }
 
 .screenshot-shape-rotate-hud-arc {
@@ -900,21 +913,18 @@
   overflow: visible;
   fill: none;
   stroke: rgba(var(--theme-accent-rgb), 0.5);
-  stroke-width: 1.5;
+  stroke-width: var(--s-1);
   stroke-linecap: round;
-}
-
-.screenshot-shape-rotate-hud.is-left .screenshot-shape-rotate-hud-arc {
-  transform: scaleX(-1);
+  transform: scale(var(--rotation-arc-scale-x), var(--rotation-arc-scale-y));
 }
 
 .screenshot-shape-rotate-hud-stop {
   position: absolute;
   display: grid;
-  min-width: 34px;
-  height: 24px;
+  min-width: calc(var(--h-md) + var(--s-1));
+  height: var(--h-xs);
   margin: 0;
-  padding: 0 6px;
+  padding: 0 var(--s-3);
   place-items: center;
   border: 1px solid var(--border);
   border-radius: var(--r-pill);
@@ -925,28 +935,30 @@
   font-weight: var(--weight-medium);
   font-variant-numeric: tabular-nums;
   line-height: 1;
+  top: var(--rotation-stop-block);
+  left: var(--rotation-stop-inline);
   transform: translate(-50%, -50%);
   pointer-events: auto;
 }
 
 .screenshot-shape-rotate-hud-stop.is-angle-0 {
-  top: 78px;
-  left: 12px;
+  --rotation-stop-block: calc(var(--s-12) + var(--s-5) + var(--s-1));
+  --rotation-stop-inline: var(--s-5);
 }
 
 .screenshot-shape-rotate-hud-stop.is-angle-15 {
-  top: 56px;
-  left: 28px;
+  --rotation-stop-block: calc(var(--s-11) + var(--s-4));
+  --rotation-stop-inline: calc(var(--s-8) + var(--s-2));
 }
 
 .screenshot-shape-rotate-hud-stop.is-angle-45 {
-  top: 28px;
-  left: 58px;
+  --rotation-stop-block: calc(var(--s-8) + var(--s-2));
+  --rotation-stop-inline: calc(var(--s-11) + var(--s-4) + var(--s-1));
 }
 
 .screenshot-shape-rotate-hud-stop.is-angle-90 {
-  top: 10px;
-  left: 98px;
+  --rotation-stop-block: calc(var(--s-4) + var(--s-1));
+  --rotation-stop-inline: calc(var(--s-12) + var(--s-9) + var(--s-1));
 }
 
 .screenshot-shape-rotate-hud.is-left .screenshot-shape-rotate-hud-stop {
@@ -955,20 +967,8 @@
   transform: translate(50%, -50%);
 }
 
-.screenshot-shape-rotate-hud.is-left .screenshot-shape-rotate-hud-stop.is-angle-0 {
-  --rotation-stop-inline: 12px;
-}
-
-.screenshot-shape-rotate-hud.is-left .screenshot-shape-rotate-hud-stop.is-angle-15 {
-  --rotation-stop-inline: 28px;
-}
-
-.screenshot-shape-rotate-hud.is-left .screenshot-shape-rotate-hud-stop.is-angle-45 {
-  --rotation-stop-inline: 58px;
-}
-
-.screenshot-shape-rotate-hud.is-left .screenshot-shape-rotate-hud-stop.is-angle-90 {
-  --rotation-stop-inline: 98px;
+.screenshot-shape-rotate-hud.is-below .screenshot-shape-rotate-hud-stop {
+  top: calc(var(--rotation-hud-block-size) - var(--rotation-stop-block));
 }
 
 .screenshot-shape-rotate-hud-stop:hover {

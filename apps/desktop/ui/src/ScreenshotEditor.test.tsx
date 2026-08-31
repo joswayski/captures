@@ -8,6 +8,7 @@ import {
   createScreenshotDocument,
   elementBounds,
   resizeHandlePoint,
+  rotationHudShouldOpenBelow,
   shapeRotationHandlePoint,
   type EditorShapeElement,
 } from "./lib/screenshotEditor";
@@ -215,6 +216,12 @@ describe("ScreenshotEditor", () => {
     vi.restoreAllMocks();
     vi.clearAllMocks();
     document.getElementById("captures-editor-paint-canvas-host")?.remove();
+  });
+
+  it("opens rotation shortcuts on the side with more viewport space", () => {
+    expect(rotationHudShouldOpenBelow(40, 0, 600, 100)).toBe(true);
+    expect(rotationHudShouldOpenBelow(180, 0, 600, 100)).toBe(false);
+    expect(rotationHudShouldOpenBelow(40, 0, 60, 100)).toBe(false);
   });
 
   it("restores a saved editor draft and can discard it", async () => {

@@ -685,6 +685,17 @@ export const SHAPE_ROTATION_SNAP_DEGREES = 15;
 /** Same step in radians (Shift-drag on the rotate handle). */
 export const SHAPE_ROTATION_SNAP_RADIANS = (SHAPE_ROTATION_SNAP_DEGREES * Math.PI) / 180;
 
+export function rotationHudShouldOpenBelow(
+  anchorClientY: number,
+  viewportTop: number,
+  viewportBottom: number,
+  hudHeight: number,
+): boolean {
+  const spaceAbove = anchorClientY - viewportTop;
+  const spaceBelow = viewportBottom - anchorClientY;
+  return spaceAbove < hudHeight && spaceBelow > spaceAbove;
+}
+
 /**
  * Open stroke shapes that support multi-point Bezier curve controls
  * (start → free controls → end), same path model for line and arrow.

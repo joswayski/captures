@@ -109,6 +109,7 @@ import {
   resizeDocumentCanvas,
   resizeElement,
   resizeHandlePoint,
+  rotationHudShouldOpenBelow,
   isResizeCornerHandle,
   scaleArrowStrokeForLength,
   shapeLocalBounds,
@@ -1717,6 +1718,7 @@ export function ScreenshotEditor() {
   /** Free view offset (CSS px) so the canvas can be dragged fully off-screen. */
   const [viewPan, setViewPan] = useState({ x: 0, y: 0 });
   const [canvasOffscreen, setCanvasOffscreen] = useState(false);
+  const [rotateHudBelow, setRotateHudBelow] = useState(false);
   const [layerDropTarget, setLayerDropTarget] = useState<LayerDropTarget | null>(null);
   /** Which layer row's settings popover is open (⋯ menu). */
   const [layerMenuId, setLayerMenuId] = useState<string | null>(null);
@@ -1784,6 +1786,7 @@ export function ScreenshotEditor() {
   const viewportRef = useRef<HTMLDivElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const rotateHudRef = useRef<HTMLDivElement>(null);
   const expandOverflowCanvasRef = useRef<HTMLCanvasElement>(null);
   const brushCursorElementRef = useRef<HTMLDivElement>(null);
   const brushCursorPositionRef = useRef({ clientX: 0, clientY: 0 });
@@ -2407,6 +2410,23 @@ export function ScreenshotEditor() {
       placeLeft: Boolean(editorDocument && handle.x > editorDocument.width * 0.58),
     };
   }, [cropSelection, displayScale, editorDocument, selected]);
+
+  useLayoutEffect(() => {
+    const hud = rotateHudRef.current;
+    const viewport = viewportRef.current;
+    const surface = surfaceRef.current;
+    if (!shapeRotateHud || !hud || !viewport || !surface) return;
+    const viewportBounds = viewport.getBoundingClientRect();
+    const surfaceBounds = surface.getBoundingClientRect();
+    const anchorClientY = surfaceBounds.top + shapeRotateHud.handle.y * displayScale;
+    const nextBelow = rotationHudShouldOpenBelow(
+      anchorClientY,
+      viewportBounds.top,
+      viewportBounds.bottom,
+      hud.offsetHeight,
+    );
+    setRotateHudBelow((current) => current === nextBelow ? current : nextBelow);
+  }, [displayScale, shapeRotateHud, viewPan]);
 
   const idleOverflowPreview = useMemo(() => {
     if (canvasExpandPreview || !editorDocument || !overflowHoverId) return null;
@@ -5533,9 +5553,11 @@ export function ScreenshotEditor() {
           />
           {shapeRotateHud && selected?.kind === "shape" && (
             <div
+              ref={rotateHudRef}
               className={[
                 "screenshot-shape-rotate-hud",
                 shapeRotateHud.placeLeft ? "is-left" : "",
+                rotateHudBelow ? "is-below" : "",
               ].filter(Boolean).join(" ")}
               style={{
                 left: shapeRotateHud.handle.x * displayScale,
@@ -6869,7 +6891,7 @@ export function ScreenshotEditor() {
             {selected.kind === "shape" && (
               <p>
                 Drag the rotate handle for a smooth spin, or use the curved
-                angle stops above it for common rotations.
+                angle stops around it for common rotations.
               </p>
             )}
           </section>
