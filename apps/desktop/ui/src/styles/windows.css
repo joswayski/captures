@@ -428,11 +428,23 @@
 }
 
 .check-row.switch-row.preference-target-highlight {
+  position: relative;
+}
+
+/* The row owns separator padding above it, so frame the visible content instead. */
+.check-row.switch-row.preference-target-highlight::before {
+  position: absolute;
+  top: calc(var(--s-5) - var(--s-4));
+  right: calc(-1 * var(--s-4));
+  bottom: calc(-1 * var(--s-4));
+  left: calc(-1 * var(--s-4));
   border-radius: var(--r-lg);
   background: var(--surface-selected);
   box-shadow:
     0 0 0 2px rgba(var(--theme-accent-rgb), 0.62),
     0 0 20px rgba(var(--theme-accent-rgb), 0.18);
+  content: "";
+  pointer-events: none;
   animation: preference-target-highlight-in var(--dur-3) var(--ease-out);
 }
 
