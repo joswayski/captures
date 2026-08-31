@@ -154,7 +154,7 @@ test("mini-preview hide control uses opaque glass tokens and contained shadows",
   assert.match(collapse, /background:\s*var\(--glass-strong-solid\)/u);
   assert.match(collapse, /left:\s*8px/u);
   assert.match(collapse, /bottom:\s*8px/u);
-  assert.match(collapse, /width:\s*40px/u);
+  assert.match(collapse, /width:\s*48px/u);
   assert.doesNotMatch(collapse, /rgb\(/u);
   assert.doesNotMatch(collapse, /var\(--glass-shadow\)/u);
   assert.match(collapse, /0 1px 3px rgba\(0, 0, 0, 0\.46\)/u);
@@ -172,7 +172,7 @@ test("mini-preview hide control uses opaque glass tokens and contained shadows",
   );
   assert.match(
     desktopCss,
-    /\.thumbnail-collapse:hover \.mini-preview-folder-icon[\s\S]*?transform:\s*translateY\(-1px\) scale\(1\.03\)/u,
+    /\.thumbnail-collapse:hover \.mini-preview-folder-scene[\s\S]*?translateY\(-1px\)/u,
   );
   const parked = desktopCss.match(/\.mini-previews-hidden\s*\{([\s\S]*?)\n\}/u)?.[1];
   assert.ok(parked, "missing .mini-previews-hidden rule");

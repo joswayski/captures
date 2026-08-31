@@ -161,7 +161,11 @@ export function clearThumbnailCssCursor(
  * would otherwise turn that invisible panel into a click shield.
  */
 export function thumbnailStackHasLiveHitTarget(root: Document = document): boolean {
-  if (root.querySelector(".thumbnail-stack-collapsing")) return false;
+  if (root.querySelector(
+    ".thumbnail-stack-collapsing, .thumbnail-stack-parked, .thumbnail-stack-restoring",
+  )) {
+    return false;
+  }
   const cards = root.querySelectorAll(".thumbnail-card");
   for (const card of cards) {
     if (!card.classList.contains("thumbnail-exiting")) return true;
