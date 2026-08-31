@@ -299,7 +299,7 @@
   border-radius: var(--r-xl);
   background: var(--surface-overlay);
   box-shadow: var(--shadow-lg);
-  color: var(--editor-text);
+  color: var(--text);
 }
 
 .screenshot-canvas-bg-menu {
@@ -853,24 +853,62 @@
   transform: translate(-50%, 0);
 }
 
-/* Single edit chrome (border + soft outline); canvas selection is suppressed while editing. */
-.screenshot-inline-text-editor {
+/*
+ * Keep editing chrome independent from the annotation treatment. The text can
+ * still be a pill, square plate, or bare glyphs while one calm rectangular
+ * frame identifies the editable region.
+ */
+.screenshot-inline-text-frame {
   position: absolute;
   z-index: 6;
+  min-width: 0;
+  min-height: 0;
+}
+
+.screenshot-inline-text-frame::after {
+  position: absolute;
+  inset: calc(-1 * var(--s-3));
+  border: 1px solid var(--theme-accent);
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-sm);
+  content: "";
+  pointer-events: none;
+}
+
+.screenshot-inline-text-editor {
+  -webkit-appearance: none;
+  position: absolute;
+  inset: 0;
   display: block;
+  width: 100%;
+  height: 100%;
   box-sizing: border-box;
   margin: 0;
-  padding: 0;
   overflow: hidden;
-  border: 1px solid var(--theme-accent);
-  border-radius: 3px;
-  outline: 2px solid rgba(var(--theme-accent-rgb), 0.28);
+  border: 0;
+  outline: 0;
   resize: none;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
+  appearance: none;
+  background-clip: padding-box;
   caret-color: currentColor;
-  box-shadow: var(--shadow-md);
+  box-shadow: none;
+}
+
+.screenshot-editor .screenshot-inline-text-editor:focus-visible {
+  outline: 0;
+}
+
+/* Keep select-all useful for replacing “Text” without hiding the style itself. */
+.screenshot-inline-text-editor::selection {
+  color: var(--inline-text-selection-color);
+  background: rgba(var(--theme-accent-rgb), 0.2);
+}
+
+.screenshot-inline-text-editor.is-placeholder-selected::selection {
+  background: transparent;
 }
 
 .screenshot-inline-text-editor.is-auto-width {
@@ -2852,8 +2890,8 @@
   gap: var(--s-4);
   border: 1px solid transparent;
   border-radius: var(--r-md);
-  color: var(--editor-text-muted);
-  background: var(--editor-control);
+  color: var(--text-muted);
+  background: var(--control);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
   text-align: left;
@@ -2863,14 +2901,14 @@
   width: 100%;
   grid-template-columns: 82px minmax(0, 1fr) 14px;
   border-color: var(--control-border);
-  background: var(--editor-field);
+  background: var(--surface-field);
 }
 
 .screenshot-text-style-trigger:hover,
 .screenshot-text-style-menu button:hover {
   border-color: var(--border-strong);
-  color: var(--editor-text);
-  background: var(--editor-control-hover);
+  color: var(--text);
+  background: var(--control-hover);
 }
 
 .screenshot-text-style-trigger[aria-expanded="true"] {
@@ -2908,7 +2946,7 @@
 
 .screenshot-text-style-menu button.active {
   border-color: var(--theme-accent);
-  color: var(--editor-text);
+  color: var(--text);
   background: var(--surface-selected);
 }
 
@@ -2920,7 +2958,7 @@
   place-items: center;
   justify-self: center;
   box-sizing: border-box;
-  color: var(--editor-text-muted);
+  color: var(--text);
   font-size: 17px;
   font-weight: var(--weight-bold);
   line-height: 1;
@@ -2942,18 +2980,54 @@
 
 .screenshot-text-style-preview.style-outlined {
   color: transparent;
-  -webkit-text-stroke: 1.2px var(--editor-text-muted);
+  -webkit-text-stroke: 1.2px var(--text);
 }
 
 .screenshot-text-style-preview.style-box,
 .screenshot-text-style-preview.style-mono-box,
 .screenshot-text-style-preview.style-rounded-box {
-  color: var(--surface-raised);
-  background: var(--editor-text-muted);
+  color: var(--solid-ink);
+  background: var(--solid);
 }
 
 .screenshot-text-style-preview.style-rounded-box {
   border-radius: var(--r-pill);
+}
+
+@media (prefers-contrast: more) {
+  .screenshot-text-style-menu {
+    border-color: var(--text);
+  }
+
+  .screenshot-text-style-preview.style-outlined {
+    -webkit-text-stroke-width: 1.6px;
+  }
+
+  .screenshot-text-style-preview.style-box,
+  .screenshot-text-style-preview.style-mono-box,
+  .screenshot-text-style-preview.style-rounded-box {
+    outline: 1px solid var(--solid-ink);
+  }
+}
+
+@media (forced-colors: active) {
+  .screenshot-inline-text-frame::after {
+    border-color: Highlight;
+    box-shadow: none;
+  }
+
+  .screenshot-text-style-preview.style-outlined {
+    -webkit-text-stroke-color: CanvasText;
+  }
+
+  .screenshot-text-style-preview.style-box,
+  .screenshot-text-style-preview.style-mono-box,
+  .screenshot-text-style-preview.style-rounded-box {
+    color: Canvas;
+    background: CanvasText;
+    outline: 1px solid CanvasText;
+    forced-color-adjust: none;
+  }
 }
 
 .screenshot-color-field {

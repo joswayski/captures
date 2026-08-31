@@ -1686,6 +1686,7 @@ export function ScreenshotEditor() {
   const [tool, setTool] = useState<ScreenshotTool>("select");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
+  const [subduedInlineSelectionId, setSubduedInlineSelectionId] = useState<string | null>(null);
   const [cropSelection, setCropSelection] = useState<EditorRect | null>(null);
   const [cropAspect, setCropAspect] = useState("free");
   const [removeBgMode, setRemoveBgMode] = useState<RemoveBackgroundMode>("wand");
@@ -2390,6 +2391,7 @@ export function ScreenshotEditor() {
 
   const beginTextEditing = useCallback((elementId: string, selectAll = false) => {
     selectInlineTextRef.current = selectAll;
+    setSubduedInlineSelectionId(selectAll ? elementId : null);
     setSelectedId(elementId);
     setEditingTextId(elementId);
     setTool("select");
@@ -2497,17 +2499,19 @@ export function ScreenshotEditor() {
     const optical = editingText.fontSize * TEXT_OPTICAL_CENTER_NUDGE_RATIO * displayScale;
     const padY = pad.y * displayScale;
     return {
-      left: (editingText.x - pad.x) * displayScale,
-      top: (editingText.y - pad.y) * displayScale,
-      width: Math.max(
-        48,
-        (editingText.width + pad.x * 2) * displayScale + border,
-      ),
-      height: Math.max(
-        28,
-        // elementBounds already includes pad when a plate is present.
-        contentHeight * displayScale + border,
-      ),
+      frame: {
+        left: (editingText.x - pad.x) * displayScale,
+        top: (editingText.y - pad.y) * displayScale,
+        width: Math.max(
+          48,
+          (editingText.width + pad.x * 2) * displayScale + border,
+        ),
+        height: Math.max(
+          28,
+          // elementBounds already includes pad when a plate is present.
+          contentHeight * displayScale + border,
+        ),
+      },
       padding: `${padY + optical}px ${pad.x * displayScale}px ${Math.max(0, padY - optical)}px`,
     };
   }, [displayScale, editingText]);
@@ -5740,77 +5744,99 @@ export function ScreenshotEditor() {
             />
           )}
           {editingText && inlineTextLayout && (
-            <textarea
-              ref={inlineTextRef}
-              className={[
-                "screenshot-inline-text-editor",
-                isAutoWidthText(editingText) ? "is-auto-width" : "",
-              ].filter(Boolean).join(" ")}
-              aria-label="Edit text on canvas"
-              autoFocus
-              value={editingText.text}
-              wrap={isAutoWidthText(editingText) ? "off" : "soft"}
-              spellCheck
-              style={{
-                ...inlineTextLayout,
-                color: editingText.outlined ? "transparent" : editingText.color,
-                backgroundColor: editingText.background ?? "transparent",
-                borderRadius: editingText.roundedBackground
-                  ? textBackgroundRadius(
-                    editingText,
-                    (editingText.width
-                      + (textHasBackgroundPlate(editingText)
-                        ? textBackgroundPad(editingText.fontSize).x * 2
-                        : 0)),
-                    elementBounds(editingText).height,
-                  ) * displayScale
-                  : undefined,
-                caretColor: editingText.color,
-                fontFamily: fontFamily(editingText),
-                fontSize: editingText.fontSize * displayScale,
-                fontWeight: editingText.bold ? 700 : 400,
-                fontStyle: editingText.italic ? "italic" : "normal",
-                lineHeight: TEXT_LINE_HEIGHT_RATIO,
-                textAlign: editingText.align,
-                WebkitTextStroke: editingText.outlined
-                  ? `${textOutlineWidth(editingText.fontSize) * displayScale}px ${editingText.color}`
-                  : undefined,
-                opacity: editingText.opacity / 100,
-                mixBlendMode: editingText.blendMode === "source-over"
-                  ? "normal"
-                  : editingText.blendMode,
-              }}
-              onChange={(event) => {
-                const nextText = event.target.value;
-                updateLayer(editingText.id, (element) => (
-                  element.kind === "text"
-                    ? fitLiveText({ ...element, text: nextText })
-                    : element
-                ));
-              }}
+            <div
+              className="screenshot-inline-text-frame"
+              style={inlineTextLayout.frame}
               onPointerDown={(event) => event.stopPropagation()}
-              onBlur={(event) => {
-                // The placing canvas click can steal focus after the textarea mounts.
-                // Ignore only real pointer-driven blurs until that click finishes.
-                if (suppressInlineTextBlurRef.current && event.nativeEvent.isTrusted) {
-                  const input = inlineTextRef.current;
-                  window.requestAnimationFrame(() => {
-                    if (!input) return;
-                    input.focus({ preventScroll: true });
-                    if (selectInlineTextRef.current) input.select();
-                  });
-                  return;
-                }
-                setEditingTextId((current) => (
-                  current === editingText.id ? null : current
-                ));
-              }}
-              onKeyDown={(event) => {
-                if (event.key !== "Escape") return;
-                event.preventDefault();
-                event.currentTarget.blur();
-              }}
-            />
+            >
+              <textarea
+                ref={inlineTextRef}
+                className={[
+                  "screenshot-inline-text-editor",
+                  isAutoWidthText(editingText) ? "is-auto-width" : "",
+                  subduedInlineSelectionId === editingText.id
+                    ? "is-placeholder-selected"
+                    : "",
+                ].filter(Boolean).join(" ")}
+                aria-label="Edit text on canvas"
+                autoFocus
+                value={editingText.text}
+                wrap={isAutoWidthText(editingText) ? "off" : "soft"}
+                spellCheck
+                style={{
+                  ["--inline-text-selection-color" as string]: editingText.outlined
+                    ? "transparent"
+                    : editingText.color,
+                  padding: inlineTextLayout.padding,
+                  color: editingText.outlined ? "transparent" : editingText.color,
+                  backgroundColor: editingText.background ?? "transparent",
+                  borderRadius: editingText.roundedBackground
+                    ? textBackgroundRadius(
+                      editingText,
+                      (editingText.width
+                        + (textHasBackgroundPlate(editingText)
+                          ? textBackgroundPad(editingText.fontSize).x * 2
+                          : 0)),
+                      elementBounds(editingText).height,
+                    ) * displayScale
+                    : undefined,
+                  caretColor: editingText.color,
+                  fontFamily: fontFamily(editingText),
+                  fontSize: editingText.fontSize * displayScale,
+                  fontWeight: editingText.bold ? 700 : 400,
+                  fontStyle: editingText.italic ? "italic" : "normal",
+                  lineHeight: TEXT_LINE_HEIGHT_RATIO,
+                  textAlign: editingText.align,
+                  WebkitTextStroke: editingText.outlined
+                    ? `${textOutlineWidth(editingText.fontSize) * displayScale}px ${editingText.color}`
+                    : undefined,
+                  opacity: editingText.opacity / 100,
+                  mixBlendMode: editingText.blendMode === "source-over"
+                    ? "normal"
+                    : editingText.blendMode,
+                }}
+                onChange={(event) => {
+                  const nextText = event.target.value;
+                  setSubduedInlineSelectionId(null);
+                  updateLayer(editingText.id, (element) => (
+                    element.kind === "text"
+                      ? fitLiveText({ ...element, text: nextText })
+                      : element
+                  ));
+                }}
+                onPointerDown={(event) => event.stopPropagation()}
+                onSelect={(event) => {
+                  if (subduedInlineSelectionId !== editingText.id) return;
+                  const input = event.currentTarget;
+                  if (input.selectionStart === 0 && input.selectionEnd === input.value.length) {
+                    return;
+                  }
+                  setSubduedInlineSelectionId(null);
+                }}
+                onBlur={(event) => {
+                  // The placing canvas click can steal focus after the textarea mounts.
+                  // Ignore only real pointer-driven blurs until that click finishes.
+                  if (suppressInlineTextBlurRef.current && event.nativeEvent.isTrusted) {
+                    const input = inlineTextRef.current;
+                    window.requestAnimationFrame(() => {
+                      if (!input) return;
+                      input.focus({ preventScroll: true });
+                      if (selectInlineTextRef.current) input.select();
+                    });
+                    return;
+                  }
+                  setSubduedInlineSelectionId(null);
+                  setEditingTextId((current) => (
+                    current === editingText.id ? null : current
+                  ));
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== "Escape") return;
+                  event.preventDefault();
+                  event.currentTarget.blur();
+                }}
+              />
+            </div>
           )}
           {dragActive && imageDropGuide && (
             <div
