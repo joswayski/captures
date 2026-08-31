@@ -68,6 +68,34 @@ describe("thumbnail stack layout", () => {
 
     expect(Number(sourceLayer?.[1])).toBeGreaterThan(Number(dustLayer?.[1]));
     expect(sourceFade?.[1]).toMatch(/filter:\s*blur\(2px\) brightness\(0\.5\)/);
+    expect(sourceFade?.[1]).toMatch(/0%,\s*20%/);
+  });
+
+  it("keeps hovered delete chrome on the first dissolve frame", () => {
+    const deleteTooltip = thumbnailStyles.match(
+      /\.thumbnail-exit-delete \.icon-button\.delete::after\s*\{([^}]*)\}/,
+    );
+    const deleteHover = thumbnailStyles.match(
+      /\.thumbnail-exit-delete \.icon-button\.delete\s*\{([^}]*)\}/,
+    );
+    const disabledSave = thumbnailStyles.match(
+      /\.thumbnail-exit-delete \.thumbnail-main-actions button:disabled,\s*\.thumbnail-exit-delete \.icon-button:disabled\s*\{([^}]*)\}/,
+    );
+    const bottomBar = thumbnailStyles.match(
+      /\.thumbnail-exit-delete \.thumbnail-bottom-bar\s*\{([^}]*)\}/,
+    );
+    const dustChip = thumbnailStyles.match(
+      /\.thumbnail-dust\s*\{([^}]*)\}/,
+    );
+
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-card\.thumbnail-exiting:not\(\.thumbnail-exit-delete\) \.icon-button::after/,
+    );
+    expect(deleteTooltip?.[1]).toMatch(/opacity:\s*1/);
+    expect(deleteHover?.[1]).toMatch(/background:\s*var\(--theme-signal\)/);
+    expect(disabledSave?.[1]).toMatch(/opacity:\s*1/);
+    expect(bottomBar?.[1]).toMatch(/z-index:\s*8/);
+    expect(dustChip?.[1]).toMatch(/filter:\s*blur\(2px\) brightness\(0\.5\)/);
   });
 
   it("fades the mini-preview frame with the delete dissolve", () => {

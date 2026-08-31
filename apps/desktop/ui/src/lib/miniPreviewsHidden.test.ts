@@ -88,6 +88,7 @@ describe("buildMiniPreviewFolderDustParticles", () => {
     ));
 
     expect(nearest.delayMs).toBeLessThan(farthest.delayMs);
+    expect(MINI_PREVIEW_FOLDER_DUST_LEAD_MS).toBe(370);
   });
 });
 

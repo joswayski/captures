@@ -34,8 +34,12 @@ export const MINI_PREVIEW_FOLDER_SHEET_HEIGHT = 26;
 /** Compact folder control used when the last preview dissolves the hide button. */
 export const MINI_PREVIEW_FOLDER_SIZE_PX = MINI_PREVIEW_FOLDER_IDLE_WIDTH;
 
-/** Hold the folder together until the outgoing card reaches its top-right edge. */
-export const MINI_PREVIEW_FOLDER_DUST_LEAD_MS = 420;
+/**
+ * Hold the folder together until the outgoing card's ash front reaches it.
+ * 50ms earlier than the previous 420ms hold so the icon starts breaking as
+ * the preview wave blows past, instead of sitting fully formed.
+ */
+export const MINI_PREVIEW_FOLDER_DUST_LEAD_MS = 370;
 
 /** A shorter copy of the card dissolve wave, scaled to the compact control. */
 export const MINI_PREVIEW_FOLDER_DUST_WAVE_MS = 420;
