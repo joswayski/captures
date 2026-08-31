@@ -292,9 +292,11 @@ pub fn run() {
             collapse_mini_previews,
             restore_mini_previews,
             get_thumbnail_pointer_position,
+            get_mini_previews_hidden_pointer_position,
             set_thumbnail_cursor,
             reassert_thumbnail_cursor,
             set_thumbnail_ignore_cursor_events,
+            set_mini_previews_hidden_ignore_cursor_events,
             refresh_thumbnail_interactivity,
             open_captures_folder,
             open_capture_history,
@@ -1448,29 +1450,26 @@ fn get_thumbnail_pointer_position(
     app: AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Option<ThumbnailPointerPosition> {
-    if state.thumbnail_visibility.lock().is_suppressed() {
-        return None;
+    {
+        let visibility = state.thumbnail_visibility.lock();
+        if visibility.is_suppressed() || visibility.is_collapsed() {
+            return None;
+        }
     }
     let window = app.get_webview_window("thumbnail")?;
     if !thumbnail_window_is_presented(&window) {
         return None;
     }
-    let position = window.outer_position().ok()?;
-    let size = window.inner_size().ok()?;
-    let scale = window.scale_factor().ok()?.max(1.0);
-    let (mouse_x, mouse_y) = pointer_position().map(|(x, y)| (f64::from(x), f64::from(y)))?;
-    Some(thumbnail_pointer_in_space(
-        mouse_x,
-        mouse_y,
-        ThumbnailWindowFrame {
-            x: position.x,
-            y: position.y,
-            width: size.width,
-            height: size.height,
-            scale,
-        },
-        thumbnail_pointer_space(),
-    ))
+    webview_pointer_position(&window)
+}
+
+#[tauri::command]
+fn get_mini_previews_hidden_pointer_position(app: AppHandle) -> Option<ThumbnailPointerPosition> {
+    let window = app.get_webview_window(MINI_PREVIEWS_HIDDEN_LABEL)?;
+    if !window.is_visible().unwrap_or(false) {
+        return None;
+    }
+    webview_pointer_position(&window)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize)]
@@ -1614,18 +1613,50 @@ fn reassert_thumbnail_cursor(
     }
 }
 
+/// Capture-suppressed stacks leave hit testing unchanged. Parked stacks stay
+/// click-through so the concealed always-on-top panel cannot eat desktop clicks.
+fn thumbnail_cursor_ignore_update(
+    suppressed: bool,
+    collapsed: bool,
+    requested_ignore: bool,
+) -> Option<bool> {
+    if suppressed {
+        None
+    } else if collapsed {
+        Some(true)
+    } else {
+        Some(requested_ignore)
+    }
+}
+
 #[tauri::command]
 fn set_thumbnail_ignore_cursor_events(
     app: AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
     ignore: bool,
 ) -> CommandResult<()> {
-    if state.thumbnail_visibility.lock().is_suppressed() {
+    let (suppressed, collapsed) = {
+        let visibility = state.thumbnail_visibility.lock();
+        (visibility.is_suppressed(), visibility.is_collapsed())
+    };
+    let Some(effective_ignore) = thumbnail_cursor_ignore_update(suppressed, collapsed, ignore)
+    else {
         return Ok(());
-    }
+    };
     let window = app
         .get_webview_window("thumbnail")
         .ok_or_else(|| "capture thumbnail is unavailable".to_owned())?;
+    set_click_through(&window, effective_ignore).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_mini_previews_hidden_ignore_cursor_events(
+    app: AppHandle,
+    ignore: bool,
+) -> CommandResult<()> {
+    let window = app
+        .get_webview_window(MINI_PREVIEWS_HIDDEN_LABEL)
+        .ok_or_else(|| "mini preview restore chip is unavailable".to_owned())?;
     set_click_through(&window, ignore).map_err(|error| error.to_string())
 }
 
@@ -1643,6 +1674,7 @@ fn refresh_thumbnail_interactivity(
     let Some(window) = app.get_webview_window("thumbnail") else {
         return Ok(());
     };
+    let collapsed = state.thumbnail_visibility.lock().is_collapsed();
     if count == 0 {
         // Do not re-arm an empty stack. On Windows a transparent always-on-top
         // window can keep eating clicks after hide() unless click-through is
@@ -1652,13 +1684,23 @@ fn refresh_thumbnail_interactivity(
         state.thumbnail_visibility.lock().expand();
         return Ok(());
     }
+    if collapsed {
+        // Sleep/resume recovery re-arms hit testing. A parked stack must stay
+        // click-through so the concealed panel cannot block the desktop under
+        // the restore chip.
+        if suppressed {
+            hide_thumbnail_window(&window);
+        } else {
+            update_thumbnail_stack(&app);
+        }
+        return Ok(());
+    }
     // Always re-enable hit testing first — a stuck click-through state is the
     // usual "frozen previews" symptom after sleep.
     let _ = set_click_through(&window, false);
     let _ = window.set_always_on_top(true);
     if !suppressed {
         // Re-apply geometry after display sleep (DPI / work area can change).
-        // Honors a parked stack so a collapsed session does not flash back.
         update_thumbnail_stack(&app);
     }
     Ok(())
@@ -1737,6 +1779,25 @@ fn thumbnail_pointer_in_space(
         y,
         inside: x >= 0.0 && y >= 0.0 && x < width && y < height,
     }
+}
+
+fn webview_pointer_position(window: &tauri::WebviewWindow) -> Option<ThumbnailPointerPosition> {
+    let position = window.outer_position().ok()?;
+    let size = window.inner_size().ok()?;
+    let scale = window.scale_factor().ok()?.max(1.0);
+    let (mouse_x, mouse_y) = pointer_position().map(|(x, y)| (f64::from(x), f64::from(y)))?;
+    Some(thumbnail_pointer_in_space(
+        mouse_x,
+        mouse_y,
+        ThumbnailWindowFrame {
+            x: position.x,
+            y: position.y,
+            width: size.width,
+            height: size.height,
+            scale,
+        },
+        thumbnail_pointer_space(),
+    ))
 }
 
 #[tauri::command]
@@ -5010,8 +5071,9 @@ fn show_mini_previews_hidden_chip(app: &AppHandle, count: usize) -> Result<(), t
 
     #[cfg(target_os = "macos")]
     {
-        // The whole slab is one target. Own the pointing hand in AppKit so the
-        // first inactive-window hover does not wait for a click to wake WebKit.
+        // The visible chip is the hit target; JS pointer polls pass the 8px
+        // shadow gutter through. Own the pointing hand in AppKit so the first
+        // inactive-window hover does not wait for a click to wake WebKit.
         captures_macos_window::configure_pointing_inactive_hover(&window)
             .map_err(|error| tauri::Error::Anyhow(anyhow::anyhow!(error)))?;
         captures_macos_window::show_without_activating(&window)
@@ -6412,11 +6474,11 @@ mod tests {
         recording::RECORDING_REGION_INDICATOR_TITLE, refine_window_chrome_from_snapshot,
         resolve_startup_notice_placement, resolve_window_capture, should_trigger_shortcut,
         startup_notice_fallback_edge_from_insets, startup_notice_url, thumbnail_cursor_action,
-        thumbnail_geometry, thumbnail_pointer_in_space, thumbnail_pointer_position,
-        thumbnail_stack_should_be_visible, thumbnail_visible_window_height,
-        track_shortcut_suppression, tray_accelerator, tray_icon_rect_is_usable,
-        tray_notice_window_size, viewer_window_label, window_display_crop_is_safe,
-        window_is_capturable, windows_window_is_capture_overlay,
+        thumbnail_cursor_ignore_update, thumbnail_geometry, thumbnail_pointer_in_space,
+        thumbnail_pointer_position, thumbnail_stack_should_be_visible,
+        thumbnail_visible_window_height, track_shortcut_suppression, tray_accelerator,
+        tray_icon_rect_is_usable, tray_notice_window_size, viewer_window_label,
+        window_display_crop_is_safe, window_is_capturable, windows_window_is_capture_overlay,
     };
 
     #[test]
@@ -7342,6 +7404,28 @@ mod tests {
             !cfg!(target_os = "linux"),
             "GTK panics when a window that was never shown is asked to pass clicks through"
         );
+    }
+
+    #[test]
+    fn parked_preview_stack_stays_click_through() {
+        assert_eq!(
+            thumbnail_cursor_ignore_update(false, true, false),
+            Some(true)
+        );
+        assert_eq!(
+            thumbnail_cursor_ignore_update(false, true, true),
+            Some(true)
+        );
+        assert_eq!(thumbnail_cursor_ignore_update(true, true, false), None);
+        assert_eq!(
+            thumbnail_cursor_ignore_update(false, false, false),
+            Some(false)
+        );
+        assert_eq!(
+            thumbnail_cursor_ignore_update(false, false, true),
+            Some(true)
+        );
+        assert_eq!(thumbnail_cursor_ignore_update(true, false, false), None);
     }
 
     #[test]

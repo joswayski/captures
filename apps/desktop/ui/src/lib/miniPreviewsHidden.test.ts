@@ -1,6 +1,7 @@
 import {
   miniPreviewsHiddenLabel,
   prepareMiniPreviewFolderMotion,
+  shouldIgnoreMiniPreviewsHiddenCursorEvents,
 } from "./miniPreviewsHidden";
 
 function rect(left: number, top: number, width: number, height: number): DOMRect {
@@ -61,5 +62,36 @@ describe("prepareMiniPreviewFolderMotion", () => {
       document.querySelector("main")!,
       document.querySelector("span")!,
     )).toBe(0);
+  });
+});
+
+describe("shouldIgnoreMiniPreviewsHiddenCursorEvents", () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+  });
+
+  it("keeps the visible chip interactive and passes the shadow gutter through", () => {
+    document.body.innerHTML = `<button class="mini-previews-hidden">2 previews</button>`;
+    const chip = document.querySelector(".mini-previews-hidden")!;
+    vi.spyOn(chip, "getBoundingClientRect").mockReturnValue(rect(8, 8, 160, 40));
+
+    expect(shouldIgnoreMiniPreviewsHiddenCursorEvents({ x: 20, y: 20, inside: true }))
+      .toBe(false);
+    expect(shouldIgnoreMiniPreviewsHiddenCursorEvents({ x: 4, y: 4, inside: true }))
+      .toBe(true);
+    expect(shouldIgnoreMiniPreviewsHiddenCursorEvents({ x: 0, y: 0, inside: false }))
+      .toBe(false);
+  });
+
+  it("passes the whole restore window through while the chip shrinks away", () => {
+    document.body.innerHTML =
+      `<button class="mini-previews-hidden mini-previews-hidden-restoring">2 previews</button>`;
+    const chip = document.querySelector(".mini-previews-hidden")!;
+    vi.spyOn(chip, "getBoundingClientRect").mockReturnValue(rect(8, 8, 40, 40));
+
+    expect(shouldIgnoreMiniPreviewsHiddenCursorEvents({ x: 20, y: 20, inside: true }))
+      .toBe(true);
+    expect(shouldIgnoreMiniPreviewsHiddenCursorEvents({ x: 0, y: 0, inside: false }))
+      .toBe(true);
   });
 });
