@@ -562,7 +562,7 @@ describe("thumbnailCursorSyncAction", () => {
   });
 
   it("covers click and editor focus handoffs with short reassert delays", () => {
-    expect([...THUMBNAIL_CURSOR_HANDOFF_REASSERT_DELAYS_MS]).toEqual([0, 16, 48]);
+    expect([...THUMBNAIL_CURSOR_HANDOFF_REASSERT_DELAYS_MS]).toEqual([0, 8, 16, 48, 96]);
   });
 });
 
