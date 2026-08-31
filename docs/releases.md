@@ -1,13 +1,22 @@
 # Captures releases
 
-Every push to `main` runs `.github/workflows/release.yml`. Preview workflows wait
-in commit order without cancelling older pushes, run the frontend and Rust
-quality gates, and then build macOS Apple Silicon, Windows x64, and Linux x64
-packages. A Preview is published only when every job succeeds. Later runs share a
-GitHub concurrency group with `queue: max` so they stay queued instead of
-cancelling an older or intermediate build (`cancel-in-progress: false` alone
-still drops pending runs when a third push arrives). The wait job retries
-transient GitHub API errors instead of failing the Preview.
+Every push to `main` runs the inexpensive scope check in
+`.github/workflows/release.yml`. Website, hosted API, documentation, standalone
+desktop UI test-file, and release-tooling-only changes stop there: they do not
+choose a new version, build installers, publish a Preview, or notify installed
+desktop apps. Changes to desktop source, shared UI source, Rust crates and
+manifests, or the desktop's reachable `package-lock.json` dependency graph
+continue through the release. Manual builds always run, including when a
+release-tooling change intentionally needs a new installer set.
+
+Qualifying Preview workflows wait in commit order without cancelling older
+pushes, run the frontend and Rust quality gates, and then build macOS Apple
+Silicon, Windows x64, and Linux x64 packages. A Preview is published only when
+every job succeeds. Later runs share a GitHub concurrency group with `queue: max`
+so they stay queued instead of cancelling an older or intermediate build
+(`cancel-in-progress: false` alone still drops pending runs when a third push
+arrives). The wait job retries transient GitHub API errors instead of failing the
+Preview.
 
 Previews are GitHub pre-releases with CalVer versions in `YYYY.MM.DD.N` form,
 using the
@@ -15,7 +24,8 @@ using the
 through 99. A Preview named `Captures Preview 2026.07.19.1` uses tag
 `v2026.07.19.1`. Tauri receives the SemVer-compatible internal version
 `2026.7.1901`; source manifests remain at the development version. The updater
-channel and fixed Git tag are both named `preview` and update after every merge.
+channel and fixed Git tag are both named `preview` and update after every
+installed-app change.
 
 The workflow stages a draft Preview at the exact tested commit. Each platform
 builds and validates its pinned LGPL FFmpeg sidecars, then uploads its installer,
@@ -30,6 +40,10 @@ those files plus a DMG, NSIS installer, AppImage, Debian package, complete
 publishes it as a pre-release. A failed build removes its draft and tag, leaving
 published Previews untouched. If draft creation itself is interrupted, the next run
 removes only stale drafts with its generated tag before retrying.
+
+Release notes are generated from only the commits in the release range that
+match the same installed-app scope check. This keeps skipped website and API
+changes from appearing later in the next real desktop update message.
 
 If an in-app update download fails, the notice keeps the error on screen and
 offers **download from captur.es**, which opens the website installer section.

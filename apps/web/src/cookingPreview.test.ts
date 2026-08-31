@@ -87,6 +87,19 @@ test("hides finished failures even when they are newer than the published Previe
   assert.deepEqual(shas, []);
 });
 
+test("hides successful scope-only runs that intentionally publish no Preview", () => {
+  const shas = cookingPreviewShas(
+    [change("website-only", 20 * 60 * 1_000), change("published", HOUR)],
+    {
+      publishedCommit: "published",
+      runs: [run("website-only", "completed", "success")],
+      now: NOW,
+    },
+  );
+
+  assert.deepEqual(shas, []);
+});
+
 test("badges an in-progress run inside the cooking window", () => {
   const shas = cookingPreviewShas([change("building", HOUR), change("published", 2 * HOUR)], {
     publishedCommit: "published",
