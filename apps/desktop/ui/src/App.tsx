@@ -123,6 +123,7 @@ import { reconcileActiveViewer } from "./lib/viewerActivation";
 import {
   miniPreviewsHiddenLabel,
   prepareMiniPreviewFolderMotion,
+  shouldIgnoreMiniPreviewsHiddenCursorEvents,
   MINI_PREVIEW_FOLDER_MORPH_MS,
   MINI_PREVIEW_FOLDER_RESTORE_LEAD_MS,
   MINI_PREVIEWS_RESTORED_EVENT,
@@ -583,8 +584,61 @@ export function MiniPreviewsHiddenChip() {
     if (restoreTimer.current) clearTimeout(restoreTimer.current);
   }, []);
 
+  useEffect(() => {
+    if (!isTauri()) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let ignoringCursorEvents = false;
+    let ignoreCursorEventsSynced = false;
+
+    const setIgnoreCursorEvents = (ignore: boolean) => {
+      if (ignoreCursorEventsSynced && ignoringCursorEvents === ignore) return;
+      ignoringCursorEvents = ignore;
+      ignoreCursorEventsSynced = true;
+      void invoke("set_mini_previews_hidden_ignore_cursor_events", { ignore })
+        .catch(() => undefined);
+    };
+
+    const poll = async () => {
+      if (cancelled) return;
+      try {
+        const position = await withThumbnailPointerTimeout(
+          invoke<ThumbnailPointerPosition | null>(
+            "get_mini_previews_hidden_pointer_position",
+          ),
+        );
+        if (cancelled) return;
+        if (!position) {
+          setIgnoreCursorEvents(true);
+        } else {
+          setIgnoreCursorEvents(shouldIgnoreMiniPreviewsHiddenCursorEvents(position));
+        }
+      } catch {
+        if (!cancelled) setIgnoreCursorEvents(true);
+      } finally {
+        if (!cancelled) {
+          timer = setTimeout(() => {
+            timer = null;
+            void poll();
+          }, 40);
+        }
+      }
+    };
+
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      setIgnoreCursorEvents(true);
+    };
+  }, []);
+
   const restoreStack = () => {
     if (restoring) return;
+    if (isTauri()) {
+      void invoke("set_mini_previews_hidden_ignore_cursor_events", { ignore: true })
+        .catch(() => undefined);
+    }
     if (prefersReducedMotion()) {
       void invoke("restore_mini_previews");
       return;
@@ -6115,19 +6169,26 @@ export function Thumbnail() {
 
   const collapseLeaving = artifacts.every(({ id }) => exitingArtifactIds.has(id));
 
+  const parkStack = () => {
+    setFolderMotion("collapsing");
+    window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
+    void invoke("collapse_mini_previews").catch(() => setFolderMotion("idle"));
+  };
+
   const collapseIntoFolder = () => {
     if (collapseLeaving || folderMotion !== "idle") return;
     if (prefersReducedMotion()) {
-      void invoke("collapse_mini_previews");
+      parkStack();
       return;
     }
     const stack = stackRef.current;
     const folder = collapseRef.current?.querySelector(".mini-preview-folder-icon");
     if (!stack || !folder || prepareMiniPreviewFolderMotion(stack, folder) === 0) {
-      void invoke("collapse_mini_previews");
+      parkStack();
       return;
     }
     setFolderMotion("collapsing");
+    window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
     folderMotionTimer.current = setTimeout(() => {
       folderMotionTimer.current = null;
       void invoke("collapse_mini_previews").catch(() => setFolderMotion("idle"));

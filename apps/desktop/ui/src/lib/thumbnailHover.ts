@@ -156,8 +156,12 @@ export function clearThumbnailCssCursor(
  * Linux that otherwise blocks the desktop for the whole ~3s delete.
  * Overflow cues only matter while a live card remains; an exiting-only stack
  * should pass every click through, including those controls.
+ * Folding into the parked chip also has to pass clicks through: macOS keeps the
+ * concealed stack onscreen at zero alpha, and a later interactivity recovery
+ * would otherwise turn that invisible panel into a click shield.
  */
 export function thumbnailStackHasLiveHitTarget(root: Document = document): boolean {
+  if (root.querySelector(".thumbnail-stack-collapsing")) return false;
   const cards = root.querySelectorAll(".thumbnail-card");
   for (const card of cards) {
     if (!card.classList.contains("thumbnail-exiting")) return true;

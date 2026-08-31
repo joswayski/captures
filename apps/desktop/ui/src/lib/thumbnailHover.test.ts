@@ -475,6 +475,23 @@ describe("shouldIgnoreThumbnailCursorEvents", () => {
     expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: false })).toBe(true);
   });
 
+  it("passes through the stack while previews fold into the parked folder", () => {
+    document.body.innerHTML = `
+      <main class="thumbnail-stack thumbnail-stack-collapsing">
+        <article class="thumbnail-card"><button>Copy</button></article>
+      </main>
+      <button class="thumbnail-collapse thumbnail-collapse-collapsing">Hide previews</button>
+    `;
+    const card = document.querySelector(".thumbnail-card")!;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => card),
+    });
+    expect(thumbnailStackHasLiveHitTarget()).toBe(false);
+    expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: true })).toBe(true);
+    expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: false })).toBe(true);
+  });
+
   it("does not treat overflow cues as a reason to keep an exiting-only stack interactive", () => {
     document.body.innerHTML = `
       <main class="thumbnail-stack">

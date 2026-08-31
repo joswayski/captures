@@ -1,3 +1,5 @@
+import type { ThumbnailPointerPosition } from "../types";
+
 /** Copy for the parked mini-preview restore chip. */
 export function miniPreviewsHiddenLabel(count: number): string {
   if (count <= 0) return "Previews";
@@ -13,6 +15,28 @@ export const MINI_PREVIEW_FOLDER_RESTORE_LEAD_MS = 260;
 
 /** DOM event emitted by the native restore command once the stack is onscreen. */
 export const MINI_PREVIEWS_RESTORED_EVENT = "captures-mini-previews-restored";
+
+/**
+ * The restore chip sits in a larger transparent window so its shadow can fade
+ * out. Empty gutter, and the shrinking restore pose, must pass clicks through
+ * to the desktop underneath.
+ */
+export function shouldIgnoreMiniPreviewsHiddenCursorEvents(
+  position: ThumbnailPointerPosition,
+  root: Document = document,
+): boolean {
+  const chip = root.querySelector(".mini-previews-hidden");
+  if (!chip || chip.classList.contains("mini-previews-hidden-restoring")) {
+    return true;
+  }
+  if (!position.inside) return false;
+  return !elementContainsPoint(chip, position.x, position.y);
+}
+
+function elementContainsPoint(element: Element, x: number, y: number): boolean {
+  const bounds = element.getBoundingClientRect();
+  return x >= bounds.left && x <= bounds.right && y >= bounds.top && y <= bounds.bottom;
+}
 
 /**
  * Measures each live card against the shared folder icon and stores the travel
