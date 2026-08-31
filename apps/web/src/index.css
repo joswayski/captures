@@ -73,16 +73,37 @@
   }
 
   .download-button {
-    @apply inline-flex w-full max-w-full items-center justify-center gap-2.5 rounded-full bg-ink px-5 py-3 text-sm font-medium text-canvas no-underline transition-colors duration-200 ease-out sm:w-auto;
+    @apply inline-flex w-full max-w-full items-center justify-center gap-2.5 rounded-full bg-ink px-5 py-3 text-sm font-medium text-canvas no-underline duration-200 ease-out sm:w-auto;
     box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+    transition-property: color, background-color, box-shadow, transform;
   }
 
   .download-button:hover {
-    background: #ffffff;
+    background: var(--theme-accent-hover);
+    box-shadow:
+      0 12px 28px rgba(var(--theme-accent-rgb), 0.28),
+      0 8px 20px rgba(0, 0, 0, 0.35);
+    transform: translateY(-2px);
+  }
+
+  .download-button:active {
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+    transform: translateY(0);
   }
 
   .download-button:focus-visible {
     @apply outline-2 outline-offset-2 outline-accent;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .download-button {
+      transition-property: color, background-color, box-shadow;
+    }
+
+    .download-button:hover,
+    .download-button:active {
+      transform: none;
+    }
   }
 
   .source-button {
