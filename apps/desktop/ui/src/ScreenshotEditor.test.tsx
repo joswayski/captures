@@ -1983,7 +1983,7 @@ describe("ScreenshotEditor", () => {
     ).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("rotates a selected rectangle from the handle above the selection box", async () => {
+  it("rotates a selected rectangle from the handle and circular dial", async () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Canvas width");
 
@@ -2037,13 +2037,9 @@ describe("ScreenshotEditor", () => {
       clientY: handle.y,
     });
     expect(screen.getByText("Drag to rotate smoothly")).toBeInTheDocument();
-    const rotationShortcuts = screen.getByRole("group", {
-      name: "Rotation angle shortcuts",
-    });
-    expect(screen.queryByRole("slider", { name: "Shape rotation" })).not.toBeInTheDocument();
-    expect(within(rotationShortcuts).getByRole("button", {
-      name: "Set rotation to 0 degrees",
-    })).toHaveAttribute("aria-pressed", "true");
+    const rotationDial = screen.getByRole("slider", { name: "Shape rotation dial" });
+    expect(rotationDial).toHaveAttribute("aria-valuetext", "0°");
+    expect(rotationDial).toHaveTextContent("15° detents");
 
     fireEvent.pointerDown(canvas, {
       button: 0,
@@ -2069,16 +2065,44 @@ describe("ScreenshotEditor", () => {
       }),
     ).toHaveLength(1);
 
-    expect(within(rotationShortcuts).getByRole("button", {
-      name: "Set rotation to 90 degrees",
-    })).toHaveAttribute("aria-pressed", "true");
+    expect(rotationDial).toHaveAttribute("aria-valuetext", "90°");
 
-    fireEvent.click(within(rotationShortcuts).getByRole("button", {
-      name: "Set rotation to 15 degrees",
-    }));
-    expect(within(rotationShortcuts).getByRole("button", {
-      name: "Set rotation to 15 degrees",
-    })).toHaveAttribute("aria-pressed", "true");
+    vi.spyOn(rotationDial, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 104,
+      bottom: 104,
+      width: 104,
+      height: 104,
+      toJSON: () => ({}),
+    });
+    rotationDial.setPointerCapture = vi.fn();
+    rotationDial.hasPointerCapture = vi.fn(() => true);
+    rotationDial.releasePointerCapture = vi.fn();
+    const dialHud = rotationDial.parentElement!;
+    const dialLeftBeforeDrag = dialHud.style.left;
+    // About 44° on the dial settles into the nearby 45° detent.
+    fireEvent.pointerDown(rotationDial, {
+      button: 0,
+      pointerId: 92,
+      clientX: 87,
+      clientY: 16,
+    });
+    expect(rotationDial).toHaveAttribute("aria-valuetext", "45°");
+    expect(dialHud.style.left).toBe(dialLeftBeforeDrag);
+    fireEvent.pointerUp(rotationDial, {
+      button: 0,
+      pointerId: 92,
+      clientX: 87,
+      clientY: 16,
+    });
+    expect(rotationDial).toHaveAttribute("aria-valuetext", "45°");
+    expect(dialHud.style.left).not.toBe(dialLeftBeforeDrag);
+
+    fireEvent.keyDown(rotationDial, { key: "ArrowRight", shiftKey: true });
+    expect(rotationDial).toHaveAttribute("aria-valuetext", "60°");
   });
 
   it("deselects the active layer when clicking the empty viewport chrome", async () => {
