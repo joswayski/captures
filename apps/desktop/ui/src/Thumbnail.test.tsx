@@ -766,11 +766,10 @@ describe("Thumbnail", () => {
       await vi.advanceTimersByTimeAsync(1_000);
     });
     expect(vi.mocked(invoke)).not.toHaveBeenCalledWith("refresh_thumbnail_interactivity");
-    const ignoreCalls = vi.mocked(invoke).mock.calls
-      .filter(([command]) => command === "set_thumbnail_ignore_cursor_events");
-    expect(ignoreCalls.length).toBeGreaterThan(0);
-    expect(ignoreCalls.every(([, args]) => args && (args as { ignore: boolean }).ignore))
-      .toBe(true);
+    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith(
+      "set_thumbnail_ignore_cursor_events",
+      { ignore: false },
+    );
   });
 
   it("rolls parked previews back out from the same folder anchor", async () => {
