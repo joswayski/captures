@@ -549,6 +549,8 @@ describe("Thumbnail", () => {
     expect(card).toHaveClass("thumbnail-exiting");
     expect(hidePreviews).toHaveClass("thumbnail-collapse-leaving");
     expect(hidePreviews).toBeDisabled();
+    expect(document.querySelectorAll(".thumbnail-collapse-dust-chip")).toHaveLength(36);
+    expect(document.querySelectorAll(".thumbnail-collapse-dust-surface")).toHaveLength(36);
 
     await waitFor(() => {
       const ignoreCalls = vi.mocked(invoke).mock.calls
