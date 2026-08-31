@@ -89,8 +89,9 @@ export function cookingPreviewShas(
     if (!seenPublished) {
       if (publishedCommit && sha === publishedCommit) {
         seenPublished = true;
-      } else if (recentEnough && !failed.has(sha)) {
-        // Newer than the latest published Preview and not a known failed build.
+      } else if (recentEnough && !failed.has(sha) && !succeeded.has(sha)) {
+        // Newer than the latest published Preview and still unresolved. A
+        // successful scope-only run intentionally has no release to wait for.
         cooking.add(change.sha);
       }
     }
