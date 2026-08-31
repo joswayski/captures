@@ -5751,18 +5751,6 @@ fn include_recording_controls_in_captures(app: &AppHandle) -> bool {
         .is_some_and(|state| state.settings().include_recording_controls_in_captures)
 }
 
-fn hide_recording_saved_notices(app: &AppHandle) {
-    #[cfg(target_os = "macos")]
-    {
-        let app = app.clone();
-        if run_on_appkit_main(move || hide_recording_saved_notices_inner(&app)).is_none() {
-            eprintln!("failed to hide recording saved notices on the main thread");
-        }
-    }
-    #[cfg(not(target_os = "macos"))]
-    hide_recording_saved_notices_inner(app);
-}
-
 fn hide_recording_saved_notices_inner(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(RECORDING_SAVED_NOTICE_LABEL) {
         let _ = window.hide();
@@ -5841,8 +5829,7 @@ fn set_capture_huds_protected_inner(app: &AppHandle, protected: bool) {
 /// Does not focus the HUD. Skip restore when the user had already hidden the
 /// controls (the hidden-controls notice was showing instead).
 pub(crate) fn restore_excluded_recording_chrome(app: &AppHandle) {
-    let restore_notice =
-        RESTORE_HIDDEN_CONTROLS_NOTICE_AFTER_CAPTURE.swap(false, Ordering::SeqCst);
+    let restore_notice = RESTORE_HIDDEN_CONTROLS_NOTICE_AFTER_CAPTURE.swap(false, Ordering::SeqCst);
     let restore_hud = RESTORE_RECORDING_HUD_AFTER_CAPTURE.swap(false, Ordering::SeqCst);
     if restore_notice {
         for (label, window) in app.webview_windows() {

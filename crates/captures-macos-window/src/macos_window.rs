@@ -2924,14 +2924,14 @@ mod tests {
 
     use super::{
         CAPTURE_OVERLAY_OWNS_CURSOR, CursorMode, CursorSurface, THUMBNAIL_CURSOR_MODE,
-        activation_handoff_target, apply_unpolled_thumbnail_hover_cursor,
+        activation_handoff_target, appkit_frame_to_quartz, apply_unpolled_thumbnail_hover_cursor,
         capture_overlay_needs_presentation, capture_surface_collection_behavior,
         capture_surface_window_level, clamp_display_corner_radius, corner_radius_from_bezel_path,
         cursor_mode_is_interactive, cursor_mode_to_thumbnail_hover, cursor_surface_can_apply,
         cursor_surface_can_take_key_window_with_thumbnail_allowed, cursor_surface_uses_key_window,
         cursor_update_tracking_options, display_corner_radius_points, is_main_thread,
-        appkit_frame_to_quartz, notice_activation_source_after_focus_change, parse_display_id,
-        point_in_ns_rect, pointer_tracking_options, reassert_thumbnail_cursor_after_click,
+        notice_activation_source_after_focus_change, parse_display_id, point_in_ns_rect,
+        pointer_tracking_options, reassert_thumbnail_cursor_after_click,
         refresh_notice_activation_source_while_unfocused, shortcut_modifiers_pressed,
         should_rearm_thumbnail_key_window, should_release_thumbnail_key_after_event,
         should_reset_cursor_on_exit, single_window_activation_options,
