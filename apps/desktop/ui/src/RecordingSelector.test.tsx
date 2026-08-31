@@ -730,11 +730,18 @@ describe("RecordingSelector", () => {
       initial_mode: "screenshot",
     };
     const defaultInvoke = vi.mocked(invoke).getMockImplementation();
-    vi.mocked(invoke).mockImplementation(async (command, args) => {
+    const resolvePreferences: { current: () => void } = { current: () => undefined };
+    const preferencesOpened = new Promise<void>((resolve) => {
+      resolvePreferences.current = resolve;
+    });
+    vi.mocked(invoke).mockImplementation((command, args) => {
       if (command === "get_settings") {
-        return { ...settings, auto_start_on_selection: true };
+        return Promise.resolve({ ...settings, auto_start_on_selection: true });
       }
-      return defaultInvoke?.(command, args);
+      if (command === "open_preferences") return preferencesOpened;
+      return defaultInvoke
+        ? defaultInvoke(command, args)
+        : Promise.resolve(undefined);
     });
 
     render(<RecordingSelector />);
@@ -742,13 +749,25 @@ describe("RecordingSelector", () => {
     fireEvent.click(change);
 
     await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith("cancel_recording_selection", {
-        selectionId: preparedSession.id,
-      });
       expect(invoke).toHaveBeenCalledWith("open_preferences", {
         target: "auto-start-on-selection",
       });
     });
+    expect(invoke).not.toHaveBeenCalledWith("cancel_recording_selection", {
+      selectionId: preparedSession.id,
+    });
+
+    resolvePreferences.current();
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("cancel_recording_selection", {
+        selectionId: preparedSession.id,
+      });
+    });
+    const actionCalls = vi.mocked(invoke).mock.calls
+      .map(([command]) => command)
+      .filter((command) => command === "open_preferences" || command === "cancel_recording_selection");
+    expect(actionCalls).toEqual(["open_preferences", "cancel_recording_selection"]);
   });
 
   it("auto-starts after picking a window when the preference is on", async () => {

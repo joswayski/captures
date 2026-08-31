@@ -203,8 +203,8 @@
 
 .thumbnail-collapse.thumbnail-collapse-leaving {
   opacity: 0;
-  transform: translateY(10px) scale(0.76);
-  filter: blur(2px);
+  transform: translateY(calc(var(--s-4) + var(--s-1))) scale(0.76);
+  filter: blur(var(--s-1));
   pointer-events: none;
 }
 
@@ -215,12 +215,11 @@
 
 .mini-previews-hidden {
   display: flex;
-  width: calc(100% - 16px);
-  height: calc(100% - 16px);
-  margin: 8px;
+  width: calc(100% - var(--s-6));
+  height: calc(100% - var(--s-6));
+  margin: var(--s-4);
   padding: 0 var(--s-4) 0 var(--s-3);
   align-items: center;
-  gap: var(--s-3);
   border: 1px solid var(--glass-border);
   border-radius: var(--r-xl);
   color: var(--glass-text);
@@ -230,7 +229,7 @@
      elevation inside the 8px window gutter instead. */
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.1),
-    0 2px 6px rgba(0, 0, 0, 0.34);
+    0 var(--s-1) var(--s-3) rgba(0, 0, 0, 0.34);
   backdrop-filter: var(--glass-blur);
   cursor: pointer !important;
   animation: mini-previews-hidden-in var(--dur-3) var(--ease-out) both;
@@ -244,6 +243,16 @@
   pointer-events: none;
 }
 
+.mini-previews-hidden-content {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: var(--s-3);
+  /* Keep the shadow-bearing button stationary inside its native gutter. */
+  animation: mini-previews-hidden-content-in var(--dur-3) var(--ease-out) both;
+}
+
 .mini-previews-hidden:hover,
 .mini-previews-hidden:focus-visible {
   background: var(--glass-raised);
@@ -251,7 +260,7 @@
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.12),
     0 0 0 1px rgba(var(--theme-accent-rgb), 0.2),
-    0 2px 6px rgba(0, 0, 0, 0.34);
+    0 var(--s-1) var(--s-3) rgba(0, 0, 0, 0.34);
 }
 
 .mini-previews-hidden:active {
@@ -279,7 +288,7 @@
 }
 
 .mini-previews-hidden-icon svg,
-.mini-previews-hidden > svg {
+.mini-previews-hidden-content > svg {
   width: 16px;
   height: 16px;
   fill: none;
@@ -289,7 +298,7 @@
   stroke-linejoin: round;
 }
 
-.mini-previews-hidden > svg {
+.mini-previews-hidden-content > svg {
   margin-left: auto;
   flex: 0 0 auto;
   transition: transform var(--dur-2) var(--ease-out);
@@ -301,8 +310,8 @@
   transform: scale(1.04);
 }
 
-.mini-previews-hidden:hover > svg,
-.mini-previews-hidden:focus-visible > svg {
+.mini-previews-hidden:hover .mini-previews-hidden-content > svg,
+.mini-previews-hidden:focus-visible .mini-previews-hidden-content > svg {
   transform: translateY(-1px);
 }
 
@@ -310,7 +319,7 @@
   transform: scale(0.98);
 }
 
-.mini-previews-hidden:active > svg {
+.mini-previews-hidden:active .mini-previews-hidden-content > svg {
   transform: translateY(0);
 }
 
@@ -340,10 +349,17 @@
 @keyframes mini-previews-hidden-in {
   from {
     opacity: 0;
-    transform: translateY(6px) scale(0.96);
   }
   to {
     opacity: 1;
+  }
+}
+
+@keyframes mini-previews-hidden-content-in {
+  from {
+    transform: translateY(var(--s-3)) scale(0.96);
+  }
+  to {
     transform: translateY(0) scale(1);
   }
 }
@@ -1622,6 +1638,10 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-collapse, .
   }
 
   .mini-previews-hidden {
+    animation: none;
+  }
+
+  .mini-previews-hidden-content {
     animation: none;
   }
 }
