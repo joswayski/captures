@@ -141,10 +141,25 @@ describe("MiniPreviewsHiddenChip", () => {
       /\.thumbnail-collapse\.thumbnail-collapse-leaving\s*\{([\s\S]*?)\n\}/,
     );
 
-    expect(exitRule?.[1]).toMatch(/thumbnail-folder-source-fade 0\.18s 0\.42s/);
+    expect(exitRule?.[1]).toMatch(
+      /thumbnail-folder-source-fade 0\.18s var\(--mini-preview-folder-dust-lead\)/,
+    );
     expect(exitRule?.[1]).not.toMatch(/mask-image|radial-gradient/);
     expect(miniPreviewStyles).toMatch(/\.thumbnail-collapse-dust-layer/);
     expect(miniPreviewStyles).toMatch(/\.thumbnail-collapse-dust-surface/);
+    expect(miniPreviewStyles).toMatch(
+      /\.thumbnail-collapse-dust-layer \.thumbnail-collapse-dust-chip\s*\{[^}]*filter:\s*none/,
+    );
+    expect(miniPreviewStyles).toMatch(
+      /\.thumbnail-collapse-dust-layer \.thumbnail-collapse-dust-chip\s*\{[^}]*opacity:\s*0/,
+    );
+    expect(miniPreviewStyles).toMatch(
+      /\.thumbnail-collapse-dust-surface\s*\{[^}]*background:\s*transparent/,
+    );
+    expect(miniPreviewStyles).not.toMatch(
+      /\.thumbnail-collapse-dust-surface\s*\{[^}]*background:\s*var\(--glass-strong-solid\)/,
+    );
+    expect(miniPreviewStyles).toMatch(/--mini-preview-folder-dust-lead:\s*370ms/);
   });
 
   it("restores the stack from the parked folder without shrinking first", async () => {

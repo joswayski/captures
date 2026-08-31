@@ -93,6 +93,7 @@
 }
 
 .thumbnail-collapse {
+  --mini-preview-folder-dust-lead: 370ms;
   position: absolute;
   z-index: 20;
   top: auto;
@@ -383,7 +384,7 @@
 }
 
 .thumbnail-collapse.thumbnail-collapse-leaving {
-  animation: thumbnail-folder-source-fade 0.18s 0.42s linear both;
+  animation: thumbnail-folder-source-fade 0.18s var(--mini-preview-folder-dust-lead) linear both;
   pointer-events: none;
 }
 
@@ -414,8 +415,15 @@
   pointer-events: none;
 }
 
-.thumbnail-collapse-dust-chip {
+/*
+ * Folder chips must not inherit the card-dust brightness filter — that rule
+ * comes later and would otherwise paint a darkened plate over the live icon.
+ * Opacity stays 0 until WAAPI starts each chip so the original control remains
+ * the only visible folder during the lead-in.
+ */
+.thumbnail-collapse-dust-layer .thumbnail-collapse-dust-chip {
   filter: none;
+  opacity: 0;
 }
 
 .thumbnail-collapse-dust-surface {
@@ -426,13 +434,14 @@
   height: 48px;
   padding: 0;
   place-items: center;
-  border: 1px solid var(--glass-border);
+  /* Transparent replica of the compact control: keep size/alignment so the
+     folder icon sits on the same pixels as the live button, without stacking
+     a second dark glass plate over it. */
+  border: 1px solid transparent;
   border-radius: var(--r-xl);
   color: var(--glass-text);
-  background: var(--glass-strong-solid);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.07),
-    0 1px 3px rgba(0, 0, 0, 0.46);
+  background: transparent;
+  box-shadow: none;
   overflow: hidden;
   pointer-events: none;
 }
@@ -1345,8 +1354,8 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-collapse, .
   cursor: default !important;
 }
 
-.thumbnail-card.thumbnail-exiting .icon-button::after,
-.thumbnail-card.thumbnail-exiting .thumbnail-editor-control-tip {
+.thumbnail-card.thumbnail-exiting .thumbnail-editor-control-tip,
+.thumbnail-card.thumbnail-exiting:not(.thumbnail-exit-delete) .icon-button::after {
   opacity: 0 !important;
   transition: none !important;
 }
@@ -1498,10 +1507,33 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-collapse, .
 }
 
 .thumbnail-exit-delete .thumbnail-bottom-bar {
+  z-index: 8;
   transition: none !important;
 }
 
-.thumbnail-exit-delete .icon-button::after,
+/*
+ * Clicking Delete clears :hover / native pointer hover (inert + click-through).
+ * Freeze the hovered delete chrome so the first dissolve frame matches the
+ * screenshot the user was looking at — tooltip, red trash, and opaque Save.
+ */
+.thumbnail-exit-delete .icon-button.delete {
+  color: #fff;
+  background: var(--theme-signal);
+  transform: translateY(-1px) scale(1.04);
+}
+
+.thumbnail-exit-delete .icon-button.delete::after {
+  opacity: 1;
+  transform: translate(0, 0);
+  transition: none;
+}
+
+.thumbnail-exit-delete .thumbnail-main-actions button:disabled,
+.thumbnail-exit-delete .icon-button:disabled {
+  opacity: 1;
+  cursor: default;
+}
+
 .thumbnail-exit-delete .thumbnail-editor-control-tip {
   opacity: 0 !important;
   transition: none !important;
@@ -1572,7 +1604,8 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-collapse, .
 }
 
 @keyframes thumbnail-delete-img-fade {
-  0% {
+  0%,
+  20% {
     opacity: 1;
     filter: blur(2px) brightness(0.5);
     transform: scale(1.015);
@@ -1614,7 +1647,7 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-collapse, .
   display: block;
   border-radius: 0;
   overflow: hidden;
-  filter: brightness(0.5);
+  filter: blur(2px) brightness(0.5);
   opacity: 1;
   transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
   box-shadow: none;

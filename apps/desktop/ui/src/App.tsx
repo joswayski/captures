@@ -129,6 +129,7 @@ import {
   prepareMiniPreviewFolderMotion,
   shouldIgnoreMiniPreviewsHiddenCursorEvents,
   takeMiniPreviewRestorePending,
+  MINI_PREVIEW_FOLDER_DUST_LEAD_MS,
   MINI_PREVIEW_FOLDER_MORPH_MS,
   MINI_PREVIEWS_RESTORED_EVENT,
   type MiniPreviewFolderPose,
@@ -6340,6 +6341,9 @@ export function Thumbnail() {
           ? `Show ${miniPreviewsHiddenLabel(artifacts.length)}`
           : "Hide previews"}
         data-tooltip={folderMotion === "parked" ? "Show previews" : "Hide previews"}
+        style={{
+          ["--mini-preview-folder-dust-lead" as string]: `${MINI_PREVIEW_FOLDER_DUST_LEAD_MS}ms`,
+        }}
         disabled={collapseLeaving || folderBusy}
         onClick={folderMotion === "parked" ? restoreFromFolderPose : collapseIntoFolder}
       >

@@ -8,7 +8,11 @@ import {
   THUMBNAIL_CARD_SLOT_PX,
   THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS,
 } from "./lib/thumbnailLayout";
-import { MINI_PREVIEW_FOLDER_MORPH_MS, takeMiniPreviewRestorePending } from "./lib/miniPreviewsHidden";
+import {
+  MINI_PREVIEW_FOLDER_DUST_LEAD_MS,
+  MINI_PREVIEW_FOLDER_MORPH_MS,
+  takeMiniPreviewRestorePending,
+} from "./lib/miniPreviewsHidden";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -733,6 +737,9 @@ describe("Thumbnail", () => {
     render(<Thumbnail />);
     const hide = await screen.findByRole("button", { name: "Hide previews" });
     expect(hide).toHaveAttribute("data-tooltip", "Hide previews");
+    expect(hide.style.getPropertyValue("--mini-preview-folder-dust-lead")).toBe(
+      `${MINI_PREVIEW_FOLDER_DUST_LEAD_MS}ms`,
+    );
     expect(hide.querySelector(".mini-preview-folder")).not.toBeNull();
     expect(hide.querySelector(".mini-preview-folder")).toHaveAttribute("data-pose", "idle");
     vi.useFakeTimers();

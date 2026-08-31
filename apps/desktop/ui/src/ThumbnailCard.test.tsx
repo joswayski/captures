@@ -812,6 +812,29 @@ describe("ThumbnailCard", () => {
     expect(card.querySelector(".thumbnail-dust-layer")).not.toBeNull();
   });
 
+  it("keeps Save, clipboard, and Delete chrome mounted when disintegration starts", () => {
+    render(
+      <ThumbnailCard
+        artifact={artifact(null)}
+        clipboardCurrent
+        viewerActive={false}
+        onRemoved={() => undefined}
+      />,
+    );
+
+    act(() => {
+      screen.getByRole("button", { name: "Delete" }).click();
+    });
+
+    const card = screen.getByRole("article");
+    const save = screen.getByRole("button", { name: "Save file" });
+    const remove = screen.getByRole("button", { name: "Delete" });
+    expect(card).toHaveClass("thumbnail-exit-delete");
+    expect(save).toBeDisabled();
+    expect(remove).toHaveAttribute("data-tooltip", "Delete");
+    expect(screen.getByText("Copied to clipboard")).toBeInTheDocument();
+  });
+
   it("keeps corner particles as clipped slices of the full rounded surface", () => {
     render(
       <ThumbnailCard
