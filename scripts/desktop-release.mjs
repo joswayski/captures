@@ -106,7 +106,7 @@ function fileAt(ref, path) {
 
 function changedPaths(before, after) {
   const args = refExists(before)
-    ? ["diff", "--name-only", "--diff-filter=ACMRTUXB", before, after]
+    ? ["diff", "--name-only", "--diff-filter=ACDMRTUXB", before, after]
     : ["diff-tree", "--root", "--no-commit-id", "--name-only", "-r", after];
   const output = git(args);
   return output ? output.split(/\r?\n/u) : [];
@@ -153,7 +153,7 @@ function noteForCommit(commit, repository) {
   return { key: `commit-${commit}`, text: `* ${subject} ([${short}](https://github.com/${repository}/commit/${commit}))` };
 }
 
-export function releaseNotes(commits, repository) {
+export function releaseNotes(commits, repository, fallbackCommit = "") {
   const seen = new Set();
   const notes = [];
   for (const commit of commits) {
@@ -162,7 +162,13 @@ export function releaseNotes(commits, repository) {
     seen.add(note.key);
     notes.push(note.text);
   }
-  if (notes.length === 0) throw new Error("desktop release range contains no installed-app changes");
+  if (notes.length === 0) {
+    if (!fallbackCommit) throw new Error("desktop release notes require a fallback commit");
+    const short = fallbackCommit.slice(0, 7);
+    notes.push(
+      `* Rebuilt desktop installers from commit [${short}](https://github.com/${repository}/commit/${fallbackCommit})`,
+    );
+  }
   return `## What's Changed\n${notes.join("\n")}\n`;
 }
 
@@ -188,7 +194,7 @@ export function releaseNotesBetween(before, after, repository) {
   const output = git(["rev-list", "--reverse", range]);
   const qualifying = (output ? output.split(/\r?\n/u) : [])
     .filter((commit) => releaseImpactBetween(firstParent(commit), commit).shouldRelease);
-  return releaseNotes(qualifying, repository);
+  return releaseNotes(qualifying, repository, after);
 }
 
 function appendOutput(entries) {

@@ -191,6 +191,15 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ needs.queue.outputs.release_sha }}
+      # Historical builds check out an older target SHA, so load the scope and
+      # notes helper from the workflow commit instead of requiring it there.
+      - name: Load the current desktop release helper
+        uses: actions/checkout@v4
+        with:
+          path: release-tools
+          ref: ${{ github.sha }}
+          sparse-checkout: scripts/desktop-release.mjs
+          sparse-checkout-cone-mode: false
       - name: Create the draft at the tested commit
         id: draft
         env:
@@ -272,7 +281,7 @@ jobs:
             > "$release_file"
           release_id="$(jq -er .id "$release_file")"
           generated_notes="$RUNNER_TEMP/generated-release-notes.md"
-          node scripts/desktop-release.mjs notes \
+          node "$GITHUB_WORKSPACE/release-tools/scripts/desktop-release.mjs" notes \
             "$RELEASE_SHA" \
             "$GITHUB_REPOSITORY" \
             "$generated_notes"

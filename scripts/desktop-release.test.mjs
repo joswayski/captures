@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -11,6 +11,7 @@ import {
   desktopLockSnapshot,
   desktopReleaseImpact,
   isDesktopReleasePath,
+  releaseImpactBetween,
   releaseNotesBetween,
 } from "./desktop-release.mjs";
 
@@ -105,6 +106,7 @@ test("release notes omit skipped website commits from the next desktop update", 
   writeFileSync(join(directory, "apps/web/src/api.ts"), "export const api = true;\n");
   runGit("add", "apps/web/src/api.ts");
   runGit("commit", "-m", "Update the hosted API (#10)");
+  const webHead = runGit("rev-parse", "HEAD");
 
   mkdirSync(join(directory, "apps/desktop/ui/src"), { recursive: true });
   writeFileSync(join(directory, "apps/desktop/ui/src/App.tsx"), "export const App = true;\n");
@@ -114,9 +116,21 @@ test("release notes omit skipped website commits from the next desktop update", 
 
   try {
     process.chdir(directory);
+    const fallback = releaseNotesBetween(base, webHead, "joswayski/captures");
+    assert.match(fallback, new RegExp(`Rebuilt desktop installers from commit \\[${webHead.slice(0, 7)}\\]`, "u"));
+
     const notes = releaseNotesBetween(base, head, "joswayski/captures");
     assert.doesNotMatch(notes, /hosted API/u);
     assert.match(notes, /Fix desktop capture \(\[#11\]\(https:\/\/github\.com\/joswayski\/captures\/pull\/11\)\)/u);
+
+    rmSync(join(directory, "apps/desktop/ui/src/App.tsx"));
+    runGit("add", "apps/desktop/ui/src/App.tsx");
+    runGit("commit", "-m", "Remove obsolete desktop code (#12)");
+    const deletedHead = runGit("rev-parse", "HEAD");
+    assert.deepEqual(releaseImpactBetween(head, deletedHead), {
+      shouldRelease: true,
+      paths: ["apps/desktop/ui/src/App.tsx"],
+    });
   } finally {
     process.chdir(originalDirectory);
   }
@@ -130,6 +144,10 @@ test("the Preview workflow gates builds and generates scoped notes", () => {
   assert.match(workflow, /should_release: \$\{\{ steps\.scope\.outputs\.should_release \}\}/u);
   assert.match(workflow, /if: needs\.queue\.outputs\.should_release == 'true'/u);
   assert.match(workflow, /desktop-release\.mjs changed/u);
-  assert.match(workflow, /desktop-release\.mjs notes/u);
+  assert.match(workflow, /desktop-release\.mjs"? notes/u);
+  assert.match(
+    workflow,
+    /name: Load the current desktop release helper[\s\S]*?ref: \$\{\{ github\.sha \}\}[\s\S]*?sparse-checkout: scripts\/desktop-release\.mjs/u,
+  );
   assert.doesNotMatch(workflow, /generate_release_notes=true/u);
 });
