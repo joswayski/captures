@@ -9,9 +9,8 @@ import { resolve } from "node:path";
 import {
   createScreenshotDocument,
   elementBounds,
+  elementRotationHandlePoint,
   resizeHandlePoint,
-  rotationHudShouldOpenBelow,
-  shapeRotationHandlePoint,
   type EditorShapeElement,
 } from "./lib/screenshotEditor";
 import { ScreenshotEditor } from "./ScreenshotEditor";
@@ -223,12 +222,6 @@ describe("ScreenshotEditor", () => {
     vi.restoreAllMocks();
     vi.clearAllMocks();
     document.getElementById("captures-editor-paint-canvas-host")?.remove();
-  });
-
-  it("opens rotation shortcuts on the side with more viewport space", () => {
-    expect(rotationHudShouldOpenBelow(40, 0, 600, 100)).toBe(true);
-    expect(rotationHudShouldOpenBelow(180, 0, 600, 100)).toBe(false);
-    expect(rotationHudShouldOpenBelow(40, 0, 60, 100)).toBe(false);
   });
 
   it("restores a saved editor draft and can discard it", async () => {
@@ -873,6 +866,75 @@ describe("ScreenshotEditor", () => {
     });
     expect(await screen.findByRole("textbox", { name: "Edit text on canvas" }))
       .toHaveValue("Hello from the screenshot editor");
+  });
+
+  it("sizes the inline editor from a rotated text layer's local bounds", async () => {
+    const draftDocument = createScreenshotDocument(
+      "captures-capture://localhost/editor-draft/capture-1/asset-1",
+      1_440,
+      900,
+      "capture-1",
+    );
+    draftDocument.elements.push({
+      id: "rotated-text",
+      kind: "text",
+      text: "Rotate me",
+      fontSize: 32,
+      width: 200,
+      fontFamily: "sans",
+      bold: false,
+      italic: false,
+      align: "left",
+      color: "#fff",
+      background: null,
+      outlined: false,
+      roundedBackground: false,
+      x: 120,
+      y: 100,
+      rotation: Math.PI / 2,
+      locked: false,
+      visible: true,
+      opacity: 100,
+      blendMode: "source-over",
+    });
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "get_artifact") return artifact;
+      if (command === "load_screenshot_editor_draft") {
+        return { document: draftDocument, updated_at_ms: 1 };
+      }
+      if (command === "estimate_screenshot_export") {
+        const colors = Number(
+          (args as { pngMaxColors?: number } | undefined)?.pngMaxColors ?? 128,
+        );
+        return Math.max(8_000, Math.round(1_200 * colors));
+      }
+      const draft = draftCommandResult(String(command));
+      if (draft !== undefined || String(command).includes("screenshot_editor_draft")) {
+        return draft;
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<ScreenshotEditor />);
+    await screen.findByText("Restored unsaved edits from last time.");
+    setCanvasZoomPercent(100);
+    const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
+    setCanvasBounds(canvas);
+    fireEvent.doubleClick(canvas, {
+      button: 0,
+      clientX: 220,
+      clientY: 120,
+    });
+
+    const inlineEditor = await screen.findByRole("textbox", {
+      name: "Edit text on canvas",
+    });
+    const inlineFrame = inlineEditor.closest(".screenshot-inline-text-frame") as HTMLElement;
+    expect(Number.parseFloat(inlineFrame.style.left)).toBeCloseTo(120, 5);
+    expect(Number.parseFloat(inlineFrame.style.top)).toBeCloseTo(100, 5);
+    expect(Number.parseFloat(inlineFrame.style.width)).toBeCloseTo(202, 5);
+    expect(Number.parseFloat(inlineFrame.style.height)).toBeLessThan(60);
+    expect(inlineFrame.style.transform).toContain("rotate(1.570796");
   });
 
   it("creates text with any of the seven visual style presets", async () => {
@@ -2021,7 +2083,7 @@ describe("ScreenshotEditor", () => {
     ).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("rotates a selected rectangle from the handle and circular dial", async () => {
+  it("rotates from the handle and configures Shift snapping with a number input", async () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Canvas width");
 
@@ -2066,7 +2128,7 @@ describe("ScreenshotEditor", () => {
       opacity: 100,
       blendMode: "source-over",
     };
-    const handle = shapeRotationHandlePoint(placed, 1);
+    const handle = elementRotationHandlePoint(placed, 1);
     const originX = (placed.x + placed.endX) / 2;
     const originY = (placed.y + placed.endY) / 2;
 
@@ -2074,10 +2136,16 @@ describe("ScreenshotEditor", () => {
       clientX: handle.x,
       clientY: handle.y,
     });
-    expect(screen.getByText("Drag to rotate smoothly")).toBeInTheDocument();
-    const rotationDial = screen.getByRole("slider", { name: "Shape rotation dial" });
-    expect(rotationDial).toHaveAttribute("aria-valuetext", "0°");
-    expect(rotationDial).toHaveTextContent("15° detents");
+    expect(screen.getByText("Drag to rotate. Hold Shift to snap by 15°")).toBeInTheDocument();
+    expect(screen.queryByRole("group", {
+      name: "Rotation angle shortcuts",
+    })).not.toBeInTheDocument();
+
+    const snapInput = screen.getByRole("spinbutton", { name: "Shift rotation snap" });
+    expect(snapInput).toHaveValue(15);
+    fireEvent.change(snapInput, { target: { value: "30" } });
+    expect(snapInput).toHaveValue(30);
+    expect(screen.getByText(/snap in 30° increments/i)).toBeInTheDocument();
 
     fireEvent.pointerDown(canvas, {
       button: 0,
@@ -2089,6 +2157,7 @@ describe("ScreenshotEditor", () => {
       pointerId: 91,
       clientX: originX + 120,
       clientY: originY,
+      shiftKey: true,
     });
     fireEvent.pointerUp(canvas, {
       button: 0,
@@ -2103,44 +2172,7 @@ describe("ScreenshotEditor", () => {
       }),
     ).toHaveLength(1);
 
-    expect(rotationDial).toHaveAttribute("aria-valuetext", "90°");
-
-    vi.spyOn(rotationDial, "getBoundingClientRect").mockReturnValue({
-      x: 0,
-      y: 0,
-      top: 0,
-      left: 0,
-      right: 104,
-      bottom: 104,
-      width: 104,
-      height: 104,
-      toJSON: () => ({}),
-    });
-    rotationDial.setPointerCapture = vi.fn();
-    rotationDial.hasPointerCapture = vi.fn(() => true);
-    rotationDial.releasePointerCapture = vi.fn();
-    const dialHud = rotationDial.parentElement!;
-    const dialLeftBeforeDrag = dialHud.style.left;
-    // About 44° on the dial settles into the nearby 45° detent.
-    fireEvent.pointerDown(rotationDial, {
-      button: 0,
-      pointerId: 92,
-      clientX: 87,
-      clientY: 16,
-    });
-    expect(rotationDial).toHaveAttribute("aria-valuetext", "45°");
-    expect(dialHud.style.left).toBe(dialLeftBeforeDrag);
-    fireEvent.pointerUp(rotationDial, {
-      button: 0,
-      pointerId: 92,
-      clientX: 87,
-      clientY: 16,
-    });
-    expect(rotationDial).toHaveAttribute("aria-valuetext", "45°");
-    expect(dialHud.style.left).not.toBe(dialLeftBeforeDrag);
-
-    fireEvent.keyDown(rotationDial, { key: "ArrowRight", shiftKey: true });
-    expect(rotationDial).toHaveAttribute("aria-valuetext", "60°");
+    expect(screen.queryByText(/angle stops/i)).not.toBeInTheDocument();
   });
 
   it("deselects the active layer when clicking the empty viewport chrome", async () => {
