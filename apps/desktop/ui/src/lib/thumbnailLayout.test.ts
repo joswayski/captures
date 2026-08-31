@@ -70,6 +70,23 @@ describe("thumbnail stack layout", () => {
     expect(sourceFade?.[1]).toMatch(/filter:\s*blur\(2px\) brightness\(0\.5\)/);
   });
 
+  it("fades the mini-preview frame with the delete dissolve", () => {
+    const deleteRule = thumbnailStyles.match(
+      /\.thumbnail-card\.thumbnail-exit-delete\s*\{([\s\S]*?)\n\}/,
+    );
+    const frameFade = thumbnailStyles.match(
+      /@keyframes thumbnail-delete-frame-fade\s*\{([\s\S]*?)\n\}/,
+    );
+    const outlineFade = thumbnailStyles.match(
+      /\.thumbnail-card\.thumbnail-exit-delete::after\s*\{([^}]*)\}/,
+    );
+
+    expect(deleteRule?.[1]).toMatch(/thumbnail-delete-frame-fade\s+0\.95s/);
+    expect(deleteRule?.[1]).not.toMatch(/^\s*box-shadow:\s*none/m);
+    expect(frameFade?.[1]).toMatch(/box-shadow:\s*none/);
+    expect(outlineFade?.[1]).toMatch(/filter:\s*opacity\(0\)/);
+  });
+
   it("scrolls to reveal newly added captures", () => {
     expect(shouldScrollThumbnailStackToEnd(1, 2)).toBe(true);
   });
