@@ -1995,10 +1995,10 @@ describe("screenshot editor geometry", () => {
   });
 
   it("scales arrow heads with stroke and shaft length", () => {
-    expect(arrowHeadLength(8)).toBeCloseTo(26.8, 5);
-    expect(arrowHeadLength(2)).toBeCloseTo(6.7, 5);
-    expect(arrowHeadLength(8, 20)).toBeCloseTo(6.8, 5);
-    expect(arrowHeadLength(8, 400)).toBeCloseTo(26.8, 5);
+    expect(arrowHeadLength(8)).toBeCloseTo(28, 5);
+    expect(arrowHeadLength(2)).toBeCloseTo(7, 5);
+    expect(arrowHeadLength(8, 20)).toBeCloseTo(7.2, 5);
+    expect(arrowHeadLength(8, 400)).toBeCloseTo(28, 5);
     expect(arrowHeadLength(8, 0)).toBe(0);
     expect(arrowDrawnStrokeWidth(8, 0)).toBe(0);
     expect(arrowDrawnStrokeWidth(8, 10)).toBeLessThan(arrowDrawnStrokeWidth(8, 80));

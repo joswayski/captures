@@ -855,6 +855,9 @@ function fillPolygon(
   }
   context.closePath();
   context.fill();
+  // Hairline stroke on the same path so diagonal edges anti-alias instead of
+  // looking like a 1px bitmap staircase, especially at 1× display scale.
+  context.stroke();
 }
 
 function applyAnnotationDropShadow(
@@ -938,8 +941,11 @@ function paintShapeGeometry(
     const polygon = arrowFillPolygon(element);
     if (polygon.length < 3) return;
     context.fillStyle = style.color;
+    context.strokeStyle = style.color;
+    context.lineWidth = Math.max(0.6, style.strokeWidth * 0.06);
     context.lineJoin = "miter";
     context.miterLimit = 2.4;
+    context.lineCap = "butt";
     fillPolygon(context, polygon);
     return;
   }
