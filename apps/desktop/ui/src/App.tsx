@@ -126,6 +126,7 @@ import {
   markMiniPreviewRestorePending,
   miniPreviewFolderPlaceholderSheets,
   miniPreviewFolderSheets,
+  miniPreviewFolderSheetsForMotion,
   miniPreviewsHiddenLabel,
   prepareMiniPreviewFolderMotion,
   shouldIgnoreMiniPreviewsHiddenCursorEvents,
@@ -133,6 +134,7 @@ import {
   MINI_PREVIEW_FOLDER_DUST_LEAD_MS,
   MINI_PREVIEW_FOLDER_MORPH_MS,
   MINI_PREVIEWS_RESTORED_EVENT,
+  type MiniPreviewFolderMotion,
   type MiniPreviewFolderPose,
   type MiniPreviewFolderSheet,
 } from "./lib/miniPreviewsHidden";
@@ -5615,9 +5617,9 @@ function useElementCssSize(
 
 export function Thumbnail() {
   const [artifacts, setArtifacts] = useState<CaptureArtifact[]>([]);
-  const [folderMotion, setFolderMotion] = useState<
-    "idle" | "collapsing" | "parked" | "restoring"
-  >(() => (takeMiniPreviewRestorePending() ? "restoring" : "idle"));
+  const [folderMotion, setFolderMotion] = useState<MiniPreviewFolderMotion>(
+    () => (takeMiniPreviewRestorePending() ? "restoring" : "idle"),
+  );
   const [exitingArtifactIds, setExitingArtifactIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -6393,7 +6395,7 @@ export function Thumbnail() {
       >
         <MiniPreviewFolder
           pose={folderMotion === "idle" ? "idle" : folderMotion === "parked" ? "parked" : "open"}
-          sheets={miniPreviewFolderSheets(artifacts)}
+          sheets={miniPreviewFolderSheetsForMotion(artifacts, folderMotion)}
         />
       </button>
       {collapseLeaving && (
@@ -6442,10 +6444,6 @@ function MiniPreviewFolder({
   pose: MiniPreviewFolderPose;
   sheets: MiniPreviewFolderSheet[];
 }) {
-  const visibleSheets = sheets.length > 0
-    ? sheets
-    : miniPreviewFolderPlaceholderSheets(2);
-
   return (
     <span className="mini-preview-folder mini-preview-folder-icon" data-pose={pose} aria-hidden="true">
       <span className="mini-preview-folder-scene">
@@ -6453,7 +6451,7 @@ function MiniPreviewFolder({
         <span className="mini-preview-folder-tab" />
         <span className="mini-preview-folder-well" />
         <span className="mini-preview-folder-pocket">
-          {visibleSheets.map((sheet, index) => (
+          {sheets.map((sheet, index) => (
             <span
               key={sheet.id}
               className="mini-preview-folder-sheet"

@@ -14,22 +14,23 @@ export function miniPreviewsHiddenLabel(count: number): string {
 /** Full card-to-folder motion, including open-folder lead-in and stagger. */
 export const MINI_PREVIEW_FOLDER_MORPH_MS = 720;
 
-/** Compact hide control before the isometric folder grows to the right. */
+/** The folder control never changes size while previews move in or out. */
 export const MINI_PREVIEW_FOLDER_IDLE_WIDTH = 48;
 export const MINI_PREVIEW_FOLDER_IDLE_HEIGHT = 48;
 
 /**
- * Grown open-folder control. Hide, parked, and restore all share this size so
- * the glass never collapses and re-extends around the pocket.
+ * Motion envelope for the fixed-size folder control. Keeping the open and idle
+ * geometry identical prevents the glass hit target from expanding around cards
+ * while they travel into the pocket.
  */
-export const MINI_PREVIEW_FOLDER_OPEN_WIDTH = 80;
-export const MINI_PREVIEW_FOLDER_OPEN_HEIGHT = 56;
+export const MINI_PREVIEW_FOLDER_OPEN_WIDTH = MINI_PREVIEW_FOLDER_IDLE_WIDTH;
+export const MINI_PREVIEW_FOLDER_OPEN_HEIGHT = MINI_PREVIEW_FOLDER_IDLE_HEIGHT;
 
-/** Pocket origin inside the grown control, from its stable bottom-left corner. */
-export const MINI_PREVIEW_FOLDER_POCKET_INSET_LEFT = 20;
+/** Pocket origin inside the fixed control, from its stable bottom-left corner. */
+export const MINI_PREVIEW_FOLDER_POCKET_INSET_LEFT = 10;
 export const MINI_PREVIEW_FOLDER_POCKET_INSET_TOP = 10;
 export const MINI_PREVIEW_FOLDER_SHEET_WIDTH = 22;
-export const MINI_PREVIEW_FOLDER_SHEET_HEIGHT = 26;
+export const MINI_PREVIEW_FOLDER_SHEET_HEIGHT = 18;
 
 /** Compact folder control used when the last preview dissolves the hide button. */
 export const MINI_PREVIEW_FOLDER_SIZE_PX = MINI_PREVIEW_FOLDER_IDLE_WIDTH;
@@ -79,6 +80,7 @@ export type MiniPreviewFolderSheet = {
 };
 
 export type MiniPreviewFolderPose = "idle" | "open" | "parked";
+export type MiniPreviewFolderMotion = "idle" | "collapsing" | "parked" | "restoring";
 
 let pendingMiniPreviewRestore = false;
 
@@ -120,6 +122,20 @@ export function miniPreviewFolderSheets(
 }
 
 /**
+ * Visible cards are the source of truth until they have actually reached the
+ * folder. Do not duplicate them as tiny sheets in the idle/open control.
+ * Parked sheets remain during restore so they can hand off to the cards flying
+ * back out along the same path.
+ */
+export function miniPreviewFolderSheetsForMotion(
+  artifacts: Array<{ id: string; preview_url: string | null }>,
+  motion: MiniPreviewFolderMotion,
+): MiniPreviewFolderSheet[] {
+  if (motion === "idle" || motion === "collapsing") return [];
+  return miniPreviewFolderSheets(artifacts);
+}
+
+/**
  * The restore chip sits in a larger transparent window so its shadow can fade
  * out. Empty gutter, and the restoring pose, must pass clicks through
  * to the desktop underneath.
@@ -142,9 +158,9 @@ function elementContainsPoint(element: Element, x: number, y: number): boolean {
 }
 
 /**
- * Measures each live card against the grown folder pocket and stores the travel
- * as CSS variables. The open control grows right from a stable bottom-left, so
- * travel uses that parked size even while the idle 48px control is still onscreen.
+ * Measures each live card against the fixed folder pocket and stores a lifted
+ * midpoint as well as the destination. The midpoint makes the motion arc through
+ * depth before the card rotates behind the front flap.
  */
 export function prepareMiniPreviewFolderMotion(
   stack: ParentNode,
@@ -173,13 +189,16 @@ export function prepareMiniPreviewFolderMotion(
     const targetLeft = openLeft + MINI_PREVIEW_FOLDER_POCKET_INSET_LEFT - depth * 2.2;
     const targetTop = openTop + MINI_PREVIEW_FOLDER_POCKET_INSET_TOP - depth * 2.8;
 
+    const travelX = targetLeft - cardBounds.left;
+    const travelY = targetTop - cardBounds.top;
+    const lift = Math.min(30, Math.max(18, Math.abs(travelY) * 0.12));
+    card.style.setProperty("--thumbnail-folder-x", `${travelX}px`);
+    card.style.setProperty("--thumbnail-folder-y", `${travelY}px`);
+    card.style.setProperty("--thumbnail-folder-mid-x", `${travelX * 0.56}px`);
+    card.style.setProperty("--thumbnail-folder-mid-y", `${travelY * 0.5 - lift}px`);
     card.style.setProperty(
-      "--thumbnail-folder-x",
-      `${targetLeft - cardBounds.left}px`,
-    );
-    card.style.setProperty(
-      "--thumbnail-folder-y",
-      `${targetTop - cardBounds.top}px`,
+      "--thumbnail-folder-mid-scale",
+      `${Math.max(0.34, Math.min(0.46, scale * 4.8))}`,
     );
     card.style.setProperty("--thumbnail-folder-scale", `${scale}`);
     card.style.setProperty(

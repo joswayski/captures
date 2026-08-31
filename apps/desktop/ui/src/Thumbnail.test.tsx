@@ -742,10 +742,12 @@ describe("Thumbnail", () => {
     );
     expect(hide.querySelector(".mini-preview-folder")).not.toBeNull();
     expect(hide.querySelector(".mini-preview-folder")).toHaveAttribute("data-pose", "idle");
+    expect(hide.querySelectorAll(".mini-preview-folder-sheet")).toHaveLength(0);
     vi.useFakeTimers();
     fireEvent.click(hide);
     expect(hide).toHaveClass("thumbnail-collapse-collapsing");
     expect(hide.querySelector(".mini-preview-folder")).toHaveAttribute("data-pose", "open");
+    expect(hide.querySelectorAll(".mini-preview-folder-sheet")).toHaveLength(0);
     expect(hide).toBeDisabled();
     expect(vi.mocked(invoke)).not.toHaveBeenCalledWith("collapse_mini_previews");
     await act(async () => {
@@ -754,6 +756,7 @@ describe("Thumbnail", () => {
     expect(hide).toHaveClass("thumbnail-collapse-parked");
     expect(hide).not.toHaveClass("thumbnail-collapse-collapsing");
     expect(hide.querySelector(".mini-preview-folder")).toHaveAttribute("data-pose", "parked");
+    expect(hide.querySelectorAll(".mini-preview-folder-sheet")).toHaveLength(1);
     expect(hide).toBeEnabled();
     expect(vi.mocked(invoke)).toHaveBeenCalledWith("collapse_mini_previews");
     const show = screen.getByRole("button", { name: "Show 1 preview" });
@@ -761,7 +764,13 @@ describe("Thumbnail", () => {
     expect(show).toHaveClass("thumbnail-collapse-restoring");
     expect(show).not.toHaveClass("thumbnail-collapse-parked");
     expect(show.querySelector(".mini-preview-folder")).toHaveAttribute("data-pose", "open");
+    expect(show.querySelectorAll(".mini-preview-folder-sheet")).toHaveLength(1);
     expect(vi.mocked(invoke)).toHaveBeenCalledWith("restore_mini_previews");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(MINI_PREVIEW_FOLDER_MORPH_MS);
+    });
+    expect(show.querySelector(".mini-preview-folder")).toHaveAttribute("data-pose", "idle");
+    expect(show.querySelectorAll(".mini-preview-folder-sheet")).toHaveLength(0);
   });
 
   it("does not re-arm a parked stack after empty pointer samples", async () => {
