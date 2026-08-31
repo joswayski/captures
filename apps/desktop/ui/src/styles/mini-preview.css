@@ -116,8 +116,6 @@
   cursor: pointer !important;
   opacity: 1;
   transition:
-    width 0.4s cubic-bezier(0.22, 0.72, 0.2, 1),
-    height 0.4s cubic-bezier(0.22, 0.72, 0.2, 1),
     opacity var(--dur-2) var(--ease-out),
     background-color var(--dur-2) var(--ease-out),
     border-color var(--dur-2) var(--ease-out),
@@ -144,10 +142,9 @@
 }
 
 /*
- * Isometric manila folder drawn with 2D layers (back, tab, sheets, front flap).
- * Solid accent fills — not SVG url(#gradient) or CSS 3D — so the gold pocket
- * stays readable at 48px. Cards fly into the pocket; the flap sits above the
- * sheets so they read as files standing inside.
+ * Compact 3D manila folder drawn with back, tab, sheets, and a hinged front
+ * flap. Its footprint never changes: opening is depth and hinge motion, not a
+ * resize of either the icon or its glass hit target.
  */
 .mini-preview-folder {
   position: relative;
@@ -157,16 +154,7 @@
   flex: 0 0 44px;
   overflow: visible;
   pointer-events: none;
-  transition:
-    width 0.4s cubic-bezier(0.22, 0.72, 0.2, 1),
-    height 0.4s cubic-bezier(0.22, 0.72, 0.2, 1);
-}
-
-.mini-preview-folder[data-pose="open"],
-.mini-preview-folder[data-pose="parked"] {
-  width: 74px;
-  height: 52px;
-  flex-basis: 74px;
+  perspective: 140px;
 }
 
 .mini-preview-folder-scene {
@@ -175,6 +163,7 @@
   height: 100%;
   overflow: visible;
   transform-origin: 50% 100%;
+  transform-style: preserve-3d;
   transition: transform 0.42s cubic-bezier(0.22, 0.72, 0.2, 1);
 }
 
@@ -188,12 +177,9 @@
   background: var(--theme-accent);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4);
   clip-path: polygon(6% 0, 100% 0, 94% 100%, 0 100%);
-}
-
-.mini-preview-folder[data-pose="open"] .mini-preview-folder-back,
-.mini-preview-folder[data-pose="parked"] .mini-preview-folder-back {
-  width: 64px;
-  height: 40px;
+  transform: rotateX(-5deg) translateZ(-2px);
+  transform-origin: 50% 100%;
+  transition: transform 0.42s cubic-bezier(0.22, 0.72, 0.2, 1);
 }
 
 .mini-preview-folder-tab {
@@ -205,13 +191,8 @@
   border-radius: 3px 3px 0 0;
   background: var(--theme-accent-hover);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45);
-}
-
-.mini-preview-folder[data-pose="open"] .mini-preview-folder-tab,
-.mini-preview-folder[data-pose="parked"] .mini-preview-folder-tab {
-  left: 42px;
-  width: 20px;
-  height: 11px;
+  transform: translateZ(-1px);
+  transition: transform 0.42s cubic-bezier(0.22, 0.72, 0.2, 1);
 }
 
 .mini-preview-folder-well {
@@ -223,12 +204,7 @@
   height: 16px;
   border-radius: 2px;
   background: rgba(0, 0, 0, 0.22);
-}
-
-.mini-preview-folder[data-pose="open"] .mini-preview-folder-well,
-.mini-preview-folder[data-pose="parked"] .mini-preview-folder-well {
-  width: 52px;
-  height: 22px;
+  transform: translateZ(-1px);
 }
 
 .mini-preview-folder-pocket {
@@ -239,12 +215,7 @@
   width: 28px;
   height: 22px;
   overflow: visible;
-}
-
-.mini-preview-folder[data-pose="open"] .mini-preview-folder-pocket,
-.mini-preview-folder[data-pose="parked"] .mini-preview-folder-pocket {
-  width: 52px;
-  height: 28px;
+  transform-style: preserve-3d;
 }
 
 .mini-preview-folder-sheet {
@@ -261,8 +232,14 @@
   background: var(--theme-accent-text-strong);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
   clip-path: polygon(8% 8%, 100% 0, 96% 100%, 0 100%);
-  transform: translateY(calc(var(--sheet-i) * -2.5px));
+  opacity: 1;
+  transform: translate3d(
+    0,
+    calc(var(--sheet-i) * -2.5px),
+    calc(var(--sheet-i) * 1px)
+  );
   transition:
+    opacity 0.16s var(--ease-out),
     transform 0.42s cubic-bezier(0.22, 0.72, 0.2, 1),
     top 0.42s cubic-bezier(0.22, 0.72, 0.2, 1);
 }
@@ -275,7 +252,11 @@
 .mini-preview-folder[data-pose="parked"] .mini-preview-folder-sheet {
   top: 0;
   height: 24px;
-  transform: translateY(calc(var(--sheet-i) * -4px));
+  transform: translate3d(
+    0,
+    calc(var(--sheet-i) * -4px),
+    calc(var(--sheet-i) * 1px)
+  );
 }
 
 .mini-preview-folder-sheet img {
@@ -300,10 +281,11 @@
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.48),
     0 2px 4px rgba(0, 0, 0, 0.38);
+  transform: rotateX(0deg) translateZ(4px);
+  transform-origin: 50% 100%;
   transition:
     top 0.42s cubic-bezier(0.22, 0.72, 0.2, 1),
-    width 0.42s cubic-bezier(0.22, 0.72, 0.2, 1),
-    height 0.42s cubic-bezier(0.22, 0.72, 0.2, 1);
+    transform 0.42s cubic-bezier(0.22, 0.72, 0.2, 1);
 }
 
 .mini-preview-folder-flap::after {
@@ -314,22 +296,26 @@
   pointer-events: none;
 }
 
-.mini-preview-folder[data-pose="open"] .mini-preview-folder-flap,
-.mini-preview-folder[data-pose="parked"] .mini-preview-folder-flap {
-  width: 70px;
-  height: 22px;
-}
-
 .mini-preview-folder[data-pose="idle"] .mini-preview-folder-flap {
   top: 20px;
 }
 
 .mini-preview-folder[data-pose="open"] .mini-preview-folder-flap {
-  top: 30px;
+  top: 22px;
+  transform: rotateX(-62deg) translateY(5px) translateZ(5px);
 }
 
 .mini-preview-folder[data-pose="parked"] .mini-preview-folder-flap {
-  top: 28px;
+  top: 21px;
+  transform: rotateX(-18deg) translateY(1px) translateZ(4px);
+}
+
+.mini-preview-folder[data-pose="open"] .mini-preview-folder-back {
+  transform: rotateX(-14deg) translateY(-1px) translateZ(-3px);
+}
+
+.mini-preview-folder[data-pose="open"] .mini-preview-folder-tab {
+  transform: translateY(-1px) translateZ(-2px);
 }
 
 .thumbnail-collapse:hover .mini-preview-folder-scene,
@@ -340,13 +326,6 @@
 
 .thumbnail-collapse:active .mini-preview-folder-scene {
   transform: scale(0.98);
-}
-
-.thumbnail-collapse.thumbnail-collapse-collapsing,
-.thumbnail-collapse.thumbnail-collapse-parked,
-.thumbnail-collapse.thumbnail-collapse-restoring {
-  width: 80px;
-  height: 56px;
 }
 
 .thumbnail-collapse::after {
@@ -380,6 +359,9 @@
 
 .thumbnail-collapse.thumbnail-collapse-collapsing,
 .thumbnail-collapse.thumbnail-collapse-restoring {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
   pointer-events: none;
 }
 
@@ -456,8 +438,8 @@
   left: 8px;
   bottom: 8px;
   display: grid;
-  width: 80px;
-  height: 56px;
+  width: 48px;
+  height: 48px;
   padding: 0;
   place-items: center;
   overflow: visible;
@@ -1836,17 +1818,29 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-collapse, .
   animation: thumbnail-card-from-folder 0.52s var(--thumbnail-folder-delay, 0ms) cubic-bezier(0.18, 0.72, 0.18, 1) both;
 }
 
+.thumbnail-collapse-restoring .mini-preview-folder-sheet {
+  animation: mini-preview-folder-sheet-release 0.16s var(--ease-out) both;
+}
+
 @keyframes thumbnail-card-into-folder {
   0% {
     opacity: 1;
     transform: translate3d(0, 0, 0) rotateX(0deg) rotateY(0deg) scale(1);
     filter: blur(0) brightness(1);
   }
-  68% {
-    opacity: 0.9;
+  48% {
+    opacity: 1;
+    transform: translate3d(
+        var(--thumbnail-folder-mid-x, -8px),
+        var(--thumbnail-folder-mid-y, 12px),
+        64px
+      )
+      rotateX(7deg) rotateY(-14deg)
+      scale(var(--thumbnail-folder-mid-scale, 0.4));
+    filter: blur(0.2px) brightness(0.96);
   }
-  92% {
-    opacity: 0.48;
+  88% {
+    opacity: 0.92;
   }
   100% {
     opacity: 0;
@@ -1873,13 +1867,34 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-collapse, .
       scale(var(--thumbnail-folder-scale, 0.08));
     filter: blur(1px) brightness(0.72);
   }
-  18% {
-    opacity: 0.54;
+  12% {
+    opacity: 0.76;
+  }
+  52% {
+    opacity: 1;
+    transform: translate3d(
+        var(--thumbnail-folder-mid-x, -8px),
+        var(--thumbnail-folder-mid-y, 12px),
+        64px
+      )
+      rotateX(7deg) rotateY(-14deg)
+      scale(var(--thumbnail-folder-mid-scale, 0.4));
+    filter: blur(0.2px) brightness(0.96);
   }
   100% {
     opacity: 1;
     transform: translate3d(0, 0, 0) rotateX(0deg) rotateY(0deg) scale(1);
     filter: blur(0) brightness(1);
+  }
+}
+
+@keyframes mini-preview-folder-sheet-release {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+    transform: translate3d(0, -6px, 10px) scale(0.92);
   }
 }
 

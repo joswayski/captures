@@ -2,6 +2,7 @@ import {
   buildMiniPreviewFolderDustParticles,
   miniPreviewFolderPlaceholderSheets,
   miniPreviewFolderSheets,
+  miniPreviewFolderSheetsForMotion,
   miniPreviewsHiddenLabel,
   markMiniPreviewRestorePending,
   prepareMiniPreviewFolderMotion,
@@ -62,6 +63,19 @@ describe("miniPreviewFolderSheets", () => {
       { id: "preview-sheet-2", src: null },
     ]);
   });
+
+  it("keeps the live folder empty until previews have actually been parked", () => {
+    const artifacts = [{ id: "capture", preview_url: "capture.png" }];
+
+    expect(miniPreviewFolderSheetsForMotion(artifacts, "idle")).toEqual([]);
+    expect(miniPreviewFolderSheetsForMotion(artifacts, "collapsing")).toEqual([]);
+    expect(miniPreviewFolderSheetsForMotion(artifacts, "parked")).toEqual([
+      { id: "capture", src: "capture.png" },
+    ]);
+    expect(miniPreviewFolderSheetsForMotion(artifacts, "restoring")).toEqual([
+      { id: "capture", src: "capture.png" },
+    ]);
+  });
 });
 
 describe("buildMiniPreviewFolderDustParticles", () => {
@@ -99,24 +113,31 @@ describe("prepareMiniPreviewFolderMotion", () => {
         <article class="thumbnail-card"></article>
         <article class="thumbnail-card"></article>
       </main>
-      <span class="mini-preview-folder-icon"></span>
+      <button class="thumbnail-collapse">
+        <span class="mini-preview-folder-icon"></span>
+      </button>
     `;
     const stack = document.querySelector("main")!;
     const cards = stack.querySelectorAll<HTMLElement>(".thumbnail-card");
     const folder = document.querySelector<HTMLElement>(".mini-preview-folder-icon")!;
+    const control = document.querySelector<HTMLElement>(".thumbnail-collapse")!;
     vi.spyOn(cards[0], "getBoundingClientRect").mockReturnValue(rect(28, 20, 284, 160));
     vi.spyOn(cards[1], "getBoundingClientRect").mockReturnValue(rect(28, 204, 284, 160));
-    vi.spyOn(folder, "getBoundingClientRect").mockReturnValue(rect(14, 332, 28, 28));
+    vi.spyOn(control, "getBoundingClientRect").mockReturnValue(rect(8, 320, 48, 48));
 
     expect(prepareMiniPreviewFolderMotion(stack, folder)).toBe(2);
     expect(Number.parseFloat(cards[0].style.getPropertyValue("--thumbnail-folder-x")))
-      .toBeCloseTo(3.8, 2);
+      .toBeCloseTo(-12.2, 2);
     expect(Number.parseFloat(cards[0].style.getPropertyValue("--thumbnail-folder-y")))
-      .toBeCloseTo(291.2, 2);
+      .toBeCloseTo(307.2, 2);
     expect(Number.parseFloat(cards[1].style.getPropertyValue("--thumbnail-folder-x")))
-      .toBeCloseTo(6, 2);
+      .toBeCloseTo(-10, 2);
     expect(Number.parseFloat(cards[1].style.getPropertyValue("--thumbnail-folder-y")))
-      .toBeCloseTo(110, 2);
+      .toBeCloseTo(126, 2);
+    expect(Number.parseFloat(cards[1].style.getPropertyValue("--thumbnail-folder-mid-x")))
+      .toBeCloseTo(-5.6, 2);
+    expect(Number.parseFloat(cards[1].style.getPropertyValue("--thumbnail-folder-mid-y")))
+      .toBeCloseTo(45, 2);
     expect(Number(cards[1].style.getPropertyValue("--thumbnail-folder-scale")))
       .toBeCloseTo(0.0775, 3);
     expect(cards[1].style.getPropertyValue("--thumbnail-folder-delay")).toBe("0ms");
@@ -156,7 +177,7 @@ describe("shouldIgnoreMiniPreviewsHiddenCursorEvents", () => {
   it("keeps the visible chip interactive and passes the shadow gutter through", () => {
     document.body.innerHTML = `<button class="mini-previews-hidden">2 previews</button>`;
     const chip = document.querySelector(".mini-previews-hidden")!;
-    vi.spyOn(chip, "getBoundingClientRect").mockReturnValue(rect(8, 8, 80, 56));
+    vi.spyOn(chip, "getBoundingClientRect").mockReturnValue(rect(8, 8, 48, 48));
 
     expect(shouldIgnoreMiniPreviewsHiddenCursorEvents({ x: 20, y: 20, inside: true }))
       .toBe(false);
@@ -170,7 +191,7 @@ describe("shouldIgnoreMiniPreviewsHiddenCursorEvents", () => {
     document.body.innerHTML =
       `<button class="mini-previews-hidden mini-previews-hidden-restoring">2 previews</button>`;
     const chip = document.querySelector(".mini-previews-hidden")!;
-    vi.spyOn(chip, "getBoundingClientRect").mockReturnValue(rect(8, 8, 80, 56));
+    vi.spyOn(chip, "getBoundingClientRect").mockReturnValue(rect(8, 8, 48, 48));
 
     expect(shouldIgnoreMiniPreviewsHiddenCursorEvents({ x: 20, y: 20, inside: true }))
       .toBe(true);

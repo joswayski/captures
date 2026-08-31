@@ -110,8 +110,8 @@ describe("MiniPreviewsHiddenChip", () => {
       /\.mini-previews-hidden-restoring\s*\{([\s\S]*?)\n\}/,
     );
 
-    expect(baseRule?.[1]).toMatch(/width:\s*80px/);
-    expect(baseRule?.[1]).toMatch(/height:\s*56px/);
+    expect(baseRule?.[1]).toMatch(/width:\s*48px/);
+    expect(baseRule?.[1]).toMatch(/height:\s*48px/);
     expect(baseRule?.[1]).toMatch(/left:\s*8px/);
     expect(baseRule?.[1]).toMatch(/bottom:\s*8px/);
     expect(baseRule?.[1]).toMatch(
@@ -122,15 +122,23 @@ describe("MiniPreviewsHiddenChip", () => {
     expect(restoringRule?.[1]).not.toMatch(/width:/);
   });
 
-  it("opens a 3D folder instead of stretching a label pill", () => {
+  it("opens the 3D folder without resizing its glass control", () => {
+    const collapseRule = miniPreviewStyles.match(
+      /\.thumbnail-collapse\s*\{([\s\S]*?)\n\}/,
+    );
+
+    expect(collapseRule?.[1]).toMatch(/width:\s*48px/);
+    expect(collapseRule?.[1]).toMatch(/height:\s*48px/);
     expect(miniPreviewStyles).toMatch(/clip-path:\s*polygon/);
     expect(miniPreviewStyles).toMatch(/data-pose="parked"/);
     expect(miniPreviewStyles).not.toMatch(
-      /\.thumbnail-collapse\.thumbnail-collapse-collapsing\s*\{[^}]*width:\s*160px/s,
+      /\.thumbnail-collapse\.thumbnail-collapse-(?:collapsing|parked|restoring)[^{]*\{[^}]*width:/s,
     );
     expect(miniPreviewStyles).toMatch(
-      /\.thumbnail-collapse\.thumbnail-collapse-collapsing,[\s\S]*?\.thumbnail-collapse-parked,[\s\S]*?\.thumbnail-collapse-restoring\s*\{[\s\S]*?width:\s*80px/,
+      /\.thumbnail-collapse\.thumbnail-collapse-collapsing,[\s\S]*?\.thumbnail-collapse\.thumbnail-collapse-restoring\s*\{[^}]*background:\s*transparent/s,
     );
+    expect(miniPreviewStyles).toMatch(/transform-style:\s*preserve-3d/);
+    expect(miniPreviewStyles).toMatch(/rotateX\(-62deg\)/);
     expect(miniPreviewStyles).toMatch(/\.mini-preview-folder-flap/);
     expect(miniPreviewStyles).toMatch(/\.mini-preview-folder-pocket/);
     expect(miniPreviewStyles).toMatch(/\.mini-preview-folder-tab/);
@@ -167,6 +175,7 @@ describe("MiniPreviewsHiddenChip", () => {
 
     const chip = screen.getByRole("button", { name: "Show 2 previews" });
     expect(chip.querySelector(".mini-preview-folder")).toHaveAttribute("data-pose", "parked");
+    expect(chip.querySelectorAll(".mini-preview-folder-sheet")).toHaveLength(2);
     fireEvent.click(chip);
     expect(chip).toHaveClass("mini-previews-hidden-restoring");
     expect(chip.querySelector(".mini-preview-folder")).toHaveAttribute("data-pose", "parked");
