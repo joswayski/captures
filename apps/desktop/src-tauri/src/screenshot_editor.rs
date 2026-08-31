@@ -356,6 +356,8 @@ pub async fn save_screenshot_edit(
         has_system_audio: false,
         has_microphone_audio: false,
         dropped_frames: 0,
+        remote_asset_id: None,
+        remote_share_url: None,
     };
     let history_saved =
         match storage::save_history_capture(&history_entry, &image_png, &preview_png) {

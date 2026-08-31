@@ -280,8 +280,8 @@ export function Onboarding() {
           <p className="eyebrow">Welcome to Captures</p>
           <h1 id="onboarding-setup-title">{setupTitle(setup?.platform)}</h1>
           <p className="onboarding-lede">
-            Captures only reads the pixels you choose to capture. Nothing is uploaded, and nothing
-            leaves this computer unless you send it somewhere.
+            Captures only reads the pixels you choose to capture. Nothing is uploaded unless you
+            choose Share, and nothing leaves this computer unless you send it somewhere.
           </p>
         </header>
 

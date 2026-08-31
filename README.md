@@ -64,6 +64,7 @@ Preview builds update after every successful merge to `main` that changes the in
 - Mini previews for quick copy, save, and drag into other apps. Hide the stack to a corner chip when it covers the desktop; a new capture brings it back
 - Screenshots during an active recording
 - 30-day capture history, filtered by screenshots, video, or GIF
+- Optional account-backed sharing for screenshots, GIFs, and videos. Captures stay private until you create a random shared link; remote deletion never removes the local file
 - Light, dark, or system appearance across every Captures window
 - Customizable shortcuts and accent colors
 - Capture UI and capture actions stay disabled while the desktop session is locked or inactive
@@ -77,7 +78,6 @@ Preview builds update after every successful merge to `main` that changes the in
 - Repeat the previous capture area
 - Pinned captures that stay above other windows
 - Editable click highlights and keystroke overlays after recording
-- Hosted sharing with shareable `captur.es/<id>` links
 - Faster recording on Windows and Linux
 
 ## Platform status

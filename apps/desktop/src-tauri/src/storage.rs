@@ -1779,6 +1779,8 @@ mod tests {
             has_system_audio: false,
             has_microphone_audio: false,
             dropped_frames: 0,
+            remote_asset_id: None,
+            remote_share_url: None,
         }
     }
 

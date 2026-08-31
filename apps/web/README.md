@@ -79,7 +79,8 @@ Nitro serves `/api/*` from `server/routes/api` and never enters TanStack.
 Those handlers call the framework-independent implementation in `src/server`.
 The homepage is delegated to TanStack.
 
-The current API exposes `GET /api/health` and `POST /api/feedback`. Feedback is
+The base API exposes liveness at `GET /api/health`, dependency readiness at
+`GET /api/ready`, and feedback at `POST /api/feedback`. Feedback is
 validated, limited to one accepted submission per client IP per minute, and sent
 to Discord. Desktop Preview builds may also POST `category: "crash"` after an
 unexpected quit (version, OS, and a redacted panic or OS crash summary — never captures).
@@ -90,12 +91,82 @@ Cloudflare’s `CF-Connecting-IP`, then `X-Real-IP`, and never a client-spoofabl
 Keep the origin unreachable except through Cloudflare so those forwarding headers
 stay trustworthy.
 
+## Sharing and accounts
+
+Set `SHARING_ENABLED=true` to add account and asset-sharing routes to this same
+Nitro process. There is no separate API service, upload worker, or public bucket.
+The API stores ownership and sharing state in PostgreSQL and returns short-lived
+presigned URLs so browsers and desktop clients transfer bytes directly to an
+S3-compatible private bucket.
+
+Required configuration:
+
+| Variable | Purpose |
+| --- | --- |
+| `DATABASE_URL` | Pooled PostgreSQL URL used by requests |
+| `DATABASE_MIGRATION_URL` | Direct PostgreSQL URL used for startup migrations |
+| `PUBLIC_ORIGIN` | Canonical origin, normally `https://captur.es` |
+| `STORAGE_BACKEND` | Metadata label such as `r2` or `tigris` |
+| `STORAGE_ENDPOINT` | S3-compatible endpoint |
+| `STORAGE_REGION` | S3 signing region (`auto` for R2) |
+| `STORAGE_BUCKET` | Private asset bucket |
+| `STORAGE_ACCESS_KEY_ID` / `STORAGE_SECRET_ACCESS_KEY` | Bucket-scoped S3 credentials |
+| `AUTH_CODE_HMAC_KEY` | Base64 encoding of at least 32 random bytes; generated once |
+| `AUTH_PUBLIC_SIGNUP` | Must remain `false`; enabling it fails startup until both clients implement Turnstile |
+| `AUTH_ALLOWED_EMAILS` | Comma-separated private-beta emails |
+| `AUTH_ALLOWED_CIDRS` | Comma-separated private-beta IPs or CIDRs |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Optional Google OAuth credentials |
+| `SES_SMTP_HOST` / `SES_SMTP_PORT` / `SES_SMTP_SECURE` | SES SMTP connection |
+| `SES_SMTP_USERNAME` / `SES_SMTP_PASSWORD` | Captures-only SES SMTP credential |
+| `SES_FROM_EMAIL` | Verified Captures sender, normally `Captures <login@captur.es>` |
+| `SES_CONFIGURATION_SET` | Captures SES configuration set |
+| `SES_TENANT` | Captures SES tenant |
+| `SES_SNS_TOPIC_ARN` | Exact topic accepted by the signed SES/SNS event endpoint |
+
+The private beta checks both the email allowlist and the trusted client IP. The
+public source code and route names are not treated as protection. Public signup
+is intentionally rejected at startup until both the web and desktop clients have
+a complete Turnstile attestation flow. Login codes are six digits, expire after
+ten minutes, and are stored only as keyed hashes.
+
+The important routes are:
+
+- `GET /api/auth/providers` reports optional login methods without exposing credentials
+- `POST /api/auth/email/start` and `/verify` for web or desktop login
+- `GET /api/auth/google/start` and `/callback` for optional web Google login
+- `POST /api/auth/refresh` for desktop refresh-token exchange
+- `GET /api/me` and `POST /api/auth/logout`
+- `GET|POST /api/assets`, with NanoID cursor pagination plus owner read/delete/media routes
+- `POST /api/assets/:id/complete` and `/parts` for verified uploads and expiring-URL refresh
+- `PATCH|POST /api/assets/:id/share` to change access or rotate the random link
+- `GET /api/shares/:shareId` for a shared asset
+- `POST /api/email/events` for signed SNS subscription, bounce, and complaint events
+
+Uploads up to 100 MiB use one presigned PUT. Larger uploads use 16 MiB multipart
+parts. Reservations and multipart uploads expire after 24 hours; presigned URLs
+expire after 15 minutes. Completion verifies object size, content type, SHA-256
+metadata, and representative magic bytes before charging the account quota. The
+per-original and per-account limits are both 1 GiB, including previews and
+pending reservations. An hourly in-process cleanup takes a PostgreSQL advisory
+lock, aborts expired multipart uploads, deletes stale objects, and releases quota.
+
+Only two access states exist: `private` and `shared`. Private assets appear only
+in their owner's library. Shared assets use a separate NanoID link identifier;
+rotating a link does not change the asset ID. There is deliberately no global
+gallery or enumeration endpoint. The schema reserves a password hash and access
+version so password-protected links can be added without changing link identity.
+See [`../../docs/asset-sharing.md`](../../docs/asset-sharing.md) for the data model
+and request flows.
+
 ## AWS
 
-The production origin is one `linux/arm64` container on the AWS k3s cluster. The
+The production origin runs two `linux/arm64` replicas on the AWS k3s cluster. The
 process listens on port `3000` (`PORT` / `HOST` from the environment). Health
-check is `GET /api/health`. Run one replica: the feedback rate limiter is
-in-memory. Required env: `DISCORD_WEBHOOK_URL`.
+checks remain on `GET /api/health`, which waits for sharing migrations and
+dependencies during process startup and becomes a process-liveness signal once
+initialization succeeds. `GET /api/ready` exposes the same startup gate for
+operators. The feedback limiter remains in-memory per replica. Sharing
+authentication limits are database-backed across replicas.
 
 The `AWS image` GitHub Actions workflow builds the production Dockerfile for
 `linux/arm64` on pull requests and verifies `/api/health` inside the resulting
@@ -133,6 +204,11 @@ From the monorepo root, a local image is:
 docker build -t captures-web .
 docker run --rm -p 8080:3000 -e DISCORD_WEBHOOK_URL="$DISCORD_WEBHOOK_URL" captures-web
 ```
+
+When sharing is enabled, the pod also needs the sharing variables above. They
+are synchronized from the Captures application secret by the infrastructure
+repository; no object-storage, database, or SMTP credential belongs on the EC2
+node role.
 
 ## Cloudflare in front
 

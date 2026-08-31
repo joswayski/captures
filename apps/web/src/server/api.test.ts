@@ -36,6 +36,54 @@ test("serves health only from the API path", async () => {
   assert.equal(missing.status, 404);
 });
 
+test("readiness waits for sharing initialization", async () => {
+  const { env } = createEnv();
+  env.SHARING_READY = Promise.resolve();
+
+  const ready = await handleApiRequest(
+    new Request("https://captur.es/api/ready"),
+    env,
+  );
+  assert.equal(ready.status, 200);
+  assert.deepEqual(await ready.json(), { status: "ready" });
+
+  env.SHARING_READY = Promise.reject(new Error("database unavailable"));
+  const unavailable = await handleApiRequest(
+    new Request("https://captur.es/api/ready"),
+    env,
+  );
+  assert.equal(unavailable.status, 503);
+  assert.deepEqual(await unavailable.json(), {
+    error: "sharing service is not ready",
+  });
+
+  const unhealthyDuringStartup = await handleApiRequest(
+    new Request("https://captur.es/api/health"),
+    env,
+  );
+  assert.equal(unhealthyDuringStartup.status, 503);
+  assert.deepEqual(await unhealthyDuringStartup.json(), {
+    error: "service is not ready",
+  });
+});
+
+test("delegates sharing routes to the configured in-process API", async () => {
+  const { env } = createEnv();
+  const seen: string[] = [];
+  env.SHARING_API = {
+    async handle(request) {
+      seen.push(new URL(request.url).pathname);
+      return new Response(JSON.stringify({ user: null }), {
+        headers: { "Content-Type": "application/json" },
+      });
+    },
+  };
+  const response = await handleApiRequest(new Request("https://captur.es/api/me"), env);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { user: null });
+  assert.deepEqual(seen, ["/api/me"]);
+});
+
 test("validates feedback before rate limiting or calling Discord", async () => {
   const { env, rateLimitKeys } = createEnv();
   let fetchCalls = 0;

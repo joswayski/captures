@@ -174,3 +174,27 @@ npm run dev
 ```
 
 Packaged builds default to `https://captur.es/api/feedback`.
+
+## Sharing API
+
+The website process also owns account authentication, asset metadata, and
+presigned object-storage uploads. Sharing is off unless `SHARING_ENABLED=true`,
+so normal website development still needs only the feedback configuration above.
+
+For a complete local sharing environment, create a PostgreSQL database and an
+S3-compatible bucket, then set the variables documented in
+[`apps/web/README.md`](apps/web/README.md#sharing-and-accounts). On process
+startup, Captures takes a PostgreSQL advisory lock and applies the checked-in SQL
+migrations through `DATABASE_MIGRATION_URL`. Ordinary requests use
+`DATABASE_URL`. Production points the former at the direct database port and the
+latter at the pooled port; local development may use the same URL for both.
+
+Point a local desktop build at the sharing API separately from feedback:
+
+```sh
+export CAPTURES_API_BASE_URL=http://localhost:5174
+npm run dev
+```
+
+Desktop refresh tokens live in the operating system credential store. Access
+tokens stay in memory and are renewed from the stored refresh token.

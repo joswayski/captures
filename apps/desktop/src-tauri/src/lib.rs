@@ -43,6 +43,7 @@ mod feedback;
 mod models;
 mod recording;
 mod screenshot_editor;
+mod sharing;
 mod state;
 mod storage;
 mod updates;
@@ -268,6 +269,13 @@ pub fn run() {
             restore_history_artifact,
             delete_history_artifact,
             clear_capture_history,
+            sharing::sharing_auth_status,
+            sharing::sharing_start_email,
+            sharing::sharing_verify_email,
+            sharing::sharing_sign_out,
+            sharing::share_history_artifact,
+            sharing::make_history_artifact_private,
+            sharing::delete_remote_history_artifact,
             get_clipboard_state,
             copy_artifact,
             save_artifact,
@@ -2544,6 +2552,8 @@ async fn finish_capture(
             has_system_audio: false,
             has_microphone_audio: false,
             dropped_frames: 0,
+            remote_asset_id: None,
+            remote_share_url: None,
         };
         let history_saved =
             match storage::save_history_capture(&history_entry, &image_png, &preview_png) {
