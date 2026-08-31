@@ -492,6 +492,27 @@ describe("shouldIgnoreThumbnailCursorEvents", () => {
     expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: false })).toBe(true);
   });
 
+  it("passes through a parked or restoring stack whose cards are still in the DOM", () => {
+    document.body.innerHTML = `
+      <main class="thumbnail-stack thumbnail-stack-parked">
+        <article class="thumbnail-card"><button>Copy</button></article>
+      </main>
+      <button class="thumbnail-collapse thumbnail-collapse-parked">Show 1 preview</button>
+    `;
+    const card = document.querySelector(".thumbnail-card")!;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => card),
+    });
+    expect(thumbnailStackHasLiveHitTarget()).toBe(false);
+    expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: true })).toBe(true);
+
+    document.querySelector(".thumbnail-stack")!.className =
+      "thumbnail-stack thumbnail-stack-restoring";
+    expect(thumbnailStackHasLiveHitTarget()).toBe(false);
+    expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: false })).toBe(true);
+  });
+
   it("does not treat overflow cues as a reason to keep an exiting-only stack interactive", () => {
     document.body.innerHTML = `
       <main class="thumbnail-stack">

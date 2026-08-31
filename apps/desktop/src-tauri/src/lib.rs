@@ -4583,10 +4583,11 @@ const THUMBNAIL_WIDTH: f64 = 340.0;
 const THUMBNAIL_CARD_HEIGHT: f64 = 160.0;
 const THUMBNAIL_GAP: f64 = 24.0;
 const THUMBNAIL_PADDING: f64 = 28.0;
-// Leave an 8px transparent gutter around the 160×40 restore chip so its
-// compact CSS shadow fades out before the native window clips it.
-const MINI_PREVIEWS_HIDDEN_WIDTH: f64 = 176.0;
-const MINI_PREVIEWS_HIDDEN_HEIGHT: f64 = 56.0;
+// Leave an 8px transparent gutter around the 80×56 restore folder so its
+// compact CSS shadow fades out before the native window clips it. Extra
+// height keeps peeking 3D sheets inside the window.
+const MINI_PREVIEWS_HIDDEN_WIDTH: f64 = 96.0;
+const MINI_PREVIEWS_HIDDEN_HEIGHT: f64 = 88.0;
 
 fn update_thumbnail_stack(app: &AppHandle) {
     let app = app.clone();
@@ -4617,8 +4618,16 @@ fn update_thumbnail_stack(app: &AppHandle) {
             show_mini_previews,
             collapsed,
         );
-        update_thumbnail_stack_window(&handle, count, show_stack);
-        update_mini_previews_hidden_chip(&handle, count, show_chip);
+        // Parked folder and restore chip share the same bottom-left pose. Show
+        // the incoming window first so the stretched control cannot collapse
+        // offscreen before the matching folder is painted.
+        if collapsed {
+            update_mini_previews_hidden_chip(&handle, count, show_chip);
+            update_thumbnail_stack_window(&handle, count, show_stack);
+        } else {
+            update_thumbnail_stack_window(&handle, count, show_stack);
+            update_mini_previews_hidden_chip(&handle, count, show_chip);
+        }
     });
 }
 

@@ -8,7 +8,7 @@ import {
   THUMBNAIL_CARD_SLOT_PX,
   THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS,
 } from "./lib/thumbnailLayout";
-import { MINI_PREVIEW_FOLDER_MORPH_MS } from "./lib/miniPreviewsHidden";
+import { MINI_PREVIEW_FOLDER_MORPH_MS, takeMiniPreviewRestorePending } from "./lib/miniPreviewsHidden";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -52,6 +52,7 @@ describe("Thumbnail", () => {
     vi.useRealTimers();
     document.documentElement.classList.remove("thumbnail-native-tracking");
     Reflect.deleteProperty(document, "elementFromPoint");
+    takeMiniPreviewRestorePending();
     vi.clearAllMocks();
   });
 
@@ -732,18 +733,28 @@ describe("Thumbnail", () => {
     render(<Thumbnail />);
     const hide = await screen.findByRole("button", { name: "Hide previews" });
     expect(hide).toHaveAttribute("data-tooltip", "Hide previews");
-    expect(Array.from(hide.querySelectorAll("path")).some(
-      (path) => path.getAttribute("d")?.includes("10.5"),
-    )).toBe(true);
+    expect(hide.querySelector(".mini-preview-folder")).not.toBeNull();
+    expect(hide.querySelector(".mini-preview-folder")).toHaveAttribute("data-pose", "idle");
     vi.useFakeTimers();
     fireEvent.click(hide);
     expect(hide).toHaveClass("thumbnail-collapse-collapsing");
+    expect(hide.querySelector(".mini-preview-folder")).toHaveAttribute("data-pose", "open");
     expect(hide).toBeDisabled();
     expect(vi.mocked(invoke)).not.toHaveBeenCalledWith("collapse_mini_previews");
     await act(async () => {
       await vi.advanceTimersByTimeAsync(MINI_PREVIEW_FOLDER_MORPH_MS);
     });
+    expect(hide).toHaveClass("thumbnail-collapse-parked");
+    expect(hide).not.toHaveClass("thumbnail-collapse-collapsing");
+    expect(hide.querySelector(".mini-preview-folder")).toHaveAttribute("data-pose", "parked");
+    expect(hide).toBeEnabled();
     expect(vi.mocked(invoke)).toHaveBeenCalledWith("collapse_mini_previews");
+    const show = screen.getByRole("button", { name: "Show 1 preview" });
+    fireEvent.click(show);
+    expect(show).toHaveClass("thumbnail-collapse-restoring");
+    expect(show).not.toHaveClass("thumbnail-collapse-parked");
+    expect(show.querySelector(".mini-preview-folder")).toHaveAttribute("data-pose", "open");
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith("restore_mini_previews");
   });
 
   it("does not re-arm a parked stack after empty pointer samples", async () => {
@@ -785,7 +796,10 @@ describe("Thumbnail", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(MINI_PREVIEW_FOLDER_MORPH_MS);
     });
-    expect(stack).toHaveClass("thumbnail-stack-collapsing");
+    expect(stack).toHaveClass("thumbnail-stack-parked");
+    expect(stack).not.toHaveClass("thumbnail-stack-collapsing");
+    const travelX = card.style.getPropertyValue("--thumbnail-folder-x");
+    expect(travelX).not.toBe("");
 
     act(() => {
       window.dispatchEvent(new Event("captures-mini-previews-restored"));
@@ -793,7 +807,8 @@ describe("Thumbnail", () => {
 
     expect(stack).toHaveClass("thumbnail-stack-restoring");
     expect(stack).not.toHaveClass("thumbnail-stack-collapsing");
-    expect(card.style.getPropertyValue("--thumbnail-folder-scale")).not.toBe("");
+    expect(stack).not.toHaveClass("thumbnail-stack-parked");
+    expect(card.style.getPropertyValue("--thumbnail-folder-x")).toBe(travelX);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(MINI_PREVIEW_FOLDER_MORPH_MS);
     });
