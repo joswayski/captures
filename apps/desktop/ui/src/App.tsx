@@ -121,10 +121,12 @@ import {
 } from "./lib/editorPresence";
 import { reconcileActiveViewer } from "./lib/viewerActivation";
 import {
+  markMiniPreviewRestorePending,
   miniPreviewFolderPlaceholderSheets,
   miniPreviewFolderSheets,
   miniPreviewsHiddenLabel,
   prepareMiniPreviewFolderMotion,
+  takeMiniPreviewRestorePending,
   MINI_PREVIEW_FOLDER_MORPH_MS,
   MINI_PREVIEWS_RESTORED_EVENT,
   type MiniPreviewFolderPose,
@@ -596,6 +598,7 @@ export function MiniPreviewsHiddenChip() {
   const restoreStack = () => {
     if (restoring) return;
     setRestoring(true);
+    markMiniPreviewRestorePending();
     void invoke("restore_mini_previews").finally(() => setRestoring(false));
   };
 
@@ -5510,7 +5513,7 @@ export function Thumbnail() {
   const [artifacts, setArtifacts] = useState<CaptureArtifact[]>([]);
   const [folderMotion, setFolderMotion] = useState<
     "idle" | "collapsing" | "parked" | "restoring"
-  >("idle");
+  >(() => (takeMiniPreviewRestorePending() ? "restoring" : "idle"));
   const [exitingArtifactIds, setExitingArtifactIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -6084,6 +6087,7 @@ export function Thumbnail() {
 
   useEffect(() => {
     const restoreFromFolder = () => {
+      takeMiniPreviewRestorePending();
       const stack = stackRef.current;
       const folder = collapseRef.current?.querySelector(".mini-preview-folder");
       if (!stack || !folder || prefersReducedMotion()) {
@@ -6101,11 +6105,6 @@ export function Thumbnail() {
       );
       if (needsMeasure) prepareMiniPreviewFolderMotion(stack, folder);
       setFolderMotion("restoring");
-      if (folderMotionTimer.current) clearTimeout(folderMotionTimer.current);
-      folderMotionTimer.current = setTimeout(() => {
-        folderMotionTimer.current = null;
-        setFolderMotion("idle");
-      }, MINI_PREVIEW_FOLDER_MORPH_MS);
     };
 
     window.addEventListener(MINI_PREVIEWS_RESTORED_EVENT, restoreFromFolder);
@@ -6113,6 +6112,33 @@ export function Thumbnail() {
       window.removeEventListener(MINI_PREVIEWS_RESTORED_EVENT, restoreFromFolder);
     };
   }, []);
+
+  useLayoutEffect(() => {
+    if (folderMotion !== "collapsing" && folderMotion !== "restoring") return;
+    const stack = stackRef.current;
+    const folder = collapseRef.current?.querySelector(".mini-preview-folder");
+    if (!stack || !folder) return;
+    if (folderMotion === "collapsing") {
+      prepareMiniPreviewFolderMotion(stack, folder);
+      return;
+    }
+    const cards = Array.from(
+      stack.querySelectorAll<HTMLElement>(".thumbnail-card:not(.thumbnail-exiting)"),
+    );
+    const needsMeasure = cards.some(
+      (card) => !card.style.getPropertyValue("--thumbnail-folder-x"),
+    );
+    if (needsMeasure) prepareMiniPreviewFolderMotion(stack, folder);
+  }, [folderMotion]);
+
+  useEffect(() => {
+    if (folderMotion !== "restoring") return;
+    if (folderMotionTimer.current) clearTimeout(folderMotionTimer.current);
+    folderMotionTimer.current = setTimeout(() => {
+      folderMotionTimer.current = null;
+      setFolderMotion("idle");
+    }, MINI_PREVIEW_FOLDER_MORPH_MS);
+  }, [folderMotion]);
 
   if (artifacts.length === 0) return null;
 
@@ -6125,6 +6151,7 @@ export function Thumbnail() {
       void invoke("restore_mini_previews");
       return;
     }
+    markMiniPreviewRestorePending();
     void invoke("restore_mini_previews");
     // The native restore command dispatches this once the stack window is
     // onscreen. The design harness has no second window, so play the release
@@ -6272,7 +6299,7 @@ function ThumbnailOverflowChevron({ direction }: { direction: "up" | "down" }) {
   );
 }
 
-/** A compact isometric folder that opens to receive mini-preview sheets. */
+/** An isometric manila folder whose pocket holds mini-preview sheets. */
 function MiniPreviewFolder({
   pose,
   sheets,
@@ -6280,6 +6307,9 @@ function MiniPreviewFolder({
   pose: MiniPreviewFolderPose;
   sheets: MiniPreviewFolderSheet[];
 }) {
+  const paintId = useId().replace(/:/g, "");
+  const goldId = `${paintId}gold`;
+  const flapId = `${paintId}flap`;
   const visibleSheets = sheets.length > 0
     ? sheets
     : miniPreviewFolderPlaceholderSheets(2);
@@ -6287,10 +6317,29 @@ function MiniPreviewFolder({
   return (
     <span className="mini-preview-folder mini-preview-folder-icon" data-pose={pose} aria-hidden="true">
       <span className="mini-preview-folder-scene">
-        <span className="mini-preview-folder-back">
-          <span className="mini-preview-folder-tab" />
-        </span>
-        <span className="mini-preview-folder-side" />
+        <svg className="mini-preview-folder-body" viewBox="0 0 80 64" aria-hidden="true">
+          <defs>
+            <linearGradient id={goldId} x1="18" y1="6" x2="72" y2="54" gradientUnits="userSpaceOnUse">
+              <stop offset="0" className="mini-preview-folder-stop-light" />
+              <stop offset="0.48" className="mini-preview-folder-stop-mid" />
+              <stop offset="1" className="mini-preview-folder-stop-dark" />
+            </linearGradient>
+          </defs>
+          <path
+            className="mini-preview-folder-edge"
+            d="M66.5 14.5 73 17.5 75.5 46 69 50.5Z"
+          />
+          <path
+            fill={`url(#${goldId})`}
+            d="M48.5 8c.8-2.2 3.4-3.6 7.2-3.6h10.6c3.4 0 5.7 2 5.7 5.2V14H66c4 0 7 3 7 7.2v24.1c0 4.4-3.3 7.7-7.6 7.7H22.8c-4.3 0-7.8-3.3-7.8-7.7V21.4c0-4 2.2-7.4 6.2-7.4h26.1V12c0-1.8.4-3.2 1.2-4Z"
+          />
+          <path
+            className="mini-preview-folder-tab"
+            fill={`url(#${goldId})`}
+            d="M49 7.2c.9-2 3.2-3.4 6.8-3.4h11.2c3.2 0 5.2 1.9 5.2 4.8v5.6H51.4C49.4 14.2 48.2 11.2 49 7.2Z"
+          />
+          <path className="mini-preview-folder-well" d="M22 22.5 64.5 19.5 67 46.5 24.5 49.5Z" />
+        </svg>
         <span className="mini-preview-folder-pocket">
           {visibleSheets.map((sheet, index) => (
             <span
@@ -6302,7 +6351,20 @@ function MiniPreviewFolder({
             </span>
           ))}
         </span>
-        <span className="mini-preview-folder-front" />
+        <svg className="mini-preview-folder-flap" viewBox="0 0 80 64" aria-hidden="true">
+          <defs>
+            <linearGradient id={flapId} x1="12" y1="24" x2="70" y2="60" gradientUnits="userSpaceOnUse">
+              <stop offset="0" className="mini-preview-folder-stop-light" />
+              <stop offset="0.42" className="mini-preview-folder-stop-mid" />
+              <stop offset="1" className="mini-preview-folder-stop-dark" />
+            </linearGradient>
+          </defs>
+          <path
+            fill={`url(#${flapId})`}
+            d="M13 29.5c0-3.4 2.6-6 6-6h42.4c3.8 0 6.6 2.8 6.6 6.4l2 20.6c.3 4-2.8 7.5-7 7.5H20.2c-4 0-7.2-3.2-7.2-7.4Z"
+          />
+          <path className="mini-preview-folder-gloss" d="M16.5 30 36 26.5 32.5 54 16 51.5Z" />
+        </svg>
       </span>
     </span>
   );

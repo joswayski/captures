@@ -8,7 +8,7 @@ import {
   THUMBNAIL_CARD_SLOT_PX,
   THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS,
 } from "./lib/thumbnailLayout";
-import { MINI_PREVIEW_FOLDER_MORPH_MS } from "./lib/miniPreviewsHidden";
+import { MINI_PREVIEW_FOLDER_MORPH_MS, takeMiniPreviewRestorePending } from "./lib/miniPreviewsHidden";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -52,6 +52,7 @@ describe("Thumbnail", () => {
     vi.useRealTimers();
     document.documentElement.classList.remove("thumbnail-native-tracking");
     Reflect.deleteProperty(document, "elementFromPoint");
+    takeMiniPreviewRestorePending();
     vi.clearAllMocks();
   });
 
@@ -749,6 +750,8 @@ describe("Thumbnail", () => {
     const show = screen.getByRole("button", { name: "Show 1 preview" });
     fireEvent.click(show);
     expect(show).toHaveClass("thumbnail-collapse-restoring");
+    expect(show).not.toHaveClass("thumbnail-collapse-parked");
+    expect(show.querySelector(".mini-preview-folder")).toHaveAttribute("data-pose", "open");
     expect(vi.mocked(invoke)).toHaveBeenCalledWith("restore_mini_previews");
   });
 

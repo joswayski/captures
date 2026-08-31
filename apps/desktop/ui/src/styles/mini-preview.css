@@ -100,8 +100,8 @@
   right: auto;
   bottom: 8px;
   display: grid;
-  width: 40px;
-  height: 40px;
+  width: 48px;
+  height: 48px;
   padding: 0;
   place-items: center;
   overflow: visible;
@@ -114,10 +114,10 @@
     0 1px 3px rgba(0, 0, 0, 0.46);
   cursor: pointer !important;
   opacity: 1;
-  transform: translateY(0) scale(1);
   transition:
+    width 0.4s cubic-bezier(0.22, 0.72, 0.2, 1),
+    height 0.4s cubic-bezier(0.22, 0.72, 0.2, 1),
     opacity var(--dur-2) var(--ease-out),
-    transform var(--dur-3) var(--ease-out),
     background-color var(--dur-2) var(--ease-out),
     border-color var(--dur-2) var(--ease-out),
     box-shadow var(--dur-2) var(--ease-out),
@@ -143,109 +143,112 @@
 }
 
 /*
- * Isometric 3D folder. Cards fly into the measured pocket; the front flap
- * sits in this stacking context so arriving miniatures disappear behind it.
+ * Isometric manila folder drawn in 2D (SVG parallelograms + skewed sheets).
+ * Do not put a transform on this control: that flattens any child 3D and
+ * previously turned the gold folder into a sliver. Cards fly into the pocket;
+ * the front flap sits above the sheets so they read as files standing inside.
  */
 .mini-preview-folder {
   position: relative;
   display: block;
-  width: 28px;
-  height: 28px;
-  flex: 0 0 28px;
-  perspective: 132px;
-  perspective-origin: 42% 78%;
-  transform-origin: center bottom;
+  width: 42px;
+  height: 38px;
+  flex: 0 0 42px;
+  overflow: visible;
   pointer-events: none;
+  transition:
+    width 0.4s cubic-bezier(0.22, 0.72, 0.2, 1),
+    height 0.4s cubic-bezier(0.22, 0.72, 0.2, 1);
+}
+
+.mini-preview-folder[data-pose="open"],
+.mini-preview-folder[data-pose="parked"] {
+  width: 72px;
+  height: 50px;
+  flex-basis: 72px;
 }
 
 .mini-preview-folder-scene {
   position: relative;
-  width: 28px;
-  height: 28px;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  transform: skewX(-10deg);
   transform-origin: 50% 100%;
-  transform-style: preserve-3d;
-  transform: rotateX(18deg) rotateY(-30deg) rotateZ(-8deg);
   transition: transform 0.42s cubic-bezier(0.22, 0.72, 0.2, 1);
 }
 
 .mini-preview-folder[data-pose="open"] .mini-preview-folder-scene,
 .mini-preview-folder[data-pose="parked"] .mini-preview-folder-scene {
-  transform: rotateX(26deg) rotateY(-38deg) rotateZ(-10deg) scale(1.16);
+  transform: skewX(-12deg) scale(1.04);
 }
 
-.mini-preview-folder-back,
-.mini-preview-folder-front {
+.mini-preview-folder-body,
+.mini-preview-folder-flap {
   position: absolute;
-  border-radius: 2px 3px 3px 3px;
-  background:
-    linear-gradient(
-      155deg,
-      var(--theme-accent-hover) 0%,
-      var(--theme-accent) 46%,
-      var(--theme-accent-strong) 100%
-    );
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.32);
-  backface-visibility: hidden;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.35));
 }
 
-.mini-preview-folder-back {
-  left: 3px;
-  right: 1px;
-  top: 5px;
-  bottom: 1px;
-  transform: translateZ(-8px);
+.mini-preview-folder-body {
+  z-index: 0;
+}
+
+.mini-preview-folder-stop-light {
+  stop-color: var(--theme-accent-hover);
+}
+
+.mini-preview-folder-stop-mid {
+  stop-color: var(--theme-accent);
+}
+
+.mini-preview-folder-stop-dark {
+  stop-color: var(--theme-accent-strong);
+}
+
+.mini-preview-folder-edge {
+  fill: var(--theme-accent-strong);
 }
 
 .mini-preview-folder-tab {
-  position: absolute;
-  top: -5px;
-  right: 1px;
-  width: 11px;
-  height: 6px;
-  border-radius: 2px 2px 0 0;
-  background: var(--theme-accent-hover);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.34);
+  stroke: transparent;
 }
 
-.mini-preview-folder-side {
-  position: absolute;
-  left: 3px;
-  top: 5px;
-  bottom: 1px;
-  width: 9px;
-  border-radius: 1px;
-  background: var(--theme-accent-strong);
-  transform: rotateY(90deg);
-  transform-origin: left center;
-  backface-visibility: hidden;
+.mini-preview-folder-well {
+  fill: rgba(0, 0, 0, 0.28);
 }
 
 .mini-preview-folder-pocket {
   position: absolute;
-  inset: 1px 4px 7px 4px;
-  transform-style: preserve-3d;
+  z-index: 1;
+  left: 22%;
+  right: 16%;
+  top: 12%;
+  height: 58%;
+  overflow: visible;
 }
 
 .mini-preview-folder-sheet {
   --sheet-i: 0;
 
   position: absolute;
-  left: 0;
-  right: 0;
-  top: 0;
-  height: 15px;
+  left: calc(var(--sheet-i) * 2px);
+  right: calc(var(--sheet-i) * -1.5px);
+  top: 10px;
+  height: 78%;
   overflow: hidden;
   border: 1px solid var(--glass-border-strong);
-  border-radius: 1.5px;
+  border-radius: 2px;
   background: var(--glass-raised-solid);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
-  transform:
-    translate3d(
-      calc(var(--sheet-i) * 0.55px),
-      calc(var(--sheet-i) * -1.4px),
-      calc(-5px + var(--sheet-i) * 2.2px)
-    );
-  transition: transform 0.42s cubic-bezier(0.22, 0.72, 0.2, 1);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.32);
+  clip-path: polygon(10% 10%, 100% 0, 96% 100%, 0 100%);
+  transform: translateY(calc(var(--sheet-i) * -2.5px));
+  transition:
+    transform 0.42s cubic-bezier(0.22, 0.72, 0.2, 1),
+    top 0.42s cubic-bezier(0.22, 0.72, 0.2, 1);
 }
 
 .mini-preview-folder-sheet:nth-child(even) {
@@ -254,12 +257,8 @@
 
 .mini-preview-folder[data-pose="open"] .mini-preview-folder-sheet,
 .mini-preview-folder[data-pose="parked"] .mini-preview-folder-sheet {
-  transform:
-    translate3d(
-      calc(var(--sheet-i) * 0.8px),
-      calc(-4px + var(--sheet-i) * -2.1px),
-      calc(-3px + var(--sheet-i) * 3.1px)
-    );
+  top: 0;
+  transform: translateY(calc(var(--sheet-i) * -4.5px));
 }
 
 .mini-preview-folder-sheet img {
@@ -271,39 +270,50 @@
   pointer-events: none;
 }
 
-.mini-preview-folder-front {
-  left: 2px;
-  right: 0;
-  top: 12px;
-  bottom: 0;
-  transform-origin: center bottom;
-  transform: translateZ(8px);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.38),
-    0 2px 3px rgba(0, 0, 0, 0.34);
-  transition:
-    transform 0.42s cubic-bezier(0.22, 0.72, 0.2, 1),
-    top 0.42s cubic-bezier(0.22, 0.72, 0.2, 1);
+.mini-preview-folder-flap {
+  z-index: 2;
+  transition: transform 0.42s cubic-bezier(0.22, 0.72, 0.2, 1);
 }
 
-.mini-preview-folder[data-pose="open"] .mini-preview-folder-front {
-  top: 16px;
-  transform: translateZ(11px) rotateX(-22deg);
+.mini-preview-folder[data-pose="idle"] .mini-preview-folder-flap {
+  transform: translateY(-3px);
 }
 
-.mini-preview-folder[data-pose="parked"] .mini-preview-folder-front {
-  top: 15px;
-  transform: translateZ(10px) rotateX(-12deg);
+.mini-preview-folder[data-pose="open"] .mini-preview-folder-flap {
+  transform: translateY(7px);
 }
 
-.thumbnail-collapse:hover .mini-preview-folder,
-.thumbnail-collapse[data-native-pointer-hover="true"] .mini-preview-folder,
-.thumbnail-collapse:focus-visible .mini-preview-folder {
-  transform: translateY(-1px) scale(1.03);
+.mini-preview-folder[data-pose="parked"] .mini-preview-folder-flap {
+  transform: translateY(5px);
 }
 
-.thumbnail-collapse:active .mini-preview-folder {
-  transform: translateY(1px) scale(0.98);
+.mini-preview-folder-gloss {
+  fill: #fff;
+  opacity: 0.3;
+}
+
+.thumbnail-collapse:hover .mini-preview-folder-scene,
+.thumbnail-collapse[data-native-pointer-hover="true"] .mini-preview-folder-scene,
+.thumbnail-collapse:focus-visible .mini-preview-folder-scene {
+  transform: skewX(-10deg) translateY(-1px);
+}
+
+.thumbnail-collapse:hover .mini-preview-folder[data-pose="open"] .mini-preview-folder-scene,
+.thumbnail-collapse:focus-visible .mini-preview-folder[data-pose="open"] .mini-preview-folder-scene,
+.thumbnail-collapse:hover .mini-preview-folder[data-pose="parked"] .mini-preview-folder-scene,
+.thumbnail-collapse:focus-visible .mini-preview-folder[data-pose="parked"] .mini-preview-folder-scene {
+  transform: skewX(-12deg) translateY(-1px) scale(1.04);
+}
+
+.thumbnail-collapse:active .mini-preview-folder-scene {
+  transform: skewX(-10deg) scale(0.98);
+}
+
+.thumbnail-collapse.thumbnail-collapse-collapsing,
+.thumbnail-collapse.thumbnail-collapse-parked,
+.thumbnail-collapse.thumbnail-collapse-restoring {
+  width: 80px;
+  height: 56px;
 }
 
 .thumbnail-collapse::after {
@@ -336,7 +346,6 @@
 }
 
 .thumbnail-collapse.thumbnail-collapse-collapsing,
-.thumbnail-collapse.thumbnail-collapse-parked,
 .thumbnail-collapse.thumbnail-collapse-restoring {
   pointer-events: none;
 }
@@ -394,8 +403,8 @@
   z-index: 21;
   left: 8px;
   bottom: 8px;
-  width: 40px;
-  height: 40px;
+  width: 48px;
+  height: 48px;
   pointer-events: none;
 }
 
@@ -447,8 +456,8 @@
   left: 8px;
   bottom: 8px;
   display: grid;
-  width: 40px;
-  height: 40px;
+  width: 80px;
+  height: 56px;
   padding: 0;
   place-items: center;
   overflow: visible;
@@ -493,13 +502,13 @@
   outline-offset: 2px;
 }
 
-.mini-previews-hidden:hover .mini-preview-folder,
-.mini-previews-hidden:focus-visible .mini-preview-folder {
-  transform: translateY(-1px);
+.mini-previews-hidden:hover .mini-preview-folder-scene,
+.mini-previews-hidden:focus-visible .mini-preview-folder-scene {
+  transform: skewX(-12deg) translateY(-1px) scale(1.04);
 }
 
-.mini-previews-hidden:active .mini-preview-folder {
-  transform: scale(0.98);
+.mini-previews-hidden:active .mini-preview-folder-scene {
+  transform: skewX(-12deg) scale(1.02);
 }
 
 .mini-previews-hidden-restoring {
@@ -1784,7 +1793,7 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-collapse, .
 }
 
 .thumbnail-stack.thumbnail-stack-collapsing > .thumbnail-card {
-  animation: thumbnail-card-into-folder 0.52s var(--thumbnail-folder-delay, 0ms) cubic-bezier(0.4, 0, 0.14, 1) both;
+  animation: thumbnail-card-into-folder 0.52s calc(0.16s + var(--thumbnail-folder-delay, 0ms)) cubic-bezier(0.4, 0, 0.14, 1) both;
 }
 
 .thumbnail-stack.thumbnail-stack-parked > .thumbnail-card {
@@ -1877,7 +1886,9 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-collapse, .
 
   .mini-preview-folder-scene,
   .mini-preview-folder-sheet,
-  .mini-preview-folder-front {
+  .mini-preview-folder-flap,
+  .mini-preview-folder,
+  .thumbnail-collapse {
     transition: none;
   }
 

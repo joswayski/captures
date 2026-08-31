@@ -9,6 +9,7 @@ import {
 } from "./App";
 import {
   miniPreviewsHiddenLabel,
+  takeMiniPreviewRestorePending,
 } from "./lib/miniPreviewsHidden";
 import type { CaptureArtifact } from "./types";
 
@@ -75,6 +76,7 @@ describe("MiniPreviewsHiddenChip", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    takeMiniPreviewRestorePending();
     vi.clearAllMocks();
   });
 
@@ -108,8 +110,8 @@ describe("MiniPreviewsHiddenChip", () => {
       /\.mini-previews-hidden-restoring\s*\{([\s\S]*?)\n\}/,
     );
 
-    expect(baseRule?.[1]).toMatch(/width:\s*40px/);
-    expect(baseRule?.[1]).toMatch(/height:\s*40px/);
+    expect(baseRule?.[1]).toMatch(/width:\s*80px/);
+    expect(baseRule?.[1]).toMatch(/height:\s*56px/);
     expect(baseRule?.[1]).toMatch(/left:\s*8px/);
     expect(baseRule?.[1]).toMatch(/bottom:\s*8px/);
     expect(baseRule?.[1]).toMatch(
@@ -121,13 +123,17 @@ describe("MiniPreviewsHiddenChip", () => {
   });
 
   it("opens a 3D folder instead of stretching a label pill", () => {
-    expect(miniPreviewStyles).toMatch(/transform-style:\s*preserve-3d/);
+    expect(miniPreviewStyles).toMatch(/skewX\(-12deg\)/);
     expect(miniPreviewStyles).toMatch(/data-pose="parked"/);
     expect(miniPreviewStyles).not.toMatch(
       /\.thumbnail-collapse\.thumbnail-collapse-collapsing\s*\{[^}]*width:\s*160px/s,
     );
-    expect(miniPreviewStyles).toMatch(/\.mini-preview-folder-front/);
+    expect(miniPreviewStyles).toMatch(
+      /\.thumbnail-collapse\.thumbnail-collapse-collapsing,[\s\S]*?\.thumbnail-collapse-parked,[\s\S]*?\.thumbnail-collapse-restoring\s*\{[\s\S]*?width:\s*80px/,
+    );
+    expect(miniPreviewStyles).toMatch(/\.mini-preview-folder-flap/);
     expect(miniPreviewStyles).toMatch(/\.mini-preview-folder-pocket/);
+    expect(miniPreviewStyles).toMatch(/\.mini-preview-folder-tab/);
   });
 
   it("dissolves the folder from its top-right card contact point", () => {

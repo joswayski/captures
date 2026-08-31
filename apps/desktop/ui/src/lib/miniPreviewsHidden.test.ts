@@ -2,7 +2,9 @@ import {
   miniPreviewFolderPlaceholderSheets,
   miniPreviewFolderSheets,
   miniPreviewsHiddenLabel,
+  markMiniPreviewRestorePending,
   prepareMiniPreviewFolderMotion,
+  takeMiniPreviewRestorePending,
 } from "./miniPreviewsHidden";
 
 function rect(left: number, top: number, width: number, height: number): DOMRect {
@@ -76,13 +78,13 @@ describe("prepareMiniPreviewFolderMotion", () => {
 
     expect(prepareMiniPreviewFolderMotion(stack, folder)).toBe(2);
     expect(Number.parseFloat(cards[0].style.getPropertyValue("--thumbnail-folder-x")))
-      .toBeCloseTo(-10.04, 2);
+      .toBeCloseTo(3.8, 2);
     expect(Number.parseFloat(cards[0].style.getPropertyValue("--thumbnail-folder-y")))
-      .toBeCloseTo(311.44, 2);
+      .toBeCloseTo(291.2, 2);
     expect(Number.parseFloat(cards[1].style.getPropertyValue("--thumbnail-folder-x")))
-      .toBeCloseTo(-7.84, 2);
+      .toBeCloseTo(6, 2);
     expect(Number.parseFloat(cards[1].style.getPropertyValue("--thumbnail-folder-y")))
-      .toBeCloseTo(130.24, 2);
+      .toBeCloseTo(110, 2);
     expect(Number(cards[1].style.getPropertyValue("--thumbnail-folder-scale")))
       .toBeCloseTo(0.0775, 3);
     expect(cards[1].style.getPropertyValue("--thumbnail-folder-delay")).toBe("0ms");
@@ -98,5 +100,18 @@ describe("prepareMiniPreviewFolderMotion", () => {
       document.querySelector("main")!,
       document.querySelector("span")!,
     )).toBe(0);
+  });
+});
+
+describe("pending mini-preview restore", () => {
+  afterEach(() => {
+    takeMiniPreviewRestorePending();
+  });
+
+  it("starts the remounted stack in the open pose", () => {
+    expect(takeMiniPreviewRestorePending()).toBe(false);
+    markMiniPreviewRestorePending();
+    expect(takeMiniPreviewRestorePending()).toBe(true);
+    expect(takeMiniPreviewRestorePending()).toBe(false);
   });
 });
