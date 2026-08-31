@@ -120,7 +120,13 @@ import {
   reconcileEditorPresence,
 } from "./lib/editorPresence";
 import { reconcileActiveViewer } from "./lib/viewerActivation";
-import { miniPreviewsHiddenLabel } from "./lib/miniPreviewsHidden";
+import {
+  miniPreviewsHiddenLabel,
+  prepareMiniPreviewFolderMotion,
+  MINI_PREVIEW_FOLDER_MORPH_MS,
+  MINI_PREVIEW_FOLDER_RESTORE_LEAD_MS,
+  MINI_PREVIEWS_RESTORED_EVENT,
+} from "./lib/miniPreviewsHidden";
 import type {
   ActiveSession,
   AudioDevice,
@@ -530,6 +536,8 @@ export function MiniPreviewsHiddenChip() {
   const [count, setCount] = useState(
     Number.isFinite(initialCount) && initialCount > 0 ? initialCount : 0,
   );
+  const [restoring, setRestoring] = useState(false);
+  const restoreTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -571,17 +579,44 @@ export function MiniPreviewsHiddenChip() {
     };
   }, []);
 
+  useEffect(() => () => {
+    if (restoreTimer.current) clearTimeout(restoreTimer.current);
+  }, []);
+
+  const restoreStack = () => {
+    if (restoring) return;
+    if (prefersReducedMotion()) {
+      void invoke("restore_mini_previews");
+      return;
+    }
+    setRestoring(true);
+    restoreTimer.current = setTimeout(() => {
+      restoreTimer.current = null;
+      void invoke("restore_mini_previews").finally(() => setRestoring(false));
+    }, MINI_PREVIEW_FOLDER_RESTORE_LEAD_MS);
+  };
+
   return (
     <button
       type="button"
-      className="mini-previews-hidden"
+      className={[
+        "mini-previews-hidden",
+        query("folder") === "1" ? "mini-previews-hidden-from-folder" : "",
+        restoring ? "mini-previews-hidden-restoring" : "",
+      ].filter(Boolean).join(" ")}
       aria-label={`Show ${miniPreviewsHiddenLabel(count)}`}
-      onClick={() => void invoke("restore_mini_previews")}
+      disabled={restoring}
+      onClick={restoreStack}
     >
       <span className="mini-previews-hidden-content">
-        <span className="mini-previews-hidden-icon" aria-hidden="true"><CaptureIcon /></span>
+        <MiniPreviewFolderIcon />
+        <span className="mini-preview-folder-compact-chevron" aria-hidden="true">
+          <ThumbnailOverflowChevron direction="down" />
+        </span>
         <strong>{miniPreviewsHiddenLabel(count)}</strong>
-        <ThumbnailOverflowChevron direction="up" />
+        <span className="mini-previews-hidden-chevron" aria-hidden="true">
+          <ThumbnailOverflowChevron direction="up" />
+        </span>
       </span>
     </button>
   );
@@ -5479,6 +5514,9 @@ function useElementCssSize(
 
 export function Thumbnail() {
   const [artifacts, setArtifacts] = useState<CaptureArtifact[]>([]);
+  const [folderMotion, setFolderMotion] = useState<
+    "idle" | "collapsing" | "restoring"
+  >("idle");
   const [exitingArtifactIds, setExitingArtifactIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -5499,6 +5537,8 @@ export function Thumbnail() {
     hasNewer: false,
   });
   const stackRef = useRef<HTMLElement>(null);
+  const collapseRef = useRef<HTMLButtonElement>(null);
+  const folderMotionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const previousArtifactCount = useRef(0);
   const cancelStackScroll = useRef<(() => void) | null>(null);
   const applyClipboardState = useCallback((next: ClipboardState) => {
@@ -6044,12 +6084,55 @@ export function Thumbnail() {
     return () => {
       cancelStackScroll.current?.();
       cancelStackScroll.current = null;
+      if (folderMotionTimer.current) clearTimeout(folderMotionTimer.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    const restoreFromFolder = () => {
+      const stack = stackRef.current;
+      const folder = collapseRef.current?.querySelector(".mini-preview-folder-icon");
+      if (!stack || !folder || prefersReducedMotion()) {
+        setFolderMotion("idle");
+        return;
+      }
+      prepareMiniPreviewFolderMotion(stack, folder);
+      setFolderMotion("restoring");
+      if (folderMotionTimer.current) clearTimeout(folderMotionTimer.current);
+      folderMotionTimer.current = setTimeout(() => {
+        folderMotionTimer.current = null;
+        setFolderMotion("idle");
+      }, MINI_PREVIEW_FOLDER_MORPH_MS);
+    };
+
+    window.addEventListener(MINI_PREVIEWS_RESTORED_EVENT, restoreFromFolder);
+    return () => {
+      window.removeEventListener(MINI_PREVIEWS_RESTORED_EVENT, restoreFromFolder);
     };
   }, []);
 
   if (artifacts.length === 0) return null;
 
   const collapseLeaving = artifacts.every(({ id }) => exitingArtifactIds.has(id));
+
+  const collapseIntoFolder = () => {
+    if (collapseLeaving || folderMotion !== "idle") return;
+    if (prefersReducedMotion()) {
+      void invoke("collapse_mini_previews");
+      return;
+    }
+    const stack = stackRef.current;
+    const folder = collapseRef.current?.querySelector(".mini-preview-folder-icon");
+    if (!stack || !folder || prepareMiniPreviewFolderMotion(stack, folder) === 0) {
+      void invoke("collapse_mini_previews");
+      return;
+    }
+    setFolderMotion("collapsing");
+    folderMotionTimer.current = setTimeout(() => {
+      folderMotionTimer.current = null;
+      void invoke("collapse_mini_previews").catch(() => setFolderMotion("idle"));
+    }, MINI_PREVIEW_FOLDER_MORPH_MS);
+  };
 
   const scrollStackBy = (slots: number) => {
     const stack = stackRef.current;
@@ -6073,7 +6156,11 @@ export function Thumbnail() {
     <>
       <main
         ref={stackRef}
-        className="thumbnail-stack"
+        className={[
+          "thumbnail-stack",
+          folderMotion === "collapsing" ? "thumbnail-stack-collapsing" : "",
+          folderMotion === "restoring" ? "thumbnail-stack-restoring" : "",
+        ].filter(Boolean).join(" ")}
         onScroll={refreshStackOverflow}
       >
         {/* Horizontal-only Gaussian blur for dismiss motion streak (stdDeviation x 0). */}
@@ -6106,18 +6193,35 @@ export function Thumbnail() {
         ))}
       </main>
       <button
+        ref={collapseRef}
         type="button"
         className={[
           "thumbnail-collapse",
           collapseLeaving ? "thumbnail-collapse-leaving" : "",
+          folderMotion === "collapsing" ? "thumbnail-collapse-collapsing" : "",
+          folderMotion === "restoring" ? "thumbnail-collapse-restoring" : "",
         ].filter(Boolean).join(" ")}
         aria-label="Hide previews"
         data-tooltip="Hide previews"
-        disabled={collapseLeaving}
-        onClick={() => void invoke("collapse_mini_previews")}
+        disabled={collapseLeaving || folderMotion !== "idle"}
+        onClick={collapseIntoFolder}
       >
-        <ThumbnailOverflowChevron direction="down" />
+        <MiniPreviewFolderIcon />
+        <span className="mini-preview-folder-compact-chevron" aria-hidden="true">
+          <ThumbnailOverflowChevron direction="down" />
+        </span>
+        <strong className="thumbnail-collapse-label">
+          {miniPreviewsHiddenLabel(artifacts.length)}
+        </strong>
+        <span className="thumbnail-collapse-chevron" aria-hidden="true">
+          <ThumbnailOverflowChevron direction="up" />
+        </span>
       </button>
+      {collapseLeaving && (
+        <span className="thumbnail-collapse-dust" aria-hidden="true">
+          {Array.from({ length: 9 }, (_, index) => <i key={index} />)}
+        </span>
+      )}
       {stackOverflow.hasOlder && (
         <button
           type="button"
@@ -6147,6 +6251,20 @@ function ThumbnailOverflowChevron({ direction }: { direction: "up" | "down" }) {
     <svg viewBox="0 0 16 16" aria-hidden="true">
       <path d={direction === "up" ? "M3.5 10 8 5.5 12.5 10" : "M3.5 6 8 10.5 12.5 6"} />
     </svg>
+  );
+}
+
+/** A compact folder with screenshot sheets peeking out of its open edge. */
+function MiniPreviewFolderIcon() {
+  return (
+    <span className="mini-preview-folder-icon" aria-hidden="true">
+      <svg viewBox="0 0 28 28">
+        <rect className="mini-preview-folder-sheet mini-preview-folder-sheet-back" x="7" y="2.5" width="16" height="12" rx="2" />
+        <rect className="mini-preview-folder-sheet" x="5" y="4.5" width="18" height="13" rx="2.5" />
+        <path className="mini-preview-folder-face" d="M2.5 9h8l2.1 2H25v13.5H2.5Z" />
+        <path className="mini-preview-folder-mark" d="M8 15.5h3M8 15.5v2.7m9-2.7h3m0 0v2.7M8 22h3m-3 0v-2.7m12 2.7h-3m3 0v-2.7" />
+      </svg>
+    </span>
   );
 }
 

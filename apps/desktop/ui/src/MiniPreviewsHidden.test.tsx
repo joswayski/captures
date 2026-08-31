@@ -7,7 +7,10 @@ import { resolve } from "node:path";
 import {
   MiniPreviewsHiddenChip,
 } from "./App";
-import { miniPreviewsHiddenLabel } from "./lib/miniPreviewsHidden";
+import {
+  miniPreviewsHiddenLabel,
+  MINI_PREVIEW_FOLDER_RESTORE_LEAD_MS,
+} from "./lib/miniPreviewsHidden";
 import type { CaptureArtifact } from "./types";
 
 const miniPreviewStyles = readFileSync(
@@ -72,6 +75,7 @@ describe("MiniPreviewsHiddenChip", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.clearAllMocks();
   });
 
@@ -87,9 +91,11 @@ describe("MiniPreviewsHiddenChip", () => {
     );
 
     expect(baseRule?.[1]).toMatch(/cursor:\s*pointer !important/);
+    expect(baseRule?.[1]).toMatch(/background:\s*var\(--glass-strong-solid\)/);
+    expect(baseRule?.[1]).not.toMatch(/backdrop-filter/);
     expect(childRule?.[1]).toMatch(/pointer-events:\s*none/);
     expect(hoverRule?.[1]).toMatch(/border-color:\s*var\(--glass-border-strong\)/);
-    expect(hoverRule?.[1]).toMatch(/rgba\(var\(--theme-accent-rgb\), 0\.2\)/);
+    expect(hoverRule?.[1]).not.toMatch(/theme-accent-rgb/);
   });
 
   it("keeps the restore chip shadow inside its native window gutter", () => {
@@ -116,23 +122,29 @@ describe("MiniPreviewsHiddenChip", () => {
     );
   });
 
-  it("uses spacing tokens for the hide control exit geometry", () => {
+  it("dissolves the folder from its top-right card contact point", () => {
     const exitRule = miniPreviewStyles.match(
       /\.thumbnail-collapse\.thumbnail-collapse-leaving\s*\{([\s\S]*?)\n\}/,
     );
 
-    expect(exitRule?.[1]).toMatch(
-      /translateY\(calc\(var\(--s-4\) \+ var\(--s-1\)\)\)/,
-    );
-    expect(exitRule?.[1]).toMatch(/filter:\s*blur\(var\(--s-1\)\)/);
+    expect(exitRule?.[1]).toMatch(/0\.9s 0\.42s linear/);
+    expect(exitRule?.[1]).toMatch(/circle at 100% 0/);
+    expect(miniPreviewStyles).toMatch(/\.thumbnail-collapse-dust/);
   });
 
   it("restores the stack from the parked count chip", async () => {
+    vi.useFakeTimers();
     render(<MiniPreviewsHiddenChip />);
 
     const chip = screen.getByRole("button", { name: "Show 2 previews" });
     expect(chip).toHaveTextContent("2 previews");
     fireEvent.click(chip);
+    expect(chip).toHaveClass("mini-previews-hidden-restoring");
+    expect(chip).toBeDisabled();
+    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith("restore_mini_previews");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(MINI_PREVIEW_FOLDER_RESTORE_LEAD_MS);
+    });
     expect(vi.mocked(invoke)).toHaveBeenCalledWith("restore_mini_previews");
   });
 

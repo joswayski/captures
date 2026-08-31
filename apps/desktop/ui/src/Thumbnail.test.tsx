@@ -8,6 +8,7 @@ import {
   THUMBNAIL_CARD_SLOT_PX,
   THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS,
 } from "./lib/thumbnailLayout";
+import { MINI_PREVIEW_FOLDER_MORPH_MS } from "./lib/miniPreviewsHidden";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -48,6 +49,7 @@ describe("Thumbnail", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     document.documentElement.classList.remove("thumbnail-native-tracking");
     Reflect.deleteProperty(document, "elementFromPoint");
     vi.clearAllMocks();
@@ -728,8 +730,43 @@ describe("Thumbnail", () => {
     render(<Thumbnail />);
     const hide = await screen.findByRole("button", { name: "Hide previews" });
     expect(hide).toHaveAttribute("data-tooltip", "Hide previews");
-    expect(hide.querySelector("path")?.getAttribute("d")).toContain("10.5");
+    expect(Array.from(hide.querySelectorAll("path")).some(
+      (path) => path.getAttribute("d")?.includes("10.5"),
+    )).toBe(true);
+    vi.useFakeTimers();
     fireEvent.click(hide);
+    expect(hide).toHaveClass("thumbnail-collapse-collapsing");
+    expect(hide).toBeDisabled();
+    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith("collapse_mini_previews");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(MINI_PREVIEW_FOLDER_MORPH_MS);
+    });
     expect(vi.mocked(invoke)).toHaveBeenCalledWith("collapse_mini_previews");
+  });
+
+  it("rolls parked previews back out from the same folder anchor", async () => {
+    render(<Thumbnail />);
+    const card = await screen.findByRole("article");
+    const stack = card.closest(".thumbnail-stack")!;
+    const hide = screen.getByRole("button", { name: "Hide previews" });
+    vi.useFakeTimers();
+
+    fireEvent.click(hide);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(MINI_PREVIEW_FOLDER_MORPH_MS);
+    });
+    expect(stack).toHaveClass("thumbnail-stack-collapsing");
+
+    act(() => {
+      window.dispatchEvent(new Event("captures-mini-previews-restored"));
+    });
+
+    expect(stack).toHaveClass("thumbnail-stack-restoring");
+    expect(stack).not.toHaveClass("thumbnail-stack-collapsing");
+    expect(card.style.getPropertyValue("--thumbnail-folder-scale")).not.toBe("");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(MINI_PREVIEW_FOLDER_MORPH_MS);
+    });
+    expect(stack).not.toHaveClass("thumbnail-stack-restoring");
   });
 });

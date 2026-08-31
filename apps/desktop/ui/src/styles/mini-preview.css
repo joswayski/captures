@@ -95,26 +95,20 @@
 .thumbnail-collapse {
   position: absolute;
   z-index: 20;
-  /* Same corner as the restore chip. A down chevron pairs with that chip's
-     up chevron instead of a left tab that read as "collapse into the card". */
   top: auto;
-  left: 6px;
+  left: 8px;
   right: auto;
-  bottom: 6px;
-  display: grid;
-  width: 36px;
-  height: 36px;
-  padding: 0;
-  place-items: center;
+  bottom: 8px;
+  display: flex;
+  width: 40px;
+  height: 40px;
+  padding: 0 6px;
+  align-items: center;
+  gap: var(--s-3);
   border: 1px solid var(--glass-border);
-  border-radius: var(--r-md);
+  border-radius: var(--r-xl);
   color: var(--glass-text);
-  /* Opaque fill (no backdrop-filter): translucent glass lets Chromium punch
-     through to the grab-cursor card, which flickers pointer vs default. */
   background: var(--glass-strong-solid);
-  /* This control sits only 6px from the transparent native-window edges. Keep
-     its elevation inside that gutter so a clipped glass blur cannot become a
-     rectangular gray seam against light desktops. */
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.07),
     0 1px 3px rgba(0, 0, 0, 0.46);
@@ -122,6 +116,7 @@
   opacity: 1;
   transform: translateY(0) scale(1);
   transition:
+    width 0.42s cubic-bezier(0.22, 0.72, 0.2, 1),
     opacity var(--dur-2) var(--ease-out),
     transform var(--dur-3) var(--ease-out),
     filter var(--dur-2) var(--ease-out),
@@ -150,7 +145,105 @@
   outline-offset: 2px;
 }
 
-.thumbnail-collapse svg {
+.mini-preview-folder-icon {
+  position: relative;
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  place-items: center;
+  transform-origin: center bottom;
+  transition: transform var(--dur-2) var(--ease-out);
+}
+
+.mini-preview-folder-icon > svg {
+  display: block;
+  width: 28px;
+  height: 28px;
+  overflow: visible;
+}
+
+.mini-preview-folder-sheet {
+  fill: var(--glass-raised-solid);
+  stroke: var(--glass-border-strong);
+  stroke-width: 1;
+}
+
+.mini-preview-folder-sheet-back {
+  opacity: 0.72;
+  transform: rotate(4deg);
+  transform-origin: center;
+}
+
+.mini-preview-folder-face {
+  fill: var(--theme-accent);
+  stroke: rgba(var(--theme-accent-rgb), 0.82);
+  stroke-width: 1;
+}
+
+.mini-preview-folder-mark {
+  fill: none;
+  stroke: var(--theme-accent-ink);
+  stroke-width: 1.35;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.mini-preview-folder-compact-chevron {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  display: grid;
+  width: 12px;
+  height: 12px;
+  place-items: center;
+  border-radius: var(--r-pill);
+  color: var(--glass-text);
+  background: var(--glass-strong-solid);
+  opacity: 1;
+  pointer-events: none;
+  transition:
+    opacity var(--dur-2) var(--ease-out),
+    transform var(--dur-2) var(--ease-out);
+}
+
+.mini-preview-folder-compact-chevron svg {
+  width: 9px;
+  height: 9px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.thumbnail-collapse-label {
+  max-width: 0;
+  overflow: hidden;
+  flex: 0 1 auto;
+  opacity: 0;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+  transition:
+    max-width 0.38s cubic-bezier(0.22, 0.72, 0.2, 1),
+    opacity var(--dur-2) var(--ease-out);
+}
+
+.thumbnail-collapse-chevron {
+  display: grid;
+  width: 0;
+  overflow: hidden;
+  flex: 0 0 auto;
+  place-items: center;
+  opacity: 0;
+  transition:
+    width 0.32s var(--ease-out),
+    opacity var(--dur-2) var(--ease-out),
+    transform var(--dur-2) var(--ease-out);
+}
+
+.thumbnail-collapse-chevron svg {
   width: 16px;
   height: 16px;
   fill: none;
@@ -162,14 +255,14 @@
   transition: transform var(--dur-2) var(--ease-out);
 }
 
-.thumbnail-collapse:hover svg,
-.thumbnail-collapse[data-native-pointer-hover="true"] svg,
-.thumbnail-collapse:focus-visible svg {
-  transform: translateY(1px);
+.thumbnail-collapse:hover .mini-preview-folder-icon,
+.thumbnail-collapse[data-native-pointer-hover="true"] .mini-preview-folder-icon,
+.thumbnail-collapse:focus-visible .mini-preview-folder-icon {
+  transform: translateY(-1px) scale(1.03);
 }
 
-.thumbnail-collapse:active svg {
-  transform: translateY(2px);
+.thumbnail-collapse:active .mini-preview-folder-icon {
+  transform: translateY(1px) scale(0.98);
 }
 
 .thumbnail-collapse::after {
@@ -201,10 +294,51 @@
   transform: translateY(0);
 }
 
-.thumbnail-collapse.thumbnail-collapse-leaving {
+.thumbnail-collapse.thumbnail-collapse-collapsing {
+  width: 160px;
+  pointer-events: none;
+}
+
+.thumbnail-collapse-collapsing .mini-preview-folder-compact-chevron {
   opacity: 0;
-  transform: translateY(calc(var(--s-4) + var(--s-1))) scale(0.76);
-  filter: blur(var(--s-1));
+  transform: scale(0.7);
+}
+
+.thumbnail-collapse-collapsing .thumbnail-collapse-label {
+  max-width: 86px;
+  opacity: 1;
+  transition-delay: 0.12s;
+}
+
+.thumbnail-collapse-collapsing .thumbnail-collapse-chevron {
+  width: 16px;
+  margin-left: auto;
+  opacity: 1;
+  transition-delay: 0.18s;
+}
+
+@property --thumbnail-folder-dissolve-radius {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+.thumbnail-collapse.thumbnail-collapse-leaving {
+  --thumbnail-folder-dissolve-radius: 0px;
+
+  animation: thumbnail-folder-contact-dissolve 0.9s 0.42s linear both;
+  -webkit-mask-image: radial-gradient(
+    circle at 100% 0,
+    transparent 0 var(--thumbnail-folder-dissolve-radius),
+    rgba(0, 0, 0, 0.5) calc(var(--thumbnail-folder-dissolve-radius) + 4px),
+    #000 calc(var(--thumbnail-folder-dissolve-radius) + 8px)
+  );
+  mask-image: radial-gradient(
+    circle at 100% 0,
+    transparent 0 var(--thumbnail-folder-dissolve-radius),
+    rgba(0, 0, 0, 0.5) calc(var(--thumbnail-folder-dissolve-radius) + 4px),
+    #000 calc(var(--thumbnail-folder-dissolve-radius) + 8px)
+  );
   pointer-events: none;
 }
 
@@ -213,27 +347,100 @@
   transform: translateY(4px);
 }
 
+@keyframes thumbnail-folder-contact-dissolve {
+  0% {
+    --thumbnail-folder-dissolve-radius: 0px;
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+  72% {
+    opacity: 0.82;
+  }
+  100% {
+    --thumbnail-folder-dissolve-radius: 68px;
+    opacity: 0;
+    transform: translate(-4px, 7px) scale(0.9);
+    filter: blur(2px);
+  }
+}
+
+.thumbnail-collapse-dust {
+  position: absolute;
+  z-index: 21;
+  left: 8px;
+  bottom: 8px;
+  width: 40px;
+  height: 40px;
+  pointer-events: none;
+}
+
+.thumbnail-collapse-dust i {
+  --folder-dust-x: -8px;
+  --folder-dust-y: 12px;
+  --folder-dust-delay: 0ms;
+
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 4px;
+  height: 4px;
+  border-radius: 1px;
+  background: var(--glass-raised-solid);
+  opacity: 0;
+  animation: thumbnail-folder-dust 0.7s calc(0.42s + var(--folder-dust-delay)) var(--ease-out) both;
+}
+
+.thumbnail-collapse-dust i:nth-child(2) { --folder-dust-x: -17px; --folder-dust-y: 7px; --folder-dust-delay: 45ms; top: 7px; right: 5px; }
+.thumbnail-collapse-dust i:nth-child(3) { --folder-dust-x: -5px; --folder-dust-y: 20px; --folder-dust-delay: 80ms; top: 4px; right: 12px; }
+.thumbnail-collapse-dust i:nth-child(4) { --folder-dust-x: -22px; --folder-dust-y: 15px; --folder-dust-delay: 115ms; top: 13px; right: 2px; }
+.thumbnail-collapse-dust i:nth-child(5) { --folder-dust-x: -12px; --folder-dust-y: 25px; --folder-dust-delay: 145ms; top: 17px; right: 8px; }
+.thumbnail-collapse-dust i:nth-child(6) { --folder-dust-x: -28px; --folder-dust-y: 18px; --folder-dust-delay: 170ms; top: 9px; right: 16px; }
+.thumbnail-collapse-dust i:nth-child(7) { --folder-dust-x: -18px; --folder-dust-y: 30px; --folder-dust-delay: 205ms; top: 22px; right: 3px; }
+.thumbnail-collapse-dust i:nth-child(8) { --folder-dust-x: -31px; --folder-dust-y: 24px; --folder-dust-delay: 235ms; top: 18px; right: 15px; }
+.thumbnail-collapse-dust i:nth-child(9) { --folder-dust-x: -24px; --folder-dust-y: 34px; --folder-dust-delay: 265ms; top: 28px; right: 8px; }
+
+.thumbnail-collapse-dust i:nth-child(3n) {
+  background: var(--theme-accent);
+}
+
+@keyframes thumbnail-folder-dust {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+  }
+  16% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(var(--folder-dust-x), var(--folder-dust-y), 0) rotate(-38deg) scale(0.25);
+  }
+}
+
 .mini-previews-hidden {
+  position: relative;
   display: flex;
   width: calc(100% - var(--s-6));
   height: calc(100% - var(--s-6));
   margin: var(--s-4);
-  padding: 0 var(--s-4) 0 var(--s-3);
+  padding: 0 var(--s-3);
   align-items: center;
   border: 1px solid var(--glass-border);
   border-radius: var(--r-xl);
   color: var(--glass-text);
-  background: var(--glass-strong);
+  /* A real opaque slab: desktop pixels must never show through this control. */
+  background: var(--glass-strong-solid);
   /* The shared 44px glass shadow is wider than this transparent native
      window and gets clipped into a visible rectangle. Keep this compact
      elevation inside the 8px window gutter instead. */
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.1),
     0 var(--s-1) var(--s-3) rgba(0, 0, 0, 0.34);
-  backdrop-filter: var(--glass-blur);
   cursor: pointer !important;
   animation: mini-previews-hidden-in var(--dur-3) var(--ease-out) both;
   transition:
+    width 0.26s cubic-bezier(0.4, 0, 0.2, 1),
     background-color var(--dur-2) var(--ease-out),
     border-color var(--dur-2) var(--ease-out),
     box-shadow var(--dur-2) var(--ease-out);
@@ -255,16 +462,15 @@
 
 .mini-previews-hidden:hover,
 .mini-previews-hidden:focus-visible {
-  background: var(--glass-raised);
+  background: var(--glass-raised-solid);
   border-color: var(--glass-border-strong);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.12),
-    0 0 0 1px rgba(var(--theme-accent-rgb), 0.2),
     0 var(--s-1) var(--s-3) rgba(0, 0, 0, 0.34);
 }
 
 .mini-previews-hidden:active {
-  background: var(--glass-raised);
+  background: var(--glass-raised-solid);
   filter: brightness(0.94);
 }
 
@@ -273,22 +479,21 @@
   outline-offset: 2px;
 }
 
-.mini-previews-hidden-icon {
+.mini-previews-hidden-chevron {
   display: grid;
-  width: 28px;
-  height: 28px;
+  width: 16px;
+  overflow: hidden;
+  margin-left: auto;
   flex: 0 0 auto;
   place-items: center;
-  border-radius: var(--r-md);
-  color: var(--theme-accent-ink);
-  background: var(--theme-accent);
+  opacity: 1;
   transition:
-    box-shadow var(--dur-2) var(--ease-out),
+    width var(--dur-2) var(--ease-out),
+    opacity var(--dur-2) var(--ease-out),
     transform var(--dur-2) var(--ease-out);
 }
 
-.mini-previews-hidden-icon svg,
-.mini-previews-hidden-content > svg {
+.mini-previews-hidden-chevron svg {
   width: 16px;
   height: 16px;
   fill: none;
@@ -298,36 +503,62 @@
   stroke-linejoin: round;
 }
 
-.mini-previews-hidden-content > svg {
-  margin-left: auto;
-  flex: 0 0 auto;
-  transition: transform var(--dur-2) var(--ease-out);
-}
-
-.mini-previews-hidden:hover .mini-previews-hidden-icon,
-.mini-previews-hidden:focus-visible .mini-previews-hidden-icon {
-  box-shadow: 0 0 0 3px rgba(var(--theme-accent-rgb), 0.24);
-  transform: scale(1.04);
-}
-
-.mini-previews-hidden:hover .mini-previews-hidden-content > svg,
-.mini-previews-hidden:focus-visible .mini-previews-hidden-content > svg {
+.mini-previews-hidden:hover .mini-preview-folder-icon,
+.mini-previews-hidden:focus-visible .mini-preview-folder-icon,
+.mini-previews-hidden:hover .mini-previews-hidden-chevron,
+.mini-previews-hidden:focus-visible .mini-previews-hidden-chevron {
   transform: translateY(-1px);
 }
 
-.mini-previews-hidden:active .mini-previews-hidden-icon {
+.mini-previews-hidden:active .mini-preview-folder-icon {
   transform: scale(0.98);
 }
 
-.mini-previews-hidden:active .mini-previews-hidden-content > svg {
+.mini-previews-hidden:active .mini-previews-hidden-chevron {
   transform: translateY(0);
 }
 
 .mini-previews-hidden strong {
   min-width: 0;
+  max-width: 92px;
+  overflow: hidden;
+  opacity: 1;
   font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
   white-space: nowrap;
+  transition:
+    max-width 0.22s var(--ease-out),
+    opacity var(--dur-2) var(--ease-out);
+}
+
+.mini-previews-hidden .mini-preview-folder-compact-chevron {
+  opacity: 0;
+  transform: scale(0.7);
+}
+
+.mini-previews-hidden-restoring {
+  width: 40px;
+  pointer-events: none;
+}
+
+.mini-previews-hidden-restoring strong {
+  max-width: 0;
+  opacity: 0;
+}
+
+.mini-previews-hidden-restoring .mini-previews-hidden-chevron {
+  width: 0;
+  opacity: 0;
+}
+
+.mini-previews-hidden-restoring .mini-preview-folder-compact-chevron {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.mini-previews-hidden-from-folder,
+.mini-previews-hidden-from-folder .mini-previews-hidden-content {
+  animation: none;
 }
 
 /*
@@ -1609,6 +1840,73 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-collapse, .
   }
 }
 
+/*
+ * Apple-style folder motion: each real preview keeps its own measured path so
+ * scrolled stacks and short monitors still converge on the exact same icon.
+ */
+.thumbnail-stack-collapsing,
+.thumbnail-stack-restoring {
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.thumbnail-stack.thumbnail-stack-collapsing > .thumbnail-card,
+.thumbnail-stack.thumbnail-stack-restoring > .thumbnail-card {
+  transform-origin: top left;
+  will-change: opacity, transform, filter;
+}
+
+.thumbnail-stack.thumbnail-stack-collapsing > .thumbnail-card {
+  animation: thumbnail-card-into-folder 0.52s var(--thumbnail-folder-delay, 0ms) cubic-bezier(0.4, 0, 0.14, 1) both;
+}
+
+.thumbnail-stack.thumbnail-stack-restoring > .thumbnail-card {
+  animation: thumbnail-card-from-folder 0.52s var(--thumbnail-folder-delay, 0ms) cubic-bezier(0.18, 0.72, 0.18, 1) both;
+}
+
+@keyframes thumbnail-card-into-folder {
+  0% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+    filter: blur(0) brightness(1);
+  }
+  68% {
+    opacity: 0.9;
+  }
+  92% {
+    opacity: 0.48;
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(
+      var(--thumbnail-folder-x, -14px),
+      var(--thumbnail-folder-y, 0),
+      0
+    ) scale(var(--thumbnail-folder-scale, 0.1));
+    filter: blur(1px) brightness(0.72);
+  }
+}
+
+@keyframes thumbnail-card-from-folder {
+  0% {
+    opacity: 0;
+    transform: translate3d(
+      var(--thumbnail-folder-x, -14px),
+      var(--thumbnail-folder-y, 0),
+      0
+    ) scale(var(--thumbnail-folder-scale, 0.1));
+    filter: blur(1px) brightness(0.72);
+  }
+  18% {
+    opacity: 0.54;
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+    filter: blur(0) brightness(1);
+  }
+}
+
 .thumbnail-message {
   position: absolute;
   z-index: 6;
@@ -1627,6 +1925,13 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-collapse, .
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .thumbnail-stack.thumbnail-stack-collapsing > .thumbnail-card,
+  .thumbnail-stack.thumbnail-stack-restoring > .thumbnail-card,
+  .thumbnail-collapse.thumbnail-collapse-leaving,
+  .thumbnail-collapse-dust i {
+    animation: none;
+  }
+
   .thumbnail-card.thumbnail-exit-dismiss img {
     animation: none;
     filter: blur(2px) brightness(0.5);

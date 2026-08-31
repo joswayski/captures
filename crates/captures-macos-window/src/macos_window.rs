@@ -623,6 +623,18 @@ pub fn configure_webview_inactive_hover(window: &WebviewWindow) -> Result<(), &'
     )
 }
 
+/// Configures an inactive HUD whose entire surface is one pointing-hand target.
+///
+/// Unlike WebKit cursor rectangles, the native tracker applies on first entry
+/// even while a browser or another application remains frontmost.
+pub fn configure_pointing_inactive_hover(window: &WebviewWindow) -> Result<(), &'static str> {
+    configure_inactive_hover_with_cursor::<InteractiveHudPanel>(
+        window,
+        CursorMode::PointingHand,
+        CursorSurface::InactiveHud,
+    )
+}
+
 /// Configures the mini-preview stack as a nonactivating mouse-interactive panel.
 /// It becomes key only while the pointer is over live preview chrome so AppKit
 /// can display its cursor, then releases key status after click delivery and on

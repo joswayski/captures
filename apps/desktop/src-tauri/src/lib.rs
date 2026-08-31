@@ -4743,22 +4743,38 @@ fn begin_thumbnail_capture(state: &Arc<AppState>) -> Result<u64, AppError> {
         .ok_or(AppError::CaptureInProgress)
 }
 
+fn notify_mini_previews_restored(app: &AppHandle) {
+    // `update_thumbnail_stack` queues the native reveal first. Queue the DOM
+    // event behind it so the still-mounted cards roll out from their parked
+    // folder pose only after the transparent panel is onscreen again.
+    let notify_app = app.clone();
+    let notify_handle = app.clone();
+    let _ = notify_app.run_on_main_thread(move || {
+        if let Some(window) = notify_handle.get_webview_window("thumbnail") {
+            let _ =
+                window.eval("window.dispatchEvent(new Event('captures-mini-previews-restored'))");
+        }
+    });
+}
+
 #[tauri::command]
 fn thumbnail_ready(
     app: AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
     artifact_id: String,
 ) -> CommandResult<()> {
-    {
-        if !state
-            .thumbnail_visibility
-            .lock()
-            .mark_artifact_ready(&artifact_id)
-        {
+    let restored_from_folder = {
+        let mut visibility = state.thumbnail_visibility.lock();
+        let was_collapsed = visibility.is_collapsed();
+        if !visibility.mark_artifact_ready(&artifact_id) {
             return Ok(());
         }
-    }
+        was_collapsed
+    };
     update_thumbnail_stack(&app);
+    if restored_from_folder {
+        notify_mini_previews_restored(&app);
+    }
     Ok(())
 }
 
@@ -4788,6 +4804,7 @@ fn restore_mini_previews(
 ) -> CommandResult<()> {
     state.thumbnail_visibility.lock().expand();
     update_thumbnail_stack(&app);
+    notify_mini_previews_restored(&app);
     Ok(())
 }
 
@@ -4932,7 +4949,9 @@ fn show_mini_previews_hidden_chip(app: &AppHandle, count: usize) -> Result<(), t
         WebviewWindowBuilder::new(
             app,
             MINI_PREVIEWS_HIDDEN_LABEL,
-            WebviewUrl::App(format!("index.html?view=mini-previews-hidden&count={count}").into()),
+            WebviewUrl::App(
+                format!("index.html?view=mini-previews-hidden&count={count}&folder=1").into(),
+            ),
         )
         .title("Mini previews hidden")
         .inner_size(MINI_PREVIEWS_HIDDEN_WIDTH, MINI_PREVIEWS_HIDDEN_HEIGHT)
@@ -4961,10 +4980,9 @@ fn show_mini_previews_hidden_chip(app: &AppHandle, count: usize) -> Result<(), t
 
     #[cfg(target_os = "macos")]
     {
-        // This chip is one large WebView button, so let its CSS own the hand
-        // cursor. The arrow fallback races `cursor: pointer` on mouse-move and
-        // visibly flips between the two while crossing the chip's children.
-        captures_macos_window::configure_webview_inactive_hover(&window)
+        // The whole slab is one target. Own the pointing hand in AppKit so the
+        // first inactive-window hover does not wait for a click to wake WebKit.
+        captures_macos_window::configure_pointing_inactive_hover(&window)
             .map_err(|error| tauri::Error::Anyhow(anyhow::anyhow!(error)))?;
         captures_macos_window::show_without_activating(&window)
             .map_err(|error| tauri::Error::Anyhow(anyhow::anyhow!(error)))?;
