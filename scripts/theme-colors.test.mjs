@@ -152,6 +152,9 @@ test("mini-preview hide control uses opaque glass tokens and contained shadows",
   const collapse = desktopCss.match(/\.thumbnail-collapse\s*\{([\s\S]*?)\n\}/u)?.[1];
   assert.ok(collapse, "missing .thumbnail-collapse rule");
   assert.match(collapse, /background:\s*var\(--glass-strong-solid\)/u);
+  assert.match(collapse, /left:\s*8px/u);
+  assert.match(collapse, /bottom:\s*8px/u);
+  assert.match(collapse, /width:\s*40px/u);
   assert.doesNotMatch(collapse, /rgb\(/u);
   assert.doesNotMatch(collapse, /var\(--glass-shadow\)/u);
   assert.match(collapse, /0 1px 3px rgba\(0, 0, 0, 0\.46\)/u);
@@ -165,12 +168,16 @@ test("mini-preview hide control uses opaque glass tokens and contained shadows",
   );
   assert.match(
     desktopCss,
-    /\.thumbnail-collapse:hover[\s\S]*?border-color:\s*rgba\(var\(--theme-accent-rgb\), 0\.72\)/u,
+    /\.thumbnail-collapse:hover[\s\S]*?border-color:\s*var\(--glass-border-strong\)/u,
   );
   assert.match(
     desktopCss,
-    /\.thumbnail-collapse:hover svg[\s\S]*?transform:\s*translateY\(1px\)/u,
+    /\.thumbnail-collapse:hover \.mini-preview-folder-icon[\s\S]*?transform:\s*translateY\(-1px\) scale\(1\.03\)/u,
   );
+  const parked = desktopCss.match(/\.mini-previews-hidden\s*\{([\s\S]*?)\n\}/u)?.[1];
+  assert.ok(parked, "missing .mini-previews-hidden rule");
+  assert.match(parked, /background:\s*var\(--glass-strong-solid\)/u);
+  assert.doesNotMatch(parked, /backdrop-filter/u);
 });
 
 test("preset accent and signal values are not duplicated outside the shared palette", async () => {
