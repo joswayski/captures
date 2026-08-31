@@ -3,6 +3,8 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { act, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 import {
   createScreenshotDocument,
@@ -14,6 +16,11 @@ import {
 } from "./lib/screenshotEditor";
 import { ScreenshotEditor } from "./ScreenshotEditor";
 import type { CaptureArtifact } from "./types";
+
+const screenshotEditorStyles = readFileSync(
+  resolve(process.cwd(), "ui/src/styles/editor-image.css"),
+  "utf8",
+);
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -823,16 +830,22 @@ describe("ScreenshotEditor", () => {
     const inlineEditor = await screen.findByRole("textbox", {
       name: "Edit text on canvas",
     });
+    const inlineFrame = inlineEditor.closest(".screenshot-inline-text-frame") as HTMLElement;
     expect(inlineEditor).toHaveValue("Text");
     expect(inlineEditor).toHaveFocus();
-    const initialWidth = Number.parseFloat(inlineEditor.style.width);
+    expect(inlineEditor).toHaveClass("is-placeholder-selected");
+    expect(inlineFrame).toBeInTheDocument();
+    expect(inlineEditor.style.getPropertyValue("--inline-text-selection-color"))
+      .toBe("#ff3b5c");
+    const initialWidth = Number.parseFloat(inlineFrame.style.width);
     fireEvent.change(inlineEditor, {
       target: { value: "Hello from the screenshot editor" },
     });
+    expect(inlineEditor).not.toHaveClass("is-placeholder-selected");
     expect(screen.getByRole("textbox", { name: "Text" })).toHaveValue(
       "Hello from the screenshot editor",
     );
-    expect(Number.parseFloat(inlineEditor.style.width)).toBeGreaterThan(initialWidth);
+    expect(Number.parseFloat(inlineFrame.style.width)).toBeGreaterThan(initialWidth);
     expect(inlineEditor).toHaveClass("is-auto-width");
     expect(inlineEditor).toHaveAttribute("wrap", "off");
     expect(screen.getByRole("button", { name: "Bold" })).toBeInTheDocument();
@@ -920,6 +933,31 @@ describe("ScreenshotEditor", () => {
     expect(inlineEditor.style.color).toBe("transparent");
     expect(inlineEditor.style.backgroundColor).toBe("transparent");
     expect(inlineEditor.style.webkitTextStroke).toContain("#ff3b5c");
+    expect(inlineEditor.style.getPropertyValue("--inline-text-selection-color"))
+      .toBe("transparent");
+  });
+
+  it("keeps inline edit chrome separate and portaled style samples contrast-safe", () => {
+    expect(screenshotEditorStyles).toMatch(
+      /\.screenshot-inline-text-frame::after\s*\{[^}]*border:\s*1px solid var\(--theme-accent\)/s,
+    );
+    expect(screenshotEditorStyles).toMatch(
+      /\.screenshot-inline-text-editor\s*\{[^}]*border:\s*0;[^}]*outline:\s*0;/s,
+    );
+    expect(screenshotEditorStyles).toMatch(
+      /\.screenshot-inline-text-editor::selection\s*\{[^}]*color:\s*var\(--inline-text-selection-color\)/s,
+    );
+    expect(screenshotEditorStyles).toMatch(
+      /\.screenshot-inline-text-editor\.is-placeholder-selected::selection\s*\{[^}]*background:\s*transparent/s,
+    );
+    expect(screenshotEditorStyles).toMatch(
+      /\.screenshot-text-style-preview\s*\{[^}]*color:\s*var\(--text\)/s,
+    );
+    expect(screenshotEditorStyles).toMatch(
+      /\.screenshot-text-style-preview\.style-box,[\s\S]*?background:\s*var\(--solid\)/,
+    );
+    expect(screenshotEditorStyles).toContain("@media (prefers-contrast: more)");
+    expect(screenshotEditorStyles).toContain("@media (forced-colors: active)");
   });
 
   it("copies, pastes, and duplicates the selected layer with standard shortcuts", async () => {
