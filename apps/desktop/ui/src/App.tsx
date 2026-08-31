@@ -6090,7 +6090,16 @@ export function Thumbnail() {
         setFolderMotion("idle");
         return;
       }
-      prepareMiniPreviewFolderMotion(stack, folder);
+      const cards = Array.from(
+        stack.querySelectorAll<HTMLElement>(".thumbnail-card:not(.thumbnail-exiting)"),
+      );
+      // Collapse already stored layout-to-pocket travel. Remeasuring while the
+      // cards are miniaturized inside the folder would zero that path and make
+      // them pop in place instead of flying out.
+      const needsMeasure = cards.some(
+        (card) => !card.style.getPropertyValue("--thumbnail-folder-x"),
+      );
+      if (needsMeasure) prepareMiniPreviewFolderMotion(stack, folder);
       setFolderMotion("restoring");
       if (folderMotionTimer.current) clearTimeout(folderMotionTimer.current);
       folderMotionTimer.current = setTimeout(() => {
@@ -6108,6 +6117,22 @@ export function Thumbnail() {
   if (artifacts.length === 0) return null;
 
   const collapseLeaving = artifacts.every(({ id }) => exitingArtifactIds.has(id));
+  const folderBusy = folderMotion === "collapsing" || folderMotion === "restoring";
+
+  const restoreFromFolderPose = () => {
+    if (prefersReducedMotion()) {
+      setFolderMotion("idle");
+      void invoke("restore_mini_previews");
+      return;
+    }
+    void invoke("restore_mini_previews");
+    // The native restore command dispatches this once the stack window is
+    // onscreen. The design harness has no second window, so play the release
+    // from the parked folder in place.
+    if (!isTauri()) {
+      window.dispatchEvent(new Event(MINI_PREVIEWS_RESTORED_EVENT));
+    }
+  };
 
   const collapseIntoFolder = () => {
     if (collapseLeaving || folderMotion !== "idle") return;
@@ -6198,10 +6223,12 @@ export function Thumbnail() {
           folderMotion === "parked" ? "thumbnail-collapse-parked" : "",
           folderMotion === "restoring" ? "thumbnail-collapse-restoring" : "",
         ].filter(Boolean).join(" ")}
-        aria-label="Hide previews"
-        data-tooltip="Hide previews"
-        disabled={collapseLeaving || folderMotion !== "idle"}
-        onClick={collapseIntoFolder}
+        aria-label={folderMotion === "parked"
+          ? `Show ${miniPreviewsHiddenLabel(artifacts.length)}`
+          : "Hide previews"}
+        data-tooltip={folderMotion === "parked" ? "Show previews" : "Hide previews"}
+        disabled={collapseLeaving || folderBusy}
+        onClick={folderMotion === "parked" ? restoreFromFolderPose : collapseIntoFolder}
       >
         <MiniPreviewFolder
           pose={folderMotion === "idle" ? "idle" : folderMotion === "parked" ? "parked" : "open"}

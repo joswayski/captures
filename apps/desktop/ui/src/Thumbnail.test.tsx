@@ -744,7 +744,12 @@ describe("Thumbnail", () => {
     expect(hide).toHaveClass("thumbnail-collapse-parked");
     expect(hide).not.toHaveClass("thumbnail-collapse-collapsing");
     expect(hide.querySelector(".mini-preview-folder")).toHaveAttribute("data-pose", "parked");
+    expect(hide).toBeEnabled();
     expect(vi.mocked(invoke)).toHaveBeenCalledWith("collapse_mini_previews");
+    const show = screen.getByRole("button", { name: "Show 1 preview" });
+    fireEvent.click(show);
+    expect(show).toHaveClass("thumbnail-collapse-restoring");
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith("restore_mini_previews");
   });
 
   it("rolls parked previews back out from the same folder anchor", async () => {
@@ -760,6 +765,8 @@ describe("Thumbnail", () => {
     });
     expect(stack).toHaveClass("thumbnail-stack-parked");
     expect(stack).not.toHaveClass("thumbnail-stack-collapsing");
+    const travelX = card.style.getPropertyValue("--thumbnail-folder-x");
+    expect(travelX).not.toBe("");
 
     act(() => {
       window.dispatchEvent(new Event("captures-mini-previews-restored"));
@@ -768,7 +775,7 @@ describe("Thumbnail", () => {
     expect(stack).toHaveClass("thumbnail-stack-restoring");
     expect(stack).not.toHaveClass("thumbnail-stack-collapsing");
     expect(stack).not.toHaveClass("thumbnail-stack-parked");
-    expect(card.style.getPropertyValue("--thumbnail-folder-scale")).not.toBe("");
+    expect(card.style.getPropertyValue("--thumbnail-folder-x")).toBe(travelX);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(MINI_PREVIEW_FOLDER_MORPH_MS);
     });
