@@ -92,6 +92,18 @@ describe("MiniPreviewsHiddenChip", () => {
     expect(hoverRule?.[1]).toMatch(/rgba\(var\(--theme-accent-rgb\), 0\.2\)/);
   });
 
+  it("keeps the restore chip shadow inside its native window gutter", () => {
+    const baseRule = miniPreviewStyles.match(
+      /\.mini-previews-hidden\s*\{([\s\S]*?)\n\}/,
+    );
+
+    expect(baseRule?.[1]).toMatch(/width:\s*calc\(100% - 16px\)/);
+    expect(baseRule?.[1]).toMatch(/height:\s*calc\(100% - 16px\)/);
+    expect(baseRule?.[1]).toMatch(/margin:\s*8px/);
+    expect(baseRule?.[1]).toMatch(/0 2px 6px rgba\(0, 0, 0, 0\.34\)/);
+    expect(baseRule?.[1]).not.toMatch(/var\(--glass-shadow\)/);
+  });
+
   it("restores the stack from the parked count chip", async () => {
     render(<MiniPreviewsHiddenChip />);
 

@@ -4492,8 +4492,10 @@ const THUMBNAIL_WIDTH: f64 = 340.0;
 const THUMBNAIL_CARD_HEIGHT: f64 = 160.0;
 const THUMBNAIL_GAP: f64 = 24.0;
 const THUMBNAIL_PADDING: f64 = 28.0;
-const MINI_PREVIEWS_HIDDEN_WIDTH: f64 = 168.0;
-const MINI_PREVIEWS_HIDDEN_HEIGHT: f64 = 48.0;
+// Leave an 8px transparent gutter around the 160×40 restore chip so its
+// compact CSS shadow fades out before the native window clips it.
+const MINI_PREVIEWS_HIDDEN_WIDTH: f64 = 176.0;
+const MINI_PREVIEWS_HIDDEN_HEIGHT: f64 = 56.0;
 
 fn update_thumbnail_stack(app: &AppHandle) {
     let app = app.clone();
