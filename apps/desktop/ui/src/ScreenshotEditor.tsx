@@ -52,14 +52,15 @@ import {
 import {
   ALIGNMENT_SNAP_SCREEN_PX,
   applyTextStylePreset,
+  ARROW_MIN_DRAW_LENGTH,
   arrowBendAmount,
-  arrowChordLength,
   arrowDefaultMidHandle,
-  arrowHeadTangentPoint,
-  arrowHeadWingTips,
+  arrowFillPolygon,
+  arrowPathLength,
   arrowStarterControls,
   arrowVertices,
   arrowWithBend,
+  editorCanvasPaintScale,
   boundedCropRect,
   cropDragAspectRatio,
   canvasExpandButtonAnchor,
@@ -842,19 +843,20 @@ function drawArrowControlHandle(
   context.restore();
 }
 
-function arrowHead(
+function fillPolygon(
   context: CanvasRenderingContext2D,
-  end: EditorPoint,
-  tangent: EditorPoint,
-  strokeWidth: number,
-  shaftLength?: number,
+  points: EditorPoint[],
 ): void {
-  const [wingA, wingB] = arrowHeadWingTips(end, tangent, strokeWidth, shaftLength);
+  if (points.length < 3) return;
   context.beginPath();
-  context.moveTo(end.x, end.y);
-  context.lineTo(wingA.x, wingA.y);
-  context.moveTo(end.x, end.y);
-  context.lineTo(wingB.x, wingB.y);
+  context.moveTo(points[0].x, points[0].y);
+  for (let index = 1; index < points.length; index += 1) {
+    context.lineTo(points[index].x, points[index].y);
+  }
+  context.closePath();
+  context.fill();
+  // Hairline stroke on the same path so diagonal edges anti-alias instead of
+  // looking like a 1px bitmap staircase, especially at 1× display scale.
   context.stroke();
 }
 
@@ -935,17 +937,21 @@ function paintShapeGeometry(
     return;
   }
 
+  if (shape === "arrow") {
+    const polygon = arrowFillPolygon(element);
+    if (polygon.length < 3) return;
+    context.fillStyle = style.color;
+    context.strokeStyle = style.color;
+    context.lineWidth = Math.max(0.6, style.strokeWidth * 0.06);
+    context.lineJoin = "miter";
+    context.miterLimit = 2.4;
+    context.lineCap = "butt";
+    fillPolygon(context, polygon);
+    return;
+  }
+
   if (isCurveableStrokeShape(element)) {
     strokeArrowPath(context, arrowVertices(element));
-    if (shape === "arrow") {
-      arrowHead(
-        context,
-        { x: endX, y: endY },
-        arrowHeadTangentPoint(element),
-        style.strokeWidth,
-        arrowChordLength(element),
-      );
-    }
     return;
   }
 
@@ -2556,10 +2562,26 @@ export function ScreenshotEditor() {
         if (element.originalSrc) ensureImage(element.originalSrc);
       });
     const canvas = canvasRef.current;
-    if (canvas.width !== editorDocument.width) canvas.width = editorDocument.width;
-    if (canvas.height !== editorDocument.height) canvas.height = editorDocument.height;
+    const paintScale = editorCanvasPaintScale(
+      displayScale,
+      typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1,
+      editorDocument.width,
+      editorDocument.height,
+    );
+    const backingWidth = Math.max(1, Math.round(editorDocument.width * paintScale));
+    const backingHeight = Math.max(1, Math.round(editorDocument.height * paintScale));
+    if (canvas.width !== backingWidth) canvas.width = backingWidth;
+    if (canvas.height !== backingHeight) canvas.height = backingHeight;
     const context = canvas.getContext("2d");
     if (!context) return;
+    context.setTransform(
+      backingWidth / Math.max(1, editorDocument.width),
+      0,
+      0,
+      backingHeight / Math.max(1, editorDocument.height),
+      0,
+      0,
+    );
     const live = removeBgLiveRef.current;
     const hiddenElementId = live?.elementId ?? canvasEditingTextId;
     renderScreenshot(context, editorDocument, imageCacheRef.current, hiddenElementId);
@@ -3107,11 +3129,12 @@ export function ScreenshotEditor() {
   /** Map client coordinates into document space (may be outside the canvas). */
   const clientToDocumentPoint = (clientX: number, clientY: number): EditorPoint => {
     const canvas = canvasRef.current;
-    if (!canvas) return { x: 0, y: 0 };
+    const current = documentRef.current;
+    if (!canvas || !current) return { x: 0, y: 0 };
     const bounds = canvas.getBoundingClientRect();
     return {
-      x: (clientX - bounds.left) * canvas.width / Math.max(1, bounds.width),
-      y: (clientY - bounds.top) * canvas.height / Math.max(1, bounds.height),
+      x: (clientX - bounds.left) * current.width / Math.max(1, bounds.width),
+      y: (clientY - bounds.top) * current.height / Math.max(1, bounds.height),
     };
   };
 
@@ -4166,10 +4189,22 @@ export function ScreenshotEditor() {
     }
 
     // Keep the just-drawn shape selected so curve/resize grips show immediately
-    // without switching to Select & move.
+    // without switching to Select & move. A click with no drag must not leave
+    // an invisible stub arrow (that used to flash a full-size head).
     if (gesture.kind === "draw") {
       const drawn = current.elements.find(({ id }) => id === gesture.elementId);
-      if (drawn && drawn.kind === "shape") {
+      if (
+        drawn
+        && drawn.kind === "shape"
+        && drawn.shape === "arrow"
+        && arrowPathLength(drawn) < Math.max(
+          ARROW_MIN_DRAW_LENGTH,
+          3 / Math.max(0.01, displayScale),
+        )
+      ) {
+        replaceDocument(gesture.initialDocument);
+        current = gesture.initialDocument;
+      } else if (drawn && drawn.kind === "shape") {
         setSelectedId(drawn.id);
       }
     }
@@ -5182,8 +5217,8 @@ export function ScreenshotEditor() {
     if (!canvas || !current) return;
     const bounds = canvas.getBoundingClientRect();
     const point = {
-      x: (clientX - bounds.left) * canvas.width / Math.max(1, bounds.width),
-      y: (clientY - bounds.top) * canvas.height / Math.max(1, bounds.height),
+      x: (clientX - bounds.left) * current.width / Math.max(1, bounds.width),
+      y: (clientY - bounds.top) * current.height / Math.max(1, bounds.height),
     };
     setImageDropGuideState(imageDropGuideAtPoint(current, selectedId, point));
   };

@@ -118,6 +118,7 @@ function installExportableCanvas(): () => void {
     scale: vi.fn(),
     rotate: vi.fn(),
     quadraticCurveTo: vi.fn(),
+    setTransform: vi.fn(),
     imageSmoothingEnabled: true,
     imageSmoothingQuality: "high",
     createLinearGradient: () => ({ addColorStop: vi.fn() }),
@@ -1136,6 +1137,34 @@ describe("ScreenshotEditor", () => {
     expect(screen.getByRole("button", { name: "Straighten arrow" })).toBeInTheDocument();
   });
 
+  it("does not leave an arrow after a click with no drag", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Canvas width");
+
+    setCanvasZoomPercent(100);
+    fireEvent.click(screen.getByRole("button", { name: "Arrow (A)" }));
+    const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
+    canvas.setPointerCapture = vi.fn();
+    canvas.hasPointerCapture = vi.fn(() => true);
+    canvas.releasePointerCapture = vi.fn();
+    setCanvasBounds(canvas);
+
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 40,
+      clientX: 220,
+      clientY: 180,
+    });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 40,
+      clientX: 220,
+      clientY: 180,
+    });
+
+    expect(screen.queryByRole("button", { name: /ArrowShape/ })).not.toBeInTheDocument();
+  });
+
   it("shrinks the arrow head when the tip handle is dragged back", async () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Canvas width");
@@ -1832,6 +1861,7 @@ describe("ScreenshotEditor", () => {
       restore: vi.fn(),
       translate: vi.fn(),
       transform: vi.fn(),
+      setTransform: vi.fn(),
       setLineDash: vi.fn(),
       strokeRect: vi.fn(),
       imageSmoothingEnabled: true,
@@ -2932,6 +2962,7 @@ describe("ScreenshotEditor", () => {
       scale: vi.fn(),
       rotate: vi.fn(),
       quadraticCurveTo: vi.fn(),
+      setTransform: vi.fn(),
       imageSmoothingEnabled: true,
       imageSmoothingQuality: "high",
       createLinearGradient: () => ({ addColorStop: vi.fn() }),

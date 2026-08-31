@@ -2261,24 +2261,97 @@ export function arrowChordLength(
   return Math.hypot(element.endX - element.x, element.endY - element.y);
 }
 
-/**
- * Drawn arrow-head wing length (must match the renderer in ScreenshotEditor).
- * Used for content bounds so trim/expand account for the head, not just the shaft.
- *
- * Head size follows stroke width. When `shaftLength` is given, the tip also
- * cannot exceed a fraction of the shaft — otherwise shrinking an arrow leaves a
- * giant point on a tiny body.
- */
-export function arrowHeadLength(strokeWidth: number, shaftLength?: number): number {
-  const fromStroke = Math.max(1, strokeWidth * 4.2);
-  if (shaftLength == null || !(shaftLength > 0)) return fromStroke;
-  // Keep the tip shorter than the remaining shaft so endpoint-shrink cannot
-  // leave a creation-sized head on a stub.
-  return Math.max(1, Math.min(fromStroke, shaftLength * 0.22));
+/** Polyline length along the sampled shaft (straight or curved). */
+export function arrowPathLength(element: EditorShapeElement): number {
+  const samples = sampleArrowPath(element, 32);
+  let total = 0;
+  for (let index = 1; index < samples.length; index += 1) {
+    total += Math.hypot(
+      samples[index].x - samples[index - 1].x,
+      samples[index].y - samples[index - 1].y,
+    );
+  }
+  return total;
 }
 
 /**
- * Arrowhead wing tip positions (matches the canvas renderer).
+ * Below this path length the arrow is not painted. A pointer-down with no drag
+ * used to flash a full-size chevron; CleanShot-style arrows grow from nothing.
+ */
+export const ARROW_MIN_DRAW_LENGTH = 1.5;
+
+const ARROW_HEAD_LENGTH_RATIO = 3.5;
+const ARROW_HEAD_WIDTH_RATIO = 3.1;
+const ARROW_TAIL_WIDTH_RATIO = 0.18;
+const ARROW_NECK_WIDTH_RATIO = 1.12;
+const ARROW_HEAD_SHAFT_FRACTION = 0.36;
+const ARROW_FULL_STROKE_LENGTH_RATIO = 7;
+const ARROW_TAIL_CAP_SEGMENTS = 7;
+
+/** Cap device pixels per document pixel so extreme zoom stays bounded. */
+const EDITOR_CANVAS_MAX_DEVICE_SCALE = 4;
+/** ~16MP backing store (~64MB RGBA) before zoom scale is reduced further. */
+const EDITOR_CANVAS_MAX_BACKING_PIXELS = 16_777_216;
+
+/**
+ * Scale applied when painting the editor view. Vectors stay sharp on retina
+ * and while zoomed; the backing store is capped so a 400% 4K canvas cannot
+ * allocate a gigapixel buffer. Export still rasterizes at document pixels.
+ */
+export function editorCanvasPaintScale(
+  displayScale: number,
+  devicePixelRatio = 1,
+  documentWidth = 1,
+  documentHeight = 1,
+): number {
+  const dpr = Math.max(1, devicePixelRatio);
+  const cssScale = Math.max(0.01, displayScale);
+  // 2× supersample so thin diagonals anti-alias on 1× displays; zoom and DPR
+  // can raise this further, then the pixel cap keeps the buffer bounded.
+  let scale = Math.min(
+    EDITOR_CANVAS_MAX_DEVICE_SCALE,
+    cssScale * dpr * 2,
+  );
+  const area = Math.max(1, documentWidth) * Math.max(1, documentHeight) * scale * scale;
+  if (area > EDITOR_CANVAS_MAX_BACKING_PIXELS) {
+    scale *= Math.sqrt(EDITOR_CANVAS_MAX_BACKING_PIXELS / area);
+  }
+  return scale;
+}
+
+/**
+ * Visual thickness while the shaft is short: hairline at click, full pen size
+ * after a short drag. Authored `strokeWidth` is the cap.
+ */
+export function arrowDrawnStrokeWidth(strokeWidth: number, shaftLength: number): number {
+  if (!(shaftLength > 0) || !(strokeWidth > 0)) return 0;
+  const fullAt = Math.max(28, strokeWidth * ARROW_FULL_STROKE_LENGTH_RATIO);
+  return Math.min(strokeWidth, strokeWidth * (shaftLength / fullAt));
+}
+
+/**
+ * Drawn arrow-head length along the shaft (must match the renderer).
+ * Used for content bounds so trim/expand account for the head, not just the body.
+ *
+ * Head size follows stroke width. When `shaftLength` is given, the tip also
+ * cannot exceed a fraction of the shaft — otherwise shrinking an arrow leaves a
+ * giant point on a tiny body. Zero-length shafts return 0 so a click does not
+ * flash a creation-sized head.
+ */
+export function arrowHeadLength(strokeWidth: number, shaftLength?: number): number {
+  const fromStroke = Math.max(0, strokeWidth * ARROW_HEAD_LENGTH_RATIO);
+  if (shaftLength == null) return fromStroke;
+  if (!(shaftLength > 0) || fromStroke <= 0) return 0;
+  return Math.min(fromStroke, shaftLength * ARROW_HEAD_SHAFT_FRACTION);
+}
+
+function arrowHeadHalfWidth(strokeWidth: number, shaftLength?: number): number {
+  if (arrowHeadLength(strokeWidth, shaftLength) <= 0) return 0;
+  return strokeWidth * ARROW_HEAD_WIDTH_RATIO / 2;
+}
+
+/**
+ * Arrowhead shoulder positions (matches the filled renderer).
  * Used so content bounds expand only near the tip, not isotropically around the
  * whole shaft (which left large empty margins for trim / selection boxes).
  */
@@ -2288,17 +2361,143 @@ export function arrowHeadWingTips(
   strokeWidth: number,
   shaftLength?: number,
 ): [EditorPoint, EditorPoint] {
-  const angle = Math.atan2(end.y - tangent.y, end.x - tangent.x);
+  const dx = end.x - tangent.x;
+  const dy = end.y - tangent.y;
+  const len = Math.hypot(dx, dy);
+  const ux = len > 1e-6 ? dx / len : 1;
+  const uy = len > 1e-6 ? dy / len : 0;
   const length = arrowHeadLength(strokeWidth, shaftLength);
+  const half = arrowHeadHalfWidth(strokeWidth, shaftLength);
+  const neckX = end.x - ux * length;
+  const neckY = end.y - uy * length;
+  const nx = -uy;
+  const ny = ux;
   return [
-    {
-      x: end.x - length * Math.cos(angle - Math.PI / 6),
-      y: end.y - length * Math.sin(angle - Math.PI / 6),
-    },
-    {
-      x: end.x - length * Math.cos(angle + Math.PI / 6),
-      y: end.y - length * Math.sin(angle + Math.PI / 6),
-    },
+    { x: neckX + nx * half, y: neckY + ny * half },
+    { x: neckX - nx * half, y: neckY - ny * half },
+  ];
+}
+
+function pointAndTangentAtLength(
+  samples: EditorPoint[],
+  cumulative: number[],
+  target: number,
+): { point: EditorPoint; tangent: EditorPoint } {
+  const last = samples[samples.length - 1] ?? { x: 0, y: 0 };
+  const first = samples[0] ?? last;
+  const unit = (from: EditorPoint, to: EditorPoint): EditorPoint => {
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const length = Math.hypot(dx, dy);
+    if (length < 1e-6) return { x: 1, y: 0 };
+    return { x: dx / length, y: dy / length };
+  };
+  if (samples.length < 2 || target <= 0) {
+    return { point: first, tangent: unit(first, samples[1] ?? last) };
+  }
+  const total = cumulative[cumulative.length - 1] ?? 0;
+  if (target >= total) {
+    return { point: last, tangent: unit(samples[samples.length - 2] ?? first, last) };
+  }
+  for (let index = 1; index < samples.length; index += 1) {
+    if (cumulative[index] >= target) {
+      const span = cumulative[index] - cumulative[index - 1];
+      const t = span > 0 ? (target - cumulative[index - 1]) / span : 1;
+      const from = samples[index - 1];
+      const to = samples[index];
+      return {
+        point: {
+          x: from.x + (to.x - from.x) * t,
+          y: from.y + (to.y - from.y) * t,
+        },
+        tangent: unit(from, to),
+      };
+    }
+  }
+  return { point: last, tangent: unit(samples[samples.length - 2] ?? first, last) };
+}
+
+/**
+ * Filled tapered arrow outline (tail → head). Empty when the shaft is too
+ * short to paint, so a click does not flash a head.
+ */
+export function arrowFillPolygon(element: EditorShapeElement): EditorPoint[] {
+  if (element.shape !== "arrow") return [];
+  const samples = sampleArrowPath(element, 28);
+  if (samples.length < 2) return [];
+
+  const cumulative: number[] = [0];
+  for (let index = 1; index < samples.length; index += 1) {
+    cumulative.push(
+      cumulative[index - 1] + Math.hypot(
+        samples[index].x - samples[index - 1].x,
+        samples[index].y - samples[index - 1].y,
+      ),
+    );
+  }
+  const pathLength = cumulative[cumulative.length - 1] ?? 0;
+  if (pathLength < ARROW_MIN_DRAW_LENGTH) return [];
+
+  const stroke = arrowDrawnStrokeWidth(element.style.strokeWidth, pathLength);
+  if (stroke <= 0) return [];
+
+  const headLength = arrowHeadLength(stroke, pathLength);
+  const headHalf = arrowHeadHalfWidth(stroke, pathLength);
+  const tailHalf = stroke * ARROW_TAIL_WIDTH_RATIO / 2;
+  const neckHalf = stroke * ARROW_NECK_WIDTH_RATIO / 2;
+  const shaftEnd = Math.max(0, pathLength - headLength);
+
+  const offsetAt = (
+    point: EditorPoint,
+    tangent: EditorPoint,
+    half: number,
+  ): { left: EditorPoint; right: EditorPoint } => {
+    const nx = -tangent.y;
+    const ny = tangent.x;
+    return {
+      left: { x: point.x + nx * half, y: point.y + ny * half },
+      right: { x: point.x - nx * half, y: point.y - ny * half },
+    };
+  };
+
+  const left: EditorPoint[] = [];
+  const right: EditorPoint[] = [];
+  const shaftSteps = Math.max(8, samples.length);
+  for (let step = 0; step <= shaftSteps; step += 1) {
+    const distance = shaftEnd * (step / shaftSteps);
+    const { point, tangent } = pointAndTangentAtLength(samples, cumulative, distance);
+    const mix = shaftEnd > 0 ? distance / shaftEnd : 0;
+    const half = tailHalf + (neckHalf - tailHalf) * mix;
+    const offset = offsetAt(point, tangent, half);
+    left.push(offset.left);
+    right.push(offset.right);
+  }
+
+  const neck = pointAndTangentAtLength(samples, cumulative, shaftEnd);
+  const tip = samples[samples.length - 1]!;
+  const shoulders = offsetAt(neck.point, neck.tangent, headHalf);
+  const tail = pointAndTangentAtLength(samples, cumulative, 0);
+  const tailNormal = { x: -tail.tangent.y, y: tail.tangent.x };
+  const cap: EditorPoint[] = [];
+  for (let step = 0; step <= ARROW_TAIL_CAP_SEGMENTS; step += 1) {
+    const angle = Math.PI * (step / ARROW_TAIL_CAP_SEGMENTS);
+    cap.push({
+      x: tail.point.x
+        - tailNormal.x * tailHalf * Math.cos(angle)
+        - tail.tangent.x * tailHalf * Math.sin(angle),
+      y: tail.point.y
+        - tailNormal.y * tailHalf * Math.cos(angle)
+        - tail.tangent.y * tailHalf * Math.sin(angle),
+    });
+  }
+
+  return [
+    ...left,
+    shoulders.left,
+    tip,
+    shoulders.right,
+    ...right.slice().reverse(),
+    ...cap.slice(1, -1),
   ];
 }
 
@@ -2479,6 +2678,17 @@ export function shapeLocalBounds(element: EditorShapeElement): EditorRect {
   }
 
   if (isCurveableStrokeShape(element)) {
+    if (element.shape === "arrow") {
+      const polygon = arrowFillPolygon(element);
+      if (polygon.length >= 3) {
+        // The polygon already includes shaft width and the head; only pad AA
+        // plus any drop shadow, not another half-stroke margin.
+        return boundsFromPoints(
+          polygon,
+          1 + annotationDropShadowPad(element.style),
+        );
+      }
+    }
     const samples = sampleArrowPath(element, 48);
     const points: EditorPoint[] = samples.length > 0
       ? [...samples]
@@ -2486,16 +2696,6 @@ export function shapeLocalBounds(element: EditorShapeElement): EditorRect {
         { x: element.x, y: element.y },
         { x: element.endX, y: element.endY },
       ];
-    if (element.shape === "arrow") {
-      const tip = { x: element.endX, y: element.endY };
-      const wings = arrowHeadWingTips(
-        tip,
-        arrowHeadTangentPoint(element),
-        element.style.strokeWidth,
-        arrowChordLength(element),
-      );
-      points.push(tip, wings[0], wings[1]);
-    }
     return boundsFromPoints(points, strokePad);
   }
 
@@ -2691,11 +2891,11 @@ export function elementRotationHandleFitsCanvas(
  * Free Bezier control points sit off the stroke (the path only approaches
  * them). Including them in content bounds used to expand the canvas and block
  * **Trim edges** whenever a handle sat past an edge even though the painted
- * shaft stayed inside. Bounds therefore follow path samples for lines/arrows,
- * not the control handles.
+ * shaft stayed inside. Bounds therefore follow path samples for lines and the
+ * filled outline for arrows, not the control handles.
  *
- * Arrowhead wings are measured at the tip only — never as an isotropic pad on
- * every side of the shaft (that left large empty selection / trim margins).
+ * Arrowhead shoulders are measured at the tip only — never as an isotropic pad
+ * on every side of the shaft (that left large empty selection / trim margins).
  */
 function rotatedBounds(local: EditorRect, rotation: number): EditorRect {
   if (rotation === 0) return local;
