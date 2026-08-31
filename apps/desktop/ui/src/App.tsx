@@ -121,6 +121,7 @@ import {
 } from "./lib/editorPresence";
 import { reconcileActiveViewer } from "./lib/viewerActivation";
 import {
+  buildMiniPreviewFolderDustParticles,
   miniPreviewsHiddenLabel,
   prepareMiniPreviewFolderMotion,
   shouldIgnoreMiniPreviewsHiddenCursorEvents,
@@ -5592,6 +5593,10 @@ export function Thumbnail() {
   });
   const stackRef = useRef<HTMLElement>(null);
   const collapseRef = useRef<HTMLButtonElement>(null);
+  const folderDustLayerRef = useRef<HTMLSpanElement>(null);
+  const [folderDustParticles] = useState<ThumbnailDustParticle[]>(
+    buildMiniPreviewFolderDustParticles,
+  );
   const folderMotionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const previousArtifactCount = useRef(0);
   const cancelStackScroll = useRef<(() => void) | null>(null);
@@ -5782,6 +5787,19 @@ export function Thumbnail() {
   }, [artifacts.length, refreshStackOverflow]);
 
   const hasThumbnailCards = artifacts.length > 0;
+  const collapseLeaving = hasThumbnailCards
+    && artifacts.every(({ id }) => exitingArtifactIds.has(id));
+
+  useEffect(() => {
+    if (!collapseLeaving || prefersReducedMotion()) return;
+    const layer = folderDustLayerRef.current;
+    if (!layer) return;
+    return playThumbnailDustAnimations(
+      layer.querySelectorAll(".thumbnail-collapse-dust-chip"),
+      folderDustParticles,
+    );
+  }, [collapseLeaving, folderDustParticles]);
+
   useEffect(() => {
     // Dust-delete and dismiss both hold layout; survivors above slide by N
     // slots with the same ease. Pure CSS only moved one fixed step (or reflowed
@@ -6167,8 +6185,6 @@ export function Thumbnail() {
 
   if (artifacts.length === 0) return null;
 
-  const collapseLeaving = artifacts.every(({ id }) => exitingArtifactIds.has(id));
-
   const parkStack = () => {
     setFolderMotion("collapsing");
     window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
@@ -6279,9 +6295,10 @@ export function Thumbnail() {
         </span>
       </button>
       {collapseLeaving && (
-        <span className="thumbnail-collapse-dust" aria-hidden="true">
-          {Array.from({ length: 9 }, (_, index) => <i key={index} />)}
-        </span>
+        <MiniPreviewFolderDust
+          layerRef={folderDustLayerRef}
+          particles={folderDustParticles}
+        />
       )}
       {stackOverflow.hasOlder && (
         <button
@@ -6325,6 +6342,44 @@ function MiniPreviewFolderIcon() {
         <path className="mini-preview-folder-face" d="M2.5 9h8l2.1 2H25v13.5H2.5Z" />
         <path className="mini-preview-folder-mark" d="M8 15.5h3M8 15.5v2.7m9-2.7h3m0 0v2.7M8 22h3m-3 0v-2.7m12 2.7h-3m3 0v-2.7" />
       </svg>
+    </span>
+  );
+}
+
+function MiniPreviewFolderDust({
+  layerRef,
+  particles,
+}: {
+  layerRef: RefObject<HTMLSpanElement | null>;
+  particles: readonly ThumbnailDustParticle[];
+}) {
+  return (
+    <span ref={layerRef} className="thumbnail-collapse-dust-layer" aria-hidden="true">
+      {particles.map((particle) => (
+        <span
+          key={particle.id}
+          className="thumbnail-dust thumbnail-collapse-dust-chip"
+          style={{
+            left: particle.left,
+            top: particle.top,
+            width: particle.width,
+            height: particle.height,
+          }}
+        >
+          <span
+            className="thumbnail-collapse-dust-surface"
+            style={{
+              left: -particle.sourceLeft,
+              top: -particle.sourceTop,
+            }}
+          >
+            <MiniPreviewFolderIcon />
+            <span className="mini-preview-folder-compact-chevron">
+              <ThumbnailOverflowChevron direction="down" />
+            </span>
+          </span>
+        </span>
+      ))}
     </span>
   );
 }

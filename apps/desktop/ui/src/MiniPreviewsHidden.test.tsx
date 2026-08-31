@@ -122,14 +122,15 @@ describe("MiniPreviewsHiddenChip", () => {
     );
   });
 
-  it("dissolves the folder from its top-right card contact point", () => {
+  it("hands the folder surface off to real clipped dust chips", () => {
     const exitRule = miniPreviewStyles.match(
       /\.thumbnail-collapse\.thumbnail-collapse-leaving\s*\{([\s\S]*?)\n\}/,
     );
 
-    expect(exitRule?.[1]).toMatch(/0\.9s 0\.42s linear/);
-    expect(exitRule?.[1]).toMatch(/circle at 100% 0/);
-    expect(miniPreviewStyles).toMatch(/\.thumbnail-collapse-dust/);
+    expect(exitRule?.[1]).toMatch(/thumbnail-folder-source-fade 0\.18s 0\.42s/);
+    expect(exitRule?.[1]).not.toMatch(/mask-image|radial-gradient/);
+    expect(miniPreviewStyles).toMatch(/\.thumbnail-collapse-dust-layer/);
+    expect(miniPreviewStyles).toMatch(/\.thumbnail-collapse-dust-surface/);
   });
 
   it("restores the stack from the parked count chip", async () => {

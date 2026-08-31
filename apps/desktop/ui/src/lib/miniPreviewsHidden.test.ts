@@ -1,7 +1,10 @@
 import {
+  buildMiniPreviewFolderDustParticles,
   miniPreviewsHiddenLabel,
   prepareMiniPreviewFolderMotion,
   shouldIgnoreMiniPreviewsHiddenCursorEvents,
+  MINI_PREVIEW_FOLDER_DUST_LEAD_MS,
+  MINI_PREVIEW_FOLDER_SIZE_PX,
 } from "./miniPreviewsHidden";
 
 function rect(left: number, top: number, width: number, height: number): DOMRect {
@@ -23,6 +26,33 @@ describe("miniPreviewsHiddenLabel", () => {
     expect(miniPreviewsHiddenLabel(0)).toBe("Previews");
     expect(miniPreviewsHiddenLabel(1)).toBe("1 preview");
     expect(miniPreviewsHiddenLabel(3)).toBe("3 previews");
+  });
+});
+
+describe("buildMiniPreviewFolderDustParticles", () => {
+  it("uses the shared chip breakup from the folder's top-right contact point", () => {
+    const particles = buildMiniPreviewFolderDustParticles(() => 0.5);
+
+    expect(particles).toHaveLength(36);
+    expect(particles.every(({ dy }) => dy < 0)).toBe(true);
+    expect(particles.every(({ delayMs }) => (
+      delayMs >= MINI_PREVIEW_FOLDER_DUST_LEAD_MS
+    ))).toBe(true);
+
+    const distanceFromContact = ({ sourceLeft, sourceTop, width, height }: typeof particles[number]) => (
+      Math.hypot(
+        sourceLeft + width / 2 - MINI_PREVIEW_FOLDER_SIZE_PX,
+        sourceTop + height / 2,
+      )
+    );
+    const nearest = particles.reduce((best, particle) => (
+      distanceFromContact(particle) < distanceFromContact(best) ? particle : best
+    ));
+    const farthest = particles.reduce((best, particle) => (
+      distanceFromContact(particle) > distanceFromContact(best) ? particle : best
+    ));
+
+    expect(nearest.delayMs).toBeLessThan(farthest.delayMs);
   });
 });
 
