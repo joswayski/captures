@@ -148,6 +148,25 @@ const session: RecordingSelectionSession = {
   ],
 };
 
+const selectorSurfaceRect = {
+  x: 0,
+  y: 0,
+  top: 0,
+  left: 0,
+  right: 1440,
+  bottom: 900,
+  width: 1440,
+  height: 900,
+  toJSON: () => undefined,
+} as DOMRect;
+
+function mockSelectorSurface(container: HTMLElement) {
+  const surface = container.querySelector<HTMLElement>(".recording-selector");
+  expect(surface).not.toBeNull();
+  vi.spyOn(surface!, "getBoundingClientRect").mockReturnValue(selectorSurfaceRect);
+  return surface!;
+}
+
 describe("RecordingSelector", () => {
   let selectorShowError: Error | null;
   let preparedSession: RecordingSelectionSession;
@@ -410,7 +429,9 @@ describe("RecordingSelector", () => {
     expect(screen.queryByRole("combobox", { name: "Region aspect ratio" })).not.toBeInTheDocument();
     const windowGuidance = screen.getByText("Select a window to continue").closest(".capture-guidance");
     expect(windowGuidance).toHaveTextContent("Esc to cancel");
-    fireEvent.click(screen.getByRole("button", { name: "Select Front eligible window" }));
+    const surface = mockSelectorSurface(container);
+    // (950, 400) is inside Front eligible window and outside Preferences.
+    fireEvent.pointerDown(surface, { pointerId: 1, clientX: 950, clientY: 400 });
     expect(screen.queryByText("Select a window to continue")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Record", pressed: false }));
@@ -784,10 +805,11 @@ describe("RecordingSelector", () => {
       return defaultInvoke?.(command, args);
     });
 
-    render(<RecordingSelector />);
+    const { container } = render(<RecordingSelector />);
     await screen.findByRole("button", { name: "Window", pressed: true });
+    const surface = mockSelectorSurface(container);
     // Title is "Front eligible window"; id is back-window (mid z-order).
-    fireEvent.click(screen.getByRole("button", { name: "Select Front eligible window" }));
+    fireEvent.pointerDown(surface, { pointerId: 1, clientX: 950, clientY: 400 });
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("capture_selection_screenshot", {
@@ -968,6 +990,7 @@ describe("RecordingSelector", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Window" }));
 
+    const surface = mockSelectorSurface(container);
     expect(screen.queryByText(/Window selected/)).not.toBeInTheDocument();
     const windowGuidance = screen.getByText("Select a window to continue").closest(".capture-guidance");
     expect(windowGuidance).toHaveTextContent("Esc to cancel");
@@ -994,22 +1017,27 @@ describe("RecordingSelector", () => {
     fireEvent.keyDown(window, { key: "Enter" });
     expect(invoke).not.toHaveBeenCalledWith("start_recording", expect.anything());
 
-    fireEvent.mouseEnter(rearWindow);
+    // Rear sits entirely under Front eligible; hit-test the unique Front strip.
+    fireEvent.pointerMove(surface, { pointerId: 1, clientX: 950, clientY: 400 });
     await waitFor(() => {
-      expect(rearWindow).toHaveClass("hovered");
+      expect(frontWindow).toHaveClass("hovered");
       expect(container.querySelector(".capture-shade-path")).toHaveAttribute(
         "d",
         expect.stringContaining(
-          "M445 220H1115A25 25 0 0 1 1140 245V715"
-          + "A25 25 0 0 1 1115 740H445",
+          "M325 160H1175A25 25 0 0 1 1200 185V775"
+          + "A25 25 0 0 1 1175 800H325",
         ),
       );
     });
-    fireEvent.mouseLeave(rearWindow);
+    fireEvent.pointerMove(surface, { pointerId: 1, clientX: 10, clientY: 10 });
+    await waitFor(() => {
+      expect(frontWindow).not.toHaveClass("hovered");
+    });
 
-    // Preferences uses a measured 12pt radius, not the session-wide 25pt default.
+    // Preferences is frontmost (z 30). A point only it covers selects it, not the windows underneath.
+    fireEvent.pointerMove(surface, { pointerId: 1, clientX: 150, clientY: 100 });
+    fireEvent.pointerDown(surface, { pointerId: 1, clientX: 150, clientY: 100 });
     const preferences = screen.getByRole("button", { name: "Select Captures Preferences" });
-    fireEvent.click(preferences);
     expect(preferences).toHaveClass("selected");
     expect(screen.queryByText("Select a window")).not.toBeInTheDocument();
     expect(screen.queryByText("Esc to cancel")).not.toBeInTheDocument();
@@ -1463,6 +1491,9 @@ describe("RecordingSelector", () => {
   it("starts a screenshot from the matching shortcut while the capture menu is open", async () => {
     render(<RecordingSelector />);
     expect(await screen.findByRole("button", { name: "Close capture controls" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Screenshot" }));
+    fireEvent.click(screen.getByRole("button", { name: "Window" }));
+    expect(screen.getByRole("button", { name: "Window", pressed: true })).toBeInTheDocument();
 
     fireEvent.keyDown(window, {
       key: "4",
@@ -1471,9 +1502,26 @@ describe("RecordingSelector", () => {
       shiftKey: true,
     });
 
-    await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith("start_capture", { mode: "region" });
+    expect(await screen.findByRole("button", { name: "Region", pressed: true })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Screenshot", pressed: true })).toBeInTheDocument();
+    expect(invoke).not.toHaveBeenCalledWith("start_capture", expect.anything());
+  });
+
+  it("switches to Window screenshot from its shortcut without rebuilding the capture menu", async () => {
+    render(<RecordingSelector />);
+    await screen.findByRole("button", { name: "Close capture controls" });
+    expect(screen.getByRole("button", { name: "Region", pressed: true })).toBeInTheDocument();
+
+    fireEvent.keyDown(window, {
+      key: "w",
+      code: "KeyW",
+      ctrlKey: true,
+      shiftKey: true,
     });
+
+    expect(await screen.findByRole("button", { name: "Window", pressed: true })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Screenshot", pressed: true })).toBeInTheDocument();
+    expect(invoke).not.toHaveBeenCalledWith("start_capture", expect.anything());
   });
 
   it("switches to Record mode from the recording shortcut while the capture menu is open", async () => {

@@ -264,6 +264,7 @@ html.capture-selector-display {
   box-shadow: none;
   text-align: left;
   cursor: inherit;
+  pointer-events: none;
   transition:
     background var(--dur-1) var(--ease-standard),
     box-shadow var(--dur-1) var(--ease-standard);
@@ -272,12 +273,9 @@ html.capture-selector-display {
 .recording-window-target {
   overflow: visible;
   cursor: pointer;
-  pointer-events: auto;
 }
 
 .window-target-hovered,
-.window-target:hover,
-.recording-window-target:hover,
 .recording-window-target.hovered,
 .recording-window-target.selected {
   color: #fff;
@@ -305,8 +303,6 @@ html.capture-selector-display {
 }
 
 .window-target-hovered span,
-.window-target:hover span,
-.recording-window-target:hover span,
 .recording-window-target.hovered span,
 .recording-window-target.selected span {
   color: var(--glass-text);

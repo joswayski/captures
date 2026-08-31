@@ -353,7 +353,9 @@ impl AppState {
     }
 
     pub fn windows(&self) -> Result<Vec<WindowDescriptor>, crate::AppError> {
-        self.backend.windows().map_err(Into::into)
+        let mut windows = self.backend.windows().map_err(Into::into)?;
+        crate::apply_native_window_frames(&mut windows);
+        Ok(windows)
     }
 }
 

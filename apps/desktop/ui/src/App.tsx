@@ -57,6 +57,7 @@ import {
   captureDimClipPath,
   constrainSelectionToAspect,
   dragSelectionRect,
+  frontmostWindowAtPoint,
   frontToBackWindows,
   isCapturableSelection,
   parseAspectRatioPreset,
@@ -2218,6 +2219,10 @@ export function RecordingSelector() {
         }
         if (previous.initial_target !== selection.initial_target) {
           setTargetMode(selection.initial_target);
+          setHoveredWindow(null);
+          if (selection.initial_target !== "window") {
+            setSelectedWindow(null);
+          }
         }
         if (!snapshotChanged && visibleSnapshotRef.current === revealKey) {
           visibleSnapshotRef.current = null;
@@ -2372,17 +2377,25 @@ export function RecordingSelector() {
         };
         if (eventMatchesShortcut(shortcutEvent, settings.region_shortcut)) {
           event.preventDefault();
-          void invoke("start_capture", { mode: "region" });
+          setActionMode("screenshot");
+          setTargetMode("region");
+          setHoveredWindow(null);
+          setSelectedWindow(null);
           return;
         }
         if (eventMatchesShortcut(shortcutEvent, settings.window_shortcut)) {
           event.preventDefault();
-          void invoke("start_capture", { mode: "window" });
+          setActionMode("screenshot");
+          setTargetMode("window");
+          setHoveredWindow(null);
           return;
         }
         if (eventMatchesShortcut(shortcutEvent, settings.display_shortcut)) {
           event.preventDefault();
-          void invoke("start_capture", { mode: "display" });
+          setActionMode("screenshot");
+          setTargetMode("display");
+          setHoveredWindow(null);
+          setSelectedWindow(null);
           return;
         }
         if (eventMatchesShortcut(shortcutEvent, settings.recording.video_shortcut)) {
@@ -2528,8 +2541,25 @@ export function RecordingSelector() {
       y: Math.max(0, Math.min(bounds?.height ?? 0, event.clientY - (bounds?.top ?? 0))),
     };
   };
+  const windowAtPointer = (event: React.PointerEvent) => frontmostWindowAtPoint(
+    session.windows,
+    point(event),
+    session.display,
+    Math.max(session.window_coordinate_scale || 1, 1),
+  );
   const onPointerDown = (event: React.PointerEvent) => {
-    if (targetMode !== "region" || (event.target as Element).closest(".recording-selector-panel")) return;
+    if ((event.target as Element).closest(".recording-selector-panel")) return;
+    if (targetMode === "window") {
+      const hit = windowAtPointer(event);
+      if (!hit) return;
+      setSelectedWindow(hit.id);
+      setHoveredWindow(hit.id);
+      if (settingsRef.current?.auto_start_on_selection) {
+        autoStartAfterSelectionRef.current = true;
+      }
+      return;
+    }
+    if (targetMode !== "region") return;
     event.preventDefault();
     const start = point(event);
     const target = event.target as Element;
@@ -2552,6 +2582,12 @@ export function RecordingSelector() {
     }
   };
   const onPointerMove = (event: React.PointerEvent) => {
+    if (targetMode === "window") {
+      if ((event.target as Element).closest(".recording-selector-panel")) return;
+      const hit = windowAtPointer(event);
+      setHoveredWindow(hit?.id ?? null);
+      return;
+    }
     if (!regionDragRef.current || targetMode !== "region") return;
     event.preventDefault();
     pendingRegionPointRef.current = point(event);
@@ -2908,15 +2944,6 @@ export function RecordingSelector() {
                 borderRadius: cornerRadius,
               }}
               aria-label={`Select ${window.title || "window"}`}
-              onPointerDown={(event) => event.stopPropagation()}
-              onMouseEnter={() => setHoveredWindow(window.id)}
-              onMouseLeave={() => setHoveredWindow(null)}
-              onClick={() => {
-                setSelectedWindow(window.id);
-                if (settingsRef.current?.auto_start_on_selection) {
-                  autoStartAfterSelectionRef.current = true;
-                }
-              }}
             >
               <span>{window.title || window.app_name || "Window"}</span>
             </button>
@@ -5339,6 +5366,17 @@ function CaptureOverlay() {
   };
 
   const onPointerMove = (event: React.PointerEvent) => {
+    if (mode === "window") {
+      const scale = Math.max(session.window_coordinate_scale || 1, 1);
+      const hit = frontmostWindowAtPoint(
+        session.windows.filter((item) => item.width >= 48 && item.height >= 48),
+        pointFromEvent(event),
+        session.display,
+        scale,
+      );
+      setHoveredWindow(hit?.id ?? null);
+      return;
+    }
     if (mode !== "region") return;
     reassertRegionCursor();
     if (!start) return;
@@ -5347,6 +5385,19 @@ function CaptureOverlay() {
   };
 
   const onPointerUp = (event: React.PointerEvent) => {
+    if (mode === "window") {
+      const scale = Math.max(session.window_coordinate_scale || 1, 1);
+      const hit = frontmostWindowAtPoint(
+        session.windows.filter((item) => item.width >= 48 && item.height >= 48),
+        pointFromEvent(event),
+        session.display,
+        scale,
+      );
+      if (!hit) return;
+      void currentWindow?.hide().catch(() => undefined);
+      void invoke("commit_window", { sessionId, windowId: hit.id });
+      return;
+    }
     if (mode !== "region" || !start) return;
     const finalRect = current
       ? dragSelectionRect(
@@ -5448,13 +5499,6 @@ function CaptureOverlay() {
                 borderRadius: item.cornerRadius,
               }}
               title={item.window.title || item.window.app_name || "Window"}
-              onPointerEnter={() => setHoveredWindow(item.window.id)}
-              onPointerLeave={() =>
-                setHoveredWindow((current) => (current === item.window.id ? null : current))
-              }
-              onClick={() => {
-                void invoke("commit_window", { sessionId, windowId: item.window.id });
-              }}
             >
               <span>{item.window.title || item.window.app_name || "Window"}</span>
             </button>

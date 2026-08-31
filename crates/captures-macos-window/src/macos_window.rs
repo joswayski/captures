@@ -1483,6 +1483,7 @@ pub fn configure_capture_overlay(window: &WebviewWindow) -> Result<(), &'static 
     }
     let native = native_window(window)?;
     elevate_fullscreen_capture_window(native);
+    native.setSharingType(NSWindowSharingType::None);
     clear_transparent_window_backing(native);
     clear_transparent_webview_backing(window);
     native.setAlphaValue(0.0);
@@ -1500,7 +1501,111 @@ pub fn configure_capture_selector(window: &WebviewWindow) -> Result<(), &'static
     }
     let _main_thread =
         MainThreadMarker::new().ok_or("capture selector setup must run on the main thread")?;
-    elevate_fullscreen_capture_window(native_window(window)?);
+    let native = native_window(window)?;
+    elevate_fullscreen_capture_window(native);
+    native.setSharingType(NSWindowSharingType::None);
+    Ok(())
+}
+
+/// Quartz / xcap screen rectangle for a visible AppKit window.
+///
+/// `kCGWindowBounds` includes the drop shadow. `NSWindow.frame` is the opaque
+/// chrome, which is what the window selector highlight should cover.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VisibleWindowFrame {
+    pub window_number: u32,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Convert an AppKit window frame (origin at the bottom-left of the menu-bar
+/// screen) into Quartz global coordinates (origin at the top-left of that
+/// screen), matching `kCGWindowBounds` / xcap.
+pub fn appkit_frame_to_quartz(
+    ns_x: f64,
+    ns_y: f64,
+    ns_width: f64,
+    ns_height: f64,
+    primary_height: f64,
+) -> (i32, i32, u32, u32) {
+    let x = ns_x.round() as i32;
+    let y = (primary_height - ns_y - ns_height).round() as i32;
+    let width = ns_width.round().max(1.0) as u32;
+    let height = ns_height.round().max(1.0) as u32;
+    (x, y, width, height)
+}
+
+/// Opaque frames for this process's visible windows, keyed by `CGWindowNumber`.
+///
+/// Used to replace shadow-inflated xcap bounds so the window selector overlay
+/// matches the on-screen chrome of Preferences, editors, and other Captures
+/// documents — and any other app whose windows we own.
+pub fn visible_window_frames() -> Vec<VisibleWindowFrame> {
+    if !is_main_thread() {
+        return run_on_main(visible_window_frames).unwrap_or_default();
+    }
+    visible_window_frames_on_main()
+}
+
+fn visible_window_frames_on_main() -> Vec<VisibleWindowFrame> {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return Vec::new();
+    };
+    let Some(primary) = NSScreen::screens(mtm).into_iter().next() else {
+        return Vec::new();
+    };
+    let primary_height = primary.frame().size.height;
+    let app = NSApplication::sharedApplication(mtm);
+    app.windows()
+        .iter()
+        .filter_map(|window| {
+            if !window.isVisible() {
+                return None;
+            }
+            let number = window.windowNumber();
+            if number <= 0 {
+                return None;
+            }
+            let frame = window.frame();
+            let (x, y, width, height) = appkit_frame_to_quartz(
+                frame.origin.x,
+                frame.origin.y,
+                frame.size.width,
+                frame.size.height,
+                primary_height,
+            );
+            Some(VisibleWindowFrame {
+                window_number: number as u32,
+                x,
+                y,
+                width,
+                height,
+            })
+        })
+        .collect()
+}
+
+/// Include or omit this window from screenshots and recordings.
+///
+/// Tauri's `set_content_protected` maps to `NSWindowSharingType`, but
+/// converting a window to an `NSPanel` can drop that setting. Set it on the
+/// live AppKit object after panel configuration.
+pub fn set_excluded_from_capture(
+    window: &WebviewWindow,
+    excluded: bool,
+) -> Result<(), &'static str> {
+    if !is_main_thread() {
+        let window = window.clone();
+        return run_on_main(move || set_excluded_from_capture(&window, excluded))
+            .ok_or("capture sharing did not run on the main thread")?;
+    }
+    native_window(window)?.setSharingType(if excluded {
+        NSWindowSharingType::None
+    } else {
+        NSWindowSharingType::ReadOnly
+    });
     Ok(())
 }
 
@@ -2825,8 +2930,8 @@ mod tests {
         cursor_mode_is_interactive, cursor_mode_to_thumbnail_hover, cursor_surface_can_apply,
         cursor_surface_can_take_key_window_with_thumbnail_allowed, cursor_surface_uses_key_window,
         cursor_update_tracking_options, display_corner_radius_points, is_main_thread,
-        notice_activation_source_after_focus_change, parse_display_id, point_in_ns_rect,
-        pointer_tracking_options, reassert_thumbnail_cursor_after_click,
+        appkit_frame_to_quartz, notice_activation_source_after_focus_change, parse_display_id,
+        point_in_ns_rect, pointer_tracking_options, reassert_thumbnail_cursor_after_click,
         refresh_notice_activation_source_while_unfocused, shortcut_modifiers_pressed,
         should_rearm_thumbnail_key_window, should_release_thumbnail_key_after_event,
         should_reset_cursor_on_exit, single_window_activation_options,
@@ -3188,5 +3293,18 @@ mod tests {
         assert!(!point_in_ns_rect(NSPoint::new(110.0, 20.0), frame));
         assert!(!point_in_ns_rect(NSPoint::new(10.0, 60.0), frame));
         assert!(!point_in_ns_rect(NSPoint::new(0.0, 20.0), frame));
+    }
+
+    #[test]
+    fn appkit_frames_convert_to_quartz_top_left_origin() {
+        assert_eq!(
+            appkit_frame_to_quartz(100.0, 200.0, 640.0, 480.0, 900.0),
+            (100, 220, 640, 480)
+        );
+        // A window sitting on the menu-bar screen's top edge.
+        assert_eq!(
+            appkit_frame_to_quartz(0.0, 860.0, 800.0, 40.0, 900.0),
+            (0, 0, 800, 40)
+        );
     }
 }

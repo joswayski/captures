@@ -45,6 +45,43 @@ export function frontToBackWindows<T extends { z_order: number }>(windows: reado
     .map(({ window }) => window);
 }
 
+/**
+ * Frontmost window whose overlay-space rectangle contains `point`.
+ *
+ * Overlay coordinates are `(window.x - origin.x) / scale`. Uses half-open
+ * edges so neighboring windows don't both claim a shared pixel.
+ */
+export function frontmostWindowAtPoint<T extends {
+  z_order: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}>(
+  windows: readonly T[],
+  point: SelectionPoint,
+  origin: { x: number; y: number },
+  scale = 1,
+): T | null {
+  const safeScale = scale > 0 ? scale : 1;
+  for (const window of frontToBackWindows(windows)) {
+    if (window.width <= 0 || window.height <= 0) continue;
+    const left = (window.x - origin.x) / safeScale;
+    const top = (window.y - origin.y) / safeScale;
+    const width = window.width / safeScale;
+    const height = window.height / safeScale;
+    if (
+      point.x >= left
+      && point.y >= top
+      && point.x < left + width
+      && point.y < top + height
+    ) {
+      return window;
+    }
+  }
+  return null;
+}
+
 export function selectionRect(start: SelectionPoint, end: SelectionPoint): SelectionRect {
   return {
     x: Math.min(start.x, end.x),
