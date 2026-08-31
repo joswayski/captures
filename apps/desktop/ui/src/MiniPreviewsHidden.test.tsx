@@ -96,12 +96,35 @@ describe("MiniPreviewsHiddenChip", () => {
     const baseRule = miniPreviewStyles.match(
       /\.mini-previews-hidden\s*\{([\s\S]*?)\n\}/,
     );
+    const rootAnimation = miniPreviewStyles.match(
+      /@keyframes mini-previews-hidden-in\s*\{([\s\S]*?)\n\}/,
+    );
+    const contentAnimation = miniPreviewStyles.match(
+      /@keyframes mini-previews-hidden-content-in\s*\{([\s\S]*?)\n\}/,
+    );
 
-    expect(baseRule?.[1]).toMatch(/width:\s*calc\(100% - 16px\)/);
-    expect(baseRule?.[1]).toMatch(/height:\s*calc\(100% - 16px\)/);
-    expect(baseRule?.[1]).toMatch(/margin:\s*8px/);
-    expect(baseRule?.[1]).toMatch(/0 2px 6px rgba\(0, 0, 0, 0\.34\)/);
+    expect(baseRule?.[1]).toMatch(/width:\s*calc\(100% - var\(--s-6\)\)/);
+    expect(baseRule?.[1]).toMatch(/height:\s*calc\(100% - var\(--s-6\)\)/);
+    expect(baseRule?.[1]).toMatch(/margin:\s*var\(--s-4\)/);
+    expect(baseRule?.[1]).toMatch(
+      /0 var\(--s-1\) var\(--s-3\) rgba\(0, 0, 0, 0\.34\)/,
+    );
     expect(baseRule?.[1]).not.toMatch(/var\(--glass-shadow\)/);
+    expect(rootAnimation?.[1]).not.toMatch(/transform:/);
+    expect(contentAnimation?.[1]).toMatch(
+      /transform:\s*translateY\(var\(--s-3\)\) scale\(0\.96\)/,
+    );
+  });
+
+  it("uses spacing tokens for the hide control exit geometry", () => {
+    const exitRule = miniPreviewStyles.match(
+      /\.thumbnail-collapse\.thumbnail-collapse-leaving\s*\{([\s\S]*?)\n\}/,
+    );
+
+    expect(exitRule?.[1]).toMatch(
+      /translateY\(calc\(var\(--s-4\) \+ var\(--s-1\)\)\)/,
+    );
+    expect(exitRule?.[1]).toMatch(/filter:\s*blur\(var\(--s-1\)\)/);
   });
 
   it("restores the stack from the parked count chip", async () => {

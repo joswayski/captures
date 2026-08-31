@@ -4,7 +4,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { Preferences } from "./App";
 import { detectShortcutPlatform, platformShortcutHelp } from "./lib/shortcut";
-import type { AppSettings } from "./types";
+import type { AppSettings, UpdateStatus } from "./types";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -451,6 +451,35 @@ describe("Preferences", () => {
     fireEvent.click(screen.getByRole("button", { name: "Check Now" }));
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("check_for_updates"));
+  });
+
+  it("does not label a manual Linux update with the AppImage size", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_settings") return settings;
+      if (command === "get_update_status") {
+        return {
+          state: "available",
+          current_version: "0.1.0",
+          current_display_version: "0.1.0",
+          version: "0.1.1",
+          display_version: "0.1.1",
+          notes: null,
+          changelog: [],
+          installable: false,
+          manual_download_url: "https://captur.es/download",
+          download_size: 12_582_912,
+          will_close_open_captures: false,
+        } satisfies UpdateStatus;
+      }
+      if (command === "set_shortcut_capture_suppressed") return undefined;
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<Preferences />);
+
+    expect(await screen.findByText("Version 0.1.1 is available")).toBeInTheDocument();
+    expect(screen.queryByText(/12\.6 MB/u)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "View release" })).toBeInTheDocument();
   });
 
   it("links a failed update to the website download page", async () => {

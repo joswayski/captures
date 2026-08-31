@@ -578,9 +578,11 @@ export function MiniPreviewsHiddenChip() {
       aria-label={`Show ${miniPreviewsHiddenLabel(count)}`}
       onClick={() => void invoke("restore_mini_previews")}
     >
-      <span className="mini-previews-hidden-icon" aria-hidden="true"><CaptureIcon /></span>
-      <strong>{miniPreviewsHiddenLabel(count)}</strong>
-      <ThumbnailOverflowChevron direction="up" />
+      <span className="mini-previews-hidden-content">
+        <span className="mini-previews-hidden-icon" aria-hidden="true"><CaptureIcon /></span>
+        <strong>{miniPreviewsHiddenLabel(count)}</strong>
+        <ThumbnailOverflowChevron direction="up" />
+      </span>
     </button>
   );
 }
@@ -653,6 +655,7 @@ export function UpdateNotice() {
   };
 
   const available = status?.state === "available" ? status : null;
+  const installableDownloadSize = available?.installable ? available.download_size : null;
   const downloading = status?.state === "downloading" ? status : null;
   const restarting = status?.state === "restarting" ? status : null;
   const error = actionError || (status?.state === "error" ? status.message : "");
@@ -690,7 +693,7 @@ export function UpdateNotice() {
       : error
         ? "Your current version was not changed."
         : available
-          ? `Version ${available.display_version}${available.download_size ? ` · ${formatUpdateSize(available.download_size)}` : ""}`
+          ? `Version ${available.display_version}${installableDownloadSize ? ` · ${formatUpdateSize(installableDownloadSize)}` : ""}`
           : status?.state === "up_to_date"
             ? `Version ${status.current_display_version}`
             : "This should only take a moment.";
@@ -880,6 +883,7 @@ function UpdatePreferences() {
   const [actionError, setActionError] = useState("");
   const currentVersion = status?.current_display_version ?? "…";
   const available = status?.state === "available" ? status : null;
+  const installableDownloadSize = available?.installable ? available.download_size : null;
   const downloading = status?.state === "downloading" ? status : null;
   const restarting = status?.state === "restarting" ? status : null;
   const progress = downloading?.total
@@ -910,7 +914,7 @@ function UpdatePreferences() {
         : status?.state === "error"
           ? status.message
           : available
-            ? available.download_size ? `${formatUpdateSize(available.download_size)} download` : ""
+            ? installableDownloadSize ? `${formatUpdateSize(installableDownloadSize)} download` : ""
             : status?.state === "checking"
               ? ""
             : "Updates are checked automatically.";
@@ -2707,9 +2711,11 @@ export function RecordingSelector() {
     setActionMode(mode);
   };
   const openAutoStartPreference = () => {
-    cancelSelection(session, () => {
-      void invoke("open_preferences", { target: AUTO_START_PREFERENCE_TARGET });
-    });
+    // Cancelling destroys this selector WebView before its IPC promise settles,
+    // so finish opening Preferences while the caller is still alive.
+    void invoke("open_preferences", { target: AUTO_START_PREFERENCE_TARGET })
+      .then(() => cancelSelection(session))
+      .catch((error) => setError(String(error)));
   };
   const retryingAutoStart = settings.auto_start_on_selection && Boolean(error);
   const primaryActionLabel = starting

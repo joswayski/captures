@@ -88,6 +88,20 @@ describe("UpdateNotice", () => {
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("install_update"));
   });
 
+  it("hides AppImage size metadata for manual Linux updates", async () => {
+    vi.mocked(invoke).mockResolvedValue({
+      ...available,
+      installable: false,
+      manual_download_url: "https://captur.es/download",
+    } satisfies UpdateStatus);
+
+    render(<UpdateNotice />);
+
+    expect(await screen.findByText("Version 2026.07.19.2")).toBeInTheDocument();
+    expect(screen.queryByText(/12\.6 MB/u)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "View release" })).toBeInTheDocument();
+  });
+
   it("dismisses Later through a native command instead of Window.hide", async () => {
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "get_update_status") return available;
