@@ -119,8 +119,12 @@
     inset 0 1px 0 rgba(255, 255, 255, 0.07),
     0 1px 3px rgba(0, 0, 0, 0.46);
   cursor: pointer !important;
-  transform: none;
+  opacity: 1;
+  transform: translateY(0) scale(1);
   transition:
+    opacity var(--dur-2) var(--ease-out),
+    transform var(--dur-3) var(--ease-out),
+    filter var(--dur-2) var(--ease-out),
     background-color var(--dur-2) var(--ease-out),
     border-color var(--dur-2) var(--ease-out),
     box-shadow var(--dur-2) var(--ease-out),
@@ -195,6 +199,18 @@
 .thumbnail-collapse:focus-visible::after {
   opacity: 1;
   transform: translateY(0);
+}
+
+.thumbnail-collapse.thumbnail-collapse-leaving {
+  opacity: 0;
+  transform: translateY(10px) scale(0.76);
+  filter: blur(2px);
+  pointer-events: none;
+}
+
+.thumbnail-collapse.thumbnail-collapse-leaving::after {
+  opacity: 0;
+  transform: translateY(4px);
 }
 
 .mini-previews-hidden {

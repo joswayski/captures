@@ -5444,6 +5444,9 @@ function useElementCssSize(
 
 export function Thumbnail() {
   const [artifacts, setArtifacts] = useState<CaptureArtifact[]>([]);
+  const [exitingArtifactIds, setExitingArtifactIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [clipboardState, setClipboardState] = useState<ClipboardState>({
     revision: -1,
     artifact_id: null,
@@ -5465,6 +5468,15 @@ export function Thumbnail() {
   const cancelStackScroll = useRef<(() => void) | null>(null);
   const applyClipboardState = useCallback((next: ClipboardState) => {
     setClipboardState((current) => reconcileClipboardState(current, next));
+  }, []);
+  const setArtifactExiting = useCallback((artifactId: string, exiting: boolean) => {
+    setExitingArtifactIds((current) => {
+      if (current.has(artifactId) === exiting) return current;
+      const next = new Set(current);
+      if (exiting) next.add(artifactId);
+      else next.delete(artifactId);
+      return next;
+    });
   }, []);
   const refreshStackOverflow = useCallback(() => {
     const stack = stackRef.current;
@@ -5493,6 +5505,7 @@ export function Thumbnail() {
         listen<CaptureArtifact>("capture-completed", ({ payload }) => {
           if (!active) return;
           removedArtifactIds.delete(payload.id);
+          setArtifactExiting(payload.id, false);
           setArtifacts((current) => current.some(({ id }) => id === payload.id)
             ? current
             : [...current, payload]);
@@ -5504,6 +5517,7 @@ export function Thumbnail() {
         listen<string>("artifact-removed", ({ payload }) => {
           if (!active) return;
           removedArtifactIds.add(payload);
+          setArtifactExiting(payload, false);
           setArtifacts((current) => current.filter(({ id }) => id !== payload));
           setActiveViewerArtifactId((current) => current === payload ? null : current);
         }),
@@ -5538,7 +5552,7 @@ export function Thumbnail() {
       active = false;
       cleanup.dispose();
     };
-  }, [applyClipboardState]);
+  }, [applyClipboardState, setArtifactExiting]);
 
   useEffect(() => {
     // The thumbnail window is a drag source, never a file-drop destination.
@@ -6000,6 +6014,8 @@ export function Thumbnail() {
 
   if (artifacts.length === 0) return null;
 
+  const collapseLeaving = artifacts.every(({ id }) => exitingArtifactIds.has(id));
+
   const scrollStackBy = (slots: number) => {
     const stack = stackRef.current;
     if (!stack) return;
@@ -6047,16 +6063,22 @@ export function Thumbnail() {
             viewerActive={activeViewerArtifactId === artifact.id}
             editorActive={editorActiveArtifactIds.has(artifact.id)}
             onRemoved={(artifactId) => {
+              setArtifactExiting(artifactId, false);
               setArtifacts((current) => current.filter(({ id }) => id !== artifactId));
             }}
+            onExitChange={setArtifactExiting}
           />
         ))}
       </main>
       <button
         type="button"
-        className="thumbnail-collapse"
+        className={[
+          "thumbnail-collapse",
+          collapseLeaving ? "thumbnail-collapse-leaving" : "",
+        ].filter(Boolean).join(" ")}
         aria-label="Hide previews"
         data-tooltip="Hide previews"
+        disabled={collapseLeaving}
         onClick={() => void invoke("collapse_mini_previews")}
       >
         <ThumbnailOverflowChevron direction="down" />
@@ -6099,6 +6121,7 @@ export function ThumbnailCard({
   viewerActive,
   editorActive = false,
   onRemoved,
+  onExitChange,
 }: {
   artifact: CaptureArtifact;
   clipboardCurrent: boolean;
@@ -6106,6 +6129,7 @@ export function ThumbnailCard({
   /** True when this capture is still present as a layer in an open editor. */
   editorActive?: boolean;
   onRemoved: (artifactId: string) => void;
+  onExitChange?: (artifactId: string, exiting: boolean) => void;
 }) {
   const [feedback, setFeedback] = useState<"saved" | null>(null);
   const [busy, setBusy] = useState<"copied" | "saved" | null>(null);
@@ -6379,6 +6403,7 @@ export function ThumbnailCard({
       .catch((error) => {
         // Only unlock if remove failed — otherwise the card is gone.
         exitingRef.current = false;
+        onExitChange?.(artifact.id, false);
         setExit(null);
         setExitChrome(null);
         setDustParticles(null);
@@ -6393,6 +6418,7 @@ export function ThumbnailCard({
     // Acquire the exit lock first so any in-flight async work becomes a no-op.
     exitingRef.current = true;
     exitAction.current = action;
+    onExitChange?.(artifact.id, true);
     if (feedbackTimer.current) {
       clearTimeout(feedbackTimer.current);
       feedbackTimer.current = null;

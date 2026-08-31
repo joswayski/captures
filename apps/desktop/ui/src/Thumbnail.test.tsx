@@ -359,12 +359,15 @@ describe("Thumbnail", () => {
 
     render(<Thumbnail />);
     const cards = await screen.findAllByRole("article");
+    const hidePreviews = screen.getByRole("button", { name: "Hide previews" });
     const firstDelete = within(cards[0]).getByRole("button", { name: "Delete" });
     const secondDelete = within(cards[1]).getByRole("button", { name: "Delete" });
     pointerReady = true;
     pointerTarget = firstDelete;
 
     fireEvent.click(firstDelete);
+    expect(hidePreviews).not.toHaveClass("thumbnail-collapse-leaving");
+    expect(hidePreviews).toBeEnabled();
 
     await waitFor(() => {
       const ignoreCalls = vi.mocked(invoke).mock.calls
@@ -383,6 +386,8 @@ describe("Thumbnail", () => {
     fireEvent.click(secondDelete);
     expect(cards[0]).toHaveClass("thumbnail-exit-delete");
     expect(cards[1]).toHaveClass("thumbnail-exit-delete");
+    expect(hidePreviews).toHaveClass("thumbnail-collapse-leaving");
+    expect(hidePreviews).toBeDisabled();
   });
 
   it("keeps a slid preview in place when it is deleted before the hole below is removed", async () => {
@@ -537,8 +542,11 @@ describe("Thumbnail", () => {
 
     render(<Thumbnail />);
     const card = await screen.findByRole("article");
+    const hidePreviews = screen.getByRole("button", { name: "Hide previews" });
     fireEvent.click(within(card).getByRole("button", { name: "Delete" }));
     expect(card).toHaveClass("thumbnail-exiting");
+    expect(hidePreviews).toHaveClass("thumbnail-collapse-leaving");
+    expect(hidePreviews).toBeDisabled();
 
     await waitFor(() => {
       const ignoreCalls = vi.mocked(invoke).mock.calls
@@ -563,8 +571,11 @@ describe("Thumbnail", () => {
 
     render(<Thumbnail />);
     const card = await screen.findByRole("article");
+    const hidePreviews = screen.getByRole("button", { name: "Hide previews" });
     fireEvent.click(within(card).getByRole("button", { name: "Close" }));
     expect(card).toHaveClass("thumbnail-exit-dismiss");
+    expect(hidePreviews).toHaveClass("thumbnail-collapse-leaving");
+    expect(hidePreviews).toBeDisabled();
 
     await waitFor(() => {
       const ignoreCalls = vi.mocked(invoke).mock.calls
