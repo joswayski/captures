@@ -726,7 +726,8 @@ describe("Thumbnail", () => {
     const card = await screen.findByRole("article");
     const stack = card.closest(".thumbnail-stack")!;
     const minimize = screen.getByRole("button", { name: "Minimize previews" });
-    expect(minimize).toHaveAttribute("data-tooltip", "Minimize previews");
+    expect(minimize).toHaveTextContent("Show less");
+    expect(minimize).not.toHaveAttribute("data-tooltip");
     expect(screen.getByRole("button", { name: "Clear previews" })).toBeEnabled();
 
     vi.useFakeTimers();

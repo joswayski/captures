@@ -170,6 +170,14 @@ test("mini-preview stack controls use opaque glass tokens and contained shadows"
   );
   assert.match(
     desktopCss,
+    /\.thumbnail-stack-minimize:hover[\s\S]*?width:\s*84px/u,
+  );
+  assert.match(
+    desktopCss,
+    /\.thumbnail-stack-minimize:hover \.thumbnail-stack-minimize-label[\s\S]*?opacity:\s*1/u,
+  );
+  assert.match(
+    desktopCss,
     /\.thumbnail-stack-minimized > \.thumbnail-card[\s\S]*?translate3d/u,
   );
 });

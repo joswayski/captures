@@ -1428,7 +1428,57 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-contr
   pointer-events: none;
 }
 
-.thumbnail-stack-control::after {
+.thumbnail-stack-minimize {
+  overflow: hidden;
+  transition:
+    width var(--dur-2) var(--ease-out),
+    color var(--dur-1) var(--ease-out),
+    background-color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out),
+    transform var(--dur-1) var(--ease-out);
+}
+
+.thumbnail-stack-minimize svg {
+  position: absolute;
+  transition:
+    opacity var(--dur-1) var(--ease-out),
+    transform var(--dur-2) var(--ease-out);
+}
+
+.thumbnail-stack-minimize-label {
+  opacity: 0;
+  transform: translateX(4px);
+  transition:
+    opacity var(--dur-1) var(--ease-out),
+    transform var(--dur-2) var(--ease-out);
+  pointer-events: none;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.thumbnail-stack-minimize:hover,
+.thumbnail-stack-minimize[data-native-pointer-hover="true"],
+.thumbnail-stack-minimize:focus-visible {
+  width: 84px;
+}
+
+.thumbnail-stack-minimize:hover svg,
+.thumbnail-stack-minimize[data-native-pointer-hover="true"] svg,
+.thumbnail-stack-minimize:focus-visible svg {
+  opacity: 0;
+  transform: translateX(-8px) scale(0.8);
+}
+
+.thumbnail-stack-minimize:hover .thumbnail-stack-minimize-label,
+.thumbnail-stack-minimize[data-native-pointer-hover="true"] .thumbnail-stack-minimize-label,
+.thumbnail-stack-minimize:focus-visible .thumbnail-stack-minimize-label {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.thumbnail-stack-control[data-tooltip]::after {
   position: absolute;
   top: calc(100% + var(--s-1));
   right: 0;
@@ -1450,9 +1500,9 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-contr
   white-space: nowrap;
 }
 
-.thumbnail-stack-control:hover::after,
-.thumbnail-stack-control[data-native-pointer-hover="true"]::after,
-.thumbnail-stack-control:focus-visible::after {
+.thumbnail-stack-control[data-tooltip]:hover::after,
+.thumbnail-stack-control[data-tooltip][data-native-pointer-hover="true"]::after,
+.thumbnail-stack-control[data-tooltip]:focus-visible::after {
   opacity: 1;
   transform: translateY(0);
 }
@@ -1605,6 +1655,11 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-contr
   }
 
   .thumbnail-stack-control {
+    transition: none;
+  }
+
+  .thumbnail-stack-minimize svg,
+  .thumbnail-stack-minimize-label {
     transition: none;
   }
 
