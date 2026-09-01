@@ -42,7 +42,11 @@ const THUMBNAIL_NATIVE_ACTIVE_SELECTOR = `[${THUMBNAIL_NATIVE_ACTIVE_ATTRIBUTE}=
 export const THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE = "data-native-pointer-hover";
 const THUMBNAIL_NATIVE_POINTER_HOVER_SELECTOR =
   `[${THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE}="true"]`;
-const THUMBNAIL_STACK_CONTROL_SELECTOR = ".thumbnail-overflow-cue, .thumbnail-collapse";
+const THUMBNAIL_STACK_CONTROL_SELECTOR = [
+  ".thumbnail-overflow-cue",
+  ".thumbnail-stack-control",
+  ".thumbnail-collapsed-hit-target",
+].join(", ");
 
 /**
  * Keeps a freshly opened editor control in its passive “In editor” state until
@@ -156,15 +160,19 @@ export function clearThumbnailCssCursor(
  * Linux that otherwise blocks the desktop for the whole ~3s delete.
  * Overflow cues only matter while a live card remains; an exiting-only stack
  * should pass every click through, including those controls.
- * Folding into the parked chip also has to pass clicks through: macOS keeps the
- * concealed stack onscreen at zero alpha, and a later interactivity recovery
- * would otherwise turn that invisible panel into a click shield.
+ * Transitioning cards are decorative and pass clicks through. A minimized
+ * stack is live only while its dedicated expand target remains enabled.
  */
 export function thumbnailStackHasLiveHitTarget(root: Document = document): boolean {
   if (root.querySelector(
-    ".thumbnail-stack-collapsing, .thumbnail-stack-parked, .thumbnail-stack-restoring",
+    ".thumbnail-stack-minimizing, .thumbnail-stack-expanding",
   )) {
     return false;
+  }
+  if (root.querySelector(".thumbnail-stack-minimized")) {
+    return Boolean(root.querySelector(
+      ".thumbnail-collapsed-hit-target:not(:disabled)",
+    ));
   }
   const cards = root.querySelectorAll(".thumbnail-card");
   for (const card of cards) {
@@ -175,7 +183,7 @@ export function thumbnailStackHasLiveHitTarget(root: Document = document): boole
 
 /**
  * Keep the native window interactive only over a live preview card, stack
- * overflow control, or hide-previews control. After a dismiss it may stay tall
+ * overflow control, toolbar control, or minimized-stack target. After a dismiss it may stay tall
  * (shrinking blanks WKWebView), and a deleting card keeps its layout slot while
  * its particles finish. Empty space and exiting slots must pass clicks through
  * without disabling the remaining cards.

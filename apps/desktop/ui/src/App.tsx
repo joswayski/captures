@@ -121,23 +121,6 @@ import {
   reconcileEditorPresence,
 } from "./lib/editorPresence";
 import { reconcileActiveViewer } from "./lib/viewerActivation";
-import {
-  buildMiniPreviewFolderDustParticles,
-  markMiniPreviewRestorePending,
-  miniPreviewFolderPlaceholderSheets,
-  miniPreviewFolderSheets,
-  miniPreviewFolderSheetsForMotion,
-  miniPreviewsHiddenLabel,
-  prepareMiniPreviewFolderMotion,
-  shouldIgnoreMiniPreviewsHiddenCursorEvents,
-  takeMiniPreviewRestorePending,
-  MINI_PREVIEW_FOLDER_DUST_LEAD_MS,
-  MINI_PREVIEW_FOLDER_MORPH_MS,
-  MINI_PREVIEWS_RESTORED_EVENT,
-  type MiniPreviewFolderMotion,
-  type MiniPreviewFolderPose,
-  type MiniPreviewFolderSheet,
-} from "./lib/miniPreviewsHidden";
 import type {
   ActiveSession,
   AudioDevice,
@@ -273,7 +256,6 @@ export function App() {
   if (view === "screenshot-editor") return <ScreenshotEditor />;
   if (view === "recording-saved") return <RecordingSavedNotice />;
   if (view === "recording-controls-hidden") return <RecordingControlsHiddenNotice />;
-  if (view === "mini-previews-hidden") return <MiniPreviewsHiddenChip />;
   if (view === "thumbnail") return <Thumbnail />;
   if (view === "viewer") return <ArtifactViewer />;
   if (view === "history") return <CaptureHistory />;
@@ -539,146 +521,6 @@ export function RecordingControlsHiddenNotice() {
         </p>
       </div>
     </main>
-  );
-}
-
-export function MiniPreviewsHiddenChip() {
-  const initialCount = Number(query("count") ?? "0");
-  const [count, setCount] = useState(
-    Number.isFinite(initialCount) && initialCount > 0 ? initialCount : 0,
-  );
-  const [sheets, setSheets] = useState<MiniPreviewFolderSheet[]>(() => (
-    miniPreviewFolderPlaceholderSheets(
-      Number.isFinite(initialCount) && initialCount > 0 ? initialCount : 0,
-    )
-  ));
-  const [restoring, setRestoring] = useState(false);
-
-  useEffect(() => {
-    let active = true;
-    const cleanup = createCleanupRegistry();
-    const urlCount = Number(query("count") ?? "0");
-    const adoptArtifacts = (artifacts: CaptureArtifact[]) => {
-      const nextSheets = miniPreviewFolderSheets(artifacts);
-      setSheets(
-        Number.isFinite(urlCount) && urlCount > 0
-          ? nextSheets.slice(0, urlCount)
-          : nextSheets,
-      );
-      if (!(Number.isFinite(urlCount) && urlCount > 0) && artifacts.length > 0) {
-        setCount(artifacts.length);
-      }
-    };
-    void (async () => {
-      const listeners = await Promise.all([
-        listen<number>("mini-previews-hidden-count", ({ payload }) => {
-          if (active && typeof payload === "number") setCount(payload);
-        }),
-        listen<CaptureArtifact>("capture-completed", () => {
-          if (!active) return;
-          void invoke<CaptureArtifact[]>("get_artifacts")
-            .then((artifacts) => {
-              if (active) adoptArtifacts(artifacts);
-            })
-            .catch(() => undefined);
-        }),
-        listen<string>("artifact-removed", () => {
-          if (!active) return;
-          void invoke<CaptureArtifact[]>("get_artifacts")
-            .then((artifacts) => {
-              if (active) adoptArtifacts(artifacts);
-            })
-            .catch(() => undefined);
-        }),
-      ]);
-      if (!cleanup.add(...listeners)) return;
-      const artifacts = await invoke<CaptureArtifact[]>("get_artifacts").catch(() => []);
-      if (active && artifacts.length > 0) adoptArtifacts(artifacts);
-    })();
-    return () => {
-      active = false;
-      cleanup.dispose();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!isTauri()) return;
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    let ignoringCursorEvents = false;
-    let ignoreCursorEventsSynced = false;
-
-    const setIgnoreCursorEvents = (ignore: boolean) => {
-      if (ignoreCursorEventsSynced && ignoringCursorEvents === ignore) return;
-      ignoringCursorEvents = ignore;
-      ignoreCursorEventsSynced = true;
-      void invoke("set_mini_previews_hidden_ignore_cursor_events", { ignore })
-        .catch(() => undefined);
-    };
-
-    const poll = async () => {
-      if (cancelled) return;
-      try {
-        const position = await withThumbnailPointerTimeout(
-          invoke<ThumbnailPointerPosition | null>(
-            "get_mini_previews_hidden_pointer_position",
-          ),
-        );
-        if (cancelled) return;
-        if (!position) {
-          setIgnoreCursorEvents(true);
-        } else {
-          setIgnoreCursorEvents(shouldIgnoreMiniPreviewsHiddenCursorEvents(position));
-        }
-      } catch {
-        if (!cancelled) setIgnoreCursorEvents(true);
-      } finally {
-        if (!cancelled) {
-          timer = setTimeout(() => {
-            timer = null;
-            void poll();
-          }, 40);
-        }
-      }
-    };
-
-    void poll();
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-      setIgnoreCursorEvents(true);
-    };
-  }, []);
-
-  const restoreStack = () => {
-    if (restoring) return;
-    if (isTauri()) {
-      void invoke("set_mini_previews_hidden_ignore_cursor_events", { ignore: true })
-        .catch(() => undefined);
-    }
-    if (prefersReducedMotion()) {
-      void invoke("restore_mini_previews");
-      return;
-    }
-    setRestoring(true);
-    markMiniPreviewRestorePending();
-    void invoke("restore_mini_previews").finally(() => setRestoring(false));
-  };
-
-  return (
-    <button
-      type="button"
-      className={[
-        "mini-previews-hidden",
-        query("folder") === "1" ? "mini-previews-hidden-from-folder" : "",
-        restoring ? "mini-previews-hidden-restoring" : "",
-      ].filter(Boolean).join(" ")}
-      aria-label={`Show ${miniPreviewsHiddenLabel(count)}`}
-      disabled={restoring}
-      onClick={restoreStack}
-    >
-      <MiniPreviewFolder pose="parked" sheets={sheets} />
-    </button>
   );
 }
 
@@ -5617,9 +5459,10 @@ function useElementCssSize(
 
 export function Thumbnail() {
   const [artifacts, setArtifacts] = useState<CaptureArtifact[]>([]);
-  const [folderMotion, setFolderMotion] = useState<MiniPreviewFolderMotion>(
-    () => (takeMiniPreviewRestorePending() ? "restoring" : "idle"),
-  );
+  const [stackMotion, setStackMotion] = useState<
+    "expanded" | "collapsing" | "collapsed" | "expanding"
+  >("expanded");
+  const [clearing, setClearing] = useState(false);
   const [exitingArtifactIds, setExitingArtifactIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -5640,12 +5483,7 @@ export function Thumbnail() {
     hasNewer: false,
   });
   const stackRef = useRef<HTMLElement>(null);
-  const collapseRef = useRef<HTMLButtonElement>(null);
-  const folderDustLayerRef = useRef<HTMLSpanElement>(null);
-  const [folderDustParticles] = useState<ThumbnailDustParticle[]>(
-    buildMiniPreviewFolderDustParticles,
-  );
-  const folderMotionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stackMotionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const previousArtifactCount = useRef(0);
   const cancelStackScroll = useRef<(() => void) | null>(null);
   const applyClipboardState = useCallback((next: ClipboardState) => {
@@ -5835,18 +5673,6 @@ export function Thumbnail() {
   }, [artifacts.length, refreshStackOverflow]);
 
   const hasThumbnailCards = artifacts.length > 0;
-  const collapseLeaving = hasThumbnailCards
-    && artifacts.every(({ id }) => exitingArtifactIds.has(id));
-
-  useEffect(() => {
-    if (!collapseLeaving || prefersReducedMotion()) return;
-    const layer = folderDustLayerRef.current;
-    if (!layer) return;
-    return playThumbnailDustAnimations(
-      layer.querySelectorAll(".thumbnail-collapse-dust-chip"),
-      folderDustParticles,
-    );
-  }, [collapseLeaving, folderDustParticles]);
 
   useEffect(() => {
     // Dust-delete and dismiss both hold layout; survivors above slide by N
@@ -6204,114 +6030,64 @@ export function Thumbnail() {
     return () => {
       cancelStackScroll.current?.();
       cancelStackScroll.current = null;
-      if (folderMotionTimer.current) clearTimeout(folderMotionTimer.current);
+      if (stackMotionTimer.current) clearTimeout(stackMotionTimer.current);
     };
   }, []);
-
-  useEffect(() => {
-    const restoreFromFolder = () => {
-      takeMiniPreviewRestorePending();
-      const stack = stackRef.current;
-      const folder = collapseRef.current?.querySelector(".mini-preview-folder");
-      if (!stack || !folder || prefersReducedMotion()) {
-        setFolderMotion("idle");
-        return;
-      }
-      const cards = Array.from(
-        stack.querySelectorAll<HTMLElement>(".thumbnail-card:not(.thumbnail-exiting)"),
-      );
-      // Collapse already stored layout-to-pocket travel. Remeasuring while the
-      // cards are miniaturized inside the folder would zero that path and make
-      // them pop in place instead of flying out.
-      const needsMeasure = cards.some(
-        (card) => !card.style.getPropertyValue("--thumbnail-folder-x"),
-      );
-      if (needsMeasure) prepareMiniPreviewFolderMotion(stack, folder);
-      setFolderMotion("restoring");
-    };
-
-    window.addEventListener(MINI_PREVIEWS_RESTORED_EVENT, restoreFromFolder);
-    return () => {
-      window.removeEventListener(MINI_PREVIEWS_RESTORED_EVENT, restoreFromFolder);
-    };
-  }, []);
-
-  useLayoutEffect(() => {
-    if (folderMotion !== "collapsing" && folderMotion !== "restoring") return;
-    const stack = stackRef.current;
-    const folder = collapseRef.current?.querySelector(".mini-preview-folder");
-    if (!stack || !folder) return;
-    if (folderMotion === "collapsing") {
-      prepareMiniPreviewFolderMotion(stack, folder);
-      return;
-    }
-    const cards = Array.from(
-      stack.querySelectorAll<HTMLElement>(".thumbnail-card:not(.thumbnail-exiting)"),
-    );
-    const needsMeasure = cards.some(
-      (card) => !card.style.getPropertyValue("--thumbnail-folder-x"),
-    );
-    if (needsMeasure) prepareMiniPreviewFolderMotion(stack, folder);
-  }, [folderMotion]);
-
-  useEffect(() => {
-    if (folderMotion !== "restoring") return;
-    if (folderMotionTimer.current) clearTimeout(folderMotionTimer.current);
-    folderMotionTimer.current = setTimeout(() => {
-      folderMotionTimer.current = null;
-      setFolderMotion("idle");
-    }, MINI_PREVIEW_FOLDER_MORPH_MS);
-  }, [folderMotion]);
 
   useEffect(() => {
     window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
-  }, [folderMotion]);
+  }, [stackMotion]);
 
   if (artifacts.length === 0) return null;
 
-  const folderBusy = folderMotion === "collapsing" || folderMotion === "restoring";
+  const collapsed = stackMotion === "collapsed";
+  const compact = stackMotion !== "expanded";
+  const stackAnimating = stackMotion === "collapsing" || stackMotion === "expanding";
+  const controlsDisabled = clearing
+    || stackAnimating
+    || artifacts.every(({ id }) => exitingArtifactIds.has(id));
 
-  const restoreFromFolderPose = () => {
+  const setStackCollapsed = (nextCollapsed: boolean) => {
+    if (controlsDisabled || collapsed === nextCollapsed) return;
+    if (stackMotionTimer.current) clearTimeout(stackMotionTimer.current);
     if (prefersReducedMotion()) {
-      setFolderMotion("idle");
-      void invoke("restore_mini_previews");
+      setStackMotion(nextCollapsed ? "collapsed" : "expanded");
+      void invoke("set_mini_previews_collapsed", { collapsed: nextCollapsed })
+        .catch(() => setStackMotion(nextCollapsed ? "expanded" : "collapsed"));
       return;
     }
-    markMiniPreviewRestorePending();
-    void invoke("restore_mini_previews");
-    // The native restore command dispatches this once the stack window is
-    // onscreen. The design harness has no second window, so play the release
-    // from the parked folder in place.
-    if (!isTauri()) {
-      window.dispatchEvent(new Event(MINI_PREVIEWS_RESTORED_EVENT));
+    if (nextCollapsed) {
+      setStackMotion("collapsing");
+      stackMotionTimer.current = setTimeout(() => {
+        stackMotionTimer.current = null;
+        setStackMotion("collapsed");
+        void invoke("set_mini_previews_collapsed", { collapsed: true })
+          .catch(() => setStackMotion("expanded"));
+      }, 320);
+      return;
     }
+    void invoke("set_mini_previews_collapsed", { collapsed: false })
+      .then(() => {
+        setStackMotion("expanding");
+        stackMotionTimer.current = setTimeout(() => {
+          stackMotionTimer.current = null;
+          setStackMotion("expanded");
+        }, 320);
+      })
+      .catch(() => setStackMotion("collapsed"));
   };
 
-  const parkStack = () => {
-    setFolderMotion("collapsing");
-    window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
-    void invoke("collapse_mini_previews").catch(() => setFolderMotion("idle"));
-  };
-
-  const collapseIntoFolder = () => {
-    if (collapseLeaving || folderMotion !== "idle") return;
-    if (prefersReducedMotion()) {
-      parkStack();
-      return;
+  const clearPreviews = async () => {
+    if (controlsDisabled) return;
+    setClearing(true);
+    try {
+      await invoke("dismiss_all_artifacts");
+      setStackMotion("expanded");
+      setArtifacts([]);
+      setExitingArtifactIds(new Set());
+    } finally {
+      setClearing(false);
     }
-    const stack = stackRef.current;
-    const folder = collapseRef.current?.querySelector(".mini-preview-folder");
-    if (!stack || !folder || prepareMiniPreviewFolderMotion(stack, folder) === 0) {
-      parkStack();
-      return;
-    }
-    setFolderMotion("collapsing");
-    window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
-    folderMotionTimer.current = setTimeout(() => {
-      folderMotionTimer.current = null;
-      setFolderMotion("parked");
-      void invoke("collapse_mini_previews").catch(() => setFolderMotion("idle"));
-    }, MINI_PREVIEW_FOLDER_MORPH_MS);
   };
 
   const scrollStackBy = (slots: number) => {
@@ -6338,12 +6114,37 @@ export function Thumbnail() {
         ref={stackRef}
         className={[
           "thumbnail-stack",
-          folderMotion === "collapsing" ? "thumbnail-stack-collapsing" : "",
-          folderMotion === "parked" ? "thumbnail-stack-parked" : "",
-          folderMotion === "restoring" ? "thumbnail-stack-restoring" : "",
+          compact ? "thumbnail-stack-compact" : "",
+          stackMotion === "collapsing" ? "thumbnail-stack-minimizing" : "",
+          stackMotion === "collapsed" ? "thumbnail-stack-minimized" : "",
+          stackMotion === "expanding" ? "thumbnail-stack-expanding" : "",
         ].filter(Boolean).join(" ")}
         onScroll={refreshStackOverflow}
       >
+        <div className="thumbnail-stack-toolbar">
+          {!collapsed && (
+            <button
+              type="button"
+              className="thumbnail-stack-control thumbnail-stack-minimize"
+              aria-label="Minimize previews"
+              data-tooltip="Minimize previews"
+              disabled={controlsDisabled}
+              onClick={() => setStackCollapsed(true)}
+            >
+              <MinimizeIcon />
+            </button>
+          )}
+          <button
+            type="button"
+            className="thumbnail-stack-control thumbnail-stack-clear"
+            aria-label="Clear previews"
+            data-tooltip="Clear previews"
+            disabled={controlsDisabled}
+            onClick={() => void clearPreviews()}
+          >
+            <CloseIcon />
+          </button>
+        </div>
         {/* Horizontal-only Gaussian blur for dismiss motion streak (stdDeviation x 0). */}
         <svg className="thumbnail-svg-defs" aria-hidden="true" focusable="false">
           <defs>
@@ -6358,13 +6159,15 @@ export function Thumbnail() {
             </filter>
           </defs>
         </svg>
-        {artifacts.map((artifact) => (
+        {artifacts.map((artifact, index) => (
           <ThumbnailCard
             key={artifact.id}
             artifact={artifact}
             clipboardCurrent={clipboardState.artifact_id === artifact.id}
             viewerActive={activeViewerArtifactId === artifact.id}
             editorActive={editorActiveArtifactIds.has(artifact.id)}
+            stackCollapsed={compact}
+            stackDepth={artifacts.length - index - 1}
             onRemoved={(artifactId) => {
               setArtifactExiting(artifactId, false);
               setArtifacts((current) => current.filter(({ id }) => id !== artifactId));
@@ -6372,39 +6175,17 @@ export function Thumbnail() {
             onExitChange={setArtifactExiting}
           />
         ))}
+        {collapsed && (
+          <button
+            type="button"
+            className="thumbnail-collapsed-hit-target"
+            aria-label={`Expand ${artifacts.length === 1 ? "preview" : `${artifacts.length} previews`}`}
+            disabled={controlsDisabled}
+            onClick={() => setStackCollapsed(false)}
+          />
+        )}
       </main>
-      <button
-        ref={collapseRef}
-        type="button"
-        className={[
-          "thumbnail-collapse",
-          collapseLeaving ? "thumbnail-collapse-leaving" : "",
-          folderMotion === "collapsing" ? "thumbnail-collapse-collapsing" : "",
-          folderMotion === "parked" ? "thumbnail-collapse-parked" : "",
-          folderMotion === "restoring" ? "thumbnail-collapse-restoring" : "",
-        ].filter(Boolean).join(" ")}
-        aria-label={folderMotion === "parked"
-          ? `Show ${miniPreviewsHiddenLabel(artifacts.length)}`
-          : "Hide previews"}
-        data-tooltip={folderMotion === "parked" ? "Show previews" : "Hide previews"}
-        style={{
-          ["--mini-preview-folder-dust-lead" as string]: `${MINI_PREVIEW_FOLDER_DUST_LEAD_MS}ms`,
-        }}
-        disabled={collapseLeaving || folderBusy}
-        onClick={folderMotion === "parked" ? restoreFromFolderPose : collapseIntoFolder}
-      >
-        <MiniPreviewFolder
-          pose={folderMotion === "idle" ? "idle" : folderMotion === "parked" ? "parked" : "open"}
-          sheets={miniPreviewFolderSheetsForMotion(artifacts, folderMotion)}
-        />
-      </button>
-      {collapseLeaving && (
-        <MiniPreviewFolderDust
-          layerRef={folderDustLayerRef}
-          particles={folderDustParticles}
-        />
-      )}
-      {stackOverflow.hasOlder && (
+      {!collapsed && stackOverflow.hasOlder && (
         <button
           type="button"
           className="thumbnail-overflow-cue thumbnail-overflow-cue-older"
@@ -6414,7 +6195,7 @@ export function Thumbnail() {
           <ThumbnailOverflowChevron direction="up" />
         </button>
       )}
-      {stackOverflow.hasNewer && (
+      {!collapsed && stackOverflow.hasNewer && (
         <button
           type="button"
           className="thumbnail-overflow-cue thumbnail-overflow-cue-newer"
@@ -6436,69 +6217,11 @@ function ThumbnailOverflowChevron({ direction }: { direction: "up" | "down" }) {
   );
 }
 
-/** An isometric manila folder whose pocket holds mini-preview sheets. */
-function MiniPreviewFolder({
-  pose,
-  sheets,
-}: {
-  pose: MiniPreviewFolderPose;
-  sheets: MiniPreviewFolderSheet[];
-}) {
+function MinimizeIcon() {
   return (
-    <span className="mini-preview-folder mini-preview-folder-icon" data-pose={pose} aria-hidden="true">
-      <span className="mini-preview-folder-scene">
-        <span className="mini-preview-folder-back" />
-        <span className="mini-preview-folder-tab" />
-        <span className="mini-preview-folder-well" />
-        <span className="mini-preview-folder-pocket">
-          {sheets.map((sheet, index) => (
-            <span
-              key={sheet.id}
-              className="mini-preview-folder-sheet"
-              style={{ "--sheet-i": index } as CSSProperties}
-            >
-              {sheet.src ? <img src={sheet.src} alt="" draggable={false} /> : null}
-            </span>
-          ))}
-        </span>
-        <span className="mini-preview-folder-flap" />
-      </span>
-    </span>
-  );
-}
-
-function MiniPreviewFolderDust({
-  layerRef,
-  particles,
-}: {
-  layerRef: RefObject<HTMLSpanElement | null>;
-  particles: readonly ThumbnailDustParticle[];
-}) {
-  return (
-    <span ref={layerRef} className="thumbnail-collapse-dust-layer" aria-hidden="true">
-      {particles.map((particle) => (
-        <span
-          key={particle.id}
-          className="thumbnail-dust thumbnail-collapse-dust-chip"
-          style={{
-            left: particle.left,
-            top: particle.top,
-            width: particle.width,
-            height: particle.height,
-          }}
-        >
-          <span
-            className="thumbnail-collapse-dust-surface"
-            style={{
-              left: -particle.sourceLeft,
-              top: -particle.sourceTop,
-            }}
-          >
-            <MiniPreviewFolder pose="idle" sheets={[]} />
-          </span>
-        </span>
-      ))}
-    </span>
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M3.5 8.5h9" />
+    </svg>
   );
 }
 
@@ -6507,6 +6230,8 @@ export function ThumbnailCard({
   clipboardCurrent,
   viewerActive,
   editorActive = false,
+  stackCollapsed = false,
+  stackDepth = 0,
   onRemoved,
   onExitChange,
 }: {
@@ -6515,6 +6240,8 @@ export function ThumbnailCard({
   viewerActive: boolean;
   /** True when this capture is still present as a layer in an open editor. */
   editorActive?: boolean;
+  stackCollapsed?: boolean;
+  stackDepth?: number;
   onRemoved: (artifactId: string) => void;
   onExitChange?: (artifactId: string, exiting: boolean) => void;
 }) {
@@ -6903,8 +6630,13 @@ export function ThumbnailCard({
         usingDust ? "thumbnail-exit-dust" : "",
         isExiting ? "thumbnail-exiting" : "",
       ].filter(Boolean).join(" ")}
-      // HTML inert disables all descendant input/focus for the whole exit animation.
-      inert={isExiting ? true : undefined}
+      style={stackCollapsed ? {
+        "--thumbnail-stack-depth": Math.min(stackDepth, 3),
+        "--thumbnail-stack-hidden": stackDepth > 3 ? 1 : 0,
+      } as CSSProperties : undefined}
+      // HTML inert disables all descendant input/focus while the card is decorative.
+      inert={isExiting || stackCollapsed ? true : undefined}
+      aria-hidden={stackCollapsed || undefined}
       aria-busy={isExiting || fileDragging}
       data-exit-locked={isExiting ? "true" : undefined}
       data-file-dragging={fileDragging ? "true" : undefined}
