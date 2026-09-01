@@ -728,7 +728,7 @@ describe("Thumbnail", () => {
     const minimize = screen.getByRole("button", { name: "Minimize previews" });
     expect(minimize).toHaveTextContent("Show less");
     expect(minimize).not.toHaveAttribute("data-tooltip");
-    expect(screen.getByRole("button", { name: "Clear previews" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Clear previews" })).toBeNull();
 
     vi.useFakeTimers();
     fireEvent.click(minimize);
@@ -760,18 +760,5 @@ describe("Thumbnail", () => {
     expect(stack).not.toHaveClass("thumbnail-stack-compact");
     expect(card).not.toHaveAttribute("aria-hidden");
     expect(screen.getByRole("button", { name: "Minimize previews" })).toBeEnabled();
-  });
-
-  it("clears all previews without trashing their saved files", async () => {
-    render(<Thumbnail />);
-    await screen.findByRole("article");
-
-    fireEvent.click(screen.getByRole("button", { name: "Clear previews" }));
-
-    await waitFor(() => {
-      expect(vi.mocked(invoke)).toHaveBeenCalledWith("dismiss_all_artifacts");
-    });
-    expect(screen.queryByRole("article")).toBeNull();
-    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith("trash_artifact", expect.anything());
   });
 });

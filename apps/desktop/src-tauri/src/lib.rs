@@ -272,7 +272,6 @@ pub fn run() {
             reveal_artifact,
             trash_artifact,
             dismiss_artifact,
-            dismiss_all_artifacts,
             open_artifact_viewer,
             screenshot_editor::open_screenshot_editor,
             screenshot_editor::default_screenshot_edit_path,
@@ -2380,24 +2379,6 @@ fn dismiss_artifact(
     artifact_id: String,
 ) -> CommandResult<()> {
     remove_artifact(&app, state.inner(), &artifact_id)
-}
-
-#[tauri::command]
-fn dismiss_all_artifacts(
-    app: AppHandle,
-    state: tauri::State<'_, Arc<AppState>>,
-) -> CommandResult<()> {
-    let artifact_ids = state
-        .artifacts
-        .lock()
-        .iter()
-        .map(|artifact| artifact.id.clone())
-        .collect::<Vec<_>>();
-    for artifact_id in artifact_ids {
-        remove_artifact(&app, state.inner(), &artifact_id)?;
-    }
-    update_thumbnail_stack(&app);
-    Ok(())
 }
 
 // WebView2 can stall a newly constructed webview at about:blank when window
@@ -4634,20 +4615,21 @@ fn update_thumbnail_stack_window(
         return;
     }
     let visible_count = thumbnail_stack_visible_count(count, collapsed);
-    let (x, y, desired_height) = thumbnail_window_geometry(handle, visible_count);
+    let (x, desired_y, desired_height) = thumbnail_window_geometry(handle, visible_count);
     let visible = window.is_visible().unwrap_or(false);
     let presented = thumbnail_window_is_presented(&window);
-    // WKWebView blanks every painted card when its NSWindow shrinks. Keep
-    // the taller frame on macOS, where native hit testing makes the empty
-    // top space click-through. Other platforms shrink normally so an
-    // invisible window area cannot block desktop clicks.
+    // WKWebView blanks painted cards when its visible NSWindow shrinks. Linux
+    // window managers can ignore the matching move after a resize, breaking
+    // the bottom anchor. Precise hit testing keeps the retained empty area
+    // click-through on both platforms.
     let height = thumbnail_visible_window_height(
         desired_height,
         visible
             .then(|| thumbnail_window_logical_height(&window))
             .flatten(),
-        cfg!(target_os = "macos") && !collapsed,
+        thumbnail_preserve_current_height(collapsed),
     );
+    let y = desired_y - (height - desired_height);
     if visible {
         #[cfg(target_os = "macos")]
         if let Err(error) =
@@ -4660,8 +4642,8 @@ fn update_thumbnail_stack_window(
 
         #[cfg(not(target_os = "macos"))]
         {
-            let _ = window.set_size(LogicalSize::new(THUMBNAIL_WIDTH, height));
             let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+            let _ = window.set_size(LogicalSize::new(THUMBNAIL_WIDTH, height));
         }
     } else {
         let _ = window.set_size(LogicalSize::new(THUMBNAIL_WIDTH, height));
@@ -4693,8 +4675,6 @@ fn thumbnail_window_logical_height(window: &tauri::WebviewWindow) -> Option<f64>
     Some(f64::from(size.height) / scale)
 }
 
-/// On macOS, keep a visible stack from shrinking because WKWebView blanks its
-/// surviving cards during NSWindow recomposition. Other platforms can shrink.
 fn thumbnail_visible_window_height(
     desired: f64,
     current: Option<f64>,
@@ -4704,6 +4684,10 @@ fn thumbnail_visible_window_height(
         (true, Some(current)) => desired.max(current),
         _ => desired,
     }
+}
+
+fn thumbnail_preserve_current_height(collapsed: bool) -> bool {
+    (cfg!(target_os = "macos") && !collapsed) || (cfg!(target_os = "linux") && collapsed)
 }
 
 fn thumbnail_webview_needs_tauri_show(is_visible: bool) -> bool {
@@ -6427,9 +6411,10 @@ mod tests {
         resolve_startup_notice_placement, resolve_window_capture, should_trigger_shortcut,
         startup_notice_fallback_edge_from_insets, startup_notice_url, thumbnail_cursor_action,
         thumbnail_cursor_ignore_update, thumbnail_geometry, thumbnail_pointer_in_space,
-        thumbnail_pointer_position, thumbnail_stack_should_be_visible,
-        thumbnail_stack_visible_count, thumbnail_visible_window_height, track_shortcut_suppression,
-        tray_accelerator, tray_icon_rect_is_usable, tray_notice_window_size, viewer_window_label,
+        thumbnail_pointer_position, thumbnail_preserve_current_height,
+        thumbnail_stack_should_be_visible, thumbnail_stack_visible_count,
+        thumbnail_visible_window_height, track_shortcut_suppression, tray_accelerator,
+        tray_icon_rect_is_usable, tray_notice_window_size, viewer_window_label,
         window_display_crop_is_safe, window_is_capturable, windows_window_is_capture_overlay,
     };
 
@@ -7239,7 +7224,7 @@ mod tests {
     }
 
     #[test]
-    fn minimized_stack_uses_one_card_of_native_window_height() {
+    fn minimized_stack_requests_one_card_of_native_window_height() {
         assert_eq!(thumbnail_stack_visible_count(4, true), 1);
         assert_eq!(thumbnail_stack_visible_count(4, false), 4);
         assert_eq!(thumbnail_stack_visible_count(0, true), 0);
@@ -7250,6 +7235,14 @@ mod tests {
         assert_eq!(
             thumbnail_visible_window_height(400.0, Some(584.0), false),
             400.0
+        );
+    }
+
+    #[test]
+    fn preserves_linux_thumbnail_height_while_collapsed() {
+        assert_eq!(
+            thumbnail_preserve_current_height(true),
+            cfg!(target_os = "linux")
         );
     }
 

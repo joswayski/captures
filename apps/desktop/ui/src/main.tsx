@@ -14,9 +14,12 @@ applyAppearance(readStoredAppearance());
 applyColorTheme(readStoredColorTheme(), readStoredCustomTheme());
 
 async function start() {
+  const searchParams = new URLSearchParams(window.location.search);
   // Dev-only design harness: renders any window with representative data so the
   // UI can be reviewed in a browser without the Tauri backend.
-  if (import.meta.env.DEV && new URLSearchParams(window.location.search).has("mock")) {
+  if (import.meta.env.DEV && searchParams.has("mock")) {
+    const view = searchParams.get("view");
+    if (view) document.documentElement.dataset.previewHarnessView = view;
     const { installPreviewBackend } = await import("./dev/previewBackend");
     installPreviewBackend();
   }

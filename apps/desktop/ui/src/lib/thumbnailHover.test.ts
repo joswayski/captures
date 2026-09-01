@@ -464,6 +464,24 @@ describe("shouldIgnoreThumbnailCursorEvents", () => {
     expect(shouldIgnoreThumbnailCursorEvents({ x: 20, y: 20, inside: true })).toBe(false);
   });
 
+  it("passes clicks through toolbar chrome outside the minimize button", () => {
+    document.body.innerHTML = `
+      <main class="thumbnail-stack">
+        <div class="thumbnail-stack-toolbar">
+          <button class="thumbnail-stack-control">Minimize previews</button>
+        </div>
+        <article class="thumbnail-card"><button>Copy</button></article>
+      </main>
+    `;
+    const toolbar = document.querySelector(".thumbnail-stack-toolbar")!;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => toolbar),
+    });
+
+    expect(shouldIgnoreThumbnailCursorEvents({ x: 100, y: 20, inside: true })).toBe(true);
+  });
+
   it("passes through the whole stack when every preview is exiting", () => {
     document.body.innerHTML = `
       <main class="thumbnail-stack">

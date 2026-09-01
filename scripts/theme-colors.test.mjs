@@ -148,6 +148,10 @@ test("mini-preview stack controls use opaque glass tokens and contained shadows"
   ]);
   assert.match(designCss, /--glass-strong-solid:\s*rgb\(15, 15, 18\)/u);
   assert.match(designCss, /--glass-raised-solid:\s*rgb\(38, 38, 45\)/u);
+  assert.match(
+    desktopCss,
+    /html\[data-preview-harness-view="thumbnail"\] #root\s*\{[^}]*width:\s*340px/u,
+  );
 
   const stackControl =
     desktopCss.match(/\.thumbnail-stack-control\s*\{([\s\S]*?)\n\}/u)?.[1];
@@ -180,6 +184,14 @@ test("mini-preview stack controls use opaque glass tokens and contained shadows"
     desktopCss,
     /\.thumbnail-stack-minimized > \.thumbnail-card[\s\S]*?translate3d/u,
   );
+  const stackToolbar =
+    desktopCss.match(/\.thumbnail-stack-toolbar\s*\{([\s\S]*?)\n\}/u)?.[1];
+  assert.ok(stackToolbar, "missing .thumbnail-stack-toolbar rule");
+  assert.match(stackToolbar, /bottom:\s*34px/u);
+  assert.match(stackToolbar, /left:\s*34px/u);
+  assert.doesNotMatch(stackToolbar, /\btop:/u);
+  assert.doesNotMatch(stackToolbar, /\bright:/u);
+  assert.doesNotMatch(desktopCss, /\.thumbnail-stack-clear/u);
 });
 
 test("preset accent and signal values are not duplicated outside the shared palette", async () => {

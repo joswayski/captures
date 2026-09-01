@@ -5462,7 +5462,6 @@ export function Thumbnail() {
   const [stackMotion, setStackMotion] = useState<
     "expanded" | "collapsing" | "collapsed" | "expanding"
   >("expanded");
-  const [clearing, setClearing] = useState(false);
   const [exitingArtifactIds, setExitingArtifactIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -6043,8 +6042,7 @@ export function Thumbnail() {
   const collapsed = stackMotion === "collapsed";
   const compact = stackMotion !== "expanded";
   const stackAnimating = stackMotion === "collapsing" || stackMotion === "expanding";
-  const controlsDisabled = clearing
-    || stackAnimating
+  const controlsDisabled = stackAnimating
     || artifacts.every(({ id }) => exitingArtifactIds.has(id));
 
   const setStackCollapsed = (nextCollapsed: boolean) => {
@@ -6075,19 +6073,6 @@ export function Thumbnail() {
         }, 320);
       })
       .catch(() => setStackMotion("collapsed"));
-  };
-
-  const clearPreviews = async () => {
-    if (controlsDisabled) return;
-    setClearing(true);
-    try {
-      await invoke("dismiss_all_artifacts");
-      setStackMotion("expanded");
-      setArtifacts([]);
-      setExitingArtifactIds(new Set());
-    } finally {
-      setClearing(false);
-    }
   };
 
   const scrollStackBy = (slots: number) => {
@@ -6121,8 +6106,8 @@ export function Thumbnail() {
         ].filter(Boolean).join(" ")}
         onScroll={refreshStackOverflow}
       >
-        <div className="thumbnail-stack-toolbar">
-          {!collapsed && (
+        {stackMotion === "expanded" && (
+          <div className="thumbnail-stack-toolbar">
             <button
               type="button"
               className="thumbnail-stack-control thumbnail-stack-minimize"
@@ -6135,18 +6120,8 @@ export function Thumbnail() {
                 Show less
               </span>
             </button>
-          )}
-          <button
-            type="button"
-            className="thumbnail-stack-control thumbnail-stack-clear"
-            aria-label="Clear previews"
-            data-tooltip="Clear previews"
-            disabled={controlsDisabled}
-            onClick={() => void clearPreviews()}
-          >
-            <CloseIcon />
-          </button>
-        </div>
+          </div>
+        )}
         {/* Horizontal-only Gaussian blur for dismiss motion streak (stdDeviation x 0). */}
         <svg className="thumbnail-svg-defs" aria-hidden="true" focusable="false">
           <defs>

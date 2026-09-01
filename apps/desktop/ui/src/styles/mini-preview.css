@@ -1,11 +1,17 @@
 /*
  * Mini previews: the always-on-top stack of recent captures.
  *
- * Geometry is load-bearing. Card height (160), stack gap (24), stack padding
- * (28), and card radius (12) are mirrored by thumbnailLayout.ts and
- * thumbnailExit.ts, which measure slots and build the dissolve particles.
- * Restyle freely; do not change those numbers without updating both modules.
+ * Geometry is load-bearing. Window width (340), card height (160), stack gap
+ * (24), stack padding (28), and card radius (12) are mirrored by native code,
+ * thumbnailLayout.ts, and thumbnailExit.ts, which measure slots and build the
+ * dissolve particles. Restyle freely; keep all mirrored values in sync.
  */
+
+html[data-preview-harness-view="thumbnail"] #root {
+  position: fixed;
+  inset: 0 auto 0 0;
+  width: 340px;
+}
 
 /*
  * Bottom-anchor the stack with content height rather than a full-window flex
@@ -1364,8 +1370,8 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-contr
 .thumbnail-stack-toolbar {
   position: absolute;
   z-index: 50;
-  top: 34px;
-  right: 34px;
+  bottom: 34px;
+  left: 34px;
   display: flex;
   gap: var(--s-1);
   pointer-events: auto;
@@ -1505,13 +1511,6 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-contr
 .thumbnail-stack-control[data-tooltip]:focus-visible::after {
   opacity: 1;
   transform: translateY(0);
-}
-
-.thumbnail-stack-clear:hover,
-.thumbnail-stack-clear[data-native-pointer-hover="true"] {
-  color: var(--theme-signal-text);
-  background: var(--theme-signal);
-  border-color: var(--theme-signal);
 }
 
 .thumbnail-stack-compact {
