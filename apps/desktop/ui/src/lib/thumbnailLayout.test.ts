@@ -146,19 +146,35 @@ describe("thumbnail stack layout", () => {
     expect(outlineFade?.[1]).toMatch(/filter:\s*opacity\(0\)/);
   });
 
-  it("uses a grab cursor on the collapsed stack so it can be moved", () => {
+  it("uses a pointer cursor on the collapsed stack so expand is obvious", () => {
     const hitTarget = thumbnailStyles.match(
       /\.thumbnail-collapsed-hit-target\s*\{([\s\S]*?)\n\}/,
     );
 
-    expect(hitTarget?.[1]).toMatch(/cursor:\s*grab/);
+    expect(hitTarget?.[1]).toMatch(/cursor:\s*pointer/);
     expect(hitTarget?.[1]).toMatch(/--thumbnail-collapsed-peek/);
     expect(hitTarget?.[1]).not.toMatch(/height:\s*248px/);
     expect(thumbnailStyles).toMatch(
-      /\.thumbnail-stack-minimized > \.thumbnail-card \*/,
+      /\.thumbnail-stack-minimized(?::not\(\.thumbnail-stack-dragging\))? > \.thumbnail-card \*/,
     );
     expect(thumbnailStyles).toMatch(
       /html\.thumbnail-native-tracking \.thumbnail-stack-minimized \.thumbnail-card img/,
+    );
+  });
+
+  it("fades the Show less control in linearly and delays hiding it on last delete", () => {
+    const enter = thumbnailStyles.split("@keyframes thumbnail-stack-toolbar-in")[1]
+      ?.split("@keyframes")[0];
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-toolbar-entering\s*\{[^}]*animation:\s*thumbnail-stack-toolbar-in 0\.48s linear/,
+    );
+    expect(enter).toMatch(/35%/);
+    expect(enter).not.toMatch(/60%/);
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-toolbar-exiting\s*\{[^}]*animation:\s*thumbnail-stack-toolbar-exit/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-control\s*\{[\s\S]*?cursor:\s*pointer/,
     );
   });
 

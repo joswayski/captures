@@ -393,9 +393,9 @@ function thumbnailStackControlAtPoint(
 /**
  * Activates the hovered preview card and returns which cursor to show.
  *
- * - `pointer` over action buttons and stack chrome
- * - `grab` over the preview image / card chrome (file drag source) and the
- *   collapsed pile (window drag source)
+ * - `pointer` over action buttons, stack chrome, and the collapsed pile
+ *   (click expands; a drag still uses the grabbing cursor)
+ * - `grab` over the preview image / card chrome (file drag source)
  * - `default` outside a live card
  */
 export function applyThumbnailNativeHover(
@@ -445,9 +445,7 @@ export function applyThumbnailNativeHover(
     if (!ignoreCollapsedHover) {
       stackControl.setAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE, "true");
     }
-    return stackControl.classList.contains("thumbnail-collapsed-hit-target")
-      ? "grab"
-      : "pointer";
+    return "pointer";
   }
   if (thumbnailStackSuppressesCardHover(root)) {
     clearThumbnailNativeHover(root);

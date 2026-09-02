@@ -6361,17 +6361,19 @@ export function Thumbnail() {
           if (compact) preventThumbnailHtml5Drag(event.nativeEvent);
         }}
       >
-        {!exitingOnly && !collapsed && (
+        {!collapsed && (
           <div className={[
             "thumbnail-stack-toolbar",
             stackMotion === "collapsing" ? "thumbnail-stack-toolbar-leaving" : "",
             stackMotion === "expanding" ? "thumbnail-stack-toolbar-entering" : "",
+            exitingOnly && stackMotion !== "collapsing"
+              ? "thumbnail-stack-toolbar-exiting"
+              : "",
           ].filter(Boolean).join(" ")}>
             <button
               type="button"
               className="thumbnail-stack-control thumbnail-stack-minimize"
               aria-label="Minimize previews"
-              disabled={controlsDisabled}
               onClick={() => setStackCollapsed(true)}
             >
               <PreviewStackIcon />
