@@ -2,7 +2,7 @@ use crate::conceal_policy::should_conceal_documents_for_capture_activation;
 use crate::cursor_policy::{
     CaptureCursor, CaptureCursorEvent, CaptureCursorKind, CaptureCursorMonitorAction,
     ThumbnailHoverCursor, capture_cursor_monitor_action, overlay_prepare_keeps_native_cursor,
-    suppress_document_cursor_rects_for_thumbnail, thumbnail_css_fallback_restores_cursor_rects,
+    should_restore_thumbnail_css_cursor_rects, suppress_document_cursor_rects_for_thumbnail,
     thumbnail_may_take_key_window, thumbnail_passthrough_disables_cursor_rects,
     thumbnail_poll_is_live, thumbnail_resets_cursor_on_exit, thumbnail_unpolled_hover,
 };
@@ -2813,10 +2813,10 @@ pub fn restore_thumbnail_css_cursor_rects(window: &WebviewWindow) -> Result<(), 
         return run_on_main(move || restore_thumbnail_css_cursor_rects(&window))
             .ok_or("thumbnail CSS cursor restore did not run on the main thread")?;
     }
-    if !thumbnail_css_fallback_restores_cursor_rects() {
-        return Ok(());
-    }
-    if capture_overlay_owns_cursor() {
+    if !should_restore_thumbnail_css_cursor_rects(
+        thumbnail_is_presented(),
+        capture_overlay_owns_cursor(),
+    ) {
         return Ok(());
     }
     let native_window = native_window(window)?;
