@@ -54,7 +54,7 @@ describe("thumbnail stack layout", () => {
       /\.thumbnail-stack-minimized\.thumbnail-stack-hover-ready > \.thumbnail-card\s*\{([\s\S]*?)\n\}/,
     );
     const minimizeFrom = thumbnailStyles.match(
-      /@keyframes thumbnail-card-minimize\s*\{[\s\S]*?from\s*\{([\s\S]*?)\n  \}/,
+      /@keyframes thumbnail-card-minimize\s*\{[\s\S]*?from\s*\{([\s\S]*?)\n {2}\}/,
     );
     const hoverFan = thumbnailStyles.match(
       /\.thumbnail-stack-minimized\.thumbnail-stack-hover-ready:has\(\.thumbnail-collapsed-hit-target:hover\)/,

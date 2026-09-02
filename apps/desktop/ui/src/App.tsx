@@ -5486,6 +5486,7 @@ export function Thumbnail() {
   });
   const stackRef = useRef<HTMLElement>(null);
   const stackMotionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stackHoverReadyFrames = useRef<{ first: number; second: number } | null>(null);
   const previousArtifactCount = useRef(0);
   const cancelStackScroll = useRef<(() => void) | null>(null);
   const applyClipboardState = useCallback((next: ClipboardState) => {
@@ -6033,28 +6034,16 @@ export function Thumbnail() {
       cancelStackScroll.current?.();
       cancelStackScroll.current = null;
       if (stackMotionTimer.current) clearTimeout(stackMotionTimer.current);
+      if (stackHoverReadyFrames.current) {
+        cancelAnimationFrame(stackHoverReadyFrames.current.first);
+        cancelAnimationFrame(stackHoverReadyFrames.current.second);
+        stackHoverReadyFrames.current = null;
+      }
     };
   }, []);
 
   useEffect(() => {
     window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
-  }, [stackMotion]);
-
-  useEffect(() => {
-    if (stackMotion !== "collapsed") {
-      setStackHoverReady(false);
-      return;
-    }
-    // Wait two frames so the minimize keyframe fill is committed as the rest
-    // pose before transform easing (hover fan-out) turns back on.
-    let secondFrame = 0;
-    const firstFrame = requestAnimationFrame(() => {
-      secondFrame = requestAnimationFrame(() => setStackHoverReady(true));
-    });
-    return () => {
-      cancelAnimationFrame(firstFrame);
-      cancelAnimationFrame(secondFrame);
-    };
   }, [stackMotion]);
 
   if (artifacts.length === 0) return null;
@@ -6068,28 +6057,59 @@ export function Thumbnail() {
   const setStackCollapsed = (nextCollapsed: boolean) => {
     if (controlsDisabled || collapsed === nextCollapsed) return;
     if (stackMotionTimer.current) clearTimeout(stackMotionTimer.current);
+    const cancelHoverReady = () => {
+      if (stackHoverReadyFrames.current) {
+        cancelAnimationFrame(stackHoverReadyFrames.current.first);
+        cancelAnimationFrame(stackHoverReadyFrames.current.second);
+        stackHoverReadyFrames.current = null;
+      }
+      setStackHoverReady(false);
+    };
+    // Two frames after collapse so the minimize fill is the rest pose before
+    // transform easing (hover fan-out) turns back on.
+    const armHoverReady = () => {
+      cancelHoverReady();
+      const frames = { first: 0, second: 0 };
+      frames.first = requestAnimationFrame(() => {
+        frames.second = requestAnimationFrame(() => {
+          stackHoverReadyFrames.current = null;
+          setStackHoverReady(true);
+        });
+      });
+      stackHoverReadyFrames.current = frames;
+    };
     if (prefersReducedMotion()) {
       setStackMotion(nextCollapsed ? "collapsed" : "expanded");
+      if (nextCollapsed) armHoverReady();
+      else cancelHoverReady();
       void invoke("set_mini_previews_collapsed", { collapsed: nextCollapsed })
-        .catch(() => setStackMotion(nextCollapsed ? "expanded" : "collapsed"));
+        .catch(() => {
+          setStackMotion(nextCollapsed ? "expanded" : "collapsed");
+          if (nextCollapsed) cancelHoverReady();
+          else armHoverReady();
+        });
       return;
     }
     if (nextCollapsed) {
+      cancelHoverReady();
       setStackMotion("collapsing");
       const collapsePromise = invoke("set_mini_previews_collapsed", { collapsed: true });
       stackMotionTimer.current = setTimeout(() => {
         stackMotionTimer.current = null;
         setStackMotion("collapsed");
+        armHoverReady();
       }, STACK_MOTION_MS);
       void collapsePromise.catch(() => {
         if (stackMotionTimer.current) {
           clearTimeout(stackMotionTimer.current);
           stackMotionTimer.current = null;
         }
+        cancelHoverReady();
         setStackMotion("expanded");
       });
       return;
     }
+    cancelHoverReady();
     void invoke("set_mini_previews_collapsed", { collapsed: false })
       .then(() => {
         setStackMotion("expanding");
@@ -6098,7 +6118,10 @@ export function Thumbnail() {
           setStackMotion("expanded");
         }, STACK_MOTION_MS);
       })
-      .catch(() => setStackMotion("collapsed"));
+      .catch(() => {
+        setStackMotion("collapsed");
+        armHoverReady();
+      });
   };
 
   const scrollStackBy = (slots: number) => {
