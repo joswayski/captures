@@ -4919,8 +4919,7 @@ fn set_mini_preview_stack_position(
     };
     let work = thumbnail_work_area(bounds);
     let content_height = thumbnail_stack_height(1, true);
-    let frame_height =
-        thumbnail_window_logical_height(&window).unwrap_or(content_height);
+    let frame_height = thumbnail_window_logical_height(&window).unwrap_or(content_height);
     let (x, y) = thumbnail_clamp_bottom_aligned_frame(x, y, frame_height, content_height, work);
     let _ = window.set_position(tauri::LogicalPosition::new(x, y));
     state
@@ -6516,10 +6515,10 @@ mod tests {
         recording::RECORDING_REGION_INDICATOR_TITLE, refine_window_chrome_from_snapshot,
         resolve_startup_notice_placement, resolve_window_capture, should_trigger_shortcut,
         startup_notice_fallback_edge_from_insets, startup_notice_url,
-        thumbnail_clamp_bottom_aligned_frame, thumbnail_clamp_frame,
-        thumbnail_cursor_action, thumbnail_cursor_ignore_update, thumbnail_geometry,
-        thumbnail_pointer_in_space, thumbnail_pointer_position, thumbnail_preserve_current_height,
-        thumbnail_stack_height, thumbnail_stack_should_be_visible, thumbnail_stack_visible_count,
+        thumbnail_clamp_bottom_aligned_frame, thumbnail_clamp_frame, thumbnail_cursor_action,
+        thumbnail_cursor_ignore_update, thumbnail_geometry, thumbnail_pointer_in_space,
+        thumbnail_pointer_position, thumbnail_preserve_current_height, thumbnail_stack_height,
+        thumbnail_stack_should_be_visible, thumbnail_stack_visible_count,
         thumbnail_visible_window_height, track_shortcut_suppression, tray_accelerator,
         tray_icon_rect_is_usable, tray_notice_window_size, viewer_window_label,
         window_display_crop_is_safe, window_is_capturable, windows_window_is_capture_overlay,
@@ -7370,11 +7369,8 @@ mod tests {
     #[test]
     fn lets_a_collapsed_pile_reach_the_top_when_the_window_stays_tall() {
         // 4-card expanded frame kept after collapse; pile is the bottom 240px.
-        let work = super::thumbnail_work_area(bounds(
-            (0, 0, 1_920, 1_040),
-            (0, 0, 1_920, 1_080),
-            1.0,
-        ));
+        let work =
+            super::thumbnail_work_area(bounds((0, 0, 1_920, 1_040), (0, 0, 1_920, 1_080), 1.0));
         assert_eq!(
             thumbnail_clamp_bottom_aligned_frame(-40.0, -800.0, 792.0, 240.0, work),
             (0.0, -552.0)
