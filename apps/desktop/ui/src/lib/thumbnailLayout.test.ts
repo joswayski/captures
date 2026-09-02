@@ -151,6 +151,21 @@ describe("thumbnail stack layout", () => {
     expect(shouldScrollThumbnailStackToEnd(2, 2)).toBe(false);
   });
 
+  it("dims stacked cards with an overlay instead of a parent filter", () => {
+    expect(thumbnailStyles).not.toMatch(
+      /\.thumbnail-stack-compact > \.thumbnail-card\s*\{[^}]*filter:\s*brightness/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-compact > \.thumbnail-card::before\s*\{[^}]*opacity:\s*calc\(var\(--thumbnail-stack-depth/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-card img\s*\{[^}]*filter:\s*blur\(0\) brightness\(1\)/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack\[data-thumbnail-suppress-card-hover="true"\]/,
+    );
+  });
+
   it("reports hidden previews at each scroll edge", () => {
     expect(thumbnailStackOverflow(0, 1_000, 400)).toEqual({
       hasOlder: false,

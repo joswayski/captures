@@ -84,11 +84,15 @@ import {
   clearThumbnailNativeHover,
   markThumbnailEditorControlOpened,
   rearmThumbnailEditorControlHover,
+  setThumbnailCardHoverSuppressed,
   setThumbnailNativeActiveCard,
   shouldIgnoreThumbnailCursorEvents,
+  shouldLockThumbnailCardHoverOnStackMotion,
   shouldRecoverThumbnailAfterNullPolls,
+  thumbnailCardHoverLockReleased,
   thumbnailCursorSyncAction,
   thumbnailStackHasLiveHitTarget,
+  thumbnailStackHoldsCollapsedPose,
   withThumbnailPointerTimeout,
   THUMBNAIL_CURSOR_HANDOFF_REASSERT_DELAYS_MS,
   type ThumbnailCursorKind,
@@ -5489,6 +5493,9 @@ export function Thumbnail() {
   const stackRef = useRef<HTMLElement>(null);
   const stackMotionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stackHoverReadyFrames = useRef<{ first: number; second: number } | null>(null);
+  const previousStackMotion = useRef<"expanded" | "collapsing" | "collapsed" | "expanding">(
+    "expanded",
+  );
   const previousArtifactCount = useRef(0);
   const cancelStackScroll = useRef<(() => void) | null>(null);
   const applyClipboardState = useCallback((next: ClipboardState) => {
@@ -5708,6 +5715,8 @@ export function Thumbnail() {
     let lastCursorSyncAt = 0;
     let consecutiveNullPolls = 0;
     let cursorHandoffTimers: ReturnType<typeof setTimeout>[] = [];
+    let cardHoverLocked = false;
+    let cardHoverLockOrigin: { x: number; y: number } | null = null;
     /**
      * Clicks and document-window handoffs can make macOS restore the frontmost
      * app's arrow for a frame. Reassert the current interactive cursor
@@ -5822,7 +5831,46 @@ export function Thumbnail() {
       setIgnoreCursorEvents(true, true);
     };
 
+    const lockCardHover = () => {
+      cardHoverLocked = true;
+      cardHoverLockOrigin = null;
+      setThumbnailCardHoverSuppressed(true);
+    };
+
+    const unlockCardHover = () => {
+      if (!cardHoverLocked) return;
+      cardHoverLocked = false;
+      cardHoverLockOrigin = null;
+      setThumbnailCardHoverSuppressed(false);
+    };
+
+    const maybeUnlockCardHover = (
+      position: ThumbnailPointerPosition,
+      options: { fromPointerMove?: boolean } = {},
+    ) => {
+      if (!cardHoverLocked) return;
+      // Window-relative coordinates change while the pile is still compact.
+      // Capture the origin only after cards are in their expanded layout.
+      if (thumbnailStackHoldsCollapsedPose()) return;
+      if (options.fromPointerMove && !cardHoverLockOrigin) {
+        unlockCardHover();
+        return;
+      }
+      if (!cardHoverLockOrigin) {
+        if (position.inside) {
+          cardHoverLockOrigin = { x: position.x, y: position.y };
+        } else {
+          unlockCardHover();
+        }
+        return;
+      }
+      if (thumbnailCardHoverLockReleased(cardHoverLockOrigin, position)) {
+        unlockCardHover();
+      }
+    };
+
     const applyNativeHover = (position: ThumbnailPointerPosition) => {
+      maybeUnlockCardHover(position);
       const ignore = shouldIgnoreThumbnailCursorEvents(position);
       const kind = applyThumbnailNativeHover(position);
       if (ignore || kind === "default") {
@@ -5967,7 +6015,19 @@ export function Thumbnail() {
       schedulePoll(0);
     };
 
-    const updateThumbnailHitTest = () => {
+    const updateThumbnailHitTest = (event: Event) => {
+      const detail = event instanceof CustomEvent
+        ? (event as CustomEvent<{
+          stackMotion?: string;
+          previousStackMotion?: string;
+        }>).detail
+        : undefined;
+      if (shouldLockThumbnailCardHoverOnStackMotion(
+        detail?.stackMotion,
+        detail?.previousStackMotion,
+      )) {
+        lockCardHover();
+      }
       clearNativeHover();
       const applyHitTest = () => {
         // Wait a microtask so React can commit `.thumbnail-exiting` from the
@@ -5978,6 +6038,16 @@ export function Thumbnail() {
         pollImmediately();
       };
       queueMicrotask(applyHitTest);
+    };
+
+    const onPointerMove = (event: PointerEvent) => {
+      if (!cardHoverLocked) return;
+      const wasLocked = cardHoverLocked;
+      maybeUnlockCardHover(
+        { x: event.clientX, y: event.clientY, inside: true },
+        { fromPointerMove: true },
+      );
+      if (wasLocked && !cardHoverLocked) pollImmediately();
     };
 
     const onPointerActivity = (event: Event) => {
@@ -6000,6 +6070,7 @@ export function Thumbnail() {
     // through that later native transition as well.
     window.addEventListener("blur", preserveInteractiveCursorAcrossHandoff);
     // Capture-phase so we reassert before WebKit's own cursor update from the click.
+    window.addEventListener("pointermove", onPointerMove);
     window.addEventListener("pointerdown", onPointerActivity, true);
     window.addEventListener("pointerup", onPointerActivity, true);
     // `click` fires after mouseup and after the Edit handler starts opening the
@@ -6023,6 +6094,7 @@ export function Thumbnail() {
       document.removeEventListener("visibilitychange", resumeFromSuspension);
       window.removeEventListener("focus", pollImmediately);
       window.removeEventListener("blur", preserveInteractiveCursorAcrossHandoff);
+      window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerdown", onPointerActivity, true);
       window.removeEventListener("pointerup", onPointerActivity, true);
       window.removeEventListener("click", onPointerActivity, true);
@@ -6037,6 +6109,7 @@ export function Thumbnail() {
         updateThumbnailHitTest,
       );
       stopNativeTracking();
+      unlockCardHover();
     };
   }, [hasThumbnailCards]);
 
@@ -6054,7 +6127,11 @@ export function Thumbnail() {
   }, []);
 
   useEffect(() => {
-    window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
+    const previous = previousStackMotion.current;
+    previousStackMotion.current = stackMotion;
+    window.dispatchEvent(new CustomEvent(THUMBNAIL_HIT_TEST_CHANGED_EVENT, {
+      detail: { stackMotion, previousStackMotion: previous },
+    }));
   }, [stackMotion]);
 
   if (artifacts.length === 0) return null;
