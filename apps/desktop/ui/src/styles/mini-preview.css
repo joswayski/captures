@@ -853,6 +853,8 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-main-actio
  * Native AppKit owns the cursor while polling. Mirror one hit-tested kind on
  * the whole tree so WebKit cannot alternate element-level pointer/grab/default
  * rules (or the system arrow) on every cursor-rectangle update.
+ * Do not paint `cursor: default` on the document: after collapse the native
+ * window stays tall, and that arrow would cover apps underneath the hole.
  */
 html.thumbnail-native-tracking[data-thumbnail-cursor="grab"],
 html.thumbnail-native-tracking[data-thumbnail-cursor="grab"] * {
@@ -863,11 +865,6 @@ html.thumbnail-native-tracking[data-thumbnail-cursor="grab"] * {
 html.thumbnail-native-tracking[data-thumbnail-cursor="pointer"],
 html.thumbnail-native-tracking[data-thumbnail-cursor="pointer"] * {
   cursor: pointer !important;
-}
-
-html.thumbnail-native-tracking[data-thumbnail-cursor="default"],
-html.thumbnail-native-tracking[data-thumbnail-cursor="default"] * {
-  cursor: default !important;
 }
 
 /*

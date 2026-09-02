@@ -1487,7 +1487,7 @@ fn thumbnail_cursor_action(
 ) -> ThumbnailCursorAction {
     if suppressed {
         ThumbnailCursorAction::Ignore
-    } else if visible {
+    } else if visible && !matches!(kind, ThumbnailCursorKind::Default) {
         ThumbnailCursorAction::Apply(kind)
     } else {
         ThumbnailCursorAction::Reset
@@ -7069,6 +7069,10 @@ mod tests {
         assert_eq!(
             thumbnail_cursor_action(false, true, ThumbnailCursorKind::Grab),
             ThumbnailCursorAction::Apply(ThumbnailCursorKind::Grab)
+        );
+        assert_eq!(
+            thumbnail_cursor_action(false, true, ThumbnailCursorKind::Default),
+            ThumbnailCursorAction::Reset
         );
         assert_eq!(
             thumbnail_cursor_action(false, false, ThumbnailCursorKind::Pointer),
