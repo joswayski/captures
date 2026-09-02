@@ -1946,9 +1946,6 @@ fn apply_capture_cursor_monitor_event(event: &NSEvent) {
 }
 
 /// Drops capture cursor ownership without requiring the overlay window.
-///
-/// The capture menu is destroyed rather than reused, so hide/reset may not run
-/// on a live `WebviewWindow`.
 pub fn release_capture_cursor() {
     if !is_main_thread() {
         let _ = run_on_main(release_capture_cursor);

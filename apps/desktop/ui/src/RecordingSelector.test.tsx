@@ -1065,6 +1065,19 @@ describe("RecordingSelector", () => {
     expect(screen.getByRole("button", { name: "Start recording" })).toBeDisabled();
   });
 
+  it("keeps window capture available while window targets load in the background", async () => {
+    preparedSession = {
+      ...session,
+      initial_target: "display",
+      windows: [],
+      windows_ready: false,
+    };
+    render(<RecordingSelector />);
+
+    expect(await screen.findByRole("button", { name: "Window" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Full screen" })).toBeEnabled();
+  });
+
   it("keeps the selector surface fixed while the controls are dragged within the display", async () => {
     const { container } = render(<RecordingSelector />);
     await screen.findByRole("button", { name: "Start recording" });

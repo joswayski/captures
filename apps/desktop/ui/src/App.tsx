@@ -2084,7 +2084,14 @@ export function RecordingSelector() {
             setSelectedWindow(null);
           }
         }
-        if (!snapshotChanged && visibleSnapshotRef.current === revealKey) {
+        if (
+          !snapshotChanged
+          && visibleSnapshotRef.current === revealKey
+          && (
+            previous.initial_target !== selection.initial_target
+            || previous.initial_mode !== selection.initial_mode
+          )
+        ) {
           visibleSnapshotRef.current = null;
           revealSelector(selection.id, freezeFrameRevealKey(selection));
         }
@@ -2131,16 +2138,19 @@ export function RecordingSelector() {
     const onSelectionReady = ({ payload }: { payload: RecordingSelectionSession }) => {
       if (!active) return;
       const currentSettings = settingsRef.current;
+      if (currentSettings) {
+        applySelection(payload, currentSettings);
+      }
       void invoke<AppSettings>("get_settings").then((latestSettings) => {
         if (!active) return;
         settingsRef.current = latestSettings;
         setSettings(latestSettings);
-        applySelection(payload, latestSettings);
+        if (!currentSettings) {
+          applySelection(payload, latestSettings);
+        }
       }).catch(() => {
         if (!active) return;
-        if (currentSettings) {
-          applySelection(payload, currentSettings);
-        } else {
+        if (!currentSettings) {
           void invoke("cancel_recording_selection", { selectionId: payload.id });
         }
       });
@@ -2868,8 +2878,8 @@ export function RecordingSelector() {
                 type="button"
                 className={targetMode === mode ? "active" : ""}
                 aria-pressed={targetMode === mode}
-                disabled={mode === "window" && windowLayouts.length === 0}
-                title={mode === "window" && windowLayouts.length === 0
+                disabled={mode === "window" && session.windows_ready !== false && windowLayouts.length === 0}
+                title={mode === "window" && session.windows_ready !== false && windowLayouts.length === 0
                   ? "Window capture is not available in this desktop session"
                   : undefined}
                 onClick={() => {
@@ -4961,6 +4971,12 @@ function CaptureOverlay() {
     void (async () => {
       const unlisten = await listen<ActiveSession>("capture-session-ready", ({ payload }) => {
         if (!active) return;
+        if (activeSessionIdRef.current === payload.id) {
+          // Window targets can arrive after the freeze-frame overlay is already
+          // interactive. Keep the revealed surface and just attach the list.
+          setSession(payload);
+          return;
+        }
         activeSessionIdRef.current = payload.id;
         revealingSessionIdRef.current = null;
         setVisibleSessionId(null);

@@ -169,6 +169,8 @@ export interface RecordingSelectionSession {
   frozen?: boolean;
   snapshot_url: string;
   windows: WindowDescriptor[];
+  /** False while window targets are still being enumerated in the background. */
+  windows_ready?: boolean;
 }
 
 export interface RecordingSessionSnapshot {

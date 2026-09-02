@@ -296,27 +296,25 @@ pub(crate) async fn prepare_capture_selector_inner(
     crate::suppress_thumbnail_capture_ui(&state);
     crate::hide_capture_huds_before_snapshot(&app).await;
     let freeze_screen = state.settings().freeze_screen;
+    let need_windows_immediately = initial_target == CaptureMode::Window;
     let prepared = (|| {
         crate::ensure_capture_session_available()?;
         let id = Uuid::new_v4().to_string();
         let (display, snapshot_png, image, displays, windows) = if freeze_screen {
             let (frame, snapshot_png, mut displays, mut windows) = std::thread::scope(|scope| {
-                // The selector always needs window targets, but their enumeration is
-                // independent of freezing and encoding the display background.
-                let windows = scope.spawn(|| state.windows());
+                // Window listing is only on the critical path for window mode.
+                // Display/region shortcuts show the freeze-frame first.
+                let windows = need_windows_immediately.then(|| scope.spawn(|| state.windows()));
+                let displays = scope.spawn(|| state.monitors());
                 let frame = state
                     .backend
                     .capture_display_at_point(crate::pointer_position())?;
-                let snapshot_png = storage::encode_png(&frame.image)?;
-                let displays = state.monitors()?;
-                let windows = match windows.join() {
-                    Ok(windows) => windows,
+                let displays = match displays.join() {
+                    Ok(result) => result,
                     Err(panic) => std::panic::resume_unwind(panic),
-                }
-                .unwrap_or_else(|error| {
-                    eprintln!("window targets are unavailable for this capture: {error}");
-                    Vec::new()
-                });
+                }?;
+                let snapshot_png = storage::encode_png(&frame.image)?;
+                let windows = join_optional_window_targets(windows);
                 Ok::<_, AppError>((frame, snapshot_png, displays, windows))
             })?;
             if !displays
@@ -326,12 +324,14 @@ pub(crate) async fn prepare_capture_selector_inner(
                 displays.push(frame.descriptor.clone());
             }
             windows.retain(|window| crate::window_is_capturable(window, &frame.descriptor));
-            crate::refine_window_chrome_from_snapshot(
-                &mut windows,
-                &frame.descriptor,
-                &frame.image,
-                crate::window_corner_radius_points(),
-            );
+            if !windows.is_empty() {
+                crate::refine_window_chrome_from_snapshot(
+                    &mut windows,
+                    &frame.descriptor,
+                    &frame.image,
+                    crate::window_corner_radius_points(),
+                );
+            }
             (
                 frame.descriptor,
                 snapshot_png,
@@ -340,15 +340,20 @@ pub(crate) async fn prepare_capture_selector_inner(
                 windows,
             )
         } else {
-            let display = crate::display_under_pointer(&state)?;
-            let mut displays = state.monitors()?;
+            let (display, mut displays, mut windows) = std::thread::scope(|scope| {
+                let windows = need_windows_immediately.then(|| scope.spawn(|| state.windows()));
+                let displays = scope.spawn(|| state.monitors());
+                let display = crate::display_under_pointer(&state)?;
+                let displays = match displays.join() {
+                    Ok(result) => result,
+                    Err(panic) => std::panic::resume_unwind(panic),
+                }?;
+                let windows = join_optional_window_targets(windows);
+                Ok::<_, AppError>((display, displays, windows))
+            })?;
             if !displays.iter().any(|candidate| candidate.id == display.id) {
                 displays.push(display.clone());
             }
-            let mut windows = state.windows().unwrap_or_else(|error| {
-                eprintln!("window targets are unavailable for this capture: {error}");
-                Vec::new()
-            });
             windows.retain(|window| crate::window_is_capturable(window, &display));
             (display, Vec::new(), None, displays, windows)
         };
@@ -379,6 +384,7 @@ pub(crate) async fn prepare_capture_selector_inner(
                 String::new()
             },
             windows,
+            windows_ready: need_windows_immediately,
         };
         *state.recording_selection.lock() = Some(RecordingSelection {
             summary: summary.clone(),
@@ -393,6 +399,9 @@ pub(crate) async fn prepare_capture_selector_inner(
                 *state.recording_selection.lock() = None;
                 restore_recording_ui(&app, &state);
                 return Err(error);
+            }
+            if !need_windows_immediately {
+                schedule_selector_window_targets(app.clone(), state, summary.id.clone());
             }
             Ok(summary)
         }
@@ -453,17 +462,14 @@ async fn select_capture_display_inner(
         .ok_or(AppError::InvalidSelection)?;
     let freeze_screen = current.frozen;
     let (display, snapshot_png, image, windows) = if freeze_screen {
-        let frame = state.backend.capture_display(&requested_display.id)?;
-        let snapshot_png = storage::encode_png(&frame.image)?;
-        let mut windows = state
-            .windows()
-            .unwrap_or_else(|error| {
-                eprintln!("window targets are unavailable for this display: {error}");
-                Vec::new()
-            })
-            .into_iter()
-            .filter(|window| crate::window_is_capturable(window, &frame.descriptor))
-            .collect::<Vec<_>>();
+        let (frame, snapshot_png, mut windows) = std::thread::scope(|scope| {
+            let windows = scope.spawn(|| state.windows());
+            let frame = state.backend.capture_display(&requested_display.id)?;
+            let windows = join_optional_window_targets(Some(windows));
+            let snapshot_png = storage::encode_png(&frame.image)?;
+            Ok::<_, AppError>((frame, snapshot_png, windows))
+        })?;
+        windows.retain(|window| crate::window_is_capturable(window, &frame.descriptor));
         crate::refine_window_chrome_from_snapshot(
             &mut windows,
             &frame.descriptor,
@@ -502,6 +508,7 @@ async fn select_capture_display_inner(
         String::new()
     };
     summary.windows = windows;
+    summary.windows_ready = true;
     let replacement = RecordingSelection {
         summary: summary.clone(),
         image,
@@ -557,13 +564,74 @@ fn cancel_recording_selection_inner(
 }
 
 fn restore_after_recording_selection(app: &AppHandle, state: &Arc<AppState>) {
-    destroy_recording_selector(app);
+    hide_recording_selector(app);
     #[cfg(target_os = "macos")]
     captures_macos_window::restore_frontmost_app_after_capture();
     crate::reveal_document_windows_after_capture(app);
     crate::set_capture_huds_protected(app, false);
     crate::restore_excluded_recording_chrome(app);
     crate::restore_thumbnail_capture_ui(app, state);
+}
+
+fn join_optional_window_targets(
+    task: Option<
+        std::thread::ScopedJoinHandle<
+            '_,
+            Result<Vec<captures_capture::WindowDescriptor>, AppError>,
+        >,
+    >,
+) -> Vec<captures_capture::WindowDescriptor> {
+    let Some(task) = task else {
+        return Vec::new();
+    };
+    match task.join() {
+        Ok(Ok(windows)) => windows,
+        Ok(Err(error)) => {
+            eprintln!("window targets are unavailable for this capture: {error}");
+            Vec::new()
+        }
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
+fn schedule_selector_window_targets(app: AppHandle, state: Arc<AppState>, selection_id: String) {
+    tauri::async_runtime::spawn_blocking(move || {
+        attach_selector_window_targets(&app, &state, &selection_id);
+    });
+}
+
+fn attach_selector_window_targets(app: &AppHandle, state: &Arc<AppState>, selection_id: &str) {
+    let mut windows = match state.windows() {
+        Ok(windows) => windows,
+        Err(error) => {
+            eprintln!("window targets are unavailable for this capture: {error}");
+            Vec::new()
+        }
+    };
+    let summary = {
+        let mut pending = state.recording_selection.lock();
+        let Some(selection) = pending.as_mut() else {
+            return;
+        };
+        if selection.summary.id != selection_id {
+            return;
+        }
+        windows.retain(|window| crate::window_is_capturable(window, &selection.summary.display));
+        if let Some(image) = selection.image.as_ref() {
+            crate::refine_window_chrome_from_snapshot(
+                &mut windows,
+                &selection.summary.display,
+                image,
+                crate::window_corner_radius_points(),
+            );
+        }
+        selection.summary.windows = windows;
+        selection.summary.windows_ready = true;
+        selection.summary.clone()
+    };
+    if let Err(error) = app.emit("recording-selection-ready", &summary) {
+        eprintln!("failed to attach selector window targets: {error}");
+    }
 }
 
 pub(crate) fn dismiss_open_recording_selection(app: &AppHandle, state: &Arc<AppState>) -> bool {
@@ -595,9 +663,13 @@ pub(crate) fn switch_open_capture_selector_to_screenshot(
     current.summary.initial_mode = CaptureSelectorMode::Screenshot;
     current.summary.initial_target = target;
     let summary = current.summary.clone();
+    let load_windows = target == CaptureMode::Window && !summary.windows_ready;
     drop(selection);
     if let Err(error) = app.emit("recording-selection-ready", &summary) {
         eprintln!("failed to switch the capture menu: {error}");
+    }
+    if load_windows {
+        schedule_selector_window_targets(app.clone(), state.clone(), summary.id);
     }
     true
 }
@@ -652,7 +724,7 @@ async fn capture_selection_screenshot_inner(
             }
         }
     };
-    destroy_recording_selector(&app);
+    hide_recording_selector(&app);
     // Screenshot-from-controls is done with the selector; hand focus back so an
     // already-open editor does not stay covering the app the user was using.
     // Document windows stay ordered out until this path finishes or fails.
@@ -844,7 +916,7 @@ async fn start_recording_inner(
         }
         selected.take().ok_or(AppError::SessionUnavailable)?
     };
-    destroy_recording_selector(&app);
+    hide_recording_selector(&app);
     crate::set_capture_huds_protected(&app, false);
 
     let selected_display = selection.summary.display.clone();
@@ -3303,7 +3375,7 @@ fn fail_session(app: &AppHandle, state: &AppState, session_id: &str, message: St
 }
 
 fn restore_recording_ui(app: &AppHandle, state: &Arc<AppState>) {
-    destroy_recording_selector(app);
+    hide_recording_selector(app);
     destroy_recording_region_indicator(app);
     destroy_recording_countdown(app);
     crate::hide_window(app, "recording-hud");
@@ -3330,18 +3402,22 @@ pub(crate) fn focus_recording_window(app: &AppHandle, label: &'static str) {
     }
 }
 
-fn destroy_recording_selector(app: &AppHandle) {
+fn hide_recording_selector(app: &AppHandle) {
     let Some(window) = app.get_webview_window("recording-selector") else {
         return;
     };
     if let Err(error) = crate::set_click_through(&window, true) {
         eprintln!("failed to disable recording selector pointer events: {error}");
     }
-    // Hidden WKWebViews can suspend before processing the next selection.
-    // Recreate this short-lived surface so every selection gets a live event
-    // bridge and cannot inherit stale region or window state.
-    if let Err(error) = window.destroy() {
-        eprintln!("failed to destroy recording selector: {error}");
+    // Keep the WebView alive so the next display/window shortcut does not pay
+    // WKWebView creation. Prime-alpha + emit on the next prepare wakes JS the
+    // same way the region overlay reuses its surface.
+    #[cfg(target_os = "macos")]
+    if let Err(error) = captures_macos_window::prepare_window_reveal(&window) {
+        eprintln!("failed to reset recording selector: {error}");
+    }
+    if let Err(error) = window.hide() {
+        eprintln!("failed to hide recording selector: {error}");
     }
     #[cfg(target_os = "macos")]
     captures_macos_window::release_capture_cursor();
@@ -3563,7 +3639,7 @@ fn media_target_suffix(os: &str, arch: &str) -> Option<&'static str> {
     }
 }
 
-fn create_recording_selector_window(app: &AppHandle) -> Result<(), AppError> {
+pub(crate) fn create_recording_selector_window(app: &AppHandle) -> Result<(), AppError> {
     if app.get_webview_window("recording-selector").is_some() {
         return Ok(());
     }
@@ -3604,6 +3680,7 @@ async fn prepare_recording_selector(
     let selection = selection.clone();
     let wake_selection = selection.clone();
     let (sender, receiver) = tokio::sync::oneshot::channel();
+    let created_now = app.get_webview_window("recording-selector").is_none();
     app.run_on_main_thread(move || {
         let result = (|| -> Result<(), String> {
             create_recording_selector_window(&handle).map_err(|error| error.to_string())?;
@@ -3651,7 +3728,7 @@ async fn prepare_recording_selector(
         .await
         .map_err(|_| AppError::Task("recording selector setup was interrupted".to_owned()))?
         .map_err(AppError::Task)?;
-    if wake_webview {
+    if wake_webview && created_now {
         schedule_recording_selector_webview_wake(app, wake_selection);
     }
     Ok(())

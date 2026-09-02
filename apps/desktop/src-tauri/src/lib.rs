@@ -354,6 +354,9 @@ pub fn run() {
             if let Err(error) = create_overlay_window(&handle) {
                 eprintln!("failed to prepare capture overlay: {error}");
             }
+            if let Err(error) = recording::create_recording_selector_window(&handle) {
+                eprintln!("failed to prepare capture selector: {error}");
+            }
             if let Err(error) = create_thumbnail_window(&handle, false) {
                 eprintln!("failed to prepare capture thumbnail: {error}");
             }
@@ -593,33 +596,27 @@ async fn prepare_capture(
     ensure_capture_session_available()?;
     let freeze_screen = state.settings().freeze_screen;
     let id = Uuid::new_v4();
+    // Enumerate windows beside capture + encode. If listing is still running
+    // when the freeze-frame is ready, show the overlay anyway and attach
+    // targets afterward so window mode can match region startup.
+    let window_targets = (mode == CaptureMode::Window).then(|| {
+        let state = state.clone();
+        std::thread::spawn(move || state.windows())
+    });
+    let deferred_window_targets;
     let session = if freeze_screen {
-        let (frame, snapshot_png, mut windows) = std::thread::scope(|scope| {
-            // Window discovery is independent of the frozen display pixels. Run it
-            // beside capture + encoding so window mode pays the slower cost, not both.
-            let windows = (mode == CaptureMode::Window).then(|| scope.spawn(|| state.windows()));
-            let frame = state.backend.capture_display_at_point(pointer_position())?;
-            // The background frame is frozen now, so this capture no longer needs HUD
-            // exclusion. Release it before encoding can emit a new preview and allow a
-            // rapid follow-up capture to start with its own protection generation.
-            set_capture_huds_protected(&app, false);
-            // Keep the selector background full-resolution and lossless. Region crops
-            // come directly from `frame.image`; window commits prefer the native window
-            // surface so overlapping windows are not baked into the result.
-            let snapshot_png = storage::encode_png(&frame.image)?;
-            let windows = windows
-                .map(|task| match task.join() {
-                    Ok(windows) => windows,
-                    Err(panic) => std::panic::resume_unwind(panic),
-                })
-                .transpose()?
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|window| window_is_capturable(window, &frame.descriptor))
-                .collect::<Vec<_>>();
-            Ok::<_, AppError>((frame, snapshot_png, windows))
-        })?;
-        if mode == CaptureMode::Window {
+        let frame = state.backend.capture_display_at_point(pointer_position())?;
+        // The background frame is frozen now, so this capture no longer needs HUD
+        // exclusion. Release it before encoding can emit a new preview and allow a
+        // rapid follow-up capture to start with its own protection generation.
+        set_capture_huds_protected(&app, false);
+        // Keep the selector background full-resolution and lossless. Region crops
+        // come directly from `frame.image`; window commits prefer the native window
+        // surface so overlapping windows are not baked into the result.
+        let snapshot_png = storage::encode_png(&frame.image)?;
+        let (mut windows, deferred) = take_ready_window_targets(window_targets, &frame.descriptor);
+        deferred_window_targets = deferred;
+        if mode == CaptureMode::Window && deferred_window_targets.is_none() {
             refine_window_chrome_from_snapshot(
                 &mut windows,
                 &frame.descriptor,
@@ -641,15 +638,8 @@ async fn prepare_capture(
         // Live overlay: skip the freeze-frame so hover states can keep changing
         // until commit, then recapture the current desktop.
         let display = display_under_pointer(&state)?;
-        let windows = if mode == CaptureMode::Window {
-            state
-                .windows()?
-                .into_iter()
-                .filter(|window| window_is_capturable(window, &display))
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let (windows, deferred) = take_ready_window_targets(window_targets, &display);
+        deferred_window_targets = deferred;
         set_capture_huds_protected(&app, false);
         CaptureSession {
             id,
@@ -663,9 +653,90 @@ async fn prepare_capture(
         }
     };
     let active = capture_session_to_active(&session);
+    let overlay_display = session.display.clone();
     state.sessions.lock().insert(id, session);
     show_capture_window(&app, &active);
+    if let Some(thread) = deferred_window_targets {
+        schedule_overlay_window_targets(app.clone(), state, id, overlay_display, thread);
+    }
     Ok(Some(active))
+}
+
+type WindowTargetsThread =
+    std::thread::JoinHandle<Result<Vec<captures_capture::WindowDescriptor>, AppError>>;
+
+fn take_ready_window_targets(
+    thread: Option<WindowTargetsThread>,
+    display: &captures_capture::DisplayDescriptor,
+) -> (
+    Vec<captures_capture::WindowDescriptor>,
+    Option<WindowTargetsThread>,
+) {
+    let Some(thread) = thread else {
+        return (Vec::new(), None);
+    };
+    if !thread.is_finished() {
+        return (Vec::new(), Some(thread));
+    }
+    (
+        filter_capturable_windows(join_window_targets_thread(thread), display),
+        None,
+    )
+}
+
+fn join_window_targets_thread(
+    thread: WindowTargetsThread,
+) -> Vec<captures_capture::WindowDescriptor> {
+    match thread.join() {
+        Ok(Ok(windows)) => windows,
+        Ok(Err(error)) => {
+            eprintln!("window targets are unavailable for this capture: {error}");
+            Vec::new()
+        }
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
+fn filter_capturable_windows(
+    windows: Vec<captures_capture::WindowDescriptor>,
+    display: &captures_capture::DisplayDescriptor,
+) -> Vec<captures_capture::WindowDescriptor> {
+    windows
+        .into_iter()
+        .filter(|window| window_is_capturable(window, display))
+        .collect()
+}
+
+fn schedule_overlay_window_targets(
+    app: AppHandle,
+    state: Arc<AppState>,
+    session_id: Uuid,
+    display: captures_capture::DisplayDescriptor,
+    thread: WindowTargetsThread,
+) {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut windows = filter_capturable_windows(join_window_targets_thread(thread), &display);
+        let mut sessions = state.sessions.lock();
+        let Some(session) = sessions.get_mut(&session_id) else {
+            return;
+        };
+        if session.frozen
+            && let Some(image) = session.image.as_ref()
+        {
+            refine_window_chrome_from_snapshot(
+                &mut windows,
+                &session.display,
+                image,
+                window_corner_radius_points(),
+            );
+        }
+        session.windows = windows;
+        let active = capture_session_to_active(session);
+        drop(sessions);
+        if let Err(error) = app.emit("capture-session-ready", &active) {
+            eprintln!("failed to attach window targets: {error}");
+        }
+    });
 }
 
 fn capture_session_to_active(session: &CaptureSession) -> ActiveSession {

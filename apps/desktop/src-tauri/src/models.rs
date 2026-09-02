@@ -352,6 +352,9 @@ pub struct RecordingSelectionSession {
     pub frozen: bool,
     pub snapshot_url: String,
     pub windows: Vec<WindowDescriptor>,
+    /// False while window targets are still being enumerated in the background.
+    #[serde(default = "default_true")]
+    pub windows_ready: bool,
 }
 
 #[derive(Debug)]
