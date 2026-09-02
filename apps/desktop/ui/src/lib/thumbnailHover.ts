@@ -274,7 +274,7 @@ export function shouldIgnoreThumbnailCursorEvents(
   if (root.querySelector(".thumbnail-stack-dragging")) return false;
   if (!thumbnailStackHasLiveHitTarget(root)) return true;
   if (!position.inside) return false;
-  const target = root.elementFromPoint(position.x, position.y);
+  const target = thumbnailElementFromPoint(position.x, position.y, root);
   if (thumbnailStackControlAtPoint(position.x, position.y, target, root)) return false;
   if (!target) return true;
   const card = target.closest(".thumbnail-card");
@@ -332,6 +332,15 @@ export function rearmThumbnailEditorControlHover(
   if (document.activeElement === control) {
     control.blur();
   }
+}
+
+function thumbnailElementFromPoint(
+  x: number,
+  y: number,
+  root: Document,
+): Element | null {
+  if (typeof root.elementFromPoint !== "function") return null;
+  return root.elementFromPoint(x, y);
 }
 
 function containsPoint(element: Element, x: number, y: number): boolean {
@@ -423,7 +432,7 @@ export function applyThumbnailNativeHover(
     THUMBNAIL_NATIVE_POINTER_HOVER_SELECTOR,
   );
   const currentCard = root.querySelector<HTMLElement>(THUMBNAIL_NATIVE_ACTIVE_SELECTOR);
-  const directTarget = root.elementFromPoint(position.x, position.y);
+  const directTarget = thumbnailElementFromPoint(position.x, position.y, root);
   const stackControl = thumbnailStackControlAtPoint(
     position.x,
     position.y,
@@ -466,8 +475,7 @@ export function applyThumbnailNativeHover(
   // Activate the card first, then hit-test again so buttons can be detected
   // while the preview window is not the active macOS window.
   setThumbnailNativeActiveCard(card, root);
-  const target = root
-    .elementFromPoint(position.x, position.y)
+  const target = thumbnailElementFromPoint(position.x, position.y, root)
     ?.closest("button");
   const directButton = target && card.contains(target) ? target : null;
   // A focus handoff or :active scale can make WebKit report the preview image

@@ -726,12 +726,31 @@ function applyPreviewStage(): void {
   style.setProperty("background-position", "center");
 }
 
+let thumbnailPointer = { x: 0, y: 0, inside: false };
+let thumbnailPointerTracking = false;
+
+function trackThumbnailPointerForHarness(): void {
+  if (thumbnailPointerTracking) return;
+  thumbnailPointerTracking = true;
+  const update = (event: PointerEvent) => {
+    thumbnailPointer = { x: event.clientX, y: event.clientY, inside: true };
+  };
+  window.addEventListener("pointermove", update, true);
+  window.addEventListener("pointerdown", update, true);
+  document.documentElement.addEventListener("pointerleave", (event) => {
+    if (event.relatedTarget) return;
+    thumbnailPointer = { ...thumbnailPointer, inside: false };
+  });
+}
+
 export function installPreviewBackend(): void {
   applyPreviewStage();
+  trackThumbnailPointerForHarness();
   selection = createSelection();
   mockIPC(async (command, payload) => {
     if (command === "get_recording_selection") return selection;
     if (command === "select_capture_display") return selectCaptureDisplay(payload);
+    if (command === "get_thumbnail_pointer_position") return thumbnailPointer;
     if (command === "estimate_screenshot_export") {
       return mockScreenshotExportBytes(payload);
     }

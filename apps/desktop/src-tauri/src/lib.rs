@@ -1472,7 +1472,6 @@ enum ThumbnailCursorKind {
     Grab,
 }
 
-#[cfg(any(target_os = "macos", test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ThumbnailCursorAction {
     Ignore,
@@ -1480,7 +1479,6 @@ enum ThumbnailCursorAction {
     Apply(ThumbnailCursorKind),
 }
 
-#[cfg(any(target_os = "macos", test))]
 fn thumbnail_cursor_action(
     suppressed: bool,
     visible: bool,
@@ -1492,6 +1490,14 @@ fn thumbnail_cursor_action(
         ThumbnailCursorAction::Apply(kind)
     } else {
         ThumbnailCursorAction::Reset
+    }
+}
+
+fn thumbnail_tauri_cursor_icon(kind: ThumbnailCursorKind) -> CursorIcon {
+    match kind {
+        ThumbnailCursorKind::Default => CursorIcon::Default,
+        ThumbnailCursorKind::Pointer => CursorIcon::Hand,
+        ThumbnailCursorKind::Grab => CursorIcon::Grab,
     }
 }
 
@@ -1561,8 +1567,20 @@ fn set_thumbnail_cursor(
 
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (app, state, kind);
-        Ok(())
+        let Some(window) = app.get_webview_window("thumbnail") else {
+            return Ok(());
+        };
+        let suppressed = state.thumbnail_visibility.lock().is_suppressed();
+        let presented = thumbnail_window_is_presented(&window);
+        match thumbnail_cursor_action(suppressed, presented, kind) {
+            ThumbnailCursorAction::Ignore => Ok(()),
+            ThumbnailCursorAction::Reset => window
+                .set_cursor_icon(CursorIcon::Default)
+                .map_err(|error| error.to_string()),
+            ThumbnailCursorAction::Apply(effective_kind) => window
+                .set_cursor_icon(thumbnail_tauri_cursor_icon(effective_kind))
+                .map_err(|error| error.to_string()),
+        }
     }
 }
 
@@ -1600,8 +1618,7 @@ fn reassert_thumbnail_cursor(
 
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (app, state, kind);
-        Ok(())
+        set_thumbnail_cursor(app, state, kind)
     }
 }
 
@@ -6501,8 +6518,8 @@ mod tests {
         thumbnail_cursor_action, thumbnail_cursor_ignore_update, thumbnail_geometry,
         thumbnail_pointer_in_space, thumbnail_pointer_position, thumbnail_preserve_current_height,
         thumbnail_stack_height, thumbnail_stack_should_be_visible, thumbnail_stack_visible_count,
-        thumbnail_visible_window_height, track_shortcut_suppression, tray_accelerator,
-        tray_icon_rect_is_usable, tray_notice_window_size, viewer_window_label,
+        thumbnail_tauri_cursor_icon, thumbnail_visible_window_height, track_shortcut_suppression,
+        tray_accelerator, tray_icon_rect_is_usable, tray_notice_window_size, viewer_window_label,
         window_display_crop_is_safe, window_is_capturable, windows_window_is_capture_overlay,
     };
 
@@ -7154,6 +7171,24 @@ mod tests {
         assert_eq!(
             thumbnail_cursor_action(false, false, ThumbnailCursorKind::Pointer),
             ThumbnailCursorAction::Reset
+        );
+    }
+
+    #[test]
+    fn maps_preview_cursor_kinds_to_tauri_icons() {
+        use tauri::CursorIcon;
+
+        assert_eq!(
+            thumbnail_tauri_cursor_icon(ThumbnailCursorKind::Default),
+            CursorIcon::Default
+        );
+        assert_eq!(
+            thumbnail_tauri_cursor_icon(ThumbnailCursorKind::Pointer),
+            CursorIcon::Hand
+        );
+        assert_eq!(
+            thumbnail_tauri_cursor_icon(ThumbnailCursorKind::Grab),
+            CursorIcon::Grab
         );
     }
 
