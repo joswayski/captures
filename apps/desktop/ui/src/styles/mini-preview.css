@@ -803,59 +803,53 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-main-actio
 /*
  * Clicking the collapsed pile leaves the pointer over a card. Keep idle chrome
  * until the pointer moves so expand motion is not followed by hover blur/fade.
+ * Keyboard focus still shows actions: Tab into a card must not land on
+ * invisible controls while the pointer remains stationary.
  */
-html:not(.thumbnail-native-tracking) .thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:hover img,
-.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:focus-within img,
-.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card[data-thumbnail-native-active="true"] img {
+html:not(.thumbnail-native-tracking) .thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:hover:not(:focus-within) img,
+.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card[data-thumbnail-native-active="true"]:not(:focus-within) img {
   filter: blur(0) brightness(1);
   transform: scale(1);
   transition: none;
 }
 
-html:not(.thumbnail-native-tracking) .thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:hover .thumbnail-meta,
-.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:focus-within .thumbnail-meta,
-.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card[data-thumbnail-native-active="true"] .thumbnail-meta {
+html:not(.thumbnail-native-tracking) .thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:hover:not(:focus-within) .thumbnail-meta,
+.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card[data-thumbnail-native-active="true"]:not(:focus-within) .thumbnail-meta {
   opacity: 1;
   transition: none;
 }
 
-html:not(.thumbnail-native-tracking) .thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:hover :is(.thumbnail-top-actions, .thumbnail-main-actions),
-.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:focus-within :is(.thumbnail-top-actions, .thumbnail-main-actions),
-.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card[data-thumbnail-native-active="true"] :is(.thumbnail-top-actions, .thumbnail-main-actions) {
+html:not(.thumbnail-native-tracking) .thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:hover:not(:focus-within) :is(.thumbnail-top-actions, .thumbnail-main-actions),
+.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card[data-thumbnail-native-active="true"]:not(:focus-within) :is(.thumbnail-top-actions, .thumbnail-main-actions) {
   opacity: 0;
   pointer-events: none;
   transition: none;
 }
 
-html:not(.thumbnail-native-tracking) .thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:hover :is(.thumbnail-top-actions, .thumbnail-main-actions) button,
-.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:focus-within :is(.thumbnail-top-actions, .thumbnail-main-actions) button,
-.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card[data-thumbnail-native-active="true"] :is(.thumbnail-top-actions, .thumbnail-main-actions) button {
+html:not(.thumbnail-native-tracking) .thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:hover:not(:focus-within) :is(.thumbnail-top-actions, .thumbnail-main-actions) button,
+.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card[data-thumbnail-native-active="true"]:not(:focus-within) :is(.thumbnail-top-actions, .thumbnail-main-actions) button {
   pointer-events: none;
 }
 
-html:not(.thumbnail-native-tracking) .thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:hover .thumbnail-top-actions,
-.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:focus-within .thumbnail-top-actions,
-.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card[data-thumbnail-native-active="true"] .thumbnail-top-actions {
+html:not(.thumbnail-native-tracking) .thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:hover:not(:focus-within) .thumbnail-top-actions,
+.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card[data-thumbnail-native-active="true"]:not(:focus-within) .thumbnail-top-actions {
   transform: translateY(-3px);
 }
 
-html:not(.thumbnail-native-tracking) .thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:hover .thumbnail-main-actions,
-.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:focus-within .thumbnail-main-actions,
-.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card[data-thumbnail-native-active="true"] .thumbnail-main-actions {
+html:not(.thumbnail-native-tracking) .thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:hover:not(:focus-within) .thumbnail-main-actions,
+.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card[data-thumbnail-native-active="true"]:not(:focus-within) .thumbnail-main-actions {
   transform: translate(-50%, -47%);
 }
 
-html:not(.thumbnail-native-tracking) .thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:hover .thumbnail-editor-control:not(.is-present),
-.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:focus-within .thumbnail-editor-control:not(.is-present),
-.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card[data-thumbnail-native-active="true"] .thumbnail-editor-control:not(.is-present) {
+html:not(.thumbnail-native-tracking) .thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:hover:not(:focus-within) .thumbnail-editor-control:not(.is-present),
+.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card[data-thumbnail-native-active="true"]:not(:focus-within) .thumbnail-editor-control:not(.is-present) {
   opacity: 0;
   pointer-events: none;
   transition: none;
 }
 
-html:not(.thumbnail-native-tracking) .thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:hover .thumbnail-editor-control:not(.is-present) .thumbnail-editor-control-face,
-.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:focus-within .thumbnail-editor-control:not(.is-present) .thumbnail-editor-control-face,
-.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card[data-thumbnail-native-active="true"] .thumbnail-editor-control:not(.is-present) .thumbnail-editor-control-face {
+html:not(.thumbnail-native-tracking) .thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:hover:not(:focus-within) .thumbnail-editor-control:not(.is-present) .thumbnail-editor-control-face,
+.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card[data-thumbnail-native-active="true"]:not(:focus-within) .thumbnail-editor-control:not(.is-present) .thumbnail-editor-control-face {
   transform: translateY(-3px);
 }
 
@@ -1662,7 +1656,7 @@ html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-collapse
   z-index: 1;
   inset: 0;
   border-radius: inherit;
-  background: #000;
+  background: var(--glass-strong-solid);
   opacity: calc(var(--thumbnail-stack-depth, 0) * 0.12);
   content: "";
   pointer-events: none;

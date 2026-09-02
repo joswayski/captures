@@ -820,6 +820,10 @@ describe("Thumbnail", () => {
     expect(stack).toHaveAttribute(THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE, "true");
     expect(card).not.toHaveAttribute("data-thumbnail-native-active");
 
+    within(card).getByRole("button", { name: "Edit" }).focus();
+    expect(stack).toHaveAttribute(THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE, "true");
+    expect(card.matches(":focus-within")).toBe(true);
+
     pointer = { x: 88, y: 36, inside: true };
     await act(async () => {
       window.dispatchEvent(new PointerEvent("pointermove", {
