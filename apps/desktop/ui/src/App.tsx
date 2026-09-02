@@ -2280,6 +2280,18 @@ export function RecordingSelector() {
       ) {
         return;
       }
+      // Mode/target segmented buttons are where Enter needs to confirm capture.
+      // Leave Close, Change…, and other dedicated actions to native activation.
+      if (target instanceof Element) {
+        const focusedButton = target.closest("button");
+        if (
+          focusedButton
+          && !focusedButton.classList.contains("capture-selector-primary")
+          && !focusedButton.closest(".capture-action-switch, .recording-target-switch")
+        ) {
+          return;
+        }
+      }
       const primaryAction = panelRef.current?.querySelector<HTMLButtonElement>(
         ".capture-selector-primary:not(:disabled)",
       );

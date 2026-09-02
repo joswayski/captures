@@ -720,6 +720,40 @@ describe("RecordingSelector", () => {
     expect(invoke).not.toHaveBeenCalledWith("capture_selection_screenshot", expect.anything());
   });
 
+  it("does not capture with Enter on Close capture controls", async () => {
+    preparedSession = {
+      ...session,
+      initial_mode: "screenshot",
+      initial_target: "display",
+    };
+    render(<RecordingSelector />);
+
+    const close = await screen.findByRole("button", { name: "Close capture controls" });
+    fireEvent.keyDown(close, { key: "Enter" });
+    expect(invoke).not.toHaveBeenCalledWith("capture_selection_screenshot", expect.anything());
+  });
+
+  it("does not capture with Enter on the auto-start Change link", async () => {
+    preparedSession = {
+      ...session,
+      initial_mode: "screenshot",
+      initial_target: "display",
+    };
+    const defaultInvoke = vi.mocked(invoke).getMockImplementation();
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "get_settings") {
+        return { ...settings, auto_start_on_selection: true };
+      }
+      return defaultInvoke?.(command, args);
+    });
+
+    render(<RecordingSelector />);
+    const change = await screen.findByRole("button", { name: "Change…" });
+    fireEvent.keyDown(change, { key: "Enter" });
+    expect(invoke).not.toHaveBeenCalledWith("capture_selection_screenshot", expect.anything());
+    expect(invoke).not.toHaveBeenCalledWith("open_preferences", expect.anything());
+  });
+
   it("auto-starts a screenshot after drawing a region when the preference is on", async () => {
     preparedSession = {
       ...session,
