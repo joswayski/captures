@@ -536,6 +536,21 @@ describe("shouldIgnoreThumbnailCursorEvents", () => {
     expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: true })).toBe(true);
   });
 
+  it("does not native-hover the collapsed pile while collapse hover is latched", () => {
+    document.body.innerHTML = `
+      <main class="thumbnail-stack thumbnail-stack-minimized thumbnail-stack-hover-latched">
+        <button class="thumbnail-collapsed-hit-target">Expand preview</button>
+      </main>
+    `;
+    const target = document.querySelector(".thumbnail-collapsed-hit-target")!;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => target),
+    });
+    expect(applyThumbnailNativeHover({ x: 10, y: 10, inside: true })).toBe("pointer");
+    expectNativePointerHover(target, false);
+  });
+
   it("keeps a minimized stack toolbar control interactive", () => {
     document.body.innerHTML = `
       <main class="thumbnail-stack thumbnail-stack-minimized">

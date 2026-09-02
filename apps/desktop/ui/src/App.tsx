@@ -6067,7 +6067,7 @@ export function Thumbnail() {
       }
       setStackHoverReady(false);
     };
-    // Two frames after collapse so the minimize fill is the rest pose before
+    // Two frames after collapse so the rest pose is committed before
     // transform easing (hover fan-out) turns back on.
     const armHoverReady = () => {
       cancelHoverReady();
@@ -6107,9 +6107,13 @@ export function Thumbnail() {
             stackMotionTimer.current = null;
             setStackMinimizeRun(false);
             setStackMotion("collapsed");
+            setStackHoverLatched(true);
             requestAnimationFrame(() => {
-              const target = stackRef.current?.querySelector(".thumbnail-collapsed-hit-target");
-              setStackHoverLatched(Boolean(target?.matches(":hover")));
+              const target = stackRef.current?.querySelector(
+                ".thumbnail-collapsed-hit-target",
+              );
+              target?.removeAttribute("data-native-pointer-hover");
+              if (!target?.matches(":hover")) setStackHoverLatched(false);
             });
             armHoverReady();
           }, STACK_MOTION_MS);
@@ -6240,7 +6244,10 @@ export function Thumbnail() {
             className="thumbnail-collapsed-hit-target"
             aria-label={`Expand ${artifacts.length === 1 ? "preview" : `${artifacts.length} previews`}`}
             disabled={controlsDisabled}
-            onPointerLeave={() => setStackHoverLatched(false)}
+            onPointerLeave={(event) => {
+              event.currentTarget.removeAttribute("data-native-pointer-hover");
+              setStackHoverLatched(false);
+            }}
             onClick={() => setStackCollapsed(false)}
           />
         )}
