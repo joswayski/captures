@@ -176,6 +176,12 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-control\s*\{[\s\S]*?cursor:\s*pointer/,
     );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-toolbar:not\(\.thumbnail-stack-toolbar-leaving\):not\(\.thumbnail-stack-toolbar-exiting\):not\(\.thumbnail-stack-toolbar-entering\) \.thumbnail-stack-minimize:hover/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-toolbar-exiting \.thumbnail-stack-minimize\s*\{[^}]*transition:\s*none/,
+    );
   });
 
   it("sizes the collapsed expand target from visible extra cards", () => {
