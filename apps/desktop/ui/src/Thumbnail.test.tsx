@@ -274,6 +274,9 @@ describe("Thumbnail", () => {
     expect(vi.mocked(invoke).mock.calls.some(([command]) => (
       command === "refresh_thumbnail_interactivity"
     ))).toBe(false);
+    await waitFor(() => {
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith("restore_thumbnail_css_cursor_rects");
+    });
   });
 
   it("rejects inbound drags so a dropped screenshot cannot replace the preview UI", async () => {

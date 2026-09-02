@@ -251,6 +251,25 @@ pub const fn thumbnail_passthrough_disables_cursor_rects() -> bool {
     true
 }
 
+/// Sleep/IPC recovery drops native tracking and uses CSS `:hover` until the
+/// pointer poll is live again. Cursor rectangles disabled for a click-through
+/// hole must be turned back on so grab/pointer CSS can apply during that
+/// fallback.
+#[must_use]
+pub const fn thumbnail_css_fallback_restores_cursor_rects() -> bool {
+    true
+}
+
+/// The concealed thumbnail panel stays ordered onscreen at zero alpha. Restoring
+/// cursor rectangles there would steal hover cursors from the app underneath.
+#[must_use]
+pub const fn should_restore_thumbnail_css_cursor_rects(
+    presented: bool,
+    overlay_owns_cursor: bool,
+) -> bool {
+    thumbnail_css_fallback_restores_cursor_rects() && presented && !overlay_owns_cursor
+}
+
 /// A titled editor's cursor rectangles reset `NSCursor` to the arrow while the
 /// pointer is still on a mini-preview control. Disable them for that window
 /// until the pointer leaves the stack.
@@ -268,7 +287,8 @@ mod tests {
     use super::{
         CaptureCursor, CaptureCursorEvent, CaptureCursorKind, CaptureCursorMonitorAction,
         ThumbnailHoverCursor, capture_cursor_monitor_action, overlay_prepare_keeps_native_cursor,
-        region_shortcut_claims_cursor_on_press, suppress_document_cursor_rects_for_thumbnail,
+        region_shortcut_claims_cursor_on_press, should_restore_thumbnail_css_cursor_rects,
+        suppress_document_cursor_rects_for_thumbnail, thumbnail_css_fallback_restores_cursor_rects,
         thumbnail_may_take_key_window, thumbnail_passthrough_disables_cursor_rects,
         thumbnail_poll_is_live, thumbnail_resets_cursor_on_exit, thumbnail_unpolled_hover,
     };
@@ -411,6 +431,11 @@ mod tests {
         assert!(!ThumbnailHoverCursor::Default.claims_ns_cursor());
         assert!(!thumbnail_resets_cursor_on_exit());
         assert!(thumbnail_passthrough_disables_cursor_rects());
+        assert!(thumbnail_css_fallback_restores_cursor_rects());
+        assert!(should_restore_thumbnail_css_cursor_rects(true, false));
+        assert!(!should_restore_thumbnail_css_cursor_rects(false, false));
+        assert!(!should_restore_thumbnail_css_cursor_rects(true, true));
+        assert!(!should_restore_thumbnail_css_cursor_rects(false, true));
         assert_eq!(
             thumbnail_unpolled_hover(false, ThumbnailHoverCursor::Default),
             ThumbnailHoverCursor::Pointer

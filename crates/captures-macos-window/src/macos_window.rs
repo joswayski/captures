@@ -2,9 +2,9 @@ use crate::conceal_policy::should_conceal_documents_for_capture_activation;
 use crate::cursor_policy::{
     CaptureCursor, CaptureCursorEvent, CaptureCursorKind, CaptureCursorMonitorAction,
     ThumbnailHoverCursor, capture_cursor_monitor_action, overlay_prepare_keeps_native_cursor,
-    suppress_document_cursor_rects_for_thumbnail, thumbnail_may_take_key_window,
-    thumbnail_passthrough_disables_cursor_rects, thumbnail_poll_is_live,
-    thumbnail_resets_cursor_on_exit, thumbnail_unpolled_hover,
+    should_restore_thumbnail_css_cursor_rects, suppress_document_cursor_rects_for_thumbnail,
+    thumbnail_may_take_key_window, thumbnail_passthrough_disables_cursor_rects,
+    thumbnail_poll_is_live, thumbnail_resets_cursor_on_exit, thumbnail_unpolled_hover,
 };
 
 use std::{
@@ -2800,6 +2800,30 @@ pub fn reset_pointing_cursor_state(window: &WebviewWindow) -> Result<(), &'stati
         !thumbnail_passthrough_disables_cursor_rects(),
     );
     set_tracked_cursor(window, CursorMode::WebView, CursorSurface::Thumbnail)
+}
+
+/// Re-enable WebKit cursor rectangles after passthrough disabled them.
+///
+/// `recoverInteractivity` drops native tracking and relies on CSS `:hover`
+/// grab/pointer until the pointer poll is live. That only works if cursor
+/// rectangles are on.
+pub fn restore_thumbnail_css_cursor_rects(window: &WebviewWindow) -> Result<(), &'static str> {
+    if !is_main_thread() {
+        let window = window.clone();
+        return run_on_main(move || restore_thumbnail_css_cursor_rects(&window))
+            .ok_or("thumbnail CSS cursor restore did not run on the main thread")?;
+    }
+    if !should_restore_thumbnail_css_cursor_rects(
+        thumbnail_is_presented(),
+        capture_overlay_owns_cursor(),
+    ) {
+        return Ok(());
+    }
+    let native_window = native_window(window)?;
+    remember_thumbnail_window(native_window);
+    set_tracked_cursor(window, CursorMode::WebView, CursorSurface::Thumbnail)?;
+    refresh_webkit_cursor_rects(native_window);
+    Ok(())
 }
 
 fn set_tracked_cursor(

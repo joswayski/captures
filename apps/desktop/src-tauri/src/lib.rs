@@ -293,6 +293,7 @@ pub fn run() {
             reassert_thumbnail_cursor,
             set_thumbnail_ignore_cursor_events,
             refresh_thumbnail_interactivity,
+            restore_thumbnail_css_cursor_rects,
             open_captures_folder,
             open_capture_history,
             open_preferences,
@@ -1655,11 +1656,33 @@ fn refresh_thumbnail_interactivity(
     // usual "frozen previews" symptom after sleep.
     let _ = set_click_through(&window, false);
     let _ = window.set_always_on_top(true);
+    #[cfg(target_os = "macos")]
+    if let Err(error) = captures_macos_window::restore_thumbnail_css_cursor_rects(&window) {
+        eprintln!("failed to restore capture thumbnail CSS cursors: {error}");
+    }
     if !suppressed {
         // Re-apply geometry after display sleep (DPI / work area can change).
         update_thumbnail_stack(&app);
     }
     Ok(())
+}
+
+/// Re-enable WebKit cursor rectangles so CSS hover can drive grab/pointer
+/// while native pointer polling is still recovering.
+#[tauri::command]
+fn restore_thumbnail_css_cursor_rects(app: AppHandle) -> CommandResult<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let Some(window) = app.get_webview_window("thumbnail") else {
+            return Ok(());
+        };
+        captures_macos_window::restore_thumbnail_css_cursor_rects(&window).map_err(str::to_owned)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
