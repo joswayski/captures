@@ -630,7 +630,7 @@ describe("RecordingSelector", () => {
     expect(screen.getByText("Drag to select a region")).toBeInTheDocument();
   });
 
-  it("confirms a drawn region with Enter without overriding focused controls", async () => {
+  it("confirms a drawn region with Enter even if a toolbar control is focused", async () => {
     preparedSession = {
       ...session,
       initial_mode: "screenshot",
@@ -668,9 +668,6 @@ describe("RecordingSelector", () => {
     fireEvent.pointerUp(surface!, { pointerId: 21, clientX: 400, clientY: 340 });
 
     fireEvent.keyDown(screenshotMode, { key: "Enter" });
-    expect(invoke).not.toHaveBeenCalledWith("capture_selection_screenshot", expect.anything());
-
-    fireEvent.keyDown(window, { key: "Enter" });
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("capture_selection_screenshot", {
@@ -708,6 +705,19 @@ describe("RecordingSelector", () => {
         },
       });
     });
+  });
+
+  it("does not capture with Enter while a dropdown is focused", async () => {
+    preparedSession = {
+      ...session,
+      initial_mode: "screenshot",
+      initial_target: "display",
+    };
+    render(<RecordingSelector />);
+
+    const displayPicker = await screen.findByRole("combobox", { name: "Display" });
+    fireEvent.keyDown(displayPicker, { key: "Enter" });
+    expect(invoke).not.toHaveBeenCalledWith("capture_selection_screenshot", expect.anything());
   });
 
   it("auto-starts a screenshot after drawing a region when the preference is on", async () => {

@@ -2276,7 +2276,7 @@ export function RecordingSelector() {
       }
       if (
         target instanceof Element
-        && target.closest("button, input, select, textarea, a, [contenteditable], [role=\"combobox\"], [role=\"listbox\"]")
+        && target.closest("input, textarea, select, [contenteditable], [role=\"combobox\"], [role=\"listbox\"]")
       ) {
         return;
       }
