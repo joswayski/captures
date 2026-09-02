@@ -8,6 +8,7 @@ import {
   THUMBNAIL_CARD_SLOT_PX,
   THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS,
 } from "./lib/thumbnailLayout";
+import { THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE } from "./lib/thumbnailHover";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -763,6 +764,61 @@ describe("Thumbnail", () => {
     expect(stack).not.toHaveClass("thumbnail-stack-compact");
     expect(card).not.toHaveAttribute("aria-hidden");
     expect(screen.getByRole("button", { name: "Minimize previews" })).toBeEnabled();
+  });
+
+  it("does not play card hover after expanding until the pointer moves", async () => {
+    let pointer = { x: 40, y: 80, inside: true };
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifacts") return [artifact];
+      if (command === "get_clipboard_state") {
+        return { revision: 0, artifact_id: artifact.id };
+      }
+      if (command === "get_thumbnail_pointer_position") return pointer;
+      return undefined;
+    });
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => document.querySelector(".thumbnail-card")),
+    });
+
+    render(<Thumbnail />);
+    const card = await screen.findByRole("article");
+    const stack = card.closest(".thumbnail-stack")!;
+    vi.useFakeTimers();
+
+    fireEvent.click(screen.getByRole("button", { name: "Minimize previews" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(480);
+    });
+    expect(stack).toHaveClass("thumbnail-stack-minimized");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Expand preview" }));
+      await Promise.resolve();
+    });
+    expect(stack).toHaveClass("thumbnail-stack-expanding");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(480);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(50);
+    });
+
+    expect(stack).not.toHaveClass("thumbnail-stack-compact");
+    expect(stack).toHaveAttribute(THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE, "true");
+    expect(card).not.toHaveAttribute("data-thumbnail-native-active");
+
+    pointer = { x: 88, y: 36, inside: true };
+    await act(async () => {
+      window.dispatchEvent(new PointerEvent("pointermove", {
+        clientX: 88,
+        clientY: 36,
+      }));
+      await vi.advanceTimersByTimeAsync(50);
+    });
+
+    expect(stack).not.toHaveAttribute(THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE);
+    expect(card).toHaveAttribute("data-thumbnail-native-active", "true");
   });
 
   it("releases the overlay cursor over the hole left by a collapsed stack", async () => {

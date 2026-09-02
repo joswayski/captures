@@ -284,6 +284,9 @@ html[data-preview-harness-view="thumbnail"] #root {
   cursor: -webkit-grab;
   cursor: grab;
   pointer-events: auto;
+  /* Resting filter so hover interpolates instead of creating a compositor layer. */
+  filter: blur(0) brightness(1);
+  transform: scale(1);
   transition:
     filter 0.18s ease,
     transform 0.22s ease;
@@ -795,6 +798,65 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-main-actio
 .thumbnail-card:focus-within .thumbnail-main-actions,
 .thumbnail-card[data-thumbnail-native-active="true"] .thumbnail-main-actions {
   transform: translate(-50%, -50%);
+}
+
+/*
+ * Clicking the collapsed pile leaves the pointer over a card. Keep idle chrome
+ * until the pointer moves so expand motion is not followed by hover blur/fade.
+ */
+html:not(.thumbnail-native-tracking) .thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:hover img,
+.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:focus-within img,
+.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card[data-thumbnail-native-active="true"] img {
+  filter: blur(0) brightness(1);
+  transform: scale(1);
+  transition: none;
+}
+
+html:not(.thumbnail-native-tracking) .thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:hover .thumbnail-meta,
+.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:focus-within .thumbnail-meta,
+.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card[data-thumbnail-native-active="true"] .thumbnail-meta {
+  opacity: 1;
+  transition: none;
+}
+
+html:not(.thumbnail-native-tracking) .thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:hover :is(.thumbnail-top-actions, .thumbnail-main-actions),
+.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:focus-within :is(.thumbnail-top-actions, .thumbnail-main-actions),
+.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card[data-thumbnail-native-active="true"] :is(.thumbnail-top-actions, .thumbnail-main-actions) {
+  opacity: 0;
+  pointer-events: none;
+  transition: none;
+}
+
+html:not(.thumbnail-native-tracking) .thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:hover :is(.thumbnail-top-actions, .thumbnail-main-actions) button,
+.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:focus-within :is(.thumbnail-top-actions, .thumbnail-main-actions) button,
+.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card[data-thumbnail-native-active="true"] :is(.thumbnail-top-actions, .thumbnail-main-actions) button {
+  pointer-events: none;
+}
+
+html:not(.thumbnail-native-tracking) .thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:hover .thumbnail-top-actions,
+.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:focus-within .thumbnail-top-actions,
+.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card[data-thumbnail-native-active="true"] .thumbnail-top-actions {
+  transform: translateY(-3px);
+}
+
+html:not(.thumbnail-native-tracking) .thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:hover .thumbnail-main-actions,
+.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:focus-within .thumbnail-main-actions,
+.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card[data-thumbnail-native-active="true"] .thumbnail-main-actions {
+  transform: translate(-50%, -47%);
+}
+
+html:not(.thumbnail-native-tracking) .thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:hover .thumbnail-editor-control:not(.is-present),
+.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:focus-within .thumbnail-editor-control:not(.is-present),
+.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card[data-thumbnail-native-active="true"] .thumbnail-editor-control:not(.is-present) {
+  opacity: 0;
+  pointer-events: none;
+  transition: none;
+}
+
+html:not(.thumbnail-native-tracking) .thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:hover .thumbnail-editor-control:not(.is-present) .thumbnail-editor-control-face,
+.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:focus-within .thumbnail-editor-control:not(.is-present) .thumbnail-editor-control-face,
+.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card[data-thumbnail-native-active="true"] .thumbnail-editor-control:not(.is-present) .thumbnail-editor-control-face {
+  transform: translateY(-3px);
 }
 
 .thumbnail-main-actions button {
@@ -1572,11 +1634,10 @@ html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-collapse
   transition:
     opacity var(--dur-4) var(--ease-out),
     transform var(--stack-fan-dur) var(--ease-in-out),
-    filter var(--stack-fan-dur) var(--ease-in-out),
     box-shadow var(--stack-fan-dur) var(--ease-in-out);
   transform-origin: 50% 100%;
   pointer-events: none;
-  will-change: transform, opacity, filter;
+  will-change: transform, opacity;
   transform:
     translate3d(
       calc(var(--thumbnail-stack-depth, 0) * -1.5px),
@@ -1585,7 +1646,23 @@ html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-collapse
     )
     rotateX(calc(var(--thumbnail-stack-depth, 0) * -1.4deg))
     scale(calc(1 - var(--thumbnail-stack-depth, 0) * 0.025));
-  filter: brightness(calc(1 - var(--thumbnail-stack-depth, 0) * 0.12));
+}
+
+/*
+ * Dim stacked cards with an overlay instead of `filter` on the card. A parent
+ * filter flattens the screenshot; removing it as expand ends then applying the
+ * hover blur on the image blanks the preview in WebKit.
+ */
+.thumbnail-stack-compact > .thumbnail-card::before {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  border-radius: inherit;
+  background: #000;
+  opacity: calc(var(--thumbnail-stack-depth, 0) * 0.12);
+  content: "";
+  pointer-events: none;
+  transition: opacity var(--stack-fan-dur) var(--ease-in-out);
 }
 
 .thumbnail-stack-minimizing > .thumbnail-card {
@@ -1608,6 +1685,14 @@ html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-collapse
   animation: thumbnail-card-expand 0.48s var(--ease-standard) both;
 }
 
+.thumbnail-stack-minimizing > .thumbnail-card::before {
+  animation: thumbnail-card-minimize-dim 0.48s var(--ease-standard) both;
+}
+
+.thumbnail-stack-expanding > .thumbnail-card::before {
+  animation: thumbnail-card-expand-dim 0.48s var(--ease-standard) both;
+}
+
 @keyframes thumbnail-card-minimize {
   from {
     transform: translate3d(
@@ -1615,7 +1700,6 @@ html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-collapse
       calc(var(--thumbnail-stack-depth, 0) * -184px),
       0
     );
-    filter: brightness(1);
   }
   to {
     transform:
@@ -1626,7 +1710,6 @@ html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-collapse
       )
       rotateX(calc(var(--thumbnail-stack-depth, 0) * -1.4deg))
       scale(calc(1 - var(--thumbnail-stack-depth, 0) * 0.025));
-    filter: brightness(calc(1 - var(--thumbnail-stack-depth, 0) * 0.12));
   }
 }
 
@@ -1637,7 +1720,21 @@ html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-collapse
       calc(var(--thumbnail-stack-depth, 0) * -184px),
       0
     );
-    filter: brightness(1);
+  }
+}
+
+@keyframes thumbnail-card-minimize-dim {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: calc(var(--thumbnail-stack-depth, 0) * 0.12);
+  }
+}
+
+@keyframes thumbnail-card-expand-dim {
+  to {
+    opacity: 0;
   }
 }
 
@@ -1728,11 +1825,15 @@ html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-collapse
     )
     rotateX(calc(var(--thumbnail-stack-depth, 0) * -1.2deg))
     scale(calc(1 - var(--thumbnail-stack-depth, 0) * 0.02));
-  filter: brightness(calc(1.06 - var(--thumbnail-stack-depth, 0) * 0.1));
   box-shadow:
     var(--thumbnail-card-shadow),
     0 0 0 1px rgba(var(--theme-accent-rgb), 0.55),
     0 0 22px rgba(var(--theme-accent-rgb), 0.28);
+}
+
+.thumbnail-stack-minimized:has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card::before,
+.thumbnail-stack-minimized:has(.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]) > .thumbnail-card::before {
+  opacity: calc(var(--thumbnail-stack-depth, 0) * 0.08);
 }
 
 .thumbnail-message {
@@ -1760,6 +1861,11 @@ html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-collapse
 
   .thumbnail-stack-minimizing > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting),
   .thumbnail-stack-expanding > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting) {
+    animation: none;
+  }
+
+  .thumbnail-stack-minimizing > .thumbnail-card::before,
+  .thumbnail-stack-expanding > .thumbnail-card::before {
     animation: none;
   }
 
