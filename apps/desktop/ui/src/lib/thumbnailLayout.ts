@@ -177,6 +177,33 @@ export function shouldScrollThumbnailStackToEnd(
   return nextCount > previousCount;
 }
 
+/**
+ * Expanding the pile starts at scrollTop 0 (oldest). Jump to the newest
+ * capture once cards are back in document flow.
+ */
+export function shouldScrollThumbnailStackToNewestOnExpand(
+  previousMotion: string | undefined,
+  nextMotion: string,
+): boolean {
+  return nextMotion === "expanded"
+    && previousMotion !== undefined
+    && previousMotion !== "expanded";
+}
+
+/** Scroll offset that puts the newest (bottom) preview in view. */
+export function thumbnailStackNewestScrollTop(
+  cardCount: number,
+  clientHeight: number,
+): number {
+  return Math.max(0, thumbnailStackContentHeight(cardCount) - Math.max(0, clientHeight));
+}
+
+/** Pin the stack to its newest capture using layout geometry, not paint overflow. */
+export function scrollThumbnailStackToNewest(stack: HTMLElement): void {
+  const cardCount = stack.querySelectorAll(":scope > .thumbnail-card").length;
+  stack.scrollTop = thumbnailStackNewestScrollTop(cardCount, stack.clientHeight);
+}
+
 export type ThumbnailStackOverflow = {
   /** Older previews are clipped above the visible scrollport. */
   hasOlder: boolean;

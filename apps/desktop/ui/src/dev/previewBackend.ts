@@ -306,6 +306,17 @@ const SECOND_ARTIFACT: CaptureArtifact = {
   clipboard_copy_status: "skipped",
 };
 
+function mockArtifacts(): CaptureArtifact[] {
+  const parsed = Number.parseInt(query().get("count") ?? "", 10);
+  const count = Number.isFinite(parsed) ? Math.min(24, Math.max(1, parsed)) : 2;
+  const samples = [ARTIFACT, SECOND_ARTIFACT];
+  return Array.from({ length: count }, (_, index) => ({
+    ...samples[index % samples.length],
+    id: `artifact-${index + 1}`,
+    created_at: new Date(Date.parse("2026-08-27T09:41:12Z") + index * 60_000).toISOString(),
+  }));
+}
+
 /**
  * Optional local clip for reviewing the recording editor. Generate one with
  * `ffmpeg -f lavfi -i color=c=black:s=800x500:d=6 apps/desktop/ui/public/dev-sample.mp4`.
@@ -623,7 +634,7 @@ const RESPONSES: Record<string, unknown> = {
   get_update_status: updateStatus(),
   get_capture_history: HISTORY,
   get_recording_drafts: DRAFTS,
-  get_artifacts: [ARTIFACT, SECOND_ARTIFACT],
+  get_artifacts: mockArtifacts(),
   get_artifact: ARTIFACT,
   get_recording_artifact: RECORDING,
   get_clipboard_state: CLIPBOARD,

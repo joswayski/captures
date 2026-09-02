@@ -10,10 +10,12 @@ import {
   resolveThumbnailStackShiftPx,
   shouldAnimateThumbnailStackShift,
   shouldScrollThumbnailStackToEnd,
+  shouldScrollThumbnailStackToNewestOnExpand,
   thumbnailStackContentHeight,
   thumbnailStackMotionClassNames,
   restoreThumbnailStackShiftClass,
   thumbnailStackOverflow,
+  thumbnailStackNewestScrollTop,
   thumbnailStackShiftPx,
   thumbnailCollapsedPeekPx,
   THUMBNAIL_CARD_HEIGHT_PX,
@@ -176,6 +178,9 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-control\s*\{[\s\S]*?cursor:\s*pointer/,
     );
+    expect(thumbnailStyles).toMatch(
+      /absolutely positioned descendants are tied to the content box/,
+    );
   });
 
   it("sizes the collapsed expand target from visible extra cards", () => {
@@ -194,6 +199,21 @@ describe("thumbnail stack layout", () => {
   it("does not force a second scroll after a capture closes", () => {
     expect(shouldScrollThumbnailStackToEnd(2, 1)).toBe(false);
     expect(shouldScrollThumbnailStackToEnd(2, 2)).toBe(false);
+  });
+
+  it("scrolls to the newest capture when the pile expands", () => {
+    expect(shouldScrollThumbnailStackToNewestOnExpand("collapsed", "expanded")).toBe(true);
+    expect(shouldScrollThumbnailStackToNewestOnExpand("expanding", "expanded")).toBe(true);
+    expect(shouldScrollThumbnailStackToNewestOnExpand("expanded", "expanded")).toBe(false);
+    expect(shouldScrollThumbnailStackToNewestOnExpand(undefined, "expanded")).toBe(false);
+    expect(shouldScrollThumbnailStackToNewestOnExpand("expanded", "collapsing")).toBe(false);
+  });
+
+  it("pins newest-scroll to layout height instead of paint overflow", () => {
+    expect(thumbnailStackNewestScrollTop(1, 400)).toBe(0);
+    expect(thumbnailStackNewestScrollTop(8, 400)).toBe(
+      thumbnailStackContentHeight(8) - 400,
+    );
   });
 
   it("dims stacked cards with an overlay instead of a parent filter", () => {
