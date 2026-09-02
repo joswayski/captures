@@ -289,6 +289,9 @@ html[data-preview-harness-view="thumbnail"] #root {
   cursor: -webkit-grab;
   cursor: grab;
   pointer-events: auto;
+  /* Resting filter so hover interpolates instead of creating a compositor layer. */
+  filter: blur(0) brightness(1);
+  transform: scale(1);
   transition:
     filter 0.18s ease,
     transform 0.22s ease;
@@ -802,6 +805,59 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-main-actio
   transform: translate(-50%, -50%);
 }
 
+/*
+ * Clicking the collapsed pile leaves the pointer over a card. Keep idle chrome
+ * until the pointer moves so expand motion is not followed by hover blur/fade.
+ * Keyboard focus still shows actions: Tab into a card must not land on
+ * invisible controls while the pointer remains stationary.
+ */
+html:not(.thumbnail-native-tracking) .thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:hover:not(:focus-within) img,
+.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card[data-thumbnail-native-active="true"]:not(:focus-within) img {
+  filter: blur(0) brightness(1);
+  transform: scale(1);
+  transition: none;
+}
+
+html:not(.thumbnail-native-tracking) .thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:hover:not(:focus-within) .thumbnail-meta,
+.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card[data-thumbnail-native-active="true"]:not(:focus-within) .thumbnail-meta {
+  opacity: 1;
+  transition: none;
+}
+
+html:not(.thumbnail-native-tracking) .thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:hover:not(:focus-within) :is(.thumbnail-top-actions, .thumbnail-main-actions),
+.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card[data-thumbnail-native-active="true"]:not(:focus-within) :is(.thumbnail-top-actions, .thumbnail-main-actions) {
+  opacity: 0;
+  pointer-events: none;
+  transition: none;
+}
+
+html:not(.thumbnail-native-tracking) .thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:hover:not(:focus-within) :is(.thumbnail-top-actions, .thumbnail-main-actions) button,
+.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card[data-thumbnail-native-active="true"]:not(:focus-within) :is(.thumbnail-top-actions, .thumbnail-main-actions) button {
+  pointer-events: none;
+}
+
+html:not(.thumbnail-native-tracking) .thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:hover:not(:focus-within) .thumbnail-top-actions,
+.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card[data-thumbnail-native-active="true"]:not(:focus-within) .thumbnail-top-actions {
+  transform: translateY(-3px);
+}
+
+html:not(.thumbnail-native-tracking) .thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:hover:not(:focus-within) .thumbnail-main-actions,
+.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card[data-thumbnail-native-active="true"]:not(:focus-within) .thumbnail-main-actions {
+  transform: translate(-50%, -47%);
+}
+
+html:not(.thumbnail-native-tracking) .thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:hover:not(:focus-within) .thumbnail-editor-control:not(.is-present),
+.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card[data-thumbnail-native-active="true"]:not(:focus-within) .thumbnail-editor-control:not(.is-present) {
+  opacity: 0;
+  pointer-events: none;
+  transition: none;
+}
+
+html:not(.thumbnail-native-tracking) .thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card:hover:not(:focus-within) .thumbnail-editor-control:not(.is-present) .thumbnail-editor-control-face,
+.thumbnail-stack[data-thumbnail-suppress-card-hover="true"] .thumbnail-card[data-thumbnail-native-active="true"]:not(:focus-within) .thumbnail-editor-control:not(.is-present) .thumbnail-editor-control-face {
+  transform: translateY(-3px);
+}
+
 .thumbnail-main-actions button {
   display: flex;
   height: 32px;
@@ -882,6 +938,12 @@ html.thumbnail-native-tracking .thumbnail-card[data-thumbnail-native-active="tru
   cursor: grab !important;
 }
 
+html.thumbnail-native-tracking .thumbnail-stack-minimized .thumbnail-card,
+html.thumbnail-native-tracking .thumbnail-stack-minimized .thumbnail-card img {
+  cursor: -webkit-grab !important;
+  cursor: grab !important;
+}
+
 html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging,
 html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   cursor: -webkit-grabbing !important;
@@ -892,6 +954,10 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
  * Stack chrome sits over grab-source cards. The document-wide grab/default
  * rules would otherwise win on every native poll that misses the control and
  * flicker pointer vs arrow while the mouse is still on the button.
+ *
+ * The collapsed pile is a window-drag source (click still expands). Force grab
+ * on peeking cards and their images so file-drag grab cannot leak through, and
+ * pointer cannot hide the move affordance.
  */
 html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-overflow-cue):not(:disabled),
 html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-overflow-cue):not(:disabled) *,
@@ -979,12 +1045,33 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
    * Keep the outgoing slot at full size for the entire dissolve so its particle
    * layer never shifts. Cards above animate into place independently, then
    * removing this card swaps their translated pose for the real layout position.
+   *
+   * The hairline ring is the same 1px stroke stacked cards use to read as a
+   * pile. Animating `box-shadow` to `none` (or through `var()`) often fails to
+   * interpolate in WKWebView, so the empty rounded stroke sits behind the ash.
+   * A matching three-shadow fade plus a transparent specified value hides that
+   * ghost even when the animation cannot interpolate.
    */
+  box-shadow:
+    0 6px 14px rgba(0, 0, 0, 0),
+    0 2px 5px rgba(0, 0, 0, 0),
+    0 0 0 1px rgba(255, 255, 255, 0);
   animation:
     thumbnail-delete 2.9s linear forwards,
-    thumbnail-delete-frame-fade 0.95s cubic-bezier(0.22, 0.1, 0.25, 1) forwards;
+    thumbnail-delete-frame-fade 0.5s cubic-bezier(0.22, 0.1, 0.25, 1) forwards;
   pointer-events: none;
   border-radius: 12px;
+}
+
+.thumbnail-card.thumbnail-exit-delete.thumbnail-viewer-active,
+.thumbnail-card.thumbnail-exit-delete.thumbnail-editor-active,
+.thumbnail-stack-compact > .thumbnail-card.thumbnail-exit-delete,
+.thumbnail-stack-minimized:has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card.thumbnail-exit-delete,
+.thumbnail-stack-minimized:has(.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]) > .thumbnail-card.thumbnail-exit-delete {
+  box-shadow:
+    0 6px 14px rgba(0, 0, 0, 0),
+    0 2px 5px rgba(0, 0, 0, 0),
+    0 0 0 1px rgba(255, 255, 255, 0);
 }
 
 /*
@@ -1320,8 +1407,17 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
 }
 
 @keyframes thumbnail-delete-frame-fade {
+  from {
+    box-shadow:
+      0 6px 14px rgba(0, 0, 0, 0.38),
+      0 2px 5px rgba(0, 0, 0, 0.26),
+      0 0 0 1px rgba(255, 255, 255, 0.08);
+  }
   to {
-    box-shadow: none;
+    box-shadow:
+      0 6px 14px rgba(0, 0, 0, 0),
+      0 2px 5px rgba(0, 0, 0, 0),
+      0 0 0 1px rgba(255, 255, 255, 0);
   }
 }
 
@@ -1493,7 +1589,7 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
   overflow: hidden;
   cursor: pointer;
   transition:
-    width var(--dur-5) var(--ease-in-out),
+    width var(--dur-3) var(--ease-out),
     color var(--dur-1) var(--ease-out),
     background-color var(--dur-1) var(--ease-out),
     border-color var(--dur-1) var(--ease-out),
@@ -1503,16 +1599,16 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
 .thumbnail-stack-minimize svg {
   position: absolute;
   transition:
-    opacity var(--dur-4) var(--ease-in-out),
-    transform var(--dur-5) var(--ease-in-out);
+    opacity var(--dur-2) var(--ease-out),
+    transform var(--dur-2) var(--ease-out);
 }
 
 .thumbnail-stack-minimize-label {
   opacity: 0;
   transform: translateX(4px);
   transition:
-    opacity var(--dur-4) var(--ease-in-out) var(--dur-1),
-    transform var(--dur-5) var(--ease-in-out);
+    opacity var(--dur-2) var(--ease-out),
+    transform var(--dur-2) var(--ease-out);
   pointer-events: none;
   cursor: pointer;
   font-size: var(--text-2xs);
@@ -1574,7 +1670,7 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
 }
 
 .thumbnail-stack-compact {
-  --stack-fan-dur: 0.56s;
+  --stack-fan-dur: var(--dur-3);
   height: 100%;
   max-height: none;
   overflow: visible;
@@ -1583,22 +1679,7 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
 }
 
 .thumbnail-stack-compact > .thumbnail-card {
-  position: absolute;
-  left: 28px;
-  right: 28px;
-  bottom: 52px;
-  z-index: calc(30 - var(--thumbnail-stack-depth, 0));
-  width: calc(100% - 56px);
-  opacity: calc(1 - var(--thumbnail-stack-hidden, 0));
-  transition:
-    opacity var(--dur-4) var(--ease-out),
-    transform var(--stack-fan-dur) var(--ease-in-out),
-    filter var(--stack-fan-dur) var(--ease-in-out),
-    box-shadow var(--stack-fan-dur) var(--ease-in-out);
-  transform-origin: 50% 100%;
-  pointer-events: none;
-  will-change: transform, opacity, filter;
-  transform:
+  --thumbnail-stack-rest-transform:
     translate3d(
       calc(var(--thumbnail-stack-depth, 0) * -1.5px),
       calc(var(--thumbnail-stack-depth, 0) * -13px),
@@ -1606,59 +1687,128 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
     )
     rotateX(calc(var(--thumbnail-stack-depth, 0) * -1.4deg))
     scale(calc(1 - var(--thumbnail-stack-depth, 0) * 0.025));
-  filter: brightness(calc(1 - var(--thumbnail-stack-depth, 0) * 0.12));
+  position: absolute;
+  left: 28px;
+  right: 28px;
+  bottom: 52px;
+  z-index: calc(30 - var(--thumbnail-stack-depth, 0));
+  width: calc(100% - 56px);
+  opacity: calc(1 - var(--thumbnail-stack-hidden, 0));
+  /*
+   * Transform stays off this transition. Collapsing eases onto the rest pose,
+   * then drops the transitioning class; a compact transform transition here
+   * would interpolate any leftover 3D matrix into a hop on rear cards.
+   */
+  transition:
+    opacity var(--dur-4) var(--ease-out),
+    box-shadow var(--dur-4) var(--ease-out);
+  transform-origin: 50% 100%;
+  pointer-events: none;
+  transform: var(--thumbnail-stack-rest-transform);
+}
+
+/*
+ * Dim stacked cards with an overlay instead of `filter` on the card. A parent
+ * filter flattens the screenshot; removing it as expand ends then applying the
+ * hover blur on the image blanks the preview in WebKit.
+ */
+.thumbnail-stack-compact > .thumbnail-card::before {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--glass-strong-solid);
+  opacity: calc(var(--thumbnail-stack-depth, 0) * 0.12);
+  content: "";
+  pointer-events: none;
+  transition: opacity var(--stack-fan-dur) var(--ease-out);
+}
+
+.thumbnail-stack-minimizing > .thumbnail-card,
+.thumbnail-stack-expanding > .thumbnail-card {
+  transition:
+    opacity var(--dur-4) var(--ease-out),
+    box-shadow var(--dur-4) var(--ease-out);
+  will-change: transform, opacity;
 }
 
 .thumbnail-stack-minimizing > .thumbnail-card {
-  animation: thumbnail-card-minimize 0.48s var(--ease-standard) both;
+  animation: none;
+  transform:
+    translate3d(
+      0,
+      calc(var(--thumbnail-stack-depth, 0) * -184px),
+      0
+    )
+    rotateX(0deg)
+    scale(1);
+  transition: none;
+}
+
+.thumbnail-stack-minimizing.thumbnail-stack-minimize-run > .thumbnail-card {
+  transform: var(--thumbnail-stack-rest-transform);
+  transition:
+    transform 0.48s var(--ease-standard),
+    opacity var(--dur-4) var(--ease-out),
+    box-shadow var(--dur-4) var(--ease-out);
 }
 
 .thumbnail-stack-expanding > .thumbnail-card {
   animation: thumbnail-card-expand 0.48s var(--ease-standard) both;
 }
 
-.thumbnail-stack-compact > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting) {
-  animation: none;
+/*
+ * Hover fan-out only after collapse has committed the rest pose without a
+ * transform transition. Duration and curve match `--stack-fan-dur`.
+ */
+.thumbnail-stack-minimized.thumbnail-stack-hover-ready > .thumbnail-card {
+  transition:
+    opacity var(--dur-4) var(--ease-out),
+    transform var(--stack-fan-dur) var(--ease-out),
+    box-shadow var(--stack-fan-dur) var(--ease-out);
 }
 
-.thumbnail-stack-minimizing > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting) {
-  animation: thumbnail-card-minimize 0.48s var(--ease-standard) both;
+.thumbnail-stack-compact > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting) {
+  animation: none;
 }
 
 .thumbnail-stack-expanding > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting) {
   animation: thumbnail-card-expand 0.48s var(--ease-standard) both;
 }
 
-@keyframes thumbnail-card-minimize {
-  from {
-    transform: translate3d(
-      0,
-      calc(var(--thumbnail-stack-depth, 0) * -184px),
-      0
-    );
-    filter: brightness(1);
-  }
-  to {
-    transform:
-      translate3d(
-        calc(var(--thumbnail-stack-depth, 0) * -1.5px),
-        calc(var(--thumbnail-stack-depth, 0) * -13px),
-        calc(var(--thumbnail-stack-depth, 0) * -24px)
-      )
-      rotateX(calc(var(--thumbnail-stack-depth, 0) * -1.4deg))
-      scale(calc(1 - var(--thumbnail-stack-depth, 0) * 0.025));
-    filter: brightness(calc(1 - var(--thumbnail-stack-depth, 0) * 0.12));
-  }
+.thumbnail-stack-minimizing > .thumbnail-card::before {
+  animation: thumbnail-card-minimize-dim 0.48s var(--ease-standard) both;
+}
+
+.thumbnail-stack-expanding > .thumbnail-card::before {
+  animation: thumbnail-card-expand-dim 0.48s var(--ease-standard) both;
 }
 
 @keyframes thumbnail-card-expand {
   to {
-    transform: translate3d(
-      0,
-      calc(var(--thumbnail-stack-depth, 0) * -184px),
-      0
-    );
-    filter: brightness(1);
+    transform:
+      translate3d(
+        0,
+        calc(var(--thumbnail-stack-depth, 0) * -184px),
+        0
+      )
+      rotateX(0deg)
+      scale(1);
+  }
+}
+
+@keyframes thumbnail-card-minimize-dim {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: calc(var(--thumbnail-stack-depth, 0) * 0.12);
+  }
+}
+
+@keyframes thumbnail-card-expand-dim {
+  to {
+    opacity: 0;
   }
 }
 
@@ -1689,7 +1839,12 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
   right: 28px;
   bottom: 52px;
   left: 28px;
-  height: 232px;
+  /*
+   * Front card is 160px. Extra peek height comes from `--thumbnail-collapsed-peek`
+   * (idle 13px × visible extra cards) so a single preview does not steal clicks
+   * in the empty space above it. Hover uses `--thumbnail-collapsed-hover-peek`.
+   */
+  height: calc(160px + var(--thumbnail-collapsed-peek, 0px));
   padding: 0;
   border: 0;
   border-radius: 12px;
@@ -1701,6 +1856,18 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
   /* Chromium's image-drag hit test skips empty controls and uses the <img>
      underneath. A 0-alpha fill makes this the drag source without tint. */
   background-image: linear-gradient(rgb(0 0 0 / 0%), rgb(0 0 0 / 0%));
+}
+
+.thumbnail-collapsed-hit-target:hover,
+.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"] {
+  height: calc(160px + var(--thumbnail-collapsed-hover-peek, var(--thumbnail-collapsed-peek, 0px)));
+}
+
+.thumbnail-stack-minimized > .thumbnail-card,
+.thumbnail-stack-minimized > .thumbnail-card *,
+.thumbnail-stack-minimized > .thumbnail-collapsed-hit-target {
+  cursor: -webkit-grab !important;
+  cursor: grab !important;
 }
 
 /*
@@ -1765,8 +1932,8 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
   }
 }
 
-.thumbnail-stack-minimized:has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card,
-.thumbnail-stack-minimized:has(.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]) > .thumbnail-card {
+.thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card,
+.thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):has(.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]) > .thumbnail-card {
   transform:
     translate3d(
       calc(var(--thumbnail-stack-depth, 0) * -2px),
@@ -1775,7 +1942,6 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
     )
     rotateX(calc(var(--thumbnail-stack-depth, 0) * -1.2deg))
     scale(calc(1 - var(--thumbnail-stack-depth, 0) * 0.02));
-  filter: brightness(calc(1.06 - var(--thumbnail-stack-depth, 0) * 0.1));
   box-shadow:
     var(--thumbnail-card-shadow),
     0 0 0 1px rgba(var(--theme-accent-rgb), 0.55),
@@ -1812,6 +1978,11 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
   opacity: 0;
 }
 
+.thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card::before,
+.thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):has(.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]) > .thumbnail-card::before {
+  opacity: calc(var(--thumbnail-stack-depth, 0) * 0.08);
+}
+
 .thumbnail-message {
   position: absolute;
   z-index: 6;
@@ -1840,6 +2011,11 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
     animation: none;
   }
 
+  .thumbnail-stack-minimizing > .thumbnail-card::before,
+  .thumbnail-stack-expanding > .thumbnail-card::before {
+    animation: none;
+  }
+
   .thumbnail-stack-toolbar-leaving,
   .thumbnail-stack-toolbar-entering {
     animation: none;
@@ -1850,7 +2026,9 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
   }
 
   .thumbnail-stack-compact > .thumbnail-card,
-  .thumbnail-stack-minimized.thumbnail-stack-dragging > .thumbnail-card {
+  .thumbnail-stack-minimized.thumbnail-stack-dragging > .thumbnail-card,
+  .thumbnail-stack-minimizing.thumbnail-stack-minimize-run > .thumbnail-card,
+  .thumbnail-stack-minimized.thumbnail-stack-hover-ready > .thumbnail-card {
     transition: none;
   }
 

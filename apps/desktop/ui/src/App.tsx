@@ -84,11 +84,15 @@ import {
   clearThumbnailNativeHover,
   markThumbnailEditorControlOpened,
   rearmThumbnailEditorControlHover,
+  setThumbnailCardHoverSuppressed,
   setThumbnailNativeActiveCard,
   shouldIgnoreThumbnailCursorEvents,
+  shouldLockThumbnailCardHoverOnStackMotion,
   shouldRecoverThumbnailAfterNullPolls,
+  thumbnailCardHoverLockReleased,
   thumbnailCursorSyncAction,
   thumbnailStackHasLiveHitTarget,
+  thumbnailStackHoldsCollapsedPose,
   withThumbnailPointerTimeout,
   THUMBNAIL_CURSOR_HANDOFF_REASSERT_DELAYS_MS,
   type ThumbnailCursorKind,
@@ -120,6 +124,7 @@ import {
   thumbnailStackContentHeight,
   thumbnailStackOverflow,
   restoreThumbnailStackShiftClass,
+  thumbnailCollapsedPeekPx,
   THUMBNAIL_CARD_SLOT_PX,
   waitForThumbnailStackSettle,
 } from "./lib/thumbnailLayout";
@@ -5473,6 +5478,9 @@ export function Thumbnail() {
   const [stackMotion, setStackMotion] = useState<
     "expanded" | "collapsing" | "collapsed" | "expanding"
   >("expanded");
+  const [stackHoverReady, setStackHoverReady] = useState(false);
+  const [stackMinimizeRun, setStackMinimizeRun] = useState(false);
+  const [stackHoverLatched, setStackHoverLatched] = useState(false);
   const [exitingArtifactIds, setExitingArtifactIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -5496,6 +5504,10 @@ export function Thumbnail() {
   const stackDrag = useRef<CollapsedThumbnailStackDrag | null>(null);
   const skipCollapsedStackClick = useRef(false);
   const stackMotionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stackHoverReadyFrames = useRef<{ first: number; second: number } | null>(null);
+  const previousStackMotion = useRef<"expanded" | "collapsing" | "collapsed" | "expanding">(
+    "expanded",
+  );
   const previousArtifactCount = useRef(0);
   const cancelStackScroll = useRef<(() => void) | null>(null);
   const applyClipboardState = useCallback((next: ClipboardState) => {
@@ -5715,6 +5727,8 @@ export function Thumbnail() {
     let lastCursorSyncAt = 0;
     let consecutiveNullPolls = 0;
     let cursorHandoffTimers: ReturnType<typeof setTimeout>[] = [];
+    let cardHoverLocked = false;
+    let cardHoverLockOrigin: { x: number; y: number } | null = null;
     /**
      * Clicks and document-window handoffs can make macOS restore the frontmost
      * app's arrow for a frame. Reassert the current interactive cursor
@@ -5829,7 +5843,46 @@ export function Thumbnail() {
       setIgnoreCursorEvents(true, true);
     };
 
+    const lockCardHover = () => {
+      cardHoverLocked = true;
+      cardHoverLockOrigin = null;
+      setThumbnailCardHoverSuppressed(true);
+    };
+
+    const unlockCardHover = () => {
+      if (!cardHoverLocked) return;
+      cardHoverLocked = false;
+      cardHoverLockOrigin = null;
+      setThumbnailCardHoverSuppressed(false);
+    };
+
+    const maybeUnlockCardHover = (
+      position: ThumbnailPointerPosition,
+      options: { fromPointerMove?: boolean } = {},
+    ) => {
+      if (!cardHoverLocked) return;
+      // Window-relative coordinates change while the pile is still compact.
+      // Capture the origin only after cards are in their expanded layout.
+      if (thumbnailStackHoldsCollapsedPose()) return;
+      if (options.fromPointerMove && !cardHoverLockOrigin) {
+        unlockCardHover();
+        return;
+      }
+      if (!cardHoverLockOrigin) {
+        if (position.inside) {
+          cardHoverLockOrigin = { x: position.x, y: position.y };
+        } else {
+          unlockCardHover();
+        }
+        return;
+      }
+      if (thumbnailCardHoverLockReleased(cardHoverLockOrigin, position)) {
+        unlockCardHover();
+      }
+    };
+
     const applyNativeHover = (position: ThumbnailPointerPosition) => {
+      maybeUnlockCardHover(position);
       const ignore = shouldIgnoreThumbnailCursorEvents(position);
       const kind = applyThumbnailNativeHover(position);
       if (ignore || kind === "default") {
@@ -5974,7 +6027,19 @@ export function Thumbnail() {
       schedulePoll(0);
     };
 
-    const updateThumbnailHitTest = () => {
+    const updateThumbnailHitTest = (event: Event) => {
+      const detail = event instanceof CustomEvent
+        ? (event as CustomEvent<{
+          stackMotion?: string;
+          previousStackMotion?: string;
+        }>).detail
+        : undefined;
+      if (shouldLockThumbnailCardHoverOnStackMotion(
+        detail?.stackMotion,
+        detail?.previousStackMotion,
+      )) {
+        lockCardHover();
+      }
       clearNativeHover();
       const applyHitTest = () => {
         // Wait a microtask so React can commit `.thumbnail-exiting` from the
@@ -5985,6 +6050,16 @@ export function Thumbnail() {
         pollImmediately();
       };
       queueMicrotask(applyHitTest);
+    };
+
+    const onPointerMove = (event: PointerEvent) => {
+      if (!cardHoverLocked) return;
+      const wasLocked = cardHoverLocked;
+      maybeUnlockCardHover(
+        { x: event.clientX, y: event.clientY, inside: true },
+        { fromPointerMove: true },
+      );
+      if (wasLocked && !cardHoverLocked) pollImmediately();
     };
 
     const onPointerActivity = (event: Event) => {
@@ -6007,6 +6082,7 @@ export function Thumbnail() {
     // through that later native transition as well.
     window.addEventListener("blur", preserveInteractiveCursorAcrossHandoff);
     // Capture-phase so we reassert before WebKit's own cursor update from the click.
+    window.addEventListener("pointermove", onPointerMove);
     window.addEventListener("pointerdown", onPointerActivity, true);
     window.addEventListener("pointerup", onPointerActivity, true);
     // `click` fires after mouseup and after the Edit handler starts opening the
@@ -6030,6 +6106,7 @@ export function Thumbnail() {
       document.removeEventListener("visibilitychange", resumeFromSuspension);
       window.removeEventListener("focus", pollImmediately);
       window.removeEventListener("blur", preserveInteractiveCursorAcrossHandoff);
+      window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerdown", onPointerActivity, true);
       window.removeEventListener("pointerup", onPointerActivity, true);
       window.removeEventListener("click", onPointerActivity, true);
@@ -6044,6 +6121,7 @@ export function Thumbnail() {
         updateThumbnailHitTest,
       );
       stopNativeTracking();
+      unlockCardHover();
     };
   }, [hasThumbnailCards]);
 
@@ -6052,11 +6130,20 @@ export function Thumbnail() {
       cancelStackScroll.current?.();
       cancelStackScroll.current = null;
       if (stackMotionTimer.current) clearTimeout(stackMotionTimer.current);
+      if (stackHoverReadyFrames.current) {
+        cancelAnimationFrame(stackHoverReadyFrames.current.first);
+        cancelAnimationFrame(stackHoverReadyFrames.current.second);
+        stackHoverReadyFrames.current = null;
+      }
     };
   }, []);
 
   useEffect(() => {
-    window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
+    const previous = previousStackMotion.current;
+    previousStackMotion.current = stackMotion;
+    window.dispatchEvent(new CustomEvent(THUMBNAIL_HIT_TEST_CHANGED_EVENT, {
+      detail: { stackMotion, previousStackMotion: previous },
+    }));
   }, [stackMotion]);
 
   useEffect(() => {
@@ -6079,28 +6166,87 @@ export function Thumbnail() {
   const setStackCollapsed = (nextCollapsed: boolean) => {
     if (controlsDisabled || collapsed === nextCollapsed) return;
     if (stackMotionTimer.current) clearTimeout(stackMotionTimer.current);
+    const cancelHoverReady = () => {
+      if (stackHoverReadyFrames.current) {
+        cancelAnimationFrame(stackHoverReadyFrames.current.first);
+        cancelAnimationFrame(stackHoverReadyFrames.current.second);
+        stackHoverReadyFrames.current = null;
+      }
+      setStackHoverReady(false);
+    };
+    // Two frames after collapse so the rest pose is committed before
+    // transform easing (hover fan-out) turns back on.
+    const armHoverReady = () => {
+      cancelHoverReady();
+      const frames = { first: 0, second: 0 };
+      frames.first = requestAnimationFrame(() => {
+        frames.second = requestAnimationFrame(() => {
+          stackHoverReadyFrames.current = null;
+          setStackHoverReady(true);
+        });
+      });
+      stackHoverReadyFrames.current = frames;
+    };
     if (prefersReducedMotion()) {
       setStackMotion(nextCollapsed ? "collapsed" : "expanded");
+      if (nextCollapsed) armHoverReady();
+      else cancelHoverReady();
       void invoke("set_mini_previews_collapsed", { collapsed: nextCollapsed })
-        .catch(() => setStackMotion(nextCollapsed ? "expanded" : "collapsed"));
+        .catch(() => {
+          setStackMotion(nextCollapsed ? "expanded" : "collapsed");
+          if (nextCollapsed) cancelHoverReady();
+          else armHoverReady();
+        });
       return;
     }
     if (nextCollapsed) {
+      cancelHoverReady();
+      setStackHoverLatched(false);
+      setStackMinimizeRun(false);
       setStackMotion("collapsing");
       const collapsePromise = invoke("set_mini_previews_collapsed", { collapsed: true });
-      stackMotionTimer.current = setTimeout(() => {
-        stackMotionTimer.current = null;
-        setStackMotion("collapsed");
-      }, STACK_MOTION_MS);
+      const frames = { first: 0, second: 0 };
+      frames.first = requestAnimationFrame(() => {
+        frames.second = requestAnimationFrame(() => {
+          stackHoverReadyFrames.current = null;
+          setStackMinimizeRun(true);
+          stackMotionTimer.current = setTimeout(() => {
+            stackMotionTimer.current = null;
+            setStackMinimizeRun(false);
+            setStackMotion("collapsed");
+            setStackHoverLatched(true);
+            requestAnimationFrame(() => {
+              const target = stackRef.current?.querySelector(
+                ".thumbnail-collapsed-hit-target",
+              );
+              target?.removeAttribute("data-native-pointer-hover");
+              if (!target?.matches(":hover")) setStackHoverLatched(false);
+            });
+            armHoverReady();
+          }, STACK_MOTION_MS);
+        });
+      });
+      stackHoverReadyFrames.current = frames;
       void collapsePromise.catch(() => {
         if (stackMotionTimer.current) {
           clearTimeout(stackMotionTimer.current);
           stackMotionTimer.current = null;
         }
+        if (stackHoverReadyFrames.current) {
+          cancelAnimationFrame(stackHoverReadyFrames.current.first);
+          cancelAnimationFrame(stackHoverReadyFrames.current.second);
+          stackHoverReadyFrames.current = null;
+        }
+        cancelHoverReady();
+        setStackMinimizeRun(false);
+        setStackHoverLatched(false);
         setStackMotion("expanded");
       });
       return;
     }
+    cancelHoverReady();
+    setStackMinimizeRun(false);
+    setStackHoverLatched(false);
     void invoke("set_mini_previews_collapsed", { collapsed: false })
       .then(() => {
         setStackMotion("expanding");
@@ -6109,7 +6255,10 @@ export function Thumbnail() {
           setStackMotion("expanded");
         }, STACK_MOTION_MS);
       })
-      .catch(() => setStackMotion("collapsed"));
+      .catch(() => {
+        setStackMotion("collapsed");
+        armHoverReady();
+      });
   };
 
   const scrollStackBy = (slots: number) => {
@@ -6203,6 +6352,9 @@ export function Thumbnail() {
           stackMotion === "collapsing" ? "thumbnail-stack-minimizing" : "",
           stackMotion === "collapsed" ? "thumbnail-stack-minimized" : "",
           stackMotion === "expanding" ? "thumbnail-stack-expanding" : "",
+          stackMinimizeRun ? "thumbnail-stack-minimize-run" : "",
+          stackHoverReady ? "thumbnail-stack-hover-ready" : "",
+          stackHoverLatched ? "thumbnail-stack-hover-latched" : "",
         ].filter(Boolean).join(" ")}
         onScroll={refreshStackOverflow}
         onDragStartCapture={(event) => {
@@ -6266,8 +6418,16 @@ export function Thumbnail() {
             aria-label={`Expand ${artifacts.length === 1 ? "preview" : `${artifacts.length} previews`}`}
             draggable={false}
             disabled={controlsDisabled}
+            style={{
+              "--thumbnail-collapsed-peek": `${thumbnailCollapsedPeekPx(artifacts.length)}px`,
+              "--thumbnail-collapsed-hover-peek": `${thumbnailCollapsedPeekPx(artifacts.length, true)}px`,
+            } as CSSProperties}
             onPointerDown={onCollapsedStackPointerDown}
             onDragStart={(event) => preventThumbnailHtml5Drag(event.nativeEvent)}
+            onPointerLeave={(event) => {
+              event.currentTarget.removeAttribute("data-native-pointer-hover");
+              setStackHoverLatched(false);
+            }}
             onClick={() => {
               if (skipCollapsedStackClick.current) {
                 skipCollapsedStackClick.current = false;

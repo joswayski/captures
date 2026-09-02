@@ -15,6 +15,7 @@ import {
   restoreThumbnailStackShiftClass,
   thumbnailStackOverflow,
   thumbnailStackShiftPx,
+  thumbnailCollapsedPeekPx,
   THUMBNAIL_CARD_HEIGHT_PX,
   THUMBNAIL_CARD_SLOT_PX,
   THUMBNAIL_DISMISS_HOLD_MS,
@@ -46,6 +47,33 @@ function card(
 }
 
 describe("thumbnail stack layout", () => {
+  it("does not ease compact-card transforms until collapse hover is armed", () => {
+    const compactCard = thumbnailStyles.match(
+      /\.thumbnail-stack-compact > \.thumbnail-card\s*\{([\s\S]*?)\n\}/,
+    );
+    const hoverReady = thumbnailStyles.match(
+      /\.thumbnail-stack-minimized\.thumbnail-stack-hover-ready > \.thumbnail-card\s*\{([\s\S]*?)\n\}/,
+    );
+    const minimizingCard = thumbnailStyles.match(
+      /\.thumbnail-stack-minimizing > \.thumbnail-card\s*\{\n {2}animation: none;([\s\S]*?)\n\}/,
+    );
+    const minimizeRun = thumbnailStyles.match(
+      /\.thumbnail-stack-minimizing\.thumbnail-stack-minimize-run > \.thumbnail-card\s*\{([\s\S]*?)\n\}/,
+    );
+    const hoverFan = thumbnailStyles.match(
+      /\.thumbnail-stack-minimized\.thumbnail-stack-hover-ready:not\(\.thumbnail-stack-hover-latched\):not\(\.thumbnail-stack-dragging\):has\(\.thumbnail-collapsed-hit-target:hover\)/,
+    );
+
+    expect(compactCard?.[1]).toMatch(/transform:\s*var\(--thumbnail-stack-rest-transform\)/);
+    expect(compactCard?.[1]).not.toMatch(/transform\s+var\(--stack-fan-dur\)/);
+    expect(hoverReady?.[1]).toMatch(/transform\s+var\(--stack-fan-dur\)/);
+    expect(minimizingCard?.[1]).toMatch(/rotateX\(0deg\)/);
+    expect(minimizingCard?.[1]).toMatch(/scale\(1\)/);
+    expect(minimizeRun?.[1]).toMatch(/transform:\s*var\(--thumbnail-stack-rest-transform\)/);
+    expect(minimizeRun?.[1]).toMatch(/transform 0\.48s/);
+    expect(hoverFan).not.toBeNull();
+  });
+
   it("releases the arrival animation before cards exit or shift", () => {
     const arrival = thumbnailStyles.match(
       /\.thumbnail-card\.thumbnail-ready([^{}]*)\{([^{}]*animation:\s*thumbnail-arrive[^{}]*)\}/,
@@ -109,10 +137,38 @@ describe("thumbnail stack layout", () => {
       /\.thumbnail-card\.thumbnail-exit-delete::after\s*\{([^}]*)\}/,
     );
 
-    expect(deleteRule?.[1]).toMatch(/thumbnail-delete-frame-fade\s+0\.95s/);
+    expect(deleteRule?.[1]).toMatch(/thumbnail-delete-frame-fade\s+0\.5s/);
+    expect(deleteRule?.[1]).toMatch(/0 0 0 1px rgba\(255, 255, 255, 0\)/);
     expect(deleteRule?.[1]).not.toMatch(/^\s*box-shadow:\s*none/m);
-    expect(frameFade?.[1]).toMatch(/box-shadow:\s*none/);
+    expect(frameFade?.[1]).toMatch(/from\s*\{/);
+    expect(frameFade?.[1]).toMatch(/0 0 0 1px rgba\(255, 255, 255, 0\.08\)/);
+    expect(frameFade?.[1]).toMatch(/0 0 0 1px rgba\(255, 255, 255, 0\)/);
     expect(outlineFade?.[1]).toMatch(/filter:\s*opacity\(0\)/);
+  });
+
+  it("uses a grab cursor on the collapsed stack so it can be moved", () => {
+    const hitTarget = thumbnailStyles.match(
+      /\.thumbnail-collapsed-hit-target\s*\{([\s\S]*?)\n\}/,
+    );
+
+    expect(hitTarget?.[1]).toMatch(/cursor:\s*grab/);
+    expect(hitTarget?.[1]).toMatch(/--thumbnail-collapsed-peek/);
+    expect(hitTarget?.[1]).not.toMatch(/height:\s*248px/);
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-minimized > \.thumbnail-card \*/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /html\.thumbnail-native-tracking \.thumbnail-stack-minimized \.thumbnail-card img/,
+    );
+  });
+
+  it("sizes the collapsed expand target from visible extra cards", () => {
+    expect(thumbnailCollapsedPeekPx(1)).toBe(0);
+    expect(thumbnailCollapsedPeekPx(2)).toBe(13);
+    expect(thumbnailCollapsedPeekPx(4)).toBe(39);
+    expect(thumbnailCollapsedPeekPx(8)).toBe(39);
+    expect(thumbnailCollapsedPeekPx(2, true)).toBe(24);
+    expect(thumbnailCollapsedPeekPx(1, true)).toBe(0);
   });
 
   it("scrolls to reveal newly added captures", () => {
@@ -122,6 +178,38 @@ describe("thumbnail stack layout", () => {
   it("does not force a second scroll after a capture closes", () => {
     expect(shouldScrollThumbnailStackToEnd(2, 1)).toBe(false);
     expect(shouldScrollThumbnailStackToEnd(2, 2)).toBe(false);
+  });
+
+  it("dims stacked cards with an overlay instead of a parent filter", () => {
+    expect(thumbnailStyles).not.toMatch(
+      /\.thumbnail-stack-compact > \.thumbnail-card\s*\{[^}]*filter:\s*brightness/,
+    );
+    const overlay = thumbnailStyles.match(
+      /\.thumbnail-stack-compact > \.thumbnail-card::before\s*\{([^}]*)\}/,
+    );
+    expect(overlay?.[1]).toMatch(
+      /opacity:\s*calc\(var\(--thumbnail-stack-depth/,
+    );
+    expect(overlay?.[1]).toMatch(/background:\s*var\(--glass-strong-solid\)/);
+    expect(overlay?.[1]).not.toMatch(/background:\s*#000/);
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-card img\s*\{[^}]*filter:\s*blur\(0\) brightness\(1\)/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack\[data-thumbnail-suppress-card-hover="true"\]/,
+    );
+  });
+
+  it("keeps keyboard-focused card actions visible while hover is locked", () => {
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack\[data-thumbnail-suppress-card-hover="true"\] \.thumbnail-card:hover:not\(:focus-within\)/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack\[data-thumbnail-suppress-card-hover="true"\] \.thumbnail-card\[data-thumbnail-native-active="true"\]:not\(:focus-within\)/,
+    );
+    expect(thumbnailStyles).not.toMatch(
+      /\.thumbnail-stack\[data-thumbnail-suppress-card-hover="true"\] \.thumbnail-card:focus-within/,
+    );
   });
 
   it("reports hidden previews at each scroll edge", () => {

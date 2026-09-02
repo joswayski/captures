@@ -42,11 +42,22 @@ const THUMBNAIL_NATIVE_ACTIVE_SELECTOR = `[${THUMBNAIL_NATIVE_ACTIVE_ATTRIBUTE}=
 export const THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE = "data-native-pointer-hover";
 const THUMBNAIL_NATIVE_POINTER_HOVER_SELECTOR =
   `[${THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE}="true"]`;
+const THUMBNAIL_STACK_HOVER_LATCHED_SELECTOR = ".thumbnail-stack-hover-latched";
 const THUMBNAIL_STACK_CONTROL_SELECTOR = [
   ".thumbnail-overflow-cue",
   ".thumbnail-stack-control",
   ".thumbnail-collapsed-hit-target",
 ].join(", ");
+/**
+ * Marker on `.thumbnail-stack` while card hover chrome must stay idle after a
+ * collapse/expand. Clicking the pile leaves the pointer over a card; applying
+ * hover immediately plays blur + action fade on top of the expand motion.
+ */
+export const THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE = "data-thumbnail-suppress-card-hover";
+const THUMBNAIL_SUPPRESS_CARD_HOVER_SELECTOR =
+  `.thumbnail-stack[${THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE}="true"]`;
+/** Ignore sub-pixel native samples so a stationary pointer cannot unlock hover. */
+export const THUMBNAIL_CARD_HOVER_LOCK_SLOP_PX = 4;
 
 /**
  * Keeps a freshly opened editor control in its passive “In editor” state until
@@ -171,6 +182,61 @@ export function clearThumbnailCssCursor(
  * stack is live only while its dedicated expand target remains enabled,
  * except while the pile is being dragged across the desktop.
  */
+/** True while cards are still in the collapsed pile pose or its motion. */
+export function thumbnailStackHoldsCollapsedPose(root: Document = document): boolean {
+  return Boolean(root.querySelector(
+    ".thumbnail-stack-compact, .thumbnail-stack-minimizing, .thumbnail-stack-expanding, .thumbnail-stack-minimized",
+  ));
+}
+
+/**
+ * True when preview cards must not show Copy/Save/Edit hover chrome. Compact
+ * and animating stacks are decorative; after expand the suppress marker stays
+ * until the pointer actually moves.
+ */
+export function thumbnailStackSuppressesCardHover(root: Document = document): boolean {
+  return thumbnailStackHoldsCollapsedPose(root)
+    || Boolean(root.querySelector(THUMBNAIL_SUPPRESS_CARD_HOVER_SELECTOR));
+}
+
+export function setThumbnailCardHoverSuppressed(
+  suppressed: boolean,
+  root: ParentNode = document,
+) {
+  const stack = root.querySelector(".thumbnail-stack");
+  if (!stack) return;
+  if (suppressed) {
+    stack.setAttribute(THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE, "true");
+  } else {
+    stack.removeAttribute(THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE);
+  }
+}
+
+/** True when a locked hover may resume — pointer left, or moved past slop. */
+export function thumbnailCardHoverLockReleased(
+  origin: { x: number; y: number } | null,
+  position: ThumbnailPointerPosition,
+  slopPx: number = THUMBNAIL_CARD_HOVER_LOCK_SLOP_PX,
+): boolean {
+  if (!position.inside) return true;
+  if (!origin) return false;
+  return Math.hypot(position.x - origin.x, position.y - origin.y) >= slopPx;
+}
+
+/**
+ * Collapse, expand, and reduced-motion jumps all leave the pointer over a card
+ * that was not hovered as a live preview. Keep hover locked through those
+ * transitions. The initial expanded mount must not lock.
+ */
+export function shouldLockThumbnailCardHoverOnStackMotion(
+  stackMotion: string | undefined,
+  previousStackMotion: string | undefined,
+): boolean {
+  if (!stackMotion) return false;
+  if (stackMotion !== "expanded") return true;
+  return Boolean(previousStackMotion && previousStackMotion !== "expanded");
+}
+
 export function thumbnailStackHasLiveHitTarget(root: Document = document): boolean {
   if (root.querySelector(".thumbnail-stack-dragging")) return true;
   if (root.querySelector(
@@ -280,12 +346,40 @@ function containsPoint(element: Element, x: number, y: number): boolean {
  * card while the pointer is still inside the button. Treating the control's
  * stable bounds as authoritative prevents native pointer/grab cursor churn.
  */
+function minimizedStackExpandControlAtPoint(
+  x: number,
+  y: number,
+  directTarget: Element | null,
+  root: Document,
+): HTMLElement | null {
+  const stack = root.querySelector<HTMLElement>(".thumbnail-stack-minimized");
+  if (!stack) return null;
+  const hitTarget = stack.querySelector<HTMLElement>(
+    ".thumbnail-collapsed-hit-target:not(:disabled)",
+  );
+  if (!hitTarget) return null;
+  if (directTarget?.closest(".thumbnail-collapsed-hit-target") === hitTarget) {
+    return hitTarget;
+  }
+  if (containsPoint(hitTarget, x, y)) return hitTarget;
+  // Peeking stacked cards sit above the front-card rect. Treat their paint
+  // bounds as the same pile action so the stack never shows a file-drag grab
+  // on a decorative card image.
+  for (const card of stack.querySelectorAll<HTMLElement>(":scope > .thumbnail-card")) {
+    if (containsPoint(card, x, y)) return hitTarget;
+  }
+  return null;
+}
+
 function thumbnailStackControlAtPoint(
   x: number,
   y: number,
   directTarget: Element | null,
   root: Document = document,
 ): HTMLElement | null {
+  const expandControl = minimizedStackExpandControlAtPoint(x, y, directTarget, root);
+  if (expandControl) return expandControl;
+
   const directControl = directTarget?.closest<HTMLElement>(THUMBNAIL_STACK_CONTROL_SELECTOR);
   if (directControl) return directControl;
 
@@ -337,18 +431,27 @@ export function applyThumbnailNativeHover(
     root,
   );
   if (stackControl) {
+    const ignoreCollapsedHover = stackControl.classList.contains(
+      "thumbnail-collapsed-hit-target",
+    ) && Boolean(root.querySelector(THUMBNAIL_STACK_HOVER_LATCHED_SELECTOR));
     root.querySelectorAll(THUMBNAIL_NATIVE_ACTIVE_SELECTOR)
       .forEach((element) => element.removeAttribute(THUMBNAIL_NATIVE_ACTIVE_ATTRIBUTE));
     root.querySelectorAll(THUMBNAIL_NATIVE_POINTER_HOVER_SELECTOR)
       .forEach((element) => {
-        if (element !== stackControl) {
+        if (ignoreCollapsedHover || element !== stackControl) {
           element.removeAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE);
         }
       });
-    stackControl.setAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE, "true");
+    if (!ignoreCollapsedHover) {
+      stackControl.setAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE, "true");
+    }
     return stackControl.classList.contains("thumbnail-collapsed-hit-target")
       ? "grab"
       : "pointer";
+  }
+  if (thumbnailStackSuppressesCardHover(root)) {
+    clearThumbnailNativeHover(root);
+    return "default";
   }
   const card = directTarget?.closest(".thumbnail-card")
     ?? (

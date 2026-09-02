@@ -7,17 +7,24 @@ import {
   clearThumbnailNativeHover,
   markThumbnailEditorControlOpened,
   rearmThumbnailEditorControlHover,
+  setThumbnailCardHoverSuppressed,
   shouldIgnoreThumbnailCursorEvents,
+  shouldLockThumbnailCardHoverOnStackMotion,
   shouldRecoverThumbnailAfterNullPolls,
+  thumbnailCardHoverLockReleased,
   thumbnailCssCursor,
   thumbnailCursorSyncAction,
   thumbnailStackHasLiveHitTarget,
+  thumbnailStackHoldsCollapsedPose,
+  thumbnailStackSuppressesCardHover,
+  THUMBNAIL_CARD_HOVER_LOCK_SLOP_PX,
   THUMBNAIL_CURSOR_HANDOFF_REASSERT_DELAYS_MS,
   THUMBNAIL_CURSOR_KIND_ATTRIBUTE,
   THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS,
   THUMBNAIL_EDITOR_JUST_OPENED_ATTRIBUTE,
   THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE,
   THUMBNAIL_NULL_POLL_RECOVER_COUNT,
+  THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE,
   withThumbnailPointerTimeout,
 } from "./thumbnailHover";
 
@@ -362,6 +369,72 @@ describe("applyThumbnailNativeHover", () => {
     expect(remaining).toHaveAttribute("data-thumbnail-native-active", "true");
     expectNativePointerHover(remainingButton, true);
   });
+
+  it("does not activate a card while the stack is expanding", () => {
+    document.body.innerHTML = `
+      <main class="thumbnail-stack thumbnail-stack-compact thumbnail-stack-expanding">
+        <article class="thumbnail-card" data-thumbnail-native-active="true">
+          <img alt="Screenshot preview">
+          <div class="thumbnail-main-actions"><button>Copy</button></div>
+        </article>
+      </main>
+    `;
+    const card = document.querySelector<HTMLElement>(".thumbnail-card")!;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => card),
+    });
+
+    expect(applyThumbnailNativeHover({ x: 40, y: 80, inside: true })).toBe("default");
+    expect(card).not.toHaveAttribute("data-thumbnail-native-active");
+  });
+
+  it("does not activate a card while post-expand hover is suppressed", () => {
+    document.body.innerHTML = `
+      <main class="thumbnail-stack">
+        <article class="thumbnail-card">
+          <img alt="Screenshot preview">
+          <div class="thumbnail-main-actions"><button>Copy</button></div>
+        </article>
+      </main>
+    `;
+    const card = document.querySelector<HTMLElement>(".thumbnail-card")!;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => card),
+    });
+    setThumbnailCardHoverSuppressed(true);
+
+    expect(thumbnailStackSuppressesCardHover()).toBe(true);
+    expect(applyThumbnailNativeHover({ x: 40, y: 80, inside: true })).toBe("default");
+    expect(card).not.toHaveAttribute("data-thumbnail-native-active");
+
+    setThumbnailCardHoverSuppressed(false);
+    expect(applyThumbnailNativeHover({ x: 40, y: 80, inside: true })).toBe("grab");
+    expect(card).toHaveAttribute("data-thumbnail-native-active", "true");
+  });
+
+  it("still highlights the collapsed pile while card hover is suppressed", () => {
+    document.body.innerHTML = `
+      <main class="thumbnail-stack thumbnail-stack-compact thumbnail-stack-minimized">
+        <article class="thumbnail-card"><button>Copy</button></article>
+        <button class="thumbnail-collapsed-hit-target">Expand previews</button>
+      </main>
+    `;
+    const target = document.querySelector<HTMLButtonElement>(
+      ".thumbnail-collapsed-hit-target",
+    )!;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => target),
+    });
+    setThumbnailCardHoverSuppressed(true);
+
+    expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe("grab");
+    expectNativePointerHover(target, true);
+    expect(document.querySelector(".thumbnail-card"))
+      .not.toHaveAttribute("data-thumbnail-native-active");
+  });
 });
 
 describe("clearThumbnailNativeHover", () => {
@@ -534,6 +607,108 @@ describe("shouldIgnoreThumbnailCursorEvents", () => {
       value: vi.fn(() => stack),
     });
     expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: true })).toBe(true);
+  });
+
+  it("treats peeking minimized stack cards as the collapsed pile target", () => {
+    document.body.innerHTML = `
+      <main class="thumbnail-stack thumbnail-stack-minimized">
+        <article class="thumbnail-card" aria-hidden="true"><img alt=""></article>
+        <button class="thumbnail-collapsed-hit-target">Expand previews</button>
+      </main>
+    `;
+    const card = document.querySelector<HTMLElement>(".thumbnail-card")!;
+    const target = document.querySelector<HTMLButtonElement>(
+      ".thumbnail-collapsed-hit-target",
+    )!;
+    vi.spyOn(card, "getBoundingClientRect").mockReturnValue({
+      x: 28,
+      y: 40,
+      top: 40,
+      right: 312,
+      bottom: 200,
+      left: 28,
+      width: 284,
+      height: 160,
+      toJSON: () => ({}),
+    });
+    vi.spyOn(target, "getBoundingClientRect").mockReturnValue({
+      x: 28,
+      y: 52,
+      top: 52,
+      right: 312,
+      bottom: 212,
+      left: 28,
+      width: 284,
+      height: 160,
+      toJSON: () => ({}),
+    });
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => card),
+    });
+
+    expect(applyThumbnailNativeHover({ x: 80, y: 48, inside: true })).toBe("grab");
+    expectNativePointerHover(target, true);
+    expect(card).not.toHaveAttribute("data-thumbnail-native-active");
+    expect(shouldIgnoreThumbnailCursorEvents({ x: 80, y: 48, inside: true })).toBe(false);
+  });
+
+  it("lets clicks pass through empty space above a single collapsed preview", () => {
+    document.body.innerHTML = `
+      <main class="thumbnail-stack thumbnail-stack-minimized">
+        <article class="thumbnail-card" aria-hidden="true"><img alt=""></article>
+        <button class="thumbnail-collapsed-hit-target">Expand preview</button>
+      </main>
+    `;
+    const stack = document.querySelector<HTMLElement>(".thumbnail-stack")!;
+    const card = document.querySelector<HTMLElement>(".thumbnail-card")!;
+    const target = document.querySelector<HTMLButtonElement>(
+      ".thumbnail-collapsed-hit-target",
+    )!;
+    vi.spyOn(card, "getBoundingClientRect").mockReturnValue({
+      x: 28,
+      y: 52,
+      top: 52,
+      right: 312,
+      bottom: 212,
+      left: 28,
+      width: 284,
+      height: 160,
+      toJSON: () => ({}),
+    });
+    vi.spyOn(target, "getBoundingClientRect").mockReturnValue({
+      x: 28,
+      y: 52,
+      top: 52,
+      right: 312,
+      bottom: 212,
+      left: 28,
+      width: 284,
+      height: 160,
+      toJSON: () => ({}),
+    });
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => stack),
+    });
+
+    expect(applyThumbnailNativeHover({ x: 80, y: 20, inside: true })).toBe("default");
+    expect(shouldIgnoreThumbnailCursorEvents({ x: 80, y: 20, inside: true })).toBe(true);
+  });
+
+  it("does not native-hover the collapsed pile while collapse hover is latched", () => {
+    document.body.innerHTML = `
+      <main class="thumbnail-stack thumbnail-stack-minimized thumbnail-stack-hover-latched">
+        <button class="thumbnail-collapsed-hit-target">Expand preview</button>
+      </main>
+    `;
+    const target = document.querySelector(".thumbnail-collapsed-hit-target")!;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => target),
+    });
+    expect(applyThumbnailNativeHover({ x: 10, y: 10, inside: true })).toBe("grab");
+    expectNativePointerHover(target, false);
   });
 
   it("uses a grab cursor over the collapsed pile so window drag is obvious", () => {
@@ -725,5 +900,44 @@ describe("thumbnail interactivity recovery helpers", () => {
       100,
     );
     expect(result).toEqual({ x: 1, y: 2, inside: true });
+  });
+});
+
+describe("thumbnail card hover lock", () => {
+  it("locks hover for collapse, expand, and reduced-motion jumps, but not the initial mount", () => {
+    expect(shouldLockThumbnailCardHoverOnStackMotion("expanded", "expanded")).toBe(false);
+    expect(shouldLockThumbnailCardHoverOnStackMotion(undefined, "expanded")).toBe(false);
+    expect(shouldLockThumbnailCardHoverOnStackMotion("collapsing", "expanded")).toBe(true);
+    expect(shouldLockThumbnailCardHoverOnStackMotion("collapsed", "collapsing")).toBe(true);
+    expect(shouldLockThumbnailCardHoverOnStackMotion("expanding", "collapsed")).toBe(true);
+    expect(shouldLockThumbnailCardHoverOnStackMotion("expanded", "expanding")).toBe(true);
+    expect(shouldLockThumbnailCardHoverOnStackMotion("expanded", "collapsed")).toBe(true);
+  });
+
+  it("releases the lock only after the pointer leaves or moves past slop", () => {
+    const origin = { x: 40, y: 80 };
+    expect(thumbnailCardHoverLockReleased(null, { x: 40, y: 80, inside: true })).toBe(false);
+    expect(thumbnailCardHoverLockReleased(origin, { x: 40, y: 80, inside: true })).toBe(false);
+    expect(thumbnailCardHoverLockReleased(origin, {
+      x: 40 + THUMBNAIL_CARD_HOVER_LOCK_SLOP_PX - 1,
+      y: 80,
+      inside: true,
+    })).toBe(false);
+    expect(thumbnailCardHoverLockReleased(origin, { x: 80, y: 20, inside: true })).toBe(true);
+    expect(thumbnailCardHoverLockReleased(origin, { x: 40, y: 80, inside: false })).toBe(true);
+  });
+
+  it("treats compact and suppressed stacks as holding card hover closed", () => {
+    document.body.innerHTML = `<main class="thumbnail-stack thumbnail-stack-compact"></main>`;
+    expect(thumbnailStackHoldsCollapsedPose()).toBe(true);
+    expect(thumbnailStackSuppressesCardHover()).toBe(true);
+
+    document.body.innerHTML = `<main class="thumbnail-stack"></main>`;
+    expect(thumbnailStackHoldsCollapsedPose()).toBe(false);
+    expect(thumbnailStackSuppressesCardHover()).toBe(false);
+    setThumbnailCardHoverSuppressed(true);
+    expect(document.querySelector(".thumbnail-stack"))
+      .toHaveAttribute(THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE, "true");
+    expect(thumbnailStackSuppressesCardHover()).toBe(true);
   });
 });
