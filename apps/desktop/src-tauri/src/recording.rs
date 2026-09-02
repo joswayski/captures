@@ -300,24 +300,29 @@ pub(crate) async fn prepare_capture_selector_inner(
     let prepared = (|| {
         crate::ensure_capture_session_available()?;
         let id = Uuid::new_v4().to_string();
-        let windows_task = {
-            let state = state.clone();
-            std::thread::spawn(move || state.windows())
-        };
+        // Window targets are only needed before first paint when this menu
+        // opens on a window. Full-screen (and region) wait until the selector
+        // is shown so listing does not contend with capture and encode.
+        let windows_task = (initial_target == CaptureMode::Window)
+            .then(|| crate::take_prefetched_or_spawn_windows(&state));
+        let windows_started = windows_task.is_some();
         let (display, snapshot_png, image, displays, windows, pending_windows) = if freeze_screen {
             let frame = state
                 .backend
                 .capture_display_at_point(crate::pointer_position())?;
+            let monitors_task = {
+                let state = state.clone();
+                std::thread::spawn(move || state.monitors())
+            };
             let snapshot_png = storage::encode_overlay_snapshot(&frame.image)?;
-            let mut displays = state.monitors()?;
-            if !displays
-                .iter()
-                .any(|candidate| candidate.id == frame.descriptor.id)
-            {
-                displays.push(frame.descriptor.clone());
-            }
+            let displays = selection_displays_from_list(
+                monitors_task
+                    .join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+                &frame.descriptor,
+            )?;
             let (windows, pending_windows) = crate::take_ready_or_defer_windows(
-                Some(windows_task),
+                windows_task,
                 &frame.descriptor,
                 Some(&frame.image),
             );
@@ -330,13 +335,11 @@ pub(crate) async fn prepare_capture_selector_inner(
                 pending_windows,
             )
         } else {
-            let display = crate::display_under_pointer(&state)?;
-            let mut displays = state.monitors()?;
-            if !displays.iter().any(|candidate| candidate.id == display.id) {
-                displays.push(display.clone());
-            }
+            let displays = state.monitors()?;
+            let display = crate::pick_display_under_pointer(&displays)
+                .ok_or(captures_capture::CaptureError::TargetUnavailable)?;
             let (windows, pending_windows) =
-                crate::take_ready_or_defer_windows(Some(windows_task), &display, None);
+                crate::take_ready_or_defer_windows(windows_task, &display, None);
             (
                 display,
                 Vec::new(),
@@ -379,16 +382,19 @@ pub(crate) async fn prepare_capture_selector_inner(
             image,
             snapshot_png,
         });
-        Ok::<_, AppError>((summary, pending_windows))
+        Ok::<_, AppError>((summary, pending_windows, windows_started))
     })();
     match prepared {
-        Ok((summary, pending_windows)) => {
+        Ok((summary, pending_windows, windows_started)) => {
             if let Err(error) = prepare_recording_selector(&app, &summary, true).await {
                 *state.recording_selection.lock() = None;
                 restore_recording_ui(&app, &state);
                 return Err(error);
             }
             if let Some(task) = pending_windows {
+                complete_selector_windows(app.clone(), state, summary.id.clone(), task);
+            } else if !windows_started {
+                let task = crate::spawn_window_list_task(&state);
                 complete_selector_windows(app.clone(), state, summary.id.clone(), task);
             }
             Ok(summary)
@@ -3346,6 +3352,17 @@ fn warm_recording_selector_window(app: &AppHandle) {
     }) {
         eprintln!("failed to schedule capture menu preparation: {error}");
     }
+}
+
+fn selection_displays_from_list(
+    listed: Result<Vec<DisplayDescriptor>, AppError>,
+    current: &DisplayDescriptor,
+) -> Result<Vec<DisplayDescriptor>, AppError> {
+    let mut displays = listed?;
+    if !displays.iter().any(|candidate| candidate.id == current.id) {
+        displays.push(current.clone());
+    }
+    Ok(displays)
 }
 
 fn complete_selector_windows(

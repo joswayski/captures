@@ -9,7 +9,7 @@ use std::{
     hash::{Hash, Hasher},
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
@@ -596,18 +596,14 @@ async fn prepare_capture(
     ensure_capture_session_available()?;
     let freeze_screen = state.settings().freeze_screen;
     let id = Uuid::new_v4();
-    let windows_task = (mode == CaptureMode::Window).then(|| {
-        let state = state.clone();
-        std::thread::spawn(move || state.windows())
-    });
+    let windows_task =
+        (mode == CaptureMode::Window).then(|| take_prefetched_or_spawn_windows(&state));
     let (session, pending_windows) = if freeze_screen {
         let frame = state.backend.capture_display_at_point(pointer_position())?;
         // The background frame is frozen now, so this capture no longer needs HUD
         // exclusion. Release it before encoding can emit a new preview and allow a
         // rapid follow-up capture to start with its own protection generation.
         set_capture_huds_protected(&app, false);
-        // Crops still come from `frame.image`. The overlay only needs a visual
-        // freeze-frame, so this encoding can be lossy and much cheaper than PNG.
         let snapshot_png = storage::encode_overlay_snapshot(&frame.image)?;
         let (windows, pending_windows) =
             take_ready_or_defer_windows(windows_task, &frame.descriptor, Some(&frame.image));
@@ -654,6 +650,41 @@ async fn prepare_capture(
 }
 
 pub(crate) type WindowListTask = std::thread::JoinHandle<Result<Vec<WindowDescriptor>, AppError>>;
+
+static PENDING_WINDOW_LIST: Mutex<Option<WindowListTask>> = Mutex::new(None);
+
+/// Start listing windows on shortcut key-down so the window overlay can show
+/// targets as soon as the freeze-frame is ready. Capture still waits for key-up
+/// so Command-highlighted menu chrome is not frozen into the snapshot.
+pub(crate) fn prefetch_capturable_windows(state: &Arc<AppState>) {
+    let Ok(mut pending) = PENDING_WINDOW_LIST.lock() else {
+        return;
+    };
+    if pending.as_ref().is_some_and(|task| !task.is_finished()) {
+        return;
+    }
+    let state = state.clone();
+    *pending = Some(std::thread::spawn(move || state.windows()));
+}
+
+pub(crate) fn take_prefetched_or_spawn_windows(state: &Arc<AppState>) -> WindowListTask {
+    PENDING_WINDOW_LIST
+        .lock()
+        .ok()
+        .and_then(|mut pending| pending.take())
+        .unwrap_or_else(|| spawn_window_list_task(state))
+}
+
+pub(crate) fn discard_prefetched_windows() {
+    if let Ok(mut pending) = PENDING_WINDOW_LIST.lock() {
+        drop(pending.take());
+    }
+}
+
+pub(crate) fn spawn_window_list_task(state: &Arc<AppState>) -> WindowListTask {
+    let state = state.clone();
+    std::thread::spawn(move || state.windows())
+}
 
 pub(crate) fn take_ready_or_defer_windows(
     task: Option<WindowListTask>,
@@ -2928,7 +2959,12 @@ fn linux_clipboard_matches(expected: ClipboardFingerprint) -> Result<bool, AppEr
 pub(crate) fn display_under_pointer(
     state: &AppState,
 ) -> Result<captures_capture::DisplayDescriptor, AppError> {
-    let displays = state.monitors()?;
+    pick_display_under_pointer(&state.monitors()?).ok_or(CaptureError::TargetUnavailable.into())
+}
+
+pub(crate) fn pick_display_under_pointer(
+    displays: &[captures_capture::DisplayDescriptor],
+) -> Option<captures_capture::DisplayDescriptor> {
     pointer_position()
         .and_then(|(x, y)| {
             displays
@@ -2945,7 +2981,6 @@ pub(crate) fn display_under_pointer(
         })
         .or_else(|| displays.iter().find(|display| display.is_primary).cloned())
         .or_else(|| displays.first().cloned())
-        .ok_or(CaptureError::TargetUnavailable.into())
 }
 
 fn pointer_position() -> Option<(i32, i32)> {
@@ -3252,20 +3287,25 @@ fn register_shortcut(app: &AppHandle, shortcut: &str, mode: CaptureMode) -> Resu
             let suppressed = shortcut_capture_is_suppressed(app, &state);
             if event.state() == ShortcutState::Pressed
                 && !suppressed
-                && mode == CaptureMode::Region
                 && !recording::screenshot_capture_is_blocked(&state)
                 && !screenshot_countdown_is_active(&state)
             {
-                claim_region_capture_cursor(app);
+                if mode == CaptureMode::Region {
+                    claim_region_capture_cursor(app);
+                } else if mode == CaptureMode::Window {
+                    prefetch_capturable_windows(&state);
+                }
             }
             let trigger_is_suppressed =
                 track_shortcut_suppression(&suppressed_while_pressed, event.state(), suppressed);
             if !should_trigger_shortcut(&armed, event.state()) || trigger_is_suppressed {
-                if event.state() == ShortcutState::Released
-                    && trigger_is_suppressed
-                    && mode == CaptureMode::Region
-                {
-                    release_claimed_region_capture_cursor();
+                if event.state() == ShortcutState::Released && trigger_is_suppressed {
+                    if mode == CaptureMode::Region {
+                        release_claimed_region_capture_cursor();
+                    }
+                    if mode == CaptureMode::Window {
+                        discard_prefetched_windows();
+                    }
                 }
                 return;
             }
@@ -6555,10 +6595,10 @@ mod tests {
         preferences_url, primary_app_window_priority, recording::RECORDING_REGION_INDICATOR_TITLE,
         refine_window_chrome_from_snapshot, resolve_startup_notice_placement,
         resolve_window_capture, should_trigger_shortcut, startup_notice_fallback_edge_from_insets,
-        startup_notice_url, thumbnail_clamp_frame, thumbnail_cursor_action,
-        thumbnail_cursor_ignore_update, thumbnail_geometry, thumbnail_pointer_in_space,
-        thumbnail_pointer_position, thumbnail_preserve_current_height, thumbnail_stack_height,
-        thumbnail_stack_should_be_visible, thumbnail_stack_visible_count,
+        startup_notice_url, take_ready_or_defer_windows, thumbnail_clamp_frame,
+        thumbnail_cursor_action, thumbnail_cursor_ignore_update, thumbnail_geometry,
+        thumbnail_pointer_in_space, thumbnail_pointer_position, thumbnail_preserve_current_height,
+        thumbnail_stack_height, thumbnail_stack_should_be_visible, thumbnail_stack_visible_count,
         thumbnail_visible_window_height, track_shortcut_suppression, tray_accelerator,
         tray_icon_rect_is_usable, tray_notice_window_size, viewer_window_label,
         window_display_crop_is_safe, window_is_capturable, windows_window_is_capture_overlay,
@@ -7886,7 +7926,16 @@ mod tests {
 
     #[test]
     fn capturable_windows_stay_empty_when_listing_fails() {
-        let display = DisplayDescriptor {
+        let windows = capturable_windows_for_display(
+            Err(AppError::Task("window list unavailable".to_owned())),
+            &test_display(),
+            None,
+        );
+        assert!(windows.is_empty());
+    }
+
+    fn test_display() -> DisplayDescriptor {
+        DisplayDescriptor {
             id: "display".to_owned(),
             name: "Display".to_owned(),
             x: 0,
@@ -7895,12 +7944,34 @@ mod tests {
             height: 100,
             scale_factor: 2.0,
             is_primary: true,
-        };
-        let windows = capturable_windows_for_display(
-            Err(AppError::Task("window list unavailable".to_owned())),
-            &display,
-            None,
-        );
+        }
+    }
+
+    #[test]
+    fn overlay_opens_without_waiting_for_a_slow_window_list() {
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let task = std::thread::spawn(move || {
+            started_tx.send(()).expect("listing started");
+            release_rx.recv().expect("listing released");
+            Ok(Vec::new())
+        });
+        started_rx.recv().expect("worker is blocked");
+        let (windows, pending) = take_ready_or_defer_windows(Some(task), &test_display(), None);
         assert!(windows.is_empty());
+        let pending = pending.expect("slow listing should be deferred");
+        release_tx.send(()).expect("release listing");
+        pending.join().expect("listing finished").expect("windows");
+    }
+
+    #[test]
+    fn overlay_includes_windows_when_listing_already_finished() {
+        let task = std::thread::spawn(|| Ok(Vec::new()));
+        while !task.is_finished() {
+            std::thread::yield_now();
+        }
+        let (windows, pending) = take_ready_or_defer_windows(Some(task), &test_display(), None);
+        assert!(windows.is_empty());
+        assert!(pending.is_none());
     }
 }

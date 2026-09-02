@@ -577,37 +577,11 @@ pub fn encode_png(image: &RgbaImage) -> Result<Vec<u8>, AppError> {
 
 /// Freeze-frame bytes for the capture overlay / capture menu.
 ///
-/// Crops still come from the uncompressed `RgbaImage`. This encoding is only
-/// decoded by the webview, so a 4:4:4 JPEG is much cheaper than a full-resolution
-/// lossless PNG on the shortcut critical path.
+/// Crops still come from the uncompressed `RgbaImage`. Screenshot-like images
+/// encode faster as PNG `Fast`+`Sub` than JPEG, and that encode sits on the
+/// shortcut path before the webview can paint.
 pub fn encode_overlay_snapshot(image: &RgbaImage) -> Result<Vec<u8>, AppError> {
-    match encode_overlay_jpeg(image) {
-        Ok(bytes) => Ok(bytes),
-        Err(error) => {
-            eprintln!("overlay JPEG snapshot fell back to PNG: {error}");
-            encode_png(image)
-        }
-    }
-}
-
-fn encode_overlay_jpeg(image: &RgbaImage) -> Result<Vec<u8>, AppError> {
-    let width = u16::try_from(image.width())
-        .map_err(|_| AppError::Image("overlay snapshot width is too large to encode".to_owned()))?;
-    let height = u16::try_from(image.height()).map_err(|_| {
-        AppError::Image("overlay snapshot height is too large to encode".to_owned())
-    })?;
-    if width == 0 || height == 0 {
-        return Err(AppError::Image(
-            "cannot encode an empty overlay snapshot".to_owned(),
-        ));
-    }
-    let mut bytes = Vec::new();
-    let mut encoder = jpeg_encoder::Encoder::new(&mut bytes, 90);
-    encoder.set_sampling_factor(jpeg_encoder::SamplingFactor::F_1_1);
-    encoder
-        .encode(image.as_raw(), width, height, jpeg_encoder::ColorType::Rgba)
-        .map_err(|error| AppError::Image(error.to_string()))?;
-    Ok(bytes)
+    encode_png(image)
 }
 
 pub fn overlay_snapshot_mime_type(bytes: &[u8]) -> &'static str {
@@ -1335,30 +1309,16 @@ mod tests {
     };
 
     #[test]
-    fn overlay_snapshot_jpeg_is_smaller_than_lossless_png() {
-        let image = RgbaImage::from_fn(640, 360, |x, y| {
-            Rgba([(x % 256) as u8, (y % 256) as u8, ((x + y) % 256) as u8, 255])
-        });
-        let png = encode_png(&image).expect("png");
-        let jpeg = encode_overlay_snapshot(&image).expect("jpeg");
-        assert_eq!(overlay_snapshot_mime_type(&jpeg), "image/jpeg");
-        assert!(
-            jpeg.len() < png.len() / 4,
-            "jpeg {} should be much smaller than png {}",
-            jpeg.len(),
-            png.len()
-        );
-    }
-
-    #[test]
-    fn overlay_snapshots_encode_as_jpeg_without_chroma_subsampling() {
+    fn overlay_snapshots_use_the_fast_png_path() {
         let image = RgbaImage::from_pixel(4, 4, Rgba([32, 64, 128, 255]));
         let bytes = encode_overlay_snapshot(&image).expect("overlay snapshot encoded");
-        assert_eq!(overlay_snapshot_mime_type(&bytes), "image/jpeg");
+        assert_eq!(overlay_snapshot_mime_type(&bytes), "image/png");
+        assert_eq!(bytes, encode_png(&image).expect("png"));
         let decoded = image::load_from_memory(&bytes)
             .expect("overlay snapshot decodes")
             .to_rgba8();
         assert_eq!(decoded.dimensions(), (4, 4));
+        assert_eq!(decoded.get_pixel(0, 0).0, [32, 64, 128, 255]);
     }
 
     #[test]
