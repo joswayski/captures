@@ -162,7 +162,8 @@ Then run:
 npm run dev:web
 ```
 
-The local health endpoint is `http://localhost:5174/api/health`. See
+The local health endpoint is `http://localhost:5174/api/health`. The Preview
+updater manifest cache is `GET http://localhost:5174/api/updates/preview`. See
 [`apps/web/README.md`](apps/web/README.md) for AWS and Cloudflare setup.
 
 Point a local desktop build at that server:

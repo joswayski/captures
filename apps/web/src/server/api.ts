@@ -1,4 +1,8 @@
 import { clientKeyFromRequest, type ApiEnv } from "./env.ts";
+import {
+  UPDATER_MANIFEST_CACHE_MS,
+  resolveUpdaterManifest,
+} from "./updaterManifest.ts";
 
 const MAX_MESSAGE_LEN = 8_000;
 const MAX_CONTACT_LEN = 200;
@@ -64,6 +68,13 @@ export async function handleApiRequest(
     return json(request, { status: "ok" });
   }
 
+  if (url.pathname === "/api/updates/preview") {
+    if (request.method !== "GET") {
+      return methodNotAllowed(request, ["GET"]);
+    }
+    return serveUpdaterManifest(request, fetcher);
+  }
+
   if (url.pathname === "/api/feedback") {
     if (request.method === "OPTIONS") {
       return preflight(request);
@@ -75,6 +86,25 @@ export async function handleApiRequest(
   }
 
   return json(request, { error: "not found" }, 404);
+}
+
+async function serveUpdaterManifest(
+  request: Request,
+  fetcher: Fetcher,
+): Promise<Response> {
+  const result = await resolveUpdaterManifest(fetcher);
+  if (!result.ok) {
+    return json(request, { error: result.error }, 502);
+  }
+
+  const headers = new Headers();
+  headers.set("Content-Type", "application/json; charset=utf-8");
+  headers.set(
+    "Cache-Control",
+    `public, max-age=${Math.floor(UPDATER_MANIFEST_CACHE_MS / 1000)}`,
+  );
+  headers.set("Age", String(result.ageSeconds));
+  return new Response(result.text, { status: 200, headers });
 }
 
 async function createFeedback(

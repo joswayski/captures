@@ -3,6 +3,10 @@ import test from "node:test";
 
 import { createMemoryRateLimiter } from "./rateLimit.ts";
 import { buildDiscordPayload, handleApiRequest, type ApiEnv } from "./api.ts";
+import {
+  PREVIEW_LATEST_JSON_URL,
+  resetUpdaterManifestCache,
+} from "./updaterManifest.ts";
 
 function createEnv(options: { rateLimitSuccess?: boolean; webhook?: string } = {}) {
   const rateLimitKeys: string[] = [];
@@ -34,6 +38,75 @@ test("serves health only from the API path", async () => {
     env,
   );
   assert.equal(missing.status, 404);
+});
+
+const PREVIEW_MANIFEST = {
+  version: "2026.9.201",
+  notes: "Faster update checks.",
+  platforms: {
+    "linux-x86_64": {
+      url: "https://github.com/joswayski/captures/releases/download/v2026.09.02.1/Captures.AppImage",
+      signature: "signed",
+    },
+  },
+};
+
+test("serves the cached Preview updater manifest from GitHub", async () => {
+  resetUpdaterManifestCache();
+  const { env } = createEnv();
+  const urls: string[] = [];
+  const fetcher = async (input: string | URL | Request) => {
+    urls.push(String(input));
+    return new Response(JSON.stringify(PREVIEW_MANIFEST), { status: 200 });
+  };
+
+  const response = await handleApiRequest(
+    new Request("https://captur.es/api/updates/preview"),
+    env,
+    fetcher,
+  );
+  const cached = await handleApiRequest(
+    new Request("https://captur.es/api/updates/preview"),
+    env,
+    fetcher,
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("Cache-Control"), "public, max-age=60");
+  assert.deepEqual(await response.json(), PREVIEW_MANIFEST);
+  assert.equal(cached.status, 200);
+  assert.deepEqual(await cached.json(), PREVIEW_MANIFEST);
+  assert.deepEqual(urls, [PREVIEW_LATEST_JSON_URL]);
+});
+
+test("returns 502 when GitHub has no updater manifest to cache", async () => {
+  resetUpdaterManifestCache();
+  const { env } = createEnv();
+  const response = await handleApiRequest(
+    new Request("https://captur.es/api/updates/preview"),
+    env,
+    async () => new Response("missing", { status: 404 }),
+  );
+
+  assert.equal(response.status, 502);
+  assert.deepEqual(await response.json(), {
+    error: "updater manifest is unavailable",
+  });
+});
+
+test("rejects non-GET updater manifest requests", async () => {
+  resetUpdaterManifestCache();
+  const { env } = createEnv();
+  const response = await handleApiRequest(
+    new Request("https://captur.es/api/updates/preview", { method: "POST" }),
+    env,
+    async () => {
+      throw new Error("should not fetch GitHub");
+    },
+  );
+
+  assert.equal(response.status, 405);
+  assert.equal(response.headers.get("Allow"), "GET");
 });
 
 test("validates feedback before rate limiting or calling Discord", async () => {
