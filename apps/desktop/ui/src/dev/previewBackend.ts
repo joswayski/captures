@@ -211,6 +211,7 @@ const SETTINGS: AppSettings = {
   onboarding_completed: true,
   screenshot_countdown_seconds: 3,
   freeze_screen: previewFreezeScreen(),
+  show_cursor_in_screenshots: true,
   screenshot_format: previewScreenshotFormat(),
 };
 

@@ -72,6 +72,10 @@ pub struct AppSettings {
     /// states, menus, and motion stay put. Off shows the live desktop instead.
     #[serde(default = "default_true")]
     pub freeze_screen: bool,
+    /// Composite the pointer into still captures. Freeze screen only holds the
+    /// desktop still; it does not include the cursor by itself.
+    #[serde(default = "default_true")]
+    pub show_cursor_in_screenshots: bool,
     /// Format used when saving or exporting a screenshot. Capture history stays
     /// lossless PNG until that save.
     #[serde(default)]
@@ -254,6 +258,7 @@ impl Default for AppSettings {
             onboarding_completed: false,
             screenshot_countdown_seconds: default_screenshot_countdown_seconds(),
             freeze_screen: true,
+            show_cursor_in_screenshots: true,
             screenshot_format: ScreenshotFormat::default(),
             recording: RecordingSettings::default(),
         }
@@ -805,6 +810,9 @@ pub struct CaptureSession {
     pub image: Option<RgbaImage>,
     pub snapshot_png: Vec<u8>,
     pub windows: Vec<WindowDescriptor>,
+    /// Pointer sample taken with a freeze-frame, used when a window capture
+    /// falls back to the native window surface instead of the frozen display.
+    pub cursor: Option<(i32, i32)>,
 }
 
 pub fn default_output_directory() -> PathBuf {
@@ -1329,6 +1337,7 @@ mod tests {
         assert!(settings.recording.open_editor_after_recording);
         assert_eq!(settings.screenshot_countdown_seconds, 0);
         assert!(settings.freeze_screen);
+        assert!(settings.show_cursor_in_screenshots);
         assert_eq!(settings.screenshot_format, ScreenshotFormat::Png);
         assert_eq!(settings.recording.video_format, VideoFormat::Mp4);
     }
@@ -1337,6 +1346,7 @@ mod tests {
     fn defaults_screenshot_countdown_to_off() {
         assert_eq!(AppSettings::default().screenshot_countdown_seconds, 0);
         assert!(AppSettings::default().freeze_screen);
+        assert!(AppSettings::default().show_cursor_in_screenshots);
         assert_eq!(
             AppSettings::default().screenshot_format,
             ScreenshotFormat::Png
@@ -1447,6 +1457,7 @@ mod tests {
         );
         assert!(settings.recording.open_editor_after_recording);
         assert_eq!(settings.recording.video_format, VideoFormat::Mp4);
+        assert!(settings.show_cursor_in_screenshots);
     }
 
     #[test]

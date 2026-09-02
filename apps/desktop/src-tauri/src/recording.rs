@@ -304,9 +304,14 @@ pub(crate) async fn prepare_capture_selector_inner(
                 // The selector always needs window targets, but their enumeration is
                 // independent of freezing and encoding the display background.
                 let windows = scope.spawn(|| state.windows());
-                let frame = state
-                    .backend
-                    .capture_display_at_point(crate::pointer_position())?;
+                let pointer = crate::pointer_position();
+                let mut frame = state.backend.capture_display_at_point(pointer)?;
+                crate::apply_screenshot_cursor(
+                    &mut frame.image,
+                    &frame.descriptor,
+                    pointer,
+                    state.settings().show_cursor_in_screenshots,
+                );
                 let snapshot_png = storage::encode_png(&frame.image)?;
                 let displays = state.monitors()?;
                 let windows = match windows.join() {
@@ -451,9 +456,16 @@ async fn select_capture_display_inner(
         .find(|display| display.id == display_id)
         .cloned()
         .ok_or(AppError::InvalidSelection)?;
-    let freeze_screen = current.frozen;
+        let freeze_screen = current.frozen;
     let (display, snapshot_png, image, windows) = if freeze_screen {
-        let frame = state.backend.capture_display(&requested_display.id)?;
+        let pointer = crate::pointer_position();
+        let mut frame = state.backend.capture_display(&requested_display.id)?;
+        crate::apply_screenshot_cursor(
+            &mut frame.image,
+            &frame.descriptor,
+            pointer,
+            state.settings().show_cursor_in_screenshots,
+        );
         let snapshot_png = storage::encode_png(&frame.image)?;
         let mut windows = state
             .windows()
@@ -718,23 +730,68 @@ fn live_image_for_target(
     target: &RecordingTarget,
 ) -> Result<image::RgbaImage, AppError> {
     crate::ensure_capture_session_available()?;
+    let pointer = crate::pointer_position();
+    let show_cursor = state.settings().show_cursor_in_screenshots;
     match target {
         RecordingTarget::Display { display_id } => {
-            Ok(state.backend.capture_display(display_id)?.image)
+            let mut frame = state.backend.capture_display(display_id)?;
+            crate::apply_screenshot_cursor(
+                &mut frame.image,
+                &frame.descriptor,
+                pointer,
+                show_cursor,
+            );
+            Ok(frame.image)
         }
         RecordingTarget::Region { display_id, rect } => {
-            let frame = state.backend.capture_display(display_id)?;
+            let mut frame = state.backend.capture_display(display_id)?;
+            crate::apply_screenshot_cursor(
+                &mut frame.image,
+                &frame.descriptor,
+                pointer,
+                show_cursor,
+            );
             crop_display_region(&frame.image, &frame.descriptor, rect)
         }
         RecordingTarget::Window { window_id } => match state.backend.capture_window(window_id) {
-            Ok(image) if !crate::image_is_effectively_blank(&image) => Ok(image),
+            Ok(mut image) if !crate::image_is_effectively_blank(&image) => {
+                if let Some(window) = state
+                    .windows()
+                    .ok()
+                    .and_then(|windows| windows.into_iter().find(|window| &window.id == window_id))
+                {
+                    crate::apply_screenshot_cursor_on_window(
+                        &mut image,
+                        &window,
+                        state
+                            .monitors()
+                            .ok()
+                            .and_then(|displays| {
+                                displays
+                                    .into_iter()
+                                    .find(|display| display.id == window.display_id)
+                            })
+                            .map(|display| display.scale_factor)
+                            .unwrap_or(1.0),
+                        pointer,
+                        show_cursor,
+                    );
+                }
+                Ok(image)
+            }
             _ => {
                 let windows = state.windows().unwrap_or_default();
                 let window = windows
                     .iter()
                     .find(|window| &window.id == window_id)
                     .ok_or(AppError::InvalidSelection)?;
-                let frame = state.backend.capture_display(&window.display_id)?;
+                let mut frame = state.backend.capture_display(&window.display_id)?;
+                crate::apply_screenshot_cursor(
+                    &mut frame.image,
+                    &frame.descriptor,
+                    pointer,
+                    show_cursor,
+                );
                 crop_window_from_display(&frame.image, &frame.descriptor, window)
             }
         },
