@@ -1668,15 +1668,24 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
 .thumbnail-stack-toolbar-leaving .thumbnail-stack-minimize,
 .thumbnail-stack-toolbar-exiting .thumbnail-stack-minimize,
 .thumbnail-stack-toolbar-entering .thumbnail-stack-minimize {
+  width: 28px;
+  transform: none;
   transition: none;
 }
 
 .thumbnail-stack-toolbar-leaving .thumbnail-stack-minimize svg,
-.thumbnail-stack-toolbar-leaving .thumbnail-stack-minimize-label,
 .thumbnail-stack-toolbar-exiting .thumbnail-stack-minimize svg,
+.thumbnail-stack-toolbar-entering .thumbnail-stack-minimize svg {
+  opacity: 1;
+  transform: none;
+  transition: none;
+}
+
+.thumbnail-stack-toolbar-leaving .thumbnail-stack-minimize-label,
 .thumbnail-stack-toolbar-exiting .thumbnail-stack-minimize-label,
-.thumbnail-stack-toolbar-entering .thumbnail-stack-minimize svg,
 .thumbnail-stack-toolbar-entering .thumbnail-stack-minimize-label {
+  opacity: 0;
+  transform: translateX(4px);
   transition: none;
 }
 
