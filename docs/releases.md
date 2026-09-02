@@ -59,11 +59,15 @@ download page, not a historical build. It holds the macOS, Windows, Debian, and
 AppImage installers plus the `latest.json` updater manifest for the greatest
 published CalVer version. That manifest includes a `changelog` of each dated
 Preview’s notes so an installed copy can list every change between its version
-and the latest Preview, not only the newest release. Platform download URLs in
-`latest.json` are rewritten from GitHub API asset endpoints to public
-`releases/download/<CalVer-tag>/…` links so in-app updates do not consume the
-unauthenticated API rate limit (HTTP 403) and do not keep draft `untagged-*`
-paths that 404 after the Preview is published. Validation passes the workflow’s
+and the latest Preview, not only the newest release. Installed Preview builds ask `https://captur.es/api/updates/preview` for that
+manifest about every five minutes (and again shortly after launch). The website
+caches GitHub's `latest.json` for one minute and serves it unchanged; Tauri
+still falls back to the GitHub download URL if captur.es is unreachable.
+Platform download URLs in `latest.json` are rewritten from GitHub API asset
+endpoints to public `releases/download/<CalVer-tag>/…` links so the archive
+download itself does not consume the unauthenticated API rate limit (HTTP 403)
+and does not keep draft `untagged-*` paths that 404 after the Preview is
+published. Validation passes the workflow’s
 CalVer tag into that rewrite because GitHub draft releases keep reporting
 `tag_name` as `untagged-*` until they are published, even when the git tag
 already exists. Installers on this channel use **stable filenames**

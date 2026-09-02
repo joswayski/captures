@@ -31,7 +31,7 @@ const RESTART_FADE_DURATION: Duration = Duration::from_millis(400);
 const EDITOR_CLOSE_FLUSH: Duration = Duration::from_millis(500);
 const DEFER_CAPTURE_START_TIMEOUT: Duration = Duration::from_millis(1_500);
 const INITIAL_CHECK_DELAY: Duration = Duration::from_secs(15);
-const CHECK_INTERVAL: Duration = Duration::from_secs(2 * 60 * 60);
+const CHECK_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const DOWNLOAD_ATTEMPTS: u32 = 3;
 const DOWNLOAD_RETRY_BASE_DELAY: Duration = Duration::from_millis(400);
 
@@ -1294,8 +1294,21 @@ mod tests {
     };
 
     #[test]
-    fn checks_for_preview_updates_every_two_hours() {
-        assert_eq!(CHECK_INTERVAL, Duration::from_secs(2 * 60 * 60));
+    fn checks_for_preview_updates_every_five_minutes() {
+        assert_eq!(CHECK_INTERVAL, Duration::from_secs(5 * 60));
+    }
+
+    #[test]
+    fn prefers_the_captur_es_manifest_and_falls_back_to_github() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json");
+        assert_eq!(
+            config["plugins"]["updater"]["endpoints"],
+            serde_json::json!([
+                "https://captur.es/api/updates/preview",
+                "https://github.com/joswayski/captures/releases/download/preview/latest.json"
+            ])
+        );
     }
 
     #[test]

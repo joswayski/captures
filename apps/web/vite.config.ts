@@ -129,7 +129,6 @@ export default defineConfig(async () => {
       react(),
       tailwindcss(),
       nitro({
-        serverDir: "server",
         routeRules: {
           "/assets/**": {
             headers: {

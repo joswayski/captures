@@ -1,4 +1,8 @@
 import { clientKeyFromRequest, type ApiEnv } from "./env.ts";
+import {
+  UPDATER_MANIFEST_CACHE_MS,
+  resolveUpdaterManifest,
+} from "./updaterManifest.ts";
 
 const MAX_MESSAGE_LEN = 8_000;
 const MAX_CONTACT_LEN = 200;
@@ -50,37 +54,33 @@ type ParseResult<T> =
   | { ok: true; value: T }
   | { ok: false; error: string };
 
-export async function handleApiRequest(
+export function getHealth(request: Request): Response {
+  return json(request, { status: "ok" });
+}
+
+export async function getPreviewUpdaterManifest(
+  request: Request,
+  fetcher: Fetcher = fetch,
+): Promise<Response> {
+  const result = await resolveUpdaterManifest(fetcher);
+  if (!result.ok) {
+    return json(request, { error: result.error }, 502);
+  }
+
+  const headers = new Headers();
+  headers.set("Content-Type", "application/json; charset=utf-8");
+  headers.set(
+    "Cache-Control",
+    `public, max-age=${Math.floor(UPDATER_MANIFEST_CACHE_MS / 1000)}`,
+  );
+  headers.set("Age", String(result.ageSeconds));
+  return new Response(result.text, { status: 200, headers });
+}
+
+export async function createFeedback(
   request: Request,
   env: ApiEnv,
   fetcher: Fetcher = fetch,
-): Promise<Response> {
-  const url = new URL(request.url);
-
-  if (url.pathname === "/api/health") {
-    if (request.method !== "GET") {
-      return methodNotAllowed(request, ["GET"]);
-    }
-    return json(request, { status: "ok" });
-  }
-
-  if (url.pathname === "/api/feedback") {
-    if (request.method === "OPTIONS") {
-      return preflight(request);
-    }
-    if (request.method !== "POST") {
-      return methodNotAllowed(request, ["POST", "OPTIONS"]);
-    }
-    return createFeedback(request, env, fetcher);
-  }
-
-  return json(request, { error: "not found" }, 404);
-}
-
-async function createFeedback(
-  request: Request,
-  env: ApiEnv,
-  fetcher: Fetcher,
 ): Promise<Response> {
   const origin = request.headers.get("Origin");
   if (origin && !ALLOWED_WEB_ORIGINS.has(origin)) {
@@ -386,7 +386,7 @@ function isDiscordWebhookUrl(value: string): boolean {
   }
 }
 
-function preflight(request: Request): Response {
+export function preflightFeedback(request: Request): Response {
   const origin = request.headers.get("Origin");
   if (origin && !ALLOWED_WEB_ORIGINS.has(origin)) {
     return json(request, { error: "origin not allowed" }, 403);
@@ -396,12 +396,6 @@ function preflight(request: Request): Response {
   headers.set("Access-Control-Allow-Methods", "POST, OPTIONS");
   headers.set("Access-Control-Max-Age", "86400");
   return new Response(null, { status: 204, headers });
-}
-
-function methodNotAllowed(request: Request, methods: string[]): Response {
-  const response = json(request, { error: "method not allowed" }, 405);
-  response.headers.set("Allow", methods.join(", "));
-  return response;
 }
 
 function json(request: Request, body: unknown, status = 200): Response {

@@ -10,33 +10,64 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiFeedbackRouteImport } from './routes/api/feedback'
+import { Route as ApiHealthRouteImport } from './routes/api/health'
+import { Route as ApiUpdatesPreviewRouteImport } from './routes/api/updates/preview'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiFeedbackRoute = ApiFeedbackRouteImport.update({
+  id: '/api/feedback',
+  path: '/api/feedback',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiHealthRoute = ApiHealthRouteImport.update({
+  id: '/api/health',
+  path: '/api/health',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiUpdatesPreviewRoute = ApiUpdatesPreviewRouteImport.update({
+  id: '/api/updates/preview',
+  path: '/api/updates/preview',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/api/feedback': typeof ApiFeedbackRoute
+  '/api/health': typeof ApiHealthRoute
+  '/api/updates/preview': typeof ApiUpdatesPreviewRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/api/feedback': typeof ApiFeedbackRoute
+  '/api/health': typeof ApiHealthRoute
+  '/api/updates/preview': typeof ApiUpdatesPreviewRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/api/feedback': typeof ApiFeedbackRoute
+  '/api/health': typeof ApiHealthRoute
+  '/api/updates/preview': typeof ApiUpdatesPreviewRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/'
+  fullPaths: '/' | '/api/feedback' | '/api/health' | '/api/updates/preview'
   fileRoutesByTo: FileRoutesByTo
-  to: '/'
-  id: '__root__' | '/'
+  to: '/' | '/api/feedback' | '/api/health' | '/api/updates/preview'
+  id:
+    '__root__' | '/' | '/api/feedback' | '/api/health' | '/api/updates/preview'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  ApiFeedbackRoute: typeof ApiFeedbackRoute
+  ApiHealthRoute: typeof ApiHealthRoute
+  ApiUpdatesPreviewRoute: typeof ApiUpdatesPreviewRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -48,11 +79,35 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/feedback': {
+      id: '/api/feedback'
+      path: '/api/feedback'
+      fullPath: '/api/feedback'
+      preLoaderRoute: typeof ApiFeedbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/health': {
+      id: '/api/health'
+      path: '/api/health'
+      fullPath: '/api/health'
+      preLoaderRoute: typeof ApiHealthRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/updates/preview': {
+      id: '/api/updates/preview'
+      path: '/api/updates/preview'
+      fullPath: '/api/updates/preview'
+      preLoaderRoute: typeof ApiUpdatesPreviewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  ApiFeedbackRoute: ApiFeedbackRoute,
+  ApiHealthRoute: ApiHealthRoute,
+  ApiUpdatesPreviewRoute: ApiUpdatesPreviewRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

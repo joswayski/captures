@@ -17,13 +17,13 @@ than listed as installers.
 
 - React 19 + TanStack Start and Router
 - Vite + Nitro, producing a Node server
-- A framework-independent `/api/*` handler in front of TanStack
+- TanStack Start server routes for `/api/*`
 - Tailwind CSS v4
 
 The homepage is server-rendered so the first HTML already includes the matching
 Preview download and any "still cooking" Preview status. Latest changes are
-still baked in at build time. TanStack renders the frontend; it does not route
-or implement `/api/*`.
+still baked in at build time. `/api/*` is the same TanStack file router, using
+`server.handlers` instead of a page component.
 
 ## Develop
 
@@ -68,18 +68,23 @@ read from the environment.
 
 The Node process serves the site and API together:
 
-1. `/api/*` runs the framework-independent handler first and never enters TanStack.
+1. `/api/*` is TanStack Start server routes in `src/routes/api/`.
 2. `/` is server-rendered so TanStack can pick the homepage download button from
    request headers.
 3. Hashed `/assets/*` files and other public files are served as static assets
    with long-lived cache headers.
 4. Unknown paths return the in-app 404 page.
 
-Nitro serves `/api/*` from `server/routes/api` and never enters TanStack.
-Those handlers call the framework-independent implementation in `src/server`.
-The homepage is delegated to TanStack.
+Nitro is the Node adapter. It does not own `/api/*`. Those files use
+`createFileRoute` with `server.handlers`; the request bodies, Discord delivery,
+and updater cache live in `src/server`.
+The homepage is delegated to TanStack as a normal page route.
 
-The current API exposes `GET /api/health` and `POST /api/feedback`. Feedback is
+The current API exposes `GET /api/health`, `GET /api/updates/preview`, and
+`POST /api/feedback`. The updater route returns GitHub's Preview `latest.json`
+as-is and caches it in memory for one minute so installed apps can poll often
+without each laptop hitting GitHub. If GitHub is down, the last good copy is
+served. Feedback is
 validated, limited to one accepted submission per client IP per minute, and sent
 to Discord. Desktop Preview builds may also POST `category: "crash"` after an
 unexpected quit (version, OS, and a redacted panic or OS crash summary — never captures).

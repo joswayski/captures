@@ -39,6 +39,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQwNjI5NTdGQTcwNjZDMkYKUldRdmJBYW5mNVZpUUVDR2NUWStpaWxOMDBWNjhBc1FxWmRXM2pyVGZvRFoxaVdPODZCWWdFYlUK",
       "endpoints": [
+        "https://captur.es/api/updates/preview",
         "https://github.com/joswayski/captures/releases/download/preview/latest.json"
       ],
       "windows": {
