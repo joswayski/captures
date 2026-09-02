@@ -306,6 +306,27 @@ const SECOND_ARTIFACT: CaptureArtifact = {
   clipboard_copy_status: "skipped",
 };
 
+function previewArtifactCount(): number {
+  const raw = Number(query().get("count"));
+  if (!Number.isFinite(raw) || raw < 1) return 2;
+  return Math.min(12, Math.floor(raw));
+}
+
+function previewArtifacts(): CaptureArtifact[] {
+  const count = previewArtifactCount();
+  return Array.from({ length: count }, (_, index) => {
+    if (index === 0) return ARTIFACT;
+    if (index === 1) return SECOND_ARTIFACT;
+    const even = index % 2 === 0;
+    return {
+      ...(even ? ARTIFACT : SECOND_ARTIFACT),
+      id: `artifact-${index + 1}`,
+      path: even ? `/Users/alex/Pictures/Captures/Capture ${index + 1}.png` : null,
+      created_at: `2026-08-27T09:${String(41 + index).padStart(2, "0")}:12Z`,
+    };
+  });
+}
+
 /**
  * Optional local clip for reviewing the recording editor. Generate one with
  * `ffmpeg -f lavfi -i color=c=black:s=800x500:d=6 apps/desktop/ui/public/dev-sample.mp4`.
@@ -623,7 +644,7 @@ const RESPONSES: Record<string, unknown> = {
   get_update_status: updateStatus(),
   get_capture_history: HISTORY,
   get_recording_drafts: DRAFTS,
-  get_artifacts: [ARTIFACT, SECOND_ARTIFACT],
+  get_artifacts: previewArtifacts(),
   get_artifact: ARTIFACT,
   get_recording_artifact: RECORDING,
   get_clipboard_state: CLIPBOARD,
