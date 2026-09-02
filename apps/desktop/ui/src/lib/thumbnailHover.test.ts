@@ -536,6 +536,20 @@ describe("shouldIgnoreThumbnailCursorEvents", () => {
     expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: true })).toBe(true);
   });
 
+  it("keeps a minimized stack toolbar control interactive", () => {
+    document.body.innerHTML = `
+      <main class="thumbnail-stack thumbnail-stack-minimized">
+        <article class="thumbnail-card" aria-hidden="true"><button>Copy</button></article>
+        <button class="thumbnail-collapsed-hit-target" disabled>Expand previews</button>
+        <div class="thumbnail-stack-toolbar">
+          <button class="thumbnail-stack-control">Expand previews</button>
+        </div>
+      </main>
+    `;
+
+    expect(thumbnailStackHasLiveHitTarget()).toBe(true);
+  });
+
   it("does not treat overflow cues as a reason to keep an exiting-only stack interactive", () => {
     document.body.innerHTML = `
       <main class="thumbnail-stack">

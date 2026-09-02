@@ -386,7 +386,7 @@ describe("Thumbnail", () => {
     fireEvent.click(secondDelete);
     expect(cards[0]).toHaveClass("thumbnail-exit-delete");
     expect(cards[1]).toHaveClass("thumbnail-exit-delete");
-    expect(minimizePreviews).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Minimize previews" })).not.toBeInTheDocument();
   });
 
   it("keeps a slid preview in place when it is deleted before the hole below is removed", async () => {
@@ -541,10 +541,9 @@ describe("Thumbnail", () => {
 
     render(<Thumbnail />);
     const card = await screen.findByRole("article");
-    const minimizePreviews = screen.getByRole("button", { name: "Minimize previews" });
     fireEvent.click(within(card).getByRole("button", { name: "Delete" }));
     expect(card).toHaveClass("thumbnail-exiting");
-    expect(minimizePreviews).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Minimize previews" })).toBeNull();
 
     await waitFor(() => {
       const ignoreCalls = vi.mocked(invoke).mock.calls
@@ -569,10 +568,9 @@ describe("Thumbnail", () => {
 
     render(<Thumbnail />);
     const card = await screen.findByRole("article");
-    const minimizePreviews = screen.getByRole("button", { name: "Minimize previews" });
     fireEvent.click(within(card).getByRole("button", { name: "Close" }));
     expect(card).toHaveClass("thumbnail-exit-dismiss");
-    expect(minimizePreviews).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Minimize previews" })).toBeNull();
 
     await waitFor(() => {
       const ignoreCalls = vi.mocked(invoke).mock.calls
@@ -735,15 +733,17 @@ describe("Thumbnail", () => {
     expect(stack).toHaveClass("thumbnail-stack-minimizing");
     expect(card).toHaveAttribute("aria-hidden", "true");
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(320);
+      await vi.advanceTimersByTimeAsync(480);
     });
 
     expect(stack).toHaveClass("thumbnail-stack-minimized");
+    const expand = screen.getByRole("button", { name: "Expand previews" });
+    expect(expand).toHaveClass("thumbnail-stack-expand");
+    expect(expand).toHaveTextContent("Show more");
     expect(vi.mocked(invoke)).toHaveBeenCalledWith(
       "set_mini_previews_collapsed",
       { collapsed: true },
     );
-    const expand = screen.getByRole("button", { name: "Expand preview" });
     await act(async () => {
       fireEvent.click(expand);
       await Promise.resolve();
@@ -754,7 +754,7 @@ describe("Thumbnail", () => {
       { collapsed: false },
     );
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(320);
+      await vi.advanceTimersByTimeAsync(480);
     });
 
     expect(stack).not.toHaveClass("thumbnail-stack-compact");

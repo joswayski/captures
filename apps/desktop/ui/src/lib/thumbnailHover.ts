@@ -171,7 +171,7 @@ export function thumbnailStackHasLiveHitTarget(root: Document = document): boole
   }
   if (root.querySelector(".thumbnail-stack-minimized")) {
     return Boolean(root.querySelector(
-      ".thumbnail-collapsed-hit-target:not(:disabled)",
+      ".thumbnail-collapsed-hit-target:not(:disabled), .thumbnail-stack-control:not(:disabled)",
     ));
   }
   const cards = root.querySelectorAll(".thumbnail-card");
