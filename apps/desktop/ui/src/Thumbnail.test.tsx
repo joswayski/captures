@@ -445,6 +445,62 @@ describe("Thumbnail", () => {
     }
   });
 
+  it("does not let an upper preview slide into a deleting neighbor during a stacked settle", async () => {
+    const captures = [1, 2, 3, 4].map((n) => ({
+      ...artifact,
+      id: `capture-${n}`,
+      preview_url: `captures-capture://artifact/capture-${n}`,
+      full_url: `captures-capture://artifact-full/capture-${n}`,
+    }));
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifacts") return captures;
+      if (command === "get_clipboard_state") {
+        return { revision: 0, artifact_id: captures[3].id };
+      }
+      if (command === "get_thumbnail_pointer_position") return null;
+      return undefined;
+    });
+
+    render(<Thumbnail />);
+    const cards = await screen.findAllByRole("article");
+    expect(cards).toHaveLength(4);
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(within(cards[2]).getByRole("button", { name: "Delete" }));
+      expect(cards[2]).toHaveClass("thumbnail-exiting");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16);
+      });
+      expect(cards[0]).toHaveClass("thumbnail-stack-shifting");
+      expect(cards[1]).toHaveClass("thumbnail-stack-shifting");
+
+      fireEvent.click(within(cards[1]).getByRole("button", { name: "Delete" }));
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(cards[1]).toHaveClass("thumbnail-exiting");
+      expect(cards[0].style.getPropertyValue("--thumbnail-stack-shift")).toBe(
+        `${THUMBNAIL_CARD_SLOT_PX}px`,
+      );
+      expect(cards[1].style.getPropertyValue("--thumbnail-stack-shift")).toBe(
+        `${THUMBNAIL_CARD_SLOT_PX}px`,
+      );
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16);
+      });
+      expect(cards[0].style.getPropertyValue("--thumbnail-stack-shift")).toBe(
+        `${THUMBNAIL_CARD_SLOT_PX}px`,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("re-arms native preview hit testing as soon as deletion completes", async () => {
     let pointerPolls = 0;
     vi.mocked(invoke).mockImplementation(async (command) => {
