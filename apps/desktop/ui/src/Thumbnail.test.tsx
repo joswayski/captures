@@ -389,7 +389,9 @@ describe("Thumbnail", () => {
     fireEvent.click(secondDelete);
     expect(cards[0]).toHaveClass("thumbnail-exit-delete");
     expect(cards[1]).toHaveClass("thumbnail-exit-delete");
-    expect(screen.queryByRole("button", { name: "Minimize previews" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Minimize previews" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Minimize previews" }).closest(".thumbnail-stack-toolbar"))
+      .toHaveClass("thumbnail-stack-toolbar-exiting");
   });
 
   it("keeps a slid preview in place when it is deleted before the hole below is removed", async () => {
@@ -546,7 +548,9 @@ describe("Thumbnail", () => {
     const card = await screen.findByRole("article");
     fireEvent.click(within(card).getByRole("button", { name: "Delete" }));
     expect(card).toHaveClass("thumbnail-exiting");
-    expect(screen.queryByRole("button", { name: "Minimize previews" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Minimize previews" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Minimize previews" }).closest(".thumbnail-stack-toolbar"))
+      .toHaveClass("thumbnail-stack-toolbar-exiting");
 
     await waitFor(() => {
       const ignoreCalls = vi.mocked(invoke).mock.calls
@@ -573,7 +577,9 @@ describe("Thumbnail", () => {
     const card = await screen.findByRole("article");
     fireEvent.click(within(card).getByRole("button", { name: "Close" }));
     expect(card).toHaveClass("thumbnail-exit-dismiss");
-    expect(screen.queryByRole("button", { name: "Minimize previews" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Minimize previews" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Minimize previews" }).closest(".thumbnail-stack-toolbar"))
+      .toHaveClass("thumbnail-stack-toolbar-exiting");
 
     await waitFor(() => {
       const ignoreCalls = vi.mocked(invoke).mock.calls
@@ -771,6 +777,9 @@ describe("Thumbnail", () => {
       await Promise.resolve();
     });
     expect(stack).toHaveClass("thumbnail-stack-expanding");
+    expect(screen.getByRole("button", { name: "Minimize previews" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Minimize previews" }).closest(".thumbnail-stack-toolbar"))
+      .toHaveClass("thumbnail-stack-toolbar-entering");
     expect(vi.mocked(invoke)).toHaveBeenCalledWith(
       "set_mini_previews_collapsed",
       { collapsed: false },

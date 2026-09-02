@@ -940,8 +940,7 @@ html.thumbnail-native-tracking .thumbnail-card[data-thumbnail-native-active="tru
 
 html.thumbnail-native-tracking .thumbnail-stack-minimized .thumbnail-card,
 html.thumbnail-native-tracking .thumbnail-stack-minimized .thumbnail-card img {
-  cursor: -webkit-grab !important;
-  cursor: grab !important;
+  cursor: pointer !important;
 }
 
 html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging,
@@ -955,23 +954,14 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
  * rules would otherwise win on every native poll that misses the control and
  * flicker pointer vs arrow while the mouse is still on the button.
  *
- * The collapsed pile is a window-drag source (click still expands). Force grab
- * on peeking cards and their images so file-drag grab cannot leak through, and
- * pointer cannot hide the move affordance.
+ * The collapsed pile expands on click and can still be dragged. Force pointer
+ * on peeking cards and their images so file-drag grab cannot leak through.
  */
-html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-overflow-cue):not(:disabled),
-html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-overflow-cue):not(:disabled) *,
-:is(.thumbnail-stack-control, .thumbnail-overflow-cue)[data-native-pointer-hover="true"]:not(:disabled),
-:is(.thumbnail-stack-control, .thumbnail-overflow-cue)[data-native-pointer-hover="true"]:not(:disabled) * {
+html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-overflow-cue, .thumbnail-collapsed-hit-target):not(:disabled),
+html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-overflow-cue, .thumbnail-collapsed-hit-target):not(:disabled) *,
+:is(.thumbnail-stack-control, .thumbnail-overflow-cue, .thumbnail-collapsed-hit-target)[data-native-pointer-hover="true"]:not(:disabled),
+:is(.thumbnail-stack-control, .thumbnail-overflow-cue, .thumbnail-collapsed-hit-target)[data-native-pointer-hover="true"]:not(:disabled) * {
   cursor: pointer !important;
-}
-
-html.thumbnail-native-tracking .thumbnail-collapsed-hit-target:not(:disabled),
-html.thumbnail-native-tracking .thumbnail-collapsed-hit-target:not(:disabled) *,
-.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]:not(:disabled),
-.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]:not(:disabled) * {
-  cursor: -webkit-grab !important;
-  cursor: grab !important;
 }
 
 html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hit-target,
@@ -1498,13 +1488,25 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
   pointer-events: auto;
 }
 
-.thumbnail-stack-toolbar-leaving {
-  animation: thumbnail-stack-toolbar-out var(--dur-4) var(--ease-standard) both;
+.thumbnail-stack-toolbar-leaving,
+.thumbnail-stack-toolbar-exiting {
   pointer-events: none;
 }
 
+.thumbnail-stack-toolbar-leaving {
+  animation: thumbnail-stack-toolbar-out var(--dur-4) var(--ease-in-out) both;
+}
+
+/*
+ * Last-preview delete: hold full opacity so the control does not pop away on
+ * the first dissolve frame, then ease out with the card chrome.
+ */
+.thumbnail-stack-toolbar-exiting {
+  animation: thumbnail-stack-toolbar-exit 1.05s linear both;
+}
+
 .thumbnail-stack-toolbar-entering {
-  animation: thumbnail-stack-toolbar-in 0.48s var(--ease-standard) both;
+  animation: thumbnail-stack-toolbar-in 0.48s linear both;
   pointer-events: none;
 }
 
@@ -1515,16 +1517,34 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
   }
 }
 
+@keyframes thumbnail-stack-toolbar-exit {
+  0%,
+  42% {
+    opacity: 1;
+    transform: none;
+    animation-timing-function: cubic-bezier(0.33, 0, 0.2, 1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(6px) scale(0.9);
+  }
+}
+
+/*
+ * Delay the fade until cards have started expanding, then interpolate opacity
+ * linearly. A strong ease over a short tail (plus :disabled { opacity: 0.45 }
+ * lifting at the same moment) used to step 0.45 → ~1 at the end.
+ */
 @keyframes thumbnail-stack-toolbar-in {
   from {
     opacity: 0;
     transform: translateY(6px) scale(0.9);
   }
-  60% {
+  35% {
     opacity: 0;
     transform: translateY(6px) scale(0.9);
   }
-  to {
+  100% {
     opacity: 1;
     transform: none;
   }
@@ -1849,7 +1869,7 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
   border: 0;
   border-radius: 12px;
   background: transparent;
-  cursor: grab;
+  cursor: pointer;
   touch-action: none;
   pointer-events: auto;
   -webkit-user-drag: none;
@@ -1863,11 +1883,10 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
   height: calc(160px + var(--thumbnail-collapsed-hover-peek, var(--thumbnail-collapsed-peek, 0px)));
 }
 
-.thumbnail-stack-minimized > .thumbnail-card,
-.thumbnail-stack-minimized > .thumbnail-card *,
-.thumbnail-stack-minimized > .thumbnail-collapsed-hit-target {
-  cursor: -webkit-grab !important;
-  cursor: grab !important;
+.thumbnail-stack-minimized:not(.thumbnail-stack-dragging) > .thumbnail-card,
+.thumbnail-stack-minimized:not(.thumbnail-stack-dragging) > .thumbnail-card *,
+.thumbnail-stack-minimized:not(.thumbnail-stack-dragging) > .thumbnail-collapsed-hit-target {
+  cursor: pointer !important;
 }
 
 /*
@@ -2017,7 +2036,8 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
   }
 
   .thumbnail-stack-toolbar-leaving,
-  .thumbnail-stack-toolbar-entering {
+  .thumbnail-stack-toolbar-entering,
+  .thumbnail-stack-toolbar-exiting {
     animation: none;
   }
 

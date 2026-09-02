@@ -430,10 +430,30 @@ describe("applyThumbnailNativeHover", () => {
     });
     setThumbnailCardHoverSuppressed(true);
 
-    expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe("grab");
+    expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe("pointer");
     expectNativePointerHover(target, true);
     expect(document.querySelector(".thumbnail-card"))
       .not.toHaveAttribute("data-thumbnail-native-active");
+  });
+
+  it("keeps pointer on Show less after expand while card hover is suppressed", () => {
+    document.body.innerHTML = `
+      <main class="thumbnail-stack">
+        <div class="thumbnail-stack-toolbar">
+          <button class="thumbnail-stack-control thumbnail-stack-minimize">Show less</button>
+        </div>
+        <article class="thumbnail-card"><img alt=""><button>Copy</button></article>
+      </main>
+    `;
+    const control = document.querySelector<HTMLButtonElement>(".thumbnail-stack-control")!;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => control),
+    });
+    setThumbnailCardHoverSuppressed(true);
+
+    expect(applyThumbnailNativeHover({ x: 20, y: 20, inside: true })).toBe("pointer");
+    expectNativePointerHover(control, true);
   });
 });
 
@@ -647,7 +667,7 @@ describe("shouldIgnoreThumbnailCursorEvents", () => {
       value: vi.fn(() => card),
     });
 
-    expect(applyThumbnailNativeHover({ x: 80, y: 48, inside: true })).toBe("grab");
+    expect(applyThumbnailNativeHover({ x: 80, y: 48, inside: true })).toBe("pointer");
     expectNativePointerHover(target, true);
     expect(card).not.toHaveAttribute("data-thumbnail-native-active");
     expect(shouldIgnoreThumbnailCursorEvents({ x: 80, y: 48, inside: true })).toBe(false);
@@ -707,11 +727,11 @@ describe("shouldIgnoreThumbnailCursorEvents", () => {
       configurable: true,
       value: vi.fn(() => target),
     });
-    expect(applyThumbnailNativeHover({ x: 10, y: 10, inside: true })).toBe("grab");
+    expect(applyThumbnailNativeHover({ x: 10, y: 10, inside: true })).toBe("pointer");
     expectNativePointerHover(target, false);
   });
 
-  it("uses a grab cursor over the collapsed pile so window drag is obvious", () => {
+  it("uses a pointer cursor over the collapsed pile so expand is obvious", () => {
     document.body.innerHTML = `
       <main class="thumbnail-stack thumbnail-stack-minimized">
         <article class="thumbnail-card" aria-hidden="true"><button>Copy</button></article>
@@ -724,7 +744,7 @@ describe("shouldIgnoreThumbnailCursorEvents", () => {
       value: vi.fn(() => target),
     });
 
-    expect(applyThumbnailNativeHover({ x: 40, y: 80, inside: true })).toBe("grab");
+    expect(applyThumbnailNativeHover({ x: 40, y: 80, inside: true })).toBe("pointer");
     expectNativePointerHover(target, true);
   });
 
