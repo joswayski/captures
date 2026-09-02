@@ -42,6 +42,7 @@ const THUMBNAIL_NATIVE_ACTIVE_SELECTOR = `[${THUMBNAIL_NATIVE_ACTIVE_ATTRIBUTE}=
 export const THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE = "data-native-pointer-hover";
 const THUMBNAIL_NATIVE_POINTER_HOVER_SELECTOR =
   `[${THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE}="true"]`;
+const THUMBNAIL_STACK_HOVER_LATCHED_SELECTOR = ".thumbnail-stack-hover-latched";
 const THUMBNAIL_STACK_CONTROL_SELECTOR = [
   ".thumbnail-overflow-cue",
   ".thumbnail-stack-control",
@@ -398,15 +399,20 @@ export function applyThumbnailNativeHover(
     root,
   );
   if (stackControl) {
+    const ignoreCollapsedHover = stackControl.classList.contains(
+      "thumbnail-collapsed-hit-target",
+    ) && Boolean(root.querySelector(THUMBNAIL_STACK_HOVER_LATCHED_SELECTOR));
     root.querySelectorAll(THUMBNAIL_NATIVE_ACTIVE_SELECTOR)
       .forEach((element) => element.removeAttribute(THUMBNAIL_NATIVE_ACTIVE_ATTRIBUTE));
     root.querySelectorAll(THUMBNAIL_NATIVE_POINTER_HOVER_SELECTOR)
       .forEach((element) => {
-        if (element !== stackControl) {
+        if (ignoreCollapsedHover || element !== stackControl) {
           element.removeAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE);
         }
       });
-    stackControl.setAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE, "true");
+    if (!ignoreCollapsedHover) {
+      stackControl.setAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE, "true");
+    }
     return "pointer";
   }
   if (thumbnailStackSuppressesCardHover(root)) {

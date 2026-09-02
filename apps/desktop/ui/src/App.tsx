@@ -5468,6 +5468,9 @@ export function Thumbnail() {
   const [stackMotion, setStackMotion] = useState<
     "expanded" | "collapsing" | "collapsed" | "expanding"
   >("expanded");
+  const [stackHoverReady, setStackHoverReady] = useState(false);
+  const [stackMinimizeRun, setStackMinimizeRun] = useState(false);
+  const [stackHoverLatched, setStackHoverLatched] = useState(false);
   const [exitingArtifactIds, setExitingArtifactIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -5489,6 +5492,7 @@ export function Thumbnail() {
   });
   const stackRef = useRef<HTMLElement>(null);
   const stackMotionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stackHoverReadyFrames = useRef<{ first: number; second: number } | null>(null);
   const previousStackMotion = useRef<"expanded" | "collapsing" | "collapsed" | "expanding">(
     "expanded",
   );
@@ -6114,6 +6118,11 @@ export function Thumbnail() {
       cancelStackScroll.current?.();
       cancelStackScroll.current = null;
       if (stackMotionTimer.current) clearTimeout(stackMotionTimer.current);
+      if (stackHoverReadyFrames.current) {
+        cancelAnimationFrame(stackHoverReadyFrames.current.first);
+        cancelAnimationFrame(stackHoverReadyFrames.current.second);
+        stackHoverReadyFrames.current = null;
+      }
     };
   }, []);
 
@@ -6136,28 +6145,87 @@ export function Thumbnail() {
   const setStackCollapsed = (nextCollapsed: boolean) => {
     if (controlsDisabled || collapsed === nextCollapsed) return;
     if (stackMotionTimer.current) clearTimeout(stackMotionTimer.current);
+    const cancelHoverReady = () => {
+      if (stackHoverReadyFrames.current) {
+        cancelAnimationFrame(stackHoverReadyFrames.current.first);
+        cancelAnimationFrame(stackHoverReadyFrames.current.second);
+        stackHoverReadyFrames.current = null;
+      }
+      setStackHoverReady(false);
+    };
+    // Two frames after collapse so the rest pose is committed before
+    // transform easing (hover fan-out) turns back on.
+    const armHoverReady = () => {
+      cancelHoverReady();
+      const frames = { first: 0, second: 0 };
+      frames.first = requestAnimationFrame(() => {
+        frames.second = requestAnimationFrame(() => {
+          stackHoverReadyFrames.current = null;
+          setStackHoverReady(true);
+        });
+      });
+      stackHoverReadyFrames.current = frames;
+    };
     if (prefersReducedMotion()) {
       setStackMotion(nextCollapsed ? "collapsed" : "expanded");
+      if (nextCollapsed) armHoverReady();
+      else cancelHoverReady();
       void invoke("set_mini_previews_collapsed", { collapsed: nextCollapsed })
-        .catch(() => setStackMotion(nextCollapsed ? "expanded" : "collapsed"));
+        .catch(() => {
+          setStackMotion(nextCollapsed ? "expanded" : "collapsed");
+          if (nextCollapsed) cancelHoverReady();
+          else armHoverReady();
+        });
       return;
     }
     if (nextCollapsed) {
+      cancelHoverReady();
+      setStackHoverLatched(false);
+      setStackMinimizeRun(false);
       setStackMotion("collapsing");
       const collapsePromise = invoke("set_mini_previews_collapsed", { collapsed: true });
-      stackMotionTimer.current = setTimeout(() => {
-        stackMotionTimer.current = null;
-        setStackMotion("collapsed");
-      }, STACK_MOTION_MS);
+      const frames = { first: 0, second: 0 };
+      frames.first = requestAnimationFrame(() => {
+        frames.second = requestAnimationFrame(() => {
+          stackHoverReadyFrames.current = null;
+          setStackMinimizeRun(true);
+          stackMotionTimer.current = setTimeout(() => {
+            stackMotionTimer.current = null;
+            setStackMinimizeRun(false);
+            setStackMotion("collapsed");
+            setStackHoverLatched(true);
+            requestAnimationFrame(() => {
+              const target = stackRef.current?.querySelector(
+                ".thumbnail-collapsed-hit-target",
+              );
+              target?.removeAttribute("data-native-pointer-hover");
+              if (!target?.matches(":hover")) setStackHoverLatched(false);
+            });
+            armHoverReady();
+          }, STACK_MOTION_MS);
+        });
+      });
+      stackHoverReadyFrames.current = frames;
       void collapsePromise.catch(() => {
         if (stackMotionTimer.current) {
           clearTimeout(stackMotionTimer.current);
           stackMotionTimer.current = null;
         }
+        if (stackHoverReadyFrames.current) {
+          cancelAnimationFrame(stackHoverReadyFrames.current.first);
+          cancelAnimationFrame(stackHoverReadyFrames.current.second);
+          stackHoverReadyFrames.current = null;
+        }
+        cancelHoverReady();
+        setStackMinimizeRun(false);
+        setStackHoverLatched(false);
         setStackMotion("expanded");
       });
       return;
     }
+    cancelHoverReady();
+    setStackMinimizeRun(false);
+    setStackHoverLatched(false);
     void invoke("set_mini_previews_collapsed", { collapsed: false })
       .then(() => {
         setStackMotion("expanding");
@@ -6166,7 +6234,10 @@ export function Thumbnail() {
           setStackMotion("expanded");
         }, STACK_MOTION_MS);
       })
-      .catch(() => setStackMotion("collapsed"));
+      .catch(() => {
+        setStackMotion("collapsed");
+        armHoverReady();
+      });
   };
 
   const scrollStackBy = (slots: number) => {
@@ -6197,6 +6268,9 @@ export function Thumbnail() {
           stackMotion === "collapsing" ? "thumbnail-stack-minimizing" : "",
           stackMotion === "collapsed" ? "thumbnail-stack-minimized" : "",
           stackMotion === "expanding" ? "thumbnail-stack-expanding" : "",
+          stackMinimizeRun ? "thumbnail-stack-minimize-run" : "",
+          stackHoverReady ? "thumbnail-stack-hover-ready" : "",
+          stackHoverLatched ? "thumbnail-stack-hover-latched" : "",
         ].filter(Boolean).join(" ")}
         onScroll={refreshStackOverflow}
       >
@@ -6256,6 +6330,10 @@ export function Thumbnail() {
             className="thumbnail-collapsed-hit-target"
             aria-label={`Expand ${artifacts.length === 1 ? "preview" : `${artifacts.length} previews`}`}
             disabled={controlsDisabled}
+            onPointerLeave={(event) => {
+              event.currentTarget.removeAttribute("data-native-pointer-hover");
+              setStackHoverLatched(false);
+            }}
             onClick={() => setStackCollapsed(false)}
           />
         )}

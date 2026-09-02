@@ -46,6 +46,33 @@ function card(
 }
 
 describe("thumbnail stack layout", () => {
+  it("does not ease compact-card transforms until collapse hover is armed", () => {
+    const compactCard = thumbnailStyles.match(
+      /\.thumbnail-stack-compact > \.thumbnail-card\s*\{([\s\S]*?)\n\}/,
+    );
+    const hoverReady = thumbnailStyles.match(
+      /\.thumbnail-stack-minimized\.thumbnail-stack-hover-ready > \.thumbnail-card\s*\{([\s\S]*?)\n\}/,
+    );
+    const minimizingCard = thumbnailStyles.match(
+      /\.thumbnail-stack-minimizing > \.thumbnail-card\s*\{\n {2}animation: none;([\s\S]*?)\n\}/,
+    );
+    const minimizeRun = thumbnailStyles.match(
+      /\.thumbnail-stack-minimizing\.thumbnail-stack-minimize-run > \.thumbnail-card\s*\{([\s\S]*?)\n\}/,
+    );
+    const hoverFan = thumbnailStyles.match(
+      /\.thumbnail-stack-minimized\.thumbnail-stack-hover-ready:not\(\.thumbnail-stack-hover-latched\):has\(\.thumbnail-collapsed-hit-target:hover\)/,
+    );
+
+    expect(compactCard?.[1]).toMatch(/transform:\s*var\(--thumbnail-stack-rest-transform\)/);
+    expect(compactCard?.[1]).not.toMatch(/transform\s+var\(--stack-fan-dur\)/);
+    expect(hoverReady?.[1]).toMatch(/transform\s+var\(--stack-fan-dur\)/);
+    expect(minimizingCard?.[1]).toMatch(/rotateX\(0deg\)/);
+    expect(minimizingCard?.[1]).toMatch(/scale\(1\)/);
+    expect(minimizeRun?.[1]).toMatch(/transform:\s*var\(--thumbnail-stack-rest-transform\)/);
+    expect(minimizeRun?.[1]).toMatch(/transform 0\.48s/);
+    expect(hoverFan).not.toBeNull();
+  });
+
   it("releases the arrival animation before cards exit or shift", () => {
     const arrival = thumbnailStyles.match(
       /\.thumbnail-card\.thumbnail-ready([^{}]*)\{([^{}]*animation:\s*thumbnail-arrive[^{}]*)\}/,

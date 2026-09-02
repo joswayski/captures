@@ -1624,21 +1624,7 @@ html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-collapse
 }
 
 .thumbnail-stack-compact > .thumbnail-card {
-  position: absolute;
-  left: 28px;
-  right: 28px;
-  bottom: 52px;
-  z-index: calc(30 - var(--thumbnail-stack-depth, 0));
-  width: calc(100% - 56px);
-  opacity: calc(1 - var(--thumbnail-stack-hidden, 0));
-  transition:
-    opacity var(--dur-4) var(--ease-out),
-    transform var(--stack-fan-dur) var(--ease-out),
-    box-shadow var(--stack-fan-dur) var(--ease-out);
-  transform-origin: 50% 100%;
-  pointer-events: none;
-  will-change: transform, opacity;
-  transform:
+  --thumbnail-stack-rest-transform:
     translate3d(
       calc(var(--thumbnail-stack-depth, 0) * -1.5px),
       calc(var(--thumbnail-stack-depth, 0) * -13px),
@@ -1646,6 +1632,24 @@ html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-collapse
     )
     rotateX(calc(var(--thumbnail-stack-depth, 0) * -1.4deg))
     scale(calc(1 - var(--thumbnail-stack-depth, 0) * 0.025));
+  position: absolute;
+  left: 28px;
+  right: 28px;
+  bottom: 52px;
+  z-index: calc(30 - var(--thumbnail-stack-depth, 0));
+  width: calc(100% - 56px);
+  opacity: calc(1 - var(--thumbnail-stack-hidden, 0));
+  /*
+   * Transform stays off this transition. Collapsing eases onto the rest pose,
+   * then drops the transitioning class; a compact transform transition here
+   * would interpolate any leftover 3D matrix into a hop on rear cards.
+   */
+  transition:
+    opacity var(--dur-4) var(--ease-out),
+    box-shadow var(--dur-4) var(--ease-out);
+  transform-origin: 50% 100%;
+  pointer-events: none;
+  transform: var(--thumbnail-stack-rest-transform);
 }
 
 /*
@@ -1665,20 +1669,52 @@ html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-collapse
   transition: opacity var(--stack-fan-dur) var(--ease-out);
 }
 
+.thumbnail-stack-minimizing > .thumbnail-card,
+.thumbnail-stack-expanding > .thumbnail-card {
+  transition:
+    opacity var(--dur-4) var(--ease-out),
+    box-shadow var(--dur-4) var(--ease-out);
+  will-change: transform, opacity;
+}
+
 .thumbnail-stack-minimizing > .thumbnail-card {
-  animation: thumbnail-card-minimize 0.48s var(--ease-standard) both;
+  animation: none;
+  transform:
+    translate3d(
+      0,
+      calc(var(--thumbnail-stack-depth, 0) * -184px),
+      0
+    )
+    rotateX(0deg)
+    scale(1);
+  transition: none;
+}
+
+.thumbnail-stack-minimizing.thumbnail-stack-minimize-run > .thumbnail-card {
+  transform: var(--thumbnail-stack-rest-transform);
+  transition:
+    transform 0.48s var(--ease-standard),
+    opacity var(--dur-4) var(--ease-out),
+    box-shadow var(--dur-4) var(--ease-out);
 }
 
 .thumbnail-stack-expanding > .thumbnail-card {
   animation: thumbnail-card-expand 0.48s var(--ease-standard) both;
 }
 
-.thumbnail-stack-compact > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting) {
-  animation: none;
+/*
+ * Hover fan-out only after collapse has committed the rest pose without a
+ * transform transition. Duration and curve match `--stack-fan-dur`.
+ */
+.thumbnail-stack-minimized.thumbnail-stack-hover-ready > .thumbnail-card {
+  transition:
+    opacity var(--dur-4) var(--ease-out),
+    transform var(--stack-fan-dur) var(--ease-out),
+    box-shadow var(--stack-fan-dur) var(--ease-out);
 }
 
-.thumbnail-stack-minimizing > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting) {
-  animation: thumbnail-card-minimize 0.48s var(--ease-standard) both;
+.thumbnail-stack-compact > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting) {
+  animation: none;
 }
 
 .thumbnail-stack-expanding > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting) {
@@ -1693,33 +1729,16 @@ html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-collapse
   animation: thumbnail-card-expand-dim 0.48s var(--ease-standard) both;
 }
 
-@keyframes thumbnail-card-minimize {
-  from {
-    transform: translate3d(
-      0,
-      calc(var(--thumbnail-stack-depth, 0) * -184px),
-      0
-    );
-  }
+@keyframes thumbnail-card-expand {
   to {
     transform:
       translate3d(
-        calc(var(--thumbnail-stack-depth, 0) * -1.5px),
-        calc(var(--thumbnail-stack-depth, 0) * -13px),
-        calc(var(--thumbnail-stack-depth, 0) * -24px)
+        0,
+        calc(var(--thumbnail-stack-depth, 0) * -184px),
+        0
       )
-      rotateX(calc(var(--thumbnail-stack-depth, 0) * -1.4deg))
-      scale(calc(1 - var(--thumbnail-stack-depth, 0) * 0.025));
-  }
-}
-
-@keyframes thumbnail-card-expand {
-  to {
-    transform: translate3d(
-      0,
-      calc(var(--thumbnail-stack-depth, 0) * -184px),
-      0
-    );
+      rotateX(0deg)
+      scale(1);
   }
 }
 
@@ -1815,8 +1834,8 @@ html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-collapse
   }
 }
 
-.thumbnail-stack-minimized:has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card,
-.thumbnail-stack-minimized:has(.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]) > .thumbnail-card {
+.thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card,
+.thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):has(.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]) > .thumbnail-card {
   transform:
     translate3d(
       calc(var(--thumbnail-stack-depth, 0) * -2px),
@@ -1831,8 +1850,8 @@ html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-collapse
     0 0 22px rgba(var(--theme-accent-rgb), 0.28);
 }
 
-.thumbnail-stack-minimized:has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card::before,
-.thumbnail-stack-minimized:has(.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]) > .thumbnail-card::before {
+.thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card::before,
+.thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):has(.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]) > .thumbnail-card::before {
   opacity: calc(var(--thumbnail-stack-depth, 0) * 0.08);
 }
 
@@ -1878,7 +1897,9 @@ html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-collapse
     transition: none;
   }
 
-  .thumbnail-stack-compact > .thumbnail-card {
+  .thumbnail-stack-compact > .thumbnail-card,
+  .thumbnail-stack-minimizing.thumbnail-stack-minimize-run > .thumbnail-card,
+  .thumbnail-stack-minimized.thumbnail-stack-hover-ready > .thumbnail-card {
     transition: none;
   }
 
