@@ -16,6 +16,7 @@ import {
   thumbnailStackOverflow,
   thumbnailStackShiftPx,
   thumbnailCollapsedPeekPx,
+  thumbnailStackFanTiltDeg,
   THUMBNAIL_CARD_HEIGHT_PX,
   THUMBNAIL_CARD_SLOT_PX,
   THUMBNAIL_DISMISS_HOLD_MS,
@@ -65,13 +66,27 @@ describe("thumbnail stack layout", () => {
     );
 
     expect(compactCard?.[1]).toMatch(/transform:\s*var\(--thumbnail-stack-rest-transform\)/);
+    expect(compactCard?.[1]).toMatch(/--thumbnail-stack-hover-transform/);
+    expect(compactCard?.[1]).toMatch(/rotateZ\(var\(--thumbnail-stack-fan-tilt/);
+    expect(compactCard?.[1]).toMatch(/--thumbnail-stack-expanded-transform/);
     expect(compactCard?.[1]).not.toMatch(/transform\s+var\(--stack-fan-dur\)/);
-    expect(hoverReady?.[1]).toMatch(/transform\s+var\(--stack-fan-dur\)/);
-    expect(minimizingCard?.[1]).toMatch(/rotateX\(0deg\)/);
-    expect(minimizingCard?.[1]).toMatch(/scale\(1\)/);
+    expect(hoverReady?.[1]).toMatch(
+      /transform\s+var\(--stack-fan-dur\) calc\(var\(--thumbnail-stack-depth, 0\) \* var\(--stack-fan-stagger\)\)/,
+    );
+    expect(minimizingCard?.[1]).toMatch(/var\(--thumbnail-stack-expanded-transform\)/);
     expect(minimizeRun?.[1]).toMatch(/transform:\s*var\(--thumbnail-stack-rest-transform\)/);
     expect(minimizeRun?.[1]).toMatch(/transform 0\.48s/);
     expect(hoverFan).not.toBeNull();
+    expect(thumbnailStyles).toMatch(/--stack-fan-stagger:\s*8ms/);
+    expect(thumbnailStyles).toMatch(/@keyframes thumbnail-card-expand-from-hover/);
+  });
+
+  it("tilts deeper collapsed cards a few degrees and leaves the front square", () => {
+    expect(thumbnailStackFanTiltDeg(0)).toBe(0);
+    expect(thumbnailStackFanTiltDeg(1)).toBe(3.2);
+    expect(thumbnailStackFanTiltDeg(2)).toBe(-2.8);
+    expect(thumbnailStackFanTiltDeg(3)).toBe(2.4);
+    expect(thumbnailStackFanTiltDeg(8)).toBe(2.4);
   });
 
   it("releases the arrival animation before cards exit or shift", () => {

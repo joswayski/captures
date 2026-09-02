@@ -19,6 +19,24 @@ export const THUMBNAIL_STACK_IDLE_PEEK_PX = 13;
 /** Hover-fan collapsed peek per extra card. */
 export const THUMBNAIL_STACK_HOVER_PEEK_PX = 24;
 
+/** Extra delay per stacked card so collapsed hover lift does not fire in lockstep. */
+export const THUMBNAIL_STACK_FAN_STAGGER_MS = 8;
+
+/**
+ * Alternating collapsed-hover tilt in degrees. The front card stays square;
+ * deeper cards skew a few degrees and ease back to 0 when the stack expands.
+ */
+export const THUMBNAIL_STACK_FAN_TILT_DEG = [0, 3.2, -2.8, 2.4] as const;
+
+/** Tilt applied to a collapsed card at `depth` while the pile is hovered. */
+export function thumbnailStackFanTiltDeg(depth: number): number {
+  const index = Math.min(
+    Math.max(Math.trunc(depth), 0),
+    THUMBNAIL_STACK_FAN_TILT_DEG.length - 1,
+  );
+  return THUMBNAIL_STACK_FAN_TILT_DEG[index];
+}
+
 /**
  * Extra height above the front card for the collapsed expand target.
  * One preview stays 160px so empty space above it still click-through.

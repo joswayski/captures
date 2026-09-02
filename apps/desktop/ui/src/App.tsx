@@ -125,6 +125,7 @@ import {
   thumbnailStackOverflow,
   restoreThumbnailStackShiftClass,
   thumbnailCollapsedPeekPx,
+  thumbnailStackFanTiltDeg,
   THUMBNAIL_CARD_SLOT_PX,
   waitForThumbnailStackSettle,
 } from "./lib/thumbnailLayout";
@@ -5481,6 +5482,7 @@ export function Thumbnail() {
   const [stackHoverReady, setStackHoverReady] = useState(false);
   const [stackMinimizeRun, setStackMinimizeRun] = useState(false);
   const [stackHoverLatched, setStackHoverLatched] = useState(false);
+  const [stackExpandingFromHover, setStackExpandingFromHover] = useState(false);
   const [exitingArtifactIds, setExitingArtifactIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -6188,6 +6190,7 @@ export function Thumbnail() {
       stackHoverReadyFrames.current = frames;
     };
     if (prefersReducedMotion()) {
+      setStackExpandingFromHover(false);
       setStackMotion(nextCollapsed ? "collapsed" : "expanded");
       if (nextCollapsed) armHoverReady();
       else cancelHoverReady();
@@ -6201,6 +6204,7 @@ export function Thumbnail() {
     }
     if (nextCollapsed) {
       cancelHoverReady();
+      setStackExpandingFromHover(false);
       setStackHoverLatched(false);
       setStackMinimizeRun(false);
       setStackMotion("collapsing");
@@ -6247,15 +6251,25 @@ export function Thumbnail() {
     cancelHoverReady();
     setStackMinimizeRun(false);
     setStackHoverLatched(false);
+    const hitTarget = stackRef.current?.querySelector(
+      ".thumbnail-collapsed-hit-target",
+    );
+    const expandingFromHover = Boolean(
+      hitTarget?.matches(":hover")
+      || hitTarget?.getAttribute("data-native-pointer-hover") === "true",
+    );
     void invoke("set_mini_previews_collapsed", { collapsed: false })
       .then(() => {
+        setStackExpandingFromHover(expandingFromHover);
         setStackMotion("expanding");
         stackMotionTimer.current = setTimeout(() => {
           stackMotionTimer.current = null;
+          setStackExpandingFromHover(false);
           setStackMotion("expanded");
         }, STACK_MOTION_MS);
       })
       .catch(() => {
+        setStackExpandingFromHover(false);
         setStackMotion("collapsed");
         armHoverReady();
       });
@@ -6352,6 +6366,7 @@ export function Thumbnail() {
           stackMotion === "collapsing" ? "thumbnail-stack-minimizing" : "",
           stackMotion === "collapsed" ? "thumbnail-stack-minimized" : "",
           stackMotion === "expanding" ? "thumbnail-stack-expanding" : "",
+          stackExpandingFromHover ? "thumbnail-stack-expanding-from-hover" : "",
           stackMinimizeRun ? "thumbnail-stack-minimize-run" : "",
           stackHoverReady ? "thumbnail-stack-hover-ready" : "",
           stackHoverLatched ? "thumbnail-stack-hover-latched" : "",
@@ -6892,6 +6907,7 @@ export function ThumbnailCard({
       style={stackCollapsed ? {
         "--thumbnail-stack-depth": Math.min(stackDepth, 3),
         "--thumbnail-stack-hidden": stackDepth > 3 ? 1 : 0,
+        "--thumbnail-stack-fan-tilt": `${thumbnailStackFanTiltDeg(stackDepth)}deg`,
       } as CSSProperties : undefined}
       // HTML inert disables all descendant input/focus while the card is decorative.
       inert={isExiting || stackCollapsed ? true : undefined}
