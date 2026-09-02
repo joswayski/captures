@@ -45,6 +45,7 @@ function card(
   };
 }
 
+describe("thumbnail stack layout", () => {
   it("does not ease compact-card transforms until collapse hover is armed", () => {
     const compactCard = thumbnailStyles.match(
       /\.thumbnail-stack-compact > \.thumbnail-card\s*\{([\s\S]*?)\n\}/,
@@ -66,6 +67,8 @@ function card(
     expect(minimizeFrom?.[1]).toMatch(/scale\(1\)/);
     expect(hoverFan).not.toBeNull();
   });
+
+  it("releases the arrival animation before cards exit or shift", () => {
     const arrival = thumbnailStyles.match(
       /\.thumbnail-card\.thumbnail-ready([^{}]*)\{([^{}]*animation:\s*thumbnail-arrive[^{}]*)\}/,
     );
