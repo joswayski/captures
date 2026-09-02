@@ -8,11 +8,6 @@ import {
   THUMBNAIL_CARD_SLOT_PX,
   THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS,
 } from "./lib/thumbnailLayout";
-import {
-  MINI_PREVIEW_FOLDER_DUST_LEAD_MS,
-  MINI_PREVIEW_FOLDER_MORPH_MS,
-  takeMiniPreviewRestorePending,
-} from "./lib/miniPreviewsHidden";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -56,7 +51,6 @@ describe("Thumbnail", () => {
     vi.useRealTimers();
     document.documentElement.classList.remove("thumbnail-native-tracking");
     Reflect.deleteProperty(document, "elementFromPoint");
-    takeMiniPreviewRestorePending();
     vi.clearAllMocks();
   });
 
@@ -366,15 +360,14 @@ describe("Thumbnail", () => {
 
     render(<Thumbnail />);
     const cards = await screen.findAllByRole("article");
-    const hidePreviews = screen.getByRole("button", { name: "Hide previews" });
+    const minimizePreviews = screen.getByRole("button", { name: "Minimize previews" });
     const firstDelete = within(cards[0]).getByRole("button", { name: "Delete" });
     const secondDelete = within(cards[1]).getByRole("button", { name: "Delete" });
     pointerReady = true;
     pointerTarget = firstDelete;
 
     fireEvent.click(firstDelete);
-    expect(hidePreviews).not.toHaveClass("thumbnail-collapse-leaving");
-    expect(hidePreviews).toBeEnabled();
+    expect(minimizePreviews).toBeEnabled();
 
     await waitFor(() => {
       const ignoreCalls = vi.mocked(invoke).mock.calls
@@ -393,8 +386,7 @@ describe("Thumbnail", () => {
     fireEvent.click(secondDelete);
     expect(cards[0]).toHaveClass("thumbnail-exit-delete");
     expect(cards[1]).toHaveClass("thumbnail-exit-delete");
-    expect(hidePreviews).toHaveClass("thumbnail-collapse-leaving");
-    expect(hidePreviews).toBeDisabled();
+    expect(minimizePreviews).toBeDisabled();
   });
 
   it("keeps a slid preview in place when it is deleted before the hole below is removed", async () => {
@@ -549,13 +541,10 @@ describe("Thumbnail", () => {
 
     render(<Thumbnail />);
     const card = await screen.findByRole("article");
-    const hidePreviews = screen.getByRole("button", { name: "Hide previews" });
+    const minimizePreviews = screen.getByRole("button", { name: "Minimize previews" });
     fireEvent.click(within(card).getByRole("button", { name: "Delete" }));
     expect(card).toHaveClass("thumbnail-exiting");
-    expect(hidePreviews).toHaveClass("thumbnail-collapse-leaving");
-    expect(hidePreviews).toBeDisabled();
-    expect(document.querySelectorAll(".thumbnail-collapse-dust-chip")).toHaveLength(36);
-    expect(document.querySelectorAll(".thumbnail-collapse-dust-surface")).toHaveLength(36);
+    expect(minimizePreviews).toBeDisabled();
 
     await waitFor(() => {
       const ignoreCalls = vi.mocked(invoke).mock.calls
@@ -580,11 +569,10 @@ describe("Thumbnail", () => {
 
     render(<Thumbnail />);
     const card = await screen.findByRole("article");
-    const hidePreviews = screen.getByRole("button", { name: "Hide previews" });
+    const minimizePreviews = screen.getByRole("button", { name: "Minimize previews" });
     fireEvent.click(within(card).getByRole("button", { name: "Close" }));
     expect(card).toHaveClass("thumbnail-exit-dismiss");
-    expect(hidePreviews).toHaveClass("thumbnail-collapse-leaving");
-    expect(hidePreviews).toBeDisabled();
+    expect(minimizePreviews).toBeDisabled();
 
     await waitFor(() => {
       const ignoreCalls = vi.mocked(invoke).mock.calls
@@ -733,101 +721,44 @@ describe("Thumbnail", () => {
     expect(nativeClickThrough).toBe(false);
   });
 
-  it("offers a control to park the preview stack", async () => {
-    render(<Thumbnail />);
-    const hide = await screen.findByRole("button", { name: "Hide previews" });
-    expect(hide).toHaveAttribute("data-tooltip", "Hide previews");
-    expect(hide.style.getPropertyValue("--mini-preview-folder-dust-lead")).toBe(
-      `${MINI_PREVIEW_FOLDER_DUST_LEAD_MS}ms`,
-    );
-    expect(hide.querySelector(".mini-preview-folder")).not.toBeNull();
-    expect(hide.querySelector(".mini-preview-folder")).toHaveAttribute("data-pose", "idle");
-    expect(hide.querySelectorAll(".mini-preview-folder-sheet")).toHaveLength(0);
-    vi.useFakeTimers();
-    fireEvent.click(hide);
-    expect(hide).toHaveClass("thumbnail-collapse-collapsing");
-    expect(hide.querySelector(".mini-preview-folder")).toHaveAttribute("data-pose", "open");
-    expect(hide.querySelectorAll(".mini-preview-folder-sheet")).toHaveLength(0);
-    expect(hide).toBeDisabled();
-    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith("collapse_mini_previews");
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(MINI_PREVIEW_FOLDER_MORPH_MS);
-    });
-    expect(hide).toHaveClass("thumbnail-collapse-parked");
-    expect(hide).not.toHaveClass("thumbnail-collapse-collapsing");
-    expect(hide.querySelector(".mini-preview-folder")).toHaveAttribute("data-pose", "parked");
-    expect(hide.querySelectorAll(".mini-preview-folder-sheet")).toHaveLength(1);
-    expect(hide).toBeEnabled();
-    expect(vi.mocked(invoke)).toHaveBeenCalledWith("collapse_mini_previews");
-    const show = screen.getByRole("button", { name: "Show 1 preview" });
-    fireEvent.click(show);
-    expect(show).toHaveClass("thumbnail-collapse-restoring");
-    expect(show).not.toHaveClass("thumbnail-collapse-parked");
-    expect(show.querySelector(".mini-preview-folder")).toHaveAttribute("data-pose", "open");
-    expect(show.querySelectorAll(".mini-preview-folder-sheet")).toHaveLength(1);
-    expect(vi.mocked(invoke)).toHaveBeenCalledWith("restore_mini_previews");
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(MINI_PREVIEW_FOLDER_MORPH_MS);
-    });
-    expect(show.querySelector(".mini-preview-folder")).toHaveAttribute("data-pose", "idle");
-    expect(show.querySelectorAll(".mini-preview-folder-sheet")).toHaveLength(0);
-  });
-
-  it("does not re-arm a parked stack after empty pointer samples", async () => {
-    vi.mocked(invoke).mockImplementation(async (command) => {
-      if (command === "get_artifacts") return [artifact];
-      if (command === "get_clipboard_state") {
-        return { revision: 0, artifact_id: artifact.id };
-      }
-      if (command === "get_thumbnail_pointer_position") return null;
-      return undefined;
-    });
-
-    render(<Thumbnail />);
-    const hide = await screen.findByRole("button", { name: "Hide previews" });
-    vi.useFakeTimers();
-    fireEvent.click(hide);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(MINI_PREVIEW_FOLDER_MORPH_MS);
-    });
-    vi.mocked(invoke).mockClear();
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1_000);
-    });
-    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith("refresh_thumbnail_interactivity");
-    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith(
-      "set_thumbnail_ignore_cursor_events",
-      { ignore: false },
-    );
-  });
-
-  it("rolls parked previews back out from the same folder anchor", async () => {
+  it("minimizes previews into a layered stack and expands them again", async () => {
     render(<Thumbnail />);
     const card = await screen.findByRole("article");
     const stack = card.closest(".thumbnail-stack")!;
-    const hide = screen.getByRole("button", { name: "Hide previews" });
+    const minimize = screen.getByRole("button", { name: "Minimize previews" });
+    expect(minimize).toHaveTextContent("Show less");
+    expect(minimize).not.toHaveAttribute("data-tooltip");
+    expect(screen.queryByRole("button", { name: "Clear previews" })).toBeNull();
+
     vi.useFakeTimers();
-
-    fireEvent.click(hide);
+    fireEvent.click(minimize);
+    expect(stack).toHaveClass("thumbnail-stack-minimizing");
+    expect(card).toHaveAttribute("aria-hidden", "true");
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(MINI_PREVIEW_FOLDER_MORPH_MS);
-    });
-    expect(stack).toHaveClass("thumbnail-stack-parked");
-    expect(stack).not.toHaveClass("thumbnail-stack-collapsing");
-    const travelX = card.style.getPropertyValue("--thumbnail-folder-x");
-    expect(travelX).not.toBe("");
-
-    act(() => {
-      window.dispatchEvent(new Event("captures-mini-previews-restored"));
+      await vi.advanceTimersByTimeAsync(320);
     });
 
-    expect(stack).toHaveClass("thumbnail-stack-restoring");
-    expect(stack).not.toHaveClass("thumbnail-stack-collapsing");
-    expect(stack).not.toHaveClass("thumbnail-stack-parked");
-    expect(card.style.getPropertyValue("--thumbnail-folder-x")).toBe(travelX);
+    expect(stack).toHaveClass("thumbnail-stack-minimized");
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith(
+      "set_mini_previews_collapsed",
+      { collapsed: true },
+    );
+    const expand = screen.getByRole("button", { name: "Expand preview" });
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(MINI_PREVIEW_FOLDER_MORPH_MS);
+      fireEvent.click(expand);
+      await Promise.resolve();
     });
-    expect(stack).not.toHaveClass("thumbnail-stack-restoring");
+    expect(stack).toHaveClass("thumbnail-stack-expanding");
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith(
+      "set_mini_previews_collapsed",
+      { collapsed: false },
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(320);
+    });
+
+    expect(stack).not.toHaveClass("thumbnail-stack-compact");
+    expect(card).not.toHaveAttribute("aria-hidden");
+    expect(screen.getByRole("button", { name: "Minimize previews" })).toBeEnabled();
   });
 });

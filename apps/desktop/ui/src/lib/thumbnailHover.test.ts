@@ -292,33 +292,33 @@ describe("applyThumbnailNativeHover", () => {
       .not.toHaveAttribute("data-thumbnail-native-active");
   });
 
-  it("keeps the hide-previews control clickable without activating a preview card", () => {
+  it("keeps preview toolbar controls clickable without activating a preview card", () => {
     document.body.innerHTML = `
-      <button class="thumbnail-collapse">Hide previews</button>
+      <button class="thumbnail-stack-control">Minimize previews</button>
       <article class="thumbnail-card" data-thumbnail-native-active="true">
         <button>Copy</button>
       </article>
     `;
-    const collapse = document.querySelector<HTMLButtonElement>(".thumbnail-collapse")!;
+    const control = document.querySelector<HTMLButtonElement>(".thumbnail-stack-control")!;
     Object.defineProperty(document, "elementFromPoint", {
       configurable: true,
-      value: vi.fn(() => collapse),
+      value: vi.fn(() => control),
     });
 
     expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe("pointer");
-    expectNativePointerHover(collapse, true);
+    expectNativePointerHover(control, true);
     expect(document.querySelector(".thumbnail-card"))
       .not.toHaveAttribute("data-thumbnail-native-active");
   });
 
-  it("keeps the hide-previews pointer when WebKit reports the card underneath", () => {
+  it("keeps the toolbar pointer when WebKit reports the card underneath", () => {
     document.body.innerHTML = `
-      <button class="thumbnail-collapse">Hide previews</button>
+      <button class="thumbnail-stack-control">Minimize previews</button>
       <article class="thumbnail-card"><button>Copy</button></article>
     `;
-    const collapse = document.querySelector<HTMLButtonElement>(".thumbnail-collapse")!;
+    const control = document.querySelector<HTMLButtonElement>(".thumbnail-stack-control")!;
     const card = document.querySelector<HTMLElement>(".thumbnail-card")!;
-    vi.spyOn(collapse, "getBoundingClientRect").mockReturnValue({
+    vi.spyOn(control, "getBoundingClientRect").mockReturnValue({
       x: 6,
       y: 6,
       top: 6,
@@ -335,7 +335,7 @@ describe("applyThumbnailNativeHover", () => {
     });
 
     expect(applyThumbnailNativeHover({ x: 20, y: 20, inside: true })).toBe("pointer");
-    expectNativePointerHover(collapse, true);
+    expectNativePointerHover(control, true);
     expect(card).not.toHaveAttribute("data-thumbnail-native-active");
   });
 
@@ -421,31 +421,31 @@ describe("shouldIgnoreThumbnailCursorEvents", () => {
     expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: false })).toBe(false);
   });
 
-  it("keeps the hide-previews control interactive while live cards remain", () => {
+  it("keeps preview toolbar controls interactive while live cards remain", () => {
     document.body.innerHTML = `
       <main class="thumbnail-stack">
+        <button class="thumbnail-stack-control">Minimize previews</button>
         <article class="thumbnail-card"><button>Copy</button></article>
       </main>
-      <button class="thumbnail-collapse">Hide previews</button>
     `;
-    const collapse = document.querySelector(".thumbnail-collapse")!;
+    const control = document.querySelector(".thumbnail-stack-control")!;
     Object.defineProperty(document, "elementFromPoint", {
       configurable: true,
-      value: vi.fn(() => collapse),
+      value: vi.fn(() => control),
     });
     expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: true })).toBe(false);
   });
 
-  it("keeps hide-previews interactive when elementFromPoint reports empty stack chrome", () => {
+  it("keeps toolbar controls interactive when elementFromPoint reports empty stack chrome", () => {
     document.body.innerHTML = `
       <main class="thumbnail-stack">
+        <button class="thumbnail-stack-control">Minimize previews</button>
         <article class="thumbnail-card"><button>Copy</button></article>
       </main>
-      <button class="thumbnail-collapse">Hide previews</button>
     `;
     const stack = document.querySelector<HTMLElement>(".thumbnail-stack")!;
-    const collapse = document.querySelector<HTMLButtonElement>(".thumbnail-collapse")!;
-    vi.spyOn(collapse, "getBoundingClientRect").mockReturnValue({
+    const control = document.querySelector<HTMLButtonElement>(".thumbnail-stack-control")!;
+    vi.spyOn(control, "getBoundingClientRect").mockReturnValue({
       x: 6,
       y: 6,
       top: 6,
@@ -464,6 +464,24 @@ describe("shouldIgnoreThumbnailCursorEvents", () => {
     expect(shouldIgnoreThumbnailCursorEvents({ x: 20, y: 20, inside: true })).toBe(false);
   });
 
+  it("passes clicks through toolbar chrome outside the minimize button", () => {
+    document.body.innerHTML = `
+      <main class="thumbnail-stack">
+        <div class="thumbnail-stack-toolbar">
+          <button class="thumbnail-stack-control">Minimize previews</button>
+        </div>
+        <article class="thumbnail-card"><button>Copy</button></article>
+      </main>
+    `;
+    const toolbar = document.querySelector(".thumbnail-stack-toolbar")!;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => toolbar),
+    });
+
+    expect(shouldIgnoreThumbnailCursorEvents({ x: 100, y: 20, inside: true })).toBe(true);
+  });
+
   it("passes through the whole stack when every preview is exiting", () => {
     document.body.innerHTML = `
       <main class="thumbnail-stack">
@@ -475,12 +493,11 @@ describe("shouldIgnoreThumbnailCursorEvents", () => {
     expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: false })).toBe(true);
   });
 
-  it("passes through the stack while previews fold into the parked folder", () => {
+  it("passes through the stack while previews minimize or expand", () => {
     document.body.innerHTML = `
-      <main class="thumbnail-stack thumbnail-stack-collapsing">
+      <main class="thumbnail-stack thumbnail-stack-minimizing">
         <article class="thumbnail-card"><button>Copy</button></article>
       </main>
-      <button class="thumbnail-collapse thumbnail-collapse-collapsing">Hide previews</button>
     `;
     const card = document.querySelector(".thumbnail-card")!;
     Object.defineProperty(document, "elementFromPoint", {
@@ -490,27 +507,33 @@ describe("shouldIgnoreThumbnailCursorEvents", () => {
     expect(thumbnailStackHasLiveHitTarget()).toBe(false);
     expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: true })).toBe(true);
     expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: false })).toBe(true);
-  });
-
-  it("passes through a parked or restoring stack whose cards are still in the DOM", () => {
-    document.body.innerHTML = `
-      <main class="thumbnail-stack thumbnail-stack-parked">
-        <article class="thumbnail-card"><button>Copy</button></article>
-      </main>
-      <button class="thumbnail-collapse thumbnail-collapse-parked">Show 1 preview</button>
-    `;
-    const card = document.querySelector(".thumbnail-card")!;
-    Object.defineProperty(document, "elementFromPoint", {
-      configurable: true,
-      value: vi.fn(() => card),
-    });
-    expect(thumbnailStackHasLiveHitTarget()).toBe(false);
-    expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: true })).toBe(true);
 
     document.querySelector(".thumbnail-stack")!.className =
-      "thumbnail-stack thumbnail-stack-restoring";
+      "thumbnail-stack thumbnail-stack-expanding";
     expect(thumbnailStackHasLiveHitTarget()).toBe(false);
-    expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: false })).toBe(true);
+  });
+
+  it("keeps only the minimized stack target interactive", () => {
+    document.body.innerHTML = `
+      <main class="thumbnail-stack thumbnail-stack-minimized">
+        <article class="thumbnail-card" aria-hidden="true"><button>Copy</button></article>
+        <button class="thumbnail-collapsed-hit-target">Expand previews</button>
+      </main>
+    `;
+    const stack = document.querySelector(".thumbnail-stack")!;
+    const target = document.querySelector(".thumbnail-collapsed-hit-target")!;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => target),
+    });
+    expect(thumbnailStackHasLiveHitTarget()).toBe(true);
+    expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: true })).toBe(false);
+
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => stack),
+    });
+    expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: true })).toBe(true);
   });
 
   it("does not treat overflow cues as a reason to keep an exiting-only stack interactive", () => {
