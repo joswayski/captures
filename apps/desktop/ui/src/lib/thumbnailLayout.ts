@@ -19,14 +19,21 @@ export const THUMBNAIL_STACK_IDLE_PEEK_PX = 13;
 /** Hover-fan collapsed peek per extra card. */
 export const THUMBNAIL_STACK_HOVER_PEEK_PX = 24;
 
+/** Extra hit-target height so a hovered tilt corner is still on the pile. */
+export const THUMBNAIL_STACK_HOVER_TILT_PEEK_PX = 18;
+
 /** Extra delay per stacked card so collapsed hover lift does not fire in lockstep. */
 export const THUMBNAIL_STACK_FAN_STAGGER_MS = 8;
 
 /**
  * Alternating collapsed-hover tilt in degrees. The front card stays square;
  * deeper cards skew a few degrees and ease back to 0 when the stack expands.
+ * Values are large enough that the peeking top edge reads as a scattered pile.
  */
-export const THUMBNAIL_STACK_FAN_TILT_DEG = [0, 3.2, -2.8, 2.4] as const;
+export const THUMBNAIL_STACK_FAN_TILT_DEG = [0, 7, -6, 5] as const;
+
+/** Extra hover shift (px) along the tilt so the peeking edge is not a parallel slab. */
+export const THUMBNAIL_STACK_FAN_SHIFT_PX_PER_DEG = 1.8;
 
 /** Tilt applied to a collapsed card at `depth` while the pile is hovered. */
 export function thumbnailStackFanTiltDeg(depth: number): number {
@@ -35,6 +42,11 @@ export function thumbnailStackFanTiltDeg(depth: number): number {
     THUMBNAIL_STACK_FAN_TILT_DEG.length - 1,
   );
   return THUMBNAIL_STACK_FAN_TILT_DEG[index];
+}
+
+/** Horizontal hover offset matching `thumbnailStackFanTiltDeg`. */
+export function thumbnailStackFanShiftPx(depth: number): number {
+  return thumbnailStackFanTiltDeg(depth) * THUMBNAIL_STACK_FAN_SHIFT_PX_PER_DEG;
 }
 
 /**
@@ -49,7 +61,9 @@ export function thumbnailCollapsedPeekPx(
     Math.max(cardCount - 1, 0),
     THUMBNAIL_STACK_MAX_VISIBLE_DEPTH,
   );
-  return extra * (hovered ? THUMBNAIL_STACK_HOVER_PEEK_PX : THUMBNAIL_STACK_IDLE_PEEK_PX);
+  const peek = extra * (hovered ? THUMBNAIL_STACK_HOVER_PEEK_PX : THUMBNAIL_STACK_IDLE_PEEK_PX);
+  if (hovered && extra > 0) return peek + THUMBNAIL_STACK_HOVER_TILT_PEEK_PX;
+  return peek;
 }
 
 /** Duration for one-slot overflow-cue scrolls (ease-out). */

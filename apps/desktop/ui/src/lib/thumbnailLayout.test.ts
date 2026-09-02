@@ -16,6 +16,7 @@ import {
   thumbnailStackOverflow,
   thumbnailStackShiftPx,
   thumbnailCollapsedPeekPx,
+  thumbnailStackFanShiftPx,
   thumbnailStackFanTiltDeg,
   THUMBNAIL_CARD_HEIGHT_PX,
   THUMBNAIL_CARD_SLOT_PX,
@@ -83,10 +84,12 @@ describe("thumbnail stack layout", () => {
 
   it("tilts deeper collapsed cards a few degrees and leaves the front square", () => {
     expect(thumbnailStackFanTiltDeg(0)).toBe(0);
-    expect(thumbnailStackFanTiltDeg(1)).toBe(3.2);
-    expect(thumbnailStackFanTiltDeg(2)).toBe(-2.8);
-    expect(thumbnailStackFanTiltDeg(3)).toBe(2.4);
-    expect(thumbnailStackFanTiltDeg(8)).toBe(2.4);
+    expect(thumbnailStackFanTiltDeg(1)).toBe(7);
+    expect(thumbnailStackFanTiltDeg(2)).toBe(-6);
+    expect(thumbnailStackFanTiltDeg(3)).toBe(5);
+    expect(thumbnailStackFanTiltDeg(8)).toBe(5);
+    expect(thumbnailStackFanShiftPx(0)).toBe(0);
+    expect(thumbnailStackFanShiftPx(1)).toBeCloseTo(12.6);
   });
 
   it("releases the arrival animation before cards exit or shift", () => {
@@ -198,7 +201,7 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailCollapsedPeekPx(2)).toBe(13);
     expect(thumbnailCollapsedPeekPx(4)).toBe(39);
     expect(thumbnailCollapsedPeekPx(8)).toBe(39);
-    expect(thumbnailCollapsedPeekPx(2, true)).toBe(24);
+    expect(thumbnailCollapsedPeekPx(2, true)).toBe(42);
     expect(thumbnailCollapsedPeekPx(1, true)).toBe(0);
   });
 

@@ -830,8 +830,8 @@ describe("Thumbnail", () => {
       await vi.advanceTimersByTimeAsync(32);
     });
 
-    expect(cards[0].style.getPropertyValue("--thumbnail-stack-fan-tilt")).toBe("-2.8deg");
-    expect(cards[1].style.getPropertyValue("--thumbnail-stack-fan-tilt")).toBe("3.2deg");
+    expect(cards[0].style.getPropertyValue("--thumbnail-stack-fan-tilt")).toBe("-6deg");
+    expect(cards[1].style.getPropertyValue("--thumbnail-stack-fan-tilt")).toBe("7deg");
     expect(cards[2].style.getPropertyValue("--thumbnail-stack-fan-tilt")).toBe("0deg");
 
     const expand = screen.getByRole("button", { name: "Expand 3 previews" });

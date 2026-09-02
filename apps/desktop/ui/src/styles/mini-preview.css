@@ -1712,7 +1712,10 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
     scale(calc(1 - var(--thumbnail-stack-depth, 0) * 0.025));
   --thumbnail-stack-hover-transform:
     translate3d(
-      calc(var(--thumbnail-stack-depth, 0) * -2px),
+      calc(
+        var(--thumbnail-stack-depth, 0) * -2px
+        + var(--thumbnail-stack-fan-shift, 0px)
+      ),
       calc(var(--thumbnail-stack-depth, 0) * -24px),
       calc(var(--thumbnail-stack-depth, 0) * -18px)
     )

@@ -125,6 +125,7 @@ import {
   thumbnailStackOverflow,
   restoreThumbnailStackShiftClass,
   thumbnailCollapsedPeekPx,
+  thumbnailStackFanShiftPx,
   thumbnailStackFanTiltDeg,
   THUMBNAIL_CARD_SLOT_PX,
   waitForThumbnailStackSettle,
@@ -6908,6 +6909,7 @@ export function ThumbnailCard({
         "--thumbnail-stack-depth": Math.min(stackDepth, 3),
         "--thumbnail-stack-hidden": stackDepth > 3 ? 1 : 0,
         "--thumbnail-stack-fan-tilt": `${thumbnailStackFanTiltDeg(stackDepth)}deg`,
+        "--thumbnail-stack-fan-shift": `${thumbnailStackFanShiftPx(stackDepth)}px`,
       } as CSSProperties : undefined}
       // HTML inert disables all descendant input/focus while the card is decorative.
       inert={isExiting || stackCollapsed ? true : undefined}
