@@ -731,15 +731,18 @@ describe("Thumbnail", () => {
     vi.useFakeTimers();
     fireEvent.click(minimize);
     expect(stack).toHaveClass("thumbnail-stack-minimizing");
+    expect(minimize.closest(".thumbnail-stack-toolbar")).toHaveClass(
+      "thumbnail-stack-toolbar-leaving",
+    );
     expect(card).toHaveAttribute("aria-hidden", "true");
     await act(async () => {
       await vi.advanceTimersByTimeAsync(480);
     });
 
     expect(stack).toHaveClass("thumbnail-stack-minimized");
-    const expand = screen.getByRole("button", { name: "Expand previews" });
-    expect(expand).toHaveClass("thumbnail-stack-expand");
-    expect(expand).toHaveTextContent("Show more");
+    expect(screen.queryByRole("button", { name: "Minimize previews" })).toBeNull();
+    const expand = screen.getByRole("button", { name: "Expand preview" });
+    expect(expand).toHaveClass("thumbnail-collapsed-hit-target");
     expect(vi.mocked(invoke)).toHaveBeenCalledWith(
       "set_mini_previews_collapsed",
       { collapsed: true },

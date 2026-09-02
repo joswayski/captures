@@ -6114,22 +6114,22 @@ export function Thumbnail() {
         ].filter(Boolean).join(" ")}
         onScroll={refreshStackOverflow}
       >
-        {!exitingOnly && (
-          <div className="thumbnail-stack-toolbar">
+        {!exitingOnly && !collapsed && (
+          <div className={[
+            "thumbnail-stack-toolbar",
+            stackMotion === "collapsing" ? "thumbnail-stack-toolbar-leaving" : "",
+            stackMotion === "expanding" ? "thumbnail-stack-toolbar-entering" : "",
+          ].filter(Boolean).join(" ")}>
             <button
               type="button"
-              className={[
-                "thumbnail-stack-control",
-                "thumbnail-stack-minimize",
-                compact ? "thumbnail-stack-expand" : "",
-              ].filter(Boolean).join(" ")}
-              aria-label={compact ? "Expand previews" : "Minimize previews"}
+              className="thumbnail-stack-control thumbnail-stack-minimize"
+              aria-label="Minimize previews"
               disabled={controlsDisabled}
-              onClick={() => setStackCollapsed(!collapsed)}
+              onClick={() => setStackCollapsed(true)}
             >
               <PreviewStackIcon />
               <span className="thumbnail-stack-minimize-label" aria-hidden="true">
-                {compact ? "Show more" : "Show less"}
+                Show less
               </span>
             </button>
           </div>
@@ -6240,6 +6240,7 @@ export function ThumbnailCard({
   const [busy, setBusy] = useState<"copied" | "saved" | null>(null);
   const [error, setError] = useState("");
   const [thumbnailReady, setThumbnailReady] = useState(false);
+  const [arrived, setArrived] = useState(false);
   const [fileDragging, setFileDragging] = useState(false);
   const [exit, setExit] = useState<"dismiss" | "delete" | null>(null);
   const [dustParticles, setDustParticles] = useState<ThumbnailDustParticle[] | null>(null);
@@ -6611,6 +6612,7 @@ export function ThumbnailCard({
       className={[
         "thumbnail-card",
         thumbnailReady ? "thumbnail-ready" : "thumbnail-pending",
+        arrived ? "thumbnail-arrived" : "",
         thumbnailReady ? "thumbnail-capture-highlight" : "",
         viewerActive && (!isExiting || exit === "delete") ? "thumbnail-viewer-active" : "",
         editorControlPresent && (!isExiting || exit === "delete") ? "thumbnail-editor-active" : "",
@@ -6631,7 +6633,15 @@ export function ThumbnailCard({
       aria-busy={isExiting || fileDragging}
       data-exit-locked={isExiting ? "true" : undefined}
       data-file-dragging={fileDragging ? "true" : undefined}
-      onAnimationEnd={finishExit}
+      onAnimationEnd={(event) => {
+        finishExit(event);
+        if (
+          event.target === event.currentTarget &&
+          event.animationName === "thumbnail-arrive"
+        ) {
+          setArrived(true);
+        }
+      }}
     >
       {/* Media shell clips hover blur/scale so it never bleeds into the card ring.
           Dust stays outside this shell so dissolve chips can fly past the edge. */}
