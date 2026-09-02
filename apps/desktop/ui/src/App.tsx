@@ -6296,6 +6296,7 @@ export function Thumbnail() {
         return writeHarnessStackOffset(x, y);
       },
       reducedMotion: prefersReducedMotion,
+      onSway: (sway) => applyThumbnailStackDragSway(stackRef.current, sway),
     });
     return stackDrag.current;
   };

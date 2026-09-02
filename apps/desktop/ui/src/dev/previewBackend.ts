@@ -306,6 +306,20 @@ const SECOND_ARTIFACT: CaptureArtifact = {
   clipboard_copy_status: "skipped",
 };
 
+const THIRD_ARTIFACT: CaptureArtifact = {
+  ...ARTIFACT,
+  id: "artifact-3",
+  path: null,
+  created_at: "2026-08-27T09:46:18Z",
+  clipboard_copy_status: "skipped",
+};
+
+const FOURTH_ARTIFACT: CaptureArtifact = {
+  ...SECOND_ARTIFACT,
+  id: "artifact-4",
+  created_at: "2026-08-27T09:48:02Z",
+};
+
 /**
  * Optional local clip for reviewing the recording editor. Generate one with
  * `ffmpeg -f lavfi -i color=c=black:s=800x500:d=6 apps/desktop/ui/public/dev-sample.mp4`.
@@ -623,7 +637,7 @@ const RESPONSES: Record<string, unknown> = {
   get_update_status: updateStatus(),
   get_capture_history: HISTORY,
   get_recording_drafts: DRAFTS,
-  get_artifacts: [ARTIFACT, SECOND_ARTIFACT],
+  get_artifacts: [ARTIFACT, SECOND_ARTIFACT, THIRD_ARTIFACT, FOURTH_ARTIFACT],
   get_artifact: ARTIFACT,
   get_recording_artifact: RECORDING,
   get_clipboard_state: CLIPBOARD,

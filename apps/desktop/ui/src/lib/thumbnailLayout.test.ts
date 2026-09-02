@@ -74,6 +74,20 @@ describe("thumbnail stack layout", () => {
     expect(hoverFan).not.toBeNull();
   });
 
+  it("arches the collapsed pile so the top trails the hands while dragging", () => {
+    const dragging = thumbnailStyles.match(
+      /\.thumbnail-stack-minimized\.thumbnail-stack-dragging > \.thumbnail-card\s*\{([\s\S]*?)\n\}/,
+    );
+
+    expect(dragging?.[1]).not.toMatch(/transform\s+0\.22s/);
+    expect(dragging?.[1]).not.toMatch(/40ms/);
+    expect(dragging?.[1]).toMatch(/--thumbnail-drag-sway-x/);
+    expect(dragging?.[1]).toMatch(/\(var\(--thumbnail-stack-depth, 0\) \+ 1\)/);
+    expect(dragging?.[1]).toMatch(/rotateZ\(/);
+    expect(dragging?.[1]).not.toMatch(/-0\.28deg/);
+    expect(dragging?.[1]).toMatch(/0\.16deg/);
+  });
+
   it("releases the arrival animation before cards exit or shift", () => {
     const arrival = thumbnailStyles.match(
       /\.thumbnail-card\.thumbnail-ready([^{}]*)\{([^{}]*animation:\s*thumbnail-arrive[^{}]*)\}/,

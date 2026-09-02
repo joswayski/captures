@@ -1967,24 +1967,40 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
     0 0 22px rgba(var(--theme-accent-rgb), 0.28);
 }
 
+/*
+ * Drag lean is velocity-driven from JS (`--thumbnail-drag-sway-*`). Origin is
+ * the bottom of each card (the hands). Negative sway is a rightward carry:
+ * rear cards translate and rotate so the top of the pile trails, forming an
+ * arch. Skip a transform transition here so the lean can track the pointer;
+ * dropping the dragging class lets hover-ready ease back to rest.
+ */
 .thumbnail-stack-minimized.thumbnail-stack-dragging > .thumbnail-card {
   transition:
-    transform 0.22s calc(var(--thumbnail-stack-depth, 0) * 40ms) var(--ease-out),
     filter var(--dur-5) var(--ease-standard),
     box-shadow var(--dur-4) var(--ease-out);
   transform:
     translate3d(
       calc(
         var(--thumbnail-stack-depth, 0) * -1.5px
-        + var(--thumbnail-drag-sway-x, 0) * 1px * var(--thumbnail-stack-depth, 0)
+        + var(--thumbnail-drag-sway-x, 0) * 1px
+          * var(--thumbnail-stack-depth, 0)
+          * (var(--thumbnail-stack-depth, 0) + 1)
+          / 2
       ),
       calc(
         var(--thumbnail-stack-depth, 0) * -13px
-        + var(--thumbnail-drag-sway-y, 0) * 1px * var(--thumbnail-stack-depth, 0) * 0.35
+        + var(--thumbnail-drag-sway-y, 0) * 1px * var(--thumbnail-stack-depth, 0) * 0.45
       ),
       calc(var(--thumbnail-stack-depth, 0) * -24px)
     )
-    rotateZ(calc(var(--thumbnail-drag-sway-x, 0) * var(--thumbnail-stack-depth, 0) * -0.28deg))
+    rotateZ(
+      calc(
+        var(--thumbnail-drag-sway-x, 0)
+        * var(--thumbnail-stack-depth, 0)
+        * (var(--thumbnail-stack-depth, 0) + 1)
+        * 0.16deg
+      )
+    )
     rotateX(calc(var(--thumbnail-stack-depth, 0) * -1.4deg))
     scale(calc(1 - var(--thumbnail-stack-depth, 0) * 0.025));
   filter: brightness(calc(1 - var(--thumbnail-stack-depth, 0) * 0.12));
