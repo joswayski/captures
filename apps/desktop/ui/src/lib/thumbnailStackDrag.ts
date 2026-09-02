@@ -23,6 +23,11 @@ export function preventThumbnailHtml5Drag(event: Event): void {
   event.stopPropagation();
 }
 
+/** CSS `url()` with quotes escaped, for painting a preview without an `<img>`. */
+export function cssUrl(value: string): string {
+  return `url(${JSON.stringify(value)})`;
+}
+
 const HARNESS_FRAME_WIDTH_PX = 340;
 const HARNESS_COLLAPSED_HEIGHT_PX = 240;
 

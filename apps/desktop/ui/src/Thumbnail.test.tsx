@@ -743,6 +743,10 @@ describe("Thumbnail", () => {
 
     expect(stack).toHaveClass("thumbnail-stack-minimized");
     expect(card.querySelector("img")).toHaveAttribute("draggable", "false");
+    expect(card.querySelector("img")).toHaveAttribute("hidden");
+    expect(card.querySelector(".thumbnail-media")).toHaveStyle({
+      backgroundImage: `url("${artifact.full_url}")`,
+    });
     expect(screen.queryByRole("button", { name: "Minimize previews" })).toBeNull();
     const expand = screen.getByRole("button", { name: "Expand preview" });
     expect(expand).toHaveClass("thumbnail-collapsed-hit-target");

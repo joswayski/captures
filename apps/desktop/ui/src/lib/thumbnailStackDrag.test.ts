@@ -10,6 +10,7 @@ import {
   clampThumbnailStackFrame,
   clearThumbnailStackDragSway,
   parseCssPx,
+  cssUrl,
   preventThumbnailHtml5Drag,
   readHarnessStackOffset,
   setThumbnailStackDragging,
@@ -29,6 +30,13 @@ describe("preventThumbnailHtml5Drag", () => {
     const event = new Event("dragstart", { bubbles: true, cancelable: true });
     preventThumbnailHtml5Drag(event);
     expect(event.defaultPrevented).toBe(true);
+  });
+});
+
+describe("cssUrl", () => {
+  it("quotes data URLs so they are valid CSS url() values", () => {
+    expect(cssUrl('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg">'))
+      .toBe('url("data:image/svg+xml,<svg xmlns=\\"http://www.w3.org/2000/svg\\">")');
   });
 });
 

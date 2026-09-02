@@ -107,6 +107,7 @@ import {
 import {
   CollapsedThumbnailStackDrag,
   applyThumbnailStackDragSway,
+  cssUrl,
   preventThumbnailHtml5Drag,
   readHarnessStackOffset,
   setThumbnailStackDragging,
@@ -6748,11 +6749,15 @@ export function ThumbnailCard({
     >
       {/* Media shell clips hover blur/scale so it never bleeds into the card ring.
           Dust stays outside this shell so dissolve chips can fly past the edge. */}
-      <div className="thumbnail-media">
+      <div
+        className="thumbnail-media"
+        style={stackCollapsed ? { backgroundImage: cssUrl(artifact.full_url) } : undefined}
+      >
         <img
           className={usingDust ? "thumbnail-dust-source" : undefined}
           src={artifact.full_url}
           alt="Screenshot preview"
+          hidden={stackCollapsed}
           draggable={!isExiting && !stackCollapsed}
           onDragStart={(event) => {
             if (stackCollapsed) {
