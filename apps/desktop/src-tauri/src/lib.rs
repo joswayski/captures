@@ -17,7 +17,7 @@ use std::{
 
 use tauri::CursorIcon;
 
-use captures_capture::{CaptureError, CaptureMode, LogicalRect};
+use captures_capture::{CaptureError, CaptureMode, LogicalRect, WindowDescriptor};
 use chrono::{DateTime, Utc};
 use image::RgbaImage;
 use mouse_position::mouse_position::Mouse;
@@ -224,7 +224,7 @@ pub fn run() {
             match resolve_asset(&protocol_state, path) {
                 Some(bytes) => tauri::http::Response::builder()
                     .status(200)
-                    .header("Content-Type", "image/png")
+                    .header("Content-Type", storage::overlay_snapshot_mime_type(&bytes))
                     .header("Access-Control-Allow-Origin", "*")
                     .header("Cache-Control", "no-store")
                     .body(bytes)
@@ -353,6 +353,9 @@ pub fn run() {
             register_shortcuts(&handle);
             if let Err(error) = create_overlay_window(&handle) {
                 eprintln!("failed to prepare capture overlay: {error}");
+            }
+            if let Err(error) = recording::ensure_recording_selector_window(&handle) {
+                eprintln!("failed to prepare capture menu: {error}");
             }
             if let Err(error) = create_thumbnail_window(&handle, false) {
                 eprintln!("failed to prepare capture thumbnail: {error}");
@@ -593,79 +596,133 @@ async fn prepare_capture(
     ensure_capture_session_available()?;
     let freeze_screen = state.settings().freeze_screen;
     let id = Uuid::new_v4();
-    let session = if freeze_screen {
-        let (frame, snapshot_png, mut windows) = std::thread::scope(|scope| {
-            // Window discovery is independent of the frozen display pixels. Run it
-            // beside capture + encoding so window mode pays the slower cost, not both.
-            let windows = (mode == CaptureMode::Window).then(|| scope.spawn(|| state.windows()));
-            let frame = state.backend.capture_display_at_point(pointer_position())?;
-            // The background frame is frozen now, so this capture no longer needs HUD
-            // exclusion. Release it before encoding can emit a new preview and allow a
-            // rapid follow-up capture to start with its own protection generation.
-            set_capture_huds_protected(&app, false);
-            // Keep the selector background full-resolution and lossless. Region crops
-            // come directly from `frame.image`; window commits prefer the native window
-            // surface so overlapping windows are not baked into the result.
-            let snapshot_png = storage::encode_png(&frame.image)?;
-            let windows = windows
-                .map(|task| match task.join() {
-                    Ok(windows) => windows,
-                    Err(panic) => std::panic::resume_unwind(panic),
-                })
-                .transpose()?
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|window| window_is_capturable(window, &frame.descriptor))
-                .collect::<Vec<_>>();
-            Ok::<_, AppError>((frame, snapshot_png, windows))
-        })?;
-        if mode == CaptureMode::Window {
-            refine_window_chrome_from_snapshot(
-                &mut windows,
-                &frame.descriptor,
-                &frame.image,
-                window_corner_radius_points(),
-            );
-        }
-        CaptureSession {
-            id,
-            mode,
-            thumbnail_capture_generation,
-            frozen: true,
-            display: frame.descriptor,
-            image: Some(frame.image),
-            snapshot_png,
-            windows,
-        }
+    let windows_task = (mode == CaptureMode::Window).then(|| {
+        let state = state.clone();
+        std::thread::spawn(move || state.windows())
+    });
+    let (session, pending_windows) = if freeze_screen {
+        let frame = state.backend.capture_display_at_point(pointer_position())?;
+        // The background frame is frozen now, so this capture no longer needs HUD
+        // exclusion. Release it before encoding can emit a new preview and allow a
+        // rapid follow-up capture to start with its own protection generation.
+        set_capture_huds_protected(&app, false);
+        // Crops still come from `frame.image`. The overlay only needs a visual
+        // freeze-frame, so this encoding can be lossy and much cheaper than PNG.
+        let snapshot_png = storage::encode_overlay_snapshot(&frame.image)?;
+        let (windows, pending_windows) =
+            take_ready_or_defer_windows(windows_task, &frame.descriptor, Some(&frame.image));
+        (
+            CaptureSession {
+                id,
+                mode,
+                thumbnail_capture_generation,
+                frozen: true,
+                display: frame.descriptor,
+                image: Some(frame.image),
+                snapshot_png,
+                windows,
+            },
+            pending_windows,
+        )
     } else {
         // Live overlay: skip the freeze-frame so hover states can keep changing
         // until commit, then recapture the current desktop.
         let display = display_under_pointer(&state)?;
-        let windows = if mode == CaptureMode::Window {
-            state
-                .windows()?
-                .into_iter()
-                .filter(|window| window_is_capturable(window, &display))
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let (windows, pending_windows) = take_ready_or_defer_windows(windows_task, &display, None);
         set_capture_huds_protected(&app, false);
-        CaptureSession {
-            id,
-            mode,
-            thumbnail_capture_generation,
-            frozen: false,
-            display,
-            image: None,
-            snapshot_png: Vec::new(),
-            windows,
-        }
+        (
+            CaptureSession {
+                id,
+                mode,
+                thumbnail_capture_generation,
+                frozen: false,
+                display,
+                image: None,
+                snapshot_png: Vec::new(),
+                windows,
+            },
+            pending_windows,
+        )
     };
     let active = capture_session_to_active(&session);
     state.sessions.lock().insert(id, session);
     show_capture_window(&app, &active);
+    if let Some(task) = pending_windows {
+        complete_overlay_windows(app.clone(), state, id, task);
+    }
     Ok(Some(active))
+}
+
+pub(crate) type WindowListTask = std::thread::JoinHandle<Result<Vec<WindowDescriptor>, AppError>>;
+
+pub(crate) fn take_ready_or_defer_windows(
+    task: Option<WindowListTask>,
+    display: &captures_capture::DisplayDescriptor,
+    image: Option<&RgbaImage>,
+) -> (Vec<WindowDescriptor>, Option<WindowListTask>) {
+    let Some(task) = task else {
+        return (Vec::new(), None);
+    };
+    if !task.is_finished() {
+        return (Vec::new(), Some(task));
+    }
+    let listed = match task.join() {
+        Ok(windows) => windows,
+        Err(panic) => std::panic::resume_unwind(panic),
+    };
+    (capturable_windows_for_display(listed, display, image), None)
+}
+
+pub(crate) fn capturable_windows_for_display(
+    windows: Result<Vec<WindowDescriptor>, AppError>,
+    display: &captures_capture::DisplayDescriptor,
+    image: Option<&RgbaImage>,
+) -> Vec<WindowDescriptor> {
+    let mut windows = windows
+        .unwrap_or_else(|error| {
+            eprintln!("window targets are unavailable for this capture: {error}");
+            Vec::new()
+        })
+        .into_iter()
+        .filter(|window| window_is_capturable(window, display))
+        .collect::<Vec<_>>();
+    if let Some(image) = image {
+        refine_window_chrome_from_snapshot(
+            &mut windows,
+            display,
+            image,
+            window_corner_radius_points(),
+        );
+    }
+    windows
+}
+
+fn complete_overlay_windows(
+    app: AppHandle,
+    state: Arc<AppState>,
+    session_id: Uuid,
+    task: WindowListTask,
+) {
+    tauri::async_runtime::spawn_blocking(move || {
+        let listed = match task.join() {
+            Ok(windows) => windows,
+            Err(panic) => std::panic::resume_unwind(panic),
+        };
+        let mut sessions = state.sessions.lock();
+        let Some(session) = sessions.get_mut(&session_id) else {
+            return;
+        };
+        if session.mode != CaptureMode::Window {
+            return;
+        }
+        session.windows =
+            capturable_windows_for_display(listed, &session.display, session.image.as_ref());
+        let active = capture_session_to_active(session);
+        drop(sessions);
+        if let Err(error) = app.emit("capture-session-ready", &active) {
+            eprintln!("failed to deliver window targets: {error}");
+        }
+    });
 }
 
 fn capture_session_to_active(session: &CaptureSession) -> ActiveSession {
@@ -6492,15 +6549,16 @@ mod tests {
         TRAY_NOTICE_CARET_INSET, TRAY_NOTICE_CARET_SIZE, TRAY_NOTICE_FRAME_PAD,
         TRAY_NOTICE_SCREEN_MARGIN, TRAY_NOTICE_TRAY_OVERLAP, ThumbnailCursorAction,
         ThumbnailCursorKind, ThumbnailMonitorBounds, ThumbnailPointerSpace, ThumbnailStackOrigin,
-        ThumbnailWindowFrame, capture_cursor_icon, click_through_applies, clipboard_fingerprint,
-        display_contains_pointer, fallback_startup_notice, mask_macos_window_corners,
-        parse_shortcut, place_startup_notice, preferences_url, primary_app_window_priority,
-        recording::RECORDING_REGION_INDICATOR_TITLE, refine_window_chrome_from_snapshot,
-        resolve_startup_notice_placement, resolve_window_capture, should_trigger_shortcut,
-        startup_notice_fallback_edge_from_insets, startup_notice_url, thumbnail_clamp_frame,
-        thumbnail_cursor_action, thumbnail_cursor_ignore_update, thumbnail_geometry,
-        thumbnail_pointer_in_space, thumbnail_pointer_position, thumbnail_preserve_current_height,
-        thumbnail_stack_height, thumbnail_stack_should_be_visible, thumbnail_stack_visible_count,
+        ThumbnailWindowFrame, capturable_windows_for_display, capture_cursor_icon,
+        click_through_applies, clipboard_fingerprint, display_contains_pointer,
+        fallback_startup_notice, mask_macos_window_corners, parse_shortcut, place_startup_notice,
+        preferences_url, primary_app_window_priority, recording::RECORDING_REGION_INDICATOR_TITLE,
+        refine_window_chrome_from_snapshot, resolve_startup_notice_placement,
+        resolve_window_capture, should_trigger_shortcut, startup_notice_fallback_edge_from_insets,
+        startup_notice_url, thumbnail_clamp_frame, thumbnail_cursor_action,
+        thumbnail_cursor_ignore_update, thumbnail_geometry, thumbnail_pointer_in_space,
+        thumbnail_pointer_position, thumbnail_preserve_current_height, thumbnail_stack_height,
+        thumbnail_stack_should_be_visible, thumbnail_stack_visible_count,
         thumbnail_visible_window_height, track_shortcut_suppression, tray_accelerator,
         tray_icon_rect_is_usable, tray_notice_window_size, viewer_window_label,
         window_display_crop_is_safe, window_is_capturable, windows_window_is_capture_overlay,
@@ -7824,5 +7882,25 @@ mod tests {
             capture_cursor_icon(CaptureMode::Display),
             CursorIcon::Default
         );
+    }
+
+    #[test]
+    fn capturable_windows_stay_empty_when_listing_fails() {
+        let display = DisplayDescriptor {
+            id: "display".to_owned(),
+            name: "Display".to_owned(),
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 100,
+            scale_factor: 2.0,
+            is_primary: true,
+        };
+        let windows = capturable_windows_for_display(
+            Err(AppError::Task("window list unavailable".to_owned())),
+            &display,
+            None,
+        );
+        assert!(windows.is_empty());
     }
 }

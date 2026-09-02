@@ -1549,4 +1549,49 @@ describe("RecordingSelector", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("macOS could not focus the selector");
     expect(invoke).not.toHaveBeenCalledWith("cancel_recording_selection", expect.anything());
   });
+
+  it("adds window targets without re-revealing an already visible selector", async () => {
+    preparedSession = {
+      ...session,
+      initial_mode: "screenshot",
+      initial_target: "window",
+      windows: [],
+    };
+    const { container } = render(<RecordingSelector />);
+    await screen.findByRole("button", { name: "Window", pressed: true });
+    expect(container.querySelectorAll(".recording-window-target")).toHaveLength(0);
+
+    const snapshot = container.querySelector(".recording-selector-snapshot");
+    expect(snapshot).not.toBeNull();
+    fireEvent.load(snapshot!);
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("reveal_recording_selector", {
+        selectionId: preparedSession.id,
+      });
+    });
+    const revealCalls = vi.mocked(invoke).mock.calls.filter(([command]) => (
+      command === "reveal_recording_selector"
+    )).length;
+    const showCalls = vi.mocked(invoke).mock.calls.filter(([command]) => (
+      command === "show_recording_selector"
+    )).length;
+
+    await act(async () => {
+      recordingSelectionReady?.({
+        payload: {
+          ...preparedSession,
+          windows: session.windows,
+        },
+      });
+    });
+
+    expect(await screen.findByRole("button", { name: "Select Captures Preferences" }))
+      .toBeInTheDocument();
+    expect(vi.mocked(invoke).mock.calls.filter(([command]) => (
+      command === "reveal_recording_selector"
+    ))).toHaveLength(revealCalls);
+    expect(vi.mocked(invoke).mock.calls.filter(([command]) => (
+      command === "show_recording_selector"
+    ))).toHaveLength(showCalls);
+  });
 });

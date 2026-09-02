@@ -2084,7 +2084,13 @@ export function RecordingSelector() {
             setSelectedWindow(null);
           }
         }
-        if (!snapshotChanged && visibleSnapshotRef.current === revealKey) {
+        const modeChanged = previous.initial_mode !== selection.initial_mode
+          || previous.initial_target !== selection.initial_target;
+        if (snapshotChanged) {
+          visibleSnapshotRef.current = null;
+          revealingSessionIdRef.current = null;
+          setFocusVisibleSessionId(null);
+        } else if (modeChanged && visibleSnapshotRef.current === revealKey) {
           visibleSnapshotRef.current = null;
           revealSelector(selection.id, freezeFrameRevealKey(selection));
         }
@@ -2130,7 +2136,16 @@ export function RecordingSelector() {
     };
     const onSelectionReady = ({ payload }: { payload: RecordingSelectionSession }) => {
       if (!active) return;
-      const currentSettings = settingsRef.current;
+      const cached = settingsRef.current;
+      if (cached) {
+        applySelection(payload, cached);
+        void invoke<AppSettings>("get_settings").then((latestSettings) => {
+          if (!active) return;
+          settingsRef.current = latestSettings;
+          setSettings(latestSettings);
+        }).catch(() => undefined);
+        return;
+      }
       void invoke<AppSettings>("get_settings").then((latestSettings) => {
         if (!active) return;
         settingsRef.current = latestSettings;
@@ -2138,11 +2153,7 @@ export function RecordingSelector() {
         applySelection(payload, latestSettings);
       }).catch(() => {
         if (!active) return;
-        if (currentSettings) {
-          applySelection(payload, currentSettings);
-        } else {
-          void invoke("cancel_recording_selection", { selectionId: payload.id });
-        }
+        void invoke("cancel_recording_selection", { selectionId: payload.id });
       });
     };
 
@@ -4961,6 +4972,10 @@ function CaptureOverlay() {
     void (async () => {
       const unlisten = await listen<ActiveSession>("capture-session-ready", ({ payload }) => {
         if (!active) return;
+        if (activeSessionIdRef.current === payload.id) {
+          setSession(payload);
+          return;
+        }
         activeSessionIdRef.current = payload.id;
         revealingSessionIdRef.current = null;
         setVisibleSessionId(null);
