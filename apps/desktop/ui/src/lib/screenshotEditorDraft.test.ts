@@ -113,6 +113,25 @@ describe("screenshot editor drafts", () => {
     expect(image && image.kind === "image" && image.src).toBe("draft-asset:asset-1");
   });
 
+  it("skips encoding assets the backend already persisted", async () => {
+    let encodes = 0;
+    const payload = await buildScreenshotEditorDraftPayload(
+      "capture-1",
+      sampleDocument(),
+      async () => {
+        encodes += 1;
+        return [1, 2, 3];
+      },
+      1_700_000_000_000,
+      () => "asset-1",
+      (assetId) => assetId === "asset-1",
+    );
+    expect(encodes).toBe(0);
+    expect(payload.assets).toEqual([{ id: "asset-1", png: null }]);
+    const image = payload.document.elements.find((element) => element.kind === "image");
+    expect(image && image.kind === "image" && image.src).toBe("draft-asset:asset-1");
+  });
+
   it("hydrates draft asset refs into protocol URLs", () => {
     const draftDoc = rewriteDocumentImageSources(sampleDocument(), () => draftAssetRef("a1"));
     const hydrated = hydrateScreenshotEditorDraftDocument(

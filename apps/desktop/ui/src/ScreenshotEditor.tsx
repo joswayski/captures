@@ -21,6 +21,7 @@ import { fileSizeDeltaBaseline, formatFileSize, formatFileSizeDelta } from "./li
 import {
   buildScreenshotEditorDraftPayload,
   collectDocumentImageSources,
+  isDraftAssetMissingError,
   isScreenshotDocumentDirty,
   SCREENSHOT_EDITOR_DRAFT_CLOSE_FLUSH_MS,
   SCREENSHOT_EDITOR_DRAFT_SAVE_MS,
@@ -1804,6 +1805,24 @@ export function ScreenshotEditor() {
   const successTimerRef = useRef<number | null>(null);
   /** Bumps to cancel in-flight debounced draft writes. */
   const draftSaveGenerationRef = useRef(0);
+  /**
+   * Image assets the backend already holds for the current draft, keyed by
+   * source URL so unchanged layers are not re-encoded and re-sent every autosave.
+   */
+  const draftAssetCacheRef = useRef<{
+    artifactKey: string | null;
+    assetIdBySource: Map<string, string>;
+    persisted: Set<string>;
+  }>({ artifactKey: null, assetIdBySource: new Map(), persisted: new Set() });
+
+  const forgetPersistedDraftAssets = useCallback(() => {
+    draftAssetCacheRef.current.persisted.clear();
+  }, []);
+
+  const discardEditorDraft = useCallback((artifactKey: string): Promise<void> => {
+    forgetPersistedDraftAssets();
+    return invoke<void>("discard_screenshot_editor_draft", { artifactId: artifactKey });
+  }, [forgetPersistedDraftAssets]);
   /** Latest flush function for the close handler (stable listener, no re-subscribe). */
   const flushEditorDraftRef = useRef<() => Promise<void>>(async () => undefined);
   const objectUrlsRef = useRef(new Set<string>());
@@ -2103,23 +2122,51 @@ export function ScreenshotEditor() {
     artifactKey: string,
   ): Promise<void> => {
     if (!isScreenshotDocumentDirty(document, baselineDocumentRef.current)) {
-      await invoke("discard_screenshot_editor_draft", { artifactId: artifactKey });
+      await discardEditorDraft(artifactKey);
       return;
     }
-    const payload = await buildScreenshotEditorDraftPayload(
-      artifactKey,
-      document,
-      pngBytesForSource,
-    );
-    await invoke("save_screenshot_editor_draft", {
-      request: {
-        artifact_id: payload.artifact_id,
-        document: payload.document,
-        assets: payload.assets,
-        updated_at_ms: payload.updated_at_ms,
-      },
-    });
-  }, [pngBytesForSource]);
+    const cache = draftAssetCacheRef.current;
+    if (cache.artifactKey !== artifactKey) {
+      cache.artifactKey = artifactKey;
+      cache.assetIdBySource.clear();
+      cache.persisted.clear();
+    }
+    const assetIdForSource = (src: string): string => {
+      let id = cache.assetIdBySource.get(src);
+      if (!id) {
+        id = crypto.randomUUID();
+        cache.assetIdBySource.set(src, id);
+      }
+      return id;
+    };
+    const save = async (incremental: boolean): Promise<void> => {
+      const payload = await buildScreenshotEditorDraftPayload(
+        artifactKey,
+        document,
+        pngBytesForSource,
+        Date.now(),
+        assetIdForSource,
+        incremental ? (assetId) => cache.persisted.has(assetId) : () => false,
+      );
+      await invoke("save_screenshot_editor_draft", {
+        request: {
+          artifact_id: payload.artifact_id,
+          document: payload.document,
+          assets: payload.assets,
+          updated_at_ms: payload.updated_at_ms,
+        },
+      });
+      cache.persisted = new Set(payload.assets.map((asset) => asset.id));
+    };
+    try {
+      await save(true);
+    } catch (reason) {
+      if (!isDraftAssetMissingError(reason)) throw reason;
+      // Draft files were removed out from under us; resend every asset.
+      cache.persisted.clear();
+      await save(false);
+    }
+  }, [discardEditorDraft, pngBytesForSource]);
 
   const flushEditorDraft = useCallback(async (): Promise<void> => {
     draftSaveGenerationRef.current += 1;
@@ -2156,9 +2203,8 @@ export function ScreenshotEditor() {
     clearSuccess();
     setError("");
     draftSaveGenerationRef.current += 1;
-    void invoke("discard_screenshot_editor_draft", { artifactId: artifact.id })
-      .catch(() => undefined);
-  }, [artifact, clearSuccess, ensureImage, replaceDocument]);
+    void discardEditorDraft(artifact.id).catch(() => undefined);
+  }, [artifact, clearSuccess, discardEditorDraft, ensureImage, replaceDocument]);
 
   const editorPresenceId = artifactId ? `screenshot-editor-${artifactId}` : null;
   const lastEmittedPresenceRef = useRef<string[] | null>(null);
@@ -4956,12 +5002,10 @@ export function ScreenshotEditor() {
       }
       setDraftRestored(false);
       draftSaveGenerationRef.current += 1;
-      void invoke("discard_screenshot_editor_draft", { artifactId: result.artifact.id })
-        .catch(() => undefined);
+      void discardEditorDraft(result.artifact.id).catch(() => undefined);
       // Window may still be keyed by the previous capture when Save as new file saved a new id.
       if (artifactId && artifactId !== result.artifact.id) {
-        void invoke("discard_screenshot_editor_draft", { artifactId })
-          .catch(() => undefined);
+        void discardEditorDraft(artifactId).catch(() => undefined);
       }
       setSaved(result);
       showSuccess(

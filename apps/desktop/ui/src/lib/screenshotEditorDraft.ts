@@ -21,10 +21,23 @@ export const SCREENSHOT_EDITOR_DRAFT_CLOSE_FLUSH_MS = 400;
 /** Soft cap so huge multi-layer edits do not fill the disk unexpectedly. */
 export const SCREENSHOT_EDITOR_DRAFT_MAX_TOTAL_BYTES = 80 * 1024 * 1024;
 
+/**
+ * One image layer in a draft save. `png` is `null` when the backend already
+ * holds this asset from an earlier save of the same draft, so the bytes do not
+ * need to be re-encoded or shipped over IPC again.
+ */
 export type ScreenshotEditorDraftAsset = {
   id: string;
-  png: number[];
+  png: number[] | null;
 };
+
+/** Backend error returned when a `png: null` asset no longer exists on disk. */
+export const SCREENSHOT_EDITOR_DRAFT_ASSET_MISSING =
+  "a previously saved draft image asset is missing; resend the full draft";
+
+export function isDraftAssetMissingError(reason: unknown): boolean {
+  return String(reason).includes(SCREENSHOT_EDITOR_DRAFT_ASSET_MISSING);
+}
 
 export type ScreenshotEditorDraftPayload = {
   artifact_id: string;
@@ -87,13 +100,18 @@ export function rewriteDocumentImageSources(
 /**
  * Build a disk-ready draft: rewrite every image URL to a `draft-asset:` ref and
  * pair those refs with PNG bytes produced by `encodePng(src)`.
+ *
+ * `createAssetId(src)` should return a stable id for a given `src` across saves
+ * so `isPersisted(assetId)` can skip re-encoding layers the backend already has;
+ * those assets are sent with `png: null`.
  */
 export async function buildScreenshotEditorDraftPayload(
   artifactId: string,
   document: ScreenshotDocument,
   encodePng: (src: string) => Promise<number[]>,
   nowMs: number = Date.now(),
-  createAssetId: () => string = () => crypto.randomUUID(),
+  createAssetId: (src: string) => string = () => crypto.randomUUID(),
+  isPersisted: (assetId: string) => boolean = () => false,
 ): Promise<ScreenshotEditorDraftPayload> {
   const sources = collectDocumentImageSources(document);
   const assets: ScreenshotEditorDraftAsset[] = [];
@@ -103,7 +121,12 @@ export async function buildScreenshotEditorDraftPayload(
   for (const src of sources) {
     if (sourceToAsset.has(src)) continue;
     const existing = parseDraftAssetRef(src);
-    const assetId = existing ?? createAssetId();
+    const assetId = existing ?? createAssetId(src);
+    if (isPersisted(assetId)) {
+      assets.push({ id: assetId, png: null });
+      sourceToAsset.set(src, assetId);
+      continue;
+    }
     const png = await encodePng(src);
     totalBytes += png.length;
     if (totalBytes > SCREENSHOT_EDITOR_DRAFT_MAX_TOTAL_BYTES) {

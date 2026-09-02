@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     fs,
     io::Write,
     path::{Path, PathBuf},
@@ -434,11 +435,18 @@ const EDITOR_DRAFT_ASSETS_DIR: &str = "assets";
 const MAX_EDITOR_DRAFT_ASSETS: usize = 64;
 const MAX_EDITOR_DRAFT_TOTAL_BYTES: usize = 80 * 1024 * 1024;
 
+/// One image layer in a draft save. `png` is `None` when the frontend already
+/// shipped this asset in an earlier save of the same draft and the file on disk
+/// should be kept as-is.
 #[derive(Debug, Deserialize)]
 pub struct ScreenshotEditorDraftAssetInput {
     id: String,
-    png: Vec<u8>,
+    #[serde(default)]
+    png: Option<Vec<u8>>,
 }
+
+pub const EDITOR_DRAFT_ASSET_MISSING: &str =
+    "a previously saved draft image asset is missing; resend the full draft";
 
 #[derive(Debug, Deserialize)]
 pub struct SaveScreenshotEditorDraftRequest {
@@ -471,13 +479,25 @@ pub fn save_screenshot_editor_draft(
     if request.assets.len() > MAX_EDITOR_DRAFT_ASSETS {
         return Err("this edit has too many image layers to keep as a draft".to_owned());
     }
+    let root = screenshot_editor_drafts_directory().join(&request.artifact_id);
+    let assets_dir = root.join(EDITOR_DRAFT_ASSETS_DIR);
     let mut total_bytes = 0usize;
     for asset in &request.assets {
         validate_draft_component_id(&asset.id).map_err(|error| error.to_string())?;
-        if asset.png.is_empty() || asset.png.len() > MAX_EDITOR_PNG_BYTES {
-            return Err("a draft image asset is empty or too large".to_owned());
-        }
-        total_bytes = total_bytes.saturating_add(asset.png.len());
+        let len = match &asset.png {
+            Some(png) => {
+                if png.is_empty() || png.len() > MAX_EDITOR_PNG_BYTES {
+                    return Err("a draft image asset is empty or too large".to_owned());
+                }
+                png.len()
+            }
+            None => fs::metadata(draft_asset_path(&assets_dir, &asset.id))
+                .ok()
+                .filter(std::fs::Metadata::is_file)
+                .map(|metadata| usize::try_from(metadata.len()).unwrap_or(usize::MAX))
+                .ok_or_else(|| EDITOR_DRAFT_ASSET_MISSING.to_owned())?,
+        };
+        total_bytes = total_bytes.saturating_add(len);
         if total_bytes > MAX_EDITOR_DRAFT_TOTAL_BYTES {
             return Err(
                 "unsaved edits are too large to keep as a draft; save a file first".to_owned(),
@@ -485,23 +505,27 @@ pub fn save_screenshot_editor_draft(
         }
     }
 
-    let root = screenshot_editor_drafts_directory().join(&request.artifact_id);
-    let assets_dir = root.join(EDITOR_DRAFT_ASSETS_DIR);
     fs::create_dir_all(&assets_dir).map_err(|error| error.to_string())?;
 
-    // Replace assets wholesale so removed layers do not leave orphan files.
-    if assets_dir.is_dir() {
-        for entry in fs::read_dir(&assets_dir).map_err(|error| error.to_string())? {
-            let entry = entry.map_err(|error| error.to_string())?;
-            let path = entry.path();
-            if path.is_file() {
-                let _ = fs::remove_file(path);
-            }
+    // Prune assets for removed layers so they do not leave orphan files, while
+    // keeping files for layers that were already persisted (`png: None`).
+    let keep: HashSet<PathBuf> = request
+        .assets
+        .iter()
+        .map(|asset| draft_asset_path(&assets_dir, &asset.id))
+        .collect();
+    for entry in fs::read_dir(&assets_dir).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let path = entry.path();
+        if path.is_file() && !keep.contains(&path) {
+            let _ = fs::remove_file(path);
         }
     }
     for asset in &request.assets {
-        let path = assets_dir.join(format!("{}.png", asset.id));
-        write_export_atomically(&path, &asset.png).map_err(|error| error.to_string())?;
+        if let Some(png) = &asset.png {
+            write_export_atomically(&draft_asset_path(&assets_dir, &asset.id), png)
+                .map_err(|error| error.to_string())?;
+        }
     }
 
     let manifest = ScreenshotEditorDraftManifest {
@@ -514,6 +538,10 @@ pub fn save_screenshot_editor_draft(
     write_export_atomically(&root.join(EDITOR_DRAFT_MANIFEST_FILE), &bytes)
         .map_err(|error| error.to_string())?;
     Ok(())
+}
+
+fn draft_asset_path(assets_dir: &Path, asset_id: &str) -> PathBuf {
+    assets_dir.join(format!("{asset_id}.png"))
 }
 
 /// Load a previously autosaved editor draft, if one exists for this capture.
