@@ -204,6 +204,64 @@ export function scrollThumbnailStackToNewest(stack: HTMLElement): void {
   stack.scrollTop = thumbnailStackNewestScrollTop(cardCount, stack.clientHeight);
 }
 
+export type ScheduleScrollThumbnailStackToNewestOptions = {
+  /** Called after each attempt so overflow cues can track the new offset. */
+  onScrolled?: () => void;
+  /** Injectable rAF. Defaults to `requestAnimationFrame`. */
+  frame?: (callback: FrameRequestCallback) => number;
+  /** Injectable cancel. Defaults to `cancelAnimationFrame`. */
+  cancelFrame?: (id: number) => void;
+  /**
+   * How long a ResizeObserver may retry after compact→expanded window growth.
+   * Omit to only run immediately plus two animation frames.
+   */
+  retryMs?: number;
+};
+
+/**
+ * Scroll to the newest capture now and again after layout settles.
+ * Compact→expanded and native window growth both change clientHeight a frame
+ * later; one useLayoutEffect write is not enough.
+ */
+export function scheduleScrollThumbnailStackToNewest(
+  stack: HTMLElement,
+  options: ScheduleScrollThumbnailStackToNewestOptions = {},
+): () => void {
+  const onScrolled = options.onScrolled;
+  const frame = options.frame
+    ?? ((callback: FrameRequestCallback) => requestAnimationFrame(callback));
+  const cancelFrame = options.cancelFrame
+    ?? ((id: number) => cancelAnimationFrame(id));
+  const retryMs = options.retryMs ?? 0;
+
+  const run = () => {
+    scrollThumbnailStackToNewest(stack);
+    onScrolled?.();
+  };
+
+  run();
+  let innerFrame = 0;
+  const outerFrame = frame(() => {
+    run();
+    innerFrame = frame(run);
+  });
+
+  const observer = retryMs > 0 && typeof ResizeObserver === "function"
+    ? new ResizeObserver(run)
+    : null;
+  observer?.observe(stack);
+  const timeout = retryMs > 0
+    ? window.setTimeout(() => observer?.disconnect(), retryMs)
+    : 0;
+
+  return () => {
+    cancelFrame(outerFrame);
+    cancelFrame(innerFrame);
+    observer?.disconnect();
+    if (timeout) window.clearTimeout(timeout);
+  };
+}
+
 export type ThumbnailStackOverflow = {
   /** Older previews are clipped above the visible scrollport. */
   hasOlder: boolean;

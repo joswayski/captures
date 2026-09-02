@@ -1481,10 +1481,11 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
 /*
  * Window overlay, not a child of `.thumbnail-stack`: that scroller's
  * absolutely positioned descendants are tied to the content box, so Show less
- * would freeze beside the 2nd/3rd card once the pile overflows.
+ * would freeze beside the 2nd/3rd card once the pile overflows. `fixed` keeps
+ * it on the visible stack edge while the list scrolls.
  */
 .thumbnail-stack-toolbar {
-  position: absolute;
+  position: fixed;
   z-index: 50;
   bottom: 16px;
   left: 28px;

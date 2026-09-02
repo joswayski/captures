@@ -120,6 +120,7 @@ import {
 import {
   animateThumbnailStackScroll,
   createThumbnailStackShiftController,
+  scheduleScrollThumbnailStackToNewest,
   scrollThumbnailStackToNewest,
   shouldScrollThumbnailStackToEnd,
   thumbnailStackContentHeight,
@@ -5661,13 +5662,14 @@ export function Thumbnail() {
   }, [applyClipboardState]);
 
   useLayoutEffect(() => {
-    if (
-      stackRef.current
-      && shouldScrollThumbnailStackToEnd(previousArtifactCount.current, artifacts.length)
-    ) {
+    const shouldReveal = shouldScrollThumbnailStackToEnd(
+      previousArtifactCount.current,
+      artifacts.length,
+    );
+    previousArtifactCount.current = artifacts.length;
+    if (shouldReveal && stackRef.current) {
       scrollThumbnailStackToNewest(stackRef.current);
     }
-    previousArtifactCount.current = artifacts.length;
     refreshStackOverflow();
     let cancelled = false;
     // Sync may grow the native window for new cards. It intentionally does not
@@ -5676,6 +5678,9 @@ export function Thumbnail() {
       .catch(() => undefined)
       .finally(() => {
         if (!cancelled) {
+          if (shouldReveal && stackRef.current) {
+            scrollThumbnailStackToNewest(stackRef.current);
+          }
           refreshStackOverflow();
           window.dispatchEvent(new Event("captures-thumbnail-layout-changed"));
         }
@@ -5687,10 +5692,19 @@ export function Thumbnail() {
 
   useLayoutEffect(() => {
     if (stackMotion !== "expanded" || !pendingNewestReveal.current) return;
-    pendingNewestReveal.current = false;
-    if (!stackRef.current) return;
-    scrollThumbnailStackToNewest(stackRef.current);
-    refreshStackOverflow();
+    const stack = stackRef.current;
+    if (!stack) return;
+    const cancelReveal = scheduleScrollThumbnailStackToNewest(stack, {
+      onScrolled: refreshStackOverflow,
+      retryMs: 450,
+    });
+    const finish = window.setTimeout(() => {
+      pendingNewestReveal.current = false;
+    }, 450);
+    return () => {
+      cancelReveal();
+      window.clearTimeout(finish);
+    };
   }, [stackMotion, refreshStackOverflow]);
 
   useEffect(() => {

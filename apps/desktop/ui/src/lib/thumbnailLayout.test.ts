@@ -9,6 +9,7 @@ import {
   easeOutCubic,
   resolveThumbnailStackShiftPx,
   shouldAnimateThumbnailStackShift,
+  scheduleScrollThumbnailStackToNewest,
   shouldScrollThumbnailStackToEnd,
   shouldScrollThumbnailStackToNewestOnExpand,
   thumbnailStackContentHeight,
@@ -179,7 +180,7 @@ describe("thumbnail stack layout", () => {
       /\.thumbnail-stack-control\s*\{[\s\S]*?cursor:\s*pointer/,
     );
     expect(thumbnailStyles).toMatch(
-      /absolutely positioned descendants are tied to the content box/,
+      /\.thumbnail-stack-toolbar\s*\{[\s\S]*?position:\s*fixed/,
     );
   });
 
@@ -214,6 +215,42 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailStackNewestScrollTop(8, 400)).toBe(
       thumbnailStackContentHeight(8) - 400,
     );
+  });
+
+  it("retries newest-scroll after layout frames", () => {
+    const stack = document.createElement("main");
+    stack.innerHTML = "<article class=\"thumbnail-card\"></article>".repeat(8);
+    Object.defineProperty(stack, "clientHeight", {
+      configurable: true,
+      writable: true,
+      value: 10_000,
+    });
+    Object.defineProperty(stack, "scrollTop", {
+      configurable: true,
+      writable: true,
+      value: 0,
+    });
+
+    const frames: FrameRequestCallback[] = [];
+    const cancel = scheduleScrollThumbnailStackToNewest(stack, {
+      retryMs: 50,
+      frame: (callback) => {
+        frames.push(callback);
+        return frames.length;
+      },
+      cancelFrame: (id) => {
+        frames[id - 1] = () => undefined;
+      },
+    });
+
+    expect(stack.scrollTop).toBe(0);
+    Object.defineProperty(stack, "clientHeight", {
+      configurable: true,
+      value: 400,
+    });
+    frames[0]?.(0);
+    expect(stack.scrollTop).toBe(thumbnailStackNewestScrollTop(8, 400));
+    cancel();
   });
 
   it("dims stacked cards with an overlay instead of a parent filter", () => {
