@@ -2,9 +2,10 @@
  * Mini previews: the always-on-top stack of recent captures.
  *
  * Geometry is load-bearing. Window width (340), card height (160), stack gap
- * (24), stack padding (28), and card radius (12) are mirrored by native code,
- * thumbnailLayout.ts, and thumbnailExit.ts, which measure slots and build the
- * dissolve particles. Restyle freely; keep all mirrored values in sync.
+ * (24), top/side padding (28), expanded control gutter (52), and card radius
+ * (12) are mirrored by native code, thumbnailLayout.ts, and thumbnailExit.ts,
+ * which measure slots and build the dissolve particles. Restyle freely; keep
+ * all mirrored values in sync.
  */
 
 html[data-preview-harness-view="thumbnail"] #root {
@@ -19,6 +20,10 @@ html[data-preview-harness-view="thumbnail"] #root {
  * the native window shrinks after a dismiss, which makes that card flicker.
  */
 .thumbnail-stack {
+  --thumbnail-card-shadow:
+    0 6px 14px rgba(0, 0, 0, 0.38),
+    0 2px 5px rgba(0, 0, 0, 0.26);
+
   position: absolute;
   bottom: 0;
   left: 0;
@@ -29,7 +34,7 @@ html[data-preview-harness-view="thumbnail"] #root {
   width: 100%;
   height: auto;
   max-height: 100%;
-  padding: 28px;
+  padding: 28px 28px 52px;
   overflow-y: auto;
   overscroll-behavior: contain;
   overflow-anchor: none;
@@ -114,10 +119,6 @@ html[data-preview-harness-view="thumbnail"] #root {
  * user-select:none stops click-drag from painting a text/image selection.
  */
 .thumbnail-card {
-  --thumbnail-card-shadow:
-    0 6px 14px rgba(0, 0, 0, 0.38),
-    0 2px 5px rgba(0, 0, 0, 0.26);
-
   position: relative;
   isolation: isolate;
   overflow: visible;
@@ -1370,8 +1371,8 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-contr
 .thumbnail-stack-toolbar {
   position: absolute;
   z-index: 50;
-  bottom: 34px;
-  left: 34px;
+  bottom: 16px;
+  left: 28px;
   display: flex;
   gap: var(--s-1);
   pointer-events: auto;
@@ -1385,12 +1386,10 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-contr
   padding: 0;
   place-items: center;
   border: 1px solid var(--glass-border);
-  border-radius: var(--r-round);
+  border-radius: var(--r-md);
   color: var(--glass-text);
   background: var(--glass-strong-solid);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.08),
-    var(--shadow-sm);
+  box-shadow: var(--thumbnail-card-shadow);
   backdrop-filter: blur(14px);
   cursor: pointer;
   transition:

@@ -4530,7 +4530,7 @@ fn bottom_center_notice_position(app: &AppHandle, width: f64, height: f64) -> (f
 }
 
 fn create_thumbnail_window(app: &AppHandle, visible: bool) -> Result<(), tauri::Error> {
-    let (x, y, height) = thumbnail_window_geometry(app, 1);
+    let (x, y, height) = thumbnail_window_geometry(app, 1, false);
     let window = WebviewWindowBuilder::new(
         app,
         "thumbnail",
@@ -4571,6 +4571,7 @@ const THUMBNAIL_WIDTH: f64 = 340.0;
 const THUMBNAIL_CARD_HEIGHT: f64 = 160.0;
 const THUMBNAIL_GAP: f64 = 24.0;
 const THUMBNAIL_PADDING: f64 = 28.0;
+const THUMBNAIL_EXPANDED_CONTROL_GUTTER: f64 = 52.0;
 
 fn update_thumbnail_stack(app: &AppHandle) {
     let app = app.clone();
@@ -4615,7 +4616,8 @@ fn update_thumbnail_stack_window(
         return;
     }
     let visible_count = thumbnail_stack_visible_count(count, collapsed);
-    let (x, desired_y, desired_height) = thumbnail_window_geometry(handle, visible_count);
+    let (x, desired_y, desired_height) =
+        thumbnail_window_geometry(handle, visible_count, collapsed);
     let visible = window.is_visible().unwrap_or(false);
     let presented = thumbnail_window_is_presented(&window);
     // WKWebView blanks painted cards when its visible NSWindow shrinks. Linux
@@ -4851,7 +4853,7 @@ fn set_mini_previews_collapsed(
     Ok(())
 }
 
-fn thumbnail_window_geometry(app: &AppHandle, count: usize) -> (f64, f64, f64) {
+fn thumbnail_window_geometry(app: &AppHandle, count: usize, collapsed: bool) -> (f64, f64, f64) {
     app.primary_monitor()
         .ok()
         .flatten()
@@ -4874,14 +4876,23 @@ fn thumbnail_window_geometry(app: &AppHandle, count: usize) -> (f64, f64, f64) {
                     scale_factor: monitor.scale_factor(),
                 },
                 count,
+                collapsed,
             )
         })
-        .unwrap_or((20.0, 20.0, thumbnail_stack_height(count)))
+        .unwrap_or((20.0, 20.0, thumbnail_stack_height(count, collapsed)))
 }
 
-fn thumbnail_stack_height(count: usize) -> f64 {
+fn thumbnail_stack_height(count: usize, collapsed: bool) -> f64 {
     let cards = count.max(1) as f64;
-    THUMBNAIL_PADDING * 2.0 + cards * THUMBNAIL_CARD_HEIGHT + (cards - 1.0) * THUMBNAIL_GAP
+    let bottom_gutter = if collapsed {
+        THUMBNAIL_PADDING
+    } else {
+        THUMBNAIL_EXPANDED_CONTROL_GUTTER
+    };
+    THUMBNAIL_PADDING
+        + bottom_gutter
+        + cards * THUMBNAIL_CARD_HEIGHT
+        + (cards - 1.0) * THUMBNAIL_GAP
 }
 
 /// Extra logical pixels to keep the stack clear of system chrome.
@@ -4905,7 +4916,11 @@ struct ThumbnailMonitorBounds {
     scale_factor: f64,
 }
 
-fn thumbnail_geometry(bounds: ThumbnailMonitorBounds, count: usize) -> (f64, f64, f64) {
+fn thumbnail_geometry(
+    bounds: ThumbnailMonitorBounds,
+    count: usize,
+    collapsed: bool,
+) -> (f64, f64, f64) {
     let scale = bounds.scale_factor.max(1.0);
     let left = f64::from(bounds.work_x) / scale;
     let top = f64::from(bounds.work_y) / scale;
@@ -4929,7 +4944,7 @@ fn thumbnail_geometry(bounds: ThumbnailMonitorBounds, count: usize) -> (f64, f64
     // flush against a visible taskbar/panel edge (padding alone is easy to miss).
     let bottom_gap = THUMBNAIL_SYSTEM_CHROME_GAP;
     let available_height = (height - bottom_gap - THUMBNAIL_PADDING).max(1.0);
-    let stack_height = thumbnail_stack_height(count).min(available_height);
+    let stack_height = thumbnail_stack_height(count, collapsed).min(available_height);
     // Window left sits at the work-area edge; CSS stack padding provides the
     // visual inset so the transparent frame can still reach the screen edge.
     let left_aligned = left;
@@ -6411,7 +6426,7 @@ mod tests {
         resolve_startup_notice_placement, resolve_window_capture, should_trigger_shortcut,
         startup_notice_fallback_edge_from_insets, startup_notice_url, thumbnail_cursor_action,
         thumbnail_cursor_ignore_update, thumbnail_geometry, thumbnail_pointer_in_space,
-        thumbnail_pointer_position, thumbnail_preserve_current_height,
+        thumbnail_pointer_position, thumbnail_preserve_current_height, thumbnail_stack_height,
         thumbnail_stack_should_be_visible, thumbnail_stack_visible_count,
         thumbnail_visible_window_height, track_shortcut_suppression, tray_accelerator,
         tray_icon_rect_is_usable, tray_notice_window_size, viewer_window_label,
@@ -7138,23 +7153,39 @@ mod tests {
         // Work area already excludes dock/taskbar; full bounds differ so no
         // auto-hide reserve is applied. Extra system-chrome gap lifts the stack.
         assert_eq!(
-            thumbnail_geometry(bounds((0, 0, 3_992, 2_048), (0, 0, 3_992, 2_160), 2.0), 1),
-            (0.0, 796.0, 216.0)
+            thumbnail_geometry(
+                bounds((0, 0, 3_992, 2_048), (0, 0, 3_992, 2_160), 2.0),
+                1,
+                false,
+            ),
+            (0.0, 772.0, 240.0)
         );
         assert_eq!(
             thumbnail_geometry(
                 bounds((-3_840, 0, 3_840, 2_048), (-3_840, 0, 3_840, 2_160), 2.0),
-                2
+                2,
+                false,
             ),
-            (-1_920.0, 612.0, 400.0)
+            (-1_920.0, 588.0, 424.0)
+        );
+        assert_eq!(
+            thumbnail_geometry(
+                bounds((0, 0, 3_992, 2_048), (0, 0, 3_992, 2_160), 2.0),
+                1,
+                true,
+            ),
+            (0.0, 796.0, 216.0)
         );
     }
 
     #[test]
     fn keeps_the_thumbnail_stack_inside_the_monitor_work_area() {
         // 1920×1040 work area on a 1920×1080 display (48px taskbar).
-        let (_, top, height) =
-            thumbnail_geometry(bounds((0, 0, 1_920, 1_040), (0, 0, 1_920, 1_080), 1.0), 1);
+        let (_, top, height) = thumbnail_geometry(
+            bounds((0, 0, 1_920, 1_040), (0, 0, 1_920, 1_080), 1.0),
+            1,
+            false,
+        );
 
         // Window bottom sits system-chrome gap above the work-area bottom.
         assert_eq!(top + height, 1_040.0 - THUMBNAIL_SYSTEM_CHROME_GAP);
@@ -7164,8 +7195,11 @@ mod tests {
     #[test]
     fn reserves_space_when_work_area_matches_full_monitor_auto_hide() {
         // Auto-hide taskbar: work area == full 1920×1080 monitor.
-        let (_, top, height) =
-            thumbnail_geometry(bounds((0, 0, 1_920, 1_080), (0, 0, 1_920, 1_080), 1.0), 1);
+        let (_, top, height) = thumbnail_geometry(
+            bounds((0, 0, 1_920, 1_080), (0, 0, 1_920, 1_080), 1.0),
+            1,
+            false,
+        );
 
         let window_bottom = top + height;
         // Must clear both the auto-hide reserve and the permanent chrome gap.
@@ -7181,8 +7215,11 @@ mod tests {
         // macOS keeps the menu bar out of the work area even when an
         // auto-hidden bottom Dock is not reserved. Linux can report the same
         // shape for a top panel plus auto-hidden bottom panel.
-        let (_, top, height) =
-            thumbnail_geometry(bounds((0, 48, 3_992, 2_112), (0, 0, 3_992, 2_160), 2.0), 1);
+        let (_, top, height) = thumbnail_geometry(
+            bounds((0, 48, 3_992, 2_112), (0, 0, 3_992, 2_160), 2.0),
+            1,
+            false,
+        );
 
         assert_eq!(
             top + height,
@@ -7228,6 +7265,8 @@ mod tests {
         assert_eq!(thumbnail_stack_visible_count(4, true), 1);
         assert_eq!(thumbnail_stack_visible_count(4, false), 4);
         assert_eq!(thumbnail_stack_visible_count(0, true), 0);
+        assert_eq!(thumbnail_stack_height(1, true), 216.0);
+        assert_eq!(thumbnail_stack_height(1, false), 240.0);
     }
 
     #[test]
