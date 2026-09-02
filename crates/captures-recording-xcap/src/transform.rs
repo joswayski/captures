@@ -1,5 +1,5 @@
 use captures_recording::{CaptureRect, MaxResolution};
-use image::{GenericImageView, RgbaImage, imageops::FilterType};
+use image::{RgbaImage, imageops::FilterType};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FrameRect {
@@ -91,6 +91,19 @@ impl FrameTransform {
             .saturating_mul(3);
         rgb.clear();
         rgb.reserve(needed);
+        if self.source.width == self.output_width && self.source.height == self.output_height {
+            let stride = frame.width() as usize * 4;
+            let row_start = self.source.x as usize * 4;
+            let row_len = self.source.width as usize * 4;
+            let raw = frame.as_raw();
+            for row in self.source.y..self.source.y + self.source.height {
+                let start = row as usize * stride + row_start;
+                if let Some(pixels) = raw.get(start..start + row_len) {
+                    copy_rgb(pixels, rgb);
+                }
+            }
+            return;
+        }
         let view = image::imageops::crop_imm(
             frame,
             self.source.x,
@@ -98,21 +111,20 @@ impl FrameTransform {
             self.source.width,
             self.source.height,
         );
-        if view.width() == self.output_width && view.height() == self.output_height {
-            for (_, _, pixel) in view.pixels() {
-                rgb.extend_from_slice(&pixel.0[..3]);
-            }
-            return;
-        }
         let output = image::imageops::resize(
-            &view.to_image(),
+            &*view,
             self.output_width,
             self.output_height,
             FilterType::Triangle,
         );
-        for pixel in output.pixels() {
-            rgb.extend_from_slice(&pixel.0[..3]);
-        }
+        copy_rgb(output.as_raw(), rgb);
+    }
+}
+
+/// Append the RGB channels of tightly packed RGBA pixels.
+fn copy_rgb(rgba: &[u8], rgb: &mut Vec<u8>) {
+    for pixel in rgba.chunks_exact(4) {
+        rgb.extend_from_slice(&pixel[..3]);
     }
 }
 
