@@ -381,7 +381,6 @@ fn should_rearm_thumbnail_key_window(interactive: bool, mode_changed: bool) -> b
 /// the default arrow. A process-local event monitor re-applies this mode on the
 /// same run loop as the mouse event (and once more on the next turn).
 static THUMBNAIL_CURSOR_MODE: AtomicU8 = AtomicU8::new(CursorMode::Arrow as u8);
-const THUMBNAIL_POLL_STALE_MS: u64 = 250;
 static THUMBNAIL_POINTER_POLL_AT_MS: AtomicU64 = AtomicU64::new(0);
 static THUMBNAIL_POINTER_POLL_CLOCK: OnceLock<Instant> = OnceLock::new();
 // Mouse-up releases thumbnail key status so the frontmost app cannot remain
@@ -416,9 +415,7 @@ pub fn thumbnail_pointer_poll_is_live() -> bool {
     let clock = THUMBNAIL_POINTER_POLL_CLOCK.get_or_init(Instant::now);
     let now_ms = clock.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
     let last_poll_ms = THUMBNAIL_POINTER_POLL_AT_MS.load(Ordering::Acquire);
-    last_poll_ms != 0
-        && thumbnail_poll_is_live(now_ms.saturating_sub(last_poll_ms))
-        && now_ms.saturating_sub(last_poll_ms) <= THUMBNAIL_POLL_STALE_MS
+    last_poll_ms != 0 && thumbnail_poll_is_live(now_ms.saturating_sub(last_poll_ms))
 }
 
 /// Retains an AppKit event monitor installed only on the main thread.
