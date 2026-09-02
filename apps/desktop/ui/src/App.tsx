@@ -2264,6 +2264,28 @@ export function RecordingSelector() {
           return;
         }
       }
+      if (
+        event.key !== "Enter"
+        || event.defaultPrevented
+        || event.altKey
+        || event.ctrlKey
+        || event.metaKey
+        || event.shiftKey
+      ) {
+        return;
+      }
+      if (
+        target instanceof Element
+        && target.closest("button, input, select, textarea, a, [contenteditable], [role=\"combobox\"], [role=\"listbox\"]")
+      ) {
+        return;
+      }
+      const primaryAction = panelRef.current?.querySelector<HTMLButtonElement>(
+        ".capture-selector-primary:not(:disabled)",
+      );
+      if (!primaryAction) return;
+      event.preventDefault();
+      primaryAction.click();
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
@@ -2919,6 +2941,7 @@ export function RecordingSelector() {
             className={`recording-start capture-selector-primary capture-selector-primary-${actionMode}`}
             type="button"
             aria-label={primaryActionAriaLabel}
+            aria-keyshortcuts="Enter"
             disabled={!canStart || starting}
             hidden={settings.auto_start_on_selection && !starting && !error}
             onClick={() => void start()}
@@ -3044,15 +3067,20 @@ export function RecordingSelector() {
             controlsExcluded ?? session.recording_capabilities.controls_excluded,
             actionMode,
           )}{" "}
-          {settings.auto_start_on_selection && <>
-            <span aria-hidden="true">·</span>{" "}
-            <span>Auto-capture is on. Selecting a target starts immediately.</span>
-            <button
-              className="capture-selector-preferences-link"
-              type="button"
-              onClick={openAutoStartPreference}
-            >Change…</button>
-          </>}
+          {settings.auto_start_on_selection
+            ? <>
+              <span aria-hidden="true">·</span>{" "}
+              <span>Auto-capture is on. Selecting a target starts immediately.</span>
+              <button
+                className="capture-selector-preferences-link"
+                type="button"
+                onClick={openAutoStartPreference}
+              >Change…</button>
+            </>
+            : <>
+              <span aria-hidden="true">·</span>{" "}
+              Press <kbd>Enter</kbd> to confirm
+            </>}
         </p>
         {error && <p className="recording-selector-error" role="alert">{error}</p>}
       </section>
@@ -7785,7 +7813,8 @@ function PreferencesSections({
             Start capture as soon as a target is selected
             <small>
               Drawing a region, choosing a window, or clicking Full screen
-              immediately starts the capture.
+              immediately starts the capture. When this is off, press Enter
+              in the capture menu to confirm.
             </small>
           </span>
         </label>

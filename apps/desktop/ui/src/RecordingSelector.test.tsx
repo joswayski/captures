@@ -417,10 +417,10 @@ describe("RecordingSelector", () => {
     expect(aspectPicker.closest(".recording-region-aspect-picker"))
       .toHaveTextContent(/Aspect/);
     expect(container.querySelector(".capture-selector-note")).toHaveTextContent(
-      "These controls won’t show in screenshots",
+      "These controls won’t show in screenshots · Press Enter to confirm",
     );
     expect(screen.getByRole("button", { name: "Take screenshot" }))
-      .not.toHaveAttribute("aria-keyshortcuts");
+      .toHaveAttribute("aria-keyshortcuts", "Enter");
     expect(screen.queryByRole("combobox", { name: "Frames per second" })).not.toBeInTheDocument();
     expect(invoke).not.toHaveBeenCalledWith("list_recording_audio_devices");
 
@@ -439,7 +439,7 @@ describe("RecordingSelector", () => {
     expect(screen.getByRole("button", { name: "Record", pressed: true })).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Frames per second" })).toBeInTheDocument();
     expect(container.querySelector(".capture-selector-note")).toHaveTextContent(
-      "These controls won’t show in recordings",
+      "These controls won’t show in recordings · Press Enter to confirm",
     );
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("list_recording_audio_devices");
@@ -447,7 +447,7 @@ describe("RecordingSelector", () => {
 
     fireEvent.click(screenshotMode);
     expect(container.querySelector(".capture-selector-note")).toHaveTextContent(
-      "These controls won’t show in screenshots",
+      "These controls won’t show in screenshots · Press Enter to confirm",
     );
     expect(screen.getByRole("button", { name: "Take screenshot" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Take screenshot" }));
@@ -630,14 +630,14 @@ describe("RecordingSelector", () => {
     expect(screen.getByText("Drag to select a region")).toBeInTheDocument();
   });
 
-  it("requires the Capture button after drawing a region and ignores Enter", async () => {
+  it("confirms a drawn region with Enter without overriding focused controls", async () => {
     preparedSession = {
       ...session,
       initial_mode: "screenshot",
     };
     const { container } = render(<RecordingSelector />);
 
-    await screen.findByRole("button", {
+    const screenshotMode = await screen.findByRole("button", {
       name: "Screenshot",
       pressed: true,
     });
@@ -667,9 +667,10 @@ describe("RecordingSelector", () => {
     });
     fireEvent.pointerUp(surface!, { pointerId: 21, clientX: 400, clientY: 340 });
 
-    fireEvent.keyDown(window, { key: "Enter" });
+    fireEvent.keyDown(screenshotMode, { key: "Enter" });
     expect(invoke).not.toHaveBeenCalledWith("capture_selection_screenshot", expect.anything());
-    fireEvent.click(screen.getByRole("button", { name: "Take screenshot" }));
+
+    fireEvent.keyDown(window, { key: "Enter" });
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("capture_selection_screenshot", {
@@ -680,6 +681,30 @@ describe("RecordingSelector", () => {
             display_id: "display-1",
             rect: { x: 100, y: 120, width: 300, height: 220 },
           },
+        },
+      });
+    });
+  });
+
+  it("takes a full-screen screenshot when Enter is pressed in the capture menu", async () => {
+    preparedSession = {
+      ...session,
+      initial_mode: "screenshot",
+      initial_target: "display",
+    };
+    render(<RecordingSelector />);
+
+    expect(await screen.findByRole("button", { name: "Full screen", pressed: true }))
+      .toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Take screenshot" })).toBeEnabled();
+
+    fireEvent.keyDown(window, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("capture_selection_screenshot", {
+        request: {
+          selection_id: preparedSession.id,
+          target: { type: "display", display_id: "display-1" },
         },
       });
     });
