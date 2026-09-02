@@ -1335,6 +1335,22 @@ mod tests {
     };
 
     #[test]
+    fn overlay_snapshot_jpeg_is_smaller_than_lossless_png() {
+        let image = RgbaImage::from_fn(640, 360, |x, y| {
+            Rgba([(x % 256) as u8, (y % 256) as u8, ((x + y) % 256) as u8, 255])
+        });
+        let png = encode_png(&image).expect("png");
+        let jpeg = encode_overlay_snapshot(&image).expect("jpeg");
+        assert_eq!(overlay_snapshot_mime_type(&jpeg), "image/jpeg");
+        assert!(
+            jpeg.len() < png.len() / 4,
+            "jpeg {} should be much smaller than png {}",
+            jpeg.len(),
+            png.len()
+        );
+    }
+
+    #[test]
     fn overlay_snapshots_encode_as_jpeg_without_chroma_subsampling() {
         let image = RgbaImage::from_pixel(4, 4, Rgba([32, 64, 128, 255]));
         let bytes = encode_overlay_snapshot(&image).expect("overlay snapshot encoded");
