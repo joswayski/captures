@@ -45,8 +45,27 @@ function card(
   };
 }
 
-describe("thumbnail stack layout", () => {
-  it("releases the arrival animation before cards exit or shift", () => {
+  it("does not ease compact-card transforms until collapse hover is armed", () => {
+    const compactCard = thumbnailStyles.match(
+      /\.thumbnail-stack-compact > \.thumbnail-card\s*\{([\s\S]*?)\n\}/,
+    );
+    const hoverReady = thumbnailStyles.match(
+      /\.thumbnail-stack-minimized\.thumbnail-stack-hover-ready > \.thumbnail-card\s*\{([\s\S]*?)\n\}/,
+    );
+    const minimizeFrom = thumbnailStyles.match(
+      /@keyframes thumbnail-card-minimize\s*\{[\s\S]*?from\s*\{([\s\S]*?)\n  \}/,
+    );
+    const hoverFan = thumbnailStyles.match(
+      /\.thumbnail-stack-minimized\.thumbnail-stack-hover-ready:has\(\.thumbnail-collapsed-hit-target:hover\)/,
+    );
+
+    expect(compactCard?.[1]).toMatch(/transform:\s*var\(--thumbnail-stack-rest-transform\)/);
+    expect(compactCard?.[1]).not.toMatch(/transform\s+var\(--dur-5\)/);
+    expect(hoverReady?.[1]).toMatch(/transform\s+var\(--dur-5\)/);
+    expect(minimizeFrom?.[1]).toMatch(/rotateX\(0deg\)/);
+    expect(minimizeFrom?.[1]).toMatch(/scale\(1\)/);
+    expect(hoverFan).not.toBeNull();
+  });
     const arrival = thumbnailStyles.match(
       /\.thumbnail-card\.thumbnail-ready([^{}]*)\{([^{}]*animation:\s*thumbnail-arrive[^{}]*)\}/,
     );

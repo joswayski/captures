@@ -1560,22 +1560,7 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-contr
 }
 
 .thumbnail-stack-compact > .thumbnail-card {
-  position: absolute;
-  left: 28px;
-  right: 28px;
-  bottom: 52px;
-  z-index: calc(30 - var(--thumbnail-stack-depth, 0));
-  width: calc(100% - 56px);
-  opacity: calc(1 - var(--thumbnail-stack-hidden, 0));
-  transition:
-    opacity var(--dur-4) var(--ease-out),
-    transform var(--dur-5) var(--ease-standard),
-    filter var(--dur-5) var(--ease-standard),
-    box-shadow var(--dur-4) var(--ease-out);
-  transform-origin: 50% 100%;
-  pointer-events: none;
-  will-change: transform, opacity, filter;
-  transform:
+  --thumbnail-stack-rest-transform:
     translate3d(
       calc(var(--thumbnail-stack-depth, 0) * -1.5px),
       calc(var(--thumbnail-stack-depth, 0) * -13px),
@@ -1583,7 +1568,36 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-contr
     )
     rotateX(calc(var(--thumbnail-stack-depth, 0) * -1.4deg))
     scale(calc(1 - var(--thumbnail-stack-depth, 0) * 0.025));
-  filter: brightness(calc(1 - var(--thumbnail-stack-depth, 0) * 0.12));
+  --thumbnail-stack-rest-filter: brightness(
+    calc(1 - var(--thumbnail-stack-depth, 0) * 0.12)
+  );
+  position: absolute;
+  left: 28px;
+  right: 28px;
+  bottom: 52px;
+  z-index: calc(30 - var(--thumbnail-stack-depth, 0));
+  width: calc(100% - 56px);
+  opacity: calc(1 - var(--thumbnail-stack-hidden, 0));
+  /*
+   * Transform/filter stay off this transition. Collapsing ends by dropping the
+   * keyframe fill onto this rest pose; a transform transition here interpolates
+   * WebKit's matrix leftover into a visible hop on every card behind the front.
+   */
+  transition:
+    opacity var(--dur-4) var(--ease-out),
+    box-shadow var(--dur-4) var(--ease-out);
+  transform-origin: 50% 100%;
+  pointer-events: none;
+  transform: var(--thumbnail-stack-rest-transform);
+  filter: var(--thumbnail-stack-rest-filter);
+}
+
+.thumbnail-stack-minimizing > .thumbnail-card,
+.thumbnail-stack-expanding > .thumbnail-card {
+  transition:
+    opacity var(--dur-4) var(--ease-out),
+    box-shadow var(--dur-4) var(--ease-out);
+  will-change: transform, opacity, filter;
 }
 
 .thumbnail-stack-minimizing > .thumbnail-card {
@@ -1592,6 +1606,19 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-contr
 
 .thumbnail-stack-expanding > .thumbnail-card {
   animation: thumbnail-card-expand 0.48s var(--ease-standard) both;
+}
+
+/*
+ * Hover fan-out only after the minimize fill has been replaced by the rest
+ * pose. Enabling transform easing in that same commit restarts ease-standard
+ * from a 3D matrix and makes background cards bounce.
+ */
+.thumbnail-stack-minimized.thumbnail-stack-hover-ready > .thumbnail-card {
+  transition:
+    opacity var(--dur-4) var(--ease-out),
+    transform var(--dur-5) var(--ease-standard),
+    filter var(--dur-5) var(--ease-standard),
+    box-shadow var(--dur-4) var(--ease-out);
 }
 
 .thumbnail-stack-compact > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting) {
@@ -1608,33 +1635,32 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-contr
 
 @keyframes thumbnail-card-minimize {
   from {
-    transform: translate3d(
-      0,
-      calc(var(--thumbnail-stack-depth, 0) * -184px),
-      0
-    );
+    transform:
+      translate3d(
+        0,
+        calc(var(--thumbnail-stack-depth, 0) * -184px),
+        0
+      )
+      rotateX(0deg)
+      scale(1);
     filter: brightness(1);
   }
   to {
-    transform:
-      translate3d(
-        calc(var(--thumbnail-stack-depth, 0) * -1.5px),
-        calc(var(--thumbnail-stack-depth, 0) * -13px),
-        calc(var(--thumbnail-stack-depth, 0) * -24px)
-      )
-      rotateX(calc(var(--thumbnail-stack-depth, 0) * -1.4deg))
-      scale(calc(1 - var(--thumbnail-stack-depth, 0) * 0.025));
-    filter: brightness(calc(1 - var(--thumbnail-stack-depth, 0) * 0.12));
+    transform: var(--thumbnail-stack-rest-transform);
+    filter: var(--thumbnail-stack-rest-filter);
   }
 }
 
 @keyframes thumbnail-card-expand {
   to {
-    transform: translate3d(
-      0,
-      calc(var(--thumbnail-stack-depth, 0) * -184px),
-      0
-    );
+    transform:
+      translate3d(
+        0,
+        calc(var(--thumbnail-stack-depth, 0) * -184px),
+        0
+      )
+      rotateX(0deg)
+      scale(1);
     filter: brightness(1);
   }
 }
@@ -1708,8 +1734,8 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-contr
   }
 }
 
-.thumbnail-stack-minimized:has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card,
-.thumbnail-stack-minimized:has(.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]) > .thumbnail-card {
+.thumbnail-stack-minimized.thumbnail-stack-hover-ready:has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card,
+.thumbnail-stack-minimized.thumbnail-stack-hover-ready:has(.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]) > .thumbnail-card {
   transform:
     translate3d(
       calc(var(--thumbnail-stack-depth, 0) * -2px),
@@ -1762,7 +1788,8 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-contr
     transition: none;
   }
 
-  .thumbnail-stack-compact > .thumbnail-card {
+  .thumbnail-stack-compact > .thumbnail-card,
+  .thumbnail-stack-minimized.thumbnail-stack-hover-ready > .thumbnail-card {
     transition: none;
   }
 

@@ -731,6 +731,7 @@ describe("Thumbnail", () => {
     vi.useFakeTimers();
     fireEvent.click(minimize);
     expect(stack).toHaveClass("thumbnail-stack-minimizing");
+    expect(stack).not.toHaveClass("thumbnail-stack-hover-ready");
     expect(minimize.closest(".thumbnail-stack-toolbar")).toHaveClass(
       "thumbnail-stack-toolbar-leaving",
     );
@@ -740,6 +741,11 @@ describe("Thumbnail", () => {
     });
 
     expect(stack).toHaveClass("thumbnail-stack-minimized");
+    expect(stack).not.toHaveClass("thumbnail-stack-minimizing");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(32);
+    });
+    expect(stack).toHaveClass("thumbnail-stack-hover-ready");
     expect(screen.queryByRole("button", { name: "Minimize previews" })).toBeNull();
     const expand = screen.getByRole("button", { name: "Expand preview" });
     expect(expand).toHaveClass("thumbnail-collapsed-hit-target");

@@ -5464,6 +5464,7 @@ export function Thumbnail() {
   const [stackMotion, setStackMotion] = useState<
     "expanded" | "collapsing" | "collapsed" | "expanding"
   >("expanded");
+  const [stackHoverReady, setStackHoverReady] = useState(false);
   const [exitingArtifactIds, setExitingArtifactIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -6039,6 +6040,23 @@ export function Thumbnail() {
     window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
   }, [stackMotion]);
 
+  useEffect(() => {
+    if (stackMotion !== "collapsed") {
+      setStackHoverReady(false);
+      return;
+    }
+    // Wait two frames so the minimize keyframe fill is committed as the rest
+    // pose before transform easing (hover fan-out) turns back on.
+    let secondFrame = 0;
+    const firstFrame = requestAnimationFrame(() => {
+      secondFrame = requestAnimationFrame(() => setStackHoverReady(true));
+    });
+    return () => {
+      cancelAnimationFrame(firstFrame);
+      cancelAnimationFrame(secondFrame);
+    };
+  }, [stackMotion]);
+
   if (artifacts.length === 0) return null;
 
   const collapsed = stackMotion === "collapsed";
@@ -6111,6 +6129,7 @@ export function Thumbnail() {
           stackMotion === "collapsing" ? "thumbnail-stack-minimizing" : "",
           stackMotion === "collapsed" ? "thumbnail-stack-minimized" : "",
           stackMotion === "expanding" ? "thumbnail-stack-expanding" : "",
+          stackHoverReady ? "thumbnail-stack-hover-ready" : "",
         ].filter(Boolean).join(" ")}
         onScroll={refreshStackOverflow}
       >
