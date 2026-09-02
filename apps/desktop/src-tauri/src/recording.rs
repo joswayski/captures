@@ -456,7 +456,7 @@ async fn select_capture_display_inner(
         .find(|display| display.id == display_id)
         .cloned()
         .ok_or(AppError::InvalidSelection)?;
-        let freeze_screen = current.frozen;
+    let freeze_screen = current.frozen;
     let (display, snapshot_png, image, windows) = if freeze_screen {
         let pointer = crate::pointer_position();
         let mut frame = state.backend.capture_display(&requested_display.id)?;
@@ -753,48 +753,48 @@ fn live_image_for_target(
             );
             crop_display_region(&frame.image, &frame.descriptor, rect)
         }
-        RecordingTarget::Window { window_id } => match state.backend.capture_window(window_id) {
-            Ok(mut image) if !crate::image_is_effectively_blank(&image) => {
-                if let Some(window) = state
-                    .windows()
-                    .ok()
-                    .and_then(|windows| windows.into_iter().find(|window| &window.id == window_id))
-                {
-                    crate::apply_screenshot_cursor_on_window(
-                        &mut image,
-                        &window,
-                        state
-                            .monitors()
-                            .ok()
-                            .and_then(|displays| {
-                                displays
-                                    .into_iter()
-                                    .find(|display| display.id == window.display_id)
-                            })
-                            .map(|display| display.scale_factor)
-                            .unwrap_or(1.0),
+        RecordingTarget::Window { window_id } => {
+            match state.backend.capture_window(window_id) {
+                Ok(mut image) if !crate::image_is_effectively_blank(&image) => {
+                    if let Some(window) = state.windows().ok().and_then(|windows| {
+                        windows.into_iter().find(|window| &window.id == window_id)
+                    }) {
+                        crate::apply_screenshot_cursor_on_window(
+                            &mut image,
+                            &window,
+                            state
+                                .monitors()
+                                .ok()
+                                .and_then(|displays| {
+                                    displays
+                                        .into_iter()
+                                        .find(|display| display.id == window.display_id)
+                                })
+                                .map(|display| display.scale_factor)
+                                .unwrap_or(1.0),
+                            pointer,
+                            show_cursor,
+                        );
+                    }
+                    Ok(image)
+                }
+                _ => {
+                    let windows = state.windows().unwrap_or_default();
+                    let window = windows
+                        .iter()
+                        .find(|window| &window.id == window_id)
+                        .ok_or(AppError::InvalidSelection)?;
+                    let mut frame = state.backend.capture_display(&window.display_id)?;
+                    crate::apply_screenshot_cursor(
+                        &mut frame.image,
+                        &frame.descriptor,
                         pointer,
                         show_cursor,
                     );
+                    crop_window_from_display(&frame.image, &frame.descriptor, window)
                 }
-                Ok(image)
             }
-            _ => {
-                let windows = state.windows().unwrap_or_default();
-                let window = windows
-                    .iter()
-                    .find(|window| &window.id == window_id)
-                    .ok_or(AppError::InvalidSelection)?;
-                let mut frame = state.backend.capture_display(&window.display_id)?;
-                crate::apply_screenshot_cursor(
-                    &mut frame.image,
-                    &frame.descriptor,
-                    pointer,
-                    show_cursor,
-                );
-                crop_window_from_display(&frame.image, &frame.descriptor, window)
-            }
-        },
+        }
     }
 }
 

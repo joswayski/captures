@@ -79,10 +79,7 @@ pub fn overlay_pointer_cursor_on_window(
     draw_cursor(image, position);
 }
 
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::too_many_arguments
-)]
+#[allow(clippy::cast_possible_truncation, clippy::too_many_arguments)]
 fn map_pointer_to_buffer(
     origin_x: i32,
     origin_y: i32,
@@ -107,7 +104,9 @@ fn map_pointer_to_buffer(
 
 #[allow(clippy::cast_possible_truncation)]
 fn draw_cursor(image: &mut RgbaImage, position: (i32, i32)) {
-    let scale = (f64::from(image.height()) / 1_080.0).round().clamp(1.0, 2.0) as i32;
+    let scale = (f64::from(image.height()) / 1_080.0)
+        .round()
+        .clamp(1.0, 2.0) as i32;
     draw_polygon(image, position, &CURSOR_OUTLINE, scale, [24, 24, 24]);
     draw_polygon(image, position, &CURSOR_FILL, scale, [248, 248, 248]);
 }
