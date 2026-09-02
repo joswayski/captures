@@ -53,6 +53,8 @@ describe("Thumbnail", () => {
     document.documentElement.classList.remove("thumbnail-native-tracking");
     Reflect.deleteProperty(document, "elementFromPoint");
     vi.clearAllMocks();
+    document.documentElement.style.removeProperty("--thumbnail-stack-drag-x");
+    document.documentElement.style.removeProperty("--thumbnail-stack-drag-y");
   });
 
   it("preserves the native hover presentation while focus moves to a viewer", async () => {
@@ -748,6 +750,11 @@ describe("Thumbnail", () => {
 
     expect(stack).toHaveClass("thumbnail-stack-minimized");
     expect(stack).not.toHaveClass("thumbnail-stack-minimizing");
+    expect(card.querySelector("img")).toHaveAttribute("draggable", "false");
+    expect(card.querySelector("img")).toHaveAttribute("hidden");
+    expect(card.querySelector(".thumbnail-media")).toHaveStyle({
+      backgroundImage: `url("${artifact.full_url}")`,
+    });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(32);
     });
@@ -775,6 +782,70 @@ describe("Thumbnail", () => {
     expect(stack).not.toHaveClass("thumbnail-stack-compact");
     expect(card).not.toHaveAttribute("aria-hidden");
     expect(screen.getByRole("button", { name: "Minimize previews" })).toBeEnabled();
+  });
+
+  it("drags the collapsed pile instead of expanding once the pointer moves", async () => {
+    render(<Thumbnail />);
+    const card = await screen.findByRole("article");
+    const stack = card.closest(".thumbnail-stack")!;
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "Minimize previews" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(32);
+      await vi.advanceTimersByTimeAsync(480);
+    });
+    vi.useRealTimers();
+
+    const expand = screen.getByRole("button", { name: "Expand preview" });
+    fireEvent.pointerDown(expand, {
+      button: 0,
+      pointerId: 1,
+      screenX: 40,
+      screenY: 80,
+    });
+    fireEvent.pointerMove(window, {
+      pointerId: 1,
+      screenX: 120,
+      screenY: 40,
+      bubbles: true,
+    });
+    await waitFor(() => {
+      expect(stack).toHaveClass("thumbnail-stack-dragging");
+    });
+    expect(document.documentElement.style.getPropertyValue("--thumbnail-stack-drag-x")).toBe(
+      "80px",
+    );
+    expect(document.documentElement.style.getPropertyValue("--thumbnail-stack-drag-y")).toBe(
+      "-40px",
+    );
+
+    fireEvent.pointerUp(window, { pointerId: 1, bubbles: true });
+    await waitFor(() => {
+      expect(stack).not.toHaveClass("thumbnail-stack-dragging");
+    });
+    expect(stack).toHaveClass("thumbnail-stack-minimized");
+    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith(
+      "set_mini_previews_collapsed",
+      { collapsed: false },
+    );
+  });
+
+  it("cancels HTML5 dragstart on collapsed screenshots so the pile can move", async () => {
+    render(<Thumbnail />);
+    const card = await screen.findByRole("article");
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "Minimize previews" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(32);
+      await vi.advanceTimersByTimeAsync(480);
+    });
+    vi.useRealTimers();
+
+    const img = card.querySelector("img");
+    expect(img).not.toBeNull();
+    const event = new Event("dragstart", { bubbles: true, cancelable: true });
+    img!.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
   });
 
   it("does not play card hover after expanding until the pointer moves", async () => {

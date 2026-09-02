@@ -179,7 +179,8 @@ export function clearThumbnailCssCursor(
  * Overflow cues only matter while a live card remains; an exiting-only stack
  * should pass every click through, including those controls.
  * Transitioning cards are decorative and pass clicks through. A minimized
- * stack is live only while its dedicated expand target remains enabled.
+ * stack is live only while its dedicated expand target remains enabled,
+ * except while the pile is being dragged across the desktop.
  */
 /** True while cards are still in the collapsed pile pose or its motion. */
 export function thumbnailStackHoldsCollapsedPose(root: Document = document): boolean {
@@ -237,6 +238,7 @@ export function shouldLockThumbnailCardHoverOnStackMotion(
 }
 
 export function thumbnailStackHasLiveHitTarget(root: Document = document): boolean {
+  if (root.querySelector(".thumbnail-stack-dragging")) return true;
   if (root.querySelector(
     ".thumbnail-stack-minimizing, .thumbnail-stack-expanding",
   )) {
@@ -269,6 +271,7 @@ export function shouldIgnoreThumbnailCursorEvents(
   position: ThumbnailPointerPosition,
   root: Document = document,
 ): boolean {
+  if (root.querySelector(".thumbnail-stack-dragging")) return false;
   if (!thumbnailStackHasLiveHitTarget(root)) return true;
   if (!position.inside) return false;
   const target = root.elementFromPoint(position.x, position.y);
@@ -360,7 +363,8 @@ function minimizedStackExpandControlAtPoint(
   }
   if (containsPoint(hitTarget, x, y)) return hitTarget;
   // Peeking stacked cards sit above the front-card rect. Treat their paint
-  // bounds as the same expand action so the pile never shows a grab/arrow cursor.
+  // bounds as the same pile action so the stack never shows a file-drag grab
+  // on a decorative card image.
   for (const card of stack.querySelectorAll<HTMLElement>(":scope > .thumbnail-card")) {
     if (containsPoint(card, x, y)) return hitTarget;
   }
@@ -389,8 +393,9 @@ function thumbnailStackControlAtPoint(
 /**
  * Activates the hovered preview card and returns which cursor to show.
  *
- * - `pointer` over action buttons
- * - `grab` over the preview image / card chrome (file drag source)
+ * - `pointer` over action buttons and stack chrome
+ * - `grab` over the preview image / card chrome (file drag source) and the
+ *   collapsed pile (window drag source)
  * - `default` outside a live card
  */
 export function applyThumbnailNativeHover(
@@ -440,7 +445,9 @@ export function applyThumbnailNativeHover(
     if (!ignoreCollapsedHover) {
       stackControl.setAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE, "true");
     }
-    return "pointer";
+    return stackControl.classList.contains("thumbnail-collapsed-hit-target")
+      ? "grab"
+      : "pointer";
   }
   if (thumbnailStackSuppressesCardHover(root)) {
     clearThumbnailNativeHover(root);

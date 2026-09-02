@@ -29,6 +29,13 @@ pub struct PreparedArtifactDrag {
     pub file_name: String,
 }
 
+/// Session-only: last user-dragged bottom-left of the mini-preview window.
+#[derive(Clone, Copy, Debug)]
+pub struct ThumbnailStackOrigin {
+    pub x: f64,
+    pub bottom: f64,
+}
+
 #[derive(Default)]
 pub struct ThumbnailVisibility {
     next_capture_generation: u64,
@@ -37,6 +44,7 @@ pub struct ThumbnailVisibility {
     capture_ui_suppressed: bool,
     /// Session-only: the user parked the stack behind the restore chip.
     user_collapsed: bool,
+    stack_origin: Option<ThumbnailStackOrigin>,
 }
 
 impl ThumbnailVisibility {
@@ -101,6 +109,19 @@ impl ThumbnailVisibility {
 
     pub fn expand(&mut self) {
         self.user_collapsed = false;
+    }
+
+    pub fn reset_session_placement(&mut self) {
+        self.user_collapsed = false;
+        self.stack_origin = None;
+    }
+
+    pub fn set_stack_origin(&mut self, origin: ThumbnailStackOrigin) {
+        self.stack_origin = Some(origin);
+    }
+
+    pub fn stack_origin(&self) -> Option<ThumbnailStackOrigin> {
+        self.stack_origin
     }
 
     pub fn is_collapsed(&self) -> bool {
@@ -433,6 +454,24 @@ mod tests {
 
         visibility.restore_capture_ui();
         assert!(!visibility.is_suppressed());
+    }
+
+    #[test]
+    fn stack_origin_survives_expand_and_clears_with_session_placement() {
+        let mut visibility = ThumbnailVisibility::default();
+        visibility.set_stack_origin(super::ThumbnailStackOrigin {
+            x: 120.0,
+            bottom: 640.0,
+        });
+        visibility.collapse();
+        visibility.expand();
+        assert!(!visibility.is_collapsed());
+        assert_eq!(visibility.stack_origin().unwrap().x, 120.0);
+        assert_eq!(visibility.stack_origin().unwrap().bottom, 640.0);
+
+        visibility.reset_session_placement();
+        assert!(visibility.stack_origin().is_none());
+        assert!(!visibility.is_collapsed());
     }
 
     #[test]

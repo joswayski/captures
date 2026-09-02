@@ -109,6 +109,15 @@ import {
   type ThumbnailDustParticle,
 } from "./lib/thumbnailExit";
 import {
+  CollapsedThumbnailStackDrag,
+  applyThumbnailStackDragSway,
+  cssUrl,
+  preventThumbnailHtml5Drag,
+  readHarnessStackOffset,
+  setThumbnailStackDragging,
+  writeHarnessStackOffset,
+} from "./lib/thumbnailStackDrag";
+import {
   animateThumbnailStackScroll,
   createThumbnailStackShiftController,
   shouldScrollThumbnailStackToEnd,
@@ -5492,6 +5501,8 @@ export function Thumbnail() {
     hasNewer: false,
   });
   const stackRef = useRef<HTMLElement>(null);
+  const stackDrag = useRef<CollapsedThumbnailStackDrag | null>(null);
+  const skipCollapsedStackClick = useRef(false);
   const stackMotionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stackHoverReadyFrames = useRef<{ first: number; second: number } | null>(null);
   const previousStackMotion = useRef<"expanded" | "collapsing" | "collapsed" | "expanding">(
@@ -6135,6 +6146,15 @@ export function Thumbnail() {
     }));
   }, [stackMotion]);
 
+  useEffect(() => {
+    if (stackMotion === "expanded") return;
+    const blockHtml5Drag = (event: DragEvent) => {
+      preventThumbnailHtml5Drag(event);
+    };
+    document.addEventListener("dragstart", blockHtml5Drag, true);
+    return () => document.removeEventListener("dragstart", blockHtml5Drag, true);
+  }, [stackMotion]);
+
   if (artifacts.length === 0) return null;
 
   const collapsed = stackMotion === "collapsed";
@@ -6259,6 +6279,69 @@ export function Thumbnail() {
     });
   };
 
+  const collapsedStackDrag = () => {
+    stackDrag.current ??= new CollapsedThumbnailStackDrag({
+      getFrame: async () => {
+        if (currentWindow) {
+          const scale = await currentWindow.scaleFactor();
+          const position = await currentWindow.outerPosition();
+          return { x: position.x / scale, y: position.y / scale };
+        }
+        return readHarnessStackOffset();
+      },
+      moveFrame: async (x, y) => {
+        if (isTauri()) {
+          return invoke<{ x: number; y: number }>("set_mini_preview_stack_position", { x, y });
+        }
+        return writeHarnessStackOffset(x, y);
+      },
+      reducedMotion: prefersReducedMotion,
+    });
+    return stackDrag.current;
+  };
+
+  const onCollapsedStackPointerDown = (event: React.PointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0 || controlsDisabled) return;
+    const drag = collapsedStackDrag();
+    if (!drag.pointerDown(event.nativeEvent)) return;
+    skipCollapsedStackClick.current = true;
+    event.preventDefault();
+    event.nativeEvent.preventDefault();
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // jsdom and some WebViews omit Element.setPointerCapture.
+    }
+    const pointerId = event.pointerId;
+    const onMove = (moveEvent: PointerEvent) => {
+      if (moveEvent.pointerId !== pointerId) return;
+      moveEvent.preventDefault();
+      void drag.pointerMove(moveEvent).then((result) => {
+        if (!result?.dragging) return;
+        const stack = stackRef.current;
+        if (stack && !stack.classList.contains("thumbnail-stack-dragging")) {
+          setThumbnailStackDragging(stack, true);
+          window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
+        }
+        applyThumbnailStackDragSway(stack, result.sway);
+      });
+    };
+    const onUp = (upEvent: PointerEvent) => {
+      if (upEvent.pointerId !== pointerId) return;
+      window.removeEventListener("pointermove", onMove, true);
+      window.removeEventListener("pointerup", onUp, true);
+      window.removeEventListener("pointercancel", onUp, true);
+      void drag.pointerUp(upEvent).then((outcome) => {
+        setThumbnailStackDragging(stackRef.current, false);
+        window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
+        if (outcome === "expand") setStackCollapsed(false);
+      });
+    };
+    window.addEventListener("pointermove", onMove, { capture: true, passive: false });
+    window.addEventListener("pointerup", onUp, true);
+    window.addEventListener("pointercancel", onUp, true);
+  };
+
   return (
     <>
       <main
@@ -6274,6 +6357,9 @@ export function Thumbnail() {
           stackHoverLatched ? "thumbnail-stack-hover-latched" : "",
         ].filter(Boolean).join(" ")}
         onScroll={refreshStackOverflow}
+        onDragStartCapture={(event) => {
+          if (compact) preventThumbnailHtml5Drag(event.nativeEvent);
+        }}
       >
         {!exitingOnly && !collapsed && (
           <div className={[
@@ -6330,16 +6416,25 @@ export function Thumbnail() {
             type="button"
             className="thumbnail-collapsed-hit-target"
             aria-label={`Expand ${artifacts.length === 1 ? "preview" : `${artifacts.length} previews`}`}
+            draggable={false}
             disabled={controlsDisabled}
             style={{
               "--thumbnail-collapsed-peek": `${thumbnailCollapsedPeekPx(artifacts.length)}px`,
               "--thumbnail-collapsed-hover-peek": `${thumbnailCollapsedPeekPx(artifacts.length, true)}px`,
             } as CSSProperties}
+            onPointerDown={onCollapsedStackPointerDown}
+            onDragStart={(event) => preventThumbnailHtml5Drag(event.nativeEvent)}
             onPointerLeave={(event) => {
               event.currentTarget.removeAttribute("data-native-pointer-hover");
               setStackHoverLatched(false);
             }}
-            onClick={() => setStackCollapsed(false)}
+            onClick={() => {
+              if (skipCollapsedStackClick.current) {
+                skipCollapsedStackClick.current = false;
+                return;
+              }
+              setStackCollapsed(false);
+            }}
           />
         )}
       </main>
@@ -6814,13 +6909,23 @@ export function ThumbnailCard({
     >
       {/* Media shell clips hover blur/scale so it never bleeds into the card ring.
           Dust stays outside this shell so dissolve chips can fly past the edge. */}
-      <div className="thumbnail-media">
+      <div
+        className="thumbnail-media"
+        style={stackCollapsed ? { backgroundImage: cssUrl(artifact.full_url) } : undefined}
+      >
         <img
           className={usingDust ? "thumbnail-dust-source" : undefined}
           src={artifact.full_url}
           alt="Screenshot preview"
-          draggable={!isExiting}
-          onDragStart={(event) => void beginFileDrag(event)}
+          hidden={stackCollapsed}
+          draggable={!isExiting && !stackCollapsed}
+          onDragStart={(event) => {
+            if (stackCollapsed) {
+              preventThumbnailHtml5Drag(event.nativeEvent);
+              return;
+            }
+            void beginFileDrag(event);
+          }}
           onLoad={markThumbnailReady}
           onError={markThumbnailReady}
         />

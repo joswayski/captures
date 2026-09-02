@@ -53,7 +53,7 @@ use models::{
     HISTORY_RETENTION_DAYS, HistoryEntry,
 };
 use screenshot_editor::SCREENSHOT_EDITOR_WINDOW_PREFIX;
-use state::{AppState, ClipboardFingerprint};
+use state::{AppState, ClipboardFingerprint, ThumbnailStackOrigin};
 
 #[derive(Debug, Error)]
 enum AppError {
@@ -288,6 +288,7 @@ pub fn run() {
             thumbnail_ready,
             sync_thumbnail_stack,
             set_mini_previews_collapsed,
+            set_mini_preview_stack_position,
             get_thumbnail_pointer_position,
             set_thumbnail_cursor,
             reassert_thumbnail_cursor,
@@ -1648,7 +1649,7 @@ fn refresh_thumbnail_interactivity(
         // window can keep eating clicks after hide() unless click-through is
         // applied first (hide_thumbnail_window does that).
         hide_thumbnail_window(&window);
-        state.thumbnail_visibility.lock().expand();
+        state.thumbnail_visibility.lock().reset_session_placement();
         return Ok(());
     }
     // Always re-enable hit testing first — a stuck click-through state is the
@@ -1857,7 +1858,7 @@ fn update_settings(
         if !settings.show_mini_previews {
             let mut visibility = state.thumbnail_visibility.lock();
             visibility.stop_waiting_for_artifact();
-            visibility.expand();
+            visibility.reset_session_placement();
         }
         // When including mini previews in captures, keep the stack shareable.
         if settings.include_mini_previews_in_captures
@@ -4532,7 +4533,7 @@ fn bottom_center_notice_position(app: &AppHandle, width: f64, height: f64) -> (f
 }
 
 fn create_thumbnail_window(app: &AppHandle, visible: bool) -> Result<(), tauri::Error> {
-    let (x, y, height) = thumbnail_window_geometry(app, 1, false);
+    let (x, y, height) = thumbnail_window_geometry(app, 1, false, None);
     let window = WebviewWindowBuilder::new(
         app,
         "thumbnail",
@@ -4584,12 +4585,16 @@ fn update_thumbnail_stack(app: &AppHandle) {
         let settings = state.settings();
         let show_mini_previews = settings.show_mini_previews;
         let include_mini_previews_in_captures = settings.include_mini_previews_in_captures;
-        let (suppressed, collapsed) = {
+        let (suppressed, collapsed, origin) = {
             let mut visibility = state.thumbnail_visibility.lock();
             if count == 0 || !show_mini_previews {
-                visibility.expand();
+                visibility.reset_session_placement();
             }
-            (visibility.is_suppressed(), visibility.is_collapsed())
+            (
+                visibility.is_suppressed(),
+                visibility.is_collapsed(),
+                visibility.stack_origin(),
+            )
         };
         let show_stack = thumbnail_stack_should_be_visible(
             count,
@@ -4597,7 +4602,7 @@ fn update_thumbnail_stack(app: &AppHandle) {
             show_mini_previews,
             include_mini_previews_in_captures,
         );
-        update_thumbnail_stack_window(&handle, count, show_stack, collapsed);
+        update_thumbnail_stack_window(&handle, count, show_stack, collapsed, origin);
     });
 }
 
@@ -4606,6 +4611,7 @@ fn update_thumbnail_stack_window(
     count: usize,
     show_stack: bool,
     collapsed: bool,
+    origin: Option<ThumbnailStackOrigin>,
 ) {
     let Some(window) = handle.get_webview_window("thumbnail") else {
         if let Err(error) = create_thumbnail_window(handle, show_stack) {
@@ -4619,7 +4625,7 @@ fn update_thumbnail_stack_window(
     }
     let visible_count = thumbnail_stack_visible_count(count, collapsed);
     let (x, desired_y, desired_height) =
-        thumbnail_window_geometry(handle, visible_count, collapsed);
+        thumbnail_window_geometry(handle, visible_count, collapsed, origin);
     let visible = window.is_visible().unwrap_or(false);
     let presented = thumbnail_window_is_presented(&window);
     // WKWebView blanks painted cards when its visible NSWindow shrinks. macOS
@@ -4854,33 +4860,76 @@ fn set_mini_previews_collapsed(
     Ok(())
 }
 
-fn thumbnail_window_geometry(app: &AppHandle, count: usize, collapsed: bool) -> (f64, f64, f64) {
-    app.primary_monitor()
-        .ok()
-        .flatten()
-        .map(|monitor| {
-            // Prefer the usable desktop (work area). Full monitor bounds include
-            // reserved UI such as the Windows taskbar, macOS Dock, and Linux panels.
-            let work_area = monitor.work_area();
-            let full_position = *monitor.position();
-            let full_size = *monitor.size();
-            thumbnail_geometry(
-                ThumbnailMonitorBounds {
-                    work_x: work_area.position.x,
-                    work_y: work_area.position.y,
-                    work_width: work_area.size.width,
-                    work_height: work_area.size.height,
-                    full_x: full_position.x,
-                    full_y: full_position.y,
-                    full_width: full_size.width,
-                    full_height: full_size.height,
-                    scale_factor: monitor.scale_factor(),
-                },
-                count,
-                collapsed,
-            )
-        })
+fn thumbnail_window_geometry(
+    app: &AppHandle,
+    count: usize,
+    collapsed: bool,
+    origin: Option<ThumbnailStackOrigin>,
+) -> (f64, f64, f64) {
+    thumbnail_monitor_bounds(app)
+        .map(|bounds| thumbnail_geometry(bounds, count, collapsed, origin))
         .unwrap_or((20.0, 20.0, thumbnail_stack_height(count, collapsed)))
+}
+
+fn thumbnail_monitor_bounds(app: &AppHandle) -> Option<ThumbnailMonitorBounds> {
+    app.primary_monitor().ok().flatten().map(|monitor| {
+        // Prefer the usable desktop (work area). Full monitor bounds include
+        // reserved UI such as the Windows taskbar, macOS Dock, and Linux panels.
+        let work_area = monitor.work_area();
+        let full_position = *monitor.position();
+        let full_size = *monitor.size();
+        ThumbnailMonitorBounds {
+            work_x: work_area.position.x,
+            work_y: work_area.position.y,
+            work_width: work_area.size.width,
+            work_height: work_area.size.height,
+            full_x: full_position.x,
+            full_y: full_position.y,
+            full_width: full_size.width,
+            full_height: full_size.height,
+            scale_factor: monitor.scale_factor(),
+        }
+    })
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+struct ThumbnailStackPosition {
+    x: f64,
+    y: f64,
+}
+
+#[tauri::command]
+fn set_mini_preview_stack_position(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    x: f64,
+    y: f64,
+) -> CommandResult<ThumbnailStackPosition> {
+    if state.artifacts.lock().is_empty() || !state.settings().show_mini_previews {
+        return Err("mini previews are not available".to_owned());
+    }
+    if !state.thumbnail_visibility.lock().is_collapsed() {
+        return Err("mini previews are not collapsed".to_owned());
+    }
+    let Some(window) = app.get_webview_window("thumbnail") else {
+        return Err("mini preview window is unavailable".to_owned());
+    };
+    let Some(bounds) = thumbnail_monitor_bounds(&app) else {
+        return Err("display work area is unavailable".to_owned());
+    };
+    let work = thumbnail_work_area(bounds);
+    let frame_height =
+        thumbnail_window_logical_height(&window).unwrap_or_else(|| thumbnail_stack_height(1, true));
+    let (x, y) = thumbnail_clamp_frame(x, y, frame_height, work);
+    let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+    state
+        .thumbnail_visibility
+        .lock()
+        .set_stack_origin(ThumbnailStackOrigin {
+            x,
+            bottom: y + frame_height,
+        });
+    Ok(ThumbnailStackPosition { x, y })
 }
 
 fn thumbnail_stack_height(count: usize, _collapsed: bool) -> f64 {
@@ -4912,11 +4961,16 @@ struct ThumbnailMonitorBounds {
     scale_factor: f64,
 }
 
-fn thumbnail_geometry(
-    bounds: ThumbnailMonitorBounds,
-    count: usize,
-    collapsed: bool,
-) -> (f64, f64, f64) {
+#[derive(Clone, Copy, Debug)]
+struct ThumbnailWorkArea {
+    left: f64,
+    top: f64,
+    width: f64,
+    height: f64,
+    bottom_gap: f64,
+}
+
+fn thumbnail_work_area(bounds: ThumbnailMonitorBounds) -> ThumbnailWorkArea {
     let scale = bounds.scale_factor.max(1.0);
     let left = f64::from(bounds.work_x) / scale;
     let top = f64::from(bounds.work_y) / scale;
@@ -4936,20 +4990,43 @@ fn thumbnail_geometry(
         height = (height - bottom_reserve).max(1.0);
     }
 
-    // Keep a small permanent gap above the work-area bottom so cards never sit
-    // flush against a visible taskbar/panel edge (padding alone is easy to miss).
-    let bottom_gap = THUMBNAIL_SYSTEM_CHROME_GAP;
-    let available_height = (height - bottom_gap - THUMBNAIL_PADDING).max(1.0);
+    ThumbnailWorkArea {
+        left,
+        top,
+        width,
+        height,
+        bottom_gap: THUMBNAIL_SYSTEM_CHROME_GAP,
+    }
+}
+
+fn thumbnail_clamp_frame(x: f64, y: f64, frame_height: f64, work: ThumbnailWorkArea) -> (f64, f64) {
+    let min_x = work.left;
+    let max_x = (work.left + work.width - THUMBNAIL_WIDTH).max(min_x);
+    let min_y = work.top;
+    let max_y = (work.top + work.height - work.bottom_gap - frame_height).max(min_y);
+    (x.clamp(min_x, max_x), y.clamp(min_y, max_y))
+}
+
+fn thumbnail_geometry(
+    bounds: ThumbnailMonitorBounds,
+    count: usize,
+    collapsed: bool,
+    origin: Option<ThumbnailStackOrigin>,
+) -> (f64, f64, f64) {
+    let work = thumbnail_work_area(bounds);
+    let available_height = (work.height - work.bottom_gap - THUMBNAIL_PADDING).max(1.0);
     let stack_height = thumbnail_stack_height(count, collapsed).min(available_height);
-    // Window left sits at the work-area edge; CSS stack padding provides the
-    // visual inset so the transparent frame can still reach the screen edge.
-    let left_aligned = left;
-    let bottom_aligned = top + height - stack_height - bottom_gap;
-    (
-        left_aligned.min(left + width - THUMBNAIL_WIDTH).max(left),
-        bottom_aligned.max(top),
-        stack_height,
-    )
+    let default_x = work
+        .left
+        .min(work.left + work.width - THUMBNAIL_WIDTH)
+        .max(work.left);
+    let default_bottom = work.top + work.height - work.bottom_gap;
+    let (x, bottom) = match origin {
+        Some(origin) => (origin.x, origin.bottom),
+        None => (default_x, default_bottom),
+    };
+    let (x, y) = thumbnail_clamp_frame(x, bottom - stack_height, stack_height, work);
+    (x, y, stack_height)
 }
 
 fn report_capture_error(app: &AppHandle, error: &AppError, mode: CaptureMode) {
@@ -6414,16 +6491,16 @@ mod tests {
         StartupNoticeCaret, THUMBNAIL_AUTO_HIDE_RESERVE, THUMBNAIL_SYSTEM_CHROME_GAP,
         TRAY_NOTICE_CARET_INSET, TRAY_NOTICE_CARET_SIZE, TRAY_NOTICE_FRAME_PAD,
         TRAY_NOTICE_SCREEN_MARGIN, TRAY_NOTICE_TRAY_OVERLAP, ThumbnailCursorAction,
-        ThumbnailCursorKind, ThumbnailMonitorBounds, ThumbnailPointerSpace, ThumbnailWindowFrame,
-        capture_cursor_icon, click_through_applies, clipboard_fingerprint,
+        ThumbnailCursorKind, ThumbnailMonitorBounds, ThumbnailPointerSpace, ThumbnailStackOrigin,
+        ThumbnailWindowFrame, capture_cursor_icon, click_through_applies, clipboard_fingerprint,
         display_contains_pointer, fallback_startup_notice, mask_macos_window_corners,
         parse_shortcut, place_startup_notice, preferences_url, primary_app_window_priority,
         recording::RECORDING_REGION_INDICATOR_TITLE, refine_window_chrome_from_snapshot,
         resolve_startup_notice_placement, resolve_window_capture, should_trigger_shortcut,
-        startup_notice_fallback_edge_from_insets, startup_notice_url, thumbnail_cursor_action,
-        thumbnail_cursor_ignore_update, thumbnail_geometry, thumbnail_pointer_in_space,
-        thumbnail_pointer_position, thumbnail_preserve_current_height, thumbnail_stack_height,
-        thumbnail_stack_should_be_visible, thumbnail_stack_visible_count,
+        startup_notice_fallback_edge_from_insets, startup_notice_url, thumbnail_clamp_frame,
+        thumbnail_cursor_action, thumbnail_cursor_ignore_update, thumbnail_geometry,
+        thumbnail_pointer_in_space, thumbnail_pointer_position, thumbnail_preserve_current_height,
+        thumbnail_stack_height, thumbnail_stack_should_be_visible, thumbnail_stack_visible_count,
         thumbnail_visible_window_height, track_shortcut_suppression, tray_accelerator,
         tray_icon_rect_is_usable, tray_notice_window_size, viewer_window_label,
         window_display_crop_is_safe, window_is_capturable, windows_window_is_capture_overlay,
@@ -7157,6 +7234,7 @@ mod tests {
                 bounds((0, 0, 3_992, 2_048), (0, 0, 3_992, 2_160), 2.0),
                 1,
                 false,
+                None,
             ),
             (0.0, 772.0, 240.0)
         );
@@ -7165,6 +7243,7 @@ mod tests {
                 bounds((-3_840, 0, 3_840, 2_048), (-3_840, 0, 3_840, 2_160), 2.0),
                 2,
                 false,
+                None,
             ),
             (-1_920.0, 588.0, 424.0)
         );
@@ -7173,6 +7252,7 @@ mod tests {
                 bounds((0, 0, 3_992, 2_048), (0, 0, 3_992, 2_160), 2.0),
                 1,
                 true,
+                None,
             ),
             (0.0, 772.0, 240.0)
         );
@@ -7185,6 +7265,7 @@ mod tests {
             bounds((0, 0, 1_920, 1_040), (0, 0, 1_920, 1_080), 1.0),
             1,
             false,
+            None,
         );
 
         // Window bottom sits system-chrome gap above the work-area bottom.
@@ -7199,6 +7280,7 @@ mod tests {
             bounds((0, 0, 1_920, 1_080), (0, 0, 1_920, 1_080), 1.0),
             1,
             false,
+            None,
         );
 
         let window_bottom = top + height;
@@ -7219,11 +7301,50 @@ mod tests {
             bounds((0, 48, 3_992, 2_112), (0, 0, 3_992, 2_160), 2.0),
             1,
             false,
+            None,
         );
 
         assert_eq!(
             top + height,
             1_080.0 - THUMBNAIL_AUTO_HIDE_RESERVE - THUMBNAIL_SYSTEM_CHROME_GAP
+        );
+    }
+
+    #[test]
+    fn places_a_dragged_stack_at_the_stored_origin() {
+        let work = bounds((0, 0, 1_920, 1_040), (0, 0, 1_920, 1_080), 1.0);
+        let (x, y, height) = thumbnail_geometry(
+            work,
+            1,
+            true,
+            Some(ThumbnailStackOrigin {
+                x: 420.0,
+                bottom: 520.0,
+            }),
+        );
+        assert_eq!(height, 240.0);
+        assert_eq!((x, y), (420.0, 280.0));
+        assert_eq!(y + height, 520.0);
+    }
+
+    #[test]
+    fn clamps_a_dragged_stack_to_the_work_area() {
+        let work = bounds((0, 0, 1_920, 1_040), (0, 0, 1_920, 1_080), 1.0);
+        assert_eq!(
+            thumbnail_geometry(
+                work,
+                1,
+                true,
+                Some(ThumbnailStackOrigin {
+                    x: 8_000.0,
+                    bottom: 8_000.0,
+                }),
+            ),
+            (1_580.0, 788.0, 240.0)
+        );
+        assert_eq!(
+            thumbnail_clamp_frame(-40.0, -20.0, 240.0, super::thumbnail_work_area(work)),
+            (0.0, 0.0)
         );
     }
 

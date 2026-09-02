@@ -61,7 +61,7 @@ describe("thumbnail stack layout", () => {
       /\.thumbnail-stack-minimizing\.thumbnail-stack-minimize-run > \.thumbnail-card\s*\{([\s\S]*?)\n\}/,
     );
     const hoverFan = thumbnailStyles.match(
-      /\.thumbnail-stack-minimized\.thumbnail-stack-hover-ready:not\(\.thumbnail-stack-hover-latched\):has\(\.thumbnail-collapsed-hit-target:hover\)/,
+      /\.thumbnail-stack-minimized\.thumbnail-stack-hover-ready:not\(\.thumbnail-stack-hover-latched\):not\(\.thumbnail-stack-dragging\):has\(\.thumbnail-collapsed-hit-target:hover\)/,
     );
 
     expect(compactCard?.[1]).toMatch(/transform:\s*var\(--thumbnail-stack-rest-transform\)/);
@@ -146,12 +146,12 @@ describe("thumbnail stack layout", () => {
     expect(outlineFade?.[1]).toMatch(/filter:\s*opacity\(0\)/);
   });
 
-  it("uses a pointer cursor on the collapsed stack expand target", () => {
+  it("uses a grab cursor on the collapsed stack so it can be moved", () => {
     const hitTarget = thumbnailStyles.match(
       /\.thumbnail-collapsed-hit-target\s*\{([\s\S]*?)\n\}/,
     );
 
-    expect(hitTarget?.[1]).toMatch(/cursor:\s*pointer/);
+    expect(hitTarget?.[1]).toMatch(/cursor:\s*grab/);
     expect(hitTarget?.[1]).toMatch(/--thumbnail-collapsed-peek/);
     expect(hitTarget?.[1]).not.toMatch(/height:\s*248px/);
     expect(thumbnailStyles).toMatch(
