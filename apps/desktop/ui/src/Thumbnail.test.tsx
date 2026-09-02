@@ -813,6 +813,23 @@ describe("Thumbnail", () => {
     );
   });
 
+  it("cancels HTML5 dragstart on collapsed screenshots so the pile can move", async () => {
+    render(<Thumbnail />);
+    const card = await screen.findByRole("article");
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "Minimize previews" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(480);
+    });
+    vi.useRealTimers();
+
+    const img = card.querySelector("img");
+    expect(img).not.toBeNull();
+    const event = new Event("dragstart", { bubbles: true, cancelable: true });
+    img!.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
   it("releases the overlay cursor over the hole left by a collapsed stack", async () => {
     let pointerReady = false;
     let pointerTarget: Element | null = null;

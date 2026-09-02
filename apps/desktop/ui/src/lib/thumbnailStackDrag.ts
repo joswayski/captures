@@ -13,6 +13,16 @@ export const THUMBNAIL_DRAG_SWAY_Y_VAR = "--thumbnail-drag-sway-y";
 
 export const THUMBNAIL_STACK_DRAGGING_CLASS = "thumbnail-stack-dragging";
 
+/**
+ * Collapsed screenshots stay in the DOM as `<img>` drag sources. Chromium can
+ * start a URL/file drag through a transparent overlay, which steals pointer
+ * events and leaves the pile stuck. Cancel that so the stack can move.
+ */
+export function preventThumbnailHtml5Drag(event: Event): void {
+  event.preventDefault();
+  event.stopPropagation();
+}
+
 const HARNESS_FRAME_WIDTH_PX = 340;
 const HARNESS_COLLAPSED_HEIGHT_PX = 240;
 

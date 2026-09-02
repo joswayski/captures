@@ -1662,7 +1662,14 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
   }
 }
 
-.thumbnail-stack-compact > .thumbnail-card img {
+/*
+ * Compact cards are decorative. `.thumbnail-card img` re-enables pointer events
+ * for file-into-apps drag; that would let Chromium start a screenshot URL drag
+ * through the transparent expand control and steal the pile's pointer gesture.
+ */
+.thumbnail-stack-compact > .thumbnail-card,
+.thumbnail-stack-compact > .thumbnail-card * {
+  pointer-events: none;
   -webkit-user-drag: none;
 }
 
@@ -1680,6 +1687,10 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
   cursor: grab;
   touch-action: none;
   pointer-events: auto;
+  -webkit-user-drag: none;
+  /* Chromium's image-drag hit test skips empty controls and uses the <img>
+     underneath. A 0-alpha fill makes this the drag source without tint. */
+  background-image: linear-gradient(rgb(0 0 0 / 0%), rgb(0 0 0 / 0%));
 }
 
 /*

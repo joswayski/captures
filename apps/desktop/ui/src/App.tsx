@@ -107,6 +107,7 @@ import {
 import {
   CollapsedThumbnailStackDrag,
   applyThumbnailStackDragSway,
+  preventThumbnailHtml5Drag,
   readHarnessStackOffset,
   setThumbnailStackDragging,
   writeHarnessStackOffset,
@@ -6057,6 +6058,15 @@ export function Thumbnail() {
     window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
   }, [stackMotion]);
 
+  useEffect(() => {
+    if (stackMotion === "expanded") return;
+    const blockHtml5Drag = (event: DragEvent) => {
+      preventThumbnailHtml5Drag(event);
+    };
+    document.addEventListener("dragstart", blockHtml5Drag, true);
+    return () => document.removeEventListener("dragstart", blockHtml5Drag, true);
+  }, [stackMotion]);
+
   if (artifacts.length === 0) return null;
 
   const collapsed = stackMotion === "collapsed";
@@ -6146,6 +6156,7 @@ export function Thumbnail() {
     if (!drag.pointerDown(event.nativeEvent)) return;
     skipCollapsedStackClick.current = true;
     event.preventDefault();
+    event.nativeEvent.preventDefault();
     try {
       event.currentTarget.setPointerCapture(event.pointerId);
     } catch {
@@ -6154,6 +6165,7 @@ export function Thumbnail() {
     const pointerId = event.pointerId;
     const onMove = (moveEvent: PointerEvent) => {
       if (moveEvent.pointerId !== pointerId) return;
+      moveEvent.preventDefault();
       void drag.pointerMove(moveEvent).then((result) => {
         if (!result?.dragging) return;
         const stack = stackRef.current;
@@ -6166,18 +6178,18 @@ export function Thumbnail() {
     };
     const onUp = (upEvent: PointerEvent) => {
       if (upEvent.pointerId !== pointerId) return;
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", onUp);
+      window.removeEventListener("pointermove", onMove, true);
+      window.removeEventListener("pointerup", onUp, true);
+      window.removeEventListener("pointercancel", onUp, true);
       void drag.pointerUp(upEvent).then((outcome) => {
         setThumbnailStackDragging(stackRef.current, false);
         window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
         if (outcome === "expand") setStackCollapsed(false);
       });
     };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("pointercancel", onUp);
+    window.addEventListener("pointermove", onMove, { capture: true, passive: false });
+    window.addEventListener("pointerup", onUp, true);
+    window.addEventListener("pointercancel", onUp, true);
   };
 
   return (
@@ -6192,6 +6204,9 @@ export function Thumbnail() {
           stackMotion === "expanding" ? "thumbnail-stack-expanding" : "",
         ].filter(Boolean).join(" ")}
         onScroll={refreshStackOverflow}
+        onDragStartCapture={(event) => {
+          if (compact) preventThumbnailHtml5Drag(event.nativeEvent);
+        }}
       >
         {!exitingOnly && !collapsed && (
           <div className={[
@@ -6248,8 +6263,10 @@ export function Thumbnail() {
             type="button"
             className="thumbnail-collapsed-hit-target"
             aria-label={`Expand ${artifacts.length === 1 ? "preview" : `${artifacts.length} previews`}`}
+            draggable={false}
             disabled={controlsDisabled}
             onPointerDown={onCollapsedStackPointerDown}
+            onDragStart={(event) => preventThumbnailHtml5Drag(event.nativeEvent)}
             onClick={() => {
               if (skipCollapsedStackClick.current) {
                 skipCollapsedStackClick.current = false;
@@ -6739,7 +6756,7 @@ export function ThumbnailCard({
           draggable={!isExiting && !stackCollapsed}
           onDragStart={(event) => {
             if (stackCollapsed) {
-              event.preventDefault();
+              preventThumbnailHtml5Drag(event.nativeEvent);
               return;
             }
             void beginFileDrag(event);

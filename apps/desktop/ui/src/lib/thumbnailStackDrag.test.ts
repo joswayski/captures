@@ -10,6 +10,7 @@ import {
   clampThumbnailStackFrame,
   clearThumbnailStackDragSway,
   parseCssPx,
+  preventThumbnailHtml5Drag,
   readHarnessStackOffset,
   setThumbnailStackDragging,
   thumbnailStackDragExceededThreshold,
@@ -21,6 +22,14 @@ afterEach(() => {
   document.documentElement.style.removeProperty(THUMBNAIL_HARNESS_DRAG_X_VAR);
   document.documentElement.style.removeProperty(THUMBNAIL_HARNESS_DRAG_Y_VAR);
   document.body.replaceChildren();
+});
+
+describe("preventThumbnailHtml5Drag", () => {
+  it("cancels the browser drag so pointer-drag can keep the pile", () => {
+    const event = new Event("dragstart", { bubbles: true, cancelable: true });
+    preventThumbnailHtml5Drag(event);
+    expect(event.defaultPrevented).toBe(true);
+  });
 });
 
 describe("thumbnailStackDragExceededThreshold", () => {
