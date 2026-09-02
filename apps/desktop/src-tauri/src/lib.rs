@@ -1493,6 +1493,7 @@ fn thumbnail_cursor_action(
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 fn thumbnail_tauri_cursor_icon(kind: ThumbnailCursorKind) -> CursorIcon {
     match kind {
         ThumbnailCursorKind::Default => CursorIcon::Default,
@@ -6518,8 +6519,8 @@ mod tests {
         thumbnail_cursor_action, thumbnail_cursor_ignore_update, thumbnail_geometry,
         thumbnail_pointer_in_space, thumbnail_pointer_position, thumbnail_preserve_current_height,
         thumbnail_stack_height, thumbnail_stack_should_be_visible, thumbnail_stack_visible_count,
-        thumbnail_tauri_cursor_icon, thumbnail_visible_window_height, track_shortcut_suppression,
-        tray_accelerator, tray_icon_rect_is_usable, tray_notice_window_size, viewer_window_label,
+        thumbnail_visible_window_height, track_shortcut_suppression, tray_accelerator,
+        tray_icon_rect_is_usable, tray_notice_window_size, viewer_window_label,
         window_display_crop_is_safe, window_is_capturable, windows_window_is_capture_overlay,
     };
 
@@ -7174,20 +7175,21 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_os = "macos"))]
     #[test]
     fn maps_preview_cursor_kinds_to_tauri_icons() {
         use tauri::CursorIcon;
 
         assert_eq!(
-            thumbnail_tauri_cursor_icon(ThumbnailCursorKind::Default),
+            super::thumbnail_tauri_cursor_icon(ThumbnailCursorKind::Default),
             CursorIcon::Default
         );
         assert_eq!(
-            thumbnail_tauri_cursor_icon(ThumbnailCursorKind::Pointer),
+            super::thumbnail_tauri_cursor_icon(ThumbnailCursorKind::Pointer),
             CursorIcon::Hand
         );
         assert_eq!(
-            thumbnail_tauri_cursor_icon(ThumbnailCursorKind::Grab),
+            super::thumbnail_tauri_cursor_icon(ThumbnailCursorKind::Grab),
             CursorIcon::Grab
         );
     }
