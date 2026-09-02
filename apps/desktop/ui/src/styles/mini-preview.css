@@ -1498,11 +1498,11 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
 }
 
 /*
- * Last-preview delete: hold full opacity briefly so the control does not pop
- * away on the first dissolve frame, then ease out with the card chrome.
+ * Last-preview delete: hold full opacity so the control does not pop away on
+ * the first dissolve frame, then ease out with the card chrome.
  */
 .thumbnail-stack-toolbar-exiting {
-  animation: thumbnail-stack-toolbar-exit 0.56s linear both;
+  animation: thumbnail-stack-toolbar-exit 1.05s linear both;
 }
 
 .thumbnail-stack-toolbar-entering {
@@ -1519,7 +1519,7 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
 
 @keyframes thumbnail-stack-toolbar-exit {
   0%,
-  40% {
+  42% {
     opacity: 1;
     transform: none;
     animation-timing-function: cubic-bezier(0.33, 0, 0.2, 1);

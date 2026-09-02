@@ -171,7 +171,7 @@ describe("thumbnail stack layout", () => {
     expect(enter).toMatch(/35%/);
     expect(enter).not.toMatch(/60%/);
     expect(thumbnailStyles).toMatch(
-      /\.thumbnail-stack-toolbar-exiting\s*\{[^}]*animation:\s*thumbnail-stack-toolbar-exit/,
+      /\.thumbnail-stack-toolbar-exiting\s*\{[^}]*animation:\s*thumbnail-stack-toolbar-exit 1\.05s/,
     );
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-control\s*\{[\s\S]*?cursor:\s*pointer/,
