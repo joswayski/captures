@@ -183,6 +183,15 @@ impl ThumbnailHoverCursor {
             other => other,
         }
     }
+
+    /// Grab/pointer are AppKit-owned. Default is a hole in the always-on-top
+    /// panel (collapsed stack, padding, exiting cards) and must not install an
+    /// arrow or WebKit cursor rectangles, or apps underneath lose hover cursors
+    /// even after clicks already pass through.
+    #[must_use]
+    pub const fn claims_ns_cursor(self) -> bool {
+        self.is_interactive()
+    }
 }
 
 /// Whether the JavaScript thumbnail pointer poll is recent enough to trust.
@@ -227,6 +236,21 @@ pub const fn thumbnail_may_take_key_window(allowed_after_click: bool, app_is_act
     allowed_after_click || !app_is_active
 }
 
+/// Click-through empty space still sits inside the panel frame after collapse.
+/// `mouseExited` fires when `ignoresMouseEvents` flips, and stamping
+/// `NSCursor::arrow` there leaves the arrow over whatever now receives clicks.
+#[must_use]
+pub const fn thumbnail_resets_cursor_on_exit() -> bool {
+    false
+}
+
+/// Passthrough hover keeps WebKit cursor rectangles off so `cursor: default`
+/// on the transparent panel cannot win over the app underneath.
+#[must_use]
+pub const fn thumbnail_passthrough_disables_cursor_rects() -> bool {
+    true
+}
+
 /// A titled editor's cursor rectangles reset `NSCursor` to the arrow while the
 /// pointer is still on a mini-preview control. Disable them for that window
 /// until the pointer leaves the stack.
@@ -245,7 +269,8 @@ mod tests {
         CaptureCursor, CaptureCursorEvent, CaptureCursorKind, CaptureCursorMonitorAction,
         ThumbnailHoverCursor, capture_cursor_monitor_action, overlay_prepare_keeps_native_cursor,
         region_shortcut_claims_cursor_on_press, suppress_document_cursor_rects_for_thumbnail,
-        thumbnail_may_take_key_window, thumbnail_poll_is_live, thumbnail_unpolled_hover,
+        thumbnail_may_take_key_window, thumbnail_passthrough_disables_cursor_rects,
+        thumbnail_poll_is_live, thumbnail_resets_cursor_on_exit, thumbnail_unpolled_hover,
     };
 
     #[test]
@@ -380,7 +405,12 @@ mod tests {
             ThumbnailHoverCursor::Grab
         );
         assert!(ThumbnailHoverCursor::Pointer.is_interactive());
+        assert!(ThumbnailHoverCursor::Pointer.claims_ns_cursor());
+        assert!(ThumbnailHoverCursor::Grab.claims_ns_cursor());
         assert!(!ThumbnailHoverCursor::Default.is_interactive());
+        assert!(!ThumbnailHoverCursor::Default.claims_ns_cursor());
+        assert!(!thumbnail_resets_cursor_on_exit());
+        assert!(thumbnail_passthrough_disables_cursor_rects());
         assert_eq!(
             thumbnail_unpolled_hover(false, ThumbnailHoverCursor::Default),
             ThumbnailHoverCursor::Pointer

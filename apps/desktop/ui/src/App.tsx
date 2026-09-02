@@ -5819,9 +5819,18 @@ export function Thumbnail() {
     };
 
     const applyNativeHover = (position: ThumbnailPointerPosition) => {
-      document.documentElement.classList.add("thumbnail-native-tracking");
-      setIgnoreCursorEvents(shouldIgnoreThumbnailCursorEvents(position));
-      setThumbnailCursor(applyThumbnailNativeHover(position));
+      const ignore = shouldIgnoreThumbnailCursorEvents(position);
+      const kind = applyThumbnailNativeHover(position);
+      if (ignore || kind === "default") {
+        // Empty space after collapse still sits inside the native window.
+        // Document-wide native cursor rules would keep the arrow over apps
+        // that already receive the clicks.
+        document.documentElement.classList.remove("thumbnail-native-tracking");
+      } else {
+        document.documentElement.classList.add("thumbnail-native-tracking");
+      }
+      setIgnoreCursorEvents(ignore);
+      setThumbnailCursor(kind);
     };
 
     const schedulePoll = (delay: number) => {

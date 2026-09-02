@@ -3,7 +3,8 @@ use crate::cursor_policy::{
     CaptureCursor, CaptureCursorEvent, CaptureCursorKind, CaptureCursorMonitorAction,
     ThumbnailHoverCursor, capture_cursor_monitor_action, overlay_prepare_keeps_native_cursor,
     suppress_document_cursor_rects_for_thumbnail, thumbnail_may_take_key_window,
-    thumbnail_poll_is_live, thumbnail_unpolled_hover,
+    thumbnail_passthrough_disables_cursor_rects, thumbnail_poll_is_live,
+    thumbnail_resets_cursor_on_exit, thumbnail_unpolled_hover,
 };
 
 use std::{
@@ -296,6 +297,13 @@ impl CursorTrackingOwner {
         {
             return;
         }
+        // Passthrough regions keep the panel tall after collapse. Becoming key
+        // there would install WebKit's default cursor over the app underneath.
+        if self.ivars().surface == CursorSurface::Thumbnail
+            && !cursor_mode_is_interactive(self.effective_thumbnail_cursor_mode())
+        {
+            return;
+        }
         if let Some(window) = self.event_or_tracked_window(Some(event))
             && !window.isKeyWindow()
         {
@@ -353,6 +361,9 @@ impl CursorTrackingOwner {
         } else {
             self.ivars().mode.get()
         };
+        if self.ivars().surface == CursorSurface::Thumbnail && !cursor_mode_is_interactive(mode) {
+            return;
+        }
         if let Some(window) = self.event_or_tracked_window(event) {
             if cursor_mode_is_interactive(mode) {
                 set_cursor_rects_enabled(&window, false);
@@ -475,7 +486,7 @@ fn cursor_mode_to_thumbnail_hover(mode: CursorMode) -> ThumbnailHoverCursor {
 
 fn thumbnail_hover_to_cursor_mode(kind: ThumbnailHoverCursor) -> CursorMode {
     match kind {
-        ThumbnailHoverCursor::Default => CursorMode::Arrow,
+        ThumbnailHoverCursor::Default => CursorMode::WebView,
         ThumbnailHoverCursor::Pointer => CursorMode::PointingHand,
         ThumbnailHoverCursor::Grab => CursorMode::OpenHand,
     }
@@ -1081,7 +1092,7 @@ pub fn configure_thumbnail_inactive_hover(window: &WebviewWindow) -> Result<(), 
     THUMBNAIL_PRESENTED.store(false, Ordering::Release);
     let result = configure_inactive_hover_with_cursor::<ThumbnailPanel>(
         window,
-        CursorMode::Arrow,
+        CursorMode::WebView,
         CursorSurface::Thumbnail,
     );
     if result.is_ok() {
@@ -1216,8 +1227,11 @@ pub fn conceal_thumbnail_without_hiding(window: &WebviewWindow) -> Result<(), &'
     restore_competing_cursor_rects();
     let native_window = native_window(window)?;
     native_window.setAlphaValue(0.0);
-    set_cursor_rects_enabled(native_window, true);
-    set_tracked_cursor(window, CursorMode::Arrow, CursorSurface::Thumbnail)?;
+    set_cursor_rects_enabled(
+        native_window,
+        !thumbnail_passthrough_disables_cursor_rects(),
+    );
+    set_tracked_cursor(window, CursorMode::WebView, CursorSurface::Thumbnail)?;
     resign_ns_window_key_without_raising_documents(native_window);
     Ok(())
 }
@@ -2653,7 +2667,9 @@ pub fn set_pointing_cursor(window: &WebviewWindow, pointing: bool) -> Result<(),
 /// Preview cards use:
 /// - `Pointer` over action buttons
 /// - `Grab` over the image (file drag source)
-/// - `Default` when the pointer is outside a live card
+/// - `Default` over click-through holes (collapsed stack, padding, exiting
+///   cards). That kind releases the cursor so the app underneath can show
+///   pointer/I-beam hover.
 pub fn set_thumbnail_cursor(
     window: &WebviewWindow,
     kind: ThumbnailCursorKind,
@@ -2663,14 +2679,14 @@ pub fn set_thumbnail_cursor(
         return run_on_main(move || set_thumbnail_cursor(&window, kind))
             .ok_or("thumbnail cursor did not run on the main thread")?;
     }
-    if capture_overlay_owns_cursor() {
+    if capture_overlay_owns_cursor() || !thumbnail_kind_to_hover(kind).claims_ns_cursor() {
         return reset_pointing_cursor_state(window);
     }
     let native_window = native_window(window)?;
     remember_thumbnail_window(native_window);
     let interactive = thumbnail_kind_to_hover(kind).is_interactive();
     let mode = match kind {
-        ThumbnailCursorKind::Default => CursorMode::Arrow,
+        ThumbnailCursorKind::Default => CursorMode::WebView,
         ThumbnailCursorKind::Pointer => CursorMode::PointingHand,
         ThumbnailCursorKind::Grab => CursorMode::OpenHand,
     };
@@ -2738,7 +2754,7 @@ pub fn reassert_thumbnail_cursor(
     }
     set_cursor_rects_enabled(native_window, false);
     let mode = match kind {
-        ThumbnailCursorKind::Default => CursorMode::Arrow,
+        ThumbnailCursorKind::Default => CursorMode::WebView,
         ThumbnailCursorKind::Pointer => CursorMode::PointingHand,
         ThumbnailCursorKind::Grab => CursorMode::OpenHand,
     };
@@ -2751,8 +2767,11 @@ pub fn reassert_thumbnail_cursor(
 }
 
 fn apply_thumbnail_ns_cursor(kind: ThumbnailCursorKind) {
+    if !thumbnail_kind_to_hover(kind).claims_ns_cursor() {
+        return;
+    }
     let mode = match kind {
-        ThumbnailCursorKind::Default => CursorMode::Arrow,
+        ThumbnailCursorKind::Default => CursorMode::WebView,
         ThumbnailCursorKind::Pointer => CursorMode::PointingHand,
         ThumbnailCursorKind::Grab => CursorMode::OpenHand,
     };
@@ -2770,8 +2789,17 @@ pub fn reset_pointing_cursor_state(window: &WebviewWindow) -> Result<(), &'stati
     THUMBNAIL_KEY_WINDOW_ALLOWED.store(false, Ordering::Release);
     restore_competing_cursor_rects();
     let native_window = native_window(window)?;
-    set_cursor_rects_enabled(native_window, true);
-    set_tracked_cursor(window, CursorMode::Arrow, CursorSurface::Thumbnail)
+    if native_window.isKeyWindow() {
+        resign_ns_window_key_without_raising_documents(native_window);
+    }
+    // The panel stays tall after collapse. Enabling WebKit cursor rectangles
+    // (or stamping the arrow) would steal hover cursors from the app that is
+    // now receiving clicks through the empty region.
+    set_cursor_rects_enabled(
+        native_window,
+        !thumbnail_passthrough_disables_cursor_rects(),
+    );
+    set_tracked_cursor(window, CursorMode::WebView, CursorSurface::Thumbnail)
 }
 
 fn set_tracked_cursor(
@@ -2958,7 +2986,14 @@ fn cursor_surface_can_take_key_window(surface: CursorSurface) -> bool {
 }
 
 fn should_reset_cursor_on_exit(surface: CursorSurface, capture_active: bool) -> bool {
-    surface != CursorSurface::CaptureOverlay && !capture_active
+    if capture_active {
+        return false;
+    }
+    match surface {
+        CursorSurface::CaptureOverlay => false,
+        CursorSurface::Thumbnail => thumbnail_resets_cursor_on_exit(),
+        CursorSurface::InactiveHud => true,
+    }
 }
 
 fn native_window(window: &WebviewWindow) -> Result<&NSWindow, &'static str> {
@@ -3246,7 +3281,10 @@ mod tests {
 
     #[test]
     fn inactive_surfaces_reset_the_cursor_when_capture_is_not_active() {
-        assert!(should_reset_cursor_on_exit(CursorSurface::Thumbnail, false));
+        assert!(!should_reset_cursor_on_exit(
+            CursorSurface::Thumbnail,
+            false
+        ));
         assert!(should_reset_cursor_on_exit(
             CursorSurface::InactiveHud,
             false
