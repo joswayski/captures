@@ -128,14 +128,31 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailStyles).not.toMatch(
       /\.thumbnail-stack-compact > \.thumbnail-card\s*\{[^}]*filter:\s*brightness/,
     );
-    expect(thumbnailStyles).toMatch(
-      /\.thumbnail-stack-compact > \.thumbnail-card::before\s*\{[^}]*opacity:\s*calc\(var\(--thumbnail-stack-depth/,
+    const overlay = thumbnailStyles.match(
+      /\.thumbnail-stack-compact > \.thumbnail-card::before\s*\{([^}]*)\}/,
     );
+    expect(overlay?.[1]).toMatch(
+      /opacity:\s*calc\(var\(--thumbnail-stack-depth/,
+    );
+    expect(overlay?.[1]).toMatch(/background:\s*var\(--glass-strong-solid\)/);
+    expect(overlay?.[1]).not.toMatch(/background:\s*#000/);
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-card img\s*\{[^}]*filter:\s*blur\(0\) brightness\(1\)/,
     );
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack\[data-thumbnail-suppress-card-hover="true"\]/,
+    );
+  });
+
+  it("keeps keyboard-focused card actions visible while hover is locked", () => {
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack\[data-thumbnail-suppress-card-hover="true"\] \.thumbnail-card:hover:not\(:focus-within\)/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack\[data-thumbnail-suppress-card-hover="true"\] \.thumbnail-card\[data-thumbnail-native-active="true"\]:not\(:focus-within\)/,
+    );
+    expect(thumbnailStyles).not.toMatch(
+      /\.thumbnail-stack\[data-thumbnail-suppress-card-hover="true"\] \.thumbnail-card:focus-within/,
     );
   });
 
