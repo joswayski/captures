@@ -1534,7 +1534,7 @@ html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-collapse
   overflow: hidden;
   cursor: pointer;
   transition:
-    width var(--dur-5) var(--ease-in-out),
+    width var(--dur-3) var(--ease-out),
     color var(--dur-1) var(--ease-out),
     background-color var(--dur-1) var(--ease-out),
     border-color var(--dur-1) var(--ease-out),
@@ -1544,16 +1544,16 @@ html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-collapse
 .thumbnail-stack-minimize svg {
   position: absolute;
   transition:
-    opacity var(--dur-4) var(--ease-in-out),
-    transform var(--dur-5) var(--ease-in-out);
+    opacity var(--dur-2) var(--ease-out),
+    transform var(--dur-2) var(--ease-out);
 }
 
 .thumbnail-stack-minimize-label {
   opacity: 0;
   transform: translateX(4px);
   transition:
-    opacity var(--dur-4) var(--ease-in-out) var(--dur-1),
-    transform var(--dur-5) var(--ease-in-out);
+    opacity var(--dur-2) var(--ease-out),
+    transform var(--dur-2) var(--ease-out);
   pointer-events: none;
   cursor: pointer;
   font-size: var(--text-2xs);
@@ -1615,7 +1615,7 @@ html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-collapse
 }
 
 .thumbnail-stack-compact {
-  --stack-fan-dur: 0.56s;
+  --stack-fan-dur: var(--dur-3);
   height: 100%;
   max-height: none;
   overflow: visible;
@@ -1666,7 +1666,7 @@ html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-collapse
   opacity: calc(var(--thumbnail-stack-depth, 0) * 0.12);
   content: "";
   pointer-events: none;
-  transition: opacity var(--stack-fan-dur) var(--ease-in-out);
+  transition: opacity var(--stack-fan-dur) var(--ease-out);
 }
 
 .thumbnail-stack-minimizing > .thumbnail-card,
@@ -1709,8 +1709,8 @@ html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-collapse
 .thumbnail-stack-minimized.thumbnail-stack-hover-ready > .thumbnail-card {
   transition:
     opacity var(--dur-4) var(--ease-out),
-    transform var(--stack-fan-dur) var(--ease-in-out),
-    box-shadow var(--stack-fan-dur) var(--ease-in-out);
+    transform var(--stack-fan-dur) var(--ease-out),
+    box-shadow var(--stack-fan-dur) var(--ease-out);
 }
 
 .thumbnail-stack-compact > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting) {
