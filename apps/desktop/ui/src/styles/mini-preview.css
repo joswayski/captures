@@ -1725,6 +1725,12 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
   transform-origin: 50% 100%;
   pointer-events: none;
   transform: var(--thumbnail-stack-rest-transform);
+  /*
+   * Slot-settle uses the CSS `translate` property. Inline offsets must not
+   * compose with this pile transform or rear cards sit a full slot below the
+   * front preview until the outgoing card unmounts.
+   */
+  translate: none !important;
 }
 
 /*

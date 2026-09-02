@@ -382,6 +382,11 @@ function clearTranslatePx(card: HTMLElement): void {
   card.style.removeProperty("translate");
 }
 
+/** Compact / collapsed / expanding piles pose with `transform`, not slot `translate`. */
+export function thumbnailStackSuppressesSlotShift(stack: HTMLElement): boolean {
+  return stack.classList.contains("thumbnail-stack-compact");
+}
+
 function writeStackShiftPx(card: HTMLElement, shiftPx: number, animate: boolean): void {
   if (shiftPx <= 0) {
     const hadVisualShift = card.classList.contains(STACK_SHIFTING_CLASS)
@@ -527,6 +532,20 @@ export function createThumbnailStackShiftController(stack: HTMLElement): () => v
       exitStartedAt.set(card, now);
       // Wake once this slot becomes motion-ready (plus a frame of slack).
       schedule(motionDelayMsFor(card) + 16);
+    }
+
+    if (thumbnailStackSuppressesSlotShift(stack)) {
+      // Compact pose is a 3D `transform` from a shared bottom anchor. Expanded
+      // slot `translate` would compose with that and drop survivors below the
+      // front card until the held exit is removed.
+      for (const card of cards) {
+        const hasSlotShift = card.classList.contains(STACK_SHIFTING_CLASS)
+          || card.classList.contains(STACK_SHIFT_INSTANT_CLASS)
+          || readStackShiftPx(card) > 0
+          || Boolean(card.style.translate);
+        if (hasSlotShift) writeStackShiftPx(card, 0, false);
+      }
+      return;
     }
 
     const motionStates: ThumbnailStackCardMotionState[] = cards.map((card) => {
