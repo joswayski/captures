@@ -6145,6 +6145,7 @@ export function Thumbnail() {
     const drag = collapsedStackDrag();
     if (!drag.pointerDown(event.nativeEvent)) return;
     skipCollapsedStackClick.current = true;
+    event.preventDefault();
     try {
       event.currentTarget.setPointerCapture(event.pointerId);
     } catch {
@@ -6735,8 +6736,14 @@ export function ThumbnailCard({
           className={usingDust ? "thumbnail-dust-source" : undefined}
           src={artifact.full_url}
           alt="Screenshot preview"
-          draggable={!isExiting}
-          onDragStart={(event) => void beginFileDrag(event)}
+          draggable={!isExiting && !stackCollapsed}
+          onDragStart={(event) => {
+            if (stackCollapsed) {
+              event.preventDefault();
+              return;
+            }
+            void beginFileDrag(event);
+          }}
           onLoad={markThumbnailReady}
           onError={markThumbnailReady}
         />

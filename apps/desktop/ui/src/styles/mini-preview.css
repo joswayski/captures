@@ -1662,13 +1662,17 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
   }
 }
 
+.thumbnail-stack-compact > .thumbnail-card img {
+  -webkit-user-drag: none;
+}
+
 .thumbnail-collapsed-hit-target {
   position: absolute;
   z-index: 40;
   right: 28px;
   bottom: 52px;
   left: 28px;
-  height: 160px;
+  height: 232px;
   padding: 0;
   border: 0;
   border-radius: 12px;
