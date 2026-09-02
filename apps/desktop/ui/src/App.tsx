@@ -115,6 +115,7 @@ import {
   preventThumbnailHtml5Drag,
   readHarnessStackOffset,
   setThumbnailStackDragging,
+  setThumbnailStackPressing,
   writeHarnessStackOffset,
 } from "./lib/thumbnailStackDrag";
 import {
@@ -6297,6 +6298,12 @@ export function Thumbnail() {
       },
       reducedMotion: prefersReducedMotion,
       onSway: (sway) => applyThumbnailStackDragSway(stackRef.current, sway),
+      onDraggingChange: (dragging) => {
+        const stack = stackRef.current;
+        if (!stack) return;
+        setThumbnailStackDragging(stack, dragging);
+        window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
+      },
     });
     return stackDrag.current;
   };
@@ -6306,6 +6313,7 @@ export function Thumbnail() {
     const drag = collapsedStackDrag();
     if (!drag.pointerDown(event.nativeEvent)) return;
     skipCollapsedStackClick.current = true;
+    setThumbnailStackPressing(stackRef.current, true);
     event.preventDefault();
     event.nativeEvent.preventDefault();
     try {
@@ -6317,21 +6325,14 @@ export function Thumbnail() {
     const onMove = (moveEvent: PointerEvent) => {
       if (moveEvent.pointerId !== pointerId) return;
       moveEvent.preventDefault();
-      void drag.pointerMove(moveEvent).then((result) => {
-        if (!result?.dragging) return;
-        const stack = stackRef.current;
-        if (stack && !stack.classList.contains("thumbnail-stack-dragging")) {
-          setThumbnailStackDragging(stack, true);
-          window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
-        }
-        applyThumbnailStackDragSway(stack, result.sway);
-      });
+      void drag.pointerMove(moveEvent);
     };
     const onUp = (upEvent: PointerEvent) => {
       if (upEvent.pointerId !== pointerId) return;
       window.removeEventListener("pointermove", onMove, true);
       window.removeEventListener("pointerup", onUp, true);
       window.removeEventListener("pointercancel", onUp, true);
+      setThumbnailStackPressing(stackRef.current, false);
       void drag.pointerUp(upEvent).then((outcome) => {
         setThumbnailStackDragging(stackRef.current, false);
         window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));

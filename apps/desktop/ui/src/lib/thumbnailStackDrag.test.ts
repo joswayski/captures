@@ -7,6 +7,7 @@ import {
   THUMBNAIL_STACK_DRAG_THRESHOLD_PX,
   THUMBNAIL_STACK_DRAG_SWAY_MAX_X_PX,
   THUMBNAIL_STACK_DRAGGING_CLASS,
+  THUMBNAIL_STACK_PRESSING_CLASS,
   applyThumbnailStackDragSway,
   clampThumbnailStackFrame,
   clearThumbnailStackDragSway,
@@ -15,6 +16,7 @@ import {
   preventThumbnailHtml5Drag,
   readHarnessStackOffset,
   setThumbnailStackDragging,
+  setThumbnailStackPressing,
   thumbnailStackDragExceededThreshold,
   tickThumbnailStackDragSway,
   writeHarnessStackOffset,
@@ -180,6 +182,26 @@ describe("CollapsedThumbnailStackDrag", () => {
     expect(left?.sway.x).toBeGreaterThan(stillRight!.sway.x);
   });
 
+  it("marks dragging before the frame moves so the lean can start immediately", async () => {
+    const events: string[] = [];
+    const drag = new CollapsedThumbnailStackDrag({
+      getFrame: () => ({ x: 0, y: 0 }),
+      moveFrame: (x, y) => {
+        events.push("move");
+        return { x, y };
+      },
+      reducedMotion: () => false,
+      onDraggingChange: () => {
+        events.push("drag");
+      },
+    });
+
+    drag.pointerDown({ button: 0, pointerId: 1, screenX: 0, screenY: 0 });
+    await drag.pointerMove({ pointerId: 1, screenX: 20, screenY: 0 });
+    expect(events[0]).toBe("drag");
+    expect(events[1]).toBe("move");
+  });
+
   it("ignores a second button and a mismatched pointer id", async () => {
     const drag = new CollapsedThumbnailStackDrag({
       getFrame: () => ({ x: 0, y: 0 }),
@@ -206,5 +228,13 @@ describe("stack dragging class helpers", () => {
     expect(stack).not.toHaveClass(THUMBNAIL_STACK_DRAGGING_CLASS);
     expect(stack.style.getPropertyValue("--thumbnail-drag-sway-x")).toBe("0");
     clearThumbnailStackDragSway(stack);
+  });
+
+  it("toggles the pressing class so hover fan stays down during a press", () => {
+    const stack = document.createElement("main");
+    setThumbnailStackPressing(stack, true);
+    expect(stack).toHaveClass(THUMBNAIL_STACK_PRESSING_CLASS);
+    setThumbnailStackPressing(stack, false);
+    expect(stack).not.toHaveClass(THUMBNAIL_STACK_PRESSING_CLASS);
   });
 });

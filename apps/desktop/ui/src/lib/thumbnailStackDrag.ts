@@ -1,17 +1,17 @@
 /** Movement before a collapsed-pile press becomes a window drag instead of expand. */
 export const THUMBNAIL_STACK_DRAG_THRESHOLD_PX = 8;
 
-export const THUMBNAIL_STACK_DRAG_SWAY_MAX_X_PX = 8;
-export const THUMBNAIL_STACK_DRAG_SWAY_MAX_Y_PX = 5;
+export const THUMBNAIL_STACK_DRAG_SWAY_MAX_X_PX = 11;
+export const THUMBNAIL_STACK_DRAG_SWAY_MAX_Y_PX = 7;
 
 /**
  * How much of each pointer step the rear cards initially refuse to follow.
  * 1 would leave them frozen in world space; 0 would glue them to the hands.
  */
-export const THUMBNAIL_STACK_DRAG_SWAY_INERTIA = 0.55;
+export const THUMBNAIL_STACK_DRAG_SWAY_INERTIA = 0.62;
 
 /** Catch-up rate in 1/seconds. Higher is a stiffer stack. */
-export const THUMBNAIL_STACK_DRAG_SWAY_SPRING = 9;
+export const THUMBNAIL_STACK_DRAG_SWAY_SPRING = 6.5;
 
 /** First sample after a press has no previous timestamp; treat it as one frame. */
 const THUMBNAIL_STACK_DRAG_SWAY_DEFAULT_DT_MS = 16;
@@ -27,6 +27,7 @@ export const THUMBNAIL_DRAG_SWAY_X_VAR = "--thumbnail-drag-sway-x";
 export const THUMBNAIL_DRAG_SWAY_Y_VAR = "--thumbnail-drag-sway-y";
 
 export const THUMBNAIL_STACK_DRAGGING_CLASS = "thumbnail-stack-dragging";
+export const THUMBNAIL_STACK_PRESSING_CLASS = "thumbnail-stack-pressing";
 
 /**
  * Collapsed screenshots stay in the DOM as `<img>` drag sources. Chromium can
@@ -62,6 +63,8 @@ export type ThumbnailStackDragHost = {
   reducedMotion: () => boolean;
   /** Live lag pose. Called from pointer samples and catch-up frames. */
   onSway?: (sway: ThumbnailStackPoint) => void;
+  /** Fires as soon as the press becomes a drag, before the frame moves. */
+  onDraggingChange?: (dragging: boolean) => void;
   now?: () => number;
 };
 
@@ -192,6 +195,10 @@ export function setThumbnailStackDragging(stack: HTMLElement | null, dragging: b
   if (!dragging) clearThumbnailStackDragSway(stack);
 }
 
+export function setThumbnailStackPressing(stack: HTMLElement | null, pressing: boolean) {
+  stack?.classList.toggle(THUMBNAIL_STACK_PRESSING_CLASS, pressing);
+}
+
 /**
  * Click-versus-drag session for the collapsed pile. Coordinates are CSS pixels
  * relative to the frame's top-left at pointer-down.
@@ -240,10 +247,10 @@ export class CollapsedThumbnailStackDrag {
     const stepX = event.screenX - this.lastPointer.x;
     const stepY = event.screenY - this.lastPointer.y;
     this.lastPointer = { x: event.screenX, y: event.screenY };
-    await this.ready;
     const dx = event.screenX - this.startPointer.x;
     const dy = event.screenY - this.startPointer.y;
     if (!this.dragging && !thumbnailStackDragExceededThreshold(dx, dy)) {
+      await this.ready;
       return {
         dragging: false,
         x: this.startFrame.x,
@@ -253,6 +260,7 @@ export class CollapsedThumbnailStackDrag {
     }
     const crossed = !this.dragging;
     this.dragging = true;
+    if (crossed) this.host.onDraggingChange?.(true);
     this.tickSway(
       this.now(),
       crossed ? dx : stepX,
@@ -261,6 +269,7 @@ export class CollapsedThumbnailStackDrag {
     this.pointerSampled = true;
     this.startSwayLoop();
     this.host.onSway?.(this.sway);
+    await this.ready;
     const next = await this.host.moveFrame(this.startFrame.x + dx, this.startFrame.y + dy);
     return {
       dragging: true,

@@ -1951,8 +1951,8 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
   }
 }
 
-.thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card,
-.thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):has(.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]) > .thumbnail-card {
+.thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):not(.thumbnail-stack-pressing):has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card,
+.thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):not(.thumbnail-stack-pressing):has(.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]) > .thumbnail-card {
   transform:
     translate3d(
       calc(var(--thumbnail-stack-depth, 0) * -2px),
@@ -1998,7 +1998,7 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
         var(--thumbnail-drag-sway-x, 0)
         * var(--thumbnail-stack-depth, 0)
         * (var(--thumbnail-stack-depth, 0) + 1)
-        * 0.16deg
+        * 0.18deg
       )
     )
     rotateX(calc(var(--thumbnail-stack-depth, 0) * -1.4deg))
@@ -2008,13 +2008,15 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
 }
 
 .thumbnail-stack-dragging .thumbnail-collapsed-hit-target::before,
-.thumbnail-stack-dragging .thumbnail-collapsed-hit-target::after {
+.thumbnail-stack-dragging .thumbnail-collapsed-hit-target::after,
+.thumbnail-stack-pressing .thumbnail-collapsed-hit-target::before,
+.thumbnail-stack-pressing .thumbnail-collapsed-hit-target::after {
   animation: none;
   opacity: 0;
 }
 
-.thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card::before,
-.thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):has(.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]) > .thumbnail-card::before {
+.thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):not(.thumbnail-stack-pressing):has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card::before,
+.thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):not(.thumbnail-stack-pressing):has(.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]) > .thumbnail-card::before {
   opacity: calc(var(--thumbnail-stack-depth, 0) * 0.08);
 }
 

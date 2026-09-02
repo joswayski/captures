@@ -61,7 +61,7 @@ describe("thumbnail stack layout", () => {
       /\.thumbnail-stack-minimizing\.thumbnail-stack-minimize-run > \.thumbnail-card\s*\{([\s\S]*?)\n\}/,
     );
     const hoverFan = thumbnailStyles.match(
-      /\.thumbnail-stack-minimized\.thumbnail-stack-hover-ready:not\(\.thumbnail-stack-hover-latched\):not\(\.thumbnail-stack-dragging\):has\(\.thumbnail-collapsed-hit-target:hover\)/,
+      /\.thumbnail-stack-minimized\.thumbnail-stack-hover-ready:not\(\.thumbnail-stack-hover-latched\):not\(\.thumbnail-stack-dragging\):not\(\.thumbnail-stack-pressing\):has\(\.thumbnail-collapsed-hit-target:hover\)/,
     );
 
     expect(compactCard?.[1]).toMatch(/transform:\s*var\(--thumbnail-stack-rest-transform\)/);
@@ -85,7 +85,7 @@ describe("thumbnail stack layout", () => {
     expect(dragging?.[1]).toMatch(/\(var\(--thumbnail-stack-depth, 0\) \+ 1\)/);
     expect(dragging?.[1]).toMatch(/rotateZ\(/);
     expect(dragging?.[1]).not.toMatch(/-0\.28deg/);
-    expect(dragging?.[1]).toMatch(/0\.16deg/);
+    expect(dragging?.[1]).toMatch(/0\.18deg/);
   });
 
   it("releases the arrival animation before cards exit or shift", () => {
