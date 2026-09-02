@@ -343,12 +343,39 @@ function containsPoint(element: Element, x: number, y: number): boolean {
  * card while the pointer is still inside the button. Treating the control's
  * stable bounds as authoritative prevents native pointer/grab cursor churn.
  */
+function minimizedStackExpandControlAtPoint(
+  x: number,
+  y: number,
+  directTarget: Element | null,
+  root: Document,
+): HTMLElement | null {
+  const stack = root.querySelector<HTMLElement>(".thumbnail-stack-minimized");
+  if (!stack) return null;
+  const hitTarget = stack.querySelector<HTMLElement>(
+    ".thumbnail-collapsed-hit-target:not(:disabled)",
+  );
+  if (!hitTarget) return null;
+  if (directTarget?.closest(".thumbnail-collapsed-hit-target") === hitTarget) {
+    return hitTarget;
+  }
+  if (containsPoint(hitTarget, x, y)) return hitTarget;
+  // Peeking stacked cards sit above the front-card rect. Treat their paint
+  // bounds as the same expand action so the pile never shows a grab/arrow cursor.
+  for (const card of stack.querySelectorAll<HTMLElement>(":scope > .thumbnail-card")) {
+    if (containsPoint(card, x, y)) return hitTarget;
+  }
+  return null;
+}
+
 function thumbnailStackControlAtPoint(
   x: number,
   y: number,
   directTarget: Element | null,
   root: Document = document,
 ): HTMLElement | null {
+  const expandControl = minimizedStackExpandControlAtPoint(x, y, directTarget, root);
+  if (expandControl) return expandControl;
+
   const directControl = directTarget?.closest<HTMLElement>(THUMBNAIL_STACK_CONTROL_SELECTOR);
   if (directControl) return directControl;
 

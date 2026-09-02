@@ -10,6 +10,30 @@ export const THUMBNAIL_STACK_PADDING_PX = 28;
 /** One stack slot: card height + inter-card gap. */
 export const THUMBNAIL_CARD_SLOT_PX = THUMBNAIL_CARD_HEIGHT_PX + THUMBNAIL_STACK_GAP_PX;
 
+/** How many collapsed cards peek behind the front preview. */
+export const THUMBNAIL_STACK_MAX_VISIBLE_DEPTH = 3;
+
+/** Idle collapsed peek per extra card (matches compact `translateY`). */
+export const THUMBNAIL_STACK_IDLE_PEEK_PX = 13;
+
+/** Hover-fan collapsed peek per extra card. */
+export const THUMBNAIL_STACK_HOVER_PEEK_PX = 24;
+
+/**
+ * Extra height above the front card for the collapsed expand target.
+ * One preview stays 160px so empty space above it still click-through.
+ */
+export function thumbnailCollapsedPeekPx(
+  cardCount: number,
+  hovered = false,
+): number {
+  const extra = Math.min(
+    Math.max(cardCount - 1, 0),
+    THUMBNAIL_STACK_MAX_VISIBLE_DEPTH,
+  );
+  return extra * (hovered ? THUMBNAIL_STACK_HOVER_PEEK_PX : THUMBNAIL_STACK_IDLE_PEEK_PX);
+}
+
 /** Duration for one-slot overflow-cue scrolls (ease-out). */
 export const THUMBNAIL_STACK_SCROLL_DURATION_MS = 380;
 

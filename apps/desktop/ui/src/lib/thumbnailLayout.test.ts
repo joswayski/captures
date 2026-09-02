@@ -15,6 +15,7 @@ import {
   restoreThumbnailStackShiftClass,
   thumbnailStackOverflow,
   thumbnailStackShiftPx,
+  thumbnailCollapsedPeekPx,
   THUMBNAIL_CARD_HEIGHT_PX,
   THUMBNAIL_CARD_SLOT_PX,
   THUMBNAIL_DISMISS_HOLD_MS,
@@ -136,10 +137,38 @@ describe("thumbnail stack layout", () => {
       /\.thumbnail-card\.thumbnail-exit-delete::after\s*\{([^}]*)\}/,
     );
 
-    expect(deleteRule?.[1]).toMatch(/thumbnail-delete-frame-fade\s+0\.95s/);
+    expect(deleteRule?.[1]).toMatch(/thumbnail-delete-frame-fade\s+0\.5s/);
+    expect(deleteRule?.[1]).toMatch(/0 0 0 1px rgba\(255, 255, 255, 0\)/);
     expect(deleteRule?.[1]).not.toMatch(/^\s*box-shadow:\s*none/m);
-    expect(frameFade?.[1]).toMatch(/box-shadow:\s*none/);
+    expect(frameFade?.[1]).toMatch(/from\s*\{/);
+    expect(frameFade?.[1]).toMatch(/0 0 0 1px rgba\(255, 255, 255, 0\.08\)/);
+    expect(frameFade?.[1]).toMatch(/0 0 0 1px rgba\(255, 255, 255, 0\)/);
     expect(outlineFade?.[1]).toMatch(/filter:\s*opacity\(0\)/);
+  });
+
+  it("uses a pointer cursor on the collapsed stack expand target", () => {
+    const hitTarget = thumbnailStyles.match(
+      /\.thumbnail-collapsed-hit-target\s*\{([\s\S]*?)\n\}/,
+    );
+
+    expect(hitTarget?.[1]).toMatch(/cursor:\s*pointer/);
+    expect(hitTarget?.[1]).toMatch(/--thumbnail-collapsed-peek/);
+    expect(hitTarget?.[1]).not.toMatch(/height:\s*248px/);
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-minimized > \.thumbnail-card \*/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /html\.thumbnail-native-tracking \.thumbnail-stack-minimized \.thumbnail-card img/,
+    );
+  });
+
+  it("sizes the collapsed expand target from visible extra cards", () => {
+    expect(thumbnailCollapsedPeekPx(1)).toBe(0);
+    expect(thumbnailCollapsedPeekPx(2)).toBe(13);
+    expect(thumbnailCollapsedPeekPx(4)).toBe(39);
+    expect(thumbnailCollapsedPeekPx(8)).toBe(39);
+    expect(thumbnailCollapsedPeekPx(2, true)).toBe(24);
+    expect(thumbnailCollapsedPeekPx(1, true)).toBe(0);
   });
 
   it("scrolls to reveal newly added captures", () => {

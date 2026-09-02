@@ -609,6 +609,93 @@ describe("shouldIgnoreThumbnailCursorEvents", () => {
     expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: true })).toBe(true);
   });
 
+  it("treats peeking minimized stack cards as the expand pointer target", () => {
+    document.body.innerHTML = `
+      <main class="thumbnail-stack thumbnail-stack-minimized">
+        <article class="thumbnail-card" aria-hidden="true"><img alt=""></article>
+        <button class="thumbnail-collapsed-hit-target">Expand previews</button>
+      </main>
+    `;
+    const card = document.querySelector<HTMLElement>(".thumbnail-card")!;
+    const target = document.querySelector<HTMLButtonElement>(
+      ".thumbnail-collapsed-hit-target",
+    )!;
+    vi.spyOn(card, "getBoundingClientRect").mockReturnValue({
+      x: 28,
+      y: 40,
+      top: 40,
+      right: 312,
+      bottom: 200,
+      left: 28,
+      width: 284,
+      height: 160,
+      toJSON: () => ({}),
+    });
+    vi.spyOn(target, "getBoundingClientRect").mockReturnValue({
+      x: 28,
+      y: 52,
+      top: 52,
+      right: 312,
+      bottom: 212,
+      left: 28,
+      width: 284,
+      height: 160,
+      toJSON: () => ({}),
+    });
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => card),
+    });
+
+    expect(applyThumbnailNativeHover({ x: 80, y: 48, inside: true })).toBe("pointer");
+    expectNativePointerHover(target, true);
+    expect(card).not.toHaveAttribute("data-thumbnail-native-active");
+    expect(shouldIgnoreThumbnailCursorEvents({ x: 80, y: 48, inside: true })).toBe(false);
+  });
+
+  it("lets clicks pass through empty space above a single collapsed preview", () => {
+    document.body.innerHTML = `
+      <main class="thumbnail-stack thumbnail-stack-minimized">
+        <article class="thumbnail-card" aria-hidden="true"><img alt=""></article>
+        <button class="thumbnail-collapsed-hit-target">Expand preview</button>
+      </main>
+    `;
+    const stack = document.querySelector<HTMLElement>(".thumbnail-stack")!;
+    const card = document.querySelector<HTMLElement>(".thumbnail-card")!;
+    const target = document.querySelector<HTMLButtonElement>(
+      ".thumbnail-collapsed-hit-target",
+    )!;
+    vi.spyOn(card, "getBoundingClientRect").mockReturnValue({
+      x: 28,
+      y: 52,
+      top: 52,
+      right: 312,
+      bottom: 212,
+      left: 28,
+      width: 284,
+      height: 160,
+      toJSON: () => ({}),
+    });
+    vi.spyOn(target, "getBoundingClientRect").mockReturnValue({
+      x: 28,
+      y: 52,
+      top: 52,
+      right: 312,
+      bottom: 212,
+      left: 28,
+      width: 284,
+      height: 160,
+      toJSON: () => ({}),
+    });
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => stack),
+    });
+
+    expect(applyThumbnailNativeHover({ x: 80, y: 20, inside: true })).toBe("default");
+    expect(shouldIgnoreThumbnailCursorEvents({ x: 80, y: 20, inside: true })).toBe(true);
+  });
+
   it("does not native-hover the collapsed pile while collapse hover is latched", () => {
     document.body.innerHTML = `
       <main class="thumbnail-stack thumbnail-stack-minimized thumbnail-stack-hover-latched">

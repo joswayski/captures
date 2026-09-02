@@ -933,6 +933,11 @@ html.thumbnail-native-tracking .thumbnail-card[data-thumbnail-native-active="tru
   cursor: grab !important;
 }
 
+html.thumbnail-native-tracking .thumbnail-stack-minimized .thumbnail-card,
+html.thumbnail-native-tracking .thumbnail-stack-minimized .thumbnail-card img {
+  cursor: pointer !important;
+}
+
 html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging,
 html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   cursor: -webkit-grabbing !important;
@@ -943,6 +948,9 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
  * Stack chrome sits over grab-source cards. The document-wide grab/default
  * rules would otherwise win on every native poll that misses the control and
  * flicker pointer vs arrow while the mouse is still on the button.
+ *
+ * The collapsed pile is an expand control, not a drag source: force pointer on
+ * peeking cards and their images so grab cannot leak through.
  */
 html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-collapsed-hit-target, .thumbnail-overflow-cue):not(:disabled),
 html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-collapsed-hit-target, .thumbnail-overflow-cue):not(:disabled) *,
@@ -1014,12 +1022,33 @@ html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-collapse
    * Keep the outgoing slot at full size for the entire dissolve so its particle
    * layer never shifts. Cards above animate into place independently, then
    * removing this card swaps their translated pose for the real layout position.
+   *
+   * The hairline ring is the same 1px stroke stacked cards use to read as a
+   * pile. Animating `box-shadow` to `none` (or through `var()`) often fails to
+   * interpolate in WKWebView, so the empty rounded stroke sits behind the ash.
+   * A matching three-shadow fade plus a transparent specified value hides that
+   * ghost even when the animation cannot interpolate.
    */
+  box-shadow:
+    0 6px 14px rgba(0, 0, 0, 0),
+    0 2px 5px rgba(0, 0, 0, 0),
+    0 0 0 1px rgba(255, 255, 255, 0);
   animation:
     thumbnail-delete 2.9s linear forwards,
-    thumbnail-delete-frame-fade 0.95s cubic-bezier(0.22, 0.1, 0.25, 1) forwards;
+    thumbnail-delete-frame-fade 0.5s cubic-bezier(0.22, 0.1, 0.25, 1) forwards;
   pointer-events: none;
   border-radius: 12px;
+}
+
+.thumbnail-card.thumbnail-exit-delete.thumbnail-viewer-active,
+.thumbnail-card.thumbnail-exit-delete.thumbnail-editor-active,
+.thumbnail-stack-compact > .thumbnail-card.thumbnail-exit-delete,
+.thumbnail-stack-minimized:has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card.thumbnail-exit-delete,
+.thumbnail-stack-minimized:has(.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]) > .thumbnail-card.thumbnail-exit-delete {
+  box-shadow:
+    0 6px 14px rgba(0, 0, 0, 0),
+    0 2px 5px rgba(0, 0, 0, 0),
+    0 0 0 1px rgba(255, 255, 255, 0);
 }
 
 /*
@@ -1355,8 +1384,17 @@ html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-collapse
 }
 
 @keyframes thumbnail-delete-frame-fade {
+  from {
+    box-shadow:
+      0 6px 14px rgba(0, 0, 0, 0.38),
+      0 2px 5px rgba(0, 0, 0, 0.26),
+      0 0 0 1px rgba(255, 255, 255, 0.08);
+  }
   to {
-    box-shadow: none;
+    box-shadow:
+      0 6px 14px rgba(0, 0, 0, 0),
+      0 2px 5px rgba(0, 0, 0, 0),
+      0 0 0 1px rgba(255, 255, 255, 0);
   }
 }
 
@@ -1757,13 +1795,29 @@ html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-collapse
   right: 28px;
   bottom: 52px;
   left: 28px;
-  height: 160px;
+  /*
+   * Front card is 160px. Extra peek height comes from `--thumbnail-collapsed-peek`
+   * (idle 13px × visible extra cards) so a single preview does not steal clicks
+   * in the empty space above it. Hover uses `--thumbnail-collapsed-hover-peek`.
+   */
+  height: calc(160px + var(--thumbnail-collapsed-peek, 0px));
   padding: 0;
   border: 0;
   border-radius: 12px;
   background: transparent;
   cursor: pointer;
   pointer-events: auto;
+}
+
+.thumbnail-collapsed-hit-target:hover,
+.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"] {
+  height: calc(160px + var(--thumbnail-collapsed-hover-peek, var(--thumbnail-collapsed-peek, 0px)));
+}
+
+.thumbnail-stack-minimized > .thumbnail-card,
+.thumbnail-stack-minimized > .thumbnail-card *,
+.thumbnail-stack-minimized > .thumbnail-collapsed-hit-target {
+  cursor: pointer !important;
 }
 
 /*

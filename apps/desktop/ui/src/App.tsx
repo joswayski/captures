@@ -115,6 +115,7 @@ import {
   thumbnailStackContentHeight,
   thumbnailStackOverflow,
   restoreThumbnailStackShiftClass,
+  thumbnailCollapsedPeekPx,
   THUMBNAIL_CARD_SLOT_PX,
   waitForThumbnailStackSettle,
 } from "./lib/thumbnailLayout";
@@ -6330,6 +6331,10 @@ export function Thumbnail() {
             className="thumbnail-collapsed-hit-target"
             aria-label={`Expand ${artifacts.length === 1 ? "preview" : `${artifacts.length} previews`}`}
             disabled={controlsDisabled}
+            style={{
+              "--thumbnail-collapsed-peek": `${thumbnailCollapsedPeekPx(artifacts.length)}px`,
+              "--thumbnail-collapsed-hover-peek": `${thumbnailCollapsedPeekPx(artifacts.length, true)}px`,
+            } as CSSProperties}
             onPointerLeave={(event) => {
               event.currentTarget.removeAttribute("data-native-pointer-hover");
               setStackHoverLatched(false);
