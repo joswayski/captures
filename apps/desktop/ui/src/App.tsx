@@ -5457,6 +5457,8 @@ function useElementCssSize(
   return measured ?? fallback;
 }
 
+const STACK_MOTION_MS = 480;
+
 export function Thumbnail() {
   const [artifacts, setArtifacts] = useState<CaptureArtifact[]>([]);
   const [stackMotion, setStackMotion] = useState<
@@ -6042,8 +6044,8 @@ export function Thumbnail() {
   const collapsed = stackMotion === "collapsed";
   const compact = stackMotion !== "expanded";
   const stackAnimating = stackMotion === "collapsing" || stackMotion === "expanding";
-  const controlsDisabled = stackAnimating
-    || artifacts.every(({ id }) => exitingArtifactIds.has(id));
+  const exitingOnly = artifacts.every(({ id }) => exitingArtifactIds.has(id));
+  const controlsDisabled = stackAnimating || exitingOnly;
 
   const setStackCollapsed = (nextCollapsed: boolean) => {
     if (controlsDisabled || collapsed === nextCollapsed) return;
@@ -6056,12 +6058,18 @@ export function Thumbnail() {
     }
     if (nextCollapsed) {
       setStackMotion("collapsing");
+      const collapsePromise = invoke("set_mini_previews_collapsed", { collapsed: true });
       stackMotionTimer.current = setTimeout(() => {
         stackMotionTimer.current = null;
         setStackMotion("collapsed");
-        void invoke("set_mini_previews_collapsed", { collapsed: true })
-          .catch(() => setStackMotion("expanded"));
-      }, 320);
+      }, STACK_MOTION_MS);
+      void collapsePromise.catch(() => {
+        if (stackMotionTimer.current) {
+          clearTimeout(stackMotionTimer.current);
+          stackMotionTimer.current = null;
+        }
+        setStackMotion("expanded");
+      });
       return;
     }
     void invoke("set_mini_previews_collapsed", { collapsed: false })
@@ -6070,7 +6078,7 @@ export function Thumbnail() {
         stackMotionTimer.current = setTimeout(() => {
           stackMotionTimer.current = null;
           setStackMotion("expanded");
-        }, 320);
+        }, STACK_MOTION_MS);
       })
       .catch(() => setStackMotion("collapsed"));
   };
@@ -6106,18 +6114,22 @@ export function Thumbnail() {
         ].filter(Boolean).join(" ")}
         onScroll={refreshStackOverflow}
       >
-        {stackMotion === "expanded" && (
+        {!exitingOnly && (
           <div className="thumbnail-stack-toolbar">
             <button
               type="button"
-              className="thumbnail-stack-control thumbnail-stack-minimize"
-              aria-label="Minimize previews"
+              className={[
+                "thumbnail-stack-control",
+                "thumbnail-stack-minimize",
+                compact ? "thumbnail-stack-expand" : "",
+              ].filter(Boolean).join(" ")}
+              aria-label={compact ? "Expand previews" : "Minimize previews"}
               disabled={controlsDisabled}
-              onClick={() => setStackCollapsed(true)}
+              onClick={() => setStackCollapsed(!collapsed)}
             >
               <PreviewStackIcon />
               <span className="thumbnail-stack-minimize-label" aria-hidden="true">
-                Show less
+                {compact ? "Show more" : "Show less"}
               </span>
             </button>
           </div>

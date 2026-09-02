@@ -3,7 +3,7 @@ use crate::cursor_policy::{
     CaptureCursor, CaptureCursorEvent, CaptureCursorKind, CaptureCursorMonitorAction,
     ThumbnailHoverCursor, capture_cursor_monitor_action, overlay_prepare_keeps_native_cursor,
     suppress_document_cursor_rects_for_thumbnail, thumbnail_may_take_key_window,
-    thumbnail_unpolled_hover_when_inactive,
+    thumbnail_poll_is_live, thumbnail_unpolled_hover,
 };
 
 use std::{
@@ -11,10 +11,10 @@ use std::{
     ffi::c_void,
     ptr,
     sync::{
-        Mutex,
-        atomic::{AtomicBool, AtomicU8, Ordering},
+        Mutex, OnceLock,
+        atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use block2::RcBlock;
@@ -337,7 +337,7 @@ impl CursorTrackingOwner {
         }
         let hover = cursor_mode_to_thumbnail_hover(mode);
         let hover = if pointer_inside_thumbnail_window() {
-            thumbnail_unpolled_hover_when_inactive(app_is_active(), hover)
+            thumbnail_unpolled_hover(thumbnail_pointer_poll_is_live(), hover)
         } else {
             hover
         };
@@ -381,6 +381,9 @@ fn should_rearm_thumbnail_key_window(interactive: bool, mode_changed: bool) -> b
 /// the default arrow. A process-local event monitor re-applies this mode on the
 /// same run loop as the mouse event (and once more on the next turn).
 static THUMBNAIL_CURSOR_MODE: AtomicU8 = AtomicU8::new(CursorMode::Arrow as u8);
+const THUMBNAIL_POLL_STALE_MS: u64 = 250;
+static THUMBNAIL_POINTER_POLL_AT_MS: AtomicU64 = AtomicU64::new(0);
+static THUMBNAIL_POINTER_POLL_CLOCK: OnceLock<Instant> = OnceLock::new();
 // Mouse-up releases thumbnail key status so the frontmost app cannot remain
 // visually inactive under a stationary pointer. Leaving/re-entering the card or
 // moving to a different cursor region rearms key-on-hover.
@@ -394,6 +397,29 @@ static GLOBAL_CURSOR_MONITOR: Mutex<Option<MainThreadMonitor>> = Mutex::new(None
 static CURSOR_CLAIM_PANEL: Mutex<Option<MainThreadPanel>> = Mutex::new(None);
 static THUMBNAIL_WINDOW_PTR: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
+
+pub fn note_thumbnail_pointer_poll() {
+    let clock = THUMBNAIL_POINTER_POLL_CLOCK.get_or_init(Instant::now);
+    THUMBNAIL_POINTER_POLL_AT_MS.store(
+        clock
+            .elapsed()
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX)
+            .max(1),
+        Ordering::Release,
+    );
+}
+
+#[must_use]
+pub fn thumbnail_pointer_poll_is_live() -> bool {
+    let clock = THUMBNAIL_POINTER_POLL_CLOCK.get_or_init(Instant::now);
+    let now_ms = clock.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
+    let last_poll_ms = THUMBNAIL_POINTER_POLL_AT_MS.load(Ordering::Acquire);
+    last_poll_ms != 0
+        && thumbnail_poll_is_live(now_ms.saturating_sub(last_poll_ms))
+        && now_ms.saturating_sub(last_poll_ms) <= THUMBNAIL_POLL_STALE_MS
+}
 
 /// Retains an AppKit event monitor installed only on the main thread.
 ///
@@ -592,7 +618,13 @@ fn ensure_thumbnail_click_cursor_monitor() {
             return event.as_ptr();
         }
         let reasserted = if over_thumbnail && (click_handoff || !app_is_active()) {
-            apply_unpolled_thumbnail_hover_cursor()
+            if !thumbnail_pointer_poll_is_live() {
+                apply_unpolled_thumbnail_hover_cursor()
+            } else if click_handoff {
+                reassert_thumbnail_cursor_after_click()
+            } else {
+                false
+            }
         } else {
             reassert_thumbnail_cursor_after_click()
         };
@@ -603,14 +635,26 @@ fn ensure_thumbnail_click_cursor_monitor() {
             // status so a Copy/Save/Delete click cannot leave the app
             // underneath inactive.
             DispatchQueue::main().exec_async(move || {
-                let _ = apply_unpolled_thumbnail_hover_cursor();
+                let _ = if thumbnail_pointer_poll_is_live() {
+                    reassert_thumbnail_cursor_after_click()
+                } else {
+                    apply_unpolled_thumbnail_hover_cursor()
+                };
                 if let Some(window_address) = thumbnail_window {
                     release_thumbnail_key_window(window_address);
                 }
                 DispatchQueue::main().exec_async(|| {
-                    let _ = apply_unpolled_thumbnail_hover_cursor();
+                    let _ = if thumbnail_pointer_poll_is_live() {
+                        reassert_thumbnail_cursor_after_click()
+                    } else {
+                        apply_unpolled_thumbnail_hover_cursor()
+                    };
                     DispatchQueue::main().exec_async(|| {
-                        let _ = apply_unpolled_thumbnail_hover_cursor();
+                        let _ = if thumbnail_pointer_poll_is_live() {
+                            reassert_thumbnail_cursor_after_click()
+                        } else {
+                            apply_unpolled_thumbnail_hover_cursor()
+                        };
                     });
                 });
             });
@@ -704,15 +748,18 @@ fn apply_thumbnail_hover_from_global_pointer() {
     if !point_in_ns_rect(NSEvent::mouseLocation(), window.frame()) {
         return;
     }
-    // Frozen JS poll can leave the stack click-through. Tracking areas do not
-    // fire on a window that ignores mouse events, so enable them before hover.
-    window.setIgnoresMouseEvents(false);
-    THUMBNAIL_KEY_WINDOW_ALLOWED.store(true, Ordering::Release);
-    if cursor_surface_can_take_key_window(CursorSurface::Thumbnail) && !window.isKeyWindow() {
-        remember_frontmost_app_before_thumbnail_key();
-        window.makeKeyWindow();
+    if !thumbnail_pointer_poll_is_live() {
+        // Frozen JS poll can leave the stack click-through. Tracking areas do
+        // not fire on a window that ignores mouse events, so enable them before
+        // hover.
+        window.setIgnoresMouseEvents(false);
+        THUMBNAIL_KEY_WINDOW_ALLOWED.store(true, Ordering::Release);
+        if cursor_surface_can_take_key_window(CursorSurface::Thumbnail) && !window.isKeyWindow() {
+            remember_frontmost_app_before_thumbnail_key();
+            window.makeKeyWindow();
+        }
+        let _ = apply_unpolled_thumbnail_hover_cursor();
     }
-    let _ = apply_unpolled_thumbnail_hover_cursor();
 }
 
 fn ensure_thumbnail_resign_active_observer() {

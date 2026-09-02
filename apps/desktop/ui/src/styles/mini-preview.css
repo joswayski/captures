@@ -1436,7 +1436,7 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-contr
 .thumbnail-stack-minimize {
   overflow: hidden;
   transition:
-    width var(--dur-2) var(--ease-out),
+    width var(--dur-4) var(--ease-standard),
     color var(--dur-1) var(--ease-out),
     background-color var(--dur-1) var(--ease-out),
     border-color var(--dur-1) var(--ease-out),
@@ -1446,16 +1446,16 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-contr
 .thumbnail-stack-minimize svg {
   position: absolute;
   transition:
-    opacity var(--dur-1) var(--ease-out),
-    transform var(--dur-2) var(--ease-out);
+    opacity var(--dur-3) var(--ease-standard),
+    transform var(--dur-3) var(--ease-standard);
 }
 
 .thumbnail-stack-minimize-label {
   opacity: 0;
   transform: translateX(4px);
   transition:
-    opacity var(--dur-1) var(--ease-out),
-    transform var(--dur-2) var(--ease-out);
+    opacity var(--dur-3) var(--ease-standard),
+    transform var(--dur-3) var(--ease-standard);
   pointer-events: none;
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
@@ -1466,7 +1466,11 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-contr
 .thumbnail-stack-minimize:hover,
 .thumbnail-stack-minimize[data-native-pointer-hover="true"],
 .thumbnail-stack-minimize:focus-visible {
-  width: 84px;
+  min-width: 92px;
+  width: 92px;
+  background: var(--glass-strong-solid);
+  border-color: var(--glass-border);
+  transform: none;
 }
 
 .thumbnail-stack-minimize:hover svg,
@@ -1524,17 +1528,18 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-contr
   position: absolute;
   left: 28px;
   right: 28px;
-  bottom: 28px;
+  bottom: 52px;
   z-index: calc(30 - var(--thumbnail-stack-depth, 0));
   width: calc(100% - 56px);
   opacity: calc(1 - var(--thumbnail-stack-hidden, 0));
+  transition: opacity var(--dur-4) var(--ease-out);
   transform-origin: 50% 100%;
   pointer-events: none;
   will-change: transform, opacity, filter;
 }
 
 .thumbnail-stack-minimizing > .thumbnail-card {
-  animation: thumbnail-card-minimize 0.32s cubic-bezier(0.32, 0.72, 0, 1) both;
+  animation: thumbnail-card-minimize 0.48s var(--ease-standard) both;
 }
 
 .thumbnail-stack-minimized > .thumbnail-card {
@@ -1550,7 +1555,7 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-contr
 }
 
 .thumbnail-stack-expanding > .thumbnail-card {
-  animation: thumbnail-card-expand 0.32s cubic-bezier(0.32, 0.72, 0, 1) both;
+  animation: thumbnail-card-expand 0.48s var(--ease-standard) both;
 }
 
 .thumbnail-stack-compact > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting) {
@@ -1613,7 +1618,7 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-contr
   position: absolute;
   z-index: 40;
   right: 28px;
-  bottom: 28px;
+  bottom: 52px;
   left: 28px;
   height: 160px;
   padding: 0;
@@ -1653,6 +1658,10 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-contr
   }
 
   .thumbnail-stack-control {
+    transition: none;
+  }
+
+  .thumbnail-stack-compact > .thumbnail-card {
     transition: none;
   }
 

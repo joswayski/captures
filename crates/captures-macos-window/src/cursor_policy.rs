@@ -185,14 +185,20 @@ impl ThumbnailHoverCursor {
     }
 }
 
-/// Frozen JS poll only happens while Captures is inactive. Trust the hit-tested
-/// kind once the app is active so empty stack chrome can keep the arrow.
+/// Whether the JavaScript thumbnail pointer poll is recent enough to trust.
 #[must_use]
-pub const fn thumbnail_unpolled_hover_when_inactive(
-    app_is_active: bool,
+pub const fn thumbnail_poll_is_live(elapsed_ms: u64) -> bool {
+    elapsed_ms <= 250
+}
+
+/// Use the hit-tested kind while the JavaScript pointer poll is live. When
+/// WebKit timers are frozen, promote a pointer inside the stack immediately.
+#[must_use]
+pub const fn thumbnail_unpolled_hover(
+    poll_is_live: bool,
     kind: ThumbnailHoverCursor,
 ) -> ThumbnailHoverCursor {
-    if app_is_active {
+    if poll_is_live {
         kind
     } else {
         kind.unpolled_hover()
@@ -239,7 +245,7 @@ mod tests {
         CaptureCursor, CaptureCursorEvent, CaptureCursorKind, CaptureCursorMonitorAction,
         ThumbnailHoverCursor, capture_cursor_monitor_action, overlay_prepare_keeps_native_cursor,
         region_shortcut_claims_cursor_on_press, suppress_document_cursor_rects_for_thumbnail,
-        thumbnail_may_take_key_window, thumbnail_unpolled_hover_when_inactive,
+        thumbnail_may_take_key_window, thumbnail_poll_is_live, thumbnail_unpolled_hover,
     };
 
     #[test]
@@ -353,7 +359,14 @@ mod tests {
     }
 
     #[test]
-    fn unpolled_thumbnail_hover_uses_a_pointing_hand() {
+    fn thumbnail_poll_liveness_has_a_250ms_stale_threshold() {
+        assert!(thumbnail_poll_is_live(0));
+        assert!(thumbnail_poll_is_live(250));
+        assert!(!thumbnail_poll_is_live(251));
+    }
+
+    #[test]
+    fn unpolled_thumbnail_hover_uses_a_pointing_hand_when_poll_is_stale() {
         assert_eq!(
             ThumbnailHoverCursor::Default.unpolled_hover(),
             ThumbnailHoverCursor::Pointer
@@ -369,15 +382,15 @@ mod tests {
         assert!(ThumbnailHoverCursor::Pointer.is_interactive());
         assert!(!ThumbnailHoverCursor::Default.is_interactive());
         assert_eq!(
-            thumbnail_unpolled_hover_when_inactive(false, ThumbnailHoverCursor::Default),
+            thumbnail_unpolled_hover(false, ThumbnailHoverCursor::Default),
             ThumbnailHoverCursor::Pointer
         );
         assert_eq!(
-            thumbnail_unpolled_hover_when_inactive(true, ThumbnailHoverCursor::Default),
+            thumbnail_unpolled_hover(true, ThumbnailHoverCursor::Default),
             ThumbnailHoverCursor::Default
         );
         assert_eq!(
-            thumbnail_unpolled_hover_when_inactive(false, ThumbnailHoverCursor::Grab),
+            thumbnail_unpolled_hover(false, ThumbnailHoverCursor::Grab),
             ThumbnailHoverCursor::Grab
         );
     }

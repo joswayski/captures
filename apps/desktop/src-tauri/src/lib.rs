@@ -1458,6 +1458,8 @@ fn get_thumbnail_pointer_position(
     if !thumbnail_window_is_presented(&window) {
         return None;
     }
+    #[cfg(target_os = "macos")]
+    captures_macos_window::note_thumbnail_pointer_poll();
     webview_pointer_position(&window)
 }
 
@@ -4571,7 +4573,7 @@ const THUMBNAIL_WIDTH: f64 = 340.0;
 const THUMBNAIL_CARD_HEIGHT: f64 = 160.0;
 const THUMBNAIL_GAP: f64 = 24.0;
 const THUMBNAIL_PADDING: f64 = 28.0;
-const THUMBNAIL_EXPANDED_CONTROL_GUTTER: f64 = 52.0;
+const THUMBNAIL_CONTROL_GUTTER: f64 = 52.0;
 
 fn update_thumbnail_stack(app: &AppHandle) {
     let app = app.clone();
@@ -4620,10 +4622,9 @@ fn update_thumbnail_stack_window(
         thumbnail_window_geometry(handle, visible_count, collapsed);
     let visible = window.is_visible().unwrap_or(false);
     let presented = thumbnail_window_is_presented(&window);
-    // WKWebView blanks painted cards when its visible NSWindow shrinks. Linux
-    // window managers can ignore the matching move after a resize, breaking
-    // the bottom anchor. Precise hit testing keeps the retained empty area
-    // click-through on both platforms.
+    // WKWebView blanks painted cards when its visible NSWindow shrinks. macOS
+    // keeps the frame in every mode; Linux keeps it while collapsed. Precise
+    // hit testing keeps the retained empty area click-through on both platforms.
     let height = thumbnail_visible_window_height(
         desired_height,
         visible
@@ -4689,7 +4690,7 @@ fn thumbnail_visible_window_height(
 }
 
 fn thumbnail_preserve_current_height(collapsed: bool) -> bool {
-    (cfg!(target_os = "macos") && !collapsed) || (cfg!(target_os = "linux") && collapsed)
+    cfg!(target_os = "macos") || (cfg!(target_os = "linux") && collapsed)
 }
 
 fn thumbnail_webview_needs_tauri_show(is_visible: bool) -> bool {
@@ -4882,15 +4883,10 @@ fn thumbnail_window_geometry(app: &AppHandle, count: usize, collapsed: bool) -> 
         .unwrap_or((20.0, 20.0, thumbnail_stack_height(count, collapsed)))
 }
 
-fn thumbnail_stack_height(count: usize, collapsed: bool) -> f64 {
+fn thumbnail_stack_height(count: usize, _collapsed: bool) -> f64 {
     let cards = count.max(1) as f64;
-    let bottom_gutter = if collapsed {
-        THUMBNAIL_PADDING
-    } else {
-        THUMBNAIL_EXPANDED_CONTROL_GUTTER
-    };
     THUMBNAIL_PADDING
-        + bottom_gutter
+        + THUMBNAIL_CONTROL_GUTTER
         + cards * THUMBNAIL_CARD_HEIGHT
         + (cards - 1.0) * THUMBNAIL_GAP
 }
@@ -7041,14 +7037,14 @@ mod tests {
             captures_macos_window::CaptureCursor::overlay_region().native_owned
         ));
         assert_eq!(
-            captures_macos_window::thumbnail_unpolled_hover_when_inactive(
+            captures_macos_window::thumbnail_unpolled_hover(
                 false,
                 captures_macos_window::ThumbnailHoverCursor::Default,
             ),
             captures_macos_window::ThumbnailHoverCursor::Pointer
         );
         assert_eq!(
-            captures_macos_window::thumbnail_unpolled_hover_when_inactive(
+            captures_macos_window::thumbnail_unpolled_hover(
                 true,
                 captures_macos_window::ThumbnailHoverCursor::Default,
             ),
@@ -7174,7 +7170,7 @@ mod tests {
                 1,
                 true,
             ),
-            (0.0, 796.0, 216.0)
+            (0.0, 772.0, 240.0)
         );
     }
 
@@ -7265,7 +7261,7 @@ mod tests {
         assert_eq!(thumbnail_stack_visible_count(4, true), 1);
         assert_eq!(thumbnail_stack_visible_count(4, false), 4);
         assert_eq!(thumbnail_stack_visible_count(0, true), 0);
-        assert_eq!(thumbnail_stack_height(1, true), 216.0);
+        assert_eq!(thumbnail_stack_height(1, true), 240.0);
         assert_eq!(thumbnail_stack_height(1, false), 240.0);
     }
 
@@ -7278,10 +7274,10 @@ mod tests {
     }
 
     #[test]
-    fn preserves_linux_thumbnail_height_while_collapsed() {
+    fn preserves_thumbnail_height_while_collapsed_on_macos_and_linux() {
         assert_eq!(
             thumbnail_preserve_current_height(true),
-            cfg!(target_os = "linux")
+            cfg!(target_os = "macos") || cfg!(target_os = "linux")
         );
     }
 
