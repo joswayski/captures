@@ -536,6 +536,33 @@ describe("shouldIgnoreThumbnailCursorEvents", () => {
     expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: true })).toBe(true);
   });
 
+  it("uses a grab cursor over the collapsed pile so window drag is obvious", () => {
+    document.body.innerHTML = `
+      <main class="thumbnail-stack thumbnail-stack-minimized">
+        <article class="thumbnail-card" aria-hidden="true"><button>Copy</button></article>
+        <button class="thumbnail-collapsed-hit-target">Expand previews</button>
+      </main>
+    `;
+    const target = document.querySelector<HTMLButtonElement>(".thumbnail-collapsed-hit-target")!;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => target),
+    });
+
+    expect(applyThumbnailNativeHover({ x: 40, y: 80, inside: true })).toBe("grab");
+    expectNativePointerHover(target, true);
+  });
+
+  it("keeps the window interactive while the collapsed pile is being dragged", () => {
+    document.body.innerHTML = `
+      <main class="thumbnail-stack thumbnail-stack-minimized thumbnail-stack-dragging">
+        <button class="thumbnail-collapsed-hit-target">Expand previews</button>
+      </main>
+    `;
+    expect(thumbnailStackHasLiveHitTarget()).toBe(true);
+    expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: false })).toBe(false);
+  });
+
   it("keeps a minimized stack toolbar control interactive", () => {
     document.body.innerHTML = `
       <main class="thumbnail-stack thumbnail-stack-minimized">

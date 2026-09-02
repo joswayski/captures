@@ -105,6 +105,13 @@ import {
   type ThumbnailDustParticle,
 } from "./lib/thumbnailExit";
 import {
+  CollapsedThumbnailStackDrag,
+  applyThumbnailStackDragSway,
+  readHarnessStackOffset,
+  setThumbnailStackDragging,
+  writeHarnessStackOffset,
+} from "./lib/thumbnailStackDrag";
+import {
   animateThumbnailStackScroll,
   createThumbnailStackShiftController,
   shouldScrollThumbnailStackToEnd,
@@ -5484,6 +5491,8 @@ export function Thumbnail() {
     hasNewer: false,
   });
   const stackRef = useRef<HTMLElement>(null);
+  const stackDrag = useRef<CollapsedThumbnailStackDrag | null>(null);
+  const skipCollapsedStackClick = useRef(false);
   const stackMotionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const previousArtifactCount = useRef(0);
   const cancelStackScroll = useRef<(() => void) | null>(null);
@@ -6110,6 +6119,66 @@ export function Thumbnail() {
     });
   };
 
+  const collapsedStackDrag = () => {
+    stackDrag.current ??= new CollapsedThumbnailStackDrag({
+      getFrame: async () => {
+        if (currentWindow) {
+          const scale = await currentWindow.scaleFactor();
+          const position = await currentWindow.outerPosition();
+          return { x: position.x / scale, y: position.y / scale };
+        }
+        return readHarnessStackOffset();
+      },
+      moveFrame: async (x, y) => {
+        if (isTauri()) {
+          return invoke<{ x: number; y: number }>("set_mini_preview_stack_position", { x, y });
+        }
+        return writeHarnessStackOffset(x, y);
+      },
+      reducedMotion: prefersReducedMotion,
+    });
+    return stackDrag.current;
+  };
+
+  const onCollapsedStackPointerDown = (event: React.PointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0 || controlsDisabled) return;
+    const drag = collapsedStackDrag();
+    if (!drag.pointerDown(event.nativeEvent)) return;
+    skipCollapsedStackClick.current = true;
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // jsdom and some WebViews omit Element.setPointerCapture.
+    }
+    const pointerId = event.pointerId;
+    const onMove = (moveEvent: PointerEvent) => {
+      if (moveEvent.pointerId !== pointerId) return;
+      void drag.pointerMove(moveEvent).then((result) => {
+        if (!result?.dragging) return;
+        const stack = stackRef.current;
+        if (stack && !stack.classList.contains("thumbnail-stack-dragging")) {
+          setThumbnailStackDragging(stack, true);
+          window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
+        }
+        applyThumbnailStackDragSway(stack, result.sway);
+      });
+    };
+    const onUp = (upEvent: PointerEvent) => {
+      if (upEvent.pointerId !== pointerId) return;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      void drag.pointerUp(upEvent).then((outcome) => {
+        setThumbnailStackDragging(stackRef.current, false);
+        window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
+        if (outcome === "expand") setStackCollapsed(false);
+      });
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+  };
+
   return (
     <>
       <main
@@ -6179,7 +6248,14 @@ export function Thumbnail() {
             className="thumbnail-collapsed-hit-target"
             aria-label={`Expand ${artifacts.length === 1 ? "preview" : `${artifacts.length} previews`}`}
             disabled={controlsDisabled}
-            onClick={() => setStackCollapsed(false)}
+            onPointerDown={onCollapsedStackPointerDown}
+            onClick={() => {
+              if (skipCollapsedStackClick.current) {
+                skipCollapsedStackClick.current = false;
+                return;
+              }
+              setStackCollapsed(false);
+            }}
           />
         )}
       </main>
