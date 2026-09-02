@@ -54,43 +54,13 @@ type ParseResult<T> =
   | { ok: true; value: T }
   | { ok: false; error: string };
 
-export async function handleApiRequest(
-  request: Request,
-  env: ApiEnv,
-  fetcher: Fetcher = fetch,
-): Promise<Response> {
-  const url = new URL(request.url);
-
-  if (url.pathname === "/api/health") {
-    if (request.method !== "GET") {
-      return methodNotAllowed(request, ["GET"]);
-    }
-    return json(request, { status: "ok" });
-  }
-
-  if (url.pathname === "/api/updates/preview") {
-    if (request.method !== "GET") {
-      return methodNotAllowed(request, ["GET"]);
-    }
-    return serveUpdaterManifest(request, fetcher);
-  }
-
-  if (url.pathname === "/api/feedback") {
-    if (request.method === "OPTIONS") {
-      return preflight(request);
-    }
-    if (request.method !== "POST") {
-      return methodNotAllowed(request, ["POST", "OPTIONS"]);
-    }
-    return createFeedback(request, env, fetcher);
-  }
-
-  return json(request, { error: "not found" }, 404);
+export function getHealth(request: Request): Response {
+  return json(request, { status: "ok" });
 }
 
-async function serveUpdaterManifest(
+export async function getPreviewUpdaterManifest(
   request: Request,
-  fetcher: Fetcher,
+  fetcher: Fetcher = fetch,
 ): Promise<Response> {
   const result = await resolveUpdaterManifest(fetcher);
   if (!result.ok) {
@@ -107,10 +77,10 @@ async function serveUpdaterManifest(
   return new Response(result.text, { status: 200, headers });
 }
 
-async function createFeedback(
+export async function createFeedback(
   request: Request,
   env: ApiEnv,
-  fetcher: Fetcher,
+  fetcher: Fetcher = fetch,
 ): Promise<Response> {
   const origin = request.headers.get("Origin");
   if (origin && !ALLOWED_WEB_ORIGINS.has(origin)) {
@@ -416,7 +386,7 @@ function isDiscordWebhookUrl(value: string): boolean {
   }
 }
 
-function preflight(request: Request): Response {
+export function preflightFeedback(request: Request): Response {
   const origin = request.headers.get("Origin");
   if (origin && !ALLOWED_WEB_ORIGINS.has(origin)) {
     return json(request, { error: "origin not allowed" }, 403);
@@ -426,12 +396,6 @@ function preflight(request: Request): Response {
   headers.set("Access-Control-Allow-Methods", "POST, OPTIONS");
   headers.set("Access-Control-Max-Age", "86400");
   return new Response(null, { status: 204, headers });
-}
-
-function methodNotAllowed(request: Request, methods: string[]): Response {
-  const response = json(request, { error: "method not allowed" }, 405);
-  response.headers.set("Allow", methods.join(", "));
-  return response;
 }
 
 function json(request: Request, body: unknown, status = 200): Response {

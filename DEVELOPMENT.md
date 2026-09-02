@@ -147,8 +147,8 @@ Windows builds produce an NSIS installer, MSI package, and unpackaged executable
 
 ## Feedback API
 
-Early user feedback is posted to Discord with no database. The same-origin
-`/api/*` routes live in the Node server under `apps/web/src/server`.
+Early user feedback is posted to Discord with no database. Same-origin `/api/*`
+routes are TanStack Start server routes under `apps/web/src/routes/api`.
 
 To run the website and its API locally, create `apps/web/.env` with:
 

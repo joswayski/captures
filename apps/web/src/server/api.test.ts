@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createMemoryRateLimiter } from "./rateLimit.ts";
-import { buildDiscordPayload, handleApiRequest, type ApiEnv } from "./api.ts";
+import {
+  buildDiscordPayload,
+  createFeedback,
+  getHealth,
+  getPreviewUpdaterManifest,
+  type ApiEnv,
+} from "./api.ts";
 import {
   PREVIEW_LATEST_JSON_URL,
   resetUpdaterManifestCache,
@@ -23,21 +29,11 @@ function createEnv(options: { rateLimitSuccess?: boolean; webhook?: string } = {
   return { env, rateLimitKeys };
 }
 
-test("serves health only from the API path", async () => {
-  const { env } = createEnv();
-  const response = await handleApiRequest(
-    new Request("https://captur.es/api/health"),
-    env,
-  );
+test("serves health", async () => {
+  const response = getHealth(new Request("https://captur.es/api/health"));
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { status: "ok" });
-
-  const missing = await handleApiRequest(
-    new Request("https://captur.es/health"),
-    env,
-  );
-  assert.equal(missing.status, 404);
 });
 
 const PREVIEW_MANIFEST = {
@@ -53,23 +49,15 @@ const PREVIEW_MANIFEST = {
 
 test("serves the cached Preview updater manifest from GitHub", async () => {
   resetUpdaterManifestCache();
-  const { env } = createEnv();
   const urls: string[] = [];
   const fetcher = async (input: string | URL | Request) => {
     urls.push(String(input));
     return new Response(JSON.stringify(PREVIEW_MANIFEST), { status: 200 });
   };
 
-  const response = await handleApiRequest(
-    new Request("https://captur.es/api/updates/preview"),
-    env,
-    fetcher,
-  );
-  const cached = await handleApiRequest(
-    new Request("https://captur.es/api/updates/preview"),
-    env,
-    fetcher,
-  );
+  const request = () => new Request("https://captur.es/api/updates/preview");
+  const response = await getPreviewUpdaterManifest(request(), fetcher);
+  const cached = await getPreviewUpdaterManifest(request(), fetcher);
 
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("Cache-Control"), "public, max-age=60");
@@ -81,10 +69,8 @@ test("serves the cached Preview updater manifest from GitHub", async () => {
 
 test("returns 502 when GitHub has no updater manifest to cache", async () => {
   resetUpdaterManifestCache();
-  const { env } = createEnv();
-  const response = await handleApiRequest(
+  const response = await getPreviewUpdaterManifest(
     new Request("https://captur.es/api/updates/preview"),
-    env,
     async () => new Response("missing", { status: 404 }),
   );
 
@@ -94,25 +80,10 @@ test("returns 502 when GitHub has no updater manifest to cache", async () => {
   });
 });
 
-test("rejects non-GET updater manifest requests", async () => {
-  resetUpdaterManifestCache();
-  const { env } = createEnv();
-  const response = await handleApiRequest(
-    new Request("https://captur.es/api/updates/preview", { method: "POST" }),
-    env,
-    async () => {
-      throw new Error("should not fetch GitHub");
-    },
-  );
-
-  assert.equal(response.status, 405);
-  assert.equal(response.headers.get("Allow"), "GET");
-});
-
 test("validates feedback before rate limiting or calling Discord", async () => {
   const { env, rateLimitKeys } = createEnv();
   let fetchCalls = 0;
-  const response = await handleApiRequest(
+  const response = await createFeedback(
     new Request("https://captur.es/api/feedback", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -134,7 +105,7 @@ test("validates feedback before rate limiting or calling Discord", async () => {
 test("rejects oversized feedback before rate limiting or calling Discord", async () => {
   const { env, rateLimitKeys } = createEnv();
   let fetchCalls = 0;
-  const response = await handleApiRequest(
+  const response = await createFeedback(
     new Request("https://captur.es/api/feedback", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -158,7 +129,7 @@ test("rejects oversized feedback before rate limiting or calling Discord", async
 test("rate limits accepted feedback by the Cloudflare connecting IP", async () => {
   const { env, rateLimitKeys } = createEnv({ rateLimitSuccess: false });
   let fetchCalls = 0;
-  const response = await handleApiRequest(
+  const response = await createFeedback(
     new Request("https://captur.es/api/feedback", {
       method: "POST",
       headers: {
@@ -181,7 +152,7 @@ test("rate limits accepted feedback by the Cloudflare connecting IP", async () =
 
 test("ignores a client-supplied X-Forwarded-For address", async () => {
   const { env, rateLimitKeys } = createEnv();
-  const response = await handleApiRequest(
+  const response = await createFeedback(
     new Request("https://captur.es/api/feedback", {
       method: "POST",
       headers: {
@@ -203,7 +174,7 @@ test("delivers normalized feedback to Discord", async () => {
   const { env, rateLimitKeys } = createEnv();
   let webhookUrl = "";
   let webhookBody: unknown;
-  const response = await handleApiRequest(
+  const response = await createFeedback(
     new Request("https://captur.es/api/feedback", {
       method: "POST",
       headers: {
@@ -257,7 +228,7 @@ test("delivers normalized feedback to Discord", async () => {
 test("delivers crash reports to Discord as a distinct category", async () => {
   const { env } = createEnv();
   let webhookBody: unknown;
-  const response = await handleApiRequest(
+  const response = await createFeedback(
     new Request("https://captur.es/api/feedback", {
       method: "POST",
       headers: {
@@ -353,12 +324,12 @@ test("refunds the rate limit when Discord delivery fails", async () => {
       body: JSON.stringify({ message: "Recording freezes" }),
     });
 
-  const failed = await handleApiRequest(request(), env, async () => {
+  const failed = await createFeedback(request(), env, async () => {
     throw new Error("network down");
   });
   assert.equal(failed.status, 502);
 
-  const retry = await handleApiRequest(
+  const retry = await createFeedback(
     request(),
     env,
     async () => new Response(null, { status: 204 }),
