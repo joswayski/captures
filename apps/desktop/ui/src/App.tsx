@@ -5865,6 +5865,10 @@ export function Thumbnail() {
       setIgnoreCursorEvents(false, true);
       if (refreshNative) {
         void invoke("refresh_thumbnail_interactivity").catch(() => undefined);
+      } else {
+        // Native show already restored z-order and hit testing. Still restore
+        // WebKit cursor rectangles so CSS grab/pointer work while polls resume.
+        void invoke("restore_thumbnail_css_cursor_rects").catch(() => undefined);
       }
       schedulePoll(0);
     };

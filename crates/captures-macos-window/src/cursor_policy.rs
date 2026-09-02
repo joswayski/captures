@@ -251,6 +251,15 @@ pub const fn thumbnail_passthrough_disables_cursor_rects() -> bool {
     true
 }
 
+/// Sleep/IPC recovery drops native tracking and uses CSS `:hover` until the
+/// pointer poll is live again. Cursor rectangles disabled for a click-through
+/// hole must be turned back on so grab/pointer CSS can apply during that
+/// fallback.
+#[must_use]
+pub const fn thumbnail_css_fallback_restores_cursor_rects() -> bool {
+    true
+}
+
 /// A titled editor's cursor rectangles reset `NSCursor` to the arrow while the
 /// pointer is still on a mini-preview control. Disable them for that window
 /// until the pointer leaves the stack.
@@ -269,8 +278,9 @@ mod tests {
         CaptureCursor, CaptureCursorEvent, CaptureCursorKind, CaptureCursorMonitorAction,
         ThumbnailHoverCursor, capture_cursor_monitor_action, overlay_prepare_keeps_native_cursor,
         region_shortcut_claims_cursor_on_press, suppress_document_cursor_rects_for_thumbnail,
-        thumbnail_may_take_key_window, thumbnail_passthrough_disables_cursor_rects,
-        thumbnail_poll_is_live, thumbnail_resets_cursor_on_exit, thumbnail_unpolled_hover,
+        thumbnail_css_fallback_restores_cursor_rects, thumbnail_may_take_key_window,
+        thumbnail_passthrough_disables_cursor_rects, thumbnail_poll_is_live,
+        thumbnail_resets_cursor_on_exit, thumbnail_unpolled_hover,
     };
 
     #[test]
@@ -411,6 +421,7 @@ mod tests {
         assert!(!ThumbnailHoverCursor::Default.claims_ns_cursor());
         assert!(!thumbnail_resets_cursor_on_exit());
         assert!(thumbnail_passthrough_disables_cursor_rects());
+        assert!(thumbnail_css_fallback_restores_cursor_rects());
         assert_eq!(
             thumbnail_unpolled_hover(false, ThumbnailHoverCursor::Default),
             ThumbnailHoverCursor::Pointer
