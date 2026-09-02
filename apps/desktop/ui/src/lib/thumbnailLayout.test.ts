@@ -180,7 +180,7 @@ describe("thumbnail stack layout", () => {
       /\.thumbnail-stack-toolbar:not\(\.thumbnail-stack-toolbar-leaving\):not\(\.thumbnail-stack-toolbar-exiting\):not\(\.thumbnail-stack-toolbar-entering\) \.thumbnail-stack-minimize:hover/,
     );
     expect(thumbnailStyles).toMatch(
-      /\.thumbnail-stack-toolbar-exiting \.thumbnail-stack-minimize\s*\{[^}]*transition:\s*none/,
+      /\.thumbnail-stack-toolbar-exiting \.thumbnail-stack-minimize,[\s\S]*?\{[^}]*transition:\s*none/,
     );
   });
 
