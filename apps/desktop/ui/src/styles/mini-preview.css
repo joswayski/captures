@@ -1541,11 +1541,11 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-contr
   transform:
     translate3d(
       calc(var(--thumbnail-stack-depth, 0) * -1.5px),
-      calc(var(--thumbnail-stack-depth, 0) * -8px),
+      calc(var(--thumbnail-stack-depth, 0) * -13px),
       calc(var(--thumbnail-stack-depth, 0) * -24px)
     )
     rotateX(calc(var(--thumbnail-stack-depth, 0) * -1.4deg))
-    scale(calc(1 - var(--thumbnail-stack-depth, 0) * 0.035));
+    scale(calc(1 - var(--thumbnail-stack-depth, 0) * 0.025));
   filter: brightness(calc(1 - var(--thumbnail-stack-depth, 0) * 0.12));
 }
 
@@ -1578,11 +1578,11 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-contr
     transform:
       translate3d(
         calc(var(--thumbnail-stack-depth, 0) * -1.5px),
-        calc(var(--thumbnail-stack-depth, 0) * -8px),
+        calc(var(--thumbnail-stack-depth, 0) * -13px),
         calc(var(--thumbnail-stack-depth, 0) * -24px)
       )
       rotateX(calc(var(--thumbnail-stack-depth, 0) * -1.4deg))
-      scale(calc(1 - var(--thumbnail-stack-depth, 0) * 0.035));
+      scale(calc(1 - var(--thumbnail-stack-depth, 0) * 0.025));
     filter: brightness(calc(1 - var(--thumbnail-stack-depth, 0) * 0.12));
   }
 }
@@ -1592,11 +1592,11 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-contr
     transform:
       translate3d(
         calc(var(--thumbnail-stack-depth, 0) * -1.5px),
-        calc(var(--thumbnail-stack-depth, 0) * -8px),
+        calc(var(--thumbnail-stack-depth, 0) * -13px),
         calc(var(--thumbnail-stack-depth, 0) * -24px)
       )
       rotateX(calc(var(--thumbnail-stack-depth, 0) * -1.4deg))
-      scale(calc(1 - var(--thumbnail-stack-depth, 0) * 0.035));
+      scale(calc(1 - var(--thumbnail-stack-depth, 0) * 0.025));
     filter: brightness(calc(1 - var(--thumbnail-stack-depth, 0) * 0.12));
   }
   to {

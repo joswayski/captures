@@ -184,6 +184,10 @@ test("mini-preview stack controls use opaque glass tokens and contained shadows"
     desktopCss,
     /\.thumbnail-stack-minimized > \.thumbnail-card[\s\S]*?translate3d/u,
   );
+  assert.match(
+    desktopCss,
+    /\.thumbnail-stack-minimized > \.thumbnail-card[\s\S]*?-13px/u,
+  );
   const stackToolbar =
     desktopCss.match(/\.thumbnail-stack-toolbar\s*\{([\s\S]*?)\n\}/u)?.[1];
   assert.ok(stackToolbar, "missing .thumbnail-stack-toolbar rule");

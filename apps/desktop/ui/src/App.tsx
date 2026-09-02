@@ -6115,7 +6115,7 @@ export function Thumbnail() {
               disabled={controlsDisabled}
               onClick={() => setStackCollapsed(true)}
             >
-              <MinimizeIcon />
+              <PreviewStackIcon />
               <span className="thumbnail-stack-minimize-label" aria-hidden="true">
                 Show less
               </span>
@@ -6194,10 +6194,12 @@ function ThumbnailOverflowChevron({ direction }: { direction: "up" | "down" }) {
   );
 }
 
-function MinimizeIcon() {
+function PreviewStackIcon() {
   return (
     <svg viewBox="0 0 16 16" aria-hidden="true">
-      <path d="M3.5 10 8 5.5 12.5 10" />
+      <path d="m3 5.5 5-2.75 5 2.75-5 2.75L3 5.5Z" />
+      <path d="m3.5 8.5 4.5 2.5 4.5-2.5" />
+      <path d="m4.5 11 3.5 2 3.5-2" />
     </svg>
   );
 }
