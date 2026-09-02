@@ -684,6 +684,10 @@ describe("thumbnailCssCursor", () => {
       "pointer",
     );
 
+    applyThumbnailCssCursor("default");
+    expect(document.documentElement.style.cursor).toBe("");
+    expect(document.documentElement).not.toHaveAttribute(THUMBNAIL_CURSOR_KIND_ATTRIBUTE);
+
     clearThumbnailCssCursor();
     expect(document.documentElement.style.cursor).toBe("");
     expect(document.documentElement).not.toHaveAttribute(THUMBNAIL_CURSOR_KIND_ATTRIBUTE);

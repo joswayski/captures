@@ -775,4 +775,72 @@ describe("Thumbnail", () => {
     expect(card).not.toHaveAttribute("aria-hidden");
     expect(screen.getByRole("button", { name: "Minimize previews" })).toBeEnabled();
   });
+
+  it("releases the overlay cursor over the hole left by a collapsed stack", async () => {
+    let pointerReady = false;
+    let pointerTarget: Element | null = null;
+    const secondArtifact = {
+      ...artifact,
+      id: "capture-2",
+      preview_url: "captures-capture://artifact/capture-2",
+      full_url: "captures-capture://artifact-full/capture-2",
+    };
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifacts") return [artifact, secondArtifact];
+      if (command === "get_clipboard_state") {
+        return { revision: 0, artifact_id: secondArtifact.id };
+      }
+      if (command === "get_thumbnail_pointer_position") {
+        return pointerReady ? { x: 40, y: 20, inside: true } : new Promise(() => undefined);
+      }
+      return undefined;
+    });
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => pointerTarget),
+    });
+
+    render(<Thumbnail />);
+    const cards = await screen.findAllByRole("article");
+    const stack = cards[0].closest(".thumbnail-stack")!;
+    const minimize = screen.getByRole("button", { name: "Minimize previews" });
+    pointerTarget = minimize;
+    pointerReady = true;
+    window.dispatchEvent(new Event("captures-thumbnail-ready"));
+
+    await waitFor(() => {
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith(
+        "set_thumbnail_cursor",
+        { kind: "pointer" },
+      );
+    });
+    expect(document.documentElement).toHaveClass("thumbnail-native-tracking");
+
+    vi.useFakeTimers();
+    fireEvent.click(minimize);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(32);
+      await vi.advanceTimersByTimeAsync(480);
+    });
+    vi.useRealTimers();
+
+    expect(stack).toHaveClass("thumbnail-stack-minimized");
+    pointerTarget = stack;
+    window.dispatchEvent(new Event("captures-thumbnail-layout-changed"));
+
+    await waitFor(() => {
+      const ignoreCalls = vi.mocked(invoke).mock.calls
+        .filter(([command]) => command === "set_thumbnail_ignore_cursor_events");
+      expect(ignoreCalls.at(-1)?.[1]).toEqual({ ignore: true });
+    });
+    await waitFor(() => {
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith(
+        "set_thumbnail_cursor",
+        { kind: "default" },
+      );
+    });
+    expect(document.documentElement).not.toHaveClass("thumbnail-native-tracking");
+    expect(document.documentElement).not.toHaveAttribute("data-thumbnail-cursor");
+    expect(document.documentElement.style.cursor).toBe("");
+  });
 });

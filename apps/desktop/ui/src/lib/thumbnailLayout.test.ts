@@ -64,8 +64,8 @@ describe("thumbnail stack layout", () => {
     );
 
     expect(compactCard?.[1]).toMatch(/transform:\s*var\(--thumbnail-stack-rest-transform\)/);
-    expect(compactCard?.[1]).not.toMatch(/transform\s+var\(--dur-5\)/);
-    expect(hoverReady?.[1]).toMatch(/transform\s+var\(--dur-5\)/);
+    expect(compactCard?.[1]).not.toMatch(/transform\s+var\(--stack-fan-dur\)/);
+    expect(hoverReady?.[1]).toMatch(/transform\s+var\(--stack-fan-dur\)/);
     expect(minimizingCard?.[1]).toMatch(/rotateX\(0deg\)/);
     expect(minimizingCard?.[1]).toMatch(/scale\(1\)/);
     expect(minimizeRun?.[1]).toMatch(/transform:\s*var\(--thumbnail-stack-rest-transform\)/);

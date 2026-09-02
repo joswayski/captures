@@ -853,6 +853,8 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-main-actio
  * Native AppKit owns the cursor while polling. Mirror one hit-tested kind on
  * the whole tree so WebKit cannot alternate element-level pointer/grab/default
  * rules (or the system arrow) on every cursor-rectangle update.
+ * Do not paint `cursor: default` on the document: after collapse the native
+ * window stays tall, and that arrow would cover apps underneath the hole.
  */
 html.thumbnail-native-tracking[data-thumbnail-cursor="grab"],
 html.thumbnail-native-tracking[data-thumbnail-cursor="grab"] * {
@@ -863,11 +865,6 @@ html.thumbnail-native-tracking[data-thumbnail-cursor="grab"] * {
 html.thumbnail-native-tracking[data-thumbnail-cursor="pointer"],
 html.thumbnail-native-tracking[data-thumbnail-cursor="pointer"] * {
   cursor: pointer !important;
-}
-
-html.thumbnail-native-tracking[data-thumbnail-cursor="default"],
-html.thumbnail-native-tracking[data-thumbnail-cursor="default"] * {
-  cursor: default !important;
 }
 
 /*
@@ -891,8 +888,10 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
  * rules would otherwise win on every native poll that misses the control and
  * flicker pointer vs arrow while the mouse is still on the button.
  */
-html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-control, .thumbnail-collapsed-hit-target, .thumbnail-overflow-cue),
-html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-control, .thumbnail-collapsed-hit-target, .thumbnail-overflow-cue) * {
+html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-collapsed-hit-target, .thumbnail-overflow-cue):not(:disabled),
+html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-collapsed-hit-target, .thumbnail-overflow-cue):not(:disabled) *,
+:is(.thumbnail-stack-control, .thumbnail-collapsed-hit-target, .thumbnail-overflow-cue)[data-native-pointer-hover="true"]:not(:disabled),
+:is(.thumbnail-stack-control, .thumbnail-collapsed-hit-target, .thumbnail-overflow-cue)[data-native-pointer-hover="true"]:not(:disabled) * {
   cursor: pointer !important;
 }
 
@@ -1471,8 +1470,9 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-contr
 
 .thumbnail-stack-minimize {
   overflow: hidden;
+  cursor: pointer;
   transition:
-    width var(--dur-4) var(--ease-standard),
+    width var(--dur-5) var(--ease-in-out),
     color var(--dur-1) var(--ease-out),
     background-color var(--dur-1) var(--ease-out),
     border-color var(--dur-1) var(--ease-out),
@@ -1482,17 +1482,18 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-contr
 .thumbnail-stack-minimize svg {
   position: absolute;
   transition:
-    opacity var(--dur-3) var(--ease-standard),
-    transform var(--dur-3) var(--ease-standard);
+    opacity var(--dur-4) var(--ease-in-out),
+    transform var(--dur-5) var(--ease-in-out);
 }
 
 .thumbnail-stack-minimize-label {
   opacity: 0;
   transform: translateX(4px);
   transition:
-    opacity var(--dur-3) var(--ease-standard),
-    transform var(--dur-3) var(--ease-standard);
+    opacity var(--dur-4) var(--ease-in-out) var(--dur-1),
+    transform var(--dur-5) var(--ease-in-out);
   pointer-events: none;
+  cursor: pointer;
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   line-height: 1;
@@ -1552,6 +1553,7 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-contr
 }
 
 .thumbnail-stack-compact {
+  --stack-fan-dur: 0.56s;
   height: 100%;
   max-height: none;
   overflow: visible;
@@ -1579,9 +1581,9 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-contr
   width: calc(100% - 56px);
   opacity: calc(1 - var(--thumbnail-stack-hidden, 0));
   /*
-   * Transform/filter stay off this transition. Collapsing ends by dropping the
-   * keyframe fill onto this rest pose; a transform transition here interpolates
-   * WebKit's matrix leftover into a visible hop on every card behind the front.
+   * Transform/filter stay off this transition. Collapsing eases onto the rest
+   * pose, then drops the transitioning class; a compact transform transition
+   * here would interpolate any leftover 3D matrix into a hop on rear cards.
    */
   transition:
     opacity var(--dur-4) var(--ease-out),
@@ -1629,16 +1631,17 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-contr
 }
 
 /*
- * Hover fan-out only after the minimize fill has been replaced by the rest
- * pose. Enabling transform easing in that same commit restarts ease-standard
- * from a 3D matrix and makes background cards bounce.
+ * Hover fan-out only after collapse has committed the rest pose without a
+ * transform transition. Arming easing in that same commit interpolates any
+ * leftover 3D matrix and makes background cards bounce. Duration and curve
+ * match the collapsed-pile fan from main (`--stack-fan-dur` / `--ease-in-out`).
  */
 .thumbnail-stack-minimized.thumbnail-stack-hover-ready > .thumbnail-card {
   transition:
     opacity var(--dur-4) var(--ease-out),
-    transform var(--dur-5) var(--ease-standard),
-    filter var(--dur-5) var(--ease-standard),
-    box-shadow var(--dur-4) var(--ease-out);
+    transform var(--stack-fan-dur) var(--ease-in-out),
+    filter var(--stack-fan-dur) var(--ease-in-out),
+    box-shadow var(--stack-fan-dur) var(--ease-in-out);
 }
 
 .thumbnail-stack-compact > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting) {
@@ -1678,10 +1681,14 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-contr
   pointer-events: auto;
 }
 
+/*
+ * Sparkle layers reach up over the fanned pile (hover lifts each deeper card
+ * 24px, so ~3 depths plus travel) instead of stopping at the front card's edge.
+ */
 .thumbnail-collapsed-hit-target::before,
 .thumbnail-collapsed-hit-target::after {
   position: absolute;
-  inset: -14px -10px -6px;
+  inset: -96px -10px -6px;
   border-radius: inherit;
   content: "";
   opacity: 0;
@@ -1694,18 +1701,22 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-contr
     radial-gradient(circle, rgba(var(--theme-accent-rgb), 0.9) 0 1.2px, transparent 2px),
     radial-gradient(circle, rgba(255, 255, 255, 0.85) 0 0.9px, transparent 1.6px),
     radial-gradient(circle, rgba(var(--theme-accent-rgb), 0.8) 0 1px, transparent 1.8px),
-    radial-gradient(circle, rgba(255, 255, 255, 0.7) 0 0.8px, transparent 1.5px);
+    radial-gradient(circle, rgba(255, 255, 255, 0.7) 0 0.8px, transparent 1.5px),
+    radial-gradient(circle, rgba(var(--theme-accent-rgb), 0.85) 0 1px, transparent 1.8px),
+    radial-gradient(circle, rgba(255, 255, 255, 0.8) 0 0.9px, transparent 1.6px);
   background-size: 6px 6px;
-  background-position: 12% 30%, 38% 12%, 66% 22%, 90% 40%;
+  background-position: 12% 62%, 38% 18%, 66% 40%, 90% 72%, 26% 6%, 78% 24%;
 }
 
 .thumbnail-collapsed-hit-target::after {
   background-image:
     radial-gradient(circle, rgba(255, 255, 255, 0.8) 0 1px, transparent 1.8px),
     radial-gradient(circle, rgba(var(--theme-accent-rgb), 0.85) 0 1.2px, transparent 2px),
-    radial-gradient(circle, rgba(var(--theme-accent-rgb), 0.7) 0 0.9px, transparent 1.6px);
+    radial-gradient(circle, rgba(var(--theme-accent-rgb), 0.7) 0 0.9px, transparent 1.6px),
+    radial-gradient(circle, rgba(255, 255, 255, 0.75) 0 1px, transparent 1.8px),
+    radial-gradient(circle, rgba(var(--theme-accent-rgb), 0.8) 0 1.1px, transparent 1.9px);
   background-size: 6px 6px;
-  background-position: 24% 70%, 55% 55%, 80% 78%;
+  background-position: 24% 84%, 55% 66%, 80% 88%, 46% 12%, 8% 30%;
 }
 
 .thumbnail-collapsed-hit-target:hover::before,
@@ -1728,7 +1739,7 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-contr
   }
   100% {
     opacity: 0;
-    transform: translateY(-14px) scale(1.02);
+    transform: translateY(-22px) scale(1.02);
   }
 }
 

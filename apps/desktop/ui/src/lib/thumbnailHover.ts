@@ -138,6 +138,13 @@ export function applyThumbnailCssCursor(
   kind: ThumbnailCursorKind,
   root: HTMLElement = document.documentElement,
 ) {
+  // Default is a click-through hole in the always-on-top panel. Painting
+  // `cursor: default` on the whole document lets WebKit cursor rectangles steal
+  // hover cursors from whatever is now receiving those clicks.
+  if (kind === "default") {
+    clearThumbnailCssCursor(root);
+    return;
+  }
   const cssCursor = thumbnailCssCursor(kind);
   if (root.style.cursor !== cssCursor) {
     root.style.cursor = cssCursor;
