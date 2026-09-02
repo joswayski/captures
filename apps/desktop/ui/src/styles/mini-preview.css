@@ -1601,7 +1601,27 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-contr
 }
 
 .thumbnail-stack-minimizing > .thumbnail-card {
-  animation: thumbnail-card-minimize 0.48s var(--ease-standard) both;
+  animation: none;
+  transform:
+    translate3d(
+      0,
+      calc(var(--thumbnail-stack-depth, 0) * -184px),
+      0
+    )
+    rotateX(0deg)
+    scale(1);
+  filter: brightness(1);
+  transition: none;
+}
+
+.thumbnail-stack-minimizing.thumbnail-stack-minimize-run > .thumbnail-card {
+  transform: var(--thumbnail-stack-rest-transform);
+  filter: var(--thumbnail-stack-rest-filter);
+  transition:
+    transform 0.48s var(--ease-standard),
+    filter 0.48s var(--ease-standard),
+    opacity var(--dur-4) var(--ease-out),
+    box-shadow var(--dur-4) var(--ease-out);
 }
 
 .thumbnail-stack-expanding > .thumbnail-card {
@@ -1625,30 +1645,8 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-contr
   animation: none;
 }
 
-.thumbnail-stack-minimizing > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting) {
-  animation: thumbnail-card-minimize 0.48s var(--ease-standard) both;
-}
-
 .thumbnail-stack-expanding > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting) {
   animation: thumbnail-card-expand 0.48s var(--ease-standard) both;
-}
-
-@keyframes thumbnail-card-minimize {
-  from {
-    transform:
-      translate3d(
-        0,
-        calc(var(--thumbnail-stack-depth, 0) * -184px),
-        0
-      )
-      rotateX(0deg)
-      scale(1);
-    filter: brightness(1);
-  }
-  to {
-    transform: var(--thumbnail-stack-rest-transform);
-    filter: var(--thumbnail-stack-rest-filter);
-  }
 }
 
 @keyframes thumbnail-card-expand {
@@ -1734,8 +1732,8 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-contr
   }
 }
 
-.thumbnail-stack-minimized.thumbnail-stack-hover-ready:has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card,
-.thumbnail-stack-minimized.thumbnail-stack-hover-ready:has(.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]) > .thumbnail-card {
+.thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card,
+.thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):has(.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]) > .thumbnail-card {
   transform:
     translate3d(
       calc(var(--thumbnail-stack-depth, 0) * -2px),
@@ -1789,6 +1787,7 @@ html.thumbnail-native-tracking[data-thumbnail-cursor] :is(.thumbnail-stack-contr
   }
 
   .thumbnail-stack-compact > .thumbnail-card,
+  .thumbnail-stack-minimizing.thumbnail-stack-minimize-run > .thumbnail-card,
   .thumbnail-stack-minimized.thumbnail-stack-hover-ready > .thumbnail-card {
     transition: none;
   }

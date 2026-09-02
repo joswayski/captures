@@ -5465,6 +5465,8 @@ export function Thumbnail() {
     "expanded" | "collapsing" | "collapsed" | "expanding"
   >("expanded");
   const [stackHoverReady, setStackHoverReady] = useState(false);
+  const [stackMinimizeRun, setStackMinimizeRun] = useState(false);
+  const [stackHoverLatched, setStackHoverLatched] = useState(false);
   const [exitingArtifactIds, setExitingArtifactIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -6092,24 +6094,48 @@ export function Thumbnail() {
     }
     if (nextCollapsed) {
       cancelHoverReady();
+      setStackHoverLatched(false);
+      setStackMinimizeRun(false);
       setStackMotion("collapsing");
       const collapsePromise = invoke("set_mini_previews_collapsed", { collapsed: true });
-      stackMotionTimer.current = setTimeout(() => {
-        stackMotionTimer.current = null;
-        setStackMotion("collapsed");
-        armHoverReady();
-      }, STACK_MOTION_MS);
+      const frames = { first: 0, second: 0 };
+      frames.first = requestAnimationFrame(() => {
+        frames.second = requestAnimationFrame(() => {
+          stackHoverReadyFrames.current = null;
+          setStackMinimizeRun(true);
+          stackMotionTimer.current = setTimeout(() => {
+            stackMotionTimer.current = null;
+            setStackMinimizeRun(false);
+            setStackMotion("collapsed");
+            requestAnimationFrame(() => {
+              const target = stackRef.current?.querySelector(".thumbnail-collapsed-hit-target");
+              setStackHoverLatched(Boolean(target?.matches(":hover")));
+            });
+            armHoverReady();
+          }, STACK_MOTION_MS);
+        });
+      });
+      stackHoverReadyFrames.current = frames;
       void collapsePromise.catch(() => {
         if (stackMotionTimer.current) {
           clearTimeout(stackMotionTimer.current);
           stackMotionTimer.current = null;
         }
+        if (stackHoverReadyFrames.current) {
+          cancelAnimationFrame(stackHoverReadyFrames.current.first);
+          cancelAnimationFrame(stackHoverReadyFrames.current.second);
+          stackHoverReadyFrames.current = null;
+        }
         cancelHoverReady();
+        setStackMinimizeRun(false);
+        setStackHoverLatched(false);
         setStackMotion("expanded");
       });
       return;
     }
     cancelHoverReady();
+    setStackMinimizeRun(false);
+    setStackHoverLatched(false);
     void invoke("set_mini_previews_collapsed", { collapsed: false })
       .then(() => {
         setStackMotion("expanding");
@@ -6152,7 +6178,9 @@ export function Thumbnail() {
           stackMotion === "collapsing" ? "thumbnail-stack-minimizing" : "",
           stackMotion === "collapsed" ? "thumbnail-stack-minimized" : "",
           stackMotion === "expanding" ? "thumbnail-stack-expanding" : "",
+          stackMinimizeRun ? "thumbnail-stack-minimize-run" : "",
           stackHoverReady ? "thumbnail-stack-hover-ready" : "",
+          stackHoverLatched ? "thumbnail-stack-hover-latched" : "",
         ].filter(Boolean).join(" ")}
         onScroll={refreshStackOverflow}
       >
@@ -6212,6 +6240,7 @@ export function Thumbnail() {
             className="thumbnail-collapsed-hit-target"
             aria-label={`Expand ${artifacts.length === 1 ? "preview" : `${artifacts.length} previews`}`}
             disabled={controlsDisabled}
+            onPointerLeave={() => setStackHoverLatched(false)}
             onClick={() => setStackCollapsed(false)}
           />
         )}

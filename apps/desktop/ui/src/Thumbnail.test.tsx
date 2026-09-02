@@ -731,11 +731,16 @@ describe("Thumbnail", () => {
     vi.useFakeTimers();
     fireEvent.click(minimize);
     expect(stack).toHaveClass("thumbnail-stack-minimizing");
+    expect(stack).not.toHaveClass("thumbnail-stack-minimize-run");
     expect(stack).not.toHaveClass("thumbnail-stack-hover-ready");
     expect(minimize.closest(".thumbnail-stack-toolbar")).toHaveClass(
       "thumbnail-stack-toolbar-leaving",
     );
     expect(card).toHaveAttribute("aria-hidden", "true");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(32);
+    });
+    expect(stack).toHaveClass("thumbnail-stack-minimize-run");
     await act(async () => {
       await vi.advanceTimersByTimeAsync(480);
     });

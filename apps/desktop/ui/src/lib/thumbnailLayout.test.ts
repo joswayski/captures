@@ -53,18 +53,23 @@ describe("thumbnail stack layout", () => {
     const hoverReady = thumbnailStyles.match(
       /\.thumbnail-stack-minimized\.thumbnail-stack-hover-ready > \.thumbnail-card\s*\{([\s\S]*?)\n\}/,
     );
-    const minimizeFrom = thumbnailStyles.match(
-      /@keyframes thumbnail-card-minimize\s*\{[\s\S]*?from\s*\{([\s\S]*?)\n {2}\}/,
+    const minimizingCard = thumbnailStyles.match(
+      /\.thumbnail-stack-minimizing > \.thumbnail-card\s*\{\n {2}animation: none;([\s\S]*?)\n\}/,
+    );
+    const minimizeRun = thumbnailStyles.match(
+      /\.thumbnail-stack-minimizing\.thumbnail-stack-minimize-run > \.thumbnail-card\s*\{([\s\S]*?)\n\}/,
     );
     const hoverFan = thumbnailStyles.match(
-      /\.thumbnail-stack-minimized\.thumbnail-stack-hover-ready:has\(\.thumbnail-collapsed-hit-target:hover\)/,
+      /\.thumbnail-stack-minimized\.thumbnail-stack-hover-ready:not\(\.thumbnail-stack-hover-latched\):has\(\.thumbnail-collapsed-hit-target:hover\)/,
     );
 
     expect(compactCard?.[1]).toMatch(/transform:\s*var\(--thumbnail-stack-rest-transform\)/);
     expect(compactCard?.[1]).not.toMatch(/transform\s+var\(--dur-5\)/);
     expect(hoverReady?.[1]).toMatch(/transform\s+var\(--dur-5\)/);
-    expect(minimizeFrom?.[1]).toMatch(/rotateX\(0deg\)/);
-    expect(minimizeFrom?.[1]).toMatch(/scale\(1\)/);
+    expect(minimizingCard?.[1]).toMatch(/rotateX\(0deg\)/);
+    expect(minimizingCard?.[1]).toMatch(/scale\(1\)/);
+    expect(minimizeRun?.[1]).toMatch(/transform:\s*var\(--thumbnail-stack-rest-transform\)/);
+    expect(minimizeRun?.[1]).toMatch(/transform 0\.48s/);
     expect(hoverFan).not.toBeNull();
   });
 
