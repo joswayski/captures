@@ -1812,7 +1812,8 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 
 .thumbnail-stack-compact > .thumbnail-card {
   /*
-   * React sets `--thumbnail-stack-base-depth` from DOM order. Subtract any
+   * React sets `--thumbnail-stack-base-depth` from DOM order and a per-capture
+   * `--thumbnail-stack-skew-*` lean from the artifact id. Subtract any
    * expanded slot-settle that was in flight when Show less started so the
    * minimizing pose matches the on-screen position instead of jumping back
    * up a held hole. `--thumbnail-stack-pose` recedes cards past the first
@@ -1834,11 +1835,17 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   --thumbnail-stack-pile-depth: var(--thumbnail-stack-pose, 0);
   --thumbnail-stack-rest-transform:
     translate3d(
-      calc(var(--thumbnail-stack-pile-depth, 0) * -1.5px),
-      calc(var(--thumbnail-stack-pile-depth, 0) * -13px),
+      calc(
+        var(--thumbnail-stack-pile-depth, 0) * -1.5px
+        + var(--thumbnail-stack-skew-x, 0px)
+      ),
+      calc(
+        var(--thumbnail-stack-pile-depth, 0) * -13px
+        + var(--thumbnail-stack-skew-y, 0px)
+      ),
       calc(var(--thumbnail-stack-pile-depth, 0) * -24px)
     )
-    rotateZ(0deg)
+    rotateZ(var(--thumbnail-stack-skew-rot, 0deg))
     rotateX(calc(var(--thumbnail-stack-pile-depth, 0) * -1.4deg))
     scale(calc(1 - var(--thumbnail-stack-pile-depth, 0) * 0.025));
   --thumbnail-stack-hover-transform:
@@ -1847,7 +1854,10 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
         var(--thumbnail-stack-pile-depth, 0) * -1px
         + var(--thumbnail-stack-fan-shift, 0px)
       ),
-      calc(var(--thumbnail-stack-pile-depth, 0) * -16px),
+      calc(
+        var(--thumbnail-stack-pile-depth, 0) * -16px
+        + var(--thumbnail-stack-skew-y, 0px)
+      ),
       calc(var(--thumbnail-stack-pile-depth, 0) * -18px)
     )
     rotateZ(var(--thumbnail-stack-fan-tilt, 0deg))
@@ -2156,19 +2166,22 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
     translate3d(
       calc(
         var(--thumbnail-stack-pile-depth, 0) * -1.5px
+        + var(--thumbnail-stack-skew-x, 0px)
         + var(--thumbnail-drag-sway-x, 0) * 1px
           * var(--thumbnail-stack-pile-depth, 0)
           * 0.7
       ),
       calc(
         var(--thumbnail-stack-pile-depth, 0) * -13px
+        + var(--thumbnail-stack-skew-y, 0px)
         + var(--thumbnail-drag-sway-y, 0) * 1px * var(--thumbnail-stack-pile-depth, 0) * 0.2
       ),
       calc(var(--thumbnail-stack-pile-depth, 0) * -24px)
     )
     rotateZ(
       calc(
-        var(--thumbnail-drag-sway-x, 0)
+        var(--thumbnail-stack-skew-rot, 0deg)
+        + var(--thumbnail-drag-sway-x, 0)
         * var(--thumbnail-stack-pile-depth, 0)
         * 0.12deg
       )
