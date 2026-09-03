@@ -6934,6 +6934,7 @@ fn window_pick_role(
     Some(WindowPickRole::Capturable)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn window_is_capturable(
     window: &captures_capture::WindowDescriptor,
     display: &captures_capture::DisplayDescriptor,
