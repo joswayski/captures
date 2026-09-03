@@ -1873,6 +1873,7 @@ export function RecordingSelector() {
   const settingsRef = useRef<AppSettings | null>(null);
   const sessionRef = useRef<RecordingSelectionSession | null>(null);
   const activeSessionIdRef = useRef<string | null>(null);
+  const audioDevicesRequestIdRef = useRef(0);
   const revealingSessionIdRef = useRef<string | null>(null);
   const visibleSnapshotRef = useRef<string | null>(null);
   /** Set when region create or window pick should auto-confirm (preference). */
@@ -1966,17 +1967,24 @@ export function RecordingSelector() {
       || devicesLoaded
       || !sessionRef.current?.recording_capabilities.microphone
     ) return;
+    const requestId = audioDevicesRequestIdRef.current + 1;
+    audioDevicesRequestIdRef.current = requestId;
     setDevicesLoading(true);
     void invoke<AudioDevice[]>("list_recording_audio_devices")
       .then((audioDevices) => {
+        if (audioDevicesRequestIdRef.current !== requestId) return;
         setDevices(audioDevices);
         setDevicesLoaded(true);
       })
       .catch(() => {
+        if (audioDevicesRequestIdRef.current !== requestId) return;
         setDevices([]);
         setDevicesLoaded(true);
       })
-      .finally(() => setDevicesLoading(false));
+      .finally(() => {
+        if (audioDevicesRequestIdRef.current !== requestId) return;
+        setDevicesLoading(false);
+      });
   }, [devicesLoaded, devicesLoading]);
 
   const revealSelector = useCallback((selectionId: string, snapshotUrl: string) => {
@@ -2101,6 +2109,10 @@ export function RecordingSelector() {
       sessionRef.current = selection;
       revealingSessionIdRef.current = null;
       visibleSnapshotRef.current = null;
+      audioDevicesRequestIdRef.current += 1;
+      setDevices([]);
+      setDevicesLoaded(false);
+      setDevicesLoading(false);
       setFocusVisibleSessionId(null);
       setSession(selection);
       setActionMode(selection.initial_mode);
