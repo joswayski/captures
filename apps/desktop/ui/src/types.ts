@@ -58,6 +58,10 @@ export interface ActiveSession {
   frozen?: boolean;
   snapshot_url: string;
   windows: WindowDescriptor[];
+  /** Menu bar / taskbar / dock strips used only for hit-testing. */
+  shell_chrome?: WindowDescriptor[];
+  /** False while window enumeration is still running. Omitted means ready. */
+  windows_ready?: boolean;
 }
 
 export interface AppSettings {
@@ -170,6 +174,10 @@ export interface RecordingSelectionSession {
   frozen?: boolean;
   snapshot_url: string;
   windows: WindowDescriptor[];
+  /** Menu bar / taskbar / dock strips used only for hit-testing. */
+  shell_chrome?: WindowDescriptor[];
+  /** False while window enumeration is still running. Omitted means ready. */
+  windows_ready?: boolean;
 }
 
 export interface RecordingSessionSnapshot {

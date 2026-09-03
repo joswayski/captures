@@ -82,6 +82,42 @@ export function frontmostWindowAtPoint<T extends {
   return null;
 }
 
+export function windowListingIsReady(windowsReady: boolean | undefined): boolean {
+  return windowsReady !== false;
+}
+
+export type CapturePointerHitKind = "window" | "chrome";
+
+/**
+ * Frontmost capturable window or shell-chrome strip at `point`.
+ *
+ * Edge chrome stays in the hit-test list so a maximized app behind the menu
+ * bar / taskbar does not steal the pointer. Hits on chrome are not window
+ * captures; callers treat them as the display.
+ */
+export function frontmostCaptureTargetAtPoint<T extends {
+  z_order: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}>(
+  windows: readonly T[],
+  shellChrome: readonly T[],
+  point: SelectionPoint,
+  origin: { x: number; y: number },
+  scale = 1,
+): { kind: CapturePointerHitKind; target: T } | null {
+  type Tagged = T & { __captureHitKind: CapturePointerHitKind };
+  const tagged: Tagged[] = [
+    ...windows.map((target) => ({ ...target, __captureHitKind: "window" as const })),
+    ...shellChrome.map((target) => ({ ...target, __captureHitKind: "chrome" as const })),
+  ];
+  const hit = frontmostWindowAtPoint(tagged, point, origin, scale);
+  if (!hit) return null;
+  return { kind: hit.__captureHitKind, target: hit };
+}
+
 export function selectionRect(start: SelectionPoint, end: SelectionPoint): SelectionRect {
   return {
     x: Math.min(start.x, end.x),

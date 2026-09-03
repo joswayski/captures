@@ -57,12 +57,13 @@ import {
   captureDimClipPath,
   constrainSelectionToAspect,
   dragSelectionRect,
-  frontmostWindowAtPoint,
+  frontmostCaptureTargetAtPoint,
   frontToBackWindows,
   isCapturableSelection,
   parseAspectRatioPreset,
   REGION_ASPECT_PRESETS,
   roundedRectPath,
+  windowListingIsReady,
   type RegionAspectPreset,
   type SelectionDragMode,
   type SelectionPoint,
@@ -1578,7 +1579,7 @@ export function CaptureGuidance({
   feedback = false,
   hidden = false,
 }: {
-  mode: Extract<CaptureMode, "region" | "window">;
+  mode: CaptureMode;
   feedback?: boolean;
   /** Fully hide while the user is dragging out a region selection. */
   hidden?: boolean;
@@ -1588,14 +1589,16 @@ export function CaptureGuidance({
   // Mount at opacity 0, then flip data-ready so entrance is the same opacity
   // transition used for hover ducking (no keyframe fill-mode fighting fade-out).
   const [ready, setReady] = useState(false);
-  const title = mode === "window"
-    ? "Select a window to continue"
-    : feedback
-      ? "Click and drag to select a region"
-      : "Drag to select a region";
-  const hint = mode === "window"
-    ? "Esc to cancel"
-    : "Shift for square · Esc to cancel";
+  const title = mode === "display"
+    ? "Click to capture this display"
+    : mode === "window"
+      ? "Select a window to continue"
+      : feedback
+        ? "Click and drag to select a region"
+        : "Drag to select a region";
+  const hint = mode === "region"
+    ? "Shift for square · Esc to cancel"
+    : "Esc to cancel";
   const faded = hidden || cursorOver;
 
   useEffect(() => {
@@ -1856,6 +1859,7 @@ export function RecordingSelector() {
   const [panelDragging, setPanelDragging] = useState(false);
   const [selectedWindow, setSelectedWindow] = useState<string | null>(null);
   const [hoveredWindow, setHoveredWindow] = useState<string | null>(null);
+  const [hoveredDisplay, setHoveredDisplay] = useState(false);
   const [fps, setFps] = useState(60);
   const [maxResolution, setMaxResolution] = useState<MaxResolution>("original");
   const [showCursor, setShowCursor] = useState(true);
@@ -2096,6 +2100,7 @@ export function RecordingSelector() {
         if (previous.initial_target !== selection.initial_target) {
           setTargetMode(selection.initial_target);
           setHoveredWindow(null);
+          setHoveredDisplay(false);
           if (selection.initial_target !== "window") {
             setSelectedWindow(null);
           }
@@ -2142,6 +2147,7 @@ export function RecordingSelector() {
       setTargetMode(selection.initial_target);
       setSelectedWindow(null);
       setHoveredWindow(null);
+      setHoveredDisplay(false);
       // Region starts empty so the user can draw anywhere (including mid-screen).
       // A pre-sized frame made intra-region create drags impossible (they moved the frame).
       setRegion(null);
@@ -2271,6 +2277,7 @@ export function RecordingSelector() {
           setActionMode("screenshot");
           setTargetMode("region");
           setHoveredWindow(null);
+          setHoveredDisplay(false);
           setSelectedWindow(null);
           return;
         }
@@ -2279,6 +2286,7 @@ export function RecordingSelector() {
           setActionMode("screenshot");
           setTargetMode("window");
           setHoveredWindow(null);
+          setHoveredDisplay(false);
           return;
         }
         if (eventMatchesShortcut(shortcutEvent, settings.display_shortcut)) {
@@ -2286,6 +2294,7 @@ export function RecordingSelector() {
           setActionMode("screenshot");
           setTargetMode("display");
           setHoveredWindow(null);
+          setHoveredDisplay(false);
           setSelectedWindow(null);
           return;
         }
@@ -2466,8 +2475,9 @@ export function RecordingSelector() {
       y: Math.max(0, Math.min(bounds?.height ?? 0, event.clientY - (bounds?.top ?? 0))),
     };
   };
-  const windowAtPointer = (event: React.PointerEvent) => frontmostWindowAtPoint(
+  const windowAtPointer = (event: React.PointerEvent) => frontmostCaptureTargetAtPoint(
     session.windows,
+    session.shell_chrome ?? [],
     point(event),
     session.display,
     Math.max(session.window_coordinate_scale || 1, 1),
@@ -2476,11 +2486,23 @@ export function RecordingSelector() {
     if ((event.target as Element).closest(".recording-selector-panel")) return;
     if (targetMode === "window") {
       const hit = windowAtPointer(event);
-      if (!hit) return;
-      setSelectedWindow(hit.id);
-      setHoveredWindow(hit.id);
-      if (settingsRef.current?.auto_start_on_selection) {
-        autoStartAfterSelectionRef.current = true;
+      if (hit?.kind === "window") {
+        setSelectedWindow(hit.target.id);
+        setHoveredWindow(hit.target.id);
+        setHoveredDisplay(false);
+        if (settingsRef.current?.auto_start_on_selection) {
+          autoStartAfterSelectionRef.current = true;
+        }
+        return;
+      }
+      if (hit?.kind === "chrome" || windowListingIsReady(session.windows_ready)) {
+        setSelectedWindow(null);
+        setHoveredWindow(null);
+        setHoveredDisplay(false);
+        setTargetMode("display");
+        if (settingsRef.current?.auto_start_on_selection) {
+          autoStartAfterSelectionRef.current = true;
+        }
       }
       return;
     }
@@ -2510,7 +2532,10 @@ export function RecordingSelector() {
     if (targetMode === "window") {
       if ((event.target as Element).closest(".recording-selector-panel")) return;
       const hit = windowAtPointer(event);
-      setHoveredWindow(hit?.id ?? null);
+      setHoveredWindow(hit?.kind === "window" ? hit.target.id : null);
+      setHoveredDisplay(
+        hit?.kind === "chrome" || (!hit && windowListingIsReady(session.windows_ready)),
+      );
       return;
     }
     if (!regionDragRef.current || targetMode !== "region") return;
@@ -2617,6 +2642,7 @@ export function RecordingSelector() {
       autoStartAfterSelectionRef.current = false;
       setSelectedWindow(null);
       setHoveredWindow(null);
+      setHoveredDisplay(false);
       if (targetMode === "display" && settingsRef.current?.auto_start_on_selection) {
         autoStartAfterSelectionRef.current = true;
       }
@@ -2803,17 +2829,18 @@ export function RecordingSelector() {
       ) : null}
       <CaptureDim
         mode={targetMode}
-        hole={targetMode === "display" ? null : selectedRect}
+        hole={targetMode === "display" || hoveredDisplay ? null : selectedRect}
         bounds={surfaceSize}
-        dimWithoutHole={targetMode === "window"}
+        dimWithoutHole={targetMode === "window" && !hoveredDisplay}
         windowCornerRadius={activeWindowCornerRadius}
       />
-      {targetMode === "display" && <>
+      {(targetMode === "display" || hoveredDisplay) && <>
         <div
           className="recording-display-outline"
           aria-hidden="true"
           style={displayCornerRadius > 0 ? { borderRadius: displayCornerRadius } : undefined}
         />
+        {targetMode === "display" && (
         <div className="recording-display-identity" aria-live="polite">
           <span className="recording-display-icon" aria-hidden="true">
             <CaptureTargetIcon mode="display" />
@@ -2824,11 +2851,14 @@ export function RecordingSelector() {
             {actionMode === "recording" ? ` · ${fps} FPS` : ""}
           </span>
         </div>
+        )}
       </>}
       {targetMode === "region" && (
         <CaptureGuidance mode="region" hidden={regionSelecting} />
       )}
-      {targetMode === "window" && !selectedWindow && <CaptureGuidance mode="window" />}
+      {targetMode === "window" && !selectedWindow && (
+        <CaptureGuidance mode={hoveredDisplay ? "display" : "window"} />
+      )}
       {targetMode === "region" && selectedRect && selectedRect.width > 0 && selectedRect.height > 0 && (
         <div
           className={`recording-selection-frame recording-selection-${targetMode}${targetMode === "region" ? " movable" : ""}`}
@@ -2933,13 +2963,14 @@ export function RecordingSelector() {
                 type="button"
                 className={targetMode === mode ? "active" : ""}
                 aria-pressed={targetMode === mode}
-                disabled={mode === "window" && windowLayouts.length === 0}
+                disabled={mode === "window" && windowLayouts.length === 0 && windowListingIsReady(session.windows_ready)}
                 title={mode === "window" && windowLayouts.length === 0
                   ? "Window capture is not available in this desktop session"
                   : undefined}
                 onClick={() => {
                   setTargetMode(mode);
                   setHoveredWindow(null);
+                  setHoveredDisplay(false);
                   if (mode === "display" && settingsRef.current?.auto_start_on_selection) {
                     if (targetMode === "display") {
                       void start();
@@ -5012,6 +5043,7 @@ function CaptureOverlay() {
   const [current, setCurrent] = useState<SelectionPoint | null>(null);
   const [regionForceSquare, setRegionForceSquare] = useState(false);
   const [hoveredWindow, setHoveredWindow] = useState<string | null>(null);
+  const [hoveredDisplay, setHoveredDisplay] = useState(false);
   const [selectionFeedback, setSelectionFeedback] = useState(0);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const activeSessionIdRef = useRef<string | null>(null);
@@ -5045,6 +5077,7 @@ function CaptureOverlay() {
         setCurrent(null);
         setRegionForceSquare(false);
         setHoveredWindow(null);
+        setHoveredDisplay(false);
         if (selectionFeedbackTimerRef.current) {
           clearTimeout(selectionFeedbackTimerRef.current);
           selectionFeedbackTimerRef.current = null;
@@ -5303,13 +5336,17 @@ function CaptureOverlay() {
   const onPointerMove = (event: React.PointerEvent) => {
     if (mode === "window") {
       const scale = Math.max(session.window_coordinate_scale || 1, 1);
-      const hit = frontmostWindowAtPoint(
+      const hit = frontmostCaptureTargetAtPoint(
         session.windows.filter((item) => item.width >= 48 && item.height >= 48),
+        session.shell_chrome ?? [],
         pointFromEvent(event),
         session.display,
         scale,
       );
-      setHoveredWindow(hit?.id ?? null);
+      setHoveredWindow(hit?.kind === "window" ? hit.target.id : null);
+      setHoveredDisplay(
+        hit?.kind === "chrome" || (!hit && windowListingIsReady(session.windows_ready)),
+      );
       return;
     }
     if (mode !== "region") return;
@@ -5322,15 +5359,22 @@ function CaptureOverlay() {
   const onPointerUp = (event: React.PointerEvent) => {
     if (mode === "window") {
       const scale = Math.max(session.window_coordinate_scale || 1, 1);
-      const hit = frontmostWindowAtPoint(
+      const hit = frontmostCaptureTargetAtPoint(
         session.windows.filter((item) => item.width >= 48 && item.height >= 48),
+        session.shell_chrome ?? [],
         pointFromEvent(event),
         session.display,
         scale,
       );
-      if (!hit) return;
-      void currentWindow?.hide().catch(() => undefined);
-      void invoke("commit_window", { sessionId, windowId: hit.id });
+      if (hit?.kind === "window") {
+        void currentWindow?.hide().catch(() => undefined);
+        void invoke("commit_window", { sessionId, windowId: hit.target.id });
+        return;
+      }
+      if (hit?.kind === "chrome" || windowListingIsReady(session.windows_ready)) {
+        void currentWindow?.hide().catch(() => undefined);
+        void invoke("commit_display", { sessionId });
+      }
       return;
     }
     if (mode !== "region" || !start) return;
@@ -5353,9 +5397,10 @@ function CaptureOverlay() {
   const hasSelection = Boolean(rect && rect.width > 0 && rect.height > 0);
   const dimHole = mode === "region" && hasSelection && rect
     ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
-    : mode === "window"
+    : mode === "window" && !hoveredDisplay
       ? hoveredWindowLayout
       : null;
+  const displayCornerRadius = Math.max(0, session.display_corner_radius ?? 0);
 
   return (
     <main
@@ -5396,10 +5441,22 @@ function CaptureOverlay() {
       />
       <CaptureGuidance
         key={`${sessionId}-${selectionFeedback}`}
-        mode={mode === "region" ? "region" : "window"}
+        mode={mode === "region" ? "region" : hoveredDisplay ? "display" : "window"}
         feedback={mode === "region" && selectionFeedback > 0}
         hidden={mode === "region" && Boolean(start)}
       />
+      {mode === "window" && hoveredDisplay && (
+        <>
+          <div
+            className="capture-display-outline"
+            aria-hidden="true"
+            style={displayCornerRadius > 0 ? { borderRadius: displayCornerRadius } : undefined}
+          />
+          <div className="capture-display-fallback" aria-hidden="true">
+            <span>Entire display</span>
+          </div>
+        </>
+      )}
       {hasSelection && rect && (
         <div
           className="selection-box"

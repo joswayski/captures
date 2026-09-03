@@ -1123,6 +1123,71 @@ describe("RecordingSelector", () => {
     );
   });
 
+  it("treats the menu bar and empty desktop as a full-display target in Window mode", async () => {
+    preparedSession = {
+      ...session,
+      windows: [
+        {
+          id: "fullscreen-app",
+          title: "Safari",
+          app_name: "Safari",
+          z_order: 10,
+          x: 0,
+          y: 0,
+          width: 1440,
+          height: 900,
+          display_id: "display-1",
+        },
+      ],
+      shell_chrome: [
+        {
+          id: "menubar",
+          title: "",
+          app_name: "Control Center",
+          z_order: 50,
+          x: 0,
+          y: 0,
+          width: 1440,
+          height: 24,
+          display_id: "display-1",
+        },
+      ],
+    };
+    const { container } = render(<RecordingSelector />);
+    fireEvent.click(await screen.findByRole("button", { name: "Window" }));
+    const surface = mockSelectorSurface(container);
+
+    fireEvent.pointerMove(surface, { pointerId: 1, clientX: 20, clientY: 8 });
+    expect(await screen.findByText("Click to capture this display")).toBeInTheDocument();
+    expect(container.querySelector(".recording-display-outline")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Window" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Select Safari" })).not.toHaveClass("hovered");
+
+    fireEvent.pointerDown(surface, { pointerId: 1, clientX: 20, clientY: 8 });
+    expect(screen.getByRole("button", { name: "Full screen" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Start recording" })).toBeEnabled();
+    expect(container.querySelector(".recording-display-identity")?.textContent)
+      .toContain("Built-in Retina Display");
+  });
+
+  it("does not treat a miss as full screen while window listing is still deferred", async () => {
+    preparedSession = {
+      ...session,
+      windows: [],
+      shell_chrome: [],
+      windows_ready: false,
+    };
+    const { container } = render(<RecordingSelector />);
+    fireEvent.click(await screen.findByRole("button", { name: "Window" }));
+    const surface = mockSelectorSurface(container);
+
+    fireEvent.pointerMove(surface, { pointerId: 1, clientX: 20, clientY: 8 });
+    expect(screen.queryByText("Click to capture this display")).not.toBeInTheDocument();
+    fireEvent.pointerDown(surface, { pointerId: 1, clientX: 20, clientY: 8 });
+    expect(screen.getByRole("button", { name: "Window" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Full screen" })).toHaveAttribute("aria-pressed", "false");
+  });
+
   it("keeps region and display capture available when the desktop cannot enumerate windows", async () => {
     preparedSession = {
       ...session,

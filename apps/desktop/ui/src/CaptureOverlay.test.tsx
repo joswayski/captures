@@ -113,6 +113,7 @@ describe("CaptureOverlay guidance", () => {
         || command === "sync_capture_cursor"
         || command === "cancel_capture"
         || command === "commit_window"
+        || command === "commit_display"
         || command === "commit_region"
       ) {
         return undefined;
@@ -634,6 +635,109 @@ describe("CaptureOverlay guidance", () => {
     });
   });
 
+  it("captures the display when window mode hits the menu bar or empty desktop", async () => {
+    activeSession = {
+      ...session,
+      mode: "window",
+      display_corner_radius: 12,
+      windows: [
+        {
+          id: "notes",
+          title: "Notes",
+          app_name: "Notes",
+          z_order: 10,
+          x: 0,
+          y: 0,
+          width: 1440,
+          height: 900,
+          display_id: "display-1",
+        },
+      ],
+      shell_chrome: [
+        {
+          id: "menubar",
+          title: "",
+          app_name: "Control Center",
+          z_order: 50,
+          x: 0,
+          y: 0,
+          width: 1440,
+          height: 24,
+          display_id: "display-1",
+        },
+      ],
+    };
+    window.history.replaceState(
+      {},
+      "",
+      "/?view=overlay&mode=window&session_id=capture-1",
+    );
+    const { container } = render(<App />);
+    await screen.findByText("Select a window to continue");
+
+    const surface = container.querySelector<HTMLElement>(".capture-surface");
+    expect(surface).not.toBeNull();
+    vi.spyOn(surface!, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 1440,
+      bottom: 900,
+      width: 1440,
+      height: 900,
+      toJSON: () => undefined,
+    } as DOMRect);
+
+    fireEvent.pointerMove(surface!, { clientX: 20, clientY: 8 });
+    expect(await screen.findByText("Click to capture this display")).toBeInTheDocument();
+    expect(screen.getByText("Entire display")).toBeInTheDocument();
+    expect(container.querySelector(".capture-display-outline")).not.toBeNull();
+    expect(screen.getByTitle("Notes")).not.toHaveClass("window-target-hovered");
+
+    fireEvent.pointerUp(surface!, { clientX: 20, clientY: 8 });
+    expect(invoke).toHaveBeenCalledWith("commit_display", { sessionId: "capture-1" });
+    expect(invoke).not.toHaveBeenCalledWith("commit_window", expect.anything());
+  });
+
+  it("does not capture the display while window listing is still deferred", async () => {
+    activeSession = {
+      ...session,
+      mode: "window",
+      windows: [],
+      shell_chrome: [],
+      windows_ready: false,
+    };
+    window.history.replaceState(
+      {},
+      "",
+      "/?view=overlay&mode=window&session_id=capture-1",
+    );
+    const { container } = render(<App />);
+    await screen.findByText("Select a window to continue");
+
+    const surface = container.querySelector<HTMLElement>(".capture-surface");
+    expect(surface).not.toBeNull();
+    vi.spyOn(surface!, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 1440,
+      bottom: 900,
+      width: 1440,
+      height: 900,
+      toJSON: () => undefined,
+    } as DOMRect);
+
+    fireEvent.pointerMove(surface!, { clientX: 20, clientY: 8 });
+    expect(screen.queryByText("Click to capture this display")).not.toBeInTheDocument();
+    fireEvent.pointerUp(surface!, { clientX: 20, clientY: 8 });
+    expect(invoke).not.toHaveBeenCalledWith("commit_display", expect.anything());
+    expect(invoke).not.toHaveBeenCalledWith("commit_window", expect.anything());
+    expect(hideCurrentWindow).not.toHaveBeenCalled();
+  });
+
   it("keeps a revealed window overlay visible when targets arrive later", async () => {
     let sessionReady: ((event: { payload: ActiveSession }) => void) | null = null;
     vi.mocked(listen).mockImplementation(async (event, handler) => {
@@ -642,7 +746,7 @@ describe("CaptureOverlay guidance", () => {
       }
       return () => undefined;
     });
-    activeSession = { ...session, mode: "window", windows: [] };
+    activeSession = { ...session, mode: "window", windows: [], windows_ready: false };
     window.history.replaceState(
       {},
       "",
