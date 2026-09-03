@@ -133,7 +133,6 @@ import {
   thumbnailStackFanShiftPx,
   thumbnailStackFanTiltDeg,
   thumbnailStackHiddenAmount,
-  thumbnailStackHoverHiddenAmount,
   THUMBNAIL_CARD_SLOT_PX,
   waitForThumbnailStackSettle,
 } from "./lib/thumbnailLayout";
@@ -7096,7 +7095,6 @@ export function ThumbnailCard({
       style={stackCollapsed ? {
         "--thumbnail-stack-base-depth": stackDepth,
         "--thumbnail-stack-hidden": thumbnailStackHiddenAmount(stackDepth),
-        "--thumbnail-stack-hover-hidden": thumbnailStackHoverHiddenAmount(stackDepth),
         "--thumbnail-stack-fan-tilt": `${thumbnailStackFanTiltDeg(stackDepth)}deg`,
         "--thumbnail-stack-fan-shift": `${thumbnailStackFanShiftPx(stackDepth)}px`,
         ...(expandFromTransform

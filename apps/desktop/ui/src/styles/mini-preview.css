@@ -1782,7 +1782,6 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   --stack-fan-stagger: 16ms;
   --stack-fan-ease: var(--ease-standard);
   --stack-pile-max-depth: 3;
-  --stack-hover-max-depth: 6;
   height: 100%;
   max-height: none;
   overflow: visible;
@@ -1797,9 +1796,9 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
    * minimizing pose matches the on-screen position instead of jumping back
    * up a held hole.
    *
-   * Rest pose clamps to `--stack-pile-max-depth` so only four cards peek.
-   * Hover/expand use the real (hover-capped) depth so tucked cards ease out
-   * of that pile instead of appearing at full offset.
+   * Rest and hover poses clamp to `--stack-pile-max-depth` so only four cards
+   * peek. Expand uses the real depth so tucked cards ease out of that pile
+   * into their list slots instead of appearing at full offset.
    */
   --thumbnail-stack-depth: max(
     0,
@@ -1811,10 +1810,6 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   --thumbnail-stack-pile-depth: min(
     var(--thumbnail-stack-depth, 0),
     var(--stack-pile-max-depth)
-  );
-  --thumbnail-stack-hover-depth: min(
-    var(--thumbnail-stack-depth, 0),
-    var(--stack-hover-max-depth)
   );
   --thumbnail-stack-rest-transform:
     translate3d(
@@ -1828,15 +1823,15 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   --thumbnail-stack-hover-transform:
     translate3d(
       calc(
-        var(--thumbnail-stack-hover-depth, 0) * -1px
+        var(--thumbnail-stack-pile-depth, 0) * -1px
         + var(--thumbnail-stack-fan-shift, 0px)
       ),
-      calc(var(--thumbnail-stack-hover-depth, 0) * -16px),
-      calc(var(--thumbnail-stack-hover-depth, 0) * -18px)
+      calc(var(--thumbnail-stack-pile-depth, 0) * -16px),
+      calc(var(--thumbnail-stack-pile-depth, 0) * -18px)
     )
     rotateZ(var(--thumbnail-stack-fan-tilt, 0deg))
-    rotateX(calc(var(--thumbnail-stack-hover-depth, 0) * -1.2deg))
-    scale(calc(1 - var(--thumbnail-stack-hover-depth, 0) * 0.02));
+    rotateX(calc(var(--thumbnail-stack-pile-depth, 0) * -1.2deg))
+    scale(calc(1 - var(--thumbnail-stack-pile-depth, 0) * 0.02));
   --thumbnail-stack-expanded-transform:
     translate3d(
       0,
@@ -1886,7 +1881,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   opacity: calc(var(--thumbnail-stack-pile-depth, 0) * 0.12);
   content: "";
   pointer-events: none;
-  transition: opacity var(--stack-fan-dur) calc(var(--thumbnail-stack-hover-depth, 0) * var(--stack-fan-stagger, 0ms)) var(--stack-fan-ease, var(--ease-out));
+  transition: opacity var(--stack-fan-dur) calc(var(--thumbnail-stack-pile-depth, 0) * var(--stack-fan-stagger, 0ms)) var(--stack-fan-ease, var(--ease-out));
 }
 
 .thumbnail-stack-minimizing > .thumbnail-card,
@@ -1924,9 +1919,9 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
  */
 .thumbnail-stack-minimized.thumbnail-stack-hover-ready > .thumbnail-card {
   transition:
-    opacity var(--stack-fan-dur) calc(var(--thumbnail-stack-hover-depth, 0) * var(--stack-fan-stagger)) var(--stack-fan-ease),
-    transform var(--stack-fan-dur) calc(var(--thumbnail-stack-hover-depth, 0) * var(--stack-fan-stagger)) var(--stack-fan-ease),
-    box-shadow var(--stack-fan-dur) calc(var(--thumbnail-stack-hover-depth, 0) * var(--stack-fan-stagger)) var(--stack-fan-ease);
+    opacity var(--stack-fan-dur) calc(var(--thumbnail-stack-pile-depth, 0) * var(--stack-fan-stagger)) var(--stack-fan-ease),
+    transform var(--stack-fan-dur) calc(var(--thumbnail-stack-pile-depth, 0) * var(--stack-fan-stagger)) var(--stack-fan-ease),
+    box-shadow var(--stack-fan-dur) calc(var(--thumbnail-stack-pile-depth, 0) * var(--stack-fan-stagger)) var(--stack-fan-ease);
 }
 
 /*
@@ -2102,7 +2097,6 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 .thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):not(.thumbnail-stack-pressing):has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card,
 .thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):not(.thumbnail-stack-pressing):has(.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]) > .thumbnail-card {
   transform: var(--thumbnail-stack-hover-transform);
-  opacity: calc(1 - var(--thumbnail-stack-hover-hidden, 0));
   box-shadow:
     var(--thumbnail-card-shadow),
     0 0 0 1px rgba(var(--theme-accent-rgb), 0.55),
@@ -2159,7 +2153,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 
 .thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):not(.thumbnail-stack-pressing):has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card::before,
 .thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):not(.thumbnail-stack-pressing):has(.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]) > .thumbnail-card::before {
-  opacity: calc(var(--thumbnail-stack-hover-depth, 0) * 0.08);
+  opacity: calc(var(--thumbnail-stack-pile-depth, 0) * 0.08);
 }
 
 .thumbnail-message {

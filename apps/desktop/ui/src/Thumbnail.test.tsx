@@ -1043,9 +1043,7 @@ describe("Thumbnail", () => {
 
     expect(cards[0]!.style.getPropertyValue("--thumbnail-stack-base-depth")).toBe("7");
     expect(cards[0]!.style.getPropertyValue("--thumbnail-stack-hidden")).toBe("1");
-    expect(cards[0]!.style.getPropertyValue("--thumbnail-stack-hover-hidden")).toBe("1");
     expect(cards[1]!.style.getPropertyValue("--thumbnail-stack-hidden")).toBe("1");
-    expect(cards[1]!.style.getPropertyValue("--thumbnail-stack-hover-hidden")).toBe("0");
     expect(cards[4]!.style.getPropertyValue("--thumbnail-stack-base-depth")).toBe("3");
     expect(cards[4]!.style.getPropertyValue("--thumbnail-stack-hidden")).toBe("0");
 
