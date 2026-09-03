@@ -1572,7 +1572,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 @keyframes thumbnail-stack-toolbar-out {
   to {
     opacity: 0;
-    transform: translateY(6px) scale(0.9);
+    filter: blur(var(--blur-dissolve));
   }
 }
 
@@ -1724,7 +1724,31 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   transform: translateX(0);
 }
 
-.thumbnail-stack-toolbar-leaving .thumbnail-stack-minimize,
+/*
+ * Collapse keeps the hovered “Show less” pill and dissolves it in place.
+ * Snapping back to the 28px stack icon while fading reads as a morph into
+ * a control that is not coming back.
+ */
+.thumbnail-stack-toolbar-leaving .thumbnail-stack-minimize {
+  width: 92px;
+  background: var(--glass-strong-solid);
+  border-color: var(--glass-border);
+  transform: none;
+  transition: none;
+}
+
+.thumbnail-stack-toolbar-leaving .thumbnail-stack-minimize svg {
+  opacity: 0;
+  transform: translateX(-8px) scale(0.8);
+  transition: none;
+}
+
+.thumbnail-stack-toolbar-leaving .thumbnail-stack-minimize-label {
+  opacity: 1;
+  transform: translateX(0);
+  transition: none;
+}
+
 .thumbnail-stack-toolbar-exiting .thumbnail-stack-minimize,
 .thumbnail-stack-toolbar-entering .thumbnail-stack-minimize {
   width: 28px;
@@ -1732,7 +1756,6 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   transition: none;
 }
 
-.thumbnail-stack-toolbar-leaving .thumbnail-stack-minimize svg,
 .thumbnail-stack-toolbar-exiting .thumbnail-stack-minimize svg,
 .thumbnail-stack-toolbar-entering .thumbnail-stack-minimize svg {
   opacity: 1;
@@ -1740,7 +1763,6 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   transition: none;
 }
 
-.thumbnail-stack-toolbar-leaving .thumbnail-stack-minimize-label,
 .thumbnail-stack-toolbar-exiting .thumbnail-stack-minimize-label,
 .thumbnail-stack-toolbar-entering .thumbnail-stack-minimize-label {
   opacity: 0;

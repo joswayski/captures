@@ -45,6 +45,10 @@ const thumbnailStyles = readFileSync(
   resolve(process.cwd(), "ui/src/styles/mini-preview.css"),
   "utf8",
 );
+const designTokens = readFileSync(
+  resolve(process.cwd(), "../../shared/design.css"),
+  "utf8",
+);
 
 function card(
   partial: Partial<ThumbnailStackCardMotionState>,
@@ -287,6 +291,17 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-toolbar:not\(\.thumbnail-stack-toolbar-leaving\):not\(\.thumbnail-stack-toolbar-exiting\):not\(\.thumbnail-stack-toolbar-entering\) \.thumbnail-stack-minimize:hover/,
     );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-toolbar-leaving \.thumbnail-stack-minimize\s*\{[^}]*width:\s*92px/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-toolbar-leaving \.thumbnail-stack-minimize-label\s*\{[^}]*opacity:\s*1/,
+    );
+    const leave = thumbnailStyles.split("@keyframes thumbnail-stack-toolbar-out")[1]
+      ?.split("@keyframes")[0];
+    expect(designTokens).toMatch(/--blur-dissolve:\s*8px;/);
+    expect(leave).toMatch(/filter:\s*blur\(var\(--blur-dissolve\)\)/);
+    expect(leave).not.toMatch(/translateY/);
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-toolbar-exiting \.thumbnail-stack-minimize,[\s\S]*?\{[^}]*width:\s*28px/,
     );
