@@ -5,8 +5,10 @@ import {
   constrainSelectionToAspect,
   dragSelectionRect,
   effectiveDragAspectRatio,
+  frontmostCaptureTargetAtPoint,
   frontmostWindowAtPoint,
   frontToBackWindows,
+  windowListingIsReady,
   isCapturableSelection,
   parseAspectRatioPreset,
   roundedRectPath,
@@ -61,6 +63,38 @@ describe("frontmostWindowAtPoint", () => {
 
   it("returns null when the pointer is not over any window", () => {
     expect(frontmostWindowAtPoint([front, rear], { x: 400, y: 400 }, origin)).toBeNull();
+  });
+});
+
+describe("frontmostCaptureTargetAtPoint", () => {
+  const origin = { x: 0, y: 0 };
+  const maximized = { id: "app", z_order: 10, x: 0, y: 0, width: 1440, height: 900 };
+  const menuBar = { id: "menubar", z_order: 50, x: 0, y: 0, width: 1440, height: 24 };
+
+  it("lets shell chrome win over a maximized window underneath", () => {
+    expect(frontmostCaptureTargetAtPoint(
+      [maximized],
+      [menuBar],
+      { x: 20, y: 8 },
+      origin,
+    )).toMatchObject({ kind: "chrome", target: { id: "menubar" } });
+  });
+
+  it("still selects the app when the pointer is below the chrome strip", () => {
+    expect(frontmostCaptureTargetAtPoint(
+      [maximized],
+      [menuBar],
+      { x: 20, y: 80 },
+      origin,
+    )).toMatchObject({ kind: "window", target: { id: "app" } });
+  });
+});
+
+describe("windowListingIsReady", () => {
+  it("treats a missing flag as ready so older payloads still commit misses", () => {
+    expect(windowListingIsReady(undefined)).toBe(true);
+    expect(windowListingIsReady(true)).toBe(true);
+    expect(windowListingIsReady(false)).toBe(false);
   });
 });
 

@@ -306,7 +306,7 @@ pub(crate) async fn prepare_capture_selector_inner(
         let windows_task = (initial_target == CaptureMode::Window)
             .then(|| crate::take_prefetched_or_spawn_windows(&state));
         let windows_started = windows_task.is_some();
-        let (display, snapshot_png, image, displays, windows, pending_windows, cursor) =
+        let (display, snapshot_png, image, displays, targets, pending_windows, cursor) =
             if freeze_screen {
                 let pointer = crate::pointer_position();
                 let frame = state.backend.capture_display_at_point(pointer)?;
@@ -321,7 +321,7 @@ pub(crate) async fn prepare_capture_selector_inner(
                         .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
                     &frame.descriptor,
                 )?;
-                let (windows, pending_windows) = crate::take_ready_or_defer_windows(
+                let (targets, pending_windows) = crate::take_ready_or_defer_windows(
                     windows_task,
                     &frame.descriptor,
                     Some(&frame.image),
@@ -331,7 +331,7 @@ pub(crate) async fn prepare_capture_selector_inner(
                     snapshot_png,
                     Some(frame.image),
                     displays,
-                    windows,
+                    targets,
                     pending_windows,
                     pointer,
                 )
@@ -339,18 +339,19 @@ pub(crate) async fn prepare_capture_selector_inner(
                 let displays = state.monitors()?;
                 let display = crate::pick_display_under_pointer(&displays)
                     .ok_or(captures_capture::CaptureError::TargetUnavailable)?;
-                let (windows, pending_windows) =
+                let (targets, pending_windows) =
                     crate::take_ready_or_defer_windows(windows_task, &display, None);
                 (
                     display,
                     Vec::new(),
                     None,
                     displays,
-                    windows,
+                    targets,
                     pending_windows,
                     None,
                 )
             };
+        let windows_ready = pending_windows.is_none() && windows_started;
         let summary = RecordingSelectionSession {
             id: id.clone(),
             // Every capture starts from a high-quality video master. The editor
@@ -377,7 +378,9 @@ pub(crate) async fn prepare_capture_selector_inner(
             } else {
                 String::new()
             },
-            windows,
+            windows: targets.windows,
+            shell_chrome: targets.shell_chrome,
+            windows_ready,
         };
         *state.recording_selection.lock() = Some(RecordingSelection {
             summary: summary.clone(),
@@ -458,11 +461,11 @@ async fn select_capture_display_inner(
         .cloned()
         .ok_or(AppError::InvalidSelection)?;
     let freeze_screen = current.frozen;
-    let (display, snapshot_png, image, windows, cursor) = if freeze_screen {
+    let (display, snapshot_png, image, targets, cursor) = if freeze_screen {
         let pointer = crate::pointer_position();
         let frame = state.backend.capture_display(&requested_display.id)?;
         let snapshot_png = storage::encode_overlay_snapshot(&frame.image)?;
-        let windows = crate::capturable_windows_for_display(
+        let targets = crate::capturable_windows_for_display(
             state.windows(),
             &frame.descriptor,
             Some(&frame.image),
@@ -477,13 +480,13 @@ async fn select_capture_display_inner(
             frame.descriptor,
             snapshot_png,
             Some(frame.image),
-            windows,
+            targets,
             pointer,
         )
     } else {
-        let windows =
+        let targets =
             crate::capturable_windows_for_display(state.windows(), &requested_display, None);
-        (requested_display, Vec::new(), None, windows, None)
+        (requested_display, Vec::new(), None, targets, None)
     };
 
     let mut summary = current;
@@ -501,7 +504,9 @@ async fn select_capture_display_inner(
     } else {
         String::new()
     };
-    summary.windows = windows;
+    summary.windows = targets.windows;
+    summary.shell_chrome = targets.shell_chrome;
+    summary.windows_ready = true;
     let replacement = RecordingSelection {
         summary: summary.clone(),
         image,
@@ -3543,11 +3548,14 @@ fn complete_selector_windows(
         if selection.summary.id != selection_id {
             return;
         }
-        selection.summary.windows = crate::capturable_windows_for_display(
+        let targets = crate::capturable_windows_for_display(
             listed,
             &selection.summary.display,
             selection.image.as_ref(),
         );
+        selection.summary.windows = targets.windows;
+        selection.summary.shell_chrome = targets.shell_chrome;
+        selection.summary.windows_ready = true;
         let summary = selection.summary.clone();
         drop(pending);
         if let Err(error) = app.emit("recording-selection-ready", &summary) {

@@ -357,6 +357,12 @@ pub struct RecordingSelectionSession {
     pub frozen: bool,
     pub snapshot_url: String,
     pub windows: Vec<WindowDescriptor>,
+    /// Menu bar / taskbar / dock strips used only for hit-testing.
+    #[serde(default)]
+    pub shell_chrome: Vec<WindowDescriptor>,
+    /// False while window enumeration is still running.
+    #[serde(default = "default_true")]
+    pub windows_ready: bool,
 }
 
 #[derive(Debug)]
@@ -799,6 +805,12 @@ pub struct ActiveSession {
     pub frozen: bool,
     pub snapshot_url: String,
     pub windows: Vec<WindowDescriptor>,
+    /// Menu bar / taskbar / dock strips used only for hit-testing.
+    #[serde(default)]
+    pub shell_chrome: Vec<WindowDescriptor>,
+    /// False while window enumeration is still running.
+    #[serde(default = "default_true")]
+    pub windows_ready: bool,
 }
 
 #[derive(Debug)]
@@ -814,6 +826,8 @@ pub struct CaptureSession {
     /// Pointer sample taken with a freeze-frame so stills can composite the
     /// cursor after cropping without baking it into the shared freeze image.
     pub cursor: Option<(i32, i32)>,
+    pub shell_chrome: Vec<WindowDescriptor>,
+    pub windows_ready: bool,
 }
 
 pub fn default_output_directory() -> PathBuf {

@@ -614,7 +614,7 @@ async fn prepare_capture(
         // rapid follow-up capture to start with its own protection generation.
         set_capture_huds_protected(&app, false);
         let snapshot_png = storage::encode_overlay_snapshot(&frame.image)?;
-        let (windows, pending_windows) =
+        let (targets, pending_windows) =
             take_ready_or_defer_windows(windows_task, &frame.descriptor, Some(&frame.image));
         (
             CaptureSession {
@@ -625,8 +625,10 @@ async fn prepare_capture(
                 display: frame.descriptor,
                 image: Some(frame.image),
                 snapshot_png,
-                windows,
+                windows: targets.windows,
                 cursor: pointer,
+                shell_chrome: targets.shell_chrome,
+                windows_ready: pending_windows.is_none(),
             },
             pending_windows,
         )
@@ -634,7 +636,7 @@ async fn prepare_capture(
         // Live overlay: skip the freeze-frame so hover states can keep changing
         // until commit, then recapture the current desktop.
         let display = display_under_pointer(&state)?;
-        let (windows, pending_windows) = take_ready_or_defer_windows(windows_task, &display, None);
+        let (targets, pending_windows) = take_ready_or_defer_windows(windows_task, &display, None);
         set_capture_huds_protected(&app, false);
         (
             CaptureSession {
@@ -645,8 +647,10 @@ async fn prepare_capture(
                 display,
                 image: None,
                 snapshot_png: Vec::new(),
-                windows,
+                windows: targets.windows,
                 cursor: None,
+                shell_chrome: targets.shell_chrome,
+                windows_ready: pending_windows.is_none(),
             },
             pending_windows,
         )
@@ -701,12 +705,12 @@ pub(crate) fn take_ready_or_defer_windows(
     task: Option<WindowListTask>,
     display: &captures_capture::DisplayDescriptor,
     image: Option<&RgbaImage>,
-) -> (Vec<WindowDescriptor>, Option<WindowListTask>) {
+) -> (WindowSelectionTargets, Option<WindowListTask>) {
     let Some(task) = task else {
-        return (Vec::new(), None);
+        return (WindowSelectionTargets::default(), None);
     };
     if !task.is_finished() {
-        return (Vec::new(), Some(task));
+        return (WindowSelectionTargets::default(), Some(task));
     }
     let listed = match task.join() {
         Ok(windows) => windows,
@@ -715,28 +719,49 @@ pub(crate) fn take_ready_or_defer_windows(
     (capturable_windows_for_display(listed, display, image), None)
 }
 
+#[derive(Clone, Debug, Default)]
+pub(crate) struct WindowSelectionTargets {
+    pub windows: Vec<WindowDescriptor>,
+    pub shell_chrome: Vec<WindowDescriptor>,
+}
+
 pub(crate) fn capturable_windows_for_display(
     windows: Result<Vec<WindowDescriptor>, AppError>,
     display: &captures_capture::DisplayDescriptor,
     image: Option<&RgbaImage>,
-) -> Vec<WindowDescriptor> {
-    let mut windows = windows
-        .unwrap_or_else(|error| {
+) -> WindowSelectionTargets {
+    classify_windows_for_display(
+        windows.unwrap_or_else(|error| {
             eprintln!("window targets are unavailable for this capture: {error}");
             Vec::new()
-        })
-        .into_iter()
-        .filter(|window| window_is_capturable(window, display))
-        .collect::<Vec<_>>();
+        }),
+        display,
+        image,
+    )
+}
+
+fn classify_windows_for_display(
+    windows: Vec<WindowDescriptor>,
+    display: &captures_capture::DisplayDescriptor,
+    image: Option<&RgbaImage>,
+) -> WindowSelectionTargets {
+    let mut targets = WindowSelectionTargets::default();
+    for window in windows {
+        match window_pick_role(&window, display) {
+            Some(WindowPickRole::Capturable) => targets.windows.push(window),
+            Some(WindowPickRole::ShellChrome) => targets.shell_chrome.push(window),
+            None => {}
+        }
+    }
     if let Some(image) = image {
         refine_window_chrome_from_snapshot(
-            &mut windows,
+            &mut targets.windows,
             display,
             image,
             window_corner_radius_points(),
         );
     }
-    windows
+    targets
 }
 
 fn complete_overlay_windows(
@@ -757,8 +782,11 @@ fn complete_overlay_windows(
         if session.mode != CaptureMode::Window {
             return;
         }
-        session.windows =
+        let targets =
             capturable_windows_for_display(listed, &session.display, session.image.as_ref());
+        session.windows = targets.windows;
+        session.shell_chrome = targets.shell_chrome;
+        session.windows_ready = true;
         let active = capture_session_to_active(session);
         drop(sessions);
         if let Err(error) = app.emit("capture-session-ready", &active) {
@@ -782,6 +810,8 @@ fn capture_session_to_active(session: &CaptureSession) -> ActiveSession {
             String::new()
         },
         windows: session.windows.clone(),
+        shell_chrome: session.shell_chrome.clone(),
+        windows_ready: session.windows_ready,
     }
 }
 
@@ -6848,28 +6878,38 @@ pub(crate) fn image_is_effectively_blank(image: &RgbaImage) -> bool {
     samples > 0 && matching * 100 / samples >= 98
 }
 
-fn window_is_capturable(
+enum WindowPickRole {
+    Capturable,
+    ShellChrome,
+}
+
+fn window_pick_role(
     window: &captures_capture::WindowDescriptor,
     display: &captures_capture::DisplayDescriptor,
-) -> bool {
+) -> Option<WindowPickRole> {
     if window.display_id != display.id {
-        return false;
+        return None;
     }
-    if window.width < 48 || window.height < 48 {
-        return false;
+    if window.width == 0 || window.height == 0 {
+        return None;
     }
     if captures_window_is_internal(window) {
-        return false;
+        return None;
     }
     #[cfg(target_os = "macos")]
     if macos_window_is_capture_overlay(window) {
-        return false;
+        return None;
     }
     #[cfg(target_os = "windows")]
     if windows_window_is_capture_overlay(window) {
-        return false;
+        return None;
     }
-    // Skip system chrome that is listed as full-screen "windows" and breaks selection.
+    if window_is_screen_edge_chrome(window, display) {
+        return Some(WindowPickRole::ShellChrome);
+    }
+    if window_is_desktop_backdrop(window, display) {
+        return None;
+    }
     const EXCLUDED_APPS: &[&str] = &[
         "Dock",
         "Control Center",
@@ -6886,13 +6926,22 @@ fn window_is_capturable(
             .iter()
             .any(|excluded| name.eq_ignore_ascii_case(excluded))
     }) {
-        return false;
+        return None;
     }
-    if window_is_screen_edge_chrome(window, display) || window_is_desktop_backdrop(window, display)
-    {
-        return false;
+    if window.width < 48 || window.height < 48 {
+        return None;
     }
-    true
+    Some(WindowPickRole::Capturable)
+}
+
+fn window_is_capturable(
+    window: &captures_capture::WindowDescriptor,
+    display: &captures_capture::DisplayDescriptor,
+) -> bool {
+    matches!(
+        window_pick_role(window, display),
+        Some(WindowPickRole::Capturable)
+    )
 }
 
 fn window_overlap_area(
@@ -7576,6 +7625,45 @@ mod tests {
             corner_radius: None,
         };
         assert!(!window_is_capturable(&menu_bar, &display));
+
+        let maximized = WindowDescriptor {
+            id: "app".to_owned(),
+            title: "Browser".to_owned(),
+            app_name: Some("Safari".to_owned()),
+            z_order: 10,
+            x: 0,
+            y: 0,
+            width: 1_440,
+            height: 900,
+            display_id: display.id.clone(),
+            corner_radius: None,
+        };
+        let targets = capturable_windows_for_display(
+            Ok(vec![
+                menu_bar.clone(),
+                taskbar.clone(),
+                maximized,
+                finder_desktop,
+            ]),
+            &display,
+            None,
+        );
+        assert_eq!(
+            targets
+                .shell_chrome
+                .iter()
+                .map(|window| window.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["menubar", "taskbar"]
+        );
+        assert_eq!(
+            targets
+                .windows
+                .iter()
+                .map(|window| window.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["app"]
+        );
     }
 
     #[test]
@@ -8510,12 +8598,13 @@ mod tests {
 
     #[test]
     fn capturable_windows_stay_empty_when_listing_fails() {
-        let windows = capturable_windows_for_display(
+        let targets = capturable_windows_for_display(
             Err(AppError::Task("window list unavailable".to_owned())),
             &test_display(),
             None,
         );
-        assert!(windows.is_empty());
+        assert!(targets.windows.is_empty());
+        assert!(targets.shell_chrome.is_empty());
     }
 
     fn test_display() -> DisplayDescriptor {
@@ -8541,8 +8630,9 @@ mod tests {
             Ok(Vec::new())
         });
         started_rx.recv().expect("worker is blocked");
-        let (windows, pending) = take_ready_or_defer_windows(Some(task), &test_display(), None);
-        assert!(windows.is_empty());
+        let (targets, pending) = take_ready_or_defer_windows(Some(task), &test_display(), None);
+        assert!(targets.windows.is_empty());
+        assert!(targets.shell_chrome.is_empty());
         let pending = pending.expect("slow listing should be deferred");
         release_tx.send(()).expect("release listing");
         pending.join().expect("listing finished").expect("windows");
@@ -8554,8 +8644,8 @@ mod tests {
         while !task.is_finished() {
             std::thread::yield_now();
         }
-        let (windows, pending) = take_ready_or_defer_windows(Some(task), &test_display(), None);
-        assert!(windows.is_empty());
+        let (targets, pending) = take_ready_or_defer_windows(Some(task), &test_display(), None);
+        assert!(targets.windows.is_empty());
         assert!(pending.is_none());
     }
 }

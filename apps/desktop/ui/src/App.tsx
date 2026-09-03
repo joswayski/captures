@@ -57,12 +57,13 @@ import {
   captureDimClipPath,
   constrainSelectionToAspect,
   dragSelectionRect,
-  frontmostWindowAtPoint,
+  frontmostCaptureTargetAtPoint,
   frontToBackWindows,
   isCapturableSelection,
   parseAspectRatioPreset,
   REGION_ASPECT_PRESETS,
   roundedRectPath,
+  windowListingIsReady,
   type RegionAspectPreset,
   type SelectionDragMode,
   type SelectionPoint,
@@ -2473,8 +2474,9 @@ export function RecordingSelector() {
       y: Math.max(0, Math.min(bounds?.height ?? 0, event.clientY - (bounds?.top ?? 0))),
     };
   };
-  const windowAtPointer = (event: React.PointerEvent) => frontmostWindowAtPoint(
+  const windowAtPointer = (event: React.PointerEvent) => frontmostCaptureTargetAtPoint(
     session.windows,
+    session.shell_chrome ?? [],
     point(event),
     session.display,
     Math.max(session.window_coordinate_scale || 1, 1),
@@ -2483,21 +2485,23 @@ export function RecordingSelector() {
     if ((event.target as Element).closest(".recording-selector-panel")) return;
     if (targetMode === "window") {
       const hit = windowAtPointer(event);
-      if (hit) {
-        setSelectedWindow(hit.id);
-        setHoveredWindow(hit.id);
+      if (hit?.kind === "window") {
+        setSelectedWindow(hit.target.id);
+        setHoveredWindow(hit.target.id);
         setHoveredDisplay(false);
         if (settingsRef.current?.auto_start_on_selection) {
           autoStartAfterSelectionRef.current = true;
         }
         return;
       }
-      setSelectedWindow(null);
-      setHoveredWindow(null);
-      setHoveredDisplay(false);
-      setTargetMode("display");
-      if (settingsRef.current?.auto_start_on_selection) {
-        autoStartAfterSelectionRef.current = true;
+      if (hit?.kind === "chrome" || windowListingIsReady(session.windows_ready)) {
+        setSelectedWindow(null);
+        setHoveredWindow(null);
+        setHoveredDisplay(false);
+        setTargetMode("display");
+        if (settingsRef.current?.auto_start_on_selection) {
+          autoStartAfterSelectionRef.current = true;
+        }
       }
       return;
     }
@@ -2527,8 +2531,10 @@ export function RecordingSelector() {
     if (targetMode === "window") {
       if ((event.target as Element).closest(".recording-selector-panel")) return;
       const hit = windowAtPointer(event);
-      setHoveredWindow(hit?.id ?? null);
-      setHoveredDisplay(!hit);
+      setHoveredWindow(hit?.kind === "window" ? hit.target.id : null);
+      setHoveredDisplay(
+        hit?.kind === "chrome" || (!hit && windowListingIsReady(session.windows_ready)),
+      );
       return;
     }
     if (!regionDragRef.current || targetMode !== "region") return;
@@ -2956,7 +2962,7 @@ export function RecordingSelector() {
                 type="button"
                 className={targetMode === mode ? "active" : ""}
                 aria-pressed={targetMode === mode}
-                disabled={mode === "window" && windowLayouts.length === 0}
+                disabled={mode === "window" && windowLayouts.length === 0 && windowListingIsReady(session.windows_ready)}
                 title={mode === "window" && windowLayouts.length === 0
                   ? "Window capture is not available in this desktop session"
                   : undefined}
@@ -5329,14 +5335,17 @@ function CaptureOverlay() {
   const onPointerMove = (event: React.PointerEvent) => {
     if (mode === "window") {
       const scale = Math.max(session.window_coordinate_scale || 1, 1);
-      const hit = frontmostWindowAtPoint(
+      const hit = frontmostCaptureTargetAtPoint(
         session.windows.filter((item) => item.width >= 48 && item.height >= 48),
+        session.shell_chrome ?? [],
         pointFromEvent(event),
         session.display,
         scale,
       );
-      setHoveredWindow(hit?.id ?? null);
-      setHoveredDisplay(!hit);
+      setHoveredWindow(hit?.kind === "window" ? hit.target.id : null);
+      setHoveredDisplay(
+        hit?.kind === "chrome" || (!hit && windowListingIsReady(session.windows_ready)),
+      );
       return;
     }
     if (mode !== "region") return;
@@ -5349,16 +5358,20 @@ function CaptureOverlay() {
   const onPointerUp = (event: React.PointerEvent) => {
     if (mode === "window") {
       const scale = Math.max(session.window_coordinate_scale || 1, 1);
-      const hit = frontmostWindowAtPoint(
+      const hit = frontmostCaptureTargetAtPoint(
         session.windows.filter((item) => item.width >= 48 && item.height >= 48),
+        session.shell_chrome ?? [],
         pointFromEvent(event),
         session.display,
         scale,
       );
-      void currentWindow?.hide().catch(() => undefined);
-      if (hit) {
-        void invoke("commit_window", { sessionId, windowId: hit.id });
-      } else {
+      if (hit?.kind === "window") {
+        void currentWindow?.hide().catch(() => undefined);
+        void invoke("commit_window", { sessionId, windowId: hit.target.id });
+        return;
+      }
+      if (hit?.kind === "chrome" || windowListingIsReady(session.windows_ready)) {
+        void currentWindow?.hide().catch(() => undefined);
         void invoke("commit_display", { sessionId });
       }
       return;
