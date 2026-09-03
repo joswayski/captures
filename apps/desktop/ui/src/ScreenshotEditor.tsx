@@ -3311,6 +3311,12 @@ export function ScreenshotEditor() {
     }
   };
 
+  /** Checkerboard only after a stamp actually punches or restores pixels. */
+  const previewTransparentCanvasWhilePainting = () => {
+    previewCanvasFill(null);
+    setLiveTransparentCanvas(true);
+  };
+
   const capturePointerTarget = (
     target: EventTarget & { setPointerCapture?: (pointerId: number) => void },
     pointerId: number,
@@ -3376,6 +3382,9 @@ export function ScreenshotEditor() {
           gesture.radius,
         ),
       );
+      if (!gesture.changed) {
+        previewTransparentCanvasWhilePainting();
+      }
       paintEditorCanvas();
     }
     return next;
@@ -4560,10 +4569,11 @@ export function ScreenshotEditor() {
         pendingPixel: null,
         changed: stamped > 0,
       });
-      // Holes are useless under a solid fill — match the committed transparent
-      // canvas immediately, including the first stamp of this pointer down.
-      previewCanvasFill(null);
-      setLiveTransparentCanvas(true);
+      // Holes are useless under a solid fill. Wait until a stamp actually
+      // changes pixels so a no-op drag does not flash the checkerboard.
+      if (stamped > 0) {
+        previewTransparentCanvasWhilePainting();
+      }
       paintEditorCanvas();
       setCanvasCursor("none");
       showBrushCursor(event.clientX, event.clientY, mode);

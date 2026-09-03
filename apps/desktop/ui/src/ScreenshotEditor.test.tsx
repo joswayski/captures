@@ -2047,6 +2047,119 @@ describe("ScreenshotEditor", () => {
     }
   });
 
+  it("keeps a solid canvas fill until an erase stroke actually changes pixels", async () => {
+    const brushArtifact = { ...artifact, width: 20, height: 10 };
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifact") return brushArtifact;
+      const draft = draftCommandResult(String(command));
+      if (draft !== undefined || String(command).includes("screenshot_editor_draft")) {
+        return draft;
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    const context = {
+      clearRect: vi.fn(),
+      fillRect: vi.fn(),
+      drawImage: vi.fn(),
+      getImageData: vi.fn((_x: number, _y: number, width: number, height: number) => {
+        const data = new Uint8ClampedArray(width * height * 4);
+        for (let y = 0; y < height; y += 1) {
+          for (let x = 0; x < width; x += 1) {
+            const index = (y * width + x) * 4;
+            data[index] = 255;
+            data[index + 1] = 255;
+            data[index + 2] = 255;
+            // Left columns are already punched out so a stamp there is a no-op.
+            data[index + 3] = x < 6 ? 0 : 255;
+          }
+        }
+        return { data, width, height, colorSpace: "srgb" } as ImageData;
+      }),
+      putImageData: vi.fn(),
+      save: vi.fn(),
+      restore: vi.fn(),
+      translate: vi.fn(),
+      transform: vi.fn(),
+      setTransform: vi.fn(),
+      setLineDash: vi.fn(),
+      strokeRect: vi.fn(),
+      imageSmoothingEnabled: true,
+      imageSmoothingQuality: "high",
+    } as unknown as CanvasRenderingContext2D;
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(context);
+    vi.spyOn(HTMLCanvasElement.prototype, "toDataURL")
+      .mockReturnValue("data:image/png;base64,edited");
+
+    const originalImage = window.Image;
+    class LoadedImage {
+      onload: ((event: Event) => void) | null = null;
+      onerror: ((event: Event) => void) | null = null;
+      naturalWidth = brushArtifact.width;
+      naturalHeight = brushArtifact.height;
+      width = brushArtifact.width;
+      height = brushArtifact.height;
+      crossOrigin = "";
+      set src(value: string) {
+        if (!value.startsWith("data:")) {
+          queueMicrotask(() => this.onload?.(new Event("load")));
+        }
+      }
+    }
+    // @ts-expect-error focused Image decode stub
+    window.Image = LoadedImage;
+
+    try {
+      render(<ScreenshotEditor />);
+      await screen.findByLabelText("Canvas width");
+      fireEvent.click(screen.getByRole("button", { name: "Eraser (B)" }));
+      fireEvent.click(screen.getByRole("button", { name: "Erase" }));
+      fireEvent.change(screen.getByLabelText("Brush size"), { target: { value: "4" } });
+
+      const canvas = document.querySelector("canvas.screenshot-canvas") as HTMLCanvasElement;
+      setCanvasBounds(canvas, brushArtifact.width, brushArtifact.height);
+      fireEvent.pointerDown(canvas, {
+        button: 0,
+        clientX: 1,
+        clientY: 5,
+        pointerId: 11,
+      });
+
+      const surface = screen
+        .getByLabelText("Screenshot editing canvas")
+        .querySelector(".screenshot-canvas-surface");
+      expect(surface).not.toHaveClass("transparent");
+      expect(
+        within(screen.getByRole("group", { name: "Canvas" })).getByRole("button", {
+          name: /Background color/,
+        }),
+      ).toHaveAccessibleName(/Background color: #f7f7f5/i);
+
+      const frames: FrameRequestCallback[] = [];
+      vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+        frames.push(callback);
+        return frames.length;
+      });
+      fireEvent.pointerMove(canvas, { clientX: 12, clientY: 5, pointerId: 11 });
+      act(() => frames.shift()?.(0));
+
+      expect(surface).toHaveClass("transparent");
+      expect(
+        within(screen.getByRole("group", { name: "Canvas" })).getByRole("button", {
+          name: /Background color/,
+        }),
+      ).toHaveAccessibleName("Background color: transparent");
+
+      fireEvent.pointerUp(canvas, { clientX: 12, clientY: 5, pointerId: 11 });
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: "Undo" })).toBeEnabled();
+      });
+      expect(surface).toHaveClass("transparent");
+    } finally {
+      window.Image = originalImage;
+    }
+  });
+
   it("can clear the solid canvas background for transparent PNG/WebP exports", async () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Canvas width");
