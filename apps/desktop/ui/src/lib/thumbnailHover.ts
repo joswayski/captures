@@ -381,13 +381,28 @@ function thumbnailStackControlAtPoint(
   if (expandControl) return expandControl;
 
   const directControl = directTarget?.closest<HTMLElement>(THUMBNAIL_STACK_CONTROL_SELECTOR);
-  if (directControl) return directControl;
+  if (directControl && thumbnailStackControlIsInteractive(directControl)) {
+    return directControl;
+  }
 
   const controls = root.querySelectorAll<HTMLElement>(THUMBNAIL_STACK_CONTROL_SELECTOR);
   for (const control of controls) {
+    if (!thumbnailStackControlIsInteractive(control)) continue;
     if (containsPoint(control, x, y)) return control;
   }
   return null;
+}
+
+/**
+ * Collapse/expand and last-preview delete keep the Show less control in the
+ * DOM (and fully opaque for part of the delete). Native pointer tracking uses
+ * bounds, so skip hover while the toolbar is a decorative fade.
+ */
+function thumbnailStackControlIsInteractive(control: HTMLElement): boolean {
+  if (control.matches(":disabled")) return false;
+  return !control.closest(
+    ".thumbnail-stack-toolbar-leaving, .thumbnail-stack-toolbar-exiting, .thumbnail-stack-toolbar-entering",
+  );
 }
 
 /**
