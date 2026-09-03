@@ -268,6 +268,16 @@ describe("thumbnail stack layout", () => {
       /\.thumbnail-stack-toolbar:not\(\.thumbnail-stack-toolbar-leaving\):not\(\.thumbnail-stack-toolbar-exiting\):not\(\.thumbnail-stack-toolbar-entering\) \.thumbnail-stack-minimize:hover/,
     );
     expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-toolbar-leaving \.thumbnail-stack-minimize\s*\{[^}]*width:\s*92px/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-toolbar-leaving \.thumbnail-stack-minimize-label\s*\{[^}]*opacity:\s*1/,
+    );
+    const leave = thumbnailStyles.split("@keyframes thumbnail-stack-toolbar-out")[1]
+      ?.split("@keyframes")[0];
+    expect(leave).toMatch(/filter:\s*blur\(8px\)/);
+    expect(leave).not.toMatch(/translateY/);
+    expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-toolbar-exiting \.thumbnail-stack-minimize,[\s\S]*?\{[^}]*width:\s*28px/,
     );
     expect(thumbnailStyles).toMatch(
