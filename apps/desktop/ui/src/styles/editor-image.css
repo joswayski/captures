@@ -3363,6 +3363,10 @@
   white-space: normal;
 }
 
+.screenshot-export-hint.is-warning {
+  color: var(--caution-text);
+}
+
 .screenshot-export-status.has-error .screenshot-export-hint {
   display: none;
 }

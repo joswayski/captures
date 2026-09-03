@@ -369,6 +369,15 @@ function isShapeDrawTool(tool: ScreenshotTool): boolean {
     || tool === "arrow";
 }
 
+/**
+ * Dashed bounds, rotate handle, and Shift-snap live on Select and on a shape
+ * tool that is still editing the annotation it just placed. Pixel tools (eraser)
+ * and crop must not surface that transform chrome.
+ */
+function toolShowsTransformChrome(tool: ScreenshotTool): boolean {
+  return tool === "select" || isShapeDrawTool(tool);
+}
+
 /** Tools whose strokes would not appear on the frozen compressed side. */
 function isAnnotationDrawTool(tool: ScreenshotTool): boolean {
   return tool === "text"
@@ -1668,6 +1677,11 @@ export function ScreenshotEditor() {
   const [wandContiguous, setWandContiguous] = useState(true);
   const [removeBgBrushSize, setRemoveBgBrushSize] = useState(DEFAULT_REMOVE_BG_BRUSH_SIZE);
   const [removeBgBusy, setRemoveBgBusy] = useState(false);
+  /**
+   * Live erase/restore punches holes before commit. Preview the checkerboard
+   * immediately so the stroke does not flash the solid canvas fill.
+   */
+  const [liveTransparentCanvas, setLiveTransparentCanvas] = useState(false);
   const [defaultStyle, setDefaultStyle] = useState<ElementStyle>({
     color: "#ff3b5c",
     fill: null,
@@ -2630,7 +2644,10 @@ export function ScreenshotEditor() {
     );
     const live = removeBgLiveRef.current;
     const hiddenElementId = live?.elementId ?? canvasEditingTextId;
-    renderScreenshot(context, editorDocument, imageCacheRef.current, hiddenElementId);
+    const paintDocument = live
+      ? { ...editorDocument, background: null }
+      : editorDocument;
+    renderScreenshot(context, paintDocument, imageCacheRef.current, hiddenElementId);
     // Live erase/restore: draw the working natural-res canvas in place of the layer.
     if (live) {
       const liveElement = editorDocument.elements.find((element) => element.id === live.elementId);
@@ -2645,16 +2662,19 @@ export function ScreenshotEditor() {
     const accentColor = getComputedStyle(canvas)
       .getPropertyValue("--theme-accent")
       .trim() || "#ffffff";
+    const overlaySelected = canvasEditingTextId === null && toolShowsTransformChrome(tool)
+      ? selected
+      : null;
     // While the inline text editor is open it provides its own focus chrome;
     // drawing the selection box too produces a second dashed highlight.
     drawEditorOverlays(
       context,
       editorDocument,
-      canvasEditingTextId === null ? selected : null,
+      overlaySelected,
       cropSelection,
       displayScale,
       accentColor,
-      canvasEditingTextId === null ? resizePreviewBounds : null,
+      overlaySelected ? resizePreviewBounds : null,
     );
   }, [
     cropSelection,
@@ -2664,6 +2684,7 @@ export function ScreenshotEditor() {
     resizePreviewBounds,
     ensureImage,
     selected,
+    tool,
   ]);
 
   useEffect(() => {
@@ -3274,6 +3295,28 @@ export function ScreenshotEditor() {
     }
   };
 
+  /**
+   * Apply the canvas-fill preview immediately on the surface DOM so the first
+   * erase stamp does not paint over a solid CSS background for one frame.
+   */
+  const previewCanvasFill = (background: string | null) => {
+    const surface = surfaceRef.current;
+    if (!surface) return;
+    if (background) {
+      surface.classList.remove("transparent");
+      surface.style.backgroundColor = background;
+    } else {
+      surface.classList.add("transparent");
+      surface.style.backgroundColor = "";
+    }
+  };
+
+  /** Checkerboard only after a stamp actually punches or restores pixels. */
+  const previewTransparentCanvasWhilePainting = () => {
+    previewCanvasFill(null);
+    setLiveTransparentCanvas(true);
+  };
+
   const capturePointerTarget = (
     target: EventTarget & { setPointerCapture?: (pointerId: number) => void },
     pointerId: number,
@@ -3339,6 +3382,9 @@ export function ScreenshotEditor() {
           gesture.radius,
         ),
       );
+      if (!gesture.changed) {
+        previewTransparentCanvasWhilePainting();
+      }
       paintEditorCanvas();
     }
     return next;
@@ -3423,7 +3469,6 @@ export function ScreenshotEditor() {
         setWandLoupe(null);
         return;
       }
-      setSelectedId(image.id);
       if (removeBgMode === "wand") {
         applyWandRemoveBackground(image, point, current);
         return;
@@ -4142,6 +4187,8 @@ export function ScreenshotEditor() {
       });
       if (!finishedGesture.changed) {
         removeBgLiveRef.current = null;
+        setLiveTransparentCanvas(false);
+        previewCanvasFill(finishedGesture.initialDocument.background);
         paintEditorCanvas();
         return;
       }
@@ -4160,13 +4207,14 @@ export function ScreenshotEditor() {
           finishedGesture.sourceBeforeEdit,
         );
         removeBgLiveRef.current = null;
+        setLiveTransparentCanvas(false);
+        previewCanvasFill(next.background);
         // Commit with undo — initialDocument is the pre-stroke snapshot.
         commitDocument(next);
-        if (exportFormat === "jpeg") {
-          setExportFormat("png");
-        }
       } catch (reason) {
         removeBgLiveRef.current = null;
+        setLiveTransparentCanvas(false);
+        previewCanvasFill(finishedGesture.initialDocument.background);
         paintEditorCanvas();
         setError(String(reason));
       }
@@ -4460,11 +4508,6 @@ export function ScreenshotEditor() {
         element.src,
       );
       commitDocument(next);
-      setSelectedId(element.id);
-      // JPEG cannot keep transparency — nudge toward PNG when holes appear.
-      if (exportFormat === "jpeg") {
-        setExportFormat("png");
-      }
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -4526,13 +4569,19 @@ export function ScreenshotEditor() {
         pendingPixel: null,
         changed: stamped > 0,
       });
-      setSelectedId(element.id);
+      // Holes are useless under a solid fill. Wait until a stamp actually
+      // changes pixels so a no-op drag does not flash the checkerboard.
+      if (stamped > 0) {
+        previewTransparentCanvasWhilePainting();
+      }
       paintEditorCanvas();
       setCanvasCursor("none");
       showBrushCursor(event.clientX, event.clientY, mode);
       capturePointerTarget(event.currentTarget, event.pointerId);
     } catch (reason) {
       removeBgLiveRef.current = null;
+      setLiveTransparentCanvas(false);
+      previewCanvasFill(initialDocument.background);
       paintEditorCanvas();
       setError(String(reason));
     }
@@ -5167,6 +5216,8 @@ export function ScreenshotEditor() {
     );
   }
 
+  const canvasBackground = liveTransparentCanvas ? null : editorDocument.background;
+  const transformSelected = selected && toolShowsTransformChrome(tool) ? selected : null;
   const output = screenshotOutputDimensions(
     editorDocument,
     exportSize,
@@ -5210,6 +5261,7 @@ export function ScreenshotEditor() {
     : exportFormat === "webp"
       ? "WebP"
       : "PNG";
+  const jpegDropsTransparency = exportFormat === "jpeg" && editorDocument.background == null;
   const exportNotice = error || (success?.kind === "save" ? success.message : "");
   const showCompressQuality = qualityMode === "compress";
 
@@ -5382,7 +5434,7 @@ export function ScreenshotEditor() {
               Trim edges
             </button>
             <CanvasBackgroundPicker
-              value={editorDocument.background}
+              value={canvasBackground}
               onChange={(background) => commitDocument({ ...editorDocument, background })}
             />
           </div>
@@ -5552,12 +5604,12 @@ export function ScreenshotEditor() {
           ref={surfaceRef}
           className={[
             "screenshot-canvas-surface",
-            editorDocument.background ? "" : "transparent",
+            canvasBackground ? "" : "transparent",
           ].filter(Boolean).join(" ")}
           style={{
             width: editorDocument.width * displayScale,
             height: editorDocument.height * displayScale,
-            backgroundColor: editorDocument.background ?? undefined,
+            backgroundColor: canvasBackground ?? undefined,
             transform: `translate(${viewPan.x}px, ${viewPan.y}px)`,
           }}
         >
@@ -6450,13 +6502,13 @@ export function ScreenshotEditor() {
         <section className="screenshot-properties" aria-label="Tool properties">
         {/* Select tool is already indicated on the left rail; only show a heading
             when an element is selected or another tool has properties to configure. */}
-        {(selected || tool !== "select") && (
+        {(transformSelected || tool !== "select") && (
           <div className="screenshot-properties-heading">
-            <strong>{selected ? elementLabel(selected) : toolLabel(tool)}</strong>
+            <strong>{transformSelected ? elementLabel(transformSelected) : toolLabel(tool)}</strong>
           </div>
         )}
 
-        {selected && (
+        {transformSelected && (
           <section className="screenshot-property-section">
             <label>
               Shift rotation snap
@@ -6519,9 +6571,7 @@ export function ScreenshotEditor() {
         {tool === "remove-bg" && (
           <section className="screenshot-property-section">
             <p>
-              Make pixels transparent on image layers — color match (wand),
-              paint away (erase), or paint back (restore). Not automatic subject
-              cutout. Export as PNG or WebP to keep transparency.
+              Remove a color, paint it out, or paint it back.
             </p>
             <div className="screenshot-format-buttons" role="group" aria-label="Eraser mode">
               {REMOVE_BG_MODE_ITEMS.map((item) => (
@@ -6565,8 +6615,8 @@ export function ScreenshotEditor() {
                 </label>
                 <p>
                   {wandContiguous
-                    ? "Click a color region to clear connected matching pixels."
-                    : "Click a color to clear every similar pixel in the layer."}
+                    ? "Click a color to remove that area."
+                    : "Click a color to remove it everywhere in the layer."}
                 </p>
               </>
             ) : (
@@ -6590,8 +6640,8 @@ export function ScreenshotEditor() {
                 </label>
                 <p>
                   {removeBgMode === "erase"
-                    ? "Paint to erase toward transparency."
-                    : "Paint to restore pixels from before transparency edits."}
+                    ? "Paint to erase."
+                    : "Paint to put back what you erased."}
                 </p>
               </>
             )}
@@ -6926,7 +6976,7 @@ export function ScreenshotEditor() {
           </section>
         )}
 
-        {!selected && tool !== "crop" && tool !== "select" && (
+        {!selected && tool !== "crop" && tool !== "select" && tool !== "remove-bg" && (
           <section className="screenshot-property-section">
             {tool === "text" ? (
               <>
@@ -7228,7 +7278,13 @@ export function ScreenshotEditor() {
                 disabled={busy !== null}
                 options={[
                   { value: "png", label: "PNG" },
-                  { value: "jpeg", label: "JPEG" },
+                  {
+                    value: "jpeg",
+                    label: "JPEG",
+                    description: jpegDropsTransparency
+                      ? "Fills in transparent areas."
+                      : undefined,
+                  },
                   { value: "webp", label: "WebP" },
                 ]}
                 onChange={(value) => applyExportFormat(value as ExportFormat)}
@@ -7261,10 +7317,18 @@ export function ScreenshotEditor() {
               {copyAnnouncement}
             </div>
             {!error && (
-              <div className="screenshot-export-hint">
+              <div
+                className={[
+                  "screenshot-export-hint",
+                  jpegDropsTransparency ? "is-warning" : "",
+                ].filter(Boolean).join(" ")}
+                role={jpegDropsTransparency ? "status" : undefined}
+              >
                 {sourceMissing
                   ? "The original was deleted. You can still copy or save this edit."
-                  : qualityMode === "preserve"
+                  : jpegDropsTransparency
+                    ? "JPEG will fill in transparent areas. Use PNG or WebP to keep them."
+                    : qualityMode === "preserve"
                     ? savingCopy
                       ? `Keeps original quality as ${formatLabel} and saves a new file.`
                       : `Keeps original quality as ${formatLabel} and replaces the original.`
