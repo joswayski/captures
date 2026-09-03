@@ -2118,8 +2118,9 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 /*
  * Drag lean is velocity-driven from JS (`--thumbnail-drag-sway-*`). Origin is
  * the bottom of each card (the hands). Negative sway is a rightward carry:
- * rear cards translate and rotate so the top of the pile trails, forming an
- * arch. Skip a transform transition here so the lean can track the pointer;
+ * rear cards translate and rotate a little so the pile trails without leaving
+ * the window. Depth is linear (not triangular) so the back cards stay close.
+ * Skip a transform transition here so the lean can track the pointer;
  * dropping the dragging class lets hover-ready ease back to rest.
  */
 .thumbnail-stack-minimized.thumbnail-stack-dragging > .thumbnail-card {
@@ -2132,12 +2133,11 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
         var(--thumbnail-stack-pile-depth, 0) * -1.5px
         + var(--thumbnail-drag-sway-x, 0) * 1px
           * var(--thumbnail-stack-pile-depth, 0)
-          * (var(--thumbnail-stack-pile-depth, 0) + 1)
-          / 2
+          * 0.7
       ),
       calc(
         var(--thumbnail-stack-pile-depth, 0) * -13px
-        + var(--thumbnail-drag-sway-y, 0) * 1px * var(--thumbnail-stack-pile-depth, 0) * 0.45
+        + var(--thumbnail-drag-sway-y, 0) * 1px * var(--thumbnail-stack-pile-depth, 0) * 0.2
       ),
       calc(var(--thumbnail-stack-pile-depth, 0) * -24px)
     )
@@ -2145,8 +2145,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
       calc(
         var(--thumbnail-drag-sway-x, 0)
         * var(--thumbnail-stack-pile-depth, 0)
-        * (var(--thumbnail-stack-pile-depth, 0) + 1)
-        * 0.18deg
+        * 0.12deg
       )
     )
     rotateX(calc(var(--thumbnail-stack-pile-depth, 0) * -1.4deg))

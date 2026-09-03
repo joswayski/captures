@@ -155,10 +155,14 @@ describe("thumbnail stack layout", () => {
     expect(dragging?.[1]).not.toMatch(/transform\s+0\.22s/);
     expect(dragging?.[1]).not.toMatch(/40ms/);
     expect(dragging?.[1]).toMatch(/--thumbnail-drag-sway-x/);
-    expect(dragging?.[1]).toMatch(/\(var\(--thumbnail-stack-pile-depth, 0\) \+ 1\)/);
+    expect(dragging?.[1]).toMatch(/--thumbnail-stack-pile-depth/);
+    expect(dragging?.[1]).toMatch(/\* 0\.7/);
+    expect(dragging?.[1]).toMatch(/\* 0\.2/);
+    expect(dragging?.[1]).not.toMatch(/\(var\(--thumbnail-stack-pile-depth, 0\) \+ 1\)/);
     expect(dragging?.[1]).toMatch(/rotateZ\(/);
     expect(dragging?.[1]).not.toMatch(/-0\.28deg/);
-    expect(dragging?.[1]).toMatch(/0\.18deg/);
+    expect(dragging?.[1]).not.toMatch(/0\.18deg/);
+    expect(dragging?.[1]).toMatch(/0\.12deg/);
   });
 
   it("releases the arrival animation before cards exit or shift", () => {
