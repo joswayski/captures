@@ -233,18 +233,25 @@ pub const fn cursor_claim_panel_should_resign_key(is_key: bool) -> bool {
 /// trying to become key.
 ///
 /// The panel exists so a region overlay can own `NSCursor` before it is key.
-/// After the overlay is ordered out — including the JS fast-hide on pointer
-/// up — a queued reassert must not resurrect this panel. A hidden
-/// nonactivating key panel swallows typing in other apps until Captures quits.
+/// The overlay window is created hidden at startup and reused; `NSCursor::set`
+/// is ignored while Captures is inactive, so this panel must still appear for a
+/// not-yet-presented overlay. After that overlay has been ordered front and
+/// then hidden — including the JS fast-hide on pointer up — a queued reassert
+/// must not resurrect it. A hidden nonactivating key panel swallows typing in
+/// other apps until Captures quits.
+///
+/// `overlay_presented` is true only after this capture ordered the overlay
+/// onscreen. Visibility alone cannot tell a precreated hidden overlay from a
+/// dismissed one.
 #[must_use]
 pub const fn cursor_claim_panel_should_show(
     owns_cursor: bool,
     native_owned: bool,
-    overlay_exists: bool,
+    overlay_presented: bool,
     overlay_is_visible: bool,
     overlay_is_key: bool,
 ) -> bool {
-    owns_cursor && native_owned && !overlay_is_key && (!overlay_exists || overlay_is_visible)
+    owns_cursor && native_owned && !overlay_is_key && (!overlay_presented || overlay_is_visible)
 }
 
 /// A delayed overlay/selector `makeKey` retry must not run after that surface
@@ -430,7 +437,8 @@ mod tests {
 
     #[test]
     fn cursor_claim_panel_is_not_resurrected_after_the_overlay_hides() {
-        // First screenshot, overlay window not created yet: claim the crosshair.
+        // Overlay not created yet, or precreated at startup and still hidden:
+        // region shortcuts claim the cursor before present.
         assert!(cursor_claim_panel_should_show(
             true, true, false, false, false
         ));
@@ -442,8 +450,9 @@ mod tests {
         assert!(!cursor_claim_panel_should_show(
             true, true, true, true, true
         ));
-        // JS/Tauri hide ordered the overlay out while cursor ownership is still
-        // live. A queued reassert must not make the claim panel key.
+        // JS/Tauri hide ordered the overlay out after it was presented, while
+        // cursor ownership is still live. A queued reassert must not make the
+        // claim panel key.
         assert!(!cursor_claim_panel_should_show(
             true, true, true, false, false
         ));
@@ -453,6 +462,18 @@ mod tests {
         ));
         assert!(!cursor_claim_panel_should_show(
             false, true, false, false, false
+        ));
+    }
+
+    #[test]
+    fn precreated_hidden_overlay_still_claims_the_region_crosshair() {
+        // `create_overlay_window` configures the overlay and leaves it hidden.
+        // Existence/visibility must not be treated as "already dismissed."
+        assert!(cursor_claim_panel_should_show(
+            true, true, false, false, false
+        ));
+        assert!(!cursor_claim_panel_should_show(
+            true, true, true, false, false
         ));
     }
 

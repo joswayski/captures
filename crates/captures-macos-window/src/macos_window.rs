@@ -409,6 +409,10 @@ static CURSOR_CLAIM_PANEL: Mutex<Option<MainThreadPanel>> = Mutex::new(None);
 static THUMBNAIL_WINDOW_PTR: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 static OVERLAY_WINDOW_PTR: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+// True after this capture ordered the overlay onscreen. Distinguishes a
+// precreated hidden overlay (claim the crosshair) from one that was presented
+// and then fast-hidden (do not resurrect the claim panel).
+static OVERLAY_PRESENTED_THIS_CAPTURE: AtomicBool = AtomicBool::new(false);
 // Invalidates delayed `focus_window` retries after a capture surface hides so
 // `orderFrontRegardless` cannot resurrect a hidden overlay as the key window.
 static CAPTURE_SURFACE_FOCUS_GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -527,11 +531,15 @@ fn overlay_window_is_visible() -> bool {
     overlay_ns_window().is_some_and(|window| window.isVisible())
 }
 
+fn overlay_presented_this_capture() -> bool {
+    OVERLAY_PRESENTED_THIS_CAPTURE.load(Ordering::Acquire)
+}
+
 fn cursor_claim_panel_allowed_now() -> bool {
     cursor_claim_panel_should_show(
         capture_overlay_owns_cursor(),
         stored_capture_cursor().native_owned,
-        overlay_ns_window().is_some(),
+        overlay_presented_this_capture(),
         overlay_window_is_visible(),
         capture_overlay_is_key(),
     )
@@ -945,6 +953,10 @@ pub fn claim_capture_cursor(cursor: CaptureCursor) {
         return;
     }
     CAPTURE_OVERLAY_OWNS_CURSOR.store(true, Ordering::Release);
+    // A new capture starts while the reused overlay is still hidden. Clear
+    // last capture's presented bit so the claim panel can seed NSCursor before
+    // this overlay is ordered front.
+    OVERLAY_PRESENTED_THIS_CAPTURE.store(false, Ordering::Release);
     store_capture_cursor(cursor);
     ensure_capture_cursor_monitor();
     ensure_global_cursor_monitor();
@@ -1808,10 +1820,12 @@ pub fn present_capture_overlay(window: &WebviewWindow) -> Result<(), &'static st
     // its backing layer immediately before reveal, which can produce a one-frame
     // scale snap. Only the hidden -> visible edge needs native preparation.
     if !capture_overlay_needs_presentation(native.isVisible()) {
+        OVERLAY_PRESENTED_THIS_CAPTURE.store(true, Ordering::Release);
         return Ok(());
     }
     prepare_capture_overlay(window)?;
     native.orderFront(None);
+    OVERLAY_PRESENTED_THIS_CAPTURE.store(true, Ordering::Release);
     if capture_overlay_owns_cursor() {
         reassert_claimed_capture_cursor();
     }

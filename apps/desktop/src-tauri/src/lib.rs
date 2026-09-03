@@ -7887,6 +7887,9 @@ mod tests {
             ),
             captures_macos_window::ThumbnailHoverCursor::Default
         );
+        assert!(captures_macos_window::cursor_claim_panel_should_show(
+            true, true, false, false, false
+        ));
         assert!(!captures_macos_window::cursor_claim_panel_should_show(
             true, true, true, false, false
         ));
