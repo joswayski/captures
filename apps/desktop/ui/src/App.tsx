@@ -81,11 +81,15 @@ import {
 import {
   applyThumbnailCssCursor,
   applyThumbnailNativeHover,
+  armThumbnailCollapsedHover,
   clearThumbnailCssCursor,
   clearThumbnailNativeHover,
   markThumbnailEditorControlOpened,
   rearmThumbnailEditorControlHover,
+  releaseThumbnailCapturedHover,
+  releaseThumbnailPointerCapture,
   setThumbnailCardHoverSuppressed,
+  setThumbnailCollapsedHoverStale,
   setThumbnailNativeActiveCard,
   shouldIgnoreThumbnailCursorEvents,
   shouldLockThumbnailCardHoverOnStackMotion,
@@ -115,6 +119,7 @@ import {
   cssUrl,
   preventThumbnailHtml5Drag,
   readHarnessStackOffset,
+  setThumbnailStackDragSwayReady,
   setThumbnailStackDragging,
   setThumbnailStackPressing,
   writeHarnessStackOffset,
@@ -126,13 +131,17 @@ import {
   scrollThumbnailStackToNewest,
   shouldScrollThumbnailStackToEnd,
   thumbnailStackContentHeight,
+  thumbnailStackNeedsScrollport,
   thumbnailStackOverflow,
   restoreThumbnailStackShiftClass,
   thumbnailCollapsedPeekPx,
   captureThumbnailCardTransforms,
+  thumbnailStackFanCollapseMs,
   thumbnailStackFanShiftPx,
   thumbnailStackFanTiltDeg,
+  thumbnailStackPeekJitterPx,
   THUMBNAIL_CARD_SLOT_PX,
+  THUMBNAIL_STACK_SCROLLPORT_CLASS,
   waitForThumbnailStackSettle,
 } from "./lib/thumbnailLayout";
 import {
@@ -5633,9 +5642,14 @@ export function Thumbnail() {
     hasOlder: false,
     hasNewer: false,
   });
+  const [stackViewportHeight, setStackViewportHeight] = useState(() => (
+    typeof window === "undefined" ? 0 : window.innerHeight
+  ));
   const stackRef = useRef<HTMLElement>(null);
   const stackDrag = useRef<CollapsedThumbnailStackDrag | null>(null);
   const skipCollapsedStackClick = useRef(false);
+  const stackFanCollapseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stackFanCollapsed = useRef(false);
   const stackMotionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stackHoverReadyFrames = useRef<{ first: number; second: number } | null>(null);
   const previousStackMotion = useRef<"expanded" | "collapsing" | "collapsed" | "expanding">(
@@ -5799,7 +5813,9 @@ export function Thumbnail() {
     );
     previousArtifactCount.current = artifacts.length;
     if (shouldReveal && stackRef.current) {
-      scrollThumbnailStackToNewest(stackRef.current);
+      scrollThumbnailStackToNewest(stackRef.current, {
+        viewportHeight: stackViewportHeight,
+      });
     }
     refreshStackOverflow();
     let cancelled = false;
@@ -5810,7 +5826,9 @@ export function Thumbnail() {
       .finally(() => {
         if (!cancelled) {
           if (shouldReveal && stackRef.current) {
-            scrollThumbnailStackToNewest(stackRef.current);
+            scrollThumbnailStackToNewest(stackRef.current, {
+              viewportHeight: stackViewportHeight,
+            });
           }
           refreshStackOverflow();
           window.dispatchEvent(new Event("captures-thumbnail-layout-changed"));
@@ -5819,7 +5837,7 @@ export function Thumbnail() {
     return () => {
       cancelled = true;
     };
-  }, [artifacts.length, refreshStackOverflow]);
+  }, [artifacts.length, refreshStackOverflow, stackViewportHeight]);
 
   useLayoutEffect(() => {
     if (stackMotion !== "expanded" || !pendingNewestReveal.current) return;
@@ -5828,6 +5846,7 @@ export function Thumbnail() {
     const cancelReveal = scheduleScrollThumbnailStackToNewest(stack, {
       onScrolled: refreshStackOverflow,
       retryMs: 450,
+      viewportHeight: stackViewportHeight,
     });
     const finish = window.setTimeout(() => {
       pendingNewestReveal.current = false;
@@ -5836,10 +5855,13 @@ export function Thumbnail() {
       cancelReveal();
       window.clearTimeout(finish);
     };
-  }, [stackMotion, refreshStackOverflow]);
+  }, [stackMotion, refreshStackOverflow, stackViewportHeight]);
 
   useEffect(() => {
-    const refresh = () => refreshStackOverflow();
+    const refresh = () => {
+      setStackViewportHeight(window.innerHeight);
+      refreshStackOverflow();
+    };
     window.addEventListener("resize", refresh);
     window.addEventListener("captures-thumbnail-ready", refresh);
     window.addEventListener("captures-thumbnail-layout-changed", refresh);
@@ -6318,6 +6340,10 @@ export function Thumbnail() {
       cancelStackScroll.current?.();
       cancelStackScroll.current = null;
       if (stackMotionTimer.current) clearTimeout(stackMotionTimer.current);
+      if (stackFanCollapseTimer.current) {
+        clearTimeout(stackFanCollapseTimer.current);
+        stackFanCollapseTimer.current = null;
+      }
       if (stackHoverReadyFrames.current) {
         cancelAnimationFrame(stackHoverReadyFrames.current.first);
         cancelAnimationFrame(stackHoverReadyFrames.current.second);
@@ -6350,6 +6376,9 @@ export function Thumbnail() {
   const stackAnimating = stackMotion === "collapsing" || stackMotion === "expanding";
   const exitingOnly = artifacts.every(({ id }) => exitingArtifactIds.has(id));
   const controlsDisabled = stackAnimating || exitingOnly;
+  const stackScrollport = (stackMotion === "expanding" || stackMotion === "expanded")
+    && thumbnailStackNeedsScrollport(artifacts.length, stackViewportHeight);
+  const showOverflowCues = stackMotion === "expanded";
 
   const setStackCollapsed = (nextCollapsed: boolean) => {
     if (controlsDisabled || collapsed === nextCollapsed) return;
@@ -6498,6 +6527,9 @@ export function Thumbnail() {
         const stack = stackRef.current;
         if (!stack) return;
         setThumbnailStackDragging(stack, dragging);
+        if (dragging && stackFanCollapsed.current) {
+          setThumbnailStackDragSwayReady(stack, true);
+        }
         window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
       },
     });
@@ -6510,25 +6542,57 @@ export function Thumbnail() {
     if (!drag.pointerDown(event.nativeEvent)) return;
     skipCollapsedStackClick.current = true;
     setThumbnailStackPressing(stackRef.current, true);
+    if (stackFanCollapseTimer.current) {
+      clearTimeout(stackFanCollapseTimer.current);
+      stackFanCollapseTimer.current = null;
+    }
+    if (prefersReducedMotion()) {
+      stackFanCollapsed.current = true;
+    } else {
+      stackFanCollapsed.current = false;
+      const cardCount = stackRef.current?.querySelectorAll(":scope > .thumbnail-card").length
+        ?? 0;
+      stackFanCollapseTimer.current = setTimeout(() => {
+        stackFanCollapseTimer.current = null;
+        stackFanCollapsed.current = true;
+        if (!drag.isDragging) return;
+        drag.resetSway();
+        setThumbnailStackDragSwayReady(stackRef.current, true);
+      }, thumbnailStackFanCollapseMs(cardCount));
+    }
     event.preventDefault();
     event.nativeEvent.preventDefault();
+    const hitTarget = event.currentTarget;
     try {
-      event.currentTarget.setPointerCapture(event.pointerId);
+      hitTarget.setPointerCapture(event.pointerId);
     } catch {
       // jsdom and some WebViews omit Element.setPointerCapture.
     }
     const pointerId = event.pointerId;
+    let finished = false;
     const onMove = (moveEvent: PointerEvent) => {
       if (moveEvent.pointerId !== pointerId) return;
       moveEvent.preventDefault();
       void drag.pointerMove(moveEvent);
     };
-    const onUp = (upEvent: PointerEvent) => {
-      if (upEvent.pointerId !== pointerId) return;
+    const finishPointer = (upEvent: PointerEvent) => {
+      if (finished || upEvent.pointerId !== pointerId) return;
+      finished = true;
       window.removeEventListener("pointermove", onMove, true);
-      window.removeEventListener("pointerup", onUp, true);
-      window.removeEventListener("pointercancel", onUp, true);
+      window.removeEventListener("pointerup", finishPointer, true);
+      window.removeEventListener("pointercancel", finishPointer, true);
+      hitTarget.removeEventListener("lostpointercapture", finishPointer);
+      if (stackFanCollapseTimer.current) {
+        clearTimeout(stackFanCollapseTimer.current);
+        stackFanCollapseTimer.current = null;
+      }
+      stackFanCollapsed.current = false;
       setThumbnailStackPressing(stackRef.current, false);
+      releaseThumbnailPointerCapture(hitTarget, pointerId);
+      releaseThumbnailCapturedHover(hitTarget, {
+        x: upEvent.clientX,
+        y: upEvent.clientY,
+      });
       void drag.pointerUp(upEvent).then((outcome) => {
         setThumbnailStackDragging(stackRef.current, false);
         window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
@@ -6536,8 +6600,9 @@ export function Thumbnail() {
       });
     };
     window.addEventListener("pointermove", onMove, { capture: true, passive: false });
-    window.addEventListener("pointerup", onUp, true);
-    window.addEventListener("pointercancel", onUp, true);
+    window.addEventListener("pointerup", finishPointer, true);
+    window.addEventListener("pointercancel", finishPointer, true);
+    hitTarget.addEventListener("lostpointercapture", finishPointer);
   };
 
   return (
@@ -6547,6 +6612,7 @@ export function Thumbnail() {
         className={[
           "thumbnail-stack",
           compact ? "thumbnail-stack-compact" : "",
+          stackScrollport ? THUMBNAIL_STACK_SCROLLPORT_CLASS : "",
           stackMotion === "collapsing" ? "thumbnail-stack-minimizing" : "",
           stackMotion === "collapsed" ? "thumbnail-stack-minimized" : "",
           stackMotion === "expanding" ? "thumbnail-stack-expanding" : "",
@@ -6603,8 +6669,12 @@ export function Thumbnail() {
             } as CSSProperties}
             onPointerDown={onCollapsedStackPointerDown}
             onDragStart={(event) => preventThumbnailHtml5Drag(event.nativeEvent)}
+            onPointerEnter={(event) => {
+              armThumbnailCollapsedHover(event.currentTarget);
+            }}
             onPointerLeave={(event) => {
               event.currentTarget.removeAttribute("data-native-pointer-hover");
+              setThumbnailCollapsedHoverStale(event.currentTarget, true);
               setStackHoverLatched(false);
             }}
             onClick={() => {
@@ -6639,7 +6709,7 @@ export function Thumbnail() {
           </button>
         </div>
       )}
-      {!collapsed && stackOverflow.hasOlder && (
+      {showOverflowCues && stackOverflow.hasOlder && (
         <button
           type="button"
           className="thumbnail-overflow-cue thumbnail-overflow-cue-older"
@@ -6649,7 +6719,7 @@ export function Thumbnail() {
           <ThumbnailOverflowChevron direction="up" />
         </button>
       )}
-      {!collapsed && stackOverflow.hasNewer && (
+      {showOverflowCues && stackOverflow.hasNewer && (
         <button
           type="button"
           className="thumbnail-overflow-cue thumbnail-overflow-cue-newer"
@@ -7095,6 +7165,7 @@ export function ThumbnailCard({
         "--thumbnail-stack-base-depth": stackDepth,
         "--thumbnail-stack-fan-tilt": `${thumbnailStackFanTiltDeg(stackDepth)}deg`,
         "--thumbnail-stack-fan-shift": `${thumbnailStackFanShiftPx(stackDepth)}px`,
+        "--thumbnail-stack-peek-jitter": `${thumbnailStackPeekJitterPx(stackDepth)}px`,
         ...(expandFromTransform
           ? { "--thumbnail-stack-expand-from": expandFromTransform }
           : {}),
