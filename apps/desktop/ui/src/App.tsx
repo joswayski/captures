@@ -132,6 +132,8 @@ import {
   captureThumbnailCardTransforms,
   thumbnailStackFanShiftPx,
   thumbnailStackFanTiltDeg,
+  thumbnailStackHiddenAmount,
+  thumbnailStackHoverHiddenAmount,
   THUMBNAIL_CARD_SLOT_PX,
   waitForThumbnailStackSettle,
 } from "./lib/thumbnailLayout";
@@ -7092,8 +7094,9 @@ export function ThumbnailCard({
       ].filter(Boolean).join(" ")}
       data-thumbnail-id={artifact.id}
       style={stackCollapsed ? {
-        "--thumbnail-stack-base-depth": Math.min(stackDepth, 3),
-        "--thumbnail-stack-hidden": stackDepth > 3 ? 1 : 0,
+        "--thumbnail-stack-base-depth": stackDepth,
+        "--thumbnail-stack-hidden": thumbnailStackHiddenAmount(stackDepth),
+        "--thumbnail-stack-hover-hidden": thumbnailStackHoverHiddenAmount(stackDepth),
         "--thumbnail-stack-fan-tilt": `${thumbnailStackFanTiltDeg(stackDepth)}deg`,
         "--thumbnail-stack-fan-shift": `${thumbnailStackFanShiftPx(stackDepth)}px`,
         ...(expandFromTransform
