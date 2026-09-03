@@ -6,6 +6,7 @@ import {
   THUMBNAIL_HARNESS_DRAG_Y_VAR,
   THUMBNAIL_STACK_DRAG_THRESHOLD_PX,
   THUMBNAIL_STACK_DRAG_SWAY_MAX_X_PX,
+  THUMBNAIL_STACK_DRAG_SWAY_CLASS,
   THUMBNAIL_STACK_DRAGGING_CLASS,
   THUMBNAIL_STACK_PRESSING_CLASS,
   applyThumbnailStackDragSway,
@@ -15,6 +16,7 @@ import {
   cssUrl,
   preventThumbnailHtml5Drag,
   readHarnessStackOffset,
+  setThumbnailStackDragSwayReady,
   setThumbnailStackDragging,
   setThumbnailStackPressing,
   thumbnailStackDragExceededThreshold,
@@ -226,6 +228,24 @@ describe("CollapsedThumbnailStackDrag", () => {
     expect(await drag.pointerMove({ pointerId: 2, screenX: 40, screenY: 0 })).toBeNull();
     expect(await drag.pointerUp({ pointerId: 2 })).toBe("ignored");
   });
+
+  it("clears accumulated lean so gather can hand off from rest", async () => {
+    const sways: { x: number; y: number }[] = [];
+    const drag = new CollapsedThumbnailStackDrag({
+      getFrame: () => ({ x: 0, y: 0 }),
+      moveFrame: (x, y) => ({ x, y }),
+      reducedMotion: () => false,
+      onSway: (sway) => {
+        sways.push({ ...sway });
+      },
+    });
+
+    drag.pointerDown({ button: 0, pointerId: 1, screenX: 0, screenY: 0 });
+    await drag.pointerMove({ pointerId: 1, screenX: 20, screenY: 0 });
+    expect(sways.at(-1)?.x).toBeLessThan(0);
+    drag.resetSway();
+    expect(sways.at(-1)).toEqual({ x: 0, y: 0 });
+  });
 });
 
 describe("stack dragging class helpers", () => {
@@ -238,6 +258,7 @@ describe("stack dragging class helpers", () => {
 
     setThumbnailStackDragging(stack, false);
     expect(stack).not.toHaveClass(THUMBNAIL_STACK_DRAGGING_CLASS);
+    expect(stack).not.toHaveClass(THUMBNAIL_STACK_DRAG_SWAY_CLASS);
     expect(stack.style.getPropertyValue("--thumbnail-drag-sway-x")).toBe("0");
     clearThumbnailStackDragSway(stack);
   });
@@ -248,5 +269,16 @@ describe("stack dragging class helpers", () => {
     expect(stack).toHaveClass(THUMBNAIL_STACK_PRESSING_CLASS);
     setThumbnailStackPressing(stack, false);
     expect(stack).not.toHaveClass(THUMBNAIL_STACK_PRESSING_CLASS);
+  });
+
+  it("holds drag sway until the hover fan has gathered", () => {
+    const stack = document.createElement("main");
+    setThumbnailStackDragging(stack, true);
+    expect(stack).toHaveClass(THUMBNAIL_STACK_DRAGGING_CLASS);
+    expect(stack).not.toHaveClass(THUMBNAIL_STACK_DRAG_SWAY_CLASS);
+    setThumbnailStackDragSwayReady(stack, true);
+    expect(stack).toHaveClass(THUMBNAIL_STACK_DRAG_SWAY_CLASS);
+    setThumbnailStackDragging(stack, false);
+    expect(stack).not.toHaveClass(THUMBNAIL_STACK_DRAG_SWAY_CLASS);
   });
 });

@@ -29,6 +29,26 @@ export const THUMBNAIL_STACK_HOVER_TILT_PEEK_PX = 18;
 export const THUMBNAIL_STACK_FAN_STAGGER_MS = 8;
 
 /**
+ * Hover fan and press-gather duration. Matches `--dur-3` / `--stack-fan-dur`
+ * so the scattered pile eases back to rest instead of snapping on click.
+ */
+export const THUMBNAIL_STACK_FAN_DURATION_MS = 200;
+
+/**
+ * Time until the deepest visible card has finished gathering from the hover
+ * fan. Drag sway waits for this so it does not snap onto a mid-ease pose.
+ */
+export function thumbnailStackFanCollapseMs(
+  cardCount = THUMBNAIL_STACK_MAX_VISIBLE_DEPTH + 1,
+): number {
+  const extra = Math.min(
+    Math.max(cardCount - 1, 0),
+    THUMBNAIL_STACK_MAX_VISIBLE_DEPTH,
+  );
+  return THUMBNAIL_STACK_FAN_DURATION_MS + extra * THUMBNAIL_STACK_FAN_STAGGER_MS;
+}
+
+/**
  * Alternating collapsed-hover tilt in degrees. The front card stays square;
  * deeper cards skew a few degrees and ease back to 0 when the stack expands.
  * Values are large enough that the peeking top edge reads as a scattered pile.

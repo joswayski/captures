@@ -28,6 +28,8 @@ export const THUMBNAIL_DRAG_SWAY_Y_VAR = "--thumbnail-drag-sway-y";
 
 export const THUMBNAIL_STACK_DRAGGING_CLASS = "thumbnail-stack-dragging";
 export const THUMBNAIL_STACK_PRESSING_CLASS = "thumbnail-stack-pressing";
+/** Live lean pose. Omitted while the hover fan is still easing back to rest. */
+export const THUMBNAIL_STACK_DRAG_SWAY_CLASS = "thumbnail-stack-drag-sway";
 
 /**
  * Collapsed screenshots stay in the DOM as `<img>` drag sources. Chromium can
@@ -198,11 +200,21 @@ export function clearThumbnailStackDragSway(stack: HTMLElement | null) {
 export function setThumbnailStackDragging(stack: HTMLElement | null, dragging: boolean) {
   if (!stack) return;
   stack.classList.toggle(THUMBNAIL_STACK_DRAGGING_CLASS, dragging);
-  if (!dragging) clearThumbnailStackDragSway(stack);
+  if (!dragging) {
+    setThumbnailStackDragSwayReady(stack, false);
+    clearThumbnailStackDragSway(stack);
+  }
 }
 
 export function setThumbnailStackPressing(stack: HTMLElement | null, pressing: boolean) {
   stack?.classList.toggle(THUMBNAIL_STACK_PRESSING_CLASS, pressing);
+}
+
+export function setThumbnailStackDragSwayReady(
+  stack: HTMLElement | null,
+  ready: boolean,
+) {
+  stack?.classList.toggle(THUMBNAIL_STACK_DRAG_SWAY_CLASS, ready);
 }
 
 /**
@@ -229,6 +241,13 @@ export class CollapsedThumbnailStackDrag {
 
   get isActive(): boolean {
     return this.pointerId !== null;
+  }
+
+  /** Start lean from rest after the hover fan has gathered. */
+  resetSway() {
+    this.sway = { x: 0, y: 0 };
+    this.lastTickMs = 0;
+    this.host.onSway?.(this.sway);
   }
 
   pointerDown(event: Pick<PointerEvent, "button" | "pointerId" | "screenX" | "screenY">): boolean {

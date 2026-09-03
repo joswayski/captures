@@ -24,6 +24,7 @@ import {
   captureThumbnailCardTransforms,
   thumbnailStackFanShiftPx,
   thumbnailStackFanTiltDeg,
+  thumbnailStackFanCollapseMs,
   THUMBNAIL_CARD_HEIGHT_PX,
   THUMBNAIL_CARD_SLOT_PX,
   THUMBNAIL_DISMISS_HOLD_MS,
@@ -74,7 +75,7 @@ describe("thumbnail stack layout", () => {
     );
 
     const pressing = thumbnailStyles.match(
-      /\.thumbnail-stack-minimized\.thumbnail-stack-pressing > \.thumbnail-card\s*\{([\s\S]*?)\n\}/,
+      /\.thumbnail-stack-minimized\.thumbnail-stack-pressing > \.thumbnail-card,\s*\n\.thumbnail-stack-minimized\.thumbnail-stack-dragging:not\(\.thumbnail-stack-drag-sway\) > \.thumbnail-card\s*\{([\s\S]*?)\n\}/,
     );
 
     expect(compactCard?.[1]).toMatch(/--thumbnail-stack-base-depth/);
@@ -89,8 +90,9 @@ describe("thumbnail stack layout", () => {
       /transform\s+var\(--stack-fan-dur\) calc\(var\(--thumbnail-stack-depth, 0\) \* var\(--stack-fan-stagger\)\)/,
     );
     expect(pressing?.[1]).toMatch(/transition:/);
-    expect(pressing?.[1]).not.toMatch(/transform\s+var\(--stack-fan-dur\)/);
-    expect(pressing?.[1]).not.toMatch(/transform\s+0\./);
+    expect(pressing?.[1]).toMatch(
+      /transform\s+var\(--stack-fan-dur\) calc\(var\(--thumbnail-stack-depth, 0\) \* var\(--stack-fan-stagger\)\)/,
+    );
     expect(minimizingCard?.[1]).toMatch(/var\(--thumbnail-stack-expanded-transform\)/);
     expect(minimizeRun?.[1]).toMatch(/transform:\s*var\(--thumbnail-stack-rest-transform\)/);
     expect(minimizeRun?.[1]).toMatch(/transform 0\.48s/);
@@ -129,11 +131,14 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailStackFanTiltDeg(8)).toBe(5);
     expect(thumbnailStackFanShiftPx(0)).toBe(0);
     expect(thumbnailStackFanShiftPx(1)).toBeCloseTo(12.6);
+    expect(thumbnailStackFanCollapseMs(1)).toBe(200);
+    expect(thumbnailStackFanCollapseMs(4)).toBe(224);
+    expect(thumbnailStackFanCollapseMs(12)).toBe(224);
   });
 
   it("arches the collapsed pile so the top trails the hands while dragging", () => {
     const dragging = thumbnailStyles.match(
-      /\.thumbnail-stack-minimized\.thumbnail-stack-dragging > \.thumbnail-card\s*\{([\s\S]*?)\n\}/,
+      /\.thumbnail-stack-minimized\.thumbnail-stack-dragging\.thumbnail-stack-drag-sway > \.thumbnail-card\s*\{([\s\S]*?)\n\}/,
     );
 
     expect(dragging?.[1]).not.toMatch(/transform\s+0\.22s/);
