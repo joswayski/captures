@@ -1,17 +1,18 @@
 /** Movement before a collapsed-pile press becomes a window drag instead of expand. */
 export const THUMBNAIL_STACK_DRAG_THRESHOLD_PX = 8;
 
-export const THUMBNAIL_STACK_DRAG_SWAY_MAX_X_PX = 11;
-export const THUMBNAIL_STACK_DRAG_SWAY_MAX_Y_PX = 7;
+export const THUMBNAIL_STACK_DRAG_SWAY_MAX_X_PX = 4;
+export const THUMBNAIL_STACK_DRAG_SWAY_MAX_Y_PX = 2.5;
 
 /**
  * How much of each pointer step the rear cards initially refuse to follow.
  * 1 would leave them frozen in world space; 0 would glue them to the hands.
+ * Keep this low so a flick cannot throw peeking cards off the webview.
  */
-export const THUMBNAIL_STACK_DRAG_SWAY_INERTIA = 0.62;
+export const THUMBNAIL_STACK_DRAG_SWAY_INERTIA = 0.18;
 
 /** Catch-up rate in 1/seconds. Higher is a stiffer stack. */
-export const THUMBNAIL_STACK_DRAG_SWAY_SPRING = 6.5;
+export const THUMBNAIL_STACK_DRAG_SWAY_SPRING = 14;
 
 /** First sample after a press has no previous timestamp; treat it as one frame. */
 const THUMBNAIL_STACK_DRAG_SWAY_DEFAULT_DT_MS = 16;

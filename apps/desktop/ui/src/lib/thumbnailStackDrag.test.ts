@@ -86,6 +86,12 @@ describe("tickThumbnailStackDragSway", () => {
     expect(tickThumbnailStackDragSway(rest, { dx: 24, dy: 12, dtMs: 16 }, { reducedMotion: true }))
       .toEqual(rest);
   });
+
+  it("keeps a typical pointer step far below the clamp so rear cards stay close", () => {
+    const right = tickThumbnailStackDragSway(rest, { dx: 24, dy: 0, dtMs: 16 });
+    expect(Math.abs(right.x)).toBeLessThan(THUMBNAIL_STACK_DRAG_SWAY_MAX_X_PX);
+    expect(Math.abs(right.x)).toBeLessThan(5);
+  });
 });
 
 describe("clampThumbnailStackFrame", () => {

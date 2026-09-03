@@ -1781,7 +1781,6 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   --stack-fan-dur: var(--dur-3);
   --stack-fan-stagger: 16ms;
   --stack-fan-ease: var(--ease-standard);
-  --stack-pile-max-depth: 3;
   height: 100%;
   max-height: none;
   overflow: visible;
@@ -1794,11 +1793,9 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
    * React sets `--thumbnail-stack-base-depth` from DOM order. Subtract any
    * expanded slot-settle that was in flight when Show less started so the
    * minimizing pose matches the on-screen position instead of jumping back
-   * up a held hole.
-   *
-   * Rest and hover poses clamp to `--stack-pile-max-depth` so only four cards
-   * peek. Expand uses the real depth so tucked cards ease out of that pile
-   * into their list slots instead of appearing at full offset.
+   * up a held hole. `--thumbnail-stack-pose` recedes cards past the first
+   * three behind-cards (aliased as `--thumbnail-stack-pile-depth` for rest
+   * and hover). Expand uses the real slot depth so cards fly to list slots.
    */
   --thumbnail-stack-depth: max(
     0,
@@ -1807,10 +1804,12 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
       - var(--thumbnail-stack-shift-slots, 0)
     )
   );
-  --thumbnail-stack-pile-depth: min(
-    var(--thumbnail-stack-depth, 0),
-    var(--stack-pile-max-depth)
+  --thumbnail-stack-extra: max(0, calc(var(--thumbnail-stack-depth, 0) - 3));
+  --thumbnail-stack-pose: calc(
+    min(var(--thumbnail-stack-depth, 0), 3)
+    + var(--thumbnail-stack-extra) * 0.55
   );
+  --thumbnail-stack-pile-depth: var(--thumbnail-stack-pose, 0);
   --thumbnail-stack-rest-transform:
     translate3d(
       calc(var(--thumbnail-stack-pile-depth, 0) * -1.5px),
@@ -1845,9 +1844,8 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   left: 28px;
   right: 28px;
   bottom: 52px;
-  z-index: calc(30 - var(--thumbnail-stack-depth, 0));
+  z-index: calc(80 - var(--thumbnail-stack-base-depth, 0));
   width: calc(100% - 56px);
-  opacity: calc(1 - var(--thumbnail-stack-hidden, 0));
   /*
    * Transform stays off this transition. Collapsing eases onto the rest pose,
    * then drops the transitioning class; a compact transform transition here
@@ -1878,7 +1876,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   inset: 0;
   border-radius: inherit;
   background: var(--glass-strong-solid);
-  opacity: calc(var(--thumbnail-stack-pile-depth, 0) * 0.12);
+  opacity: calc(min(0.72, var(--thumbnail-stack-pile-depth, 0) * 0.14));
   content: "";
   pointer-events: none;
   transition: opacity var(--stack-fan-dur) calc(var(--thumbnail-stack-pile-depth, 0) * var(--stack-fan-stagger, 0ms)) var(--stack-fan-ease, var(--ease-out));
@@ -1907,7 +1905,6 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 }
 
 .thumbnail-stack-expanding > .thumbnail-card {
-  /* Tucked extras start at rest opacity 0; fade in while they fly into slots. */
   opacity: 1;
   animation: thumbnail-card-expand 0.48s var(--ease-standard) both;
 }
@@ -1968,7 +1965,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
     opacity: 0;
   }
   to {
-    opacity: calc(var(--thumbnail-stack-pile-depth, 0) * 0.12);
+    opacity: calc(min(0.72, var(--thumbnail-stack-pile-depth, 0) * 0.14));
   }
 }
 
@@ -1995,6 +1992,21 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   background-repeat: no-repeat;
 }
 
+/*
+ * Blur lives on the media shell, not the card: a parent filter flattens the
+ * screenshot and blanks it in WebKit when expand removes the filter. Only the
+ * collapsed rest pose blurs so expand/collapse fly-outs stay sharp.
+ */
+.thumbnail-stack-minimized > .thumbnail-card .thumbnail-media {
+  filter: blur(calc(var(--thumbnail-stack-pose, 0) * 1.15px));
+  transition: filter var(--stack-fan-dur, var(--dur-3)) calc(var(--thumbnail-stack-depth, 0) * var(--stack-fan-stagger, 0ms)) var(--stack-fan-ease, var(--ease-out));
+}
+
+.thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):not(.thumbnail-stack-pressing):has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card .thumbnail-media,
+.thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):not(.thumbnail-stack-pressing):has(.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]) > .thumbnail-card .thumbnail-media {
+  filter: blur(calc(var(--thumbnail-stack-pose, 0) * 0.75px));
+}
+
 .thumbnail-stack-compact > .thumbnail-card img {
   display: none;
 }
@@ -2007,7 +2019,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   left: 28px;
   /*
    * Front card is 160px. Extra peek height comes from `--thumbnail-collapsed-peek`
-   * (idle 13px × visible extra cards) so a single preview does not steal clicks
+   * (idle 13px × receding pose) so a single preview does not steal clicks
    * in the empty space above it. Hover uses `--thumbnail-collapsed-hover-peek`.
    */
   height: calc(160px + var(--thumbnail-collapsed-peek, 0px));
@@ -2109,8 +2121,9 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 /*
  * Drag lean is velocity-driven from JS (`--thumbnail-drag-sway-*`). Origin is
  * the bottom of each card (the hands). Negative sway is a rightward carry:
- * rear cards translate and rotate so the top of the pile trails, forming an
- * arch. Skip a transform transition here so the lean can track the pointer;
+ * rear cards translate and rotate a little so the pile trails without leaving
+ * the window. Depth is linear (not triangular) so the back cards stay close.
+ * Skip a transform transition here so the lean can track the pointer;
  * dropping the dragging class lets hover-ready ease back to rest.
  */
 .thumbnail-stack-minimized.thumbnail-stack-dragging.thumbnail-stack-drag-sway > .thumbnail-card {
@@ -2123,12 +2136,11 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
         var(--thumbnail-stack-pile-depth, 0) * -1.5px
         + var(--thumbnail-drag-sway-x, 0) * 1px
           * var(--thumbnail-stack-pile-depth, 0)
-          * (var(--thumbnail-stack-pile-depth, 0) + 1)
-          / 2
+          * 0.7
       ),
       calc(
         var(--thumbnail-stack-pile-depth, 0) * -13px
-        + var(--thumbnail-drag-sway-y, 0) * 1px * var(--thumbnail-stack-pile-depth, 0) * 0.45
+        + var(--thumbnail-drag-sway-y, 0) * 1px * var(--thumbnail-stack-pile-depth, 0) * 0.2
       ),
       calc(var(--thumbnail-stack-pile-depth, 0) * -24px)
     )
@@ -2136,8 +2148,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
       calc(
         var(--thumbnail-drag-sway-x, 0)
         * var(--thumbnail-stack-pile-depth, 0)
-        * (var(--thumbnail-stack-pile-depth, 0) + 1)
-        * 0.18deg
+        * 0.12deg
       )
     )
     rotateX(calc(var(--thumbnail-stack-pile-depth, 0) * -1.4deg))
@@ -2156,7 +2167,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 
 .thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):not(.thumbnail-stack-pressing):has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card::before,
 .thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):not(.thumbnail-stack-pressing):has(.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]) > .thumbnail-card::before {
-  opacity: calc(var(--thumbnail-stack-pile-depth, 0) * 0.08);
+  opacity: calc(min(0.55, var(--thumbnail-stack-pile-depth, 0) * 0.1));
 }
 
 .thumbnail-message {
@@ -2207,6 +2218,11 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   .thumbnail-stack-minimized.thumbnail-stack-pressing > .thumbnail-card,
   .thumbnail-stack-minimizing.thumbnail-stack-minimize-run > .thumbnail-card,
   .thumbnail-stack-minimized.thumbnail-stack-hover-ready > .thumbnail-card {
+    transition: none;
+  }
+
+  .thumbnail-stack-minimized > .thumbnail-card .thumbnail-media {
+    filter: none;
     transition: none;
   }
 
