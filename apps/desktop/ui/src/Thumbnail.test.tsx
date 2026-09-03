@@ -9,6 +9,7 @@ import {
   THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS,
   thumbnailStackFanCollapseMs,
   thumbnailStackNewestScrollTop,
+  thumbnailStackPeekJitterPx,
 } from "./lib/thumbnailLayout";
 import { THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE } from "./lib/thumbnailHover";
 
@@ -1045,8 +1046,12 @@ describe("Thumbnail", () => {
     const collapsedCards = stack.querySelectorAll<HTMLElement>(":scope > .thumbnail-card");
     expect(collapsedCards).toHaveLength(8);
     collapsedCards.forEach((card, index) => {
+      const depth = collapsedCards.length - index - 1;
       expect(card.style.getPropertyValue("--thumbnail-stack-base-depth")).toBe(
-        String(collapsedCards.length - index - 1),
+        String(depth),
+      );
+      expect(card.style.getPropertyValue("--thumbnail-stack-peek-jitter")).toBe(
+        `${thumbnailStackPeekJitterPx(depth)}px`,
       );
       expect(card.style.getPropertyValue("--thumbnail-stack-hidden")).toBe("");
     });

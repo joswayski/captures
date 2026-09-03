@@ -5337,14 +5337,13 @@ fn set_mini_preview_stack_position(
 }
 
 fn thumbnail_stack_pose_depth(depth: f64) -> f64 {
-    const FULL: f64 = 3.0;
-    const STEP: f64 = 0.55;
+    // Keep in sync with thumbnailStackPoseDepth in thumbnailLayout.ts.
+    const RECEDE: f64 = 0.55;
+    const EASE_K: f64 = 24.0;
     if depth <= 0.0 {
         0.0
-    } else if depth <= FULL {
-        depth
     } else {
-        FULL + (depth - FULL) * STEP
+        depth * (EASE_K + RECEDE * depth) / (depth + EASE_K)
     }
 }
 
@@ -8171,7 +8170,10 @@ mod tests {
         assert_eq!(thumbnail_stack_height(1, false), 240.0);
         assert!(thumbnail_stack_height(8, true) > thumbnail_stack_height(4, true));
         assert!(thumbnail_stack_height(8, true) < thumbnail_stack_height(8, false));
-        assert_eq!(thumbnail_stack_height(4, true), 268.0);
+        let pose_3 = 3.0 * (24.0 + 0.55 * 3.0) / (3.0 + 24.0);
+        let peek = pose_3 * 16.0 + 8.0;
+        let extra_above_padding = f64::max(peek - 28.0, 0.0);
+        assert!((thumbnail_stack_height(4, true) - (240.0 + extra_above_padding)).abs() < 1e-9);
     }
 
     #[test]

@@ -135,6 +135,7 @@ import {
   thumbnailStackFanCollapseMs,
   thumbnailStackFanShiftPx,
   thumbnailStackFanTiltDeg,
+  thumbnailStackPeekJitterPx,
   THUMBNAIL_CARD_SLOT_PX,
   THUMBNAIL_STACK_SCROLLPORT_CLASS,
   waitForThumbnailStackSettle,
@@ -7146,6 +7147,7 @@ export function ThumbnailCard({
         "--thumbnail-stack-base-depth": stackDepth,
         "--thumbnail-stack-fan-tilt": `${thumbnailStackFanTiltDeg(stackDepth)}deg`,
         "--thumbnail-stack-fan-shift": `${thumbnailStackFanShiftPx(stackDepth)}px`,
+        "--thumbnail-stack-peek-jitter": `${thumbnailStackPeekJitterPx(stackDepth)}px`,
         ...(expandFromTransform
           ? { "--thumbnail-stack-expand-from": expandFromTransform }
           : {}),
