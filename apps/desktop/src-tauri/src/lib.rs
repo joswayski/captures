@@ -5361,8 +5361,10 @@ fn thumbnail_collapsed_peek(count: usize, hovered: bool) -> f64 {
     let extra = count.saturating_sub(1) as f64;
     let pose = thumbnail_stack_pose_depth(extra);
     let peek = pose * if hovered { 16.0 } else { 13.0 };
-    if hovered && extra > 0.0 {
-        peek + 8.0
+    // Matches `THUMBNAIL_STACK_*_SKEW_PEEK_PX` in thumbnailLayout.ts: rotation
+    // corner rise plus max Y jitter, so a max-tilt rear card is not clipped.
+    if extra > 0.0 {
+        peek + if hovered { 19.0 } else { 16.0 }
     } else {
         peek
     }
@@ -8195,7 +8197,7 @@ mod tests {
         assert!(thumbnail_stack_height(8, true) > thumbnail_stack_height(4, true));
         assert!(thumbnail_stack_height(8, true) < thumbnail_stack_height(8, false));
         let pose_3 = 3.0 * (24.0 + 0.55 * 3.0) / (3.0 + 24.0);
-        let peek = pose_3 * 16.0 + 8.0;
+        let peek = pose_3 * 16.0 + 19.0;
         let extra_above_padding = f64::max(peek - 28.0, 0.0);
         assert!((thumbnail_stack_height(4, true) - (240.0 + extra_above_padding)).abs() < 1e-9);
     }

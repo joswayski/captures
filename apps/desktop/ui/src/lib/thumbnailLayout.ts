@@ -45,9 +45,6 @@ export const THUMBNAIL_STACK_IDLE_PEEK_PX = 13;
 /** Hover-fan collapsed peek per pose unit (matches compact hover `translateY`). */
 export const THUMBNAIL_STACK_HOVER_PEEK_PX = 16;
 
-/** Extra hit-target height so a hovered tilt corner is still on the pile. */
-export const THUMBNAIL_STACK_HOVER_TILT_PEEK_PX = 8;
-
 /** Extra delay per stacked card so collapsed hover lift does not fire in lockstep. */
 export const THUMBNAIL_STACK_FAN_STAGGER_MS = 16;
 
@@ -73,24 +70,155 @@ export function thumbnailStackFanCollapseMs(
 }
 
 /**
- * Alternating collapsed-hover tilt in degrees. The front card stays square;
- * deeper cards take a tiny skew so the pile reads as scattered without
- * swinging far past the front preview.
+ * Per-capture rest scatter. Seeded from the artifact id so a capture keeps
+ * the same lean as newer shots push it back, instead of snapping onto a
+ * depth-indexed slot that looks identical every time. The front card stays
+ * square; behind-cards stay within a couple of degrees and a few pixels.
  */
-export const THUMBNAIL_STACK_FAN_TILT_DEG = [0, 2.4, -2, 1.6] as const;
+export const THUMBNAIL_STACK_REST_SKEW_X_PX = 10;
+export const THUMBNAIL_STACK_REST_SKEW_Y_PX = 4.5;
+export const THUMBNAIL_STACK_REST_SKEW_ROT_DEG = 4.4;
+export const THUMBNAIL_STACK_HOVER_SKEW_X_PX = 12;
+export const THUMBNAIL_STACK_HOVER_SKEW_ROT_DEG = 5.8;
 
-/** Extra hover shift (px) along the tilt so the peeking edge is not a parallel slab. */
-export const THUMBNAIL_STACK_FAN_SHIFT_PX_PER_DEG = 1;
+/** Keep behind-cards off the dead zone so a new capture never looks slotted. */
+export const THUMBNAIL_STACK_SKEW_MIN_UNIT = 0.42;
 
-/** Tilt applied to a collapsed card at `depth` while the pile is hovered. */
-export function thumbnailStackFanTiltDeg(depth: number): number {
-  const index = Math.max(Math.trunc(depth), 0);
-  if (index < THUMBNAIL_STACK_FAN_TILT_DEG.length) {
-    return THUMBNAIL_STACK_FAN_TILT_DEG[index];
+/** Compact card width: window 340 minus 28px padding on each side. */
+export const THUMBNAIL_STACK_CARD_WIDTH_PX = 284;
+
+/**
+ * How far a bottom-centered rotateZ swings the top corners past the unrotated
+ * card box. CSS `rotateZ` is clockwise.
+ */
+export function thumbnailStackSkewCornerExtra(rotateDeg: number): { x: number; y: number } {
+  const halfWidth = THUMBNAIL_STACK_CARD_WIDTH_PX / 2;
+  let extraX = 0;
+  let extraY = 0;
+  for (const sign of [-1, 1]) {
+    const radians = (sign * Math.abs(rotateDeg) * Math.PI) / 180;
+    const cos = Math.cos(radians);
+    const sin = Math.sin(radians);
+    for (const [x, y] of [
+      [-halfWidth, -THUMBNAIL_CARD_HEIGHT_PX],
+      [halfWidth, -THUMBNAIL_CARD_HEIGHT_PX],
+    ] as const) {
+      const rotatedX = x * cos + y * sin;
+      const rotatedY = -x * sin + y * cos;
+      extraX = Math.max(extraX, Math.abs(rotatedX) - halfWidth);
+      extraY = Math.max(extraY, -rotatedY - THUMBNAIL_CARD_HEIGHT_PX);
+    }
   }
-  const pattern = THUMBNAIL_STACK_FAN_TILT_DEG.slice(1);
-  const raw = pattern[(index - 1) % pattern.length] ?? 0;
-  return raw / (1 + (index - (THUMBNAIL_STACK_FAN_TILT_DEG.length - 1)) * 0.28);
+  return { x: extraX, y: extraY };
+}
+
+/** Worst-case paint overflow from unique skew plus that rotation. */
+export function thumbnailStackSkewPaintOverflow(hovered: boolean): { x: number; y: number } {
+  const rotate = hovered
+    ? THUMBNAIL_STACK_HOVER_SKEW_ROT_DEG
+    : THUMBNAIL_STACK_REST_SKEW_ROT_DEG;
+  const shiftX = hovered
+    ? THUMBNAIL_STACK_HOVER_SKEW_X_PX
+    : THUMBNAIL_STACK_REST_SKEW_X_PX;
+  const corner = thumbnailStackSkewCornerExtra(rotate);
+  return {
+    x: corner.x + shiftX,
+    y: corner.y + THUMBNAIL_STACK_REST_SKEW_Y_PX,
+  };
+}
+
+/** Extra idle peek so rest rotation and Y jitter stay inside the hit target. */
+export const THUMBNAIL_STACK_REST_SKEW_PEEK_PX = Math.ceil(
+  thumbnailStackSkewPaintOverflow(false).y,
+);
+
+/** Extra hit-target height so a hovered tilt corner is still on the pile. */
+export const THUMBNAIL_STACK_HOVER_TILT_PEEK_PX = Math.ceil(
+  thumbnailStackSkewPaintOverflow(true).y,
+);
+
+/**
+ * Horizontal inset to pull back so scattered rear-card edges stay on the
+ * expand control. Capped at side padding so a single square preview does
+ * not steal the click-through gutters; `thumbnailStackSkewHitPadPx` zeros
+ * that pad for a one-card pile.
+ */
+export const THUMBNAIL_STACK_SKEW_HIT_PAD_PX = Math.min(
+  THUMBNAIL_STACK_PADDING_PX,
+  Math.ceil(thumbnailStackSkewPaintOverflow(true).x),
+);
+
+/** Collapsed expand-control inset for `cardCount` previews. */
+export function thumbnailStackSkewHitPadPx(cardCount: number): number {
+  return cardCount > 1 ? THUMBNAIL_STACK_SKEW_HIT_PAD_PX : 0;
+}
+
+export type ThumbnailStackSkew = {
+  restX: number;
+  restY: number;
+  restRotate: number;
+  fanShift: number;
+  fanTilt: number;
+};
+
+const ZERO_THUMBNAIL_STACK_SKEW: ThumbnailStackSkew = {
+  restX: 0,
+  restY: 0,
+  restRotate: 0,
+  fanShift: 0,
+  fanTilt: 0,
+};
+
+/** FNV-1a with an extra avalanche mix, mapped away from zero onto [-1, -min] ∪ [min, 1]. */
+function thumbnailStackSkewUnit(id: string, salt: number): number {
+  let hash = (2166136261 ^ salt) >>> 0;
+  for (let index = 0; index < id.length; index += 1) {
+    hash ^= id.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  hash = Math.imul(hash ^ (hash >>> 16), 2246822519);
+  hash = Math.imul(hash ^ (hash >>> 13), 3266489917);
+  hash ^= hash >>> 16;
+  const unit = (hash >>> 0) / 0xffffffff;
+  const side = unit < 0.5 ? -1 : 1;
+  const span = 1 - THUMBNAIL_STACK_SKEW_MIN_UNIT;
+  const magnitude = THUMBNAIL_STACK_SKEW_MIN_UNIT + (unit % 0.5) * 2 * span;
+  return side * Math.min(magnitude, 1);
+}
+
+function cssQty(value: number, unit: string): string {
+  return `${Number(value.toFixed(3))}${unit}`;
+}
+
+/** Unique collapsed lean for `id` at `depth`. Depth 0 is always square. */
+export function thumbnailStackSkew(id: string, depth: number): ThumbnailStackSkew {
+  if (depth <= 0 || !id) return ZERO_THUMBNAIL_STACK_SKEW;
+  const x = thumbnailStackSkewUnit(id, 0x51ed);
+  const y = thumbnailStackSkewUnit(id, 0x9e37);
+  const rotate = thumbnailStackSkewUnit(id, 0xc2b2);
+  return {
+    restX: x * THUMBNAIL_STACK_REST_SKEW_X_PX,
+    restY: y * THUMBNAIL_STACK_REST_SKEW_Y_PX,
+    restRotate: rotate * THUMBNAIL_STACK_REST_SKEW_ROT_DEG,
+    fanShift: x * THUMBNAIL_STACK_HOVER_SKEW_X_PX,
+    fanTilt: rotate * THUMBNAIL_STACK_HOVER_SKEW_ROT_DEG,
+  };
+}
+
+/** Inline CSS variables for the compact pile pose. */
+export function thumbnailStackSkewCssVars(
+  id: string,
+  depth: number,
+): Record<string, string | number> {
+  const skew = thumbnailStackSkew(id, depth);
+  return {
+    "--thumbnail-stack-base-depth": depth,
+    "--thumbnail-stack-skew-x": cssQty(skew.restX, "px"),
+    "--thumbnail-stack-skew-y": cssQty(skew.restY, "px"),
+    "--thumbnail-stack-skew-rot": cssQty(skew.restRotate, "deg"),
+    "--thumbnail-stack-fan-tilt": cssQty(skew.fanTilt, "deg"),
+    "--thumbnail-stack-fan-shift": cssQty(skew.fanShift, "px"),
+  };
 }
 
 /**
@@ -141,11 +269,6 @@ export function thumbnailStackPileDepth(depth: number): number {
   return thumbnailStackPoseDepth(depth);
 }
 
-/** Horizontal hover offset matching `thumbnailStackFanTiltDeg`. */
-export function thumbnailStackFanShiftPx(depth: number): number {
-  return thumbnailStackFanTiltDeg(depth) * THUMBNAIL_STACK_FAN_SHIFT_PX_PER_DEG;
-}
-
 const THUMBNAIL_CARD_ID_ATTRIBUTE = "data-thumbnail-id";
 
 /**
@@ -178,8 +301,10 @@ export function thumbnailCollapsedPeekPx(
   const extra = Math.max(cardCount - 1, 0);
   const pose = thumbnailStackPoseDepth(extra);
   const peek = pose * (hovered ? THUMBNAIL_STACK_HOVER_PEEK_PX : THUMBNAIL_STACK_IDLE_PEEK_PX);
-  if (hovered && extra > 0) return peek + THUMBNAIL_STACK_HOVER_TILT_PEEK_PX;
-  return peek;
+  if (extra <= 0) return peek;
+  return peek + (hovered
+    ? THUMBNAIL_STACK_HOVER_TILT_PEEK_PX
+    : THUMBNAIL_STACK_REST_SKEW_PEEK_PX);
 }
 
 /** Duration for one-slot overflow-cue scrolls (ease-out). */
