@@ -36,12 +36,14 @@ import {
   THUMBNAIL_STACK_GAP_PX,
   THUMBNAIL_STACK_HOVER_SKEW_ROT_DEG,
   THUMBNAIL_STACK_HOVER_SKEW_X_PX,
+  THUMBNAIL_STACK_HOVER_TILT_PEEK_PX,
   THUMBNAIL_STACK_MOTION_DURATION_MS,
   THUMBNAIL_STACK_PADDING_PX,
   THUMBNAIL_STACK_REST_SKEW_PEEK_PX,
   THUMBNAIL_STACK_REST_SKEW_ROT_DEG,
   THUMBNAIL_STACK_REST_SKEW_X_PX,
   THUMBNAIL_STACK_REST_SKEW_Y_PX,
+  THUMBNAIL_STACK_SKEW_MIN_UNIT,
   THUMBNAIL_STACK_SCROLL_DURATION_MS,
   THUMBNAIL_STACK_SETTLE_MAX_WAIT_MS,
   waitForThumbnailStackSettle,
@@ -162,6 +164,18 @@ describe("thumbnail stack layout", () => {
       (id) => thumbnailStackSkew(id, 1).restRotate,
     );
     expect(new Set(nextSeconds.map((value) => value.toFixed(3))).size).toBe(4);
+    for (const id of ["shot-1", "shot-2", "shot-3", "shot-4", "artifact-1", "artifact-4"]) {
+      const skew = thumbnailStackSkew(id, 1);
+      expect(Math.abs(skew.restX)).toBeGreaterThanOrEqual(
+        THUMBNAIL_STACK_SKEW_MIN_UNIT * THUMBNAIL_STACK_REST_SKEW_X_PX - 1e-6,
+      );
+      expect(Math.abs(skew.restY)).toBeGreaterThanOrEqual(
+        THUMBNAIL_STACK_SKEW_MIN_UNIT * THUMBNAIL_STACK_REST_SKEW_Y_PX - 1e-6,
+      );
+      expect(Math.abs(skew.restRotate)).toBeGreaterThanOrEqual(
+        THUMBNAIL_STACK_SKEW_MIN_UNIT * THUMBNAIL_STACK_REST_SKEW_ROT_DEG - 1e-6,
+      );
+    }
     expect(Math.abs(second.restX)).toBeLessThanOrEqual(THUMBNAIL_STACK_REST_SKEW_X_PX);
     expect(Math.abs(second.restY)).toBeLessThanOrEqual(THUMBNAIL_STACK_REST_SKEW_Y_PX);
     expect(Math.abs(second.restRotate)).toBeLessThanOrEqual(THUMBNAIL_STACK_REST_SKEW_ROT_DEG);
@@ -360,10 +374,10 @@ describe("thumbnail stack layout", () => {
     );
     expect(thumbnailCollapsedPeekPx(8) - thumbnailCollapsedPeekPx(4)).toBeCloseTo(4 * 0.55 * 13);
     expect(thumbnailCollapsedPeekPx(24)).toBeGreaterThan(thumbnailCollapsedPeekPx(8));
-    expect(thumbnailCollapsedPeekPx(2, true)).toBe(24);
-    expect(thumbnailCollapsedPeekPx(4, true)).toBe(56);
+    expect(thumbnailCollapsedPeekPx(2, true)).toBe(16 + THUMBNAIL_STACK_HOVER_TILT_PEEK_PX);
+    expect(thumbnailCollapsedPeekPx(4, true)).toBe(48 + THUMBNAIL_STACK_HOVER_TILT_PEEK_PX);
     expect(thumbnailCollapsedPeekPx(8, true)).toBeCloseTo(
-      thumbnailStackPoseDepth(7) * 16 + 8,
+      thumbnailStackPoseDepth(7) * 16 + THUMBNAIL_STACK_HOVER_TILT_PEEK_PX,
     );
     expect(thumbnailCollapsedPeekPx(1, true)).toBe(0);
   });

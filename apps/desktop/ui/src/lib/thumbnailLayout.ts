@@ -29,10 +29,10 @@ export const THUMBNAIL_STACK_IDLE_PEEK_PX = 13;
 export const THUMBNAIL_STACK_HOVER_PEEK_PX = 16;
 
 /** Extra hit-target height so a hovered tilt corner is still on the pile. */
-export const THUMBNAIL_STACK_HOVER_TILT_PEEK_PX = 8;
+export const THUMBNAIL_STACK_HOVER_TILT_PEEK_PX = 12;
 
 /** Extra idle peek so rest rotation and Y jitter stay inside the hit target. */
-export const THUMBNAIL_STACK_REST_SKEW_PEEK_PX = 8;
+export const THUMBNAIL_STACK_REST_SKEW_PEEK_PX = 10;
 
 /** Extra delay per stacked card so collapsed hover lift does not fire in lockstep. */
 export const THUMBNAIL_STACK_FAN_STAGGER_MS = 16;
@@ -64,11 +64,14 @@ export function thumbnailStackFanCollapseMs(
  * depth-indexed slot that looks identical every time. The front card stays
  * square; behind-cards stay within a couple of degrees and a few pixels.
  */
-export const THUMBNAIL_STACK_REST_SKEW_X_PX = 7;
-export const THUMBNAIL_STACK_REST_SKEW_Y_PX = 3.25;
-export const THUMBNAIL_STACK_REST_SKEW_ROT_DEG = 3.1;
-export const THUMBNAIL_STACK_HOVER_SKEW_X_PX = 9;
-export const THUMBNAIL_STACK_HOVER_SKEW_ROT_DEG = 4.4;
+export const THUMBNAIL_STACK_REST_SKEW_X_PX = 10;
+export const THUMBNAIL_STACK_REST_SKEW_Y_PX = 4.5;
+export const THUMBNAIL_STACK_REST_SKEW_ROT_DEG = 4.4;
+export const THUMBNAIL_STACK_HOVER_SKEW_X_PX = 12;
+export const THUMBNAIL_STACK_HOVER_SKEW_ROT_DEG = 5.8;
+
+/** Keep behind-cards off the dead zone so a new capture never looks slotted. */
+export const THUMBNAIL_STACK_SKEW_MIN_UNIT = 0.42;
 
 export type ThumbnailStackSkew = {
   restX: number;
@@ -86,7 +89,7 @@ const ZERO_THUMBNAIL_STACK_SKEW: ThumbnailStackSkew = {
   fanTilt: 0,
 };
 
-/** FNV-1a with an extra avalanche mix, mapped to [-1, 1]. */
+/** FNV-1a with an extra avalanche mix, mapped away from zero onto [-1, -min] ∪ [min, 1]. */
 function thumbnailStackSkewUnit(id: string, salt: number): number {
   let hash = (2166136261 ^ salt) >>> 0;
   for (let index = 0; index < id.length; index += 1) {
@@ -96,7 +99,11 @@ function thumbnailStackSkewUnit(id: string, salt: number): number {
   hash = Math.imul(hash ^ (hash >>> 16), 2246822519);
   hash = Math.imul(hash ^ (hash >>> 13), 3266489917);
   hash ^= hash >>> 16;
-  return ((hash >>> 0) / 0xffffffff) * 2 - 1;
+  const unit = (hash >>> 0) / 0xffffffff;
+  const side = unit < 0.5 ? -1 : 1;
+  const span = 1 - THUMBNAIL_STACK_SKEW_MIN_UNIT;
+  const magnitude = THUMBNAIL_STACK_SKEW_MIN_UNIT + (unit % 0.5) * 2 * span;
+  return side * Math.min(magnitude, 1);
 }
 
 function cssQty(value: number, unit: string): string {
