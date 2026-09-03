@@ -115,6 +115,7 @@ describe("CaptureOverlay guidance", () => {
         || command === "commit_window"
         || command === "commit_display"
         || command === "commit_region"
+        || command === "dismiss_capture_surface"
       ) {
         return undefined;
       }
@@ -353,14 +354,22 @@ describe("CaptureOverlay guidance", () => {
     fireEvent.pointerUp(surface!, { pointerId: 1, clientX: 620, clientY: 480 });
 
     expect(hideCurrentWindow).toHaveBeenCalledOnce();
+    expect(invoke).toHaveBeenCalledWith("dismiss_capture_surface");
     expect(invoke).toHaveBeenCalledWith("commit_region", {
       sessionId: "capture-1",
       rect: { x: 120, y: 80, width: 500, height: 400 },
     });
+    const dismissCall = vi.mocked(invoke).mock.calls.findIndex(([command]) => (
+      command === "dismiss_capture_surface"
+    ));
     const commitCall = vi.mocked(invoke).mock.calls.findIndex(([command]) => (
       command === "commit_region"
     ));
+    expect(dismissCall).toBeGreaterThanOrEqual(0);
     expect(commitCall).toBeGreaterThanOrEqual(0);
+    expect(vi.mocked(invoke).mock.invocationCallOrder[dismissCall]).toBeLessThan(
+      hideCurrentWindow.mock.invocationCallOrder[0],
+    );
     expect(hideCurrentWindow.mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(invoke).mock.invocationCallOrder[commitCall],
     );
@@ -378,11 +387,19 @@ describe("CaptureOverlay guidance", () => {
     fireEvent.keyDown(window, { key: "Escape" });
 
     expect(hideCurrentWindow).toHaveBeenCalledOnce();
+    expect(invoke).toHaveBeenCalledWith("dismiss_capture_surface");
     expect(invoke).toHaveBeenCalledWith("cancel_capture", { sessionId: "capture-1" });
+    const dismissCall = vi.mocked(invoke).mock.calls.findIndex(([command]) => (
+      command === "dismiss_capture_surface"
+    ));
     const cancelCall = vi.mocked(invoke).mock.calls.findIndex(([command]) => (
       command === "cancel_capture"
     ));
+    expect(dismissCall).toBeGreaterThanOrEqual(0);
     expect(cancelCall).toBeGreaterThanOrEqual(0);
+    expect(vi.mocked(invoke).mock.invocationCallOrder[dismissCall]).toBeLessThan(
+      hideCurrentWindow.mock.invocationCallOrder[0],
+    );
     expect(hideCurrentWindow.mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(invoke).mock.invocationCallOrder[cancelCall],
     );
@@ -629,6 +646,7 @@ describe("CaptureOverlay guidance", () => {
     expect(prefs).not.toHaveClass("window-target-hovered");
 
     fireEvent.pointerUp(surface!, { clientX: 950, clientY: 400 });
+    expect(invoke).toHaveBeenCalledWith("dismiss_capture_surface");
     expect(invoke).toHaveBeenCalledWith("commit_window", {
       sessionId: "capture-1",
       windowId: "notes",
@@ -696,6 +714,7 @@ describe("CaptureOverlay guidance", () => {
     expect(screen.getByTitle("Notes")).not.toHaveClass("window-target-hovered");
 
     fireEvent.pointerUp(surface!, { clientX: 20, clientY: 8 });
+    expect(invoke).toHaveBeenCalledWith("dismiss_capture_surface");
     expect(invoke).toHaveBeenCalledWith("commit_display", { sessionId: "capture-1" });
     expect(invoke).not.toHaveBeenCalledWith("commit_window", expect.anything());
   });

@@ -181,6 +181,14 @@ import type {
 } from "./types";
 
 const currentWindow = isTauri() ? getCurrentWindow() : null;
+
+function dismissCaptureOverlayWindow() {
+  // Drop native keyboard grabs in parallel with Tauri hide. Waiting for the
+  // async capture command left a hidden key window that swallowed typing in
+  // other apps after a few screenshots.
+  void invoke("dismiss_capture_surface").catch(() => undefined);
+  void currentWindow?.hide().catch(() => undefined);
+}
 // Slightly past dismiss hold (450ms fade + 580ms shared settle) so animationend
 // remains the primary completion path; fallback only covers missed events.
 const THUMBNAIL_DISMISS_FALLBACK_MS = 1_250;
@@ -5120,7 +5128,7 @@ function CaptureOverlay() {
       // Match the region commit fast path: hide the native surface before the
       // async command crosses into Rust. The backend repeats the hide while it
       // restores the previous app and capture UI, so this remains best-effort.
-      void currentWindow?.hide().catch(() => undefined);
+      dismissCaptureOverlayWindow();
       void invoke("cancel_capture", { sessionId });
     };
     window.addEventListener("keydown", onKeyDown, true);
@@ -5299,7 +5307,7 @@ function CaptureOverlay() {
     // to be scheduled and hop back to the platform UI thread first. The backend
     // repeats this hide before it touches pixels, so live captures remain safe if
     // this best-effort fast path has not completed yet.
-    void currentWindow?.hide().catch(() => undefined);
+    dismissCaptureOverlayWindow();
     void invoke("commit_region", { sessionId, rect: selection });
     return true;
   };
@@ -5374,12 +5382,12 @@ function CaptureOverlay() {
         scale,
       );
       if (hit?.kind === "window") {
-        void currentWindow?.hide().catch(() => undefined);
+        dismissCaptureOverlayWindow();
         void invoke("commit_window", { sessionId, windowId: hit.target.id });
         return;
       }
       if (hit?.kind === "chrome" || windowListingIsReady(session.windows_ready)) {
-        void currentWindow?.hide().catch(() => undefined);
+        dismissCaptureOverlayWindow();
         void invoke("commit_display", { sessionId });
       }
       return;
