@@ -455,6 +455,37 @@ describe("applyThumbnailNativeHover", () => {
     expect(applyThumbnailNativeHover({ x: 20, y: 20, inside: true })).toBe("pointer");
     expectNativePointerHover(control, true);
   });
+
+  it("does not morph Show less while the last preview is deleting", () => {
+    document.body.innerHTML = `
+      <main class="thumbnail-stack">
+        <div class="thumbnail-stack-toolbar thumbnail-stack-toolbar-exiting">
+          <button class="thumbnail-stack-control thumbnail-stack-minimize">Show less</button>
+        </div>
+        <article class="thumbnail-card thumbnail-exiting"><img alt=""></article>
+      </main>
+    `;
+    const control = document.querySelector<HTMLButtonElement>(".thumbnail-stack-control")!;
+    control.setAttribute("data-native-pointer-hover", "true");
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => control),
+    });
+    vi.spyOn(control, "getBoundingClientRect").mockReturnValue({
+      x: 6,
+      y: 6,
+      top: 6,
+      right: 42,
+      bottom: 42,
+      left: 6,
+      width: 36,
+      height: 36,
+      toJSON: () => ({}),
+    });
+
+    expect(applyThumbnailNativeHover({ x: 20, y: 20, inside: true })).toBe("default");
+    expectNativePointerHover(control, false);
+  });
 });
 
 describe("clearThumbnailNativeHover", () => {

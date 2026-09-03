@@ -300,13 +300,12 @@ describe("Thumbnail", () => {
     render(<Thumbnail />);
     await screen.findByRole("article");
     const stack = document.querySelector<HTMLElement>(".thumbnail-stack")!;
-    // Layout height for one card is 216px; force a taller client so the
-    // content-height helper still reports overflow via mocked scrollTop.
+    // Layout height for one card is 240px (28 top + 160 card + 52 gutter).
     Object.defineProperties(stack, {
       clientHeight: { configurable: true, value: 100 },
     });
-    // With one card, layout height is 216 → maxScroll = 116. Pin near bottom.
-    stack.scrollTop = 116;
+    // maxScroll = 140. Pin near bottom.
+    stack.scrollTop = 140;
 
     fireEvent.scroll(stack);
 
@@ -326,7 +325,7 @@ describe("Thumbnail", () => {
     expect(frames).toHaveLength(1);
     now.mockReturnValue(380);
     frames[0]?.(380);
-    // One slot up from 116 → 0 (clamped).
+    // One slot up from 140 → 0 (clamped).
     expect(stack.scrollTop).toBe(0);
 
     raf.mockRestore();
@@ -441,6 +440,62 @@ describe("Thumbnail", () => {
         `${THUMBNAIL_CARD_SLOT_PX}px`,
       );
       expect(cards[0].style.translate).toBe(`0 ${THUMBNAIL_CARD_SLOT_PX}px`);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let an upper preview slide into a deleting neighbor during a stacked settle", async () => {
+    const captures = [1, 2, 3, 4].map((n) => ({
+      ...artifact,
+      id: `capture-${n}`,
+      preview_url: `captures-capture://artifact/capture-${n}`,
+      full_url: `captures-capture://artifact-full/capture-${n}`,
+    }));
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifacts") return captures;
+      if (command === "get_clipboard_state") {
+        return { revision: 0, artifact_id: captures[3].id };
+      }
+      if (command === "get_thumbnail_pointer_position") return null;
+      return undefined;
+    });
+
+    render(<Thumbnail />);
+    const cards = await screen.findAllByRole("article");
+    expect(cards).toHaveLength(4);
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(within(cards[2]).getByRole("button", { name: "Delete" }));
+      expect(cards[2]).toHaveClass("thumbnail-exiting");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16);
+      });
+      expect(cards[0]).toHaveClass("thumbnail-stack-shifting");
+      expect(cards[1]).toHaveClass("thumbnail-stack-shifting");
+
+      fireEvent.click(within(cards[1]).getByRole("button", { name: "Delete" }));
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(cards[1]).toHaveClass("thumbnail-exiting");
+      expect(cards[0].style.getPropertyValue("--thumbnail-stack-shift")).toBe(
+        `${THUMBNAIL_CARD_SLOT_PX}px`,
+      );
+      expect(cards[1].style.getPropertyValue("--thumbnail-stack-shift")).toBe(
+        `${THUMBNAIL_CARD_SLOT_PX}px`,
+      );
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16);
+      });
+      expect(cards[0].style.getPropertyValue("--thumbnail-stack-shift")).toBe(
+        `${THUMBNAIL_CARD_SLOT_PX}px`,
+      );
     } finally {
       vi.useRealTimers();
     }
