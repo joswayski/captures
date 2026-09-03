@@ -19,6 +19,8 @@ import {
   thumbnailStackNewestScrollTop,
   thumbnailStackShiftPx,
   thumbnailCollapsedPeekPx,
+  thumbnailExpandedHoverPathPx,
+  thumbnailExpandedRisePx,
   THUMBNAIL_CARD_HEIGHT_PX,
   THUMBNAIL_CARD_SLOT_PX,
   THUMBNAIL_DISMISS_HOLD_MS,
@@ -158,6 +160,15 @@ describe("thumbnail stack layout", () => {
     expect(hitTarget?.[1]).toMatch(/cursor:\s*pointer/);
     expect(hitTarget?.[1]).toMatch(/--thumbnail-collapsed-peek/);
     expect(hitTarget?.[1]).not.toMatch(/height:\s*248px/);
+    expect(thumbnailStyles).not.toMatch(/thumbnail-stack-sparkle/);
+    expect(thumbnailStyles).toMatch(/\.thumbnail-stack-expand-path\s*\{/);
+    expect(thumbnailStyles).toMatch(/--thumbnail-expand-path/);
+    expect(thumbnailStyles).toMatch(/thumbnail-stack-expand-path-flow/);
+    expect(thumbnailStyles).toMatch(/rgba\(var\(--theme-accent-rgb\)/);
+    expect(thumbnailStyles).toMatch(/--theme-signal-rgb/);
+    expect(thumbnailStyles).toMatch(/--theme-accent-text/);
+    expect(thumbnailStyles).toMatch(/var\(--glass-veil-soft\)/);
+    expect(thumbnailStyles).not.toMatch(/255 176 92/);
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-minimized(?::not\(\.thumbnail-stack-dragging\))? > \.thumbnail-card \*/,
     );
@@ -213,6 +224,22 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailCollapsedPeekPx(8)).toBe(39);
     expect(thumbnailCollapsedPeekPx(2, true)).toBe(24);
     expect(thumbnailCollapsedPeekPx(1, true)).toBe(0);
+  });
+
+  it("sizes the collapsed hover path to the remaining expanded rise", () => {
+    expect(thumbnailExpandedRisePx(1)).toBe(0);
+    expect(thumbnailExpandedRisePx(2)).toBe(THUMBNAIL_CARD_SLOT_PX);
+    expect(thumbnailExpandedRisePx(8)).toBe(7 * THUMBNAIL_CARD_SLOT_PX);
+    expect(thumbnailExpandedHoverPathPx(1)).toBe(0);
+    expect(thumbnailExpandedHoverPathPx(2)).toBe(
+      THUMBNAIL_CARD_SLOT_PX - thumbnailCollapsedPeekPx(2, true),
+    );
+    expect(thumbnailExpandedHoverPathPx(8)).toBe(
+      7 * THUMBNAIL_CARD_SLOT_PX - thumbnailCollapsedPeekPx(8, true),
+    );
+    expect(thumbnailExpandedHoverPathPx(8)).toBeGreaterThan(
+      thumbnailExpandedHoverPathPx(2),
+    );
   });
 
   it("scrolls to reveal newly added captures", () => {

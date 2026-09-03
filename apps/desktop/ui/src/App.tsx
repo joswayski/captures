@@ -127,6 +127,8 @@ import {
   thumbnailStackOverflow,
   restoreThumbnailStackShiftClass,
   thumbnailCollapsedPeekPx,
+  thumbnailExpandedHoverPathPx,
+  thumbnailExpandedRisePx,
   THUMBNAIL_CARD_SLOT_PX,
   waitForThumbnailStackSettle,
 } from "./lib/thumbnailLayout";
@@ -6502,6 +6504,8 @@ export function Thumbnail() {
             style={{
               "--thumbnail-collapsed-peek": `${thumbnailCollapsedPeekPx(artifacts.length)}px`,
               "--thumbnail-collapsed-hover-peek": `${thumbnailCollapsedPeekPx(artifacts.length, true)}px`,
+              "--thumbnail-expand-rise": `${thumbnailExpandedRisePx(artifacts.length)}px`,
+              "--thumbnail-expand-path": `${thumbnailExpandedHoverPathPx(artifacts.length)}px`,
             } as CSSProperties}
             onPointerDown={onCollapsedStackPointerDown}
             onDragStart={(event) => preventThumbnailHtml5Drag(event.nativeEvent)}
@@ -6516,7 +6520,11 @@ export function Thumbnail() {
               }
               setStackCollapsed(false);
             }}
-          />
+          >
+            {thumbnailExpandedHoverPathPx(artifacts.length) > 0 ? (
+              <span className="thumbnail-stack-expand-path" aria-hidden="true" />
+            ) : null}
+          </button>
         )}
       </main>
       {!collapsed && (
