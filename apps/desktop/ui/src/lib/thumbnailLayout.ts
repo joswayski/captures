@@ -90,25 +90,6 @@ export function thumbnailCollapsedPeekPx(
   return peek;
 }
 
-/**
- * Distance from the front card's top to the expanded stack's top.
- * Matches compact expand `translateY(depth * -184px)`.
- */
-export function thumbnailExpandedRisePx(cardCount: number): number {
-  return Math.max(cardCount - 1, 0) * THUMBNAIL_CARD_SLOT_PX;
-}
-
-/**
- * Hover path above the fanned pile: expanded top minus the hover peek already
- * occupied by stacked cards.
- */
-export function thumbnailExpandedHoverPathPx(cardCount: number): number {
-  return Math.max(
-    0,
-    thumbnailExpandedRisePx(cardCount) - thumbnailCollapsedPeekPx(cardCount, true),
-  );
-}
-
 /** Duration for one-slot overflow-cue scrolls (ease-out). */
 export const THUMBNAIL_STACK_SCROLL_DURATION_MS = 380;
 
