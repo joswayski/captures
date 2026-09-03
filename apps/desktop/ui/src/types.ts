@@ -82,6 +82,7 @@ export interface AppSettings {
   onboarding_completed: boolean;
   screenshot_countdown_seconds: number;
   freeze_screen: boolean;
+  show_cursor_in_screenshots: boolean;
   screenshot_format: ScreenshotFormat;
   recording: RecordingSettings;
 }

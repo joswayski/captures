@@ -70,6 +70,18 @@ describe("clampThumbnailStackFrame", () => {
       y: 788,
     });
   });
+
+  it("lets a bottom-aligned pile reach the top when the window is taller", () => {
+    // Preserved expanded frame (4 cards) with the collapsed pile at the bottom.
+    expect(clampThumbnailStackFrame(0, -800, 340, 792, work, 240)).toEqual({
+      x: 0,
+      y: -552,
+    });
+    expect(clampThumbnailStackFrame(0, 400, 340, 792, work, 240)).toEqual({
+      x: 0,
+      y: 236,
+    });
+  });
 });
 
 describe("harness stack offset", () => {

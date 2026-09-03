@@ -274,7 +274,7 @@ export function shouldIgnoreThumbnailCursorEvents(
   if (root.querySelector(".thumbnail-stack-dragging")) return false;
   if (!thumbnailStackHasLiveHitTarget(root)) return true;
   if (!position.inside) return false;
-  const target = root.elementFromPoint(position.x, position.y);
+  const target = thumbnailElementFromPoint(position.x, position.y, root);
   if (thumbnailStackControlAtPoint(position.x, position.y, target, root)) return false;
   if (!target) return true;
   const card = target.closest(".thumbnail-card");
@@ -334,6 +334,15 @@ export function rearmThumbnailEditorControlHover(
   }
 }
 
+function thumbnailElementFromPoint(
+  x: number,
+  y: number,
+  root: Document,
+): Element | null {
+  if (typeof root.elementFromPoint !== "function") return null;
+  return root.elementFromPoint(x, y);
+}
+
 function containsPoint(element: Element, x: number, y: number): boolean {
   const bounds = element.getBoundingClientRect();
   return x >= bounds.left && x <= bounds.right && y >= bounds.top && y <= bounds.bottom;
@@ -381,13 +390,28 @@ function thumbnailStackControlAtPoint(
   if (expandControl) return expandControl;
 
   const directControl = directTarget?.closest<HTMLElement>(THUMBNAIL_STACK_CONTROL_SELECTOR);
-  if (directControl) return directControl;
+  if (directControl && thumbnailStackControlIsInteractive(directControl)) {
+    return directControl;
+  }
 
   const controls = root.querySelectorAll<HTMLElement>(THUMBNAIL_STACK_CONTROL_SELECTOR);
   for (const control of controls) {
+    if (!thumbnailStackControlIsInteractive(control)) continue;
     if (containsPoint(control, x, y)) return control;
   }
   return null;
+}
+
+/**
+ * Collapse/expand and last-preview delete keep the Show less control in the
+ * DOM (and fully opaque for part of the delete). Native pointer tracking uses
+ * bounds, so skip hover while the toolbar is a decorative fade.
+ */
+function thumbnailStackControlIsInteractive(control: HTMLElement): boolean {
+  if (control.matches(":disabled")) return false;
+  return !control.closest(
+    ".thumbnail-stack-toolbar-leaving, .thumbnail-stack-toolbar-exiting, .thumbnail-stack-toolbar-entering",
+  );
 }
 
 /**
@@ -423,7 +447,7 @@ export function applyThumbnailNativeHover(
     THUMBNAIL_NATIVE_POINTER_HOVER_SELECTOR,
   );
   const currentCard = root.querySelector<HTMLElement>(THUMBNAIL_NATIVE_ACTIVE_SELECTOR);
-  const directTarget = root.elementFromPoint(position.x, position.y);
+  const directTarget = thumbnailElementFromPoint(position.x, position.y, root);
   const stackControl = thumbnailStackControlAtPoint(
     position.x,
     position.y,
@@ -466,8 +490,7 @@ export function applyThumbnailNativeHover(
   // Activate the card first, then hit-test again so buttons can be detected
   // while the preview window is not the active macOS window.
   setThumbnailNativeActiveCard(card, root);
-  const target = root
-    .elementFromPoint(position.x, position.y)
+  const target = thumbnailElementFromPoint(position.x, position.y, root)
     ?.closest("button");
   const directButton = target && card.contains(target) ? target : null;
   // A focus handoff or :active scale can make WebKit report the preview image
