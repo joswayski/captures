@@ -167,6 +167,11 @@ export function readHarnessStackOffset(
   };
 }
 
+export type HarnessStackOffsetOptions = {
+  anchor?: "top" | "bottom";
+  contentHeight?: number;
+};
+
 export function writeHarnessStackOffset(
   x: number,
   y: number,
@@ -175,10 +180,17 @@ export function writeHarnessStackOffset(
     width: window.innerWidth,
     height: window.innerHeight,
   },
+  options: HarnessStackOffsetOptions = {},
 ): ThumbnailStackPoint {
+  const contentHeight = options.contentHeight ?? HARNESS_COLLAPSED_HEIGHT_PX;
+  const anchor = options.anchor ?? "bottom";
+  const minY = anchor === "top" ? 0 : Math.min(0, contentHeight - viewport.height);
+  const maxY = anchor === "top"
+    ? Math.max(0, viewport.height - contentHeight)
+    : 0;
   const clamped = {
     x: clamp(x, 0, Math.max(0, viewport.width - HARNESS_FRAME_WIDTH_PX)),
-    y: clamp(y, Math.min(0, HARNESS_COLLAPSED_HEIGHT_PX - viewport.height), 0),
+    y: clamp(y, minY, maxY),
   };
   root.style.setProperty(THUMBNAIL_HARNESS_DRAG_X_VAR, `${clamped.x}px`);
   root.style.setProperty(THUMBNAIL_HARNESS_DRAG_Y_VAR, `${clamped.y}px`);
@@ -242,6 +254,17 @@ export class CollapsedThumbnailStackDrag {
 
   get isActive(): boolean {
     return this.pointerId !== null;
+  }
+
+  /**
+   * Keep the pointer delta after a coordinate-system change (bottom↔top
+   * harness anchor) so later moves do not jump back to the old origin.
+   */
+  rebaseFrame(frame: ThumbnailStackPoint) {
+    this.startFrame = {
+      x: frame.x - (this.lastPointer.x - this.startPointer.x),
+      y: frame.y - (this.lastPointer.y - this.startPointer.y),
+    };
   }
 
   /** Start lean from rest after the hover fan has gathered. */

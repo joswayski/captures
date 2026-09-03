@@ -1,6 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow, currentMonitor } from "@tauri-apps/api/window";
 import { message, open } from "@tauri-apps/plugin-dialog";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import {
@@ -126,11 +126,17 @@ import {
 } from "./lib/thumbnailStackDrag";
 import {
   animateThumbnailStackScroll,
+  applyThumbnailStackGravity,
+  convertHarnessStackOffsetAnchor,
   createThumbnailStackShiftController,
   scheduleScrollThumbnailStackToNewest,
   scrollThumbnailStackToNewest,
   shouldScrollThumbnailStackToEnd,
+  thumbnailCollapsedFrameHeight,
+  thumbnailStackAnchorFromGravity,
   thumbnailStackContentHeight,
+  thumbnailStackGravityFromHarness,
+  thumbnailStackGravityFromWorkArea,
   thumbnailStackNeedsScrollport,
   thumbnailStackOverflow,
   restoreThumbnailStackShiftClass,
@@ -144,6 +150,7 @@ import {
   THUMBNAIL_STACK_EXPAND_COLLAPSE_MS,
   THUMBNAIL_STACK_SCROLLPORT_CLASS,
   waitForThumbnailStackSettle,
+  type ThumbnailStackAnchor,
 } from "./lib/thumbnailLayout";
 import {
   EDITOR_PRESENCE_LEAVE_MS,
@@ -5626,6 +5633,8 @@ export function Thumbnail() {
   const [stackMotion, setStackMotion] = useState<
     "expanded" | "collapsing" | "collapsed" | "expanding"
   >("expanded");
+  const [stackAnchor, setStackAnchor] = useState<ThumbnailStackAnchor>("bottom");
+  const stackAnchorRef = useRef<ThumbnailStackAnchor>("bottom");
   const [stackHoverReady, setStackHoverReady] = useState(false);
   const [stackMinimizeRun, setStackMinimizeRun] = useState(false);
   const [stackHoverLatched, setStackHoverLatched] = useState(false);
@@ -5821,9 +5830,11 @@ export function Thumbnail() {
       artifacts.length,
     );
     previousArtifactCount.current = artifacts.length;
+    const fromTop = stackAnchorRef.current === "top";
     if (shouldReveal && stackRef.current) {
       scrollThumbnailStackToNewest(stackRef.current, {
         viewportHeight: stackViewportHeight,
+        fromTop,
       });
     }
     refreshStackOverflow();
@@ -5837,6 +5848,7 @@ export function Thumbnail() {
           if (shouldReveal && stackRef.current) {
             scrollThumbnailStackToNewest(stackRef.current, {
               viewportHeight: stackViewportHeight,
+              fromTop,
             });
           }
           refreshStackOverflow();
@@ -5856,6 +5868,7 @@ export function Thumbnail() {
       onScrolled: refreshStackOverflow,
       retryMs: 450,
       viewportHeight: stackViewportHeight,
+      fromTop: stackAnchorRef.current === "top",
     });
     const finish = window.setTimeout(() => {
       pendingNewestReveal.current = false;
@@ -5870,6 +5883,18 @@ export function Thumbnail() {
     const refresh = () => {
       setStackViewportHeight(window.innerHeight);
       refreshStackOverflow();
+      if (isTauri()) return;
+      const offset = readHarnessStackOffset();
+      const gravity = thumbnailStackGravityFromHarness({
+        offsetY: offset.y,
+        anchor: stackAnchorRef.current,
+        viewportHeight: window.innerHeight,
+        contentHeight: thumbnailCollapsedFrameHeight(Math.max(
+          stackRef.current?.querySelectorAll(":scope > .thumbnail-card").length ?? 1,
+          1,
+        )),
+      });
+      applyThumbnailStackGravity(stackRef.current, gravity);
     };
     window.addEventListener("resize", refresh);
     window.addEventListener("captures-thumbnail-ready", refresh);
@@ -6525,10 +6550,94 @@ export function Thumbnail() {
         return readHarnessStackOffset();
       },
       moveFrame: async (x, y) => {
+        const contentHeight = thumbnailCollapsedFrameHeight(
+          Math.max(
+            stackRef.current?.querySelectorAll(":scope > .thumbnail-card").length ?? 1,
+            1,
+          ),
+        );
         if (isTauri()) {
-          return invoke<{ x: number; y: number }>("set_mini_preview_stack_position", { x, y });
+          const next = await invoke<{ x: number; y: number }>(
+            "set_mini_preview_stack_position",
+            { x, y },
+          );
+          if (currentWindow) {
+            try {
+              const scale = await currentWindow.scaleFactor();
+              const size = await currentWindow.outerSize();
+              const frameHeight = size.height / scale;
+              const monitor = await currentMonitor();
+              const workTop = monitor
+                ? monitor.workArea.position.y / scale
+                : 0;
+              const workHeight = monitor
+                ? monitor.workArea.size.height / scale
+                : window.screen.availHeight;
+              applyThumbnailStackGravity(
+                stackRef.current,
+                thumbnailStackGravityFromWorkArea({
+                  pileBottom: next.y + frameHeight,
+                  workTop,
+                  workHeight,
+                  contentHeight,
+                  bottomGap: 12,
+                }),
+              );
+            } catch {
+              applyThumbnailStackGravity(stackRef.current, 1);
+            }
+          }
+          return next;
         }
-        return writeHarnessStackOffset(x, y);
+        const viewport = { width: window.innerWidth, height: window.innerHeight };
+        const anchor = stackAnchorRef.current;
+        const written = writeHarnessStackOffset(
+          x,
+          y,
+          document.documentElement,
+          viewport,
+          { anchor, contentHeight },
+        );
+        const gravity = thumbnailStackGravityFromHarness({
+          offsetY: written.y,
+          anchor,
+          viewportHeight: viewport.height,
+          contentHeight,
+        });
+        applyThumbnailStackGravity(stackRef.current, gravity);
+        const nextAnchor = thumbnailStackAnchorFromGravity(gravity, anchor);
+        if (nextAnchor === anchor) return written;
+        const converted = convertHarnessStackOffsetAnchor(
+          written,
+          anchor,
+          nextAnchor,
+          viewport.height,
+          contentHeight,
+        );
+        const nextWritten = writeHarnessStackOffset(
+          converted.x,
+          converted.y,
+          document.documentElement,
+          viewport,
+          { anchor: nextAnchor, contentHeight },
+        );
+        stackRef.current?.classList.toggle(
+          "thumbnail-stack-anchor-top",
+          nextAnchor === "top",
+        );
+        stackAnchorRef.current = nextAnchor;
+        setStackAnchor(nextAnchor);
+        applyThumbnailStackGravity(
+          stackRef.current,
+          thumbnailStackGravityFromHarness({
+            offsetY: nextWritten.y,
+            anchor: nextAnchor,
+            viewportHeight: viewport.height,
+            contentHeight,
+          }),
+        );
+        stackDrag.current?.rebaseFrame(nextWritten);
+        return nextWritten;
       },
       reducedMotion: prefersReducedMotion,
       onSway: (sway) => applyThumbnailStackDragSway(stackRef.current, sway),
@@ -6628,6 +6737,7 @@ export function Thumbnail() {
           stackMinimizeRun ? "thumbnail-stack-minimize-run" : "",
           stackHoverReady ? "thumbnail-stack-hover-ready" : "",
           stackHoverLatched ? "thumbnail-stack-hover-latched" : "",
+          stackAnchor === "top" ? "thumbnail-stack-anchor-top" : "",
         ].filter(Boolean).join(" ")}
         onScroll={refreshStackOverflow}
         onDragStartCapture={(event) => {
@@ -6648,7 +6758,10 @@ export function Thumbnail() {
             </filter>
           </defs>
         </svg>
-        {artifacts.map((artifact, index) => (
+        {(stackAnchor === "top" && stackMotion !== "collapsed"
+          ? [...artifacts].reverse()
+          : artifacts
+        ).map((artifact) => (
           <ThumbnailCard
             key={artifact.id}
             artifact={artifact}
@@ -6656,7 +6769,7 @@ export function Thumbnail() {
             viewerActive={activeViewerArtifactId === artifact.id}
             editorActive={editorActiveArtifactIds.has(artifact.id)}
             stackCollapsed={compact}
-            stackDepth={artifacts.length - index - 1}
+            stackDepth={artifacts.length - artifacts.indexOf(artifact) - 1}
             expandFromTransform={expandFromTransforms.get(artifact.id)}
             onRemoved={(artifactId) => {
               setArtifactExiting(artifactId, false);
@@ -6700,6 +6813,7 @@ export function Thumbnail() {
       {!collapsed && (
         <div className={[
           "thumbnail-stack-toolbar",
+          stackAnchor === "top" ? "thumbnail-stack-toolbar-anchor-top" : "",
           stackMotion === "collapsing" ? "thumbnail-stack-toolbar-leaving" : "",
           stackMotion === "expanding" ? "thumbnail-stack-toolbar-entering" : "",
           exitingOnly && stackMotion !== "collapsing"
@@ -6723,7 +6837,7 @@ export function Thumbnail() {
         <button
           type="button"
           className="thumbnail-overflow-cue thumbnail-overflow-cue-older"
-          aria-label="Show older captures"
+          aria-label={stackAnchor === "top" ? "Show newer captures" : "Show older captures"}
           onClick={() => scrollStackBy(-1)}
         >
           <ThumbnailOverflowChevron direction="up" />
@@ -6733,7 +6847,7 @@ export function Thumbnail() {
         <button
           type="button"
           className="thumbnail-overflow-cue thumbnail-overflow-cue-newer"
-          aria-label="Show newer captures"
+          aria-label={stackAnchor === "top" ? "Show older captures" : "Show newer captures"}
           onClick={() => scrollStackBy(1)}
         >
           <ThumbnailOverflowChevron direction="down" />
