@@ -575,6 +575,23 @@ pub fn encode_png(image: &RgbaImage) -> Result<Vec<u8>, AppError> {
     encode_png_with_filter(image, FilterType::Sub)
 }
 
+/// Freeze-frame bytes for the capture overlay / capture menu.
+///
+/// Crops still come from the uncompressed `RgbaImage`. Screenshot-like images
+/// encode faster as PNG `Fast`+`Sub` than JPEG, and that encode sits on the
+/// shortcut path before the webview can paint.
+pub fn encode_overlay_snapshot(image: &RgbaImage) -> Result<Vec<u8>, AppError> {
+    encode_png(image)
+}
+
+pub fn overlay_snapshot_mime_type(bytes: &[u8]) -> &'static str {
+    if bytes.len() >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF {
+        "image/jpeg"
+    } else {
+        "image/png"
+    }
+}
+
 /// Encode a PNG for user export.
 ///
 /// - Preserve (`compact = false`): fast lossless packing, identical pixels.
@@ -1278,9 +1295,10 @@ mod tests {
     use super::{
         DRAG_EXPORT_DIRECTORY, DRAG_ICON_FILE, DRAG_ICON_HEIGHT, DRAG_ICON_WIDTH,
         HISTORY_IMAGE_FILE, HISTORY_PREVIEW_FILE, clear_drag_exports_in, encode_drag_icon_png,
-        encode_png, encode_png_export, encode_png_export_dithered, encode_preview_png,
-        encode_thumbnail_png, load_capture_history_from, png_palette_colors_for_quality,
-        prepare_artifact_drag_in, recording_destination_path, recording_destination_path_in,
+        encode_overlay_snapshot, encode_png, encode_png_export, encode_png_export_dithered,
+        encode_preview_png, encode_thumbnail_png, load_capture_history_from,
+        overlay_snapshot_mime_type, png_palette_colors_for_quality, prepare_artifact_drag_in,
+        recording_destination_path, recording_destination_path_in,
         recording_replacement_destination_path_in,
         recording_replacement_destination_path_in_with_replaceable, save_encoded_capture,
         save_history_capture_in, save_history_entry_in, save_settings_to, unique_path,
@@ -1289,6 +1307,31 @@ mod tests {
         AppSettings, ArtifactKind, CaptureArtifact, ClipboardCopyStatus, HistoryEntry,
         RecordingArtifact, history_full_url, history_preview_url,
     };
+
+    #[test]
+    fn overlay_snapshots_use_the_fast_png_path() {
+        let image = RgbaImage::from_pixel(4, 4, Rgba([32, 64, 128, 255]));
+        let bytes = encode_overlay_snapshot(&image).expect("overlay snapshot encoded");
+        assert_eq!(overlay_snapshot_mime_type(&bytes), "image/png");
+        assert_eq!(bytes, encode_png(&image).expect("png"));
+        let decoded = image::load_from_memory(&bytes)
+            .expect("overlay snapshot decodes")
+            .to_rgba8();
+        assert_eq!(decoded.dimensions(), (4, 4));
+        assert_eq!(decoded.get_pixel(0, 0).0, [32, 64, 128, 255]);
+    }
+
+    #[test]
+    fn overlay_snapshot_mime_sniffs_png_and_jpeg_magic() {
+        assert_eq!(
+            overlay_snapshot_mime_type(&[0x89, b'P', b'N', b'G']),
+            "image/png"
+        );
+        assert_eq!(
+            overlay_snapshot_mime_type(&[0xFF, 0xD8, 0xFF, 0xE0]),
+            "image/jpeg"
+        );
+    }
 
     #[test]
     fn save_capture_writes_a_png_and_avoids_collisions() {

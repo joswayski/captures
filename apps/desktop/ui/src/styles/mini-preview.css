@@ -972,6 +972,59 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
   cursor: grabbing !important;
 }
 
+/*
+ * Transparent always-on-top WebViews often skip element-level `cursor` until
+ * mousedown. Mirror grab/pointer on `html` from CSS :hover so the glow hover
+ * and Show less control do not wait for a click.
+ */
+html:has(.thumbnail-card:hover) {
+  cursor: -webkit-grab;
+  cursor: grab;
+}
+
+html:has(
+  :is(
+    .thumbnail-stack-control,
+    .thumbnail-overflow-cue,
+    .thumbnail-collapsed-hit-target,
+    .icon-button,
+    .thumbnail-main-actions button,
+    .thumbnail-editor-control
+  ):hover:not(:disabled)
+),
+html:has(
+  :is(
+    .thumbnail-stack-control,
+    .thumbnail-overflow-cue,
+    .thumbnail-collapsed-hit-target,
+    .icon-button,
+    .thumbnail-main-actions button,
+    .thumbnail-editor-control
+  )[data-native-pointer-hover="true"]:not(:disabled)
+) {
+  cursor: pointer;
+}
+
+html:has(.thumbnail-stack-dragging),
+html:has(.thumbnail-card.thumbnail-file-dragging) {
+  cursor: -webkit-grabbing;
+  cursor: grabbing;
+}
+
+.thumbnail-card:hover,
+.thumbnail-card:hover img {
+  cursor: -webkit-grab;
+  cursor: grab;
+}
+
+.thumbnail-card:hover :is(button, .icon-button, .thumbnail-editor-control):not(:disabled),
+.thumbnail-stack-control:hover:not(:disabled),
+.thumbnail-stack-control:hover:not(:disabled) *,
+.thumbnail-overflow-cue:hover:not(:disabled),
+.thumbnail-collapsed-hit-target:hover:not(:disabled) {
+  cursor: pointer;
+}
+
 .thumbnail-main-actions svg,
 .icon-button svg {
   width: 16px;
@@ -1478,8 +1531,14 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
   }
 }
 
+/*
+ * Window overlay, not a child of `.thumbnail-stack`: that scroller's
+ * absolutely positioned descendants are tied to the content box, so Show less
+ * would freeze beside the 2nd/3rd card once the pile overflows. `fixed` keeps
+ * it on the visible stack edge while the list scrolls.
+ */
 .thumbnail-stack-toolbar {
-  position: absolute;
+  position: fixed;
   z-index: 50;
   bottom: 16px;
   left: 28px;
@@ -1720,6 +1779,8 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
 
 .thumbnail-stack-compact {
   --stack-fan-dur: var(--dur-3);
+  --stack-fan-stagger: 8ms;
+  --stack-fan-ease: var(--ease-standard);
   height: 100%;
   max-height: none;
   overflow: visible;
@@ -1747,8 +1808,30 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
       calc(var(--thumbnail-stack-depth, 0) * -13px),
       calc(var(--thumbnail-stack-depth, 0) * -24px)
     )
+    rotateZ(0deg)
     rotateX(calc(var(--thumbnail-stack-depth, 0) * -1.4deg))
     scale(calc(1 - var(--thumbnail-stack-depth, 0) * 0.025));
+  --thumbnail-stack-hover-transform:
+    translate3d(
+      calc(
+        var(--thumbnail-stack-depth, 0) * -2px
+        + var(--thumbnail-stack-fan-shift, 0px)
+      ),
+      calc(var(--thumbnail-stack-depth, 0) * -24px),
+      calc(var(--thumbnail-stack-depth, 0) * -18px)
+    )
+    rotateZ(var(--thumbnail-stack-fan-tilt, 0deg))
+    rotateX(calc(var(--thumbnail-stack-depth, 0) * -1.2deg))
+    scale(calc(1 - var(--thumbnail-stack-depth, 0) * 0.02));
+  --thumbnail-stack-expanded-transform:
+    translate3d(
+      0,
+      calc(var(--thumbnail-stack-depth, 0) * -184px),
+      0
+    )
+    rotateZ(0deg)
+    rotateX(0deg)
+    scale(1);
   position: absolute;
   left: 28px;
   right: 28px;
@@ -1789,7 +1872,7 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
   opacity: calc(var(--thumbnail-stack-depth, 0) * 0.12);
   content: "";
   pointer-events: none;
-  transition: opacity var(--stack-fan-dur) var(--ease-out);
+  transition: opacity var(--stack-fan-dur) calc(var(--thumbnail-stack-depth, 0) * var(--stack-fan-stagger, 0ms)) var(--stack-fan-ease, var(--ease-out));
 }
 
 .thumbnail-stack-minimizing > .thumbnail-card,
@@ -1802,14 +1885,7 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
 
 .thumbnail-stack-minimizing > .thumbnail-card {
   animation: none;
-  transform:
-    translate3d(
-      0,
-      calc(var(--thumbnail-stack-depth, 0) * -184px),
-      0
-    )
-    rotateX(0deg)
-    scale(1);
+  transform: var(--thumbnail-stack-expanded-transform);
   transition: none;
 }
 
@@ -1827,13 +1903,14 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
 
 /*
  * Hover fan-out only after collapse has committed the rest pose without a
- * transform transition. Duration and curve match `--stack-fan-dur`.
+ * transform transition. Duration and curve match `--stack-fan-dur`. Deeper
+ * cards start a few milliseconds later so the lift is a cascade, not a slab.
  */
 .thumbnail-stack-minimized.thumbnail-stack-hover-ready > .thumbnail-card {
   transition:
     opacity var(--dur-4) var(--ease-out),
-    transform var(--stack-fan-dur) var(--ease-out),
-    box-shadow var(--stack-fan-dur) var(--ease-out);
+    transform var(--stack-fan-dur) calc(var(--thumbnail-stack-depth, 0) * var(--stack-fan-stagger)) var(--stack-fan-ease),
+    box-shadow var(--stack-fan-dur) calc(var(--thumbnail-stack-depth, 0) * var(--stack-fan-stagger)) var(--stack-fan-ease);
 }
 
 .thumbnail-stack-compact > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting) {
@@ -1853,15 +1930,11 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
 }
 
 @keyframes thumbnail-card-expand {
+  from {
+    transform: var(--thumbnail-stack-expand-from, var(--thumbnail-stack-rest-transform));
+  }
   to {
-    transform:
-      translate3d(
-        0,
-        calc(var(--thumbnail-stack-depth, 0) * -184px),
-        0
-      )
-      rotateX(0deg)
-      scale(1);
+    transform: var(--thumbnail-stack-expanded-transform);
   }
 }
 
@@ -1938,77 +2011,116 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
 }
 
 /*
- * Sparkle layers reach up over the fanned pile (hover lifts each deeper card
- * 24px, so ~3 depths plus travel) instead of stopping at the front card's edge.
+ * Hover expand path sits on top of the collapsed pile's hit target and paints
+ * only the unrevealed rise: expanded stack top minus the hover peek already
+ * occupied by fanned cards. Two cards stay short; eight stretch much farther.
  */
-.thumbnail-collapsed-hit-target::before,
-.thumbnail-collapsed-hit-target::after {
+.thumbnail-stack-expand-path {
+  --thumbnail-path-tile: 22px;
   position: absolute;
-  inset: -96px -10px -6px;
-  border-radius: inherit;
-  content: "";
+  z-index: 0;
+  left: 18%;
+  right: 18%;
+  bottom: 100%;
+  height: var(--thumbnail-expand-path, 0px);
+  overflow: hidden;
+  border-radius: 10px 10px 2px 2px;
   opacity: 0;
   pointer-events: none;
-  background-repeat: no-repeat;
+  clip-path: polygon(12% 0, 88% 0, 100% 100%, 0 100%);
+  mask-image: linear-gradient(
+    to top,
+    transparent 0,
+    rgb(0 0 0 / 0.55) 18px,
+    rgb(0 0 0 / 0.72) 42%,
+    rgb(0 0 0 / 0.28) 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to top,
+    transparent 0,
+    rgb(0 0 0 / 0.55) 18px,
+    rgb(0 0 0 / 0.72) 42%,
+    rgb(0 0 0 / 0.28) 100%
+  );
+  transition: opacity var(--dur-3) var(--ease-out);
 }
 
-.thumbnail-collapsed-hit-target::before {
+.thumbnail-stack-expand-path::before,
+.thumbnail-stack-expand-path::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+  pointer-events: none;
+}
+
+.thumbnail-stack-expand-path::before {
+  background-color: var(--glass-veil-soft);
   background-image:
-    radial-gradient(circle, rgba(var(--theme-accent-rgb), 0.9) 0 1.2px, transparent 2px),
-    radial-gradient(circle, rgba(255, 255, 255, 0.85) 0 0.9px, transparent 1.6px),
-    radial-gradient(circle, rgba(var(--theme-accent-rgb), 0.8) 0 1px, transparent 1.8px),
-    radial-gradient(circle, rgba(255, 255, 255, 0.7) 0 0.8px, transparent 1.5px),
-    radial-gradient(circle, rgba(var(--theme-accent-rgb), 0.85) 0 1px, transparent 1.8px),
-    radial-gradient(circle, rgba(255, 255, 255, 0.8) 0 0.9px, transparent 1.6px);
-  background-size: 6px 6px;
-  background-position: 12% 62%, 38% 18%, 66% 40%, 90% 72%, 26% 6%, 78% 24%;
+    repeating-linear-gradient(
+      to top,
+      rgb(255 255 255 / 0) 0 11px,
+      rgb(255 255 255 / 0.2) 11px 12px,
+      rgb(255 255 255 / 0) 12px var(--thumbnail-path-tile)
+    ),
+    repeating-linear-gradient(
+      to top,
+      rgb(255 255 255 / 0) 0 7px,
+      rgb(255 255 255 / 0.28) 7px 14px,
+      rgb(255 255 255 / 0) 14px 36px
+    ),
+    linear-gradient(
+      to top,
+      rgba(var(--theme-accent-rgb), 0.42),
+      color-mix(in srgb, var(--theme-accent-text) 38%, transparent) 40%,
+      rgba(var(--theme-signal-rgb), 0.2) 74%,
+      rgb(255 255 255 / 0.12)
+    );
+  background-size:
+    100% var(--thumbnail-path-tile),
+    100% 36px,
+    100% 100%;
+  filter: blur(0.35px);
+  transform: translateZ(0);
 }
 
-.thumbnail-collapsed-hit-target::after {
-  background-image:
-    radial-gradient(circle, rgba(255, 255, 255, 0.8) 0 1px, transparent 1.8px),
-    radial-gradient(circle, rgba(var(--theme-accent-rgb), 0.85) 0 1.2px, transparent 2px),
-    radial-gradient(circle, rgba(var(--theme-accent-rgb), 0.7) 0 0.9px, transparent 1.6px),
-    radial-gradient(circle, rgba(255, 255, 255, 0.75) 0 1px, transparent 1.8px),
-    radial-gradient(circle, rgba(var(--theme-accent-rgb), 0.8) 0 1.1px, transparent 1.9px);
-  background-size: 6px 6px;
-  background-position: 24% 84%, 55% 66%, 80% 88%, 46% 12%, 8% 30%;
+.thumbnail-stack-expand-path::after {
+  background:
+    radial-gradient(
+      ellipse 90% 14px at 50% 0%,
+      rgb(255 255 255 / 0.42),
+      rgba(var(--theme-accent-rgb), 0.18) 42%,
+      transparent 72%
+    ),
+    radial-gradient(
+      ellipse 80% 18px at 50% 100%,
+      rgb(255 255 255 / 0.5),
+      rgba(var(--theme-accent-rgb), 0.22) 40%,
+      transparent 74%
+    );
 }
 
-.thumbnail-collapsed-hit-target:hover::before,
-.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]::before {
-  animation: thumbnail-stack-sparkle 1.8s var(--ease-out) infinite;
+.thumbnail-collapsed-hit-target:hover .thumbnail-stack-expand-path,
+.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"] .thumbnail-stack-expand-path {
+  opacity: 1;
 }
 
-.thumbnail-collapsed-hit-target:hover::after,
-.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]::after {
-  animation: thumbnail-stack-sparkle 2.2s var(--ease-out) 0.5s infinite;
+.thumbnail-collapsed-hit-target:hover .thumbnail-stack-expand-path::before,
+.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"] .thumbnail-stack-expand-path::before {
+  animation: thumbnail-stack-expand-path-flow 1.05s linear infinite;
 }
 
-@keyframes thumbnail-stack-sparkle {
-  0% {
-    opacity: 0;
-    transform: translateY(6px) scale(0.96);
+@keyframes thumbnail-stack-expand-path-flow {
+  from {
+    background-position: 0 22px, 0 18px, 0 0;
   }
-  30% {
-    opacity: 0.9;
-  }
-  100% {
-    opacity: 0;
-    transform: translateY(-22px) scale(1.02);
+  to {
+    background-position: 0 0, 0 0, 0 0;
   }
 }
 
 .thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card,
 .thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):has(.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]) > .thumbnail-card {
-  transform:
-    translate3d(
-      calc(var(--thumbnail-stack-depth, 0) * -2px),
-      calc(var(--thumbnail-stack-depth, 0) * -24px),
-      calc(var(--thumbnail-stack-depth, 0) * -18px)
-    )
-    rotateX(calc(var(--thumbnail-stack-depth, 0) * -1.2deg))
-    scale(calc(1 - var(--thumbnail-stack-depth, 0) * 0.02));
+  transform: var(--thumbnail-stack-hover-transform);
   box-shadow:
     var(--thumbnail-card-shadow),
     0 0 0 1px rgba(var(--theme-accent-rgb), 0.55),
@@ -2039,10 +2151,10 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
   box-shadow: var(--thumbnail-card-shadow);
 }
 
-.thumbnail-stack-dragging .thumbnail-collapsed-hit-target::before,
-.thumbnail-stack-dragging .thumbnail-collapsed-hit-target::after {
+.thumbnail-stack-dragging .thumbnail-stack-expand-path {
   animation: none;
   opacity: 0;
+  transition: none;
 }
 
 .thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card::before,
@@ -2100,10 +2212,14 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
     transition: none;
   }
 
-  .thumbnail-collapsed-hit-target::before,
-  .thumbnail-collapsed-hit-target::after {
+  .thumbnail-stack-expand-path,
+  .thumbnail-stack-expand-path::before {
     animation: none;
-    opacity: 0;
+  }
+
+  .thumbnail-collapsed-hit-target:hover .thumbnail-stack-expand-path,
+  .thumbnail-collapsed-hit-target[data-native-pointer-hover="true"] .thumbnail-stack-expand-path {
+    opacity: 0.55;
   }
 
   .thumbnail-stack-minimize svg,
