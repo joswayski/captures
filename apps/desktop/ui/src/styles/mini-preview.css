@@ -972,6 +972,59 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
   cursor: grabbing !important;
 }
 
+/*
+ * Transparent always-on-top WebViews often skip element-level `cursor` until
+ * mousedown. Mirror grab/pointer on `html` from CSS :hover so the glow hover
+ * and Show less control do not wait for a click.
+ */
+html:has(.thumbnail-card:hover) {
+  cursor: -webkit-grab;
+  cursor: grab;
+}
+
+html:has(
+  :is(
+    .thumbnail-stack-control,
+    .thumbnail-overflow-cue,
+    .thumbnail-collapsed-hit-target,
+    .icon-button,
+    .thumbnail-main-actions button,
+    .thumbnail-editor-control
+  ):hover:not(:disabled)
+),
+html:has(
+  :is(
+    .thumbnail-stack-control,
+    .thumbnail-overflow-cue,
+    .thumbnail-collapsed-hit-target,
+    .icon-button,
+    .thumbnail-main-actions button,
+    .thumbnail-editor-control
+  )[data-native-pointer-hover="true"]:not(:disabled)
+) {
+  cursor: pointer;
+}
+
+html:has(.thumbnail-stack-dragging),
+html:has(.thumbnail-card.thumbnail-file-dragging) {
+  cursor: -webkit-grabbing;
+  cursor: grabbing;
+}
+
+.thumbnail-card:hover,
+.thumbnail-card:hover img {
+  cursor: -webkit-grab;
+  cursor: grab;
+}
+
+.thumbnail-card:hover :is(button, .icon-button, .thumbnail-editor-control):not(:disabled),
+.thumbnail-stack-control:hover:not(:disabled),
+.thumbnail-stack-control:hover:not(:disabled) *,
+.thumbnail-overflow-cue:hover:not(:disabled),
+.thumbnail-collapsed-hit-target:hover:not(:disabled) {
+  cursor: pointer;
+}
+
 .thumbnail-main-actions svg,
 .icon-button svg {
   width: 16px;

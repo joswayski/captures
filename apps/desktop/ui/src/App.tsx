@@ -5921,7 +5921,10 @@ export function Thumbnail() {
       }
     };
 
-    const applyNativeHover = (position: ThumbnailPointerPosition) => {
+    const applyNativeHover = (
+      position: ThumbnailPointerPosition,
+      options: { updateHitTest?: boolean } = {},
+    ) => {
       maybeUnlockCardHover(position);
       const ignore = shouldIgnoreThumbnailCursorEvents(position);
       const kind = applyThumbnailNativeHover(position);
@@ -5933,7 +5936,13 @@ export function Thumbnail() {
       } else {
         document.documentElement.classList.add("thumbnail-native-tracking");
       }
-      setIgnoreCursorEvents(ignore);
+      // DOM hover can fire over the hole in the always-on-top window. Toggling
+      // click-through from those events leaves Wayland (null pointer polls)
+      // unable to restore hits: the window ignores the cursor, so no later
+      // pointermove can undo it. Native samples still own hit testing.
+      if (options.updateHitTest !== false) {
+        setIgnoreCursorEvents(ignore);
+      }
       setThumbnailCursor(kind);
     };
 
@@ -6093,13 +6102,35 @@ export function Thumbnail() {
     };
 
     const onPointerMove = (event: PointerEvent) => {
-      if (!cardHoverLocked) return;
-      const wasLocked = cardHoverLocked;
-      maybeUnlockCardHover(
-        { x: event.clientX, y: event.clientY, inside: true },
-        { fromPointerMove: true },
+      if (cardHoverLocked) {
+        const wasLocked = cardHoverLocked;
+        maybeUnlockCardHover(
+          { x: event.clientX, y: event.clientY, inside: true },
+          { fromPointerMove: true },
+        );
+        if (wasLocked && !cardHoverLocked) pollImmediately();
+      }
+      // Native pointer polls cover click-through macOS panels. DOM moves cover
+      // the harness and Windows/Linux WebViews, where glow :hover already
+      // fires but CSS cursor often stays the arrow until mousedown.
+      if (event.pointerType !== "touch") {
+        applyNativeHover(
+          {
+            x: event.clientX,
+            y: event.clientY,
+            inside: true,
+          },
+          { updateHitTest: false },
+        );
+      }
+    };
+
+    const onPointerLeaveWindow = (event: PointerEvent) => {
+      if (event.relatedTarget) return;
+      applyNativeHover(
+        { x: event.clientX, y: event.clientY, inside: false },
+        { updateHitTest: false },
       );
-      if (wasLocked && !cardHoverLocked) pollImmediately();
     };
 
     const onPointerActivity = (event: Event) => {
@@ -6122,7 +6153,8 @@ export function Thumbnail() {
     // through that later native transition as well.
     window.addEventListener("blur", preserveInteractiveCursorAcrossHandoff);
     // Capture-phase so we reassert before WebKit's own cursor update from the click.
-    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointermove", onPointerMove, true);
+    window.addEventListener("pointerleave", onPointerLeaveWindow, true);
     window.addEventListener("pointerdown", onPointerActivity, true);
     window.addEventListener("pointerup", onPointerActivity, true);
     // `click` fires after mouseup and after the Edit handler starts opening the
@@ -6146,7 +6178,8 @@ export function Thumbnail() {
       document.removeEventListener("visibilitychange", resumeFromSuspension);
       window.removeEventListener("focus", pollImmediately);
       window.removeEventListener("blur", preserveInteractiveCursorAcrossHandoff);
-      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointermove", onPointerMove, true);
+      window.removeEventListener("pointerleave", onPointerLeaveWindow, true);
       window.removeEventListener("pointerdown", onPointerActivity, true);
       window.removeEventListener("pointerup", onPointerActivity, true);
       window.removeEventListener("click", onPointerActivity, true);

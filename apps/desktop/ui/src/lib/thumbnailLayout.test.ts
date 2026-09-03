@@ -160,6 +160,18 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailStyles).toMatch(
       /html\.thumbnail-native-tracking \.thumbnail-stack-minimized \.thumbnail-card img/,
     );
+    expect(thumbnailStyles).toMatch(
+      /html:has\(\.thumbnail-card:hover\)\s*\{[\s\S]*?cursor:\s*grab/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /html:has\(\s*:is\(\s*\.thumbnail-stack-control/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-card:hover :is\(button, \.icon-button, \.thumbnail-editor-control\):not\(:disabled\)/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-control:hover:not\(:disabled\),\s*\n\.thumbnail-stack-control:hover:not\(:disabled\) \*/,
+    );
   });
 
   it("fades the Show less control in linearly and delays hiding it on last delete", () => {

@@ -51,6 +51,8 @@ describe("Thumbnail", () => {
   afterEach(() => {
     vi.useRealTimers();
     document.documentElement.classList.remove("thumbnail-native-tracking");
+    document.documentElement.removeAttribute("data-thumbnail-cursor");
+    document.documentElement.style.cursor = "";
     Reflect.deleteProperty(document, "elementFromPoint");
     vi.clearAllMocks();
     document.documentElement.style.removeProperty("--thumbnail-stack-drag-x");
@@ -259,6 +261,58 @@ describe("Thumbnail", () => {
       expect(vi.mocked(invoke)).toHaveBeenCalledWith("refresh_thumbnail_interactivity");
     });
     expect(document.documentElement).not.toHaveClass("thumbnail-native-tracking");
+  });
+
+  it("applies grab and pointer cursors from DOM hover without waiting for a click", async () => {
+    render(<Thumbnail />);
+    const card = await screen.findByRole("article");
+    const image = within(card).getByRole("img", { name: "Screenshot preview" });
+    const minimize = screen.getByRole("button", { name: "Minimize previews" });
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => image),
+    });
+
+    fireEvent.pointerMove(image, { clientX: 80, clientY: 90, pointerType: "mouse" });
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute("data-thumbnail-cursor", "grab");
+    });
+    expect(document.documentElement.style.cursor).toBe("grab");
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith("set_thumbnail_cursor", { kind: "grab" });
+
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => minimize),
+    });
+    fireEvent.pointerMove(minimize, { clientX: 40, clientY: 20, pointerType: "mouse" });
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute("data-thumbnail-cursor", "pointer");
+    });
+    expect(document.documentElement.style.cursor).toBe("pointer");
+    expect(minimize).toHaveAttribute("data-native-pointer-hover", "true");
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith("set_thumbnail_cursor", { kind: "pointer" });
+  });
+
+  it("does not click-through the window from DOM hover over empty preview space", async () => {
+    render(<Thumbnail />);
+    const stack = (await screen.findByRole("article")).closest(".thumbnail-stack")!;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => stack),
+    });
+    vi.mocked(invoke).mockClear();
+
+    fireEvent.pointerMove(stack, { clientX: 8, clientY: 8, pointerType: "mouse" });
+    window.dispatchEvent(new PointerEvent("pointerleave", { bubbles: true, pointerType: "mouse" }));
+
+    expect(
+      vi.mocked(invoke).mock.calls.filter(
+        ([command, payload]) => command === "set_thumbnail_ignore_cursor_events"
+          && (payload as { ignore?: boolean } | undefined)?.ignore === true,
+      ),
+    ).toHaveLength(0);
   });
 
   it("resumes WebView polling after a native show without recursively refreshing the window", async () => {
