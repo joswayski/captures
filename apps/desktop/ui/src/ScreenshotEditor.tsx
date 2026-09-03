@@ -4202,9 +4202,6 @@ export function ScreenshotEditor() {
         previewCanvasFill(next.background);
         // Commit with undo — initialDocument is the pre-stroke snapshot.
         commitDocument(next);
-        if (exportFormat === "jpeg") {
-          setExportFormat("png");
-        }
       } catch (reason) {
         removeBgLiveRef.current = null;
         setLiveTransparentCanvas(false);
@@ -4502,10 +4499,6 @@ export function ScreenshotEditor() {
         element.src,
       );
       commitDocument(next);
-      // JPEG cannot keep transparency — nudge toward PNG when holes appear.
-      if (exportFormat === "jpeg") {
-        setExportFormat("png");
-      }
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -5258,6 +5251,7 @@ export function ScreenshotEditor() {
     : exportFormat === "webp"
       ? "WebP"
       : "PNG";
+  const jpegDropsTransparency = exportFormat === "jpeg" && editorDocument.background == null;
   const exportNotice = error || (success?.kind === "save" ? success.message : "");
   const showCompressQuality = qualityMode === "compress";
 
@@ -6567,9 +6561,7 @@ export function ScreenshotEditor() {
         {tool === "remove-bg" && (
           <section className="screenshot-property-section">
             <p>
-              Make pixels transparent on image layers — color match (wand),
-              paint away (erase), or paint back (restore). Not automatic subject
-              cutout. Export as PNG or WebP to keep transparency.
+              Remove a color, paint it out, or paint it back.
             </p>
             <div className="screenshot-format-buttons" role="group" aria-label="Eraser mode">
               {REMOVE_BG_MODE_ITEMS.map((item) => (
@@ -6613,8 +6605,8 @@ export function ScreenshotEditor() {
                 </label>
                 <p>
                   {wandContiguous
-                    ? "Click a color region to clear connected matching pixels."
-                    : "Click a color to clear every similar pixel in the layer."}
+                    ? "Click a color to remove that area."
+                    : "Click a color to remove it everywhere in the layer."}
                 </p>
               </>
             ) : (
@@ -6638,8 +6630,8 @@ export function ScreenshotEditor() {
                 </label>
                 <p>
                   {removeBgMode === "erase"
-                    ? "Paint to erase toward transparency."
-                    : "Paint to restore pixels from before transparency edits."}
+                    ? "Paint to erase."
+                    : "Paint to put back what you erased."}
                 </p>
               </>
             )}
@@ -7276,7 +7268,13 @@ export function ScreenshotEditor() {
                 disabled={busy !== null}
                 options={[
                   { value: "png", label: "PNG" },
-                  { value: "jpeg", label: "JPEG" },
+                  {
+                    value: "jpeg",
+                    label: "JPEG",
+                    description: jpegDropsTransparency
+                      ? "Fills in transparent areas."
+                      : undefined,
+                  },
                   { value: "webp", label: "WebP" },
                 ]}
                 onChange={(value) => applyExportFormat(value as ExportFormat)}
@@ -7309,10 +7307,18 @@ export function ScreenshotEditor() {
               {copyAnnouncement}
             </div>
             {!error && (
-              <div className="screenshot-export-hint">
+              <div
+                className={[
+                  "screenshot-export-hint",
+                  jpegDropsTransparency ? "is-warning" : "",
+                ].filter(Boolean).join(" ")}
+                role={jpegDropsTransparency ? "status" : undefined}
+              >
                 {sourceMissing
                   ? "The original was deleted. You can still copy or save this edit."
-                  : qualityMode === "preserve"
+                  : jpegDropsTransparency
+                    ? "JPEG will fill in transparent areas. Use PNG or WebP to keep them."
+                    : qualityMode === "preserve"
                     ? savingCopy
                       ? `Keeps original quality as ${formatLabel} and saves a new file.`
                       : `Keeps original quality as ${formatLabel} and replaces the original.`

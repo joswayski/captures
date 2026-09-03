@@ -1728,19 +1728,21 @@ describe("ScreenshotEditor", () => {
     expect(screen.getByRole("button", { name: "Wand" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByLabelText("Color tolerance")).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "Contiguous only" })).toBeChecked();
-    expect(
-      screen.getByText(/Make pixels transparent on image layers/i),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/Not automatic subject cutout/i)).toBeInTheDocument();
+    expect(screen.getByText("Remove a color, paint it out, or paint it back."))
+      .toBeInTheDocument();
+    expect(screen.queryByText(/Not automatic subject cutout/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Export as PNG or WebP/i)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Erase" }));
     expect(screen.getByRole("button", { name: "Erase" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByLabelText("Brush size")).toBeInTheDocument();
+    expect(screen.getByText("Paint to erase.")).toBeInTheDocument();
     expect(screen.queryByLabelText("Color tolerance")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Restore" }));
     expect(screen.getByRole("button", { name: "Restore" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByLabelText("Brush size")).toBeInTheDocument();
+    expect(screen.getByText("Paint to put back what you erased.")).toBeInTheDocument();
     expect(screen.queryByRole("spinbutton", { name: "Shift rotation snap" }))
       .not.toBeInTheDocument();
     expect(screen.queryByText("New annotation color")).not.toBeInTheDocument();
@@ -2083,6 +2085,47 @@ describe("ScreenshotEditor", () => {
     expect(within(picker).getByLabelText("Canvas background: #ffffff")).toBeInTheDocument();
     expect(surface).not.toHaveClass("transparent");
     expect(backgroundTrigger).toHaveAccessibleName(/Background color: #f7f7f5/i);
+  });
+
+  it("warns on JPEG export when the canvas is transparent", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Canvas width");
+
+    const format = screen.getByRole("combobox", { name: "Format" });
+    fireEvent.click(format);
+    fireEvent.click(screen.getByRole("option", { name: "JPEG" }));
+    expect(format).toHaveTextContent(".jpg");
+    expect(screen.queryByText(/JPEG will fill in transparent areas/i))
+      .not.toBeInTheDocument();
+    expect(
+      screen.getByText("Keeps original quality as JPEG and saves a new file."),
+    ).toBeInTheDocument();
+
+    const canvasToolbar = screen.getByRole("group", { name: "Canvas" });
+    fireEvent.click(within(canvasToolbar).getByRole("button", { name: /Background color/ }));
+    const picker = await screen.findByRole("dialog", { name: "Canvas background" });
+    fireEvent.click(within(picker).getByRole("checkbox", { name: "Solid background" }));
+
+    const warning = screen.getByText(
+      "JPEG will fill in transparent areas. Use PNG or WebP to keep them.",
+    );
+    expect(warning).toHaveClass("screenshot-export-hint", "is-warning");
+    expect(warning).toHaveAttribute("role", "status");
+    expect(
+      screen.queryByText("Keeps original quality as JPEG and saves a new file."),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(format);
+    expect(screen.getByRole("option", { name: /JPEG/ })).toHaveTextContent(
+      "Fills in transparent areas.",
+    );
+    fireEvent.click(screen.getByRole("option", { name: "PNG" }));
+    expect(format).toHaveTextContent(".png");
+    expect(screen.queryByText(/JPEG will fill in transparent areas/i))
+      .not.toBeInTheDocument();
+    expect(
+      screen.getByText("Keeps original quality as PNG and replaces the original."),
+    ).toBeInTheDocument();
   });
 
   it("picks a canvas background color from the compact picker popover", async () => {
