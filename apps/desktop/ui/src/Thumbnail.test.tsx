@@ -10,6 +10,7 @@ import {
   THUMBNAIL_STACK_EXPAND_COLLAPSE_MS,
   thumbnailStackFanCollapseMs,
   thumbnailStackNewestScrollTop,
+  thumbnailStackPeekJitterPx,
 } from "./lib/thumbnailLayout";
 import { THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE } from "./lib/thumbnailHover";
 
@@ -1046,8 +1047,12 @@ describe("Thumbnail", () => {
     const collapsedCards = stack.querySelectorAll<HTMLElement>(":scope > .thumbnail-card");
     expect(collapsedCards).toHaveLength(8);
     collapsedCards.forEach((card, index) => {
+      const depth = collapsedCards.length - index - 1;
       expect(card.style.getPropertyValue("--thumbnail-stack-base-depth")).toBe(
-        String(collapsedCards.length - index - 1),
+        String(depth),
+      );
+      expect(card.style.getPropertyValue("--thumbnail-stack-peek-jitter")).toBe(
+        `${thumbnailStackPeekJitterPx(depth)}px`,
       );
       expect(card.style.getPropertyValue("--thumbnail-stack-hidden")).toBe("");
     });
@@ -1059,12 +1064,18 @@ describe("Thumbnail", () => {
       fireEvent.click(expand);
       await Promise.resolve();
     });
+    expect(stack).toHaveClass("thumbnail-stack-expanding");
+    expect(stack).toHaveClass("thumbnail-stack-scrollport");
+    expect(screen.queryByRole("button", { name: "Show newer captures" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Show older captures" })).toBeNull();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(THUMBNAIL_STACK_EXPAND_COLLAPSE_MS);
     });
 
     expect(stack.scrollTop).toBe(newestTop);
+    expect(stack).toHaveClass("thumbnail-stack-scrollport");
     expect(screen.queryByRole("button", { name: "Show newer captures" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Show older captures" })).toBeInTheDocument();
     const restack = screen.getByRole("button", { name: "Minimize previews" })
       .closest(".thumbnail-stack-toolbar");
     expect(stack.contains(restack)).toBe(false);

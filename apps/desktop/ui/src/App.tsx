@@ -127,6 +127,7 @@ import {
   scrollThumbnailStackToNewest,
   shouldScrollThumbnailStackToEnd,
   thumbnailStackContentHeight,
+  thumbnailStackNeedsScrollport,
   thumbnailStackOverflow,
   restoreThumbnailStackShiftClass,
   thumbnailCollapsedPeekPx,
@@ -134,8 +135,10 @@ import {
   thumbnailStackFanCollapseMs,
   thumbnailStackFanShiftPx,
   thumbnailStackFanTiltDeg,
+  thumbnailStackPeekJitterPx,
   THUMBNAIL_CARD_SLOT_PX,
   THUMBNAIL_STACK_EXPAND_COLLAPSE_MS,
+  THUMBNAIL_STACK_SCROLLPORT_CLASS,
   waitForThumbnailStackSettle,
 } from "./lib/thumbnailLayout";
 import {
@@ -5636,6 +5639,9 @@ export function Thumbnail() {
     hasOlder: false,
     hasNewer: false,
   });
+  const [stackViewportHeight, setStackViewportHeight] = useState(() => (
+    typeof window === "undefined" ? 0 : window.innerHeight
+  ));
   const stackRef = useRef<HTMLElement>(null);
   const stackDrag = useRef<CollapsedThumbnailStackDrag | null>(null);
   const skipCollapsedStackClick = useRef(false);
@@ -5804,7 +5810,9 @@ export function Thumbnail() {
     );
     previousArtifactCount.current = artifacts.length;
     if (shouldReveal && stackRef.current) {
-      scrollThumbnailStackToNewest(stackRef.current);
+      scrollThumbnailStackToNewest(stackRef.current, {
+        viewportHeight: stackViewportHeight,
+      });
     }
     refreshStackOverflow();
     let cancelled = false;
@@ -5815,7 +5823,9 @@ export function Thumbnail() {
       .finally(() => {
         if (!cancelled) {
           if (shouldReveal && stackRef.current) {
-            scrollThumbnailStackToNewest(stackRef.current);
+            scrollThumbnailStackToNewest(stackRef.current, {
+              viewportHeight: stackViewportHeight,
+            });
           }
           refreshStackOverflow();
           window.dispatchEvent(new Event("captures-thumbnail-layout-changed"));
@@ -5824,7 +5834,7 @@ export function Thumbnail() {
     return () => {
       cancelled = true;
     };
-  }, [artifacts.length, refreshStackOverflow]);
+  }, [artifacts.length, refreshStackOverflow, stackViewportHeight]);
 
   useLayoutEffect(() => {
     if (stackMotion !== "expanded" || !pendingNewestReveal.current) return;
@@ -5833,6 +5843,7 @@ export function Thumbnail() {
     const cancelReveal = scheduleScrollThumbnailStackToNewest(stack, {
       onScrolled: refreshStackOverflow,
       retryMs: 450,
+      viewportHeight: stackViewportHeight,
     });
     const finish = window.setTimeout(() => {
       pendingNewestReveal.current = false;
@@ -5841,10 +5852,13 @@ export function Thumbnail() {
       cancelReveal();
       window.clearTimeout(finish);
     };
-  }, [stackMotion, refreshStackOverflow]);
+  }, [stackMotion, refreshStackOverflow, stackViewportHeight]);
 
   useEffect(() => {
-    const refresh = () => refreshStackOverflow();
+    const refresh = () => {
+      setStackViewportHeight(window.innerHeight);
+      refreshStackOverflow();
+    };
     window.addEventListener("resize", refresh);
     window.addEventListener("captures-thumbnail-ready", refresh);
     window.addEventListener("captures-thumbnail-layout-changed", refresh);
@@ -6359,6 +6373,9 @@ export function Thumbnail() {
   const stackAnimating = stackMotion === "collapsing" || stackMotion === "expanding";
   const exitingOnly = artifacts.every(({ id }) => exitingArtifactIds.has(id));
   const controlsDisabled = stackAnimating || exitingOnly;
+  const stackScrollport = (stackMotion === "expanding" || stackMotion === "expanded")
+    && thumbnailStackNeedsScrollport(artifacts.length, stackViewportHeight);
+  const showOverflowCues = stackMotion === "expanded";
 
   const setStackCollapsed = (nextCollapsed: boolean) => {
     if (controlsDisabled || collapsed === nextCollapsed) return;
@@ -6582,6 +6599,7 @@ export function Thumbnail() {
         className={[
           "thumbnail-stack",
           compact ? "thumbnail-stack-compact" : "",
+          stackScrollport ? THUMBNAIL_STACK_SCROLLPORT_CLASS : "",
           stackMotion === "collapsing" ? "thumbnail-stack-minimizing" : "",
           stackMotion === "collapsed" ? "thumbnail-stack-minimized" : "",
           stackMotion === "expanding" ? "thumbnail-stack-expanding" : "",
@@ -6674,7 +6692,7 @@ export function Thumbnail() {
           </button>
         </div>
       )}
-      {!collapsed && stackOverflow.hasOlder && (
+      {showOverflowCues && stackOverflow.hasOlder && (
         <button
           type="button"
           className="thumbnail-overflow-cue thumbnail-overflow-cue-older"
@@ -6684,7 +6702,7 @@ export function Thumbnail() {
           <ThumbnailOverflowChevron direction="up" />
         </button>
       )}
-      {!collapsed && stackOverflow.hasNewer && (
+      {showOverflowCues && stackOverflow.hasNewer && (
         <button
           type="button"
           className="thumbnail-overflow-cue thumbnail-overflow-cue-newer"
@@ -7130,6 +7148,7 @@ export function ThumbnailCard({
         "--thumbnail-stack-base-depth": stackDepth,
         "--thumbnail-stack-fan-tilt": `${thumbnailStackFanTiltDeg(stackDepth)}deg`,
         "--thumbnail-stack-fan-shift": `${thumbnailStackFanShiftPx(stackDepth)}px`,
+        "--thumbnail-stack-peek-jitter": `${thumbnailStackPeekJitterPx(stackDepth)}px`,
         ...(expandFromTransform
           ? { "--thumbnail-stack-expand-from": expandFromTransform }
           : {}),
