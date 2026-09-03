@@ -7,6 +7,7 @@ import type { CaptureArtifact } from "./types";
 import {
   THUMBNAIL_CARD_SLOT_PX,
   THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS,
+  thumbnailStackFanCollapseMs,
   thumbnailStackNewestScrollTop,
 } from "./lib/thumbnailLayout";
 import { THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE } from "./lib/thumbnailHover";
@@ -1186,6 +1187,59 @@ describe("Thumbnail", () => {
       "set_mini_previews_collapsed",
       { collapsed: false },
     );
+  });
+
+  it("eases the hover fan closed before the dragged pile starts leaning", async () => {
+    render(<Thumbnail />);
+    const card = await screen.findByRole("article");
+    const stack = card.closest(".thumbnail-stack")!;
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "Minimize previews" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(32);
+      await vi.advanceTimersByTimeAsync(480);
+    });
+
+    const expand = screen.getByRole("button", { name: "Expand preview" });
+    fireEvent.pointerDown(expand, {
+      button: 0,
+      pointerId: 3,
+      screenX: 40,
+      screenY: 80,
+    });
+    expect(stack).toHaveClass("thumbnail-stack-pressing");
+    expect(stack).not.toHaveClass("thumbnail-stack-drag-sway");
+
+    fireEvent.pointerMove(window, {
+      pointerId: 3,
+      screenX: 120,
+      screenY: 40,
+      bubbles: true,
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(stack).toHaveClass("thumbnail-stack-dragging");
+    expect(stack).not.toHaveClass("thumbnail-stack-drag-sway");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(thumbnailStackFanCollapseMs(1) - 1);
+    });
+    expect(stack).not.toHaveClass("thumbnail-stack-drag-sway");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(stack).toHaveClass("thumbnail-stack-drag-sway");
+
+    fireEvent.pointerUp(window, { pointerId: 3, bubbles: true });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(stack).not.toHaveClass("thumbnail-stack-dragging");
+    expect(stack).not.toHaveClass("thumbnail-stack-drag-sway");
+    expect(stack).not.toHaveClass("thumbnail-stack-pressing");
+    vi.useRealTimers();
   });
 
   it("cancels HTML5 dragstart on collapsed screenshots so the pile can move", async () => {

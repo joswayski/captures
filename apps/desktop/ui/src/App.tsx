@@ -115,6 +115,7 @@ import {
   cssUrl,
   preventThumbnailHtml5Drag,
   readHarnessStackOffset,
+  setThumbnailStackDragSwayReady,
   setThumbnailStackDragging,
   setThumbnailStackPressing,
   writeHarnessStackOffset,
@@ -130,6 +131,7 @@ import {
   restoreThumbnailStackShiftClass,
   thumbnailCollapsedPeekPx,
   captureThumbnailCardTransforms,
+  thumbnailStackFanCollapseMs,
   thumbnailStackFanShiftPx,
   thumbnailStackFanTiltDeg,
   THUMBNAIL_CARD_SLOT_PX,
@@ -5636,6 +5638,8 @@ export function Thumbnail() {
   const stackRef = useRef<HTMLElement>(null);
   const stackDrag = useRef<CollapsedThumbnailStackDrag | null>(null);
   const skipCollapsedStackClick = useRef(false);
+  const stackFanCollapseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stackFanCollapsed = useRef(false);
   const stackMotionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stackHoverReadyFrames = useRef<{ first: number; second: number } | null>(null);
   const previousStackMotion = useRef<"expanded" | "collapsing" | "collapsed" | "expanding">(
@@ -6318,6 +6322,10 @@ export function Thumbnail() {
       cancelStackScroll.current?.();
       cancelStackScroll.current = null;
       if (stackMotionTimer.current) clearTimeout(stackMotionTimer.current);
+      if (stackFanCollapseTimer.current) {
+        clearTimeout(stackFanCollapseTimer.current);
+        stackFanCollapseTimer.current = null;
+      }
       if (stackHoverReadyFrames.current) {
         cancelAnimationFrame(stackHoverReadyFrames.current.first);
         cancelAnimationFrame(stackHoverReadyFrames.current.second);
@@ -6498,6 +6506,9 @@ export function Thumbnail() {
         const stack = stackRef.current;
         if (!stack) return;
         setThumbnailStackDragging(stack, dragging);
+        if (dragging && stackFanCollapsed.current) {
+          setThumbnailStackDragSwayReady(stack, true);
+        }
         window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
       },
     });
@@ -6510,6 +6521,24 @@ export function Thumbnail() {
     if (!drag.pointerDown(event.nativeEvent)) return;
     skipCollapsedStackClick.current = true;
     setThumbnailStackPressing(stackRef.current, true);
+    if (stackFanCollapseTimer.current) {
+      clearTimeout(stackFanCollapseTimer.current);
+      stackFanCollapseTimer.current = null;
+    }
+    if (prefersReducedMotion()) {
+      stackFanCollapsed.current = true;
+    } else {
+      stackFanCollapsed.current = false;
+      const cardCount = stackRef.current?.querySelectorAll(":scope > .thumbnail-card").length
+        ?? 0;
+      stackFanCollapseTimer.current = setTimeout(() => {
+        stackFanCollapseTimer.current = null;
+        stackFanCollapsed.current = true;
+        if (!drag.isDragging) return;
+        drag.resetSway();
+        setThumbnailStackDragSwayReady(stackRef.current, true);
+      }, thumbnailStackFanCollapseMs(cardCount));
+    }
     event.preventDefault();
     event.nativeEvent.preventDefault();
     try {
@@ -6528,6 +6557,11 @@ export function Thumbnail() {
       window.removeEventListener("pointermove", onMove, true);
       window.removeEventListener("pointerup", onUp, true);
       window.removeEventListener("pointercancel", onUp, true);
+      if (stackFanCollapseTimer.current) {
+        clearTimeout(stackFanCollapseTimer.current);
+        stackFanCollapseTimer.current = null;
+      }
+      stackFanCollapsed.current = false;
       setThumbnailStackPressing(stackRef.current, false);
       void drag.pointerUp(upEvent).then((outcome) => {
         setThumbnailStackDragging(stackRef.current, false);
