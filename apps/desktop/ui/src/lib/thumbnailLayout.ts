@@ -304,8 +304,9 @@ export function shouldScrollThumbnailStackToEnd(
 }
 
 /**
- * Expanding the pile starts at scrollTop 0 (oldest). Jump to the newest
- * capture once cards are back in document flow.
+ * Expanding the pile should land on the newest capture. Compact cards are
+ * absolutely positioned, so the in-flow list starts at scrollTop 0 (oldest)
+ * unless we pin before the first expanded paint.
  */
 export function shouldScrollThumbnailStackToNewestOnExpand(
   previousMotion: string | undefined,
@@ -316,6 +317,30 @@ export function shouldScrollThumbnailStackToNewestOnExpand(
     && previousMotion !== "expanded";
 }
 
+/**
+ * Bounded window-filling scrollport. Compact uses height 100%; expanded uses
+ * height auto + max-height 100%, which can stay content-sized for a frame and
+ * clamp newest-scroll to 0. Keep this class through expand so the first
+ * in-flow layout can actually overflow.
+ */
+export const THUMBNAIL_STACK_SCROLLPORT_CLASS = "thumbnail-stack-scrollport";
+
+/** Containing-block height for the stack, falling back to the WebView. */
+export function thumbnailStackViewportHeight(stack: HTMLElement): number {
+  const containing = stack.parentElement;
+  const containingHeight = containing?.clientHeight ?? 0;
+  if (containingHeight > 0) return containingHeight;
+  return typeof window !== "undefined" ? window.innerHeight : 0;
+}
+
+/** True when the expanded list is taller than the visible window. */
+export function thumbnailStackNeedsScrollport(
+  cardCount: number,
+  viewportHeight: number,
+): boolean {
+  return thumbnailStackContentHeight(cardCount) - Math.max(0, viewportHeight) > 1;
+}
+
 /** Scroll offset that puts the newest (bottom) preview in view. */
 export function thumbnailStackNewestScrollTop(
   cardCount: number,
@@ -324,10 +349,33 @@ export function thumbnailStackNewestScrollTop(
   return Math.max(0, thumbnailStackContentHeight(cardCount) - Math.max(0, clientHeight));
 }
 
-/** Pin the stack to its newest capture using layout geometry, not paint overflow. */
-export function scrollThumbnailStackToNewest(stack: HTMLElement): void {
+export type ScrollThumbnailStackToNewestOptions = {
+  /** Visible window height. Defaults to the stack's containing block. */
+  viewportHeight?: number;
+};
+
+/**
+ * Pin the stack to its newest capture using layout geometry, not paint overflow.
+ * If the stack is still content-sized, fill the viewport first so `scrollTop`
+ * can land in this layout pass instead of waiting for a later frame.
+ */
+export function scrollThumbnailStackToNewest(
+  stack: HTMLElement,
+  options: ScrollThumbnailStackToNewestOptions = {},
+): void {
   const cardCount = stack.querySelectorAll(":scope > .thumbnail-card").length;
-  stack.scrollTop = thumbnailStackNewestScrollTop(cardCount, stack.clientHeight);
+  const contentHeight = thumbnailStackContentHeight(cardCount);
+  const viewportHeight = options.viewportHeight ?? thumbnailStackViewportHeight(stack);
+  if (thumbnailStackNeedsScrollport(cardCount, viewportHeight)) {
+    stack.classList.add(THUMBNAIL_STACK_SCROLLPORT_CLASS);
+  } else {
+    stack.classList.remove(THUMBNAIL_STACK_SCROLLPORT_CLASS);
+  }
+  const measured = stack.clientHeight;
+  const scrollPortHeight = measured > 0 && measured < contentHeight - 1
+    ? measured
+    : (thumbnailStackNeedsScrollport(cardCount, viewportHeight) ? viewportHeight : measured);
+  stack.scrollTop = thumbnailStackNewestScrollTop(cardCount, scrollPortHeight);
 }
 
 export type ScheduleScrollThumbnailStackToNewestOptions = {
@@ -342,12 +390,14 @@ export type ScheduleScrollThumbnailStackToNewestOptions = {
    * Omit to only run immediately plus two animation frames.
    */
   retryMs?: number;
+  /** Visible window height forwarded to each pin attempt. */
+  viewportHeight?: number;
 };
 
 /**
  * Scroll to the newest capture now and again after layout settles.
- * Compact→expanded and native window growth both change clientHeight a frame
- * later; one useLayoutEffect write is not enough.
+ * Native window growth can still change clientHeight a frame later; pinning
+ * with a viewport fill covers the compact→expanded handover in this pass.
  */
 export function scheduleScrollThumbnailStackToNewest(
   stack: HTMLElement,
@@ -359,9 +409,10 @@ export function scheduleScrollThumbnailStackToNewest(
   const cancelFrame = options.cancelFrame
     ?? ((id: number) => cancelAnimationFrame(id));
   const retryMs = options.retryMs ?? 0;
+  const viewportHeight = options.viewportHeight;
 
   const run = () => {
-    scrollThumbnailStackToNewest(stack);
+    scrollThumbnailStackToNewest(stack, { viewportHeight });
     onScrolled?.();
   };
 

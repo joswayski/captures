@@ -1058,12 +1058,18 @@ describe("Thumbnail", () => {
       fireEvent.click(expand);
       await Promise.resolve();
     });
+    expect(stack).toHaveClass("thumbnail-stack-expanding");
+    expect(stack).toHaveClass("thumbnail-stack-scrollport");
+    expect(screen.queryByRole("button", { name: "Show newer captures" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Show older captures" })).toBeNull();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(480);
     });
 
     expect(stack.scrollTop).toBe(newestTop);
+    expect(stack).toHaveClass("thumbnail-stack-scrollport");
     expect(screen.queryByRole("button", { name: "Show newer captures" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Show older captures" })).toBeInTheDocument();
     const restack = screen.getByRole("button", { name: "Minimize previews" })
       .closest(".thumbnail-stack-toolbar");
     expect(stack.contains(restack)).toBe(false);
