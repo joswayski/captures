@@ -135,6 +135,16 @@ describe("harness stack offset", () => {
       width: 1_280,
       height: 720,
     })).toEqual({ x: 940, y: 0 });
+
+    const top = writeHarnessStackOffset(40, 80, document.documentElement, {
+      width: 1_280,
+      height: 720,
+    }, { anchor: "top", contentHeight: 240 });
+    expect(top).toEqual({ x: 40, y: 80 });
+    expect(writeHarnessStackOffset(40, 800, document.documentElement, {
+      width: 1_280,
+      height: 720,
+    }, { anchor: "top", contentHeight: 240 })).toEqual({ x: 40, y: 480 });
   });
 });
 
@@ -251,6 +261,21 @@ describe("CollapsedThumbnailStackDrag", () => {
     expect(sways.at(-1)?.x).toBeLessThan(0);
     drag.resetSway();
     expect(sways.at(-1)).toEqual({ x: 0, y: 0 });
+  });
+
+  it("rebases the press origin after a top/bottom coordinate switch", async () => {
+    const drag = new CollapsedThumbnailStackDrag({
+      getFrame: () => ({ x: 0, y: 0 }),
+      moveFrame: (x, y) => ({ x, y }),
+      reducedMotion: () => false,
+    });
+
+    drag.pointerDown({ button: 0, pointerId: 1, screenX: 10, screenY: 20 });
+    await drag.pointerMove({ pointerId: 1, screenX: 30, screenY: 50 });
+    drag.rebaseFrame({ x: 100, y: -200 });
+    const moved = await drag.pointerMove({ pointerId: 1, screenX: 40, screenY: 60 });
+    expect(moved?.x).toBe(110);
+    expect(moved?.y).toBe(-190);
   });
 });
 

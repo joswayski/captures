@@ -28,6 +28,13 @@ html[data-preview-harness-view="thumbnail"] #root {
   --thumbnail-card-shadow:
     0 6px 14px rgba(0, 0, 0, 0.38),
     0 2px 5px rgba(0, 0, 0, 0.26);
+  /*
+   * Signed gravity from JS: +1 bottom (peek up), 0 middle (skew only),
+   * -1 top (peek down). Per-capture `--thumbnail-stack-skew-*` is not
+   * scaled so the pile never goes perfectly flush.
+   */
+  --thumbnail-stack-gravity: 1;
+  --thumbnail-stack-expand-sign: 1;
 
   position: absolute;
   bottom: 0;
@@ -1847,6 +1854,20 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   overflow: hidden;
 }
 
+.thumbnail-stack-anchor-top {
+  --thumbnail-stack-expand-sign: -1;
+}
+
+.thumbnail-stack-anchor-top:not(.thumbnail-stack-compact) {
+  top: 0;
+  bottom: auto;
+}
+
+.thumbnail-stack-toolbar-anchor-top {
+  top: 16px;
+  bottom: auto;
+}
+
 .thumbnail-stack-compact > .thumbnail-card {
   /*
    * React sets `--thumbnail-stack-base-depth` from DOM order, a per-capture
@@ -1887,13 +1908,19 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
       ),
       calc(
         var(--thumbnail-stack-pile-depth, 0) * -13px
+          * var(--thumbnail-stack-gravity, 1)
         + var(--thumbnail-stack-peek-jitter, 0px)
         + var(--thumbnail-stack-skew-y, 0px)
       ),
       calc(var(--thumbnail-stack-pile-depth, 0) * -24px)
     )
     rotateZ(var(--thumbnail-stack-skew-rot, 0deg))
-    rotateX(calc(var(--thumbnail-stack-pile-depth, 0) * -1.4deg))
+    rotateX(
+      calc(
+        var(--thumbnail-stack-pile-depth, 0) * -1.4deg
+          * var(--thumbnail-stack-gravity, 1)
+      )
+    )
     scale(calc(1 - var(--thumbnail-stack-pile-depth, 0) * 0.025));
   --thumbnail-stack-hover-transform:
     translate3d(
@@ -1903,18 +1930,27 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
       ),
       calc(
         var(--thumbnail-stack-pile-depth, 0) * -16px
+          * var(--thumbnail-stack-gravity, 1)
         + var(--thumbnail-stack-peek-jitter, 0px)
         + var(--thumbnail-stack-skew-y, 0px)
       ),
       calc(var(--thumbnail-stack-pile-depth, 0) * -18px)
     )
     rotateZ(var(--thumbnail-stack-fan-tilt, 0deg))
-    rotateX(calc(var(--thumbnail-stack-pile-depth, 0) * -1.2deg))
+    rotateX(
+      calc(
+        var(--thumbnail-stack-pile-depth, 0) * -1.2deg
+          * var(--thumbnail-stack-gravity, 1)
+      )
+    )
     scale(calc(1 - var(--thumbnail-stack-pile-depth, 0) * 0.02));
   --thumbnail-stack-expanded-transform:
     translate3d(
       0,
-      calc(var(--thumbnail-stack-depth, 0) * -184px),
+      calc(
+        var(--thumbnail-stack-depth, 0) * -184px
+          * var(--thumbnail-stack-expand-sign, 1)
+      ),
       0
     )
     rotateZ(0deg)
@@ -1934,7 +1970,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   transition:
     opacity var(--dur-4) var(--ease-out),
     box-shadow var(--dur-4) var(--ease-out);
-  transform-origin: 50% 100%;
+  transform-origin: 50% calc(50% * (1 + var(--thumbnail-stack-gravity, 1)));
   pointer-events: none;
   transform: var(--thumbnail-stack-rest-transform);
   /*
@@ -1943,6 +1979,11 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
    * front preview until the outgoing card unmounts.
    */
   translate: none !important;
+}
+
+.thumbnail-stack-anchor-top.thumbnail-stack-compact > .thumbnail-card {
+  top: 28px;
+  bottom: auto;
 }
 
 /*
@@ -2092,10 +2133,18 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 }
 
 .thumbnail-collapsed-hit-target {
+  --thumbnail-peek-up: max(
+    0px,
+    calc(var(--thumbnail-collapsed-peek, 0px) * var(--thumbnail-stack-gravity, 1))
+  );
+  --thumbnail-peek-down: max(
+    0px,
+    calc(var(--thumbnail-collapsed-peek, 0px) * -1 * var(--thumbnail-stack-gravity, 1))
+  );
   position: absolute;
   z-index: 40;
   right: calc(28px - var(--thumbnail-collapsed-skew-pad, 0px));
-  bottom: 52px;
+  bottom: calc(52px - var(--thumbnail-peek-down));
   left: calc(28px - var(--thumbnail-collapsed-skew-pad, 0px));
   /*
    * Front card is 160px. Extra peek height comes from `--thumbnail-collapsed-peek`
@@ -2103,9 +2152,9 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
    * does not steal clicks in the empty space above it. Hover uses
    * `--thumbnail-collapsed-hover-peek`. Side inset pulls back by
    * `--thumbnail-collapsed-skew-pad` so scattered rear-card edges stay on
-   * this control instead of the click-through gutter.
+   * this control. Gravity splits the extra above or below the front card.
    */
-  height: calc(160px + var(--thumbnail-collapsed-peek, 0px));
+  height: calc(160px + var(--thumbnail-peek-up) + var(--thumbnail-peek-down));
   padding: 0;
   border: 0;
   border-radius: 12px;
@@ -2125,7 +2174,25 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 
 .thumbnail-collapsed-hit-target:hover:not([data-thumbnail-hover-stale]),
 .thumbnail-collapsed-hit-target[data-native-pointer-hover="true"] {
-  height: calc(160px + var(--thumbnail-collapsed-hover-peek, var(--thumbnail-collapsed-peek, 0px)));
+  --thumbnail-peek-up: max(
+    0px,
+    calc(
+      var(--thumbnail-collapsed-hover-peek, var(--thumbnail-collapsed-peek, 0px))
+        * var(--thumbnail-stack-gravity, 1)
+    )
+  );
+  --thumbnail-peek-down: max(
+    0px,
+    calc(
+      var(--thumbnail-collapsed-hover-peek, var(--thumbnail-collapsed-peek, 0px))
+        * -1 * var(--thumbnail-stack-gravity, 1)
+    )
+  );
+}
+
+.thumbnail-stack-anchor-top .thumbnail-collapsed-hit-target {
+  top: 28px;
+  bottom: auto;
 }
 
 .thumbnail-stack-minimized:not(.thumbnail-stack-dragging) > .thumbnail-card,
@@ -2147,6 +2214,11 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   opacity: 0;
   pointer-events: none;
   background-repeat: no-repeat;
+}
+
+.thumbnail-stack-anchor-top .thumbnail-collapsed-hit-target::before,
+.thumbnail-stack-anchor-top .thumbnail-collapsed-hit-target::after {
+  inset: -6px -10px -96px;
 }
 
 .thumbnail-collapsed-hit-target::before {
@@ -2228,6 +2300,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
       ),
       calc(
         var(--thumbnail-stack-pile-depth, 0) * -13px
+          * var(--thumbnail-stack-gravity, 1)
         + var(--thumbnail-stack-peek-jitter, 0px)
         + var(--thumbnail-stack-skew-y, 0px)
         + var(--thumbnail-drag-sway-y, 0) * 1px * var(--thumbnail-stack-pile-depth, 0) * 0.2
@@ -2242,7 +2315,12 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
         * 0.12deg
       )
     )
-    rotateX(calc(var(--thumbnail-stack-pile-depth, 0) * -1.4deg))
+    rotateX(
+      calc(
+        var(--thumbnail-stack-pile-depth, 0) * -1.4deg
+          * var(--thumbnail-stack-gravity, 1)
+      )
+    )
     scale(calc(1 - var(--thumbnail-stack-pile-depth, 0) * 0.025));
   filter: brightness(calc(1 - var(--thumbnail-stack-pile-depth, 0) * 0.12));
   box-shadow: var(--thumbnail-card-shadow);

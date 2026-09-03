@@ -24,6 +24,17 @@ import {
   THUMBNAIL_STACK_SCROLLPORT_CLASS,
   thumbnailStackShiftPx,
   thumbnailCollapsedPeekPx,
+  thumbnailCollapsedFrameHeight,
+  thumbnailStackGravityFromNormalizedY,
+  thumbnailStackGravityFromHarness,
+  thumbnailStackGravityFromWorkArea,
+  thumbnailStackAnchorFromGravity,
+  thumbnailStackHarnessPileTop,
+  convertHarnessStackOffsetAnchor,
+  applyThumbnailStackGravity,
+  THUMBNAIL_STACK_GRAVITY_VAR,
+  THUMBNAIL_STACK_ANCHOR_TOP_GRAVITY,
+  THUMBNAIL_STACK_ANCHOR_BOTTOM_GRAVITY,
   captureThumbnailCardTransforms,
   thumbnailStackFanCollapseMs,
   thumbnailStackSkew,
@@ -115,6 +126,11 @@ describe("thumbnail stack layout", () => {
     expect(compactCard?.[1]).toMatch(/translate:\s*none\s*!important/);
     expect(compactCard?.[1]).toMatch(/rotateZ\(var\(--thumbnail-stack-skew-rot/);
     expect(compactCard?.[1]).toMatch(/--thumbnail-stack-skew-x/);
+    expect(thumbnailStyles).toMatch(/--thumbnail-stack-gravity/);
+    expect(thumbnailStyles).toMatch(/--thumbnail-stack-expand-sign:\s*-1/);
+    expect(thumbnailStyles).toMatch(
+      /var\(--thumbnail-stack-pile-depth, 0\) \* -13px\s*\n\s*\* var\(--thumbnail-stack-gravity, 1\)/,
+    );
     expect(compactCard?.[1]).toMatch(/--thumbnail-stack-skew-y/);
     expect(compactCard?.[1]).toMatch(/--thumbnail-stack-hover-transform/);
     expect(compactCard?.[1]).toMatch(/rotateZ\(var\(--thumbnail-stack-fan-tilt/);
@@ -233,6 +249,85 @@ describe("thumbnail stack layout", () => {
     );
     expect(thumbnailStackFanCollapseMs(12)).toBeCloseTo(
       200 + thumbnailStackPoseDepth(11) * 16,
+    );
+  });
+
+  it("tucks structured peek at mid-screen and inverts it at the top", () => {
+    expect(thumbnailStackGravityFromNormalizedY(1)).toBe(1);
+    expect(thumbnailStackGravityFromNormalizedY(0.5)).toBe(0);
+    expect(thumbnailStackGravityFromNormalizedY(0)).toBe(-1);
+    expect(thumbnailCollapsedFrameHeight(1)).toBe(240);
+    expect(thumbnailCollapsedFrameHeight(4)).toBe(
+      THUMBNAIL_STACK_PADDING_PX
+      + THUMBNAIL_STACK_CONTROL_GUTTER_PX
+      + THUMBNAIL_CARD_HEIGHT_PX
+      + Math.max(0, thumbnailCollapsedPeekPx(4, true) - THUMBNAIL_STACK_PADDING_PX),
+    );
+
+    const viewportHeight = 800;
+    const contentHeight = 240;
+    expect(thumbnailStackGravityFromHarness({
+      offsetY: 0,
+      anchor: "bottom",
+      viewportHeight,
+      contentHeight,
+    })).toBeCloseTo(1);
+    expect(thumbnailStackGravityFromHarness({
+      offsetY: contentHeight - viewportHeight,
+      anchor: "bottom",
+      viewportHeight,
+      contentHeight,
+    })).toBeCloseTo(-1);
+    expect(thumbnailStackHarnessPileTop({
+      offsetY: contentHeight - viewportHeight,
+      anchor: "bottom",
+      viewportHeight,
+      contentHeight,
+    })).toBeCloseTo(0);
+
+    const bottomOffset = { x: 12, y: contentHeight - viewportHeight };
+    const topOffset = convertHarnessStackOffsetAnchor(
+      bottomOffset,
+      "bottom",
+      "top",
+      viewportHeight,
+      contentHeight,
+    );
+    expect(topOffset).toEqual({ x: 12, y: 0 });
+    expect(convertHarnessStackOffsetAnchor(
+      topOffset,
+      "top",
+      "bottom",
+      viewportHeight,
+      contentHeight,
+    )).toEqual(bottomOffset);
+
+    expect(thumbnailStackAnchorFromGravity(-0.5, "bottom")).toBe("top");
+    expect(thumbnailStackAnchorFromGravity(-0.1, "bottom")).toBe("bottom");
+    expect(thumbnailStackAnchorFromGravity(0.5, "top")).toBe("bottom");
+    expect(thumbnailStackAnchorFromGravity(0.1, "top")).toBe("top");
+    expect(THUMBNAIL_STACK_ANCHOR_TOP_GRAVITY).toBeLessThan(0);
+    expect(THUMBNAIL_STACK_ANCHOR_BOTTOM_GRAVITY).toBeGreaterThan(0);
+
+    expect(thumbnailStackGravityFromWorkArea({
+      pileBottom: 1_040,
+      workTop: 0,
+      workHeight: 1_040,
+      contentHeight: 240,
+    })).toBeCloseTo(1);
+    expect(thumbnailStackGravityFromWorkArea({
+      pileBottom: 240,
+      workTop: 0,
+      workHeight: 1_040,
+      contentHeight: 240,
+    })).toBeCloseTo(-1);
+
+    const stack = document.createElement("main");
+    applyThumbnailStackGravity(stack, -0.42);
+    expect(stack.style.getPropertyValue(THUMBNAIL_STACK_GRAVITY_VAR)).toBe("-0.42");
+    expect(thumbnailStyles).toMatch(/--thumbnail-stack-skew-y/);
+    expect(thumbnailStyles).not.toMatch(
+      /var\(--thumbnail-stack-pile-depth, 0\) \* -13px\s*\n\s*\+ var\(--thumbnail-stack-skew-y/,
     );
   });
 
@@ -478,7 +573,7 @@ describe("thumbnail stack layout", () => {
     expect(envelope(6)).toBeLessThan(envelope(2));
     expect(Math.abs(thumbnailStackPeekJitterPx(6))).toBeLessThanOrEqual(envelope(6) + 1e-12);
     expect(thumbnailStyles).toMatch(
-      /var\(--thumbnail-stack-pile-depth, 0\) \* -13px\s*\+\s*var\(--thumbnail-stack-peek-jitter, 0px\)\s*\+\s*var\(--thumbnail-stack-skew-y, 0px\)/,
+      /var\(--thumbnail-stack-pile-depth, 0\) \* -13px\s*\n\s*\* var\(--thumbnail-stack-gravity, 1\)\s*\+\s*var\(--thumbnail-stack-peek-jitter, 0px\)\s*\+\s*var\(--thumbnail-stack-skew-y, 0px\)/,
     );
   });
 
@@ -504,6 +599,7 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailStackNewestScrollTop(8, 400)).toBe(
       thumbnailStackContentHeight(8) - 400,
     );
+    expect(thumbnailStackNewestScrollTop(8, 400, true)).toBe(0);
   });
 
   it("fills the viewport when the expanded list is taller than the window", () => {
@@ -529,6 +625,10 @@ describe("thumbnail stack layout", () => {
 
     expect(stack.classList.contains(THUMBNAIL_STACK_SCROLLPORT_CLASS)).toBe(true);
     expect(stack.scrollTop).toBe(thumbnailStackNewestScrollTop(8, 400));
+
+    scrollThumbnailStackToNewest(stack, { viewportHeight: 400, fromTop: true });
+    expect(stack.classList.contains(THUMBNAIL_STACK_SCROLLPORT_CLASS)).toBe(true);
+    expect(stack.scrollTop).toBe(0);
   });
 
   it("retries newest-scroll after the window grows", () => {

@@ -307,6 +307,142 @@ export function thumbnailCollapsedPeekPx(
     : THUMBNAIL_STACK_REST_SKEW_PEEK_PX);
 }
 
+/**
+ * Collapsed native/harness frame height matching `thumbnail_stack_height`
+ * in Rust: front card + gutters + hover peek that sticks out of padding.
+ */
+export function thumbnailCollapsedFrameHeight(cardCount: number): number {
+  const peek = thumbnailCollapsedPeekPx(Math.max(cardCount, 1), true);
+  const extraAbovePadding = Math.max(0, peek - THUMBNAIL_STACK_PADDING_PX);
+  return (
+    THUMBNAIL_STACK_PADDING_PX
+    + THUMBNAIL_STACK_CONTROL_GUTTER_PX
+    + THUMBNAIL_CARD_HEIGHT_PX
+    + extraAbovePadding
+  );
+}
+
+/**
+ * Signed pile gravity. +1 = bottom of the screen (peek up), 0 = middle
+ * (structured peek tucked; per-capture skew remains), -1 = top (peek down).
+ */
+export type ThumbnailStackAnchor = "top" | "bottom";
+
+export const THUMBNAIL_STACK_GRAVITY_VAR = "--thumbnail-stack-gravity";
+
+/** Switch to a top pile once gravity is clearly in the upper band. */
+export const THUMBNAIL_STACK_ANCHOR_TOP_GRAVITY = -0.2;
+
+/** Switch back to a bottom pile once gravity is clearly in the lower band. */
+export const THUMBNAIL_STACK_ANCHOR_BOTTOM_GRAVITY = 0.2;
+
+function clampGravity(value: number): number {
+  if (!Number.isFinite(value)) return 1;
+  return Math.min(1, Math.max(-1, value));
+}
+
+/**
+ * Map a 0 (top) … 1 (bottom) travel through the work area onto signed gravity.
+ */
+export function thumbnailStackGravityFromNormalizedY(yFromTop: number): number {
+  if (!Number.isFinite(yFromTop)) return 1;
+  return clampGravity(2 * yFromTop - 1);
+}
+
+export type ThumbnailStackHarnessGravity = {
+  offsetY: number;
+  anchor: ThumbnailStackAnchor;
+  viewportHeight: number;
+  contentHeight: number;
+};
+
+/** Visible pile top in CSS pixels for a harness `#root` translation. */
+export function thumbnailStackHarnessPileTop({
+  offsetY,
+  anchor,
+  viewportHeight,
+  contentHeight,
+}: ThumbnailStackHarnessGravity): number {
+  const content = Math.max(0, contentHeight);
+  if (anchor === "top") return offsetY;
+  return viewportHeight + offsetY - content;
+}
+
+export function thumbnailStackGravityFromHarness(
+  options: ThumbnailStackHarnessGravity,
+): number {
+  const travel = Math.max(1, options.viewportHeight - Math.max(0, options.contentHeight));
+  return thumbnailStackGravityFromNormalizedY(
+    thumbnailStackHarnessPileTop(options) / travel,
+  );
+}
+
+export function thumbnailStackAnchorFromGravity(
+  gravity: number,
+  current: ThumbnailStackAnchor = "bottom",
+): ThumbnailStackAnchor {
+  if (current === "bottom" && gravity <= THUMBNAIL_STACK_ANCHOR_TOP_GRAVITY) {
+    return "top";
+  }
+  if (current === "top" && gravity >= THUMBNAIL_STACK_ANCHOR_BOTTOM_GRAVITY) {
+    return "bottom";
+  }
+  return current;
+}
+
+/** Convert a harness `#root` translation between top and bottom anchoring. */
+export function convertHarnessStackOffsetAnchor(
+  offset: { x: number; y: number },
+  from: ThumbnailStackAnchor,
+  to: ThumbnailStackAnchor,
+  viewportHeight: number,
+  contentHeight: number,
+): { x: number; y: number } {
+  if (from === to) return offset;
+  const pileTop = thumbnailStackHarnessPileTop({
+    offsetY: offset.y,
+    anchor: from,
+    viewportHeight,
+    contentHeight,
+  });
+  if (to === "top") return { x: offset.x, y: pileTop };
+  return { x: offset.x, y: pileTop + contentHeight - viewportHeight };
+}
+
+export function applyThumbnailStackGravity(
+  stack: HTMLElement | null,
+  gravity: number,
+) {
+  if (!stack) return;
+  stack.style.setProperty(
+    THUMBNAIL_STACK_GRAVITY_VAR,
+    String(Number(clampGravity(gravity).toFixed(4))),
+  );
+}
+
+export type ThumbnailStackWorkGravity = {
+  pileBottom: number;
+  workTop: number;
+  workHeight: number;
+  contentHeight: number;
+  bottomGap?: number;
+};
+
+/** Gravity from a native window's visible pile bottom in the monitor work area. */
+export function thumbnailStackGravityFromWorkArea({
+  pileBottom,
+  workTop,
+  workHeight,
+  contentHeight,
+  bottomGap = 0,
+}: ThumbnailStackWorkGravity): number {
+  const workBottom = workTop + workHeight - Math.max(0, bottomGap);
+  const travel = workBottom - workTop - Math.max(0, contentHeight);
+  if (travel <= 1) return 1;
+  const fromTop = (workBottom - pileBottom) / travel;
+  return thumbnailStackGravityFromNormalizedY(1 - fromTop);
+}
+
 /** Duration for one-slot overflow-cue scrolls (ease-out). */
 export const THUMBNAIL_STACK_SCROLL_DURATION_MS = 380;
 
@@ -523,17 +659,21 @@ export function thumbnailStackNeedsScrollport(
   return thumbnailStackContentHeight(cardCount) - Math.max(0, viewportHeight) > 1;
 }
 
-/** Scroll offset that puts the newest (bottom) preview in view. */
+/** Scroll offset that puts the newest preview in view. */
 export function thumbnailStackNewestScrollTop(
   cardCount: number,
   clientHeight: number,
+  fromTop = false,
 ): number {
+  if (fromTop) return 0;
   return Math.max(0, thumbnailStackContentHeight(cardCount) - Math.max(0, clientHeight));
 }
 
 export type ScrollThumbnailStackToNewestOptions = {
   /** Visible window height. Defaults to the stack's containing block. */
   viewportHeight?: number;
+  /** Newest capture is at the start of the list (top-anchored expand). */
+  fromTop?: boolean;
 };
 
 /**
@@ -557,7 +697,11 @@ export function scrollThumbnailStackToNewest(
   const scrollPortHeight = measured > 0 && measured < contentHeight - 1
     ? measured
     : (thumbnailStackNeedsScrollport(cardCount, viewportHeight) ? viewportHeight : measured);
-  stack.scrollTop = thumbnailStackNewestScrollTop(cardCount, scrollPortHeight);
+  stack.scrollTop = thumbnailStackNewestScrollTop(
+    cardCount,
+    scrollPortHeight,
+    options.fromTop,
+  );
 }
 
 export type ScheduleScrollThumbnailStackToNewestOptions = {
@@ -574,6 +718,8 @@ export type ScheduleScrollThumbnailStackToNewestOptions = {
   retryMs?: number;
   /** Visible window height forwarded to each pin attempt. */
   viewportHeight?: number;
+  /** Newest capture is at the start of the list (top-anchored expand). */
+  fromTop?: boolean;
 };
 
 /**
@@ -594,7 +740,10 @@ export function scheduleScrollThumbnailStackToNewest(
   const viewportHeight = options.viewportHeight;
 
   const run = () => {
-    scrollThumbnailStackToNewest(stack, { viewportHeight });
+    scrollThumbnailStackToNewest(stack, {
+      viewportHeight,
+      fromTop: options.fromTop,
+    });
     onScrolled?.();
   };
 
