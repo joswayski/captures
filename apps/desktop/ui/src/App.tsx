@@ -5881,7 +5881,10 @@ export function Thumbnail() {
       }
     };
 
-    const applyNativeHover = (position: ThumbnailPointerPosition) => {
+    const applyNativeHover = (
+      position: ThumbnailPointerPosition,
+      options: { updateHitTest?: boolean } = {},
+    ) => {
       maybeUnlockCardHover(position);
       const ignore = shouldIgnoreThumbnailCursorEvents(position);
       const kind = applyThumbnailNativeHover(position);
@@ -5893,7 +5896,13 @@ export function Thumbnail() {
       } else {
         document.documentElement.classList.add("thumbnail-native-tracking");
       }
-      setIgnoreCursorEvents(ignore);
+      // DOM hover can fire over the hole in the always-on-top window. Toggling
+      // click-through from those events leaves Wayland (null pointer polls)
+      // unable to restore hits: the window ignores the cursor, so no later
+      // pointermove can undo it. Native samples still own hit testing.
+      if (options.updateHitTest !== false) {
+        setIgnoreCursorEvents(ignore);
+      }
       setThumbnailCursor(kind);
     };
 
@@ -6065,17 +6074,23 @@ export function Thumbnail() {
       // the harness and Windows/Linux WebViews, where glow :hover already
       // fires but CSS cursor often stays the arrow until mousedown.
       if (event.pointerType !== "touch") {
-        applyNativeHover({
-          x: event.clientX,
-          y: event.clientY,
-          inside: true,
-        });
+        applyNativeHover(
+          {
+            x: event.clientX,
+            y: event.clientY,
+            inside: true,
+          },
+          { updateHitTest: false },
+        );
       }
     };
 
     const onPointerLeaveWindow = (event: PointerEvent) => {
       if (event.relatedTarget) return;
-      applyNativeHover({ x: event.clientX, y: event.clientY, inside: false });
+      applyNativeHover(
+        { x: event.clientX, y: event.clientY, inside: false },
+        { updateHitTest: false },
+      );
     };
 
     const onPointerActivity = (event: Event) => {

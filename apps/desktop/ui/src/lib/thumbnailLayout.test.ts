@@ -167,7 +167,10 @@ describe("thumbnail stack layout", () => {
       /html:has\(\s*:is\(\s*\.thumbnail-stack-control/,
     );
     expect(thumbnailStyles).toMatch(
-      /\.thumbnail-stack-control:hover,\s*\n\.thumbnail-stack-control:hover \*/,
+      /\.thumbnail-card:hover :is\(button, \.icon-button, \.thumbnail-editor-control\):not\(:disabled\)/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-control:hover:not\(:disabled\),\s*\n\.thumbnail-stack-control:hover:not\(:disabled\) \*/,
     );
   });
 

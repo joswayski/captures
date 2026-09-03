@@ -990,7 +990,7 @@ html:has(
     .icon-button,
     .thumbnail-main-actions button,
     .thumbnail-editor-control
-  ):hover
+  ):hover:not(:disabled)
 ),
 html:has(
   :is(
@@ -1000,7 +1000,7 @@ html:has(
     .icon-button,
     .thumbnail-main-actions button,
     .thumbnail-editor-control
-  )[data-native-pointer-hover="true"]
+  )[data-native-pointer-hover="true"]:not(:disabled)
 ) {
   cursor: pointer;
 }
@@ -1017,11 +1017,11 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   cursor: grab;
 }
 
-.thumbnail-card:hover :is(button, .icon-button, .thumbnail-editor-control),
-.thumbnail-stack-control:hover,
-.thumbnail-stack-control:hover *,
-.thumbnail-overflow-cue:hover,
-.thumbnail-collapsed-hit-target:hover {
+.thumbnail-card:hover :is(button, .icon-button, .thumbnail-editor-control):not(:disabled),
+.thumbnail-stack-control:hover:not(:disabled),
+.thumbnail-stack-control:hover:not(:disabled) *,
+.thumbnail-overflow-cue:hover:not(:disabled),
+.thumbnail-collapsed-hit-target:hover:not(:disabled) {
   cursor: pointer;
 }
 

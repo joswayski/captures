@@ -295,6 +295,26 @@ describe("Thumbnail", () => {
     expect(vi.mocked(invoke)).toHaveBeenCalledWith("set_thumbnail_cursor", { kind: "pointer" });
   });
 
+  it("does not click-through the window from DOM hover over empty preview space", async () => {
+    render(<Thumbnail />);
+    const stack = (await screen.findByRole("article")).closest(".thumbnail-stack")!;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => stack),
+    });
+    vi.mocked(invoke).mockClear();
+
+    fireEvent.pointerMove(stack, { clientX: 8, clientY: 8, pointerType: "mouse" });
+    window.dispatchEvent(new PointerEvent("pointerleave", { bubbles: true, pointerType: "mouse" }));
+
+    expect(
+      vi.mocked(invoke).mock.calls.filter(
+        ([command, payload]) => command === "set_thumbnail_ignore_cursor_events"
+          && (payload as { ignore?: boolean } | undefined)?.ignore === true,
+      ),
+    ).toHaveLength(0);
+  });
+
   it("resumes WebView polling after a native show without recursively refreshing the window", async () => {
     render(<Thumbnail />);
     await screen.findByRole("article");
