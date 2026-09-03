@@ -211,6 +211,7 @@ const SETTINGS: AppSettings = {
   onboarding_completed: true,
   screenshot_countdown_seconds: 3,
   freeze_screen: previewFreezeScreen(),
+  show_cursor_in_screenshots: true,
   screenshot_format: previewScreenshotFormat(),
 };
 
@@ -306,25 +307,15 @@ const SECOND_ARTIFACT: CaptureArtifact = {
   clipboard_copy_status: "skipped",
 };
 
-function previewArtifactCount(): number {
-  const raw = Number(query().get("count"));
-  if (!Number.isFinite(raw) || raw < 1) return 2;
-  return Math.min(12, Math.floor(raw));
-}
-
-function previewArtifacts(): CaptureArtifact[] {
-  const count = previewArtifactCount();
-  return Array.from({ length: count }, (_, index) => {
-    if (index === 0) return ARTIFACT;
-    if (index === 1) return SECOND_ARTIFACT;
-    const even = index % 2 === 0;
-    return {
-      ...(even ? ARTIFACT : SECOND_ARTIFACT),
-      id: `artifact-${index + 1}`,
-      path: even ? `/Users/alex/Pictures/Captures/Capture ${index + 1}.png` : null,
-      created_at: `2026-08-27T09:${String(41 + index).padStart(2, "0")}:12Z`,
-    };
-  });
+function mockArtifacts(): CaptureArtifact[] {
+  const parsed = Number.parseInt(query().get("count") ?? "", 10);
+  const count = Number.isFinite(parsed) ? Math.min(24, Math.max(1, parsed)) : 2;
+  const samples = [ARTIFACT, SECOND_ARTIFACT];
+  return Array.from({ length: count }, (_, index) => ({
+    ...samples[index % samples.length],
+    id: `artifact-${index + 1}`,
+    created_at: new Date(Date.parse("2026-08-27T09:41:12Z") + index * 60_000).toISOString(),
+  }));
 }
 
 /**
@@ -644,7 +635,7 @@ const RESPONSES: Record<string, unknown> = {
   get_update_status: updateStatus(),
   get_capture_history: HISTORY,
   get_recording_drafts: DRAFTS,
-  get_artifacts: previewArtifacts(),
+  get_artifacts: mockArtifacts(),
   get_artifact: ARTIFACT,
   get_recording_artifact: RECORDING,
   get_clipboard_state: CLIPBOARD,
@@ -747,12 +738,31 @@ function applyPreviewStage(): void {
   style.setProperty("background-position", "center");
 }
 
+let thumbnailPointer = { x: 0, y: 0, inside: false };
+let thumbnailPointerTracking = false;
+
+function trackThumbnailPointerForHarness(): void {
+  if (thumbnailPointerTracking) return;
+  thumbnailPointerTracking = true;
+  const update = (event: PointerEvent) => {
+    thumbnailPointer = { x: event.clientX, y: event.clientY, inside: true };
+  };
+  window.addEventListener("pointermove", update, true);
+  window.addEventListener("pointerdown", update, true);
+  document.documentElement.addEventListener("pointerleave", (event) => {
+    if (event.relatedTarget) return;
+    thumbnailPointer = { ...thumbnailPointer, inside: false };
+  });
+}
+
 export function installPreviewBackend(): void {
   applyPreviewStage();
+  trackThumbnailPointerForHarness();
   selection = createSelection();
   mockIPC(async (command, payload) => {
     if (command === "get_recording_selection") return selection;
     if (command === "select_capture_display") return selectCaptureDisplay(payload);
+    if (command === "get_thumbnail_pointer_position") return thumbnailPointer;
     if (command === "estimate_screenshot_export") {
       return mockScreenshotExportBytes(payload);
     }

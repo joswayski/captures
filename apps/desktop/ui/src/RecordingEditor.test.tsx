@@ -86,6 +86,7 @@ const settings: AppSettings = {
   onboarding_completed: true,
   screenshot_countdown_seconds: 0,
   freeze_screen: true,
+  show_cursor_in_screenshots: true,
   screenshot_format: "png",
   recording: {
     video_shortcut: "Ctrl+Shift+5",
