@@ -1741,6 +1741,87 @@ describe("ScreenshotEditor", () => {
     fireEvent.click(screen.getByRole("button", { name: "Restore" }));
     expect(screen.getByRole("button", { name: "Restore" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByLabelText("Brush size")).toBeInTheDocument();
+    expect(screen.queryByRole("spinbutton", { name: "Shift rotation snap" }))
+      .not.toBeInTheDocument();
+    expect(screen.queryByText("New annotation color")).not.toBeInTheDocument();
+  });
+
+  it("does not select a layer or show transform chrome for eraser, crop, or pen", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Canvas width");
+
+    const layers = screen.getByRole("region", { name: "Layers" });
+    const originalLayer = within(layers).getByRole("button", {
+      name: /Original screenshotLocked background/,
+    });
+    fireEvent.click(originalLayer);
+    expect(originalLayer).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("spinbutton", { name: "Shift rotation snap" })).toBeInTheDocument();
+
+    const canvas = document.querySelector("canvas.screenshot-canvas");
+    expect(canvas).toBeInstanceOf(HTMLCanvasElement);
+    setCanvasBounds(canvas as HTMLCanvasElement);
+
+    fireEvent.click(screen.getByRole("button", { name: "Eraser (B)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Erase" }));
+    expect(originalLayer).toHaveAttribute("aria-pressed", "false");
+    expect(screen.queryByRole("spinbutton", { name: "Shift rotation snap" }))
+      .not.toBeInTheDocument();
+    expect(screen.queryByText("New annotation color")).not.toBeInTheDocument();
+
+    fireEvent.pointerDown(canvas as HTMLCanvasElement, {
+      button: 0,
+      clientX: 400,
+      clientY: 300,
+      pointerId: 21,
+    });
+    fireEvent.pointerUp(canvas as HTMLCanvasElement, {
+      button: 0,
+      clientX: 400,
+      clientY: 300,
+      pointerId: 21,
+    });
+    expect(originalLayer).toHaveAttribute("aria-pressed", "false");
+    expect(screen.queryByRole("spinbutton", { name: "Shift rotation snap" }))
+      .not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Crop (C)" }));
+    fireEvent.pointerDown(canvas as HTMLCanvasElement, {
+      button: 0,
+      clientX: 200,
+      clientY: 180,
+      pointerId: 22,
+    });
+    fireEvent.pointerUp(canvas as HTMLCanvasElement, {
+      button: 0,
+      clientX: 360,
+      clientY: 300,
+      pointerId: 22,
+    });
+    expect(originalLayer).toHaveAttribute("aria-pressed", "false");
+    expect(screen.queryByRole("spinbutton", { name: "Shift rotation snap" }))
+      .not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Freehand (P)" }));
+    fireEvent.pointerDown(canvas as HTMLCanvasElement, {
+      button: 0,
+      clientX: 80,
+      clientY: 80,
+      pointerId: 23,
+    });
+    fireEvent.pointerMove(canvas as HTMLCanvasElement, {
+      clientX: 140,
+      clientY: 120,
+      pointerId: 23,
+    });
+    fireEvent.pointerUp(canvas as HTMLCanvasElement, {
+      button: 0,
+      clientX: 140,
+      clientY: 120,
+      pointerId: 23,
+    });
+    expect(screen.queryByRole("spinbutton", { name: "Shift rotation snap" }))
+      .not.toBeInTheDocument();
   });
 
   it("shows a size-matched circular brush cursor for erase mode", async () => {
@@ -1907,6 +1988,23 @@ describe("ScreenshotEditor", () => {
         pointerId: 7,
       });
 
+      const surface = screen
+        .getByLabelText("Screenshot editing canvas")
+        .querySelector(".screenshot-canvas-surface");
+      expect(surface).toHaveClass("transparent");
+      expect(
+        within(screen.getByRole("group", { name: "Canvas" })).getByRole("button", {
+          name: /Background color/,
+        }),
+      ).toHaveAccessibleName("Background color: transparent");
+      expect(screen.queryByRole("spinbutton", { name: "Shift rotation snap" }))
+        .not.toBeInTheDocument();
+      expect(
+        within(screen.getByRole("region", { name: "Layers" })).getByRole("button", {
+          name: /Original screenshotLocked background/,
+        }),
+      ).toHaveAttribute("aria-pressed", "false");
+
       const frames: FrameRequestCallback[] = [];
       vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
         frames.push(callback);
@@ -1928,6 +2026,13 @@ describe("ScreenshotEditor", () => {
       await waitFor(() => {
         expect(screen.getByRole("button", { name: "Undo" })).toBeEnabled();
       });
+
+      expect(surface).toHaveClass("transparent");
+      expect(
+        within(screen.getByRole("group", { name: "Canvas" })).getByRole("button", {
+          name: /Background color/,
+        }),
+      ).toHaveAccessibleName("Background color: transparent");
 
       // The committed data URL is backed by the working canvas immediately;
       // no second Image decode can clear the editor while it is still loading.
