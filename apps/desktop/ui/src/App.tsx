@@ -7926,6 +7926,21 @@ function PreferencesSections({
           </span>
         </label>
 
+        <label className="check-row switch-row">
+          <input
+            type="checkbox"
+            checked={settings.show_cursor_in_screenshots}
+            onChange={(event) => update("show_cursor_in_screenshots", event.target.checked)}
+          />
+          <span>
+            Show cursor in screenshots
+            <small>
+              Includes the pointer in still captures. Freeze screen only holds the desktop still; it
+              does not add the cursor by itself.
+            </small>
+          </span>
+        </label>
+
         <SettingRow
           title="Screenshot format"
           description="Used when you save or export. Capture History keeps a lossless PNG until then."

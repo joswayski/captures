@@ -17,7 +17,7 @@ use std::{
 
 use tauri::CursorIcon;
 
-use captures_capture::{CaptureError, CaptureMode, LogicalRect};
+use captures_capture::{CaptureError, CaptureMode, LogicalRect, PhysicalRect};
 use chrono::{DateTime, Utc};
 use image::RgbaImage;
 use mouse_position::mouse_position::Mouse;
@@ -577,7 +577,14 @@ async fn prepare_capture(
             return Ok(None);
         }
         ensure_capture_session_available()?;
-        let frame = state.backend.capture_display(&display.id)?;
+        let pointer = pointer_position();
+        let mut frame = state.backend.capture_display(&display.id)?;
+        apply_screenshot_cursor(
+            &mut frame.image,
+            &frame.descriptor,
+            pointer,
+            state.settings().show_cursor_in_screenshots,
+        );
         set_capture_huds_protected(&app, false);
         let _ = finish_capture(
             &app,
@@ -594,11 +601,12 @@ async fn prepare_capture(
     let freeze_screen = state.settings().freeze_screen;
     let id = Uuid::new_v4();
     let session = if freeze_screen {
-        let (frame, snapshot_png, mut windows) = std::thread::scope(|scope| {
+        let (frame, snapshot_png, mut windows, pointer) = std::thread::scope(|scope| {
             // Window discovery is independent of the frozen display pixels. Run it
             // beside capture + encoding so window mode pays the slower cost, not both.
             let windows = (mode == CaptureMode::Window).then(|| scope.spawn(|| state.windows()));
-            let frame = state.backend.capture_display_at_point(pointer_position())?;
+            let pointer = pointer_position();
+            let frame = state.backend.capture_display_at_point(pointer)?;
             // The background frame is frozen now, so this capture no longer needs HUD
             // exclusion. Release it before encoding can emit a new preview and allow a
             // rapid follow-up capture to start with its own protection generation.
@@ -617,7 +625,7 @@ async fn prepare_capture(
                 .into_iter()
                 .filter(|window| window_is_capturable(window, &frame.descriptor))
                 .collect::<Vec<_>>();
-            Ok::<_, AppError>((frame, snapshot_png, windows))
+            Ok::<_, AppError>((frame, snapshot_png, windows, pointer))
         })?;
         if mode == CaptureMode::Window {
             refine_window_chrome_from_snapshot(
@@ -636,6 +644,7 @@ async fn prepare_capture(
             image: Some(frame.image),
             snapshot_png,
             windows,
+            cursor: pointer,
         }
     } else {
         // Live overlay: skip the freeze-frame so hover states can keep changing
@@ -660,6 +669,7 @@ async fn prepare_capture(
             image: None,
             snapshot_png: Vec::new(),
             windows,
+            cursor: None,
         }
     };
     let active = capture_session_to_active(&session);
@@ -745,8 +755,18 @@ async fn commit_region(
             .image
             .as_ref()
             .ok_or(AppError::SessionUnavailable)
-            .and_then(|image| crop_region_from_display(&session.display, image, rect))
-        {
+            .and_then(|source| {
+                let mut image = crop_region_from_display(&session.display, source, rect)?;
+                apply_screenshot_cursor_to_region(
+                    &mut image,
+                    &session.display,
+                    source,
+                    rect,
+                    session.cursor,
+                    state.settings().show_cursor_in_screenshots,
+                );
+                Ok(image)
+            }) {
             Ok(image) => image,
             Err(error) => {
                 restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
@@ -851,8 +871,30 @@ async fn commit_window(
         // covers the target, use the native surface so that occluder is not saved.
         match resolve_window_capture(
             display_crop_is_safe,
-            || crop_window_from_session(&session, &window_id),
-            || state.backend.capture_window(&window_id),
+            || {
+                let source = session.image.as_ref()?;
+                let mut image = crop_window_from_session(&session, &window_id)?;
+                apply_screenshot_cursor_to_window_crop(
+                    &mut image,
+                    &session.display,
+                    source,
+                    &selected_window,
+                    session.cursor,
+                    state.settings().show_cursor_in_screenshots,
+                );
+                Some(image)
+            },
+            || {
+                let mut image = state.backend.capture_window(&window_id)?;
+                apply_screenshot_cursor_on_window(
+                    &mut image,
+                    &selected_window,
+                    session.display.scale_factor,
+                    session.cursor,
+                    state.settings().show_cursor_in_screenshots,
+                );
+                Ok(image)
+            },
         ) {
             Ok(image) => image,
             Err(error) => {
@@ -2907,6 +2949,120 @@ pub(crate) fn display_under_pointer(
         .or_else(|| displays.iter().find(|display| display.is_primary).cloned())
         .or_else(|| displays.first().cloned())
         .ok_or(CaptureError::TargetUnavailable.into())
+}
+
+fn apply_screenshot_cursor(
+    image: &mut RgbaImage,
+    display: &captures_capture::DisplayDescriptor,
+    pointer: Option<(i32, i32)>,
+    enabled: bool,
+) {
+    apply_screenshot_cursor_in_crop(
+        image,
+        display,
+        0,
+        0,
+        image.width(),
+        image.height(),
+        pointer,
+        enabled,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_screenshot_cursor_in_crop(
+    image: &mut RgbaImage,
+    display: &captures_capture::DisplayDescriptor,
+    crop_x: u32,
+    crop_y: u32,
+    source_width: u32,
+    source_height: u32,
+    pointer: Option<(i32, i32)>,
+    enabled: bool,
+) {
+    if !enabled {
+        return;
+    }
+    let Some(pointer) = pointer else {
+        return;
+    };
+    captures_capture::overlay_pointer_cursor_in_crop(
+        image,
+        display,
+        crop_x,
+        crop_y,
+        source_width,
+        source_height,
+        pointer,
+        captures_capture::screenshot_pointer_scale(display.scale_factor),
+    );
+}
+
+fn apply_screenshot_cursor_to_region(
+    cropped: &mut RgbaImage,
+    display: &captures_capture::DisplayDescriptor,
+    source: &RgbaImage,
+    rect: LogicalRect,
+    pointer: Option<(i32, i32)>,
+    enabled: bool,
+) {
+    let Ok(physical) = region_physical_rect(display, source, rect) else {
+        return;
+    };
+    apply_screenshot_cursor_in_crop(
+        cropped,
+        display,
+        physical.x,
+        physical.y,
+        source.width(),
+        source.height(),
+        pointer,
+        enabled,
+    );
+}
+
+fn apply_screenshot_cursor_to_window_crop(
+    cropped: &mut RgbaImage,
+    display: &captures_capture::DisplayDescriptor,
+    source: &RgbaImage,
+    window: &captures_capture::WindowDescriptor,
+    pointer: Option<(i32, i32)>,
+    enabled: bool,
+) {
+    let Some(physical) = window_physical_rect(display, source, window) else {
+        return;
+    };
+    apply_screenshot_cursor_in_crop(
+        cropped,
+        display,
+        physical.x,
+        physical.y,
+        source.width(),
+        source.height(),
+        pointer,
+        enabled,
+    );
+}
+
+fn apply_screenshot_cursor_on_window(
+    image: &mut RgbaImage,
+    window: &captures_capture::WindowDescriptor,
+    display_scale_factor: f64,
+    pointer: Option<(i32, i32)>,
+    enabled: bool,
+) {
+    if !enabled {
+        return;
+    }
+    let Some(pointer) = pointer else {
+        return;
+    };
+    captures_capture::overlay_pointer_cursor_on_window(
+        image,
+        window,
+        pointer,
+        captures_capture::screenshot_pointer_scale(display_scale_factor),
+    );
 }
 
 fn pointer_position() -> Option<(i32, i32)> {
@@ -5942,8 +6098,18 @@ fn crop_live_region(
     rect: LogicalRect,
 ) -> Result<RgbaImage, AppError> {
     ensure_capture_session_available()?;
+    let pointer = pointer_position();
     let frame = state.backend.capture_display(display_id)?;
-    crop_region_from_display(&frame.descriptor, &frame.image, rect)
+    let mut image = crop_region_from_display(&frame.descriptor, &frame.image, rect)?;
+    apply_screenshot_cursor_to_region(
+        &mut image,
+        &frame.descriptor,
+        &frame.image,
+        rect,
+        pointer,
+        state.settings().show_cursor_in_screenshots,
+    );
+    Ok(image)
 }
 
 fn crop_region_from_display(
@@ -5951,11 +6117,7 @@ fn crop_region_from_display(
     image: &RgbaImage,
     rect: LogicalRect,
 ) -> Result<RgbaImage, AppError> {
-    let scale = display.overlay_to_buffer_scale(image.width(), image.height());
-    let physical = rect.to_physical(scale, image.width(), image.height());
-    if physical.width == 0 || physical.height == 0 {
-        return Err(AppError::InvalidSelection);
-    }
+    let physical = region_physical_rect(display, image, rect)?;
     Ok(image::imageops::crop_imm(
         image,
         physical.x,
@@ -5964,6 +6126,19 @@ fn crop_region_from_display(
         physical.height,
     )
     .to_image())
+}
+
+fn region_physical_rect(
+    display: &captures_capture::DisplayDescriptor,
+    image: &RgbaImage,
+    rect: LogicalRect,
+) -> Result<PhysicalRect, AppError> {
+    let scale = display.overlay_to_buffer_scale(image.width(), image.height());
+    let physical = rect.to_physical(scale, image.width(), image.height());
+    if physical.width == 0 || physical.height == 0 {
+        return Err(AppError::InvalidSelection);
+    }
+    Ok(physical)
 }
 
 fn capture_live_window(
@@ -5988,15 +6163,46 @@ fn capture_live_window(
     resolve_window_capture(
         display_crop_is_safe,
         || {
+            let pointer = pointer_position();
             state
                 .backend
                 .capture_display(&current_window.display_id)
                 .ok()
                 .and_then(|frame| {
-                    crop_window_from_display(&frame.descriptor, &frame.image, &current_window)
+                    let mut image =
+                        crop_window_from_display(&frame.descriptor, &frame.image, &current_window)?;
+                    apply_screenshot_cursor_to_window_crop(
+                        &mut image,
+                        &frame.descriptor,
+                        &frame.image,
+                        &current_window,
+                        pointer,
+                        state.settings().show_cursor_in_screenshots,
+                    );
+                    Some(image)
                 })
         },
-        || state.backend.capture_window(&current_window.id),
+        || {
+            let pointer = pointer_position();
+            let mut image = state.backend.capture_window(&current_window.id)?;
+            apply_screenshot_cursor_on_window(
+                &mut image,
+                &current_window,
+                state
+                    .monitors()
+                    .ok()
+                    .and_then(|displays| {
+                        displays
+                            .into_iter()
+                            .find(|display| display.id == current_window.display_id)
+                    })
+                    .map(|display| display.scale_factor)
+                    .unwrap_or(1.0),
+                pointer,
+                state.settings().show_cursor_in_screenshots,
+            );
+            Ok(image)
+        },
     )
 }
 
@@ -6092,11 +6298,11 @@ fn crop_window_from_session(session: &CaptureSession, window_id: &str) -> Option
     crop_window_from_display(&session.display, image, window)
 }
 
-fn crop_window_from_display(
+fn window_physical_rect(
     display: &captures_capture::DisplayDescriptor,
     image: &RgbaImage,
     window: &captures_capture::WindowDescriptor,
-) -> Option<RgbaImage> {
+) -> Option<PhysicalRect> {
     let scale = capture_buffer_scale(display, image);
     let rect = LogicalRect {
         x: f64::from(window.x - display.x),
@@ -6106,8 +6312,20 @@ fn crop_window_from_display(
     };
     let physical = rect.to_physical(scale, image.width(), image.height());
     if physical.width == 0 || physical.height == 0 {
-        return None;
+        None
+    } else {
+        Some(physical)
     }
+}
+
+fn crop_window_from_display(
+    display: &captures_capture::DisplayDescriptor,
+    image: &RgbaImage,
+    window: &captures_capture::WindowDescriptor,
+) -> Option<RgbaImage> {
+    let physical = window_physical_rect(display, image, window)?;
+    #[cfg(target_os = "macos")]
+    let scale = capture_buffer_scale(display, image);
     let image = image::imageops::crop_imm(
         image,
         physical.x,

@@ -299,26 +299,26 @@ pub(crate) async fn prepare_capture_selector_inner(
     let prepared = (|| {
         crate::ensure_capture_session_available()?;
         let id = Uuid::new_v4().to_string();
-        let (display, snapshot_png, image, displays, windows) = if freeze_screen {
-            let (frame, snapshot_png, mut displays, mut windows) = std::thread::scope(|scope| {
-                // The selector always needs window targets, but their enumeration is
-                // independent of freezing and encoding the display background.
-                let windows = scope.spawn(|| state.windows());
-                let frame = state
-                    .backend
-                    .capture_display_at_point(crate::pointer_position())?;
-                let snapshot_png = storage::encode_png(&frame.image)?;
-                let displays = state.monitors()?;
-                let windows = match windows.join() {
-                    Ok(windows) => windows,
-                    Err(panic) => std::panic::resume_unwind(panic),
-                }
-                .unwrap_or_else(|error| {
-                    eprintln!("window targets are unavailable for this capture: {error}");
-                    Vec::new()
-                });
-                Ok::<_, AppError>((frame, snapshot_png, displays, windows))
-            })?;
+        let (display, snapshot_png, image, displays, windows, cursor) = if freeze_screen {
+            let (frame, snapshot_png, mut displays, mut windows, pointer) =
+                std::thread::scope(|scope| {
+                    // The selector always needs window targets, but their enumeration is
+                    // independent of freezing and encoding the display background.
+                    let windows = scope.spawn(|| state.windows());
+                    let pointer = crate::pointer_position();
+                    let frame = state.backend.capture_display_at_point(pointer)?;
+                    let snapshot_png = storage::encode_png(&frame.image)?;
+                    let displays = state.monitors()?;
+                    let windows = match windows.join() {
+                        Ok(windows) => windows,
+                        Err(panic) => std::panic::resume_unwind(panic),
+                    }
+                    .unwrap_or_else(|error| {
+                        eprintln!("window targets are unavailable for this capture: {error}");
+                        Vec::new()
+                    });
+                    Ok::<_, AppError>((frame, snapshot_png, displays, windows, pointer))
+                })?;
             if !displays
                 .iter()
                 .any(|candidate| candidate.id == frame.descriptor.id)
@@ -338,6 +338,7 @@ pub(crate) async fn prepare_capture_selector_inner(
                 Some(frame.image),
                 displays,
                 windows,
+                pointer,
             )
         } else {
             let display = crate::display_under_pointer(&state)?;
@@ -350,7 +351,7 @@ pub(crate) async fn prepare_capture_selector_inner(
                 Vec::new()
             });
             windows.retain(|window| crate::window_is_capturable(window, &display));
-            (display, Vec::new(), None, displays, windows)
+            (display, Vec::new(), None, displays, windows, None)
         };
         let summary = RecordingSelectionSession {
             id: id.clone(),
@@ -384,6 +385,7 @@ pub(crate) async fn prepare_capture_selector_inner(
             summary: summary.clone(),
             image,
             snapshot_png,
+            cursor,
         });
         Ok::<_, AppError>(summary)
     })();
@@ -452,7 +454,8 @@ async fn select_capture_display_inner(
         .cloned()
         .ok_or(AppError::InvalidSelection)?;
     let freeze_screen = current.frozen;
-    let (display, snapshot_png, image, windows) = if freeze_screen {
+    let (display, snapshot_png, image, windows, cursor) = if freeze_screen {
+        let pointer = crate::pointer_position();
         let frame = state.backend.capture_display(&requested_display.id)?;
         let snapshot_png = storage::encode_png(&frame.image)?;
         let mut windows = state
@@ -476,14 +479,20 @@ async fn select_capture_display_inner(
         {
             *display = frame.descriptor.clone();
         }
-        (frame.descriptor, snapshot_png, Some(frame.image), windows)
+        (
+            frame.descriptor,
+            snapshot_png,
+            Some(frame.image),
+            windows,
+            pointer,
+        )
     } else {
         let mut windows = state.windows().unwrap_or_else(|error| {
             eprintln!("window targets are unavailable for this display: {error}");
             Vec::new()
         });
         windows.retain(|window| crate::window_is_capturable(window, &requested_display));
-        (requested_display, Vec::new(), None, windows)
+        (requested_display, Vec::new(), None, windows, None)
     };
 
     let mut summary = current;
@@ -506,6 +515,7 @@ async fn select_capture_display_inner(
         summary: summary.clone(),
         image,
         snapshot_png,
+        cursor,
     };
     let previous = {
         let mut pending = state.recording_selection.lock();
@@ -679,7 +689,11 @@ async fn capture_selection_screenshot_inner(
         )
         .await
         {
-            Ok(true) => match live_image_for_target(&state, &request.target) {
+            Ok(true) => match live_screenshot_image_for_target(
+                &state,
+                &request.target,
+                state.settings().show_cursor_in_screenshots,
+            ) {
                 Ok(image) => image,
                 Err(error) => {
                     crate::restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
@@ -696,7 +710,7 @@ async fn capture_selection_screenshot_inner(
             }
         }
     } else {
-        match pixels_for_selection(&state, &selection, &request.target) {
+        match screenshot_image_for_target(&state, &selection, &request.target) {
             Ok(image) => image,
             Err(error) => {
                 crate::restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
@@ -738,6 +752,151 @@ fn live_image_for_target(
                 crop_window_from_display(&frame.image, &frame.descriptor, window)
             }
         },
+    }
+}
+
+fn screenshot_image_for_target(
+    state: &AppState,
+    selection: &RecordingSelection,
+    target: &RecordingTarget,
+) -> Result<image::RgbaImage, AppError> {
+    let enabled = state.settings().show_cursor_in_screenshots;
+    if selection.summary.frozen && selection.image.is_some() {
+        let source = selection
+            .image
+            .as_ref()
+            .ok_or(AppError::SessionUnavailable)?;
+        let mut image = image_for_selection(selection, target)?;
+        apply_screenshot_cursor_to_recording_target(
+            &mut image,
+            &selection.summary.display,
+            source,
+            &selection.summary.windows,
+            target,
+            selection.cursor,
+            enabled,
+        );
+        Ok(image)
+    } else {
+        live_screenshot_image_for_target(state, target, enabled)
+    }
+}
+
+fn live_screenshot_image_for_target(
+    state: &AppState,
+    target: &RecordingTarget,
+    enabled: bool,
+) -> Result<image::RgbaImage, AppError> {
+    crate::ensure_capture_session_available()?;
+    let pointer = crate::pointer_position();
+    match target {
+        RecordingTarget::Display { display_id } => {
+            let mut frame = state.backend.capture_display(display_id)?;
+            crate::apply_screenshot_cursor(&mut frame.image, &frame.descriptor, pointer, enabled);
+            Ok(frame.image)
+        }
+        RecordingTarget::Region { display_id, rect } => {
+            let frame = state.backend.capture_display(display_id)?;
+            let mut image = crop_display_region(&frame.image, &frame.descriptor, rect)?;
+            crate::apply_screenshot_cursor_to_region(
+                &mut image,
+                &frame.descriptor,
+                &frame.image,
+                recording_rect_to_logical(rect),
+                pointer,
+                enabled,
+            );
+            Ok(image)
+        }
+        RecordingTarget::Window { window_id } => match state.backend.capture_window(window_id) {
+            Ok(mut image) if !crate::image_is_effectively_blank(&image) => {
+                if let Some(window) = state
+                    .windows()
+                    .ok()
+                    .and_then(|windows| windows.into_iter().find(|window| &window.id == window_id))
+                {
+                    crate::apply_screenshot_cursor_on_window(
+                        &mut image,
+                        &window,
+                        state
+                            .monitors()
+                            .ok()
+                            .and_then(|displays| {
+                                displays
+                                    .into_iter()
+                                    .find(|display| display.id == window.display_id)
+                            })
+                            .map(|display| display.scale_factor)
+                            .unwrap_or(1.0),
+                        pointer,
+                        enabled,
+                    );
+                }
+                Ok(image)
+            }
+            _ => {
+                let windows = state.windows().unwrap_or_default();
+                let window = windows
+                    .iter()
+                    .find(|window| &window.id == window_id)
+                    .ok_or(AppError::InvalidSelection)?;
+                let frame = state.backend.capture_display(&window.display_id)?;
+                let mut image = crop_window_from_display(&frame.image, &frame.descriptor, window)?;
+                crate::apply_screenshot_cursor_to_window_crop(
+                    &mut image,
+                    &frame.descriptor,
+                    &frame.image,
+                    window,
+                    pointer,
+                    enabled,
+                );
+                Ok(image)
+            }
+        },
+    }
+}
+
+fn apply_screenshot_cursor_to_recording_target(
+    image: &mut image::RgbaImage,
+    display: &DisplayDescriptor,
+    source: &image::RgbaImage,
+    windows: &[captures_capture::WindowDescriptor],
+    target: &RecordingTarget,
+    pointer: Option<(i32, i32)>,
+    enabled: bool,
+) {
+    match target {
+        RecordingTarget::Display { .. } => {
+            crate::apply_screenshot_cursor(image, display, pointer, enabled);
+        }
+        RecordingTarget::Region { rect, .. } => {
+            crate::apply_screenshot_cursor_to_region(
+                image,
+                display,
+                source,
+                recording_rect_to_logical(rect),
+                pointer,
+                enabled,
+            );
+        }
+        RecordingTarget::Window { window_id } => {
+            if let Some(window) = windows.iter().find(|window| &window.id == window_id) {
+                crate::apply_screenshot_cursor_to_window_crop(
+                    image, display, source, window, pointer, enabled,
+                );
+            }
+        }
+    }
+}
+
+fn recording_rect_to_logical(
+    rect: &captures_recording::CaptureRect,
+) -> captures_capture::LogicalRect {
+    captures_capture::LogicalRect {
+        x: f64::from(rect.x),
+        y: f64::from(rect.y),
+        width: f64::from(rect.width),
+        height: f64::from(rect.height),
     }
 }
 
