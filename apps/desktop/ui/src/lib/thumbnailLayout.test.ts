@@ -64,9 +64,16 @@ describe("thumbnail stack layout", () => {
       /\.thumbnail-stack-minimized\.thumbnail-stack-hover-ready:not\(\.thumbnail-stack-hover-latched\):not\(\.thumbnail-stack-dragging\):not\(\.thumbnail-stack-pressing\):has\(\.thumbnail-collapsed-hit-target:hover\)/,
     );
 
+    const pressing = thumbnailStyles.match(
+      /\.thumbnail-stack-minimized\.thumbnail-stack-pressing > \.thumbnail-card\s*\{([\s\S]*?)\n\}/,
+    );
+
     expect(compactCard?.[1]).toMatch(/transform:\s*var\(--thumbnail-stack-rest-transform\)/);
     expect(compactCard?.[1]).not.toMatch(/transform\s+var\(--stack-fan-dur\)/);
     expect(hoverReady?.[1]).toMatch(/transform\s+var\(--stack-fan-dur\)/);
+    expect(pressing?.[1]).toMatch(/transition:/);
+    expect(pressing?.[1]).not.toMatch(/transform\s+var\(--stack-fan-dur\)/);
+    expect(pressing?.[1]).not.toMatch(/transform\s+0\./);
     expect(minimizingCard?.[1]).toMatch(/rotateX\(0deg\)/);
     expect(minimizingCard?.[1]).toMatch(/scale\(1\)/);
     expect(minimizeRun?.[1]).toMatch(/transform:\s*var\(--thumbnail-stack-rest-transform\)/);

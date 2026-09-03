@@ -1788,6 +1788,16 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
     box-shadow var(--stack-fan-dur) var(--ease-out);
 }
 
+/*
+ * Pressing drops the hover-fan transform immediately. If `--stack-fan-dur`
+ * were still active, a drag would often start mid-ease and snap onto sway.
+ */
+.thumbnail-stack-minimized.thumbnail-stack-pressing > .thumbnail-card {
+  transition:
+    opacity var(--dur-4) var(--ease-out),
+    box-shadow var(--dur-4) var(--ease-out);
+}
+
 .thumbnail-stack-compact > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting) {
   animation: none;
 }
@@ -2065,6 +2075,7 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
 
   .thumbnail-stack-compact > .thumbnail-card,
   .thumbnail-stack-minimized.thumbnail-stack-dragging > .thumbnail-card,
+  .thumbnail-stack-minimized.thumbnail-stack-pressing > .thumbnail-card,
   .thumbnail-stack-minimizing.thumbnail-stack-minimize-run > .thumbnail-card,
   .thumbnail-stack-minimized.thumbnail-stack-hover-ready > .thumbnail-card {
     transition: none;
