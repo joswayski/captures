@@ -1789,6 +1789,19 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 }
 
 .thumbnail-stack-compact > .thumbnail-card {
+  /*
+   * React sets `--thumbnail-stack-base-depth` from DOM order. Subtract any
+   * expanded slot-settle that was in flight when Show less started so the
+   * minimizing pose matches the on-screen position instead of jumping back
+   * up a held hole.
+   */
+  --thumbnail-stack-depth: max(
+    0,
+    calc(
+      var(--thumbnail-stack-base-depth, 0)
+      - var(--thumbnail-stack-shift-slots, 0)
+    )
+  );
   --thumbnail-stack-rest-transform:
     translate3d(
       calc(var(--thumbnail-stack-depth, 0) * -1.5px),
@@ -1837,6 +1850,12 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   transform-origin: 50% 100%;
   pointer-events: none;
   transform: var(--thumbnail-stack-rest-transform);
+  /*
+   * Slot-settle uses the CSS `translate` property. Inline offsets must not
+   * compose with this pile transform or rear cards sit a full slot below the
+   * front preview until the outgoing card unmounts.
+   */
+  translate: none !important;
 }
 
 /*

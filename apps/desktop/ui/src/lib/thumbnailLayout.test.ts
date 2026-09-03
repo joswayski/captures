@@ -6,6 +6,8 @@ import {
   createThumbnailStackShiftController,
   computeThumbnailStackShifts,
   countMotionReadySlotsBelow,
+  thumbnailStackSuppressesSlotShift,
+  thumbnailStackShiftSlots,
   easeOutCubic,
   resolveThumbnailStackShiftPx,
   shouldAnimateThumbnailStackShift,
@@ -73,7 +75,10 @@ describe("thumbnail stack layout", () => {
       /\.thumbnail-stack-minimized\.thumbnail-stack-hover-ready:not\(\.thumbnail-stack-hover-latched\):not\(\.thumbnail-stack-dragging\):has\(\.thumbnail-collapsed-hit-target:hover\)/,
     );
 
+    expect(compactCard?.[1]).toMatch(/--thumbnail-stack-base-depth/);
+    expect(compactCard?.[1]).toMatch(/--thumbnail-stack-shift-slots/);
     expect(compactCard?.[1]).toMatch(/transform:\s*var\(--thumbnail-stack-rest-transform\)/);
+    expect(compactCard?.[1]).toMatch(/translate:\s*none\s*!important/);
     expect(compactCard?.[1]).toMatch(/--thumbnail-stack-hover-transform/);
     expect(compactCard?.[1]).toMatch(/rotateZ\(var\(--thumbnail-stack-fan-tilt/);
     expect(compactCard?.[1]).toMatch(/--thumbnail-stack-expanded-transform/);
@@ -839,6 +844,80 @@ describe("thumbnail stack layout", () => {
       vi.advanceTimersByTime(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16);
       expect(upper).not.toHaveClass("thumbnail-stack-shifting");
       expect(upper.style.getPropertyValue("--thumbnail-stack-shift")).toBe("");
+    } finally {
+      dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("treats a compact pile as suppressing expanded slot shifts", () => {
+    const stack = document.createElement("main");
+    stack.className = "thumbnail-stack";
+    expect(thumbnailStackSuppressesSlotShift(stack)).toBe(false);
+    stack.classList.add("thumbnail-stack-compact");
+    expect(thumbnailStackSuppressesSlotShift(stack)).toBe(true);
+    expect(thumbnailStackShiftSlots(THUMBNAIL_CARD_SLOT_PX)).toBe(1);
+    expect(thumbnailStackShiftSlots(0)).toBe(0);
+  });
+
+  it("clears slot shifts while the stack is compact and restores them after expand", async () => {
+    vi.useFakeTimers();
+    const stack = document.createElement("main");
+    stack.className = "thumbnail-stack";
+    const survivor = document.createElement("article");
+    survivor.className = "thumbnail-card";
+    const exiting = document.createElement("article");
+    exiting.className = "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
+    stack.append(survivor, exiting);
+    const dispose = createThumbnailStackShiftController(stack);
+
+    try {
+      await Promise.resolve();
+      vi.advanceTimersByTime(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16);
+      expect(survivor).toHaveClass("thumbnail-stack-shifting");
+      expect(survivor.style.translate).toBe(`0 ${THUMBNAIL_CARD_SLOT_PX}px`);
+
+      stack.classList.add("thumbnail-stack-compact");
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(survivor).not.toHaveClass("thumbnail-stack-shifting");
+      expect(survivor.style.getPropertyValue("--thumbnail-stack-shift")).toBe("");
+      expect(survivor.style.translate).toBe("");
+      expect(survivor.style.getPropertyValue("--thumbnail-stack-shift-slots")).toBe("1");
+
+      vi.advanceTimersByTime(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS);
+      await Promise.resolve();
+      expect(survivor.style.translate).toBe("");
+      expect(survivor.style.getPropertyValue("--thumbnail-stack-shift-slots")).toBe("1");
+
+      stack.classList.remove("thumbnail-stack-compact");
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(survivor).toHaveClass("thumbnail-stack-shifting");
+      expect(survivor.style.translate).toBe(`0 ${THUMBNAIL_CARD_SLOT_PX}px`);
+      expect(survivor.style.getPropertyValue("--thumbnail-stack-shift-slots")).toBe("");
+    } finally {
+      dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not start a slot shift while a delete plays on a compact pile", async () => {
+    vi.useFakeTimers();
+    const stack = document.createElement("main");
+    stack.className = "thumbnail-stack thumbnail-stack-compact";
+    const survivor = document.createElement("article");
+    survivor.className = "thumbnail-card";
+    const exiting = document.createElement("article");
+    exiting.className = "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
+    stack.append(survivor, exiting);
+    const dispose = createThumbnailStackShiftController(stack);
+
+    try {
+      await Promise.resolve();
+      vi.advanceTimersByTime(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16);
+      expect(survivor).not.toHaveClass("thumbnail-stack-shifting");
+      expect(survivor.style.translate).toBe("");
     } finally {
       dispose();
       vi.useRealTimers();

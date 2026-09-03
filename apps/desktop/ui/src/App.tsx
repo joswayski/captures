@@ -7041,7 +7041,7 @@ export function ThumbnailCard({
       ].filter(Boolean).join(" ")}
       data-thumbnail-id={artifact.id}
       style={stackCollapsed ? {
-        "--thumbnail-stack-depth": Math.min(stackDepth, 3),
+        "--thumbnail-stack-base-depth": Math.min(stackDepth, 3),
         "--thumbnail-stack-hidden": stackDepth > 3 ? 1 : 0,
         "--thumbnail-stack-fan-tilt": `${thumbnailStackFanTiltDeg(stackDepth)}deg`,
         "--thumbnail-stack-fan-shift": `${thumbnailStackFanShiftPx(stackDepth)}px`,
