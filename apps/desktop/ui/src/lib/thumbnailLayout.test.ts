@@ -25,6 +25,8 @@ import {
   thumbnailStackFanCollapseMs,
   thumbnailStackSkew,
   thumbnailStackSkewCssVars,
+  thumbnailStackSkewHitPadPx,
+  thumbnailStackSkewPaintOverflow,
   thumbnailStackPileDepth,
   thumbnailStackPoseDepth,
   THUMBNAIL_CARD_HEIGHT_PX,
@@ -43,6 +45,7 @@ import {
   THUMBNAIL_STACK_REST_SKEW_ROT_DEG,
   THUMBNAIL_STACK_REST_SKEW_X_PX,
   THUMBNAIL_STACK_REST_SKEW_Y_PX,
+  THUMBNAIL_STACK_SKEW_HIT_PAD_PX,
   THUMBNAIL_STACK_SKEW_MIN_UNIT,
   THUMBNAIL_STACK_SCROLL_DURATION_MS,
   THUMBNAIL_STACK_SETTLE_MAX_WAIT_MS,
@@ -186,6 +189,20 @@ describe("thumbnail stack layout", () => {
       `${Number(second.restRotate.toFixed(3))}deg`,
     );
     expect(thumbnailStackSkewCssVars("capture-front", 0)["--thumbnail-stack-fan-tilt"]).toBe("0deg");
+    expect(THUMBNAIL_STACK_REST_SKEW_PEEK_PX).toBeGreaterThanOrEqual(
+      thumbnailStackSkewPaintOverflow(false).y,
+    );
+    expect(THUMBNAIL_STACK_HOVER_TILT_PEEK_PX).toBeGreaterThanOrEqual(
+      thumbnailStackSkewPaintOverflow(true).y,
+    );
+    expect(thumbnailStackSkewHitPadPx(1)).toBe(0);
+    expect(thumbnailStackSkewHitPadPx(4)).toBe(THUMBNAIL_STACK_SKEW_HIT_PAD_PX);
+    expect(THUMBNAIL_STACK_SKEW_HIT_PAD_PX).toBe(
+      Math.min(
+        THUMBNAIL_STACK_PADDING_PX,
+        Math.ceil(thumbnailStackSkewPaintOverflow(true).x),
+      ),
+    );
     expect(thumbnailStackFanCollapseMs(1)).toBe(200);
     expect(thumbnailStackFanCollapseMs(4)).toBe(248);
     expect(thumbnailStackFanCollapseMs(12)).toBeCloseTo(
@@ -302,6 +319,7 @@ describe("thumbnail stack layout", () => {
 
     expect(hitTarget?.[1]).toMatch(/cursor:\s*pointer/);
     expect(hitTarget?.[1]).toMatch(/--thumbnail-collapsed-peek/);
+    expect(hitTarget?.[1]).toMatch(/--thumbnail-collapsed-skew-pad/);
     expect(hitTarget?.[1]).not.toMatch(/height:\s*248px/);
     expect(thumbnailStyles).toMatch(/thumbnail-stack-sparkle/);
     expect(thumbnailStyles).not.toMatch(/thumbnail-stack-expand-path/);

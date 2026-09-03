@@ -28,12 +28,6 @@ export const THUMBNAIL_STACK_IDLE_PEEK_PX = 13;
 /** Hover-fan collapsed peek per pose unit (matches compact hover `translateY`). */
 export const THUMBNAIL_STACK_HOVER_PEEK_PX = 16;
 
-/** Extra hit-target height so a hovered tilt corner is still on the pile. */
-export const THUMBNAIL_STACK_HOVER_TILT_PEEK_PX = 12;
-
-/** Extra idle peek so rest rotation and Y jitter stay inside the hit target. */
-export const THUMBNAIL_STACK_REST_SKEW_PEEK_PX = 10;
-
 /** Extra delay per stacked card so collapsed hover lift does not fire in lockstep. */
 export const THUMBNAIL_STACK_FAN_STAGGER_MS = 16;
 
@@ -72,6 +66,75 @@ export const THUMBNAIL_STACK_HOVER_SKEW_ROT_DEG = 5.8;
 
 /** Keep behind-cards off the dead zone so a new capture never looks slotted. */
 export const THUMBNAIL_STACK_SKEW_MIN_UNIT = 0.42;
+
+/** Compact card width: window 340 minus 28px padding on each side. */
+export const THUMBNAIL_STACK_CARD_WIDTH_PX = 284;
+
+/**
+ * How far a bottom-centered rotateZ swings the top corners past the unrotated
+ * card box. CSS `rotateZ` is clockwise.
+ */
+export function thumbnailStackSkewCornerExtra(rotateDeg: number): { x: number; y: number } {
+  const halfWidth = THUMBNAIL_STACK_CARD_WIDTH_PX / 2;
+  let extraX = 0;
+  let extraY = 0;
+  for (const sign of [-1, 1]) {
+    const radians = (sign * Math.abs(rotateDeg) * Math.PI) / 180;
+    const cos = Math.cos(radians);
+    const sin = Math.sin(radians);
+    for (const [x, y] of [
+      [-halfWidth, -THUMBNAIL_CARD_HEIGHT_PX],
+      [halfWidth, -THUMBNAIL_CARD_HEIGHT_PX],
+    ] as const) {
+      const rotatedX = x * cos + y * sin;
+      const rotatedY = -x * sin + y * cos;
+      extraX = Math.max(extraX, Math.abs(rotatedX) - halfWidth);
+      extraY = Math.max(extraY, -rotatedY - THUMBNAIL_CARD_HEIGHT_PX);
+    }
+  }
+  return { x: extraX, y: extraY };
+}
+
+/** Worst-case paint overflow from unique skew plus that rotation. */
+export function thumbnailStackSkewPaintOverflow(hovered: boolean): { x: number; y: number } {
+  const rotate = hovered
+    ? THUMBNAIL_STACK_HOVER_SKEW_ROT_DEG
+    : THUMBNAIL_STACK_REST_SKEW_ROT_DEG;
+  const shiftX = hovered
+    ? THUMBNAIL_STACK_HOVER_SKEW_X_PX
+    : THUMBNAIL_STACK_REST_SKEW_X_PX;
+  const corner = thumbnailStackSkewCornerExtra(rotate);
+  return {
+    x: corner.x + shiftX,
+    y: corner.y + THUMBNAIL_STACK_REST_SKEW_Y_PX,
+  };
+}
+
+/** Extra idle peek so rest rotation and Y jitter stay inside the hit target. */
+export const THUMBNAIL_STACK_REST_SKEW_PEEK_PX = Math.ceil(
+  thumbnailStackSkewPaintOverflow(false).y,
+);
+
+/** Extra hit-target height so a hovered tilt corner is still on the pile. */
+export const THUMBNAIL_STACK_HOVER_TILT_PEEK_PX = Math.ceil(
+  thumbnailStackSkewPaintOverflow(true).y,
+);
+
+/**
+ * Horizontal inset to pull back so scattered rear-card edges stay on the
+ * expand control. Capped at side padding so a single square preview does
+ * not steal the click-through gutters; `thumbnailStackSkewHitPadPx` zeros
+ * that pad for a one-card pile.
+ */
+export const THUMBNAIL_STACK_SKEW_HIT_PAD_PX = Math.min(
+  THUMBNAIL_STACK_PADDING_PX,
+  Math.ceil(thumbnailStackSkewPaintOverflow(true).x),
+);
+
+/** Collapsed expand-control inset for `cardCount` previews. */
+export function thumbnailStackSkewHitPadPx(cardCount: number): number {
+  return cardCount > 1 ? THUMBNAIL_STACK_SKEW_HIT_PAD_PX : 0;
+}
 
 export type ThumbnailStackSkew = {
   restX: number;

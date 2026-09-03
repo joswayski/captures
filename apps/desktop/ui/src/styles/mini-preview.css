@@ -2046,13 +2046,16 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 .thumbnail-collapsed-hit-target {
   position: absolute;
   z-index: 40;
-  right: 28px;
+  right: calc(28px - var(--thumbnail-collapsed-skew-pad, 0px));
   bottom: 52px;
-  left: 28px;
+  left: calc(28px - var(--thumbnail-collapsed-skew-pad, 0px));
   /*
    * Front card is 160px. Extra peek height comes from `--thumbnail-collapsed-peek`
-   * (idle 13px × receding pose) so a single preview does not steal clicks
-   * in the empty space above it. Hover uses `--thumbnail-collapsed-hover-peek`.
+   * (idle 13px × receding pose plus rest-skew overflow) so a single preview
+   * does not steal clicks in the empty space above it. Hover uses
+   * `--thumbnail-collapsed-hover-peek`. Side inset pulls back by
+   * `--thumbnail-collapsed-skew-pad` so scattered rear-card edges stay on
+   * this control instead of the click-through gutter.
    */
   height: calc(160px + var(--thumbnail-collapsed-peek, 0px));
   padding: 0;

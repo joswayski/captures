@@ -1059,6 +1059,8 @@ describe("Thumbnail", () => {
     expect(new Set(restRots.slice(0, -1)).size).toBe(7);
 
     const expand = screen.getByRole("button", { name: "Expand 8 previews" });
+    expect(expand.style.getPropertyValue("--thumbnail-collapsed-skew-pad")).not.toBe("0px");
+    expect(expand.style.getPropertyValue("--thumbnail-collapsed-skew-pad")).not.toBe("");
     stack.scrollTop = 0;
     await act(async () => {
       fireEvent.click(expand);

@@ -133,6 +133,7 @@ import {
   captureThumbnailCardTransforms,
   thumbnailStackFanCollapseMs,
   thumbnailStackSkewCssVars,
+  thumbnailStackSkewHitPadPx,
   THUMBNAIL_CARD_SLOT_PX,
   waitForThumbnailStackSettle,
 } from "./lib/thumbnailLayout";
@@ -6633,6 +6634,7 @@ export function Thumbnail() {
             style={{
               "--thumbnail-collapsed-peek": `${thumbnailCollapsedPeekPx(artifacts.length)}px`,
               "--thumbnail-collapsed-hover-peek": `${thumbnailCollapsedPeekPx(artifacts.length, true)}px`,
+              "--thumbnail-collapsed-skew-pad": `${thumbnailStackSkewHitPadPx(artifacts.length)}px`,
             } as CSSProperties}
             onPointerDown={onCollapsedStackPointerDown}
             onDragStart={(event) => preventThumbnailHtml5Drag(event.nativeEvent)}
