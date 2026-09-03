@@ -221,6 +221,50 @@ pub const fn overlay_prepare_keeps_native_cursor(native_owned: bool) -> bool {
     native_owned
 }
 
+/// A leftover cursor-claim panel can remain the key window after it is ordered
+/// out. Keyboard then goes to Captures while mouse clicks reach the app
+/// underneath. Resign whenever the panel is still key, even if it is hidden.
+#[must_use]
+pub const fn cursor_claim_panel_should_resign_key(is_key: bool) -> bool {
+    is_key
+}
+
+/// Show the native cursor-claim panel only while a capture overlay is still
+/// trying to become key.
+///
+/// The panel exists so a region overlay can own `NSCursor` before it is key.
+/// The overlay window is created hidden at startup and reused; `NSCursor::set`
+/// is ignored while Captures is inactive, so this panel must still appear for a
+/// not-yet-presented overlay. After that overlay has been ordered front and
+/// then hidden — including the JS fast-hide on pointer up — a queued reassert
+/// must not resurrect it. A hidden nonactivating key panel swallows typing in
+/// other apps until Captures quits.
+///
+/// `overlay_presented` is true only after this capture ordered the overlay
+/// onscreen. Visibility alone cannot tell a precreated hidden overlay from a
+/// dismissed one.
+#[must_use]
+pub const fn cursor_claim_panel_should_show(
+    owns_cursor: bool,
+    native_owned: bool,
+    overlay_presented: bool,
+    overlay_is_visible: bool,
+    overlay_is_key: bool,
+) -> bool {
+    owns_cursor && native_owned && !overlay_is_key && (!overlay_presented || overlay_is_visible)
+}
+
+/// A delayed overlay/selector `makeKey` retry must not run after that surface
+/// was dismissed, and must not `orderFront` a window that is already hidden.
+#[must_use]
+pub const fn capture_surface_focus_retry_allowed(
+    scheduled_generation: u64,
+    current_generation: u64,
+    surface_is_visible: bool,
+) -> bool {
+    scheduled_generation == current_generation && surface_is_visible
+}
+
 /// Region screenshot (⌘⇧4) claims the crosshair on key-down, not after
 /// modifiers come up or the freeze-frame paints.
 #[must_use]
@@ -267,10 +311,12 @@ pub const fn suppress_document_cursor_rects_for_thumbnail(
 mod tests {
     use super::{
         CaptureCursor, CaptureCursorEvent, CaptureCursorKind, CaptureCursorMonitorAction,
-        ThumbnailHoverCursor, capture_cursor_monitor_action, overlay_prepare_keeps_native_cursor,
-        region_shortcut_claims_cursor_on_press, suppress_document_cursor_rects_for_thumbnail,
-        thumbnail_may_take_key_window, thumbnail_passthrough_disables_cursor_rects,
-        thumbnail_poll_is_live, thumbnail_resets_cursor_on_exit, thumbnail_unpolled_hover,
+        ThumbnailHoverCursor, capture_cursor_monitor_action, capture_surface_focus_retry_allowed,
+        cursor_claim_panel_should_resign_key, cursor_claim_panel_should_show,
+        overlay_prepare_keeps_native_cursor, region_shortcut_claims_cursor_on_press,
+        suppress_document_cursor_rects_for_thumbnail, thumbnail_may_take_key_window,
+        thumbnail_passthrough_disables_cursor_rects, thumbnail_poll_is_live,
+        thumbnail_resets_cursor_on_exit, thumbnail_unpolled_hover,
     };
 
     #[test]
@@ -381,6 +427,61 @@ mod tests {
             CaptureCursor::overlay_window().native_owned
         ));
         assert!(region_shortcut_claims_cursor_on_press());
+    }
+
+    #[test]
+    fn hidden_cursor_claim_panels_still_resign_key() {
+        assert!(cursor_claim_panel_should_resign_key(true));
+        assert!(!cursor_claim_panel_should_resign_key(false));
+    }
+
+    #[test]
+    fn cursor_claim_panel_is_not_resurrected_after_the_overlay_hides() {
+        // Overlay not created yet, or precreated at startup and still hidden:
+        // region shortcuts claim the cursor before present.
+        assert!(cursor_claim_panel_should_show(
+            true, true, false, false, false
+        ));
+        // Primed overlay is on-screen but not yet key.
+        assert!(cursor_claim_panel_should_show(
+            true, true, true, true, false
+        ));
+        // Overlay is key: drop the claim panel.
+        assert!(!cursor_claim_panel_should_show(
+            true, true, true, true, true
+        ));
+        // JS/Tauri hide ordered the overlay out after it was presented, while
+        // cursor ownership is still live. A queued reassert must not make the
+        // claim panel key.
+        assert!(!cursor_claim_panel_should_show(
+            true, true, true, false, false
+        ));
+        // Window capture does not use the native claim panel.
+        assert!(!cursor_claim_panel_should_show(
+            true, false, false, false, false
+        ));
+        assert!(!cursor_claim_panel_should_show(
+            false, true, false, false, false
+        ));
+    }
+
+    #[test]
+    fn precreated_hidden_overlay_still_claims_the_region_crosshair() {
+        // `create_overlay_window` configures the overlay and leaves it hidden.
+        // Existence/visibility must not be treated as "already dismissed."
+        assert!(cursor_claim_panel_should_show(
+            true, true, false, false, false
+        ));
+        assert!(!cursor_claim_panel_should_show(
+            true, true, true, false, false
+        ));
+    }
+
+    #[test]
+    fn dismissed_capture_surfaces_do_not_retry_make_key() {
+        assert!(capture_surface_focus_retry_allowed(3, 3, true));
+        assert!(!capture_surface_focus_retry_allowed(3, 4, true));
+        assert!(!capture_surface_focus_retry_allowed(3, 3, false));
     }
 
     #[test]

@@ -81,11 +81,15 @@ import {
 import {
   applyThumbnailCssCursor,
   applyThumbnailNativeHover,
+  armThumbnailCollapsedHover,
   clearThumbnailCssCursor,
   clearThumbnailNativeHover,
   markThumbnailEditorControlOpened,
   rearmThumbnailEditorControlHover,
+  releaseThumbnailCapturedHover,
+  releaseThumbnailPointerCapture,
   setThumbnailCardHoverSuppressed,
+  setThumbnailCollapsedHoverStale,
   setThumbnailNativeActiveCard,
   shouldIgnoreThumbnailCursorEvents,
   shouldLockThumbnailCardHoverOnStackMotion,
@@ -178,6 +182,14 @@ import type {
 } from "./types";
 
 const currentWindow = isTauri() ? getCurrentWindow() : null;
+
+function dismissCaptureOverlayWindow() {
+  // Drop native keyboard grabs in parallel with Tauri hide. Waiting for the
+  // async capture command left a hidden key window that swallowed typing in
+  // other apps after a few screenshots.
+  void invoke("dismiss_capture_surface").catch(() => undefined);
+  void currentWindow?.hide().catch(() => undefined);
+}
 // Slightly past dismiss hold (450ms fade + 580ms shared settle) so animationend
 // remains the primary completion path; fallback only covers missed events.
 const THUMBNAIL_DISMISS_FALLBACK_MS = 1_250;
@@ -5117,7 +5129,7 @@ function CaptureOverlay() {
       // Match the region commit fast path: hide the native surface before the
       // async command crosses into Rust. The backend repeats the hide while it
       // restores the previous app and capture UI, so this remains best-effort.
-      void currentWindow?.hide().catch(() => undefined);
+      dismissCaptureOverlayWindow();
       void invoke("cancel_capture", { sessionId });
     };
     window.addEventListener("keydown", onKeyDown, true);
@@ -5296,7 +5308,7 @@ function CaptureOverlay() {
     // to be scheduled and hop back to the platform UI thread first. The backend
     // repeats this hide before it touches pixels, so live captures remain safe if
     // this best-effort fast path has not completed yet.
-    void currentWindow?.hide().catch(() => undefined);
+    dismissCaptureOverlayWindow();
     void invoke("commit_region", { sessionId, rect: selection });
     return true;
   };
@@ -5371,12 +5383,12 @@ function CaptureOverlay() {
         scale,
       );
       if (hit?.kind === "window") {
-        void currentWindow?.hide().catch(() => undefined);
+        dismissCaptureOverlayWindow();
         void invoke("commit_window", { sessionId, windowId: hit.target.id });
         return;
       }
       if (hit?.kind === "chrome" || windowListingIsReady(session.windows_ready)) {
-        void currentWindow?.hide().catch(() => undefined);
+        dismissCaptureOverlayWindow();
         void invoke("commit_display", { sessionId });
       }
       return;
@@ -6559,28 +6571,37 @@ export function Thumbnail() {
     }
     event.preventDefault();
     event.nativeEvent.preventDefault();
+    const hitTarget = event.currentTarget;
     try {
-      event.currentTarget.setPointerCapture(event.pointerId);
+      hitTarget.setPointerCapture(event.pointerId);
     } catch {
       // jsdom and some WebViews omit Element.setPointerCapture.
     }
     const pointerId = event.pointerId;
+    let finished = false;
     const onMove = (moveEvent: PointerEvent) => {
       if (moveEvent.pointerId !== pointerId) return;
       moveEvent.preventDefault();
       void drag.pointerMove(moveEvent);
     };
-    const onUp = (upEvent: PointerEvent) => {
-      if (upEvent.pointerId !== pointerId) return;
+    const finishPointer = (upEvent: PointerEvent) => {
+      if (finished || upEvent.pointerId !== pointerId) return;
+      finished = true;
       window.removeEventListener("pointermove", onMove, true);
-      window.removeEventListener("pointerup", onUp, true);
-      window.removeEventListener("pointercancel", onUp, true);
+      window.removeEventListener("pointerup", finishPointer, true);
+      window.removeEventListener("pointercancel", finishPointer, true);
+      hitTarget.removeEventListener("lostpointercapture", finishPointer);
       if (stackFanCollapseTimer.current) {
         clearTimeout(stackFanCollapseTimer.current);
         stackFanCollapseTimer.current = null;
       }
       stackFanCollapsed.current = false;
       setThumbnailStackPressing(stackRef.current, false);
+      releaseThumbnailPointerCapture(hitTarget, pointerId);
+      releaseThumbnailCapturedHover(hitTarget, {
+        x: upEvent.clientX,
+        y: upEvent.clientY,
+      });
       void drag.pointerUp(upEvent).then((outcome) => {
         setThumbnailStackDragging(stackRef.current, false);
         window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
@@ -6588,8 +6609,9 @@ export function Thumbnail() {
       });
     };
     window.addEventListener("pointermove", onMove, { capture: true, passive: false });
-    window.addEventListener("pointerup", onUp, true);
-    window.addEventListener("pointercancel", onUp, true);
+    window.addEventListener("pointerup", finishPointer, true);
+    window.addEventListener("pointercancel", finishPointer, true);
+    hitTarget.addEventListener("lostpointercapture", finishPointer);
   };
 
   return (
@@ -6656,8 +6678,12 @@ export function Thumbnail() {
             } as CSSProperties}
             onPointerDown={onCollapsedStackPointerDown}
             onDragStart={(event) => preventThumbnailHtml5Drag(event.nativeEvent)}
+            onPointerEnter={(event) => {
+              armThumbnailCollapsedHover(event.currentTarget);
+            }}
             onPointerLeave={(event) => {
               event.currentTarget.removeAttribute("data-native-pointer-hover");
+              setThumbnailCollapsedHoverStale(event.currentTarget, true);
               setStackHoverLatched(false);
             }}
             onClick={() => {

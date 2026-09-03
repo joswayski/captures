@@ -1,10 +1,11 @@
 use crate::conceal_policy::should_conceal_documents_for_capture_activation;
 use crate::cursor_policy::{
     CaptureCursor, CaptureCursorEvent, CaptureCursorKind, CaptureCursorMonitorAction,
-    ThumbnailHoverCursor, capture_cursor_monitor_action, overlay_prepare_keeps_native_cursor,
-    suppress_document_cursor_rects_for_thumbnail, thumbnail_may_take_key_window,
-    thumbnail_passthrough_disables_cursor_rects, thumbnail_poll_is_live,
-    thumbnail_resets_cursor_on_exit, thumbnail_unpolled_hover,
+    ThumbnailHoverCursor, capture_cursor_monitor_action, capture_surface_focus_retry_allowed,
+    cursor_claim_panel_should_resign_key, cursor_claim_panel_should_show,
+    overlay_prepare_keeps_native_cursor, suppress_document_cursor_rects_for_thumbnail,
+    thumbnail_may_take_key_window, thumbnail_passthrough_disables_cursor_rects,
+    thumbnail_poll_is_live, thumbnail_resets_cursor_on_exit, thumbnail_unpolled_hover,
 };
 
 use std::{
@@ -407,6 +408,14 @@ static GLOBAL_CURSOR_MONITOR: Mutex<Option<MainThreadMonitor>> = Mutex::new(None
 static CURSOR_CLAIM_PANEL: Mutex<Option<MainThreadPanel>> = Mutex::new(None);
 static THUMBNAIL_WINDOW_PTR: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
+static OVERLAY_WINDOW_PTR: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+// True after this capture ordered the overlay onscreen. Distinguishes a
+// precreated hidden overlay (claim the crosshair) from one that was presented
+// and then fast-hidden (do not resurrect the claim panel).
+static OVERLAY_PRESENTED_THIS_CAPTURE: AtomicBool = AtomicBool::new(false);
+// Invalidates delayed `focus_window` retries after a capture surface hides so
+// `orderFrontRegardless` cannot resurrect a hidden overlay as the key window.
+static CAPTURE_SURFACE_FOCUS_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 pub fn note_thumbnail_pointer_poll() {
     let clock = THUMBNAIL_POINTER_POLL_CLOCK.get_or_init(Instant::now);
@@ -504,11 +513,52 @@ fn remember_thumbnail_window(window: &NSWindow) {
     THUMBNAIL_WINDOW_PTR.store(ptr::from_ref(window) as usize, Ordering::Release);
 }
 
+fn remember_overlay_window(window: &NSWindow) {
+    OVERLAY_WINDOW_PTR.store(ptr::from_ref(window) as usize, Ordering::Release);
+}
+
+fn overlay_ns_window() -> Option<&'static NSWindow> {
+    let pointer = OVERLAY_WINDOW_PTR.load(Ordering::Acquire) as *const NSWindow;
+    if pointer.is_null() {
+        return None;
+    }
+    // SAFETY: The overlay NSWindow is process-lived once configured; the
+    // pointer is only stored from `configure_capture_overlay` / present.
+    unsafe { pointer.as_ref() }
+}
+
+fn overlay_window_is_visible() -> bool {
+    overlay_ns_window().is_some_and(|window| window.isVisible())
+}
+
+fn overlay_presented_this_capture() -> bool {
+    OVERLAY_PRESENTED_THIS_CAPTURE.load(Ordering::Acquire)
+}
+
+fn cursor_claim_panel_allowed_now() -> bool {
+    cursor_claim_panel_should_show(
+        capture_overlay_owns_cursor(),
+        stored_capture_cursor().native_owned,
+        overlay_presented_this_capture(),
+        overlay_window_is_visible(),
+        capture_overlay_is_key(),
+    )
+}
+
 fn thumbnail_ns_window() -> Option<&'static NSWindow> {
     let pointer = THUMBNAIL_WINDOW_PTR.load(Ordering::Acquire) as *const NSWindow;
     // SAFETY: The thumbnail NSWindow is process-lived; `configure_thumbnail_inactive_hover`
     // stores it and the panel is never destroyed for the rest of the session.
     unsafe { pointer.as_ref() }
+}
+
+fn resign_passthrough_thumbnail_if_key() {
+    let Some(thumbnail) = thumbnail_ns_window() else {
+        return;
+    };
+    if thumbnail.isKeyWindow() && !cursor_mode_is_interactive(thumbnail_cursor_mode()) {
+        resign_ns_window_key_without_raising_documents(thumbnail);
+    }
 }
 
 fn point_in_ns_rect(point: NSPoint, rect: NSRect) -> bool {
@@ -817,7 +867,7 @@ fn screen_frame_containing_mouse(mtm: MainThreadMarker) -> NSRect {
 }
 
 fn show_cursor_claim_panel() {
-    if capture_overlay_is_key() {
+    if !cursor_claim_panel_allowed_now() {
         hide_cursor_claim_panel();
         return;
     }
@@ -877,13 +927,14 @@ fn hide_cursor_claim_panel() {
         return;
     };
     if let Some(MainThreadPanel(panel)) = guard.as_ref() {
-        if !panel.isVisible() {
-            return;
-        }
-        if panel.isKeyWindow() {
+        // Ordering out does not always clear key status. A hidden key panel
+        // keeps keyboard in Captures while clicks go to the app underneath.
+        if cursor_claim_panel_should_resign_key(panel.isKeyWindow()) {
             panel.resignKeyWindow();
         }
-        panel.orderOut(None);
+        if panel.isVisible() {
+            panel.orderOut(None);
+        }
     }
 }
 
@@ -902,6 +953,10 @@ pub fn claim_capture_cursor(cursor: CaptureCursor) {
         return;
     }
     CAPTURE_OVERLAY_OWNS_CURSOR.store(true, Ordering::Release);
+    // A new capture starts while the reused overlay is still hidden. Clear
+    // last capture's presented bit so the claim panel can seed NSCursor before
+    // this overlay is ordered front.
+    OVERLAY_PRESENTED_THIS_CAPTURE.store(false, Ordering::Release);
     store_capture_cursor(cursor);
     ensure_capture_cursor_monitor();
     ensure_global_cursor_monitor();
@@ -922,8 +977,15 @@ fn reassert_claimed_capture_cursor() {
     }
     let cursor = stored_capture_cursor();
     if cursor.reasserts_native_cursor_on_modifiers() {
-        show_cursor_claim_panel();
-        apply_cursor_mode(cursor.kind.to_cursor_mode());
+        if cursor_claim_panel_allowed_now() {
+            show_cursor_claim_panel();
+            apply_cursor_mode(cursor.kind.to_cursor_mode());
+        } else {
+            hide_cursor_claim_panel();
+            if capture_overlay_is_key() {
+                apply_cursor_mode(cursor.kind.to_cursor_mode());
+            }
+        }
     }
 }
 
@@ -1546,6 +1608,7 @@ pub fn configure_capture_overlay(window: &WebviewWindow) -> Result<(), &'static 
             .ok_or("capture overlay setup did not run on the main thread")?;
     }
     let native = native_window(window)?;
+    remember_overlay_window(native);
     elevate_fullscreen_capture_window(native);
     native.setSharingType(NSWindowSharingType::None);
     clear_transparent_window_backing(native);
@@ -1751,15 +1814,18 @@ pub fn present_capture_overlay(window: &WebviewWindow) -> Result<(), &'static st
             .ok_or("capture overlay present did not run on the main thread")?;
     }
     let native = native_window(window)?;
+    remember_overlay_window(native);
     // Session delivery and snapshot onLoad can both ask to wake the same
     // overlay. Re-preparing an already-present WKWebView clears and reattaches
     // its backing layer immediately before reveal, which can produce a one-frame
     // scale snap. Only the hidden -> visible edge needs native preparation.
     if !capture_overlay_needs_presentation(native.isVisible()) {
+        OVERLAY_PRESENTED_THIS_CAPTURE.store(true, Ordering::Release);
         return Ok(());
     }
     prepare_capture_overlay(window)?;
     native.orderFront(None);
+    OVERLAY_PRESENTED_THIS_CAPTURE.store(true, Ordering::Release);
     if capture_overlay_owns_cursor() {
         reassert_claimed_capture_cursor();
     }
@@ -1927,8 +1993,12 @@ fn apply_capture_cursor_monitor_event(event: &NSEvent) {
     match capture_cursor_monitor_action(event_kind, stored_capture_cursor()) {
         CaptureCursorMonitorAction::Ignore => {}
         CaptureCursorMonitorAction::ReassertNative => {
-            show_cursor_claim_panel();
-            apply_cursor_mode(stored_capture_cursor().kind.to_cursor_mode());
+            if cursor_claim_panel_allowed_now() {
+                show_cursor_claim_panel();
+                apply_cursor_mode(stored_capture_cursor().kind.to_cursor_mode());
+            } else {
+                hide_cursor_claim_panel();
+            }
         }
         CaptureCursorMonitorAction::RefreshWebKitRects => {
             // Selector and window capture keep CSS cursors. Rebuild rectangles
@@ -1955,6 +2025,9 @@ pub fn release_capture_cursor() {
         return;
     }
     CAPTURE_OVERLAY_OWNS_CURSOR.store(false, Ordering::Release);
+    CAPTURE_SURFACE_FOCUS_GENERATION.fetch_add(1, Ordering::AcqRel);
+    hide_cursor_claim_panel();
+    resign_passthrough_thumbnail_if_key();
     hide_cursor_claim_panel();
     NSCursor::setHiddenUntilMouseMoves(false);
     NSCursor::arrowCursor().set();
@@ -2023,13 +2096,25 @@ pub fn focus_window(window: &WebviewWindow) -> Result<(), &'static str> {
     // Countdown / recording selector callers show the covering surface first.
     conceal_documents_under_opaque_capture_surface();
     make_key_and_activate(window)?;
+    let generation = CAPTURE_SURFACE_FOCUS_GENERATION.load(Ordering::Acquire);
     let window = window.clone();
     DispatchQueue::main().exec_async(move || {
-        // Escape can hide the surface before this queued retry runs. Never
-        // order a cancelled overlay or selector back onscreen.
-        if window.is_visible().unwrap_or(false) {
-            let _ = make_key_and_activate(&window);
+        // Escape / pointer-up can hide the surface before this queued retry
+        // runs. Never order a cancelled overlay or selector back onscreen, and
+        // never make a dismissed surface key — that steals typing from other
+        // apps while remaining invisible.
+        let native_visible = native_window(&window)
+            .map(NSWindow::isVisible)
+            .unwrap_or(true);
+        let visible = window.is_visible().unwrap_or(false) && native_visible;
+        if !capture_surface_focus_retry_allowed(
+            generation,
+            CAPTURE_SURFACE_FOCUS_GENERATION.load(Ordering::Acquire),
+            visible,
+        ) {
+            return;
         }
+        let _ = make_key_and_activate(&window);
     });
     Ok(())
 }
@@ -2597,6 +2682,28 @@ fn style_mask_is_titled_document(mask: NSWindowStyleMask) -> bool {
         && !mask.contains(NSWindowStyleMask::NonactivatingPanel)
 }
 
+/// Drops capture keyboard/cursor grabs before the overlay is ordered out.
+///
+/// Call this as soon as a selection commits or cancels. The overlay webview
+/// hides itself via Tauri `window.hide()` before the async capture command
+/// hops to Rust; AppKit can donate key status to the cursor-claim panel in
+/// that gap. Resigning here — including when the panel is already hidden —
+/// returns typing to the user's other apps.
+pub fn dismiss_capture_overlay_input(window: Option<&WebviewWindow>) {
+    if !is_main_thread() {
+        let window = window.cloned();
+        let _ = run_on_main(move || dismiss_capture_overlay_input(window.as_ref()));
+        return;
+    }
+    if let Some(window) = window
+        && let Ok(native) = native_window(window)
+        && native.isKeyWindow()
+    {
+        resign_ns_window_key_without_raising_documents(native);
+    }
+    release_capture_cursor();
+}
+
 /// Restores native overlay state after a capture ends.
 pub fn reset_capture_overlay(window: &WebviewWindow) -> Result<(), &'static str> {
     if !is_main_thread() {
@@ -2604,14 +2711,11 @@ pub fn reset_capture_overlay(window: &WebviewWindow) -> Result<(), &'static str>
         return run_on_main(move || reset_capture_overlay(&window))
             .ok_or("overlay reset did not run on the main thread")?;
     }
-    let result = (|| {
-        let native_window = native_window(window)?;
-        native_window.setAlphaValue(0.0);
-        set_cursor_rects_enabled(native_window, true);
-        set_tracked_cursor(window, CursorMode::Arrow, CursorSurface::CaptureOverlay)
-    })();
-    release_capture_cursor();
-    result
+    dismiss_capture_overlay_input(Some(window));
+    let native_window = native_window(window)?;
+    native_window.setAlphaValue(0.0);
+    set_cursor_rects_enabled(native_window, true);
+    set_tracked_cursor(window, CursorMode::Arrow, CursorSurface::CaptureOverlay)
 }
 
 /// Resizes a visible preview stack in one AppKit update while preserving its

@@ -12,7 +12,11 @@ import {
   thumbnailStackNewestScrollTop,
   thumbnailStackPeekJitterPx,
 } from "./lib/thumbnailLayout";
-import { THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE } from "./lib/thumbnailHover";
+import {
+  THUMBNAIL_HOVER_STALE_ATTRIBUTE,
+  THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE,
+  THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE,
+} from "./lib/thumbnailHover";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -1252,6 +1256,74 @@ describe("Thumbnail", () => {
     expect(stack).not.toHaveClass("thumbnail-stack-drag-sway");
     expect(stack).not.toHaveClass("thumbnail-stack-pressing");
     vi.useRealTimers();
+  });
+
+  it("drops collapsed hover chrome after a drag ends away from the pile", async () => {
+    render(<Thumbnail />);
+    const card = await screen.findByRole("article");
+    const stack = card.closest(".thumbnail-stack")!;
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "Minimize previews" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(32);
+      await vi.advanceTimersByTimeAsync(THUMBNAIL_STACK_EXPAND_COLLAPSE_MS);
+    });
+    vi.useRealTimers();
+
+    const expand = screen.getByRole("button", { name: "Expand preview" });
+    expand.setPointerCapture = vi.fn();
+    expand.releasePointerCapture = vi.fn();
+    expand.hasPointerCapture = vi.fn(() => true);
+    vi.spyOn(expand, "getBoundingClientRect").mockReturnValue({
+      x: 20,
+      y: 40,
+      top: 40,
+      left: 20,
+      right: 220,
+      bottom: 200,
+      width: 200,
+      height: 160,
+      toJSON: () => ({}),
+    });
+    expand.setAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE, "true");
+
+    fireEvent.pointerDown(expand, {
+      button: 0,
+      pointerId: 5,
+      clientX: 80,
+      clientY: 80,
+      screenX: 40,
+      screenY: 80,
+    });
+    fireEvent.pointerMove(window, {
+      pointerId: 5,
+      clientX: 280,
+      clientY: 20,
+      screenX: 240,
+      screenY: 20,
+      bubbles: true,
+    });
+    await waitFor(() => {
+      expect(stack).toHaveClass("thumbnail-stack-dragging");
+    });
+
+    fireEvent.pointerUp(window, {
+      pointerId: 5,
+      clientX: 280,
+      clientY: 20,
+      bubbles: true,
+    });
+    await waitFor(() => {
+      expect(stack).not.toHaveClass("thumbnail-stack-dragging");
+    });
+
+    expect(expand.releasePointerCapture).toHaveBeenCalledWith(5);
+    expect(expand).not.toHaveAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE);
+    expect(expand).toHaveAttribute(THUMBNAIL_HOVER_STALE_ATTRIBUTE, "true");
+    expect(stack).toHaveClass("thumbnail-stack-minimized");
+
+    fireEvent.pointerEnter(expand);
+    expect(expand).not.toHaveAttribute(THUMBNAIL_HOVER_STALE_ATTRIBUTE);
   });
 
   it("cancels HTML5 dragstart on collapsed screenshots so the pile can move", async () => {

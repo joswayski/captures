@@ -3,10 +3,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyThumbnailCssCursor,
   applyThumbnailNativeHover,
+  armThumbnailCollapsedHover,
   clearThumbnailCssCursor,
   clearThumbnailNativeHover,
   markThumbnailEditorControlOpened,
   rearmThumbnailEditorControlHover,
+  releaseThumbnailCapturedHover,
+  releaseThumbnailPointerCapture,
   setThumbnailCardHoverSuppressed,
   shouldIgnoreThumbnailCursorEvents,
   shouldLockThumbnailCardHoverOnStackMotion,
@@ -22,6 +25,7 @@ import {
   THUMBNAIL_CURSOR_KIND_ATTRIBUTE,
   THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS,
   THUMBNAIL_EDITOR_JUST_OPENED_ATTRIBUTE,
+  THUMBNAIL_HOVER_STALE_ATTRIBUTE,
   THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE,
   THUMBNAIL_NULL_POLL_RECOVER_COUNT,
   THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE,
@@ -488,6 +492,62 @@ describe("applyThumbnailNativeHover", () => {
   });
 });
 
+describe("releaseThumbnailCapturedHover", () => {
+  function mockBounds(element: HTMLElement) {
+    vi.spyOn(element, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 100,
+      bottom: 100,
+      width: 100,
+      height: 100,
+      toJSON: () => ({}),
+    });
+  }
+
+  it("clears native hover and marks CSS hover stale after a captured pointer leaves", () => {
+    const target = document.createElement("button");
+    target.className = "thumbnail-collapsed-hit-target";
+    target.setAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE, "true");
+    mockBounds(target);
+
+    expect(releaseThumbnailCapturedHover(target, { x: 180, y: 40 })).toBe(true);
+    expectNativePointerHover(target, false);
+    expect(target).toHaveAttribute(THUMBNAIL_HOVER_STALE_ATTRIBUTE, "true");
+    expect(target.style.pointerEvents).toBe("");
+  });
+
+  it("keeps hover armed when the captured pointer is still over the pile", () => {
+    const target = document.createElement("button");
+    target.className = "thumbnail-collapsed-hit-target";
+    target.setAttribute(THUMBNAIL_HOVER_STALE_ATTRIBUTE, "true");
+    mockBounds(target);
+
+    expect(releaseThumbnailCapturedHover(target, { x: 40, y: 40 })).toBe(false);
+    expect(target).not.toHaveAttribute(THUMBNAIL_HOVER_STALE_ATTRIBUTE);
+  });
+
+  it("rearms collapsed hover on a later enter", () => {
+    const target = document.createElement("button");
+    target.setAttribute(THUMBNAIL_HOVER_STALE_ATTRIBUTE, "true");
+    armThumbnailCollapsedHover(target);
+    expect(target).not.toHaveAttribute(THUMBNAIL_HOVER_STALE_ATTRIBUTE);
+  });
+
+  it("releases an active pointer capture when the platform supports it", () => {
+    const target = document.createElement("button");
+    const hasPointerCapture = vi.fn(() => true);
+    const releasePointerCapture = vi.fn();
+    Object.assign(target, { hasPointerCapture, releasePointerCapture });
+
+    releaseThumbnailPointerCapture(target, 7);
+    expect(hasPointerCapture).toHaveBeenCalledWith(7);
+    expect(releasePointerCapture).toHaveBeenCalledWith(7);
+  });
+});
+
 describe("clearThumbnailNativeHover", () => {
   it("clears the native card marker and button hover attribute", () => {
     document.body.innerHTML = `
@@ -760,6 +820,46 @@ describe("shouldIgnoreThumbnailCursorEvents", () => {
     });
     expect(applyThumbnailNativeHover({ x: 10, y: 10, inside: true })).toBe("pointer");
     expectNativePointerHover(target, false);
+  });
+
+  it("marks collapsed hover stale when the pointer leaves the pile", () => {
+    document.body.innerHTML = `
+      <main class="thumbnail-stack thumbnail-stack-minimized">
+        <button
+          class="thumbnail-collapsed-hit-target"
+          data-native-pointer-hover="true"
+        >Expand preview</button>
+      </main>
+    `;
+    const target = document.querySelector<HTMLButtonElement>(
+      ".thumbnail-collapsed-hit-target",
+    )!;
+
+    expect(applyThumbnailNativeHover({ x: 0, y: 0, inside: false })).toBe("default");
+    expectNativePointerHover(target, false);
+    expect(target).toHaveAttribute(THUMBNAIL_HOVER_STALE_ATTRIBUTE, "true");
+  });
+
+  it("rearms collapsed hover when the pointer is over the pile again", () => {
+    document.body.innerHTML = `
+      <main class="thumbnail-stack thumbnail-stack-minimized">
+        <button
+          class="thumbnail-collapsed-hit-target"
+          data-thumbnail-hover-stale="true"
+        >Expand preview</button>
+      </main>
+    `;
+    const target = document.querySelector<HTMLButtonElement>(
+      ".thumbnail-collapsed-hit-target",
+    )!;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => target),
+    });
+
+    expect(applyThumbnailNativeHover({ x: 10, y: 10, inside: true })).toBe("pointer");
+    expectNativePointerHover(target, true);
+    expect(target).not.toHaveAttribute(THUMBNAIL_HOVER_STALE_ATTRIBUTE);
   });
 
   it("uses a pointer cursor over the collapsed pile so expand is obvious", () => {
