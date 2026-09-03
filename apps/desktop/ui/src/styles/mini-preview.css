@@ -1803,6 +1803,9 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   --stack-fan-dur: var(--dur-3);
   --stack-fan-stagger: 16ms;
   --stack-fan-ease: var(--ease-standard);
+  /* Keep in sync with THUMBNAIL_STACK_RECEDING_STEP / POSE_EASE_K. */
+  --thumbnail-stack-recede: 0.55;
+  --thumbnail-stack-pose-k: 24;
   height: 100%;
   max-height: none;
   overflow: visible;
@@ -1815,9 +1818,9 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
    * React sets `--thumbnail-stack-base-depth` from DOM order. Subtract any
    * expanded slot-settle that was in flight when Show less started so the
    * minimizing pose matches the on-screen position instead of jumping back
-   * up a held hole. `--thumbnail-stack-pose` recedes cards past the first
-   * three behind-cards (aliased as `--thumbnail-stack-pile-depth` for rest
-   * and hover). Expand uses the real slot depth so cards fly to list slots.
+   * up a held hole. `--thumbnail-stack-pose` eases consecutive peeks toward
+   * `--thumbnail-stack-recede` (aliased as `--thumbnail-stack-pile-depth` for
+   * rest and hover). Expand uses the real slot depth so cards fly to list slots.
    */
   --thumbnail-stack-depth: max(
     0,
@@ -1826,16 +1829,26 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
       - var(--thumbnail-stack-shift-slots, 0)
     )
   );
-  --thumbnail-stack-extra: max(0, calc(var(--thumbnail-stack-depth, 0) - 3));
   --thumbnail-stack-pose: calc(
-    min(var(--thumbnail-stack-depth, 0), 3)
-    + var(--thumbnail-stack-extra) * 0.55
+    var(--thumbnail-stack-depth, 0)
+    * (
+      var(--thumbnail-stack-pose-k, 24)
+      + var(--thumbnail-stack-recede, 0.55)
+        * var(--thumbnail-stack-depth, 0)
+    )
+    / (
+      var(--thumbnail-stack-depth, 0)
+      + var(--thumbnail-stack-pose-k, 24)
+    )
   );
   --thumbnail-stack-pile-depth: var(--thumbnail-stack-pose, 0);
   --thumbnail-stack-rest-transform:
     translate3d(
       calc(var(--thumbnail-stack-pile-depth, 0) * -1.5px),
-      calc(var(--thumbnail-stack-pile-depth, 0) * -13px),
+      calc(
+        var(--thumbnail-stack-pile-depth, 0) * -13px
+        + var(--thumbnail-stack-peek-jitter, 0px)
+      ),
       calc(var(--thumbnail-stack-pile-depth, 0) * -24px)
     )
     rotateZ(0deg)
@@ -1847,7 +1860,10 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
         var(--thumbnail-stack-pile-depth, 0) * -1px
         + var(--thumbnail-stack-fan-shift, 0px)
       ),
-      calc(var(--thumbnail-stack-pile-depth, 0) * -16px),
+      calc(
+        var(--thumbnail-stack-pile-depth, 0) * -16px
+        + var(--thumbnail-stack-peek-jitter, 0px)
+      ),
       calc(var(--thumbnail-stack-pile-depth, 0) * -18px)
     )
     rotateZ(var(--thumbnail-stack-fan-tilt, 0deg))
@@ -2162,6 +2178,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
       ),
       calc(
         var(--thumbnail-stack-pile-depth, 0) * -13px
+        + var(--thumbnail-stack-peek-jitter, 0px)
         + var(--thumbnail-drag-sway-y, 0) * 1px * var(--thumbnail-stack-pile-depth, 0) * 0.2
       ),
       calc(var(--thumbnail-stack-pile-depth, 0) * -24px)
