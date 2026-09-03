@@ -1913,6 +1913,16 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
     box-shadow var(--stack-fan-dur) calc(var(--thumbnail-stack-depth, 0) * var(--stack-fan-stagger)) var(--stack-fan-ease);
 }
 
+/*
+ * Pressing drops the hover-fan transform immediately. If `--stack-fan-dur`
+ * were still active, a drag would often start mid-ease and snap onto sway.
+ */
+.thumbnail-stack-minimized.thumbnail-stack-pressing > .thumbnail-card {
+  transition:
+    opacity var(--dur-4) var(--ease-out),
+    box-shadow var(--dur-4) var(--ease-out);
+}
+
 .thumbnail-stack-compact > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting) {
   animation: none;
 }
@@ -2118,8 +2128,8 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   }
 }
 
-.thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card,
-.thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):has(.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]) > .thumbnail-card {
+.thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):not(.thumbnail-stack-pressing):has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card,
+.thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):not(.thumbnail-stack-pressing):has(.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]) > .thumbnail-card {
   transform: var(--thumbnail-stack-hover-transform);
   box-shadow:
     var(--thumbnail-card-shadow),
@@ -2127,38 +2137,55 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
     0 0 22px rgba(var(--theme-accent-rgb), 0.28);
 }
 
+/*
+ * Drag lean is velocity-driven from JS (`--thumbnail-drag-sway-*`). Origin is
+ * the bottom of each card (the hands). Negative sway is a rightward carry:
+ * rear cards translate and rotate so the top of the pile trails, forming an
+ * arch. Skip a transform transition here so the lean can track the pointer;
+ * dropping the dragging class lets hover-ready ease back to rest.
+ */
 .thumbnail-stack-minimized.thumbnail-stack-dragging > .thumbnail-card {
   transition:
-    transform 0.22s calc(var(--thumbnail-stack-depth, 0) * 40ms) var(--ease-out),
     filter var(--dur-5) var(--ease-standard),
     box-shadow var(--dur-4) var(--ease-out);
   transform:
     translate3d(
       calc(
         var(--thumbnail-stack-depth, 0) * -1.5px
-        + var(--thumbnail-drag-sway-x, 0) * 1px * var(--thumbnail-stack-depth, 0)
+        + var(--thumbnail-drag-sway-x, 0) * 1px
+          * var(--thumbnail-stack-depth, 0)
+          * (var(--thumbnail-stack-depth, 0) + 1)
+          / 2
       ),
       calc(
         var(--thumbnail-stack-depth, 0) * -13px
-        + var(--thumbnail-drag-sway-y, 0) * 1px * var(--thumbnail-stack-depth, 0) * 0.35
+        + var(--thumbnail-drag-sway-y, 0) * 1px * var(--thumbnail-stack-depth, 0) * 0.45
       ),
       calc(var(--thumbnail-stack-depth, 0) * -24px)
     )
-    rotateZ(calc(var(--thumbnail-drag-sway-x, 0) * var(--thumbnail-stack-depth, 0) * -0.28deg))
+    rotateZ(
+      calc(
+        var(--thumbnail-drag-sway-x, 0)
+        * var(--thumbnail-stack-depth, 0)
+        * (var(--thumbnail-stack-depth, 0) + 1)
+        * 0.18deg
+      )
+    )
     rotateX(calc(var(--thumbnail-stack-depth, 0) * -1.4deg))
     scale(calc(1 - var(--thumbnail-stack-depth, 0) * 0.025));
   filter: brightness(calc(1 - var(--thumbnail-stack-depth, 0) * 0.12));
   box-shadow: var(--thumbnail-card-shadow);
 }
 
-.thumbnail-stack-dragging .thumbnail-stack-expand-path {
+.thumbnail-stack-dragging .thumbnail-stack-expand-path,
+.thumbnail-stack-pressing .thumbnail-stack-expand-path {
   animation: none;
   opacity: 0;
   transition: none;
 }
 
-.thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card::before,
-.thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):has(.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]) > .thumbnail-card::before {
+.thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):not(.thumbnail-stack-pressing):has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card::before,
+.thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):not(.thumbnail-stack-pressing):has(.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]) > .thumbnail-card::before {
   opacity: calc(var(--thumbnail-stack-depth, 0) * 0.08);
 }
 
@@ -2207,6 +2234,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 
   .thumbnail-stack-compact > .thumbnail-card,
   .thumbnail-stack-minimized.thumbnail-stack-dragging > .thumbnail-card,
+  .thumbnail-stack-minimized.thumbnail-stack-pressing > .thumbnail-card,
   .thumbnail-stack-minimizing.thumbnail-stack-minimize-run > .thumbnail-card,
   .thumbnail-stack-minimized.thumbnail-stack-hover-ready > .thumbnail-card {
     transition: none;

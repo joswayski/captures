@@ -1,8 +1,23 @@
 /** Movement before a collapsed-pile press becomes a window drag instead of expand. */
 export const THUMBNAIL_STACK_DRAG_THRESHOLD_PX = 8;
 
-export const THUMBNAIL_STACK_DRAG_SWAY_MAX_X_PX = 12;
-export const THUMBNAIL_STACK_DRAG_SWAY_MAX_Y_PX = 6;
+export const THUMBNAIL_STACK_DRAG_SWAY_MAX_X_PX = 11;
+export const THUMBNAIL_STACK_DRAG_SWAY_MAX_Y_PX = 7;
+
+/**
+ * How much of each pointer step the rear cards initially refuse to follow.
+ * 1 would leave them frozen in world space; 0 would glue them to the hands.
+ */
+export const THUMBNAIL_STACK_DRAG_SWAY_INERTIA = 0.62;
+
+/** Catch-up rate in 1/seconds. Higher is a stiffer stack. */
+export const THUMBNAIL_STACK_DRAG_SWAY_SPRING = 6.5;
+
+/** First sample after a press has no previous timestamp; treat it as one frame. */
+const THUMBNAIL_STACK_DRAG_SWAY_DEFAULT_DT_MS = 16;
+
+/** Ignore huge pauses so a backgrounded tab cannot snap the pile. */
+const THUMBNAIL_STACK_DRAG_SWAY_MAX_DT_MS = 48;
 
 /** Harness-only: CSS translation of `#root` from its default bottom-left strip. */
 export const THUMBNAIL_HARNESS_DRAG_X_VAR = "--thumbnail-stack-drag-x";
@@ -12,6 +27,7 @@ export const THUMBNAIL_DRAG_SWAY_X_VAR = "--thumbnail-drag-sway-x";
 export const THUMBNAIL_DRAG_SWAY_Y_VAR = "--thumbnail-drag-sway-y";
 
 export const THUMBNAIL_STACK_DRAGGING_CLASS = "thumbnail-stack-dragging";
+export const THUMBNAIL_STACK_PRESSING_CLASS = "thumbnail-stack-pressing";
 
 /**
  * Collapsed screenshots stay in the DOM as `<img>` drag sources. Chromium can
@@ -45,6 +61,11 @@ export type ThumbnailStackDragHost = {
   getFrame: () => ThumbnailStackPoint | Promise<ThumbnailStackPoint>;
   moveFrame: (x: number, y: number) => ThumbnailStackPoint | Promise<ThumbnailStackPoint>;
   reducedMotion: () => boolean;
+  /** Live lag pose. Called from pointer samples and catch-up frames. */
+  onSway?: (sway: ThumbnailStackPoint) => void;
+  /** Fires as soon as the press becomes a drag, before the frame moves. */
+  onDraggingChange?: (dragging: boolean) => void;
+  now?: () => number;
 };
 
 export type ThumbnailStackDragMove = {
@@ -52,6 +73,12 @@ export type ThumbnailStackDragMove = {
   x: number;
   y: number;
   sway: ThumbnailStackPoint;
+};
+
+export type ThumbnailStackDragSwayMotion = {
+  dx: number;
+  dy: number;
+  dtMs: number;
 };
 
 function clamp(value: number, min: number, max: number): number {
@@ -72,28 +99,36 @@ export function thumbnailStackDragExceededThreshold(
   return Math.hypot(dx, dy) >= threshold;
 }
 
+function swayDtMs(dtMs: number): number {
+  if (!Number.isFinite(dtMs) || dtMs <= 0) return 0;
+  return Math.min(dtMs, THUMBNAIL_STACK_DRAG_SWAY_MAX_DT_MS);
+}
+
 /**
- * Rear-card trail while the pile is carried. Front card (depth 0) stays glued
- * to the pointer; deeper cards lag opposite the drag, like a short stack of
- * paper.
+ * Rear-card trail while the pile is carried. The front card stays glued to the
+ * pointer; this vector is the extra lag at depth 1. Deeper cards take a larger
+ * share in CSS so the pile arches: the hands move first, the top follows late.
+ *
+ * `dx`/`dy` are the latest pointer step, not the total drag from press, so the
+ * lean tracks velocity and settles when the pointer stops.
  */
-export function thumbnailStackDragSway(
-  dx: number,
-  dy: number,
+export function tickThumbnailStackDragSway(
+  sway: ThumbnailStackPoint,
+  motion: ThumbnailStackDragSwayMotion,
   options: { reducedMotion?: boolean } = {},
 ): ThumbnailStackPoint {
   if (options.reducedMotion) return { x: 0, y: 0 };
+  const dt = swayDtMs(motion.dtMs) / 1000;
+  let x = sway.x - motion.dx * THUMBNAIL_STACK_DRAG_SWAY_INERTIA;
+  let y = sway.y - motion.dy * THUMBNAIL_STACK_DRAG_SWAY_INERTIA;
+  if (dt > 0) {
+    const decay = Math.exp(-THUMBNAIL_STACK_DRAG_SWAY_SPRING * dt);
+    x *= decay;
+    y *= decay;
+  }
   return {
-    x: clamp(
-      -dx * 0.4,
-      -THUMBNAIL_STACK_DRAG_SWAY_MAX_X_PX,
-      THUMBNAIL_STACK_DRAG_SWAY_MAX_X_PX,
-    ),
-    y: clamp(
-      -dy * 0.18,
-      -THUMBNAIL_STACK_DRAG_SWAY_MAX_Y_PX,
-      THUMBNAIL_STACK_DRAG_SWAY_MAX_Y_PX,
-    ),
+    x: clamp(x, -THUMBNAIL_STACK_DRAG_SWAY_MAX_X_PX, THUMBNAIL_STACK_DRAG_SWAY_MAX_X_PX),
+    y: clamp(y, -THUMBNAIL_STACK_DRAG_SWAY_MAX_Y_PX, THUMBNAIL_STACK_DRAG_SWAY_MAX_Y_PX),
   };
 }
 
@@ -166,6 +201,10 @@ export function setThumbnailStackDragging(stack: HTMLElement | null, dragging: b
   if (!dragging) clearThumbnailStackDragSway(stack);
 }
 
+export function setThumbnailStackPressing(stack: HTMLElement | null, pressing: boolean) {
+  stack?.classList.toggle(THUMBNAIL_STACK_PRESSING_CLASS, pressing);
+}
+
 /**
  * Click-versus-drag session for the collapsed pile. Coordinates are CSS pixels
  * relative to the frame's top-left at pointer-down.
@@ -173,9 +212,14 @@ export function setThumbnailStackDragging(stack: HTMLElement | null, dragging: b
 export class CollapsedThumbnailStackDrag {
   private pointerId: number | null = null;
   private startPointer: ThumbnailStackPoint = { x: 0, y: 0 };
+  private lastPointer: ThumbnailStackPoint = { x: 0, y: 0 };
   private startFrame: ThumbnailStackPoint = { x: 0, y: 0 };
   private ready: Promise<void> | null = null;
   private dragging = false;
+  private sway: ThumbnailStackPoint = { x: 0, y: 0 };
+  private lastTickMs = 0;
+  private swayRaf = 0;
+  private pointerSampled = false;
 
   constructor(private readonly host: ThumbnailStackDragHost) {}
 
@@ -191,7 +235,11 @@ export class CollapsedThumbnailStackDrag {
     if (event.button !== 0) return false;
     this.pointerId = event.pointerId;
     this.startPointer = { x: event.screenX, y: event.screenY };
+    this.lastPointer = this.startPointer;
     this.dragging = false;
+    this.sway = { x: 0, y: 0 };
+    this.lastTickMs = 0;
+    this.pointerSampled = false;
     this.ready = Promise.resolve(this.host.getFrame()).then((frame) => {
       this.startFrame = frame;
     });
@@ -202,10 +250,13 @@ export class CollapsedThumbnailStackDrag {
     event: Pick<PointerEvent, "pointerId" | "screenX" | "screenY">,
   ): Promise<ThumbnailStackDragMove | null> {
     if (this.pointerId !== event.pointerId) return null;
-    await this.ready;
+    const stepX = event.screenX - this.lastPointer.x;
+    const stepY = event.screenY - this.lastPointer.y;
+    this.lastPointer = { x: event.screenX, y: event.screenY };
     const dx = event.screenX - this.startPointer.x;
     const dy = event.screenY - this.startPointer.y;
     if (!this.dragging && !thumbnailStackDragExceededThreshold(dx, dy)) {
+      await this.ready;
       return {
         dragging: false,
         x: this.startFrame.x,
@@ -213,13 +264,24 @@ export class CollapsedThumbnailStackDrag {
         sway: { x: 0, y: 0 },
       };
     }
+    const crossed = !this.dragging;
     this.dragging = true;
+    if (crossed) this.host.onDraggingChange?.(true);
+    this.tickSway(
+      this.now(),
+      crossed ? dx : stepX,
+      crossed ? dy : stepY,
+    );
+    this.pointerSampled = true;
+    this.startSwayLoop();
+    this.host.onSway?.(this.sway);
+    await this.ready;
     const next = await this.host.moveFrame(this.startFrame.x + dx, this.startFrame.y + dy);
     return {
       dragging: true,
       x: next.x,
       y: next.y,
-      sway: thumbnailStackDragSway(dx, dy, { reducedMotion: this.host.reducedMotion() }),
+      sway: this.sway,
     };
   }
 
@@ -232,6 +294,48 @@ export class CollapsedThumbnailStackDrag {
     this.pointerId = null;
     this.dragging = false;
     this.ready = null;
+    this.stopSwayLoop();
+    this.sway = { x: 0, y: 0 };
+    this.lastTickMs = 0;
     return expand ? "expand" : "drop";
+  }
+
+  private now(): number {
+    return this.host.now?.() ?? performance.now();
+  }
+
+  private tickSway(now: number, dx: number, dy: number) {
+    const dtMs = this.lastTickMs === 0
+      ? THUMBNAIL_STACK_DRAG_SWAY_DEFAULT_DT_MS
+      : now - this.lastTickMs;
+    this.lastTickMs = now;
+    this.sway = tickThumbnailStackDragSway(
+      this.sway,
+      { dx, dy, dtMs },
+      { reducedMotion: this.host.reducedMotion() },
+    );
+  }
+
+  private startSwayLoop() {
+    if (this.swayRaf !== 0 || !this.host.onSway) return;
+    const step = (now: number) => {
+      if (this.pointerId === null || !this.dragging) {
+        this.swayRaf = 0;
+        return;
+      }
+      if (this.pointerSampled) {
+        this.pointerSampled = false;
+      } else {
+        this.tickSway(now, 0, 0);
+        this.host.onSway?.(this.sway);
+      }
+      this.swayRaf = requestAnimationFrame(step);
+    };
+    this.swayRaf = requestAnimationFrame(step);
+  }
+
+  private stopSwayLoop() {
+    if (this.swayRaf !== 0) cancelAnimationFrame(this.swayRaf);
+    this.swayRaf = 0;
   }
 }

@@ -72,7 +72,11 @@ describe("thumbnail stack layout", () => {
       /\.thumbnail-stack-minimizing\.thumbnail-stack-minimize-run > \.thumbnail-card\s*\{([\s\S]*?)\n\}/,
     );
     const hoverFan = thumbnailStyles.match(
-      /\.thumbnail-stack-minimized\.thumbnail-stack-hover-ready:not\(\.thumbnail-stack-hover-latched\):not\(\.thumbnail-stack-dragging\):has\(\.thumbnail-collapsed-hit-target:hover\)/,
+      /\.thumbnail-stack-minimized\.thumbnail-stack-hover-ready:not\(\.thumbnail-stack-hover-latched\):not\(\.thumbnail-stack-dragging\):not\(\.thumbnail-stack-pressing\):has\(\.thumbnail-collapsed-hit-target:hover\)/,
+    );
+
+    const pressing = thumbnailStyles.match(
+      /\.thumbnail-stack-minimized\.thumbnail-stack-pressing > \.thumbnail-card\s*\{([\s\S]*?)\n\}/,
     );
 
     expect(compactCard?.[1]).toMatch(/--thumbnail-stack-base-depth/);
@@ -86,6 +90,9 @@ describe("thumbnail stack layout", () => {
     expect(hoverReady?.[1]).toMatch(
       /transform\s+var\(--stack-fan-dur\) calc\(var\(--thumbnail-stack-depth, 0\) \* var\(--stack-fan-stagger\)\)/,
     );
+    expect(pressing?.[1]).toMatch(/transition:/);
+    expect(pressing?.[1]).not.toMatch(/transform\s+var\(--stack-fan-dur\)/);
+    expect(pressing?.[1]).not.toMatch(/transform\s+0\./);
     expect(minimizingCard?.[1]).toMatch(/var\(--thumbnail-stack-expanded-transform\)/);
     expect(minimizeRun?.[1]).toMatch(/transform:\s*var\(--thumbnail-stack-rest-transform\)/);
     expect(minimizeRun?.[1]).toMatch(/transform 0\.48s/);
@@ -124,6 +131,20 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailStackFanTiltDeg(8)).toBe(5);
     expect(thumbnailStackFanShiftPx(0)).toBe(0);
     expect(thumbnailStackFanShiftPx(1)).toBeCloseTo(12.6);
+  });
+
+  it("arches the collapsed pile so the top trails the hands while dragging", () => {
+    const dragging = thumbnailStyles.match(
+      /\.thumbnail-stack-minimized\.thumbnail-stack-dragging > \.thumbnail-card\s*\{([\s\S]*?)\n\}/,
+    );
+
+    expect(dragging?.[1]).not.toMatch(/transform\s+0\.22s/);
+    expect(dragging?.[1]).not.toMatch(/40ms/);
+    expect(dragging?.[1]).toMatch(/--thumbnail-drag-sway-x/);
+    expect(dragging?.[1]).toMatch(/\(var\(--thumbnail-stack-depth, 0\) \+ 1\)/);
+    expect(dragging?.[1]).toMatch(/rotateZ\(/);
+    expect(dragging?.[1]).not.toMatch(/-0\.28deg/);
+    expect(dragging?.[1]).toMatch(/0\.18deg/);
   });
 
   it("releases the arrival animation before cards exit or shift", () => {
@@ -210,6 +231,12 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailStyles).toMatch(/\.thumbnail-stack-expand-path\s*\{/);
     expect(thumbnailStyles).toMatch(/--thumbnail-expand-path/);
     expect(thumbnailStyles).toMatch(/thumbnail-stack-expand-path-flow/);
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-dragging \.thumbnail-stack-expand-path/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-pressing \.thumbnail-stack-expand-path/,
+    );
     expect(thumbnailStyles).toMatch(/rgba\(var\(--theme-accent-rgb\)/);
     expect(thumbnailStyles).toMatch(/--theme-signal-rgb/);
     expect(thumbnailStyles).toMatch(/--theme-accent-text/);

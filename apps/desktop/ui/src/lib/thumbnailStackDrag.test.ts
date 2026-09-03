@@ -5,7 +5,9 @@ import {
   THUMBNAIL_HARNESS_DRAG_X_VAR,
   THUMBNAIL_HARNESS_DRAG_Y_VAR,
   THUMBNAIL_STACK_DRAG_THRESHOLD_PX,
+  THUMBNAIL_STACK_DRAG_SWAY_MAX_X_PX,
   THUMBNAIL_STACK_DRAGGING_CLASS,
+  THUMBNAIL_STACK_PRESSING_CLASS,
   applyThumbnailStackDragSway,
   clampThumbnailStackFrame,
   clearThumbnailStackDragSway,
@@ -14,8 +16,9 @@ import {
   preventThumbnailHtml5Drag,
   readHarnessStackOffset,
   setThumbnailStackDragging,
+  setThumbnailStackPressing,
   thumbnailStackDragExceededThreshold,
-  thumbnailStackDragSway,
+  tickThumbnailStackDragSway,
   writeHarnessStackOffset,
 } from "./thumbnailStackDrag";
 
@@ -47,15 +50,39 @@ describe("thumbnailStackDragExceededThreshold", () => {
   });
 });
 
-describe("thumbnailStackDragSway", () => {
-  it("lags opposite the drag so rear cards trail the pointer", () => {
-    expect(thumbnailStackDragSway(40, 0)).toEqual({ x: -12, y: 0 });
-    expect(thumbnailStackDragSway(-20, 30).x).toBeGreaterThan(0);
-    expect(thumbnailStackDragSway(0, 40).y).toBeLessThan(0);
+describe("tickThumbnailStackDragSway", () => {
+  const rest = { x: 0, y: 0 };
+
+  it("lags opposite the latest step so rear cards trail the hands", () => {
+    const right = tickThumbnailStackDragSway(rest, { dx: 24, dy: 0, dtMs: 16 });
+    expect(right.x).toBeLessThan(0);
+    expect(right.x).toBeGreaterThanOrEqual(-THUMBNAIL_STACK_DRAG_SWAY_MAX_X_PX);
+
+    const left = tickThumbnailStackDragSway(rest, { dx: -20, dy: 0, dtMs: 16 });
+    expect(left.x).toBeGreaterThan(0);
+
+    const down = tickThumbnailStackDragSway(rest, { dx: 0, dy: 20, dtMs: 16 });
+    expect(down.y).toBeLessThan(0);
   });
 
-  it("skips sway when motion is reduced", () => {
-    expect(thumbnailStackDragSway(40, 20, { reducedMotion: true })).toEqual({ x: 0, y: 0 });
+  it("tracks velocity instead of the press origin", () => {
+    const right = tickThumbnailStackDragSway(rest, { dx: 8, dy: 0, dtMs: 16 });
+    const stillRight = tickThumbnailStackDragSway(right, { dx: 8, dy: 0, dtMs: 16 });
+    expect(right.x).toBeLessThan(0);
+    expect(stillRight.x).toBeLessThan(right.x);
+
+    const reversing = tickThumbnailStackDragSway(right, { dx: -8, dy: 0, dtMs: 16 });
+    expect(reversing.x).toBeGreaterThan(right.x);
+
+    const settling = tickThumbnailStackDragSway(right, { dx: 0, dy: 0, dtMs: 16 });
+    expect(Math.abs(settling.x)).toBeLessThan(Math.abs(right.x));
+  });
+
+  it("clamps extreme flicks and skips sway when motion is reduced", () => {
+    expect(tickThumbnailStackDragSway(rest, { dx: 400, dy: 0, dtMs: 16 }).x)
+      .toBe(-THUMBNAIL_STACK_DRAG_SWAY_MAX_X_PX);
+    expect(tickThumbnailStackDragSway(rest, { dx: 24, dy: 12, dtMs: 16 }, { reducedMotion: true }))
+      .toEqual(rest);
   });
 });
 
@@ -135,15 +162,56 @@ describe("CollapsedThumbnailStackDrag", () => {
 
     drag.pointerDown({ button: 0, pointerId: 7, screenX: 100, screenY: 200 });
     const moved = await drag.pointerMove({ pointerId: 7, screenX: 160, screenY: 188 });
-    expect(moved).toEqual({
-      dragging: true,
-      x: 100,
-      y: 68,
-      sway: thumbnailStackDragSway(60, -12),
-    });
+    expect(moved?.dragging).toBe(true);
+    expect(moved?.x).toBe(100);
+    expect(moved?.y).toBe(68);
+    expect(moved?.sway.x).toBeLessThan(0);
+    expect(moved?.sway.y).toBeGreaterThan(0);
     expect(drag.isDragging).toBe(true);
     expect(await drag.pointerUp({ pointerId: 7 })).toBe("drop");
     expect(drag.isDragging).toBe(false);
+  });
+
+  it("follows later pointer steps instead of freezing the first lean", async () => {
+    let now = 0;
+    const drag = new CollapsedThumbnailStackDrag({
+      getFrame: () => ({ x: 0, y: 0 }),
+      moveFrame: (x, y) => ({ x, y }),
+      reducedMotion: () => false,
+      now: () => now,
+    });
+
+    drag.pointerDown({ button: 0, pointerId: 1, screenX: 0, screenY: 0 });
+    now = 16;
+    const right = await drag.pointerMove({ pointerId: 1, screenX: 12, screenY: 0 });
+    now = 32;
+    const stillRight = await drag.pointerMove({ pointerId: 1, screenX: 24, screenY: 0 });
+    now = 48;
+    const left = await drag.pointerMove({ pointerId: 1, screenX: 12, screenY: 0 });
+
+    expect(right?.sway.x).toBeLessThan(0);
+    expect(stillRight?.sway.x).toBeLessThan(right!.sway.x);
+    expect(left?.sway.x).toBeGreaterThan(stillRight!.sway.x);
+  });
+
+  it("marks dragging before the frame moves so the lean can start immediately", async () => {
+    const events: string[] = [];
+    const drag = new CollapsedThumbnailStackDrag({
+      getFrame: () => ({ x: 0, y: 0 }),
+      moveFrame: (x, y) => {
+        events.push("move");
+        return { x, y };
+      },
+      reducedMotion: () => false,
+      onDraggingChange: () => {
+        events.push("drag");
+      },
+    });
+
+    drag.pointerDown({ button: 0, pointerId: 1, screenX: 0, screenY: 0 });
+    await drag.pointerMove({ pointerId: 1, screenX: 20, screenY: 0 });
+    expect(events[0]).toBe("drag");
+    expect(events[1]).toBe("move");
   });
 
   it("ignores a second button and a mismatched pointer id", async () => {
@@ -172,5 +240,13 @@ describe("stack dragging class helpers", () => {
     expect(stack).not.toHaveClass(THUMBNAIL_STACK_DRAGGING_CLASS);
     expect(stack.style.getPropertyValue("--thumbnail-drag-sway-x")).toBe("0");
     clearThumbnailStackDragSway(stack);
+  });
+
+  it("toggles the pressing class so hover fan stays down during a press", () => {
+    const stack = document.createElement("main");
+    setThumbnailStackPressing(stack, true);
+    expect(stack).toHaveClass(THUMBNAIL_STACK_PRESSING_CLASS);
+    setThumbnailStackPressing(stack, false);
+    expect(stack).not.toHaveClass(THUMBNAIL_STACK_PRESSING_CLASS);
   });
 });
