@@ -4629,8 +4629,9 @@ fn update_thumbnail_stack_window(
     let visible = window.is_visible().unwrap_or(false);
     let presented = thumbnail_window_is_presented(&window);
     // WKWebView blanks painted cards when its visible NSWindow shrinks. macOS
-    // keeps the frame in every mode; Linux keeps it while collapsed. Precise
-    // hit testing keeps the retained empty area click-through on both platforms.
+    // keeps the frame in every mode; Linux and Windows keep it while collapsed
+    // so peeking cards and the hover expand path stay on-screen. Precise hit
+    // testing keeps the retained empty area click-through.
     let height = thumbnail_visible_window_height(
         desired_height,
         visible
@@ -4674,8 +4675,11 @@ fn thumbnail_stack_should_be_visible(
     count > 0 && show_mini_previews && (!suppressed || include_mini_previews_in_captures)
 }
 
-fn thumbnail_stack_visible_count(count: usize, collapsed: bool) -> usize {
-    if collapsed { count.min(1) } else { count }
+fn thumbnail_stack_visible_count(count: usize, _collapsed: bool) -> usize {
+    // Collapsed piles still paint peeking cards and a hover path that reaches
+    // the expanded stack top. Keep the native frame at full stack height;
+    // empty space above the pile stays click-through via hit testing.
+    count
 }
 
 fn thumbnail_window_logical_height(window: &tauri::WebviewWindow) -> Option<f64> {
@@ -4696,7 +4700,7 @@ fn thumbnail_visible_window_height(
 }
 
 fn thumbnail_preserve_current_height(collapsed: bool) -> bool {
-    cfg!(target_os = "macos") || (cfg!(target_os = "linux") && collapsed)
+    cfg!(target_os = "macos") || collapsed
 }
 
 fn thumbnail_webview_needs_tauri_show(is_visible: bool) -> bool {
@@ -7382,12 +7386,21 @@ mod tests {
     }
 
     #[test]
-    fn minimized_stack_requests_one_card_of_native_window_height() {
-        assert_eq!(thumbnail_stack_visible_count(4, true), 1);
+    fn minimized_stack_keeps_full_native_window_height() {
+        assert_eq!(thumbnail_stack_visible_count(4, true), 4);
         assert_eq!(thumbnail_stack_visible_count(4, false), 4);
         assert_eq!(thumbnail_stack_visible_count(0, true), 0);
         assert_eq!(thumbnail_stack_height(1, true), 240.0);
         assert_eq!(thumbnail_stack_height(1, false), 240.0);
+        assert_eq!(
+            thumbnail_stack_height(thumbnail_stack_visible_count(4, true), true),
+            thumbnail_stack_height(4, false),
+        );
+        let work = bounds((0, 0, 1_920, 1_080), (0, 0, 1_920, 1_080), 1.0);
+        let (_, _, collapsed_height) = thumbnail_geometry(work, 4, true, None);
+        let (_, _, expanded_height) = thumbnail_geometry(work, 4, false, None);
+        assert_eq!(collapsed_height, expanded_height);
+        assert!(collapsed_height > 240.0);
     }
 
     #[test]
@@ -7399,10 +7412,11 @@ mod tests {
     }
 
     #[test]
-    fn preserves_thumbnail_height_while_collapsed_on_macos_and_linux() {
+    fn preserves_thumbnail_height_while_collapsed() {
+        assert!(thumbnail_preserve_current_height(true));
         assert_eq!(
-            thumbnail_preserve_current_height(true),
-            cfg!(target_os = "macos") || cfg!(target_os = "linux")
+            thumbnail_preserve_current_height(false),
+            cfg!(target_os = "macos")
         );
     }
 

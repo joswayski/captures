@@ -1933,7 +1933,7 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
 }
 
 .thumbnail-stack-expand-path::before {
-  background-color: rgb(15 15 18 / 0.22);
+  background-color: var(--glass-veil-soft);
   background-image:
     repeating-linear-gradient(
       to top,
@@ -1949,11 +1949,10 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
     ),
     linear-gradient(
       to top,
-      rgba(var(--theme-accent-rgb), 0.38),
-      rgb(255 176 92 / 0.2) 22%,
-      rgb(92 214 164 / 0.16) 48%,
-      rgb(110 186 255 / 0.2) 74%,
-      rgb(186 154 255 / 0.14)
+      rgba(var(--theme-accent-rgb), 0.42),
+      color-mix(in srgb, var(--theme-accent-text) 38%, transparent) 40%,
+      rgba(var(--theme-signal-rgb), 0.2) 74%,
+      rgb(255 255 255 / 0.12)
     );
   background-size:
     100% var(--thumbnail-path-tile),

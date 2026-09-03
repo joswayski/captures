@@ -160,6 +160,11 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailStyles).toMatch(/\.thumbnail-stack-expand-path\s*\{/);
     expect(thumbnailStyles).toMatch(/--thumbnail-expand-path/);
     expect(thumbnailStyles).toMatch(/thumbnail-stack-expand-path-flow/);
+    expect(thumbnailStyles).toMatch(/rgba\(var\(--theme-accent-rgb\)/);
+    expect(thumbnailStyles).toMatch(/--theme-signal-rgb/);
+    expect(thumbnailStyles).toMatch(/--theme-accent-text/);
+    expect(thumbnailStyles).toMatch(/var\(--glass-veil-soft\)/);
+    expect(thumbnailStyles).not.toMatch(/255 176 92/);
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-minimized(?::not\(\.thumbnail-stack-dragging\))? > \.thumbnail-card \*/,
     );
