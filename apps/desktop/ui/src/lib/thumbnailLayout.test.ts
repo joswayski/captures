@@ -286,7 +286,8 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailCollapsedPeekPx(4)).toBe(39);
     expect(thumbnailCollapsedPeekPx(8)).toBeGreaterThan(thumbnailCollapsedPeekPx(4));
     expect(thumbnailCollapsedPeekPx(8)).toBeCloseTo(thumbnailStackPoseDepth(7) * 13);
-    expect(thumbnailCollapsedPeekPx(24)).toBeLessThan(thumbnailCollapsedPeekPx(8) + 20);
+    expect(thumbnailCollapsedPeekPx(8) - thumbnailCollapsedPeekPx(4)).toBeCloseTo(4 * 0.55 * 13);
+    expect(thumbnailCollapsedPeekPx(24)).toBeGreaterThan(thumbnailCollapsedPeekPx(8));
     expect(thumbnailCollapsedPeekPx(2, true)).toBe(42);
     expect(thumbnailCollapsedPeekPx(1, true)).toBe(0);
   });
@@ -294,8 +295,8 @@ describe("thumbnail stack layout", () => {
   it("packs collapsed cards past the first four into a vanishing pose", () => {
     expect(thumbnailStackPoseDepth(0)).toBe(0);
     expect(thumbnailStackPoseDepth(3)).toBe(3);
-    expect(thumbnailStackPoseDepth(7)).toBeCloseTo(3 + 4 / (1 + 4 * 0.45));
-    expect(thumbnailStackPoseDepth(20)).toBeLessThan(6);
+    expect(thumbnailStackPoseDepth(7)).toBeCloseTo(3 + 4 * 0.55);
+    expect(thumbnailStackPoseDepth(20)).toBeCloseTo(3 + 17 * 0.55);
   });
 
   it("scrolls to reveal newly added captures", () => {

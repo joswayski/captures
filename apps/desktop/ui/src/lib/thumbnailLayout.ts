@@ -19,8 +19,8 @@ export const THUMBNAIL_CARD_SLOT_PX = THUMBNAIL_CARD_HEIGHT_PX + THUMBNAIL_STACK
  */
 export const THUMBNAIL_STACK_FULL_PEEK_DEPTH = 3;
 
-/** How fast extra collapsed cards tighten after the full-step band. */
-export const THUMBNAIL_STACK_RECEDING_TIGHTEN = 0.45;
+/** Extra pose units per card after the full-step band (≈8px idle peek). */
+export const THUMBNAIL_STACK_RECEDING_STEP = 0.55;
 
 /** Idle collapsed peek per pose unit (matches compact `translateY`). */
 export const THUMBNAIL_STACK_IDLE_PEEK_PX = 13;
@@ -57,16 +57,15 @@ export function thumbnailStackFanTiltDeg(depth: number): number {
 
 /**
  * Visual collapsed depth. The first three behind-cards keep the current
- * 13px steps; anything deeper approaches a shallow vanishing pile.
- * Mirrored in mini-preview.css as `--thumbnail-stack-pose`.
+ * 13px steps; older captures keep peeking with a shorter step so the pile
+ * recedes instead of hiding. Mirrored in mini-preview.css as `--thumbnail-stack-pose`.
  */
 export function thumbnailStackPoseDepth(depth: number): number {
   const n = Math.max(0, depth);
   if (n <= THUMBNAIL_STACK_FULL_PEEK_DEPTH) return n;
-  const extra = n - THUMBNAIL_STACK_FULL_PEEK_DEPTH;
   return (
     THUMBNAIL_STACK_FULL_PEEK_DEPTH
-    + extra / (1 + extra * THUMBNAIL_STACK_RECEDING_TIGHTEN)
+    + (n - THUMBNAIL_STACK_FULL_PEEK_DEPTH) * THUMBNAIL_STACK_RECEDING_STEP
   );
 }
 

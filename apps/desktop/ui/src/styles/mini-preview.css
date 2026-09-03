@@ -1806,7 +1806,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   --thumbnail-stack-extra: max(0, calc(var(--thumbnail-stack-depth, 0) - 3));
   --thumbnail-stack-pose: calc(
     min(var(--thumbnail-stack-depth, 0), 3)
-    + var(--thumbnail-stack-extra) / (1 + var(--thumbnail-stack-extra) * 0.45)
+    + var(--thumbnail-stack-extra) * 0.55
   );
   --thumbnail-stack-rest-transform:
     translate3d(
@@ -1991,13 +1991,13 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
  * collapsed rest pose blurs so expand/collapse fly-outs stay sharp.
  */
 .thumbnail-stack-minimized > .thumbnail-card .thumbnail-media {
-  filter: blur(calc(var(--thumbnail-stack-pose, 0) * 0.7px));
+  filter: blur(calc(var(--thumbnail-stack-pose, 0) * 1.15px));
   transition: filter var(--stack-fan-dur, var(--dur-3)) calc(var(--thumbnail-stack-depth, 0) * var(--stack-fan-stagger, 0ms)) var(--stack-fan-ease, var(--ease-out));
 }
 
 .thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):not(.thumbnail-stack-pressing):has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card .thumbnail-media,
 .thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):not(.thumbnail-stack-pressing):has(.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]) > .thumbnail-card .thumbnail-media {
-  filter: blur(calc(var(--thumbnail-stack-pose, 0) * 0.4px));
+  filter: blur(calc(var(--thumbnail-stack-pose, 0) * 0.75px));
 }
 
 .thumbnail-stack-compact > .thumbnail-card img {

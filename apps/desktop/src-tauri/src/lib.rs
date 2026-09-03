@@ -5338,14 +5338,13 @@ fn set_mini_preview_stack_position(
 
 fn thumbnail_stack_pose_depth(depth: f64) -> f64 {
     const FULL: f64 = 3.0;
-    const TIGHTEN: f64 = 0.45;
+    const STEP: f64 = 0.55;
     if depth <= 0.0 {
         0.0
     } else if depth <= FULL {
         depth
     } else {
-        let extra = depth - FULL;
-        FULL + extra / (1.0 + extra * TIGHTEN)
+        FULL + (depth - FULL) * STEP
     }
 }
 
