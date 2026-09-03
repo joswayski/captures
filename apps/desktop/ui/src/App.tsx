@@ -120,6 +120,8 @@ import {
 import {
   animateThumbnailStackScroll,
   createThumbnailStackShiftController,
+  scheduleScrollThumbnailStackToNewest,
+  scrollThumbnailStackToNewest,
   shouldScrollThumbnailStackToEnd,
   thumbnailStackContentHeight,
   thumbnailStackOverflow,
@@ -2267,6 +2269,40 @@ export function RecordingSelector() {
           return;
         }
       }
+      if (
+        event.key !== "Enter"
+        || event.defaultPrevented
+        || event.altKey
+        || event.ctrlKey
+        || event.metaKey
+        || event.shiftKey
+      ) {
+        return;
+      }
+      if (
+        target instanceof Element
+        && target.closest("input, textarea, select, [contenteditable], [role=\"combobox\"], [role=\"listbox\"]")
+      ) {
+        return;
+      }
+      // Mode/target segmented buttons are where Enter needs to confirm capture.
+      // Leave Close, Change…, and other dedicated actions to native activation.
+      if (target instanceof Element) {
+        const focusedButton = target.closest("button");
+        if (
+          focusedButton
+          && !focusedButton.classList.contains("capture-selector-primary")
+          && !focusedButton.closest(".capture-action-switch, .recording-target-switch")
+        ) {
+          return;
+        }
+      }
+      const primaryAction = panelRef.current?.querySelector<HTMLButtonElement>(
+        ".capture-selector-primary:not(:disabled)",
+      );
+      if (!primaryAction) return;
+      event.preventDefault();
+      primaryAction.click();
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
@@ -2922,6 +2958,7 @@ export function RecordingSelector() {
             className={`recording-start capture-selector-primary capture-selector-primary-${actionMode}`}
             type="button"
             aria-label={primaryActionAriaLabel}
+            aria-keyshortcuts="Enter"
             disabled={!canStart || starting}
             hidden={settings.auto_start_on_selection && !starting && !error}
             onClick={() => void start()}
@@ -3047,15 +3084,20 @@ export function RecordingSelector() {
             controlsExcluded ?? session.recording_capabilities.controls_excluded,
             actionMode,
           )}{" "}
-          {settings.auto_start_on_selection && <>
-            <span aria-hidden="true">·</span>{" "}
-            <span>Auto-capture is on. Selecting a target starts immediately.</span>
-            <button
-              className="capture-selector-preferences-link"
-              type="button"
-              onClick={openAutoStartPreference}
-            >Change…</button>
-          </>}
+          {settings.auto_start_on_selection
+            ? <>
+              <span aria-hidden="true">·</span>{" "}
+              <span>Auto-capture is on. Selecting a target starts immediately.</span>
+              <button
+                className="capture-selector-preferences-link"
+                type="button"
+                onClick={openAutoStartPreference}
+              >Change…</button>
+            </>
+            : <>
+              <span aria-hidden="true">·</span>{" "}
+              Press <kbd>Enter</kbd> to confirm
+            </>}
         </p>
         {error && <p className="recording-selector-error" role="alert">{error}</p>}
       </section>
@@ -5515,6 +5557,7 @@ export function Thumbnail() {
     "expanded",
   );
   const previousArtifactCount = useRef(0);
+  const pendingNewestReveal = useRef(false);
   const cancelStackScroll = useRef<(() => void) | null>(null);
   const applyClipboardState = useCallback((next: ClipboardState) => {
     setClipboardState((current) => reconcileClipboardState(current, next));
@@ -5665,13 +5708,14 @@ export function Thumbnail() {
   }, [applyClipboardState]);
 
   useLayoutEffect(() => {
-    if (
-      stackRef.current
-      && shouldScrollThumbnailStackToEnd(previousArtifactCount.current, artifacts.length)
-    ) {
-      stackRef.current.scrollTop = stackRef.current.scrollHeight;
-    }
+    const shouldReveal = shouldScrollThumbnailStackToEnd(
+      previousArtifactCount.current,
+      artifacts.length,
+    );
     previousArtifactCount.current = artifacts.length;
+    if (shouldReveal && stackRef.current) {
+      scrollThumbnailStackToNewest(stackRef.current);
+    }
     refreshStackOverflow();
     let cancelled = false;
     // Sync may grow the native window for new cards. It intentionally does not
@@ -5680,6 +5724,9 @@ export function Thumbnail() {
       .catch(() => undefined)
       .finally(() => {
         if (!cancelled) {
+          if (shouldReveal && stackRef.current) {
+            scrollThumbnailStackToNewest(stackRef.current);
+          }
           refreshStackOverflow();
           window.dispatchEvent(new Event("captures-thumbnail-layout-changed"));
         }
@@ -5688,6 +5735,23 @@ export function Thumbnail() {
       cancelled = true;
     };
   }, [artifacts.length, refreshStackOverflow]);
+
+  useLayoutEffect(() => {
+    if (stackMotion !== "expanded" || !pendingNewestReveal.current) return;
+    const stack = stackRef.current;
+    if (!stack) return;
+    const cancelReveal = scheduleScrollThumbnailStackToNewest(stack, {
+      onScrolled: refreshStackOverflow,
+      retryMs: 450,
+    });
+    const finish = window.setTimeout(() => {
+      pendingNewestReveal.current = false;
+    }, 450);
+    return () => {
+      cancelReveal();
+      window.clearTimeout(finish);
+    };
+  }, [stackMotion, refreshStackOverflow]);
 
   useEffect(() => {
     const refresh = () => refreshStackOverflow();
@@ -5887,7 +5951,10 @@ export function Thumbnail() {
       }
     };
 
-    const applyNativeHover = (position: ThumbnailPointerPosition) => {
+    const applyNativeHover = (
+      position: ThumbnailPointerPosition,
+      options: { updateHitTest?: boolean } = {},
+    ) => {
       maybeUnlockCardHover(position);
       const ignore = shouldIgnoreThumbnailCursorEvents(position);
       const kind = applyThumbnailNativeHover(position);
@@ -5899,7 +5966,13 @@ export function Thumbnail() {
       } else {
         document.documentElement.classList.add("thumbnail-native-tracking");
       }
-      setIgnoreCursorEvents(ignore);
+      // DOM hover can fire over the hole in the always-on-top window. Toggling
+      // click-through from those events leaves Wayland (null pointer polls)
+      // unable to restore hits: the window ignores the cursor, so no later
+      // pointermove can undo it. Native samples still own hit testing.
+      if (options.updateHitTest !== false) {
+        setIgnoreCursorEvents(ignore);
+      }
       setThumbnailCursor(kind);
     };
 
@@ -6059,13 +6132,35 @@ export function Thumbnail() {
     };
 
     const onPointerMove = (event: PointerEvent) => {
-      if (!cardHoverLocked) return;
-      const wasLocked = cardHoverLocked;
-      maybeUnlockCardHover(
-        { x: event.clientX, y: event.clientY, inside: true },
-        { fromPointerMove: true },
+      if (cardHoverLocked) {
+        const wasLocked = cardHoverLocked;
+        maybeUnlockCardHover(
+          { x: event.clientX, y: event.clientY, inside: true },
+          { fromPointerMove: true },
+        );
+        if (wasLocked && !cardHoverLocked) pollImmediately();
+      }
+      // Native pointer polls cover click-through macOS panels. DOM moves cover
+      // the harness and Windows/Linux WebViews, where glow :hover already
+      // fires but CSS cursor often stays the arrow until mousedown.
+      if (event.pointerType !== "touch") {
+        applyNativeHover(
+          {
+            x: event.clientX,
+            y: event.clientY,
+            inside: true,
+          },
+          { updateHitTest: false },
+        );
+      }
+    };
+
+    const onPointerLeaveWindow = (event: PointerEvent) => {
+      if (event.relatedTarget) return;
+      applyNativeHover(
+        { x: event.clientX, y: event.clientY, inside: false },
+        { updateHitTest: false },
       );
-      if (wasLocked && !cardHoverLocked) pollImmediately();
     };
 
     const onPointerActivity = (event: Event) => {
@@ -6088,7 +6183,8 @@ export function Thumbnail() {
     // through that later native transition as well.
     window.addEventListener("blur", preserveInteractiveCursorAcrossHandoff);
     // Capture-phase so we reassert before WebKit's own cursor update from the click.
-    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointermove", onPointerMove, true);
+    window.addEventListener("pointerleave", onPointerLeaveWindow, true);
     window.addEventListener("pointerdown", onPointerActivity, true);
     window.addEventListener("pointerup", onPointerActivity, true);
     // `click` fires after mouseup and after the Edit handler starts opening the
@@ -6112,7 +6208,8 @@ export function Thumbnail() {
       document.removeEventListener("visibilitychange", resumeFromSuspension);
       window.removeEventListener("focus", pollImmediately);
       window.removeEventListener("blur", preserveInteractiveCursorAcrossHandoff);
-      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointermove", onPointerMove, true);
+      window.removeEventListener("pointerleave", onPointerLeaveWindow, true);
       window.removeEventListener("pointerdown", onPointerActivity, true);
       window.removeEventListener("pointerup", onPointerActivity, true);
       window.removeEventListener("click", onPointerActivity, true);
@@ -6195,11 +6292,13 @@ export function Thumbnail() {
     };
     if (prefersReducedMotion()) {
       setExpandFromTransforms(new Map());
+      if (!nextCollapsed) pendingNewestReveal.current = true;
       setStackMotion(nextCollapsed ? "collapsed" : "expanded");
       if (nextCollapsed) armHoverReady();
       else cancelHoverReady();
       void invoke("set_mini_previews_collapsed", { collapsed: nextCollapsed })
         .catch(() => {
+          if (!nextCollapsed) pendingNewestReveal.current = false;
           setStackMotion(nextCollapsed ? "expanded" : "collapsed");
           if (nextCollapsed) cancelHoverReady();
           else armHoverReady();
@@ -6252,6 +6351,7 @@ export function Thumbnail() {
       });
       return;
     }
+    pendingNewestReveal.current = true;
     void invoke("set_mini_previews_collapsed", { collapsed: false })
       .then(() => {
         setExpandFromTransforms(captureThumbnailCardTransforms(stackRef.current));
@@ -6267,6 +6367,7 @@ export function Thumbnail() {
       })
       .catch(() => {
         setExpandFromTransforms(new Map());
+        pendingNewestReveal.current = false;
         setStackMotion("collapsed");
         armHoverReady();
       });
@@ -6372,28 +6473,6 @@ export function Thumbnail() {
           if (compact) preventThumbnailHtml5Drag(event.nativeEvent);
         }}
       >
-        {!collapsed && (
-          <div className={[
-            "thumbnail-stack-toolbar",
-            stackMotion === "collapsing" ? "thumbnail-stack-toolbar-leaving" : "",
-            stackMotion === "expanding" ? "thumbnail-stack-toolbar-entering" : "",
-            exitingOnly && stackMotion !== "collapsing"
-              ? "thumbnail-stack-toolbar-exiting"
-              : "",
-          ].filter(Boolean).join(" ")}>
-            <button
-              type="button"
-              className="thumbnail-stack-control thumbnail-stack-minimize"
-              aria-label="Minimize previews"
-              onClick={() => setStackCollapsed(true)}
-            >
-              <PreviewStackIcon />
-              <span className="thumbnail-stack-minimize-label" aria-hidden="true">
-                Show less
-              </span>
-            </button>
-          </div>
-        )}
         {/* Horizontal-only Gaussian blur for dismiss motion streak (stdDeviation x 0). */}
         <svg className="thumbnail-svg-defs" aria-hidden="true" focusable="false">
           <defs>
@@ -6452,6 +6531,28 @@ export function Thumbnail() {
           />
         )}
       </main>
+      {!collapsed && (
+        <div className={[
+          "thumbnail-stack-toolbar",
+          stackMotion === "collapsing" ? "thumbnail-stack-toolbar-leaving" : "",
+          stackMotion === "expanding" ? "thumbnail-stack-toolbar-entering" : "",
+          exitingOnly && stackMotion !== "collapsing"
+            ? "thumbnail-stack-toolbar-exiting"
+            : "",
+        ].filter(Boolean).join(" ")}>
+          <button
+            type="button"
+            className="thumbnail-stack-control thumbnail-stack-minimize"
+            aria-label="Minimize previews"
+            onClick={() => setStackCollapsed(true)}
+          >
+            <PreviewStackIcon />
+            <span className="thumbnail-stack-minimize-label" aria-hidden="true">
+              Show less
+            </span>
+          </button>
+        </div>
+      )}
       {!collapsed && stackOverflow.hasOlder && (
         <button
           type="button"
@@ -7805,7 +7906,8 @@ function PreferencesSections({
             Start capture as soon as a target is selected
             <small>
               Drawing a region, choosing a window, or clicking Full screen
-              immediately starts the capture.
+              immediately starts the capture. When this is off, press Enter
+              in the capture menu to confirm.
             </small>
           </span>
         </label>
@@ -7868,6 +7970,21 @@ function PreferencesSections({
             <small>
               Holds hover states, menus, and motion still while you choose a region or window.
               Turn this off to select from the live desktop.
+            </small>
+          </span>
+        </label>
+
+        <label className="check-row switch-row">
+          <input
+            type="checkbox"
+            checked={settings.show_cursor_in_screenshots}
+            onChange={(event) => update("show_cursor_in_screenshots", event.target.checked)}
+          />
+          <span>
+            Show cursor in screenshots
+            <small>
+              Includes the pointer in still captures. Freeze screen only holds the desktop still; it
+              does not add the cursor by itself.
             </small>
           </span>
         </label>

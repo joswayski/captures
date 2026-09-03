@@ -7,6 +7,7 @@ import type { CaptureArtifact } from "./types";
 import {
   THUMBNAIL_CARD_SLOT_PX,
   THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS,
+  thumbnailStackNewestScrollTop,
 } from "./lib/thumbnailLayout";
 import { THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE } from "./lib/thumbnailHover";
 
@@ -51,6 +52,8 @@ describe("Thumbnail", () => {
   afterEach(() => {
     vi.useRealTimers();
     document.documentElement.classList.remove("thumbnail-native-tracking");
+    document.documentElement.removeAttribute("data-thumbnail-cursor");
+    document.documentElement.style.cursor = "";
     Reflect.deleteProperty(document, "elementFromPoint");
     vi.clearAllMocks();
     document.documentElement.style.removeProperty("--thumbnail-stack-drag-x");
@@ -261,6 +264,58 @@ describe("Thumbnail", () => {
     expect(document.documentElement).not.toHaveClass("thumbnail-native-tracking");
   });
 
+  it("applies grab and pointer cursors from DOM hover without waiting for a click", async () => {
+    render(<Thumbnail />);
+    const card = await screen.findByRole("article");
+    const image = within(card).getByRole("img", { name: "Screenshot preview" });
+    const minimize = screen.getByRole("button", { name: "Minimize previews" });
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => image),
+    });
+
+    fireEvent.pointerMove(image, { clientX: 80, clientY: 90, pointerType: "mouse" });
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute("data-thumbnail-cursor", "grab");
+    });
+    expect(document.documentElement.style.cursor).toBe("grab");
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith("set_thumbnail_cursor", { kind: "grab" });
+
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => minimize),
+    });
+    fireEvent.pointerMove(minimize, { clientX: 40, clientY: 20, pointerType: "mouse" });
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute("data-thumbnail-cursor", "pointer");
+    });
+    expect(document.documentElement.style.cursor).toBe("pointer");
+    expect(minimize).toHaveAttribute("data-native-pointer-hover", "true");
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith("set_thumbnail_cursor", { kind: "pointer" });
+  });
+
+  it("does not click-through the window from DOM hover over empty preview space", async () => {
+    render(<Thumbnail />);
+    const stack = (await screen.findByRole("article")).closest(".thumbnail-stack")!;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => stack),
+    });
+    vi.mocked(invoke).mockClear();
+
+    fireEvent.pointerMove(stack, { clientX: 8, clientY: 8, pointerType: "mouse" });
+    window.dispatchEvent(new PointerEvent("pointerleave", { bubbles: true, pointerType: "mouse" }));
+
+    expect(
+      vi.mocked(invoke).mock.calls.filter(
+        ([command, payload]) => command === "set_thumbnail_ignore_cursor_events"
+          && (payload as { ignore?: boolean } | undefined)?.ignore === true,
+      ),
+    ).toHaveLength(0);
+  });
+
   it("resumes WebView polling after a native show without recursively refreshing the window", async () => {
     render(<Thumbnail />);
     await screen.findByRole("article");
@@ -299,13 +354,12 @@ describe("Thumbnail", () => {
     render(<Thumbnail />);
     await screen.findByRole("article");
     const stack = document.querySelector<HTMLElement>(".thumbnail-stack")!;
-    // Layout height for one card is 216px; force a taller client so the
-    // content-height helper still reports overflow via mocked scrollTop.
+    // Layout height for one card is 240px (28 top + 160 card + 52 gutter).
     Object.defineProperties(stack, {
       clientHeight: { configurable: true, value: 100 },
     });
-    // With one card, layout height is 216 → maxScroll = 116. Pin near bottom.
-    stack.scrollTop = 116;
+    // maxScroll = 140. Pin near bottom.
+    stack.scrollTop = 140;
 
     fireEvent.scroll(stack);
 
@@ -325,7 +379,7 @@ describe("Thumbnail", () => {
     expect(frames).toHaveLength(1);
     now.mockReturnValue(380);
     frames[0]?.(380);
-    // One slot up from 116 → 0 (clamped).
+    // One slot up from 140 → 0 (clamped).
     expect(stack.scrollTop).toBe(0);
 
     raf.mockRestore();
@@ -440,6 +494,62 @@ describe("Thumbnail", () => {
         `${THUMBNAIL_CARD_SLOT_PX}px`,
       );
       expect(cards[0].style.translate).toBe(`0 ${THUMBNAIL_CARD_SLOT_PX}px`);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let an upper preview slide into a deleting neighbor during a stacked settle", async () => {
+    const captures = [1, 2, 3, 4].map((n) => ({
+      ...artifact,
+      id: `capture-${n}`,
+      preview_url: `captures-capture://artifact/capture-${n}`,
+      full_url: `captures-capture://artifact-full/capture-${n}`,
+    }));
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifacts") return captures;
+      if (command === "get_clipboard_state") {
+        return { revision: 0, artifact_id: captures[3].id };
+      }
+      if (command === "get_thumbnail_pointer_position") return null;
+      return undefined;
+    });
+
+    render(<Thumbnail />);
+    const cards = await screen.findAllByRole("article");
+    expect(cards).toHaveLength(4);
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(within(cards[2]).getByRole("button", { name: "Delete" }));
+      expect(cards[2]).toHaveClass("thumbnail-exiting");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16);
+      });
+      expect(cards[0]).toHaveClass("thumbnail-stack-shifting");
+      expect(cards[1]).toHaveClass("thumbnail-stack-shifting");
+
+      fireEvent.click(within(cards[1]).getByRole("button", { name: "Delete" }));
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(cards[1]).toHaveClass("thumbnail-exiting");
+      expect(cards[0].style.getPropertyValue("--thumbnail-stack-shift")).toBe(
+        `${THUMBNAIL_CARD_SLOT_PX}px`,
+      );
+      expect(cards[1].style.getPropertyValue("--thumbnail-stack-shift")).toBe(
+        `${THUMBNAIL_CARD_SLOT_PX}px`,
+      );
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16);
+      });
+      expect(cards[0].style.getPropertyValue("--thumbnail-stack-shift")).toBe(
+        `${THUMBNAIL_CARD_SLOT_PX}px`,
+      );
     } finally {
       vi.useRealTimers();
     }
@@ -791,6 +901,60 @@ describe("Thumbnail", () => {
     expect(stack).not.toHaveClass("thumbnail-stack-compact");
     expect(card).not.toHaveAttribute("aria-hidden");
     expect(screen.getByRole("button", { name: "Minimize previews" })).toBeEnabled();
+    expect(stack.contains(
+      screen.getByRole("button", { name: "Minimize previews" }).closest(".thumbnail-stack-toolbar"),
+    )).toBe(false);
+  });
+
+  it("reveals the newest capture and keeps Show less at the window after expanding", async () => {
+    const stacked = Array.from({ length: 8 }, (_, index) => ({
+      ...artifact,
+      id: `capture-${index + 1}`,
+    }));
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifacts") return stacked;
+      if (command === "get_clipboard_state") {
+        return { revision: 0, artifact_id: stacked.at(-1)?.id };
+      }
+      if (command === "get_thumbnail_pointer_position") {
+        return new Promise(() => undefined);
+      }
+      return undefined;
+    });
+
+    render(<Thumbnail />);
+    const cards = await screen.findAllByRole("article");
+    expect(cards).toHaveLength(8);
+    const stack = cards[0]!.closest(".thumbnail-stack")!;
+    const viewportHeight = 400;
+    Object.defineProperties(stack, {
+      clientHeight: { configurable: true, value: viewportHeight },
+    });
+    const newestTop = thumbnailStackNewestScrollTop(8, viewportHeight);
+    expect(newestTop).toBeGreaterThan(0);
+
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "Minimize previews" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(32);
+      await vi.advanceTimersByTimeAsync(480);
+    });
+
+    const expand = screen.getByRole("button", { name: "Expand 8 previews" });
+    stack.scrollTop = 0;
+    await act(async () => {
+      fireEvent.click(expand);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(480);
+    });
+
+    expect(stack.scrollTop).toBe(newestTop);
+    expect(screen.queryByRole("button", { name: "Show newer captures" })).toBeNull();
+    const restack = screen.getByRole("button", { name: "Minimize previews" })
+      .closest(".thumbnail-stack-toolbar");
+    expect(stack.contains(restack)).toBe(false);
   });
 
   it("fans collapsed previews with staggered tilt and settles that pose on expand", async () => {

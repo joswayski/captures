@@ -39,6 +39,7 @@ const settings: AppSettings = {
   onboarding_completed: true,
   screenshot_countdown_seconds: 0,
   freeze_screen: true,
+  show_cursor_in_screenshots: true,
   screenshot_format: "png",
   recording: {
     video_shortcut: "Ctrl+Shift+5",
@@ -518,6 +519,22 @@ describe("Preferences", () => {
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("update_settings", {
         settings: expect.objectContaining({ freeze_screen: false }),
+      });
+    });
+  });
+
+  it("can turn off the screenshot cursor", async () => {
+    render(<Preferences />);
+
+    const showCursor = await screen.findByRole("checkbox", {
+      name: /Show cursor in screenshots/,
+    });
+    expect(showCursor).toBeChecked();
+    fireEvent.click(showCursor);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("update_settings", {
+        settings: expect.objectContaining({ show_cursor_in_screenshots: false }),
       });
     });
   });

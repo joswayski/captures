@@ -4,8 +4,11 @@ export const THUMBNAIL_CARD_HEIGHT_PX = 160;
 /** Vertical gap between cards (matches `.thumbnail-stack` gap). */
 export const THUMBNAIL_STACK_GAP_PX = 24;
 
-/** Vertical padding on `.thumbnail-stack` (top + bottom each). */
+/** Top/side padding on `.thumbnail-stack`. */
 export const THUMBNAIL_STACK_PADDING_PX = 28;
+
+/** Bottom padding that reserves the expanded Show less gutter. */
+export const THUMBNAIL_STACK_CONTROL_GUTTER_PX = 52;
 
 /** One stack slot: card height + inter-card gap. */
 export const THUMBNAIL_CARD_SLOT_PX = THUMBNAIL_CARD_HEIGHT_PX + THUMBNAIL_STACK_GAP_PX;
@@ -186,10 +189,24 @@ export function resolveThumbnailStackShiftPx(
   return Math.min(Math.max(0, currentShiftPx), live);
 }
 
+/** Treat a dissolving-in-place card as passable after its motion delay. */
+function isClearExitHole(
+  card: ThumbnailStackCardMotionState | undefined,
+  resolvedShiftPx: number,
+): boolean {
+  return Boolean(card?.holdsLayoutSlot && card.motionReady && resolvedShiftPx <= 0.5);
+}
+
 /**
  * Compute the target translateY (px) for every card in order.
  * Live survivors slide into motion-ready holes; exiting cards keep the shift
  * they already had until those holes are removed from layout.
+ *
+ * Cards never close the gap to a neighbor that still occupies its slot. That
+ * keeps a convoy when several live cards follow a lower hole, and it stops a
+ * live card from sliding into a preview that started deleting mid-settle.
+ * Dissolving-in-place holes (motion-ready, unshifted) stay passable so a
+ * single delete still eases into the ash after the usual delay.
  */
 export function computeThumbnailStackShifts(
   cards: readonly ThumbnailStackCardMotionState[],
@@ -198,14 +215,23 @@ export function computeThumbnailStackShifts(
   // that can fire repeatedly during exit animations.
   const shifts = new Array<number>(cards.length);
   let readySlotsBelow = 0;
+  let blockingPxFromBelow = Number.POSITIVE_INFINITY;
   for (let index = cards.length - 1; index >= 0; index -= 1) {
     const card = cards[index];
-    const livePx = thumbnailStackShiftPx(readySlotsBelow);
-    shifts[index] = resolveThumbnailStackShiftPx(
+    const livePx = Math.min(thumbnailStackShiftPx(readySlotsBelow), blockingPxFromBelow);
+    const resolvedPx = resolveThumbnailStackShiftPx(
       livePx,
       card?.currentShiftPx ?? 0,
       Boolean(card?.exiting),
     );
+    shifts[index] = resolvedPx;
+    if (isClearExitHole(card, resolvedPx)) {
+      // Pass through this empty-looking slot; the next occupied card is one
+      // more slot farther away.
+      blockingPxFromBelow += THUMBNAIL_CARD_SLOT_PX;
+    } else {
+      blockingPxFromBelow = resolvedPx;
+    }
     if (card?.holdsLayoutSlot && card.motionReady) readySlotsBelow += 1;
   }
   return shifts;
@@ -230,6 +256,91 @@ export function shouldScrollThumbnailStackToEnd(
   return nextCount > previousCount;
 }
 
+/**
+ * Expanding the pile starts at scrollTop 0 (oldest). Jump to the newest
+ * capture once cards are back in document flow.
+ */
+export function shouldScrollThumbnailStackToNewestOnExpand(
+  previousMotion: string | undefined,
+  nextMotion: string,
+): boolean {
+  return nextMotion === "expanded"
+    && previousMotion !== undefined
+    && previousMotion !== "expanded";
+}
+
+/** Scroll offset that puts the newest (bottom) preview in view. */
+export function thumbnailStackNewestScrollTop(
+  cardCount: number,
+  clientHeight: number,
+): number {
+  return Math.max(0, thumbnailStackContentHeight(cardCount) - Math.max(0, clientHeight));
+}
+
+/** Pin the stack to its newest capture using layout geometry, not paint overflow. */
+export function scrollThumbnailStackToNewest(stack: HTMLElement): void {
+  const cardCount = stack.querySelectorAll(":scope > .thumbnail-card").length;
+  stack.scrollTop = thumbnailStackNewestScrollTop(cardCount, stack.clientHeight);
+}
+
+export type ScheduleScrollThumbnailStackToNewestOptions = {
+  /** Called after each attempt so overflow cues can track the new offset. */
+  onScrolled?: () => void;
+  /** Injectable rAF. Defaults to `requestAnimationFrame`. */
+  frame?: (callback: FrameRequestCallback) => number;
+  /** Injectable cancel. Defaults to `cancelAnimationFrame`. */
+  cancelFrame?: (id: number) => void;
+  /**
+   * How long a ResizeObserver may retry after compact→expanded window growth.
+   * Omit to only run immediately plus two animation frames.
+   */
+  retryMs?: number;
+};
+
+/**
+ * Scroll to the newest capture now and again after layout settles.
+ * Compact→expanded and native window growth both change clientHeight a frame
+ * later; one useLayoutEffect write is not enough.
+ */
+export function scheduleScrollThumbnailStackToNewest(
+  stack: HTMLElement,
+  options: ScheduleScrollThumbnailStackToNewestOptions = {},
+): () => void {
+  const onScrolled = options.onScrolled;
+  const frame = options.frame
+    ?? ((callback: FrameRequestCallback) => requestAnimationFrame(callback));
+  const cancelFrame = options.cancelFrame
+    ?? ((id: number) => cancelAnimationFrame(id));
+  const retryMs = options.retryMs ?? 0;
+
+  const run = () => {
+    scrollThumbnailStackToNewest(stack);
+    onScrolled?.();
+  };
+
+  run();
+  let innerFrame = 0;
+  const outerFrame = frame(() => {
+    run();
+    innerFrame = frame(run);
+  });
+
+  const observer = retryMs > 0 && typeof ResizeObserver === "function"
+    ? new ResizeObserver(run)
+    : null;
+  observer?.observe(stack);
+  const timeout = retryMs > 0
+    ? window.setTimeout(() => observer?.disconnect(), retryMs)
+    : 0;
+
+  return () => {
+    cancelFrame(outerFrame);
+    cancelFrame(innerFrame);
+    observer?.disconnect();
+    if (timeout) window.clearTimeout(timeout);
+  };
+}
+
 export type ThumbnailStackOverflow = {
   /** Older previews are clipped above the visible scrollport. */
   hasOlder: boolean;
@@ -248,7 +359,8 @@ export type ThumbnailStackOverflow = {
 export function thumbnailStackContentHeight(cardCount: number): number {
   if (cardCount <= 0) return 0;
   return (
-    THUMBNAIL_STACK_PADDING_PX * 2
+    THUMBNAIL_STACK_PADDING_PX
+    + THUMBNAIL_STACK_CONTROL_GUTTER_PX
     + cardCount * THUMBNAIL_CARD_HEIGHT_PX
     + (cardCount - 1) * THUMBNAIL_STACK_GAP_PX
   );

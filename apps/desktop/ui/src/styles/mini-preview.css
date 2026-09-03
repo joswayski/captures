@@ -972,6 +972,59 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
   cursor: grabbing !important;
 }
 
+/*
+ * Transparent always-on-top WebViews often skip element-level `cursor` until
+ * mousedown. Mirror grab/pointer on `html` from CSS :hover so the glow hover
+ * and Show less control do not wait for a click.
+ */
+html:has(.thumbnail-card:hover) {
+  cursor: -webkit-grab;
+  cursor: grab;
+}
+
+html:has(
+  :is(
+    .thumbnail-stack-control,
+    .thumbnail-overflow-cue,
+    .thumbnail-collapsed-hit-target,
+    .icon-button,
+    .thumbnail-main-actions button,
+    .thumbnail-editor-control
+  ):hover:not(:disabled)
+),
+html:has(
+  :is(
+    .thumbnail-stack-control,
+    .thumbnail-overflow-cue,
+    .thumbnail-collapsed-hit-target,
+    .icon-button,
+    .thumbnail-main-actions button,
+    .thumbnail-editor-control
+  )[data-native-pointer-hover="true"]:not(:disabled)
+) {
+  cursor: pointer;
+}
+
+html:has(.thumbnail-stack-dragging),
+html:has(.thumbnail-card.thumbnail-file-dragging) {
+  cursor: -webkit-grabbing;
+  cursor: grabbing;
+}
+
+.thumbnail-card:hover,
+.thumbnail-card:hover img {
+  cursor: -webkit-grab;
+  cursor: grab;
+}
+
+.thumbnail-card:hover :is(button, .icon-button, .thumbnail-editor-control):not(:disabled),
+.thumbnail-stack-control:hover:not(:disabled),
+.thumbnail-stack-control:hover:not(:disabled) *,
+.thumbnail-overflow-cue:hover:not(:disabled),
+.thumbnail-collapsed-hit-target:hover:not(:disabled) {
+  cursor: pointer;
+}
+
 .thumbnail-main-actions svg,
 .icon-button svg {
   width: 16px;
@@ -1478,8 +1531,14 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
   }
 }
 
+/*
+ * Window overlay, not a child of `.thumbnail-stack`: that scroller's
+ * absolutely positioned descendants are tied to the content box, so Show less
+ * would freeze beside the 2nd/3rd card once the pile overflows. `fixed` keeps
+ * it on the visible stack edge while the list scrolls.
+ */
 .thumbnail-stack-toolbar {
-  position: absolute;
+  position: fixed;
   z-index: 50;
   bottom: 16px;
   left: 28px;
@@ -1637,27 +1696,56 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
   white-space: nowrap;
 }
 
-.thumbnail-stack-minimize:hover,
-.thumbnail-stack-minimize[data-native-pointer-hover="true"],
-.thumbnail-stack-minimize:focus-visible {
+/*
+ * Idle hover only. While the last preview deletes, the toolbar stays visible
+ * (and native pointer tracking still hits its bounds) — expanding to “Show
+ * less” on a control that is about to vanish is noise.
+ */
+.thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize:hover,
+.thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize[data-native-pointer-hover="true"],
+.thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize:focus-visible {
   width: 92px;
   background: var(--glass-strong-solid);
   border-color: var(--glass-border);
   transform: none;
 }
 
-.thumbnail-stack-minimize:hover svg,
-.thumbnail-stack-minimize[data-native-pointer-hover="true"] svg,
-.thumbnail-stack-minimize:focus-visible svg {
+.thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize:hover svg,
+.thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize[data-native-pointer-hover="true"] svg,
+.thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize:focus-visible svg {
   opacity: 0;
   transform: translateX(-8px) scale(0.8);
 }
 
-.thumbnail-stack-minimize:hover .thumbnail-stack-minimize-label,
-.thumbnail-stack-minimize[data-native-pointer-hover="true"] .thumbnail-stack-minimize-label,
-.thumbnail-stack-minimize:focus-visible .thumbnail-stack-minimize-label {
+.thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize:hover .thumbnail-stack-minimize-label,
+.thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize[data-native-pointer-hover="true"] .thumbnail-stack-minimize-label,
+.thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize:focus-visible .thumbnail-stack-minimize-label {
   opacity: 1;
   transform: translateX(0);
+}
+
+.thumbnail-stack-toolbar-leaving .thumbnail-stack-minimize,
+.thumbnail-stack-toolbar-exiting .thumbnail-stack-minimize,
+.thumbnail-stack-toolbar-entering .thumbnail-stack-minimize {
+  width: 28px;
+  transform: none;
+  transition: none;
+}
+
+.thumbnail-stack-toolbar-leaving .thumbnail-stack-minimize svg,
+.thumbnail-stack-toolbar-exiting .thumbnail-stack-minimize svg,
+.thumbnail-stack-toolbar-entering .thumbnail-stack-minimize svg {
+  opacity: 1;
+  transform: none;
+  transition: none;
+}
+
+.thumbnail-stack-toolbar-leaving .thumbnail-stack-minimize-label,
+.thumbnail-stack-toolbar-exiting .thumbnail-stack-minimize-label,
+.thumbnail-stack-toolbar-entering .thumbnail-stack-minimize-label {
+  opacity: 0;
+  transform: translateX(4px);
+  transition: none;
 }
 
 .thumbnail-stack-control[data-tooltip]::after {
