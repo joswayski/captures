@@ -24,6 +24,8 @@ import {
   captureThumbnailCardTransforms,
   thumbnailStackFanShiftPx,
   thumbnailStackFanTiltDeg,
+  thumbnailStackHiddenAmount,
+  thumbnailStackPileDepth,
   THUMBNAIL_CARD_HEIGHT_PX,
   THUMBNAIL_CARD_SLOT_PX,
   THUMBNAIL_DISMISS_HOLD_MS,
@@ -77,6 +79,7 @@ describe("thumbnail stack layout", () => {
       /\.thumbnail-stack-minimized\.thumbnail-stack-pressing > \.thumbnail-card\s*\{([\s\S]*?)\n\}/,
     );
 
+    expect(compactCard?.[1]).toMatch(/--thumbnail-stack-pile-depth/);
     expect(compactCard?.[1]).toMatch(/--thumbnail-stack-base-depth/);
     expect(compactCard?.[1]).toMatch(/--thumbnail-stack-shift-slots/);
     expect(compactCard?.[1]).toMatch(/transform:\s*var\(--thumbnail-stack-rest-transform\)/);
@@ -86,7 +89,7 @@ describe("thumbnail stack layout", () => {
     expect(compactCard?.[1]).toMatch(/--thumbnail-stack-expanded-transform/);
     expect(compactCard?.[1]).not.toMatch(/transform\s+var\(--stack-fan-dur\)/);
     expect(hoverReady?.[1]).toMatch(
-      /transform\s+var\(--stack-fan-dur\) calc\(var\(--thumbnail-stack-depth, 0\) \* var\(--stack-fan-stagger\)\)/,
+      /transform\s+var\(--stack-fan-dur\) calc\(var\(--thumbnail-stack-pile-depth, 0\) \* var\(--stack-fan-stagger\)\)/,
     );
     expect(pressing?.[1]).toMatch(/transition:/);
     expect(pressing?.[1]).not.toMatch(/transform\s+var\(--stack-fan-dur\)/);
@@ -95,7 +98,8 @@ describe("thumbnail stack layout", () => {
     expect(minimizeRun?.[1]).toMatch(/transform:\s*var\(--thumbnail-stack-rest-transform\)/);
     expect(minimizeRun?.[1]).toMatch(/transform 0\.48s/);
     expect(hoverFan).not.toBeNull();
-    expect(thumbnailStyles).toMatch(/--stack-fan-stagger:\s*8ms/);
+    expect(thumbnailStyles).toMatch(/--stack-fan-stagger:\s*16ms/);
+    expect(thumbnailStyles).toMatch(/--stack-pile-max-depth:\s*3/);
     expect(thumbnailStyles).toMatch(
       /transform:\s*var\(--thumbnail-stack-expand-from, var\(--thumbnail-stack-rest-transform\)\)/,
     );
@@ -121,14 +125,25 @@ describe("thumbnail stack layout", () => {
     spy.mockRestore();
   });
 
-  it("tilts deeper collapsed cards a few degrees and leaves the front square", () => {
+  it("tilts deeper collapsed cards a couple of degrees and leaves the front square", () => {
     expect(thumbnailStackFanTiltDeg(0)).toBe(0);
-    expect(thumbnailStackFanTiltDeg(1)).toBe(7);
-    expect(thumbnailStackFanTiltDeg(2)).toBe(-6);
-    expect(thumbnailStackFanTiltDeg(3)).toBe(5);
-    expect(thumbnailStackFanTiltDeg(8)).toBe(5);
+    expect(thumbnailStackFanTiltDeg(1)).toBe(2.4);
+    expect(thumbnailStackFanTiltDeg(2)).toBe(-2);
+    expect(thumbnailStackFanTiltDeg(3)).toBe(1.6);
+    expect(thumbnailStackFanTiltDeg(8)).toBe(1.6);
     expect(thumbnailStackFanShiftPx(0)).toBe(0);
-    expect(thumbnailStackFanShiftPx(1)).toBeCloseTo(12.6);
+    expect(thumbnailStackFanShiftPx(1)).toBeCloseTo(2.4);
+  });
+
+  it("tucks extra collapsed cards behind the idle pile until expand", () => {
+    expect(thumbnailStackPileDepth(0)).toBe(0);
+    expect(thumbnailStackPileDepth(3)).toBe(3);
+    expect(thumbnailStackPileDepth(8)).toBe(3);
+    expect(thumbnailStackHiddenAmount(3)).toBe(0);
+    expect(thumbnailStackHiddenAmount(4)).toBe(1);
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-expanding > \.thumbnail-card\s*\{[^}]*opacity:\s*1/,
+    );
   });
 
   it("arches the collapsed pile so the top trails the hands while dragging", () => {
@@ -139,9 +154,10 @@ describe("thumbnail stack layout", () => {
     expect(dragging?.[1]).not.toMatch(/transform\s+0\.22s/);
     expect(dragging?.[1]).not.toMatch(/40ms/);
     expect(dragging?.[1]).toMatch(/--thumbnail-drag-sway-x/);
+    expect(dragging?.[1]).toMatch(/--thumbnail-stack-pile-depth/);
     expect(dragging?.[1]).toMatch(/\* 0\.7/);
     expect(dragging?.[1]).toMatch(/\* 0\.2/);
-    expect(dragging?.[1]).not.toMatch(/\(var\(--thumbnail-stack-depth, 0\) \+ 1\)/);
+    expect(dragging?.[1]).not.toMatch(/\(var\(--thumbnail-stack-pile-depth, 0\) \+ 1\)/);
     expect(dragging?.[1]).toMatch(/rotateZ\(/);
     expect(dragging?.[1]).not.toMatch(/-0\.28deg/);
     expect(dragging?.[1]).not.toMatch(/0\.18deg/);
@@ -283,7 +299,9 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailCollapsedPeekPx(2)).toBe(13);
     expect(thumbnailCollapsedPeekPx(4)).toBe(39);
     expect(thumbnailCollapsedPeekPx(8)).toBe(39);
-    expect(thumbnailCollapsedPeekPx(2, true)).toBe(42);
+    expect(thumbnailCollapsedPeekPx(2, true)).toBe(24);
+    expect(thumbnailCollapsedPeekPx(4, true)).toBe(56);
+    expect(thumbnailCollapsedPeekPx(8, true)).toBe(56);
     expect(thumbnailCollapsedPeekPx(1, true)).toBe(0);
   });
 
@@ -355,7 +373,7 @@ describe("thumbnail stack layout", () => {
       /\.thumbnail-stack-compact > \.thumbnail-card::before\s*\{([^}]*)\}/,
     );
     expect(overlay?.[1]).toMatch(
-      /opacity:\s*calc\(var\(--thumbnail-stack-depth/,
+      /opacity:\s*calc\(var\(--thumbnail-stack-pile-depth/,
     );
     expect(overlay?.[1]).toMatch(/background:\s*var\(--glass-strong-solid\)/);
     expect(overlay?.[1]).not.toMatch(/background:\s*#000/);
