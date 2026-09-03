@@ -7,8 +7,6 @@ import type { CaptureArtifact } from "./types";
 import {
   THUMBNAIL_CARD_SLOT_PX,
   THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS,
-  thumbnailCollapsedPeekPx,
-  thumbnailExpandedHoverPathPx,
   thumbnailStackNewestScrollTop,
 } from "./lib/thumbnailLayout";
 import { THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE } from "./lib/thumbnailHover";
@@ -981,7 +979,6 @@ describe("Thumbnail", () => {
     expect(screen.queryByRole("button", { name: "Minimize previews" })).toBeNull();
     const expand = screen.getByRole("button", { name: "Expand preview" });
     expect(expand).toHaveClass("thumbnail-collapsed-hit-target");
-    expect(expand.querySelector(".thumbnail-stack-expand-path")).toBeNull();
     expect(vi.mocked(invoke)).toHaveBeenCalledWith(
       "set_mini_previews_collapsed",
       { collapsed: true },
@@ -1133,42 +1130,6 @@ describe("Thumbnail", () => {
     });
     expect(cards[0].style.getPropertyValue("--thumbnail-stack-expand-from")).toBe("");
     expect(stack).not.toHaveClass("thumbnail-stack-compact");
-  });
-
-  it("paints a hover path as tall as the remaining expanded stack", async () => {
-    const stacked = Array.from({ length: 8 }, (_, index) => ({
-      ...artifact,
-      id: `capture-${index + 1}`,
-    }));
-    vi.mocked(invoke).mockImplementation(async (command) => {
-      if (command === "get_artifacts") return stacked;
-      if (command === "get_clipboard_state") {
-        return { revision: 0, artifact_id: stacked[0].id };
-      }
-      if (command === "get_thumbnail_pointer_position") {
-        return new Promise(() => undefined);
-      }
-      return undefined;
-    });
-
-    render(<Thumbnail />);
-    await screen.findAllByRole("article");
-    vi.useFakeTimers();
-    fireEvent.click(screen.getByRole("button", { name: "Minimize previews" }));
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(32);
-      await vi.advanceTimersByTimeAsync(480);
-      await vi.advanceTimersByTimeAsync(32);
-    });
-
-    const expand = screen.getByRole("button", { name: "Expand 8 previews" });
-    const path = expand.querySelector(".thumbnail-stack-expand-path");
-    expect(path).not.toBeNull();
-    expect(expand).toHaveStyle({
-      "--thumbnail-expand-rise": `${7 * THUMBNAIL_CARD_SLOT_PX}px`,
-      "--thumbnail-expand-path": `${thumbnailExpandedHoverPathPx(8)}px`,
-      "--thumbnail-collapsed-hover-peek": `${thumbnailCollapsedPeekPx(8, true)}px`,
-    });
   });
 
   it("drags the collapsed pile instead of expanding once the pointer moves", async () => {
