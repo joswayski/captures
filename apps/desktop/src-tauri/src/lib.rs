@@ -5031,9 +5031,8 @@ fn update_thumbnail_stack_window(
         hide_thumbnail_window(&window);
         return;
     }
-    let visible_count = thumbnail_stack_visible_count(count, collapsed);
     let (x, desired_y, desired_height) =
-        thumbnail_window_geometry(handle, visible_count, collapsed, origin);
+        thumbnail_window_geometry(handle, count, collapsed, origin);
     let visible = window.is_visible().unwrap_or(false);
     let presented = thumbnail_window_is_presented(&window);
     // WKWebView blanks painted cards when its visible NSWindow shrinks. macOS
@@ -5080,10 +5079,6 @@ fn thumbnail_stack_should_be_visible(
     // Capture flows suppress the stack so it does not appear in screenshots or
     // recordings. Opting in keeps it visible for self-capture / feedback.
     count > 0 && show_mini_previews && (!suppressed || include_mini_previews_in_captures)
-}
-
-fn thumbnail_stack_visible_count(count: usize, collapsed: bool) -> usize {
-    if collapsed { count.min(1) } else { count }
 }
 
 fn thumbnail_window_logical_height(window: &tauri::WebviewWindow) -> Option<f64> {
@@ -5326,7 +5321,8 @@ fn set_mini_preview_stack_position(
         return Err("display work area is unavailable".to_owned());
     };
     let work = thumbnail_work_area(bounds);
-    let content_height = thumbnail_stack_height(1, true);
+    let count = state.artifacts.lock().len().max(1);
+    let content_height = thumbnail_stack_height(count, true);
     let frame_height = thumbnail_window_logical_height(&window).unwrap_or(content_height);
     let (x, y) = thumbnail_clamp_bottom_aligned_frame(x, y, frame_height, content_height, work);
     let _ = window.set_position(tauri::LogicalPosition::new(x, y));
@@ -5340,7 +5336,39 @@ fn set_mini_preview_stack_position(
     Ok(ThumbnailStackPosition { x, y })
 }
 
-fn thumbnail_stack_height(count: usize, _collapsed: bool) -> f64 {
+fn thumbnail_stack_pose_depth(depth: f64) -> f64 {
+    const FULL: f64 = 3.0;
+    const TIGHTEN: f64 = 0.45;
+    if depth <= 0.0 {
+        0.0
+    } else if depth <= FULL {
+        depth
+    } else {
+        let extra = depth - FULL;
+        FULL + extra / (1.0 + extra * TIGHTEN)
+    }
+}
+
+fn thumbnail_collapsed_peek(count: usize, hovered: bool) -> f64 {
+    let extra = count.saturating_sub(1) as f64;
+    let pose = thumbnail_stack_pose_depth(extra);
+    let peek = pose * if hovered { 24.0 } else { 13.0 };
+    if hovered && extra > 0.0 {
+        peek + 18.0
+    } else {
+        peek
+    }
+}
+
+fn thumbnail_stack_height(count: usize, collapsed: bool) -> f64 {
+    if collapsed {
+        let peek = thumbnail_collapsed_peek(count.max(1), true);
+        let extra_above_padding = (peek - THUMBNAIL_PADDING).max(0.0);
+        return THUMBNAIL_PADDING
+            + THUMBNAIL_CONTROL_GUTTER
+            + THUMBNAIL_CARD_HEIGHT
+            + extra_above_padding;
+    }
     let cards = count.max(1) as f64;
     THUMBNAIL_PADDING
         + THUMBNAIL_CONTROL_GUTTER
@@ -7112,7 +7140,7 @@ mod tests {
         thumbnail_clamp_frame, thumbnail_cursor_action, thumbnail_cursor_ignore_update,
         thumbnail_geometry, thumbnail_pointer_in_space, thumbnail_pointer_position,
         thumbnail_preserve_current_height, thumbnail_stack_height,
-        thumbnail_stack_should_be_visible, thumbnail_stack_visible_count,
+        thumbnail_stack_should_be_visible,
         thumbnail_visible_window_height, track_shortcut_suppression, tray_accelerator,
         tray_icon_rect_is_usable, tray_notice_window_size, viewer_window_label,
         window_display_crop_is_safe, window_is_capturable, windows_window_is_capture_overlay,
@@ -8139,12 +8167,12 @@ mod tests {
     }
 
     #[test]
-    fn minimized_stack_requests_one_card_of_native_window_height() {
-        assert_eq!(thumbnail_stack_visible_count(4, true), 1);
-        assert_eq!(thumbnail_stack_visible_count(4, false), 4);
-        assert_eq!(thumbnail_stack_visible_count(0, true), 0);
+    fn collapsed_stack_window_fits_the_receding_pile() {
         assert_eq!(thumbnail_stack_height(1, true), 240.0);
         assert_eq!(thumbnail_stack_height(1, false), 240.0);
+        assert!(thumbnail_stack_height(8, true) > thumbnail_stack_height(4, true));
+        assert!(thumbnail_stack_height(8, true) < thumbnail_stack_height(8, false));
+        assert_eq!(thumbnail_stack_height(4, true), 302.0);
     }
 
     #[test]

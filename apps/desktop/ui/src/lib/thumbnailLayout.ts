@@ -13,13 +13,19 @@ export const THUMBNAIL_STACK_CONTROL_GUTTER_PX = 52;
 /** One stack slot: card height + inter-card gap. */
 export const THUMBNAIL_CARD_SLOT_PX = THUMBNAIL_CARD_HEIGHT_PX + THUMBNAIL_STACK_GAP_PX;
 
-/** How many collapsed cards peek behind the front preview. */
-export const THUMBNAIL_STACK_MAX_VISIBLE_DEPTH = 3;
+/**
+ * Collapsed cards at this depth and closer keep a full 13px idle step.
+ * Deeper cards pack tighter so a long history recedes instead of hiding.
+ */
+export const THUMBNAIL_STACK_FULL_PEEK_DEPTH = 3;
 
-/** Idle collapsed peek per extra card (matches compact `translateY`). */
+/** How fast extra collapsed cards tighten after the full-step band. */
+export const THUMBNAIL_STACK_RECEDING_TIGHTEN = 0.45;
+
+/** Idle collapsed peek per pose unit (matches compact `translateY`). */
 export const THUMBNAIL_STACK_IDLE_PEEK_PX = 13;
 
-/** Hover-fan collapsed peek per extra card. */
+/** Hover-fan collapsed peek per pose unit. */
 export const THUMBNAIL_STACK_HOVER_PEEK_PX = 24;
 
 /** Extra hit-target height so a hovered tilt corner is still on the pile. */
@@ -40,11 +46,28 @@ export const THUMBNAIL_STACK_FAN_SHIFT_PX_PER_DEG = 1.8;
 
 /** Tilt applied to a collapsed card at `depth` while the pile is hovered. */
 export function thumbnailStackFanTiltDeg(depth: number): number {
-  const index = Math.min(
-    Math.max(Math.trunc(depth), 0),
-    THUMBNAIL_STACK_FAN_TILT_DEG.length - 1,
+  const index = Math.max(Math.trunc(depth), 0);
+  if (index < THUMBNAIL_STACK_FAN_TILT_DEG.length) {
+    return THUMBNAIL_STACK_FAN_TILT_DEG[index];
+  }
+  const pattern = THUMBNAIL_STACK_FAN_TILT_DEG.slice(1);
+  const raw = pattern[(index - 1) % pattern.length] ?? 0;
+  return raw / (1 + (index - (THUMBNAIL_STACK_FAN_TILT_DEG.length - 1)) * 0.28);
+}
+
+/**
+ * Visual collapsed depth. The first three behind-cards keep the current
+ * 13px steps; anything deeper approaches a shallow vanishing pile.
+ * Mirrored in mini-preview.css as `--thumbnail-stack-pose`.
+ */
+export function thumbnailStackPoseDepth(depth: number): number {
+  const n = Math.max(0, depth);
+  if (n <= THUMBNAIL_STACK_FULL_PEEK_DEPTH) return n;
+  const extra = n - THUMBNAIL_STACK_FULL_PEEK_DEPTH;
+  return (
+    THUMBNAIL_STACK_FULL_PEEK_DEPTH
+    + extra / (1 + extra * THUMBNAIL_STACK_RECEDING_TIGHTEN)
   );
-  return THUMBNAIL_STACK_FAN_TILT_DEG[index];
 }
 
 /** Horizontal hover offset matching `thumbnailStackFanTiltDeg`. */
@@ -81,11 +104,9 @@ export function thumbnailCollapsedPeekPx(
   cardCount: number,
   hovered = false,
 ): number {
-  const extra = Math.min(
-    Math.max(cardCount - 1, 0),
-    THUMBNAIL_STACK_MAX_VISIBLE_DEPTH,
-  );
-  const peek = extra * (hovered ? THUMBNAIL_STACK_HOVER_PEEK_PX : THUMBNAIL_STACK_IDLE_PEEK_PX);
+  const extra = Math.max(cardCount - 1, 0);
+  const pose = thumbnailStackPoseDepth(extra);
+  const peek = pose * (hovered ? THUMBNAIL_STACK_HOVER_PEEK_PX : THUMBNAIL_STACK_IDLE_PEEK_PX);
   if (hovered && extra > 0) return peek + THUMBNAIL_STACK_HOVER_TILT_PEEK_PX;
   return peek;
 }

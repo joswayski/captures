@@ -1041,6 +1041,16 @@ describe("Thumbnail", () => {
       await vi.advanceTimersByTimeAsync(480);
     });
 
+    const collapsedCards = stack.querySelectorAll<HTMLElement>(":scope > .thumbnail-card");
+    expect(collapsedCards).toHaveLength(8);
+    collapsedCards.forEach((card, index) => {
+      expect(card.style.getPropertyValue("--thumbnail-stack-base-depth")).toBe(
+        String(collapsedCards.length - index - 1),
+      );
+      expect(card.style.getPropertyValue("--thumbnail-stack-hidden")).toBe("");
+    });
+    expect(collapsedCards[0].style.getPropertyValue("--thumbnail-stack-base-depth")).toBe("7");
+
     const expand = screen.getByRole("button", { name: "Expand 8 previews" });
     stack.scrollTop = 0;
     await act(async () => {
