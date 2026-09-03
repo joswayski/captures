@@ -24,8 +24,8 @@ import {
   captureThumbnailCardTransforms,
   thumbnailStackFanShiftPx,
   thumbnailStackFanTiltDeg,
-  thumbnailStackHiddenAmount,
   thumbnailStackPileDepth,
+  thumbnailStackPoseDepth,
   THUMBNAIL_CARD_HEIGHT_PX,
   THUMBNAIL_CARD_SLOT_PX,
   THUMBNAIL_DISMISS_HOLD_MS,
@@ -81,6 +81,7 @@ describe("thumbnail stack layout", () => {
 
     expect(compactCard?.[1]).toMatch(/--thumbnail-stack-pile-depth/);
     expect(compactCard?.[1]).toMatch(/--thumbnail-stack-base-depth/);
+    expect(compactCard?.[1]).toMatch(/--thumbnail-stack-pose/);
     expect(compactCard?.[1]).toMatch(/--thumbnail-stack-shift-slots/);
     expect(compactCard?.[1]).toMatch(/transform:\s*var\(--thumbnail-stack-rest-transform\)/);
     expect(compactCard?.[1]).toMatch(/translate:\s*none\s*!important/);
@@ -99,7 +100,7 @@ describe("thumbnail stack layout", () => {
     expect(minimizeRun?.[1]).toMatch(/transform 0\.48s/);
     expect(hoverFan).not.toBeNull();
     expect(thumbnailStyles).toMatch(/--stack-fan-stagger:\s*16ms/);
-    expect(thumbnailStyles).toMatch(/--stack-pile-max-depth:\s*3/);
+    expect(thumbnailStyles).not.toMatch(/--stack-pile-max-depth:\s*3/);
     expect(thumbnailStyles).toMatch(
       /transform:\s*var\(--thumbnail-stack-expand-from, var\(--thumbnail-stack-rest-transform\)\)/,
     );
@@ -130,17 +131,17 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailStackFanTiltDeg(1)).toBe(2.4);
     expect(thumbnailStackFanTiltDeg(2)).toBe(-2);
     expect(thumbnailStackFanTiltDeg(3)).toBe(1.6);
-    expect(thumbnailStackFanTiltDeg(8)).toBe(1.6);
+    expect(Math.abs(thumbnailStackFanTiltDeg(8))).toBeLessThan(
+      Math.abs(thumbnailStackFanTiltDeg(3)),
+    );
     expect(thumbnailStackFanShiftPx(0)).toBe(0);
     expect(thumbnailStackFanShiftPx(1)).toBeCloseTo(2.4);
   });
 
-  it("tucks extra collapsed cards behind the idle pile until expand", () => {
+  it("recedes extra collapsed cards instead of hiding them", () => {
     expect(thumbnailStackPileDepth(0)).toBe(0);
     expect(thumbnailStackPileDepth(3)).toBe(3);
-    expect(thumbnailStackPileDepth(8)).toBe(3);
-    expect(thumbnailStackHiddenAmount(3)).toBe(0);
-    expect(thumbnailStackHiddenAmount(4)).toBe(1);
+    expect(thumbnailStackPileDepth(8)).toBeCloseTo(3 + 5 * 0.55);
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-expanding > \.thumbnail-card\s*\{[^}]*opacity:\s*1/,
     );
@@ -290,15 +291,27 @@ describe("thumbnail stack layout", () => {
     );
   });
 
-  it("sizes the collapsed expand target from visible extra cards", () => {
+  it("sizes the collapsed expand target from receding extra cards", () => {
     expect(thumbnailCollapsedPeekPx(1)).toBe(0);
     expect(thumbnailCollapsedPeekPx(2)).toBe(13);
     expect(thumbnailCollapsedPeekPx(4)).toBe(39);
-    expect(thumbnailCollapsedPeekPx(8)).toBe(39);
+    expect(thumbnailCollapsedPeekPx(8)).toBeGreaterThan(thumbnailCollapsedPeekPx(4));
+    expect(thumbnailCollapsedPeekPx(8)).toBeCloseTo(thumbnailStackPoseDepth(7) * 13);
+    expect(thumbnailCollapsedPeekPx(8) - thumbnailCollapsedPeekPx(4)).toBeCloseTo(4 * 0.55 * 13);
+    expect(thumbnailCollapsedPeekPx(24)).toBeGreaterThan(thumbnailCollapsedPeekPx(8));
     expect(thumbnailCollapsedPeekPx(2, true)).toBe(24);
     expect(thumbnailCollapsedPeekPx(4, true)).toBe(56);
-    expect(thumbnailCollapsedPeekPx(8, true)).toBe(56);
+    expect(thumbnailCollapsedPeekPx(8, true)).toBeCloseTo(
+      thumbnailStackPoseDepth(7) * 16 + 8,
+    );
     expect(thumbnailCollapsedPeekPx(1, true)).toBe(0);
+  });
+
+  it("packs collapsed cards past the first four into a vanishing pose", () => {
+    expect(thumbnailStackPoseDepth(0)).toBe(0);
+    expect(thumbnailStackPoseDepth(3)).toBe(3);
+    expect(thumbnailStackPoseDepth(7)).toBeCloseTo(3 + 4 * 0.55);
+    expect(thumbnailStackPoseDepth(20)).toBeCloseTo(3 + 17 * 0.55);
   });
 
   it("scrolls to reveal newly added captures", () => {
@@ -369,13 +382,14 @@ describe("thumbnail stack layout", () => {
       /\.thumbnail-stack-compact > \.thumbnail-card::before\s*\{([^}]*)\}/,
     );
     expect(overlay?.[1]).toMatch(
-      /opacity:\s*calc\(var\(--thumbnail-stack-pile-depth/,
+      /opacity:\s*calc\(min\(0\.72, var\(--thumbnail-stack-pile-depth/,
     );
     expect(overlay?.[1]).toMatch(/background:\s*var\(--glass-strong-solid\)/);
     expect(overlay?.[1]).not.toMatch(/background:\s*#000/);
     expect(thumbnailStyles).toMatch(
-      /\.thumbnail-card img\s*\{[^}]*filter:\s*blur\(0\) brightness\(1\)/,
+      /\.thumbnail-stack-minimized > \.thumbnail-card \.thumbnail-media\s*\{[^}]*blur\(calc\(var\(--thumbnail-stack-pose/,
     );
+    expect(thumbnailStyles).not.toMatch(/--thumbnail-stack-hidden/);
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack\[data-thumbnail-suppress-card-hover="true"\]/,
     );
