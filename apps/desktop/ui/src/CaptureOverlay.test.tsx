@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
@@ -632,5 +632,63 @@ describe("CaptureOverlay guidance", () => {
       sessionId: "capture-1",
       windowId: "notes",
     });
+  });
+
+  it("keeps a revealed window overlay visible when targets arrive later", async () => {
+    let sessionReady: ((event: { payload: ActiveSession }) => void) | null = null;
+    vi.mocked(listen).mockImplementation(async (event, handler) => {
+      if (event === "capture-session-ready") {
+        sessionReady = handler as (event: { payload: ActiveSession }) => void;
+      }
+      return () => undefined;
+    });
+    activeSession = { ...session, mode: "window", windows: [] };
+    window.history.replaceState(
+      {},
+      "",
+      "/?view=overlay&mode=window&session_id=capture-1",
+    );
+    const { container } = render(<App />);
+    await screen.findByText("Select a window to continue");
+    expect(container.querySelectorAll(".window-target")).toHaveLength(0);
+
+    const snapshot = container.querySelector(".capture-snapshot");
+    expect(snapshot).not.toBeNull();
+    fireEvent.load(snapshot!);
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("reveal_capture_overlay", { sessionId: "capture-1" });
+    });
+    await waitFor(() => {
+      expect(container.querySelector(".capture-surface")).toHaveClass("capture-visible");
+    });
+    const wakeCalls = vi.mocked(invoke).mock.calls.filter(([command]) => (
+      command === "show_capture_overlay"
+    )).length;
+
+    await act(async () => {
+      sessionReady?.({
+        payload: {
+          ...activeSession,
+          windows: [{
+            id: "notes",
+            title: "Notes",
+            app_name: "Notes",
+            z_order: 10,
+            x: 300,
+            y: 160,
+            width: 900,
+            height: 640,
+            display_id: "display-1",
+            corner_radius: 12,
+          }],
+        },
+      });
+    });
+
+    expect(await screen.findByTitle("Notes")).toBeInTheDocument();
+    expect(container.querySelector(".capture-surface")).toHaveClass("capture-visible");
+    expect(vi.mocked(invoke).mock.calls.filter(([command]) => (
+      command === "show_capture_overlay"
+    ))).toHaveLength(wakeCalls);
   });
 });

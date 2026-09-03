@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 import { RecordingSelector } from "./App";
-import type { AppSettings, RecordingSelectionSession } from "./types";
+import type { AppSettings, AudioDevice, RecordingSelectionSession } from "./types";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -38,6 +38,7 @@ const settings: AppSettings = {
   onboarding_completed: true,
   screenshot_countdown_seconds: 0,
   freeze_screen: true,
+  show_cursor_in_screenshots: true,
   screenshot_format: "png",
   recording: {
     video_shortcut: "Ctrl+Shift+5",
@@ -170,6 +171,7 @@ function mockSelectorSurface(container: HTMLElement) {
 describe("RecordingSelector", () => {
   let selectorShowError: Error | null;
   let preparedSession: RecordingSelectionSession;
+  let audioDevices: AudioDevice[];
   let recordingSelectionReady:
     | ((event: { payload: RecordingSelectionSession }) => void)
     | null;
@@ -177,6 +179,10 @@ describe("RecordingSelector", () => {
   beforeEach(() => {
     selectorShowError = null;
     preparedSession = session;
+    audioDevices = [
+      { id: "default", name: "Default — Studio Microphone", kind: "default", is_default: true },
+      { id: "microphone-2", name: "USB Microphone", kind: "microphone", is_default: false },
+    ];
     recordingSelectionReady = null;
     vi.mocked(listen).mockImplementation(async (event, handler) => {
       if (event === "recording-selection-ready") {
@@ -190,10 +196,7 @@ describe("RecordingSelector", () => {
       if (command === "get_recording_selection") return preparedSession;
       if (command === "get_settings") return settings;
       if (command === "list_recording_audio_devices") {
-        return [
-          { id: "default", name: "Default — Studio Microphone", kind: "default", is_default: true },
-          { id: "microphone-2", name: "USB Microphone", kind: "microphone", is_default: false },
-        ];
+        return audioDevices;
       }
       if (command === "show_recording_selector") {
         if (selectorShowError) throw selectorShowError;
@@ -417,10 +420,10 @@ describe("RecordingSelector", () => {
     expect(aspectPicker.closest(".recording-region-aspect-picker"))
       .toHaveTextContent(/Aspect/);
     expect(container.querySelector(".capture-selector-note")).toHaveTextContent(
-      "These controls won’t show in screenshots",
+      "These controls won’t show in screenshots · Press Enter to confirm",
     );
     expect(screen.getByRole("button", { name: "Take screenshot" }))
-      .not.toHaveAttribute("aria-keyshortcuts");
+      .toHaveAttribute("aria-keyshortcuts", "Enter");
     expect(screen.queryByRole("combobox", { name: "Frames per second" })).not.toBeInTheDocument();
     expect(invoke).not.toHaveBeenCalledWith("list_recording_audio_devices");
 
@@ -439,7 +442,7 @@ describe("RecordingSelector", () => {
     expect(screen.getByRole("button", { name: "Record", pressed: true })).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Frames per second" })).toBeInTheDocument();
     expect(container.querySelector(".capture-selector-note")).toHaveTextContent(
-      "These controls won’t show in recordings",
+      "These controls won’t show in recordings · Press Enter to confirm",
     );
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("list_recording_audio_devices");
@@ -447,7 +450,7 @@ describe("RecordingSelector", () => {
 
     fireEvent.click(screenshotMode);
     expect(container.querySelector(".capture-selector-note")).toHaveTextContent(
-      "These controls won’t show in screenshots",
+      "These controls won’t show in screenshots · Press Enter to confirm",
     );
     expect(screen.getByRole("button", { name: "Take screenshot" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Take screenshot" }));
@@ -630,14 +633,14 @@ describe("RecordingSelector", () => {
     expect(screen.getByText("Drag to select a region")).toBeInTheDocument();
   });
 
-  it("requires the Capture button after drawing a region and ignores Enter", async () => {
+  it("confirms a drawn region with Enter even if a toolbar control is focused", async () => {
     preparedSession = {
       ...session,
       initial_mode: "screenshot",
     };
     const { container } = render(<RecordingSelector />);
 
-    await screen.findByRole("button", {
+    const screenshotMode = await screen.findByRole("button", {
       name: "Screenshot",
       pressed: true,
     });
@@ -667,9 +670,7 @@ describe("RecordingSelector", () => {
     });
     fireEvent.pointerUp(surface!, { pointerId: 21, clientX: 400, clientY: 340 });
 
-    fireEvent.keyDown(window, { key: "Enter" });
-    expect(invoke).not.toHaveBeenCalledWith("capture_selection_screenshot", expect.anything());
-    fireEvent.click(screen.getByRole("button", { name: "Take screenshot" }));
+    fireEvent.keyDown(screenshotMode, { key: "Enter" });
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("capture_selection_screenshot", {
@@ -683,6 +684,77 @@ describe("RecordingSelector", () => {
         },
       });
     });
+  });
+
+  it("takes a full-screen screenshot when Enter is pressed in the capture menu", async () => {
+    preparedSession = {
+      ...session,
+      initial_mode: "screenshot",
+      initial_target: "display",
+    };
+    render(<RecordingSelector />);
+
+    expect(await screen.findByRole("button", { name: "Full screen", pressed: true }))
+      .toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Take screenshot" })).toBeEnabled();
+
+    fireEvent.keyDown(window, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("capture_selection_screenshot", {
+        request: {
+          selection_id: preparedSession.id,
+          target: { type: "display", display_id: "display-1" },
+        },
+      });
+    });
+  });
+
+  it("does not capture with Enter while a dropdown is focused", async () => {
+    preparedSession = {
+      ...session,
+      initial_mode: "screenshot",
+      initial_target: "display",
+    };
+    render(<RecordingSelector />);
+
+    const displayPicker = await screen.findByRole("combobox", { name: "Display" });
+    fireEvent.keyDown(displayPicker, { key: "Enter" });
+    expect(invoke).not.toHaveBeenCalledWith("capture_selection_screenshot", expect.anything());
+  });
+
+  it("does not capture with Enter on Close capture controls", async () => {
+    preparedSession = {
+      ...session,
+      initial_mode: "screenshot",
+      initial_target: "display",
+    };
+    render(<RecordingSelector />);
+
+    const close = await screen.findByRole("button", { name: "Close capture controls" });
+    fireEvent.keyDown(close, { key: "Enter" });
+    expect(invoke).not.toHaveBeenCalledWith("capture_selection_screenshot", expect.anything());
+  });
+
+  it("does not capture with Enter on the auto-start Change link", async () => {
+    preparedSession = {
+      ...session,
+      initial_mode: "screenshot",
+      initial_target: "display",
+    };
+    const defaultInvoke = vi.mocked(invoke).getMockImplementation();
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "get_settings") {
+        return { ...settings, auto_start_on_selection: true };
+      }
+      return defaultInvoke?.(command, args);
+    });
+
+    render(<RecordingSelector />);
+    const change = await screen.findByRole("button", { name: "Change…" });
+    fireEvent.keyDown(change, { key: "Enter" });
+    expect(invoke).not.toHaveBeenCalledWith("capture_selection_screenshot", expect.anything());
+    expect(invoke).not.toHaveBeenCalledWith("open_preferences", expect.anything());
   });
 
   it("auto-starts a screenshot after drawing a region when the preference is on", async () => {
@@ -1548,5 +1620,80 @@ describe("RecordingSelector", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("macOS could not focus the selector");
     expect(invoke).not.toHaveBeenCalledWith("cancel_recording_selection", expect.anything());
+  });
+
+  it("adds window targets without re-revealing an already visible selector", async () => {
+    preparedSession = {
+      ...session,
+      initial_mode: "screenshot",
+      initial_target: "window",
+      windows: [],
+    };
+    const { container } = render(<RecordingSelector />);
+    await screen.findByRole("button", { name: "Window", pressed: true });
+    expect(container.querySelectorAll(".recording-window-target")).toHaveLength(0);
+
+    const snapshot = container.querySelector(".recording-selector-snapshot");
+    expect(snapshot).not.toBeNull();
+    fireEvent.load(snapshot!);
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("reveal_recording_selector", {
+        selectionId: preparedSession.id,
+      });
+    });
+    const revealCalls = vi.mocked(invoke).mock.calls.filter(([command]) => (
+      command === "reveal_recording_selector"
+    )).length;
+    const showCalls = vi.mocked(invoke).mock.calls.filter(([command]) => (
+      command === "show_recording_selector"
+    )).length;
+
+    await act(async () => {
+      recordingSelectionReady?.({
+        payload: {
+          ...preparedSession,
+          windows: session.windows,
+        },
+      });
+    });
+
+    expect(await screen.findByRole("button", { name: "Select Captures Preferences" }))
+      .toBeInTheDocument();
+    expect(vi.mocked(invoke).mock.calls.filter(([command]) => (
+      command === "reveal_recording_selector"
+    ))).toHaveLength(revealCalls);
+    expect(vi.mocked(invoke).mock.calls.filter(([command]) => (
+      command === "show_recording_selector"
+    ))).toHaveLength(showCalls);
+  });
+
+  it("reloads microphones when a reused selector starts a new session", async () => {
+    render(<RecordingSelector />);
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("list_recording_audio_devices");
+    });
+
+    audioDevices = [
+      { id: "default", name: "Default — Studio Microphone", kind: "default", is_default: true },
+      { id: "microphone-3", name: "Headset Microphone", kind: "microphone", is_default: false },
+    ];
+    const nextSession = {
+      ...session,
+      id: "selection-2",
+      snapshot_url: "capture://recording-selection/selection-2",
+    };
+
+    await act(async () => {
+      recordingSelectionReady?.({ payload: nextSession });
+    });
+
+    await waitFor(() => {
+      expect(vi.mocked(invoke).mock.calls.filter(([command]) => (
+        command === "list_recording_audio_devices"
+      ))).toHaveLength(2);
+    });
+    fireEvent.click(screen.getByRole("combobox", { name: "Microphone" }));
+    expect(await screen.findByRole("option", { name: "Headset Microphone" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "USB Microphone" })).not.toBeInTheDocument();
   });
 });

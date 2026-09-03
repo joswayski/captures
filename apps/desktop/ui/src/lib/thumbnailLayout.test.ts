@@ -9,18 +9,27 @@ import {
   easeOutCubic,
   resolveThumbnailStackShiftPx,
   shouldAnimateThumbnailStackShift,
+  scheduleScrollThumbnailStackToNewest,
   shouldScrollThumbnailStackToEnd,
+  shouldScrollThumbnailStackToNewestOnExpand,
   thumbnailStackContentHeight,
   thumbnailStackMotionClassNames,
   restoreThumbnailStackShiftClass,
   thumbnailStackOverflow,
+  thumbnailStackNewestScrollTop,
   thumbnailStackShiftPx,
   thumbnailCollapsedPeekPx,
+  captureThumbnailCardTransforms,
+  thumbnailStackFanShiftPx,
+  thumbnailStackFanTiltDeg,
+  thumbnailExpandedHoverPathPx,
+  thumbnailExpandedRisePx,
   THUMBNAIL_CARD_HEIGHT_PX,
   THUMBNAIL_CARD_SLOT_PX,
   THUMBNAIL_DISMISS_HOLD_MS,
   THUMBNAIL_DISMISS_STACK_MOTION_DELAY_MS,
   THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS,
+  THUMBNAIL_STACK_CONTROL_GUTTER_PX,
   THUMBNAIL_STACK_GAP_PX,
   THUMBNAIL_STACK_MOTION_DURATION_MS,
   THUMBNAIL_STACK_PADDING_PX,
@@ -69,16 +78,54 @@ describe("thumbnail stack layout", () => {
     );
 
     expect(compactCard?.[1]).toMatch(/transform:\s*var\(--thumbnail-stack-rest-transform\)/);
+    expect(compactCard?.[1]).toMatch(/--thumbnail-stack-hover-transform/);
+    expect(compactCard?.[1]).toMatch(/rotateZ\(var\(--thumbnail-stack-fan-tilt/);
+    expect(compactCard?.[1]).toMatch(/--thumbnail-stack-expanded-transform/);
     expect(compactCard?.[1]).not.toMatch(/transform\s+var\(--stack-fan-dur\)/);
-    expect(hoverReady?.[1]).toMatch(/transform\s+var\(--stack-fan-dur\)/);
+    expect(hoverReady?.[1]).toMatch(
+      /transform\s+var\(--stack-fan-dur\) calc\(var\(--thumbnail-stack-depth, 0\) \* var\(--stack-fan-stagger\)\)/,
+    );
     expect(pressing?.[1]).toMatch(/transition:/);
     expect(pressing?.[1]).not.toMatch(/transform\s+var\(--stack-fan-dur\)/);
     expect(pressing?.[1]).not.toMatch(/transform\s+0\./);
-    expect(minimizingCard?.[1]).toMatch(/rotateX\(0deg\)/);
-    expect(minimizingCard?.[1]).toMatch(/scale\(1\)/);
+    expect(minimizingCard?.[1]).toMatch(/var\(--thumbnail-stack-expanded-transform\)/);
     expect(minimizeRun?.[1]).toMatch(/transform:\s*var\(--thumbnail-stack-rest-transform\)/);
     expect(minimizeRun?.[1]).toMatch(/transform 0\.48s/);
     expect(hoverFan).not.toBeNull();
+    expect(thumbnailStyles).toMatch(/--stack-fan-stagger:\s*8ms/);
+    expect(thumbnailStyles).toMatch(
+      /transform:\s*var\(--thumbnail-stack-expand-from, var\(--thumbnail-stack-rest-transform\)\)/,
+    );
+    expect(thumbnailStyles).not.toMatch(/@keyframes thumbnail-card-expand-from-hover/);
+  });
+
+  it("captures live card transforms so expand can start from a partial pose", () => {
+    const stack = document.createElement("main");
+    const card = document.createElement("article");
+    card.className = "thumbnail-card";
+    card.setAttribute("data-thumbnail-id", "capture-1");
+    stack.append(card);
+    const computed = { transform: "matrix(0.97, 0.12, -0.12, 0.97, 10, -24)" };
+    const spy = vi.spyOn(window, "getComputedStyle").mockReturnValue(
+      computed as CSSStyleDeclaration,
+    );
+
+    expect(captureThumbnailCardTransforms(stack).get("capture-1")).toBe(computed.transform);
+    expect(captureThumbnailCardTransforms(stack).has("missing")).toBe(false);
+
+    spy.mockImplementation(() => ({ transform: "none" }) as CSSStyleDeclaration);
+    expect(captureThumbnailCardTransforms(stack).size).toBe(0);
+    spy.mockRestore();
+  });
+
+  it("tilts deeper collapsed cards a few degrees and leaves the front square", () => {
+    expect(thumbnailStackFanTiltDeg(0)).toBe(0);
+    expect(thumbnailStackFanTiltDeg(1)).toBe(7);
+    expect(thumbnailStackFanTiltDeg(2)).toBe(-6);
+    expect(thumbnailStackFanTiltDeg(3)).toBe(5);
+    expect(thumbnailStackFanTiltDeg(8)).toBe(5);
+    expect(thumbnailStackFanShiftPx(0)).toBe(0);
+    expect(thumbnailStackFanShiftPx(1)).toBeCloseTo(12.6);
   });
 
   it("arches the collapsed pile so the top trails the hands while dragging", () => {
@@ -175,11 +222,38 @@ describe("thumbnail stack layout", () => {
     expect(hitTarget?.[1]).toMatch(/cursor:\s*pointer/);
     expect(hitTarget?.[1]).toMatch(/--thumbnail-collapsed-peek/);
     expect(hitTarget?.[1]).not.toMatch(/height:\s*248px/);
+    expect(thumbnailStyles).not.toMatch(/thumbnail-stack-sparkle/);
+    expect(thumbnailStyles).toMatch(/\.thumbnail-stack-expand-path\s*\{/);
+    expect(thumbnailStyles).toMatch(/--thumbnail-expand-path/);
+    expect(thumbnailStyles).toMatch(/thumbnail-stack-expand-path-flow/);
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-dragging \.thumbnail-stack-expand-path/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-pressing \.thumbnail-stack-expand-path/,
+    );
+    expect(thumbnailStyles).toMatch(/rgba\(var\(--theme-accent-rgb\)/);
+    expect(thumbnailStyles).toMatch(/--theme-signal-rgb/);
+    expect(thumbnailStyles).toMatch(/--theme-accent-text/);
+    expect(thumbnailStyles).toMatch(/var\(--glass-veil-soft\)/);
+    expect(thumbnailStyles).not.toMatch(/255 176 92/);
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-minimized(?::not\(\.thumbnail-stack-dragging\))? > \.thumbnail-card \*/,
     );
     expect(thumbnailStyles).toMatch(
       /html\.thumbnail-native-tracking \.thumbnail-stack-minimized \.thumbnail-card img/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /html:has\(\.thumbnail-card:hover\)\s*\{[\s\S]*?cursor:\s*grab/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /html:has\(\s*:is\(\s*\.thumbnail-stack-control/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-card:hover :is\(button, \.icon-button, \.thumbnail-editor-control\):not\(:disabled\)/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-control:hover:not\(:disabled\),\s*\n\.thumbnail-stack-control:hover:not\(:disabled\) \*/,
     );
   });
 
@@ -197,6 +271,18 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-control\s*\{[\s\S]*?cursor:\s*pointer/,
     );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-toolbar\s*\{[\s\S]*?position:\s*fixed/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-toolbar:not\(\.thumbnail-stack-toolbar-leaving\):not\(\.thumbnail-stack-toolbar-exiting\):not\(\.thumbnail-stack-toolbar-entering\) \.thumbnail-stack-minimize:hover/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-toolbar-exiting \.thumbnail-stack-minimize,[\s\S]*?\{[^}]*width:\s*28px/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-toolbar-exiting \.thumbnail-stack-minimize,[\s\S]*?\{[^}]*transition:\s*none/,
+    );
   });
 
   it("sizes the collapsed expand target from visible extra cards", () => {
@@ -204,8 +290,24 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailCollapsedPeekPx(2)).toBe(13);
     expect(thumbnailCollapsedPeekPx(4)).toBe(39);
     expect(thumbnailCollapsedPeekPx(8)).toBe(39);
-    expect(thumbnailCollapsedPeekPx(2, true)).toBe(24);
+    expect(thumbnailCollapsedPeekPx(2, true)).toBe(42);
     expect(thumbnailCollapsedPeekPx(1, true)).toBe(0);
+  });
+
+  it("sizes the collapsed hover path to the remaining expanded rise", () => {
+    expect(thumbnailExpandedRisePx(1)).toBe(0);
+    expect(thumbnailExpandedRisePx(2)).toBe(THUMBNAIL_CARD_SLOT_PX);
+    expect(thumbnailExpandedRisePx(8)).toBe(7 * THUMBNAIL_CARD_SLOT_PX);
+    expect(thumbnailExpandedHoverPathPx(1)).toBe(0);
+    expect(thumbnailExpandedHoverPathPx(2)).toBe(
+      THUMBNAIL_CARD_SLOT_PX - thumbnailCollapsedPeekPx(2, true),
+    );
+    expect(thumbnailExpandedHoverPathPx(8)).toBe(
+      7 * THUMBNAIL_CARD_SLOT_PX - thumbnailCollapsedPeekPx(8, true),
+    );
+    expect(thumbnailExpandedHoverPathPx(8)).toBeGreaterThan(
+      thumbnailExpandedHoverPathPx(2),
+    );
   });
 
   it("scrolls to reveal newly added captures", () => {
@@ -215,6 +317,57 @@ describe("thumbnail stack layout", () => {
   it("does not force a second scroll after a capture closes", () => {
     expect(shouldScrollThumbnailStackToEnd(2, 1)).toBe(false);
     expect(shouldScrollThumbnailStackToEnd(2, 2)).toBe(false);
+  });
+
+  it("scrolls to the newest capture when the pile expands", () => {
+    expect(shouldScrollThumbnailStackToNewestOnExpand("collapsed", "expanded")).toBe(true);
+    expect(shouldScrollThumbnailStackToNewestOnExpand("expanding", "expanded")).toBe(true);
+    expect(shouldScrollThumbnailStackToNewestOnExpand("expanded", "expanded")).toBe(false);
+    expect(shouldScrollThumbnailStackToNewestOnExpand(undefined, "expanded")).toBe(false);
+    expect(shouldScrollThumbnailStackToNewestOnExpand("expanded", "collapsing")).toBe(false);
+  });
+
+  it("pins newest-scroll to layout height instead of paint overflow", () => {
+    expect(thumbnailStackNewestScrollTop(1, 400)).toBe(0);
+    expect(thumbnailStackNewestScrollTop(8, 400)).toBe(
+      thumbnailStackContentHeight(8) - 400,
+    );
+  });
+
+  it("retries newest-scroll after layout frames", () => {
+    const stack = document.createElement("main");
+    stack.innerHTML = "<article class=\"thumbnail-card\"></article>".repeat(8);
+    Object.defineProperty(stack, "clientHeight", {
+      configurable: true,
+      writable: true,
+      value: 10_000,
+    });
+    Object.defineProperty(stack, "scrollTop", {
+      configurable: true,
+      writable: true,
+      value: 0,
+    });
+
+    const frames: FrameRequestCallback[] = [];
+    const cancel = scheduleScrollThumbnailStackToNewest(stack, {
+      retryMs: 50,
+      frame: (callback) => {
+        frames.push(callback);
+        return frames.length;
+      },
+      cancelFrame: (id) => {
+        frames[id - 1] = () => undefined;
+      },
+    });
+
+    expect(stack.scrollTop).toBe(0);
+    Object.defineProperty(stack, "clientHeight", {
+      configurable: true,
+      value: 400,
+    });
+    frames[0]?.(0);
+    expect(stack.scrollTop).toBe(thumbnailStackNewestScrollTop(8, 400));
+    cancel();
   });
 
   it("dims stacked cards with an overlay instead of a parent filter", () => {
@@ -271,17 +424,20 @@ describe("thumbnail stack layout", () => {
   it("computes stack content height from card layout, not paint overflow", () => {
     expect(thumbnailStackContentHeight(0)).toBe(0);
     expect(thumbnailStackContentHeight(1)).toBe(
-      THUMBNAIL_STACK_PADDING_PX * 2 + THUMBNAIL_CARD_HEIGHT_PX,
+      THUMBNAIL_STACK_PADDING_PX
+        + THUMBNAIL_STACK_CONTROL_GUTTER_PX
+        + THUMBNAIL_CARD_HEIGHT_PX,
     );
     expect(thumbnailStackContentHeight(4)).toBe(
-      THUMBNAIL_STACK_PADDING_PX * 2
+      THUMBNAIL_STACK_PADDING_PX
+        + THUMBNAIL_STACK_CONTROL_GUTTER_PX
         + 4 * THUMBNAIL_CARD_HEIGHT_PX
         + 3 * THUMBNAIL_STACK_GAP_PX,
     );
   });
 
   it("ignores inflated scrollable overflow when layout content fits", () => {
-    // Four cards fill a 768px stack. Dust chips and settle transforms can make
+    // Four cards fill a 792px stack. Dust chips and settle transforms can make
     // WebKit report a taller scrollHeight; cues must use layout height instead
     // so the bottom drawer does not flash while survivors settle.
     const layoutHeight = thumbnailStackContentHeight(4);
@@ -461,6 +617,83 @@ describe("thumbnail stack layout", () => {
     expect(computeThumbnailStackShifts(cards)).toEqual([0, 0]);
   });
 
+  it("keeps live cards behind a neighbor that froze mid-settle", () => {
+    // Delete 3, then delete 2 before 2 finishes sliding into 3. 1 must stay
+    // behind 2 instead of completing the slide into a still-solid preview.
+    const cards = [
+      card({}),
+      card({
+        exiting: true,
+        holdsLayoutSlot: true,
+        motionReady: false,
+        currentShiftPx: thumbnailStackShiftPx(1) * 0.85,
+      }),
+      card({ exiting: true, holdsLayoutSlot: true, motionReady: true }),
+      card({}),
+    ];
+    expect(computeThumbnailStackShifts(cards)).toEqual([
+      thumbnailStackShiftPx(1) * 0.85,
+      thumbnailStackShiftPx(1) * 0.85,
+      0,
+      0,
+    ]);
+  });
+
+  it("does not slide a live card into a deleting neighbor that already settled into a lower hole", () => {
+    // 2 already occupies 3's slot. 1 may sit in 2's vacated layout slot, but
+    // must not take a second slot until 2 is dissolving in place.
+    const cards = [
+      card({ currentShiftPx: thumbnailStackShiftPx(1) }),
+      card({
+        exiting: true,
+        holdsLayoutSlot: true,
+        motionReady: false,
+        currentShiftPx: thumbnailStackShiftPx(1),
+      }),
+      card({ exiting: true, holdsLayoutSlot: true, motionReady: true }),
+      card({}),
+    ];
+    expect(computeThumbnailStackShifts(cards)).toEqual([
+      thumbnailStackShiftPx(1),
+      thumbnailStackShiftPx(1),
+      0,
+      0,
+    ]);
+  });
+
+  it("waits to consume a shifted deleting neighbor until that neighbor is a clear hole", () => {
+    const cards = [
+      card({ currentShiftPx: thumbnailStackShiftPx(1) }),
+      card({
+        exiting: true,
+        holdsLayoutSlot: true,
+        motionReady: true,
+        currentShiftPx: thumbnailStackShiftPx(1),
+      }),
+      card({ exiting: true, holdsLayoutSlot: true, motionReady: true }),
+      card({}),
+    ];
+    expect(computeThumbnailStackShifts(cards)).toEqual([
+      thumbnailStackShiftPx(1),
+      thumbnailStackShiftPx(1),
+      0,
+      0,
+    ]);
+  });
+
+  it("slides into a deleting neighbor once that neighbor is dissolving in its layout slot", () => {
+    const cards = [
+      card({}),
+      card({ exiting: true, holdsLayoutSlot: true, motionReady: true }),
+      card({}),
+    ];
+    expect(computeThumbnailStackShifts(cards)).toEqual([
+      thumbnailStackShiftPx(1),
+      0,
+      0,
+    ]);
+  });
+
   it("snaps an exiting card's shift down when a hole below is removed", () => {
     const cards = [
       card({ exiting: true, currentShiftPx: thumbnailStackShiftPx(1) }),
@@ -559,6 +792,58 @@ describe("thumbnail stack layout", () => {
         `${THUMBNAIL_CARD_SLOT_PX}px`,
       );
       expect(survivor.style.translate).toBe(`0 ${THUMBNAIL_CARD_SLOT_PX}px`);
+    } finally {
+      dispose();
+      stack.remove();
+      vi.useRealTimers();
+    }
+  });
+
+  it("holds a live card behind a mid-settle delete instead of sliding into it", async () => {
+    vi.useFakeTimers();
+    const stack = document.createElement("main");
+    const first = document.createElement("article");
+    first.className = "thumbnail-card";
+    const second = document.createElement("article");
+    second.className = "thumbnail-card";
+    const third = document.createElement("article");
+    third.className = "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
+    const fourth = document.createElement("article");
+    fourth.className = "thumbnail-card";
+    stack.append(first, second, third, fourth);
+    document.body.append(stack);
+    const dispose = createThumbnailStackShiftController(stack);
+
+    try {
+      await Promise.resolve();
+      vi.advanceTimersByTime(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16);
+      expect(first).toHaveClass("thumbnail-stack-shifting");
+      expect(second).toHaveClass("thumbnail-stack-shifting");
+      expect(first.style.getPropertyValue("--thumbnail-stack-shift")).toBe(
+        `${THUMBNAIL_CARD_SLOT_PX}px`,
+      );
+      expect(second.style.getPropertyValue("--thumbnail-stack-shift")).toBe(
+        `${THUMBNAIL_CARD_SLOT_PX}px`,
+      );
+
+      second.classList.add("thumbnail-exiting", "thumbnail-exit-delete", "thumbnail-exit-dust");
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(first.style.getPropertyValue("--thumbnail-stack-shift")).toBe(
+        `${THUMBNAIL_CARD_SLOT_PX}px`,
+      );
+      expect(second.style.getPropertyValue("--thumbnail-stack-shift")).toBe(
+        `${THUMBNAIL_CARD_SLOT_PX}px`,
+      );
+
+      vi.advanceTimersByTime(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16);
+      expect(first.style.getPropertyValue("--thumbnail-stack-shift")).toBe(
+        `${THUMBNAIL_CARD_SLOT_PX}px`,
+      );
+      expect(second.style.getPropertyValue("--thumbnail-stack-shift")).toBe(
+        `${THUMBNAIL_CARD_SLOT_PX}px`,
+      );
     } finally {
       dispose();
       stack.remove();
