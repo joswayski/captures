@@ -1136,7 +1136,8 @@ describe("RecordingSelector", () => {
     fireEvent.pointerDown(surface, { pointerId: 1, clientX: 20, clientY: 8 });
     expect(screen.getByRole("button", { name: "Full screen" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "Start recording" })).toBeEnabled();
-    expect(screen.getByText("Built-in Retina Display")).toBeInTheDocument();
+    expect(container.querySelector(".recording-display-identity")?.textContent)
+      .toContain("Built-in Retina Display");
   });
 
   it("keeps region and display capture available when the desktop cannot enumerate windows", async () => {
