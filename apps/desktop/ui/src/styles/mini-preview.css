@@ -1779,8 +1779,9 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 
 .thumbnail-stack-compact {
   --stack-fan-dur: var(--dur-3);
-  --stack-fan-stagger: 8ms;
+  --stack-fan-stagger: 16ms;
   --stack-fan-ease: var(--ease-standard);
+  --stack-pile-max-depth: 3;
   height: 100%;
   max-height: none;
   overflow: visible;
@@ -1794,6 +1795,10 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
    * expanded slot-settle that was in flight when Show less started so the
    * minimizing pose matches the on-screen position instead of jumping back
    * up a held hole.
+   *
+   * Rest and hover poses clamp to `--stack-pile-max-depth` so only four cards
+   * peek. Expand uses the real depth so tucked cards ease out of that pile
+   * into their list slots instead of appearing at full offset.
    */
   --thumbnail-stack-depth: max(
     0,
@@ -1802,27 +1807,31 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
       - var(--thumbnail-stack-shift-slots, 0)
     )
   );
+  --thumbnail-stack-pile-depth: min(
+    var(--thumbnail-stack-depth, 0),
+    var(--stack-pile-max-depth)
+  );
   --thumbnail-stack-rest-transform:
     translate3d(
-      calc(var(--thumbnail-stack-depth, 0) * -1.5px),
-      calc(var(--thumbnail-stack-depth, 0) * -13px),
-      calc(var(--thumbnail-stack-depth, 0) * -24px)
+      calc(var(--thumbnail-stack-pile-depth, 0) * -1.5px),
+      calc(var(--thumbnail-stack-pile-depth, 0) * -13px),
+      calc(var(--thumbnail-stack-pile-depth, 0) * -24px)
     )
     rotateZ(0deg)
-    rotateX(calc(var(--thumbnail-stack-depth, 0) * -1.4deg))
-    scale(calc(1 - var(--thumbnail-stack-depth, 0) * 0.025));
+    rotateX(calc(var(--thumbnail-stack-pile-depth, 0) * -1.4deg))
+    scale(calc(1 - var(--thumbnail-stack-pile-depth, 0) * 0.025));
   --thumbnail-stack-hover-transform:
     translate3d(
       calc(
-        var(--thumbnail-stack-depth, 0) * -2px
+        var(--thumbnail-stack-pile-depth, 0) * -1px
         + var(--thumbnail-stack-fan-shift, 0px)
       ),
-      calc(var(--thumbnail-stack-depth, 0) * -24px),
-      calc(var(--thumbnail-stack-depth, 0) * -18px)
+      calc(var(--thumbnail-stack-pile-depth, 0) * -16px),
+      calc(var(--thumbnail-stack-pile-depth, 0) * -18px)
     )
     rotateZ(var(--thumbnail-stack-fan-tilt, 0deg))
-    rotateX(calc(var(--thumbnail-stack-depth, 0) * -1.2deg))
-    scale(calc(1 - var(--thumbnail-stack-depth, 0) * 0.02));
+    rotateX(calc(var(--thumbnail-stack-pile-depth, 0) * -1.2deg))
+    scale(calc(1 - var(--thumbnail-stack-pile-depth, 0) * 0.02));
   --thumbnail-stack-expanded-transform:
     translate3d(
       0,
@@ -1869,10 +1878,10 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   inset: 0;
   border-radius: inherit;
   background: var(--glass-strong-solid);
-  opacity: calc(var(--thumbnail-stack-depth, 0) * 0.12);
+  opacity: calc(var(--thumbnail-stack-pile-depth, 0) * 0.12);
   content: "";
   pointer-events: none;
-  transition: opacity var(--stack-fan-dur) calc(var(--thumbnail-stack-depth, 0) * var(--stack-fan-stagger, 0ms)) var(--stack-fan-ease, var(--ease-out));
+  transition: opacity var(--stack-fan-dur) calc(var(--thumbnail-stack-pile-depth, 0) * var(--stack-fan-stagger, 0ms)) var(--stack-fan-ease, var(--ease-out));
 }
 
 .thumbnail-stack-minimizing > .thumbnail-card,
@@ -1898,6 +1907,8 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 }
 
 .thumbnail-stack-expanding > .thumbnail-card {
+  /* Tucked extras start at rest opacity 0; fade in while they fly into slots. */
+  opacity: 1;
   animation: thumbnail-card-expand 0.48s var(--ease-standard) both;
 }
 
@@ -1908,9 +1919,9 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
  */
 .thumbnail-stack-minimized.thumbnail-stack-hover-ready > .thumbnail-card {
   transition:
-    opacity var(--dur-4) var(--ease-out),
-    transform var(--stack-fan-dur) calc(var(--thumbnail-stack-depth, 0) * var(--stack-fan-stagger)) var(--stack-fan-ease),
-    box-shadow var(--stack-fan-dur) calc(var(--thumbnail-stack-depth, 0) * var(--stack-fan-stagger)) var(--stack-fan-ease);
+    opacity var(--stack-fan-dur) calc(var(--thumbnail-stack-pile-depth, 0) * var(--stack-fan-stagger)) var(--stack-fan-ease),
+    transform var(--stack-fan-dur) calc(var(--thumbnail-stack-pile-depth, 0) * var(--stack-fan-stagger)) var(--stack-fan-ease),
+    box-shadow var(--stack-fan-dur) calc(var(--thumbnail-stack-pile-depth, 0) * var(--stack-fan-stagger)) var(--stack-fan-ease);
 }
 
 /*
@@ -1928,6 +1939,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 }
 
 .thumbnail-stack-expanding > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting) {
+  opacity: 1;
   animation: thumbnail-card-expand 0.48s var(--ease-standard) both;
 }
 
@@ -1953,7 +1965,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
     opacity: 0;
   }
   to {
-    opacity: calc(var(--thumbnail-stack-depth, 0) * 0.12);
+    opacity: calc(var(--thumbnail-stack-pile-depth, 0) * 0.12);
   }
 }
 
@@ -2105,29 +2117,29 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   transform:
     translate3d(
       calc(
-        var(--thumbnail-stack-depth, 0) * -1.5px
+        var(--thumbnail-stack-pile-depth, 0) * -1.5px
         + var(--thumbnail-drag-sway-x, 0) * 1px
-          * var(--thumbnail-stack-depth, 0)
-          * (var(--thumbnail-stack-depth, 0) + 1)
+          * var(--thumbnail-stack-pile-depth, 0)
+          * (var(--thumbnail-stack-pile-depth, 0) + 1)
           / 2
       ),
       calc(
-        var(--thumbnail-stack-depth, 0) * -13px
-        + var(--thumbnail-drag-sway-y, 0) * 1px * var(--thumbnail-stack-depth, 0) * 0.45
+        var(--thumbnail-stack-pile-depth, 0) * -13px
+        + var(--thumbnail-drag-sway-y, 0) * 1px * var(--thumbnail-stack-pile-depth, 0) * 0.45
       ),
-      calc(var(--thumbnail-stack-depth, 0) * -24px)
+      calc(var(--thumbnail-stack-pile-depth, 0) * -24px)
     )
     rotateZ(
       calc(
         var(--thumbnail-drag-sway-x, 0)
-        * var(--thumbnail-stack-depth, 0)
-        * (var(--thumbnail-stack-depth, 0) + 1)
+        * var(--thumbnail-stack-pile-depth, 0)
+        * (var(--thumbnail-stack-pile-depth, 0) + 1)
         * 0.18deg
       )
     )
-    rotateX(calc(var(--thumbnail-stack-depth, 0) * -1.4deg))
-    scale(calc(1 - var(--thumbnail-stack-depth, 0) * 0.025));
-  filter: brightness(calc(1 - var(--thumbnail-stack-depth, 0) * 0.12));
+    rotateX(calc(var(--thumbnail-stack-pile-depth, 0) * -1.4deg))
+    scale(calc(1 - var(--thumbnail-stack-pile-depth, 0) * 0.025));
+  filter: brightness(calc(1 - var(--thumbnail-stack-pile-depth, 0) * 0.12));
   box-shadow: var(--thumbnail-card-shadow);
 }
 
@@ -2141,7 +2153,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 
 .thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):not(.thumbnail-stack-pressing):has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card::before,
 .thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):not(.thumbnail-stack-pressing):has(.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]) > .thumbnail-card::before {
-  opacity: calc(var(--thumbnail-stack-depth, 0) * 0.08);
+  opacity: calc(var(--thumbnail-stack-pile-depth, 0) * 0.08);
 }
 
 .thumbnail-message {
