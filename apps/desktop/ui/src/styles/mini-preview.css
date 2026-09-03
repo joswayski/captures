@@ -1572,7 +1572,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 @keyframes thumbnail-stack-toolbar-out {
   to {
     opacity: 0;
-    filter: blur(8px);
+    filter: blur(var(--blur-dissolve));
   }
 }
 

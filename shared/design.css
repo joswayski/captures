@@ -86,6 +86,8 @@
   --dur-3: 200ms;
   --dur-4: 280ms;
   --dur-5: 420ms;
+  /* Fade-out dissolve for chrome that should vanish in place. */
+  --blur-dissolve: 8px;
 
   /* Media chrome — fixed, appearance-independent */
   --glass: rgba(20, 20, 24, 0.82);
