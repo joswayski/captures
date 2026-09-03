@@ -20,7 +20,7 @@ export const THUMBNAIL_CARD_SLOT_PX = THUMBNAIL_CARD_HEIGHT_PX + THUMBNAIL_STACK
 export const THUMBNAIL_STACK_FULL_PEEK_DEPTH = 3;
 
 /**
- * Far-field peek step as a fraction of a full 13px idle step.
+ * Far-field peek step as a fraction of a full 9px idle step.
  * Deep cards pack toward this so a long history recedes instead of hiding.
  * Mirrored in mini-preview.css as `--thumbnail-stack-recede`.
  */
@@ -34,16 +34,16 @@ export const THUMBNAIL_STACK_RECEDING_STEP = 0.55;
 export const THUMBNAIL_STACK_POSE_EASE_K = 24;
 
 /** Max idle peek nudge on the first behind-card (px). Deeper cards damp toward 0. */
-export const THUMBNAIL_STACK_PEEK_JITTER_PX = 0.85;
+export const THUMBNAIL_STACK_PEEK_JITTER_PX = 0.4;
 
 /** How quickly peek jitter settles toward the back of the pile. */
 export const THUMBNAIL_STACK_PEEK_JITTER_DECAY = 0.58;
 
 /** Idle collapsed peek per pose unit (matches compact rest `translateY`). */
-export const THUMBNAIL_STACK_IDLE_PEEK_PX = 13;
+export const THUMBNAIL_STACK_IDLE_PEEK_PX = 9;
 
 /** Hover-fan collapsed peek per pose unit (matches compact hover `translateY`). */
-export const THUMBNAIL_STACK_HOVER_PEEK_PX = 16;
+export const THUMBNAIL_STACK_HOVER_PEEK_PX = 11;
 
 /** Extra delay per stacked card so collapsed hover lift does not fire in lockstep. */
 export const THUMBNAIL_STACK_FAN_STAGGER_MS = 16;
@@ -73,16 +73,16 @@ export function thumbnailStackFanCollapseMs(
  * Per-capture rest scatter. Seeded from the artifact id so a capture keeps
  * the same lean as newer shots push it back, instead of snapping onto a
  * depth-indexed slot that looks identical every time. The front card stays
- * square; behind-cards stay within a couple of degrees and a few pixels.
+ * square; behind-cards stay within about a degree and a couple of pixels.
  */
-export const THUMBNAIL_STACK_REST_SKEW_X_PX = 10;
-export const THUMBNAIL_STACK_REST_SKEW_Y_PX = 4.5;
-export const THUMBNAIL_STACK_REST_SKEW_ROT_DEG = 4.4;
-export const THUMBNAIL_STACK_HOVER_SKEW_X_PX = 12;
-export const THUMBNAIL_STACK_HOVER_SKEW_ROT_DEG = 5.8;
+export const THUMBNAIL_STACK_REST_SKEW_X_PX = 3.5;
+export const THUMBNAIL_STACK_REST_SKEW_Y_PX = 1.5;
+export const THUMBNAIL_STACK_REST_SKEW_ROT_DEG = 1.5;
+export const THUMBNAIL_STACK_HOVER_SKEW_X_PX = 4.5;
+export const THUMBNAIL_STACK_HOVER_SKEW_ROT_DEG = 2;
 
 /** Keep behind-cards off the dead zone so a new capture never looks slotted. */
-export const THUMBNAIL_STACK_SKEW_MIN_UNIT = 0.42;
+export const THUMBNAIL_STACK_SKEW_MIN_UNIT = 0.22;
 
 /** Compact card width: window 340 minus 28px padding on each side. */
 export const THUMBNAIL_STACK_CARD_WIDTH_PX = 284;

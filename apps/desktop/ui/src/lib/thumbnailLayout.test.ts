@@ -55,6 +55,8 @@ import {
   THUMBNAIL_MINIMIZE_MORPH_MS,
   THUMBNAIL_MINIMIZE_SWAP_MS,
   THUMBNAIL_STACK_GAP_PX,
+  THUMBNAIL_STACK_IDLE_PEEK_PX,
+  THUMBNAIL_STACK_HOVER_PEEK_PX,
   THUMBNAIL_STACK_HOVER_SKEW_ROT_DEG,
   THUMBNAIL_STACK_HOVER_SKEW_X_PX,
   THUMBNAIL_STACK_HOVER_TILT_PEEK_PX,
@@ -129,7 +131,7 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailStyles).toMatch(/--thumbnail-stack-gravity/);
     expect(thumbnailStyles).toMatch(/--thumbnail-stack-expand-sign:\s*-1/);
     expect(thumbnailStyles).toMatch(
-      /var\(--thumbnail-stack-pile-depth, 0\) \* -13px\s*\n\s*\* var\(--thumbnail-stack-gravity, 1\)/,
+      /var\(--thumbnail-stack-pile-depth, 0\) \* -9px\s*\n\s*\* var\(--thumbnail-stack-gravity, 1\)/,
     );
     expect(compactCard?.[1]).toMatch(/--thumbnail-stack-skew-y/);
     expect(compactCard?.[1]).toMatch(/--thumbnail-stack-hover-transform/);
@@ -327,7 +329,7 @@ describe("thumbnail stack layout", () => {
     expect(stack.style.getPropertyValue(THUMBNAIL_STACK_GRAVITY_VAR)).toBe("-0.42");
     expect(thumbnailStyles).toMatch(/--thumbnail-stack-skew-y/);
     expect(thumbnailStyles).not.toMatch(
-      /var\(--thumbnail-stack-pile-depth, 0\) \* -13px\s*\n\s*\+ var\(--thumbnail-stack-skew-y/,
+      /var\(--thumbnail-stack-pile-depth, 0\) \* -9px\s*\n\s*\+ var\(--thumbnail-stack-skew-y/,
     );
   });
 
@@ -527,27 +529,27 @@ describe("thumbnail stack layout", () => {
   it("sizes the collapsed expand target from receding extra cards", () => {
     expect(thumbnailCollapsedPeekPx(1)).toBe(0);
     expect(thumbnailCollapsedPeekPx(2)).toBeCloseTo(
-      thumbnailStackPoseDepth(1) * 13 + THUMBNAIL_STACK_REST_SKEW_PEEK_PX,
+      thumbnailStackPoseDepth(1) * THUMBNAIL_STACK_IDLE_PEEK_PX + THUMBNAIL_STACK_REST_SKEW_PEEK_PX,
     );
     expect(thumbnailCollapsedPeekPx(4)).toBeCloseTo(
-      thumbnailStackPoseDepth(3) * 13 + THUMBNAIL_STACK_REST_SKEW_PEEK_PX,
+      thumbnailStackPoseDepth(3) * THUMBNAIL_STACK_IDLE_PEEK_PX + THUMBNAIL_STACK_REST_SKEW_PEEK_PX,
     );
     expect(thumbnailCollapsedPeekPx(8)).toBeGreaterThan(thumbnailCollapsedPeekPx(4));
     expect(thumbnailCollapsedPeekPx(8)).toBeCloseTo(
-      thumbnailStackPoseDepth(7) * 13 + THUMBNAIL_STACK_REST_SKEW_PEEK_PX,
+      thumbnailStackPoseDepth(7) * THUMBNAIL_STACK_IDLE_PEEK_PX + THUMBNAIL_STACK_REST_SKEW_PEEK_PX,
     );
     expect(thumbnailCollapsedPeekPx(8) - thumbnailCollapsedPeekPx(4)).toBeCloseTo(
-      (thumbnailStackPoseDepth(7) - thumbnailStackPoseDepth(3)) * 13,
+      (thumbnailStackPoseDepth(7) - thumbnailStackPoseDepth(3)) * THUMBNAIL_STACK_IDLE_PEEK_PX,
     );
     expect(thumbnailCollapsedPeekPx(24)).toBeGreaterThan(thumbnailCollapsedPeekPx(8));
     expect(thumbnailCollapsedPeekPx(2, true)).toBeCloseTo(
-      thumbnailStackPoseDepth(1) * 16 + THUMBNAIL_STACK_HOVER_TILT_PEEK_PX,
+      thumbnailStackPoseDepth(1) * THUMBNAIL_STACK_HOVER_PEEK_PX + THUMBNAIL_STACK_HOVER_TILT_PEEK_PX,
     );
     expect(thumbnailCollapsedPeekPx(4, true)).toBeCloseTo(
-      thumbnailStackPoseDepth(3) * 16 + THUMBNAIL_STACK_HOVER_TILT_PEEK_PX,
+      thumbnailStackPoseDepth(3) * THUMBNAIL_STACK_HOVER_PEEK_PX + THUMBNAIL_STACK_HOVER_TILT_PEEK_PX,
     );
     expect(thumbnailCollapsedPeekPx(8, true)).toBeCloseTo(
-      thumbnailStackPoseDepth(7) * 16 + THUMBNAIL_STACK_HOVER_TILT_PEEK_PX,
+      thumbnailStackPoseDepth(7) * THUMBNAIL_STACK_HOVER_PEEK_PX + THUMBNAIL_STACK_HOVER_TILT_PEEK_PX,
     );
     expect(thumbnailCollapsedPeekPx(1, true)).toBe(0);
   });
@@ -573,7 +575,7 @@ describe("thumbnail stack layout", () => {
     expect(envelope(6)).toBeLessThan(envelope(2));
     expect(Math.abs(thumbnailStackPeekJitterPx(6))).toBeLessThanOrEqual(envelope(6) + 1e-12);
     expect(thumbnailStyles).toMatch(
-      /var\(--thumbnail-stack-pile-depth, 0\) \* -13px\s*\n\s*\* var\(--thumbnail-stack-gravity, 1\)\s*\+\s*var\(--thumbnail-stack-peek-jitter, 0px\)\s*\+\s*var\(--thumbnail-stack-skew-y, 0px\)/,
+      /var\(--thumbnail-stack-pile-depth, 0\) \* -9px\s*\n\s*\* var\(--thumbnail-stack-gravity, 1\)\s*\+\s*var\(--thumbnail-stack-peek-jitter, 0px\)\s*\+\s*var\(--thumbnail-stack-skew-y, 0px\)/,
     );
   });
 
