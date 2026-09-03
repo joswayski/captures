@@ -1565,7 +1565,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 }
 
 .thumbnail-stack-toolbar-entering {
-  animation: thumbnail-stack-toolbar-in 0.48s linear both;
+  animation: thumbnail-stack-toolbar-in 0.52s linear both;
   pointer-events: none;
 }
 
@@ -1630,6 +1630,12 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
     transform var(--dur-1) var(--ease-out);
 }
 
+.thumbnail-stack-control *,
+.thumbnail-stack-minimize,
+.thumbnail-stack-minimize * {
+  cursor: pointer;
+}
+
 .thumbnail-stack-control:hover,
 .thumbnail-stack-control[data-native-pointer-hover="true"] {
   border-color: var(--glass-border-strong);
@@ -1665,10 +1671,12 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 }
 
 .thumbnail-stack-minimize {
+  --thumbnail-minimize-morph: 240ms;
+  --thumbnail-minimize-swap: 180ms;
   overflow: hidden;
   cursor: pointer;
   transition:
-    width var(--dur-3) var(--ease-out),
+    width var(--thumbnail-minimize-morph) var(--ease-out),
     color var(--dur-1) var(--ease-out),
     background-color var(--dur-1) var(--ease-out),
     border-color var(--dur-1) var(--ease-out),
@@ -1677,17 +1685,18 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 
 .thumbnail-stack-minimize svg {
   position: absolute;
+  cursor: pointer;
   transition:
-    opacity var(--dur-2) var(--ease-out),
-    transform var(--dur-2) var(--ease-out);
+    opacity var(--thumbnail-minimize-swap) var(--ease-out),
+    transform var(--thumbnail-minimize-swap) var(--ease-out);
 }
 
 .thumbnail-stack-minimize-label {
   opacity: 0;
   transform: translateX(4px);
   transition:
-    opacity var(--dur-2) var(--ease-out),
-    transform var(--dur-2) var(--ease-out);
+    opacity var(--thumbnail-minimize-swap) var(--ease-out),
+    transform var(--thumbnail-minimize-swap) var(--ease-out);
   pointer-events: none;
   cursor: pointer;
   font-size: var(--text-2xs);
@@ -1707,7 +1716,12 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   width: 92px;
   background: var(--glass-strong-solid);
   border-color: var(--glass-border);
-  transform: none;
+  cursor: pointer;
+  transform: translateY(-1px);
+}
+
+.thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize:active {
+  transform: scale(0.94);
 }
 
 .thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize:hover svg,
@@ -1921,14 +1935,14 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 .thumbnail-stack-minimizing.thumbnail-stack-minimize-run > .thumbnail-card {
   transform: var(--thumbnail-stack-rest-transform);
   transition:
-    transform 0.48s var(--ease-standard),
+    transform 0.52s var(--ease-standard),
     opacity var(--dur-4) var(--ease-out),
     box-shadow var(--dur-4) var(--ease-out);
 }
 
 .thumbnail-stack-expanding > .thumbnail-card {
   opacity: 1;
-  animation: thumbnail-card-expand 0.48s var(--ease-standard) both;
+  animation: thumbnail-card-expand 0.52s var(--ease-standard) both;
 }
 
 /*
@@ -1962,15 +1976,15 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 
 .thumbnail-stack-expanding > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting) {
   opacity: 1;
-  animation: thumbnail-card-expand 0.48s var(--ease-standard) both;
+  animation: thumbnail-card-expand 0.52s var(--ease-standard) both;
 }
 
 .thumbnail-stack-minimizing > .thumbnail-card::before {
-  animation: thumbnail-card-minimize-dim 0.48s var(--ease-standard) both;
+  animation: thumbnail-card-minimize-dim 0.52s var(--ease-standard) both;
 }
 
 .thumbnail-stack-expanding > .thumbnail-card::before {
-  animation: thumbnail-card-expand-dim 0.48s var(--ease-standard) both;
+  animation: thumbnail-card-expand-dim 0.52s var(--ease-standard) both;
 }
 
 @keyframes thumbnail-card-expand {
@@ -2056,6 +2070,10 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   /* Chromium's image-drag hit test skips empty controls and uses the <img>
      underneath. A 0-alpha fill makes this the drag source without tint. */
   background-image: linear-gradient(rgb(0 0 0 / 0%), rgb(0 0 0 / 0%));
+}
+
+.thumbnail-collapsed-hit-target:not(:disabled) * {
+  cursor: pointer;
 }
 
 .thumbnail-collapsed-hit-target:hover,

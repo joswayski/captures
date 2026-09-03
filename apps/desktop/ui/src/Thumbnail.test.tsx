@@ -7,6 +7,7 @@ import type { CaptureArtifact } from "./types";
 import {
   THUMBNAIL_CARD_SLOT_PX,
   THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS,
+  THUMBNAIL_STACK_EXPAND_COLLAPSE_MS,
   thumbnailStackFanCollapseMs,
   thumbnailStackNewestScrollTop,
 } from "./lib/thumbnailLayout";
@@ -528,7 +529,7 @@ describe("Thumbnail", () => {
       fireEvent.click(screen.getByRole("button", { name: "Minimize previews" }));
       await act(async () => {
         await vi.advanceTimersByTimeAsync(32);
-        await vi.advanceTimersByTimeAsync(480);
+        await vi.advanceTimersByTimeAsync(THUMBNAIL_STACK_EXPAND_COLLAPSE_MS);
       });
       expect(stack).toHaveClass("thumbnail-stack-compact");
       expect(stack).toHaveClass("thumbnail-stack-minimized");
@@ -546,7 +547,7 @@ describe("Thumbnail", () => {
         await Promise.resolve();
       });
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(480);
+        await vi.advanceTimersByTimeAsync(THUMBNAIL_STACK_EXPAND_COLLAPSE_MS);
       });
       expect(stack).not.toHaveClass("thumbnail-stack-compact");
       expect(cards[0]).toHaveClass("thumbnail-stack-shifting");
@@ -963,7 +964,7 @@ describe("Thumbnail", () => {
     });
     expect(stack).toHaveClass("thumbnail-stack-minimize-run");
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(480);
+      await vi.advanceTimersByTimeAsync(THUMBNAIL_STACK_EXPAND_COLLAPSE_MS);
     });
 
     expect(stack).toHaveClass("thumbnail-stack-minimized");
@@ -997,7 +998,7 @@ describe("Thumbnail", () => {
       { collapsed: false },
     );
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(480);
+      await vi.advanceTimersByTimeAsync(THUMBNAIL_STACK_EXPAND_COLLAPSE_MS);
     });
 
     expect(stack).not.toHaveClass("thumbnail-stack-compact");
@@ -1039,7 +1040,7 @@ describe("Thumbnail", () => {
     fireEvent.click(screen.getByRole("button", { name: "Minimize previews" }));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(32);
-      await vi.advanceTimersByTimeAsync(480);
+      await vi.advanceTimersByTimeAsync(THUMBNAIL_STACK_EXPAND_COLLAPSE_MS);
     });
 
     const collapsedCards = stack.querySelectorAll<HTMLElement>(":scope > .thumbnail-card");
@@ -1059,7 +1060,7 @@ describe("Thumbnail", () => {
       await Promise.resolve();
     });
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(480);
+      await vi.advanceTimersByTimeAsync(THUMBNAIL_STACK_EXPAND_COLLAPSE_MS);
     });
 
     expect(stack.scrollTop).toBe(newestTop);
@@ -1102,7 +1103,7 @@ describe("Thumbnail", () => {
     fireEvent.click(screen.getByRole("button", { name: "Minimize previews" }));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(32);
-      await vi.advanceTimersByTimeAsync(480);
+      await vi.advanceTimersByTimeAsync(THUMBNAIL_STACK_EXPAND_COLLAPSE_MS);
       await vi.advanceTimersByTimeAsync(32);
     });
 
@@ -1137,7 +1138,7 @@ describe("Thumbnail", () => {
     expect(cards[0].style.getPropertyValue("--thumbnail-stack-expand-from")).toBe(livePose);
     computedSpy.mockRestore();
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(480);
+      await vi.advanceTimersByTimeAsync(THUMBNAIL_STACK_EXPAND_COLLAPSE_MS);
     });
     expect(cards[0].style.getPropertyValue("--thumbnail-stack-expand-from")).toBe("");
     expect(stack).not.toHaveClass("thumbnail-stack-compact");
@@ -1151,7 +1152,7 @@ describe("Thumbnail", () => {
     fireEvent.click(screen.getByRole("button", { name: "Minimize previews" }));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(32);
-      await vi.advanceTimersByTimeAsync(480);
+      await vi.advanceTimersByTimeAsync(THUMBNAIL_STACK_EXPAND_COLLAPSE_MS);
     });
     vi.useRealTimers();
 
@@ -1197,7 +1198,7 @@ describe("Thumbnail", () => {
     fireEvent.click(screen.getByRole("button", { name: "Minimize previews" }));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(32);
-      await vi.advanceTimersByTimeAsync(480);
+      await vi.advanceTimersByTimeAsync(THUMBNAIL_STACK_EXPAND_COLLAPSE_MS);
     });
 
     const expand = screen.getByRole("button", { name: "Expand preview" });
@@ -1249,7 +1250,7 @@ describe("Thumbnail", () => {
     fireEvent.click(screen.getByRole("button", { name: "Minimize previews" }));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(32);
-      await vi.advanceTimersByTimeAsync(480);
+      await vi.advanceTimersByTimeAsync(THUMBNAIL_STACK_EXPAND_COLLAPSE_MS);
     });
     vi.useRealTimers();
 
@@ -1283,7 +1284,7 @@ describe("Thumbnail", () => {
     fireEvent.click(screen.getByRole("button", { name: "Minimize previews" }));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(32);
-      await vi.advanceTimersByTimeAsync(480);
+      await vi.advanceTimersByTimeAsync(THUMBNAIL_STACK_EXPAND_COLLAPSE_MS);
     });
     expect(stack).toHaveClass("thumbnail-stack-minimized");
 
@@ -1293,7 +1294,7 @@ describe("Thumbnail", () => {
     });
     expect(stack).toHaveClass("thumbnail-stack-expanding");
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(480);
+      await vi.advanceTimersByTimeAsync(THUMBNAIL_STACK_EXPAND_COLLAPSE_MS);
     });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(50);
@@ -1364,7 +1365,7 @@ describe("Thumbnail", () => {
     fireEvent.click(minimize);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(32);
-      await vi.advanceTimersByTimeAsync(480);
+      await vi.advanceTimersByTimeAsync(THUMBNAIL_STACK_EXPAND_COLLAPSE_MS);
     });
     vi.useRealTimers();
 

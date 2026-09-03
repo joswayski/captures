@@ -141,6 +141,18 @@ export function thumbnailCollapsedPeekPx(
 export const THUMBNAIL_STACK_SCROLL_DURATION_MS = 380;
 
 /**
+ * Expand/collapse fly between the list and the compact pile.
+ * Matches `thumbnail-card-expand` / minimize-run CSS (0.52s).
+ */
+export const THUMBNAIL_STACK_EXPAND_COLLAPSE_MS = 520;
+
+/** Hover morph: stack icon width → Show less pill (and the reverse). */
+export const THUMBNAIL_MINIMIZE_MORPH_MS = 240;
+
+/** Hover morph: stack icon / Show less label crossfade. */
+export const THUMBNAIL_MINIMIZE_SWAP_MS = 180;
+
+/**
  * Delay before live cards above a dust-delete begin sliding into the empty
  * slot. Matches the pre-motion ash phase in styles.css.
  */
