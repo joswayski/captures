@@ -38,6 +38,9 @@ import {
   THUMBNAIL_DISMISS_STACK_MOTION_DELAY_MS,
   THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS,
   THUMBNAIL_STACK_CONTROL_GUTTER_PX,
+  THUMBNAIL_STACK_EXPAND_COLLAPSE_MS,
+  THUMBNAIL_MINIMIZE_MORPH_MS,
+  THUMBNAIL_MINIMIZE_SWAP_MS,
   THUMBNAIL_STACK_GAP_PX,
   THUMBNAIL_STACK_MOTION_DURATION_MS,
   THUMBNAIL_STACK_PADDING_PX,
@@ -112,7 +115,10 @@ describe("thumbnail stack layout", () => {
     );
     expect(minimizingCard?.[1]).toMatch(/var\(--thumbnail-stack-expanded-transform\)/);
     expect(minimizeRun?.[1]).toMatch(/transform:\s*var\(--thumbnail-stack-rest-transform\)/);
-    expect(minimizeRun?.[1]).toMatch(/transform 0\.48s/);
+    expect(minimizeRun?.[1]).toMatch(/transform 0\.52s/);
+    expect(thumbnailStyles).toMatch(/thumbnail-card-expand 0\.52s/);
+    expect(thumbnailStyles).toMatch(/thumbnail-card-minimize-dim 0\.52s/);
+    expect(thumbnailStyles).toMatch(/thumbnail-card-expand-dim 0\.52s/);
     expect(hoverFan).not.toBeNull();
     expect(thumbnailStyles).toMatch(/--stack-fan-stagger:\s*16ms/);
     expect(thumbnailStyles).not.toMatch(/--stack-pile-max-depth:\s*3/);
@@ -306,7 +312,7 @@ describe("thumbnail stack layout", () => {
     const enter = thumbnailStyles.split("@keyframes thumbnail-stack-toolbar-in")[1]
       ?.split("@keyframes")[0];
     expect(thumbnailStyles).toMatch(
-      /\.thumbnail-stack-toolbar-entering\s*\{[^}]*animation:\s*thumbnail-stack-toolbar-in 0\.48s linear/,
+      /\.thumbnail-stack-toolbar-entering\s*\{[^}]*animation:\s*thumbnail-stack-toolbar-in 0\.52s linear/,
     );
     expect(enter).toMatch(/35%/);
     expect(enter).not.toMatch(/60%/);
@@ -317,10 +323,27 @@ describe("thumbnail stack layout", () => {
       /\.thumbnail-stack-control\s*\{[\s\S]*?cursor:\s*pointer/,
     );
     expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-control \*,\s*\n\.thumbnail-stack-minimize,\s*\n\.thumbnail-stack-minimize \*\s*\{[\s\S]*?cursor:\s*pointer/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-collapsed-hit-target:not\(:disabled\) \*\s*\{[\s\S]*?cursor:\s*pointer/,
+    );
+    expect(thumbnailStyles).toMatch(/--thumbnail-minimize-morph:\s*240ms/);
+    expect(thumbnailStyles).toMatch(/--thumbnail-minimize-swap:\s*180ms/);
+    expect(THUMBNAIL_STACK_EXPAND_COLLAPSE_MS).toBe(520);
+    expect(THUMBNAIL_MINIMIZE_MORPH_MS).toBe(240);
+    expect(THUMBNAIL_MINIMIZE_SWAP_MS).toBe(180);
+    expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-toolbar\s*\{[\s\S]*?position:\s*fixed/,
     );
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-toolbar:not\(\.thumbnail-stack-toolbar-leaving\):not\(\.thumbnail-stack-toolbar-exiting\):not\(\.thumbnail-stack-toolbar-entering\) \.thumbnail-stack-minimize:hover/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-toolbar:not\(\.thumbnail-stack-toolbar-leaving\):not\(\.thumbnail-stack-toolbar-exiting\):not\(\.thumbnail-stack-toolbar-entering\) \.thumbnail-stack-minimize:focus-visible \{[\s\S]*?cursor:\s*pointer[\s\S]*?transform:\s*translateY\(-1px\)/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-toolbar:not\(\.thumbnail-stack-toolbar-leaving\):not\(\.thumbnail-stack-toolbar-exiting\):not\(\.thumbnail-stack-toolbar-entering\) \.thumbnail-stack-minimize:active/,
     );
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-toolbar-leaving \.thumbnail-stack-minimize\s*\{[^}]*width:\s*92px/,

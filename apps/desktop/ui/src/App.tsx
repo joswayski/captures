@@ -141,6 +141,7 @@ import {
   thumbnailStackFanTiltDeg,
   thumbnailStackPeekJitterPx,
   THUMBNAIL_CARD_SLOT_PX,
+  THUMBNAIL_STACK_EXPAND_COLLAPSE_MS,
   THUMBNAIL_STACK_SCROLLPORT_CLASS,
   waitForThumbnailStackSettle,
 } from "./lib/thumbnailLayout";
@@ -5618,7 +5619,7 @@ function useElementCssSize(
   return measured ?? fallback;
 }
 
-const STACK_MOTION_MS = 480;
+const STACK_MOTION_MS = THUMBNAIL_STACK_EXPAND_COLLAPSE_MS;
 
 export function Thumbnail() {
   const [artifacts, setArtifacts] = useState<CaptureArtifact[]>([]);
