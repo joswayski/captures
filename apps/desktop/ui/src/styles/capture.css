@@ -134,6 +134,37 @@ html.capture-selector-display {
   background: rgba(6, 9, 16, 0.42);
 }
 
+.capture-display-outline {
+  position: absolute;
+  z-index: 8;
+  inset: 0;
+  box-shadow: inset 0 0 0 2px var(--theme-accent);
+  pointer-events: none;
+}
+
+.capture-display-fallback {
+  position: absolute;
+  z-index: 9;
+  top: var(--s-4);
+  left: var(--s-4);
+  pointer-events: none;
+}
+
+.capture-display-fallback span {
+  display: inline-block;
+  max-width: min(360px, calc(100% - 8px));
+  padding: var(--s-2) var(--s-3);
+  overflow: hidden;
+  border-radius: var(--r-sm);
+  color: var(--glass-text);
+  background: var(--glass-strong);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-snug);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /*
  * Opacity owns both entrance and hover ducking. Keyframe fill-mode used to pin
  * opacity, so fading out under the cursor snapped while leaving re-ran the

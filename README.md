@@ -49,7 +49,7 @@ Preview builds update after every successful merge to `main` that changes the in
 
 ## Features
 
-- Capture regions, windows, or full displays
+- Capture regions, windows, or full displays. Window mode treats the menu bar, taskbar, and desktop backdrop as a full-display capture instead of a window.
 - Draw a region from an empty screen (no pre-sized outline); lock to common aspect ratios, or hold Shift for a square
 - Press Enter in the capture menu to confirm a screenshot or recording once a target is ready
 - Optional auto-start after selecting a region, window, or full display (Preferences)

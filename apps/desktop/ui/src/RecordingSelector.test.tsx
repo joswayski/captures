@@ -1123,6 +1123,22 @@ describe("RecordingSelector", () => {
     );
   });
 
+  it("treats the menu bar and empty desktop as a full-display target in Window mode", async () => {
+    const { container } = render(<RecordingSelector />);
+    fireEvent.click(await screen.findByRole("button", { name: "Window" }));
+    const surface = mockSelectorSurface(container);
+
+    fireEvent.pointerMove(surface, { pointerId: 1, clientX: 20, clientY: 8 });
+    expect(await screen.findByText("Click to capture this display")).toBeInTheDocument();
+    expect(container.querySelector(".recording-display-outline")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Window" })).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.pointerDown(surface, { pointerId: 1, clientX: 20, clientY: 8 });
+    expect(screen.getByRole("button", { name: "Full screen" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Start recording" })).toBeEnabled();
+    expect(screen.getByText("Built-in Retina Display")).toBeInTheDocument();
+  });
+
   it("keeps region and display capture available when the desktop cannot enumerate windows", async () => {
     preparedSession = {
       ...session,

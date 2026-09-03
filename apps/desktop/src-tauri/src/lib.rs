@@ -240,6 +240,7 @@ pub fn run() {
             start_capture,
             commit_region,
             commit_window,
+            commit_display,
             cancel_capture,
             cancel_screenshot_countdown,
             get_screenshot_countdown,
@@ -1015,6 +1016,112 @@ async fn commit_window(
         restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
     }
     result.map(Some).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn commit_display(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    session_id: String,
+) -> CommandResult<Option<CaptureArtifact>> {
+    hide_capture_overlay(&app);
+    let _reveal_documents = RevealDocumentWindowsOnDrop::new(&app);
+    let state = state.inner().clone();
+    let id = Uuid::parse_str(&session_id).map_err(|error| error.to_string())?;
+    let session = state
+        .sessions
+        .lock()
+        .remove(&id)
+        .ok_or_else(|| AppError::SessionUnavailable.to_string())?;
+    let thumbnail_capture_generation = session.thumbnail_capture_generation;
+    let countdown_seconds = state.settings().screenshot_countdown_seconds;
+    let image = if countdown_seconds > 0 {
+        set_capture_huds_protected(&app, true);
+        let completed = match run_screenshot_countdown(
+            app.clone(),
+            state.clone(),
+            &session.display,
+            countdown_seconds,
+            thumbnail_capture_generation,
+        )
+        .await
+        {
+            Ok(completed) => completed,
+            Err(error) => {
+                set_capture_huds_protected(&app, false);
+                restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
+                return Err(error.to_string());
+            }
+        };
+        if !completed {
+            return Ok(None);
+        }
+        let live_image = capture_live_display(&state, &session.display.id);
+        set_capture_huds_protected(&app, false);
+        match live_image {
+            Ok(image) => image,
+            Err(error) => {
+                restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
+                return Err(error.to_string());
+            }
+        }
+    } else if session.frozen {
+        match session
+            .image
+            .ok_or(AppError::SessionUnavailable)
+            .map(|mut image| {
+                apply_screenshot_cursor(
+                    &mut image,
+                    &session.display,
+                    session.cursor,
+                    state.settings().show_cursor_in_screenshots,
+                );
+                image
+            }) {
+            Ok(image) => image,
+            Err(error) => {
+                restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
+                return Err(error.to_string());
+            }
+        }
+    } else {
+        set_capture_huds_protected(&app, true);
+        let live_image = capture_live_display(&state, &session.display.id);
+        set_capture_huds_protected(&app, false);
+        match live_image {
+            Ok(image) => image,
+            Err(error) => {
+                restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
+                return Err(error.to_string());
+            }
+        }
+    };
+
+    let result = finish_capture(
+        &app,
+        &state,
+        CaptureMode::Display,
+        image,
+        thumbnail_capture_generation,
+    )
+    .await;
+    if result.is_err() {
+        restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
+    }
+    result.map(Some).map_err(|error| error.to_string())
+}
+
+fn capture_live_display(state: &AppState, display_id: &str) -> Result<RgbaImage, AppError> {
+    ensure_capture_session_available()?;
+    let pointer = pointer_position();
+    let mut frame = state.backend.capture_display(display_id)?;
+    apply_screenshot_cursor(
+        &mut frame.image,
+        &frame.descriptor,
+        pointer,
+        state.settings().show_cursor_in_screenshots,
+    );
+    Ok(frame.image)
 }
 
 #[tauri::command]
@@ -6781,7 +6888,110 @@ fn window_is_capturable(
     }) {
         return false;
     }
+    if window_is_screen_edge_chrome(window, display) || window_is_desktop_backdrop(window, display)
+    {
+        return false;
+    }
     true
+}
+
+fn window_overlap_area(
+    window: &captures_capture::WindowDescriptor,
+    display: &captures_capture::DisplayDescriptor,
+) -> u64 {
+    let left = i64::from(window.x).max(i64::from(display.x));
+    let top = i64::from(window.y).max(i64::from(display.y));
+    let right = (i64::from(window.x) + i64::from(window.width))
+        .min(i64::from(display.x) + i64::from(display.width));
+    let bottom = (i64::from(window.y) + i64::from(window.height))
+        .min(i64::from(display.y) + i64::from(display.height));
+    let width = (right - left).max(0);
+    let height = (bottom - top).max(0);
+    u64::try_from(width * height).unwrap_or(0)
+}
+
+fn window_covers_display(
+    window: &captures_capture::WindowDescriptor,
+    display: &captures_capture::DisplayDescriptor,
+) -> bool {
+    let display_area = u64::from(display.width) * u64::from(display.height);
+    if display_area == 0 {
+        return false;
+    }
+    window_overlap_area(window, display) * 100 >= display_area * 95
+}
+
+/// Menu bar, taskbar, and dock/panel strips that span a display edge.
+fn window_is_screen_edge_chrome(
+    window: &captures_capture::WindowDescriptor,
+    display: &captures_capture::DisplayDescriptor,
+) -> bool {
+    const MAX_THICKNESS: i32 = 96;
+    let display_right = i64::from(display.x) + i64::from(display.width);
+    let display_bottom = i64::from(display.y) + i64::from(display.height);
+    let window_left = i64::from(window.x);
+    let window_top = i64::from(window.y);
+    let window_right = window_left + i64::from(window.width);
+    let window_bottom = window_top + i64::from(window.height);
+    let spans_width = window_left <= i64::from(display.x) + 8
+        && window_right >= display_right - 8
+        && i32::try_from(window.width).unwrap_or(i32::MAX)
+            >= display.width.saturating_sub(16) as i32;
+    let spans_height = window_top <= i64::from(display.y) + 8
+        && window_bottom >= display_bottom - 8
+        && i32::try_from(window.height).unwrap_or(i32::MAX)
+            >= display.height.saturating_sub(16) as i32;
+    let thickness_h = i32::try_from(window.height).unwrap_or(i32::MAX);
+    let thickness_w = i32::try_from(window.width).unwrap_or(i32::MAX);
+    let top_bar =
+        spans_width && thickness_h <= MAX_THICKNESS && window_top <= i64::from(display.y) + 8;
+    let bottom_bar =
+        spans_width && thickness_h <= MAX_THICKNESS && window_bottom >= display_bottom - 8;
+    let left_bar =
+        spans_height && thickness_w <= MAX_THICKNESS && window_left <= i64::from(display.x) + 8;
+    let right_bar =
+        spans_height && thickness_w <= MAX_THICKNESS && window_right >= display_right - 8;
+    top_bar || bottom_bar || left_bar || right_bar
+}
+
+/// Wallpaper / desktop windows that fill the display and steal hits under the
+/// menu bar or taskbar. Named document windows from the same apps stay selectable.
+fn window_is_desktop_backdrop(
+    window: &captures_capture::WindowDescriptor,
+    display: &captures_capture::DisplayDescriptor,
+) -> bool {
+    if !window_covers_display(window, display) {
+        return false;
+    }
+    let title = window.title.trim();
+    if title.eq_ignore_ascii_case("Desktop") || title.eq_ignore_ascii_case("Program Manager") {
+        return true;
+    }
+    let Some(app) = window.app_name.as_deref().map(str::trim) else {
+        return false;
+    };
+    const BACKDROP_APPS: &[&str] = &[
+        "Finder",
+        "explorer",
+        "explorer.exe",
+        "Progman",
+        "WorkerW",
+        "Nautilus",
+        "nemo",
+        "caja",
+        "pcmanfm",
+        "pcmanfm-qt",
+        "dolphin",
+        "plasmashell",
+        "gnome-shell",
+    ];
+    if !BACKDROP_APPS
+        .iter()
+        .any(|excluded| app.eq_ignore_ascii_case(excluded))
+    {
+        return false;
+    }
+    title.is_empty() || title.eq_ignore_ascii_case("Desktop")
 }
 
 #[cfg(target_os = "macos")]
@@ -7296,6 +7506,76 @@ mod tests {
         let mut other_app = captures_window("Captures");
         other_app.app_name = Some("Browser".to_owned());
         assert!(window_is_capturable(&other_app, &display));
+    }
+
+    #[test]
+    fn treats_desktop_backdrop_and_taskbar_as_display_not_windows() {
+        let display = DisplayDescriptor {
+            id: "display".to_owned(),
+            name: "Display".to_owned(),
+            x: 0,
+            y: 0,
+            width: 1_440,
+            height: 900,
+            scale_factor: 2.0,
+            is_primary: true,
+        };
+        let finder_desktop = WindowDescriptor {
+            id: "desktop".to_owned(),
+            title: String::new(),
+            app_name: Some("Finder".to_owned()),
+            z_order: 0,
+            x: 0,
+            y: 0,
+            width: 1_440,
+            height: 900,
+            display_id: display.id.clone(),
+            corner_radius: None,
+        };
+        assert!(!window_is_capturable(&finder_desktop, &display));
+
+        let mut finder_folder = finder_desktop.clone();
+        finder_folder.id = "folder".to_owned();
+        finder_folder.title = "Documents".to_owned();
+        finder_folder.x = 80;
+        finder_folder.y = 80;
+        finder_folder.width = 640;
+        finder_folder.height = 480;
+        assert!(window_is_capturable(&finder_folder, &display));
+
+        let mut fullscreen_app = finder_desktop.clone();
+        fullscreen_app.id = "safari".to_owned();
+        fullscreen_app.title = "Safari".to_owned();
+        fullscreen_app.app_name = Some("Safari".to_owned());
+        assert!(window_is_capturable(&fullscreen_app, &display));
+
+        let taskbar = WindowDescriptor {
+            id: "taskbar".to_owned(),
+            title: String::new(),
+            app_name: Some("explorer.exe".to_owned()),
+            z_order: 40,
+            x: 0,
+            y: 852,
+            width: 1_440,
+            height: 48,
+            display_id: display.id.clone(),
+            corner_radius: None,
+        };
+        assert!(!window_is_capturable(&taskbar, &display));
+
+        let menu_bar = WindowDescriptor {
+            id: "menubar".to_owned(),
+            title: String::new(),
+            app_name: Some("Control Center".to_owned()),
+            z_order: 50,
+            x: 0,
+            y: 0,
+            width: 1_440,
+            height: 24,
+            display_id: display.id.clone(),
+            corner_radius: None,
+        };
+        assert!(!window_is_capturable(&menu_bar, &display));
     }
 
     #[test]
