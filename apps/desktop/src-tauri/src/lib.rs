@@ -5351,9 +5351,9 @@ fn thumbnail_stack_pose_depth(depth: f64) -> f64 {
 fn thumbnail_collapsed_peek(count: usize, hovered: bool) -> f64 {
     let extra = count.saturating_sub(1) as f64;
     let pose = thumbnail_stack_pose_depth(extra);
-    let peek = pose * if hovered { 24.0 } else { 13.0 };
+    let peek = pose * if hovered { 16.0 } else { 13.0 };
     if hovered && extra > 0.0 {
-        peek + 18.0
+        peek + 8.0
     } else {
         peek
     }
@@ -7139,10 +7139,10 @@ mod tests {
         thumbnail_clamp_frame, thumbnail_cursor_action, thumbnail_cursor_ignore_update,
         thumbnail_geometry, thumbnail_pointer_in_space, thumbnail_pointer_position,
         thumbnail_preserve_current_height, thumbnail_stack_height,
-        thumbnail_stack_should_be_visible,
-        thumbnail_visible_window_height, track_shortcut_suppression, tray_accelerator,
-        tray_icon_rect_is_usable, tray_notice_window_size, viewer_window_label,
-        window_display_crop_is_safe, window_is_capturable, windows_window_is_capture_overlay,
+        thumbnail_stack_should_be_visible, thumbnail_visible_window_height,
+        track_shortcut_suppression, tray_accelerator, tray_icon_rect_is_usable,
+        tray_notice_window_size, viewer_window_label, window_display_crop_is_safe,
+        window_is_capturable, windows_window_is_capture_overlay,
     };
 
     #[test]
@@ -8171,7 +8171,7 @@ mod tests {
         assert_eq!(thumbnail_stack_height(1, false), 240.0);
         assert!(thumbnail_stack_height(8, true) > thumbnail_stack_height(4, true));
         assert!(thumbnail_stack_height(8, true) < thumbnail_stack_height(8, false));
-        assert_eq!(thumbnail_stack_height(4, true), 302.0);
+        assert_eq!(thumbnail_stack_height(4, true), 268.0);
     }
 
     #[test]

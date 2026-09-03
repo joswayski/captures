@@ -22,27 +22,27 @@ export const THUMBNAIL_STACK_FULL_PEEK_DEPTH = 3;
 /** Extra pose units per card after the full-step band (≈8px idle peek). */
 export const THUMBNAIL_STACK_RECEDING_STEP = 0.55;
 
-/** Idle collapsed peek per pose unit (matches compact `translateY`). */
+/** Idle collapsed peek per pose unit (matches compact rest `translateY`). */
 export const THUMBNAIL_STACK_IDLE_PEEK_PX = 13;
 
-/** Hover-fan collapsed peek per pose unit. */
-export const THUMBNAIL_STACK_HOVER_PEEK_PX = 24;
+/** Hover-fan collapsed peek per pose unit (matches compact hover `translateY`). */
+export const THUMBNAIL_STACK_HOVER_PEEK_PX = 16;
 
 /** Extra hit-target height so a hovered tilt corner is still on the pile. */
-export const THUMBNAIL_STACK_HOVER_TILT_PEEK_PX = 18;
+export const THUMBNAIL_STACK_HOVER_TILT_PEEK_PX = 8;
 
 /** Extra delay per stacked card so collapsed hover lift does not fire in lockstep. */
-export const THUMBNAIL_STACK_FAN_STAGGER_MS = 8;
+export const THUMBNAIL_STACK_FAN_STAGGER_MS = 16;
 
 /**
  * Alternating collapsed-hover tilt in degrees. The front card stays square;
- * deeper cards skew a few degrees and ease back to 0 when the stack expands.
- * Values are large enough that the peeking top edge reads as a scattered pile.
+ * deeper cards take a tiny skew so the pile reads as scattered without
+ * swinging far past the front preview.
  */
-export const THUMBNAIL_STACK_FAN_TILT_DEG = [0, 7, -6, 5] as const;
+export const THUMBNAIL_STACK_FAN_TILT_DEG = [0, 2.4, -2, 1.6] as const;
 
 /** Extra hover shift (px) along the tilt so the peeking edge is not a parallel slab. */
-export const THUMBNAIL_STACK_FAN_SHIFT_PX_PER_DEG = 1.8;
+export const THUMBNAIL_STACK_FAN_SHIFT_PX_PER_DEG = 1;
 
 /** Tilt applied to a collapsed card at `depth` while the pile is hovered. */
 export function thumbnailStackFanTiltDeg(depth: number): number {
@@ -58,7 +58,8 @@ export function thumbnailStackFanTiltDeg(depth: number): number {
 /**
  * Visual collapsed depth. The first three behind-cards keep the current
  * 13px steps; older captures keep peeking with a shorter step so the pile
- * recedes instead of hiding. Mirrored in mini-preview.css as `--thumbnail-stack-pose`.
+ * recedes instead of hiding. Mirrored in mini-preview.css as
+ * `--thumbnail-stack-pose` / `--thumbnail-stack-pile-depth`.
  */
 export function thumbnailStackPoseDepth(depth: number): number {
   const n = Math.max(0, depth);
@@ -67,6 +68,11 @@ export function thumbnailStackPoseDepth(depth: number): number {
     THUMBNAIL_STACK_FULL_PEEK_DEPTH
     + (n - THUMBNAIL_STACK_FULL_PEEK_DEPTH) * THUMBNAIL_STACK_RECEDING_STEP
   );
+}
+
+/** Compact rest/hover depth. Same as pose: extras recede instead of clamping. */
+export function thumbnailStackPileDepth(depth: number): number {
+  return thumbnailStackPoseDepth(depth);
 }
 
 /** Horizontal hover offset matching `thumbnailStackFanTiltDeg`. */

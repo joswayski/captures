@@ -1105,8 +1105,8 @@ describe("Thumbnail", () => {
       await vi.advanceTimersByTimeAsync(32);
     });
 
-    expect(cards[0].style.getPropertyValue("--thumbnail-stack-fan-tilt")).toBe("-6deg");
-    expect(cards[1].style.getPropertyValue("--thumbnail-stack-fan-tilt")).toBe("7deg");
+    expect(cards[0].style.getPropertyValue("--thumbnail-stack-fan-tilt")).toBe("-2deg");
+    expect(cards[1].style.getPropertyValue("--thumbnail-stack-fan-tilt")).toBe("2.4deg");
     expect(cards[2].style.getPropertyValue("--thumbnail-stack-fan-tilt")).toBe("0deg");
 
     const livePose = "matrix(0.97, 0.12, -0.12, 0.97, 10, -24)";

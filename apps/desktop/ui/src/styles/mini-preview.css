@@ -1779,7 +1779,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 
 .thumbnail-stack-compact {
   --stack-fan-dur: var(--dur-3);
-  --stack-fan-stagger: 8ms;
+  --stack-fan-stagger: 16ms;
   --stack-fan-ease: var(--ease-standard);
   height: 100%;
   max-height: none;
@@ -1793,8 +1793,9 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
    * React sets `--thumbnail-stack-base-depth` from DOM order. Subtract any
    * expanded slot-settle that was in flight when Show less started so the
    * minimizing pose matches the on-screen position instead of jumping back
-   * up a held hole. `--thumbnail-stack-pose` compresses cards past the first
-   * three behind-cards into a vanishing pile (keep slot depth for expand).
+   * up a held hole. `--thumbnail-stack-pose` recedes cards past the first
+   * three behind-cards (aliased as `--thumbnail-stack-pile-depth` for rest
+   * and hover). Expand uses the real slot depth so cards fly to list slots.
    */
   --thumbnail-stack-depth: max(
     0,
@@ -1808,27 +1809,28 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
     min(var(--thumbnail-stack-depth, 0), 3)
     + var(--thumbnail-stack-extra) * 0.55
   );
+  --thumbnail-stack-pile-depth: var(--thumbnail-stack-pose, 0);
   --thumbnail-stack-rest-transform:
     translate3d(
-      calc(var(--thumbnail-stack-pose, 0) * -1.5px),
-      calc(var(--thumbnail-stack-pose, 0) * -13px),
-      calc(var(--thumbnail-stack-pose, 0) * -24px)
+      calc(var(--thumbnail-stack-pile-depth, 0) * -1.5px),
+      calc(var(--thumbnail-stack-pile-depth, 0) * -13px),
+      calc(var(--thumbnail-stack-pile-depth, 0) * -24px)
     )
     rotateZ(0deg)
-    rotateX(calc(var(--thumbnail-stack-pose, 0) * -1.4deg))
-    scale(calc(1 - var(--thumbnail-stack-pose, 0) * 0.025));
+    rotateX(calc(var(--thumbnail-stack-pile-depth, 0) * -1.4deg))
+    scale(calc(1 - var(--thumbnail-stack-pile-depth, 0) * 0.025));
   --thumbnail-stack-hover-transform:
     translate3d(
       calc(
-        var(--thumbnail-stack-pose, 0) * -2px
+        var(--thumbnail-stack-pile-depth, 0) * -1px
         + var(--thumbnail-stack-fan-shift, 0px)
       ),
-      calc(var(--thumbnail-stack-pose, 0) * -24px),
-      calc(var(--thumbnail-stack-pose, 0) * -18px)
+      calc(var(--thumbnail-stack-pile-depth, 0) * -16px),
+      calc(var(--thumbnail-stack-pile-depth, 0) * -18px)
     )
     rotateZ(var(--thumbnail-stack-fan-tilt, 0deg))
-    rotateX(calc(var(--thumbnail-stack-pose, 0) * -1.2deg))
-    scale(calc(1 - var(--thumbnail-stack-pose, 0) * 0.02));
+    rotateX(calc(var(--thumbnail-stack-pile-depth, 0) * -1.2deg))
+    scale(calc(1 - var(--thumbnail-stack-pile-depth, 0) * 0.02));
   --thumbnail-stack-expanded-transform:
     translate3d(
       0,
@@ -1874,10 +1876,10 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   inset: 0;
   border-radius: inherit;
   background: var(--glass-strong-solid);
-  opacity: calc(min(0.72, var(--thumbnail-stack-pose, 0) * 0.14));
+  opacity: calc(min(0.72, var(--thumbnail-stack-pile-depth, 0) * 0.14));
   content: "";
   pointer-events: none;
-  transition: opacity var(--stack-fan-dur) calc(var(--thumbnail-stack-depth, 0) * var(--stack-fan-stagger, 0ms)) var(--stack-fan-ease, var(--ease-out));
+  transition: opacity var(--stack-fan-dur) calc(var(--thumbnail-stack-pile-depth, 0) * var(--stack-fan-stagger, 0ms)) var(--stack-fan-ease, var(--ease-out));
 }
 
 .thumbnail-stack-minimizing > .thumbnail-card,
@@ -1903,6 +1905,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 }
 
 .thumbnail-stack-expanding > .thumbnail-card {
+  opacity: 1;
   animation: thumbnail-card-expand 0.48s var(--ease-standard) both;
 }
 
@@ -1913,9 +1916,9 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
  */
 .thumbnail-stack-minimized.thumbnail-stack-hover-ready > .thumbnail-card {
   transition:
-    opacity var(--dur-4) var(--ease-out),
-    transform var(--stack-fan-dur) calc(var(--thumbnail-stack-depth, 0) * var(--stack-fan-stagger)) var(--stack-fan-ease),
-    box-shadow var(--stack-fan-dur) calc(var(--thumbnail-stack-depth, 0) * var(--stack-fan-stagger)) var(--stack-fan-ease);
+    opacity var(--stack-fan-dur) calc(var(--thumbnail-stack-pile-depth, 0) * var(--stack-fan-stagger)) var(--stack-fan-ease),
+    transform var(--stack-fan-dur) calc(var(--thumbnail-stack-pile-depth, 0) * var(--stack-fan-stagger)) var(--stack-fan-ease),
+    box-shadow var(--stack-fan-dur) calc(var(--thumbnail-stack-pile-depth, 0) * var(--stack-fan-stagger)) var(--stack-fan-ease);
 }
 
 /*
@@ -1933,6 +1936,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 }
 
 .thumbnail-stack-expanding > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting) {
+  opacity: 1;
   animation: thumbnail-card-expand 0.48s var(--ease-standard) both;
 }
 
@@ -1958,7 +1962,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
     opacity: 0;
   }
   to {
-    opacity: calc(min(0.72, var(--thumbnail-stack-pose, 0) * 0.14));
+    opacity: calc(min(0.72, var(--thumbnail-stack-pile-depth, 0) * 0.14));
   }
 }
 
@@ -2125,29 +2129,29 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   transform:
     translate3d(
       calc(
-        var(--thumbnail-stack-pose, 0) * -1.5px
+        var(--thumbnail-stack-pile-depth, 0) * -1.5px
         + var(--thumbnail-drag-sway-x, 0) * 1px
-          * var(--thumbnail-stack-pose, 0)
-          * (var(--thumbnail-stack-pose, 0) + 1)
+          * var(--thumbnail-stack-pile-depth, 0)
+          * (var(--thumbnail-stack-pile-depth, 0) + 1)
           / 2
       ),
       calc(
-        var(--thumbnail-stack-pose, 0) * -13px
-        + var(--thumbnail-drag-sway-y, 0) * 1px * var(--thumbnail-stack-pose, 0) * 0.45
+        var(--thumbnail-stack-pile-depth, 0) * -13px
+        + var(--thumbnail-drag-sway-y, 0) * 1px * var(--thumbnail-stack-pile-depth, 0) * 0.45
       ),
-      calc(var(--thumbnail-stack-pose, 0) * -24px)
+      calc(var(--thumbnail-stack-pile-depth, 0) * -24px)
     )
     rotateZ(
       calc(
         var(--thumbnail-drag-sway-x, 0)
-        * var(--thumbnail-stack-pose, 0)
-        * (var(--thumbnail-stack-pose, 0) + 1)
+        * var(--thumbnail-stack-pile-depth, 0)
+        * (var(--thumbnail-stack-pile-depth, 0) + 1)
         * 0.18deg
       )
     )
-    rotateX(calc(var(--thumbnail-stack-pose, 0) * -1.4deg))
-    scale(calc(1 - var(--thumbnail-stack-pose, 0) * 0.025));
-  filter: brightness(calc(1 - var(--thumbnail-stack-pose, 0) * 0.12));
+    rotateX(calc(var(--thumbnail-stack-pile-depth, 0) * -1.4deg))
+    scale(calc(1 - var(--thumbnail-stack-pile-depth, 0) * 0.025));
+  filter: brightness(calc(1 - var(--thumbnail-stack-pile-depth, 0) * 0.12));
   box-shadow: var(--thumbnail-card-shadow);
 }
 
@@ -2161,7 +2165,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 
 .thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):not(.thumbnail-stack-pressing):has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card::before,
 .thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):not(.thumbnail-stack-pressing):has(.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]) > .thumbnail-card::before {
-  opacity: calc(min(0.55, var(--thumbnail-stack-pose, 0) * 0.1));
+  opacity: calc(min(0.55, var(--thumbnail-stack-pile-depth, 0) * 0.1));
 }
 
 .thumbnail-message {
