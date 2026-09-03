@@ -7,6 +7,7 @@ import type { CaptureArtifact } from "./types";
 import {
   THUMBNAIL_CARD_SLOT_PX,
   THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS,
+  thumbnailStackNewestScrollTop,
 } from "./lib/thumbnailLayout";
 import { THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE } from "./lib/thumbnailHover";
 
@@ -353,13 +354,12 @@ describe("Thumbnail", () => {
     render(<Thumbnail />);
     await screen.findByRole("article");
     const stack = document.querySelector<HTMLElement>(".thumbnail-stack")!;
-    // Layout height for one card is 216px; force a taller client so the
-    // content-height helper still reports overflow via mocked scrollTop.
+    // Layout height for one card is 240px (28 top + 160 card + 52 gutter).
     Object.defineProperties(stack, {
       clientHeight: { configurable: true, value: 100 },
     });
-    // With one card, layout height is 216 → maxScroll = 116. Pin near bottom.
-    stack.scrollTop = 116;
+    // maxScroll = 140. Pin near bottom.
+    stack.scrollTop = 140;
 
     fireEvent.scroll(stack);
 
@@ -379,7 +379,7 @@ describe("Thumbnail", () => {
     expect(frames).toHaveLength(1);
     now.mockReturnValue(380);
     frames[0]?.(380);
-    // One slot up from 116 → 0 (clamped).
+    // One slot up from 140 → 0 (clamped).
     expect(stack.scrollTop).toBe(0);
 
     raf.mockRestore();
@@ -901,6 +901,60 @@ describe("Thumbnail", () => {
     expect(stack).not.toHaveClass("thumbnail-stack-compact");
     expect(card).not.toHaveAttribute("aria-hidden");
     expect(screen.getByRole("button", { name: "Minimize previews" })).toBeEnabled();
+    expect(stack.contains(
+      screen.getByRole("button", { name: "Minimize previews" }).closest(".thumbnail-stack-toolbar"),
+    )).toBe(false);
+  });
+
+  it("reveals the newest capture and keeps Show less at the window after expanding", async () => {
+    const stacked = Array.from({ length: 8 }, (_, index) => ({
+      ...artifact,
+      id: `capture-${index + 1}`,
+    }));
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifacts") return stacked;
+      if (command === "get_clipboard_state") {
+        return { revision: 0, artifact_id: stacked.at(-1)?.id };
+      }
+      if (command === "get_thumbnail_pointer_position") {
+        return new Promise(() => undefined);
+      }
+      return undefined;
+    });
+
+    render(<Thumbnail />);
+    const cards = await screen.findAllByRole("article");
+    expect(cards).toHaveLength(8);
+    const stack = cards[0]!.closest(".thumbnail-stack")!;
+    const viewportHeight = 400;
+    Object.defineProperties(stack, {
+      clientHeight: { configurable: true, value: viewportHeight },
+    });
+    const newestTop = thumbnailStackNewestScrollTop(8, viewportHeight);
+    expect(newestTop).toBeGreaterThan(0);
+
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "Minimize previews" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(32);
+      await vi.advanceTimersByTimeAsync(480);
+    });
+
+    const expand = screen.getByRole("button", { name: "Expand 8 previews" });
+    stack.scrollTop = 0;
+    await act(async () => {
+      fireEvent.click(expand);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(480);
+    });
+
+    expect(stack.scrollTop).toBe(newestTop);
+    expect(screen.queryByRole("button", { name: "Show newer captures" })).toBeNull();
+    const restack = screen.getByRole("button", { name: "Minimize previews" })
+      .closest(".thumbnail-stack-toolbar");
+    expect(stack.contains(restack)).toBe(false);
   });
 
   it("drags the collapsed pile instead of expanding once the pointer moves", async () => {

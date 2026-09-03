@@ -9,11 +9,14 @@ import {
   easeOutCubic,
   resolveThumbnailStackShiftPx,
   shouldAnimateThumbnailStackShift,
+  scheduleScrollThumbnailStackToNewest,
   shouldScrollThumbnailStackToEnd,
+  shouldScrollThumbnailStackToNewestOnExpand,
   thumbnailStackContentHeight,
   thumbnailStackMotionClassNames,
   restoreThumbnailStackShiftClass,
   thumbnailStackOverflow,
+  thumbnailStackNewestScrollTop,
   thumbnailStackShiftPx,
   thumbnailCollapsedPeekPx,
   THUMBNAIL_CARD_HEIGHT_PX,
@@ -21,6 +24,7 @@ import {
   THUMBNAIL_DISMISS_HOLD_MS,
   THUMBNAIL_DISMISS_STACK_MOTION_DELAY_MS,
   THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS,
+  THUMBNAIL_STACK_CONTROL_GUTTER_PX,
   THUMBNAIL_STACK_GAP_PX,
   THUMBNAIL_STACK_MOTION_DURATION_MS,
   THUMBNAIL_STACK_PADDING_PX,
@@ -189,6 +193,9 @@ describe("thumbnail stack layout", () => {
       /\.thumbnail-stack-control\s*\{[\s\S]*?cursor:\s*pointer/,
     );
     expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-toolbar\s*\{[\s\S]*?position:\s*fixed/,
+    );
+    expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-toolbar:not\(\.thumbnail-stack-toolbar-leaving\):not\(\.thumbnail-stack-toolbar-exiting\):not\(\.thumbnail-stack-toolbar-entering\) \.thumbnail-stack-minimize:hover/,
     );
     expect(thumbnailStyles).toMatch(
@@ -215,6 +222,57 @@ describe("thumbnail stack layout", () => {
   it("does not force a second scroll after a capture closes", () => {
     expect(shouldScrollThumbnailStackToEnd(2, 1)).toBe(false);
     expect(shouldScrollThumbnailStackToEnd(2, 2)).toBe(false);
+  });
+
+  it("scrolls to the newest capture when the pile expands", () => {
+    expect(shouldScrollThumbnailStackToNewestOnExpand("collapsed", "expanded")).toBe(true);
+    expect(shouldScrollThumbnailStackToNewestOnExpand("expanding", "expanded")).toBe(true);
+    expect(shouldScrollThumbnailStackToNewestOnExpand("expanded", "expanded")).toBe(false);
+    expect(shouldScrollThumbnailStackToNewestOnExpand(undefined, "expanded")).toBe(false);
+    expect(shouldScrollThumbnailStackToNewestOnExpand("expanded", "collapsing")).toBe(false);
+  });
+
+  it("pins newest-scroll to layout height instead of paint overflow", () => {
+    expect(thumbnailStackNewestScrollTop(1, 400)).toBe(0);
+    expect(thumbnailStackNewestScrollTop(8, 400)).toBe(
+      thumbnailStackContentHeight(8) - 400,
+    );
+  });
+
+  it("retries newest-scroll after layout frames", () => {
+    const stack = document.createElement("main");
+    stack.innerHTML = "<article class=\"thumbnail-card\"></article>".repeat(8);
+    Object.defineProperty(stack, "clientHeight", {
+      configurable: true,
+      writable: true,
+      value: 10_000,
+    });
+    Object.defineProperty(stack, "scrollTop", {
+      configurable: true,
+      writable: true,
+      value: 0,
+    });
+
+    const frames: FrameRequestCallback[] = [];
+    const cancel = scheduleScrollThumbnailStackToNewest(stack, {
+      retryMs: 50,
+      frame: (callback) => {
+        frames.push(callback);
+        return frames.length;
+      },
+      cancelFrame: (id) => {
+        frames[id - 1] = () => undefined;
+      },
+    });
+
+    expect(stack.scrollTop).toBe(0);
+    Object.defineProperty(stack, "clientHeight", {
+      configurable: true,
+      value: 400,
+    });
+    frames[0]?.(0);
+    expect(stack.scrollTop).toBe(thumbnailStackNewestScrollTop(8, 400));
+    cancel();
   });
 
   it("dims stacked cards with an overlay instead of a parent filter", () => {
@@ -271,17 +329,20 @@ describe("thumbnail stack layout", () => {
   it("computes stack content height from card layout, not paint overflow", () => {
     expect(thumbnailStackContentHeight(0)).toBe(0);
     expect(thumbnailStackContentHeight(1)).toBe(
-      THUMBNAIL_STACK_PADDING_PX * 2 + THUMBNAIL_CARD_HEIGHT_PX,
+      THUMBNAIL_STACK_PADDING_PX
+        + THUMBNAIL_STACK_CONTROL_GUTTER_PX
+        + THUMBNAIL_CARD_HEIGHT_PX,
     );
     expect(thumbnailStackContentHeight(4)).toBe(
-      THUMBNAIL_STACK_PADDING_PX * 2
+      THUMBNAIL_STACK_PADDING_PX
+        + THUMBNAIL_STACK_CONTROL_GUTTER_PX
         + 4 * THUMBNAIL_CARD_HEIGHT_PX
         + 3 * THUMBNAIL_STACK_GAP_PX,
     );
   });
 
   it("ignores inflated scrollable overflow when layout content fits", () => {
-    // Four cards fill a 768px stack. Dust chips and settle transforms can make
+    // Four cards fill a 792px stack. Dust chips and settle transforms can make
     // WebKit report a taller scrollHeight; cues must use layout height instead
     // so the bottom drawer does not flash while survivors settle.
     const layoutHeight = thumbnailStackContentHeight(4);

@@ -439,11 +439,11 @@ describe("applyThumbnailNativeHover", () => {
   it("keeps pointer on Show less after expand while card hover is suppressed", () => {
     document.body.innerHTML = `
       <main class="thumbnail-stack">
-        <div class="thumbnail-stack-toolbar">
-          <button class="thumbnail-stack-control thumbnail-stack-minimize">Show less</button>
-        </div>
         <article class="thumbnail-card"><img alt=""><button>Copy</button></article>
       </main>
+      <div class="thumbnail-stack-toolbar">
+        <button class="thumbnail-stack-control thumbnail-stack-minimize">Show less</button>
+      </div>
     `;
     const control = document.querySelector<HTMLButtonElement>(".thumbnail-stack-control")!;
     Object.defineProperty(document, "elementFromPoint", {
@@ -591,11 +591,11 @@ describe("shouldIgnoreThumbnailCursorEvents", () => {
   it("passes clicks through toolbar chrome outside the minimize button", () => {
     document.body.innerHTML = `
       <main class="thumbnail-stack">
-        <div class="thumbnail-stack-toolbar">
-          <button class="thumbnail-stack-control">Minimize previews</button>
-        </div>
         <article class="thumbnail-card"><button>Copy</button></article>
       </main>
+      <div class="thumbnail-stack-toolbar">
+        <button class="thumbnail-stack-control">Minimize previews</button>
+      </div>
     `;
     const toolbar = document.querySelector(".thumbnail-stack-toolbar")!;
     Object.defineProperty(document, "elementFromPoint", {

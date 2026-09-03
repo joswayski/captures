@@ -120,6 +120,8 @@ import {
 import {
   animateThumbnailStackScroll,
   createThumbnailStackShiftController,
+  scheduleScrollThumbnailStackToNewest,
+  scrollThumbnailStackToNewest,
   shouldScrollThumbnailStackToEnd,
   thumbnailStackContentHeight,
   thumbnailStackOverflow,
@@ -5549,6 +5551,7 @@ export function Thumbnail() {
     "expanded",
   );
   const previousArtifactCount = useRef(0);
+  const pendingNewestReveal = useRef(false);
   const cancelStackScroll = useRef<(() => void) | null>(null);
   const applyClipboardState = useCallback((next: ClipboardState) => {
     setClipboardState((current) => reconcileClipboardState(current, next));
@@ -5699,13 +5702,14 @@ export function Thumbnail() {
   }, [applyClipboardState]);
 
   useLayoutEffect(() => {
-    if (
-      stackRef.current
-      && shouldScrollThumbnailStackToEnd(previousArtifactCount.current, artifacts.length)
-    ) {
-      stackRef.current.scrollTop = stackRef.current.scrollHeight;
-    }
+    const shouldReveal = shouldScrollThumbnailStackToEnd(
+      previousArtifactCount.current,
+      artifacts.length,
+    );
     previousArtifactCount.current = artifacts.length;
+    if (shouldReveal && stackRef.current) {
+      scrollThumbnailStackToNewest(stackRef.current);
+    }
     refreshStackOverflow();
     let cancelled = false;
     // Sync may grow the native window for new cards. It intentionally does not
@@ -5714,6 +5718,9 @@ export function Thumbnail() {
       .catch(() => undefined)
       .finally(() => {
         if (!cancelled) {
+          if (shouldReveal && stackRef.current) {
+            scrollThumbnailStackToNewest(stackRef.current);
+          }
           refreshStackOverflow();
           window.dispatchEvent(new Event("captures-thumbnail-layout-changed"));
         }
@@ -5722,6 +5729,23 @@ export function Thumbnail() {
       cancelled = true;
     };
   }, [artifacts.length, refreshStackOverflow]);
+
+  useLayoutEffect(() => {
+    if (stackMotion !== "expanded" || !pendingNewestReveal.current) return;
+    const stack = stackRef.current;
+    if (!stack) return;
+    const cancelReveal = scheduleScrollThumbnailStackToNewest(stack, {
+      onScrolled: refreshStackOverflow,
+      retryMs: 450,
+    });
+    const finish = window.setTimeout(() => {
+      pendingNewestReveal.current = false;
+    }, 450);
+    return () => {
+      cancelReveal();
+      window.clearTimeout(finish);
+    };
+  }, [stackMotion, refreshStackOverflow]);
 
   useEffect(() => {
     const refresh = () => refreshStackOverflow();
@@ -6261,11 +6285,13 @@ export function Thumbnail() {
       stackHoverReadyFrames.current = frames;
     };
     if (prefersReducedMotion()) {
+      if (!nextCollapsed) pendingNewestReveal.current = true;
       setStackMotion(nextCollapsed ? "collapsed" : "expanded");
       if (nextCollapsed) armHoverReady();
       else cancelHoverReady();
       void invoke("set_mini_previews_collapsed", { collapsed: nextCollapsed })
         .catch(() => {
+          if (!nextCollapsed) pendingNewestReveal.current = false;
           setStackMotion(nextCollapsed ? "expanded" : "collapsed");
           if (nextCollapsed) cancelHoverReady();
           else armHoverReady();
@@ -6320,6 +6346,7 @@ export function Thumbnail() {
     cancelHoverReady();
     setStackMinimizeRun(false);
     setStackHoverLatched(false);
+    pendingNewestReveal.current = true;
     void invoke("set_mini_previews_collapsed", { collapsed: false })
       .then(() => {
         setStackMotion("expanding");
@@ -6329,6 +6356,7 @@ export function Thumbnail() {
         }, STACK_MOTION_MS);
       })
       .catch(() => {
+        pendingNewestReveal.current = false;
         setStackMotion("collapsed");
         armHoverReady();
       });
@@ -6434,28 +6462,6 @@ export function Thumbnail() {
           if (compact) preventThumbnailHtml5Drag(event.nativeEvent);
         }}
       >
-        {!collapsed && (
-          <div className={[
-            "thumbnail-stack-toolbar",
-            stackMotion === "collapsing" ? "thumbnail-stack-toolbar-leaving" : "",
-            stackMotion === "expanding" ? "thumbnail-stack-toolbar-entering" : "",
-            exitingOnly && stackMotion !== "collapsing"
-              ? "thumbnail-stack-toolbar-exiting"
-              : "",
-          ].filter(Boolean).join(" ")}>
-            <button
-              type="button"
-              className="thumbnail-stack-control thumbnail-stack-minimize"
-              aria-label="Minimize previews"
-              onClick={() => setStackCollapsed(true)}
-            >
-              <PreviewStackIcon />
-              <span className="thumbnail-stack-minimize-label" aria-hidden="true">
-                Show less
-              </span>
-            </button>
-          </div>
-        )}
         {/* Horizontal-only Gaussian blur for dismiss motion streak (stdDeviation x 0). */}
         <svg className="thumbnail-svg-defs" aria-hidden="true" focusable="false">
           <defs>
@@ -6513,6 +6519,28 @@ export function Thumbnail() {
           />
         )}
       </main>
+      {!collapsed && (
+        <div className={[
+          "thumbnail-stack-toolbar",
+          stackMotion === "collapsing" ? "thumbnail-stack-toolbar-leaving" : "",
+          stackMotion === "expanding" ? "thumbnail-stack-toolbar-entering" : "",
+          exitingOnly && stackMotion !== "collapsing"
+            ? "thumbnail-stack-toolbar-exiting"
+            : "",
+        ].filter(Boolean).join(" ")}>
+          <button
+            type="button"
+            className="thumbnail-stack-control thumbnail-stack-minimize"
+            aria-label="Minimize previews"
+            onClick={() => setStackCollapsed(true)}
+          >
+            <PreviewStackIcon />
+            <span className="thumbnail-stack-minimize-label" aria-hidden="true">
+              Show less
+            </span>
+          </button>
+        </div>
+      )}
       {!collapsed && stackOverflow.hasOlder && (
         <button
           type="button"
