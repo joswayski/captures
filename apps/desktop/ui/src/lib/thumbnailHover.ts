@@ -56,6 +56,12 @@ const THUMBNAIL_STACK_CONTROL_SELECTOR = [
 export const THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE = "data-thumbnail-suppress-card-hover";
 const THUMBNAIL_SUPPRESS_CARD_HOVER_SELECTOR =
   `.thumbnail-stack[${THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE}="true"]`;
+/**
+ * Marker on the collapsed pile while CSS `:hover` is stale. Pointer capture
+ * (and a click-through window after drop) can leave `:hover` true after the
+ * pointer has already left, which sticks the sparkle / fan pose.
+ */
+export const THUMBNAIL_HOVER_STALE_ATTRIBUTE = "data-thumbnail-hover-stale";
 /** Ignore sub-pixel native samples so a stationary pointer cannot unlock hover. */
 export const THUMBNAIL_CARD_HOVER_LOCK_SLOP_PX = 4;
 
@@ -291,6 +297,73 @@ export function clearThumbnailNativeHover(root: ParentNode = document) {
     });
 }
 
+export function setThumbnailCollapsedHoverStale(
+  element: HTMLElement | null,
+  stale: boolean,
+) {
+  if (!element) return;
+  if (stale) {
+    element.setAttribute(THUMBNAIL_HOVER_STALE_ATTRIBUTE, "true");
+  } else {
+    element.removeAttribute(THUMBNAIL_HOVER_STALE_ATTRIBUTE);
+  }
+}
+
+export function armThumbnailCollapsedHover(element: HTMLElement | null) {
+  setThumbnailCollapsedHoverStale(element, false);
+}
+
+function staleCollapsedHitTargets(root: ParentNode, stale: boolean) {
+  root.querySelectorAll<HTMLElement>(".thumbnail-collapsed-hit-target")
+    .forEach((target) => setThumbnailCollapsedHoverStale(target, stale));
+}
+
+/**
+ * WebKit/Chromium can keep `:hover` on a pointer-captured node after release,
+ * especially when the next samples never arrive because the window is already
+ * click-through. Toggling `pointer-events` forces a hover restyle.
+ */
+export function forceClearThumbnailCssHover(element: HTMLElement) {
+  const previous = element.style.pointerEvents;
+  element.style.pointerEvents = "none";
+  void element.getBoundingClientRect();
+  element.style.pointerEvents = previous;
+}
+
+export function releaseThumbnailPointerCapture(
+  element: HTMLElement,
+  pointerId: number,
+) {
+  try {
+    if (
+      typeof element.hasPointerCapture === "function"
+      && element.hasPointerCapture(pointerId)
+    ) {
+      element.releasePointerCapture(pointerId);
+    }
+  } catch {
+    // jsdom and some WebViews omit Element.releasePointerCapture.
+  }
+}
+
+/**
+ * End a collapsed-pile press/drag. Returns true when the pointer is no longer
+ * over the pile, so sparkle/fan chrome must stay off until a real re-enter.
+ */
+export function releaseThumbnailCapturedHover(
+  element: HTMLElement,
+  pointer: { x: number; y: number },
+): boolean {
+  if (containsPoint(element, pointer.x, pointer.y)) {
+    armThumbnailCollapsedHover(element);
+    return false;
+  }
+  element.removeAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE);
+  setThumbnailCollapsedHoverStale(element, true);
+  forceClearThumbnailCssHover(element);
+  return true;
+}
+
 /**
  * Native pointer tracking is intentionally stored outside React's `className`.
  * Viewer activation rerenders the card and would otherwise overwrite an
@@ -429,6 +502,7 @@ export function applyThumbnailNativeHover(
   if (!position.inside) {
     root.querySelectorAll<HTMLElement>(THUMBNAIL_EDITOR_JUST_OPENED_SELECTOR)
       .forEach((control) => rearmThumbnailEditorControlHover(control, { fromLeave: true }));
+    staleCollapsedHitTargets(root, true);
     clearThumbnailNativeHover(root);
     return "default";
   }
@@ -467,10 +541,12 @@ export function applyThumbnailNativeHover(
         }
       });
     if (!ignoreCollapsedHover) {
+      armThumbnailCollapsedHover(stackControl);
       stackControl.setAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE, "true");
     }
     return "pointer";
   }
+  staleCollapsedHitTargets(root, true);
   if (thumbnailStackSuppressesCardHover(root)) {
     clearThumbnailNativeHover(root);
     return "default";
