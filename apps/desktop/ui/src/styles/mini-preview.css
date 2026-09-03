@@ -1779,6 +1779,8 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 
 .thumbnail-stack-compact {
   --stack-fan-dur: var(--dur-3);
+  --stack-fan-stagger: 8ms;
+  --stack-fan-ease: var(--ease-standard);
   height: 100%;
   max-height: none;
   overflow: visible;
@@ -1793,8 +1795,30 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
       calc(var(--thumbnail-stack-depth, 0) * -13px),
       calc(var(--thumbnail-stack-depth, 0) * -24px)
     )
+    rotateZ(0deg)
     rotateX(calc(var(--thumbnail-stack-depth, 0) * -1.4deg))
     scale(calc(1 - var(--thumbnail-stack-depth, 0) * 0.025));
+  --thumbnail-stack-hover-transform:
+    translate3d(
+      calc(
+        var(--thumbnail-stack-depth, 0) * -2px
+        + var(--thumbnail-stack-fan-shift, 0px)
+      ),
+      calc(var(--thumbnail-stack-depth, 0) * -24px),
+      calc(var(--thumbnail-stack-depth, 0) * -18px)
+    )
+    rotateZ(var(--thumbnail-stack-fan-tilt, 0deg))
+    rotateX(calc(var(--thumbnail-stack-depth, 0) * -1.2deg))
+    scale(calc(1 - var(--thumbnail-stack-depth, 0) * 0.02));
+  --thumbnail-stack-expanded-transform:
+    translate3d(
+      0,
+      calc(var(--thumbnail-stack-depth, 0) * -184px),
+      0
+    )
+    rotateZ(0deg)
+    rotateX(0deg)
+    scale(1);
   position: absolute;
   left: 28px;
   right: 28px;
@@ -1829,7 +1853,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   opacity: calc(var(--thumbnail-stack-depth, 0) * 0.12);
   content: "";
   pointer-events: none;
-  transition: opacity var(--stack-fan-dur) var(--ease-out);
+  transition: opacity var(--stack-fan-dur) calc(var(--thumbnail-stack-depth, 0) * var(--stack-fan-stagger, 0ms)) var(--stack-fan-ease, var(--ease-out));
 }
 
 .thumbnail-stack-minimizing > .thumbnail-card,
@@ -1842,14 +1866,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 
 .thumbnail-stack-minimizing > .thumbnail-card {
   animation: none;
-  transform:
-    translate3d(
-      0,
-      calc(var(--thumbnail-stack-depth, 0) * -184px),
-      0
-    )
-    rotateX(0deg)
-    scale(1);
+  transform: var(--thumbnail-stack-expanded-transform);
   transition: none;
 }
 
@@ -1867,13 +1884,14 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 
 /*
  * Hover fan-out only after collapse has committed the rest pose without a
- * transform transition. Duration and curve match `--stack-fan-dur`.
+ * transform transition. Duration and curve match `--stack-fan-dur`. Deeper
+ * cards start a few milliseconds later so the lift is a cascade, not a slab.
  */
 .thumbnail-stack-minimized.thumbnail-stack-hover-ready > .thumbnail-card {
   transition:
     opacity var(--dur-4) var(--ease-out),
-    transform var(--stack-fan-dur) var(--ease-out),
-    box-shadow var(--stack-fan-dur) var(--ease-out);
+    transform var(--stack-fan-dur) calc(var(--thumbnail-stack-depth, 0) * var(--stack-fan-stagger)) var(--stack-fan-ease),
+    box-shadow var(--stack-fan-dur) calc(var(--thumbnail-stack-depth, 0) * var(--stack-fan-stagger)) var(--stack-fan-ease);
 }
 
 .thumbnail-stack-compact > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting) {
@@ -1893,15 +1911,11 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 }
 
 @keyframes thumbnail-card-expand {
+  from {
+    transform: var(--thumbnail-stack-expand-from, var(--thumbnail-stack-rest-transform));
+  }
   to {
-    transform:
-      translate3d(
-        0,
-        calc(var(--thumbnail-stack-depth, 0) * -184px),
-        0
-      )
-      rotateX(0deg)
-      scale(1);
+    transform: var(--thumbnail-stack-expanded-transform);
   }
 }
 
@@ -2087,14 +2101,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 
 .thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card,
 .thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):has(.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]) > .thumbnail-card {
-  transform:
-    translate3d(
-      calc(var(--thumbnail-stack-depth, 0) * -2px),
-      calc(var(--thumbnail-stack-depth, 0) * -24px),
-      calc(var(--thumbnail-stack-depth, 0) * -18px)
-    )
-    rotateX(calc(var(--thumbnail-stack-depth, 0) * -1.2deg))
-    scale(calc(1 - var(--thumbnail-stack-depth, 0) * 0.02));
+  transform: var(--thumbnail-stack-hover-transform);
   box-shadow:
     var(--thumbnail-card-shadow),
     0 0 0 1px rgba(var(--theme-accent-rgb), 0.55),

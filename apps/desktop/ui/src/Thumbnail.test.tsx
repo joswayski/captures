@@ -960,6 +960,80 @@ describe("Thumbnail", () => {
     expect(stack.contains(restack)).toBe(false);
   });
 
+  it("fans collapsed previews with staggered tilt and settles that pose on expand", async () => {
+    const secondArtifact = {
+      ...artifact,
+      id: "capture-2",
+      preview_url: "captures-capture://artifact/capture-2",
+      full_url: "captures-capture://artifact-full/capture-2",
+    };
+    const thirdArtifact = {
+      ...artifact,
+      id: "capture-3",
+      preview_url: "captures-capture://artifact/capture-3",
+      full_url: "captures-capture://artifact-full/capture-3",
+    };
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifacts") {
+        return [artifact, secondArtifact, thirdArtifact];
+      }
+      if (command === "get_clipboard_state") {
+        return { revision: 0, artifact_id: thirdArtifact.id };
+      }
+      if (command === "get_thumbnail_pointer_position") {
+        return new Promise(() => undefined);
+      }
+      return undefined;
+    });
+
+    render(<Thumbnail />);
+    const cards = await screen.findAllByRole("article");
+    const stack = cards[0].closest(".thumbnail-stack")!;
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "Minimize previews" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(32);
+      await vi.advanceTimersByTimeAsync(480);
+      await vi.advanceTimersByTimeAsync(32);
+    });
+
+    expect(cards[0].style.getPropertyValue("--thumbnail-stack-fan-tilt")).toBe("-6deg");
+    expect(cards[1].style.getPropertyValue("--thumbnail-stack-fan-tilt")).toBe("7deg");
+    expect(cards[2].style.getPropertyValue("--thumbnail-stack-fan-tilt")).toBe("0deg");
+
+    const livePose = "matrix(0.97, 0.12, -0.12, 0.97, 10, -24)";
+    const originalComputed = window.getComputedStyle.bind(window);
+    const computedSpy = vi.spyOn(window, "getComputedStyle").mockImplementation((element) => {
+      const style = originalComputed(element);
+      if (element instanceof Element && element.classList.contains("thumbnail-card")) {
+        return new Proxy(style, {
+          get(target, prop, receiver) {
+            if (prop === "transform") return livePose;
+            return Reflect.get(target, prop, receiver);
+          },
+        });
+      }
+      return style;
+    });
+
+    const expand = screen.getByRole("button", { name: "Expand 3 previews" });
+    expand.setAttribute("data-native-pointer-hover", "true");
+    stack.classList.add("thumbnail-stack-hover-latched");
+    await act(async () => {
+      fireEvent.click(expand);
+      await Promise.resolve();
+    });
+    expect(stack).toHaveClass("thumbnail-stack-expanding");
+    expect(stack).not.toHaveClass("thumbnail-stack-expanding-from-hover");
+    expect(cards[0].style.getPropertyValue("--thumbnail-stack-expand-from")).toBe(livePose);
+    computedSpy.mockRestore();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(480);
+    });
+    expect(cards[0].style.getPropertyValue("--thumbnail-stack-expand-from")).toBe("");
+    expect(stack).not.toHaveClass("thumbnail-stack-compact");
+  });
+
   it("paints a hover path as tall as the remaining expanded stack", async () => {
     const stacked = Array.from({ length: 8 }, (_, index) => ({
       ...artifact,

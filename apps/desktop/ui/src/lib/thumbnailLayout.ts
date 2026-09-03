@@ -22,6 +22,57 @@ export const THUMBNAIL_STACK_IDLE_PEEK_PX = 13;
 /** Hover-fan collapsed peek per extra card. */
 export const THUMBNAIL_STACK_HOVER_PEEK_PX = 24;
 
+/** Extra hit-target height so a hovered tilt corner is still on the pile. */
+export const THUMBNAIL_STACK_HOVER_TILT_PEEK_PX = 18;
+
+/** Extra delay per stacked card so collapsed hover lift does not fire in lockstep. */
+export const THUMBNAIL_STACK_FAN_STAGGER_MS = 8;
+
+/**
+ * Alternating collapsed-hover tilt in degrees. The front card stays square;
+ * deeper cards skew a few degrees and ease back to 0 when the stack expands.
+ * Values are large enough that the peeking top edge reads as a scattered pile.
+ */
+export const THUMBNAIL_STACK_FAN_TILT_DEG = [0, 7, -6, 5] as const;
+
+/** Extra hover shift (px) along the tilt so the peeking edge is not a parallel slab. */
+export const THUMBNAIL_STACK_FAN_SHIFT_PX_PER_DEG = 1.8;
+
+/** Tilt applied to a collapsed card at `depth` while the pile is hovered. */
+export function thumbnailStackFanTiltDeg(depth: number): number {
+  const index = Math.min(
+    Math.max(Math.trunc(depth), 0),
+    THUMBNAIL_STACK_FAN_TILT_DEG.length - 1,
+  );
+  return THUMBNAIL_STACK_FAN_TILT_DEG[index];
+}
+
+/** Horizontal hover offset matching `thumbnailStackFanTiltDeg`. */
+export function thumbnailStackFanShiftPx(depth: number): number {
+  return thumbnailStackFanTiltDeg(depth) * THUMBNAIL_STACK_FAN_SHIFT_PX_PER_DEG;
+}
+
+const THUMBNAIL_CARD_ID_ATTRIBUTE = "data-thumbnail-id";
+
+/**
+ * Snapshot each collapsed card's live transform so expand can ease from a
+ * latched rest pose, a mid-fan tween, or the full hover fan without snapping.
+ */
+export function captureThumbnailCardTransforms(
+  stack: Element | null,
+): Map<string, string> {
+  const captured = new Map<string, string>();
+  if (!stack) return captured;
+  stack.querySelectorAll<HTMLElement>(":scope > .thumbnail-card").forEach((card) => {
+    const id = card.getAttribute(THUMBNAIL_CARD_ID_ATTRIBUTE);
+    if (!id) return;
+    const transform = getComputedStyle(card).transform;
+    if (!transform || transform === "none") return;
+    captured.set(id, transform);
+  });
+  return captured;
+}
+
 /**
  * Extra height above the front card for the collapsed expand target.
  * One preview stays 160px so empty space above it still click-through.
@@ -34,7 +85,9 @@ export function thumbnailCollapsedPeekPx(
     Math.max(cardCount - 1, 0),
     THUMBNAIL_STACK_MAX_VISIBLE_DEPTH,
   );
-  return extra * (hovered ? THUMBNAIL_STACK_HOVER_PEEK_PX : THUMBNAIL_STACK_IDLE_PEEK_PX);
+  const peek = extra * (hovered ? THUMBNAIL_STACK_HOVER_PEEK_PX : THUMBNAIL_STACK_IDLE_PEEK_PX);
+  if (hovered && extra > 0) return peek + THUMBNAIL_STACK_HOVER_TILT_PEEK_PX;
+  return peek;
 }
 
 /**

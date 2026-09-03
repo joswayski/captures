@@ -127,6 +127,9 @@ import {
   thumbnailStackOverflow,
   restoreThumbnailStackShiftClass,
   thumbnailCollapsedPeekPx,
+  captureThumbnailCardTransforms,
+  thumbnailStackFanShiftPx,
+  thumbnailStackFanTiltDeg,
   thumbnailExpandedHoverPathPx,
   thumbnailExpandedRisePx,
   THUMBNAIL_CARD_SLOT_PX,
@@ -5525,6 +5528,9 @@ export function Thumbnail() {
   const [stackHoverReady, setStackHoverReady] = useState(false);
   const [stackMinimizeRun, setStackMinimizeRun] = useState(false);
   const [stackHoverLatched, setStackHoverLatched] = useState(false);
+  const [expandFromTransforms, setExpandFromTransforms] = useState<Map<string, string>>(
+    () => new Map(),
+  );
   const [exitingArtifactIds, setExitingArtifactIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -6287,6 +6293,7 @@ export function Thumbnail() {
       stackHoverReadyFrames.current = frames;
     };
     if (prefersReducedMotion()) {
+      setExpandFromTransforms(new Map());
       if (!nextCollapsed) pendingNewestReveal.current = true;
       setStackMotion(nextCollapsed ? "collapsed" : "expanded");
       if (nextCollapsed) armHoverReady();
@@ -6302,6 +6309,7 @@ export function Thumbnail() {
     }
     if (nextCollapsed) {
       cancelHoverReady();
+      setExpandFromTransforms(new Map());
       setStackHoverLatched(false);
       setStackMinimizeRun(false);
       setStackMotion("collapsing");
@@ -6345,19 +6353,22 @@ export function Thumbnail() {
       });
       return;
     }
-    cancelHoverReady();
-    setStackMinimizeRun(false);
-    setStackHoverLatched(false);
     pendingNewestReveal.current = true;
     void invoke("set_mini_previews_collapsed", { collapsed: false })
       .then(() => {
+        setExpandFromTransforms(captureThumbnailCardTransforms(stackRef.current));
+        cancelHoverReady();
+        setStackMinimizeRun(false);
+        setStackHoverLatched(false);
         setStackMotion("expanding");
         stackMotionTimer.current = setTimeout(() => {
           stackMotionTimer.current = null;
+          setExpandFromTransforms(new Map());
           setStackMotion("expanded");
         }, STACK_MOTION_MS);
       })
       .catch(() => {
+        setExpandFromTransforms(new Map());
         pendingNewestReveal.current = false;
         setStackMotion("collapsed");
         armHoverReady();
@@ -6487,6 +6498,7 @@ export function Thumbnail() {
             editorActive={editorActiveArtifactIds.has(artifact.id)}
             stackCollapsed={compact}
             stackDepth={artifacts.length - index - 1}
+            expandFromTransform={expandFromTransforms.get(artifact.id)}
             onRemoved={(artifactId) => {
               setArtifactExiting(artifactId, false);
               setArtifacts((current) => current.filter(({ id }) => id !== artifactId));
@@ -6598,6 +6610,7 @@ export function ThumbnailCard({
   editorActive = false,
   stackCollapsed = false,
   stackDepth = 0,
+  expandFromTransform,
   onRemoved,
   onExitChange,
 }: {
@@ -6608,6 +6621,7 @@ export function ThumbnailCard({
   editorActive?: boolean;
   stackCollapsed?: boolean;
   stackDepth?: number;
+  expandFromTransform?: string;
   onRemoved: (artifactId: string) => void;
   onExitChange?: (artifactId: string, exiting: boolean) => void;
 }) {
@@ -6998,9 +7012,15 @@ export function ThumbnailCard({
         usingDust ? "thumbnail-exit-dust" : "",
         isExiting ? "thumbnail-exiting" : "",
       ].filter(Boolean).join(" ")}
+      data-thumbnail-id={artifact.id}
       style={stackCollapsed ? {
         "--thumbnail-stack-depth": Math.min(stackDepth, 3),
         "--thumbnail-stack-hidden": stackDepth > 3 ? 1 : 0,
+        "--thumbnail-stack-fan-tilt": `${thumbnailStackFanTiltDeg(stackDepth)}deg`,
+        "--thumbnail-stack-fan-shift": `${thumbnailStackFanShiftPx(stackDepth)}px`,
+        ...(expandFromTransform
+          ? { "--thumbnail-stack-expand-from": expandFromTransform }
+          : {}),
       } as CSSProperties : undefined}
       // HTML inert disables all descendant input/focus while the card is decorative.
       inert={isExiting || stackCollapsed ? true : undefined}
