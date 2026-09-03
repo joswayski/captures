@@ -242,6 +242,7 @@ pub fn run() {
             commit_window,
             commit_display,
             cancel_capture,
+            dismiss_capture_surface,
             cancel_screenshot_countdown,
             get_screenshot_countdown,
             get_active_session,
@@ -1168,6 +1169,15 @@ fn cancel_capture(
     reveal_document_windows_after_capture(&app);
     updates::restore_update_notice(&app);
     Ok(())
+}
+
+/// Releases overlay keyboard/cursor grabs and hides the freeze-frame as soon as
+/// a selection commits or cancels. The overlay webview calls this in parallel
+/// with Tauri `window.hide()` so a leftover key window cannot swallow typing
+/// in other apps while the slower capture command hops to Rust.
+#[tauri::command]
+fn dismiss_capture_surface(app: AppHandle) {
+    hide_capture_overlay(&app);
 }
 
 /// Cancel screenshot capture UI so an update can restart. Failures are logged
@@ -5337,14 +5347,13 @@ fn set_mini_preview_stack_position(
 }
 
 fn thumbnail_stack_pose_depth(depth: f64) -> f64 {
-    const FULL: f64 = 3.0;
-    const STEP: f64 = 0.55;
+    // Keep in sync with thumbnailStackPoseDepth in thumbnailLayout.ts.
+    const RECEDE: f64 = 0.55;
+    const EASE_K: f64 = 24.0;
     if depth <= 0.0 {
         0.0
-    } else if depth <= FULL {
-        depth
     } else {
-        FULL + (depth - FULL) * STEP
+        depth * (EASE_K + RECEDE * depth) / (depth + EASE_K)
     }
 }
 
@@ -6251,6 +6260,8 @@ fn hide_capture_overlay_inner(app: &AppHandle) {
     // until reveal_document_windows_after_capture, so this ordering cannot flash
     // an editor during the overlay → countdown handoff.
     if let Some(window) = app.get_webview_window("overlay") {
+        #[cfg(target_os = "macos")]
+        captures_macos_window::dismiss_capture_overlay_input(Some(&window));
         let _ = set_click_through(&window, false);
         let _ = window.hide();
         let _ = window.set_cursor_icon(CursorIcon::Default);
@@ -6260,7 +6271,7 @@ fn hide_capture_overlay_inner(app: &AppHandle) {
         }
     } else {
         #[cfg(target_os = "macos")]
-        captures_macos_window::release_capture_cursor();
+        captures_macos_window::dismiss_capture_overlay_input(None);
     }
     #[cfg(target_os = "macos")]
     captures_macos_window::restore_frontmost_app_after_capture();
@@ -7877,6 +7888,18 @@ mod tests {
             ),
             captures_macos_window::ThumbnailHoverCursor::Default
         );
+        assert!(captures_macos_window::cursor_claim_panel_should_show(
+            true, true, false, false, false
+        ));
+        assert!(!captures_macos_window::cursor_claim_panel_should_show(
+            true, true, true, false, false
+        ));
+        assert!(captures_macos_window::cursor_claim_panel_should_resign_key(
+            true
+        ));
+        assert!(!captures_macos_window::capture_surface_focus_retry_allowed(
+            1, 2, true
+        ));
     }
 
     #[test]
@@ -8173,7 +8196,10 @@ mod tests {
         assert_eq!(thumbnail_stack_height(1, false), 240.0);
         assert!(thumbnail_stack_height(8, true) > thumbnail_stack_height(4, true));
         assert!(thumbnail_stack_height(8, true) < thumbnail_stack_height(8, false));
-        assert_eq!(thumbnail_stack_height(4, true), 279.0);
+        let pose_3 = 3.0 * (24.0 + 0.55 * 3.0) / (3.0 + 24.0);
+        let peek = pose_3 * 16.0 + 19.0;
+        let extra_above_padding = f64::max(peek - 28.0, 0.0);
+        assert!((thumbnail_stack_height(4, true) - (240.0 + extra_above_padding)).abs() < 1e-9);
     }
 
     #[test]

@@ -16,9 +16,12 @@ import {
   shouldScrollThumbnailStackToNewestOnExpand,
   thumbnailStackContentHeight,
   thumbnailStackMotionClassNames,
+  thumbnailStackNeedsScrollport,
   restoreThumbnailStackShiftClass,
   thumbnailStackOverflow,
   thumbnailStackNewestScrollTop,
+  scrollThumbnailStackToNewest,
+  THUMBNAIL_STACK_SCROLLPORT_CLASS,
   thumbnailStackShiftPx,
   thumbnailCollapsedPeekPx,
   captureThumbnailCardTransforms,
@@ -27,8 +30,10 @@ import {
   thumbnailStackSkewCssVars,
   thumbnailStackSkewHitPadPx,
   thumbnailStackSkewPaintOverflow,
+  thumbnailStackPeekJitterPx,
   thumbnailStackPileDepth,
   thumbnailStackPoseDepth,
+  thumbnailStackPoseStep,
   THUMBNAIL_CARD_HEIGHT_PX,
   THUMBNAIL_CARD_SLOT_PX,
   THUMBNAIL_DISMISS_HOLD_MS,
@@ -47,6 +52,9 @@ import {
   THUMBNAIL_STACK_REST_SKEW_Y_PX,
   THUMBNAIL_STACK_SKEW_HIT_PAD_PX,
   THUMBNAIL_STACK_SKEW_MIN_UNIT,
+  THUMBNAIL_STACK_PEEK_JITTER_DECAY,
+  THUMBNAIL_STACK_PEEK_JITTER_PX,
+  THUMBNAIL_STACK_RECEDING_STEP,
   THUMBNAIL_STACK_SCROLL_DURATION_MS,
   THUMBNAIL_STACK_SETTLE_MAX_WAIT_MS,
   waitForThumbnailStackSettle,
@@ -88,7 +96,7 @@ describe("thumbnail stack layout", () => {
       /\.thumbnail-stack-minimizing\.thumbnail-stack-minimize-run > \.thumbnail-card\s*\{([\s\S]*?)\n\}/,
     );
     const hoverFan = thumbnailStyles.match(
-      /\.thumbnail-stack-minimized\.thumbnail-stack-hover-ready:not\(\.thumbnail-stack-hover-latched\):not\(\.thumbnail-stack-dragging\):not\(\.thumbnail-stack-pressing\):has\(\.thumbnail-collapsed-hit-target:hover\)/,
+      /\.thumbnail-stack-minimized\.thumbnail-stack-hover-ready:not\(\.thumbnail-stack-hover-latched\):not\(\.thumbnail-stack-dragging\):not\(\.thumbnail-stack-pressing\):has\(\.thumbnail-collapsed-hit-target:hover:not\(\[data-thumbnail-hover-stale\]\)\)/,
     );
 
     const pressing = thumbnailStyles.match(
@@ -99,6 +107,7 @@ describe("thumbnail stack layout", () => {
     expect(compactCard?.[1]).toMatch(/--thumbnail-stack-base-depth/);
     expect(compactCard?.[1]).toMatch(/--thumbnail-stack-pose/);
     expect(compactCard?.[1]).toMatch(/--thumbnail-stack-shift-slots/);
+    expect(compactCard?.[1]).toMatch(/--thumbnail-stack-peek-jitter/);
     expect(compactCard?.[1]).toMatch(/transform:\s*var\(--thumbnail-stack-rest-transform\)/);
     expect(compactCard?.[1]).toMatch(/translate:\s*none\s*!important/);
     expect(compactCard?.[1]).toMatch(/rotateZ\(var\(--thumbnail-stack-skew-rot/);
@@ -125,6 +134,15 @@ describe("thumbnail stack layout", () => {
       /transform:\s*var\(--thumbnail-stack-expand-from, var\(--thumbnail-stack-rest-transform\)\)/,
     );
     expect(thumbnailStyles).not.toMatch(/@keyframes thumbnail-card-expand-from-hover/);
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-scrollport\s*\{[^}]*height:\s*100%/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-compact\.thumbnail-stack-expanding\s*\{[^}]*overflow:\s*hidden/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack\s*\{[^}]*scroll-behavior:\s*auto/,
+    );
   });
 
   it("captures live card transforms so expand can start from a partial pose", () => {
@@ -204,7 +222,9 @@ describe("thumbnail stack layout", () => {
       ),
     );
     expect(thumbnailStackFanCollapseMs(1)).toBe(200);
-    expect(thumbnailStackFanCollapseMs(4)).toBe(248);
+    expect(thumbnailStackFanCollapseMs(4)).toBeCloseTo(
+      200 + thumbnailStackPoseDepth(3) * 16,
+    );
     expect(thumbnailStackFanCollapseMs(12)).toBeCloseTo(
       200 + thumbnailStackPoseDepth(11) * 16,
     );
@@ -212,11 +232,15 @@ describe("thumbnail stack layout", () => {
 
   it("recedes extra collapsed cards instead of hiding them", () => {
     expect(thumbnailStackPileDepth(0)).toBe(0);
-    expect(thumbnailStackPileDepth(3)).toBe(3);
-    expect(thumbnailStackPileDepth(8)).toBeCloseTo(3 + 5 * 0.55);
+    expect(thumbnailStackPileDepth(3)).toBeCloseTo(thumbnailStackPoseDepth(3));
+    expect(thumbnailStackPileDepth(8)).toBeGreaterThan(thumbnailStackPileDepth(3));
+    expect(thumbnailStackPileDepth(8)).toBeLessThan(8);
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-expanding > \.thumbnail-card\s*\{[^}]*opacity:\s*1/,
     );
+    expect(thumbnailStyles).toMatch(/--thumbnail-stack-pose-k:\s*24/);
+    expect(thumbnailStyles).toMatch(/--thumbnail-stack-recede:\s*0.55/);
+    expect(thumbnailStyles).not.toMatch(/--thumbnail-stack-extra/);
   });
 
   it("arches the collapsed pile so the top trails the hands while dragging", () => {
@@ -384,27 +408,55 @@ describe("thumbnail stack layout", () => {
 
   it("sizes the collapsed expand target from receding extra cards", () => {
     expect(thumbnailCollapsedPeekPx(1)).toBe(0);
-    expect(thumbnailCollapsedPeekPx(2)).toBe(13 + THUMBNAIL_STACK_REST_SKEW_PEEK_PX);
-    expect(thumbnailCollapsedPeekPx(4)).toBe(39 + THUMBNAIL_STACK_REST_SKEW_PEEK_PX);
+    expect(thumbnailCollapsedPeekPx(2)).toBeCloseTo(
+      thumbnailStackPoseDepth(1) * 13 + THUMBNAIL_STACK_REST_SKEW_PEEK_PX,
+    );
+    expect(thumbnailCollapsedPeekPx(4)).toBeCloseTo(
+      thumbnailStackPoseDepth(3) * 13 + THUMBNAIL_STACK_REST_SKEW_PEEK_PX,
+    );
     expect(thumbnailCollapsedPeekPx(8)).toBeGreaterThan(thumbnailCollapsedPeekPx(4));
     expect(thumbnailCollapsedPeekPx(8)).toBeCloseTo(
       thumbnailStackPoseDepth(7) * 13 + THUMBNAIL_STACK_REST_SKEW_PEEK_PX,
     );
-    expect(thumbnailCollapsedPeekPx(8) - thumbnailCollapsedPeekPx(4)).toBeCloseTo(4 * 0.55 * 13);
+    expect(thumbnailCollapsedPeekPx(8) - thumbnailCollapsedPeekPx(4)).toBeCloseTo(
+      (thumbnailStackPoseDepth(7) - thumbnailStackPoseDepth(3)) * 13,
+    );
     expect(thumbnailCollapsedPeekPx(24)).toBeGreaterThan(thumbnailCollapsedPeekPx(8));
-    expect(thumbnailCollapsedPeekPx(2, true)).toBe(16 + THUMBNAIL_STACK_HOVER_TILT_PEEK_PX);
-    expect(thumbnailCollapsedPeekPx(4, true)).toBe(48 + THUMBNAIL_STACK_HOVER_TILT_PEEK_PX);
+    expect(thumbnailCollapsedPeekPx(2, true)).toBeCloseTo(
+      thumbnailStackPoseDepth(1) * 16 + THUMBNAIL_STACK_HOVER_TILT_PEEK_PX,
+    );
+    expect(thumbnailCollapsedPeekPx(4, true)).toBeCloseTo(
+      thumbnailStackPoseDepth(3) * 16 + THUMBNAIL_STACK_HOVER_TILT_PEEK_PX,
+    );
     expect(thumbnailCollapsedPeekPx(8, true)).toBeCloseTo(
       thumbnailStackPoseDepth(7) * 16 + THUMBNAIL_STACK_HOVER_TILT_PEEK_PX,
     );
     expect(thumbnailCollapsedPeekPx(1, true)).toBe(0);
   });
 
-  it("packs collapsed cards past the first four into a vanishing pose", () => {
+  it("eases collapsed peeks so the fade-out does not open a gap", () => {
     expect(thumbnailStackPoseDepth(0)).toBe(0);
-    expect(thumbnailStackPoseDepth(3)).toBe(3);
-    expect(thumbnailStackPoseDepth(7)).toBeCloseTo(3 + 4 * 0.55);
-    expect(thumbnailStackPoseDepth(20)).toBeCloseTo(3 + 17 * 0.55);
+    expect(Math.abs(thumbnailStackPoseStep(4) - thumbnailStackPoseStep(3))).toBeLessThan(0.08);
+    expect(thumbnailStackPoseStep(4)).toBeGreaterThan(THUMBNAIL_STACK_RECEDING_STEP);
+    expect(thumbnailStackPoseStep(8)).toBeLessThan(thumbnailStackPoseStep(3));
+    expect(thumbnailStackPoseStep(20)).toBeGreaterThan(THUMBNAIL_STACK_RECEDING_STEP);
+    expect(thumbnailStackPoseDepth(20)).toBeLessThan(20);
+  });
+
+  it("nudges collapsed peeks a little less toward the back of the pile", () => {
+    expect(thumbnailStackPeekJitterPx(0)).toBe(0);
+    expect(Math.abs(thumbnailStackPeekJitterPx(1))).toBeGreaterThan(0);
+    expect(Math.abs(thumbnailStackPeekJitterPx(1))).toBeLessThanOrEqual(
+      THUMBNAIL_STACK_PEEK_JITTER_PX,
+    );
+    const envelope = (depth: number) => (
+      THUMBNAIL_STACK_PEEK_JITTER_PX * THUMBNAIL_STACK_PEEK_JITTER_DECAY ** (depth - 1)
+    );
+    expect(envelope(6)).toBeLessThan(envelope(2));
+    expect(Math.abs(thumbnailStackPeekJitterPx(6))).toBeLessThanOrEqual(envelope(6) + 1e-12);
+    expect(thumbnailStyles).toMatch(
+      /var\(--thumbnail-stack-pile-depth, 0\) \* -13px\s*\+\s*var\(--thumbnail-stack-peek-jitter, 0px\)\s*\+\s*var\(--thumbnail-stack-skew-y, 0px\)/,
+    );
   });
 
   it("scrolls to reveal newly added captures", () => {
@@ -431,13 +483,38 @@ describe("thumbnail stack layout", () => {
     );
   });
 
-  it("retries newest-scroll after layout frames", () => {
+  it("fills the viewport when the expanded list is taller than the window", () => {
+    expect(thumbnailStackNeedsScrollport(1, 400)).toBe(false);
+    expect(thumbnailStackNeedsScrollport(8, 400)).toBe(true);
+    expect(thumbnailStackNeedsScrollport(8, 10_000)).toBe(false);
+  });
+
+  it("pins newest-scroll in the same pass when the stack is still content-sized", () => {
+    const stack = document.createElement("main");
+    stack.innerHTML = "<article class=\"thumbnail-card\"></article>".repeat(8);
+    Object.defineProperty(stack, "clientHeight", {
+      configurable: true,
+      value: thumbnailStackContentHeight(8),
+    });
+    Object.defineProperty(stack, "scrollTop", {
+      configurable: true,
+      writable: true,
+      value: 0,
+    });
+
+    scrollThumbnailStackToNewest(stack, { viewportHeight: 400 });
+
+    expect(stack.classList.contains(THUMBNAIL_STACK_SCROLLPORT_CLASS)).toBe(true);
+    expect(stack.scrollTop).toBe(thumbnailStackNewestScrollTop(8, 400));
+  });
+
+  it("retries newest-scroll after the window grows", () => {
     const stack = document.createElement("main");
     stack.innerHTML = "<article class=\"thumbnail-card\"></article>".repeat(8);
     Object.defineProperty(stack, "clientHeight", {
       configurable: true,
       writable: true,
-      value: 10_000,
+      value: 200,
     });
     Object.defineProperty(stack, "scrollTop", {
       configurable: true,
@@ -448,6 +525,7 @@ describe("thumbnail stack layout", () => {
     const frames: FrameRequestCallback[] = [];
     const cancel = scheduleScrollThumbnailStackToNewest(stack, {
       retryMs: 50,
+      viewportHeight: 400,
       frame: (callback) => {
         frames.push(callback);
         return frames.length;
@@ -457,7 +535,7 @@ describe("thumbnail stack layout", () => {
       },
     });
 
-    expect(stack.scrollTop).toBe(0);
+    expect(stack.scrollTop).toBe(thumbnailStackNewestScrollTop(8, 200));
     Object.defineProperty(stack, "clientHeight", {
       configurable: true,
       value: 400,

@@ -14,13 +14,30 @@ export const THUMBNAIL_STACK_CONTROL_GUTTER_PX = 52;
 export const THUMBNAIL_CARD_SLOT_PX = THUMBNAIL_CARD_HEIGHT_PX + THUMBNAIL_STACK_GAP_PX;
 
 /**
- * Collapsed cards at this depth and closer keep a full 13px idle step.
- * Deeper cards pack tighter so a long history recedes instead of hiding.
+ * Typical small pile used as the default hover-fan stagger bound.
+ * Fade/blur still reads around this depth; peek spacing no longer cliffs here.
  */
 export const THUMBNAIL_STACK_FULL_PEEK_DEPTH = 3;
 
-/** Extra pose units per card after the full-step band (≈8px idle peek). */
+/**
+ * Far-field peek step as a fraction of a full 13px idle step.
+ * Deep cards pack toward this so a long history recedes instead of hiding.
+ * Mirrored in mini-preview.css as `--thumbnail-stack-recede`.
+ */
 export const THUMBNAIL_STACK_RECEDING_STEP = 0.55;
+
+/**
+ * Softens receding so consecutive peeks stay close. Larger = more uniform
+ * gaps through the front of the pile. Mirrored in mini-preview.css as
+ * `--thumbnail-stack-pose-k`.
+ */
+export const THUMBNAIL_STACK_POSE_EASE_K = 24;
+
+/** Max idle peek nudge on the first behind-card (px). Deeper cards damp toward 0. */
+export const THUMBNAIL_STACK_PEEK_JITTER_PX = 0.85;
+
+/** How quickly peek jitter settles toward the back of the pile. */
+export const THUMBNAIL_STACK_PEEK_JITTER_DECAY = 0.58;
 
 /** Idle collapsed peek per pose unit (matches compact rest `translateY`). */
 export const THUMBNAIL_STACK_IDLE_PEEK_PX = 13;
@@ -205,18 +222,46 @@ export function thumbnailStackSkewCssVars(
 }
 
 /**
- * Visual collapsed depth. The first three behind-cards keep the current
- * 13px steps; older captures keep peeking with a shorter step so the pile
- * recedes instead of hiding. Mirrored in mini-preview.css as
+ * Visual collapsed depth. Consecutive peeks ease from a full step toward
+ * {@link THUMBNAIL_STACK_RECEDING_STEP} so the pile recedes without a gap
+ * jump where fade/blur picks up. Mirrored in mini-preview.css as
  * `--thumbnail-stack-pose` / `--thumbnail-stack-pile-depth`.
  */
 export function thumbnailStackPoseDepth(depth: number): number {
   const n = Math.max(0, depth);
-  if (n <= THUMBNAIL_STACK_FULL_PEEK_DEPTH) return n;
+  if (n === 0) return 0;
   return (
-    THUMBNAIL_STACK_FULL_PEEK_DEPTH
-    + (n - THUMBNAIL_STACK_FULL_PEEK_DEPTH) * THUMBNAIL_STACK_RECEDING_STEP
+    n
+    * (THUMBNAIL_STACK_POSE_EASE_K + THUMBNAIL_STACK_RECEDING_STEP * n)
+    / (n + THUMBNAIL_STACK_POSE_EASE_K)
   );
+}
+
+/** Peek step from `depth - 1` to `depth`, in pose units. */
+export function thumbnailStackPoseStep(depth: number): number {
+  const n = Math.max(0, depth);
+  if (n <= 0) return 0;
+  return thumbnailStackPoseDepth(n) - thumbnailStackPoseDepth(n - 1);
+}
+
+/**
+ * Tiny signed rest-pose nudge so stacked peeks are not a perfectly even
+ * ruler. Amplitude falls off with depth so the faded tail stays even.
+ */
+export function thumbnailStackPeekJitterPx(depth: number): number {
+  const n = Math.max(0, Math.trunc(depth));
+  if (n <= 0) return 0;
+  return (
+    thumbnailStackPeekJitterUnit(n)
+    * THUMBNAIL_STACK_PEEK_JITTER_PX
+    * THUMBNAIL_STACK_PEEK_JITTER_DECAY ** (n - 1)
+  );
+}
+
+/** Deterministic signed unit in (-1, 1) from depth so every pile matches. */
+function thumbnailStackPeekJitterUnit(depth: number): number {
+  const hashed = Math.imul(depth * 0x9e3779b1 ^ 0x7f4a7c15, 0x85ebca6b) >>> 0;
+  return hashed / 2 ** 32 * 2 - 1;
 }
 
 /** Compact rest/hover depth. Same as pose: extras recede instead of clamping. */
@@ -429,8 +474,9 @@ export function shouldScrollThumbnailStackToEnd(
 }
 
 /**
- * Expanding the pile starts at scrollTop 0 (oldest). Jump to the newest
- * capture once cards are back in document flow.
+ * Expanding the pile should land on the newest capture. Compact cards are
+ * absolutely positioned, so the in-flow list starts at scrollTop 0 (oldest)
+ * unless we pin before the first expanded paint.
  */
 export function shouldScrollThumbnailStackToNewestOnExpand(
   previousMotion: string | undefined,
@@ -441,6 +487,30 @@ export function shouldScrollThumbnailStackToNewestOnExpand(
     && previousMotion !== "expanded";
 }
 
+/**
+ * Bounded window-filling scrollport. Compact uses height 100%; expanded uses
+ * height auto + max-height 100%, which can stay content-sized for a frame and
+ * clamp newest-scroll to 0. Keep this class through expand so the first
+ * in-flow layout can actually overflow.
+ */
+export const THUMBNAIL_STACK_SCROLLPORT_CLASS = "thumbnail-stack-scrollport";
+
+/** Containing-block height for the stack, falling back to the WebView. */
+export function thumbnailStackViewportHeight(stack: HTMLElement): number {
+  const containing = stack.parentElement;
+  const containingHeight = containing?.clientHeight ?? 0;
+  if (containingHeight > 0) return containingHeight;
+  return typeof window !== "undefined" ? window.innerHeight : 0;
+}
+
+/** True when the expanded list is taller than the visible window. */
+export function thumbnailStackNeedsScrollport(
+  cardCount: number,
+  viewportHeight: number,
+): boolean {
+  return thumbnailStackContentHeight(cardCount) - Math.max(0, viewportHeight) > 1;
+}
+
 /** Scroll offset that puts the newest (bottom) preview in view. */
 export function thumbnailStackNewestScrollTop(
   cardCount: number,
@@ -449,10 +519,33 @@ export function thumbnailStackNewestScrollTop(
   return Math.max(0, thumbnailStackContentHeight(cardCount) - Math.max(0, clientHeight));
 }
 
-/** Pin the stack to its newest capture using layout geometry, not paint overflow. */
-export function scrollThumbnailStackToNewest(stack: HTMLElement): void {
+export type ScrollThumbnailStackToNewestOptions = {
+  /** Visible window height. Defaults to the stack's containing block. */
+  viewportHeight?: number;
+};
+
+/**
+ * Pin the stack to its newest capture using layout geometry, not paint overflow.
+ * If the stack is still content-sized, fill the viewport first so `scrollTop`
+ * can land in this layout pass instead of waiting for a later frame.
+ */
+export function scrollThumbnailStackToNewest(
+  stack: HTMLElement,
+  options: ScrollThumbnailStackToNewestOptions = {},
+): void {
   const cardCount = stack.querySelectorAll(":scope > .thumbnail-card").length;
-  stack.scrollTop = thumbnailStackNewestScrollTop(cardCount, stack.clientHeight);
+  const contentHeight = thumbnailStackContentHeight(cardCount);
+  const viewportHeight = options.viewportHeight ?? thumbnailStackViewportHeight(stack);
+  if (thumbnailStackNeedsScrollport(cardCount, viewportHeight)) {
+    stack.classList.add(THUMBNAIL_STACK_SCROLLPORT_CLASS);
+  } else {
+    stack.classList.remove(THUMBNAIL_STACK_SCROLLPORT_CLASS);
+  }
+  const measured = stack.clientHeight;
+  const scrollPortHeight = measured > 0 && measured < contentHeight - 1
+    ? measured
+    : (thumbnailStackNeedsScrollport(cardCount, viewportHeight) ? viewportHeight : measured);
+  stack.scrollTop = thumbnailStackNewestScrollTop(cardCount, scrollPortHeight);
 }
 
 export type ScheduleScrollThumbnailStackToNewestOptions = {
@@ -467,12 +560,14 @@ export type ScheduleScrollThumbnailStackToNewestOptions = {
    * Omit to only run immediately plus two animation frames.
    */
   retryMs?: number;
+  /** Visible window height forwarded to each pin attempt. */
+  viewportHeight?: number;
 };
 
 /**
  * Scroll to the newest capture now and again after layout settles.
- * Compact→expanded and native window growth both change clientHeight a frame
- * later; one useLayoutEffect write is not enough.
+ * Native window growth can still change clientHeight a frame later; pinning
+ * with a viewport fill covers the compact→expanded handover in this pass.
  */
 export function scheduleScrollThumbnailStackToNewest(
   stack: HTMLElement,
@@ -484,9 +579,10 @@ export function scheduleScrollThumbnailStackToNewest(
   const cancelFrame = options.cancelFrame
     ?? ((id: number) => cancelAnimationFrame(id));
   const retryMs = options.retryMs ?? 0;
+  const viewportHeight = options.viewportHeight;
 
   const run = () => {
-    scrollThumbnailStackToNewest(stack);
+    scrollThumbnailStackToNewest(stack, { viewportHeight });
     onScrolled?.();
   };
 

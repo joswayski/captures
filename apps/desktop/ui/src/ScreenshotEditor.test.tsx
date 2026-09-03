@@ -1728,19 +1728,102 @@ describe("ScreenshotEditor", () => {
     expect(screen.getByRole("button", { name: "Wand" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByLabelText("Color tolerance")).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "Contiguous only" })).toBeChecked();
-    expect(
-      screen.getByText(/Make pixels transparent on image layers/i),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/Not automatic subject cutout/i)).toBeInTheDocument();
+    expect(screen.getByText("Remove a color, paint it out, or paint it back."))
+      .toBeInTheDocument();
+    expect(screen.queryByText(/Not automatic subject cutout/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Export as PNG or WebP/i)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Erase" }));
     expect(screen.getByRole("button", { name: "Erase" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByLabelText("Brush size")).toBeInTheDocument();
+    expect(screen.getByText("Paint to erase.")).toBeInTheDocument();
     expect(screen.queryByLabelText("Color tolerance")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Restore" }));
     expect(screen.getByRole("button", { name: "Restore" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByLabelText("Brush size")).toBeInTheDocument();
+    expect(screen.getByText("Paint to put back what you erased.")).toBeInTheDocument();
+    expect(screen.queryByRole("spinbutton", { name: "Shift rotation snap" }))
+      .not.toBeInTheDocument();
+    expect(screen.queryByText("New annotation color")).not.toBeInTheDocument();
+  });
+
+  it("does not select a layer or show transform chrome for eraser, crop, or pen", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Canvas width");
+
+    const layers = screen.getByRole("region", { name: "Layers" });
+    const originalLayer = within(layers).getByRole("button", {
+      name: /Original screenshotLocked background/,
+    });
+    fireEvent.click(originalLayer);
+    expect(originalLayer).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("spinbutton", { name: "Shift rotation snap" })).toBeInTheDocument();
+
+    const canvas = document.querySelector("canvas.screenshot-canvas");
+    expect(canvas).toBeInstanceOf(HTMLCanvasElement);
+    setCanvasBounds(canvas as HTMLCanvasElement);
+
+    fireEvent.click(screen.getByRole("button", { name: "Eraser (B)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Erase" }));
+    expect(originalLayer).toHaveAttribute("aria-pressed", "false");
+    expect(screen.queryByRole("spinbutton", { name: "Shift rotation snap" }))
+      .not.toBeInTheDocument();
+    expect(screen.queryByText("New annotation color")).not.toBeInTheDocument();
+
+    fireEvent.pointerDown(canvas as HTMLCanvasElement, {
+      button: 0,
+      clientX: 400,
+      clientY: 300,
+      pointerId: 21,
+    });
+    fireEvent.pointerUp(canvas as HTMLCanvasElement, {
+      button: 0,
+      clientX: 400,
+      clientY: 300,
+      pointerId: 21,
+    });
+    expect(originalLayer).toHaveAttribute("aria-pressed", "false");
+    expect(screen.queryByRole("spinbutton", { name: "Shift rotation snap" }))
+      .not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Crop (C)" }));
+    fireEvent.pointerDown(canvas as HTMLCanvasElement, {
+      button: 0,
+      clientX: 200,
+      clientY: 180,
+      pointerId: 22,
+    });
+    fireEvent.pointerUp(canvas as HTMLCanvasElement, {
+      button: 0,
+      clientX: 360,
+      clientY: 300,
+      pointerId: 22,
+    });
+    expect(originalLayer).toHaveAttribute("aria-pressed", "false");
+    expect(screen.queryByRole("spinbutton", { name: "Shift rotation snap" }))
+      .not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Freehand (P)" }));
+    fireEvent.pointerDown(canvas as HTMLCanvasElement, {
+      button: 0,
+      clientX: 80,
+      clientY: 80,
+      pointerId: 23,
+    });
+    fireEvent.pointerMove(canvas as HTMLCanvasElement, {
+      clientX: 140,
+      clientY: 120,
+      pointerId: 23,
+    });
+    fireEvent.pointerUp(canvas as HTMLCanvasElement, {
+      button: 0,
+      clientX: 140,
+      clientY: 120,
+      pointerId: 23,
+    });
+    expect(screen.queryByRole("spinbutton", { name: "Shift rotation snap" }))
+      .not.toBeInTheDocument();
   });
 
   it("shows a size-matched circular brush cursor for erase mode", async () => {
@@ -1907,6 +1990,23 @@ describe("ScreenshotEditor", () => {
         pointerId: 7,
       });
 
+      const surface = screen
+        .getByLabelText("Screenshot editing canvas")
+        .querySelector(".screenshot-canvas-surface");
+      expect(surface).toHaveClass("transparent");
+      expect(
+        within(screen.getByRole("group", { name: "Canvas" })).getByRole("button", {
+          name: /Background color/,
+        }),
+      ).toHaveAccessibleName("Background color: transparent");
+      expect(screen.queryByRole("spinbutton", { name: "Shift rotation snap" }))
+        .not.toBeInTheDocument();
+      expect(
+        within(screen.getByRole("region", { name: "Layers" })).getByRole("button", {
+          name: /Original screenshotLocked background/,
+        }),
+      ).toHaveAttribute("aria-pressed", "false");
+
       const frames: FrameRequestCallback[] = [];
       vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
         frames.push(callback);
@@ -1929,12 +2029,132 @@ describe("ScreenshotEditor", () => {
         expect(screen.getByRole("button", { name: "Undo" })).toBeEnabled();
       });
 
+      expect(surface).toHaveClass("transparent");
+      expect(
+        within(screen.getByRole("group", { name: "Canvas" })).getByRole("button", {
+          name: /Background color/,
+        }),
+      ).toHaveAccessibleName("Background color: transparent");
+
       // The committed data URL is backed by the working canvas immediately;
       // no second Image decode can clear the editor while it is still loading.
       expect(imageSources).not.toContain("data:image/png;base64,edited");
       const lastClear = operations.lastIndexOf("clear");
       expect(lastClear).toBeGreaterThanOrEqual(0);
       expect(operations.slice(lastClear + 1)).toContain("draw-canvas");
+    } finally {
+      window.Image = originalImage;
+    }
+  });
+
+  it("keeps a solid canvas fill until an erase stroke actually changes pixels", async () => {
+    const brushArtifact = { ...artifact, width: 20, height: 10 };
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifact") return brushArtifact;
+      const draft = draftCommandResult(String(command));
+      if (draft !== undefined || String(command).includes("screenshot_editor_draft")) {
+        return draft;
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    const context = {
+      clearRect: vi.fn(),
+      fillRect: vi.fn(),
+      drawImage: vi.fn(),
+      getImageData: vi.fn((_x: number, _y: number, width: number, height: number) => {
+        const data = new Uint8ClampedArray(width * height * 4);
+        for (let y = 0; y < height; y += 1) {
+          for (let x = 0; x < width; x += 1) {
+            const index = (y * width + x) * 4;
+            data[index] = 255;
+            data[index + 1] = 255;
+            data[index + 2] = 255;
+            // Left columns are already punched out so a stamp there is a no-op.
+            data[index + 3] = x < 6 ? 0 : 255;
+          }
+        }
+        return { data, width, height, colorSpace: "srgb" } as ImageData;
+      }),
+      putImageData: vi.fn(),
+      save: vi.fn(),
+      restore: vi.fn(),
+      translate: vi.fn(),
+      transform: vi.fn(),
+      setTransform: vi.fn(),
+      setLineDash: vi.fn(),
+      strokeRect: vi.fn(),
+      imageSmoothingEnabled: true,
+      imageSmoothingQuality: "high",
+    } as unknown as CanvasRenderingContext2D;
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(context);
+    vi.spyOn(HTMLCanvasElement.prototype, "toDataURL")
+      .mockReturnValue("data:image/png;base64,edited");
+
+    const originalImage = window.Image;
+    class LoadedImage {
+      onload: ((event: Event) => void) | null = null;
+      onerror: ((event: Event) => void) | null = null;
+      naturalWidth = brushArtifact.width;
+      naturalHeight = brushArtifact.height;
+      width = brushArtifact.width;
+      height = brushArtifact.height;
+      crossOrigin = "";
+      set src(value: string) {
+        if (!value.startsWith("data:")) {
+          queueMicrotask(() => this.onload?.(new Event("load")));
+        }
+      }
+    }
+    // @ts-expect-error focused Image decode stub
+    window.Image = LoadedImage;
+
+    try {
+      render(<ScreenshotEditor />);
+      await screen.findByLabelText("Canvas width");
+      fireEvent.click(screen.getByRole("button", { name: "Eraser (B)" }));
+      fireEvent.click(screen.getByRole("button", { name: "Erase" }));
+      fireEvent.change(screen.getByLabelText("Brush size"), { target: { value: "4" } });
+
+      const canvas = document.querySelector("canvas.screenshot-canvas") as HTMLCanvasElement;
+      setCanvasBounds(canvas, brushArtifact.width, brushArtifact.height);
+      fireEvent.pointerDown(canvas, {
+        button: 0,
+        clientX: 1,
+        clientY: 5,
+        pointerId: 11,
+      });
+
+      const surface = screen
+        .getByLabelText("Screenshot editing canvas")
+        .querySelector(".screenshot-canvas-surface");
+      expect(surface).not.toHaveClass("transparent");
+      expect(
+        within(screen.getByRole("group", { name: "Canvas" })).getByRole("button", {
+          name: /Background color/,
+        }),
+      ).toHaveAccessibleName(/Background color: #f7f7f5/i);
+
+      const frames: FrameRequestCallback[] = [];
+      vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+        frames.push(callback);
+        return frames.length;
+      });
+      fireEvent.pointerMove(canvas, { clientX: 12, clientY: 5, pointerId: 11 });
+      act(() => frames.shift()?.(0));
+
+      expect(surface).toHaveClass("transparent");
+      expect(
+        within(screen.getByRole("group", { name: "Canvas" })).getByRole("button", {
+          name: /Background color/,
+        }),
+      ).toHaveAccessibleName("Background color: transparent");
+
+      fireEvent.pointerUp(canvas, { clientX: 12, clientY: 5, pointerId: 11 });
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: "Undo" })).toBeEnabled();
+      });
+      expect(surface).toHaveClass("transparent");
     } finally {
       window.Image = originalImage;
     }
@@ -1978,6 +2198,47 @@ describe("ScreenshotEditor", () => {
     expect(within(picker).getByLabelText("Canvas background: #ffffff")).toBeInTheDocument();
     expect(surface).not.toHaveClass("transparent");
     expect(backgroundTrigger).toHaveAccessibleName(/Background color: #f7f7f5/i);
+  });
+
+  it("warns on JPEG export when the canvas is transparent", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Canvas width");
+
+    const format = screen.getByRole("combobox", { name: "Format" });
+    fireEvent.click(format);
+    fireEvent.click(screen.getByRole("option", { name: "JPEG" }));
+    expect(format).toHaveTextContent(".jpg");
+    expect(screen.queryByText(/JPEG will fill in transparent areas/i))
+      .not.toBeInTheDocument();
+    expect(
+      screen.getByText("Keeps original quality as JPEG and saves a new file."),
+    ).toBeInTheDocument();
+
+    const canvasToolbar = screen.getByRole("group", { name: "Canvas" });
+    fireEvent.click(within(canvasToolbar).getByRole("button", { name: /Background color/ }));
+    const picker = await screen.findByRole("dialog", { name: "Canvas background" });
+    fireEvent.click(within(picker).getByRole("checkbox", { name: "Solid background" }));
+
+    const warning = screen.getByText(
+      "JPEG will fill in transparent areas. Use PNG or WebP to keep them.",
+    );
+    expect(warning).toHaveClass("screenshot-export-hint", "is-warning");
+    expect(warning).toHaveAttribute("role", "status");
+    expect(
+      screen.queryByText("Keeps original quality as JPEG and saves a new file."),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(format);
+    expect(screen.getByRole("option", { name: /JPEG/ })).toHaveTextContent(
+      "Fills in transparent areas.",
+    );
+    fireEvent.click(screen.getByRole("option", { name: "PNG" }));
+    expect(format).toHaveTextContent(".png");
+    expect(screen.queryByText(/JPEG will fill in transparent areas/i))
+      .not.toBeInTheDocument();
+    expect(
+      screen.getByText("Keeps original quality as PNG and replaces the original."),
+    ).toBeInTheDocument();
   });
 
   it("picks a canvas background color from the compact picker popover", async () => {

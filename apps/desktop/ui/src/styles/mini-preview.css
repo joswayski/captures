@@ -43,6 +43,7 @@ html[data-preview-harness-view="thumbnail"] #root {
   overflow-y: auto;
   overscroll-behavior: contain;
   overflow-anchor: none;
+  scroll-behavior: auto;
   background: transparent;
   scrollbar-width: none;
   -webkit-user-select: none;
@@ -990,7 +991,7 @@ html:has(
     .icon-button,
     .thumbnail-main-actions button,
     .thumbnail-editor-control
-  ):hover:not(:disabled)
+  ):hover:not(:disabled):not([data-thumbnail-hover-stale])
 ),
 html:has(
   :is(
@@ -1021,7 +1022,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 .thumbnail-stack-control:hover:not(:disabled),
 .thumbnail-stack-control:hover:not(:disabled) *,
 .thumbnail-overflow-cue:hover:not(:disabled),
-.thumbnail-collapsed-hit-target:hover:not(:disabled) {
+.thumbnail-collapsed-hit-target:hover:not(:disabled):not([data-thumbnail-hover-stale]) {
   cursor: pointer;
 }
 
@@ -1109,7 +1110,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 .thumbnail-card.thumbnail-exit-delete.thumbnail-viewer-active,
 .thumbnail-card.thumbnail-exit-delete.thumbnail-editor-active,
 .thumbnail-stack-compact > .thumbnail-card.thumbnail-exit-delete,
-.thumbnail-stack-minimized:has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card.thumbnail-exit-delete,
+.thumbnail-stack-minimized:has(.thumbnail-collapsed-hit-target:hover:not([data-thumbnail-hover-stale])) > .thumbnail-card.thumbnail-exit-delete,
 .thumbnail-stack-minimized:has(.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]) > .thumbnail-card.thumbnail-exit-delete {
   box-shadow:
     0 6px 14px rgba(0, 0, 0, 0),
@@ -1803,6 +1804,9 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   --stack-fan-dur: var(--dur-3);
   --stack-fan-stagger: 16ms;
   --stack-fan-ease: var(--ease-standard);
+  /* Keep in sync with THUMBNAIL_STACK_RECEDING_STEP / POSE_EASE_K. */
+  --thumbnail-stack-recede: 0.55;
+  --thumbnail-stack-pose-k: 24;
   height: 100%;
   max-height: none;
   overflow: visible;
@@ -1810,15 +1814,36 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   pointer-events: none;
 }
 
+/*
+ * Expanded lists taller than the window must fill it before cards return to
+ * document flow. Height auto + max-height 100% can stay content-sized for a
+ * frame, which clamps newest-scroll to 0 and then jumps down.
+ */
+.thumbnail-stack-scrollport {
+  height: 100%;
+  max-height: 100%;
+}
+
+/*
+ * Expanding cards fly from the pile with overflow:visible. On a tall stack
+ * that inflates the document and shifts the window before the list can pin
+ * to the newest capture. Clip to the frame for the fly-out.
+ */
+.thumbnail-stack-compact.thumbnail-stack-expanding {
+  overflow: hidden;
+}
+
 .thumbnail-stack-compact > .thumbnail-card {
   /*
-   * React sets `--thumbnail-stack-base-depth` from DOM order and a per-capture
-   * `--thumbnail-stack-skew-*` lean from the artifact id. Subtract any
-   * expanded slot-settle that was in flight when Show less started so the
-   * minimizing pose matches the on-screen position instead of jumping back
-   * up a held hole. `--thumbnail-stack-pose` recedes cards past the first
-   * three behind-cards (aliased as `--thumbnail-stack-pile-depth` for rest
-   * and hover). Expand uses the real slot depth so cards fly to list slots.
+   * React sets `--thumbnail-stack-base-depth` from DOM order, a per-capture
+   * `--thumbnail-stack-skew-*` lean from the artifact id, and a tiny depth
+   * `--thumbnail-stack-peek-jitter` so stacked peeks are not a perfectly
+   * even ruler. Subtract any expanded slot-settle that was in flight when
+   * Show less started so the minimizing pose matches the on-screen position
+   * instead of jumping back up a held hole. `--thumbnail-stack-pose` eases
+   * consecutive peeks toward `--thumbnail-stack-recede` (aliased as
+   * `--thumbnail-stack-pile-depth` for rest and hover). Expand uses the real
+   * slot depth so cards fly to list slots.
    */
   --thumbnail-stack-depth: max(
     0,
@@ -1827,10 +1852,17 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
       - var(--thumbnail-stack-shift-slots, 0)
     )
   );
-  --thumbnail-stack-extra: max(0, calc(var(--thumbnail-stack-depth, 0) - 3));
   --thumbnail-stack-pose: calc(
-    min(var(--thumbnail-stack-depth, 0), 3)
-    + var(--thumbnail-stack-extra) * 0.55
+    var(--thumbnail-stack-depth, 0)
+    * (
+      var(--thumbnail-stack-pose-k, 24)
+      + var(--thumbnail-stack-recede, 0.55)
+        * var(--thumbnail-stack-depth, 0)
+    )
+    / (
+      var(--thumbnail-stack-depth, 0)
+      + var(--thumbnail-stack-pose-k, 24)
+    )
   );
   --thumbnail-stack-pile-depth: var(--thumbnail-stack-pose, 0);
   --thumbnail-stack-rest-transform:
@@ -1841,6 +1873,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
       ),
       calc(
         var(--thumbnail-stack-pile-depth, 0) * -13px
+        + var(--thumbnail-stack-peek-jitter, 0px)
         + var(--thumbnail-stack-skew-y, 0px)
       ),
       calc(var(--thumbnail-stack-pile-depth, 0) * -24px)
@@ -1856,6 +1889,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
       ),
       calc(
         var(--thumbnail-stack-pile-depth, 0) * -16px
+        + var(--thumbnail-stack-peek-jitter, 0px)
         + var(--thumbnail-stack-skew-y, 0px)
       ),
       calc(var(--thumbnail-stack-pile-depth, 0) * -18px)
@@ -2034,7 +2068,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   transition: filter var(--stack-fan-dur, var(--dur-3)) calc(var(--thumbnail-stack-depth, 0) * var(--stack-fan-stagger, 0ms)) var(--stack-fan-ease, var(--ease-out));
 }
 
-.thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):not(.thumbnail-stack-pressing):has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card .thumbnail-media,
+.thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):not(.thumbnail-stack-pressing):has(.thumbnail-collapsed-hit-target:hover:not([data-thumbnail-hover-stale])) > .thumbnail-card .thumbnail-media,
 .thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):not(.thumbnail-stack-pressing):has(.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]) > .thumbnail-card .thumbnail-media {
   filter: blur(calc(var(--thumbnail-stack-pose, 0) * 0.75px));
 }
@@ -2071,7 +2105,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   background-image: linear-gradient(rgb(0 0 0 / 0%), rgb(0 0 0 / 0%));
 }
 
-.thumbnail-collapsed-hit-target:hover,
+.thumbnail-collapsed-hit-target:hover:not([data-thumbnail-hover-stale]),
 .thumbnail-collapsed-hit-target[data-native-pointer-hover="true"] {
   height: calc(160px + var(--thumbnail-collapsed-hover-peek, var(--thumbnail-collapsed-peek, 0px)));
 }
@@ -2120,12 +2154,12 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   background-position: 24% 84%, 55% 66%, 80% 88%, 46% 12%, 8% 30%;
 }
 
-.thumbnail-collapsed-hit-target:hover::before,
+.thumbnail-collapsed-hit-target:hover:not([data-thumbnail-hover-stale])::before,
 .thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]::before {
   animation: thumbnail-stack-sparkle 1.8s var(--ease-out) infinite;
 }
 
-.thumbnail-collapsed-hit-target:hover::after,
+.thumbnail-collapsed-hit-target:hover:not([data-thumbnail-hover-stale])::after,
 .thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]::after {
   animation: thumbnail-stack-sparkle 2.2s var(--ease-out) 0.5s infinite;
 }
@@ -2144,7 +2178,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   }
 }
 
-.thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):not(.thumbnail-stack-pressing):has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card,
+.thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):not(.thumbnail-stack-pressing):has(.thumbnail-collapsed-hit-target:hover:not([data-thumbnail-hover-stale])) > .thumbnail-card,
 .thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):not(.thumbnail-stack-pressing):has(.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]) > .thumbnail-card {
   transform: var(--thumbnail-stack-hover-transform);
   box-shadow:
@@ -2176,6 +2210,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
       ),
       calc(
         var(--thumbnail-stack-pile-depth, 0) * -13px
+        + var(--thumbnail-stack-peek-jitter, 0px)
         + var(--thumbnail-stack-skew-y, 0px)
         + var(--thumbnail-drag-sway-y, 0) * 1px * var(--thumbnail-stack-pile-depth, 0) * 0.2
       ),
@@ -2203,7 +2238,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   opacity: 0;
 }
 
-.thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):not(.thumbnail-stack-pressing):has(.thumbnail-collapsed-hit-target:hover) > .thumbnail-card::before,
+.thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):not(.thumbnail-stack-pressing):has(.thumbnail-collapsed-hit-target:hover:not([data-thumbnail-hover-stale])) > .thumbnail-card::before,
 .thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):not(.thumbnail-stack-pressing):has(.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"]) > .thumbnail-card::before {
   opacity: calc(min(0.55, var(--thumbnail-stack-pile-depth, 0) * 0.1));
 }
