@@ -4918,9 +4918,9 @@ fn set_mini_preview_stack_position(
         return Err("display work area is unavailable".to_owned());
     };
     let work = thumbnail_work_area(bounds);
-    let frame_height =
-        thumbnail_window_logical_height(&window).unwrap_or_else(|| thumbnail_stack_height(1, true));
-    let (x, y) = thumbnail_clamp_frame(x, y, frame_height, work);
+    let content_height = thumbnail_stack_height(1, true);
+    let frame_height = thumbnail_window_logical_height(&window).unwrap_or(content_height);
+    let (x, y) = thumbnail_clamp_bottom_aligned_frame(x, y, frame_height, content_height, work);
     let _ = window.set_position(tauri::LogicalPosition::new(x, y));
     state
         .thumbnail_visibility
@@ -5000,9 +5000,26 @@ fn thumbnail_work_area(bounds: ThumbnailMonitorBounds) -> ThumbnailWorkArea {
 }
 
 fn thumbnail_clamp_frame(x: f64, y: f64, frame_height: f64, work: ThumbnailWorkArea) -> (f64, f64) {
+    thumbnail_clamp_bottom_aligned_frame(x, y, frame_height, frame_height, work)
+}
+
+/// Keep the bottom-aligned visible pile in the work area.
+///
+/// Collapsed macOS/Linux windows stay at their expanded height so WebKit does
+/// not blank cards. Empty frame above the pile may leave the work area so the
+/// stack can be dragged to the top of the screen.
+fn thumbnail_clamp_bottom_aligned_frame(
+    x: f64,
+    y: f64,
+    frame_height: f64,
+    content_height: f64,
+    work: ThumbnailWorkArea,
+) -> (f64, f64) {
+    let content_height = content_height.min(frame_height).max(0.0);
+    let slack = (frame_height - content_height).max(0.0);
     let min_x = work.left;
     let max_x = (work.left + work.width - THUMBNAIL_WIDTH).max(min_x);
-    let min_y = work.top;
+    let min_y = work.top - slack;
     let max_y = (work.top + work.height - work.bottom_gap - frame_height).max(min_y);
     (x.clamp(min_x, max_x), y.clamp(min_y, max_y))
 }
@@ -6497,10 +6514,11 @@ mod tests {
         parse_shortcut, place_startup_notice, preferences_url, primary_app_window_priority,
         recording::RECORDING_REGION_INDICATOR_TITLE, refine_window_chrome_from_snapshot,
         resolve_startup_notice_placement, resolve_window_capture, should_trigger_shortcut,
-        startup_notice_fallback_edge_from_insets, startup_notice_url, thumbnail_clamp_frame,
-        thumbnail_cursor_action, thumbnail_cursor_ignore_update, thumbnail_geometry,
-        thumbnail_pointer_in_space, thumbnail_pointer_position, thumbnail_preserve_current_height,
-        thumbnail_stack_height, thumbnail_stack_should_be_visible, thumbnail_stack_visible_count,
+        startup_notice_fallback_edge_from_insets, startup_notice_url,
+        thumbnail_clamp_bottom_aligned_frame, thumbnail_clamp_frame, thumbnail_cursor_action,
+        thumbnail_cursor_ignore_update, thumbnail_geometry, thumbnail_pointer_in_space,
+        thumbnail_pointer_position, thumbnail_preserve_current_height, thumbnail_stack_height,
+        thumbnail_stack_should_be_visible, thumbnail_stack_visible_count,
         thumbnail_visible_window_height, track_shortcut_suppression, tray_accelerator,
         tray_icon_rect_is_usable, tray_notice_window_size, viewer_window_label,
         window_display_crop_is_safe, window_is_capturable, windows_window_is_capture_overlay,
@@ -7346,6 +7364,23 @@ mod tests {
             thumbnail_clamp_frame(-40.0, -20.0, 240.0, super::thumbnail_work_area(work)),
             (0.0, 0.0)
         );
+    }
+
+    #[test]
+    fn lets_a_collapsed_pile_reach_the_top_when_the_window_stays_tall() {
+        // 4-card expanded frame kept after collapse; pile is the bottom 240px.
+        let work =
+            super::thumbnail_work_area(bounds((0, 0, 1_920, 1_040), (0, 0, 1_920, 1_080), 1.0));
+        assert_eq!(
+            thumbnail_clamp_bottom_aligned_frame(-40.0, -800.0, 792.0, 240.0, work),
+            (0.0, -552.0)
+        );
+        assert_eq!(
+            thumbnail_clamp_bottom_aligned_frame(420.0, 400.0, 792.0, 240.0, work),
+            (420.0, 236.0)
+        );
+        // Visible pile top sits at the work-area top when slack is consumed.
+        assert_eq!(-552.0 + 792.0 - 240.0, 0.0);
     }
 
     #[test]
