@@ -42,19 +42,64 @@ pub fn overlay_pointer_cursor(
     pointer: (i32, i32),
     pointer_scale: f64,
 ) {
-    let Some(position) = map_pointer_to_buffer(
+    overlay_pointer_cursor_in_crop(
+        image,
+        display,
+        0,
+        0,
+        image.width(),
+        image.height(),
+        pointer,
+        pointer_scale,
+    );
+}
+
+/// Draw a pointer glyph onto a cropped screenshot when the hotspot is inside the crop.
+///
+/// `source_width` / `source_height` are the full display buffer that `crop_x` /
+/// `crop_y` were taken from. The hotspot is tested against that crop, so a
+/// pointer just outside the selected region does not leave a clipped arrow.
+#[allow(clippy::too_many_arguments)]
+pub fn overlay_pointer_cursor_in_crop(
+    image: &mut RgbaImage,
+    display: &DisplayDescriptor,
+    crop_x: u32,
+    crop_y: u32,
+    source_width: u32,
+    source_height: u32,
+    pointer: (i32, i32),
+    pointer_scale: f64,
+) {
+    let Some((x, y)) = map_pointer_to_buffer(
         display.x,
         display.y,
         display.width,
         display.height,
-        image.width(),
-        image.height(),
+        source_width,
+        source_height,
         pointer,
         pointer_scale,
     ) else {
         return;
     };
-    draw_cursor(image, position);
+    let Ok(crop_x) = i32::try_from(crop_x) else {
+        return;
+    };
+    let Ok(crop_y) = i32::try_from(crop_y) else {
+        return;
+    };
+    let local_x = x - crop_x;
+    let local_y = y - crop_y;
+    let Ok(image_width) = i32::try_from(image.width()) else {
+        return;
+    };
+    let Ok(image_height) = i32::try_from(image.height()) else {
+        return;
+    };
+    if local_x < 0 || local_y < 0 || local_x >= image_width || local_y >= image_height {
+        return;
+    }
+    draw_cursor(image, (local_x, local_y), source_height);
 }
 
 /// Draw a pointer glyph onto a window screenshot when `pointer` lands on it.
@@ -76,7 +121,7 @@ pub fn overlay_pointer_cursor_on_window(
     ) else {
         return;
     };
-    draw_cursor(image, position);
+    draw_cursor(image, position, image.height());
 }
 
 #[allow(clippy::cast_possible_truncation, clippy::too_many_arguments)]
@@ -103,10 +148,8 @@ fn map_pointer_to_buffer(
 }
 
 #[allow(clippy::cast_possible_truncation)]
-fn draw_cursor(image: &mut RgbaImage, position: (i32, i32)) {
-    let scale = (f64::from(image.height()) / 1_080.0)
-        .round()
-        .clamp(1.0, 2.0) as i32;
+fn draw_cursor(image: &mut RgbaImage, position: (i32, i32), source_height: u32) {
+    let scale = (f64::from(source_height) / 1_080.0).round().clamp(1.0, 2.0) as i32;
     draw_polygon(image, position, &CURSOR_OUTLINE, scale, [24, 24, 24]);
     draw_polygon(image, position, &CURSOR_FILL, scale, [248, 248, 248]);
 }
@@ -163,8 +206,8 @@ fn put_pixel(image: &mut RgbaImage, x: i32, y: i32, color: [u8; 3]) {
 #[cfg(test)]
 mod tests {
     use super::{
-        map_pointer_to_buffer, overlay_pointer_cursor, overlay_pointer_cursor_on_window,
-        screenshot_pointer_scale,
+        map_pointer_to_buffer, overlay_pointer_cursor, overlay_pointer_cursor_in_crop,
+        overlay_pointer_cursor_on_window, screenshot_pointer_scale,
     };
     use crate::model::{DisplayDescriptor, WindowDescriptor};
 
@@ -249,5 +292,21 @@ mod tests {
         } else {
             assert!((screenshot_pointer_scale(2.0) - 1.0).abs() < f64::EPSILON);
         }
+    }
+
+    #[test]
+    fn paints_the_cursor_when_the_hotspot_is_inside_a_crop() {
+        let display = display(0, 0, 80, 60, 1.0);
+        let mut image = image::RgbaImage::from_pixel(20, 20, image::Rgba([0, 0, 0, 255]));
+        overlay_pointer_cursor_in_crop(&mut image, &display, 10, 10, 80, 60, (14, 16), 1.0);
+        assert!(image.pixels().any(|pixel| pixel.0 == [24, 24, 24, 255]));
+    }
+
+    #[test]
+    fn skips_the_cursor_when_the_hotspot_is_outside_the_crop() {
+        let display = display(0, 0, 80, 60, 1.0);
+        let mut image = image::RgbaImage::from_pixel(20, 20, image::Rgba([0, 0, 0, 255]));
+        overlay_pointer_cursor_in_crop(&mut image, &display, 10, 10, 80, 60, (8, 16), 1.0);
+        assert!(image.pixels().all(|pixel| pixel.0 == [0, 0, 0, 255]));
     }
 }

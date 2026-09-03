@@ -364,6 +364,7 @@ pub struct RecordingSelection {
     pub summary: RecordingSelectionSession,
     pub image: Option<RgbaImage>,
     pub snapshot_png: Vec<u8>,
+    pub cursor: Option<(i32, i32)>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -810,8 +811,8 @@ pub struct CaptureSession {
     pub image: Option<RgbaImage>,
     pub snapshot_png: Vec<u8>,
     pub windows: Vec<WindowDescriptor>,
-    /// Pointer sample taken with a freeze-frame, used when a window capture
-    /// falls back to the native window surface instead of the frozen display.
+    /// Pointer sample taken with a freeze-frame so stills can composite the
+    /// cursor after cropping without baking it into the shared freeze image.
     pub cursor: Option<(i32, i32)>,
 }
 
