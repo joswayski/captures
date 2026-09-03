@@ -6890,7 +6890,7 @@ export function ThumbnailCard({
         isExiting ? "thumbnail-exiting" : "",
       ].filter(Boolean).join(" ")}
       style={stackCollapsed ? {
-        "--thumbnail-stack-depth": Math.min(stackDepth, 3),
+        "--thumbnail-stack-base-depth": Math.min(stackDepth, 3),
         "--thumbnail-stack-hidden": stackDepth > 3 ? 1 : 0,
       } as CSSProperties : undefined}
       // HTML inert disables all descendant input/focus while the card is decorative.

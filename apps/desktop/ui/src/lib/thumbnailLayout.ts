@@ -311,6 +311,7 @@ export function animateThumbnailStackScroll(
 }
 
 const STACK_SHIFT_VAR = "--thumbnail-stack-shift";
+const STACK_SHIFT_SLOTS_VAR = "--thumbnail-stack-shift-slots";
 export const THUMBNAIL_STACK_SHIFTING_CLASS = "thumbnail-stack-shifting";
 export const THUMBNAIL_STACK_SHIFT_INSTANT_CLASS = "thumbnail-stack-shift-instant";
 const STACK_SHIFTING_CLASS = THUMBNAIL_STACK_SHIFTING_CLASS;
@@ -408,6 +409,23 @@ function clearTranslatePx(card: HTMLElement): void {
 /** Compact / collapsed / expanding piles pose with `transform`, not slot `translate`. */
 export function thumbnailStackSuppressesSlotShift(stack: HTMLElement): boolean {
   return stack.classList.contains("thumbnail-stack-compact");
+}
+
+/** How many expanded slots `shiftPx` represents, for compact visual depth. */
+export function thumbnailStackShiftSlots(shiftPx: number): number {
+  return Math.max(0, shiftPx) / THUMBNAIL_CARD_SLOT_PX;
+}
+
+function writeShiftSlots(card: HTMLElement, slots: number): void {
+  if (slots <= 0) {
+    card.style.removeProperty(STACK_SHIFT_SLOTS_VAR);
+    return;
+  }
+  card.style.setProperty(STACK_SHIFT_SLOTS_VAR, String(slots));
+}
+
+function clearShiftSlots(card: HTMLElement): void {
+  card.style.removeProperty(STACK_SHIFT_SLOTS_VAR);
 }
 
 function writeStackShiftPx(card: HTMLElement, shiftPx: number, animate: boolean): void {
@@ -560,16 +578,22 @@ export function createThumbnailStackShiftController(stack: HTMLElement): () => v
     if (thumbnailStackSuppressesSlotShift(stack)) {
       // Compact pose is a 3D `transform` from a shared bottom anchor. Expanded
       // slot `translate` would compose with that and drop survivors below the
-      // front card until the held exit is removed.
+      // front card until the held exit is removed. Snapshot any in-flight
+      // settle as compact depth so Show less does not jump cards back up to
+      // their original expanded slots.
       for (const card of cards) {
+        const shiftPx = readStackShiftPx(card);
+        if (shiftPx > 0) writeShiftSlots(card, thumbnailStackShiftSlots(shiftPx));
         const hasSlotShift = card.classList.contains(STACK_SHIFTING_CLASS)
           || card.classList.contains(STACK_SHIFT_INSTANT_CLASS)
-          || readStackShiftPx(card) > 0
+          || shiftPx > 0
           || Boolean(card.style.translate);
         if (hasSlotShift) writeStackShiftPx(card, 0, false);
       }
       return;
     }
+
+    for (const card of cards) clearShiftSlots(card);
 
     const motionStates: ThumbnailStackCardMotionState[] = cards.map((card) => {
       const holdsLayoutSlot = isHeldLayoutExitCard(card);
@@ -651,6 +675,7 @@ export function createThumbnailStackShiftController(stack: HTMLElement): () => v
       card.classList.remove(STACK_SHIFTING_CLASS);
       card.classList.remove(STACK_SHIFT_INSTANT_CLASS);
       clearTranslatePx(card);
+      clearShiftSlots(card);
     }
   };
 }
