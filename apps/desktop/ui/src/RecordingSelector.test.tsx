@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 import { RecordingSelector } from "./App";
-import type { AppSettings, RecordingSelectionSession } from "./types";
+import type { AppSettings, AudioDevice, RecordingSelectionSession } from "./types";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -171,6 +171,7 @@ function mockSelectorSurface(container: HTMLElement) {
 describe("RecordingSelector", () => {
   let selectorShowError: Error | null;
   let preparedSession: RecordingSelectionSession;
+  let audioDevices: AudioDevice[];
   let recordingSelectionReady:
     | ((event: { payload: RecordingSelectionSession }) => void)
     | null;
@@ -178,6 +179,10 @@ describe("RecordingSelector", () => {
   beforeEach(() => {
     selectorShowError = null;
     preparedSession = session;
+    audioDevices = [
+      { id: "default", name: "Default — Studio Microphone", kind: "default", is_default: true },
+      { id: "microphone-2", name: "USB Microphone", kind: "microphone", is_default: false },
+    ];
     recordingSelectionReady = null;
     vi.mocked(listen).mockImplementation(async (event, handler) => {
       if (event === "recording-selection-ready") {
@@ -191,10 +196,7 @@ describe("RecordingSelector", () => {
       if (command === "get_recording_selection") return preparedSession;
       if (command === "get_settings") return settings;
       if (command === "list_recording_audio_devices") {
-        return [
-          { id: "default", name: "Default — Studio Microphone", kind: "default", is_default: true },
-          { id: "microphone-2", name: "USB Microphone", kind: "microphone", is_default: false },
-        ];
+        return audioDevices;
       }
       if (command === "show_recording_selector") {
         if (selectorShowError) throw selectorShowError;
@@ -1618,5 +1620,80 @@ describe("RecordingSelector", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("macOS could not focus the selector");
     expect(invoke).not.toHaveBeenCalledWith("cancel_recording_selection", expect.anything());
+  });
+
+  it("adds window targets without re-revealing an already visible selector", async () => {
+    preparedSession = {
+      ...session,
+      initial_mode: "screenshot",
+      initial_target: "window",
+      windows: [],
+    };
+    const { container } = render(<RecordingSelector />);
+    await screen.findByRole("button", { name: "Window", pressed: true });
+    expect(container.querySelectorAll(".recording-window-target")).toHaveLength(0);
+
+    const snapshot = container.querySelector(".recording-selector-snapshot");
+    expect(snapshot).not.toBeNull();
+    fireEvent.load(snapshot!);
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("reveal_recording_selector", {
+        selectionId: preparedSession.id,
+      });
+    });
+    const revealCalls = vi.mocked(invoke).mock.calls.filter(([command]) => (
+      command === "reveal_recording_selector"
+    )).length;
+    const showCalls = vi.mocked(invoke).mock.calls.filter(([command]) => (
+      command === "show_recording_selector"
+    )).length;
+
+    await act(async () => {
+      recordingSelectionReady?.({
+        payload: {
+          ...preparedSession,
+          windows: session.windows,
+        },
+      });
+    });
+
+    expect(await screen.findByRole("button", { name: "Select Captures Preferences" }))
+      .toBeInTheDocument();
+    expect(vi.mocked(invoke).mock.calls.filter(([command]) => (
+      command === "reveal_recording_selector"
+    ))).toHaveLength(revealCalls);
+    expect(vi.mocked(invoke).mock.calls.filter(([command]) => (
+      command === "show_recording_selector"
+    ))).toHaveLength(showCalls);
+  });
+
+  it("reloads microphones when a reused selector starts a new session", async () => {
+    render(<RecordingSelector />);
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("list_recording_audio_devices");
+    });
+
+    audioDevices = [
+      { id: "default", name: "Default — Studio Microphone", kind: "default", is_default: true },
+      { id: "microphone-3", name: "Headset Microphone", kind: "microphone", is_default: false },
+    ];
+    const nextSession = {
+      ...session,
+      id: "selection-2",
+      snapshot_url: "capture://recording-selection/selection-2",
+    };
+
+    await act(async () => {
+      recordingSelectionReady?.({ payload: nextSession });
+    });
+
+    await waitFor(() => {
+      expect(vi.mocked(invoke).mock.calls.filter(([command]) => (
+        command === "list_recording_audio_devices"
+      ))).toHaveLength(2);
+    });
+    fireEvent.click(screen.getByRole("combobox", { name: "Microphone" }));
+    expect(await screen.findByRole("option", { name: "Headset Microphone" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "USB Microphone" })).not.toBeInTheDocument();
   });
 });
