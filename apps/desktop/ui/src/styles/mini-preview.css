@@ -43,6 +43,7 @@ html[data-preview-harness-view="thumbnail"] #root {
   overflow-y: auto;
   overscroll-behavior: contain;
   overflow-anchor: none;
+  scroll-behavior: auto;
   background: transparent;
   scrollbar-width: none;
   -webkit-user-select: none;
@@ -1808,6 +1809,25 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   overflow: visible;
   perspective: 900px;
   pointer-events: none;
+}
+
+/*
+ * Expanded lists taller than the window must fill it before cards return to
+ * document flow. Height auto + max-height 100% can stay content-sized for a
+ * frame, which clamps newest-scroll to 0 and then jumps down.
+ */
+.thumbnail-stack-scrollport {
+  height: 100%;
+  max-height: 100%;
+}
+
+/*
+ * Expanding cards fly from the pile with overflow:visible. On a tall stack
+ * that inflates the document and shifts the window before the list can pin
+ * to the newest capture. Clip to the frame for the fly-out.
+ */
+.thumbnail-stack-compact.thumbnail-stack-expanding {
+  overflow: hidden;
 }
 
 .thumbnail-stack-compact > .thumbnail-card {

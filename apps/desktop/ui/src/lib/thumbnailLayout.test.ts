@@ -16,9 +16,12 @@ import {
   shouldScrollThumbnailStackToNewestOnExpand,
   thumbnailStackContentHeight,
   thumbnailStackMotionClassNames,
+  thumbnailStackNeedsScrollport,
   restoreThumbnailStackShiftClass,
   thumbnailStackOverflow,
   thumbnailStackNewestScrollTop,
+  scrollThumbnailStackToNewest,
+  THUMBNAIL_STACK_SCROLLPORT_CLASS,
   thumbnailStackShiftPx,
   thumbnailCollapsedPeekPx,
   captureThumbnailCardTransforms,
@@ -111,6 +114,15 @@ describe("thumbnail stack layout", () => {
       /transform:\s*var\(--thumbnail-stack-expand-from, var\(--thumbnail-stack-rest-transform\)\)/,
     );
     expect(thumbnailStyles).not.toMatch(/@keyframes thumbnail-card-expand-from-hover/);
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-scrollport\s*\{[^}]*height:\s*100%/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-compact\.thumbnail-stack-expanding\s*\{[^}]*overflow:\s*hidden/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack\s*\{[^}]*scroll-behavior:\s*auto/,
+    );
   });
 
   it("captures live card transforms so expand can start from a partial pose", () => {
@@ -364,13 +376,38 @@ describe("thumbnail stack layout", () => {
     );
   });
 
-  it("retries newest-scroll after layout frames", () => {
+  it("fills the viewport when the expanded list is taller than the window", () => {
+    expect(thumbnailStackNeedsScrollport(1, 400)).toBe(false);
+    expect(thumbnailStackNeedsScrollport(8, 400)).toBe(true);
+    expect(thumbnailStackNeedsScrollport(8, 10_000)).toBe(false);
+  });
+
+  it("pins newest-scroll in the same pass when the stack is still content-sized", () => {
+    const stack = document.createElement("main");
+    stack.innerHTML = "<article class=\"thumbnail-card\"></article>".repeat(8);
+    Object.defineProperty(stack, "clientHeight", {
+      configurable: true,
+      value: thumbnailStackContentHeight(8),
+    });
+    Object.defineProperty(stack, "scrollTop", {
+      configurable: true,
+      writable: true,
+      value: 0,
+    });
+
+    scrollThumbnailStackToNewest(stack, { viewportHeight: 400 });
+
+    expect(stack.classList.contains(THUMBNAIL_STACK_SCROLLPORT_CLASS)).toBe(true);
+    expect(stack.scrollTop).toBe(thumbnailStackNewestScrollTop(8, 400));
+  });
+
+  it("retries newest-scroll after the window grows", () => {
     const stack = document.createElement("main");
     stack.innerHTML = "<article class=\"thumbnail-card\"></article>".repeat(8);
     Object.defineProperty(stack, "clientHeight", {
       configurable: true,
       writable: true,
-      value: 10_000,
+      value: 200,
     });
     Object.defineProperty(stack, "scrollTop", {
       configurable: true,
@@ -381,6 +418,7 @@ describe("thumbnail stack layout", () => {
     const frames: FrameRequestCallback[] = [];
     const cancel = scheduleScrollThumbnailStackToNewest(stack, {
       retryMs: 50,
+      viewportHeight: 400,
       frame: (callback) => {
         frames.push(callback);
         return frames.length;
@@ -390,7 +428,7 @@ describe("thumbnail stack layout", () => {
       },
     });
 
-    expect(stack.scrollTop).toBe(0);
+    expect(stack.scrollTop).toBe(thumbnailStackNewestScrollTop(8, 200));
     Object.defineProperty(stack, "clientHeight", {
       configurable: true,
       value: 400,
