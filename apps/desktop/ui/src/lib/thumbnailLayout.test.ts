@@ -16,6 +16,7 @@ import {
   thumbnailStackOverflow,
   thumbnailStackShiftPx,
   thumbnailCollapsedPeekPx,
+  captureThumbnailCardTransforms,
   thumbnailStackFanShiftPx,
   thumbnailStackFanTiltDeg,
   THUMBNAIL_CARD_HEIGHT_PX,
@@ -79,7 +80,29 @@ describe("thumbnail stack layout", () => {
     expect(minimizeRun?.[1]).toMatch(/transform 0\.48s/);
     expect(hoverFan).not.toBeNull();
     expect(thumbnailStyles).toMatch(/--stack-fan-stagger:\s*8ms/);
-    expect(thumbnailStyles).toMatch(/@keyframes thumbnail-card-expand-from-hover/);
+    expect(thumbnailStyles).toMatch(
+      /transform:\s*var\(--thumbnail-stack-expand-from, var\(--thumbnail-stack-rest-transform\)\)/,
+    );
+    expect(thumbnailStyles).not.toMatch(/@keyframes thumbnail-card-expand-from-hover/);
+  });
+
+  it("captures live card transforms so expand can start from a partial pose", () => {
+    const stack = document.createElement("main");
+    const card = document.createElement("article");
+    card.className = "thumbnail-card";
+    card.setAttribute("data-thumbnail-id", "capture-1");
+    stack.append(card);
+    const computed = { transform: "matrix(0.97, 0.12, -0.12, 0.97, 10, -24)" };
+    const spy = vi.spyOn(window, "getComputedStyle").mockReturnValue(
+      computed as CSSStyleDeclaration,
+    );
+
+    expect(captureThumbnailCardTransforms(stack).get("capture-1")).toBe(computed.transform);
+    expect(captureThumbnailCardTransforms(stack).has("missing")).toBe(false);
+
+    spy.mockImplementation(() => ({ transform: "none" }) as CSSStyleDeclaration);
+    expect(captureThumbnailCardTransforms(stack).size).toBe(0);
+    spy.mockRestore();
   });
 
   it("tilts deeper collapsed cards a few degrees and leaves the front square", () => {

@@ -49,6 +49,27 @@ export function thumbnailStackFanShiftPx(depth: number): number {
   return thumbnailStackFanTiltDeg(depth) * THUMBNAIL_STACK_FAN_SHIFT_PX_PER_DEG;
 }
 
+const THUMBNAIL_CARD_ID_ATTRIBUTE = "data-thumbnail-id";
+
+/**
+ * Snapshot each collapsed card's live transform so expand can ease from a
+ * latched rest pose, a mid-fan tween, or the full hover fan without snapping.
+ */
+export function captureThumbnailCardTransforms(
+  stack: Element | null,
+): Map<string, string> {
+  const captured = new Map<string, string>();
+  if (!stack) return captured;
+  stack.querySelectorAll<HTMLElement>(":scope > .thumbnail-card").forEach((card) => {
+    const id = card.getAttribute(THUMBNAIL_CARD_ID_ATTRIBUTE);
+    if (!id) return;
+    const transform = getComputedStyle(card).transform;
+    if (!transform || transform === "none") return;
+    captured.set(id, transform);
+  });
+  return captured;
+}
+
 /**
  * Extra height above the front card for the collapsed expand target.
  * One preview stays 160px so empty space above it still click-through.

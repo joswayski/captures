@@ -834,18 +834,36 @@ describe("Thumbnail", () => {
     expect(cards[1].style.getPropertyValue("--thumbnail-stack-fan-tilt")).toBe("7deg");
     expect(cards[2].style.getPropertyValue("--thumbnail-stack-fan-tilt")).toBe("0deg");
 
+    const livePose = "matrix(0.97, 0.12, -0.12, 0.97, 10, -24)";
+    const originalComputed = window.getComputedStyle.bind(window);
+    const computedSpy = vi.spyOn(window, "getComputedStyle").mockImplementation((element) => {
+      const style = originalComputed(element);
+      if (element instanceof Element && element.classList.contains("thumbnail-card")) {
+        return new Proxy(style, {
+          get(target, prop, receiver) {
+            if (prop === "transform") return livePose;
+            return Reflect.get(target, prop, receiver);
+          },
+        });
+      }
+      return style;
+    });
+
     const expand = screen.getByRole("button", { name: "Expand 3 previews" });
     expand.setAttribute("data-native-pointer-hover", "true");
+    stack.classList.add("thumbnail-stack-hover-latched");
     await act(async () => {
       fireEvent.click(expand);
       await Promise.resolve();
     });
     expect(stack).toHaveClass("thumbnail-stack-expanding");
-    expect(stack).toHaveClass("thumbnail-stack-expanding-from-hover");
+    expect(stack).not.toHaveClass("thumbnail-stack-expanding-from-hover");
+    expect(cards[0].style.getPropertyValue("--thumbnail-stack-expand-from")).toBe(livePose);
+    computedSpy.mockRestore();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(480);
     });
-    expect(stack).not.toHaveClass("thumbnail-stack-expanding-from-hover");
+    expect(cards[0].style.getPropertyValue("--thumbnail-stack-expand-from")).toBe("");
     expect(stack).not.toHaveClass("thumbnail-stack-compact");
   });
 

@@ -1794,10 +1794,6 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
   animation: thumbnail-card-expand 0.48s var(--ease-standard) both;
 }
 
-.thumbnail-stack-expanding.thumbnail-stack-expanding-from-hover > .thumbnail-card {
-  animation: thumbnail-card-expand-from-hover 0.48s var(--ease-standard) both;
-}
-
 /*
  * Hover fan-out only after collapse has committed the rest pose without a
  * transform transition. Duration and curve match `--stack-fan-dur`. Deeper
@@ -1818,10 +1814,6 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
   animation: thumbnail-card-expand 0.48s var(--ease-standard) both;
 }
 
-.thumbnail-stack-expanding.thumbnail-stack-expanding-from-hover > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting) {
-  animation: thumbnail-card-expand-from-hover 0.48s var(--ease-standard) both;
-}
-
 .thumbnail-stack-minimizing > .thumbnail-card::before {
   animation: thumbnail-card-minimize-dim 0.48s var(--ease-standard) both;
 }
@@ -1831,14 +1823,8 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
 }
 
 @keyframes thumbnail-card-expand {
-  to {
-    transform: var(--thumbnail-stack-expanded-transform);
-  }
-}
-
-@keyframes thumbnail-card-expand-from-hover {
   from {
-    transform: var(--thumbnail-stack-hover-transform);
+    transform: var(--thumbnail-stack-expand-from, var(--thumbnail-stack-rest-transform));
   }
   to {
     transform: var(--thumbnail-stack-expanded-transform);
@@ -2042,14 +2028,12 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
 
 @media (prefers-reduced-motion: reduce) {
   .thumbnail-stack-minimizing > .thumbnail-card,
-  .thumbnail-stack-expanding > .thumbnail-card,
-  .thumbnail-stack-expanding.thumbnail-stack-expanding-from-hover > .thumbnail-card {
+  .thumbnail-stack-expanding > .thumbnail-card {
     animation: none;
   }
 
   .thumbnail-stack-minimizing > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting),
-  .thumbnail-stack-expanding > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting),
-  .thumbnail-stack-expanding.thumbnail-stack-expanding-from-hover > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting) {
+  .thumbnail-stack-expanding > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting) {
     animation: none;
   }
 
