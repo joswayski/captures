@@ -1903,11 +1903,11 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   --thumbnail-stack-rest-transform:
     translate3d(
       calc(
-        var(--thumbnail-stack-pile-depth, 0) * -1.5px
+        var(--thumbnail-stack-pile-depth, 0) * -0.8px
         + var(--thumbnail-stack-skew-x, 0px)
       ),
       calc(
-        var(--thumbnail-stack-pile-depth, 0) * -13px
+        var(--thumbnail-stack-pile-depth, 0) * -9px
           * var(--thumbnail-stack-gravity, 1)
         + var(--thumbnail-stack-peek-jitter, 0px)
         + var(--thumbnail-stack-skew-y, 0px)
@@ -1917,7 +1917,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
     rotateZ(var(--thumbnail-stack-skew-rot, 0deg))
     rotateX(
       calc(
-        var(--thumbnail-stack-pile-depth, 0) * -1.4deg
+        var(--thumbnail-stack-pile-depth, 0) * -0.8deg
           * var(--thumbnail-stack-gravity, 1)
       )
     )
@@ -1925,11 +1925,11 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   --thumbnail-stack-hover-transform:
     translate3d(
       calc(
-        var(--thumbnail-stack-pile-depth, 0) * -1px
+        var(--thumbnail-stack-pile-depth, 0) * -0.6px
         + var(--thumbnail-stack-fan-shift, 0px)
       ),
       calc(
-        var(--thumbnail-stack-pile-depth, 0) * -16px
+        var(--thumbnail-stack-pile-depth, 0) * -11px
           * var(--thumbnail-stack-gravity, 1)
         + var(--thumbnail-stack-peek-jitter, 0px)
         + var(--thumbnail-stack-skew-y, 0px)
@@ -1939,7 +1939,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
     rotateZ(var(--thumbnail-stack-fan-tilt, 0deg))
     rotateX(
       calc(
-        var(--thumbnail-stack-pile-depth, 0) * -1.2deg
+        var(--thumbnail-stack-pile-depth, 0) * -0.7deg
           * var(--thumbnail-stack-gravity, 1)
       )
     )
@@ -2148,7 +2148,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   left: calc(28px - var(--thumbnail-collapsed-skew-pad, 0px));
   /*
    * Front card is 160px. Extra peek height comes from `--thumbnail-collapsed-peek`
-   * (idle 13px × receding pose plus rest-skew overflow) so a single preview
+   * (idle 9px × receding pose plus rest-skew overflow) so a single preview
    * does not steal clicks in the empty space above it. Hover uses
    * `--thumbnail-collapsed-hover-peek`. Side inset pulls back by
    * `--thumbnail-collapsed-skew-pad` so scattered rear-card edges stay on
@@ -2292,14 +2292,14 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   transform:
     translate3d(
       calc(
-        var(--thumbnail-stack-pile-depth, 0) * -1.5px
+        var(--thumbnail-stack-pile-depth, 0) * -0.8px
         + var(--thumbnail-stack-skew-x, 0px)
         + var(--thumbnail-drag-sway-x, 0) * 1px
           * var(--thumbnail-stack-pile-depth, 0)
           * 0.7
       ),
       calc(
-        var(--thumbnail-stack-pile-depth, 0) * -13px
+        var(--thumbnail-stack-pile-depth, 0) * -9px
           * var(--thumbnail-stack-gravity, 1)
         + var(--thumbnail-stack-peek-jitter, 0px)
         + var(--thumbnail-stack-skew-y, 0px)
@@ -2317,7 +2317,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
     )
     rotateX(
       calc(
-        var(--thumbnail-stack-pile-depth, 0) * -1.4deg
+        var(--thumbnail-stack-pile-depth, 0) * -0.8deg
           * var(--thumbnail-stack-gravity, 1)
       )
     )
