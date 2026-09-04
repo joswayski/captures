@@ -5470,6 +5470,7 @@ fn thumbnail_work_area(bounds: ThumbnailMonitorBounds) -> ThumbnailWorkArea {
     }
 }
 
+#[cfg(test)]
 fn thumbnail_clamp_frame(x: f64, y: f64, frame_height: f64, work: ThumbnailWorkArea) -> (f64, f64) {
     thumbnail_clamp_aligned_frame(
         x,
@@ -5486,6 +5487,7 @@ fn thumbnail_clamp_frame(x: f64, y: f64, frame_height: f64, work: ThumbnailWorkA
 /// Collapsed macOS/Linux windows stay at their expanded height so WebKit does
 /// not blank cards. Empty frame on the unanchored side may leave the work area
 /// so the stack can be dragged to the opposite edge of the screen.
+#[cfg(test)]
 fn thumbnail_clamp_bottom_aligned_frame(
     x: f64,
     y: f64,
