@@ -9,7 +9,7 @@ export const THUMBNAIL_STACK_GAP_PX = 24;
 /** Top/side padding on `.thumbnail-stack`. */
 export const THUMBNAIL_STACK_PADDING_PX = 28;
 
-/** Bottom padding that reserves the expanded Show less gutter. */
+/** Expanded Show less gutter (bottom padding, swapped to the top when top-anchored). */
 export const THUMBNAIL_STACK_CONTROL_GUTTER_PX = 52;
 
 /** One stack slot: card height + inter-card gap. */

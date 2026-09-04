@@ -114,7 +114,7 @@ describe("thumbnail stack layout", () => {
       /\.thumbnail-stack-minimizing > \.thumbnail-card\s*\{\n {2}animation: none;([\s\S]*?)\n\}/,
     );
     const minimizeRun = thumbnailStyles.match(
-      /\.thumbnail-stack-minimizing\.thumbnail-stack-minimize-run > \.thumbnail-card\s*\{([\s\S]*?)\n\}/,
+      /^\.thumbnail-stack-minimizing\.thumbnail-stack-minimize-run > \.thumbnail-card\s*\{([\s\S]*?)\n\}/m,
     );
     const hoverFan = thumbnailStyles.match(
       /\.thumbnail-stack-minimized\.thumbnail-stack-hover-ready:not\(\.thumbnail-stack-hover-latched\):not\(\.thumbnail-stack-dragging\):not\(\.thumbnail-stack-pressing\):has\(\.thumbnail-collapsed-hit-target:hover:not\(\[data-thumbnail-hover-stale\]\)\)/,
@@ -156,6 +156,7 @@ describe("thumbnail stack layout", () => {
     expect(minimizingCard?.[1]).toMatch(/var\(--thumbnail-stack-expanded-transform\)/);
     expect(minimizeRun?.[1]).toMatch(/transform:\s*var\(--thumbnail-stack-rest-transform\)/);
     expect(minimizeRun?.[1]).toMatch(/transform 0\.52s/);
+    expect(minimizeRun?.[1]).toMatch(/top 0\.52s/);
     expect(thumbnailStyles).toMatch(/thumbnail-card-expand 0\.52s/);
     expect(thumbnailStyles).toMatch(/thumbnail-card-minimize-dim 0\.52s/);
     expect(thumbnailStyles).toMatch(/thumbnail-card-expand-dim 0\.52s/);
@@ -604,6 +605,30 @@ describe("thumbnail stack layout", () => {
     );
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-toolbar-exiting \.thumbnail-stack-minimize,[\s\S]*?\{[^}]*transition:\s*none/,
+    );
+  });
+
+  it("reserves the Show less gutter above expanded cards at the top of the screen", () => {
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack\s*\{[\s\S]*?padding:\s*28px 28px 52px/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-anchor-top:not\(\.thumbnail-stack-compact\)\s*\{[\s\S]*?padding:\s*52px 28px 28px/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-toolbar-anchor-top\s*\{[\s\S]*?top:\s*16px/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-top-actions\s*\{[\s\S]*?top:\s*8px/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-anchor-top\.thumbnail-stack-compact > \.thumbnail-card\s*\{[\s\S]*?top:\s*28px/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-anchor-top\.thumbnail-stack-expanding > \.thumbnail-card,\s*\n\.thumbnail-stack-anchor-top\.thumbnail-stack-minimizing > \.thumbnail-card\s*\{[\s\S]*?top:\s*52px/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-anchor-top\.thumbnail-stack-minimizing\.thumbnail-stack-minimize-run > \.thumbnail-card\s*\{[\s\S]*?top:\s*28px/,
     );
   });
 
