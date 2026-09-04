@@ -1,8 +1,21 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import {
   isPreviewFileDropLanding,
   previewFileDropShouldDismiss,
   previewFileDropShouldReject,
+  THUMBNAIL_DROP_REJECT_MS,
 } from "./thumbnailFileDrag";
+
+const thumbnailStyles = readFileSync(
+  resolve(process.cwd(), "ui/src/styles/mini-preview.css"),
+  "utf8",
+);
+const designTokens = readFileSync(
+  resolve(process.cwd(), "../../shared/design.css"),
+  "utf8",
+);
 
 describe("mini-preview file-drop landing", () => {
   it("treats a drop on the preview stack as a rejected self-drop", () => {
@@ -25,4 +38,18 @@ describe("mini-preview file-drop landing", () => {
     expect(isPreviewFileDropLanding("preview_stack")).toBe(true);
     expect(isPreviewFileDropLanding("keep")).toBe(false);
   });
+
+  it("shakes with shared duration and spacing tokens", () => {
+    expect(designTokens).toMatch(/--thumbnail-drop-reject-duration:\s*var\(--dur-5\)/);
+    expect(designTokens).toMatch(/--thumbnail-drop-reject-x-1:\s*var\(--s-5\)/);
+    expect(THUMBNAIL_DROP_REJECT_MS).toBe(420);
+    expect(thumbnailStyles).toMatch(
+      /animation:\s*thumbnail-drop-reject var\(--thumbnail-drop-reject-duration\) var\(--ease-out\)/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /translate:\s*calc\(-1 \* var\(--thumbnail-drop-reject-x-1\)\) 0/,
+    );
+    expect(thumbnailStyles).not.toMatch(/translate:\s*-9px 0/);
+  });
 });
+

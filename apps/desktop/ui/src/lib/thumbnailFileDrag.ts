@@ -5,7 +5,7 @@ export type { PreviewFileDropLanding };
 /** macOS-style “no” shake when a preview is dropped back on itself. */
 export const THUMBNAIL_DROP_REJECT_ANIMATION = "thumbnail-drop-reject";
 
-export const THUMBNAIL_DROP_REJECT_MS = 420;
+export const THUMBNAIL_DROP_REJECT_MS = 420; // matches `--dur-5` / `--thumbnail-drop-reject-duration`
 
 export function isPreviewFileDropLanding(value: unknown): value is PreviewFileDropLanding {
   return value === "preview_stack" || value === "app_window" || value === "external";

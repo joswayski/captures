@@ -86,6 +86,13 @@
   --dur-3: 200ms;
   --dur-4: 280ms;
   --dur-5: 420ms;
+  /* Mini-preview “no” shake when a file is dropped back on the stack. */
+  --thumbnail-drop-reject-duration: var(--dur-5);
+  --thumbnail-drop-reject-x-1: var(--s-5);
+  --thumbnail-drop-reject-x-2: var(--s-4);
+  --thumbnail-drop-reject-x-3: var(--s-3);
+  --thumbnail-drop-reject-x-4: var(--s-2);
+  --thumbnail-drop-reject-x-5: var(--s-1);
   /* Fade-out dissolve for chrome that should vanish in place. */
   --blur-dissolve: 8px;
 
