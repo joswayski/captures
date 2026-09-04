@@ -855,6 +855,10 @@ fn show_update_notice(app: &AppHandle) {
             }
             sync_update_notice_window(&window, &status, placement);
             let _ = window.show();
+            let _ = crate::set_window_content_protected(
+                &window,
+                should_hide_update_notice_for_capture(&app),
+            );
             let _ = crate::apply_tray_notice_position(&window, placement);
             crate::focus_single_window(&window);
             return;
@@ -915,7 +919,8 @@ fn create_update_notice(
     .build()?;
     crate::apply_tray_notice_position(&window, placement)?;
     window.show()?;
-    let _ = crate::set_window_content_protected(&window, true);
+    let _ =
+        crate::set_window_content_protected(&window, should_hide_update_notice_for_capture(app));
     crate::apply_tray_notice_position(&window, placement)?;
     crate::focus_single_window(&window);
     Ok(())

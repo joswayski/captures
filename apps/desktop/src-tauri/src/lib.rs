@@ -6375,6 +6375,14 @@ fn restore_hidden_recording_controls(app: &AppHandle) -> bool {
         hide_recording_controls_hidden_notices(app);
         let _ = window.show();
         let _ = window.unminimize();
+        // Hide cleared WDA_EXCLUDEFROMCAPTURE so NVIDIA Instant Replay can run.
+        // Reapply after show so the restored HUD is not burned into recordings.
+        let excluded = !include_recording_controls_in_captures(app);
+        #[cfg(target_os = "macos")]
+        if let Err(error) = captures_macos_window::set_excluded_from_capture(&window, excluded) {
+            eprintln!("failed to restore recording controls capture sharing: {error}");
+        }
+        let _ = set_window_content_protected(&window, excluded);
         let _ = window.set_focus();
         return true;
     }
