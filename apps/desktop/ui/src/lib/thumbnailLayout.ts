@@ -1,3 +1,5 @@
+import type { MiniPreviewPlacement } from "../types";
+
 /** Thumbnail card height in CSS pixels (matches `.thumbnail-card` flex-basis/height). */
 export const THUMBNAIL_CARD_HEIGHT_PX = 160;
 
@@ -327,6 +329,52 @@ export function thumbnailCollapsedFrameHeight(cardCount: number): number {
  * (structured peek tucked; per-capture skew remains), -1 = top (peek down).
  */
 export type ThumbnailStackAnchor = "top" | "bottom";
+export type ThumbnailStackSide = "left" | "right";
+
+export const DEFAULT_MINI_PREVIEW_PLACEMENT: MiniPreviewPlacement = "bottom_left";
+
+export const MINI_PREVIEW_PLACEMENTS: ReadonlyArray<{
+  id: MiniPreviewPlacement;
+  name: string;
+}> = [
+  { id: "top_left", name: "Top left" },
+  { id: "top_right", name: "Top right" },
+  { id: "bottom_left", name: "Bottom left" },
+  { id: "bottom_right", name: "Bottom right" },
+];
+
+export function thumbnailStackAnchorFromPlacement(
+  placement: MiniPreviewPlacement,
+): ThumbnailStackAnchor {
+  return placement.startsWith("top") ? "top" : "bottom";
+}
+
+export function thumbnailStackSideFromPlacement(
+  placement: MiniPreviewPlacement,
+): ThumbnailStackSide {
+  return placement.endsWith("right") ? "right" : "left";
+}
+
+export function thumbnailStackGravityFromPlacement(
+  placement: MiniPreviewPlacement,
+): number {
+  return thumbnailStackAnchorFromPlacement(placement) === "top" ? -1 : 1;
+}
+
+/** Default harness `#root` translation for a chosen screen corner. */
+export function harnessOffsetForPlacement(
+  placement: MiniPreviewPlacement,
+  viewport: { width: number; height: number },
+  frameWidth = 340,
+): { x: number; y: number; anchor: ThumbnailStackAnchor } {
+  return {
+    x: thumbnailStackSideFromPlacement(placement) === "right"
+      ? Math.max(0, viewport.width - frameWidth)
+      : 0,
+    y: 0,
+    anchor: thumbnailStackAnchorFromPlacement(placement),
+  };
+}
 
 export const THUMBNAIL_STACK_GRAVITY_VAR = "--thumbnail-stack-gravity";
 

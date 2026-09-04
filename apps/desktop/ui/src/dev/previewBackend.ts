@@ -21,6 +21,7 @@ import type {
   CaptureArtifact,
   ClipboardState,
   DisplayDescriptor,
+  MiniPreviewPlacement,
   OnboardingState,
   RecordingArtifact,
   RecordingDraftManifest,
@@ -134,6 +135,24 @@ function previewScreenshotFormat(): AppSettings["screenshot_format"] {
   return value === "jpeg" || value === "webp" ? value : "png";
 }
 
+function previewMiniPreviewPlacement(): MiniPreviewPlacement {
+  const value = query().get("placement");
+  switch (value) {
+    case "top":
+    case "top-left":
+    case "top_left":
+      return "top_left";
+    case "top-right":
+    case "top_right":
+      return "top_right";
+    case "bottom-right":
+    case "bottom_right":
+      return "bottom_right";
+    default:
+      return "bottom_left";
+  }
+}
+
 function previewVideoFormat(): AppSettings["recording"]["video_format"] {
   const value = query().get("video_format");
   return value === "gif" || value === "webm" ? value : "mp4";
@@ -203,6 +222,7 @@ const SETTINGS: AppSettings = {
   auto_copy_to_clipboard: true,
   auto_start_on_selection: flag("auto"),
   show_mini_previews: true,
+  mini_preview_placement: previewMiniPreviewPlacement(),
   include_mini_previews_in_captures: false,
   include_recording_controls_in_captures: false,
   launch_at_login: true,
@@ -631,7 +651,6 @@ const DRAFTS: RecordingDraftManifest[] = flag("drafts")
 
 const RESPONSES: Record<string, unknown> = {
   get_settings: SETTINGS,
-  update_settings: SETTINGS,
   get_update_status: updateStatus(),
   get_capture_history: HISTORY,
   get_recording_drafts: DRAFTS,
@@ -762,6 +781,12 @@ export function installPreviewBackend(): void {
   selection = createSelection();
   mockIPC(async (command, payload) => {
     if (command === "get_recording_selection") return selection;
+    if (command === "update_settings") {
+      const next = (payload as { settings?: AppSettings } | undefined)?.settings;
+      if (!next) return SETTINGS;
+      Object.assign(SETTINGS, next);
+      return SETTINGS;
+    }
     if (command === "select_capture_display") return selectCaptureDisplay(payload);
     if (command === "get_thumbnail_pointer_position" || command === "get_capture_pointer_position") {
       return thumbnailPointer.inside

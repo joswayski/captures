@@ -10,12 +10,13 @@ use std::time::Instant;
 
 use captures_capture::{DisplayDescriptor, WindowDescriptor, XcapBackend};
 use parking_lot::{Mutex, RwLock};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
     models::{
-        AppSettings, CaptureArtifact, CaptureSession, HistoryEntry, RecordingArtifactData,
-        RecordingSelection,
+        AppSettings, CaptureArtifact, CaptureSession, HistoryEntry, MiniPreviewPlacement,
+        RecordingArtifactData, RecordingSelection,
     },
     recording::RecordingRuntime,
     storage,
@@ -29,14 +30,40 @@ pub struct PreparedArtifactDrag {
     pub file_name: String,
 }
 
-/// Session-only: last user-dragged placement of the mini-preview window.
+/// Which edge of the visible pile stays put when the stack opens or closes.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThumbnailStackAnchor {
+    #[default]
+    Bottom,
+    Top,
+}
+
+impl ThumbnailStackAnchor {
+    pub const fn is_top(self) -> bool {
+        matches!(self, Self::Top)
+    }
+}
+
+impl From<MiniPreviewPlacement> for ThumbnailStackAnchor {
+    fn from(placement: MiniPreviewPlacement) -> Self {
+        if placement.is_top() {
+            Self::Top
+        } else {
+            Self::Bottom
+        }
+    }
+}
+
+/// Session-only: last user-dragged position of the mini-preview pile.
+///
+/// `edge` is the anchored edge of the visible pile in logical pixels: the
+/// pile bottom when `anchor` is bottom, or the pile top when it is top.
 #[derive(Clone, Copy, Debug)]
 pub struct ThumbnailStackOrigin {
     pub x: f64,
-    /// Visible pile bottom in logical pixels.
-    pub bottom: f64,
-    /// When true, empty chrome hangs below the pile so peek-down stays visible.
-    pub top_aligned: bool,
+    pub edge: f64,
+    pub anchor: ThumbnailStackAnchor,
 }
 
 #[derive(Default)]
@@ -125,6 +152,10 @@ impl ThumbnailVisibility {
 
     pub fn stack_origin(&self) -> Option<ThumbnailStackOrigin> {
         self.stack_origin
+    }
+
+    pub fn clear_stack_origin(&mut self) {
+        self.stack_origin = None;
     }
 
     pub fn is_collapsed(&self) -> bool {
@@ -464,14 +495,18 @@ mod tests {
         let mut visibility = ThumbnailVisibility::default();
         visibility.set_stack_origin(super::ThumbnailStackOrigin {
             x: 120.0,
-            bottom: 640.0,
-            top_aligned: false,
+            edge: 640.0,
+            anchor: super::ThumbnailStackAnchor::Bottom,
         });
         visibility.collapse();
         visibility.expand();
         assert!(!visibility.is_collapsed());
         assert_eq!(visibility.stack_origin().unwrap().x, 120.0);
-        assert_eq!(visibility.stack_origin().unwrap().bottom, 640.0);
+        assert_eq!(visibility.stack_origin().unwrap().edge, 640.0);
+        assert_eq!(
+            visibility.stack_origin().unwrap().anchor,
+            super::ThumbnailStackAnchor::Bottom
+        );
 
         visibility.reset_session_placement();
         assert!(visibility.stack_origin().is_none());

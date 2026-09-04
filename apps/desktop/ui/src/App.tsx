@@ -140,13 +140,18 @@ import {
   convertHarnessStackOffsetAnchor,
   convertThumbnailStackFrameAnchor,
   createThumbnailStackShiftController,
+  DEFAULT_MINI_PREVIEW_PLACEMENT,
+  harnessOffsetForPlacement,
+  MINI_PREVIEW_PLACEMENTS,
   scheduleScrollThumbnailStackToNewest,
   scrollThumbnailStackToNewest,
   shouldScrollThumbnailStackToEnd,
   thumbnailCollapsedFrameHeight,
   thumbnailStackAnchorFromGravity,
+  thumbnailStackAnchorFromPlacement,
   thumbnailStackContentHeight,
   thumbnailStackGravityFromHarness,
+  thumbnailStackGravityFromPlacement,
   thumbnailStackGravityFromWorkArea,
   thumbnailStackVisualPileBottom,
   thumbnailStackNeedsScrollport,
@@ -186,6 +191,7 @@ import type {
   ExportProgress,
   ExportSpec,
   MaxResolution,
+  MiniPreviewPlacement,
   RecordingArtifact,
   RecordingDraftManifest,
   RecordingOptions,
@@ -5800,6 +5806,7 @@ export function Thumbnail() {
   >("expanded");
   const [stackAnchor, setStackAnchor] = useState<ThumbnailStackAnchor>("bottom");
   const stackAnchorRef = useRef<ThumbnailStackAnchor>("bottom");
+  const placementRef = useRef<MiniPreviewPlacement>(DEFAULT_MINI_PREVIEW_PLACEMENT);
   const [stackHoverReady, setStackHoverReady] = useState(false);
   const [stackMinimizeRun, setStackMinimizeRun] = useState(false);
   const [stackHoverLatched, setStackHoverLatched] = useState(false);
@@ -5871,6 +5878,55 @@ export function Thumbnail() {
         : next
     ));
   }, []);
+
+  const commitStackAnchor = useCallback((nextAnchor: ThumbnailStackAnchor) => {
+    if (stackAnchorRef.current === nextAnchor) return;
+    stackAnchorRef.current = nextAnchor;
+    setStackAnchor(nextAnchor);
+    stackRef.current?.classList.toggle("thumbnail-stack-anchor-top", nextAnchor === "top");
+    pendingNewestReveal.current = true;
+  }, []);
+
+  const applyMiniPreviewHome = useCallback((placement: MiniPreviewPlacement) => {
+    placementRef.current = placement;
+    const nextAnchor = thumbnailStackAnchorFromPlacement(placement);
+    commitStackAnchor(nextAnchor);
+    applyThumbnailStackGravity(
+      stackRef.current,
+      thumbnailStackGravityFromPlacement(placement),
+    );
+    if (isTauri()) return;
+    const viewport = { width: window.innerWidth, height: window.innerHeight };
+    const home = harnessOffsetForPlacement(placement, viewport);
+    writeHarnessStackOffset(home.x, home.y, document.documentElement, viewport, {
+      anchor: home.anchor,
+    });
+  }, [commitStackAnchor]);
+
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    const applySettings = (settings: AppSettings | null | undefined, forceHome: boolean) => {
+      const placement = settings?.mini_preview_placement ?? DEFAULT_MINI_PREVIEW_PLACEMENT;
+      if (!forceHome && placement === placementRef.current) return;
+      applyMiniPreviewHome(placement);
+    };
+    void invoke<AppSettings>("get_settings")
+      .then((settings) => {
+        if (active) applySettings(settings, true);
+      })
+      .catch(() => undefined);
+    void listen<AppSettings>("settings-changed", ({ payload }) => {
+      if (active) applySettings(payload, false);
+    }).then((dispose) => {
+      if (active) unlisten = dispose;
+      else dispose();
+    }).catch(() => undefined);
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, [applyMiniPreviewHome]);
 
   useEffect(() => {
     let active = true;
@@ -6043,7 +6099,7 @@ export function Thumbnail() {
       cancelReveal();
       window.clearTimeout(finish);
     };
-  }, [stackMotion, refreshStackOverflow, stackViewportHeight]);
+  }, [stackMotion, refreshStackOverflow, stackViewportHeight, stackAnchor]);
 
   useEffect(() => {
     const refresh = () => {
@@ -6713,13 +6769,6 @@ export function Thumbnail() {
     ),
   );
 
-  const applyThumbnailStackAnchor = (next: ThumbnailStackAnchor) => {
-    if (stackAnchorRef.current === next) return;
-    stackRef.current?.classList.toggle("thumbnail-stack-anchor-top", next === "top");
-    stackAnchorRef.current = next;
-    setStackAnchor(next);
-  };
-
   const collapsedStackDrag = () => {
     stackDrag.current ??= new CollapsedThumbnailStackDrag({
       getFrame: async () => {
@@ -6800,7 +6849,7 @@ export function Thumbnail() {
               );
               frameX = reclamped.x;
               frameY = reclamped.y;
-              applyThumbnailStackAnchor(nextAnchor);
+              commitStackAnchor(nextAnchor);
               anchor = nextAnchor;
               convertedAnchor = true;
             }
@@ -6826,7 +6875,10 @@ export function Thumbnail() {
             if (convertedAnchor) stackDrag.current?.rebaseFrame(next);
             return next;
           } catch {
-            applyThumbnailStackGravity(stackRef.current, 1);
+            applyThumbnailStackGravity(
+              stackRef.current,
+              thumbnailStackGravityFromPlacement(placementRef.current),
+            );
             return invoke<{ x: number; y: number }>(
               "set_mini_preview_stack_position",
               { x, y, anchor: stackAnchorRef.current },
@@ -6865,7 +6917,7 @@ export function Thumbnail() {
           viewport,
           { anchor: nextAnchor, contentHeight },
         );
-        applyThumbnailStackAnchor(nextAnchor);
+        commitStackAnchor(nextAnchor);
         applyThumbnailStackGravity(
           stackRef.current,
           thumbnailStackGravityFromHarness({
@@ -7925,6 +7977,45 @@ function useVisibleSection(
   return [visible, setVisible];
 }
 
+function MiniPreviewPlacementPicker({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: MiniPreviewPlacement;
+  disabled?: boolean;
+  onChange: (placement: MiniPreviewPlacement) => void;
+}) {
+  const selected = MINI_PREVIEW_PLACEMENTS.find((placement) => placement.id === value)
+    ?? MINI_PREVIEW_PLACEMENTS[2];
+  return (
+    <div className={`mini-preview-placement${disabled ? " is-disabled" : ""}`}>
+      <div
+        className="mini-preview-placement-screen"
+        role="radiogroup"
+        aria-label="Mini preview position"
+        aria-disabled={disabled || undefined}
+      >
+        {MINI_PREVIEW_PLACEMENTS.map((placement) => (
+          <button
+            key={placement.id}
+            type="button"
+            className={`mini-preview-placement-corner mini-preview-placement-${placement.id}${
+              value === placement.id ? " active" : ""
+            }`}
+            role="radio"
+            aria-checked={value === placement.id}
+            aria-label={placement.name}
+            disabled={disabled}
+            onClick={() => onChange(placement.id)}
+          />
+        ))}
+      </div>
+      <small>{selected.name}</small>
+    </div>
+  );
+}
+
 function SettingRow({
   title,
   description,
@@ -8487,6 +8578,18 @@ function PreferencesSections({
             <small>Turn this off to keep the quick-access preview stack hidden.</small>
           </span>
         </label>
+
+        <SettingRow
+          title="Mini preview position"
+          description="Choose a screen corner. Show less stays on that edge, and the stack opens away from it. You can still drag the collapsed pile during a session."
+          control={(
+            <MiniPreviewPlacementPicker
+              value={settings.mini_preview_placement ?? DEFAULT_MINI_PREVIEW_PLACEMENT}
+              disabled={!settings.show_mini_previews}
+              onChange={(placement) => update("mini_preview_placement", placement)}
+            />
+          )}
+        />
 
         <label className="check-row switch-row">
           <input

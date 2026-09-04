@@ -116,6 +116,14 @@ describe("clampThumbnailStackFrame", () => {
       x: 0,
       y: 236,
     });
+    expect(clampThumbnailStackFrame(40, 800, 340, 792, work, 240, "top")).toEqual({
+      x: 40,
+      y: 788,
+    });
+    expect(clampThumbnailStackFrame(40, -20, 340, 792, work, 240, "top")).toEqual({
+      x: 40,
+      y: 0,
+    });
   });
 
   it("lets a top-aligned pile reach the bottom when the window is taller", () => {

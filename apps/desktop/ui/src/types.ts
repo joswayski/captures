@@ -45,6 +45,11 @@ export interface WindowDescriptor {
 
 export type ScreenshotFormat = "png" | "jpeg" | "webp";
 export type VideoFormat = "mp4" | "gif" | "webm";
+export type MiniPreviewPlacement =
+  | "bottom_left"
+  | "bottom_right"
+  | "top_left"
+  | "top_right";
 
 export interface ActiveSession {
   id: string;
@@ -78,6 +83,7 @@ export interface AppSettings {
   /** Start screenshot/recording as soon as a region is drawn or a window is picked. */
   auto_start_on_selection: boolean;
   show_mini_previews: boolean;
+  mini_preview_placement: MiniPreviewPlacement;
   include_mini_previews_in_captures: boolean;
   include_recording_controls_in_captures: boolean;
   launch_at_login: boolean;

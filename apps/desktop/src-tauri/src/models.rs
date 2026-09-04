@@ -49,6 +49,9 @@ pub struct AppSettings {
     pub auto_start_on_selection: bool,
     #[serde(default = "default_true")]
     pub show_mini_previews: bool,
+    /// Screen corner for the mini-preview stack when it has not been dragged.
+    #[serde(default)]
+    pub mini_preview_placement: MiniPreviewPlacement,
     /// When true, keep the quick-access mini preview stack visible during
     /// screenshots and recordings so Captures UI can be captured for feedback.
     #[serde(default)]
@@ -82,6 +85,28 @@ pub struct AppSettings {
     pub screenshot_format: ScreenshotFormat,
     #[serde(default)]
     pub recording: RecordingSettings,
+}
+
+/// Home corner for the mini-preview stack. Dragging the collapsed pile can
+/// still move it for the rest of the session.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MiniPreviewPlacement {
+    #[default]
+    BottomLeft,
+    BottomRight,
+    TopLeft,
+    TopRight,
+}
+
+impl MiniPreviewPlacement {
+    pub const fn is_top(self) -> bool {
+        matches!(self, Self::TopLeft | Self::TopRight)
+    }
+
+    pub const fn is_right(self) -> bool {
+        matches!(self, Self::BottomRight | Self::TopRight)
+    }
 }
 
 /// Light/dark preference for regular Captures windows. Surfaces that float over
@@ -250,6 +275,7 @@ impl Default for AppSettings {
             auto_copy_to_clipboard: true,
             auto_start_on_selection: false,
             show_mini_previews: true,
+            mini_preview_placement: MiniPreviewPlacement::default(),
             include_mini_previews_in_captures: false,
             include_recording_controls_in_captures: false,
             launch_at_login: false,
@@ -1256,11 +1282,11 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        AppSettings, Appearance, ColorTheme, CustomThemeSettings, HistoryEntry, RecordingArtifact,
-        ScreenshotFormat, VideoFormat, macos_screenshot_hotkeys_conflicting_with,
-        migrate_output_directory, migrate_settings, platform_can_exclude_recording_controls,
-        recording_controls_are_excluded, recording_media_url, recording_poster_url,
-        recording_selection_url, snapshot_url,
+        AppSettings, Appearance, ColorTheme, CustomThemeSettings, HistoryEntry,
+        MiniPreviewPlacement, RecordingArtifact, ScreenshotFormat, VideoFormat,
+        macos_screenshot_hotkeys_conflicting_with, migrate_output_directory, migrate_settings,
+        platform_can_exclude_recording_controls, recording_controls_are_excluded,
+        recording_media_url, recording_poster_url, recording_selection_url, snapshot_url,
     };
 
     #[test]
@@ -1333,6 +1359,10 @@ mod tests {
         assert!(settings.auto_copy_to_clipboard);
         assert!(!settings.auto_start_on_selection);
         assert!(settings.show_mini_previews);
+        assert_eq!(
+            settings.mini_preview_placement,
+            MiniPreviewPlacement::BottomLeft
+        );
         assert!(!settings.include_mini_previews_in_captures);
         assert!(!settings.include_recording_controls_in_captures);
         assert_eq!(settings.appearance, Appearance::System);
@@ -1518,6 +1548,27 @@ mod tests {
             serde_json::from_str(&json).expect("settings should deserialize");
 
         assert!(!restored.show_mini_previews);
+    }
+
+    #[test]
+    fn persists_mini_preview_placement() {
+        let settings = AppSettings {
+            mini_preview_placement: MiniPreviewPlacement::TopRight,
+            ..AppSettings::default()
+        };
+
+        let json = serde_json::to_string(&settings).expect("settings should serialize");
+        let restored: AppSettings =
+            serde_json::from_str(&json).expect("settings should deserialize");
+
+        assert_eq!(
+            restored.mini_preview_placement,
+            MiniPreviewPlacement::TopRight
+        );
+        assert_eq!(
+            AppSettings::default().mini_preview_placement,
+            MiniPreviewPlacement::BottomLeft
+        );
     }
 
     #[test]
