@@ -4009,11 +4009,12 @@ fn install_windows_screenshot_takeover(app: &AppHandle, settings: &AppSettings) 
         disable_windows_print_screen_snipping();
     }
     let action = models::settings_super_shift_s_action(settings);
+    let takeover = models::settings_use_super_shift_s(settings);
     let _ = WIN_SHIFT_S_APP.set(app.clone());
     if let Ok(mut slot) = WIN_SHIFT_S_ACTION.lock() {
         *slot = action;
     }
-    captures_session::set_win_shift_s_takeover_enabled(action.is_some());
+    captures_session::set_win_shift_s_takeover_enabled(takeover);
     if action.is_none() {
         captures_session::set_win_shift_s_handler(None);
         return;
