@@ -190,6 +190,50 @@ describe("CollapsedThumbnailStackDrag", () => {
     expect(drag.isDragging).toBe(false);
   });
 
+  it("starts a later drag from the frame after the previous drop", async () => {
+    let frame = { x: 40, y: 80 };
+    const drag = new CollapsedThumbnailStackDrag({
+      getFrame: () => frame,
+      moveFrame: (x, y) => {
+        frame = { x, y };
+        return frame;
+      },
+      reducedMotion: () => false,
+    });
+
+    drag.pointerDown({ button: 0, pointerId: 1, screenX: 100, screenY: 200 });
+    await drag.pointerMove({ pointerId: 1, screenX: 160, screenY: 188 });
+    expect(await drag.pointerUp({ pointerId: 1 })).toBe("drop");
+    expect(frame).toEqual({ x: 100, y: 68 });
+
+    drag.pointerDown({ button: 0, pointerId: 1, screenX: 160, screenY: 188 });
+    const moved = await drag.pointerMove({ pointerId: 1, screenX: 180, screenY: 208 });
+    expect(moved?.dragging).toBe(true);
+    expect(moved?.x).toBe(120);
+    expect(moved?.y).toBe(88);
+    expect(await drag.pointerUp({ pointerId: 1 })).toBe("drop");
+  });
+
+  it("ignores an in-flight move after the press has already ended", async () => {
+    let continueMove: (() => void) | undefined;
+    const drag = new CollapsedThumbnailStackDrag({
+      getFrame: () => ({ x: 0, y: 0 }),
+      moveFrame: (x, y) => new Promise<{ x: number; y: number }>((resolve) => {
+        continueMove = () => resolve({ x, y });
+      }),
+      reducedMotion: () => false,
+    });
+
+    drag.pointerDown({ button: 0, pointerId: 1, screenX: 0, screenY: 0 });
+    const move = drag.pointerMove({ pointerId: 1, screenX: 40, screenY: 0 });
+    await Promise.resolve();
+    expect(await drag.pointerUp({ pointerId: 1 })).toBe("drop");
+    continueMove?.();
+    expect(await move).toBeNull();
+    expect(drag.isDragging).toBe(false);
+    expect(drag.isActive).toBe(false);
+  });
+
   it("follows later pointer steps instead of freezing the first lean", async () => {
     let now = 0;
     const drag = new CollapsedThumbnailStackDrag({

@@ -88,6 +88,8 @@ import {
   rearmThumbnailEditorControlHover,
   releaseThumbnailCapturedHover,
   releaseThumbnailPointerCapture,
+  retainThumbnailPointerCapture,
+  thumbnailLostPointerCaptureShouldEndDrag,
   setThumbnailCardHoverSuppressed,
   setThumbnailCollapsedHoverStale,
   setThumbnailNativeActiveCard,
@@ -5665,6 +5667,7 @@ export function Thumbnail() {
   ));
   const stackRef = useRef<HTMLElement>(null);
   const stackDrag = useRef<CollapsedThumbnailStackDrag | null>(null);
+  const collapsedStackPointerCleanup = useRef<(() => void) | null>(null);
   const skipCollapsedStackClick = useRef(false);
   const stackFanCollapseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stackFanCollapsed = useRef(false);
@@ -6371,6 +6374,7 @@ export function Thumbnail() {
 
   useEffect(() => {
     return () => {
+      collapsedStackPointerCleanup.current?.();
       cancelStackScroll.current?.();
       cancelStackScroll.current = null;
       if (stackMotionTimer.current) clearTimeout(stackMotionTimer.current);
@@ -6656,6 +6660,7 @@ export function Thumbnail() {
 
   const onCollapsedStackPointerDown = (event: React.PointerEvent<HTMLButtonElement>) => {
     if (event.button !== 0 || controlsDisabled) return;
+    collapsedStackPointerCleanup.current?.();
     const drag = collapsedStackDrag();
     if (!drag.pointerDown(event.nativeEvent)) return;
     skipCollapsedStackClick.current = true;
@@ -6681,25 +6686,28 @@ export function Thumbnail() {
     event.preventDefault();
     event.nativeEvent.preventDefault();
     const hitTarget = event.currentTarget;
-    try {
-      hitTarget.setPointerCapture(event.pointerId);
-    } catch {
-      // jsdom and some WebViews omit Element.setPointerCapture.
-    }
     const pointerId = event.pointerId;
+    retainThumbnailPointerCapture(hitTarget, pointerId);
     let finished = false;
+    let recapturing = false;
     const onMove = (moveEvent: PointerEvent) => {
       if (moveEvent.pointerId !== pointerId) return;
       moveEvent.preventDefault();
+      retainThumbnailPointerCapture(hitTarget, pointerId);
       void drag.pointerMove(moveEvent);
     };
-    const finishPointer = (upEvent: PointerEvent) => {
+    const finishPointer = (
+      upEvent: Pick<PointerEvent, "pointerId" | "clientX" | "clientY">,
+      options: { expand?: boolean } = {},
+    ) => {
       if (finished || upEvent.pointerId !== pointerId) return;
       finished = true;
+      collapsedStackPointerCleanup.current = null;
       window.removeEventListener("pointermove", onMove, true);
-      window.removeEventListener("pointerup", finishPointer, true);
-      window.removeEventListener("pointercancel", finishPointer, true);
-      hitTarget.removeEventListener("lostpointercapture", finishPointer);
+      window.removeEventListener("pointerup", onPointerUp, true);
+      window.removeEventListener("pointercancel", onPointerUp, true);
+      window.removeEventListener("mouseup", onMouseUp, true);
+      hitTarget.removeEventListener("lostpointercapture", onLostCapture);
       if (stackFanCollapseTimer.current) {
         clearTimeout(stackFanCollapseTimer.current);
         stackFanCollapseTimer.current = null;
@@ -6711,16 +6719,40 @@ export function Thumbnail() {
         x: upEvent.clientX,
         y: upEvent.clientY,
       });
-      void drag.pointerUp(upEvent).then((outcome) => {
+      void drag.pointerUp({ pointerId: upEvent.pointerId }).then((outcome) => {
+        if (outcome === "ignored") return;
         setThumbnailStackDragging(stackRef.current, false);
         window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
-        if (outcome === "expand") setStackCollapsed(false);
+        if (options.expand !== false && outcome === "expand") setStackCollapsed(false);
       });
     };
+    const onPointerUp = (upEvent: PointerEvent) => finishPointer(upEvent);
+    const onMouseUp = (upEvent: MouseEvent) => {
+      if (upEvent.button !== 0) return;
+      finishPointer({
+        pointerId,
+        clientX: upEvent.clientX,
+        clientY: upEvent.clientY,
+      });
+    };
+    const onLostCapture = (lostEvent: PointerEvent) => {
+      if (finished || recapturing || lostEvent.pointerId !== pointerId) return;
+      recapturing = true;
+      const recaptured = retainThumbnailPointerCapture(hitTarget, pointerId);
+      recapturing = false;
+      if (thumbnailLostPointerCaptureShouldEndDrag(lostEvent, recaptured)) {
+        finishPointer(lostEvent);
+      }
+    };
+    collapsedStackPointerCleanup.current = () => finishPointer(
+      { pointerId, clientX: -1, clientY: -1 },
+      { expand: false },
+    );
     window.addEventListener("pointermove", onMove, { capture: true, passive: false });
-    window.addEventListener("pointerup", finishPointer, true);
-    window.addEventListener("pointercancel", finishPointer, true);
-    hitTarget.addEventListener("lostpointercapture", finishPointer);
+    window.addEventListener("pointerup", onPointerUp, true);
+    window.addEventListener("pointercancel", onPointerUp, true);
+    window.addEventListener("mouseup", onMouseUp, true);
+    hitTarget.addEventListener("lostpointercapture", onLostCapture);
   };
 
   return (

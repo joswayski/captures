@@ -10,6 +10,8 @@ import {
   rearmThumbnailEditorControlHover,
   releaseThumbnailCapturedHover,
   releaseThumbnailPointerCapture,
+  retainThumbnailPointerCapture,
+  thumbnailLostPointerCaptureShouldEndDrag,
   setThumbnailCardHoverSuppressed,
   shouldIgnoreThumbnailCursorEvents,
   shouldLockThumbnailCardHoverOnStackMotion,
@@ -545,6 +547,30 @@ describe("releaseThumbnailCapturedHover", () => {
     releaseThumbnailPointerCapture(target, 7);
     expect(hasPointerCapture).toHaveBeenCalledWith(7);
     expect(releasePointerCapture).toHaveBeenCalledWith(7);
+  });
+
+  it("recaptures after a window-move lost capture so the pile can be dragged again", () => {
+    const target = document.createElement("button");
+    const hasPointerCapture = vi.fn(() => false);
+    const setPointerCapture = vi.fn(() => {
+      hasPointerCapture.mockReturnValue(true);
+    });
+    Object.assign(target, { hasPointerCapture, setPointerCapture });
+
+    expect(retainThumbnailPointerCapture(target, 4)).toBe(true);
+    expect(setPointerCapture).toHaveBeenCalledWith(4);
+    expect(thumbnailLostPointerCaptureShouldEndDrag({ buttons: 1 }, true)).toBe(false);
+    expect(thumbnailLostPointerCaptureShouldEndDrag({ buttons: 0 }, false)).toBe(true);
+  });
+
+  it("skips recapture when the pointer is already captured", () => {
+    const target = document.createElement("button");
+    const hasPointerCapture = vi.fn(() => true);
+    const setPointerCapture = vi.fn();
+    Object.assign(target, { hasPointerCapture, setPointerCapture });
+
+    expect(retainThumbnailPointerCapture(target, 4)).toBe(true);
+    expect(setPointerCapture).not.toHaveBeenCalled();
   });
 });
 

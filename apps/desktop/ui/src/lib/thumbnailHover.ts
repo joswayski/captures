@@ -347,6 +347,40 @@ export function releaseThumbnailPointerCapture(
 }
 
 /**
+ * Moving the always-on-top preview window while a press is captured often
+ * fires `lostpointercapture` even though the button is still down. Without a
+ * recapture, later moves never reach the pile, so it can only be dragged once.
+ */
+export function retainThumbnailPointerCapture(
+  element: HTMLElement,
+  pointerId: number,
+): boolean {
+  try {
+    if (typeof element.setPointerCapture !== "function") return false;
+    if (
+      typeof element.hasPointerCapture === "function"
+      && element.hasPointerCapture(pointerId)
+    ) {
+      return true;
+    }
+    element.setPointerCapture(pointerId);
+    return typeof element.hasPointerCapture !== "function"
+      || element.hasPointerCapture(pointerId);
+  } catch {
+    return false;
+  }
+}
+
+/** True when a lost capture is just the window moving under a held press. */
+export function thumbnailLostPointerCaptureShouldEndDrag(
+  event: Pick<PointerEvent, "buttons">,
+  recaptured: boolean,
+): boolean {
+  if (recaptured) return false;
+  return (event.buttons & 1) === 0;
+}
+
+/**
  * End a collapsed-pile press/drag. Returns true when the pointer is no longer
  * over the pile, so sparkle/fan chrome must stay off until a real re-enter.
  */
