@@ -1405,12 +1405,12 @@ fn show_screenshot_countdown(
         .ok_or_else(|| AppError::Task("screenshot countdown is unavailable".to_owned()))?;
     window.set_size(tauri::LogicalSize::new(width, height))?;
     window.set_position(tauri::LogicalPosition::new(x, y))?;
-    // Keep the countdown out of Captures' own screenshots and recordings.
-    window.set_content_protected(true)?;
     #[cfg(target_os = "macos")]
     captures_macos_window::set_excluded_from_capture(&window, true)
         .map_err(|error| AppError::Task(error.to_owned()))?;
     window.show()?;
+    // Exclude after show: a hidden HWND with this affinity blocks NVIDIA capture.
+    set_window_content_protected(&window, true)?;
     #[cfg(target_os = "macos")]
     captures_macos_window::conceal_documents_under_opaque_capture_surface();
     #[cfg(target_os = "macos")]
@@ -2219,7 +2219,7 @@ fn update_settings(
         if settings.include_mini_previews_in_captures
             && let Some(window) = app.get_webview_window("thumbnail")
         {
-            let _ = window.set_content_protected(false);
+            let _ = set_window_content_protected(&window, false);
         }
         update_thumbnail_stack(&app);
     }
@@ -2230,7 +2230,7 @@ fn update_settings(
         && let Some(window) = app.get_webview_window("recording-hud")
     {
         let excluded = !settings.include_recording_controls_in_captures;
-        let _ = window.set_content_protected(excluded);
+        let _ = set_window_content_protected(&window, excluded);
         #[cfg(target_os = "macos")]
         if let Err(error) = captures_macos_window::set_excluded_from_capture(&window, excluded) {
             eprintln!("failed to update recording controls capture sharing: {error}");
@@ -4966,8 +4966,6 @@ fn show_recording_saved_notice(app: &AppHandle, artifact_id: &str) -> Result<(),
         .visible(false)
         .build()?
     };
-    let _ = window.set_content_protected(true);
-
     #[cfg(target_os = "macos")]
     {
         captures_macos_window::configure_inactive_hover(&window)
@@ -4978,6 +4976,7 @@ fn show_recording_saved_notice(app: &AppHandle, artifact_id: &str) -> Result<(),
 
     #[cfg(not(target_os = "macos"))]
     window.show()?;
+    let _ = set_window_content_protected(&window, true);
 
     let timer_app = app.clone();
     let timer_state = state;
@@ -4992,6 +4991,7 @@ fn show_recording_saved_notice(app: &AppHandle, artifact_id: &str) -> Result<(),
                 && let Some(window) = handle.get_webview_window(RECORDING_SAVED_NOTICE_LABEL)
             {
                 let _ = window.hide();
+                let _ = set_window_content_protected(&window, false);
             }
         });
     });
@@ -5040,7 +5040,6 @@ fn show_recording_controls_hidden_notice(
     .focused(false)
     .visible(false)
     .build()?;
-    let _ = window.set_content_protected(true);
     set_click_through(&window, true)?;
 
     #[cfg(target_os = "macos")]
@@ -5049,6 +5048,7 @@ fn show_recording_controls_hidden_notice(
 
     #[cfg(not(target_os = "macos"))]
     window.show()?;
+    let _ = set_window_content_protected(&window, true);
 
     set_click_through(&window, true)?;
 
@@ -5312,7 +5312,10 @@ fn hide_thumbnail_window_inner(window: &tauri::WebviewWindow) {
         eprintln!("failed to conceal the capture thumbnail: {error}");
     }
     #[cfg(not(target_os = "macos"))]
-    let _ = window.hide();
+    {
+        let _ = window.hide();
+        let _ = set_window_content_protected(window, false);
+    }
 }
 
 fn show_thumbnail_window(window: &tauri::WebviewWindow) {
@@ -6194,7 +6197,41 @@ fn hide_window_inner(app: &AppHandle, label: &str) {
             return;
         }
         let _ = window.hide();
+        // Hidden HWNDs with WDA_EXCLUDEFROMCAPTURE still block NVIDIA Instant Replay.
+        let _ = set_window_content_protected(&window, false);
     }
+}
+
+/// NVIDIA Instant Replay / ShadowPlay refuse desktop capture when any HWND in
+/// the process has `WDA_EXCLUDEFROMCAPTURE` (Tauri `set_content_protected(true)`),
+/// including hidden and off-screen windows. Only keep that affinity while the
+/// window is actually on screen.
+pub(crate) const fn windows_display_affinity_excludes_capture(
+    excluded: bool,
+    visible: bool,
+) -> bool {
+    excluded && visible
+}
+
+pub(crate) fn set_window_content_protected(
+    window: &tauri::WebviewWindow,
+    excluded: bool,
+) -> tauri::Result<()> {
+    let excluded = {
+        #[cfg(target_os = "windows")]
+        {
+            windows_display_affinity_excludes_capture(
+                excluded,
+                window.is_visible().unwrap_or(false),
+            )
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = window;
+            excluded
+        }
+    };
+    window.set_content_protected(excluded)
 }
 
 const CAPTURE_HUD_HIDE_SETTLE_MS: u64 = 40;
@@ -6333,6 +6370,7 @@ fn include_recording_controls_in_captures(app: &AppHandle) -> bool {
 fn hide_recording_saved_notices_inner(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(RECORDING_SAVED_NOTICE_LABEL) {
         let _ = window.hide();
+        let _ = set_window_content_protected(&window, false);
     }
 }
 
@@ -6340,6 +6378,7 @@ fn hide_recording_controls_hidden_notices(app: &AppHandle) {
     for (label, window) in app.webview_windows() {
         if label.starts_with(RECORDING_CONTROLS_HIDDEN_NOTICE_PREFIX) {
             let _ = window.hide();
+            let _ = set_window_content_protected(&window, false);
         }
     }
 }
@@ -6390,7 +6429,7 @@ fn set_capture_huds_protected_inner(app: &AppHandle, protected: bool) {
         } else {
             protected
         };
-        if let Err(error) = window.set_content_protected(next_protected) {
+        if let Err(error) = set_window_content_protected(&window, next_protected) {
             eprintln!("failed to update {label} capture protection: {error}");
         }
         #[cfg(target_os = "macos")]
@@ -6422,6 +6461,7 @@ pub(crate) fn restore_excluded_recording_chrome(app: &AppHandle) {
             if let Err(error) = window.show() {
                 eprintln!("failed to restore hidden recording controls notice: {error}");
             }
+            let _ = set_window_content_protected(&window, true);
         }
         return;
     }
@@ -6441,7 +6481,6 @@ pub(crate) fn restore_excluded_recording_chrome(app: &AppHandle) {
         return;
     }
     let excluded = !include_recording_controls_in_captures(app);
-    let _ = hud.set_content_protected(excluded);
     #[cfg(target_os = "macos")]
     {
         if let Err(error) = captures_macos_window::set_excluded_from_capture(&hud, excluded) {
@@ -6455,6 +6494,7 @@ pub(crate) fn restore_excluded_recording_chrome(app: &AppHandle) {
     if let Err(error) = hud.show() {
         eprintln!("failed to restore recording controls: {error}");
     }
+    let _ = set_window_content_protected(&hud, excluded);
 }
 
 /// Runs `work` on AppKit's main thread and waits for it.
@@ -7382,7 +7422,8 @@ mod tests {
         thumbnail_stack_height, thumbnail_stack_should_be_visible, thumbnail_visible_window_height,
         thumbnail_window_top, track_shortcut_suppression, tray_accelerator,
         tray_icon_rect_is_usable, tray_notice_window_size, viewer_window_label,
-        window_display_crop_is_safe, window_is_capturable, windows_window_is_capture_overlay,
+        window_display_crop_is_safe, window_is_capturable, windows_display_affinity_excludes_capture,
+        windows_window_is_capture_overlay,
     };
 
     #[test]
@@ -7754,6 +7795,17 @@ mod tests {
         let mut app = overlay.clone();
         app.title = "NVIDIA App".to_owned();
         assert!(!windows_window_is_capture_overlay(&app));
+    }
+
+    #[test]
+    fn windows_display_affinity_is_not_left_on_hidden_windows() {
+        assert!(windows_display_affinity_excludes_capture(true, true));
+        assert!(
+            !windows_display_affinity_excludes_capture(true, false),
+            "hidden capture chrome must not keep WDA_EXCLUDEFROMCAPTURE; NVIDIA Instant Replay treats that as blocking desktop capture"
+        );
+        assert!(!windows_display_affinity_excludes_capture(false, true));
+        assert!(!windows_display_affinity_excludes_capture(false, false));
     }
 
     #[cfg(target_os = "macos")]
