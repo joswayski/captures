@@ -651,7 +651,6 @@ const DRAFTS: RecordingDraftManifest[] = flag("drafts")
 
 const RESPONSES: Record<string, unknown> = {
   get_settings: SETTINGS,
-  update_settings: SETTINGS,
   get_update_status: updateStatus(),
   get_capture_history: HISTORY,
   get_recording_drafts: DRAFTS,
@@ -781,6 +780,12 @@ export function installPreviewBackend(): void {
   selection = createSelection();
   mockIPC(async (command, payload) => {
     if (command === "get_recording_selection") return selection;
+    if (command === "update_settings") {
+      const next = (payload as { settings?: AppSettings } | undefined)?.settings;
+      if (!next) return SETTINGS;
+      Object.assign(SETTINGS, next);
+      return SETTINGS;
+    }
     if (command === "select_capture_display") return selectCaptureDisplay(payload);
     if (command === "get_thumbnail_pointer_position") return thumbnailPointer;
     if (command === "estimate_screenshot_export") {

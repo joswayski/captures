@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { clearMocks } from "@tauri-apps/api/mocks";
 
 import { installPreviewBackend } from "./previewBackend";
-import type { RecordingSelectionSession } from "../types";
+import type { AppSettings, RecordingSelectionSession } from "../types";
 
 describe("previewBackend capture display switching", () => {
   beforeEach(() => {
@@ -34,6 +34,19 @@ describe("previewBackend capture display switching", () => {
 
     const stored = await invoke<RecordingSelectionSession>("get_recording_selection");
     expect(stored.display.id).toBe("display-2");
+  });
+
+  it("keeps preference changes instead of reverting to the sample settings", async () => {
+    const current = await invoke<AppSettings>("get_settings");
+    expect(current.mini_preview_placement).toBe("bottom_left");
+
+    const saved = await invoke<AppSettings>("update_settings", {
+      settings: { ...current, mini_preview_placement: "top_right" },
+    });
+    expect(saved.mini_preview_placement).toBe("top_right");
+    expect((await invoke<AppSettings>("get_settings")).mini_preview_placement).toBe("top_right");
+
+    await invoke("update_settings", { settings: current });
   });
 
   it("rejects an unknown display without returning undefined", async () => {

@@ -6612,7 +6612,7 @@ export function Thumbnail() {
           ),
         );
         if (isTauri()) {
-          let anchor = stackAnchorRef.current;
+          const anchor = stackAnchorRef.current;
           let next = await invoke<{ x: number; y: number }>(
             "set_mini_preview_stack_position",
             { x, y, anchor },
