@@ -6217,21 +6217,20 @@ pub(crate) fn set_window_content_protected(
     window: &tauri::WebviewWindow,
     excluded: bool,
 ) -> tauri::Result<()> {
-    let excluded = {
+    // macOS/Linux keep exclusion on hidden windows. Windows must not: NVIDIA
+    // Instant Replay treats WDA_EXCLUDEFROMCAPTURE on any HWND as DRM.
+    let visible = {
         #[cfg(target_os = "windows")]
         {
-            windows_display_affinity_excludes_capture(
-                excluded,
-                window.is_visible().unwrap_or(false),
-            )
+            window.is_visible().unwrap_or(false)
         }
         #[cfg(not(target_os = "windows"))]
         {
             let _ = window;
-            excluded
+            true
         }
     };
-    window.set_content_protected(excluded)
+    window.set_content_protected(windows_display_affinity_excludes_capture(excluded, visible))
 }
 
 const CAPTURE_HUD_HIDE_SETTLE_MS: u64 = 40;
