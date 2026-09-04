@@ -5336,14 +5336,8 @@ fn set_mini_preview_stack_position(
     let content_height = thumbnail_stack_height(count, true);
     let frame_height = thumbnail_window_logical_height(&window).unwrap_or(content_height);
     let top_aligned = anchor.as_deref() == Some("top");
-    let (x, y) = thumbnail_clamp_aligned_frame(
-        x,
-        y,
-        frame_height,
-        content_height,
-        work,
-        top_aligned,
-    );
+    let (x, y) =
+        thumbnail_clamp_aligned_frame(x, y, frame_height, content_height, work, top_aligned);
     let _ = window.set_position(tauri::LogicalPosition::new(x, y));
     let pile_bottom = if top_aligned {
         y + content_height.min(frame_height)
@@ -5471,16 +5465,6 @@ fn thumbnail_clamp_frame(x: f64, y: f64, frame_height: f64, work: ThumbnailWorkA
 /// may leave the work area above so the stack can reach the top). Top piles
 /// sit at the top so peek-down has room; empty chrome may leave below so the
 /// stack can still reach the bottom.
-fn thumbnail_clamp_bottom_aligned_frame(
-    x: f64,
-    y: f64,
-    frame_height: f64,
-    content_height: f64,
-    work: ThumbnailWorkArea,
-) -> (f64, f64) {
-    thumbnail_clamp_aligned_frame(x, y, frame_height, content_height, work, false)
-}
-
 fn thumbnail_clamp_aligned_frame(
     x: f64,
     y: f64,
@@ -7184,7 +7168,6 @@ mod tests {
         refine_window_chrome_from_snapshot, resolve_startup_notice_placement,
         resolve_window_capture, should_trigger_shortcut, startup_notice_fallback_edge_from_insets,
         startup_notice_url, take_ready_or_defer_windows, thumbnail_clamp_aligned_frame,
-        thumbnail_clamp_bottom_aligned_frame,
         thumbnail_clamp_frame, thumbnail_cursor_action, thumbnail_cursor_ignore_update,
         thumbnail_geometry, thumbnail_pointer_in_space, thumbnail_pointer_position,
         thumbnail_preserve_current_height, thumbnail_stack_height,
@@ -8182,11 +8165,11 @@ mod tests {
         let work =
             super::thumbnail_work_area(bounds((0, 0, 1_920, 1_040), (0, 0, 1_920, 1_080), 1.0));
         assert_eq!(
-            thumbnail_clamp_bottom_aligned_frame(-40.0, -800.0, 792.0, 240.0, work),
+            thumbnail_clamp_aligned_frame(-40.0, -800.0, 792.0, 240.0, work, false),
             (0.0, -552.0)
         );
         assert_eq!(
-            thumbnail_clamp_bottom_aligned_frame(420.0, 400.0, 792.0, 240.0, work),
+            thumbnail_clamp_aligned_frame(420.0, 400.0, 792.0, 240.0, work, false),
             (420.0, 236.0)
         );
         // Visible pile top sits at the work-area top when slack is consumed.

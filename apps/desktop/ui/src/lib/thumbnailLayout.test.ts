@@ -330,7 +330,6 @@ describe("thumbnail stack layout", () => {
     })).toBeCloseTo(-1);
 
     const tallFrame = 792;
-    const contentHeight = 240;
     const topOfScreen = convertThumbnailStackFrameAnchor(
       { x: 12, y: contentHeight - tallFrame },
       "bottom",
