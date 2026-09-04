@@ -1,8 +1,10 @@
 use std::{
+    ffi::c_void,
     mem::size_of,
+    ptr,
     sync::{
         Mutex, OnceLock,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicPtr, Ordering},
     },
 };
 
@@ -14,7 +16,7 @@ use windows_sys::Win32::{
             SendInput, VK_LSHIFT, VK_LWIN, VK_RSHIFT, VK_RWIN, VK_SHIFT,
         },
         WindowsAndMessaging::{
-            CallNextHookEx, HHOOK, KBDLLHOOKSTRUCT, LLKHF_INJECTED, SetWindowsHookExW,
+            CallNextHookEx, KBDLLHOOKSTRUCT, LLKHF_INJECTED, SetWindowsHookExW,
             UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
         },
     },
@@ -30,7 +32,8 @@ pub enum WinShiftSPhase {
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static SWALLOWED_S: AtomicBool = AtomicBool::new(false);
-static HOOK: Mutex<HHOOK> = Mutex::new(0);
+static HOOK: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
+static INSTALL: Mutex<()> = Mutex::new(());
 static HANDLER: OnceLock<Mutex<Option<fn(WinShiftSPhase)>>> = OnceLock::new();
 
 fn handler_slot() -> &'static Mutex<Option<fn(WinShiftSPhase)>> {
@@ -51,29 +54,31 @@ pub fn set_enabled(enabled: bool) {
 }
 
 pub fn ensure_hook() -> Result<(), String> {
-    let mut hook = HOOK
+    let _install = INSTALL
         .lock()
         .map_err(|_| "Windows screenshot takeover hook is poisoned".to_owned())?;
-    if *hook != 0 {
+    if !HOOK.load(Ordering::Acquire).is_null() {
         return Ok(());
     }
     // SAFETY: WH_KEYBOARD_LL callbacks run in this process. The procedure lives
     // for the process lifetime; we unhook on a best-effort Drop via disable.
-    let installed = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(win_shift_s_proc), 0, 0) };
-    if installed == 0 {
+    let installed =
+        unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(win_shift_s_proc), ptr::null_mut(), 0) };
+    if installed.is_null() {
         return Err("could not install a keyboard hook for Win+Shift+S".to_owned());
     }
-    *hook = installed;
+    HOOK.store(installed, Ordering::Release);
     Ok(())
 }
 
 #[allow(dead_code)]
 pub fn uninstall_hook() {
-    if let Ok(mut hook) = HOOK.lock()
-        && *hook != 0
-    {
-        unsafe { UnhookWindowsHookEx(*hook) };
-        *hook = 0;
+    let Ok(_install) = INSTALL.lock() else {
+        return;
+    };
+    let hook = HOOK.swap(ptr::null_mut(), Ordering::AcqRel);
+    if !hook.is_null() {
+        unsafe { UnhookWindowsHookEx(hook) };
     }
 }
 
@@ -81,7 +86,7 @@ extern "system" fn win_shift_s_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
     if code >= 0 && ENABLED.load(Ordering::Acquire) && should_swallow(wparam, lparam) {
         return 1;
     }
-    unsafe { CallNextHookEx(0, code, wparam, lparam) }
+    unsafe { CallNextHookEx(ptr::null_mut(), code, wparam, lparam) }
 }
 
 fn should_swallow(wparam: WPARAM, lparam: LPARAM) -> bool {
