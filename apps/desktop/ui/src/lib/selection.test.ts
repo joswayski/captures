@@ -9,6 +9,7 @@ import {
   frontmostWindowAtPoint,
   frontToBackWindows,
   windowListingIsReady,
+  windowPointerHoverAtPoint,
   isCapturableSelection,
   parseAspectRatioPreset,
   roundedRectPath,
@@ -87,6 +88,56 @@ describe("frontmostCaptureTargetAtPoint", () => {
       { x: 20, y: 80 },
       origin,
     )).toMatchObject({ kind: "window", target: { id: "app" } });
+  });
+});
+
+describe("windowPointerHoverAtPoint", () => {
+  const origin = { x: 0, y: 0 };
+  const maximized = { id: "app", z_order: 10, x: 0, y: 0, width: 1440, height: 900 };
+  const menuBar = { id: "menubar", z_order: 50, x: 0, y: 0, width: 1440, height: 24 };
+
+  it("hovers the frontmost window under the pointer", () => {
+    expect(windowPointerHoverAtPoint(
+      [maximized],
+      [menuBar],
+      { x: 20, y: 80 },
+      origin,
+      1,
+      true,
+    )).toEqual({ windowId: "app", display: false });
+  });
+
+  it("treats menu-bar chrome as the display instead of the app behind it", () => {
+    expect(windowPointerHoverAtPoint(
+      [maximized],
+      [menuBar],
+      { x: 20, y: 8 },
+      origin,
+      1,
+      true,
+    )).toEqual({ windowId: null, display: true });
+  });
+
+  it("falls back to the display when listing is ready and nothing is hit", () => {
+    expect(windowPointerHoverAtPoint(
+      [maximized],
+      [menuBar],
+      { x: 2000, y: 8 },
+      origin,
+      1,
+      true,
+    )).toEqual({ windowId: null, display: true });
+  });
+
+  it("stays clear while window listing is still deferred", () => {
+    expect(windowPointerHoverAtPoint(
+      [],
+      [],
+      { x: 20, y: 80 },
+      origin,
+      1,
+      false,
+    )).toEqual({ windowId: null, display: false });
   });
 });
 

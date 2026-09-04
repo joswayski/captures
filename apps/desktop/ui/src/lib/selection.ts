@@ -118,6 +118,40 @@ export function frontmostCaptureTargetAtPoint<T extends {
   return { kind: hit.__captureHitKind, target: hit };
 }
 
+export type WindowPointerHover = {
+  windowId: string | null;
+  display: boolean;
+};
+
+/**
+ * Overlay-space hover for window capture: the frontmost window, shell chrome
+ * (treated as the display), or the display itself once listing is ready.
+ */
+export function windowPointerHoverAtPoint<T extends {
+  id: string;
+  z_order: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}>(
+  windows: readonly T[],
+  shellChrome: readonly T[],
+  point: SelectionPoint,
+  origin: { x: number; y: number },
+  scale: number,
+  windowsReady: boolean | undefined,
+): WindowPointerHover {
+  const hit = frontmostCaptureTargetAtPoint(windows, shellChrome, point, origin, scale);
+  if (hit?.kind === "window") {
+    return { windowId: hit.target.id, display: false };
+  }
+  return {
+    windowId: null,
+    display: hit?.kind === "chrome" || (!hit && windowListingIsReady(windowsReady)),
+  };
+}
+
 export function selectionRect(start: SelectionPoint, end: SelectionPoint): SelectionRect {
   return {
     x: Math.min(start.x, end.x),

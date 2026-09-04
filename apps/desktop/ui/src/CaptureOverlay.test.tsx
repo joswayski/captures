@@ -99,13 +99,18 @@ async function movePointerOverGuidance(
 
 describe("CaptureOverlay guidance", () => {
   let activeSession: ActiveSession;
+  let capturePointer: { x: number; y: number; inside: boolean } | null;
 
   beforeEach(() => {
     activeSession = session;
+    capturePointer = null;
     vi.mocked(listen).mockResolvedValue(() => undefined);
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "get_active_session" || command === "get_pending_session") {
         return activeSession;
+      }
+      if (command === "get_capture_pointer_position") {
+        return capturePointer;
       }
       if (
         command === "show_capture_overlay"
@@ -322,6 +327,59 @@ describe("CaptureOverlay guidance", () => {
     expect(invoke).toHaveBeenCalledWith("commit_region", {
       sessionId: "capture-1",
       rect: { x: 120, y: 80, width: 500, height: 500 },
+    });
+  });
+
+  it("commits the freeform region if Shift is released before the mouse", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/?view=overlay&mode=region&session_id=capture-1",
+    );
+    const { container } = render(<App />);
+    await screen.findByText("Drag to select a region");
+
+    const surface = container.querySelector<HTMLElement>(".capture-surface");
+    expect(surface).not.toBeNull();
+    surface!.setPointerCapture = vi.fn();
+    surface!.hasPointerCapture = vi.fn(() => true);
+    surface!.releasePointerCapture = vi.fn();
+    vi.spyOn(surface!, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 1440,
+      bottom: 900,
+      width: 1440,
+      height: 900,
+      toJSON: () => undefined,
+    });
+
+    fireEvent.pointerDown(surface!, { pointerId: 1, clientX: 120, clientY: 80 });
+    fireEvent.pointerMove(surface!, { pointerId: 1, clientX: 620, clientY: 480 });
+    fireEvent.keyDown(window, { key: "Shift" });
+    await waitFor(() => {
+      expect(container.querySelector(".selection-box")).toHaveStyle({
+        width: "500px",
+        height: "500px",
+      });
+    });
+    fireEvent.keyUp(window, { key: "Shift" });
+    await waitFor(() => {
+      expect(container.querySelector(".selection-box")).toHaveStyle({
+        width: "500px",
+        height: "400px",
+      });
+    });
+    fireEvent.pointerUp(surface!, {
+      pointerId: 1,
+      clientX: 620,
+      clientY: 480,
+    });
+    expect(invoke).toHaveBeenCalledWith("commit_region", {
+      sessionId: "capture-1",
+      rect: { x: 120, y: 80, width: 500, height: 400 },
     });
   });
 
@@ -813,5 +871,91 @@ describe("CaptureOverlay guidance", () => {
     expect(vi.mocked(invoke).mock.calls.filter(([command]) => (
       command === "show_capture_overlay"
     ))).toHaveLength(wakeCalls);
+  });
+
+  it("releases a region click so a double-click cannot cover the display", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/?view=overlay&mode=region&session_id=capture-1",
+    );
+    const { container } = render(<App />);
+    await screen.findByText("Drag to select a region");
+
+    const surface = container.querySelector<HTMLElement>(".capture-surface");
+    expect(surface).not.toBeNull();
+    surface!.setPointerCapture = vi.fn();
+    surface!.hasPointerCapture = vi.fn(() => true);
+    surface!.releasePointerCapture = vi.fn();
+    vi.spyOn(surface!, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 1440,
+      bottom: 900,
+      width: 1440,
+      height: 900,
+      toJSON: () => undefined,
+    } as DOMRect);
+
+    fireEvent.pointerDown(surface!, { pointerId: 1, clientX: 240, clientY: 180 });
+    fireEvent.pointerUp(surface!, { pointerId: 1, clientX: 240, clientY: 180 });
+    fireEvent.pointerDown(surface!, { pointerId: 1, clientX: 240, clientY: 180 });
+    fireEvent.pointerUp(surface!, { pointerId: 1, clientX: 240, clientY: 180 });
+    fireEvent.doubleClick(surface!, { clientX: 240, clientY: 180 });
+
+    expect(await screen.findByText("Click and drag to select a region")).toBeInTheDocument();
+    expect(container.querySelector(".selection-box")).not.toBeInTheDocument();
+    expect(invoke).not.toHaveBeenCalledWith("commit_region", expect.anything());
+
+    fireEvent.pointerMove(surface!, { pointerId: 2, clientX: 1400, clientY: 860 });
+    expect(container.querySelector(".selection-box")).not.toBeInTheDocument();
+  });
+
+  it("highlights the window under the pointer when window capture starts", async () => {
+    capturePointer = { x: 150, y: 100, inside: true };
+    activeSession = {
+      ...session,
+      mode: "window",
+      windows: [
+        {
+          id: "prefs",
+          title: "Captures Preferences",
+          app_name: "Captures",
+          z_order: 30,
+          x: 100,
+          y: 80,
+          width: 800,
+          height: 600,
+          display_id: "display-1",
+          corner_radius: 12,
+        },
+        {
+          id: "notes",
+          title: "Notes",
+          app_name: "Notes",
+          z_order: 10,
+          x: 300,
+          y: 160,
+          width: 900,
+          height: 640,
+          display_id: "display-1",
+        },
+      ],
+    };
+    window.history.replaceState(
+      {},
+      "",
+      "/?view=overlay&mode=window&session_id=capture-1",
+    );
+    render(<App />);
+    await screen.findByText("Select a window to continue");
+
+    const prefs = await screen.findByTitle("Captures Preferences");
+    await waitFor(() => {
+      expect(prefs).toHaveClass("window-target-hovered");
+    });
+    expect(screen.getByTitle("Notes")).not.toHaveClass("window-target-hovered");
   });
 });
