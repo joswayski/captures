@@ -1783,4 +1783,38 @@ describe("RecordingSelector", () => {
       expect(preferences).toHaveClass("hovered");
     });
   });
+
+  it("re-polls the pointer when a new selector session starts", async () => {
+    capturePointer = { x: 150, y: 100, inside: true };
+    preparedSession = {
+      ...session,
+      initial_mode: "screenshot",
+      initial_target: "window",
+    };
+    const { container } = render(<RecordingSelector />);
+    await screen.findByRole("button", { name: "Window", pressed: true });
+    mockSelectorSurface(container);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Select Captures Preferences" }))
+        .toHaveClass("hovered");
+    });
+
+    capturePointer = { x: 950, y: 400, inside: true };
+    await act(async () => {
+      recordingSelectionReady?.({
+        payload: {
+          ...preparedSession,
+          id: "selection-2",
+          snapshot_url: "capture://recording-selection/selection-2",
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Select Front eligible window" }))
+        .toHaveClass("hovered");
+    });
+    expect(screen.getByRole("button", { name: "Select Captures Preferences" }))
+      .not.toHaveClass("hovered");
+  });
 });

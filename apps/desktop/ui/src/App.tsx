@@ -1922,6 +1922,7 @@ export function RecordingSelector() {
   const surfaceRef = useRef<HTMLElement>(null);
   const panelRef = useRef<HTMLElement>(null);
   const lastWindowPointerRef = useRef<SelectionPoint | null>(null);
+  const windowHoverSurfaceRef = useRef<string | null>(null);
   const panelDragRef = useRef<RecordingPanelDrag | null>(null);
   const panelResizeFromRef = useRef<{ width: number; height: number } | null>(null);
   const panelResizeAnimationRef = useRef<Animation | null>(null);
@@ -2201,6 +2202,8 @@ export function RecordingSelector() {
       setRegion(null);
       autoStartAfterSelectionRef.current = false;
       clearRegionDrag();
+      lastWindowPointerRef.current = null;
+      windowHoverSurfaceRef.current = null;
       panelDragRef.current = null;
       setPanelDragging(false);
       setPanelPosition(null);
@@ -2436,6 +2439,11 @@ export function RecordingSelector() {
 
   useEffect(() => {
     if (targetMode !== "window" || !session?.id) return;
+    const surfaceKey = `${session.id}:${session.display.id}`;
+    if (windowHoverSurfaceRef.current !== surfaceKey) {
+      lastWindowPointerRef.current = null;
+      windowHoverSurfaceRef.current = surfaceKey;
+    }
     const existing = lastWindowPointerRef.current;
     if (existing) {
       applyWindowHoverAt(existing);
@@ -2452,6 +2460,7 @@ export function RecordingSelector() {
   }, [
     applyWindowHoverAt,
     session?.id,
+    session?.display.id,
     session?.windows,
     session?.windows_ready,
     targetMode,
@@ -2723,6 +2732,8 @@ export function RecordingSelector() {
       sessionRef.current = next;
       setSession(next);
       setRegion(null);
+      lastWindowPointerRef.current = null;
+      windowHoverSurfaceRef.current = null;
       autoStartAfterSelectionRef.current = false;
       setSelectedWindow(null);
       setHoveredWindow(null);
@@ -5150,6 +5161,7 @@ function CaptureOverlay() {
     forceSquare: boolean;
   } | null>(null);
   const lastWindowPointerRef = useRef<SelectionPoint | null>(null);
+  const windowHoverSurfaceRef = useRef<string | null>(null);
   const sessionId = session?.id ?? query("session_id");
   const mode = session?.mode ?? ((query("mode") ?? "region") as CaptureMode);
 
@@ -5171,8 +5183,8 @@ function CaptureOverlay() {
         setStart(null);
         setCurrent(null);
         regionDragRef.current = null;
-        regionDragRef.current = null;
         lastWindowPointerRef.current = null;
+        windowHoverSurfaceRef.current = null;
         setRegionForceSquare(false);
         setHoveredWindow(null);
         setHoveredDisplay(false);
@@ -5222,8 +5234,10 @@ function CaptureOverlay() {
 
   useEffect(() => {
     const onShift = (event: KeyboardEvent) => {
-      if (event.key !== "Shift" || mode !== "region" || !start) return;
-      setRegionForceSquare(event.type === "keydown");
+      if (event.key !== "Shift" || mode !== "region" || !regionDragRef.current) return;
+      const forceSquare = event.type === "keydown";
+      regionDragRef.current.forceSquare = forceSquare;
+      setRegionForceSquare(forceSquare);
     };
     window.addEventListener("keydown", onShift, true);
     window.addEventListener("keyup", onShift, true);
@@ -5231,7 +5245,7 @@ function CaptureOverlay() {
       window.removeEventListener("keydown", onShift, true);
       window.removeEventListener("keyup", onShift, true);
     };
-  }, [mode, start]);
+  }, [mode]);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -5390,6 +5404,11 @@ function CaptureOverlay() {
 
   useEffect(() => {
     if (mode !== "window" || !session?.id) return;
+    const surfaceKey = `${session.id}:${session.display.id}`;
+    if (windowHoverSurfaceRef.current !== surfaceKey) {
+      lastWindowPointerRef.current = null;
+      windowHoverSurfaceRef.current = surfaceKey;
+    }
     const existing = lastWindowPointerRef.current;
     if (existing) {
       applyWindowHoverAt(existing);
@@ -5407,6 +5426,7 @@ function CaptureOverlay() {
     applyWindowHoverAt,
     mode,
     session?.id,
+    session?.display.id,
     session?.windows,
     session?.windows_ready,
     visibleSessionId,
@@ -5511,7 +5531,7 @@ function CaptureOverlay() {
       drag.current,
       { x: drag.start.x, y: drag.start.y, width: 0, height: 0 },
       surfaceSize,
-      { forceSquare: event.shiftKey || drag.forceSquare },
+      { forceSquare: event.shiftKey },
     );
     if (commit && !commitRegion(finalRect)) showSelectionFeedback();
     setStart(null);

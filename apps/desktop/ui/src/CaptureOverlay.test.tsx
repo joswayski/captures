@@ -330,6 +330,59 @@ describe("CaptureOverlay guidance", () => {
     });
   });
 
+  it("commits the freeform region if Shift is released before the mouse", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/?view=overlay&mode=region&session_id=capture-1",
+    );
+    const { container } = render(<App />);
+    await screen.findByText("Drag to select a region");
+
+    const surface = container.querySelector<HTMLElement>(".capture-surface");
+    expect(surface).not.toBeNull();
+    surface!.setPointerCapture = vi.fn();
+    surface!.hasPointerCapture = vi.fn(() => true);
+    surface!.releasePointerCapture = vi.fn();
+    vi.spyOn(surface!, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 1440,
+      bottom: 900,
+      width: 1440,
+      height: 900,
+      toJSON: () => undefined,
+    });
+
+    fireEvent.pointerDown(surface!, { pointerId: 1, clientX: 120, clientY: 80 });
+    fireEvent.pointerMove(surface!, { pointerId: 1, clientX: 620, clientY: 480 });
+    fireEvent.keyDown(window, { key: "Shift" });
+    await waitFor(() => {
+      expect(container.querySelector(".selection-box")).toHaveStyle({
+        width: "500px",
+        height: "500px",
+      });
+    });
+    fireEvent.keyUp(window, { key: "Shift" });
+    await waitFor(() => {
+      expect(container.querySelector(".selection-box")).toHaveStyle({
+        width: "500px",
+        height: "400px",
+      });
+    });
+    fireEvent.pointerUp(surface!, {
+      pointerId: 1,
+      clientX: 620,
+      clientY: 480,
+    });
+    expect(invoke).toHaveBeenCalledWith("commit_region", {
+      sessionId: "capture-1",
+      rect: { x: 120, y: 80, width: 500, height: 400 },
+    });
+  });
+
   it("starts hiding the native overlay as soon as a region drag is released", async () => {
     window.history.replaceState(
       {},
