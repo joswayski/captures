@@ -32,10 +32,10 @@ use objc2::{
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationOptions, NSApplicationDidResignActiveNotification,
     NSBackingStoreType, NSBezierPath, NSBezierPathElement, NSColor, NSCursor, NSEvent, NSEventMask,
-    NSEventType, NSPanel, NSPasteboard, NSRunningApplication, NSScreen, NSSound,
-    NSStatusWindowLevel, NSTrackingArea, NSTrackingAreaOptions, NSView,
-    NSViewLayerContentsPlacement, NSWindow, NSWindowCollectionBehavior, NSWindowSharingType,
-    NSWindowStyleMask, NSWorkspace, NSWorkspaceDidActivateApplicationNotification,
+    NSEventType, NSPanel, NSPasteboard, NSRunningApplication, NSScreen, NSStatusWindowLevel,
+    NSTrackingArea, NSTrackingAreaOptions, NSView, NSViewLayerContentsPlacement, NSWindow,
+    NSWindowCollectionBehavior, NSWindowSharingType, NSWindowStyleMask, NSWorkspace,
+    NSWorkspaceDidActivateApplicationNotification,
 };
 use objc2_foundation::{
     NSNotification, NSNotificationCenter, NSNumber, NSObject, NSObjectProtocol, NSOperationQueue,
@@ -1070,21 +1070,6 @@ pub fn clipboard_change_count() -> isize {
         return run_on_main(clipboard_change_count).unwrap_or(0);
     }
     NSPasteboard::generalPasteboard().changeCount()
-}
-
-/// Plays a short, low-volume system sound after a capture is confirmed.
-pub fn play_capture_sound() -> Result<(), &'static str> {
-    if !is_main_thread() {
-        return run_on_main(play_capture_sound)
-            .ok_or("macOS capture sound did not run on the main thread")?;
-    }
-    let sound = NSSound::soundNamed(&NSString::from_str("Tink"))
-        .ok_or("macOS capture sound is unavailable")?;
-    sound.setVolume(0.18);
-    sound
-        .play()
-        .then_some(())
-        .ok_or("macOS capture sound could not be played")
 }
 
 fn shortcut_modifiers_pressed(flags: objc2_app_kit::NSEventModifierFlags) -> bool {
