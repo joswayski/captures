@@ -29,11 +29,14 @@ pub struct PreparedArtifactDrag {
     pub file_name: String,
 }
 
-/// Session-only: last user-dragged bottom-left of the mini-preview window.
+/// Session-only: last user-dragged placement of the mini-preview window.
 #[derive(Clone, Copy, Debug)]
 pub struct ThumbnailStackOrigin {
     pub x: f64,
+    /// Visible pile bottom in logical pixels.
     pub bottom: f64,
+    /// When true, empty chrome hangs below the pile so peek-down stays visible.
+    pub top_aligned: bool,
 }
 
 #[derive(Default)]
@@ -462,6 +465,7 @@ mod tests {
         visibility.set_stack_origin(super::ThumbnailStackOrigin {
             x: 120.0,
             bottom: 640.0,
+            top_aligned: false,
         });
         visibility.collapse();
         visibility.expand();
