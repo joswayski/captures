@@ -144,17 +144,20 @@ export function clampThumbnailStackFrame(
   contentHeight: number = frameHeight,
   anchor: "top" | "bottom" = "bottom",
 ): ThumbnailStackPoint {
-  // macOS/Linux keep the collapsed window at its expanded height. Empty
-  // chrome on the unanchored side may leave the work area so the pile can
-  // reach the opposite edge of the screen.
+  // macOS/Linux keep the collapsed window at its expanded height. Bottom piles
+  // sit in the lower content box (empty chrome may leave the work area above);
+  // top piles sit in the upper content box so peek-down has room below.
   const content = Math.min(frameHeight, Math.max(0, contentHeight));
   const slack = Math.max(0, frameHeight - content);
   const minX = work.x;
   const maxX = Math.max(minX, work.x + work.width - frameWidth);
   const minY = anchor === "top" ? work.y : work.y - slack;
-  const maxY = anchor === "top"
-    ? Math.max(minY, work.y + work.height - work.bottomGap - content)
-    : Math.max(minY, work.y + work.height - work.bottomGap - frameHeight);
+  const maxY = Math.max(
+    minY,
+    anchor === "top"
+      ? work.y + work.height - work.bottomGap - content
+      : work.y + work.height - work.bottomGap - frameHeight,
+  );
   return {
     x: clamp(x, minX, maxX),
     y: clamp(y, minY, maxY),
@@ -239,6 +242,7 @@ export function setThumbnailStackDragSwayReady(
  */
 export class CollapsedThumbnailStackDrag {
   private pointerId: number | null = null;
+  private session = 0;
   private startPointer: ThumbnailStackPoint = { x: 0, y: 0 };
   private lastPointer: ThumbnailStackPoint = { x: 0, y: 0 };
   private startFrame: ThumbnailStackPoint = { x: 0, y: 0 };
@@ -279,16 +283,7 @@ export class CollapsedThumbnailStackDrag {
 
   pointerDown(event: Pick<PointerEvent, "button" | "pointerId" | "screenX" | "screenY">): boolean {
     if (event.button !== 0) return false;
-    this.pointerId = event.pointerId;
-    this.startPointer = { x: event.screenX, y: event.screenY };
-    this.lastPointer = this.startPointer;
-    this.dragging = false;
-    this.sway = { x: 0, y: 0 };
-    this.lastTickMs = 0;
-    this.pointerSampled = false;
-    this.ready = Promise.resolve(this.host.getFrame()).then((frame) => {
-      this.startFrame = frame;
-    });
+    this.beginSession(event.pointerId, event.screenX, event.screenY);
     return true;
   }
 
@@ -296,6 +291,7 @@ export class CollapsedThumbnailStackDrag {
     event: Pick<PointerEvent, "pointerId" | "screenX" | "screenY">,
   ): Promise<ThumbnailStackDragMove | null> {
     if (this.pointerId !== event.pointerId) return null;
+    const session = this.session;
     const stepX = event.screenX - this.lastPointer.x;
     const stepY = event.screenY - this.lastPointer.y;
     this.lastPointer = { x: event.screenX, y: event.screenY };
@@ -303,6 +299,7 @@ export class CollapsedThumbnailStackDrag {
     const dy = event.screenY - this.startPointer.y;
     if (!this.dragging && !thumbnailStackDragExceededThreshold(dx, dy)) {
       await this.ready;
+      if (!this.sessionIs(session, event.pointerId)) return null;
       return {
         dragging: false,
         x: this.startFrame.x,
@@ -322,7 +319,9 @@ export class CollapsedThumbnailStackDrag {
     this.startSwayLoop();
     this.host.onSway?.(this.sway);
     await this.ready;
+    if (!this.sessionIs(session, event.pointerId)) return null;
     const next = await this.host.moveFrame(this.startFrame.x + dx, this.startFrame.y + dy);
+    if (!this.sessionIs(session, event.pointerId)) return null;
     return {
       dragging: true,
       x: next.x,
@@ -335,15 +334,44 @@ export class CollapsedThumbnailStackDrag {
     event: Pick<PointerEvent, "pointerId">,
   ): Promise<"expand" | "drop" | "ignored"> {
     if (this.pointerId !== event.pointerId) return "ignored";
+    const session = this.session;
     await this.ready;
+    if (!this.sessionIs(session, event.pointerId)) return "ignored";
     const expand = !this.dragging;
+    this.endSession();
+    return expand ? "expand" : "drop";
+  }
+
+  private beginSession(pointerId: number, screenX: number, screenY: number) {
+    this.session += 1;
+    const session = this.session;
+    this.pointerId = pointerId;
+    this.startPointer = { x: screenX, y: screenY };
+    this.lastPointer = this.startPointer;
+    this.dragging = false;
+    this.sway = { x: 0, y: 0 };
+    this.lastTickMs = 0;
+    this.pointerSampled = false;
+    this.stopSwayLoop();
+    this.ready = Promise.resolve(this.host.getFrame()).then((frame) => {
+      if (session !== this.session) return;
+      this.startFrame = frame;
+    });
+  }
+
+  private endSession() {
+    this.session += 1;
     this.pointerId = null;
     this.dragging = false;
     this.ready = null;
     this.stopSwayLoop();
     this.sway = { x: 0, y: 0 };
     this.lastTickMs = 0;
-    return expand ? "expand" : "drop";
+    this.pointerSampled = false;
+  }
+
+  private sessionIs(session: number, pointerId: number): boolean {
+    return this.session === session && this.pointerId === pointerId;
   }
 
   private now(): number {

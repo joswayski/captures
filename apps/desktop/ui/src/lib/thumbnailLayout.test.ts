@@ -31,7 +31,8 @@ import {
   thumbnailStackAnchorFromGravity,
   thumbnailStackHarnessPileTop,
   convertHarnessStackOffsetAnchor,
-  convertNativeStackFrameAnchor,
+  convertThumbnailStackFrameAnchor,
+  thumbnailStackVisualPileBottom,
   applyThumbnailStackGravity,
   harnessOffsetForPlacement,
   thumbnailStackAnchorFromPlacement,
@@ -134,6 +135,9 @@ describe("thumbnail stack layout", () => {
     expect(compactCard?.[1]).toMatch(/--thumbnail-stack-skew-x/);
     expect(thumbnailStyles).toMatch(/--thumbnail-stack-gravity/);
     expect(thumbnailStyles).toMatch(/--thumbnail-stack-expand-sign:\s*-1/);
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-anchor-top\.thumbnail-stack-compact > \.thumbnail-card\s*\{[^}]*top:\s*28px/,
+    );
     expect(thumbnailStyles).toMatch(
       /var\(--thumbnail-stack-pile-depth, 0\) \* -9px\s*\n\s*\* var\(--thumbnail-stack-gravity, 1\)/,
     );
@@ -308,14 +312,14 @@ describe("thumbnail stack layout", () => {
       contentHeight,
     )).toEqual(bottomOffset);
 
-    expect(convertNativeStackFrameAnchor(
+    expect(convertThumbnailStackFrameAnchor(
       { x: 40, y: -552 },
       "bottom",
       "top",
       792,
       240,
     )).toEqual({ x: 40, y: 0 });
-    expect(convertNativeStackFrameAnchor(
+    expect(convertThumbnailStackFrameAnchor(
       { x: 40, y: 0 },
       "top",
       "bottom",
@@ -359,6 +363,46 @@ describe("thumbnail stack layout", () => {
       workTop: 0,
       workHeight: 1_040,
       contentHeight: 240,
+    })).toBeCloseTo(-1);
+
+    const tallFrame = 792;
+    const topOfScreen = convertThumbnailStackFrameAnchor(
+      { x: 12, y: contentHeight - tallFrame },
+      "bottom",
+      "top",
+      tallFrame,
+      contentHeight,
+    );
+    expect(topOfScreen).toEqual({ x: 12, y: 0 });
+    expect(convertThumbnailStackFrameAnchor(
+      topOfScreen,
+      "top",
+      "bottom",
+      tallFrame,
+      contentHeight,
+    )).toEqual({ x: 12, y: contentHeight - tallFrame });
+    expect(thumbnailStackVisualPileBottom({
+      y: contentHeight - tallFrame,
+      frameHeight: tallFrame,
+      contentHeight,
+      anchor: "bottom",
+    })).toBe(contentHeight);
+    expect(thumbnailStackVisualPileBottom({
+      y: 0,
+      frameHeight: tallFrame,
+      contentHeight,
+      anchor: "top",
+    })).toBe(contentHeight);
+    expect(thumbnailStackGravityFromWorkArea({
+      pileBottom: thumbnailStackVisualPileBottom({
+        y: 0,
+        frameHeight: tallFrame,
+        contentHeight,
+        anchor: "top",
+      }),
+      workTop: 0,
+      workHeight: 1_040,
+      contentHeight,
     })).toBeCloseTo(-1);
 
     const stack = document.createElement("main");

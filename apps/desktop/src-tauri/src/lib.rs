@@ -5470,41 +5470,13 @@ fn thumbnail_work_area(bounds: ThumbnailMonitorBounds) -> ThumbnailWorkArea {
     }
 }
 
-#[cfg(test)]
-fn thumbnail_clamp_frame(x: f64, y: f64, frame_height: f64, work: ThumbnailWorkArea) -> (f64, f64) {
-    thumbnail_clamp_aligned_frame(
-        x,
-        y,
-        frame_height,
-        frame_height,
-        work,
-        ThumbnailStackAnchor::Bottom,
-    )
-}
-
 /// Keep the visible pile in the work area.
 ///
 /// Collapsed macOS/Linux windows stay at their expanded height so WebKit does
-/// not blank cards. Empty frame on the unanchored side may leave the work area
-/// so the stack can be dragged to the opposite edge of the screen.
-#[cfg(test)]
-fn thumbnail_clamp_bottom_aligned_frame(
-    x: f64,
-    y: f64,
-    frame_height: f64,
-    content_height: f64,
-    work: ThumbnailWorkArea,
-) -> (f64, f64) {
-    thumbnail_clamp_aligned_frame(
-        x,
-        y,
-        frame_height,
-        content_height,
-        work,
-        ThumbnailStackAnchor::Bottom,
-    )
-}
-
+/// not blank cards. Bottom piles sit at the bottom of that frame (empty chrome
+/// may leave the work area above so the stack can reach the top). Top piles
+/// sit at the top so peek-down has room; empty chrome may leave below so the
+/// stack can still reach the bottom.
 fn thumbnail_clamp_aligned_frame(
     x: f64,
     y: f64,
@@ -7253,14 +7225,13 @@ mod tests {
         primary_app_window_priority, recording::RECORDING_REGION_INDICATOR_TITLE,
         refine_window_chrome_from_snapshot, resolve_startup_notice_placement,
         resolve_window_capture, should_trigger_shortcut, startup_notice_fallback_edge_from_insets,
-        startup_notice_url, take_ready_or_defer_windows, thumbnail_clamp_bottom_aligned_frame,
-        thumbnail_clamp_frame, thumbnail_cursor_action, thumbnail_cursor_ignore_update,
-        thumbnail_geometry, thumbnail_pointer_in_space, thumbnail_pointer_position,
-        thumbnail_preserve_current_height, thumbnail_stack_height,
-        thumbnail_stack_should_be_visible, thumbnail_visible_window_height, thumbnail_window_top,
-        track_shortcut_suppression, tray_accelerator, tray_icon_rect_is_usable,
-        tray_notice_window_size, viewer_window_label, window_display_crop_is_safe,
-        window_is_capturable, windows_window_is_capture_overlay,
+        startup_notice_url, take_ready_or_defer_windows, thumbnail_clamp_aligned_frame,
+        thumbnail_cursor_action, thumbnail_cursor_ignore_update, thumbnail_geometry,
+        thumbnail_pointer_in_space, thumbnail_pointer_position, thumbnail_preserve_current_height,
+        thumbnail_stack_height, thumbnail_stack_should_be_visible, thumbnail_visible_window_height,
+        thumbnail_window_top, track_shortcut_suppression, tray_accelerator,
+        tray_icon_rect_is_usable, tray_notice_window_size, viewer_window_label,
+        window_display_crop_is_safe, window_is_capturable, windows_window_is_capture_overlay,
     };
 
     #[test]
@@ -8251,6 +8222,43 @@ mod tests {
     }
 
     #[test]
+    fn restores_a_top_aligned_pile_without_consuming_preserved_slack() {
+        let work = bounds((0, 0, 1_920, 1_040), (0, 0, 1_920, 1_080), 1.0);
+        let geometry = thumbnail_geometry(
+            work,
+            1,
+            true,
+            Some(ThumbnailStackOrigin {
+                x: 420.0,
+                edge: 0.0,
+                anchor: ThumbnailStackAnchor::Top,
+            }),
+            crate::models::MiniPreviewPlacement::BottomLeft,
+        );
+        assert_eq!(geometry.height, 240.0);
+        assert_eq!((geometry.x, geometry.y), (420.0, 0.0));
+        assert_eq!(geometry.anchor, ThumbnailStackAnchor::Top);
+        assert_eq!(
+            thumbnail_window_top(
+                geometry.y,
+                792.0,
+                geometry.height,
+                ThumbnailStackAnchor::Top
+            ),
+            0.0
+        );
+        assert_eq!(
+            thumbnail_window_top(
+                geometry.y,
+                792.0,
+                geometry.height,
+                ThumbnailStackAnchor::Bottom
+            ),
+            -552.0
+        );
+    }
+
+    #[test]
     fn clamps_a_dragged_stack_to_the_work_area() {
         let work = bounds((0, 0, 1_920, 1_040), (0, 0, 1_920, 1_080), 1.0);
         assert_eq!(
@@ -8267,7 +8275,14 @@ mod tests {
             (1_580.0, 788.0, 240.0)
         );
         assert_eq!(
-            thumbnail_clamp_frame(-40.0, -20.0, 240.0, super::thumbnail_work_area(work)),
+            thumbnail_clamp_aligned_frame(
+                -40.0,
+                -20.0,
+                240.0,
+                240.0,
+                super::thumbnail_work_area(work),
+                ThumbnailStackAnchor::Bottom,
+            ),
             (0.0, 0.0)
         );
     }
@@ -8278,15 +8293,54 @@ mod tests {
         let work =
             super::thumbnail_work_area(bounds((0, 0, 1_920, 1_040), (0, 0, 1_920, 1_080), 1.0));
         assert_eq!(
-            thumbnail_clamp_bottom_aligned_frame(-40.0, -800.0, 792.0, 240.0, work),
+            thumbnail_clamp_aligned_frame(
+                -40.0,
+                -800.0,
+                792.0,
+                240.0,
+                work,
+                ThumbnailStackAnchor::Bottom
+            ),
             (0.0, -552.0)
         );
         assert_eq!(
-            thumbnail_clamp_bottom_aligned_frame(420.0, 400.0, 792.0, 240.0, work),
+            thumbnail_clamp_aligned_frame(
+                420.0,
+                400.0,
+                792.0,
+                240.0,
+                work,
+                ThumbnailStackAnchor::Bottom
+            ),
             (420.0, 236.0)
         );
         // Visible pile top sits at the work-area top when slack is consumed.
         assert_eq!(-552.0 + 792.0 - 240.0, 0.0);
+        assert_eq!(
+            thumbnail_clamp_aligned_frame(
+                -40.0,
+                -800.0,
+                792.0,
+                240.0,
+                work,
+                ThumbnailStackAnchor::Top
+            ),
+            (0.0, 0.0)
+        );
+        assert_eq!(
+            thumbnail_clamp_aligned_frame(
+                420.0,
+                2_000.0,
+                792.0,
+                240.0,
+                work,
+                ThumbnailStackAnchor::Top
+            ),
+            (420.0, 788.0)
+        );
+        // Top-aligned slack hangs below the work area so the pile can still
+        // reach the bottom chrome gap.
+        assert_eq!(788.0 + 240.0, 1_040.0 - THUMBNAIL_SYSTEM_CHROME_GAP);
     }
 
     #[test]

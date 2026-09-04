@@ -88,6 +88,8 @@ import {
   rearmThumbnailEditorControlHover,
   releaseThumbnailCapturedHover,
   releaseThumbnailPointerCapture,
+  retainThumbnailPointerCapture,
+  thumbnailLostPointerCaptureShouldEndDrag,
   setThumbnailCardHoverSuppressed,
   setThumbnailCollapsedHoverStale,
   setThumbnailNativeActiveCard,
@@ -116,6 +118,7 @@ import {
 import {
   CollapsedThumbnailStackDrag,
   applyThumbnailStackDragSway,
+  clampThumbnailStackFrame,
   cssUrl,
   preventThumbnailHtml5Drag,
   readHarnessStackOffset,
@@ -128,7 +131,7 @@ import {
   animateThumbnailStackScroll,
   applyThumbnailStackGravity,
   convertHarnessStackOffsetAnchor,
-  convertNativeStackFrameAnchor,
+  convertThumbnailStackFrameAnchor,
   createThumbnailStackShiftController,
   DEFAULT_MINI_PREVIEW_PLACEMENT,
   harnessOffsetForPlacement,
@@ -143,6 +146,7 @@ import {
   thumbnailStackGravityFromHarness,
   thumbnailStackGravityFromPlacement,
   thumbnailStackGravityFromWorkArea,
+  thumbnailStackVisualPileBottom,
   thumbnailStackNeedsScrollport,
   thumbnailStackOverflow,
   restoreThumbnailStackShiftClass,
@@ -5673,6 +5677,7 @@ export function Thumbnail() {
   ));
   const stackRef = useRef<HTMLElement>(null);
   const stackDrag = useRef<CollapsedThumbnailStackDrag | null>(null);
+  const collapsedStackPointerCleanup = useRef<(() => void) | null>(null);
   const skipCollapsedStackClick = useRef(false);
   const stackFanCollapseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stackFanCollapsed = useRef(false);
@@ -5715,9 +5720,11 @@ export function Thumbnail() {
   }, []);
 
   const commitStackAnchor = useCallback((nextAnchor: ThumbnailStackAnchor) => {
+    if (stackAnchorRef.current === nextAnchor) return;
     stackAnchorRef.current = nextAnchor;
     setStackAnchor(nextAnchor);
     stackRef.current?.classList.toggle("thumbnail-stack-anchor-top", nextAnchor === "top");
+    pendingNewestReveal.current = true;
   }, []);
 
   const applyMiniPreviewHome = useCallback((placement: MiniPreviewPlacement) => {
@@ -5932,7 +5939,7 @@ export function Thumbnail() {
       cancelReveal();
       window.clearTimeout(finish);
     };
-  }, [stackMotion, refreshStackOverflow, stackViewportHeight]);
+  }, [stackMotion, refreshStackOverflow, stackViewportHeight, stackAnchor]);
 
   useEffect(() => {
     const refresh = () => {
@@ -6426,6 +6433,7 @@ export function Thumbnail() {
 
   useEffect(() => {
     return () => {
+      collapsedStackPointerCleanup.current?.();
       cancelStackScroll.current?.();
       cancelStackScroll.current = null;
       if (stackMotionTimer.current) clearTimeout(stackMotionTimer.current);
@@ -6594,6 +6602,13 @@ export function Thumbnail() {
     });
   };
 
+  const collapsedContentHeight = () => thumbnailCollapsedFrameHeight(
+    Math.max(
+      stackRef.current?.querySelectorAll(":scope > .thumbnail-card").length ?? 1,
+      1,
+    ),
+  );
+
   const collapsedStackDrag = () => {
     stackDrag.current ??= new CollapsedThumbnailStackDrag({
       getFrame: async () => {
@@ -6605,77 +6620,110 @@ export function Thumbnail() {
         return readHarnessStackOffset();
       },
       moveFrame: async (x, y) => {
-        const contentHeight = thumbnailCollapsedFrameHeight(
-          Math.max(
-            stackRef.current?.querySelectorAll(":scope > .thumbnail-card").length ?? 1,
-            1,
-          ),
-        );
+        const contentHeight = collapsedContentHeight();
         if (isTauri()) {
-          const anchor = stackAnchorRef.current;
-          let next = await invoke<{ x: number; y: number }>(
-            "set_mini_preview_stack_position",
-            { x, y, anchor },
-          );
-          if (currentWindow) {
-            try {
-              const scale = await currentWindow.scaleFactor();
-              const size = await currentWindow.outerSize();
-              const frameHeight = size.height / scale;
-              const monitor = await currentMonitor();
-              const workTop = monitor
-                ? monitor.workArea.position.y / scale
-                : 0;
-              const workHeight = monitor
-                ? monitor.workArea.size.height / scale
-                : window.screen.availHeight;
-              const pileBottom = anchor === "top"
-                ? next.y + contentHeight
-                : next.y + frameHeight;
-              const gravity = thumbnailStackGravityFromWorkArea({
-                pileBottom,
+          let frameX = x;
+          let frameY = y;
+          let anchor = stackAnchorRef.current;
+          let convertedAnchor = false;
+          try {
+            const scale = currentWindow ? await currentWindow.scaleFactor() : 1;
+            const size = currentWindow ? await currentWindow.outerSize() : null;
+            const frameHeight = size ? size.height / scale : contentHeight;
+            const monitor = await currentMonitor();
+            const workTop = monitor
+              ? monitor.workArea.position.y / scale
+              : 0;
+            const workHeight = monitor
+              ? monitor.workArea.size.height / scale
+              : window.screen.availHeight;
+            const work = {
+              x: monitor ? monitor.workArea.position.x / scale : 0,
+              y: workTop,
+              width: monitor
+                ? monitor.workArea.size.width / scale
+                : window.screen.availWidth,
+              height: workHeight,
+              bottomGap: 12,
+            };
+            const clamped = clampThumbnailStackFrame(
+              frameX,
+              frameY,
+              340,
+              frameHeight,
+              work,
+              contentHeight,
+              anchor,
+            );
+            frameX = clamped.x;
+            frameY = clamped.y;
+            const gravity = thumbnailStackGravityFromWorkArea({
+              pileBottom: thumbnailStackVisualPileBottom({
+                y: frameY,
+                frameHeight,
+                contentHeight,
+                anchor,
+              }),
+              workTop,
+              workHeight,
+              contentHeight,
+              bottomGap: 12,
+            });
+            const nextAnchor = thumbnailStackAnchorFromGravity(gravity, anchor);
+            if (nextAnchor !== anchor) {
+              const converted = convertThumbnailStackFrameAnchor(
+                { x: frameX, y: frameY },
+                anchor,
+                nextAnchor,
+                frameHeight,
+                contentHeight,
+              );
+              const reclamped = clampThumbnailStackFrame(
+                converted.x,
+                converted.y,
+                340,
+                frameHeight,
+                work,
+                contentHeight,
+                nextAnchor,
+              );
+              frameX = reclamped.x;
+              frameY = reclamped.y;
+              commitStackAnchor(nextAnchor);
+              anchor = nextAnchor;
+              convertedAnchor = true;
+            }
+            const next = await invoke<{ x: number; y: number }>(
+              "set_mini_preview_stack_position",
+              { x: frameX, y: frameY, anchor },
+            );
+            applyThumbnailStackGravity(
+              stackRef.current,
+              thumbnailStackGravityFromWorkArea({
+                pileBottom: thumbnailStackVisualPileBottom({
+                  y: next.y,
+                  frameHeight,
+                  contentHeight,
+                  anchor,
+                }),
                 workTop,
                 workHeight,
                 contentHeight,
                 bottomGap: 12,
-              });
-              applyThumbnailStackGravity(stackRef.current, gravity);
-              const nextAnchor = thumbnailStackAnchorFromGravity(gravity, anchor);
-              if (nextAnchor !== anchor) {
-                const converted = convertNativeStackFrameAnchor(
-                  next,
-                  anchor,
-                  nextAnchor,
-                  frameHeight,
-                  contentHeight,
-                );
-                next = await invoke<{ x: number; y: number }>(
-                  "set_mini_preview_stack_position",
-                  { x: converted.x, y: converted.y, anchor: nextAnchor },
-                );
-                commitStackAnchor(nextAnchor);
-                stackDrag.current?.rebaseFrame(next);
-                applyThumbnailStackGravity(
-                  stackRef.current,
-                  thumbnailStackGravityFromWorkArea({
-                    pileBottom: nextAnchor === "top"
-                      ? next.y + contentHeight
-                      : next.y + frameHeight,
-                    workTop,
-                    workHeight,
-                    contentHeight,
-                    bottomGap: 12,
-                  }),
-                );
-              }
-            } catch {
-              applyThumbnailStackGravity(
-                stackRef.current,
-                thumbnailStackGravityFromPlacement(placementRef.current),
-              );
-            }
+              }),
+            );
+            if (convertedAnchor) stackDrag.current?.rebaseFrame(next);
+            return next;
+          } catch {
+            applyThumbnailStackGravity(
+              stackRef.current,
+              thumbnailStackGravityFromPlacement(placementRef.current),
+            );
+            return invoke<{ x: number; y: number }>(
+              "set_mini_preview_stack_position",
+              { x, y, anchor: stackAnchorRef.current },
+            );
           }
-          return next;
         }
         const viewport = { width: window.innerWidth, height: window.innerHeight };
         const anchor = stackAnchorRef.current;
@@ -6739,6 +6787,7 @@ export function Thumbnail() {
 
   const onCollapsedStackPointerDown = (event: React.PointerEvent<HTMLButtonElement>) => {
     if (event.button !== 0 || controlsDisabled) return;
+    collapsedStackPointerCleanup.current?.();
     const drag = collapsedStackDrag();
     if (!drag.pointerDown(event.nativeEvent)) return;
     skipCollapsedStackClick.current = true;
@@ -6764,25 +6813,28 @@ export function Thumbnail() {
     event.preventDefault();
     event.nativeEvent.preventDefault();
     const hitTarget = event.currentTarget;
-    try {
-      hitTarget.setPointerCapture(event.pointerId);
-    } catch {
-      // jsdom and some WebViews omit Element.setPointerCapture.
-    }
     const pointerId = event.pointerId;
+    retainThumbnailPointerCapture(hitTarget, pointerId);
     let finished = false;
+    let recapturing = false;
     const onMove = (moveEvent: PointerEvent) => {
       if (moveEvent.pointerId !== pointerId) return;
       moveEvent.preventDefault();
+      retainThumbnailPointerCapture(hitTarget, pointerId);
       void drag.pointerMove(moveEvent);
     };
-    const finishPointer = (upEvent: PointerEvent) => {
+    const finishPointer = (
+      upEvent: Pick<PointerEvent, "pointerId" | "clientX" | "clientY">,
+      options: { expand?: boolean } = {},
+    ) => {
       if (finished || upEvent.pointerId !== pointerId) return;
       finished = true;
+      collapsedStackPointerCleanup.current = null;
       window.removeEventListener("pointermove", onMove, true);
-      window.removeEventListener("pointerup", finishPointer, true);
-      window.removeEventListener("pointercancel", finishPointer, true);
-      hitTarget.removeEventListener("lostpointercapture", finishPointer);
+      window.removeEventListener("pointerup", onPointerUp, true);
+      window.removeEventListener("pointercancel", onPointerUp, true);
+      window.removeEventListener("mouseup", onMouseUp, true);
+      hitTarget.removeEventListener("lostpointercapture", onLostCapture);
       if (stackFanCollapseTimer.current) {
         clearTimeout(stackFanCollapseTimer.current);
         stackFanCollapseTimer.current = null;
@@ -6794,16 +6846,40 @@ export function Thumbnail() {
         x: upEvent.clientX,
         y: upEvent.clientY,
       });
-      void drag.pointerUp(upEvent).then((outcome) => {
+      void drag.pointerUp({ pointerId: upEvent.pointerId }).then((outcome) => {
+        if (outcome === "ignored") return;
         setThumbnailStackDragging(stackRef.current, false);
         window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
-        if (outcome === "expand") setStackCollapsed(false);
+        if (options.expand !== false && outcome === "expand") setStackCollapsed(false);
       });
     };
+    const onPointerUp = (upEvent: PointerEvent) => finishPointer(upEvent);
+    const onMouseUp = (upEvent: MouseEvent) => {
+      if (upEvent.button !== 0) return;
+      finishPointer({
+        pointerId,
+        clientX: upEvent.clientX,
+        clientY: upEvent.clientY,
+      });
+    };
+    const onLostCapture = (lostEvent: PointerEvent) => {
+      if (finished || recapturing || lostEvent.pointerId !== pointerId) return;
+      recapturing = true;
+      const recaptured = retainThumbnailPointerCapture(hitTarget, pointerId);
+      recapturing = false;
+      if (thumbnailLostPointerCaptureShouldEndDrag(lostEvent, recaptured)) {
+        finishPointer(lostEvent);
+      }
+    };
+    collapsedStackPointerCleanup.current = () => finishPointer(
+      { pointerId, clientX: -1, clientY: -1 },
+      { expand: false },
+    );
     window.addEventListener("pointermove", onMove, { capture: true, passive: false });
-    window.addEventListener("pointerup", finishPointer, true);
-    window.addEventListener("pointercancel", finishPointer, true);
-    hitTarget.addEventListener("lostpointercapture", finishPointer);
+    window.addEventListener("pointerup", onPointerUp, true);
+    window.addEventListener("pointercancel", onPointerUp, true);
+    window.addEventListener("mouseup", onMouseUp, true);
+    hitTarget.addEventListener("lostpointercapture", onLostCapture);
   };
 
   return (
