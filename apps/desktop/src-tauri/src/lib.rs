@@ -379,12 +379,15 @@ pub fn run() {
             if pending_capture.is_none() {
                 let onboarding_completed =
                     app.state::<Arc<AppState>>().settings().onboarding_completed;
-                if !onboarding_completed {
-                    show_onboarding(&handle);
-                } else if restarted_after_update || launched_from_autostart() {
-                    show_startup_notice(&handle, STARTUP_NOTICE_AUTOSTART_VISIBLE);
-                } else {
-                    open_capture_controls(&handle, CaptureSelectorMode::Screenshot);
+                match interactive_launch_action(
+                    onboarding_completed,
+                    restarted_after_update || launched_from_autostart(),
+                ) {
+                    InteractiveLaunchAction::Onboarding => show_onboarding(&handle),
+                    InteractiveLaunchAction::StartupNotice => {
+                        show_startup_notice(&handle, STARTUP_NOTICE_AUTOSTART_VISIBLE);
+                    }
+                    InteractiveLaunchAction::Preferences => show_preferences(&handle),
                 }
             }
             if let Some(mode) = pending_capture {
@@ -413,6 +416,54 @@ pub fn run() {
 
 fn launched_from_autostart() -> bool {
     std::env::args_os().any(|argument| argument == std::ffi::OsStr::new(AUTOSTART_ARG))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InteractiveLaunchAction {
+    Onboarding,
+    StartupNotice,
+    Preferences,
+}
+
+/// First interactive launch opens Preferences, not a capture overlay.
+/// Autostart and post-update restarts stay in the tray with the startup notice.
+fn interactive_launch_action(
+    onboarding_completed: bool,
+    launched_quietly: bool,
+) -> InteractiveLaunchAction {
+    if !onboarding_completed {
+        InteractiveLaunchAction::Onboarding
+    } else if launched_quietly {
+        InteractiveLaunchAction::StartupNotice
+    } else {
+        InteractiveLaunchAction::Preferences
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AppReactivation {
+    ShowOnboarding,
+    RestoreRecordingControls,
+    FocusExisting,
+    ShowPreferences,
+}
+
+/// Start, Search, Dock, or a second instance should surface a durable window.
+/// Capture overlays stay bound to shortcuts and the tray New Capture item.
+fn app_reactivation(
+    onboarding_completed: bool,
+    restore_recording_controls: bool,
+    has_visible_primary_window: bool,
+) -> AppReactivation {
+    if !onboarding_completed {
+        AppReactivation::ShowOnboarding
+    } else if restore_recording_controls {
+        AppReactivation::RestoreRecordingControls
+    } else if has_visible_primary_window {
+        AppReactivation::FocusExisting
+    } else {
+        AppReactivation::ShowPreferences
+    }
 }
 
 fn refresh_autostart_registration(app: &tauri::App) {
@@ -3919,6 +3970,25 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         tray = tray.icon(icon.clone());
     }
 
+    // Windows hides the icon in the tray overflow; left-click opens
+    // Preferences so Search is not the only way to find settings.
+    #[cfg(target_os = "windows")]
+    {
+        use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
+        tray = tray
+            .show_menu_on_left_click(false)
+            .on_tray_icon_event(|tray, event| {
+                if let TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                } = event
+                {
+                    show_preferences(tray.app_handle());
+                }
+            });
+    }
+
     tray.on_menu_event(|app, event| match event.id().as_ref() {
         "new-capture" => {
             open_capture_controls(app, CaptureSelectorMode::Screenshot);
@@ -5980,12 +6050,6 @@ fn primary_app_window_priority(label: &str) -> Option<u8> {
     if label == ONBOARDING_WINDOW_LABEL {
         return Some(0);
     }
-    if matches!(
-        label,
-        "recording-selector" | "recording-countdown" | "screenshot-countdown"
-    ) {
-        return Some(0);
-    }
     if label.starts_with(RECORDING_EDITOR_WINDOW_PREFIX)
         || label.starts_with(SCREENSHOT_EDITOR_WINDOW_PREFIX)
     {
@@ -5997,7 +6061,7 @@ fn primary_app_window_priority(label: &str) -> Option<u8> {
     if label == "preferences" || label.starts_with(VIEWER_WINDOW_PREFIX) {
         return Some(3);
     }
-    (label == "recording-hud").then_some(4)
+    None
 }
 
 fn focus_or_show_primary_app_window(app: &AppHandle) {
@@ -6005,16 +6069,10 @@ fn focus_or_show_primary_app_window(app: &AppHandle) {
 }
 
 fn focus_primary_app_window(app: &AppHandle) {
-    if app
+    let onboarding_completed = app
         .try_state::<Arc<AppState>>()
-        .is_some_and(|state| !state.settings().onboarding_completed)
-    {
-        show_onboarding(app);
-        return;
-    }
-    if restore_hidden_recording_controls(app) {
-        return;
-    }
+        .is_none_or(|state| state.settings().onboarding_completed);
+    let restore_recording = restore_hidden_recording_controls_are_needed(app);
     let primary = app
         .webview_windows()
         .into_iter()
@@ -6023,24 +6081,37 @@ fn focus_primary_app_window(app: &AppHandle) {
             primary_app_window_priority(&label).map(|priority| (priority, window))
         })
         .min_by_key(|(priority, _)| *priority);
-    if let Some((_, window)) = primary {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
-    } else {
-        open_capture_controls(app, CaptureSelectorMode::Screenshot);
+    match app_reactivation(onboarding_completed, restore_recording, primary.is_some()) {
+        AppReactivation::ShowOnboarding => show_onboarding(app),
+        AppReactivation::RestoreRecordingControls => {
+            let _ = restore_hidden_recording_controls(app);
+        }
+        AppReactivation::FocusExisting => {
+            if let Some((_, window)) = primary {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }
+        AppReactivation::ShowPreferences => show_preferences(app),
     }
 }
 
+fn restore_hidden_recording_controls_are_needed(app: &AppHandle) -> bool {
+    let recording_is_active = app
+        .try_state::<Arc<AppState>>()
+        .is_some_and(|state| recording::recording_controls_are_available(state.inner()));
+    recording_is_active
+        && app
+            .get_webview_window("recording-hud")
+            .is_some_and(|window| !window.is_visible().unwrap_or(false))
+}
+
 fn restore_hidden_recording_controls(app: &AppHandle) -> bool {
-    let recording_is_active = {
-        let state = app.state::<Arc<AppState>>();
-        recording::recording_controls_are_available(state.inner())
-    };
-    if recording_is_active
-        && let Some(window) = app.get_webview_window("recording-hud")
-        && !window.is_visible().unwrap_or(false)
-    {
+    if !restore_hidden_recording_controls_are_needed(app) {
+        return false;
+    }
+    if let Some(window) = app.get_webview_window("recording-hud") {
         hide_recording_controls_hidden_notices(app);
         let _ = window.show();
         let _ = window.unminimize();
@@ -6169,9 +6240,9 @@ pub(crate) async fn hide_capture_huds_before_snapshot(app: &AppHandle) {
         tokio::time::sleep(std::time::Duration::from_millis(CAPTURE_HUD_HIDE_SETTLE_MS)).await;
     }
 
-    // Opening Captures from the Windows Start menu starts a capture immediately.
-    // Wait until Start / Search have actually left the screen so they do not
-    // freeze into the screenshot. No-op on other platforms.
+    // A capture shortcut can fire while Start / Search are still on screen.
+    // Wait until those flyouts have left so they do not freeze into the
+    // screenshot. No-op on other platforms.
     let _ =
         tokio::task::spawn_blocking(captures_session::dismiss_transient_shell_ui_before_capture)
             .await;
@@ -7290,27 +7361,28 @@ mod tests {
     #[cfg(target_os = "macos")]
     use super::macos_window_is_capture_overlay;
     use super::{
-        AppError, LogicalRect, PreviewFileDropLanding, STARTUP_NOTICE_AFTER_SETUP_VISIBLE,
-        STARTUP_NOTICE_AUTOSTART_VISIBLE, STARTUP_NOTICE_HEIGHT, STARTUP_NOTICE_WIDTH,
-        StartupNoticeCaret, THUMBNAIL_AUTO_HIDE_RESERVE, THUMBNAIL_SYSTEM_CHROME_GAP,
-        TRAY_NOTICE_CARET_INSET, TRAY_NOTICE_CARET_SIZE, TRAY_NOTICE_FRAME_PAD,
-        TRAY_NOTICE_SCREEN_MARGIN, TRAY_NOTICE_TRAY_OVERLAP, ThumbnailCursorAction,
-        ThumbnailCursorKind, ThumbnailMonitorBounds, ThumbnailPointerSpace, ThumbnailStackAnchor,
-        ThumbnailStackOrigin, ThumbnailWindowFrame, ThumbnailWindowGeometry,
+        AppError, AppReactivation, InteractiveLaunchAction, LogicalRect, PreviewFileDropLanding,
+        STARTUP_NOTICE_AFTER_SETUP_VISIBLE, STARTUP_NOTICE_AUTOSTART_VISIBLE,
+        STARTUP_NOTICE_HEIGHT, STARTUP_NOTICE_WIDTH, StartupNoticeCaret,
+        THUMBNAIL_AUTO_HIDE_RESERVE, THUMBNAIL_SYSTEM_CHROME_GAP, TRAY_NOTICE_CARET_INSET,
+        TRAY_NOTICE_CARET_SIZE, TRAY_NOTICE_FRAME_PAD, TRAY_NOTICE_SCREEN_MARGIN,
+        TRAY_NOTICE_TRAY_OVERLAP, ThumbnailCursorAction, ThumbnailCursorKind,
+        ThumbnailMonitorBounds, ThumbnailPointerSpace, ThumbnailStackAnchor, ThumbnailStackOrigin,
+        ThumbnailWindowFrame, ThumbnailWindowGeometry, app_reactivation,
         capturable_windows_for_display, capture_cursor_icon, classify_preview_file_drop,
         click_through_applies, clipboard_fingerprint, display_contains_pointer,
-        drag_plugin_cursor_to_pointer_space, fallback_startup_notice, mask_macos_window_corners,
-        parse_shortcut, place_startup_notice, preferences_url, primary_app_window_priority,
-        recording::RECORDING_REGION_INDICATOR_TITLE, refine_window_chrome_from_snapshot,
-        resolve_startup_notice_placement, resolve_window_capture, should_trigger_shortcut,
-        startup_notice_fallback_edge_from_insets, startup_notice_url, take_ready_or_defer_windows,
-        thumbnail_clamp_aligned_frame, thumbnail_cursor_action, thumbnail_cursor_ignore_update,
-        thumbnail_geometry, thumbnail_pointer_in_space, thumbnail_pointer_position,
-        thumbnail_preserve_current_height, thumbnail_stack_height,
-        thumbnail_stack_should_be_visible, thumbnail_visible_window_height, thumbnail_window_top,
-        track_shortcut_suppression, tray_accelerator, tray_icon_rect_is_usable,
-        tray_notice_window_size, viewer_window_label, window_display_crop_is_safe,
-        window_is_capturable, windows_window_is_capture_overlay,
+        drag_plugin_cursor_to_pointer_space, fallback_startup_notice, interactive_launch_action,
+        mask_macos_window_corners, parse_shortcut, place_startup_notice, preferences_url,
+        primary_app_window_priority, recording::RECORDING_REGION_INDICATOR_TITLE,
+        refine_window_chrome_from_snapshot, resolve_startup_notice_placement,
+        resolve_window_capture, should_trigger_shortcut, startup_notice_fallback_edge_from_insets,
+        startup_notice_url, take_ready_or_defer_windows, thumbnail_clamp_aligned_frame,
+        thumbnail_cursor_action, thumbnail_cursor_ignore_update, thumbnail_geometry,
+        thumbnail_pointer_in_space, thumbnail_pointer_position, thumbnail_preserve_current_height,
+        thumbnail_stack_height, thumbnail_stack_should_be_visible, thumbnail_visible_window_height,
+        thumbnail_window_top, track_shortcut_suppression, tray_accelerator,
+        tray_icon_rect_is_usable, tray_notice_window_size, viewer_window_label,
+        window_display_crop_is_safe, window_is_capturable, windows_window_is_capture_overlay,
     };
 
     #[test]
@@ -8655,8 +8727,46 @@ mod tests {
             Some(1)
         );
         assert_eq!(primary_app_window_priority("history"), Some(2));
-        assert_eq!(primary_app_window_priority("recording-hud"), Some(4));
+        assert_eq!(primary_app_window_priority("preferences"), Some(3));
+        assert_eq!(primary_app_window_priority("recording-hud"), None);
+        assert_eq!(primary_app_window_priority("recording-selector"), None);
         assert_eq!(primary_app_window_priority("thumbnail"), None);
+    }
+
+    #[test]
+    fn interactive_launch_opens_preferences_instead_of_a_capture() {
+        assert_eq!(
+            interactive_launch_action(false, false),
+            InteractiveLaunchAction::Onboarding
+        );
+        assert_eq!(
+            interactive_launch_action(true, true),
+            InteractiveLaunchAction::StartupNotice
+        );
+        assert_eq!(
+            interactive_launch_action(true, false),
+            InteractiveLaunchAction::Preferences
+        );
+    }
+
+    #[test]
+    fn reactivating_the_app_opens_preferences_when_no_durable_window_is_open() {
+        assert_eq!(
+            app_reactivation(false, false, false),
+            AppReactivation::ShowOnboarding
+        );
+        assert_eq!(
+            app_reactivation(true, true, false),
+            AppReactivation::RestoreRecordingControls
+        );
+        assert_eq!(
+            app_reactivation(true, false, true),
+            AppReactivation::FocusExisting
+        );
+        assert_eq!(
+            app_reactivation(true, false, false),
+            AppReactivation::ShowPreferences
+        );
     }
 
     #[test]

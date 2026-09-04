@@ -8347,6 +8347,13 @@ export function Preferences() {
             <p>Changes save automatically.</p>
           </div>
           <div className="preferences-header-actions">
+            <button
+              type="button"
+              className="preferences-history-button"
+              onClick={() => void invoke("open_capture_history")}
+            >
+              Capture History…
+            </button>
             {saveStatus.kind !== "idle" && (
               <div className={`preferences-save-status preferences-save-${saveStatus.kind}`} role="status">
                 <span aria-hidden="true">{saveStatus.kind === "saved" ? "✓" : saveStatus.kind === "error" ? "!" : ""}</span>
