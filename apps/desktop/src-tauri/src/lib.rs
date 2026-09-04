@@ -7686,8 +7686,8 @@ mod tests {
         thumbnail_stack_height, thumbnail_stack_should_be_visible, thumbnail_visible_window_height,
         thumbnail_window_top, track_shortcut_suppression, tray_accelerator,
         tray_icon_rect_is_usable, tray_notice_window_size, viewer_window_label,
-        window_display_crop_is_safe, window_is_capturable, windows_display_affinity_excludes_capture,
-        windows_window_is_capture_overlay,
+        window_display_crop_is_safe, window_is_capturable,
+        windows_display_affinity_excludes_capture, windows_window_is_capture_overlay,
     };
 
     #[test]
