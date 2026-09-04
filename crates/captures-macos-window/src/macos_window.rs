@@ -1164,8 +1164,33 @@ pub fn configure_thumbnail_inactive_hover(window: &WebviewWindow) -> Result<(), 
         if let Ok(native) = native_window(window) {
             remember_thumbnail_window(native);
         }
+        let _ = reject_inbound_file_drops(window);
     }
     result
+}
+
+/// Mini previews are a drag source, never a drop destination. WKWebView still
+/// registers for file drops by default; accepting a preview dropped on itself
+/// recaptures the floating card and then dismisses it.
+pub fn reject_inbound_file_drops(window: &WebviewWindow) -> Result<(), &'static str> {
+    if !is_main_thread() {
+        let window = window.clone();
+        return run_on_main(move || reject_inbound_file_drops(&window))
+            .ok_or("inbound drop rejection did not run on the main thread")?;
+    }
+    let native_window = native_window(window)?;
+    native_window.unregisterDraggedTypes();
+    window
+        .as_ref()
+        .with_webview(|platform_webview| {
+            let pointer = platform_webview.inner();
+            // SAFETY: Tauri supplies the live WKWebView for this callback.
+            if let Some(webview) = unsafe { pointer.cast::<NSView>().as_ref() } {
+                webview.unregisterDraggedTypes();
+            }
+        })
+        .map_err(|_| "macOS webview handle is unavailable")?;
+    Ok(())
 }
 
 fn configure_inactive_hover_with_cursor<P>(
@@ -1267,6 +1292,7 @@ pub fn show_thumbnail_without_activating(window: &WebviewWindow) -> Result<(), &
     }
     native_window(window)?.setAlphaValue(1.0);
     show_without_activating(window)?;
+    let _ = reject_inbound_file_drops(window);
     THUMBNAIL_PRESENTED.store(true, Ordering::Release);
     THUMBNAIL_KEY_WINDOW_ALLOWED.store(true, Ordering::Release);
     Ok(())
