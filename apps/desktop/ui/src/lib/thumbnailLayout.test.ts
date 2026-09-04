@@ -136,7 +136,7 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailStyles).toMatch(/--thumbnail-stack-gravity/);
     expect(thumbnailStyles).toMatch(/--thumbnail-stack-expand-sign:\s*-1/);
     expect(thumbnailStyles).toMatch(
-      /\.thumbnail-stack-anchor-top\.thumbnail-stack-compact > \.thumbnail-card\s*\{[^}]*top:\s*28px/,
+      /\.thumbnail-stack-anchor-top\.thumbnail-stack-compact > \.thumbnail-card\s*\{[^}]*top:\s*52px/,
     );
     expect(thumbnailStyles).toMatch(
       /var\(--thumbnail-stack-pile-depth, 0\) \* -9px\s*\n\s*\* var\(--thumbnail-stack-gravity, 1\)/,
