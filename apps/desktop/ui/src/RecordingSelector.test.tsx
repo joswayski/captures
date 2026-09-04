@@ -176,10 +176,12 @@ describe("RecordingSelector", () => {
   let recordingSelectionReady:
     | ((event: { payload: RecordingSelectionSession }) => void)
     | null;
+  let capturePointer: { x: number; y: number; inside: boolean } | null;
 
   beforeEach(() => {
     selectorShowError = null;
     preparedSession = session;
+    capturePointer = null;
     audioDevices = [
       { id: "default", name: "Default — Studio Microphone", kind: "default", is_default: true },
       { id: "microphone-2", name: "USB Microphone", kind: "microphone", is_default: false },
@@ -227,6 +229,9 @@ describe("RecordingSelector", () => {
       }
       if (command === "recording_controls_are_excluded") {
         return preparedSession.recording_capabilities.controls_excluded;
+      }
+      if (command === "get_capture_pointer_position") {
+        return capturePointer;
       }
       throw new Error(`unexpected command: ${command}`);
     });
@@ -1761,5 +1766,56 @@ describe("RecordingSelector", () => {
     fireEvent.click(screen.getByRole("combobox", { name: "Microphone" }));
     expect(await screen.findByRole("option", { name: "Headset Microphone" })).toBeInTheDocument();
     expect(screen.queryByRole("option", { name: "USB Microphone" })).not.toBeInTheDocument();
+  });
+
+  it("highlights the window under the pointer when Window capture starts", async () => {
+    capturePointer = { x: 150, y: 100, inside: true };
+    preparedSession = {
+      ...session,
+      initial_mode: "screenshot",
+      initial_target: "window",
+    };
+    const { container } = render(<RecordingSelector />);
+    await screen.findByRole("button", { name: "Window", pressed: true });
+    mockSelectorSurface(container);
+
+    const preferences = screen.getByRole("button", { name: "Select Captures Preferences" });
+    await waitFor(() => {
+      expect(preferences).toHaveClass("hovered");
+    });
+  });
+
+  it("re-polls the pointer when a new selector session starts", async () => {
+    capturePointer = { x: 150, y: 100, inside: true };
+    preparedSession = {
+      ...session,
+      initial_mode: "screenshot",
+      initial_target: "window",
+    };
+    const { container } = render(<RecordingSelector />);
+    await screen.findByRole("button", { name: "Window", pressed: true });
+    mockSelectorSurface(container);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Select Captures Preferences" }))
+        .toHaveClass("hovered");
+    });
+
+    capturePointer = { x: 950, y: 400, inside: true };
+    await act(async () => {
+      recordingSelectionReady?.({
+        payload: {
+          ...preparedSession,
+          id: "selection-2",
+          snapshot_url: "capture://recording-selection/selection-2",
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Select Front eligible window" }))
+        .toHaveClass("hovered");
+    });
+    expect(screen.getByRole("button", { name: "Select Captures Preferences" }))
+      .not.toHaveClass("hovered");
   });
 });

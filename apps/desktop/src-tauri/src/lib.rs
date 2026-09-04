@@ -261,7 +261,7 @@ pub fn run() {
             get_artifact,
             prepare_artifact_drag,
             mark_internal_file_drop,
-            should_keep_preview_after_file_drop,
+            preview_file_drop_landing,
             read_prepared_drag_image,
             prepared_drag_artifact_id,
             get_capture_history,
@@ -292,6 +292,7 @@ pub fn run() {
             set_mini_previews_collapsed,
             set_mini_preview_stack_position,
             get_thumbnail_pointer_position,
+            get_capture_pointer_position,
             set_thumbnail_cursor,
             reassert_thumbnail_cursor,
             set_thumbnail_ignore_cursor_events,
@@ -1741,6 +1742,11 @@ fn get_thumbnail_pointer_position(
     webview_pointer_position(&window)
 }
 
+#[tauri::command]
+fn get_capture_pointer_position(window: tauri::WebviewWindow) -> Option<ThumbnailPointerPosition> {
+    webview_pointer_position(&window)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum ThumbnailCursorKind {
@@ -2245,23 +2251,53 @@ fn mark_internal_file_drop(state: tauri::State<'_, Arc<AppState>>) {
     *state.last_internal_file_drop.lock() = Some(std::time::Instant::now());
 }
 
-/// Keep the preview when the drop landed on a Captures window or an in-app
-/// drop target just accepted the file. External drops still dismiss.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum PreviewFileDropLanding {
+    /// Dropped back on the mini-preview stack, including the source card.
+    PreviewStack,
+    /// Dropped on another Captures window (screenshot editor, history, …).
+    AppWindow,
+    /// Finder, Slack, a browser, the desktop, or any other external target.
+    External,
+}
+
+fn classify_preview_file_drop(
+    internal_drop_recent: bool,
+    over_preview_stack: bool,
+    over_app_window: bool,
+) -> PreviewFileDropLanding {
+    if internal_drop_recent {
+        return PreviewFileDropLanding::AppWindow;
+    }
+    if over_preview_stack {
+        return PreviewFileDropLanding::PreviewStack;
+    }
+    if over_app_window {
+        return PreviewFileDropLanding::AppWindow;
+    }
+    PreviewFileDropLanding::External
+}
+
+/// Where a mini-preview file drag ended. Self-drops keep the card; only
+/// external targets dismiss it.
 #[tauri::command]
-fn should_keep_preview_after_file_drop(
+fn preview_file_drop_landing(
     app: AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
     x: f64,
     y: f64,
-) -> bool {
-    if let Some(at) = *state.last_internal_file_drop.lock() {
-        // Editor marks the drop before the drag source gets Dropped; allow a
-        // short window so the preview is not dismissed mid-import.
-        if at.elapsed() <= std::time::Duration::from_millis(1_500) {
-            return true;
-        }
-    }
-    captures_window_contains_point(&app, x, y)
+) -> PreviewFileDropLanding {
+    let internal_drop_recent = state
+        .last_internal_file_drop
+        .lock()
+        .is_some_and(|at| at.elapsed() <= std::time::Duration::from_millis(1_500));
+    let (x, y) = preview_file_drop_cursor(&app, x, y);
+    classify_preview_file_drop(
+        internal_drop_recent,
+        named_captures_window_contains_point(&app, "thumbnail", x, y),
+        captures_window_contains_point(&app, x, y),
+    )
 }
 
 /// Read the full-resolution PNG staged for the current preview file drag.
@@ -2302,33 +2338,85 @@ fn prepared_drag_artifact_id(
 
 /// Screen-space hit test: is `(x, y)` over any visible Captures window?
 ///
-/// Coordinates match `drag::CursorPosition` (top-left origin screen pixels on
-/// macOS/Windows after the drag crate's conversion).
+/// Coordinates match the live pointer used by thumbnail hit testing (logical
+/// points on macOS, physical pixels on Windows/Linux). The drag crate's
+/// `cursorPos` can disagree with Tauri window frames on Retina displays, so
+/// callers should prefer `pointer_position()` when it is available.
 fn captures_window_contains_point(app: &AppHandle, x: f64, y: f64) -> bool {
-    for (_label, window) in app.webview_windows() {
-        let Ok(true) = window.is_visible() else {
-            continue;
-        };
-        let Ok(position) = window.outer_position() else {
-            continue;
-        };
-        let Ok(size) = window.outer_size() else {
-            continue;
-        };
-        if screen_rect_contains_point(
-            f64::from(position.x),
-            f64::from(position.y),
-            f64::from(size.width),
-            f64::from(size.height),
-            x,
-            y,
-        ) {
-            return true;
-        }
-    }
-    false
+    app.webview_windows()
+        .into_iter()
+        .any(|(_label, window)| webview_contains_screen_point(&window, x, y))
 }
 
+fn named_captures_window_contains_point(app: &AppHandle, label: &str, x: f64, y: f64) -> bool {
+    app.get_webview_window(label)
+        .is_some_and(|window| webview_contains_screen_point(&window, x, y))
+}
+
+/// Map `tauri-plugin-drag` / drag-rs `cursorPos` into thumbnail pointer space.
+///
+/// On macOS the plugin flips AppKit’s bottom-left *points* with
+/// `CGDisplay::pixels_high()` (device pixels). Hover hit-testing expects
+/// logical top-left, like `CGEvent`. Windows and Linux already match Tauri’s
+/// physical origin, so those values pass through.
+fn drag_plugin_cursor_to_pointer_space(
+    x: f64,
+    y: f64,
+    primary_pixel_height: f64,
+    primary_scale: f64,
+    space: ThumbnailPointerSpace,
+) -> (f64, f64) {
+    match space {
+        ThumbnailPointerSpace::LogicalMouse => {
+            let scale = primary_scale.max(1.0);
+            let pixel_height = primary_pixel_height.max(0.0);
+            let point_height = pixel_height / scale;
+            (x, y + point_height - pixel_height)
+        }
+        ThumbnailPointerSpace::PhysicalMouse => (x, y),
+    }
+}
+
+fn preview_file_drop_cursor(app: &AppHandle, x: f64, y: f64) -> (f64, f64) {
+    let Some(monitor) = app.primary_monitor().ok().flatten() else {
+        return (x, y);
+    };
+    drag_plugin_cursor_to_pointer_space(
+        x,
+        y,
+        f64::from(monitor.size().height),
+        monitor.scale_factor(),
+        thumbnail_pointer_space(),
+    )
+}
+
+fn webview_contains_screen_point(window: &tauri::WebviewWindow, x: f64, y: f64) -> bool {
+    let Ok(true) = window.is_visible() else {
+        return false;
+    };
+    let Ok(position) = window.outer_position() else {
+        return false;
+    };
+    let Ok(size) = window.outer_size() else {
+        return false;
+    };
+    let scale = window.scale_factor().ok().unwrap_or(1.0).max(1.0);
+    thumbnail_pointer_in_space(
+        x,
+        y,
+        ThumbnailWindowFrame {
+            x: position.x,
+            y: position.y,
+            width: size.width,
+            height: size.height,
+            scale,
+        },
+        thumbnail_pointer_space(),
+    )
+    .inside
+}
+
+#[cfg(test)]
 fn screen_rect_contains_point(
     left: f64,
     top: f64,
@@ -7212,26 +7300,27 @@ mod tests {
     #[cfg(target_os = "macos")]
     use super::macos_window_is_capture_overlay;
     use super::{
-        AppError, LogicalRect, STARTUP_NOTICE_AFTER_SETUP_VISIBLE,
+        AppError, LogicalRect, PreviewFileDropLanding, STARTUP_NOTICE_AFTER_SETUP_VISIBLE,
         STARTUP_NOTICE_AUTOSTART_VISIBLE, STARTUP_NOTICE_HEIGHT, STARTUP_NOTICE_WIDTH,
         StartupNoticeCaret, THUMBNAIL_AUTO_HIDE_RESERVE, THUMBNAIL_SYSTEM_CHROME_GAP,
         TRAY_NOTICE_CARET_INSET, TRAY_NOTICE_CARET_SIZE, TRAY_NOTICE_FRAME_PAD,
         TRAY_NOTICE_SCREEN_MARGIN, TRAY_NOTICE_TRAY_OVERLAP, ThumbnailCursorAction,
         ThumbnailCursorKind, ThumbnailMonitorBounds, ThumbnailPointerSpace, ThumbnailStackAnchor,
         ThumbnailStackOrigin, ThumbnailWindowFrame, ThumbnailWindowGeometry,
-        capturable_windows_for_display, capture_cursor_icon, click_through_applies,
-        clipboard_fingerprint, display_contains_pointer, fallback_startup_notice,
-        mask_macos_window_corners, parse_shortcut, place_startup_notice, preferences_url,
-        primary_app_window_priority, recording::RECORDING_REGION_INDICATOR_TITLE,
-        refine_window_chrome_from_snapshot, resolve_startup_notice_placement,
-        resolve_window_capture, should_trigger_shortcut, startup_notice_fallback_edge_from_insets,
-        startup_notice_url, take_ready_or_defer_windows, thumbnail_clamp_aligned_frame,
-        thumbnail_cursor_action, thumbnail_cursor_ignore_update, thumbnail_geometry,
-        thumbnail_pointer_in_space, thumbnail_pointer_position, thumbnail_preserve_current_height,
-        thumbnail_stack_height, thumbnail_stack_should_be_visible, thumbnail_visible_window_height,
-        thumbnail_window_top, track_shortcut_suppression, tray_accelerator,
-        tray_icon_rect_is_usable, tray_notice_window_size, viewer_window_label,
-        window_display_crop_is_safe, window_is_capturable, windows_window_is_capture_overlay,
+        capturable_windows_for_display, capture_cursor_icon, classify_preview_file_drop,
+        click_through_applies, clipboard_fingerprint, display_contains_pointer,
+        drag_plugin_cursor_to_pointer_space, fallback_startup_notice, mask_macos_window_corners,
+        parse_shortcut, place_startup_notice, preferences_url, primary_app_window_priority,
+        recording::RECORDING_REGION_INDICATOR_TITLE, refine_window_chrome_from_snapshot,
+        resolve_startup_notice_placement, resolve_window_capture, should_trigger_shortcut,
+        startup_notice_fallback_edge_from_insets, startup_notice_url, take_ready_or_defer_windows,
+        thumbnail_clamp_aligned_frame, thumbnail_cursor_action, thumbnail_cursor_ignore_update,
+        thumbnail_geometry, thumbnail_pointer_in_space, thumbnail_pointer_position,
+        thumbnail_preserve_current_height, thumbnail_stack_height,
+        thumbnail_stack_should_be_visible, thumbnail_visible_window_height, thumbnail_window_top,
+        track_shortcut_suppression, tray_accelerator, tray_icon_rect_is_usable,
+        tray_notice_window_size, viewer_window_label, window_display_crop_is_safe,
+        window_is_capturable, windows_window_is_capture_overlay,
     };
 
     #[test]
@@ -8629,6 +8718,87 @@ mod tests {
         assert!(!super::screen_rect_contains_point(
             100.0, 200.0, 400.0, 300.0, 99.0, 250.0
         ));
+    }
+
+    #[test]
+    fn preview_file_drop_on_the_stack_is_a_rejected_self_drop() {
+        assert_eq!(
+            classify_preview_file_drop(false, true, true),
+            PreviewFileDropLanding::PreviewStack
+        );
+        assert_eq!(
+            classify_preview_file_drop(false, true, false),
+            PreviewFileDropLanding::PreviewStack
+        );
+    }
+
+    #[test]
+    fn preview_file_drop_into_another_captures_window_keeps_the_card() {
+        assert_eq!(
+            classify_preview_file_drop(true, false, false),
+            PreviewFileDropLanding::AppWindow
+        );
+        assert_eq!(
+            classify_preview_file_drop(false, false, true),
+            PreviewFileDropLanding::AppWindow
+        );
+        assert_eq!(
+            classify_preview_file_drop(true, true, true),
+            PreviewFileDropLanding::AppWindow
+        );
+    }
+
+    #[test]
+    fn preview_file_drop_outside_captures_is_external() {
+        assert_eq!(
+            classify_preview_file_drop(false, false, false),
+            PreviewFileDropLanding::External
+        );
+    }
+
+    #[test]
+    fn retina_logical_pointer_still_hits_the_preview_stack_frame() {
+        // macOS: logical mouse vs physical window origin (scale 2).
+        let pointer = thumbnail_pointer_in_space(
+            40.0,
+            80.0,
+            ThumbnailWindowFrame {
+                x: 48,
+                y: 120,
+                width: 680,
+                height: 480,
+                scale: 2.0,
+            },
+            ThumbnailPointerSpace::LogicalMouse,
+        );
+        assert!(pointer.inside);
+    }
+
+    #[test]
+    fn macos_drag_plugin_cursor_undoes_the_pixel_height_y_flip() {
+        // drag-rs: y = pixels_high - cocoa_y. cocoa_y = 100pt from the bottom of
+        // a 900pt / 1800px Retina display → reported 1700, logical top-left 800.
+        let (x, y) = drag_plugin_cursor_to_pointer_space(
+            40.0,
+            1_700.0,
+            1_800.0,
+            2.0,
+            ThumbnailPointerSpace::LogicalMouse,
+        );
+        assert_eq!(x, 40.0);
+        assert_eq!(y, 800.0);
+    }
+
+    #[test]
+    fn physical_drag_plugin_cursor_is_unchanged() {
+        let (x, y) = drag_plugin_cursor_to_pointer_space(
+            448.0,
+            280.0,
+            1_800.0,
+            2.0,
+            ThumbnailPointerSpace::PhysicalMouse,
+        );
+        assert_eq!((x, y), (448.0, 280.0));
     }
 
     fn notice_monitor(width: f64, height: f64) -> LogicalRect {

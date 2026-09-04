@@ -682,6 +682,7 @@ const RESPONSES: Record<string, unknown> = {
     sprite_height: 76,
   },
   prepared_drag_artifact_id: null,
+  preview_file_drop_landing: "app_window",
 };
 
 function mockScreenshotExportBytes(payload: unknown): number {
@@ -787,7 +788,11 @@ export function installPreviewBackend(): void {
       return SETTINGS;
     }
     if (command === "select_capture_display") return selectCaptureDisplay(payload);
-    if (command === "get_thumbnail_pointer_position") return thumbnailPointer;
+    if (command === "get_thumbnail_pointer_position" || command === "get_capture_pointer_position") {
+      return thumbnailPointer.inside
+        ? thumbnailPointer
+        : { x: 360, y: 280, inside: true };
+    }
     if (command === "estimate_screenshot_export") {
       return mockScreenshotExportBytes(payload);
     }

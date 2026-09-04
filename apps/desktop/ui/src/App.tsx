@@ -64,6 +64,7 @@ import {
   REGION_ASPECT_PRESETS,
   roundedRectPath,
   windowListingIsReady,
+  windowPointerHoverAtPoint,
   type RegionAspectPreset,
   type SelectionDragMode,
   type SelectionPoint,
@@ -115,6 +116,12 @@ import {
   THUMBNAIL_DELETE_ORIGIN_Y,
   type ThumbnailDustParticle,
 } from "./lib/thumbnailExit";
+import {
+  isPreviewFileDropLanding,
+  previewFileDropShouldDismiss,
+  previewFileDropShouldReject,
+  THUMBNAIL_DROP_REJECT_ANIMATION,
+} from "./lib/thumbnailFileDrag";
 import {
   CollapsedThumbnailStackDrag,
   applyThumbnailStackDragSway,
@@ -174,6 +181,7 @@ import type {
   AudioDevice,
   AppSettings,
   ArtifactDragPayload,
+  PreviewFileDropLanding,
   ArtifactSummary,
   CaptureArtifact,
   CaptureMode,
@@ -207,6 +215,29 @@ function dismissCaptureOverlayWindow() {
   // other apps after a few screenshots.
   void invoke("dismiss_capture_surface").catch(() => undefined);
   void currentWindow?.hide().catch(() => undefined);
+}
+
+function overlayPointFromClient(
+  surface: HTMLElement | null,
+  clientX: number,
+  clientY: number,
+): SelectionPoint {
+  const bounds = surface?.getBoundingClientRect();
+  return {
+    x: clientX - (bounds?.left ?? 0),
+    y: clientY - (bounds?.top ?? 0),
+  };
+}
+
+function capturableOverlayWindows<T extends { width: number; height: number }>(
+  windows: readonly T[],
+): T[] {
+  return windows.filter((item) => item.width >= 48 && item.height >= 48);
+}
+
+function requestCapturePointerPosition(): Promise<ThumbnailPointerPosition | null> {
+  return invoke<ThumbnailPointerPosition | null>("get_capture_pointer_position")
+    .catch(() => null);
 }
 // Slightly past dismiss hold (450ms fade + 580ms shared settle) so animationend
 // remains the primary completion path; fallback only covers missed events.
@@ -1908,6 +1939,8 @@ export function RecordingSelector() {
   const [regionSelecting, setRegionSelecting] = useState(false);
   const surfaceRef = useRef<HTMLElement>(null);
   const panelRef = useRef<HTMLElement>(null);
+  const lastWindowPointerRef = useRef<SelectionPoint | null>(null);
+  const windowHoverSurfaceRef = useRef<string | null>(null);
   const panelDragRef = useRef<RecordingPanelDrag | null>(null);
   const panelResizeFromRef = useRef<{ width: number; height: number } | null>(null);
   const panelResizeAnimationRef = useRef<Animation | null>(null);
@@ -2187,6 +2220,8 @@ export function RecordingSelector() {
       setRegion(null);
       autoStartAfterSelectionRef.current = false;
       clearRegionDrag();
+      lastWindowPointerRef.current = null;
+      windowHoverSurfaceRef.current = null;
       panelDragRef.current = null;
       setPanelDragging(false);
       setPanelPosition(null);
@@ -2404,6 +2439,52 @@ export function RecordingSelector() {
     return () => document.documentElement.classList.remove(cursorClass);
   }, [session?.id, targetMode]);
 
+  const applyWindowHoverAt = useCallback((point: SelectionPoint) => {
+    const current = sessionRef.current;
+    if (!current) return;
+    lastWindowPointerRef.current = point;
+    const hover = windowPointerHoverAtPoint(
+      current.windows,
+      current.shell_chrome ?? [],
+      point,
+      current.display,
+      Math.max(current.window_coordinate_scale || 1, 1),
+      current.windows_ready,
+    );
+    setHoveredWindow(hover.windowId);
+    setHoveredDisplay(hover.display);
+  }, []);
+
+  useEffect(() => {
+    if (targetMode !== "window" || !session?.id) return;
+    const surfaceKey = `${session.id}:${session.display.id}`;
+    if (windowHoverSurfaceRef.current !== surfaceKey) {
+      lastWindowPointerRef.current = null;
+      windowHoverSurfaceRef.current = surfaceKey;
+    }
+    const existing = lastWindowPointerRef.current;
+    if (existing) {
+      applyWindowHoverAt(existing);
+      return;
+    }
+    let cancelled = false;
+    void requestCapturePointerPosition().then((pointer) => {
+      if (cancelled || lastWindowPointerRef.current || !pointer?.inside) return;
+      applyWindowHoverAt({ x: pointer.x, y: pointer.y });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    applyWindowHoverAt,
+    session?.id,
+    session?.display.id,
+    session?.windows,
+    session?.windows_ready,
+    targetMode,
+    focusVisibleSessionId,
+  ]);
+
   useEffect(() => {
     if (!session?.id || focusVisibleSessionId !== session.id) return;
     void invoke("sync_selector_cursor", { selectionId: session.id, mode: targetMode });
@@ -2565,11 +2646,7 @@ export function RecordingSelector() {
   const onPointerMove = (event: React.PointerEvent) => {
     if (targetMode === "window") {
       if ((event.target as Element).closest(".recording-selector-panel")) return;
-      const hit = windowAtPointer(event);
-      setHoveredWindow(hit?.kind === "window" ? hit.target.id : null);
-      setHoveredDisplay(
-        hit?.kind === "chrome" || (!hit && windowListingIsReady(session.windows_ready)),
-      );
+      applyWindowHoverAt(point(event));
       return;
     }
     if (!regionDragRef.current || targetMode !== "region") return;
@@ -2673,6 +2750,8 @@ export function RecordingSelector() {
       sessionRef.current = next;
       setSession(next);
       setRegion(null);
+      lastWindowPointerRef.current = null;
+      windowHoverSurfaceRef.current = null;
       autoStartAfterSelectionRef.current = false;
       setSelectedWindow(null);
       setHoveredWindow(null);
@@ -2846,6 +2925,11 @@ export function RecordingSelector() {
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
+      onPointerEnter={(event) => {
+        if (targetMode !== "window") return;
+        if ((event.target as Element).closest(".recording-selector-panel")) return;
+        applyWindowHoverAt(point(event));
+      }}
       onDragStart={(event) => event.preventDefault()}
     >
       {sessionShowsFreezeFrame(session) && session.snapshot_url ? (
@@ -5089,6 +5173,13 @@ function CaptureOverlay() {
   const regionOverlayWarmedRef = useRef(false);
   const selectionFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastRegionCursorSyncAtRef = useRef(0);
+  const regionDragRef = useRef<{
+    start: SelectionPoint;
+    current: SelectionPoint;
+    forceSquare: boolean;
+  } | null>(null);
+  const lastWindowPointerRef = useRef<SelectionPoint | null>(null);
+  const windowHoverSurfaceRef = useRef<string | null>(null);
   const sessionId = session?.id ?? query("session_id");
   const mode = session?.mode ?? ((query("mode") ?? "region") as CaptureMode);
 
@@ -5109,6 +5200,9 @@ function CaptureOverlay() {
         setSession(payload);
         setStart(null);
         setCurrent(null);
+        regionDragRef.current = null;
+        lastWindowPointerRef.current = null;
+        windowHoverSurfaceRef.current = null;
         setRegionForceSquare(false);
         setHoveredWindow(null);
         setHoveredDisplay(false);
@@ -5158,8 +5252,10 @@ function CaptureOverlay() {
 
   useEffect(() => {
     const onShift = (event: KeyboardEvent) => {
-      if (event.key !== "Shift" || mode !== "region" || !start) return;
-      setRegionForceSquare(event.type === "keydown");
+      if (event.key !== "Shift" || mode !== "region" || !regionDragRef.current) return;
+      const forceSquare = event.type === "keydown";
+      regionDragRef.current.forceSquare = forceSquare;
+      setRegionForceSquare(forceSquare);
     };
     window.addEventListener("keydown", onShift, true);
     window.addEventListener("keyup", onShift, true);
@@ -5167,7 +5263,7 @@ function CaptureOverlay() {
       window.removeEventListener("keydown", onShift, true);
       window.removeEventListener("keyup", onShift, true);
     };
-  }, [mode, start]);
+  }, [mode]);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -5309,15 +5405,60 @@ function CaptureOverlay() {
     return () => window.clearTimeout(timer);
   }, [overlayFrozen, session?.id, revealOverlay]);
 
+  const applyWindowHoverAt = useCallback((point: SelectionPoint) => {
+    if (!session || session.mode !== "window") return;
+    lastWindowPointerRef.current = point;
+    const hover = windowPointerHoverAtPoint(
+      capturableOverlayWindows(session.windows),
+      session.shell_chrome ?? [],
+      point,
+      session.display,
+      Math.max(session.window_coordinate_scale || 1, 1),
+      session.windows_ready,
+    );
+    setHoveredWindow(hover.windowId);
+    setHoveredDisplay(hover.display);
+  }, [session]);
+
+  useEffect(() => {
+    if (mode !== "window" || !session?.id) return;
+    const surfaceKey = `${session.id}:${session.display.id}`;
+    if (windowHoverSurfaceRef.current !== surfaceKey) {
+      lastWindowPointerRef.current = null;
+      windowHoverSurfaceRef.current = surfaceKey;
+    }
+    const existing = lastWindowPointerRef.current;
+    if (existing) {
+      applyWindowHoverAt(existing);
+      return;
+    }
+    let cancelled = false;
+    void requestCapturePointerPosition().then((pointer) => {
+      if (cancelled || lastWindowPointerRef.current || !pointer?.inside) return;
+      applyWindowHoverAt({ x: pointer.x, y: pointer.y });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    applyWindowHoverAt,
+    mode,
+    session?.id,
+    session?.display.id,
+    session?.windows,
+    session?.windows_ready,
+    visibleSessionId,
+  ]);
+
   if (!session || !sessionId) {
     return <main className="capture-loading">Preparing capture…</main>;
   }
 
-  const pointFromEvent = (event: React.PointerEvent) => {
-    const bounds = surfaceRef.current?.getBoundingClientRect();
-    if (!bounds) return { x: 0, y: 0 };
-    return { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
-  };
+  const pointFromEvent = (event: React.PointerEvent) => overlayPointFromClient(
+    surfaceRef.current,
+    event.clientX,
+    event.clientY,
+  );
 
   const commitRegion = (selection: SelectionRect | null): boolean => {
     if (!isCapturableSelection(selection)) return false;
@@ -5358,43 +5499,70 @@ function CaptureOverlay() {
 
   const onPointerDown = (event: React.PointerEvent) => {
     if (mode !== "region") return;
+    event.preventDefault();
     clearSelectionFeedback();
     reassertRegionCursor();
     event.currentTarget.setPointerCapture(event.pointerId);
     const point = pointFromEvent(event);
-    setRegionForceSquare(event.shiftKey);
+    const forceSquare = event.shiftKey;
+    regionDragRef.current = { start: point, current: point, forceSquare };
+    setRegionForceSquare(forceSquare);
     setStart(point);
     setCurrent(point);
   };
 
   const onPointerMove = (event: React.PointerEvent) => {
     if (mode === "window") {
-      const scale = Math.max(session.window_coordinate_scale || 1, 1);
-      const hit = frontmostCaptureTargetAtPoint(
-        session.windows.filter((item) => item.width >= 48 && item.height >= 48),
-        session.shell_chrome ?? [],
-        pointFromEvent(event),
-        session.display,
-        scale,
-      );
-      setHoveredWindow(hit?.kind === "window" ? hit.target.id : null);
-      setHoveredDisplay(
-        hit?.kind === "chrome" || (!hit && windowListingIsReady(session.windows_ready)),
-      );
+      applyWindowHoverAt(pointFromEvent(event));
       return;
     }
     if (mode !== "region") return;
     reassertRegionCursor();
-    if (!start) return;
+    const drag = regionDragRef.current;
+    if (!drag) return;
+    const point = pointFromEvent(event);
+    drag.current = point;
+    drag.forceSquare = event.shiftKey;
     setRegionForceSquare(event.shiftKey);
-    setCurrent(pointFromEvent(event));
+    setCurrent(point);
+  };
+
+  const finishRegionDrag = (event: React.PointerEvent, commit: boolean) => {
+    if (mode !== "region") return;
+    const drag = regionDragRef.current;
+    regionDragRef.current = null;
+    if (
+      typeof event.currentTarget.hasPointerCapture === "function"
+      && event.currentTarget.hasPointerCapture(event.pointerId)
+    ) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    if (!drag) {
+      setStart(null);
+      setCurrent(null);
+      setRegionForceSquare(false);
+      return;
+    }
+    const finalRect = dragSelectionRect(
+      "create",
+      drag.start,
+      drag.current,
+      { x: drag.start.x, y: drag.start.y, width: 0, height: 0 },
+      surfaceSize,
+      { forceSquare: event.shiftKey },
+    );
+    if (commit && !commitRegion(finalRect)) showSelectionFeedback();
+    setStart(null);
+    setCurrent(null);
+    setRegionForceSquare(false);
   };
 
   const onPointerUp = (event: React.PointerEvent) => {
     if (mode === "window") {
+      applyWindowHoverAt(pointFromEvent(event));
       const scale = Math.max(session.window_coordinate_scale || 1, 1);
       const hit = frontmostCaptureTargetAtPoint(
-        session.windows.filter((item) => item.width >= 48 && item.height >= 48),
+        capturableOverlayWindows(session.windows),
         session.shell_chrome ?? [],
         pointFromEvent(event),
         session.display,
@@ -5411,21 +5579,7 @@ function CaptureOverlay() {
       }
       return;
     }
-    if (mode !== "region" || !start) return;
-    const finalRect = current
-      ? dragSelectionRect(
-          "create",
-          start,
-          current,
-          { x: start.x, y: start.y, width: 0, height: 0 },
-          surfaceSize,
-          { forceSquare: event.shiftKey },
-        )
-      : null;
-    if (!commitRegion(finalRect)) showSelectionFeedback();
-    setStart(null);
-    setCurrent(null);
-    setRegionForceSquare(false);
+    finishRegionDrag(event, true);
   };
 
   const hasSelection = Boolean(rect && rect.width > 0 && rect.height > 0);
@@ -5444,6 +5598,12 @@ function CaptureOverlay() {
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
+      onPointerCancel={(event) => finishRegionDrag(event, false)}
+      onPointerEnter={(event) => {
+        if (mode === "window") applyWindowHoverAt(pointFromEvent(event));
+      }}
+      onDoubleClick={(event) => event.preventDefault()}
+      onDragStart={(event) => event.preventDefault()}
       onTransitionEnd={(event) => {
         const target = event.target;
         const finishedSurfaceFade = target === event.currentTarget;
@@ -7062,6 +7222,7 @@ export function ThumbnailCard({
   const [thumbnailReady, setThumbnailReady] = useState(false);
   const [arrived, setArrived] = useState(false);
   const [fileDragging, setFileDragging] = useState(false);
+  const [dropRejected, setDropRejected] = useState(false);
   const [exit, setExit] = useState<"dismiss" | "delete" | null>(null);
   const [dustParticles, setDustParticles] = useState<ThumbnailDustParticle[] | null>(null);
   /** Optimistically morph Edit into In editor while the native window opens. */
@@ -7240,6 +7401,14 @@ export function ThumbnailCard({
     });
   };
 
+  const playDropReject = () => {
+    setDropRejected(false);
+    requestAnimationFrame(() => {
+      if (isExitLocked() || isExiting) return;
+      setDropRejected(true);
+    });
+  };
+
   const finishFileDrag = (
     result: "Dropped" | "Cancelled",
     cursorPos: { x: number; y: number },
@@ -7251,21 +7420,29 @@ export function ThumbnailCard({
     window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
     void invoke("refresh_thumbnail_interactivity").catch(() => undefined);
 
-    if (result !== "Dropped" || isExitLocked() || isExiting) return;
+    if (isExitLocked() || isExiting) return;
 
     void (async () => {
-      let keepPreview = false;
+      let landing: PreviewFileDropLanding = result === "Dropped" ? "external" : "app_window";
       try {
-        keepPreview = await invoke<boolean>("should_keep_preview_after_file_drop", {
+        const reported = await invoke<PreviewFileDropLanding>("preview_file_drop_landing", {
           x: Number(cursorPos.x),
           y: Number(cursorPos.y),
         });
+        if (isPreviewFileDropLanding(reported)) landing = reported;
       } catch {
-        keepPreview = false;
+        // Keep the Dropped → dismiss fallback when the native hit test fails.
+      }
+      if (isExitLocked() || isExiting) return;
+      // Dropping the file back on this stack captures the preview itself
+      // (hall of mirrors) and used to dismiss the card. Refuse it with a shake.
+      if (previewFileDropShouldReject(landing)) {
+        playDropReject();
+        return;
       }
       // Drops into Captures itself (screenshot editor, other app windows) keep
       // the preview. External targets (Finder, Slack, browser) still dismiss.
-      if (keepPreview || isExitLocked() || isExiting) return;
+      if (!previewFileDropShouldDismiss(result, landing)) return;
       exitWith("dismiss", "dismiss_artifact");
     })();
   };
@@ -7439,6 +7616,7 @@ export function ThumbnailCard({
         editorControlLeaving ? "thumbnail-editor-leaving" : "",
         editorControlLingering ? "thumbnail-editor-lingering" : "",
         fileDragging ? "thumbnail-file-dragging" : "",
+        dropRejected ? "thumbnail-drop-rejected" : "",
         exit ? `thumbnail-exit-${exit}` : "",
         usingDust ? "thumbnail-exit-dust" : "",
         isExiting ? "thumbnail-exiting" : "",
@@ -7459,11 +7637,12 @@ export function ThumbnailCard({
       data-file-dragging={fileDragging ? "true" : undefined}
       onAnimationEnd={(event) => {
         finishExit(event);
-        if (
-          event.target === event.currentTarget &&
-          event.animationName === "thumbnail-arrive"
-        ) {
+        if (event.target !== event.currentTarget) return;
+        if (event.animationName === "thumbnail-arrive") {
           setArrived(true);
+        }
+        if (event.animationName === THUMBNAIL_DROP_REJECT_ANIMATION) {
+          setDropRejected(false);
         }
       }}
     >
