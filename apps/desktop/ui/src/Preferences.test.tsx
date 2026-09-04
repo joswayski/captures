@@ -77,6 +77,7 @@ describe("Preferences", () => {
       }
       if (command === "set_shortcut_capture_suppressed") return undefined;
       if (command === "update_settings") return (args as { settings: AppSettings }).settings;
+      if (command === "open_capture_history") return undefined;
       throw new Error(`unexpected command: ${command}`);
     });
   });
@@ -92,6 +93,15 @@ describe("Preferences", () => {
     } else {
       delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
     }
+  });
+
+  it("opens Capture History from Preferences", async () => {
+    render(<Preferences />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Capture History…" }));
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("open_capture_history");
+    });
   });
 
   it("does not offer a global feedback shortcut", async () => {

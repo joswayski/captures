@@ -1,6 +1,6 @@
 //! Shared rules for dismissing Windows Start / Search before a capture.
 //!
-//! Opening Captures from the Start menu starts a capture immediately. The
+//! A capture shortcut can fire while Start / Search are still on screen. The
 //! menu's close animation is slower than that snapshot, so the flyout would
 //! otherwise appear in the freeze-frame.
 

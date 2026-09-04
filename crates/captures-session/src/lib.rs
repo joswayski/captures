@@ -27,8 +27,8 @@ pub fn capture_session_available() -> bool {
 /// Closes Start / Search if they are on screen, then waits for the fade.
 ///
 /// No-op on platforms that do not show those flyouts, and when they are already
-/// hidden. Called immediately before a capture snapshot so launching Captures
-/// from the Windows Start menu does not freeze the menu into the screenshot.
+/// hidden. Called immediately before a capture snapshot so a shortcut pressed
+/// while Start or Search is open does not freeze the menu into the screenshot.
 pub fn dismiss_transient_shell_ui_before_capture() {
     #[cfg(target_os = "windows")]
     windows::dismiss_transient_shell_ui_before_capture();
