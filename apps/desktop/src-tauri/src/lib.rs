@@ -2372,6 +2372,7 @@ fn webview_contains_screen_point(window: &tauri::WebviewWindow, x: f64, y: f64) 
     .inside
 }
 
+#[cfg(test)]
 fn screen_rect_contains_point(
     left: f64,
     top: f64,
