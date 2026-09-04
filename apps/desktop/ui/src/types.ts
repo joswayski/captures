@@ -295,6 +295,9 @@ export interface ArtifactDragPayload {
   icon_path: string;
 }
 
+/** Where a mini-preview file drag ended, from `preview_file_drop_landing`. */
+export type PreviewFileDropLanding = "preview_stack" | "app_window" | "external";
+
 interface ArtifactSummaryBase {
   id: string;
   width: number;

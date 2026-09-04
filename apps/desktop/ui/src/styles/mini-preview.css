@@ -202,6 +202,47 @@ html[data-preview-harness-view="thumbnail"] #root {
   cursor: grabbing !important;
 }
 
+/*
+ * Hide the source image while a native file drag is in flight. Leaving it
+ * painted under the drag ghost recaptures the preview (hall of mirrors) when
+ * the pointer stays on the card.
+ */
+.thumbnail-card.thumbnail-file-dragging .thumbnail-media,
+.thumbnail-card.thumbnail-file-dragging img {
+  opacity: 0;
+}
+
+/*
+ * macOS-style “no” shake when the file is dropped back on this stack.
+ * Use `translate` so stack-skew `transform` on collapsed cards still composes
+ * if a reject somehow runs there; expanded cards are the file-drag source.
+ */
+.thumbnail-card.thumbnail-drop-rejected {
+  animation: thumbnail-drop-reject 0.42s var(--ease-out);
+}
+
+@keyframes thumbnail-drop-reject {
+  0%,
+  100% {
+    translate: 0 0;
+  }
+  16% {
+    translate: -9px 0;
+  }
+  32% {
+    translate: 8px 0;
+  }
+  48% {
+    translate: -5px 0;
+  }
+  64% {
+    translate: 3px 0;
+  }
+  80% {
+    translate: -1px 0;
+  }
+}
+
 .thumbnail-card.thumbnail-viewer-active {
   box-shadow:
     var(--thumbnail-card-shadow),
@@ -2410,6 +2451,15 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
     animation: none;
     filter: blur(2px) brightness(0.5);
     transform: scale(1.015);
+  }
+
+  .thumbnail-card.thumbnail-drop-rejected {
+    animation: none;
+  }
+
+  .thumbnail-card.thumbnail-file-dragging .thumbnail-media,
+  .thumbnail-card.thumbnail-file-dragging img {
+    opacity: 0;
   }
 
   .thumbnail-dust {

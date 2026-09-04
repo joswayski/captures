@@ -114,6 +114,12 @@ import {
   type ThumbnailDustParticle,
 } from "./lib/thumbnailExit";
 import {
+  isPreviewFileDropLanding,
+  previewFileDropShouldDismiss,
+  previewFileDropShouldReject,
+  THUMBNAIL_DROP_REJECT_ANIMATION,
+} from "./lib/thumbnailFileDrag";
+import {
   CollapsedThumbnailStackDrag,
   applyThumbnailStackDragSway,
   cssUrl,
@@ -164,6 +170,7 @@ import type {
   AudioDevice,
   AppSettings,
   ArtifactDragPayload,
+  PreviewFileDropLanding,
   ArtifactSummary,
   CaptureArtifact,
   CaptureMode,
@@ -6903,6 +6910,7 @@ export function ThumbnailCard({
   const [thumbnailReady, setThumbnailReady] = useState(false);
   const [arrived, setArrived] = useState(false);
   const [fileDragging, setFileDragging] = useState(false);
+  const [dropRejected, setDropRejected] = useState(false);
   const [exit, setExit] = useState<"dismiss" | "delete" | null>(null);
   const [dustParticles, setDustParticles] = useState<ThumbnailDustParticle[] | null>(null);
   /** Optimistically morph Edit into In editor while the native window opens. */
@@ -7081,6 +7089,14 @@ export function ThumbnailCard({
     });
   };
 
+  const playDropReject = () => {
+    setDropRejected(false);
+    requestAnimationFrame(() => {
+      if (isExitLocked() || isExiting) return;
+      setDropRejected(true);
+    });
+  };
+
   const finishFileDrag = (
     result: "Dropped" | "Cancelled",
     cursorPos: { x: number; y: number },
@@ -7092,21 +7108,29 @@ export function ThumbnailCard({
     window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
     void invoke("refresh_thumbnail_interactivity").catch(() => undefined);
 
-    if (result !== "Dropped" || isExitLocked() || isExiting) return;
+    if (isExitLocked() || isExiting) return;
 
     void (async () => {
-      let keepPreview = false;
+      let landing: PreviewFileDropLanding = result === "Dropped" ? "external" : "app_window";
       try {
-        keepPreview = await invoke<boolean>("should_keep_preview_after_file_drop", {
+        const reported = await invoke<PreviewFileDropLanding>("preview_file_drop_landing", {
           x: Number(cursorPos.x),
           y: Number(cursorPos.y),
         });
+        if (isPreviewFileDropLanding(reported)) landing = reported;
       } catch {
-        keepPreview = false;
+        // Keep the Dropped → dismiss fallback when the native hit test fails.
+      }
+      if (isExitLocked() || isExiting) return;
+      // Dropping the file back on this stack captures the preview itself
+      // (hall of mirrors) and used to dismiss the card. Refuse it with a shake.
+      if (previewFileDropShouldReject(landing)) {
+        playDropReject();
+        return;
       }
       // Drops into Captures itself (screenshot editor, other app windows) keep
       // the preview. External targets (Finder, Slack, browser) still dismiss.
-      if (keepPreview || isExitLocked() || isExiting) return;
+      if (!previewFileDropShouldDismiss(result, landing)) return;
       exitWith("dismiss", "dismiss_artifact");
     })();
   };
@@ -7280,6 +7304,7 @@ export function ThumbnailCard({
         editorControlLeaving ? "thumbnail-editor-leaving" : "",
         editorControlLingering ? "thumbnail-editor-lingering" : "",
         fileDragging ? "thumbnail-file-dragging" : "",
+        dropRejected ? "thumbnail-drop-rejected" : "",
         exit ? `thumbnail-exit-${exit}` : "",
         usingDust ? "thumbnail-exit-dust" : "",
         isExiting ? "thumbnail-exiting" : "",
@@ -7300,11 +7325,12 @@ export function ThumbnailCard({
       data-file-dragging={fileDragging ? "true" : undefined}
       onAnimationEnd={(event) => {
         finishExit(event);
-        if (
-          event.target === event.currentTarget &&
-          event.animationName === "thumbnail-arrive"
-        ) {
+        if (event.target !== event.currentTarget) return;
+        if (event.animationName === "thumbnail-arrive") {
           setArrived(true);
+        }
+        if (event.animationName === THUMBNAIL_DROP_REJECT_ANIMATION) {
+          setDropRejected(false);
         }
       }}
     >

@@ -663,6 +663,7 @@ const RESPONSES: Record<string, unknown> = {
     sprite_height: 76,
   },
   prepared_drag_artifact_id: null,
+  preview_file_drop_landing: "app_window",
 };
 
 function mockScreenshotExportBytes(payload: unknown): number {
