@@ -25,117 +25,9 @@ use crate::system_audio_linux::PipeWireSystemAudioSegment;
 
 const DEVICE_ID_PREFIX: &str = "microphone:";
 const AUDIO_READY_TIMEOUT: Duration = Duration::from_secs(5);
-const FEEDBACK_VOLUME: f32 = 0.12;
 
 type Writer = hound::WavWriter<BufWriter<File>>;
 pub(crate) type WriterHandle = Arc<Mutex<Option<Writer>>>;
-
-/// Plays a short confirmation tone after a screenshot is captured.
-pub fn play_capture_sound() {
-    play_feedback_tone(880.0, Duration::from_millis(90), "captures-capture-sound");
-}
-
-/// Plays a short tone when a recording begins.
-pub fn play_start_chime() {
-    play_feedback_tone(
-        660.0,
-        Duration::from_millis(140),
-        "captures-recording-chime",
-    );
-}
-
-fn play_feedback_tone(frequency_hz: f32, duration: Duration, thread_name: &str) {
-    let spawn = thread::Builder::new()
-        .name(thread_name.to_owned())
-        .spawn(move || {
-            if let Err(error) = run_feedback_tone(frequency_hz, duration) {
-                eprintln!("failed to play audio feedback: {error}");
-            }
-        });
-    if let Err(error) = spawn {
-        eprintln!("failed to start audio feedback: {error}");
-    }
-}
-
-fn run_feedback_tone(frequency_hz: f32, duration: Duration) -> XcapRecordingResult<()> {
-    let host = cpal::default_host();
-    let device = host.default_output_device().ok_or_else(|| {
-        XcapRecordingError::Audio("no audio output device is available".to_owned())
-    })?;
-    let config = device.default_output_config().map_err(audio_error)?;
-    let stream = match config.sample_format() {
-        SampleFormat::I8 => build_feedback_stream::<i8>(&device, &config, frequency_hz, duration),
-        SampleFormat::I16 => build_feedback_stream::<i16>(&device, &config, frequency_hz, duration),
-        SampleFormat::I24 => build_feedback_stream::<I24>(&device, &config, frequency_hz, duration),
-        SampleFormat::I32 => build_feedback_stream::<i32>(&device, &config, frequency_hz, duration),
-        SampleFormat::I64 => build_feedback_stream::<i64>(&device, &config, frequency_hz, duration),
-        SampleFormat::U8 => build_feedback_stream::<u8>(&device, &config, frequency_hz, duration),
-        SampleFormat::U16 => build_feedback_stream::<u16>(&device, &config, frequency_hz, duration),
-        SampleFormat::U32 => build_feedback_stream::<u32>(&device, &config, frequency_hz, duration),
-        SampleFormat::U64 => build_feedback_stream::<u64>(&device, &config, frequency_hz, duration),
-        SampleFormat::F32 => build_feedback_stream::<f32>(&device, &config, frequency_hz, duration),
-        SampleFormat::F64 => build_feedback_stream::<f64>(&device, &config, frequency_hz, duration),
-        format => Err(XcapRecordingError::Audio(format!(
-            "the audio output device uses unsupported {format} samples"
-        ))),
-    }?;
-    stream.play().map_err(audio_error)?;
-    thread::sleep(duration + Duration::from_millis(30));
-    Ok(())
-}
-
-fn build_feedback_stream<T>(
-    device: &cpal::Device,
-    config: &cpal::SupportedStreamConfig,
-    frequency_hz: f32,
-    duration: Duration,
-) -> XcapRecordingResult<Stream>
-where
-    T: FromSample<f32> + SizedSample,
-{
-    let sample_rate = config.sample_rate().0 as f32;
-    let channels = usize::from(config.channels());
-    let total_frames = (duration.as_secs_f32() * sample_rate) as usize;
-    let fade_frames = (sample_rate * 0.008) as usize;
-    let mut frame_index = 0_usize;
-    device
-        .build_output_stream(
-            &config.clone().into(),
-            move |output: &mut [T], _| {
-                for frame in output.chunks_mut(channels) {
-                    let sample = feedback_sample(
-                        frame_index,
-                        total_frames,
-                        fade_frames,
-                        sample_rate,
-                        frequency_hz,
-                    );
-                    frame.fill(T::from_sample(sample));
-                    frame_index = frame_index.saturating_add(1);
-                }
-            },
-            |error| eprintln!("audio feedback device disconnected: {error}"),
-            None,
-        )
-        .map_err(audio_error)
-}
-
-fn feedback_sample(
-    frame: usize,
-    total_frames: usize,
-    fade_frames: usize,
-    sample_rate: f32,
-    frequency_hz: f32,
-) -> f32 {
-    if frame >= total_frames || total_frames == 0 {
-        return 0.0;
-    }
-    let fade_in = frame.min(fade_frames) as f32 / fade_frames.max(1) as f32;
-    let fade_out =
-        total_frames.saturating_sub(frame).min(fade_frames) as f32 / fade_frames.max(1) as f32;
-    let phase = std::f32::consts::TAU * frequency_hz * frame as f32 / sample_rate;
-    phase.sin() * FEEDBACK_VOLUME * fade_in.min(fade_out)
-}
 
 pub struct AudioSegmentInfo {
     pub path: Option<PathBuf>,
@@ -660,16 +552,4 @@ pub(crate) fn audio_error(error: impl std::fmt::Display) -> XcapRecordingError {
 
 pub(crate) fn elapsed_milliseconds(started_at: Instant) -> i64 {
     i64::try_from(started_at.elapsed().as_millis()).unwrap_or(i64::MAX)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{FEEDBACK_VOLUME, feedback_sample};
-
-    #[test]
-    fn feedback_tone_fades_in_and_stops_at_its_duration() {
-        assert_eq!(feedback_sample(0, 4_800, 384, 48_000.0, 880.0), 0.0);
-        assert_eq!(feedback_sample(4_800, 4_800, 384, 48_000.0, 880.0), 0.0);
-        assert!(feedback_sample(2_400, 4_800, 384, 48_000.0, 880.0).abs() <= FEEDBACK_VOLUME);
-    }
 }

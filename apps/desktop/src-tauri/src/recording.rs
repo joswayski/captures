@@ -1184,13 +1184,6 @@ fn start_native_segment(
     }
 }
 
-fn play_recording_start_chime() {
-    #[cfg(target_os = "macos")]
-    captures_recording_macos::play_start_chime();
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
-    captures_recording_xcap::play_start_chime();
-}
-
 async fn start_segment(
     app: AppHandle,
     state: Arc<AppState>,
@@ -1349,7 +1342,6 @@ async fn start_segment(
     };
     emit_snapshot(&app, &snapshot);
     if started_from_countdown {
-        play_recording_start_chime();
         #[cfg(target_os = "macos")]
         {
             tokio::time::sleep(Duration::from_millis(RECORDING_COUNTDOWN_FADE_OUT_MS)).await;

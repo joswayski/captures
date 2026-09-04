@@ -13,7 +13,7 @@ mod transform;
 mod segment;
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
-pub use audio::{microphone_devices, play_capture_sound, play_start_chime};
+pub use audio::microphone_devices;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 pub use pointer::pointer_features_available;
 #[cfg(any(target_os = "windows", target_os = "linux"))]

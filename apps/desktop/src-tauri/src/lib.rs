@@ -2948,16 +2948,6 @@ async fn finish_capture(
     // Re-show capture-concealed editors only after the capture session ends so
     // they cannot flash above the restored frontmost app for a few frames.
     let _reveal_documents = RevealDocumentWindowsOnDrop::new(app);
-    #[cfg(target_os = "macos")]
-    if let Err(error) = app.run_on_main_thread(|| {
-        if let Err(error) = captures_macos_window::play_capture_sound() {
-            eprintln!("failed to play capture sound: {error}");
-        }
-    }) {
-        eprintln!("failed to schedule capture sound: {error}");
-    }
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
-    captures_recording_xcap::play_capture_sound();
 
     let width = image.width();
     let height = image.height();
