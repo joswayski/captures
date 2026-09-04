@@ -21,6 +21,7 @@ import type {
   CaptureArtifact,
   ClipboardState,
   DisplayDescriptor,
+  MiniPreviewPlacement,
   OnboardingState,
   RecordingArtifact,
   RecordingDraftManifest,
@@ -134,6 +135,24 @@ function previewScreenshotFormat(): AppSettings["screenshot_format"] {
   return value === "jpeg" || value === "webp" ? value : "png";
 }
 
+function previewMiniPreviewPlacement(): MiniPreviewPlacement {
+  const value = query().get("placement");
+  switch (value) {
+    case "top":
+    case "top-left":
+    case "top_left":
+      return "top_left";
+    case "top-right":
+    case "top_right":
+      return "top_right";
+    case "bottom-right":
+    case "bottom_right":
+      return "bottom_right";
+    default:
+      return "bottom_left";
+  }
+}
+
 function previewVideoFormat(): AppSettings["recording"]["video_format"] {
   const value = query().get("video_format");
   return value === "gif" || value === "webm" ? value : "mp4";
@@ -203,6 +222,7 @@ const SETTINGS: AppSettings = {
   auto_copy_to_clipboard: true,
   auto_start_on_selection: flag("auto"),
   show_mini_previews: true,
+  mini_preview_placement: previewMiniPreviewPlacement(),
   include_mini_previews_in_captures: false,
   include_recording_controls_in_captures: false,
   launch_at_login: true,

@@ -31,6 +31,7 @@ const settings: AppSettings = {
   auto_copy_to_clipboard: true,
   auto_start_on_selection: false,
   show_mini_previews: true,
+  mini_preview_placement: "bottom_left",
   include_mini_previews_in_captures: false,
   include_recording_controls_in_captures: false,
   launch_at_login: false,
@@ -233,6 +234,26 @@ describe("Preferences", () => {
     expect(screen.getByText(
       "Mini previews are off, so they won’t show in screenshots or recordings.",
     )).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Bottom left" })).toBeDisabled();
+  });
+
+  it("can move mini previews to another screen corner", async () => {
+    render(<Preferences />);
+
+    const topRight = await screen.findByRole("radio", { name: "Top right" });
+    expect(screen.getByRole("radio", { name: "Bottom left" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    fireEvent.click(topRight);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("update_settings", {
+        settings: expect.objectContaining({ mini_preview_placement: "top_right" }),
+      });
+    });
+    expect(topRight).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByText("Top right")).toBeInTheDocument();
   });
 
   it("explains and updates mini preview visibility in screenshots and recordings", async () => {

@@ -1856,6 +1856,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 
 .thumbnail-stack-anchor-top {
   --thumbnail-stack-expand-sign: -1;
+  padding: 52px 28px 28px;
 }
 
 .thumbnail-stack-anchor-top:not(.thumbnail-stack-compact) {
@@ -1982,7 +1983,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 }
 
 .thumbnail-stack-anchor-top.thumbnail-stack-compact > .thumbnail-card {
-  top: 28px;
+  top: 52px;
   bottom: auto;
 }
 
@@ -2191,7 +2192,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 }
 
 .thumbnail-stack-anchor-top .thumbnail-collapsed-hit-target {
-  top: 28px;
+  top: calc(52px - var(--thumbnail-peek-up));
   bottom: auto;
 }
 

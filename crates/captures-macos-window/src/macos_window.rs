@@ -1243,6 +1243,10 @@ fn anchor_layer_contents_to_bottom(view: &NSView) {
     view.setLayerContentsPlacement(NSViewLayerContentsPlacement::Bottom);
 }
 
+fn anchor_layer_contents_to_top(view: &NSView) {
+    view.setLayerContentsPlacement(NSViewLayerContentsPlacement::Top);
+}
+
 /// Shows the preview without making Captures the active application.
 pub fn show_without_activating(window: &WebviewWindow) -> Result<(), &'static str> {
     if !is_main_thread() {
@@ -2734,10 +2738,8 @@ pub fn resize_from_bottom(
     }
     let native_window = native_window(window)?;
     let current = native_window.frame();
-    // Avoid a no-op setFrame, which can still force WKWebView to recompose.
-    if (current.size.width - width).abs() < 0.5 && (current.size.height - height).abs() < 0.5 {
-        return Ok(());
-    }
+    let size_unchanged = (current.size.width - width).abs() < 0.5
+        && (current.size.height - height).abs() < 0.5;
 
     // WKWebView can recreate its backing layer; re-apply bottom anchoring when
     // the frame actually changes so growth does not shift painted cards.
@@ -2748,8 +2750,51 @@ pub fn resize_from_bottom(
             anchor_layer_contents_to_bottom(webview);
         }
     });
+    if size_unchanged {
+        return Ok(());
+    }
 
     let frame = NSRect::new(current.origin, NSSize::new(width, height));
+    native_window.setFrame_display(frame, true);
+    Ok(())
+}
+
+/// Resizes a visible preview stack while preserving its top edge so a
+/// top-anchored pile can open downward. Callers should only grow a visible
+/// stack: shrinking WKWebView blanks surviving cards.
+pub fn resize_from_top(
+    window: &WebviewWindow,
+    width: f64,
+    height: f64,
+) -> Result<(), &'static str> {
+    if !is_main_thread() {
+        let window = window.clone();
+        return run_on_main(move || resize_from_top(&window, width, height))
+            .ok_or("preview resize did not run on the main thread")?;
+    }
+    let native_window = native_window(window)?;
+    let current = native_window.frame();
+    let size_unchanged = (current.size.width - width).abs() < 0.5
+        && (current.size.height - height).abs() < 0.5;
+
+    let _ = window.as_ref().with_webview(|platform_webview| {
+        let pointer = platform_webview.inner();
+        // SAFETY: Tauri supplies the live WKWebView for the duration of this callback.
+        if let Some(webview) = unsafe { pointer.cast::<NSView>().as_ref() } {
+            anchor_layer_contents_to_top(webview);
+        }
+    });
+    if size_unchanged {
+        return Ok(());
+    }
+
+    let frame = NSRect::new(
+        NSPoint::new(
+            current.origin.x,
+            current.origin.y - (height - current.size.height),
+        ),
+        NSSize::new(width, height),
+    );
     native_window.setFrame_display(frame, true);
     Ok(())
 }

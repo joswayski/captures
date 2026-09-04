@@ -78,6 +78,7 @@ const settings: AppSettings = {
   auto_copy_to_clipboard: true,
   auto_start_on_selection: false,
   show_mini_previews: true,
+  mini_preview_placement: "bottom_left",
   include_mini_previews_in_captures: false,
   include_recording_controls_in_captures: false,
   launch_at_login: false,

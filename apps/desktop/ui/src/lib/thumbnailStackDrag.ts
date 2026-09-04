@@ -142,16 +142,19 @@ export function clampThumbnailStackFrame(
   frameHeight: number,
   work: ThumbnailStackWorkArea,
   contentHeight: number = frameHeight,
+  anchor: "top" | "bottom" = "bottom",
 ): ThumbnailStackPoint {
-  // macOS/Linux keep the collapsed window at its expanded height. Cards sit at
-  // the bottom; empty chrome above them may leave the work area so the pile
-  // can reach the top of the screen.
+  // macOS/Linux keep the collapsed window at its expanded height. Empty
+  // chrome on the unanchored side may leave the work area so the pile can
+  // reach the opposite edge of the screen.
   const content = Math.min(frameHeight, Math.max(0, contentHeight));
   const slack = Math.max(0, frameHeight - content);
   const minX = work.x;
   const maxX = Math.max(minX, work.x + work.width - frameWidth);
-  const minY = work.y - slack;
-  const maxY = Math.max(minY, work.y + work.height - work.bottomGap - frameHeight);
+  const minY = anchor === "top" ? work.y : work.y - slack;
+  const maxY = anchor === "top"
+    ? Math.max(minY, work.y + work.height - work.bottomGap - content)
+    : Math.max(minY, work.y + work.height - work.bottomGap - frameHeight);
   return {
     x: clamp(x, minX, maxX),
     y: clamp(y, minY, maxY),

@@ -31,7 +31,11 @@ import {
   thumbnailStackAnchorFromGravity,
   thumbnailStackHarnessPileTop,
   convertHarnessStackOffsetAnchor,
+  convertNativeStackFrameAnchor,
   applyThumbnailStackGravity,
+  harnessOffsetForPlacement,
+  thumbnailStackAnchorFromPlacement,
+  thumbnailStackGravityFromPlacement,
   THUMBNAIL_STACK_GRAVITY_VAR,
   THUMBNAIL_STACK_ANCHOR_TOP_GRAVITY,
   THUMBNAIL_STACK_ANCHOR_BOTTOM_GRAVITY,
@@ -303,6 +307,39 @@ describe("thumbnail stack layout", () => {
       viewportHeight,
       contentHeight,
     )).toEqual(bottomOffset);
+
+    expect(convertNativeStackFrameAnchor(
+      { x: 40, y: -552 },
+      "bottom",
+      "top",
+      792,
+      240,
+    )).toEqual({ x: 40, y: 0 });
+    expect(convertNativeStackFrameAnchor(
+      { x: 40, y: 0 },
+      "top",
+      "bottom",
+      792,
+      240,
+    )).toEqual({ x: 40, y: -552 });
+
+    expect(thumbnailStackAnchorFromPlacement("top_right")).toBe("top");
+    expect(thumbnailStackGravityFromPlacement("top_left")).toBe(-1);
+    expect(harnessOffsetForPlacement("bottom_right", { width: 1_280, height: 720 })).toEqual({
+      x: 940,
+      y: 0,
+      anchor: "bottom",
+    });
+    expect(harnessOffsetForPlacement("top_left", { width: 1_280, height: 720 }).anchor).toBe("top");
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-anchor-top\s*\{[^}]*padding:\s*52px 28px 28px/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-anchor-top\.thumbnail-stack-compact > \.thumbnail-card\s*\{[^}]*top:\s*52px/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-toolbar-anchor-top\s*\{[^}]*top:\s*16px/,
+    );
 
     expect(thumbnailStackAnchorFromGravity(-0.5, "bottom")).toBe("top");
     expect(thumbnailStackAnchorFromGravity(-0.1, "bottom")).toBe("bottom");
