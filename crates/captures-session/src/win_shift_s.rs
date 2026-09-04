@@ -180,10 +180,12 @@ fn suppress_win_key_start_menu() {
 
 #[cfg(test)]
 mod tests {
-    use super::{WinShiftSPhase, win_and_shift_are_down};
+    use super::{HOOK, WinShiftSPhase, win_and_shift_are_down};
+    use std::sync::atomic::Ordering;
 
     #[test]
-    fn phases_are_distinct() {
+    fn hook_starts_uninstalled() {
+        assert!(HOOK.load(Ordering::Relaxed).is_null());
         assert_ne!(WinShiftSPhase::Pressed, WinShiftSPhase::Released);
         let _ = win_and_shift_are_down();
     }
