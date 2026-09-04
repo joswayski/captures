@@ -571,6 +571,21 @@ describe("thumbnail stack layout", () => {
     );
   });
 
+  it("reserves the Show less gutter above expanded cards at the top of the screen", () => {
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack\s*\{[\s\S]*?padding:\s*28px 28px 52px/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-anchor-top:not\(\.thumbnail-stack-compact\)\s*\{[\s\S]*?padding:\s*52px 28px 28px/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-toolbar-anchor-top\s*\{[\s\S]*?top:\s*16px/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-top-actions\s*\{[\s\S]*?top:\s*8px/,
+    );
+  });
+
   it("sizes the collapsed expand target from receding extra cards", () => {
     expect(thumbnailCollapsedPeekPx(1)).toBe(0);
     expect(thumbnailCollapsedPeekPx(2)).toBeCloseTo(

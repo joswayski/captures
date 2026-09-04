@@ -1902,6 +1902,12 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 .thumbnail-stack-anchor-top:not(.thumbnail-stack-compact) {
   top: 0;
   bottom: auto;
+  /*
+   * Show less sits in this 52px strip (`top: 16px` + 28px control). Keep it
+   * above the first card so it does not cover Close/Delete at `top: 8px`.
+   * Compact piles stay on the 28/52 padding so collapsed cards hug the top.
+   */
+  padding: 52px 28px 28px;
 }
 
 .thumbnail-stack-toolbar-anchor-top {

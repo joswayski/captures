@@ -1229,6 +1229,61 @@ describe("Thumbnail", () => {
     );
   });
 
+  it("keeps Show less in the top gutter after the pile is dragged to the top", async () => {
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 800 });
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1200 });
+
+    render(<Thumbnail />);
+    const card = await screen.findByRole("article");
+    const stack = card.closest(".thumbnail-stack")!;
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "Minimize previews" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(32);
+      await vi.advanceTimersByTimeAsync(THUMBNAIL_STACK_EXPAND_COLLAPSE_MS);
+    });
+    vi.useRealTimers();
+
+    const expand = screen.getByRole("button", { name: "Expand preview" });
+    fireEvent.pointerDown(expand, {
+      button: 0,
+      pointerId: 1,
+      screenX: 40,
+      screenY: 700,
+    });
+    fireEvent.pointerMove(window, {
+      pointerId: 1,
+      screenX: 40,
+      screenY: 40,
+      bubbles: true,
+    });
+    await waitFor(() => {
+      expect(stack).toHaveClass("thumbnail-stack-anchor-top");
+    });
+    fireEvent.pointerUp(window, { pointerId: 1, bubbles: true });
+    await waitFor(() => {
+      expect(stack).not.toHaveClass("thumbnail-stack-dragging");
+    });
+
+    fireEvent.click(expand);
+
+    vi.useFakeTimers();
+    await act(async () => {
+      fireEvent.click(expand);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(THUMBNAIL_STACK_EXPAND_COLLAPSE_MS);
+    });
+
+    expect(stack).toHaveClass("thumbnail-stack-anchor-top");
+    expect(stack).not.toHaveClass("thumbnail-stack-compact");
+    const toolbar = screen.getByRole("button", { name: "Minimize previews" })
+      .closest(".thumbnail-stack-toolbar");
+    expect(toolbar).toHaveClass("thumbnail-stack-toolbar-anchor-top");
+    expect(within(card).getByRole("button", { name: "Delete" })).toBeInTheDocument();
+  });
+
   it("can drag the collapsed pile a second time without expanding first", async () => {
     render(<Thumbnail />);
     const card = await screen.findByRole("article");
