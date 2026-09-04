@@ -32,10 +32,10 @@ use objc2::{
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationOptions, NSApplicationDidResignActiveNotification,
     NSBackingStoreType, NSBezierPath, NSBezierPathElement, NSColor, NSCursor, NSEvent, NSEventMask,
-    NSEventType, NSPanel, NSPasteboard, NSRunningApplication, NSScreen,
-    NSStatusWindowLevel, NSTrackingArea, NSTrackingAreaOptions, NSView,
-    NSViewLayerContentsPlacement, NSWindow, NSWindowCollectionBehavior, NSWindowSharingType,
-    NSWindowStyleMask, NSWorkspace, NSWorkspaceDidActivateApplicationNotification,
+    NSEventType, NSPanel, NSPasteboard, NSRunningApplication, NSScreen, NSStatusWindowLevel,
+    NSTrackingArea, NSTrackingAreaOptions, NSView, NSViewLayerContentsPlacement, NSWindow,
+    NSWindowCollectionBehavior, NSWindowSharingType, NSWindowStyleMask, NSWorkspace,
+    NSWorkspaceDidActivateApplicationNotification,
 };
 use objc2_foundation::{
     NSNotification, NSNotificationCenter, NSNumber, NSObject, NSObjectProtocol, NSOperationQueue,
