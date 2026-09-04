@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
 use std::process::Command;
+#[cfg(target_os = "windows")]
+use std::sync::OnceLock;
 #[cfg(not(target_os = "macos"))]
 use std::sync::atomic::AtomicIsize;
 use std::{
@@ -3685,12 +3687,15 @@ fn register_shortcuts_with(app: &AppHandle, settings: &AppSettings) -> Result<()
     }
     #[cfg(not(target_os = "linux"))]
     let _ = overlapping_gnome_screenshot_bindings;
+    #[cfg(target_os = "linux")]
+    disable_overlapping_kde_screenshot_shortcuts(settings);
     #[cfg(target_os = "windows")]
-    if models::settings_use_print_screen(settings) {
-        disable_windows_print_screen_snipping();
-    }
+    install_windows_screenshot_takeover(app, settings);
     #[cfg(not(target_os = "windows"))]
-    let _ = models::settings_use_print_screen(settings);
+    {
+        let _ = models::settings_use_print_screen(settings);
+        let _ = models::settings_use_super_shift_s(settings);
+    }
     register_new_capture_shortcut(app, &settings.new_capture_shortcut)?;
     register_shortcut(app, &settings.region_shortcut, CaptureMode::Region)?;
     register_shortcut(app, &settings.window_shortcut, CaptureMode::Window)?;
@@ -3700,6 +3705,9 @@ fn register_shortcuts_with(app: &AppHandle, settings: &AppSettings) -> Result<()
 }
 
 fn register_new_capture_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), AppError> {
+    if skip_windows_os_owned_super_shift_s(shortcut) {
+        return Ok(());
+    }
     let parsed = parse_shortcut(shortcut)?;
     let armed = AtomicBool::new(false);
     app.global_shortcut()
@@ -3725,6 +3733,11 @@ fn register_new_capture_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), 
 }
 
 fn register_shortcut(app: &AppHandle, shortcut: &str, mode: CaptureMode) -> Result<(), AppError> {
+    if skip_windows_os_owned_super_shift_s(shortcut) {
+        // Explorer/Snipping Tool own Win+Shift+S before RegisterHotKey. The
+        // low-level hook in captures-session swallows that chord instead.
+        return Ok(());
+    }
     let parsed = parse_shortcut(shortcut)?;
     let armed = AtomicBool::new(false);
     let suppressed_while_pressed = AtomicBool::new(false);
@@ -3783,6 +3796,9 @@ fn register_shortcut(app: &AppHandle, shortcut: &str, mode: CaptureMode) -> Resu
 }
 
 fn register_recording_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), AppError> {
+    if skip_windows_os_owned_super_shift_s(shortcut) {
+        return Ok(());
+    }
     let parsed = parse_shortcut(shortcut)?;
     let armed = AtomicBool::new(false);
     let suppressed_while_pressed = AtomicBool::new(false);
@@ -3890,18 +3906,259 @@ fn disable_overlapping_gnome_screenshot_shortcuts(bindings: &[models::GnomeScree
 fn disable_gnome_screenshot_bindings(
     bindings: &[models::GnomeScreenshotBinding],
 ) -> Result<(), String> {
+    let mut errors = Vec::new();
     for binding in bindings {
-        let output = Command::new("gsettings")
-            .args(["set", binding.schema, binding.key, "[]"])
+        match clear_gsettings_key(binding.schema, binding.key) {
+            Ok(()) => {}
+            Err(error) => errors.push(error),
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn clear_gsettings_key(schema: &str, key: &str) -> Result<(), String> {
+    let mut last_error = String::new();
+    for binary in models::GNOME_GSETTINGS_BINARIES {
+        for value in ["[]", "['']"] {
+            match Command::new(binary)
+                .args(["set", schema, key, value])
+                .output()
+            {
+                Ok(output) if output.status.success() => return Ok(()),
+                Ok(output) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+                    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+                    last_error = if stderr.is_empty() { stdout } else { stderr };
+                }
+                Err(error) => last_error = error.to_string(),
+            }
+        }
+    }
+    Err(last_error)
+}
+
+#[cfg(target_os = "linux")]
+fn disable_overlapping_kde_screenshot_shortcuts(settings: &AppSettings) {
+    if !models::settings_use_super_shift_s(settings) {
+        return;
+    }
+    if let Err(error) = disable_kde_spectacle_region_shortcut() {
+        eprintln!("could not disable overlapping KDE Spectacle shortcuts: {error}");
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn disable_kde_spectacle_region_shortcut() -> Result<(), String> {
+    let mut wrote = false;
+    for binary in ["kwriteconfig6", "kwriteconfig5"] {
+        match Command::new(binary)
+            .args(models::KDE_SPECTACLE_REGION_WRITE_ARGS)
             .output()
-            .map_err(|error| error.to_string())?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-            return Err(if stderr.is_empty() { stdout } else { stderr });
+        {
+            Ok(output) if output.status.success() => {
+                wrote = true;
+                break;
+            }
+            _ => {}
+        }
+    }
+    if !wrote {
+        return Ok(());
+    }
+    for reload in [
+        &[
+            "qdbus6",
+            "org.kde.kglobalaccel",
+            "/kglobalaccel",
+            "org.kde.KGlobalAccel.reloadConfig",
+        ][..],
+        &[
+            "qdbus",
+            "org.kde.kglobalaccel",
+            "/kglobalaccel",
+            "org.kde.KGlobalAccel.reloadConfig",
+        ][..],
+    ] {
+        if Command::new(reload[0]).args(&reload[1..]).status().is_ok() {
+            break;
         }
     }
     Ok(())
+}
+
+fn skip_windows_os_owned_super_shift_s(shortcut: &str) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        models::shortcut_is_super_shift_s(shortcut)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = shortcut;
+        false
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn install_windows_screenshot_takeover(app: &AppHandle, settings: &AppSettings) {
+    if models::settings_use_print_screen(settings) {
+        disable_windows_print_screen_snipping();
+    }
+    let action = models::settings_super_shift_s_action(settings);
+    let _ = WIN_SHIFT_S_APP.set(app.clone());
+    if let Ok(mut slot) = WIN_SHIFT_S_ACTION.lock() {
+        *slot = action;
+    }
+    captures_session::set_win_shift_s_takeover_enabled(action.is_some());
+    if action.is_none() {
+        captures_session::set_win_shift_s_handler(None);
+        return;
+    }
+    captures_session::set_win_shift_s_handler(Some(on_win_shift_s));
+    if let Err(error) = captures_session::ensure_win_shift_s_takeover() {
+        eprintln!("could not take over Win+Shift+S from Snipping Tool: {error}");
+    }
+}
+
+#[cfg(target_os = "windows")]
+static WIN_SHIFT_S_APP: OnceLock<AppHandle> = OnceLock::new();
+#[cfg(target_os = "windows")]
+static WIN_SHIFT_S_ACTION: Mutex<Option<models::SuperShiftSAction>> = Mutex::new(None);
+#[cfg(target_os = "windows")]
+static WIN_SHIFT_S_ARMED: AtomicBool = AtomicBool::new(false);
+#[cfg(target_os = "windows")]
+static WIN_SHIFT_S_SUPPRESSED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(target_os = "windows")]
+fn on_win_shift_s(phase: captures_session::WinShiftSPhase) {
+    let Some(app) = WIN_SHIFT_S_APP.get() else {
+        return;
+    };
+    let event_state = match phase {
+        captures_session::WinShiftSPhase::Pressed => ShortcutState::Pressed,
+        captures_session::WinShiftSPhase::Released => ShortcutState::Released,
+    };
+    let action = WIN_SHIFT_S_ACTION
+        .lock()
+        .ok()
+        .and_then(|slot| *slot)
+        .unwrap_or(models::SuperShiftSAction::Region);
+    match action {
+        models::SuperShiftSAction::NewCapture => dispatch_new_capture_shortcut(app, event_state),
+        models::SuperShiftSAction::Region => {
+            dispatch_capture_shortcut(app, CaptureMode::Region, event_state)
+        }
+        models::SuperShiftSAction::Window => {
+            dispatch_capture_shortcut(app, CaptureMode::Window, event_state)
+        }
+        models::SuperShiftSAction::Display => {
+            dispatch_capture_shortcut(app, CaptureMode::Display, event_state)
+        }
+        models::SuperShiftSAction::Recording => dispatch_recording_shortcut(app, event_state),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn dispatch_new_capture_shortcut(app: &AppHandle, event_state: ShortcutState) {
+    if !should_trigger_shortcut(&WIN_SHIFT_S_ARMED, event_state) {
+        return;
+    }
+    if app
+        .get_webview_window("preferences")
+        .is_some_and(|window| window.is_focused().unwrap_or(false))
+        || app
+            .get_webview_window(ONBOARDING_WINDOW_LABEL)
+            .is_some_and(|window| window.is_focused().unwrap_or(false))
+    {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        open_capture_controls(&app, CaptureSelectorMode::Screenshot);
+    });
+}
+
+#[cfg(target_os = "windows")]
+fn dispatch_recording_shortcut(app: &AppHandle, event_state: ShortcutState) {
+    let state = app.state::<Arc<AppState>>().inner().clone();
+    if !state.settings().onboarding_completed {
+        if event_state == ShortcutState::Released {
+            show_onboarding(app);
+        }
+        return;
+    }
+    let suppressed = shortcut_capture_is_suppressed(app, &state);
+    let trigger_is_suppressed =
+        track_shortcut_suppression(&WIN_SHIFT_S_SUPPRESSED, event_state, suppressed);
+    if !should_trigger_shortcut(&WIN_SHIFT_S_ARMED, event_state) || trigger_is_suppressed {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = recording::prepare_recording_inner(app.clone(), state).await
+            && !matches!(&error, AppError::CaptureInProgress)
+        {
+            report_recording_error(&app, &error);
+        }
+    });
+}
+
+#[cfg(target_os = "windows")]
+fn dispatch_capture_shortcut(app: &AppHandle, mode: CaptureMode, event_state: ShortcutState) {
+    let armed = &WIN_SHIFT_S_ARMED;
+    let suppressed_while_pressed = &WIN_SHIFT_S_SUPPRESSED;
+    let state = app.state::<Arc<AppState>>().inner().clone();
+    if !state.settings().onboarding_completed {
+        if event_state == ShortcutState::Released {
+            show_onboarding(app);
+        }
+        return;
+    }
+    let suppressed = shortcut_capture_is_suppressed(app, &state);
+    if event_state == ShortcutState::Pressed
+        && !suppressed
+        && !recording::screenshot_capture_is_blocked(&state)
+        && !screenshot_countdown_is_active(&state)
+    {
+        if mode == CaptureMode::Region {
+            claim_region_capture_cursor(app);
+        } else if mode == CaptureMode::Window {
+            prefetch_capturable_windows(&state);
+        }
+    }
+    let trigger_is_suppressed =
+        track_shortcut_suppression(suppressed_while_pressed, event_state, suppressed);
+    if !should_trigger_shortcut(armed, event_state) || trigger_is_suppressed {
+        if event_state == ShortcutState::Released && trigger_is_suppressed {
+            if mode == CaptureMode::Region {
+                release_claimed_region_capture_cursor();
+            }
+            if mode == CaptureMode::Window {
+                discard_prefetched_windows();
+            }
+        }
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if mode == CaptureMode::Display && !recording::recording_session_is_active(&state) {
+            open_capture_controls_with_target(
+                &app,
+                CaptureSelectorMode::Screenshot,
+                CaptureMode::Display,
+            );
+            return;
+        }
+        if let Err(error) = start_capture_inner(app.clone(), state, mode).await
+            && !matches!(&error, AppError::CaptureInProgress)
+        {
+            report_capture_error(&app, &error, mode);
+        }
+    });
 }
 
 #[cfg(target_os = "windows")]

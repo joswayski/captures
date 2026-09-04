@@ -144,6 +144,8 @@ describe("shortcut recording", () => {
       /unbinds overlapping Screenshot app keys/,
     );
     expect(platformShortcutHelp("windows").intro).toMatch(/Win\+Shift\+S/);
+    expect(platformShortcutHelp("windows").takeoverBody).toMatch(/Win\+Shift\+S/);
     expect(platformShortcutHelp("linux").intro).toMatch(/GNOME\/Ubuntu/);
+    expect(platformShortcutHelp("linux").takeoverBody).toMatch(/GNOME screenshot/);
   });
 });
