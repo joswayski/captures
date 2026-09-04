@@ -762,7 +762,11 @@ export function installPreviewBackend(): void {
   mockIPC(async (command, payload) => {
     if (command === "get_recording_selection") return selection;
     if (command === "select_capture_display") return selectCaptureDisplay(payload);
-    if (command === "get_thumbnail_pointer_position") return thumbnailPointer;
+    if (command === "get_thumbnail_pointer_position" || command === "get_capture_pointer_position") {
+      return thumbnailPointer.inside
+        ? thumbnailPointer
+        : { x: 360, y: 280, inside: true };
+    }
     if (command === "estimate_screenshot_export") {
       return mockScreenshotExportBytes(payload);
     }

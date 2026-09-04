@@ -292,6 +292,7 @@ pub fn run() {
             set_mini_previews_collapsed,
             set_mini_preview_stack_position,
             get_thumbnail_pointer_position,
+            get_capture_pointer_position,
             set_thumbnail_cursor,
             reassert_thumbnail_cursor,
             set_thumbnail_ignore_cursor_events,
@@ -1738,6 +1739,11 @@ fn get_thumbnail_pointer_position(
     }
     #[cfg(target_os = "macos")]
     captures_macos_window::note_thumbnail_pointer_poll();
+    webview_pointer_position(&window)
+}
+
+#[tauri::command]
+fn get_capture_pointer_position(window: tauri::WebviewWindow) -> Option<ThumbnailPointerPosition> {
     webview_pointer_position(&window)
 }
 
