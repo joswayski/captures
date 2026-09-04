@@ -383,11 +383,11 @@ pub fn run() {
                     onboarding_completed,
                     restarted_after_update || launched_from_autostart(),
                 ) {
-                    InteractiveLaunchAction::ShowOnboarding => show_onboarding(&handle),
-                    InteractiveLaunchAction::ShowStartupNotice => {
+                    InteractiveLaunchAction::Onboarding => show_onboarding(&handle),
+                    InteractiveLaunchAction::StartupNotice => {
                         show_startup_notice(&handle, STARTUP_NOTICE_AUTOSTART_VISIBLE);
                     }
-                    InteractiveLaunchAction::ShowPreferences => show_preferences(&handle),
+                    InteractiveLaunchAction::Preferences => show_preferences(&handle),
                 }
             }
             if let Some(mode) = pending_capture {
@@ -420,9 +420,9 @@ fn launched_from_autostart() -> bool {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InteractiveLaunchAction {
-    ShowOnboarding,
-    ShowStartupNotice,
-    ShowPreferences,
+    Onboarding,
+    StartupNotice,
+    Preferences,
 }
 
 /// First interactive launch opens Preferences, not a capture overlay.
@@ -432,11 +432,11 @@ fn interactive_launch_action(
     launched_quietly: bool,
 ) -> InteractiveLaunchAction {
     if !onboarding_completed {
-        InteractiveLaunchAction::ShowOnboarding
+        InteractiveLaunchAction::Onboarding
     } else if launched_quietly {
-        InteractiveLaunchAction::ShowStartupNotice
+        InteractiveLaunchAction::StartupNotice
     } else {
-        InteractiveLaunchAction::ShowPreferences
+        InteractiveLaunchAction::Preferences
     }
 }
 
@@ -6079,9 +6079,9 @@ fn focus_or_show_primary_app_window(app: &AppHandle) {
 }
 
 fn focus_primary_app_window(app: &AppHandle) {
-    let onboarding_completed = !app
+    let onboarding_completed = app
         .try_state::<Arc<AppState>>()
-        .is_some_and(|state| !state.settings().onboarding_completed);
+        .is_none_or(|state| state.settings().onboarding_completed);
     let restore_recording = restore_hidden_recording_controls_are_needed(app);
     let primary = app
         .webview_windows()
@@ -8747,15 +8747,15 @@ mod tests {
     fn interactive_launch_opens_preferences_instead_of_a_capture() {
         assert_eq!(
             interactive_launch_action(false, false),
-            InteractiveLaunchAction::ShowOnboarding
+            InteractiveLaunchAction::Onboarding
         );
         assert_eq!(
             interactive_launch_action(true, true),
-            InteractiveLaunchAction::ShowStartupNotice
+            InteractiveLaunchAction::StartupNotice
         );
         assert_eq!(
             interactive_launch_action(true, false),
-            InteractiveLaunchAction::ShowPreferences
+            InteractiveLaunchAction::Preferences
         );
     }
 
