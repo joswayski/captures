@@ -4954,7 +4954,10 @@ fn bottom_center_notice_position(app: &AppHandle, width: f64, height: f64) -> (f
 }
 
 fn create_thumbnail_window(app: &AppHandle, visible: bool) -> Result<(), tauri::Error> {
-    let placement = app.state::<Arc<AppState>>().settings().mini_preview_placement;
+    let placement = app
+        .state::<Arc<AppState>>()
+        .settings()
+        .mini_preview_placement;
     let geometry = thumbnail_window_geometry(app, 1, false, None, placement);
     let window = WebviewWindowBuilder::new(
         app,
@@ -5060,12 +5063,7 @@ fn update_thumbnail_stack_window(
             .flatten(),
         thumbnail_preserve_current_height(collapsed),
     );
-    let y = thumbnail_window_top(
-        geometry.y,
-        height,
-        geometry.height,
-        geometry.anchor,
-    );
+    let y = thumbnail_window_top(geometry.y, height, geometry.height, geometry.anchor);
     if visible {
         #[cfg(target_os = "macos")]
         {
@@ -5357,25 +5355,14 @@ fn set_mini_preview_stack_position(
     let content_height = thumbnail_stack_height(count, true);
     let frame_height = thumbnail_window_logical_height(&window).unwrap_or(content_height);
     let anchor = anchor.unwrap_or(ThumbnailStackAnchor::Bottom);
-    let (x, y) = thumbnail_clamp_aligned_frame(
-        x,
-        y,
-        frame_height,
-        content_height,
-        work,
-        anchor,
-    );
+    let (x, y) = thumbnail_clamp_aligned_frame(x, y, frame_height, content_height, work, anchor);
     let _ = window.set_position(tauri::LogicalPosition::new(x, y));
     state
         .thumbnail_visibility
         .lock()
         .set_stack_origin(ThumbnailStackOrigin {
             x,
-            edge: if anchor.is_top() {
-                y
-            } else {
-                y + frame_height
-            },
+            edge: if anchor.is_top() { y } else { y + frame_height },
             anchor,
         });
     Ok(ThumbnailStackPosition { x, y })
@@ -5597,7 +5584,8 @@ fn thumbnail_geometry(
             (default_x, desired_y, default_anchor)
         }
     };
-    let (x, y) = thumbnail_clamp_aligned_frame(x, desired_y, stack_height, stack_height, work, anchor);
+    let (x, y) =
+        thumbnail_clamp_aligned_frame(x, desired_y, stack_height, stack_height, work, anchor);
     ThumbnailWindowGeometry {
         x,
         y,
@@ -7256,18 +7244,18 @@ mod tests {
         TRAY_NOTICE_CARET_INSET, TRAY_NOTICE_CARET_SIZE, TRAY_NOTICE_FRAME_PAD,
         TRAY_NOTICE_SCREEN_MARGIN, TRAY_NOTICE_TRAY_OVERLAP, ThumbnailCursorAction,
         ThumbnailCursorKind, ThumbnailMonitorBounds, ThumbnailPointerSpace, ThumbnailStackAnchor,
-        ThumbnailStackOrigin, ThumbnailWindowFrame, ThumbnailWindowGeometry, capturable_windows_for_display, capture_cursor_icon,
-        click_through_applies, clipboard_fingerprint, display_contains_pointer,
-        fallback_startup_notice, mask_macos_window_corners, parse_shortcut, place_startup_notice,
-        preferences_url, primary_app_window_priority, recording::RECORDING_REGION_INDICATOR_TITLE,
+        ThumbnailStackOrigin, ThumbnailWindowFrame, ThumbnailWindowGeometry,
+        capturable_windows_for_display, capture_cursor_icon, click_through_applies,
+        clipboard_fingerprint, display_contains_pointer, fallback_startup_notice,
+        mask_macos_window_corners, parse_shortcut, place_startup_notice, preferences_url,
+        primary_app_window_priority, recording::RECORDING_REGION_INDICATOR_TITLE,
         refine_window_chrome_from_snapshot, resolve_startup_notice_placement,
         resolve_window_capture, should_trigger_shortcut, startup_notice_fallback_edge_from_insets,
         startup_notice_url, take_ready_or_defer_windows, thumbnail_clamp_bottom_aligned_frame,
         thumbnail_clamp_frame, thumbnail_cursor_action, thumbnail_cursor_ignore_update,
         thumbnail_geometry, thumbnail_pointer_in_space, thumbnail_pointer_position,
         thumbnail_preserve_current_height, thumbnail_stack_height,
-        thumbnail_stack_should_be_visible, thumbnail_visible_window_height,
-        thumbnail_window_top,
+        thumbnail_stack_should_be_visible, thumbnail_visible_window_height, thumbnail_window_top,
         track_shortcut_suppression, tray_accelerator, tray_icon_rect_is_usable,
         tray_notice_window_size, viewer_window_label, window_display_crop_is_safe,
         window_is_capturable, windows_window_is_capture_overlay,
@@ -8322,7 +8310,10 @@ mod tests {
             crate::models::MiniPreviewPlacement::BottomRight,
         );
         assert_eq!(bottom_right.x, 1_580.0);
-        assert_eq!(bottom_right.y + bottom_right.height, 1_040.0 - THUMBNAIL_SYSTEM_CHROME_GAP);
+        assert_eq!(
+            bottom_right.y + bottom_right.height,
+            1_040.0 - THUMBNAIL_SYSTEM_CHROME_GAP
+        );
         assert_eq!(bottom_right.anchor, ThumbnailStackAnchor::Bottom);
     }
 

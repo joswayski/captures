@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import { Preferences } from "./App";
 import { detectShortcutPlatform, platformShortcutHelp } from "./lib/shortcut";
@@ -347,7 +347,10 @@ describe("Preferences", () => {
   it("presents the expanded spectrum as compact theme choices", async () => {
     render(<Preferences />);
 
-    expect(await screen.findAllByRole("radio")).toHaveLength(10);
+    expect(
+      await within(await screen.findByRole("radiogroup", { name: "Color theme" }))
+        .findAllByRole("radio"),
+    ).toHaveLength(10);
     expect(screen.getByRole("radio", { name: /Violet/ })).toHaveAttribute(
       "data-capture-theme",
       "violet",

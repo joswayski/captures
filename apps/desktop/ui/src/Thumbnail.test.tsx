@@ -1223,10 +1223,10 @@ describe("Thumbnail", () => {
       expect(stack).not.toHaveClass("thumbnail-stack-dragging");
     });
     expect(stack).toHaveClass("thumbnail-stack-minimized");
-    expect(vi.mocked(invoke).not.toHaveBeenCalledWith(
+    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith(
       "set_mini_previews_collapsed",
       { collapsed: false },
-    ));
+    );
   });
 
   it("opens downward after the collapsed pile is dragged to the top", async () => {

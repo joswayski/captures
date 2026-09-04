@@ -1561,7 +1561,10 @@ mod tests {
         let restored: AppSettings =
             serde_json::from_str(&json).expect("settings should deserialize");
 
-        assert_eq!(restored.mini_preview_placement, MiniPreviewPlacement::TopRight);
+        assert_eq!(
+            restored.mini_preview_placement,
+            MiniPreviewPlacement::TopRight
+        );
         assert_eq!(
             AppSettings::default().mini_preview_placement,
             MiniPreviewPlacement::BottomLeft

@@ -2738,8 +2738,8 @@ pub fn resize_from_bottom(
     }
     let native_window = native_window(window)?;
     let current = native_window.frame();
-    let size_unchanged = (current.size.width - width).abs() < 0.5
-        && (current.size.height - height).abs() < 0.5;
+    let size_unchanged =
+        (current.size.width - width).abs() < 0.5 && (current.size.height - height).abs() < 0.5;
 
     // WKWebView can recreate its backing layer; re-apply bottom anchoring when
     // the frame actually changes so growth does not shift painted cards.
@@ -2774,8 +2774,8 @@ pub fn resize_from_top(
     }
     let native_window = native_window(window)?;
     let current = native_window.frame();
-    let size_unchanged = (current.size.width - width).abs() < 0.5
-        && (current.size.height - height).abs() < 0.5;
+    let size_unchanged =
+        (current.size.width - width).abs() < 0.5 && (current.size.height - height).abs() < 0.5;
 
     let _ = window.as_ref().with_webview(|platform_webview| {
         let pointer = platform_webview.inner();
