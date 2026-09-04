@@ -5055,10 +5055,14 @@ fn update_thumbnail_stack_window(
             .flatten(),
         thumbnail_preserve_current_height(collapsed),
     );
-    let y = desired_y - (height - desired_height);
+    let top_aligned = origin.is_some_and(|origin| origin.top_aligned);
+    let y = thumbnail_preserved_window_y(desired_y, desired_height, height, top_aligned);
     if visible {
         #[cfg(target_os = "macos")]
-        if let Err(error) =
+        if top_aligned {
+            let _ = window.set_size(LogicalSize::new(THUMBNAIL_WIDTH, height));
+            let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+        } else if let Err(error) =
             captures_macos_window::resize_from_bottom(&window, THUMBNAIL_WIDTH, height)
         {
             eprintln!("failed to resize capture thumbnail stack: {error}");
@@ -5105,6 +5109,21 @@ fn thumbnail_visible_window_height(
     match (preserve_current, current) {
         (true, Some(current)) => desired.max(current),
         _ => desired,
+    }
+}
+
+/// Extra chrome on a preserved-height window hangs above a bottom pile and
+/// below a top pile so peeking cards stay on-screen.
+fn thumbnail_preserved_window_y(
+    desired_y: f64,
+    desired_height: f64,
+    height: f64,
+    top_aligned: bool,
+) -> f64 {
+    if top_aligned {
+        desired_y
+    } else {
+        desired_y - (height - desired_height)
     }
 }
 
@@ -5350,6 +5369,7 @@ fn set_mini_preview_stack_position(
         .set_stack_origin(ThumbnailStackOrigin {
             x,
             bottom: pile_bottom,
+            top_aligned,
         });
     Ok(ThumbnailStackPosition { x, y })
 }
@@ -5454,10 +5474,6 @@ fn thumbnail_work_area(bounds: ThumbnailMonitorBounds) -> ThumbnailWorkArea {
     }
 }
 
-fn thumbnail_clamp_frame(x: f64, y: f64, frame_height: f64, work: ThumbnailWorkArea) -> (f64, f64) {
-    thumbnail_clamp_aligned_frame(x, y, frame_height, frame_height, work, false)
-}
-
 /// Keep the visible pile in the work area.
 ///
 /// Collapsed macOS/Linux windows stay at their expanded height so WebKit does
@@ -5507,7 +5523,15 @@ fn thumbnail_geometry(
         Some(origin) => (origin.x, origin.bottom),
         None => (default_x, default_bottom),
     };
-    let (x, y) = thumbnail_clamp_frame(x, bottom - stack_height, stack_height, work);
+    let top_aligned = origin.is_some_and(|origin| origin.top_aligned);
+    let (x, y) = thumbnail_clamp_aligned_frame(
+        x,
+        bottom - stack_height,
+        stack_height,
+        stack_height,
+        work,
+        top_aligned,
+    );
     (x, y, stack_height)
 }
 
@@ -7168,13 +7192,12 @@ mod tests {
         refine_window_chrome_from_snapshot, resolve_startup_notice_placement,
         resolve_window_capture, should_trigger_shortcut, startup_notice_fallback_edge_from_insets,
         startup_notice_url, take_ready_or_defer_windows, thumbnail_clamp_aligned_frame,
-        thumbnail_clamp_frame, thumbnail_cursor_action, thumbnail_cursor_ignore_update,
-        thumbnail_geometry, thumbnail_pointer_in_space, thumbnail_pointer_position,
-        thumbnail_preserve_current_height, thumbnail_stack_height,
-        thumbnail_stack_should_be_visible, thumbnail_visible_window_height,
-        track_shortcut_suppression, tray_accelerator, tray_icon_rect_is_usable,
-        tray_notice_window_size, viewer_window_label, window_display_crop_is_safe,
-        window_is_capturable, windows_window_is_capture_overlay,
+        thumbnail_cursor_action, thumbnail_cursor_ignore_update, thumbnail_geometry,
+        thumbnail_pointer_in_space, thumbnail_pointer_position, thumbnail_preserve_current_height,
+        thumbnail_preserved_window_y, thumbnail_stack_height, thumbnail_stack_should_be_visible,
+        thumbnail_visible_window_height, track_shortcut_suppression, tray_accelerator,
+        tray_icon_rect_is_usable, tray_notice_window_size, viewer_window_label,
+        window_display_crop_is_safe, window_is_capturable, windows_window_is_capture_overlay,
     };
 
     #[test]
@@ -8131,11 +8154,34 @@ mod tests {
             Some(ThumbnailStackOrigin {
                 x: 420.0,
                 bottom: 520.0,
+                top_aligned: false,
             }),
         );
         assert_eq!(height, 240.0);
         assert_eq!((x, y), (420.0, 280.0));
         assert_eq!(y + height, 520.0);
+    }
+
+    #[test]
+    fn restores_a_top_aligned_pile_without_consuming_preserved_slack() {
+        let work = bounds((0, 0, 1_920, 1_040), (0, 0, 1_920, 1_080), 1.0);
+        let (x, y, height) = thumbnail_geometry(
+            work,
+            1,
+            true,
+            Some(ThumbnailStackOrigin {
+                x: 420.0,
+                bottom: 240.0,
+                top_aligned: true,
+            }),
+        );
+        assert_eq!(height, 240.0);
+        assert_eq!((x, y), (420.0, 0.0));
+        assert_eq!(thumbnail_preserved_window_y(y, height, 792.0, true), 0.0);
+        assert_eq!(
+            thumbnail_preserved_window_y(y, height, 792.0, false),
+            -552.0
+        );
     }
 
     #[test]
@@ -8149,12 +8195,20 @@ mod tests {
                 Some(ThumbnailStackOrigin {
                     x: 8_000.0,
                     bottom: 8_000.0,
+                    top_aligned: false,
                 }),
             ),
             (1_580.0, 788.0, 240.0)
         );
         assert_eq!(
-            thumbnail_clamp_frame(-40.0, -20.0, 240.0, super::thumbnail_work_area(work)),
+            thumbnail_clamp_aligned_frame(
+                -40.0,
+                -20.0,
+                240.0,
+                240.0,
+                super::thumbnail_work_area(work),
+                false,
+            ),
             (0.0, 0.0)
         );
     }
