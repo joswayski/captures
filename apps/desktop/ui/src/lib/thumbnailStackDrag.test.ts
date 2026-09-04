@@ -117,6 +117,17 @@ describe("clampThumbnailStackFrame", () => {
       y: 236,
     });
   });
+
+  it("lets a top-aligned pile reach the bottom when the window is taller", () => {
+    expect(clampThumbnailStackFrame(0, -800, 340, 792, work, 240, "top")).toEqual({
+      x: 0,
+      y: 0,
+    });
+    expect(clampThumbnailStackFrame(0, 2_000, 340, 792, work, 240, "top")).toEqual({
+      x: 0,
+      y: 788,
+    });
+  });
 });
 
 describe("harness stack offset", () => {

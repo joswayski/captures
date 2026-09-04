@@ -409,6 +409,43 @@ export function convertHarnessStackOffsetAnchor(
   return { x: offset.x, y: pileTop + contentHeight - viewportHeight };
 }
 
+/**
+ * Visible pile bottom in screen space. Bottom-aligned native windows keep
+ * empty chrome above the pile; top-aligned ones keep it below so peek-down
+ * is not clipped by the webview.
+ */
+export function thumbnailStackVisualPileBottom({
+  y,
+  frameHeight,
+  contentHeight,
+  anchor,
+}: {
+  y: number;
+  frameHeight: number;
+  contentHeight: number;
+  anchor: ThumbnailStackAnchor;
+}): number {
+  const frame = Math.max(0, frameHeight);
+  const content = Math.min(frame, Math.max(0, contentHeight));
+  return anchor === "top" ? y + content : y + frame;
+}
+
+/** Keep the visible pile in place when the native frame flips its slack. */
+export function convertThumbnailStackFrameAnchor(
+  offset: { x: number; y: number },
+  from: ThumbnailStackAnchor,
+  to: ThumbnailStackAnchor,
+  frameHeight: number,
+  contentHeight: number,
+): { x: number; y: number } {
+  if (from === to) return offset;
+  const frame = Math.max(0, frameHeight);
+  const content = Math.min(frame, Math.max(0, contentHeight));
+  const slack = Math.max(0, frame - content);
+  const pileTop = from === "top" ? offset.y : offset.y + slack;
+  return { x: offset.x, y: to === "top" ? pileTop : pileTop - slack };
+}
+
 export function applyThumbnailStackGravity(
   stack: HTMLElement | null,
   gravity: number,

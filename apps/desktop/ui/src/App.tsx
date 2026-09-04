@@ -116,6 +116,7 @@ import {
 import {
   CollapsedThumbnailStackDrag,
   applyThumbnailStackDragSway,
+  clampThumbnailStackFrame,
   cssUrl,
   preventThumbnailHtml5Drag,
   readHarnessStackOffset,
@@ -128,6 +129,7 @@ import {
   animateThumbnailStackScroll,
   applyThumbnailStackGravity,
   convertHarnessStackOffsetAnchor,
+  convertThumbnailStackFrameAnchor,
   createThumbnailStackShiftController,
   scheduleScrollThumbnailStackToNewest,
   scrollThumbnailStackToNewest,
@@ -137,6 +139,7 @@ import {
   thumbnailStackContentHeight,
   thumbnailStackGravityFromHarness,
   thumbnailStackGravityFromWorkArea,
+  thumbnailStackVisualPileBottom,
   thumbnailStackNeedsScrollport,
   thumbnailStackOverflow,
   restoreThumbnailStackShiftClass,
@@ -6539,6 +6542,20 @@ export function Thumbnail() {
     });
   };
 
+  const collapsedContentHeight = () => thumbnailCollapsedFrameHeight(
+    Math.max(
+      stackRef.current?.querySelectorAll(":scope > .thumbnail-card").length ?? 1,
+      1,
+    ),
+  );
+
+  const applyThumbnailStackAnchor = (next: ThumbnailStackAnchor) => {
+    if (stackAnchorRef.current === next) return;
+    stackRef.current?.classList.toggle("thumbnail-stack-anchor-top", next === "top");
+    stackAnchorRef.current = next;
+    setStackAnchor(next);
+  };
+
   const collapsedStackDrag = () => {
     stackDrag.current ??= new CollapsedThumbnailStackDrag({
       getFrame: async () => {
@@ -6550,44 +6567,107 @@ export function Thumbnail() {
         return readHarnessStackOffset();
       },
       moveFrame: async (x, y) => {
-        const contentHeight = thumbnailCollapsedFrameHeight(
-          Math.max(
-            stackRef.current?.querySelectorAll(":scope > .thumbnail-card").length ?? 1,
-            1,
-          ),
-        );
+        const contentHeight = collapsedContentHeight();
         if (isTauri()) {
-          const next = await invoke<{ x: number; y: number }>(
-            "set_mini_preview_stack_position",
-            { x, y },
-          );
-          if (currentWindow) {
-            try {
-              const scale = await currentWindow.scaleFactor();
-              const size = await currentWindow.outerSize();
-              const frameHeight = size.height / scale;
-              const monitor = await currentMonitor();
-              const workTop = monitor
-                ? monitor.workArea.position.y / scale
-                : 0;
-              const workHeight = monitor
-                ? monitor.workArea.size.height / scale
-                : window.screen.availHeight;
-              applyThumbnailStackGravity(
-                stackRef.current,
-                thumbnailStackGravityFromWorkArea({
-                  pileBottom: next.y + frameHeight,
-                  workTop,
-                  workHeight,
-                  contentHeight,
-                  bottomGap: 12,
-                }),
+          let frameX = x;
+          let frameY = y;
+          let anchor = stackAnchorRef.current;
+          let convertedAnchor = false;
+          try {
+            const scale = currentWindow ? await currentWindow.scaleFactor() : 1;
+            const size = currentWindow ? await currentWindow.outerSize() : null;
+            const frameHeight = size ? size.height / scale : contentHeight;
+            const monitor = await currentMonitor();
+            const workTop = monitor
+              ? monitor.workArea.position.y / scale
+              : 0;
+            const workHeight = monitor
+              ? monitor.workArea.size.height / scale
+              : window.screen.availHeight;
+            const work = {
+              x: monitor ? monitor.workArea.position.x / scale : 0,
+              y: workTop,
+              width: monitor
+                ? monitor.workArea.size.width / scale
+                : window.screen.availWidth,
+              height: workHeight,
+              bottomGap: 12,
+            };
+            const clamped = clampThumbnailStackFrame(
+              frameX,
+              frameY,
+              340,
+              frameHeight,
+              work,
+              contentHeight,
+              anchor,
+            );
+            frameX = clamped.x;
+            frameY = clamped.y;
+            const gravity = thumbnailStackGravityFromWorkArea({
+              pileBottom: thumbnailStackVisualPileBottom({
+                y: frameY,
+                frameHeight,
+                contentHeight,
+                anchor,
+              }),
+              workTop,
+              workHeight,
+              contentHeight,
+              bottomGap: 12,
+            });
+            const nextAnchor = thumbnailStackAnchorFromGravity(gravity, anchor);
+            if (nextAnchor !== anchor) {
+              const converted = convertThumbnailStackFrameAnchor(
+                { x: frameX, y: frameY },
+                anchor,
+                nextAnchor,
+                frameHeight,
+                contentHeight,
               );
-            } catch {
-              applyThumbnailStackGravity(stackRef.current, 1);
+              const reclamped = clampThumbnailStackFrame(
+                converted.x,
+                converted.y,
+                340,
+                frameHeight,
+                work,
+                contentHeight,
+                nextAnchor,
+              );
+              frameX = reclamped.x;
+              frameY = reclamped.y;
+              applyThumbnailStackAnchor(nextAnchor);
+              anchor = nextAnchor;
+              convertedAnchor = true;
             }
+            const next = await invoke<{ x: number; y: number }>(
+              "set_mini_preview_stack_position",
+              { x: frameX, y: frameY, anchor },
+            );
+            applyThumbnailStackGravity(
+              stackRef.current,
+              thumbnailStackGravityFromWorkArea({
+                pileBottom: thumbnailStackVisualPileBottom({
+                  y: next.y,
+                  frameHeight,
+                  contentHeight,
+                  anchor,
+                }),
+                workTop,
+                workHeight,
+                contentHeight,
+                bottomGap: 12,
+              }),
+            );
+            if (convertedAnchor) stackDrag.current?.rebaseFrame(next);
+            return next;
+          } catch {
+            applyThumbnailStackGravity(stackRef.current, 1);
+            return invoke<{ x: number; y: number }>(
+              "set_mini_preview_stack_position",
+              { x, y, anchor: stackAnchorRef.current },
+            );
           }
-          return next;
         }
         const viewport = { width: window.innerWidth, height: window.innerHeight };
         const anchor = stackAnchorRef.current;
@@ -6621,12 +6701,7 @@ export function Thumbnail() {
           viewport,
           { anchor: nextAnchor, contentHeight },
         );
-        stackRef.current?.classList.toggle(
-          "thumbnail-stack-anchor-top",
-          nextAnchor === "top",
-        );
-        stackAnchorRef.current = nextAnchor;
-        setStackAnchor(nextAnchor);
+        applyThumbnailStackAnchor(nextAnchor);
         applyThumbnailStackGravity(
           stackRef.current,
           thumbnailStackGravityFromHarness({

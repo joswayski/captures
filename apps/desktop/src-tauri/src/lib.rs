@@ -5317,6 +5317,7 @@ fn set_mini_preview_stack_position(
     state: tauri::State<'_, Arc<AppState>>,
     x: f64,
     y: f64,
+    anchor: Option<String>,
 ) -> CommandResult<ThumbnailStackPosition> {
     if state.artifacts.lock().is_empty() || !state.settings().show_mini_previews {
         return Err("mini previews are not available".to_owned());
@@ -5334,14 +5335,27 @@ fn set_mini_preview_stack_position(
     let count = state.artifacts.lock().len().max(1);
     let content_height = thumbnail_stack_height(count, true);
     let frame_height = thumbnail_window_logical_height(&window).unwrap_or(content_height);
-    let (x, y) = thumbnail_clamp_bottom_aligned_frame(x, y, frame_height, content_height, work);
+    let top_aligned = anchor.as_deref() == Some("top");
+    let (x, y) = thumbnail_clamp_aligned_frame(
+        x,
+        y,
+        frame_height,
+        content_height,
+        work,
+        top_aligned,
+    );
     let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+    let pile_bottom = if top_aligned {
+        y + content_height.min(frame_height)
+    } else {
+        y + frame_height
+    };
     state
         .thumbnail_visibility
         .lock()
         .set_stack_origin(ThumbnailStackOrigin {
             x,
-            bottom: y + frame_height,
+            bottom: pile_bottom,
         });
     Ok(ThumbnailStackPosition { x, y })
 }
@@ -5447,14 +5461,16 @@ fn thumbnail_work_area(bounds: ThumbnailMonitorBounds) -> ThumbnailWorkArea {
 }
 
 fn thumbnail_clamp_frame(x: f64, y: f64, frame_height: f64, work: ThumbnailWorkArea) -> (f64, f64) {
-    thumbnail_clamp_bottom_aligned_frame(x, y, frame_height, frame_height, work)
+    thumbnail_clamp_aligned_frame(x, y, frame_height, frame_height, work, false)
 }
 
-/// Keep the bottom-aligned visible pile in the work area.
+/// Keep the visible pile in the work area.
 ///
 /// Collapsed macOS/Linux windows stay at their expanded height so WebKit does
-/// not blank cards. Empty frame above the pile may leave the work area so the
-/// stack can be dragged to the top of the screen.
+/// not blank cards. Bottom piles sit at the bottom of that frame (empty chrome
+/// may leave the work area above so the stack can reach the top). Top piles
+/// sit at the top so peek-down has room; empty chrome may leave below so the
+/// stack can still reach the bottom.
 fn thumbnail_clamp_bottom_aligned_frame(
     x: f64,
     y: f64,
@@ -5462,12 +5478,30 @@ fn thumbnail_clamp_bottom_aligned_frame(
     content_height: f64,
     work: ThumbnailWorkArea,
 ) -> (f64, f64) {
+    thumbnail_clamp_aligned_frame(x, y, frame_height, content_height, work, false)
+}
+
+fn thumbnail_clamp_aligned_frame(
+    x: f64,
+    y: f64,
+    frame_height: f64,
+    content_height: f64,
+    work: ThumbnailWorkArea,
+    top_aligned: bool,
+) -> (f64, f64) {
     let content_height = content_height.min(frame_height).max(0.0);
     let slack = (frame_height - content_height).max(0.0);
     let min_x = work.left;
     let max_x = (work.left + work.width - THUMBNAIL_WIDTH).max(min_x);
-    let min_y = work.top - slack;
-    let max_y = (work.top + work.height - work.bottom_gap - frame_height).max(min_y);
+    let (min_y, max_y) = if top_aligned {
+        let min_y = work.top;
+        let max_y = (work.top + work.height - work.bottom_gap - content_height).max(min_y);
+        (min_y, max_y)
+    } else {
+        let min_y = work.top - slack;
+        let max_y = (work.top + work.height - work.bottom_gap - frame_height).max(min_y);
+        (min_y, max_y)
+    };
     (x.clamp(min_x, max_x), y.clamp(min_y, max_y))
 }
 
@@ -7149,7 +7183,8 @@ mod tests {
         preferences_url, primary_app_window_priority, recording::RECORDING_REGION_INDICATOR_TITLE,
         refine_window_chrome_from_snapshot, resolve_startup_notice_placement,
         resolve_window_capture, should_trigger_shortcut, startup_notice_fallback_edge_from_insets,
-        startup_notice_url, take_ready_or_defer_windows, thumbnail_clamp_bottom_aligned_frame,
+        startup_notice_url, take_ready_or_defer_windows, thumbnail_clamp_aligned_frame,
+        thumbnail_clamp_bottom_aligned_frame,
         thumbnail_clamp_frame, thumbnail_cursor_action, thumbnail_cursor_ignore_update,
         thumbnail_geometry, thumbnail_pointer_in_space, thumbnail_pointer_position,
         thumbnail_preserve_current_height, thumbnail_stack_height,
@@ -8156,6 +8191,17 @@ mod tests {
         );
         // Visible pile top sits at the work-area top when slack is consumed.
         assert_eq!(-552.0 + 792.0 - 240.0, 0.0);
+        assert_eq!(
+            thumbnail_clamp_aligned_frame(-40.0, -800.0, 792.0, 240.0, work, true),
+            (0.0, 0.0)
+        );
+        assert_eq!(
+            thumbnail_clamp_aligned_frame(420.0, 2_000.0, 792.0, 240.0, work, true),
+            (420.0, 788.0)
+        );
+        // Top-aligned slack hangs below the work area so the pile can still
+        // reach the bottom chrome gap.
+        assert_eq!(788.0 + 240.0, 1_040.0 - THUMBNAIL_SYSTEM_CHROME_GAP);
     }
 
     #[test]
