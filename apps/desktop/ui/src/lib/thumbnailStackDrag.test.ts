@@ -184,6 +184,89 @@ describe("harness stack offset", () => {
 });
 
 describe("CollapsedThumbnailStackDrag", () => {
+  it("keeps the session locked through anchor conversion and ignores duplicate releases", async () => {
+    let finishSettlement!: () => void;
+    const settled = new Promise<void>((resolve) => { finishSettlement = resolve; });
+    let frame = { x: 0, y: 400 };
+    const onDrop = vi.fn(async () => {
+      await settled;
+      frame = { x: 40, y: 20 };
+    });
+    const drag = new CollapsedThumbnailStackDrag({
+      getFrame: () => frame,
+      moveFrame: (x, y) => (frame = { x, y }),
+      onDrop,
+      reducedMotion: () => true,
+    });
+    drag.pointerDown({ button: 0, pointerId: 1, screenX: 0, screenY: 400 });
+    await drag.pointerMove({ pointerId: 1, screenX: 40, screenY: 100 });
+    const drop = drag.pointerUp({ pointerId: 1 });
+    await vi.waitFor(() => expect(onDrop).toHaveBeenCalledOnce());
+    expect(drag.pointerDown({ button: 0, pointerId: 1, screenX: 40, screenY: 100 }))
+      .toBe(false);
+    expect(await drag.pointerMove({ pointerId: 1, screenX: 80, screenY: 200 })).toBeNull();
+    expect(await drag.pointerUp({ pointerId: 1 })).toBe("ignored");
+    finishSettlement();
+    expect(await drop).toBe("drop");
+    expect(onDrop).toHaveBeenCalledOnce();
+
+    drag.pointerDown({ button: 0, pointerId: 1, screenX: 40, screenY: 100 });
+    expect(await drag.pointerMove({ pointerId: 1, screenX: 60, screenY: 120 }))
+      .toMatchObject({ x: 60, y: 40 });
+    await drag.pointerUp({ pointerId: 1 });
+  });
+
+  it.each(["frame", "move", "settle"])("releases the session after a failed %s request", async (failure) => {
+    const error = new Error("preview window unavailable");
+    const drag = new CollapsedThumbnailStackDrag({
+      getFrame: () => {
+        if (failure === "frame") throw error;
+        return { x: 0, y: 0 };
+      },
+      moveFrame: (x, y) => {
+        if (failure === "move") throw error;
+        return { x, y };
+      },
+      onDrop: () => { throw error; },
+      onSway: vi.fn(),
+      reducedMotion: () => false,
+    });
+    drag.pointerDown({ button: 0, pointerId: 1, screenX: 0, screenY: 0 });
+    await drag.pointerMove({ pointerId: 1, screenX: 40, screenY: 0 }).catch(() => undefined);
+    await expect(drag.pointerUp({ pointerId: 1 })).rejects.toThrow(error);
+    expect(drag.isActive).toBe(false);
+    expect(drag.isDragging).toBe(false);
+    expect(drag.pointerDown({ button: 0, pointerId: 2, screenX: 40, screenY: 0 })).toBe(true);
+    await drag.pointerUp({ pointerId: 2 }).catch(() => undefined);
+  });
+
+  it("does not read a new drag origin while the previous drop is still moving", async () => {
+    let finishMove!: (frame: { x: number; y: number }) => void;
+    const release = new Promise<{ x: number; y: number }>((resolve) => { finishMove = resolve; });
+    const getFrame = vi.fn(() => ({ x: 0, y: 0 }));
+    const moveFrame = vi.fn()
+      .mockImplementationOnce((x: number, y: number) => ({ x, y }))
+      .mockReturnValueOnce(release);
+    const drag = new CollapsedThumbnailStackDrag({
+      getFrame,
+      moveFrame,
+      reducedMotion: () => true,
+    });
+    drag.pointerDown({ button: 0, pointerId: 1, screenX: 0, screenY: 0 });
+    await drag.pointerMove({ pointerId: 1, screenX: 40, screenY: -80 });
+    const drop = drag.pointerUp({ pointerId: 1 });
+    await vi.waitFor(() => expect(moveFrame).toHaveBeenCalledTimes(2));
+
+    expect(drag.pointerDown({ button: 0, pointerId: 1, screenX: 40, screenY: -80 }))
+      .toBe(false);
+    expect(getFrame).toHaveBeenCalledTimes(1);
+    finishMove({ x: 40, y: -80 });
+    expect(await drop).toBe("drop");
+    expect(drag.pointerDown({ button: 0, pointerId: 1, screenX: 40, screenY: -80 }))
+      .toBe(true);
+    await drag.pointerUp({ pointerId: 1 });
+  });
+
   it("expands when the pointer is released without crossing the drag threshold", async () => {
     const frames: { x: number; y: number }[] = [];
     const drag = new CollapsedThumbnailStackDrag({

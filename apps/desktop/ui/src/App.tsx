@@ -6037,6 +6037,7 @@ export function Thumbnail() {
   useEffect(() => {
     let active = true;
     let unlisten: (() => void) | undefined;
+    let settingsChanged = false;
     const applySettings = (settings: AppSettings | null | undefined, forceHome: boolean) => {
       const placement = settings?.mini_preview_placement ?? DEFAULT_MINI_PREVIEW_PLACEMENT;
       if (!forceHome && placement === placementRef.current) return;
@@ -6044,10 +6045,11 @@ export function Thumbnail() {
     };
     void invoke<AppSettings>("get_settings")
       .then((settings) => {
-        if (active) applySettings(settings, true);
+        if (active && !settingsChanged) applySettings(settings, true);
       })
       .catch(() => undefined);
     void listen<AppSettings>("settings-changed", ({ payload }) => {
+      settingsChanged = true;
       if (active) applySettings(payload, false);
     }).then((dispose) => {
       if (active) unlisten = dispose;
@@ -6826,7 +6828,7 @@ export function Thumbnail() {
   };
 
   const setStackCollapsed = (nextCollapsed: boolean) => {
-    if (controlsDisabled || collapsed === nextCollapsed) return;
+    if (controlsDisabled || stackDrag.current?.isActive || collapsed === nextCollapsed) return;
     if (stackMotionTimer.current) clearTimeout(stackMotionTimer.current);
     const cancelHoverReady = () => {
       if (stackHoverReadyFrames.current) {
@@ -7142,6 +7144,7 @@ export function Thumbnail() {
         collapsedLayoutAnchorRef.current,
       ),
       reducedMotion: prefersReducedMotion,
+      onDrop: settleCollapsedStackAnchor,
       onSway: (sway) => applyThumbnailStackDragSway(stackRef.current, sway),
       onDraggingChange: (dragging) => {
         const stack = stackRef.current;
@@ -7158,6 +7161,13 @@ export function Thumbnail() {
 
   const onCollapsedStackPointerDown = (event: React.PointerEvent<HTMLButtonElement>) => {
     if (event.button !== 0 || controlsDisabled) return;
+    if (stackDrag.current?.isActive) {
+      // A press during the previous drop must not become an Expand click
+      // after that drop's asynchronous anchor conversion finishes.
+      skipCollapsedStackClick.current = true;
+      event.preventDefault();
+      return;
+    }
     collapsedStackPointerCleanup.current?.();
     const drag = collapsedStackDrag();
     if (!drag.pointerDown(event.nativeEvent)) return;
@@ -7193,7 +7203,7 @@ export function Thumbnail() {
       if (moveEvent.pointerId !== pointerId) return;
       moveEvent.preventDefault();
       retainThumbnailPointerCapture(hitTarget, pointerId);
-      void drag.pointerMove(moveEvent);
+      void drag.pointerMove(moveEvent).catch(() => undefined);
     };
     const finishPointer = (
       upEvent: Pick<PointerEvent, "pointerId" | "clientX" | "clientY">,
@@ -7218,13 +7228,12 @@ export function Thumbnail() {
         x: upEvent.clientX,
         y: upEvent.clientY,
       });
-      void drag.pointerUp({ pointerId: upEvent.pointerId }).then(async (outcome) => {
-        if (outcome === "ignored") return;
-        if (outcome === "drop") await settleCollapsedStackAnchor();
-        setThumbnailStackDragging(stackRef.current, false);
-        window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
-        if (options.expand !== false && outcome === "expand") setStackCollapsed(false);
-      });
+      void drag.pointerUp({ pointerId: upEvent.pointerId }).catch(() => "ignored" as const)
+        .then((outcome) => {
+          setThumbnailStackDragging(stackRef.current, false);
+          window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
+          if (options.expand !== false && outcome === "expand") setStackCollapsed(false);
+        });
     };
     const onPointerUp = (upEvent: PointerEvent) => finishPointer(upEvent);
     const onMouseUp = (upEvent: MouseEvent) => {

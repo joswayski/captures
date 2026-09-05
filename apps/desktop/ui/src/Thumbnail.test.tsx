@@ -1477,6 +1477,32 @@ describe("Thumbnail", () => {
     );
   });
 
+  it("does not turn a press during drop settlement into an expand click", async () => {
+    render(<Thumbnail />);
+    const card = await screen.findByRole("article");
+    const stack = card.closest(".thumbnail-stack")!;
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "Minimize previews" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(32 + THUMBNAIL_STACK_EXPAND_COLLAPSE_MS);
+    });
+    vi.useRealTimers();
+    const expand = screen.getByRole("button", { name: "Expand preview" });
+    fireEvent.pointerDown(expand, { button: 0, pointerId: 1, screenX: 40, screenY: 400 });
+    fireEvent.pointerMove(window, { pointerId: 1, screenX: 120, screenY: 40 });
+    await waitFor(() => expect(stack).toHaveClass("thumbnail-stack-dragging"));
+    // Deliver the next press before the first pointerUp's promises finish,
+    // then release it only after corner conversion has completed.
+    fireEvent.pointerUp(window, { pointerId: 1 });
+    fireEvent.click(expand);
+    fireEvent.pointerDown(expand, { button: 0, pointerId: 1, screenX: 120, screenY: 40 });
+    await waitFor(() => expect(stack).not.toHaveClass("thumbnail-stack-dragging"));
+    fireEvent.pointerUp(window, { pointerId: 1 });
+    fireEvent.click(expand);
+    expect(stack).toHaveClass("thumbnail-stack-minimized");
+    expect(invoke).not.toHaveBeenCalledWith("set_mini_previews_collapsed", { collapsed: false });
+  });
+
   it("keeps Show less in the top gutter after the pile is dragged to the top", async () => {
     Object.defineProperty(window, "innerHeight", { configurable: true, value: 800 });
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 1200 });
@@ -1876,6 +1902,36 @@ describe("Thumbnail", () => {
       .closest(".thumbnail-stack-toolbar");
     expect(toolbar).toHaveClass("thumbnail-stack-toolbar-anchor-top");
     expect(toolbar).toHaveClass("thumbnail-stack-toolbar-anchor-right");
+  });
+
+  it("keeps a newer corner preference when the initial settings request finishes late", async () => {
+    let finishSettings!: (settings: { mini_preview_placement: string }) => void;
+    const initial = new Promise<{ mini_preview_placement: string }>((resolve) => {
+      finishSettings = resolve;
+    });
+    type SettingsHandler = (event: { payload: { mini_preview_placement: string } }) => void;
+    let settingsChanged: SettingsHandler | undefined;
+    vi.mocked(listen).mockImplementation(async (event, handler) => {
+      if (event === "settings-changed") settingsChanged = handler as SettingsHandler;
+      return () => undefined;
+    });
+    const defaultInvoke = vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation((command, args, options) => (
+      command === "get_settings" ? initial : defaultInvoke(command, args, options)
+    ));
+    render(<Thumbnail />);
+    const card = await screen.findByRole("article");
+    const stack = card.closest(".thumbnail-stack")!;
+    await act(async () => {
+      settingsChanged!({ payload: { mini_preview_placement: "top_right" } });
+    });
+    expect(stack).toHaveClass("thumbnail-stack-anchor-top");
+    await act(async () => {
+      finishSettings({ mini_preview_placement: "bottom_left" });
+    });
+    expect(stack).toHaveClass("thumbnail-stack-anchor-top");
+    expect(screen.getByRole("button", { name: "Minimize previews" })
+      .closest(".thumbnail-stack-toolbar")).toHaveClass("thumbnail-stack-toolbar-anchor-right");
   });
 
   it("scrolls to the newest card when settings move an expanded pile between top and bottom", async () => {

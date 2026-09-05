@@ -68,6 +68,8 @@ export type ThumbnailStackDragHost = {
   onSway?: (sway: ThumbnailStackPoint) => void;
   /** Fires as soon as the press becomes a drag, before the frame moves. */
   onDraggingChange?: (dragging: boolean) => void;
+  /** Convert the dropped frame's anchor before another press can read its origin. */
+  onDrop?: () => void | Promise<void>;
   now?: () => number;
 };
 
@@ -264,6 +266,7 @@ export class CollapsedThumbnailStackDrag {
   private startFrame: ThumbnailStackPoint = { x: 0, y: 0 };
   private ready: Promise<void> | null = null;
   private dragging = false;
+  private releasing = false;
   private sway: ThumbnailStackPoint = { x: 0, y: 0 };
   private lastTickMs = 0;
   private swayRaf = 0;
@@ -301,7 +304,7 @@ export class CollapsedThumbnailStackDrag {
   }
 
   pointerDown(event: Pick<PointerEvent, "button" | "pointerId" | "screenX" | "screenY">): boolean {
-    if (event.button !== 0) return false;
+    if (event.button !== 0 || this.isActive) return false;
     this.beginSession(event.pointerId, event.screenX, event.screenY);
     return true;
   }
@@ -309,7 +312,7 @@ export class CollapsedThumbnailStackDrag {
   async pointerMove(
     event: Pick<PointerEvent, "pointerId" | "screenX" | "screenY">,
   ): Promise<ThumbnailStackDragMove | null> {
-    if (this.pointerId !== event.pointerId) return null;
+    if (this.pointerId !== event.pointerId || this.releasing) return null;
     const session = this.session;
     const stepX = event.screenX - this.lastPointer.x;
     const stepY = event.screenY - this.lastPointer.y;
@@ -369,17 +372,23 @@ export class CollapsedThumbnailStackDrag {
   async pointerUp(
     event: Pick<PointerEvent, "pointerId">,
   ): Promise<"expand" | "drop" | "ignored"> {
-    if (this.pointerId !== event.pointerId) return "ignored";
+    if (this.pointerId !== event.pointerId || this.releasing) return "ignored";
     const session = this.session;
-    await this.ready;
-    if (!this.sessionIs(session, event.pointerId)) return "ignored";
-    const expand = !this.dragging;
-    if (!expand) {
-      await this.flushDropMove(session, event.pointerId);
+    this.releasing = true;
+    try {
+      await this.ready;
       if (!this.sessionIs(session, event.pointerId)) return "ignored";
+      const expand = !this.dragging;
+      if (!expand) {
+        await this.flushDropMove(session, event.pointerId);
+        await this.host.onDrop?.();
+      }
+      return expand ? "expand" : "drop";
+    } finally {
+      // Native IPC can fail if the last capture disappears or a display goes
+      // away. Never leave the session (and its sway RAF) locked in that case.
+      if (this.sessionIs(session, event.pointerId)) this.endSession();
     }
-    this.endSession();
-    return expand ? "expand" : "drop";
   }
 
   private beginSession(pointerId: number, screenX: number, screenY: number) {
@@ -394,10 +403,13 @@ export class CollapsedThumbnailStackDrag {
     this.lastTickMs = 0;
     this.pointerSampled = false;
     this.stopSwayLoop();
-    this.ready = Promise.resolve(this.host.getFrame()).then((frame) => {
+    this.ready = Promise.resolve().then(() => this.host.getFrame()).then((frame) => {
       if (session !== this.session) return;
       this.startFrame = frame;
     });
+    // Observe failures even before the first move/up awaits the frame. Keep
+    // the rejected promise so pointerUp can release the session without expanding.
+    void this.ready.catch(() => undefined);
   }
 
   /**
@@ -420,6 +432,7 @@ export class CollapsedThumbnailStackDrag {
     this.moveGeneration += 1;
     this.pointerId = null;
     this.dragging = false;
+    this.releasing = false;
     this.ready = null;
     this.stopSwayLoop();
     this.sway = { x: 0, y: 0 };
