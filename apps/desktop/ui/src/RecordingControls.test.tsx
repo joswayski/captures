@@ -186,6 +186,18 @@ describe("placeCustomSelectMenu", () => {
     );
     expect(layout.left).toBe(472);
   });
+
+  it("keeps a bottom-of-window menu inside the viewport", () => {
+    const layout = placeCustomSelectMenu(
+      { top: 540, left: 80, right: 280, bottom: 574, width: 200, height: 34 },
+      { width: 280, height: 180 },
+      { width: 800, height: 600 },
+      3,
+    );
+    expect(layout.placement).toBe("above");
+    expect(layout.top).toBeGreaterThanOrEqual(8);
+    expect(layout.top + Math.min(layout.maxHeight, 180)).toBeLessThanOrEqual(592);
+  });
 });
 
 describe("RecordingCountdown", () => {

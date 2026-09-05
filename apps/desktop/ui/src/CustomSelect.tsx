@@ -54,7 +54,11 @@ export function placeCustomSelectMenu(
   const spaceBelow = Math.max(0, viewport.height - trigger.bottom - VIEWPORT_PADDING);
   const placement = spaceBelow < desiredHeight && spaceAbove > spaceBelow ? "above" : "below";
   const availableHeight = placement === "above" ? spaceAbove : spaceBelow;
-  const maxHeight = Math.max(72, Math.min(MAX_MENU_HEIGHT, availableHeight - 5));
+  const viewportMaxHeight = Math.max(0, viewport.height - VIEWPORT_PADDING * 2);
+  const maxHeight = Math.max(
+    1,
+    Math.min(MAX_MENU_HEIGHT, availableHeight || viewportMaxHeight, viewportMaxHeight),
+  );
   const menuHeight = Math.min(maxHeight, measuredHeight);
 
   const maxWidth = Math.min(MAX_MENU_WIDTH, Math.max(0, viewport.width - VIEWPORT_PADDING * 2));
@@ -64,16 +68,19 @@ export function placeCustomSelectMenu(
   const maxLeft = viewport.width - VIEWPORT_PADDING - menuWidth;
   left = Math.min(Math.max(minLeft, left), Math.max(minLeft, maxLeft));
 
-  const top = placement === "above"
+  let top = placement === "above"
     ? trigger.top - MENU_GAP - menuHeight
     : trigger.bottom + MENU_GAP;
+  const minTop = VIEWPORT_PADDING;
+  const maxTop = Math.max(minTop, viewport.height - menuHeight - VIEWPORT_PADDING);
+  top = Math.min(Math.max(minTop, top), maxTop);
 
   return {
     placement,
     maxHeight,
     top,
     left,
-    minWidth: trigger.width,
+    minWidth: Math.min(trigger.width, maxWidth || trigger.width),
   };
 }
 
@@ -214,6 +221,7 @@ export function CustomSelect({
         left: menuLayout.left,
         minWidth: menuLayout.minWidth,
         maxHeight: menuLayout.maxHeight,
+        maxWidth: MAX_MENU_WIDTH,
       }}
     >
       {options.map((option, index) => (
