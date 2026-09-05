@@ -831,7 +831,8 @@
   color: var(--text);
 }
 
-.filename-format-select .custom-select-listbox {
+.filename-format-select .custom-select-listbox,
+.filename-format-select-listbox {
   min-width: 8.5rem;
 }
 

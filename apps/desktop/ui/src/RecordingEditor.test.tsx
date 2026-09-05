@@ -645,6 +645,8 @@ describe("RecordingEditor", () => {
     expect(document.querySelector(".recording-output-estimate-delta")).toBeNull();
 
     fireEvent.click(screen.getByRole("combobox", { name: "Output resolution" }));
+    expect(screen.getByRole("listbox", { name: "Output resolution" }).parentElement)
+      .toBe(document.body);
     expect(screen.getByRole("option", { name: /Choose exact pixel dimensions/ })).toHaveTextContent(
       "Choose exact pixel dimensions.",
     );

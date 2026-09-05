@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useState } from "react";
 
 import { RecordingCountdown, RecordingRegionIndicator, ScreenshotCountdown } from "./App";
-import { CustomSelect } from "./CustomSelect";
+import { CustomSelect, placeCustomSelectMenu } from "./CustomSelect";
 import type { RecordingSessionSnapshot } from "./types";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -133,8 +133,58 @@ describe("CustomSelect", () => {
     expect(trigger.closest(".custom-select")).toHaveClass("filename-format-select");
 
     fireEvent.click(trigger);
+    const listbox = screen.getByRole("listbox", { name: "Quality" });
+    expect(listbox).toHaveClass("filename-format-select-listbox");
     fireEvent.click(screen.getByRole("option", { name: "Two" }));
     expect(trigger).toHaveTextContent(".png");
+  });
+
+  it("portals the listbox so overflow-hidden ancestors cannot clip it", () => {
+    render(
+      <div style={{ overflow: "hidden", width: 80 }}>
+        <DropdownHarness />
+      </div>,
+    );
+    fireEvent.click(screen.getByRole("combobox", { name: "Quality" }));
+    const listbox = screen.getByRole("listbox", { name: "Quality" });
+    expect(listbox.parentElement).toBe(document.body);
+    expect(listbox).toHaveStyle({ position: "fixed" });
+  });
+});
+
+describe("placeCustomSelectMenu", () => {
+  it("opens above when the menu would cross the bottom of the display", () => {
+    const layout = placeCustomSelectMenu(
+      { top: 720, left: 200, right: 420, bottom: 754, width: 220, height: 34 },
+      { width: 280, height: 160 },
+      { width: 1280, height: 800 },
+      4,
+    );
+    expect(layout.placement).toBe("above");
+    expect(layout.top).toBe(720 - 6 - 160);
+    expect(layout.left).toBe(140);
+    expect(layout.minWidth).toBe(220);
+  });
+
+  it("shifts right when a right-aligned menu would clip the left edge", () => {
+    const layout = placeCustomSelectMenu(
+      { top: 400, left: 12, right: 120, bottom: 434, width: 108, height: 34 },
+      { width: 320, height: 180 },
+      { width: 800, height: 600 },
+      4,
+    );
+    expect(layout.left).toBe(8);
+    expect(layout.placement).toBe("below");
+  });
+
+  it("shifts left when the menu would clip the right edge", () => {
+    const layout = placeCustomSelectMenu(
+      { top: 200, left: 700, right: 792, bottom: 234, width: 92, height: 34 },
+      { width: 320, height: 120 },
+      { width: 800, height: 600 },
+      3,
+    );
+    expect(layout.left).toBe(472);
   });
 });
 
