@@ -117,7 +117,8 @@ export default function Home({
                 </h2>
                 <p className="mt-3 max-w-xl text-sm leading-relaxed text-ink-muted">
                   Builds are available after every merge and may contain bugs or incomplete
-                  features. Please give feedback in the app, on{" "}
+                  features. Installing a download replaces the current app without deleting
+                  settings or captures. Please give feedback in the app, on{" "}
                   <a
                     href={X_URL}
                     target="_blank"

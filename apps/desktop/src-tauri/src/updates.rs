@@ -1322,6 +1322,18 @@ mod tests {
                 "https://github.com/joswayski/captures/releases/download/preview/latest.json"
             ])
         );
+        let pubkey = config["plugins"]["updater"]["pubkey"]
+            .as_str()
+            .expect("updater pubkey");
+        assert!(
+            pubkey.len() > 80,
+            "published builds must keep the updater public key so installed copies can verify the next Preview"
+        );
+        assert_eq!(
+            config["bundle"]["createUpdaterArtifacts"],
+            serde_json::json!(true),
+            "published builds must keep updater archives so installed copies can replace themselves"
+        );
     }
 
     #[test]
@@ -1729,6 +1741,17 @@ mod tests {
     fn failed_updates_open_the_website_download_page() {
         assert_eq!(DOWNLOAD_PAGE_URL, "https://captur.es/#download");
         assert_ne!(DOWNLOAD_PAGE_URL, RELEASES_URL);
+    }
+
+    #[test]
+    fn idle_tray_always_offers_a_manual_update_check() {
+        let item = tray_update_item(&UpdateStatus::Idle {
+            current_version: "2026.7.1901".into(),
+            current_display_version: "2026.07.19.1".into(),
+        });
+        assert_eq!(item.label, "Check for Updates…");
+        assert!(item.enabled);
+        assert!(!item.pin_first);
     }
 
     fn available_status(changelog: Vec<UpdateChangelogEntry>) -> UpdateStatus {

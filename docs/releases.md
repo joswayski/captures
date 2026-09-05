@@ -47,6 +47,13 @@ changes from appearing later in the next real desktop update message.
 
 If an in-app update download fails, the notice keeps the error on screen and
 offers **download from captur.es**, which opens the website installer section.
+Preferences → Updates always shows the same installer link, not only after a
+failure. Users can also download the `.dmg`, Windows setup, `.deb`, or AppImage
+from captur.es or the README and install over the current copy. That recovery path
+does not depend on the in-app updater working; settings and capture history stay.
+`scripts/updater-recovery.test.mjs` fails `npm run check` if updater artifacts,
+endpoints, the signing public key, stable installer filenames, or that download
+page URL are removed.
 
 Creating the draft early is only a private staging step. The **Publish Preview**
 job runs only after **Validate staged release** succeeds and `SHA256SUMS` is
