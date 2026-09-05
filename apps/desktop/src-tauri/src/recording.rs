@@ -254,15 +254,20 @@ pub(crate) async fn prepare_capture_selector_inner(
     initial_mode: CaptureSelectorMode,
     initial_target: CaptureMode,
 ) -> Result<RecordingSelectionSession, AppError> {
-    crate::ensure_capture_session_available()?;
+    crate::ensure_capture_session_available().inspect_err(|_| {
+        crate::abort_prefetched_freeze_capture(&app);
+    })?;
     if crate::updates::install_is_active(&app) {
+        crate::abort_prefetched_freeze_capture(&app);
         return Err(AppError::UpdateInstalling);
     }
     if recording_session_is_active(&state) || crate::screenshot_countdown_is_active(&state) {
+        crate::abort_prefetched_freeze_capture(&app);
         return Err(AppError::CaptureInProgress);
     }
     let overlay_visible = crate::capture_overlay_is_visible(&app);
     if !state.sessions.lock().is_empty() && !overlay_visible {
+        crate::abort_prefetched_freeze_capture(&app);
         return Err(AppError::CaptureInProgress);
     }
     let recapture_menu =
@@ -280,6 +285,7 @@ pub(crate) async fn prepare_capture_selector_inner(
             if let Err(error) = app.emit("recording-selection-ready", &summary) {
                 eprintln!("failed to update the open capture menu: {error}");
             }
+            crate::abort_prefetched_freeze_capture(&app);
             return Ok(summary);
         }
         if !recapture_menu {
@@ -287,7 +293,9 @@ pub(crate) async fn prepare_capture_selector_inner(
         }
     }
 
-    let request_permission = crate::mark_screen_permission_request(&state)?;
+    let request_permission = crate::mark_screen_permission_request(&state).inspect_err(|_| {
+        crate::abort_prefetched_freeze_capture(&app);
+    })?;
     if let Err(error) = state.backend.ensure_permission(request_permission) {
         if matches!(
             &error,
@@ -295,6 +303,7 @@ pub(crate) async fn prepare_capture_selector_inner(
         ) {
             *state.screen_permission_requested_this_launch.lock() = true;
         }
+        crate::abort_prefetched_freeze_capture(&app);
         return Err(error.into());
     }
 
