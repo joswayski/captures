@@ -118,9 +118,9 @@ describe("RecordingHud", () => {
 
     expect(screen.getByText("Recording")).toBeInTheDocument();
     expect(screen.queryByText("Not in recording")).not.toBeInTheDocument();
-    const privacy = screen.getByText("These controls won’t show in recordings");
-    expect(privacy).toBeInTheDocument();
-    expect(privacy.querySelector("strong")).toHaveTextContent("won’t");
+    const privacy = container.querySelector(".recording-hud-privacy");
+    expect(privacy).toHaveTextContent("These controls won’t show in recordings");
+    expect(privacy?.querySelector("strong")).toHaveTextContent("won’t");
     expect(container.querySelector(".recording-hud")?.firstElementChild).toBe(privacy);
     expect(container.querySelector(".recording-hud-main")).toContainElement(
       screen.getByRole("button", { name: "Hide recording controls" }),
@@ -270,15 +270,19 @@ describe("RecordingHud", () => {
       throw new Error(`unexpected command: ${command}`);
     });
 
-    render(<RecordingHud />);
+    const { container } = render(<RecordingHud />);
 
-    const privacy = await screen.findByText(
-      "These controls will show in recordings · Use Hide controls to keep them out",
+    const privacy = await waitFor(() => {
+      const note = container.querySelector(".recording-hud-privacy");
+      expect(note).toHaveTextContent(
+        "These controls will show in recordings · Use Hide controls to keep them out",
+      );
+      return note;
+    });
+    expect(privacy?.querySelector("strong")).toHaveTextContent("will");
+    expect(container.querySelector(".recording-hud-privacy")).not.toHaveTextContent(
+      "These controls won’t show in recordings",
     );
-    expect(privacy).toBeInTheDocument();
-    expect(privacy.querySelector("strong")).toHaveTextContent("will");
-    expect(screen.queryByText("These controls won’t show in recordings"))
-      .not.toBeInTheDocument();
   });
 
   it("updates the privacy menu text when the include preference changes", async () => {
@@ -294,12 +298,14 @@ describe("RecordingHud", () => {
       throw new Error(`unexpected command: ${command}`);
     });
 
-    render(<RecordingHud />);
+    const { container } = render(<RecordingHud />);
 
-    expect(await screen.findByText("These controls won’t show in recordings"))
-      .toBeInTheDocument();
-    expect(screen.getByText("These controls won’t show in recordings").querySelector("strong"))
-      .toHaveTextContent("won’t");
+    await waitFor(() => {
+      expect(container.querySelector(".recording-hud-privacy")).toHaveTextContent(
+        "These controls won’t show in recordings",
+      );
+    });
+    expect(container.querySelector(".recording-hud-privacy strong")).toHaveTextContent("won’t");
 
     controlsExcluded = false;
     await act(async () => {
@@ -308,13 +314,12 @@ describe("RecordingHud", () => {
       });
     });
 
-    expect(await screen.findByText(
-      "These controls will show in recordings · Use Hide controls to keep them out",
-    ))
-      .toBeInTheDocument();
-    expect(screen.getByText(
-      "These controls will show in recordings · Use Hide controls to keep them out",
-    ).querySelector("strong")).toHaveTextContent("will");
+    await waitFor(() => {
+      expect(container.querySelector(".recording-hud-privacy")).toHaveTextContent(
+        "These controls will show in recordings · Use Hide controls to keep them out",
+      );
+    });
+    expect(container.querySelector(".recording-hud-privacy strong")).toHaveTextContent("will");
   });
 
   it("uses a native Delete recording dialog before discarding", async () => {

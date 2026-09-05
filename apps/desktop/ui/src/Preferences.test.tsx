@@ -324,8 +324,9 @@ describe("Preferences", () => {
       name: /Show recording controls in screenshots and recordings/,
     });
     expect(includeControls).not.toBeChecked();
-    expect(screen.getByText("Recording controls won’t show in screenshots or recordings."))
-      .toBeInTheDocument();
+    expect(includeControls.closest("label")).toHaveTextContent(
+      "Recording controls won’t show in screenshots or recordings.",
+    );
     expect(includeControls.closest("label")?.querySelector("strong")).toHaveTextContent("won’t");
     fireEvent.click(includeControls);
 
@@ -334,9 +335,9 @@ describe("Preferences", () => {
         settings: expect.objectContaining({ include_recording_controls_in_captures: true }),
       });
     });
-    expect(screen.getByText(
+    expect(includeControls.closest("label")).toHaveTextContent(
       "Recording controls will show in screenshots and recordings. Turn this off to keep them out.",
-    )).toBeInTheDocument();
+    );
     expect(includeControls.closest("label")?.querySelector("strong")).toHaveTextContent("will");
   });
 
