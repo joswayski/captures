@@ -5373,6 +5373,8 @@ function CaptureOverlay() {
     return () => {
       active = false;
       cleanup.dispose();
+      activeSessionIdRef.current = null;
+      revealingSessionIdRef.current = null;
     };
   }, []);
 
