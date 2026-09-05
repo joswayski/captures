@@ -84,7 +84,8 @@ The current API exposes `GET /api/health`, `GET /api/updates/preview`, and
 `POST /api/feedback`. The updater route returns GitHub's Preview `latest.json`
 as-is and caches it in memory for one minute so installed apps can poll often
 without each laptop hitting GitHub. If GitHub is down, the last good copy is
-served. Feedback is
+served. Failed lookups wait one minute before retrying, including when the
+server has not cached a successful response yet. Feedback is
 validated, limited to one accepted submission per client IP per minute, and sent
 to Discord. Desktop Preview builds may also POST `category: "crash"` after an
 unexpected quit (version, OS, and a redacted panic or OS crash summary — never captures).

@@ -19,6 +19,7 @@
   --editor-text: var(--text);
   --editor-text-muted: var(--text-muted);
   --editor-text-subtle: var(--text-subtle);
+  --editor-check-size: 15px;
   display: grid;
   width: 100%;
   height: 100%;
@@ -2553,6 +2554,18 @@
   border-bottom: 1px solid var(--editor-border);
 }
 
+.screenshot-drop-shadow,
+.screenshot-drop-shadow-settings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+}
+
+/* Align nested knobs with the Drop shadow label, not the checkbox. */
+.screenshot-drop-shadow-settings {
+  margin-inline-start: calc(var(--editor-check-size) + var(--s-4));
+}
+
 .screenshot-property-section h2 {
   margin: 0;
   color: var(--editor-text);
@@ -2798,6 +2811,7 @@
 }
 
 .screenshot-check-row {
+  --editor-check-size: 15px;
   display: flex !important;
   min-height: 28px;
   flex-direction: row !important;
@@ -2809,8 +2823,8 @@
 .screenshot-check-row input[type="checkbox"] {
   display: grid;
   flex: 0 0 auto;
-  width: 15px;
-  height: 15px;
+  width: var(--editor-check-size);
+  height: var(--editor-check-size);
   margin: 0;
   place-content: center;
   border: 1px solid var(--border-strong);

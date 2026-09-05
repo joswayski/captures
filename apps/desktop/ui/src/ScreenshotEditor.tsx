@@ -151,8 +151,10 @@ import {
   TEXT_OPTICAL_CENTER_NUDGE_RATIO,
   textBackgroundPad,
   textBackgroundRadius,
+  textDropShadowStyle,
   textGlyphDrawY,
   textHasBackgroundPlate,
+  textLayoutBounds,
   textStylePreset,
   wrapTextLines,
   translateElement,
@@ -162,6 +164,9 @@ import {
   visibleContentBounds,
   annotationDropShadowMetrics,
   annotationHasDropShadow,
+  DROP_SHADOW_BLUR_MAX,
+  DROP_SHADOW_OFFSET_MAX,
+  resolvedDropShadowStyle,
   type AlignmentSnapGuide,
   type CanvasTrimMarginPreview,
   type ArrowHandle,
@@ -174,6 +179,7 @@ import {
   type EditorPoint,
   type EditorRect,
   type EditorTextElement,
+  type DropShadowStyle,
   type ElementStyle,
   type ResizeHandle,
   type ScreenshotDocument,
@@ -906,8 +912,8 @@ function applyAnnotationDropShadow(
   context: CanvasRenderingContext2D,
   style: ElementStyle,
 ): void {
-  const metrics = annotationDropShadowMetrics(style.strokeWidth);
-  context.shadowColor = "rgba(0, 0, 0, 0.45)";
+  const metrics = annotationDropShadowMetrics(style);
+  context.shadowColor = metrics.color;
   context.shadowBlur = metrics.blur;
   context.shadowOffsetX = metrics.offsetX;
   context.shadowOffsetY = metrics.offsetY;
@@ -1040,8 +1046,8 @@ function drawText(
   const anchorX = element.align === "center"
     ? element.x + boxWidth / 2
     : element.align === "right" ? element.x + boxWidth : element.x;
-  if (textHasBackgroundPlate(element)) {
-    context.fillStyle = element.background!;
+  const shadowStyle = textDropShadowStyle(element);
+  const paintPlate = () => {
     const pad = textBackgroundPad(element.fontSize);
     const backgroundX = element.x - pad.x;
     const backgroundY = element.y - pad.y;
@@ -1065,26 +1071,36 @@ function drawText(
     } else {
       context.fillRect(backgroundX, backgroundY, backgroundWidth, backgroundHeight);
     }
+  };
+  const paintGlyphs = () => {
+    context.fillStyle = element.color;
+    context.strokeStyle = element.color;
+    context.lineWidth = textOutlineWidth(element.fontSize);
+    context.lineJoin = "round";
+    lines.forEach((line, index) => {
+      const sample = line || " ";
+      const draw = textGlyphDrawY(
+        element.y,
+        element.fontSize,
+        index,
+        context.measureText(sample),
+      );
+      context.textBaseline = draw.baseline;
+      if (element.outlined) {
+        context.strokeText(sample, anchorX, draw.y);
+      } else {
+        context.fillText(sample, anchorX, draw.y);
+      }
+    });
+  };
+  if (textHasBackgroundPlate(element)) {
+    // Shadow the plate once so glyphs sitting on it do not cast a second pool.
+    context.fillStyle = element.background!;
+    paintAnnotationInk(context, shadowStyle, paintPlate);
+    paintGlyphs();
+  } else {
+    paintAnnotationInk(context, shadowStyle, paintGlyphs);
   }
-  context.fillStyle = element.color;
-  context.strokeStyle = element.color;
-  context.lineWidth = textOutlineWidth(element.fontSize);
-  context.lineJoin = "round";
-  lines.forEach((line, index) => {
-    const sample = line || " ";
-    const draw = textGlyphDrawY(
-      element.y,
-      element.fontSize,
-      index,
-      context.measureText(sample),
-    );
-    context.textBaseline = draw.baseline;
-    if (element.outlined) {
-      context.strokeText(sample, anchorX, draw.y);
-    } else {
-      context.fillText(sample, anchorX, draw.y);
-    }
-  });
   context.restore();
 }
 
@@ -2602,7 +2618,7 @@ export function ScreenshotEditor() {
 
   const inlineTextLayout = useMemo(() => {
     if (!editingText) return null;
-    const localBounds = elementLocalBounds(editingText);
+    const localBounds = textLayoutBounds(editingText);
     const pad = textHasBackgroundPlate(editingText)
       ? textBackgroundPad(editingText.fontSize)
       : { x: 0, y: 0 };
@@ -3736,6 +3752,8 @@ export function ScreenshotEditor() {
         fontSize: defaultFontSize,
         color: defaultStyle.color,
         preset: defaultTextStyle,
+        dropShadow: defaultStyle.dropShadow,
+        dropShadowStyle: defaultStyle.dropShadowStyle,
       });
       // Fully off-canvas text still grows the document so the label is not lost.
       const withText = { ...current, elements: [...current.elements, element] };
@@ -5829,10 +5847,10 @@ export function ScreenshotEditor() {
                   color: editingText.outlined ? "transparent" : editingText.color,
                   backgroundColor: editingText.background ?? "transparent",
                   borderRadius: editingText.roundedBackground
-                    ? textBackgroundRadius(
+                      ? textBackgroundRadius(
                       editingText,
-                      elementLocalBounds(editingText).width,
-                      elementLocalBounds(editingText).height,
+                      textLayoutBounds(editingText).width,
+                      textLayoutBounds(editingText).height,
                     ) * displayScale
                     : undefined,
                   caretColor: editingText.color,
@@ -6957,6 +6975,18 @@ export function ScreenshotEditor() {
                 ))}
               />
             )}
+            <DropShadowFields
+              style={textDropShadowStyle(selected)}
+              onChange={(next) => updateSelected((element) => (
+                element.kind === "text"
+                  ? {
+                    ...element,
+                    dropShadow: next.dropShadow,
+                    dropShadowStyle: next.dropShadowStyle,
+                  }
+                  : element
+              ))}
+            />
           </section>
         )}
 
@@ -7080,11 +7110,11 @@ export function ScreenshotEditor() {
                 ))}
               />
             </label>
-            <DropShadowCheck
-              checked={annotationHasDropShadow(selected.style)}
-              onChange={(dropShadow) => updateSelected((element) => (
+            <DropShadowFields
+              style={selected.style}
+              onChange={(nextStyle) => updateSelected((element) => (
                 element.kind === "shape" || element.kind === "path"
-                  ? { ...element, style: { ...element.style, dropShadow } }
+                  ? { ...element, style: nextStyle }
                   : element
               ))}
             />
@@ -7185,6 +7215,19 @@ export function ScreenshotEditor() {
                     onChange={setDefaultFontSize}
                   />
                 </label>
+                <DropShadowFields
+                  style={textDropShadowStyle({
+                    color: defaultStyle.color,
+                    fontSize: defaultFontSize,
+                    dropShadow: defaultStyle.dropShadow,
+                    dropShadowStyle: defaultStyle.dropShadowStyle,
+                  })}
+                  onChange={(next) => setDefaultStyle((style) => ({
+                    ...style,
+                    dropShadow: next.dropShadow,
+                    dropShadowStyle: next.dropShadowStyle,
+                  }))}
+                />
               </>
             ) : (
               <>
@@ -7269,12 +7312,9 @@ export function ScreenshotEditor() {
                     )}
                   </>
                 )}
-                <DropShadowCheck
-                  checked={annotationHasDropShadow(defaultStyle)}
-                  onChange={(dropShadow) => setDefaultStyle((style) => ({
-                    ...style,
-                    dropShadow,
-                  }))}
+                <DropShadowFields
+                  style={defaultStyle}
+                  onChange={setDefaultStyle}
                 />
               </>
             )}
@@ -7924,22 +7964,110 @@ function CanvasBackgroundPicker({
   );
 }
 
-function DropShadowCheck({
-  checked,
+function DropShadowFields({
+  style,
   onChange,
 }: {
-  checked: boolean;
-  onChange: (checked: boolean) => void;
+  style: ElementStyle;
+  onChange: (style: ElementStyle) => void;
 }) {
+  const enabled = annotationHasDropShadow(style);
+  const shadow = resolvedDropShadowStyle(style);
+  const [offsetDraft, setOffsetDraft] = useState<{
+    axis: "x" | "y";
+    text: string;
+  } | null>(null);
+  const patchShadow = (partial: Partial<DropShadowStyle>) => {
+    onChange({
+      ...style,
+      dropShadow: true,
+      dropShadowStyle: { ...shadow, ...partial },
+    });
+  };
+  const commitOffset = (axis: "x" | "y", text: string) => {
+    setOffsetDraft(null);
+    const parsed = Number(text);
+    if (!Number.isFinite(parsed)) return;
+    const offset = Math.min(
+      DROP_SHADOW_OFFSET_MAX,
+      Math.max(-DROP_SHADOW_OFFSET_MAX, Math.round(parsed)),
+    );
+    patchShadow(axis === "x" ? { offsetX: offset } : { offsetY: offset });
+  };
+
   return (
-    <label className="screenshot-check-row">
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(event) => onChange(event.target.checked)}
-      />
-      Drop shadow
-    </label>
+    <div className="screenshot-drop-shadow">
+      <label className="screenshot-check-row">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(event) => onChange({
+            ...style,
+            dropShadow: event.target.checked,
+          })}
+        />
+        Drop shadow
+      </label>
+      {enabled && (
+        <div className="screenshot-drop-shadow-settings">
+          <ColorField
+            label="Shadow color"
+            value={shadow.color}
+            onChange={(color) => patchShadow({ color })}
+          />
+          <label>
+            Opacity
+            <RangeSlider
+              ariaLabel="Shadow opacity"
+              min={0}
+              max={100}
+              value={Math.round(shadow.opacity)}
+              valueText={`${Math.round(shadow.opacity)}%`}
+              onChange={(opacity) => patchShadow({ opacity })}
+            />
+          </label>
+          <label>
+            Blur
+            <RangeSlider
+              ariaLabel="Shadow blur"
+              min={0}
+              max={DROP_SHADOW_BLUR_MAX}
+              value={Math.round(shadow.blur)}
+              valueText={`${Math.round(shadow.blur)} px`}
+              onChange={(blur) => patchShadow({ blur })}
+            />
+          </label>
+          <div className="screenshot-number-pair">
+            <label>
+              X offset
+              <NumberInput
+                ariaLabel="Shadow X offset"
+                min={-DROP_SHADOW_OFFSET_MAX}
+                max={DROP_SHADOW_OFFSET_MAX}
+                value={offsetDraft?.axis === "x"
+                  ? offsetDraft.text
+                  : Math.round(shadow.offsetX)}
+                onTextChange={(text) => setOffsetDraft({ axis: "x", text })}
+                onCommit={(text) => commitOffset("x", text)}
+              />
+            </label>
+            <label>
+              Y offset
+              <NumberInput
+                ariaLabel="Shadow Y offset"
+                min={-DROP_SHADOW_OFFSET_MAX}
+                max={DROP_SHADOW_OFFSET_MAX}
+                value={offsetDraft?.axis === "y"
+                  ? offsetDraft.text
+                  : Math.round(shadow.offsetY)}
+                onTextChange={(text) => setOffsetDraft({ axis: "y", text })}
+                onCommit={(text) => commitOffset("y", text)}
+              />
+            </label>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

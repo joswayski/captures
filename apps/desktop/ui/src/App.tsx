@@ -60,6 +60,7 @@ import {
   frontmostCaptureTargetAtPoint,
   frontToBackWindows,
   isCapturableSelection,
+  keepReadyWindowTargets,
   parseAspectRatioPreset,
   REGION_ASPECT_PRESETS,
   roundedRectPath,
@@ -2037,6 +2038,8 @@ export function RecordingSelector() {
   const visibleSnapshotRef = useRef<string | null>(null);
   /** Set when region create or window pick should auto-confirm (preference). */
   const autoStartAfterSelectionRef = useRef(false);
+  /** Latest start() for Enter. Auto-start calls `start` directly; the primary button is hidden. */
+  const startCaptureRef = useRef<() => void>(() => undefined);
 
   const clearRegionDrag = useCallback(() => {
     if (regionFrameRef.current !== null) {
@@ -2236,31 +2239,32 @@ export function RecordingSelector() {
         && sessionRef.current?.id === selection.id
       ) {
         const previous = sessionRef.current;
-        const snapshotChanged = previous.snapshot_url !== selection.snapshot_url
-          || previous.frozen !== selection.frozen;
-        const revealKey = `${selection.id}:${freezeFrameRevealKey(selection)}`;
-        sessionRef.current = selection;
-        setSession(selection);
-        if (previous.initial_mode !== selection.initial_mode) {
-          setActionMode(selection.initial_mode);
+        const next = keepReadyWindowTargets(previous, selection);
+        const snapshotChanged = previous.snapshot_url !== next.snapshot_url
+          || previous.frozen !== next.frozen;
+        const revealKey = `${next.id}:${freezeFrameRevealKey(next)}`;
+        sessionRef.current = next;
+        setSession(next);
+        if (previous.initial_mode !== next.initial_mode) {
+          setActionMode(next.initial_mode);
         }
-        if (previous.initial_target !== selection.initial_target) {
-          setTargetMode(selection.initial_target);
+        if (previous.initial_target !== next.initial_target) {
+          setTargetMode(next.initial_target);
           setHoveredWindow(null);
           setHoveredDisplay(false);
-          if (selection.initial_target !== "window") {
+          if (next.initial_target !== "window") {
             setSelectedWindow(null);
           }
         }
-        const modeChanged = previous.initial_mode !== selection.initial_mode
-          || previous.initial_target !== selection.initial_target;
+        const modeChanged = previous.initial_mode !== next.initial_mode
+          || previous.initial_target !== next.initial_target;
         if (snapshotChanged) {
           visibleSnapshotRef.current = null;
           revealingSessionIdRef.current = null;
           setFocusVisibleSessionId(null);
         } else if (modeChanged && visibleSnapshotRef.current === revealKey) {
           visibleSnapshotRef.current = null;
-          revealSelector(selection.id, freezeFrameRevealKey(selection));
+          revealSelector(next.id, freezeFrameRevealKey(next));
         }
         setSwitchingDisplay(false);
         return;
@@ -2487,7 +2491,7 @@ export function RecordingSelector() {
       );
       if (!primaryAction) return;
       event.preventDefault();
-      primaryAction.click();
+      startCaptureRef.current();
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
@@ -2640,18 +2644,129 @@ export function RecordingSelector() {
     || (targetMode === "region" && Boolean(region && region.width >= 2 && region.height >= 2))
   );
 
+  const selectedTarget = useCallback((): RecordingTarget | null => {
+    const current = sessionRef.current;
+    if (!current) return null;
+    if (targetMode === "display") {
+      return { type: "display", display_id: current.display.id };
+    }
+    if (targetMode === "window" && selectedWindow) {
+      return { type: "window", window_id: selectedWindow };
+    }
+    if (region) {
+      return {
+        type: "region",
+        display_id: current.display.id,
+        rect: roundRecordingRect(region, surfaceSize.width, surfaceSize.height),
+      };
+    }
+    return null;
+  }, [region, selectedWindow, surfaceSize.height, surfaceSize.width, targetMode]);
+
+  const start = useCallback(async () => {
+    const currentSession = sessionRef.current;
+    const currentSettings = settingsRef.current;
+    if (
+      !currentSession
+      || !currentSettings
+      || !canStartSelection
+      || starting
+      || switchingDisplay
+    ) return;
+    const target = selectedTarget();
+    if (!target) return;
+    setStarting(true);
+    setError("");
+    if (actionMode === "screenshot") {
+      try {
+        await invoke("capture_selection_screenshot", {
+          request: { selection_id: currentSession.id, target },
+        });
+        activeSessionIdRef.current = null;
+        revealingSessionIdRef.current = null;
+        setSession(null);
+        clearRegionDrag();
+      } catch (error) {
+        const message = String(error);
+        if (message.includes("screenshot cancelled")) {
+          activeSessionIdRef.current = null;
+          revealingSessionIdRef.current = null;
+          setSession(null);
+          clearRegionDrag();
+          return;
+        }
+        setError(message);
+        setStarting(false);
+      }
+      return;
+    }
+    const capabilities = currentSession.recording_capabilities;
+    const options: RecordingOptions = {
+      kind: "video",
+      target,
+      frames_per_second: fps,
+      max_resolution: maxResolution,
+      countdown_seconds: currentSettings.recording.countdown_seconds,
+      show_cursor: capabilities.cursor_control && showCursor,
+      highlight_clicks: capabilities.click_highlights && showClicks,
+      show_keystrokes: currentSettings.recording.show_keystrokes,
+      audio: {
+        capture_system_audio: capabilities.system_audio && systemAudio,
+        microphone_device_id: capabilities.microphone ? microphoneId : null,
+        mono_output: currentSettings.recording.mono_audio,
+        system_volume_percent: 100,
+        microphone_volume_percent: 100,
+        microphone_muted: false,
+      },
+      gif: {
+        max_width: currentSettings.recording.gif_max_width,
+        max_colors: currentSettings.recording.gif_max_colors,
+        optimize: true,
+      },
+    };
+    try {
+      await invoke("start_recording", {
+        request: { selection_id: currentSession.id, options },
+      });
+      activeSessionIdRef.current = null;
+      revealingSessionIdRef.current = null;
+      setSession(null);
+      clearRegionDrag();
+    } catch (error) {
+      setError(String(error));
+      setStarting(false);
+    }
+  }, [
+    actionMode,
+    canStartSelection,
+    clearRegionDrag,
+    fps,
+    maxResolution,
+    microphoneId,
+    selectedTarget,
+    showClicks,
+    showCursor,
+    starting,
+    switchingDisplay,
+    systemAudio,
+  ]);
+
+  useLayoutEffect(() => {
+    startCaptureRef.current = () => {
+      void start();
+    };
+  }, [start]);
+
   // Preference: selecting any target starts the capture immediately.
   useEffect(() => {
     if (!autoStartAfterSelectionRef.current || !canStartSelection || starting || switchingDisplay) {
       return;
     }
     autoStartAfterSelectionRef.current = false;
-    const primaryAction = panelRef.current?.querySelector<HTMLButtonElement>(
-      ".capture-selector-primary:not(:disabled)",
-    );
-    primaryAction?.click();
+    void start();
   }, [
     canStartSelection,
+    start,
     starting,
     switchingDisplay,
     region,
@@ -2844,90 +2959,6 @@ export function RecordingSelector() {
       setError(String(error));
     } finally {
       setSwitchingDisplay(false);
-    }
-  };
-
-  const selectedTarget = (): RecordingTarget | null => {
-    let target: RecordingTarget;
-    if (targetMode === "display") {
-      target = { type: "display", display_id: session.display.id };
-    } else if (targetMode === "window" && selectedWindow) {
-      target = { type: "window", window_id: selectedWindow };
-    } else if (region) {
-      target = {
-        type: "region",
-        display_id: session.display.id,
-        rect: roundRecordingRect(region, surfaceSize.width, surfaceSize.height),
-      };
-    } else {
-      return null;
-    }
-    return target;
-  };
-
-  const start = async () => {
-    if (!canStart || starting || switchingDisplay) return;
-    const target = selectedTarget();
-    if (!target) return;
-    setStarting(true);
-    setError("");
-    if (actionMode === "screenshot") {
-      try {
-        await invoke("capture_selection_screenshot", {
-          request: { selection_id: session.id, target },
-        });
-        activeSessionIdRef.current = null;
-        revealingSessionIdRef.current = null;
-        setSession(null);
-        clearRegionDrag();
-      } catch (error) {
-        const message = String(error);
-        if (message.includes("screenshot cancelled")) {
-          activeSessionIdRef.current = null;
-          revealingSessionIdRef.current = null;
-          setSession(null);
-          clearRegionDrag();
-          return;
-        }
-        setError(message);
-        setStarting(false);
-      }
-      return;
-    }
-    const options: RecordingOptions = {
-      kind: "video",
-      target,
-      frames_per_second: fps,
-      max_resolution: maxResolution,
-      countdown_seconds: settings.recording.countdown_seconds,
-      show_cursor: session.recording_capabilities.cursor_control && showCursor,
-      highlight_clicks: session.recording_capabilities.click_highlights && showClicks,
-      show_keystrokes: settings.recording.show_keystrokes,
-      audio: {
-        capture_system_audio: session.recording_capabilities.system_audio && systemAudio,
-        microphone_device_id: session.recording_capabilities.microphone ? microphoneId : null,
-        mono_output: settings.recording.mono_audio,
-        system_volume_percent: 100,
-        microphone_volume_percent: 100,
-        microphone_muted: false,
-      },
-      gif: {
-        max_width: settings.recording.gif_max_width,
-        max_colors: settings.recording.gif_max_colors,
-        optimize: true,
-      },
-    };
-    try {
-      await invoke("start_recording", {
-        request: { selection_id: session.id, options },
-      });
-      activeSessionIdRef.current = null;
-      revealingSessionIdRef.current = null;
-      setSession(null);
-      clearRegionDrag();
-    } catch (error) {
-      setError(String(error));
-      setStarting(false);
     }
   };
 
@@ -3176,6 +3207,11 @@ export function RecordingSelector() {
                     } else {
                       autoStartAfterSelectionRef.current = true;
                     }
+                  } else {
+                    // Region and window still need a drawn/picked target.
+                    // Drop a pending full-screen auto-start so switching away
+                    // from Full screen cannot start and dismiss the menu.
+                    autoStartAfterSelectionRef.current = false;
                   }
                 }}
               >

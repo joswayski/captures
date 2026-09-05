@@ -1155,12 +1155,18 @@ fn encode_indexed_png(
         palette.extend_from_slice(&[0, 0, 0]);
         trns.push(255);
     }
+    let depth = match palette_colors.len() {
+        0..=2 => png::BitDepth::One,
+        3..=4 => png::BitDepth::Two,
+        5..=16 => png::BitDepth::Four,
+        _ => png::BitDepth::Eight,
+    };
 
     let mut bytes = Vec::new();
     {
         let mut encoder = png::Encoder::new(&mut bytes, width, height);
         encoder.set_color(png::ColorType::Indexed);
-        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_depth(depth);
         encoder.set_compression(png::Compression::Best);
         // Palette indices are categorical, not intensities: byte-difference
         // filters like Paeth add noise and inflate the deflate stream, which
@@ -1174,8 +1180,28 @@ fn encode_indexed_png(
         let mut writer = encoder
             .write_header()
             .map_err(|error| AppError::Image(error.to_string()))?;
+        // PNG stores sub-byte samples most-significant first, padding each row
+        // independently. Keep the palette (including alpha) and indices exact.
+        let packed;
+        let data = if depth == png::BitDepth::Eight {
+            indices
+        } else {
+            let bits = depth as usize;
+            let per_byte = 8 / bits;
+            packed = indices
+                .chunks(width as usize)
+                .flat_map(|row| {
+                    row.chunks(per_byte).map(|chunk| {
+                        chunk.iter().enumerate().fold(0, |byte, (offset, index)| {
+                            byte | (index << (8 - bits * (offset + 1)))
+                        })
+                    })
+                })
+                .collect::<Vec<u8>>();
+            packed.as_slice()
+        };
         writer
-            .write_image_data(indices)
+            .write_image_data(data)
             .map_err(|error| AppError::Image(error.to_string()))?;
     }
     Ok(bytes)
@@ -1870,6 +1896,76 @@ mod tests {
             .expect("png header")
             .info()
             .color_type
+    }
+
+    #[test]
+    fn indexed_png_packing_preserves_pixels_alpha_and_row_boundaries() {
+        for (colors, depth) in [
+            (1, png::BitDepth::One),
+            (2, png::BitDepth::One),
+            (3, png::BitDepth::Two),
+            (4, png::BitDepth::Two),
+            (5, png::BitDepth::Four),
+            (16, png::BitDepth::Four),
+            (17, png::BitDepth::Eight),
+            (256, png::BitDepth::Eight),
+        ] {
+            let palette: Vec<[u8; 4]> = (0..colors)
+                .map(|index| {
+                    let value = index as u8;
+                    [value, 255 - value, value / 2, value]
+                })
+                .collect();
+            for width in [1_u32, 2, 3, 7, 8, 9, 17] {
+                let height = 19;
+                let indices: Vec<u8> = (0..width * height)
+                    .map(|index| (index % colors) as u8)
+                    .collect();
+                let bytes = super::encode_indexed_png(width, height, &palette, &indices)
+                    .expect("indexed PNG encoded");
+                let reader = png::Decoder::new(std::io::Cursor::new(&bytes))
+                    .read_info()
+                    .expect("PNG header");
+                assert_eq!(reader.info().bit_depth, depth);
+                assert_eq!(reader.info().color_type, png::ColorType::Indexed);
+                assert_eq!(
+                    reader.info().srgb,
+                    Some(png::SrgbRenderingIntent::Perceptual)
+                );
+                let decoded = image::load_from_memory(&bytes)
+                    .expect("packed PNG decodes")
+                    .to_rgba8();
+                assert_eq!(decoded.dimensions(), (width, height));
+                let expected: Vec<u8> = indices
+                    .iter()
+                    .flat_map(|&index| palette[usize::from(index)])
+                    .collect();
+                assert_eq!(
+                    decoded.as_raw(),
+                    &expected,
+                    "{colors} colors, width {width}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn low_color_png_export_preserves_exact_pixels() {
+        let image = RgbaImage::from_fn(257, 129, |x, y| {
+            if (x * 13 + y * 7) % 19 < 9 {
+                Rgba([24, 48, 96, 255])
+            } else {
+                Rgba([216, 192, 160, 128])
+            }
+        });
+        let bytes = encode_png_export(&image, true, Some(32)).expect("PNG export");
+        assert_eq!(
+            image::load_from_memory(&bytes)
+                .expect("PNG decodes")
+                .to_rgba8(),
+            image
+        );
+        assert!(bytes.len() <= encode_png(&image).expect("preserve PNG").len());
     }
 
     fn png_has_srgb_chunk(bytes: &[u8]) -> bool {

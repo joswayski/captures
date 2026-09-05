@@ -8,6 +8,7 @@ import {
   frontmostCaptureTargetAtPoint,
   frontmostWindowAtPoint,
   frontToBackWindows,
+  keepReadyWindowTargets,
   windowListingIsReady,
   windowPointerHoverAtPoint,
   isCapturableSelection,
@@ -146,6 +147,46 @@ describe("windowListingIsReady", () => {
     expect(windowListingIsReady(undefined)).toBe(true);
     expect(windowListingIsReady(true)).toBe(true);
     expect(windowListingIsReady(false)).toBe(false);
+  });
+});
+
+describe("keepReadyWindowTargets", () => {
+  const ready = {
+    id: "selection-1",
+    snapshot_url: "capture://recording-selection/selection-1",
+    display: { id: "display-1" },
+    windows: [{ id: "front-window" }],
+    shell_chrome: [{ id: "menubar" }],
+    windows_ready: true,
+  };
+
+  it("keeps listed windows when a later wake repeats the deferred empty payload", () => {
+    expect(keepReadyWindowTargets(ready, {
+      ...ready,
+      windows: [],
+      shell_chrome: [],
+      windows_ready: false,
+    })).toEqual(ready);
+  });
+
+  it("accepts a finished listing, including an empty desktop", () => {
+    const emptyReady = {
+      ...ready,
+      windows: [],
+      shell_chrome: [],
+      windows_ready: true,
+    };
+    expect(keepReadyWindowTargets(ready, emptyReady)).toEqual(emptyReady);
+  });
+
+  it("does not keep windows after the freeze-frame display changes", () => {
+    const incoming = {
+      ...ready,
+      display: { id: "display-2" },
+      windows: [],
+      windows_ready: false,
+    };
+    expect(keepReadyWindowTargets(ready, incoming)).toEqual(incoming);
   });
 });
 

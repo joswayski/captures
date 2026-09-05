@@ -25,10 +25,12 @@ export type UpdaterManifestResult =
 
 let cache: CacheEntry | null = null;
 let inflight: Promise<string> | null = null;
+let retryAfter = 0;
 
 export function resetUpdaterManifestCache(): void {
   cache = null;
   inflight = null;
+  retryAfter = 0;
 }
 
 /** Test helper: install a cached manifest with an explicit expiry. */
@@ -42,6 +44,7 @@ export function setUpdaterManifestCacheForTests(
     fetchedAt: options.fetchedAt ?? Date.now(),
   };
   inflight = null;
+  retryAfter = 0;
 }
 
 export function isUpdaterManifest(value: unknown): boolean {
@@ -72,6 +75,8 @@ export async function resolveUpdaterManifest(
     };
   }
 
+  if (now < retryAfter) return staleOrUnavailable(now);
+
   if (inflight) {
     try {
       const text = await inflight;
@@ -96,22 +101,14 @@ export async function resolveUpdaterManifest(
       fetchedAt,
       expiresAt: fetchedAt + UPDATER_MANIFEST_CACHE_MS,
     };
+    retryAfter = 0;
     return { ok: true, text, ageSeconds: 0, stale: false };
   } catch (error) {
     console.error("updater manifest lookup failed", error);
-    if (cache) {
-      cache = {
-        ...cache,
-        expiresAt: Date.now() + UPDATER_MANIFEST_FAILURE_RETRY_MS,
-      };
-      return {
-        ok: true,
-        text: cache.text,
-        ageSeconds: ageSeconds(now, cache.fetchedAt),
-        stale: true,
-      };
-    }
-    return { ok: false, error: "updater manifest is unavailable" };
+    // Back off even on a cold cache. Keep the successful entry's expiry intact
+    // so every stale response during the retry window remains marked stale.
+    retryAfter = Date.now() + UPDATER_MANIFEST_FAILURE_RETRY_MS;
+    return staleOrUnavailable(now);
   } finally {
     if (inflight === promise) inflight = null;
   }
