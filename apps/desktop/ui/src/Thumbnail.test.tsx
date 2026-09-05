@@ -1183,6 +1183,72 @@ describe("Thumbnail", () => {
     expect(stack).not.toHaveClass("thumbnail-stack-compact");
   });
 
+  it("keeps a collapsed pile collapsed and draggable after a new capture", async () => {
+    type CaptureCompletedHandler = (event: { payload: CaptureArtifact }) => void;
+    let onCaptureCompleted: CaptureCompletedHandler | null = null;
+    vi.mocked(listen).mockImplementation(async (event, handler) => {
+      if (event === "capture-completed") {
+        onCaptureCompleted = handler as CaptureCompletedHandler;
+      }
+      return () => undefined;
+    });
+
+    render(<Thumbnail />);
+    const card = await screen.findByRole("article");
+    const stack = card.closest(".thumbnail-stack")!;
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "Minimize previews" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(32);
+      await vi.advanceTimersByTimeAsync(THUMBNAIL_STACK_EXPAND_COLLAPSE_MS);
+    });
+    vi.useRealTimers();
+
+    await waitFor(() => expect(onCaptureCompleted).not.toBeNull());
+    const secondArtifact = {
+      ...artifact,
+      id: "capture-2",
+      preview_url: "captures-capture://artifact/capture-2",
+      full_url: "captures-capture://artifact-full/capture-2",
+    };
+    await act(async () => {
+      onCaptureCompleted?.({ payload: secondArtifact });
+    });
+
+    expect(stack).toHaveClass("thumbnail-stack-minimized");
+    const expand = screen.getByRole("button", { name: "Expand 2 previews" });
+    fireEvent.pointerDown(expand, {
+      button: 0,
+      pointerId: 1,
+      screenX: 40,
+      screenY: 80,
+    });
+    fireEvent.pointerMove(window, {
+      pointerId: 1,
+      screenX: 120,
+      screenY: 40,
+      bubbles: true,
+    });
+    await waitFor(() => {
+      expect(stack).toHaveClass("thumbnail-stack-dragging");
+    });
+    expect(document.documentElement.style.getPropertyValue("--thumbnail-stack-drag-x")).toBe(
+      "80px",
+    );
+    expect(document.documentElement.style.getPropertyValue("--thumbnail-stack-drag-y")).toBe(
+      "-40px",
+    );
+    fireEvent.pointerUp(window, { pointerId: 1, bubbles: true });
+    await waitFor(() => {
+      expect(stack).not.toHaveClass("thumbnail-stack-dragging");
+    });
+    expect(stack).toHaveClass("thumbnail-stack-minimized");
+    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith(
+      "set_mini_previews_collapsed",
+      { collapsed: false },
+    );
+  });
+
   it("drags the collapsed pile instead of expanding once the pointer moves", async () => {
     render(<Thumbnail />);
     const card = await screen.findByRole("article");
