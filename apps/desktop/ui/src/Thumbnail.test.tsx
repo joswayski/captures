@@ -1158,7 +1158,7 @@ describe("Thumbnail", () => {
         path: "/Users/example/Captures/three.png",
       },
     ];
-    vi.mocked(invoke).mockImplementation(async (command, payload) => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "get_artifacts") return stacked;
       if (command === "get_clipboard_state") {
         return { revision: 0, artifact_id: stacked.at(-1)?.id };
