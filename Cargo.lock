@@ -561,6 +561,7 @@ dependencies = [
  "directories",
  "image",
  "jpeg-encoder",
+ "libc",
  "mouse_position",
  "parking_lot",
  "png 0.17.16",
@@ -585,6 +586,7 @@ dependencies = [
  "trash",
  "uuid",
  "webp",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
