@@ -1005,10 +1005,10 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
  * The collapsed pile expands on click and can still be dragged. Force pointer
  * on peeking cards and their images so file-drag grab cannot leak through.
  */
-html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-overflow-cue, .thumbnail-collapsed-hit-target):not(:disabled),
-html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-overflow-cue, .thumbnail-collapsed-hit-target):not(:disabled) *,
-:is(.thumbnail-stack-control, .thumbnail-overflow-cue, .thumbnail-collapsed-hit-target)[data-native-pointer-hover="true"]:not(:disabled),
-:is(.thumbnail-stack-control, .thumbnail-overflow-cue, .thumbnail-collapsed-hit-target)[data-native-pointer-hover="true"]:not(:disabled) * {
+html.thumbnail-native-tracking :is(.thumbnail-stack-toolbar, .thumbnail-stack-control, .thumbnail-overflow-cue, .thumbnail-collapsed-hit-target):not(:disabled),
+html.thumbnail-native-tracking :is(.thumbnail-stack-toolbar, .thumbnail-stack-control, .thumbnail-overflow-cue, .thumbnail-collapsed-hit-target):not(:disabled) *,
+:is(.thumbnail-stack-toolbar, .thumbnail-stack-control, .thumbnail-overflow-cue, .thumbnail-collapsed-hit-target)[data-native-pointer-hover="true"]:not(:disabled),
+:is(.thumbnail-stack-toolbar, .thumbnail-stack-control, .thumbnail-overflow-cue, .thumbnail-collapsed-hit-target)[data-native-pointer-hover="true"]:not(:disabled) * {
   cursor: pointer !important;
 }
 
@@ -1024,14 +1024,34 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
  * Transparent always-on-top WebViews often skip element-level `cursor` until
  * mousedown. Mirror grab/pointer on `html` from CSS :hover so the glow hover
  * and Show less control do not wait for a click.
+ *
+ * Stack chrome (Show less, overflow cues, collapsed pile) must paint pointer
+ * on `html` *and* every descendant with `!important`. Native tracking otherwise
+ * stamps grab/default on the whole tree, and moving across the rounded control,
+ * morphing pill, or peeking cards lets WebKit flash the arrow.
  */
-html:has(.thumbnail-card:hover) {
+html:has(.thumbnail-card:hover):not(:has(
+  :is(
+    .thumbnail-stack-toolbar,
+    .thumbnail-stack-control,
+    .thumbnail-overflow-cue,
+    .thumbnail-collapsed-hit-target
+  ):hover
+)):not(:has(
+  :is(
+    .thumbnail-stack-toolbar,
+    .thumbnail-stack-control,
+    .thumbnail-overflow-cue,
+    .thumbnail-collapsed-hit-target
+  )[data-native-pointer-hover="true"]
+)) {
   cursor: -webkit-grab;
   cursor: grab;
 }
 
 html:has(
   :is(
+    .thumbnail-stack-toolbar,
     .thumbnail-stack-control,
     .thumbnail-overflow-cue,
     .thumbnail-collapsed-hit-target,
@@ -1042,6 +1062,18 @@ html:has(
 ),
 html:has(
   :is(
+    .thumbnail-stack-toolbar,
+    .thumbnail-stack-control,
+    .thumbnail-overflow-cue,
+    .thumbnail-collapsed-hit-target,
+    .icon-button,
+    .thumbnail-main-actions button,
+    .thumbnail-editor-control
+  ):hover:not(:disabled):not([data-thumbnail-hover-stale])
+) *,
+html:has(
+  :is(
+    .thumbnail-stack-toolbar,
     .thumbnail-stack-control,
     .thumbnail-overflow-cue,
     .thumbnail-collapsed-hit-target,
@@ -1049,14 +1081,27 @@ html:has(
     .thumbnail-main-actions button,
     .thumbnail-editor-control
   )[data-native-pointer-hover="true"]:not(:disabled)
-) {
-  cursor: pointer;
+),
+html:has(
+  :is(
+    .thumbnail-stack-toolbar,
+    .thumbnail-stack-control,
+    .thumbnail-overflow-cue,
+    .thumbnail-collapsed-hit-target,
+    .icon-button,
+    .thumbnail-main-actions button,
+    .thumbnail-editor-control
+  )[data-native-pointer-hover="true"]:not(:disabled)
+) * {
+  cursor: pointer !important;
 }
 
 html:has(.thumbnail-stack-dragging),
-html:has(.thumbnail-card.thumbnail-file-dragging) {
-  cursor: -webkit-grabbing;
-  cursor: grabbing;
+html:has(.thumbnail-stack-dragging) *,
+html:has(.thumbnail-card.thumbnail-file-dragging),
+html:has(.thumbnail-card.thumbnail-file-dragging) * {
+  cursor: -webkit-grabbing !important;
+  cursor: grabbing !important;
 }
 
 .thumbnail-card:hover,
@@ -1066,10 +1111,13 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 }
 
 .thumbnail-card:hover :is(button, .icon-button, .thumbnail-editor-control):not(:disabled),
+.thumbnail-stack-toolbar:hover,
+.thumbnail-stack-toolbar:hover *,
 .thumbnail-stack-control:hover:not(:disabled),
 .thumbnail-stack-control:hover:not(:disabled) *,
 .thumbnail-overflow-cue:hover:not(:disabled),
-.thumbnail-collapsed-hit-target:hover:not(:disabled):not([data-thumbnail-hover-stale]) {
+.thumbnail-collapsed-hit-target:hover:not(:disabled):not([data-thumbnail-hover-stale]),
+.thumbnail-collapsed-hit-target:hover:not(:disabled):not([data-thumbnail-hover-stale]) * {
   cursor: pointer;
 }
 
@@ -1593,6 +1641,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   display: flex;
   gap: var(--s-1);
   pointer-events: auto;
+  cursor: pointer;
 }
 
 .thumbnail-stack-toolbar-leaving,
@@ -1688,7 +1737,6 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 .thumbnail-stack-control[data-native-pointer-hover="true"] {
   border-color: var(--glass-border-strong);
   background: var(--glass-raised-solid);
-  transform: translateY(-1px);
 }
 
 .thumbnail-stack-control:active {
@@ -1765,7 +1813,6 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   background: var(--glass-strong-solid);
   border-color: var(--glass-border);
   cursor: pointer;
-  transform: translateY(-1px);
 }
 
 .thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize:active {
@@ -2196,45 +2243,6 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 .thumbnail-collapsed-hit-target {
   --thumbnail-peek-up: max(
     0px,
-    calc(var(--thumbnail-collapsed-peek, 0px) * var(--thumbnail-stack-gravity, 1))
-  );
-  --thumbnail-peek-down: max(
-    0px,
-    calc(var(--thumbnail-collapsed-peek, 0px) * -1 * var(--thumbnail-stack-gravity, 1))
-  );
-  position: absolute;
-  z-index: 40;
-  right: 28px;
-  bottom: calc(52px - var(--thumbnail-peek-down));
-  left: 28px;
-  /*
-   * Front card is 160px. Extra peek height comes from `--thumbnail-collapsed-peek`
-   * (idle 9px × receding pose) so a single preview does not steal clicks in
-   * the empty space above it. Hover uses `--thumbnail-collapsed-hover-peek`.
-   * Gravity splits the extra above or below the front card.
-   */
-  height: calc(160px + var(--thumbnail-peek-up) + var(--thumbnail-peek-down));
-  padding: 0;
-  border: 0;
-  border-radius: 12px;
-  background: transparent;
-  cursor: pointer;
-  touch-action: none;
-  pointer-events: auto;
-  -webkit-user-drag: none;
-  /* Chromium's image-drag hit test skips empty controls and uses the <img>
-     underneath. A 0-alpha fill makes this the drag source without tint. */
-  background-image: linear-gradient(rgb(0 0 0 / 0%), rgb(0 0 0 / 0%));
-}
-
-.thumbnail-collapsed-hit-target:not(:disabled) * {
-  cursor: pointer;
-}
-
-.thumbnail-collapsed-hit-target:hover:not([data-thumbnail-hover-stale]),
-.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"] {
-  --thumbnail-peek-up: max(
-    0px,
     calc(
       var(--thumbnail-collapsed-hover-peek, var(--thumbnail-collapsed-peek, 0px))
         * var(--thumbnail-stack-gravity, 1)
@@ -2247,6 +2255,33 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
         * -1 * var(--thumbnail-stack-gravity, 1)
     )
   );
+  position: absolute;
+  z-index: 40;
+  right: 28px;
+  bottom: calc(52px - var(--thumbnail-peek-down));
+  left: 28px;
+  /*
+   * Front card is 160px. Extra peek height always uses the hover-fan size so
+   * moving onto peeking cards cannot leave this control (idle peek was shorter
+   * than the fan, which flashed the default arrow). Gravity splits the extra
+   * above or below the front card.
+   */
+  height: calc(160px + var(--thumbnail-peek-up) + var(--thumbnail-peek-down));
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  cursor: pointer;
+  touch-action: none;
+  pointer-events: auto;
+  -webkit-user-drag: none;
+  /* Chromium's image-drag hit test skips empty controls and uses the <img>
+     underneath. A 0-alpha fill makes this the drag source without tint. */
+  background-image: linear-gradient(rgb(0 0 0 / 0%), rgb(0 0 0 / 0%));
+}
+
+.thumbnail-collapsed-hit-target:not(:disabled) * {
+  cursor: pointer;
 }
 
 .thumbnail-stack-anchor-top .thumbnail-collapsed-hit-target {
@@ -2268,7 +2303,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 .thumbnail-collapsed-hit-target::after {
   position: absolute;
   inset: -96px -10px -6px;
-  border-radius: inherit;
+  border-radius: 12px;
   content: "";
   opacity: 0;
   pointer-events: none;

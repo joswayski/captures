@@ -460,7 +460,9 @@ describe("thumbnail stack layout", () => {
     );
 
     expect(hitTarget?.[1]).toMatch(/cursor:\s*pointer/);
+    expect(hitTarget?.[1]).toMatch(/--thumbnail-collapsed-hover-peek/);
     expect(hitTarget?.[1]).toMatch(/--thumbnail-collapsed-peek/);
+    expect(hitTarget?.[1]).toMatch(/border-radius:\s*0/);
     expect(hitTarget?.[1]).toMatch(/left:\s*28px/);
     expect(hitTarget?.[1]).toMatch(/right:\s*28px/);
     expect(hitTarget?.[1]).not.toMatch(/--thumbnail-collapsed-skew-pad/);
@@ -474,13 +476,22 @@ describe("thumbnail stack layout", () => {
       /html\.thumbnail-native-tracking \.thumbnail-stack-minimized \.thumbnail-card img/,
     );
     expect(thumbnailStyles).toMatch(
-      /html:has\(\.thumbnail-card:hover\)\s*\{[\s\S]*?cursor:\s*grab/,
+      /html:has\(\.thumbnail-card:hover\):not\(:has\(/,
     );
     expect(thumbnailStyles).toMatch(
-      /html:has\(\s*:is\(\s*\.thumbnail-stack-control/,
+      /html:has\(\.thumbnail-card:hover\):not\(:has\([\s\S]*?cursor:\s*grab/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /html:has\(\s*:is\(\s*\.thumbnail-stack-toolbar/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /html:has\(\s*:is\(\s*\.thumbnail-stack-toolbar[\s\S]*?\) \*\s*\{[\s\S]*?cursor:\s*pointer !important/,
     );
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-card:hover :is\(button, \.icon-button, \.thumbnail-editor-control\):not\(:disabled\)/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-toolbar:hover,\s*\n\.thumbnail-stack-toolbar:hover \*/,
     );
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-control:hover:not\(:disabled\),\s*\n\.thumbnail-stack-control:hover:not\(:disabled\) \*/,
@@ -519,7 +530,10 @@ describe("thumbnail stack layout", () => {
       /\.thumbnail-stack-toolbar:not\(\.thumbnail-stack-toolbar-leaving\):not\(\.thumbnail-stack-toolbar-exiting\):not\(\.thumbnail-stack-toolbar-entering\) \.thumbnail-stack-minimize:hover/,
     );
     expect(thumbnailStyles).toMatch(
-      /\.thumbnail-stack-toolbar:not\(\.thumbnail-stack-toolbar-leaving\):not\(\.thumbnail-stack-toolbar-exiting\):not\(\.thumbnail-stack-toolbar-entering\) \.thumbnail-stack-minimize:focus-visible \{[\s\S]*?cursor:\s*pointer[\s\S]*?transform:\s*translateY\(-1px\)/,
+      /\.thumbnail-stack-toolbar:not\(\.thumbnail-stack-toolbar-leaving\):not\(\.thumbnail-stack-toolbar-exiting\):not\(\.thumbnail-stack-toolbar-entering\) \.thumbnail-stack-minimize:focus-visible \{[\s\S]*?cursor:\s*pointer/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-toolbar\s*\{[\s\S]*?cursor:\s*pointer/,
     );
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-toolbar:not\(\.thumbnail-stack-toolbar-leaving\):not\(\.thumbnail-stack-toolbar-exiting\):not\(\.thumbnail-stack-toolbar-entering\) \.thumbnail-stack-minimize:active/,
