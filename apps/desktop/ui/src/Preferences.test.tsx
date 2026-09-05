@@ -617,4 +617,95 @@ describe("Preferences", () => {
       });
     });
   });
+
+  it("opens find with the platform shortcut and jumps to matching settings", async () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+    render(<Preferences />);
+    await screen.findByRole("heading", { name: "Preferences" });
+    expect(screen.queryByRole("searchbox", { name: "Find settings" })).not.toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "f", code: "KeyF", ctrlKey: true });
+    const find = await screen.findByRole("searchbox", { name: "Find settings" });
+    await waitFor(() => expect(find).toHaveFocus());
+
+    fireEvent.change(find, { target: { value: "clipboard" } });
+    expect(await screen.findByText("1 of 1")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", {
+      name: /Automatically copy captures to the clipboard/,
+    }).closest("label")).toHaveClass("preference-find-match", "preference-find-current");
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center" });
+  });
+
+  it("cycles through matching settings and closes find with Escape", async () => {
+    render(<Preferences />);
+    await screen.findByRole("heading", { name: "Preferences" });
+
+    fireEvent.keyDown(window, { key: "f", code: "KeyF", ctrlKey: true });
+    const find = await screen.findByRole("searchbox", { name: "Find settings" });
+    fireEvent.change(find, { target: { value: "cursor" } });
+    expect(await screen.findByText("1 of 2")).toBeInTheDocument();
+
+    fireEvent.keyDown(find, { key: "Enter", code: "Enter" });
+    expect(screen.getByText("2 of 2")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Previous match" }));
+    expect(screen.getByText("1 of 2")).toBeInTheDocument();
+
+    fireEvent.change(find, { target: { value: "zzzz-not-a-setting" } });
+    expect(await screen.findByText("No results")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Next match" })).toBeDisabled();
+
+    fireEvent.keyDown(window, { key: "Escape", code: "Escape" });
+    expect(screen.queryByRole("searchbox", { name: "Find settings" })).not.toBeInTheDocument();
+  });
+
+  it("does not treat Enter on find-bar buttons as next-match", async () => {
+    render(<Preferences />);
+    await screen.findByRole("heading", { name: "Preferences" });
+
+    fireEvent.keyDown(window, { key: "f", code: "KeyF", ctrlKey: true });
+    const find = await screen.findByRole("searchbox", { name: "Find settings" });
+    fireEvent.change(find, { target: { value: "cursor" } });
+    expect(await screen.findByText("1 of 2")).toBeInTheDocument();
+
+    const previous = screen.getByRole("button", { name: "Previous match" });
+    previous.focus();
+    fireEvent.keyDown(previous, { key: "Enter", code: "Enter" });
+    expect(screen.getByText("1 of 2")).toBeInTheDocument();
+
+    const close = screen.getByRole("button", { name: "Close find" });
+    close.focus();
+    fireEvent.keyDown(close, { key: "Enter", code: "Enter" });
+    expect(screen.getByText("1 of 2")).toBeInTheDocument();
+    expect(screen.getByRole("searchbox", { name: "Find settings" })).toBeInTheDocument();
+  });
+
+  it("uses Command+F on macOS and ignores Control+F there", async () => {
+    window.history.replaceState({}, "", "/?platform=macos");
+    render(<Preferences />);
+    await screen.findByRole("heading", { name: "Preferences" });
+
+    fireEvent.keyDown(window, { key: "f", code: "KeyF", ctrlKey: true });
+    expect(screen.queryByRole("searchbox", { name: "Find settings" })).not.toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "f", code: "KeyF", metaKey: true });
+    expect(await screen.findByRole("searchbox", { name: "Find settings" })).toBeInTheDocument();
+  });
+
+  it("does not steal the find chord while a shortcut is being recorded", async () => {
+    render(<Preferences />);
+    const recorder = await screen.findByRole("button", { name: "Window" });
+    fireEvent.click(recorder);
+    fireEvent.keyDown(recorder, { key: "f", code: "KeyF", ctrlKey: true });
+
+    expect(screen.queryByRole("searchbox", { name: "Find settings" })).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("update_settings", {
+        settings: expect.objectContaining({ window_shortcut: "Control+KeyF" }),
+      });
+    });
+  });
 });

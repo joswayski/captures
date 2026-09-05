@@ -71,6 +71,13 @@ import {
   type SelectionRect,
 } from "./lib/selection";
 import {
+  collectPreferenceFindTargets,
+  matchPreferenceFindTargets,
+  preferenceFindCountLabel,
+  preferencesFindCommand,
+  wrapFindIndex,
+} from "./lib/preferencesFind";
+import {
   detectShortcutPlatform,
   eventMatchesShortcut,
   isCaptureEscapeKey,
@@ -8241,6 +8248,212 @@ function useVisibleSection(
   return [visible, setVisible];
 }
 
+const PREFERENCE_FIND_MATCH_CLASS = "preference-find-match";
+const PREFERENCE_FIND_CURRENT_CLASS = "preference-find-current";
+
+function usePreferencesFind(
+  scrollerRef: RefObject<HTMLElement | null>,
+  recordingShortcut: string | null,
+  contentRevision: unknown,
+) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [matchCount, setMatchCount] = useState(0);
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const matchesRef = useRef<HTMLElement[]>([]);
+  const scrolledKeyRef = useRef("");
+
+  const clearHighlights = useCallback(() => {
+    const root = scrollerRef.current;
+    if (!root) return;
+    for (const element of root.querySelectorAll(
+      `.${PREFERENCE_FIND_MATCH_CLASS}, .${PREFERENCE_FIND_CURRENT_CLASS}`,
+    )) {
+      element.classList.remove(PREFERENCE_FIND_MATCH_CLASS, PREFERENCE_FIND_CURRENT_CLASS);
+    }
+  }, [scrollerRef]);
+
+  const revealFind = useCallback(() => {
+    setOpen(true);
+    window.requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    });
+  }, []);
+
+  const closeFind = useCallback(() => {
+    setOpen(false);
+    clearHighlights();
+    matchesRef.current = [];
+    setMatchCount(0);
+    scrolledKeyRef.current = "";
+  }, [clearHighlights]);
+
+  const goToMatch = useCallback((delta: 1 | -1) => {
+    setCurrentIndex((current) => {
+      const count = matchesRef.current.length;
+      if (count === 0) return current;
+      return wrapFindIndex(count, current, delta);
+    });
+  }, []);
+
+  const updateQuery = useCallback((value: string) => {
+    setQuery(value);
+    setCurrentIndex(0);
+    scrolledKeyRef.current = "";
+    const root = scrollerRef.current;
+    const matches = root
+      ? matchPreferenceFindTargets(collectPreferenceFindTargets(root), value)
+      : [];
+    matchesRef.current = matches;
+    setMatchCount(matches.length);
+  }, [scrollerRef]);
+
+  useLayoutEffect(() => {
+    if (!open) {
+      clearHighlights();
+      matchesRef.current = [];
+      scrolledKeyRef.current = "";
+      return;
+    }
+    const root = scrollerRef.current;
+    if (!root) return;
+    clearHighlights();
+    const matches = matchPreferenceFindTargets(collectPreferenceFindTargets(root), query);
+    matchesRef.current = matches;
+    if (matches.length === 0) return;
+    const index = Math.min(currentIndex, matches.length - 1);
+    for (const [matchIndex, match] of matches.entries()) {
+      match.classList.add(PREFERENCE_FIND_MATCH_CLASS);
+      if (matchIndex === index) match.classList.add(PREFERENCE_FIND_CURRENT_CLASS);
+    }
+    const current = matches[index];
+    const key = `${query}\0${index}\0${current.textContent ?? ""}`;
+    if (scrolledKeyRef.current === key) return;
+    scrolledKeyRef.current = key;
+    if (typeof current.scrollIntoView === "function") {
+      current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [clearHighlights, contentRevision, currentIndex, open, query, scrollerRef]);
+
+  useEffect(() => {
+    if (!open) return;
+    const frame = window.requestAnimationFrame(() => {
+      const root = scrollerRef.current;
+      const matches = root
+        ? matchPreferenceFindTargets(collectPreferenceFindTargets(root), query)
+        : [];
+      matchesRef.current = matches;
+      setMatchCount(matches.length);
+      setCurrentIndex((current) => (
+        matches.length === 0 ? 0 : Math.min(current, matches.length - 1)
+      ));
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [contentRevision, open, query, scrollerRef]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (recordingShortcut) return;
+      const command = preferencesFindCommand(
+        event,
+        detectShortcutPlatform(),
+        open,
+      );
+      if (!command) return;
+      event.preventDefault();
+      if (command === "open") {
+        revealFind();
+        return;
+      }
+      if (command === "close") {
+        closeFind();
+        return;
+      }
+      goToMatch(command === "next" ? 1 : -1);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [closeFind, goToMatch, open, recordingShortcut, revealFind]);
+
+  return {
+    open,
+    query,
+    matchCount,
+    currentIndex,
+    countLabel: preferenceFindCountLabel(query, matchCount, currentIndex),
+    inputRef,
+    updateQuery,
+    closeFind,
+    goToMatch,
+  };
+}
+
+function PreferencesFindBar({
+  query,
+  countLabel,
+  matchCount,
+  inputRef,
+  onQueryChange,
+  onClose,
+  onNext,
+  onPrevious,
+}: {
+  query: string;
+  countLabel: string;
+  matchCount: number;
+  inputRef: RefObject<HTMLInputElement | null>;
+  onQueryChange: (value: string) => void;
+  onClose: () => void;
+  onNext: () => void;
+  onPrevious: () => void;
+}) {
+  return (
+    <div className="preferences-find" role="search">
+      <input
+        ref={inputRef}
+        type="search"
+        className="preferences-find-input"
+        value={query}
+        placeholder="Find settings"
+        aria-label="Find settings"
+        autoComplete="off"
+        autoCorrect="off"
+        spellCheck={false}
+        onChange={(event) => onQueryChange(event.target.value)}
+      />
+      <span className="preferences-find-count" aria-live="polite">{countLabel}</span>
+      <button
+        type="button"
+        className="preferences-find-step"
+        aria-label="Previous match"
+        disabled={matchCount === 0}
+        onClick={onPrevious}
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 10 4-4 4 4" /></svg>
+      </button>
+      <button
+        type="button"
+        className="preferences-find-step"
+        aria-label="Next match"
+        disabled={matchCount === 0}
+        onClick={onNext}
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>
+      </button>
+      <button
+        type="button"
+        className="preferences-find-close"
+        aria-label="Close find"
+        onClick={onClose}
+      >
+        <CloseIcon />
+      </button>
+    </div>
+  );
+}
+
 function MiniPreviewPlacementPicker({
   value,
   disabled,
@@ -8368,6 +8581,7 @@ export function Preferences() {
   const [highlightedPreference, setHighlightedPreference] = useState<string | null>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const [visibleSection, setVisibleSection] = useVisibleSection(scrollerRef);
+  const find = usePreferencesFind(scrollerRef, recordingShortcut, settings);
   const settingsRef = useRef<AppSettings | null>(null);
   const pendingSettingsRef = useRef<AppSettings | null>(null);
   const saveDelayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -8625,6 +8839,18 @@ export function Preferences() {
               </div>
             )}
           </div>
+          {find.open && (
+            <PreferencesFindBar
+              query={find.query}
+              countLabel={find.countLabel}
+              matchCount={find.matchCount}
+              inputRef={find.inputRef}
+              onQueryChange={find.updateQuery}
+              onClose={find.closeFind}
+              onNext={() => find.goToMatch(1)}
+              onPrevious={() => find.goToMatch(-1)}
+            />
+          )}
         </header>
 
         <div className="preferences-scroller" ref={scrollerRef}>
