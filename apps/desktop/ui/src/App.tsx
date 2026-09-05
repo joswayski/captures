@@ -73,6 +73,7 @@ import {
 import {
   detectShortcutPlatform,
   eventMatchesShortcut,
+  isCaptureEscapeKey,
   isModifierCode,
   modifierDisplayTokens,
   platformShortcutHelp,
@@ -220,6 +221,17 @@ function dismissCaptureOverlayWindow() {
   // other apps after a few screenshots.
   void invoke("dismiss_capture_surface").catch(() => undefined);
   void currentWindow?.hide().catch(() => undefined);
+}
+
+function onCaptureEscape(handler: () => void): () => void {
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (!isCaptureEscapeKey(event)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    handler();
+  };
+  window.addEventListener("keydown", onKeyDown, true);
+  return () => window.removeEventListener("keydown", onKeyDown, true);
 }
 
 function overlayPointFromClient(
@@ -1827,25 +1839,19 @@ export function ScreenshotCountdown() {
     setCancelling(true);
     setExiting(true);
     try {
+      await invoke("cancel_screenshot_countdown");
       if (!prefersReducedMotion()) {
         await new Promise((resolve) => setTimeout(resolve, RECORDING_COUNTDOWN_FADE_OUT_MS));
       }
-      await invoke("cancel_screenshot_countdown");
     } finally {
       cancellingRef.current = false;
       setCancelling(false);
     }
   }, []);
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      void cancel();
-    };
-    window.addEventListener("keydown", onKeyDown, true);
-    return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [cancel]);
+  useEffect(() => onCaptureEscape(() => {
+    void cancel();
+  }), [cancel]);
 
   return (
     <main
@@ -1905,25 +1911,19 @@ export function RecordingCountdown() {
     setCancelling(true);
     setExiting(true);
     try {
+      await invoke("discard_recording", { sessionId: snapshot.id });
       if (!prefersReducedMotion()) {
         await new Promise((resolve) => setTimeout(resolve, RECORDING_COUNTDOWN_FADE_OUT_MS));
       }
-      await invoke("discard_recording", { sessionId: snapshot.id });
     } finally {
       cancellingRef.current = false;
       setCancelling(false);
     }
   }, [snapshot]);
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      void cancel();
-    };
-    window.addEventListener("keydown", onKeyDown, true);
-    return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [cancel]);
+  useEffect(() => onCaptureEscape(() => {
+    void cancel();
+  }), [cancel]);
 
   const count = snapshot?.state === "countdown"
     ? remaining ?? snapshot.countdown_remaining_seconds ?? snapshot.options.countdown_seconds
@@ -2387,8 +2387,9 @@ export function RecordingSelector() {
     const onKeyDown = (event: KeyboardEvent) => {
       const currentSession = sessionRef.current;
       if (!currentSession) return;
-      if (event.key === "Escape") {
+      if (isCaptureEscapeKey(event)) {
         event.preventDefault();
+        event.stopImmediatePropagation();
         cancelSelection(currentSession);
         return;
       }
@@ -5301,20 +5302,17 @@ function CaptureOverlay() {
     if (selectionFeedbackTimerRef.current) clearTimeout(selectionFeedbackTimerRef.current);
   }, []);
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || !sessionId) return;
-      // Match the region commit fast path: hide the native surface before the
-      // async command crosses into Rust. The backend repeats the hide while it
-      // restores the previous app and capture UI, so this remains best-effort.
-      dismissCaptureOverlayWindow();
+  useEffect(() => onCaptureEscape(() => {
+    // Match the region commit fast path: hide the native surface before the
+    // async command crosses into Rust. The backend repeats the hide while it
+    // restores the previous app and capture UI, so this remains best-effort.
+    dismissCaptureOverlayWindow();
+    if (sessionId) {
       void invoke("cancel_capture", { sessionId });
-    };
-    window.addEventListener("keydown", onKeyDown, true);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown, true);
-    };
-  }, [sessionId]);
+    } else {
+      void invoke("cancel_active_capture");
+    }
+  }), [sessionId]);
 
   useEffect(() => {
     const onShift = (event: KeyboardEvent) => {

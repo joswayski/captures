@@ -1,8 +1,6 @@
 #![deny(unsafe_code)]
 
 use std::process::Command;
-#[cfg(target_os = "windows")]
-use std::sync::OnceLock;
 #[cfg(not(target_os = "macos"))]
 use std::sync::atomic::AtomicIsize;
 use std::{
@@ -11,7 +9,7 @@ use std::{
     hash::{Hash, Hasher},
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
@@ -246,6 +244,7 @@ pub fn run() {
             commit_window,
             commit_display,
             cancel_capture,
+            cancel_active_capture,
             dismiss_capture_surface,
             cancel_screenshot_countdown,
             get_screenshot_countdown,
@@ -358,6 +357,7 @@ pub fn run() {
             let handle = app.handle().clone();
             updates::initialize(&handle);
             register_shortcuts(&handle);
+            install_capture_escape_cancel(&handle);
             if let Err(error) = create_overlay_window(&handle) {
                 eprintln!("failed to prepare capture overlay: {error}");
             }
@@ -543,13 +543,16 @@ async fn start_capture_inner(
 ) -> Result<Option<ActiveSession>, AppError> {
     if let Err(error) = ensure_capture_session_available() {
         release_claimed_region_capture_cursor();
+        disarm_capture_escape_intent(&app);
         return Err(error);
     }
     if updates::install_is_active(&app) {
         release_claimed_region_capture_cursor();
+        disarm_capture_escape_intent(&app);
         return Err(AppError::UpdateInstalling);
     }
     if recording::screenshot_capture_is_blocked(&state) || screenshot_countdown_is_active(&state) {
+        disarm_capture_escape_intent(&app);
         return Err(AppError::CaptureInProgress);
     }
     // Screenshot shortcuts must work while the capture menu is open. Stay on
@@ -557,8 +560,10 @@ async fn start_capture_inner(
     // revealed Preferences and other documents, then recaptured a ghost of the
     // menu into the freeze-frame.
     if recording::switch_open_capture_selector_to_screenshot(&app, &state, mode) {
+        disarm_capture_escape_intent(&app);
         return Ok(None);
     }
+    arm_capture_escape(&app);
     // A failed overlay (image never loaded, webview stuck, etc.) leaves a session
     // behind. CaptureInProgress was silent on the shortcut path, so region mode
     // appeared completely dead until restart. Drop the stale session and retry.
@@ -585,6 +590,7 @@ async fn start_capture_inner(
     let thumbnail_capture_generation = match begin_thumbnail_capture(&state) {
         Ok(generation) => generation,
         Err(error) => {
+            disarm_capture_escape_intent(&app);
             hide_capture_overlay(&app);
             return Err(error);
         }
@@ -601,6 +607,7 @@ async fn start_capture_inner(
     if result.is_err() {
         set_capture_huds_protected(&app, false);
         state.sessions.lock().clear();
+        CAPTURE_ESCAPE_INTENT.store(false, Ordering::Release);
         hide_capture_overlay(&app);
         restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
         reveal_document_windows_after_capture(&app);
@@ -637,6 +644,7 @@ async fn prepare_capture(
         {
             // Cancel already restored the stack, cleared HUD protection, and
             // re-showed any capture-concealed document windows.
+            disarm_capture_escape_intent(&app);
             return Ok(None);
         }
         ensure_capture_session_available()?;
@@ -657,6 +665,7 @@ async fn prepare_capture(
             thumbnail_capture_generation,
         )
         .await?;
+        disarm_capture_escape_intent(&app);
         return Ok(None);
     }
 
@@ -716,7 +725,9 @@ async fn prepare_capture(
     };
     let active = capture_session_to_active(&session);
     state.sessions.lock().insert(id, session);
+    CAPTURE_ESCAPE_INTENT.store(false, Ordering::Release);
     show_capture_window(&app, &active);
+    sync_capture_escape(&app);
     if let Some(task) = pending_windows {
         complete_overlay_windows(app.clone(), state, id, task);
     }
@@ -893,6 +904,7 @@ async fn commit_region(
         .remove(&id)
         .ok_or_else(|| AppError::SessionUnavailable.to_string())?;
     let thumbnail_capture_generation = session.thumbnail_capture_generation;
+    sync_capture_escape(&app);
     let countdown_seconds = state.settings().screenshot_countdown_seconds;
     let image = if countdown_seconds > 0 {
         set_capture_huds_protected(&app, true);
@@ -997,6 +1009,7 @@ async fn commit_window(
         .remove(&id)
         .ok_or_else(|| AppError::SessionUnavailable.to_string())?;
     let thumbnail_capture_generation = session.thumbnail_capture_generation;
+    sync_capture_escape(&app);
 
     let selected_window = match session
         .windows
@@ -1123,6 +1136,7 @@ async fn commit_display(
         .remove(&id)
         .ok_or_else(|| AppError::SessionUnavailable.to_string())?;
     let thumbnail_capture_generation = session.thumbnail_capture_generation;
+    sync_capture_escape(&app);
     let countdown_seconds = state.settings().screenshot_countdown_seconds;
     let image = if countdown_seconds > 0 {
         set_capture_huds_protected(&app, true);
@@ -1226,7 +1240,16 @@ fn cancel_capture(
     }
     reveal_document_windows_after_capture(&app);
     updates::restore_update_notice(&app);
+    sync_capture_escape(&app);
     Ok(())
+}
+
+/// Cancels every in-progress capture surface. Escape uses this so cancellation
+/// does not depend on a focused webview, a freeze-frame having painted, or a
+/// known session id.
+#[tauri::command]
+fn cancel_active_capture(app: AppHandle, state: tauri::State<'_, Arc<AppState>>) {
+    cancel_active_capture_ui(&app, state.inner());
 }
 
 /// Releases overlay keyboard/cursor grabs and hides the freeze-frame as soon as
@@ -1254,6 +1277,8 @@ pub(crate) fn dismiss_capture_ui_for_update(app: &AppHandle, state: &Arc<AppStat
     }
     recording::dismiss_recording_selection_for_update(app, state);
     reveal_document_windows_after_capture(app);
+    CAPTURE_ESCAPE_INTENT.store(false, Ordering::Release);
+    sync_capture_escape(app);
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -1308,6 +1333,7 @@ pub(crate) async fn run_screenshot_countdown(
         runtime.remaining_seconds = seconds;
         runtime.generation
     };
+    arm_capture_escape(&app);
 
     if let Err(error) = show_screenshot_countdown(&app, display) {
         let mut runtime = state.screenshot_countdown.lock();
@@ -1316,6 +1342,8 @@ pub(crate) async fn run_screenshot_countdown(
             runtime.thumbnail_capture_generation = None;
             runtime.remaining_seconds = 0;
         }
+        drop(runtime);
+        disarm_capture_escape_intent(&app);
         return Err(error);
     }
 
@@ -1325,6 +1353,7 @@ pub(crate) async fn run_screenshot_countdown(
             if !runtime.active || runtime.generation != generation {
                 drop(runtime);
                 destroy_screenshot_countdown(&app);
+                disarm_capture_escape_intent(&app);
                 return Ok(false);
             }
             runtime.remaining_seconds = remaining;
@@ -1348,6 +1377,7 @@ pub(crate) async fn run_screenshot_countdown(
         }
     }
     destroy_screenshot_countdown(&app);
+    disarm_capture_escape_intent(&app);
     // Give the overlay a beat to leave the display before freezing a frame.
     if completed {
         tokio::time::sleep(std::time::Duration::from_millis(40)).await;
@@ -1378,6 +1408,8 @@ pub(crate) fn cancel_screenshot_countdown_inner(app: &AppHandle, state: Arc<AppS
     }
     reveal_document_windows_after_capture(app);
     updates::restore_update_notice(app);
+    CAPTURE_ESCAPE_INTENT.store(false, Ordering::Release);
+    sync_capture_escape(app);
 }
 
 fn show_screenshot_countdown(
@@ -1474,6 +1506,7 @@ fn capture_cursor_icon(mode: CaptureMode) -> CursorIcon {
 }
 
 fn claim_region_capture_cursor(app: &AppHandle) {
+    arm_capture_escape(app);
     #[cfg(target_os = "macos")]
     {
         let cursor = captures_macos_window::CaptureCursor::overlay_region();
@@ -3662,6 +3695,142 @@ pub(crate) fn apply_native_window_frames(windows: &mut [captures_capture::Window
     }
 }
 
+static CAPTURE_ESCAPE_APP: OnceLock<AppHandle> = OnceLock::new();
+/// True between shortcut key-down / capture start and the first painted
+/// overlay, selector, or countdown. Real window and session state take over
+/// after that so Escape is not stolen during an in-progress recording.
+static CAPTURE_ESCAPE_INTENT: AtomicBool = AtomicBool::new(false);
+static CAPTURE_ESCAPE_HOTKEY_REGISTERED: AtomicBool = AtomicBool::new(false);
+static CAPTURE_ESCAPE_CANCELING: AtomicBool = AtomicBool::new(false);
+
+fn install_capture_escape_cancel(app: &AppHandle) {
+    let _ = CAPTURE_ESCAPE_APP.set(app.clone());
+    captures_session::set_capture_escape_handler(Some(on_native_capture_escape));
+    if let Err(error) = captures_session::ensure_capture_escape_hook() {
+        eprintln!("could not install capture Escape hook: {error}");
+    }
+    #[cfg(target_os = "macos")]
+    {
+        captures_macos_window::set_capture_escape_handler(Some(on_native_capture_escape));
+        captures_macos_window::ensure_capture_escape_monitors();
+    }
+}
+
+fn on_native_capture_escape() {
+    let Some(app) = CAPTURE_ESCAPE_APP.get() else {
+        return;
+    };
+    handle_native_capture_escape(app);
+}
+
+fn handle_native_capture_escape(app: &AppHandle) {
+    let state = app.state::<Arc<AppState>>().inner().clone();
+    if !capture_escape_ui_is_active(app, &state) {
+        return;
+    }
+    cancel_active_capture_ui(app, &state);
+}
+
+pub(crate) fn arm_capture_escape(app: &AppHandle) {
+    CAPTURE_ESCAPE_INTENT.store(true, Ordering::Release);
+    sync_capture_escape(app);
+}
+
+pub(crate) fn disarm_capture_escape_intent(app: &AppHandle) {
+    CAPTURE_ESCAPE_INTENT.store(false, Ordering::Release);
+    sync_capture_escape(app);
+}
+
+pub(crate) fn sync_capture_escape(app: &AppHandle) {
+    let state = app.state::<Arc<AppState>>().inner().clone();
+    let active = capture_escape_ui_is_active(app, &state);
+    captures_session::set_capture_escape_enabled(active);
+    #[cfg(target_os = "macos")]
+    captures_macos_window::set_capture_escape_armed(active);
+    if active {
+        register_capture_escape_hotkey(app);
+    } else {
+        unregister_capture_escape_hotkey(app);
+    }
+}
+
+fn capture_escape_ui_is_active(app: &AppHandle, state: &AppState) -> bool {
+    captures_session::CaptureEscapeUi {
+        screenshot_overlay: CAPTURE_ESCAPE_INTENT.load(Ordering::Acquire)
+            || !state.sessions.lock().is_empty()
+            || window_is_visible(app, "overlay"),
+        recording_selector: state.recording_selection.lock().is_some()
+            || window_is_visible(app, "recording-selector"),
+        screenshot_countdown: screenshot_countdown_is_active(state)
+            || window_is_visible(app, "screenshot-countdown"),
+        recording_countdown: recording::recording_countdown_is_active(state)
+            || window_is_visible(app, "recording-countdown"),
+    }
+    .is_armed()
+}
+
+fn window_is_visible(app: &AppHandle, label: &str) -> bool {
+    app.get_webview_window(label)
+        .is_some_and(|window| window.is_visible().unwrap_or(false))
+}
+
+fn cancel_active_capture_ui(app: &AppHandle, state: &Arc<AppState>) {
+    if CAPTURE_ESCAPE_CANCELING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    CAPTURE_ESCAPE_INTENT.store(false, Ordering::Release);
+    hide_capture_overlay(app);
+    let generations: Vec<u64> = state
+        .sessions
+        .lock()
+        .drain()
+        .map(|(_, session)| session.thumbnail_capture_generation)
+        .collect();
+    for generation in generations {
+        restore_thumbnail_capture(app, state, generation);
+    }
+    cancel_screenshot_countdown_inner(app, state.clone());
+    recording::dismiss_open_recording_selection(app, state);
+    recording::discard_recording_countdown_from_escape(app, state);
+    release_claimed_region_capture_cursor();
+    reveal_document_windows_after_capture(app);
+    updates::restore_update_notice(app);
+    sync_capture_escape(app);
+    CAPTURE_ESCAPE_CANCELING.store(false, Ordering::Release);
+}
+
+fn register_capture_escape_hotkey(app: &AppHandle) {
+    if CAPTURE_ESCAPE_HOTKEY_REGISTERED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let Ok(parsed) = parse_shortcut("Escape") else {
+        CAPTURE_ESCAPE_HOTKEY_REGISTERED.store(false, Ordering::Release);
+        eprintln!("could not parse the capture Escape shortcut");
+        return;
+    };
+    if let Err(error) = app
+        .global_shortcut()
+        .on_shortcut(parsed, |app, _shortcut, event| {
+            if event.state() != ShortcutState::Pressed {
+                return;
+            }
+            handle_native_capture_escape(app);
+        })
+    {
+        CAPTURE_ESCAPE_HOTKEY_REGISTERED.store(false, Ordering::Release);
+        eprintln!("could not register capture Escape: {error}");
+    }
+}
+
+fn unregister_capture_escape_hotkey(app: &AppHandle) {
+    if !CAPTURE_ESCAPE_HOTKEY_REGISTERED.swap(false, Ordering::AcqRel) {
+        return;
+    }
+    if let Ok(parsed) = parse_shortcut("Escape") {
+        let _ = app.global_shortcut().unregister(parsed);
+    }
+}
+
 fn register_shortcuts(app: &AppHandle) {
     let settings = app.state::<Arc<AppState>>().settings();
     if let Err(error) = register_shortcuts_with(app, &settings) {
@@ -3673,6 +3842,7 @@ fn register_shortcuts_with(app: &AppHandle, settings: &AppSettings) -> Result<()
     app.global_shortcut()
         .unregister_all()
         .map_err(|error| AppError::Shortcut(error.to_string()))?;
+    CAPTURE_ESCAPE_HOTKEY_REGISTERED.store(false, Ordering::Release);
     // Unbind overlapping OS screenshot tools before Captures claims the same
     // chords. On macOS, persist through cfprefsd and disable the live
     // WindowServer hotkeys; writing the plist file alone does not stop
@@ -3707,6 +3877,7 @@ fn register_shortcuts_with(app: &AppHandle, settings: &AppSettings) -> Result<()
     register_shortcut(app, &settings.window_shortcut, CaptureMode::Window)?;
     register_shortcut(app, &settings.display_shortcut, CaptureMode::Display)?;
     register_recording_shortcut(app, &settings.recording.video_shortcut)?;
+    sync_capture_escape(app);
     Ok(())
 }
 
@@ -6805,6 +6976,7 @@ fn hide_capture_overlay_inner(app: &AppHandle) {
     }
     #[cfg(target_os = "macos")]
     captures_macos_window::restore_frontmost_app_after_capture();
+    sync_capture_escape(app);
 }
 
 /// Re-shows document windows ordered out while a capture surface was active.
@@ -8334,6 +8506,12 @@ mod tests {
 
         assert!(windows.iter().any(|window| window == "update"));
         assert!(
+            windows
+                .iter()
+                .any(|window| window == "screenshot-countdown"),
+            "screenshot countdown needs IPC so Escape can cancel it"
+        );
+        assert!(
             !permissions
                 .iter()
                 .any(|granted| granted == "core:window:allow-hide"),
@@ -8546,6 +8724,7 @@ mod tests {
             parse_shortcut("Super+Shift+S").expect("windows/linux region shortcut should parse"),
             parse_shortcut("Super+Shift+KeyS").expect("recorded super-shift-s should parse")
         );
+        assert!(parse_shortcut("Escape").is_ok());
     }
 
     #[test]

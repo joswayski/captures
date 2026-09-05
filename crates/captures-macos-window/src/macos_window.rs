@@ -1,11 +1,12 @@
 use crate::conceal_policy::should_conceal_documents_for_capture_activation;
 use crate::cursor_policy::{
     CaptureCursor, CaptureCursorEvent, CaptureCursorKind, CaptureCursorMonitorAction,
-    ThumbnailHoverCursor, capture_cursor_monitor_action, capture_surface_focus_retry_allowed,
-    cursor_claim_panel_should_resign_key, cursor_claim_panel_should_show,
-    overlay_prepare_keeps_native_cursor, suppress_document_cursor_rects_for_thumbnail,
-    thumbnail_may_take_key_window, thumbnail_passthrough_disables_cursor_rects,
-    thumbnail_poll_is_live, thumbnail_resets_cursor_on_exit, thumbnail_unpolled_hover,
+    ThumbnailHoverCursor, capture_cursor_monitor_action, capture_escape_should_dispatch,
+    capture_surface_focus_retry_allowed, cursor_claim_panel_should_resign_key,
+    cursor_claim_panel_should_show, macos_key_code_is_escape, overlay_prepare_keeps_native_cursor,
+    suppress_document_cursor_rects_for_thumbnail, thumbnail_may_take_key_window,
+    thumbnail_passthrough_disables_cursor_rects, thumbnail_poll_is_live,
+    thumbnail_resets_cursor_on_exit, thumbnail_unpolled_hover,
 };
 
 use std::{
@@ -1000,6 +1001,10 @@ static CAPTURE_OVERLAY_OWNS_CURSOR: AtomicBool = AtomicBool::new(false);
 static CAPTURE_CURSOR_KIND: AtomicU8 = AtomicU8::new(0);
 static CAPTURE_CURSOR_NATIVE_OWNED: AtomicBool = AtomicBool::new(false);
 static CAPTURE_CURSOR_MONITOR: Mutex<Option<MainThreadMonitor>> = Mutex::new(None);
+static CAPTURE_ESCAPE_LOCAL_MONITOR: Mutex<Option<MainThreadMonitor>> = Mutex::new(None);
+static CAPTURE_ESCAPE_GLOBAL_MONITOR: Mutex<Option<MainThreadMonitor>> = Mutex::new(None);
+static CAPTURE_ESCAPE_ARMED: AtomicBool = AtomicBool::new(false);
+static CAPTURE_ESCAPE_HANDLER: Mutex<Option<fn()>> = Mutex::new(None);
 // When a transient capture surface activates Captures (region/window overlay,
 // recording selector, countdown), sibling document windows such as the
 // screenshot editor are ordered front with the app. Remember the user's
@@ -1994,6 +1999,104 @@ fn ensure_capture_cursor_monitor() {
         )
     };
     *guard = monitor.map(MainThreadMonitor);
+}
+
+/// Arms native Escape cancellation while a capture surface is onscreen.
+///
+/// WebView keydown is not enough: a competing screenshot tool can remain the
+/// key window after both overlays open, and the cursor-claim panel can be key
+/// before the freeze-frame paints.
+pub fn set_capture_escape_armed(armed: bool) {
+    if !is_main_thread() {
+        let _ = run_on_main(move || set_capture_escape_armed(armed));
+        return;
+    }
+    CAPTURE_ESCAPE_ARMED.store(armed, Ordering::Release);
+    ensure_capture_escape_monitors();
+}
+
+pub fn set_capture_escape_handler(handler: Option<fn()>) {
+    if let Ok(mut slot) = CAPTURE_ESCAPE_HANDLER.lock() {
+        *slot = handler;
+    }
+    if handler.is_some() {
+        if is_main_thread() {
+            ensure_capture_escape_monitors();
+        } else {
+            let _ = run_on_main(ensure_capture_escape_monitors);
+        }
+    }
+}
+
+pub fn ensure_capture_escape_monitors() {
+    if !is_main_thread() {
+        let _ = run_on_main(ensure_capture_escape_monitors);
+        return;
+    }
+    ensure_capture_escape_local_monitor();
+    ensure_capture_escape_global_monitor();
+}
+
+fn ensure_capture_escape_local_monitor() {
+    let Ok(mut guard) = CAPTURE_ESCAPE_LOCAL_MONITOR.lock() else {
+        return;
+    };
+    if guard.is_some() {
+        return;
+    }
+    let block = RcBlock::new(|event: ptr::NonNull<NSEvent>| -> *mut NSEvent {
+        // SAFETY: AppKit supplies a live NSEvent for the duration of the local
+        // monitor callback.
+        dispatch_capture_escape_if_needed(unsafe { event.as_ref() });
+        event.as_ptr()
+    });
+    let monitor = unsafe {
+        NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::KeyDown, &block)
+    };
+    *guard = monitor.map(MainThreadMonitor);
+}
+
+fn ensure_capture_escape_global_monitor() {
+    let Ok(mut guard) = CAPTURE_ESCAPE_GLOBAL_MONITOR.lock() else {
+        return;
+    };
+    if guard.is_some() {
+        return;
+    }
+    let block = RcBlock::new(|event: ptr::NonNull<NSEvent>| {
+        // SAFETY: AppKit supplies a live NSEvent for the duration of the global
+        // monitor callback. Global key monitors may no-op without Accessibility;
+        // the Tauri Escape hotkey covers that case.
+        dispatch_capture_escape_if_needed(unsafe { event.as_ref() });
+    });
+    let monitor =
+        NSEvent::addGlobalMonitorForEventsMatchingMask_handler(NSEventMask::KeyDown, &block);
+    *guard = monitor.map(MainThreadMonitor);
+}
+
+fn dispatch_capture_escape_if_needed(event: &NSEvent) {
+    if event.r#type() != NSEventType::KeyDown {
+        return;
+    }
+    if !macos_key_code_is_escape(event.keyCode()) {
+        return;
+    }
+    if !capture_escape_should_dispatch(
+        CAPTURE_ESCAPE_ARMED.load(Ordering::Acquire),
+        overlay_window_is_visible(),
+        capture_overlay_owns_cursor(),
+    ) {
+        return;
+    }
+    let handler = {
+        let Ok(slot) = CAPTURE_ESCAPE_HANDLER.lock() else {
+            return;
+        };
+        *slot
+    };
+    if let Some(handler) = handler {
+        handler();
+    }
 }
 
 fn apply_capture_cursor_monitor_event(event: &NSEvent) {
