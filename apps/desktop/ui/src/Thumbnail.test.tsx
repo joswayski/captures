@@ -7,6 +7,8 @@ import type { CaptureArtifact } from "./types";
 import {
   THUMBNAIL_CARD_SLOT_PX,
   THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS,
+  THUMBNAIL_STACK_CONTROL_GUTTER_PX,
+  THUMBNAIL_CARD_HEIGHT_PX,
   THUMBNAIL_STACK_EXPAND_COLLAPSE_MS,
   thumbnailStackFanCollapseMs,
   thumbnailStackNewestScrollTop,
@@ -663,6 +665,58 @@ describe("Thumbnail", () => {
     }
   });
 
+  it("slides later previews up into a deleted slot when the stack is top-anchored", async () => {
+    const captures = [1, 2, 3].map((n) => ({
+      ...artifact,
+      id: `capture-${n}`,
+      preview_url: `captures-capture://artifact/capture-${n}`,
+      full_url: `captures-capture://artifact-full/capture-${n}`,
+    }));
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifacts") return captures;
+      if (command === "get_clipboard_state") {
+        return { revision: 0, artifact_id: captures[2].id };
+      }
+      if (command === "get_settings") {
+        return { mini_preview_placement: "top_left" };
+      }
+      if (command === "get_thumbnail_pointer_position") return null;
+      return undefined;
+    });
+
+    render(<Thumbnail />);
+    const cards = await screen.findAllByRole("article");
+    expect(cards).toHaveLength(3);
+    const stack = cards[0].closest(".thumbnail-stack")!;
+    await waitFor(() => {
+      expect(stack).toHaveClass("thumbnail-stack-anchor-top");
+    });
+    // Top-anchored lists render newest-first: capture-3, capture-2, capture-1.
+    expect(cards[0]).toHaveAttribute("data-thumbnail-id", "capture-3");
+    expect(cards[1]).toHaveAttribute("data-thumbnail-id", "capture-2");
+    expect(cards[2]).toHaveAttribute("data-thumbnail-id", "capture-1");
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(within(cards[1]).getByRole("button", { name: "Delete" }));
+      expect(cards[1]).toHaveClass("thumbnail-exiting");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16);
+      });
+
+      expect(cards[0]).not.toHaveClass("thumbnail-stack-shifting");
+      expect(cards[0].style.getPropertyValue("--thumbnail-stack-shift")).toBe("");
+      expect(cards[2]).toHaveClass("thumbnail-stack-shifting");
+      expect(cards[2].style.getPropertyValue("--thumbnail-stack-shift")).toBe(
+        `${-THUMBNAIL_CARD_SLOT_PX}px`,
+      );
+      expect(cards[2].style.translate).toBe(`0 ${-THUMBNAIL_CARD_SLOT_PX}px`);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("re-arms native preview hit testing as soon as deletion completes", async () => {
     let pointerPolls = 0;
     vi.mocked(invoke).mockImplementation(async (command) => {
@@ -1311,6 +1365,72 @@ describe("Thumbnail", () => {
     expect(stack).not.toHaveClass("thumbnail-stack-compact");
   });
 
+  it("keeps a collapsed pile collapsed and draggable after a new capture", async () => {
+    type CaptureCompletedHandler = (event: { payload: CaptureArtifact }) => void;
+    let onCaptureCompleted: CaptureCompletedHandler | null = null;
+    vi.mocked(listen).mockImplementation(async (event, handler) => {
+      if (event === "capture-completed") {
+        onCaptureCompleted = handler as CaptureCompletedHandler;
+      }
+      return () => undefined;
+    });
+
+    render(<Thumbnail />);
+    const card = await screen.findByRole("article");
+    const stack = card.closest(".thumbnail-stack")!;
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "Minimize previews" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(32);
+      await vi.advanceTimersByTimeAsync(THUMBNAIL_STACK_EXPAND_COLLAPSE_MS);
+    });
+    vi.useRealTimers();
+
+    await waitFor(() => expect(onCaptureCompleted).not.toBeNull());
+    const secondArtifact = {
+      ...artifact,
+      id: "capture-2",
+      preview_url: "captures-capture://artifact/capture-2",
+      full_url: "captures-capture://artifact-full/capture-2",
+    };
+    await act(async () => {
+      onCaptureCompleted?.({ payload: secondArtifact });
+    });
+
+    expect(stack).toHaveClass("thumbnail-stack-minimized");
+    const expand = screen.getByRole("button", { name: "Expand 2 previews" });
+    fireEvent.pointerDown(expand, {
+      button: 0,
+      pointerId: 1,
+      screenX: 40,
+      screenY: 80,
+    });
+    fireEvent.pointerMove(window, {
+      pointerId: 1,
+      screenX: 120,
+      screenY: 40,
+      bubbles: true,
+    });
+    await waitFor(() => {
+      expect(stack).toHaveClass("thumbnail-stack-dragging");
+    });
+    expect(document.documentElement.style.getPropertyValue("--thumbnail-stack-drag-x")).toBe(
+      "80px",
+    );
+    expect(document.documentElement.style.getPropertyValue("--thumbnail-stack-drag-y")).toBe(
+      "-40px",
+    );
+    fireEvent.pointerUp(window, { pointerId: 1, bubbles: true });
+    await waitFor(() => {
+      expect(stack).not.toHaveClass("thumbnail-stack-dragging");
+    });
+    expect(stack).toHaveClass("thumbnail-stack-minimized");
+    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith(
+      "set_mini_previews_collapsed",
+      { collapsed: false },
+    );
+  });
+
   it("drags the collapsed pile instead of expanding once the pointer moves", async () => {
     render(<Thumbnail />);
     const card = await screen.findByRole("article");
@@ -1386,10 +1506,11 @@ describe("Thumbnail", () => {
       bubbles: true,
     });
     await waitFor(() => {
-      expect(stack).toHaveClass("thumbnail-stack-anchor-top");
+      expect(stack).toHaveClass("thumbnail-stack-dragging");
     });
     fireEvent.pointerUp(window, { pointerId: 1, bubbles: true });
     await waitFor(() => {
+      expect(stack).toHaveClass("thumbnail-stack-anchor-top");
       expect(stack).not.toHaveClass("thumbnail-stack-dragging");
     });
 
@@ -1410,6 +1531,148 @@ describe("Thumbnail", () => {
       .closest(".thumbnail-stack-toolbar");
     expect(toolbar).toHaveClass("thumbnail-stack-toolbar-anchor-top");
     expect(within(card).getByRole("button", { name: "Delete" })).toBeInTheDocument();
+  });
+
+  it("does not teleport the collapsed pile while dragging through mid-screen", async () => {
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 800 });
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1_200 });
+
+    render(<Thumbnail />);
+    const card = await screen.findByRole("article");
+    const stack = card.closest(".thumbnail-stack")!;
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "Minimize previews" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(32);
+      await vi.advanceTimersByTimeAsync(THUMBNAIL_STACK_EXPAND_COLLAPSE_MS);
+    });
+    vi.useRealTimers();
+
+    const expand = screen.getByRole("button", { name: "Expand preview" });
+    fireEvent.pointerDown(expand, {
+      button: 0,
+      pointerId: 1,
+      screenX: 40,
+      screenY: 700,
+    });
+
+    const cardTop = () => {
+      const offsetY = Number.parseFloat(
+        document.documentElement.style.getPropertyValue("--thumbnail-stack-drag-y") || "0",
+      ) || 0;
+      if (stack.classList.contains("thumbnail-stack-anchor-top")) {
+        return offsetY + THUMBNAIL_STACK_CONTROL_GUTTER_PX;
+      }
+      return offsetY + 800 - THUMBNAIL_STACK_CONTROL_GUTTER_PX - THUMBNAIL_CARD_HEIGHT_PX;
+    };
+
+    const tops: number[] = [];
+    for (const screenY of [640, 520, 400, 280, 160]) {
+      fireEvent.pointerMove(window, {
+        pointerId: 1,
+        screenX: 40,
+        screenY,
+        bubbles: true,
+      });
+      await waitFor(() => {
+        expect(stack).toHaveClass("thumbnail-stack-dragging");
+      });
+      expect(stack).not.toHaveClass("thumbnail-stack-anchor-top");
+      tops.push(cardTop());
+    }
+
+    for (let index = 1; index < tops.length; index += 1) {
+      expect(Math.abs(tops[index]! - tops[index - 1]!)).toBeLessThan(160);
+    }
+
+    fireEvent.pointerUp(window, { pointerId: 1, bubbles: true });
+    await waitFor(() => {
+      expect(stack).toHaveClass("thumbnail-stack-anchor-top");
+      expect(stack).not.toHaveClass("thumbnail-stack-dragging");
+    });
+    expect(cardTop()).toBeLessThan(200);
+
+    fireEvent.pointerDown(expand, {
+      button: 0,
+      pointerId: 2,
+      screenX: 40,
+      screenY: 80,
+    });
+    for (const screenY of [200, 320, 440, 560, 680]) {
+      fireEvent.pointerMove(window, {
+        pointerId: 2,
+        screenX: 40,
+        screenY,
+        bubbles: true,
+      });
+      await waitFor(() => {
+        expect(stack).toHaveClass("thumbnail-stack-dragging");
+      });
+      expect(stack).toHaveClass("thumbnail-stack-anchor-top");
+      tops.push(cardTop());
+    }
+    const downTops = tops.slice(-5);
+    for (let index = 1; index < downTops.length; index += 1) {
+      expect(Math.abs(downTops[index]! - downTops[index - 1]!)).toBeLessThan(160);
+    }
+    fireEvent.pointerUp(window, { pointerId: 2, bubbles: true });
+    await waitFor(() => {
+      expect(stack).not.toHaveClass("thumbnail-stack-dragging");
+    });
+    expect(stack).not.toHaveClass("thumbnail-stack-anchor-top");
+  });
+
+  it("keeps Show less on the right after the pile is dragged to the right", async () => {
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 800 });
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1200 });
+
+    render(<Thumbnail />);
+    const card = await screen.findByRole("article");
+    const stack = card.closest(".thumbnail-stack")!;
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "Minimize previews" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(32);
+      await vi.advanceTimersByTimeAsync(THUMBNAIL_STACK_EXPAND_COLLAPSE_MS);
+    });
+    vi.useRealTimers();
+
+    const expand = screen.getByRole("button", { name: "Expand preview" });
+    fireEvent.pointerDown(expand, {
+      button: 0,
+      pointerId: 1,
+      screenX: 40,
+      screenY: 700,
+    });
+    fireEvent.pointerMove(window, {
+      pointerId: 1,
+      screenX: 700,
+      screenY: 700,
+      bubbles: true,
+    });
+    await waitFor(() => {
+      expect(stack).toHaveClass("thumbnail-stack-dragging");
+    });
+    fireEvent.pointerUp(window, { pointerId: 1, bubbles: true });
+    await waitFor(() => {
+      expect(stack).not.toHaveClass("thumbnail-stack-dragging");
+    });
+
+    fireEvent.click(expand);
+    vi.useFakeTimers();
+    await act(async () => {
+      fireEvent.click(expand);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(THUMBNAIL_STACK_EXPAND_COLLAPSE_MS);
+    });
+
+    expect(stack).not.toHaveClass("thumbnail-stack-compact");
+    expect(screen.getByRole("button", { name: "Minimize previews" })
+      .closest(".thumbnail-stack-toolbar")).toHaveClass("thumbnail-stack-toolbar-anchor-right");
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 768 });
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1024 });
   });
 
   it("can drag the collapsed pile a second time without expanding first", async () => {
@@ -1561,6 +1824,58 @@ describe("Thumbnail", () => {
     });
     expect(screen.getByRole("button", { name: "Minimize previews" })
       .closest(".thumbnail-stack-toolbar")).toHaveClass("thumbnail-stack-toolbar-anchor-top");
+    expect(screen.getByRole("button", { name: "Minimize previews" })
+      .closest(".thumbnail-stack-toolbar")).not.toHaveClass("thumbnail-stack-toolbar-anchor-right");
+  });
+
+  it("keeps Show less on the right from a bottom-right preference", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifacts") return [artifact];
+      if (command === "get_clipboard_state") {
+        return { revision: 0, artifact_id: artifact.id };
+      }
+      if (command === "get_settings") {
+        return { mini_preview_placement: "bottom_right" };
+      }
+      if (command === "get_thumbnail_pointer_position") {
+        return new Promise(() => undefined);
+      }
+      return undefined;
+    });
+    render(<Thumbnail />);
+    await screen.findByRole("article");
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Minimize previews" })
+        .closest(".thumbnail-stack-toolbar")).toHaveClass("thumbnail-stack-toolbar-anchor-right");
+    });
+    expect(screen.getByRole("button", { name: "Minimize previews" })
+      .closest(".thumbnail-stack-toolbar")).not.toHaveClass("thumbnail-stack-toolbar-anchor-top");
+  });
+
+  it("keeps Show less on the top-right from a top-right preference", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifacts") return [artifact];
+      if (command === "get_clipboard_state") {
+        return { revision: 0, artifact_id: artifact.id };
+      }
+      if (command === "get_settings") {
+        return { mini_preview_placement: "top_right" };
+      }
+      if (command === "get_thumbnail_pointer_position") {
+        return new Promise(() => undefined);
+      }
+      return undefined;
+    });
+    render(<Thumbnail />);
+    const card = await screen.findByRole("article");
+    const stack = card.closest(".thumbnail-stack")!;
+    await waitFor(() => {
+      expect(stack).toHaveClass("thumbnail-stack-anchor-top");
+    });
+    const toolbar = screen.getByRole("button", { name: "Minimize previews" })
+      .closest(".thumbnail-stack-toolbar");
+    expect(toolbar).toHaveClass("thumbnail-stack-toolbar-anchor-top");
+    expect(toolbar).toHaveClass("thumbnail-stack-toolbar-anchor-right");
   });
 
   it("scrolls to the newest card when settings move an expanded pile between top and bottom", async () => {
@@ -1617,6 +1932,8 @@ describe("Thumbnail", () => {
     expect(stack.scrollTop).toBe(0);
     expect(screen.getByRole("button", { name: "Minimize previews" })
       .closest(".thumbnail-stack-toolbar")).toHaveClass("thumbnail-stack-toolbar-anchor-top");
+    expect(screen.getByRole("button", { name: "Minimize previews" })
+      .closest(".thumbnail-stack-toolbar")).toHaveClass("thumbnail-stack-toolbar-anchor-right");
   });
 
   it("eases the hover fan closed before the dragged pile starts leaning", async () => {

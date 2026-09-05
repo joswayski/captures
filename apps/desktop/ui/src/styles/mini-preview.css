@@ -169,7 +169,7 @@ html[data-preview-harness-view="thumbnail"] #root {
   filter: blur(3px);
 }
 
-.thumbnail-card.thumbnail-ready:not(.thumbnail-exiting) {
+.thumbnail-card.thumbnail-ready:not(.thumbnail-exiting):not(.thumbnail-drop-rejected) {
   animation: thumbnail-arrive 0.52s cubic-bezier(0.22, 0.65, 0.28, 1);
 }
 
@@ -186,7 +186,14 @@ html[data-preview-harness-view="thumbnail"] #root {
   }
 }
 
-.thumbnail-card.thumbnail-ready.thumbnail-arrived {
+/*
+ * Cancel arrival after it finishes so later class toggles cannot replay it.
+ * Exclude exit: this selector is more specific than `.thumbnail-exit-dismiss`,
+ * so a blanket `animation: none` froze the card in place while only the image
+ * streaked, then the preview popped away on the dismiss timeout.
+ * Exclude drop-reject so a self-drop is not held still here either.
+ */
+.thumbnail-card.thumbnail-ready.thumbnail-arrived:not(.thumbnail-exiting):not(.thumbnail-drop-rejected) {
   animation: none;
 }
 
@@ -215,9 +222,26 @@ html[data-preview-harness-view="thumbnail"] #root {
  * macOS-style “no” shake when the file is dropped back on this stack.
  * Use `translate` so compact-pile `transform` still composes if a reject
  * somehow runs there; expanded cards are the file-drag source.
+ *
+ * Arrive / arrived set `animation` at (0,3,0). Keep reject at least that
+ * specific so a settled card actually shakes instead of replaying arrive
+ * (fade + rise) or staying still under `animation: none`.
  */
-.thumbnail-card.thumbnail-drop-rejected {
-  animation: thumbnail-drop-reject var(--thumbnail-drop-reject-duration) var(--ease-out);
+.thumbnail-card.thumbnail-drop-rejected,
+.thumbnail-card.thumbnail-ready.thumbnail-drop-rejected,
+.thumbnail-card.thumbnail-ready.thumbnail-arrived.thumbnail-drop-rejected {
+  animation: thumbnail-drop-reject var(--thumbnail-drop-reject-duration)
+    var(--thumbnail-drop-reject-ease);
+}
+
+.thumbnail-card.thumbnail-drop-rejected img,
+html:not(.thumbnail-native-tracking) .thumbnail-card.thumbnail-drop-rejected:hover img,
+.thumbnail-card.thumbnail-drop-rejected:focus-within img,
+.thumbnail-card.thumbnail-drop-rejected[data-thumbnail-native-active="true"] img {
+  opacity: 1;
+  filter: blur(0) brightness(1);
+  transform: scale(1);
+  transition: none;
 }
 
 @keyframes thumbnail-drop-reject {
@@ -225,20 +249,23 @@ html[data-preview-harness-view="thumbnail"] #root {
   100% {
     translate: 0 0;
   }
-  16% {
+  10% {
     translate: calc(-1 * var(--thumbnail-drop-reject-x-1)) 0;
   }
-  32% {
-    translate: var(--thumbnail-drop-reject-x-2) 0;
+  30% {
+    translate: var(--thumbnail-drop-reject-x-1) 0;
   }
-  48% {
-    translate: calc(-1 * var(--thumbnail-drop-reject-x-3)) 0;
+  50% {
+    translate: calc(-1 * var(--thumbnail-drop-reject-x-2)) 0;
   }
-  64% {
-    translate: var(--thumbnail-drop-reject-x-4) 0;
+  65% {
+    translate: var(--thumbnail-drop-reject-x-3) 0;
   }
   80% {
-    translate: calc(-1 * var(--thumbnail-drop-reject-x-5)) 0;
+    translate: calc(-1 * var(--thumbnail-drop-reject-x-4)) 0;
+  }
+  90% {
+    translate: var(--thumbnail-drop-reject-x-4) 0;
   }
 }
 
@@ -514,12 +541,14 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-top-action
 }
 
 .icon-button {
+  --thumbnail-tooltip-nudge: -2px;
   position: relative;
   display: grid;
   width: 28px;
   height: 28px;
   padding: 5px;
   place-items: center;
+  overflow: visible;
   border: 1px solid var(--glass-border);
   border-radius: var(--r-md);
   color: var(--glass-text);
@@ -559,10 +588,21 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-top-action
   background: var(--theme-signal);
 }
 
+/*
+ * Center tips on the icon. `translate` holds the X centering so hover
+ * `transform` (and grid `place-items: center`) cannot shove them sideways.
+ * `justify-self`/`align-self: start` keeps the abspos ::after on the
+ * padding box instead of the centered grid area.
+ */
 .icon-button::after {
   position: absolute;
+  justify-self: start;
+  align-self: start;
+  inset: auto;
   top: calc(100% + 6px);
   left: 50%;
+  z-index: 20;
+  width: max-content;
   padding: 4px 7px;
   border-radius: var(--r-xs);
   content: attr(data-tooltip);
@@ -570,7 +610,8 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-top-action
   background: var(--glass-strong);
   box-shadow: var(--shadow-sm);
   opacity: 0;
-  transform: translate(-50%, -2px);
+  translate: -50% 0;
+  transform: translateY(var(--thumbnail-tooltip-nudge));
   transition:
     opacity 0.12s ease,
     transform 0.12s ease;
@@ -578,37 +619,37 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-top-action
   font-size: var(--text-2xs);
   font-weight: var(--weight-medium);
   white-space: nowrap;
-  z-index: 20;
 }
 
 .icon-button:hover::after,
 .icon-button[data-native-pointer-hover="true"]::after,
 .icon-button:focus-visible::after {
   opacity: 1;
-  transform: translate(-50%, 0);
+  transform: translateY(0);
+}
+
+/* Bottom-anchored stack: room above the card, keep tips out of the preview. */
+.thumbnail-top-actions .icon-button {
+  --thumbnail-tooltip-nudge: 2px;
 }
 
 .thumbnail-top-actions .icon-button::after {
   top: auto;
   bottom: calc(100% + 6px);
-  transform: translate(-50%, 2px);
 }
 
-.thumbnail-top-actions .icon-button:hover::after,
-.thumbnail-top-actions .icon-button[data-native-pointer-hover="true"]::after,
-.thumbnail-top-actions .icon-button:focus-visible::after {
-  transform: translate(-50%, 0);
+/*
+ * Top-anchored stack: Show less (and later close-all / delete-all) sit in the
+ * gutter above the first card, on whichever side the toolbar uses. Flip tips
+ * below the icons so they cannot tuck under those controls.
+ */
+.thumbnail-stack-anchor-top .thumbnail-top-actions .icon-button {
+  --thumbnail-tooltip-nudge: -2px;
 }
 
-.thumbnail-top-left .icon-button::after {
-  left: 0;
-  transform: translate(0, 2px);
-}
-
-.thumbnail-top-left .icon-button:hover::after,
-.thumbnail-top-left .icon-button[data-native-pointer-hover="true"]::after,
-.thumbnail-top-left .icon-button:focus-visible::after {
-  transform: translate(0, 0);
+.thumbnail-stack-anchor-top .thumbnail-top-actions .icon-button::after {
+  top: calc(100% + 6px);
+  bottom: auto;
 }
 
 /*
@@ -619,6 +660,7 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-top-action
  */
 .thumbnail-editor-control {
   --editor-control-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --thumbnail-tooltip-nudge: 2px;
   position: absolute;
   z-index: 9;
   top: 8px;
@@ -717,15 +759,18 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-editor-con
 .thumbnail-editor-control-tip {
   position: absolute;
   z-index: 20;
+  inset: auto;
   bottom: calc(100% + 6px);
-  right: 0;
+  left: 50%;
+  width: max-content;
   padding: 4px 7px;
   border-radius: var(--r-xs);
   color: var(--glass-text);
   background: var(--glass-strong);
   box-shadow: var(--shadow-sm);
   opacity: 0;
-  transform: translateY(2px);
+  translate: -50% 0;
+  transform: translateY(var(--thumbnail-tooltip-nudge));
   transition:
     opacity 0.12s ease,
     transform 0.12s ease;
@@ -740,6 +785,15 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-editor-con
 .thumbnail-editor-control:focus-visible .thumbnail-editor-control-tip {
   opacity: 1;
   transform: translateY(0);
+}
+
+.thumbnail-stack-anchor-top .thumbnail-editor-control {
+  --thumbnail-tooltip-nudge: -2px;
+}
+
+.thumbnail-stack-anchor-top .thumbnail-editor-control-tip {
+  top: calc(100% + 6px);
+  bottom: auto;
 }
 
 .thumbnail-editor-control svg {
@@ -1005,10 +1059,10 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
  * The collapsed pile expands on click and can still be dragged. Force pointer
  * on peeking cards and their images so file-drag grab cannot leak through.
  */
-html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-overflow-cue, .thumbnail-collapsed-hit-target):not(:disabled),
-html.thumbnail-native-tracking :is(.thumbnail-stack-control, .thumbnail-overflow-cue, .thumbnail-collapsed-hit-target):not(:disabled) *,
-:is(.thumbnail-stack-control, .thumbnail-overflow-cue, .thumbnail-collapsed-hit-target)[data-native-pointer-hover="true"]:not(:disabled),
-:is(.thumbnail-stack-control, .thumbnail-overflow-cue, .thumbnail-collapsed-hit-target)[data-native-pointer-hover="true"]:not(:disabled) * {
+html.thumbnail-native-tracking:not(:has(.thumbnail-stack-dragging)) :is(.thumbnail-stack-toolbar, .thumbnail-stack-control, .thumbnail-overflow-cue, .thumbnail-collapsed-hit-target):not(:disabled),
+html.thumbnail-native-tracking:not(:has(.thumbnail-stack-dragging)) :is(.thumbnail-stack-toolbar, .thumbnail-stack-control, .thumbnail-overflow-cue, .thumbnail-collapsed-hit-target):not(:disabled) *,
+html:not(:has(.thumbnail-stack-dragging)) :is(.thumbnail-stack-toolbar, .thumbnail-stack-control, .thumbnail-overflow-cue, .thumbnail-collapsed-hit-target)[data-native-pointer-hover="true"]:not(:disabled),
+html:not(:has(.thumbnail-stack-dragging)) :is(.thumbnail-stack-toolbar, .thumbnail-stack-control, .thumbnail-overflow-cue, .thumbnail-collapsed-hit-target)[data-native-pointer-hover="true"]:not(:disabled) * {
   cursor: pointer !important;
 }
 
@@ -1024,14 +1078,37 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
  * Transparent always-on-top WebViews often skip element-level `cursor` until
  * mousedown. Mirror grab/pointer on `html` from CSS :hover so the glow hover
  * and Show less control do not wait for a click.
+ *
+ * Stack chrome (Show less, overflow cues, collapsed pile) must paint pointer
+ * on `html` *and* every descendant with `!important`. Native tracking otherwise
+ * stamps grab/default on the whole tree, and moving across the rounded control,
+ * morphing pill, or peeking cards lets WebKit flash the arrow.
+ * Skip that while a pile or file drag is in flight: pointer capture keeps
+ * :hover / data-native-pointer-hover, and this selector would otherwise beat
+ * the grabbing rules despite also using `!important`.
  */
-html:has(.thumbnail-card:hover) {
+html:has(.thumbnail-card:hover):not(:has(
+  :is(
+    .thumbnail-stack-toolbar,
+    .thumbnail-stack-control,
+    .thumbnail-overflow-cue,
+    .thumbnail-collapsed-hit-target
+  ):hover
+)):not(:has(
+  :is(
+    .thumbnail-stack-toolbar,
+    .thumbnail-stack-control,
+    .thumbnail-overflow-cue,
+    .thumbnail-collapsed-hit-target
+  )[data-native-pointer-hover="true"]
+)) {
   cursor: -webkit-grab;
   cursor: grab;
 }
 
-html:has(
+html:not(:has(.thumbnail-stack-dragging)):not(:has(.thumbnail-card.thumbnail-file-dragging)):has(
   :is(
+    .thumbnail-stack-toolbar,
     .thumbnail-stack-control,
     .thumbnail-overflow-cue,
     .thumbnail-collapsed-hit-target,
@@ -1040,8 +1117,20 @@ html:has(
     .thumbnail-editor-control
   ):hover:not(:disabled):not([data-thumbnail-hover-stale])
 ),
-html:has(
+html:not(:has(.thumbnail-stack-dragging)):not(:has(.thumbnail-card.thumbnail-file-dragging)):has(
   :is(
+    .thumbnail-stack-toolbar,
+    .thumbnail-stack-control,
+    .thumbnail-overflow-cue,
+    .thumbnail-collapsed-hit-target,
+    .icon-button,
+    .thumbnail-main-actions button,
+    .thumbnail-editor-control
+  ):hover:not(:disabled):not([data-thumbnail-hover-stale])
+) *,
+html:not(:has(.thumbnail-stack-dragging)):not(:has(.thumbnail-card.thumbnail-file-dragging)):has(
+  :is(
+    .thumbnail-stack-toolbar,
     .thumbnail-stack-control,
     .thumbnail-overflow-cue,
     .thumbnail-collapsed-hit-target,
@@ -1049,14 +1138,27 @@ html:has(
     .thumbnail-main-actions button,
     .thumbnail-editor-control
   )[data-native-pointer-hover="true"]:not(:disabled)
-) {
-  cursor: pointer;
+),
+html:not(:has(.thumbnail-stack-dragging)):not(:has(.thumbnail-card.thumbnail-file-dragging)):has(
+  :is(
+    .thumbnail-stack-toolbar,
+    .thumbnail-stack-control,
+    .thumbnail-overflow-cue,
+    .thumbnail-collapsed-hit-target,
+    .icon-button,
+    .thumbnail-main-actions button,
+    .thumbnail-editor-control
+  )[data-native-pointer-hover="true"]:not(:disabled)
+) * {
+  cursor: pointer !important;
 }
 
 html:has(.thumbnail-stack-dragging),
-html:has(.thumbnail-card.thumbnail-file-dragging) {
-  cursor: -webkit-grabbing;
-  cursor: grabbing;
+html:has(.thumbnail-stack-dragging) *,
+html:has(.thumbnail-card.thumbnail-file-dragging),
+html:has(.thumbnail-card.thumbnail-file-dragging) * {
+  cursor: -webkit-grabbing !important;
+  cursor: grabbing !important;
 }
 
 .thumbnail-card:hover,
@@ -1066,10 +1168,13 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 }
 
 .thumbnail-card:hover :is(button, .icon-button, .thumbnail-editor-control):not(:disabled),
+.thumbnail-stack-toolbar:hover,
+.thumbnail-stack-toolbar:hover *,
 .thumbnail-stack-control:hover:not(:disabled),
 .thumbnail-stack-control:hover:not(:disabled) *,
 .thumbnail-overflow-cue:hover:not(:disabled),
-.thumbnail-collapsed-hit-target:hover:not(:disabled):not([data-thumbnail-hover-stale]) {
+.thumbnail-collapsed-hit-target:hover:not(:disabled):not([data-thumbnail-hover-stale]),
+.thumbnail-collapsed-hit-target:hover:not(:disabled):not([data-thumbnail-hover-stale]) * {
   cursor: pointer;
 }
 
@@ -1177,8 +1282,9 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 
 /*
  * Multi-slot stack settle is driven in JS (createThumbnailStackShiftController).
- * Delete and dismiss both hold layout; survivors ease by N × slot with the same
- * transition. Finished holes snap the translate down with layout reflow.
+ * Delete and dismiss both hold layout; survivors ease by N × slot toward the
+ * stack anchor (down when bottom-anchored, up when top-anchored). Finished
+ * holes snap the translate with layout reflow.
  *
  * Use the `translate` property (not `transform`) so dismiss `translateX` and
  * delete dust transforms still compose when a shifted card itself starts exiting.
@@ -1209,9 +1315,11 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 /*
  * Once a live card starts moving into an exiting slot, cover its controls until
  * the holes are removed, so a different control cannot slide under a still
- * pointer during the settle.
+ * pointer during the settle. Bottom-anchored stacks slide preceding siblings
+ * down; top-anchored stacks slide following siblings up.
  */
-.thumbnail-card:not(.thumbnail-exiting):has(~ .thumbnail-exit-delete.thumbnail-exit-dust)::before {
+.thumbnail-stack:not(.thumbnail-stack-anchor-top) .thumbnail-card:not(.thumbnail-exiting):has(~ .thumbnail-exit-delete.thumbnail-exit-dust)::before,
+.thumbnail-stack-anchor-top .thumbnail-exit-delete.thumbnail-exit-dust ~ .thumbnail-card:not(.thumbnail-exiting)::before {
   position: absolute;
   z-index: 30;
   inset: 0;
@@ -1222,7 +1330,8 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   animation: thumbnail-stack-interaction-guard 1ms 1.8s step-end forwards;
 }
 
-.thumbnail-card:not(.thumbnail-exiting):has(~ .thumbnail-exit-dismiss)::before {
+.thumbnail-stack:not(.thumbnail-stack-anchor-top) .thumbnail-card:not(.thumbnail-exiting):has(~ .thumbnail-exit-dismiss)::before,
+.thumbnail-stack-anchor-top .thumbnail-exit-dismiss ~ .thumbnail-card:not(.thumbnail-exiting)::before {
   position: absolute;
   z-index: 30;
   inset: 0;
@@ -1233,7 +1342,8 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   animation: thumbnail-stack-interaction-guard 1ms 0.45s step-end forwards;
 }
 
-.thumbnail-card:not(.thumbnail-exiting):has(~ .thumbnail-exit-delete:not(.thumbnail-exit-dust))::before {
+.thumbnail-stack:not(.thumbnail-stack-anchor-top) .thumbnail-card:not(.thumbnail-exiting):has(~ .thumbnail-exit-delete:not(.thumbnail-exit-dust))::before,
+.thumbnail-stack-anchor-top .thumbnail-exit-delete:not(.thumbnail-exit-dust) ~ .thumbnail-card:not(.thumbnail-exiting)::before {
   position: absolute;
   z-index: 30;
   inset: 0;
@@ -1297,7 +1407,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 
 .thumbnail-exit-delete .icon-button.delete::after {
   opacity: 1;
-  transform: translate(0, 0);
+  transform: translateY(0);
   transition: none;
 }
 
@@ -1583,11 +1693,14 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
  * Window overlay, not a child of `.thumbnail-stack`: that scroller's
  * absolutely positioned descendants are tied to the content box, so Show less
  * would freeze beside the 2nd/3rd card once the pile overflows. `fixed` keeps
- * it on the visible stack edge while the list scrolls. Clear all sits to the
- * left of Show less so the Show less hover morph cannot cover it. The collapsed
- * pile stays one hit target.
+ * it on the visible stack edge while the list scrolls. Left/right follows the
+ * screen edge the pile is hugging; `--thumbnail-minimize-slide` flips the
+ * Show less morph so the pill grows inward from that edge. Clear all sits to
+ * the left of Show less so the Show less hover morph cannot cover it. The
+ * collapsed pile stays one hit target.
  */
 .thumbnail-stack-toolbar {
+  --thumbnail-minimize-slide: 1;
   position: fixed;
   z-index: 50;
   bottom: 16px;
@@ -1595,6 +1708,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   display: flex;
   gap: var(--s-1);
   pointer-events: auto;
+  cursor: pointer;
 }
 
 .thumbnail-stack-clearing,
@@ -1680,12 +1794,14 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 }
 
 .thumbnail-stack-control {
+  --thumbnail-tooltip-nudge: 2px;
   position: relative;
   display: grid;
   width: 28px;
   height: 28px;
   padding: 0;
   place-items: center;
+  overflow: visible;
   border: 1px solid var(--glass-border);
   border-radius: var(--r-md);
   color: var(--glass-text);
@@ -1710,7 +1826,6 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 .thumbnail-stack-control[data-native-pointer-hover="true"] {
   border-color: var(--glass-border-strong);
   background: var(--glass-raised-solid);
-  transform: translateY(-1px);
 }
 
 .thumbnail-stack-control:active {
@@ -1767,7 +1882,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 
 .thumbnail-stack-minimize-label {
   opacity: 0;
-  transform: translateX(4px);
+  transform: translateX(calc(var(--thumbnail-minimize-slide) * 4px));
   transition:
     opacity var(--thumbnail-minimize-swap) var(--ease-out),
     transform var(--thumbnail-minimize-swap) var(--ease-out);
@@ -1791,7 +1906,6 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   background: var(--glass-strong-solid);
   border-color: var(--glass-border);
   cursor: pointer;
-  transform: translateY(-1px);
 }
 
 .thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize:active {
@@ -1802,7 +1916,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 .thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize[data-native-pointer-hover="true"] svg,
 .thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize:focus-visible svg {
   opacity: 0;
-  transform: translateX(-8px) scale(0.8);
+  transform: translateX(calc(var(--thumbnail-minimize-slide) * -8px)) scale(0.8);
 }
 
 .thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize:hover .thumbnail-stack-minimize-label,
@@ -1827,7 +1941,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 
 .thumbnail-stack-toolbar-leaving .thumbnail-stack-minimize svg {
   opacity: 0;
-  transform: translateX(-8px) scale(0.8);
+  transform: translateX(calc(var(--thumbnail-minimize-slide) * -8px)) scale(0.8);
   transition: none;
 }
 
@@ -1854,24 +1968,34 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 .thumbnail-stack-toolbar-exiting .thumbnail-stack-minimize-label,
 .thumbnail-stack-toolbar-entering .thumbnail-stack-minimize-label {
   opacity: 0;
-  transform: translateX(4px);
+  transform: translateX(calc(var(--thumbnail-minimize-slide) * 4px));
   transition: none;
 }
 
+/*
+ * Per-control tips, not one shared corner anchor. Extra toolbar actions
+ * (close all, delete all) each get a tip centered on that icon. Default
+ * toolbar is at the bottom of the window, so the tip opens above.
+ */
 .thumbnail-stack-control[data-tooltip]::after {
   position: absolute;
+  justify-self: start;
+  align-self: start;
+  inset: auto;
   top: auto;
-  right: 0;
-  bottom: calc(100% + var(--s-1));
+  bottom: calc(100% + 6px);
+  left: 50%;
   z-index: 60;
-  padding: var(--s-1) var(--s-2);
+  width: max-content;
+  padding: 4px 7px;
   border-radius: var(--r-xs);
   content: attr(data-tooltip);
   color: var(--glass-text);
   background: var(--glass-strong);
   box-shadow: var(--shadow-sm);
   opacity: 0;
-  transform: translateY(2px);
+  translate: -50% 0;
+  transform: translateY(var(--thumbnail-tooltip-nudge));
   transition:
     opacity var(--dur-1) var(--ease-out),
     transform var(--dur-1) var(--ease-out);
@@ -1879,12 +2003,6 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   font-size: var(--text-2xs);
   font-weight: var(--weight-medium);
   white-space: nowrap;
-}
-
-.thumbnail-stack-toolbar-anchor-top .thumbnail-stack-control[data-tooltip]::after {
-  top: calc(100% + var(--s-1));
-  bottom: auto;
-  transform: translateY(-2px);
 }
 
 .thumbnail-stack-control[data-tooltip]:hover::after,
@@ -1899,6 +2017,15 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 .thumbnail-stack-toolbar-entering .thumbnail-stack-control[data-tooltip]::after {
   opacity: 0;
   transition: none;
+}
+
+.thumbnail-stack-toolbar-anchor-top .thumbnail-stack-control {
+  --thumbnail-tooltip-nudge: -2px;
+}
+
+.thumbnail-stack-toolbar-anchor-top .thumbnail-stack-control[data-tooltip]::after {
+  top: calc(100% + 6px);
+  bottom: auto;
 }
 
 .thumbnail-stack-compact {
@@ -1952,6 +2079,12 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 .thumbnail-stack-toolbar-anchor-top {
   top: 16px;
   bottom: auto;
+}
+
+.thumbnail-stack-toolbar-anchor-right {
+  --thumbnail-minimize-slide: -1;
+  left: auto;
+  right: 28px;
 }
 
 .thumbnail-stack-compact > .thumbnail-card {
@@ -2236,45 +2369,6 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 .thumbnail-collapsed-hit-target {
   --thumbnail-peek-up: max(
     0px,
-    calc(var(--thumbnail-collapsed-peek, 0px) * var(--thumbnail-stack-gravity, 1))
-  );
-  --thumbnail-peek-down: max(
-    0px,
-    calc(var(--thumbnail-collapsed-peek, 0px) * -1 * var(--thumbnail-stack-gravity, 1))
-  );
-  position: absolute;
-  z-index: 40;
-  right: 28px;
-  bottom: calc(52px - var(--thumbnail-peek-down));
-  left: 28px;
-  /*
-   * Front card is 160px. Extra peek height comes from `--thumbnail-collapsed-peek`
-   * (idle 9px × receding pose) so a single preview does not steal clicks in
-   * the empty space above it. Hover uses `--thumbnail-collapsed-hover-peek`.
-   * Gravity splits the extra above or below the front card.
-   */
-  height: calc(160px + var(--thumbnail-peek-up) + var(--thumbnail-peek-down));
-  padding: 0;
-  border: 0;
-  border-radius: 12px;
-  background: transparent;
-  cursor: pointer;
-  touch-action: none;
-  pointer-events: auto;
-  -webkit-user-drag: none;
-  /* Chromium's image-drag hit test skips empty controls and uses the <img>
-     underneath. A 0-alpha fill makes this the drag source without tint. */
-  background-image: linear-gradient(rgb(0 0 0 / 0%), rgb(0 0 0 / 0%));
-}
-
-.thumbnail-collapsed-hit-target:not(:disabled) * {
-  cursor: pointer;
-}
-
-.thumbnail-collapsed-hit-target:hover:not([data-thumbnail-hover-stale]),
-.thumbnail-collapsed-hit-target[data-native-pointer-hover="true"] {
-  --thumbnail-peek-up: max(
-    0px,
     calc(
       var(--thumbnail-collapsed-hover-peek, var(--thumbnail-collapsed-peek, 0px))
         * var(--thumbnail-stack-gravity, 1)
@@ -2287,6 +2381,33 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
         * -1 * var(--thumbnail-stack-gravity, 1)
     )
   );
+  position: absolute;
+  z-index: 40;
+  right: 28px;
+  bottom: calc(52px - var(--thumbnail-peek-down));
+  left: 28px;
+  /*
+   * Front card is 160px. Extra peek height always uses the hover-fan size so
+   * moving onto peeking cards cannot leave this control (idle peek was shorter
+   * than the fan, which flashed the default arrow). Gravity splits the extra
+   * above or below the front card.
+   */
+  height: calc(160px + var(--thumbnail-peek-up) + var(--thumbnail-peek-down));
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  cursor: pointer;
+  touch-action: none;
+  pointer-events: auto;
+  -webkit-user-drag: none;
+  /* Chromium's image-drag hit test skips empty controls and uses the <img>
+     underneath. A 0-alpha fill makes this the drag source without tint. */
+  background-image: linear-gradient(rgb(0 0 0 / 0%), rgb(0 0 0 / 0%));
+}
+
+.thumbnail-collapsed-hit-target:not(:disabled) * {
+  cursor: pointer;
 }
 
 .thumbnail-stack-anchor-top .thumbnail-collapsed-hit-target {
@@ -2308,7 +2429,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 .thumbnail-collapsed-hit-target::after {
   position: absolute;
   inset: -96px -10px -6px;
-  border-radius: inherit;
+  border-radius: 12px;
   content: "";
   opacity: 0;
   pointer-events: none;
@@ -2509,7 +2630,9 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
     transform: scale(1.015);
   }
 
-  .thumbnail-card.thumbnail-drop-rejected {
+  .thumbnail-card.thumbnail-drop-rejected,
+  .thumbnail-card.thumbnail-ready.thumbnail-drop-rejected,
+  .thumbnail-card.thumbnail-ready.thumbnail-arrived.thumbnail-drop-rejected {
     animation: none;
   }
 

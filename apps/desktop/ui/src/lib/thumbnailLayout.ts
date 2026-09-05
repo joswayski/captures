@@ -228,9 +228,23 @@ export const THUMBNAIL_STACK_ANCHOR_TOP_GRAVITY = -0.2;
 /** Switch back to a bottom pile once gravity is clearly in the lower band. */
 export const THUMBNAIL_STACK_ANCHOR_BOTTOM_GRAVITY = 0.2;
 
-function clampGravity(value: number): number {
-  if (!Number.isFinite(value)) return 1;
+/** Switch Show less to the right once travel is clearly in the right band. */
+export const THUMBNAIL_STACK_SIDE_RIGHT_BIAS = 0.2;
+
+/** Switch Show less back to the left once travel is clearly in the left band. */
+export const THUMBNAIL_STACK_SIDE_LEFT_BIAS = -0.2;
+
+function clampSignedAxis(value: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback;
   return Math.min(1, Math.max(-1, value));
+}
+
+function clampGravity(value: number): number {
+  return clampSignedAxis(value, 1);
+}
+
+function clampBias(value: number): number {
+  return clampSignedAxis(value, -1);
 }
 
 /**
@@ -278,6 +292,71 @@ export function thumbnailStackAnchorFromGravity(
   }
   if (current === "top" && gravity >= THUMBNAIL_STACK_ANCHOR_BOTTOM_GRAVITY) {
     return "bottom";
+  }
+  return current;
+}
+
+/**
+ * Compact cards sit on one end of a full-height stack (`bottom: 52px` or
+ * `top: 52px`). Flipping that layout mid-drag teleports the pile across the
+ * window until the frame conversion catches up, so collapsed dragging keeps
+ * the press-time anchor and only settles after drop.
+ */
+export function thumbnailStackHarnessCardTop({
+  offsetY,
+  anchor,
+  viewportHeight,
+}: {
+  offsetY: number;
+  anchor: ThumbnailStackAnchor;
+  viewportHeight: number;
+}): number {
+  if (anchor === "top") return offsetY + THUMBNAIL_STACK_CONTROL_GUTTER_PX;
+  return (
+    offsetY
+    + viewportHeight
+    - THUMBNAIL_STACK_CONTROL_GUTTER_PX
+    - THUMBNAIL_CARD_HEIGHT_PX
+  );
+}
+
+/**
+ * Map a 0 (left) … 1 (right) travel through the work area onto signed side
+ * bias. -1 = left, +1 = right.
+ */
+export function thumbnailStackBiasFromNormalizedX(xFromLeft: number): number {
+  if (!Number.isFinite(xFromLeft)) return -1;
+  return clampBias(2 * xFromLeft - 1);
+}
+
+/** Horizontal travel of a 340px stack frame through a work area. */
+export function thumbnailStackBiasFromFrameX(
+  x: number,
+  workX: number,
+  workWidth: number,
+  frameWidth = 340,
+): number {
+  const travel = Math.max(1, workWidth - frameWidth);
+  return thumbnailStackBiasFromNormalizedX((x - workX) / travel);
+}
+
+export function thumbnailStackBiasFromHarness(
+  offsetX: number,
+  viewportWidth: number,
+  frameWidth = 340,
+): number {
+  return thumbnailStackBiasFromFrameX(offsetX, 0, viewportWidth, frameWidth);
+}
+
+export function thumbnailStackSideFromBias(
+  bias: number,
+  current: ThumbnailStackSide = "left",
+): ThumbnailStackSide {
+  if (current === "left" && bias >= THUMBNAIL_STACK_SIDE_RIGHT_BIAS) {
+    return "right";
+  }
+  if (current === "right" && bias <= THUMBNAIL_STACK_SIDE_LEFT_BIAS) {
+    return "left";
   }
   return current;
 }
@@ -388,14 +467,15 @@ export const THUMBNAIL_MINIMIZE_MORPH_MS = 240;
 export const THUMBNAIL_MINIMIZE_SWAP_MS = 180;
 
 /**
- * Delay before live cards above a dust-delete begin sliding into the empty
- * slot. Matches the pre-motion ash phase in styles.css.
+ * Delay before live cards toward the stack anchor begin sliding into a
+ * dust-delete hole. Matches the pre-motion ash phase in styles.css.
  */
 export const THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS = 1_800;
 
 /**
- * Delay before live cards above a dismiss begin sliding. Matches the point
- * where the outgoing preview has fully faded/streaked off-screen.
+ * Delay before live cards toward the stack anchor begin sliding after a
+ * dismiss. Matches the point where the outgoing preview has fully
+ * faded/streaked off-screen.
  */
 export const THUMBNAIL_DISMISS_STACK_MOTION_DELAY_MS = 450;
 
@@ -427,18 +507,21 @@ export type ThumbnailStackCardMotionState = {
   /** True while this card is locked in any exit animation. */
   exiting: boolean;
   /**
-   * True when this card still occupies layout space and should pull cards
-   * above it downward once `motionReady` (dust-delete or dismiss hold).
+   * True when this card still occupies layout space and should pull live
+   * cards toward the stack anchor once `motionReady` (dust-delete or dismiss
+   * hold). Bottom-anchored stacks slide earlier cards down; top-anchored
+   * stacks slide later cards up.
    */
   holdsLayoutSlot: boolean;
   /**
    * True once this exit's motion delay has elapsed so its slot contributes
-   * to the stacked shift of live cards above it.
+   * to the stacked shift of live cards toward the anchor.
    */
   motionReady: boolean;
   /**
-   * Shift already applied to this card, in CSS pixels. Exiting cards keep this
-   * value instead of sliding into holes that opened after they started exiting.
+   * Signed translateY already applied to this card, in CSS pixels (positive
+   * down). Exiting cards keep this value instead of sliding into holes that
+   * opened after they started exiting.
    */
   currentShiftPx?: number;
 };
@@ -462,9 +545,14 @@ export function countMotionReadySlotsBelow(
 /** @deprecated Prefer countMotionReadySlotsBelow. */
 export const countMotionReadyDeleteSlotsBelow = countMotionReadySlotsBelow;
 
-/** Pixel shift for a live card sitting above `slots` open exit holes. */
+/** Pixel shift magnitude for a live card sitting `slots` open exit holes from the anchor. */
 export function thumbnailStackShiftPx(slots: number): number {
   return Math.max(0, slots) * THUMBNAIL_CARD_SLOT_PX;
+}
+
+/** True when `shiftPx` is a non-zero stacked offset (signed translateY). */
+export function hasThumbnailStackShiftPx(shiftPx: number): boolean {
+  return Number.isFinite(shiftPx) && Math.abs(shiftPx) > 0.5;
 }
 
 /**
@@ -492,17 +580,45 @@ function isClearExitHole(
 }
 
 /**
- * Compute the target translateY (px) for every card in order.
+ * Compute the target translateY (px) for every card in document order.
  * Live survivors slide into motion-ready holes; exiting cards keep the shift
  * they already had until those holes are removed from layout.
  *
+ * Bottom-anchored stacks slide earlier cards down (positive Y) so the newest
+ * capture and Show less stay put. Top-anchored stacks reverse that: later
+ * cards slide up (negative Y) so Show less and the first preview stay packed.
+ *
  * Cards never close the gap to a neighbor that still occupies its slot. That
- * keeps a convoy when several live cards follow a lower hole, and it stops a
- * live card from sliding into a preview that started deleting mid-settle.
+ * keeps a convoy when several live cards follow a hole, and it stops a live
+ * card from sliding into a preview that started deleting mid-settle.
  * Dissolving-in-place holes (motion-ready, unshifted) stay passable so a
  * single delete still eases into the ash after the usual delay.
  */
 export function computeThumbnailStackShifts(
+  cards: readonly ThumbnailStackCardMotionState[],
+  options: { fromTop?: boolean } = {},
+): number[] {
+  if (options.fromTop) {
+    const magnitudeCards = cards.map((card) => ({
+      ...card,
+      currentShiftPx: card.currentShiftPx === undefined
+        ? undefined
+        : Math.abs(card.currentShiftPx),
+    }));
+    const towardStart = computeThumbnailStackShiftsTowardLater(
+      [...magnitudeCards].reverse(),
+    );
+    return towardStart.reverse().map((px) => (px === 0 ? 0 : -px));
+  }
+  return computeThumbnailStackShiftsTowardLater(cards);
+}
+
+/**
+ * Bottom-up pass: each live card moves down by the stacked hole distance
+ * toward later cards. Used as-is for bottom-anchored stacks, and on a
+ * reversed copy for top-anchored stacks.
+ */
+function computeThumbnailStackShiftsTowardLater(
   cards: readonly ThumbnailStackCardMotionState[],
 ): number[] {
   // Single bottom-up pass keeps this O(n); it runs from a MutationObserver
@@ -532,15 +648,15 @@ export function computeThumbnailStackShifts(
 }
 
 /**
- * Increases should ease so multi-exit stacks accumulate smoothly.
- * Decreases must snap: removing a finished exit reflows layout by one
- * slot, and an instant transform drop of the same amount cancels the jump.
+ * Magnitude increases should ease so multi-exit stacks accumulate smoothly.
+ * Decreases must snap: removing a finished exit reflows layout by one slot,
+ * and an instant transform drop of the same amount cancels the jump.
  */
 export function shouldAnimateThumbnailStackShift(
   previousPx: number,
   nextPx: number,
 ): boolean {
-  return nextPx > previousPx;
+  return Math.abs(nextPx) > Math.abs(previousPx);
 }
 
 export function shouldScrollThumbnailStackToEnd(
@@ -833,7 +949,7 @@ export function thumbnailStackMotionClassNames(card: HTMLElement | null): string
 export function restoreThumbnailStackShiftClass(card: HTMLElement | null): void {
   if (!card) return;
   const shiftPx = Number.parseFloat(card.style.getPropertyValue(STACK_SHIFT_VAR).trim());
-  if (Number.isFinite(shiftPx) && shiftPx > 0) {
+  if (hasThumbnailStackShiftPx(shiftPx)) {
     card.classList.add(STACK_SHIFTING_CLASS);
   }
 }
@@ -912,9 +1028,14 @@ export function thumbnailStackSuppressesSlotShift(stack: HTMLElement): boolean {
     || stack.classList.contains("thumbnail-stack-clearing");
 }
 
+/** True when survivors should slide up into holes (Show less is on the top edge). */
+export function thumbnailStackShiftsFromTop(stack: HTMLElement): boolean {
+  return stack.classList.contains("thumbnail-stack-anchor-top");
+}
+
 /** How many expanded slots `shiftPx` represents, for compact visual depth. */
 export function thumbnailStackShiftSlots(shiftPx: number): number {
-  return Math.max(0, shiftPx) / THUMBNAIL_CARD_SLOT_PX;
+  return Math.abs(shiftPx) / THUMBNAIL_CARD_SLOT_PX;
 }
 
 function writeShiftSlots(card: HTMLElement, slots: number): void {
@@ -925,18 +1046,32 @@ function writeShiftSlots(card: HTMLElement, slots: number): void {
   card.style.setProperty(STACK_SHIFT_SLOTS_VAR, String(slots));
 }
 
+function readShiftSlots(card: HTMLElement): number {
+  const raw = card.style.getPropertyValue(STACK_SHIFT_SLOTS_VAR).trim();
+  if (!raw) return 0;
+  const parsed = Number.parseFloat(raw);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 function clearShiftSlots(card: HTMLElement): void {
   card.style.removeProperty(STACK_SHIFT_SLOTS_VAR);
 }
 
+function hasExpandedSlotShift(card: HTMLElement): boolean {
+  return card.classList.contains(STACK_SHIFTING_CLASS)
+    || card.classList.contains(STACK_SHIFT_INSTANT_CLASS)
+    || hasThumbnailStackShiftPx(readStackShiftPx(card))
+    || Boolean(card.style.translate);
+}
+
 function writeStackShiftPx(card: HTMLElement, shiftPx: number, animate: boolean): void {
-  if (shiftPx <= 0) {
+  if (!hasThumbnailStackShiftPx(shiftPx)) {
     const hadVisualShift = card.classList.contains(STACK_SHIFTING_CLASS)
-      || readStackShiftPx(card) > 0
+      || hasThumbnailStackShiftPx(readStackShiftPx(card))
       || Boolean(card.style.translate);
     if (hadVisualShift) {
-      // Snap with layout reflow. An ease here would slide the card back up
-      // while a hole below is collapsing.
+      // Snap with layout reflow. An ease here would fight the hole collapsing
+      // (cards jumping toward the anchored edge as the stack shrinks).
       card.classList.add(STACK_SHIFT_INSTANT_CLASS);
       card.classList.remove(STACK_SHIFTING_CLASS);
       clearTranslatePx(card);
@@ -1040,9 +1175,9 @@ export async function waitForThumbnailStackSettle(
 /**
  * Drive multi-slot stack collapse for held-layout exits (dust delete + dismiss).
  *
- * Survivors slide by N × slot with the same ease for both exit kinds. When a
- * finished exit is removed, the transform snaps down with the layout reflow
- * so multi-exit batches do not teleport.
+ * Survivors slide by N × slot toward the stack anchor with the same ease for
+ * both exit kinds. When a finished exit is removed, the transform snaps with
+ * the layout reflow so multi-exit batches do not teleport.
  */
 export function createThumbnailStackShiftController(stack: HTMLElement): () => void {
   const exitStartedAt = new WeakMap<HTMLElement, number>();
@@ -1077,19 +1212,37 @@ export function createThumbnailStackShiftController(stack: HTMLElement): () => v
     }
 
     if (thumbnailStackSuppressesSlotShift(stack)) {
-      // Compact pose is a 3D `transform` from a shared bottom anchor. Expanded
-      // slot `translate` would compose with that and drop survivors below the
-      // front card until the held exit is removed. Snapshot any in-flight
-      // settle as compact depth so Show less does not jump cards back up to
-      // their original expanded slots.
-      for (const card of cards) {
-        const shiftPx = readStackShiftPx(card);
-        if (shiftPx > 0) writeShiftSlots(card, thumbnailStackShiftSlots(shiftPx));
-        const hasSlotShift = card.classList.contains(STACK_SHIFTING_CLASS)
-          || card.classList.contains(STACK_SHIFT_INSTANT_CLASS)
-          || shiftPx > 0
-          || Boolean(card.style.translate);
-        if (hasSlotShift) writeStackShiftPx(card, 0, false);
+      // Compact pose is a 3D `transform`. Expanded slot `translate` would
+      // compose with that and drop survivors off the pile until the held exit
+      // is removed. Snapshot any in-flight settle as compact depth so Show
+      // less does not jump cards back to their original expanded slots, then
+      // rebase or clear that snapshot when held exits unmount so React's new
+      // `--thumbnail-stack-base-depth` does not stack with a stale offset.
+      const motionStates: ThumbnailStackCardMotionState[] = cards.map((card) => {
+        const holdsLayoutSlot = isHeldLayoutExitCard(card);
+        const startedAt = exitStartedAt.get(card);
+        const delayMs = motionDelayMsFor(card);
+        const motionReady = holdsLayoutSlot
+          && startedAt !== undefined
+          && now - startedAt >= delayMs;
+        return {
+          exiting: isExitingCard(card),
+          holdsLayoutSlot,
+          motionReady,
+          currentShiftPx: readStackShiftPx(card),
+        };
+      });
+      const shifts = computeThumbnailStackShifts(motionStates, {
+        fromTop: thumbnailStackShiftsFromTop(stack),
+      });
+      for (let index = 0; index < cards.length; index += 1) {
+        const card = cards[index]!;
+        const nextSlots = thumbnailStackShiftSlots(shifts[index] ?? 0);
+        const expandedShift = hasExpandedSlotShift(card);
+        if (expandedShift || readShiftSlots(card) > 0) {
+          writeShiftSlots(card, nextSlots);
+        }
+        if (expandedShift) writeStackShiftPx(card, 0, false);
       }
       return;
     }
@@ -1105,13 +1258,17 @@ export function createThumbnailStackShiftController(stack: HTMLElement): () => v
         && now - startedAt >= delayMs;
       const exiting = isExitingCard(card);
       let currentShiftPx = readStackShiftPx(card);
-      if (exiting && currentShiftPx > 0) {
+      if (exiting && hasThumbnailStackShiftPx(currentShiftPx)) {
         // Freeze mid-ease so delete/dismiss starts where the card actually is,
         // not at the still-animating target slot. Ignore a 0/identity matrix —
         // jsdom and some WebViews report no visual translate even while the
         // CSS variable still holds the stacked offset.
         const visualPx = readComputedTranslateY(card);
-        if (visualPx !== null && visualPx > 0.5 && Math.abs(visualPx - currentShiftPx) > 0.5) {
+        if (
+          visualPx !== null
+          && hasThumbnailStackShiftPx(visualPx)
+          && Math.abs(visualPx - currentShiftPx) > 0.5
+        ) {
           writeStackShiftPx(card, visualPx, false);
           currentShiftPx = visualPx;
         }
@@ -1124,7 +1281,9 @@ export function createThumbnailStackShiftController(stack: HTMLElement): () => v
       };
     });
 
-    const shifts = computeThumbnailStackShifts(motionStates);
+    const shifts = computeThumbnailStackShifts(motionStates, {
+      fromTop: thumbnailStackShiftsFromTop(stack),
+    });
     for (let index = 0; index < cards.length; index += 1) {
       const card = cards[index]!;
       const nextPx = shifts[index] ?? 0;
@@ -1134,7 +1293,7 @@ export function createThumbnailStackShiftController(stack: HTMLElement): () => v
         // repeats an existing token. Since this controller observes `class`,
         // rewriting the settled class would queue applyShifts forever and
         // starve timers, hover polling, clicks, and exit completion.
-        if (nextPx > 0 && !card.classList.contains(STACK_SHIFTING_CLASS)) {
+        if (hasThumbnailStackShiftPx(nextPx) && !card.classList.contains(STACK_SHIFTING_CLASS)) {
           card.classList.add(STACK_SHIFTING_CLASS);
         }
         continue;

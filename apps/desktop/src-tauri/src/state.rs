@@ -102,8 +102,9 @@ impl ThumbnailVisibility {
         }
         self.pending_artifact_id = None;
         self.suppressed_capture_generation = None;
-        // A new capture should bring the stack back; parking is temporary.
-        self.user_collapsed = false;
+        // Un-hide the stack so the new shot lands on the pile. Leave parking
+        // alone: auto-expanding resized the window to the expanded bar while
+        // the webview stayed collapsed, which pinned drag to that bar's top.
         true
     }
 
@@ -538,7 +539,7 @@ mod tests {
     }
 
     #[test]
-    fn collapsing_the_stack_is_session_state_until_a_new_preview_arrives() {
+    fn a_new_preview_keeps_the_stack_collapsed() {
         let mut visibility = ThumbnailVisibility::default();
         visibility.collapse();
         assert!(visibility.is_collapsed());
@@ -551,7 +552,7 @@ mod tests {
         assert!(visibility.is_collapsed());
         assert!(visibility.wait_for_artifact(capture, "artifact".to_owned()));
         assert!(visibility.mark_artifact_ready("artifact"));
-        assert!(!visibility.is_collapsed());
+        assert!(visibility.is_collapsed());
     }
 
     #[test]

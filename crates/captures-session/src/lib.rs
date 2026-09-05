@@ -1,5 +1,6 @@
 //! Reports whether the current interactive desktop session is safe to capture.
 
+mod capture_escape;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
@@ -73,6 +74,12 @@ pub fn set_win_shift_s_handler(handler: Option<fn(WinShiftSPhase)>) {
     #[cfg(not(target_os = "windows"))]
     let _ = handler;
 }
+
+pub use capture_escape::{
+    CaptureEscapeUi, capture_escape_overrides_focus_and_freeze, ensure_capture_escape_hook,
+    macos_key_code_is_escape, set_capture_escape_enabled, set_capture_escape_handler,
+    windows_vk_is_escape,
+};
 
 #[cfg(test)]
 mod tests {

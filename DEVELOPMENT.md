@@ -35,17 +35,24 @@ open "http://127.0.0.1:1420/?view=recording-hud&mock=1&stage=1"
 open "http://127.0.0.1:1420/?view=recording-region-indicator&mock=1&stage=1&target=region&x=260&y=180&width=1000&height=640"
 open "http://127.0.0.1:1420/?view=thumbnail&mock=1&stage=1"
 open "http://127.0.0.1:1420/?view=thumbnail&mock=1&stage=1&placement=top-right"
+open "http://127.0.0.1:1420/?view=thumbnail&mock=1&stage=1&reject=1"
 open "http://127.0.0.1:1420/?view=update&mock=1"
 open "http://127.0.0.1:1420/?view=update&mock=1&captures=1"
+open "http://127.0.0.1:1420/?view=update&mock=1&changelog=0"
 open "http://127.0.0.1:1420/?view=update&mock=1&update=downloading"
+open "http://127.0.0.1:1420/?view=update&mock=1&update=restarting"
 open "http://127.0.0.1:1420/?view=update&mock=1&update=error"
 open "http://127.0.0.1:1420/?view=startup&mock=1"
+open "http://127.0.0.1:1420/?view=startup&mock=1&stage=1&caret=top&caret_x=148"
 ```
 
 - `mock` installs the sample backend (`apps/desktop/ui/src/dev/previewBackend.ts`).
 - `stage` paints a sample desktop behind transparent overlay windows.
-- Other parameters set variants: `mode`, `target`, `state`, `update`, `platform`, `granted`, `drafts`, `captures`, `count`, `placement`.
+- Other parameters set variants: `mode`, `target`, `state`, `update`, `platform`, `granted`, `drafts`, `captures`, `count`, `placement`, `changelog`, `reject`.
+- `changelog=0` hides stacked release notes on the update notice (Preferences default is on).
+- `caret=top` or `caret=bottom` plus `caret_x` places the tray-pointing triangle on the update and launch notices.
 - `placement` sets the mini-preview home corner in the thumbnail and Preferences harness (`top-left`, `top-right`, `bottom-left`, `bottom-right`).
+- `reject=1` loops the mini-preview self-drop “no” shake on the newest expanded card.
 - `auto=1` enables automatic capture in the selector harness so its compact controls and Preferences link can be reviewed.
 - `live=1` or `frozen=0` shows the capture overlay and recording selector over the live desktop instead of a freeze-frame.
 - `screenshot_format` and `video_format` set the Preferences defaults used by the editor harness (`png`/`jpeg`/`webp` and `mp4`/`gif`/`webm`).
@@ -65,11 +72,12 @@ module per family of surfaces from `apps/desktop/ui/src/styles/`.
 
 - Regular windows follow the light/dark/system appearance setting.
 - Surfaces that float over the desktop — capture overlay, capture menu, recording
-  controls, mini previews, saved/hidden recording notices — use the fixed `--glass-*`
-  media palette so they stay legible on any wallpaper.
-- The update and startup notices are solid `--surface-raised` cards in a
-  transparent native window, with CSS shadow and a tooltip caret that points at
-  the tray or menu bar icon.
+  controls, mini previews, saved/hidden recording notices, the post-update / launch
+  tooltip — use the fixed `--glass-*` media palette so they stay legible on any
+  wallpaper.
+- The update notice is a solid `--surface-raised` card in a transparent native
+  window. The launch notice is a dark glass pill with a CSS triangle caret pointing
+  at the tray or menu bar icon, not a rotated square.
 - Accent is reserved for the primary capture action, selection, and focus. Status
   colors keep stable meanings: signal for recording and destructive, green for saved,
   blue for progress.

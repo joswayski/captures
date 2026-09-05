@@ -89,6 +89,7 @@ const settings: AppSettings = {
   freeze_screen: true,
   show_cursor_in_screenshots: true,
   screenshot_format: "png",
+  show_update_changelog: true,
   recording: {
     video_shortcut: "Ctrl+Shift+5",
     gif_shortcut: "Ctrl+Shift+6",

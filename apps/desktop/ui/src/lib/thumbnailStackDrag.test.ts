@@ -20,6 +20,7 @@ import {
   setThumbnailStackDragging,
   setThumbnailStackPressing,
   thumbnailStackDragExceededThreshold,
+  thumbnailStackMeasuredFrameHeight,
   tickThumbnailStackDragSway,
   writeHarnessStackOffset,
 } from "./thumbnailStackDrag";
@@ -103,6 +104,21 @@ describe("clampThumbnailStackFrame", () => {
     expect(clampThumbnailStackFrame(2_000, 2_000, 340, 240, work)).toEqual({
       x: 1_580,
       y: 788,
+    });
+  });
+
+  it("uses the webview height when the native size is missing so slack still applies", () => {
+    expect(thumbnailStackMeasuredFrameHeight(792, 240, 1_040)).toBe(792);
+    expect(thumbnailStackMeasuredFrameHeight(null, 240, 792)).toBe(792);
+    expect(thumbnailStackMeasuredFrameHeight(0, 240, 792)).toBe(792);
+    expect(thumbnailStackMeasuredFrameHeight(undefined, 240, 240)).toBe(240);
+    const work = { x: 0, y: 0, width: 1_920, height: 1_040, bottomGap: 12 };
+    const pinned = clampThumbnailStackFrame(0, -800, 340, 240, work, 240);
+    expect(pinned).toEqual({ x: 0, y: 0 });
+    const frame = thumbnailStackMeasuredFrameHeight(null, 240, 792);
+    expect(clampThumbnailStackFrame(0, -800, 340, frame, work, 240)).toEqual({
+      x: 0,
+      y: -552,
     });
   });
 
@@ -233,12 +249,47 @@ describe("CollapsedThumbnailStackDrag", () => {
     expect(await drag.pointerUp({ pointerId: 1 })).toBe("drop");
   });
 
-  it("ignores an in-flight move after the press has already ended", async () => {
-    let continueMove: (() => void) | undefined;
+  it("drops a superseded in-flight move so a later sample is not overwritten", async () => {
+    let continueFirst: (() => void) | undefined;
+    const frames: { x: number; y: number }[] = [];
     const drag = new CollapsedThumbnailStackDrag({
       getFrame: () => ({ x: 0, y: 0 }),
       moveFrame: (x, y) => new Promise<{ x: number; y: number }>((resolve) => {
-        continueMove = () => resolve({ x, y });
+        const finish = () => {
+          frames.push({ x, y });
+          resolve({ x, y });
+        };
+        if (continueFirst === undefined) continueFirst = finish;
+        else finish();
+      }),
+      reducedMotion: () => false,
+    });
+
+    drag.pointerDown({ button: 0, pointerId: 1, screenX: 0, screenY: 0 });
+    const first = drag.pointerMove({ pointerId: 1, screenX: 40, screenY: 0 });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(continueFirst).toEqual(expect.any(Function));
+    const second = drag.pointerMove({ pointerId: 1, screenX: 80, screenY: 0 });
+    continueFirst?.();
+    expect(await first).toBeNull();
+    expect(await second).toMatchObject({ dragging: true, x: 80, y: 0 });
+    expect(frames.at(-1)).toEqual({ x: 80, y: 0 });
+  });
+
+  it("applies an in-flight move before drop so settlement sees the last position", async () => {
+    let continueMove: (() => void) | undefined;
+    const frames: { x: number; y: number }[] = [];
+    const drag = new CollapsedThumbnailStackDrag({
+      getFrame: () => ({ x: 0, y: 0 }),
+      moveFrame: (x, y) => new Promise<{ x: number; y: number }>((resolve) => {
+        const finish = () => {
+          frames.push({ x, y });
+          resolve({ x, y });
+        };
+        if (continueMove === undefined) continueMove = finish;
+        else finish();
       }),
       reducedMotion: () => false,
     });
@@ -246,11 +297,47 @@ describe("CollapsedThumbnailStackDrag", () => {
     drag.pointerDown({ button: 0, pointerId: 1, screenX: 0, screenY: 0 });
     const move = drag.pointerMove({ pointerId: 1, screenX: 40, screenY: 0 });
     await Promise.resolve();
-    expect(await drag.pointerUp({ pointerId: 1 })).toBe("drop");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(continueMove).toEqual(expect.any(Function));
+    const dropped = drag.pointerUp({ pointerId: 1 });
     continueMove?.();
-    expect(await move).toBeNull();
+    expect(await dropped).toBe("drop");
+    expect(await move).toMatchObject({ dragging: true, x: 40, y: 0 });
+    expect(frames.at(-1)).toEqual({ x: 40, y: 0 });
     expect(drag.isDragging).toBe(false);
     expect(drag.isActive).toBe(false);
+  });
+
+  it("applies the latest queued sample on drop instead of discarding it", async () => {
+    let continueFirst: (() => void) | undefined;
+    const frames: { x: number; y: number }[] = [];
+    const drag = new CollapsedThumbnailStackDrag({
+      getFrame: () => ({ x: 0, y: 0 }),
+      moveFrame: (x, y) => new Promise<{ x: number; y: number }>((resolve) => {
+        const finish = () => {
+          frames.push({ x, y });
+          resolve({ x, y });
+        };
+        if (continueFirst === undefined) continueFirst = finish;
+        else finish();
+      }),
+      reducedMotion: () => false,
+    });
+
+    drag.pointerDown({ button: 0, pointerId: 1, screenX: 0, screenY: 0 });
+    const first = drag.pointerMove({ pointerId: 1, screenX: 40, screenY: 0 });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(continueFirst).toEqual(expect.any(Function));
+    const second = drag.pointerMove({ pointerId: 1, screenX: 80, screenY: 0 });
+    const dropped = drag.pointerUp({ pointerId: 1 });
+    continueFirst?.();
+    expect(await dropped).toBe("drop");
+    expect(await first).toBeNull();
+    expect(await second).toMatchObject({ dragging: true, x: 80, y: 0 });
+    expect(frames.at(-1)).toEqual({ x: 80, y: 0 });
   });
 
   it("follows later pointer steps instead of freezing the first lean", async () => {
