@@ -100,8 +100,10 @@ import {
   shouldRecoverThumbnailAfterNullPolls,
   thumbnailCardHoverLockReleased,
   thumbnailCursorSyncAction,
+  thumbnailNullPollNeedsDesktopInputRecovery,
   thumbnailStackHasLiveHitTarget,
   thumbnailStackHoldsCollapsedPose,
+  thumbnailUnknownPointerShouldIgnoreCursorEvents,
   withThumbnailPointerTimeout,
   THUMBNAIL_CURSOR_HANDOFF_REASSERT_DELAYS_MS,
   type ThumbnailCursorKind,
@@ -6246,6 +6248,7 @@ export function Thumbnail() {
     let ignoreCursorUpdate: Promise<void> = Promise.resolve();
     let lastCursorSyncAt = 0;
     let consecutiveNullPolls = 0;
+    let pointerPollSupported = true;
     let cursorHandoffTimers: ReturnType<typeof setTimeout>[] = [];
     let cardHoverLocked = false;
     let cardHoverLockOrigin: { x: number; y: number } | null = null;
@@ -6335,7 +6338,16 @@ export function Thumbnail() {
       // animation. Without this, Windows/Linux leave the always-on-top window
       // hit-testable for the whole ~3s delete because pointer polls used to
       // return null on those platforms.
-      setIgnoreCursorEvents(!thumbnailStackHasLiveHitTarget(), true);
+      //
+      // A live card somewhere in a preserved-height window must not make the
+      // empty chrome eat desktop input. Prefer pass-through until a poll proves
+      // the pointer is on a card. An in-progress pile drag is the exception.
+      const dragging = Boolean(document.querySelector(".thumbnail-stack-dragging"));
+      setIgnoreCursorEvents(
+        thumbnailUnknownPointerShouldIgnoreCursorEvents(dragging, pointerPollSupported)
+          || !thumbnailStackHasLiveHitTarget(),
+        true,
+      );
     };
 
     const invalidatePointerPoll = () => {
@@ -6448,6 +6460,7 @@ export function Thumbnail() {
       clearNativeClasses();
       clearThumbnailCssCursor();
       cursorKind = "default";
+      const dragging = Boolean(document.querySelector(".thumbnail-stack-dragging"));
       if (!thumbnailStackHasLiveHitTarget()) {
         // Exiting-only stacks must stay click-through. Re-arming here would
         // undo the Close/Delete pass-through for ~3s on Windows/Linux.
@@ -6455,7 +6468,12 @@ export function Thumbnail() {
         schedulePoll(0);
         return;
       }
-      setIgnoreCursorEvents(false, true);
+      // Prefer pass-through until a poll proves the pointer is on a live card.
+      // Forcing the whole tall window hit-testable covers apps underneath.
+      setIgnoreCursorEvents(
+        thumbnailUnknownPointerShouldIgnoreCursorEvents(dragging, pointerPollSupported),
+        true,
+      );
       if (refreshNative) {
         void invoke("refresh_thumbnail_interactivity").catch(() => undefined);
       }
@@ -6480,12 +6498,15 @@ export function Thumbnail() {
             setIgnoreCursorEvents(true);
             delay = 40;
           } else {
-            // Wayland (and hung IPC) can still return null. Only recover when
-            // we are already in a click-through or native-tracking state that
-            // null samples cannot clear themselves — and never while the last
-            // preview is still dissolving, which must stay click-through.
-            const needsRecovery = ignoringCursorEvents
-              || document.documentElement.classList.contains("thumbnail-native-tracking");
+            // Wayland (and hung IPC) can still return null. Recover only when
+            // the tall window is still eating desktop events, or native hover
+            // tracking is stuck. Click-through with an unknown pointer is safe
+            // and must not loop recover. Exiting stacks stay click-through.
+            const needsRecovery = thumbnailNullPollNeedsDesktopInputRecovery(
+              ignoringCursorEvents,
+              document.documentElement.classList.contains("thumbnail-native-tracking"),
+              pointerPollSupported,
+            );
             if (
               needsRecovery
               && shouldRecoverThumbnailAfterNullPolls(consecutiveNullPolls)
@@ -6511,8 +6532,11 @@ export function Thumbnail() {
           setIgnoreCursorEvents(true);
           delay = 40;
         } else {
-          const needsRecovery = ignoringCursorEvents
-            || document.documentElement.classList.contains("thumbnail-native-tracking");
+          const needsRecovery = thumbnailNullPollNeedsDesktopInputRecovery(
+            ignoringCursorEvents,
+            document.documentElement.classList.contains("thumbnail-native-tracking"),
+            pointerPollSupported,
+          );
           if (
             needsRecovery
             && shouldRecoverThumbnailAfterNullPolls(consecutiveNullPolls)
@@ -6650,6 +6674,13 @@ export function Thumbnail() {
       THUMBNAIL_HIT_TEST_CHANGED_EVENT,
       updateThumbnailHitTest,
     );
+    void invoke<boolean>("thumbnail_pointer_poll_available")
+      .then((available) => {
+        if (cancelled) return;
+        pointerPollSupported = available !== false;
+        applyStackClickThrough();
+      })
+      .catch(() => undefined);
     schedulePoll(0);
     return () => {
       cancelled = true;
