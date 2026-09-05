@@ -1,6 +1,7 @@
 import {
   detectShortcutPlatform,
   eventMatchesShortcut,
+  isCaptureEscapeKey,
   modifierDisplayTokens,
   platformShortcutHelp,
   recordShortcut,
@@ -90,6 +91,13 @@ describe("shortcut recording", () => {
     expect(recordShortcut(keyEvent("Escape", { shiftKey: true }), "linux")).toEqual({
       kind: "cancel",
     });
+  });
+
+  it("treats Escape as a capture cancel regardless of leftover modifiers", () => {
+    expect(isCaptureEscapeKey({ key: "Escape" })).toBe(true);
+    expect(isCaptureEscapeKey({ code: "Escape" })).toBe(true);
+    expect(isCaptureEscapeKey({ key: "Esc" })).toBe(true);
+    expect(isCaptureEscapeKey({ key: "Enter", code: "Enter" })).toBe(false);
   });
 
   it("renders both legacy and canonical saved shortcut formats as keycaps", () => {

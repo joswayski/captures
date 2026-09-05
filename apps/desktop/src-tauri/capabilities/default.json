@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "desktop",
   "description": "Narrow capabilities for Captures desktop windows",
-  "windows": ["overlay", "thumbnail", "viewer", "viewer-*", "history", "preferences", "feedback", "onboarding", "startup", "update", "recording-selector", "recording-countdown", "recording-hud", "recording-editor-*", "screenshot-editor-*", "recording-saved-*", "recording-controls-hidden-*"],
+  "windows": ["overlay", "thumbnail", "viewer", "viewer-*", "history", "preferences", "feedback", "onboarding", "startup", "update", "recording-selector", "screenshot-countdown", "recording-countdown", "recording-hud", "recording-editor-*", "screenshot-editor-*", "recording-saved-*", "recording-controls-hidden-*"],
   "permissions": [
     "core:default",
     "dialog:allow-open",

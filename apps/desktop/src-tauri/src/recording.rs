@@ -153,6 +153,34 @@ pub(crate) fn recording_controls_are_available(state: &AppState) -> bool {
         })
 }
 
+pub(crate) fn recording_countdown_is_active(state: &AppState) -> bool {
+    state
+        .recording
+        .lock()
+        .coordinator
+        .snapshot(now_ms())
+        .is_some_and(|snapshot| snapshot.state == RecordingState::Countdown)
+}
+
+pub(crate) fn discard_recording_countdown_from_escape(app: &AppHandle, state: &Arc<AppState>) {
+    let session_id = {
+        let runtime = state.recording.lock();
+        let Some(snapshot) = runtime.coordinator.snapshot(now_ms()) else {
+            return;
+        };
+        if snapshot.state != RecordingState::Countdown {
+            return;
+        }
+        snapshot.id.clone()
+    };
+    let app = app.clone();
+    let state = state.clone();
+    tauri::async_runtime::spawn(async move {
+        let _ = discard_recording_inner(app.clone(), state, &session_id).await;
+        crate::sync_capture_escape(&app);
+    });
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct StartRecordingRequest {
     pub selection_id: String,
@@ -264,6 +292,7 @@ pub(crate) async fn prepare_capture_selector_inner(
     {
         return Err(AppError::CaptureInProgress);
     }
+    crate::arm_capture_escape(&app);
     let pending_selection = {
         let mut pending = state.recording_selection.lock();
         pending.as_mut().map(|selection| {
@@ -282,7 +311,13 @@ pub(crate) async fn prepare_capture_selector_inner(
         *state.recording_selection.lock() = None;
     }
 
-    let request_permission = crate::mark_screen_permission_request(&state)?;
+    let request_permission = match crate::mark_screen_permission_request(&state) {
+        Ok(request) => request,
+        Err(error) => {
+            crate::disarm_capture_escape_intent(&app);
+            return Err(error);
+        }
+    };
     if let Err(error) = state.backend.ensure_permission(request_permission) {
         if matches!(
             &error,
@@ -290,6 +325,7 @@ pub(crate) async fn prepare_capture_selector_inner(
         ) {
             *state.screen_permission_requested_this_launch.lock() = true;
         }
+        crate::disarm_capture_escape_intent(&app);
         return Err(error.into());
     }
 
@@ -395,8 +431,12 @@ pub(crate) async fn prepare_capture_selector_inner(
             if let Err(error) = prepare_recording_selector(&app, &summary, true).await {
                 *state.recording_selection.lock() = None;
                 restore_recording_ui(&app, &state);
+                crate::disarm_capture_escape_intent(&app);
                 return Err(error);
             }
+            // Selector visibility / selection state now own Escape. Drop the
+            // pre-paint gap flag so a later recording does not steal Esc.
+            crate::disarm_capture_escape_intent(&app);
             if let Some(task) = pending_windows {
                 complete_selector_windows(app.clone(), state, summary.id.clone(), task);
             } else if !windows_started {
@@ -408,6 +448,7 @@ pub(crate) async fn prepare_capture_selector_inner(
         Err(error) => {
             *state.recording_selection.lock() = None;
             restore_recording_ui(&app, &state);
+            crate::disarm_capture_escape_intent(&app);
             Err(error)
         }
     }
@@ -550,10 +591,10 @@ fn cancel_recording_selection_inner(
     selection_id: &str,
 ) -> Result<(), AppError> {
     let mut selection = state.recording_selection.lock();
-    let matches = selection
-        .as_ref()
-        .is_some_and(|selection| selection.summary.id == selection_id);
-    if !matches {
+    let Some(current) = selection.as_ref() else {
+        return Ok(());
+    };
+    if current.summary.id != selection_id {
         return Err(AppError::SessionUnavailable);
     }
     *selection = None;
@@ -570,6 +611,7 @@ fn restore_after_recording_selection(app: &AppHandle, state: &Arc<AppState>) {
     crate::set_capture_huds_protected(app, false);
     crate::restore_excluded_recording_chrome(app);
     crate::restore_thumbnail_capture_ui(app, state);
+    crate::sync_capture_escape(app);
 }
 
 pub(crate) fn dismiss_open_recording_selection(app: &AppHandle, state: &Arc<AppState>) -> bool {
@@ -1870,6 +1912,7 @@ async fn discard_recording_inner(
     destroy_recording_countdown(&app);
     crate::hide_window(&app, "recording-hud");
     crate::restore_thumbnail_capture_ui(&app, &state);
+    crate::sync_capture_escape(&app);
     Ok(snapshot)
 }
 
@@ -3460,6 +3503,7 @@ fn restore_recording_ui(app: &AppHandle, state: &Arc<AppState>) {
     crate::set_capture_huds_protected(app, false);
     crate::restore_thumbnail_capture_ui(app, state);
     crate::updates::restore_update_notice(app);
+    crate::disarm_capture_escape_intent(app);
 }
 
 #[cfg(target_os = "macos")]
@@ -4313,6 +4357,7 @@ fn show_recording_countdown(app: &AppHandle, display: &DisplayDescriptor) -> Res
     )
     .map_err(|error| AppError::Task(error.to_owned()))?;
     window.show()?;
+    crate::arm_capture_escape(app);
     crate::set_window_content_protected(&window, recording_overlay_content_protected(app))?;
     #[cfg(target_os = "macos")]
     captures_macos_window::elevate_capture_surface(&window)
@@ -4331,6 +4376,7 @@ fn destroy_recording_countdown(app: &AppHandle) {
     {
         eprintln!("failed to close recording countdown: {error}");
     }
+    crate::sync_capture_escape(app);
 }
 
 fn recording_overlay_content_protected(app: &AppHandle) -> bool {

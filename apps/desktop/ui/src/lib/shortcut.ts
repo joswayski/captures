@@ -328,6 +328,11 @@ export function eventMatchesShortcut(
   return true;
 }
 
+/** True for Escape regardless of leftover modifiers or `key` vs `code`. */
+export function isCaptureEscapeKey(event: { key?: string; code?: string }): boolean {
+  return event.key === "Escape" || event.key === "Esc" || event.code === "Escape";
+}
+
 export function recordShortcut(
   event: ShortcutKeyEvent,
   platform: ShortcutPlatform = detectShortcutPlatform(),
