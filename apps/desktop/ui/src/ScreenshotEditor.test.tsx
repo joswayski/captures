@@ -1491,12 +1491,14 @@ describe("ScreenshotEditor", () => {
     fireEvent.change(screen.getByRole("slider", { name: "Shadow blur" }), {
       target: { value: "22" },
     });
-    fireEvent.change(screen.getByRole("spinbutton", { name: "Shadow X offset" }), {
-      target: { value: "8" },
-    });
-    fireEvent.change(screen.getByRole("spinbutton", { name: "Shadow Y offset" }), {
-      target: { value: "-4" },
-    });
+    const xOffset = screen.getByRole("spinbutton", { name: "Shadow X offset" });
+    const yOffset = screen.getByRole("spinbutton", { name: "Shadow Y offset" });
+    fireEvent.change(xOffset, { target: { value: "8" } });
+    fireEvent.blur(xOffset);
+    fireEvent.change(yOffset, { target: { value: "-" } });
+    expect(yOffset).not.toHaveValue(3);
+    fireEvent.change(yOffset, { target: { value: "-4" } });
+    fireEvent.blur(yOffset);
     fireEvent.click(screen.getByRole("button", { name: "Shadow color: #2d9cff" }));
 
     expect(screen.getByRole("slider", { name: "Shadow opacity" })).toHaveAttribute(

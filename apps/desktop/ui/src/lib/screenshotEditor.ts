@@ -152,8 +152,11 @@ export function annotationDropShadowMetrics(style: ElementStyle): {
  */
 export function annotationDropShadowPad(style: ElementStyle): number {
   if (!annotationHasDropShadow(style)) return 0;
-  const { blur, offsetX, offsetY } = annotationDropShadowMetrics(style);
-  return Math.ceil(blur * 2 + Math.max(Math.abs(offsetX), Math.abs(offsetY)));
+  const shadow = resolvedDropShadowStyle(style);
+  if (shadow.opacity <= 0) return 0;
+  return Math.ceil(
+    shadow.blur * 2 + Math.max(Math.abs(shadow.offsetX), Math.abs(shadow.offsetY)),
+  );
 }
 
 export type LayerBlendMode =

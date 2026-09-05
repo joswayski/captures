@@ -7727,12 +7727,26 @@ function DropShadowFields({
 }) {
   const enabled = annotationHasDropShadow(style);
   const shadow = resolvedDropShadowStyle(style);
+  const [offsetDraft, setOffsetDraft] = useState<{
+    axis: "x" | "y";
+    text: string;
+  } | null>(null);
   const patchShadow = (partial: Partial<DropShadowStyle>) => {
     onChange({
       ...style,
       dropShadow: true,
       dropShadowStyle: { ...shadow, ...partial },
     });
+  };
+  const commitOffset = (axis: "x" | "y", text: string) => {
+    setOffsetDraft(null);
+    const parsed = Number(text);
+    if (!Number.isFinite(parsed)) return;
+    const offset = Math.min(
+      DROP_SHADOW_OFFSET_MAX,
+      Math.max(-DROP_SHADOW_OFFSET_MAX, Math.round(parsed)),
+    );
+    patchShadow(axis === "x" ? { offsetX: offset } : { offsetY: offset });
   };
 
   return (
@@ -7784,8 +7798,11 @@ function DropShadowFields({
                 ariaLabel="Shadow X offset"
                 min={-DROP_SHADOW_OFFSET_MAX}
                 max={DROP_SHADOW_OFFSET_MAX}
-                value={Math.round(shadow.offsetX)}
-                onChange={(offsetX) => patchShadow({ offsetX })}
+                value={offsetDraft?.axis === "x"
+                  ? offsetDraft.text
+                  : Math.round(shadow.offsetX)}
+                onTextChange={(text) => setOffsetDraft({ axis: "x", text })}
+                onCommit={(text) => commitOffset("x", text)}
               />
             </label>
             <label>
@@ -7794,8 +7811,11 @@ function DropShadowFields({
                 ariaLabel="Shadow Y offset"
                 min={-DROP_SHADOW_OFFSET_MAX}
                 max={DROP_SHADOW_OFFSET_MAX}
-                value={Math.round(shadow.offsetY)}
-                onChange={(offsetY) => patchShadow({ offsetY })}
+                value={offsetDraft?.axis === "y"
+                  ? offsetDraft.text
+                  : Math.round(shadow.offsetY)}
+                onTextChange={(text) => setOffsetDraft({ axis: "y", text })}
+                onCommit={(text) => commitOffset("y", text)}
               />
             </label>
           </div>

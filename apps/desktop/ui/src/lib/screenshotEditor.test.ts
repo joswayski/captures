@@ -1354,6 +1354,10 @@ describe("screenshot editor geometry", () => {
     expect(annotationDropShadowPad(custom)).toBeGreaterThan(
       annotationDropShadowPad({ ...base, dropShadow: true }),
     );
+    expect(annotationDropShadowPad({
+      ...custom,
+      dropShadowStyle: { ...custom.dropShadowStyle, opacity: 0 },
+    })).toBe(0);
 
     const autoShadow: EditorShapeElement = {
       ...editableLayer,
