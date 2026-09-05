@@ -1685,9 +1685,15 @@ describe("ScreenshotEditor", () => {
     expect(within(layerSettings).getByRole("combobox", { name: "Blend mode" }))
       .toHaveTextContent("Normal");
     fireEvent.click(within(layerSettings).getByRole("combobox", { name: "Blend mode" }));
-    expect(screen.getByRole("listbox", { name: "Blend mode" }).parentElement)
-      .toBe(document.body);
-    fireEvent.click(within(layerSettings).getByRole("combobox", { name: "Blend mode" }));
+    const blendMenu = screen.getByRole("listbox", { name: "Blend mode" });
+    expect(blendMenu.parentElement).toBe(document.body);
+    const multiply = screen.getByRole("option", { name: "Multiply" });
+    fireEvent.pointerDown(multiply);
+    fireEvent.click(multiply);
+    expect(screen.getByRole("dialog", {
+      name: "Layer settings for Reference image",
+    })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Blend mode" })).toHaveTextContent("Multiply");
     fireEvent.change(within(layerSettings).getByRole("slider", { name: "Layer opacity" }), {
       target: { value: "65" },
     });

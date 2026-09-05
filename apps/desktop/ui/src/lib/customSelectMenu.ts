@@ -75,3 +75,17 @@ export function placeCustomSelectMenu(
     minWidth: Math.min(trigger.width, maxWidth || trigger.width),
   };
 }
+
+/** True when `target` is inside a portaled select owned by `container`. */
+export function eventTargetBelongsToSelectIn(
+  container: Element | null,
+  target: EventTarget | null,
+): boolean {
+  if (!(target instanceof Element) || !container) return false;
+  const listbox = target.closest(".custom-select-listbox");
+  if (!listbox?.id) return false;
+  return Array.from(container.querySelectorAll("[aria-controls]")).some(
+    (element) => element.getAttribute("aria-controls") === listbox.id,
+  );
+}
+
