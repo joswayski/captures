@@ -20,12 +20,14 @@ use crate::state::AppState;
 const UPDATE_EVENT: &str = "update-status-changed";
 const RELEASES_URL: &str = "https://github.com/joswayski/captures/releases";
 const DOWNLOAD_PAGE_URL: &str = "https://captur.es/#download";
-const UPDATE_NOTICE_WIDTH: f64 = 440.0;
-const UPDATE_NOTICE_MIN_HEIGHT: f64 = 290.0;
+const UPDATE_NOTICE_WIDTH: f64 = 400.0;
+const UPDATE_NOTICE_COMPACT_HEIGHT: f64 = 168.0;
+const UPDATE_NOTICE_NOTES_HEIGHT: f64 = 122.0;
 const UPDATE_NOTICE_MAX_HEIGHT: f64 = 480.0;
 const UPDATE_NOTICE_STACK_HEIGHT: f64 = 72.0;
 const UPDATE_NOTICE_WARNING_HEIGHT: f64 = 56.0;
-const UPDATE_NOTICE_ERROR_FALLBACK_HEIGHT: f64 = 40.0;
+const UPDATE_NOTICE_STATUS_HEIGHT: f64 = 56.0;
+const UPDATE_NOTICE_ERROR_HEIGHT: f64 = 96.0;
 const RESTART_COUNTDOWN_SECONDS: u8 = 3;
 const RESTART_FADE_DURATION: Duration = Duration::from_millis(400);
 const EDITOR_CLOSE_FLUSH: Duration = Duration::from_millis(500);
@@ -212,7 +214,7 @@ pub fn refresh_update_notice(app: &AppHandle) {
     }
 
     let status = annotate_status(app, app.state::<UpdateCoordinator>().status.lock().clone());
-    let card_height = update_notice_height(&status);
+    let card_height = update_notice_height(&status, show_update_changelog(app));
     let app = app.clone();
     let dispatch = app.clone();
     if let Err(error) = dispatch.run_on_main_thread(move || {
@@ -843,7 +845,7 @@ fn show_update_notice(app: &AppHandle) {
         NoticeDisposition::Show => {}
     }
 
-    let card_height = update_notice_height(&status);
+    let card_height = update_notice_height(&status, show_update_changelog(app));
     let app = app.clone();
     let dispatch = app.clone();
     if let Err(error) = dispatch.run_on_main_thread(move || {
@@ -935,10 +937,13 @@ fn remember_notice_activation_source() {
     captures_macos_window::remember_frontmost_app_before_update_notice_activation();
 }
 
-fn update_notice_height(status: &UpdateStatus) -> f64 {
-    let extra_versions = match status {
-        UpdateStatus::Available { changelog, .. } => changelog.len().saturating_sub(1),
-        _ => 0,
+fn update_notice_height(status: &UpdateStatus, show_changelog: bool) -> f64 {
+    let notes = match status {
+        UpdateStatus::Available { changelog, .. } if show_changelog => {
+            UPDATE_NOTICE_NOTES_HEIGHT
+                + changelog.len().saturating_sub(1) as f64 * UPDATE_NOTICE_STACK_HEIGHT
+        }
+        _ => 0.0,
     };
     let warning = match status {
         UpdateStatus::Available {
@@ -947,15 +952,18 @@ fn update_notice_height(status: &UpdateStatus) -> f64 {
         } => UPDATE_NOTICE_WARNING_HEIGHT,
         _ => 0.0,
     };
-    let error_fallback = match status {
-        UpdateStatus::Error { .. } => UPDATE_NOTICE_ERROR_FALLBACK_HEIGHT,
-        _ => 0.0,
+    let status_body = match status {
+        UpdateStatus::Available { .. } => 0.0,
+        UpdateStatus::Error { .. } => UPDATE_NOTICE_ERROR_HEIGHT,
+        _ => UPDATE_NOTICE_STATUS_HEIGHT,
     };
-    (UPDATE_NOTICE_MIN_HEIGHT
-        + extra_versions as f64 * UPDATE_NOTICE_STACK_HEIGHT
-        + warning
-        + error_fallback)
-        .min(UPDATE_NOTICE_MAX_HEIGHT)
+    (UPDATE_NOTICE_COMPACT_HEIGHT + notes + warning + status_body).min(UPDATE_NOTICE_MAX_HEIGHT)
+}
+
+fn show_update_changelog(app: &AppHandle) -> bool {
+    app.state::<Arc<AppState>>()
+        .settings()
+        .show_update_changelog
 }
 
 fn show_dialog(app: &AppHandle, title: &str, message: &str, kind: MessageDialogKind) {
@@ -1683,8 +1691,10 @@ mod tests {
                 notes: Some("Three".into()),
             },
         ]);
-        assert_eq!(update_notice_height(&single), 290.0);
-        assert_eq!(update_notice_height(&stacked), 434.0);
+        assert_eq!(update_notice_height(&single, true), 290.0);
+        assert_eq!(update_notice_height(&stacked, true), 434.0);
+        assert_eq!(update_notice_height(&single, false), 168.0);
+        assert_eq!(update_notice_height(&stacked, false), 168.0);
         let warned = UpdateStatus::Available {
             current_version: "2026.7.1901".into(),
             current_display_version: "2026.07.19.1".into(),
@@ -1701,7 +1711,8 @@ mod tests {
             download_size: None,
             will_close_open_captures: true,
         };
-        assert_eq!(update_notice_height(&warned), 346.0);
+        assert_eq!(update_notice_height(&warned, true), 346.0);
+        assert_eq!(update_notice_height(&warned, false), 224.0);
         let failed = UpdateStatus::Error {
             current_version: "2026.7.1901".into(),
             current_display_version: "2026.07.19.1".into(),
@@ -1710,7 +1721,8 @@ mod tests {
                     .into(),
             retry_install: true,
         };
-        assert_eq!(update_notice_height(&failed), 330.0);
+        assert_eq!(update_notice_height(&failed, true), 264.0);
+        assert_eq!(update_notice_height(&failed, false), 264.0);
     }
 
     #[test]

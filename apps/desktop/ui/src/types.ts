@@ -94,6 +94,8 @@ export interface AppSettings {
   freeze_screen: boolean;
   show_cursor_in_screenshots: boolean;
   screenshot_format: ScreenshotFormat;
+  /** When false, the update notice hides release notes and stays compact. */
+  show_update_changelog: boolean;
   recording: RecordingSettings;
 }
 
