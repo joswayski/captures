@@ -278,12 +278,18 @@ describe("CollapsedThumbnailStackDrag", () => {
     expect(frames.at(-1)).toEqual({ x: 80, y: 0 });
   });
 
-  it("ignores an in-flight move after the press has already ended", async () => {
+  it("applies an in-flight move before drop so settlement sees the last position", async () => {
     let continueMove: (() => void) | undefined;
+    const frames: { x: number; y: number }[] = [];
     const drag = new CollapsedThumbnailStackDrag({
       getFrame: () => ({ x: 0, y: 0 }),
       moveFrame: (x, y) => new Promise<{ x: number; y: number }>((resolve) => {
-        continueMove = () => resolve({ x, y });
+        const finish = () => {
+          frames.push({ x, y });
+          resolve({ x, y });
+        };
+        if (continueMove === undefined) continueMove = finish;
+        else finish();
       }),
       reducedMotion: () => false,
     });
@@ -291,11 +297,47 @@ describe("CollapsedThumbnailStackDrag", () => {
     drag.pointerDown({ button: 0, pointerId: 1, screenX: 0, screenY: 0 });
     const move = drag.pointerMove({ pointerId: 1, screenX: 40, screenY: 0 });
     await Promise.resolve();
-    expect(await drag.pointerUp({ pointerId: 1 })).toBe("drop");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(continueMove).toEqual(expect.any(Function));
+    const dropped = drag.pointerUp({ pointerId: 1 });
     continueMove?.();
-    expect(await move).toBeNull();
+    expect(await dropped).toBe("drop");
+    expect(await move).toMatchObject({ dragging: true, x: 40, y: 0 });
+    expect(frames.at(-1)).toEqual({ x: 40, y: 0 });
     expect(drag.isDragging).toBe(false);
     expect(drag.isActive).toBe(false);
+  });
+
+  it("applies the latest queued sample on drop instead of discarding it", async () => {
+    let continueFirst: (() => void) | undefined;
+    const frames: { x: number; y: number }[] = [];
+    const drag = new CollapsedThumbnailStackDrag({
+      getFrame: () => ({ x: 0, y: 0 }),
+      moveFrame: (x, y) => new Promise<{ x: number; y: number }>((resolve) => {
+        const finish = () => {
+          frames.push({ x, y });
+          resolve({ x, y });
+        };
+        if (continueFirst === undefined) continueFirst = finish;
+        else finish();
+      }),
+      reducedMotion: () => false,
+    });
+
+    drag.pointerDown({ button: 0, pointerId: 1, screenX: 0, screenY: 0 });
+    const first = drag.pointerMove({ pointerId: 1, screenX: 40, screenY: 0 });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(continueFirst).toEqual(expect.any(Function));
+    const second = drag.pointerMove({ pointerId: 1, screenX: 80, screenY: 0 });
+    const dropped = drag.pointerUp({ pointerId: 1 });
+    continueFirst?.();
+    expect(await dropped).toBe("drop");
+    expect(await first).toBeNull();
+    expect(await second).toMatchObject({ dragging: true, x: 80, y: 0 });
+    expect(frames.at(-1)).toEqual({ x: 80, y: 0 });
   });
 
   it("follows later pointer steps instead of freezing the first lean", async () => {

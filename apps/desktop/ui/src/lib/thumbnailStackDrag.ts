@@ -374,6 +374,10 @@ export class CollapsedThumbnailStackDrag {
     await this.ready;
     if (!this.sessionIs(session, event.pointerId)) return "ignored";
     const expand = !this.dragging;
+    if (!expand) {
+      await this.flushDropMove(session, event.pointerId);
+      if (!this.sessionIs(session, event.pointerId)) return "ignored";
+    }
     this.endSession();
     return expand ? "expand" : "drop";
   }
@@ -394,6 +398,21 @@ export class CollapsedThumbnailStackDrag {
       if (session !== this.session) return;
       this.startFrame = frame;
     });
+  }
+
+  /**
+   * Let the latest serialized sample land, then write lastPointer once more
+   * so settlement sees the drop position. Invalidating the session first would
+   * skip a queued sample and let an already-started native move finish after
+   * the top/bottom anchor conversion.
+   */
+  private async flushDropMove(session: number, pointerId: number) {
+    await this.moveTail;
+    if (!this.sessionIs(session, pointerId) || !this.dragging) return;
+    await this.host.moveFrame(
+      this.startFrame.x + (this.lastPointer.x - this.startPointer.x),
+      this.startFrame.y + (this.lastPointer.y - this.startPointer.y),
+    );
   }
 
   private endSession() {
