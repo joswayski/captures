@@ -1952,6 +1952,8 @@ export function ScreenshotEditor() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageCacheRef = useRef(new Map<string, CachedImage>());
   const successTimerRef = useRef<number | null>(null);
+  /** Synchronous re-entry guard so a second click cannot start another copy before busy commits. */
+  const copyInFlightRef = useRef(false);
   /** Bumps to cancel in-flight debounced draft writes. */
   const draftSaveGenerationRef = useRef(0);
   /**
@@ -5084,7 +5086,8 @@ export function ScreenshotEditor() {
   ]);
 
   const copyEditedImage = async () => {
-    if (busy) return;
+    if (busy || copyInFlightRef.current) return;
+    copyInFlightRef.current = true;
     const keepCopiedState = success?.kind === "copy";
     setBusy("copying");
     setError("");
@@ -5092,8 +5095,7 @@ export function ScreenshotEditor() {
     // confirmation again without adding visible footer text.
     setCopyAnnouncement("");
     if (keepCopiedState) {
-      // Keep the compact confirmation in place while a repeat copy runs. This
-      // avoids swapping back to the wider "Copying…" label and moving the hint.
+      // Keep the compact confirmation in place while a repeat copy runs.
       clearSuccessTimer();
     } else {
       clearSuccess();
@@ -5107,6 +5109,7 @@ export function ScreenshotEditor() {
       clearSuccess();
       setError(String(reason));
     } finally {
+      copyInFlightRef.current = false;
       setBusy(null);
     }
   };
@@ -7539,7 +7542,7 @@ export function ScreenshotEditor() {
                 <button
                   type="button"
                   aria-label="Change save location"
-                  disabled={busy !== null}
+                  disabled={busy === "saving"}
                   onClick={() => void chooseDestinationDirectory()}
                 >Change…</button>
               </div>
@@ -7550,7 +7553,7 @@ export function ScreenshotEditor() {
                 value={filenameStem}
                 aria-label="Saved filename"
                 spellCheck={false}
-                disabled={busy !== null}
+                disabled={busy === "saving"}
                 onFocus={(event) => event.currentTarget.select()}
                 onChange={(event) => {
                   const next = event.target.value;
@@ -7568,7 +7571,7 @@ export function ScreenshotEditor() {
                 value={exportFormat}
                 ariaLabel="Format"
                 triggerLabel={`.${screenshotFormatExtension(exportFormat, artifact.path)}`}
-                disabled={busy !== null}
+                disabled={busy === "saving"}
                 options={[
                   { value: "png", label: "PNG" },
                   {
@@ -7588,17 +7591,21 @@ export function ScreenshotEditor() {
             {saved && <button type="button" onClick={() => void showSavedFile()}>Show in Folder</button>}
             <button
               type="button"
-              className={success?.kind === "copy" ? "success" : undefined}
+              className={[
+                "screenshot-export-copy",
+                success?.kind === "copy" ? "success" : "",
+              ].filter(Boolean).join(" ")}
               title="Copy the edited image to the clipboard. Does not save a file."
-              disabled={busy !== null}
+              aria-label={success?.kind === "copy" ? "Copied" : "Copy image"}
+              aria-busy={busy === "copying" ? true : undefined}
+              disabled={busy === "saving"}
               onClick={() => void copyEditedImage()}
             >
               <EditorIcon name={success?.kind === "copy" ? "check" : "copy"} />
-              {success?.kind === "copy"
-                ? "Copied"
-                : busy === "copying"
-                  ? "Copying…"
-                  : "Copy image"}
+              <span className="screenshot-export-copy-label" aria-hidden="true">
+                <span className="screenshot-export-copy-idle">Copy image</span>
+                <span className="screenshot-export-copy-done">Copied</span>
+              </span>
             </button>
           </div>
           <div
@@ -7648,7 +7655,7 @@ export function ScreenshotEditor() {
                   aria-label="Save as new file"
                   type="checkbox"
                   checked={makeCopy}
-                  disabled={busy !== null}
+                  disabled={busy === "saving"}
                   onChange={(event) => updateMakeCopy(event.target.checked)}
                 />
                 <span className="recording-switch" aria-hidden="true" />
@@ -7659,7 +7666,7 @@ export function ScreenshotEditor() {
               type="button"
               className="primary"
               title={saveHint}
-              disabled={busy !== null}
+              disabled={busy === "saving"}
               onClick={() => void saveEditedImage()}
             >
               <EditorIcon name="save" />{busy === "saving" ? "Saving…" : "Save"}
