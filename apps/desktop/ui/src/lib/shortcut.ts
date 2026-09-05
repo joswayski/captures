@@ -198,7 +198,7 @@ export function platformShortcutHelp(platform: ShortcutPlatform): {
         "Defaults match Windows screenshot keys: Win+Shift+S region, PrtScn full screen, Alt+PrtScn window, and Win+Alt+R recording.",
       takeoverTitle: "Windows screenshot shortcuts",
       takeoverBody:
-        "Captures turns off Print Screen for Snipping Tool when it uses that key. Win+Shift+S may still open Snipping Tool until you change it in Windows keyboard settings.",
+        "Captures unbinds overlapping Snipping Tool keys so Win+Shift+S and Print Screen reach this app instead of the system overlay. Restore them in Windows keyboard settings if you want both.",
     };
   }
   return {
@@ -206,7 +206,7 @@ export function platformShortcutHelp(platform: ShortcutPlatform): {
       "Defaults match GNOME/Ubuntu screenshot keys: PrtScn opens New Capture, Super+Shift+S region, Shift+PrtScn full screen, Alt+PrtScn window, and Ctrl+Shift+Alt+R recording.",
     takeoverTitle: "GNOME screenshot shortcuts",
     takeoverBody:
-      "Captures turns off overlapping GNOME screenshot keys when possible so they reach this app. Restore them in Keyboard settings if you want both.",
+      "Captures turns off overlapping GNOME screenshot keys (and KDE Spectacle region capture when those tools are installed) so they reach this app. Restore them in Keyboard settings if you want both.",
   };
 }
 

@@ -1129,6 +1129,18 @@ fn macos_screenshot_hotkey_disabled_entry(id: u32) -> String {
 
 const GNOME_SHELL_KEYBINDINGS: &str = "org.gnome.shell.keybindings";
 const GNOME_MEDIA_KEYS: &str = "org.gnome.settings-daemon.plugins.media-keys";
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+pub(crate) const GNOME_GSETTINGS_BINARIES: &[&str] = &["gsettings", "/usr/bin/gsettings"];
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+pub(crate) const KDE_SPECTACLE_REGION_WRITE_ARGS: &[&str] = &[
+    "--file",
+    "kglobalshortcutsrc",
+    "--group",
+    "org.kde.spectacle.desktop",
+    "--key",
+    "RectangularRegion",
+    "none,none,Capture Rectangular Region",
+];
 
 /// GNOME screenshot/screencast bindings that overlap the current Captures shortcuts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1190,6 +1202,50 @@ pub fn settings_use_print_screen(settings: &AppSettings) -> bool {
         canonical_shortcut_parts(shortcut)
             .is_some_and(|(_, key)| key == canonical_shortcut_token("PrintScreen"))
     })
+}
+
+/// True when a Captures binding is Win/Super+Shift+S (Snipping Tool / GNOME screenshot UI).
+pub fn settings_use_super_shift_s(settings: &AppSettings) -> bool {
+    settings_super_shift_s_action(settings).is_some()
+}
+
+/// Which Captures action currently owns Win/Super+Shift+S, if any.
+///
+/// First match wins in registration order so a remapped chord still takes over
+/// the OS screenshot tool instead of opening Snipping Tool / GNOME Screenshot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SuperShiftSAction {
+    NewCapture,
+    Region,
+    Window,
+    Display,
+    Recording,
+}
+
+pub fn settings_super_shift_s_action(settings: &AppSettings) -> Option<SuperShiftSAction> {
+    if shortcut_is_super_shift_s(&settings.new_capture_shortcut) {
+        return Some(SuperShiftSAction::NewCapture);
+    }
+    if shortcut_is_super_shift_s(&settings.region_shortcut) {
+        return Some(SuperShiftSAction::Region);
+    }
+    if shortcut_is_super_shift_s(&settings.window_shortcut) {
+        return Some(SuperShiftSAction::Window);
+    }
+    if shortcut_is_super_shift_s(&settings.display_shortcut) {
+        return Some(SuperShiftSAction::Display);
+    }
+    if shortcut_is_super_shift_s(&settings.recording.video_shortcut)
+        || shortcut_is_super_shift_s(&settings.recording.gif_shortcut)
+    {
+        return Some(SuperShiftSAction::Recording);
+    }
+    None
+}
+
+#[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+pub fn shortcut_is_super_shift_s(shortcut: &str) -> bool {
+    shortcut_matches(shortcut, &["Super", "Shift"], "S")
 }
 
 fn migrate_output_directory(settings: &mut AppSettings, legacy: &Path, current: &Path) {
@@ -2036,5 +2092,32 @@ mod tests {
             },
             ..AppSettings::default()
         }));
+        assert_eq!(
+            super::settings_super_shift_s_action(&AppSettings {
+                region_shortcut: "Super+Shift+S".to_owned(),
+                ..AppSettings::default()
+            }),
+            Some(super::SuperShiftSAction::Region)
+        );
+        assert_eq!(
+            super::settings_super_shift_s_action(&AppSettings {
+                new_capture_shortcut: "Win+Shift+S".to_owned(),
+                region_shortcut: "Control+Shift+4".to_owned(),
+                ..AppSettings::default()
+            }),
+            Some(super::SuperShiftSAction::NewCapture)
+        );
+        assert!(super::shortcut_is_super_shift_s("Win+Shift+S"));
+        assert!(super::shortcut_is_super_shift_s("Super+Shift+KeyS"));
+        assert!(!super::settings_use_super_shift_s(&AppSettings {
+            region_shortcut: "CommandOrControl+Shift+4".to_owned(),
+            ..AppSettings::default()
+        }));
+        assert_eq!(
+            super::KDE_SPECTACLE_REGION_WRITE_ARGS[5],
+            "RectangularRegion"
+        );
+        assert!(super::GNOME_GSETTINGS_BINARIES.contains(&"gsettings"));
+        assert!(super::GNOME_GSETTINGS_BINARIES.contains(&"/usr/bin/gsettings"));
     }
 }

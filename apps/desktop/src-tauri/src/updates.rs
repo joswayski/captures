@@ -674,7 +674,7 @@ fn apply_update_notice_capture_policy(app: &AppHandle) {
     let dispatch = app.clone();
     if let Err(error) = dispatch.run_on_main_thread(move || {
         if let Some(window) = app.get_webview_window("update")
-            && let Err(error) = window.set_content_protected(protected)
+            && let Err(error) = crate::set_window_content_protected(&window, protected)
         {
             eprintln!("failed to update notice capture protection: {error}");
         }
@@ -855,6 +855,10 @@ fn show_update_notice(app: &AppHandle) {
             }
             sync_update_notice_window(&window, &status, placement);
             let _ = window.show();
+            let _ = crate::set_window_content_protected(
+                &window,
+                should_hide_update_notice_for_capture(&app),
+            );
             let _ = crate::apply_tray_notice_position(&window, placement);
             crate::focus_single_window(&window);
             return;
@@ -913,9 +917,10 @@ fn create_update_notice(
         "failed to reveal the update notice",
     ))
     .build()?;
-    let _ = window.set_content_protected(true);
     crate::apply_tray_notice_position(&window, placement)?;
     window.show()?;
+    let _ =
+        crate::set_window_content_protected(&window, should_hide_update_notice_for_capture(app));
     crate::apply_tray_notice_position(&window, placement)?;
     crate::focus_single_window(&window);
     Ok(())

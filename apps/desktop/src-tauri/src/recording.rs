@@ -3492,6 +3492,7 @@ fn hide_recording_selector(app: &AppHandle) {
     if let Err(error) = window.hide() {
         eprintln!("failed to hide recording selector: {error}");
     }
+    let _ = crate::set_window_content_protected(&window, false);
     #[cfg(target_os = "macos")]
     captures_macos_window::release_capture_cursor();
 }
@@ -3776,7 +3777,7 @@ fn create_recording_selector_window(app: &AppHandle) -> Result<(), AppError> {
     if app.get_webview_window("recording-selector").is_some() {
         return Ok(());
     }
-    let window = WebviewWindowBuilder::new(
+    WebviewWindowBuilder::new(
         app,
         "recording-selector",
         WebviewUrl::App("index.html?view=recording-selector".into()),
@@ -3799,8 +3800,6 @@ fn create_recording_selector_window(app: &AppHandle) -> Result<(), AppError> {
     // reveal, which reads as a brief fullscreen zoom/flash.
     .visible(false)
     .build()?;
-    // Selector sits over the desktop; keep it out of secondary captures.
-    window.set_content_protected(true)?;
     Ok(())
 }
 
@@ -3836,9 +3835,6 @@ async fn prepare_recording_selector(
                 .map_err(|error| error.to_string())?;
             #[cfg(target_os = "macos")]
             captures_macos_window::cover_display(&window, &display.id).map_err(str::to_owned)?;
-            window
-                .set_content_protected(true)
-                .map_err(|error| error.to_string())?;
             // A hidden or zero-alpha WKWebView can be suspended before React
             // installs its recording-selection listener. Wake it at a tiny,
             // imperceptible alpha while pointer events still pass through.
@@ -3848,6 +3844,8 @@ async fn prepare_recording_selector(
             #[cfg(target_os = "macos")]
             captures_macos_window::prime_window_reveal(&window).map_err(str::to_owned)?;
             window.show().map_err(|error| error.to_string())?;
+            crate::set_window_content_protected(&window, true)
+                .map_err(|error| error.to_string())?;
             crate::set_click_through(&window, true).map_err(|error| error.to_string())?;
             handle
                 .emit("recording-selection-ready", &selection)
@@ -3899,6 +3897,7 @@ fn schedule_recording_selector_webview_wake(app: &AppHandle, selection: Recordin
             if let Err(error) = window.show() {
                 eprintln!("failed to show recording selector while waking: {error}");
             }
+            let _ = crate::set_window_content_protected(&window, true);
         }) {
             eprintln!("failed to schedule recording selector WebView wake: {error}");
         }
@@ -4092,12 +4091,6 @@ async fn prepare_recording_region_indicator(
             .visible(false)
             .build()
             .map_err(|error| error.to_string())?;
-            // Keep the overlay passive and permanently excluded where the
-            // platform supports protected windows. Its shade and frame are
-            // also painted wholly outside the recorded rectangle.
-            window
-                .set_content_protected(true)
-                .map_err(|error| error.to_string())?;
             crate::set_click_through(&window, true).map_err(|error| error.to_string())?;
             #[cfg(target_os = "macos")]
             {
@@ -4111,6 +4104,8 @@ async fn prepare_recording_region_indicator(
             }
             #[cfg(not(target_os = "macos"))]
             window.show().map_err(|error| error.to_string())?;
+            crate::set_window_content_protected(&window, true)
+                .map_err(|error| error.to_string())?;
             crate::set_click_through(&window, true).map_err(|error| error.to_string())?;
             Ok(())
         })();
@@ -4196,10 +4191,9 @@ async fn prepare_recording_hud(
             window
                 .set_position(tauri::LogicalPosition::new(x, y))
                 .map_err(|error| error.to_string())?;
-            window
-                .set_content_protected(recording_overlay_content_protected(&handle))
-                .map_err(|error| error.to_string())?;
             window.hide().map_err(|error| error.to_string())?;
+            crate::set_window_content_protected(&window, false)
+                .map_err(|error| error.to_string())?;
             Ok(())
         })();
         let _ = sender.send(result);
@@ -4241,6 +4235,7 @@ pub fn hide_recording_hud(
         ))
     });
     window.hide().map_err(|error| error.to_string())?;
+    let _ = crate::set_window_content_protected(&window, false);
     if let Err(error) = crate::show_recording_controls_hidden_notice(&app, notice_position) {
         eprintln!("failed to show recording controls hidden notice: {error}");
     }
@@ -4258,9 +4253,6 @@ async fn show_recording_hud(app: &AppHandle) -> Result<(), AppError> {
             let window = handle
                 .get_webview_window("recording-hud")
                 .ok_or_else(|| "recording controls are unavailable".to_owned())?;
-            window
-                .set_content_protected(recording_overlay_content_protected(&handle))
-                .map_err(|error| error.to_string())?;
             #[cfg(target_os = "macos")]
             captures_macos_window::set_excluded_from_capture(
                 &window,
@@ -4271,6 +4263,11 @@ async fn show_recording_hud(app: &AppHandle) -> Result<(), AppError> {
             captures_macos_window::show_without_activating(&window).map_err(str::to_owned)?;
             #[cfg(not(target_os = "macos"))]
             window.show().map_err(|error| error.to_string())?;
+            crate::set_window_content_protected(
+                &window,
+                recording_overlay_content_protected(&handle),
+            )
+            .map_err(|error| error.to_string())?;
             Ok(())
         })();
         let _ = sender.send(result);
@@ -4309,7 +4306,6 @@ fn show_recording_countdown(app: &AppHandle, display: &DisplayDescriptor) -> Res
         .ok_or_else(|| AppError::Task("recording countdown is unavailable".to_owned()))?;
     window.set_size(tauri::LogicalSize::new(width, height))?;
     window.set_position(tauri::LogicalPosition::new(x, y))?;
-    window.set_content_protected(recording_overlay_content_protected(app))?;
     #[cfg(target_os = "macos")]
     captures_macos_window::set_excluded_from_capture(
         &window,
@@ -4317,6 +4313,7 @@ fn show_recording_countdown(app: &AppHandle, display: &DisplayDescriptor) -> Res
     )
     .map_err(|error| AppError::Task(error.to_owned()))?;
     window.show()?;
+    crate::set_window_content_protected(&window, recording_overlay_content_protected(app))?;
     #[cfg(target_os = "macos")]
     captures_macos_window::elevate_capture_surface(&window)
         .map_err(|error| AppError::Task(error.to_owned()))?;
@@ -4338,8 +4335,9 @@ fn destroy_recording_countdown(app: &AppHandle) {
 
 fn recording_overlay_content_protected(app: &AppHandle) -> bool {
     // Exclude recording chrome from screenshots and recordings unless the user
-    // opted to include it. Windows uses display affinity; macOS uses window
-    // sharing. Linux has no exclusion API, so this is a no-op there.
+    // opted to include it. Windows uses display affinity only while the window
+    // is visible so NVIDIA Instant Replay is not blocked by hidden HWNDs. macOS
+    // uses window sharing. Linux has no exclusion API, so this is a no-op there.
     app.try_state::<Arc<AppState>>().is_none_or(|state| {
         controls_excluded_for_preference(state.settings().include_recording_controls_in_captures)
     })
