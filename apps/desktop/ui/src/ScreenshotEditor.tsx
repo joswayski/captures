@@ -1617,6 +1617,62 @@ function formatScreenshotMaximumFileSizeInput(
   return Number(value.toPrecision(8)).toString();
 }
 
+/** Footer copy next to Save: first write, overwrite, or a separate file. */
+function screenshotSaveHint({
+  sourceMissing,
+  jpegDropsTransparency,
+  qualityMode,
+  exportFormat,
+  hasOriginalFile,
+  savingCopy,
+}: {
+  sourceMissing: boolean;
+  jpegDropsTransparency: boolean;
+  qualityMode: ScreenshotQualityMode;
+  exportFormat: ExportFormat;
+  hasOriginalFile: boolean;
+  savingCopy: boolean;
+}): string {
+  const formatLabel = exportFormat === "jpeg"
+    ? "JPEG"
+    : exportFormat === "webp"
+      ? "WebP"
+      : "PNG";
+  if (sourceMissing) {
+    return "The original was deleted. You can still copy or save this edit.";
+  }
+  if (jpegDropsTransparency) {
+    return "JPEG will fill in transparent areas. Use PNG or WebP to keep them.";
+  }
+  const firstSave = !hasOriginalFile;
+  if (qualityMode === "preserve") {
+    if (firstSave) return `Save writes a ${formatLabel} at original quality.`;
+    if (savingCopy) {
+      return `Save writes a new ${formatLabel} at original quality and leaves the original untouched.`;
+    }
+    return `Save keeps original quality as ${formatLabel} and overwrites the original.`;
+  }
+  if (qualityMode === "maximum") {
+    if (exportFormat === "jpeg") {
+      if (firstSave) return "Save writes a JPEG within the selected limit.";
+      if (savingCopy) {
+        return "Save writes a new JPEG within the selected limit and leaves the original untouched.";
+      }
+      return "Save writes a JPEG within the selected limit and overwrites the original.";
+    }
+    if (firstSave) return `Save writes a ${formatLabel} within the selected size limit.`;
+    if (savingCopy) {
+      return `Save writes a new ${formatLabel} within the selected size limit and leaves the original untouched.`;
+    }
+    return `Save writes a ${formatLabel} within the selected size limit and overwrites the original.`;
+  }
+  if (firstSave) return `Save writes a compressed ${formatLabel}.`;
+  if (savingCopy) {
+    return `Save writes a compressed ${formatLabel} and leaves the original untouched.`;
+  }
+  return `Save overwrites the original with compressed ${formatLabel}. Turn on Save as new file to keep it.`;
+}
+
 /**
  * When nothing about the export changes pixels or codec vs the loaded capture,
  * show the known original file size instead of a browser re-encode estimate.
@@ -5192,6 +5248,16 @@ export function ScreenshotEditor() {
   const formatRequiresCopy = sourceMissing
     || !screenshotPathMatchesFormat(artifact.path, exportFormat);
   const savingCopy = makeCopy || formatRequiresCopy;
+  const hasOriginalFile = Boolean(artifact.path) && !sourceMissing;
+  const saveHint = screenshotSaveHint({
+    sourceMissing,
+    jpegDropsTransparency: exportFormat === "jpeg"
+      && editorDocument.background == null,
+    qualityMode,
+    exportFormat,
+    hasOriginalFile,
+    savingCopy,
+  });
   const sourceDirectory = artifact.path ? screenshotParentDirectory(artifact.path) : "";
   const sourceStem = artifact.path ? screenshotFileStem(artifact.path) : "";
   const maximumSizeBytes = qualityMode === "maximum"
@@ -7268,6 +7334,23 @@ export function ScreenshotEditor() {
               />
             </span>
           </div>
+          <div className="screenshot-export-secondary">
+            {saved && <button type="button" onClick={() => void showSavedFile()}>Show in Folder</button>}
+            <button
+              type="button"
+              className={success?.kind === "copy" ? "success" : undefined}
+              title="Copy the edited image to the clipboard. Does not save a file."
+              disabled={busy !== null}
+              onClick={() => void copyEditedImage()}
+            >
+              <EditorIcon name={success?.kind === "copy" ? "check" : "copy"} />
+              {success?.kind === "copy"
+                ? "Copied"
+                : busy === "copying"
+                  ? "Copying…"
+                  : "Copy image"}
+            </button>
+          </div>
           <div
             className={[
               "screenshot-export-status",
@@ -7301,29 +7384,7 @@ export function ScreenshotEditor() {
                 ].filter(Boolean).join(" ")}
                 role={jpegDropsTransparency ? "status" : undefined}
               >
-                {sourceMissing
-                  ? "The original was deleted. You can still copy or save this edit."
-                  : jpegDropsTransparency
-                    ? "JPEG will fill in transparent areas. Use PNG or WebP to keep them."
-                    : qualityMode === "preserve"
-                    ? savingCopy
-                      ? `Keeps original quality as ${formatLabel} and saves a new file.`
-                      : `Keeps original quality as ${formatLabel} and replaces the original.`
-                    : qualityMode === "maximum"
-                      ? exportFormat === "jpeg"
-                        ? savingCopy
-                          ? "The JPEG stays within the selected limit and saves as a new file."
-                          : "The JPEG stays within the selected limit and replaces the original."
-                        : savingCopy
-                          ? `Compresses ${formatLabel} to aim for the size limit and saves a new file.`
-                          : `Compresses ${formatLabel} to aim for the size limit and replaces the original.`
-                      : qualityMode === "compress"
-                        ? savingCopy
-                          ? `Compressed ${formatLabel} saves as a new file and leaves the original untouched.`
-                          : `Compressed ${formatLabel} replaces the original; turn on Save as new file to keep it.`
-                        : savingCopy
-                          ? "Save creates a new file and leaves the original untouched."
-                          : "Save replaces the original; turn on Save as new file to keep it."}
+                {saveHint}
               </div>
             )}
           </div>
@@ -7344,24 +7405,10 @@ export function ScreenshotEditor() {
                 <span>Save as new file</span>
               </label>
             )}
-            {saved && <button type="button" onClick={() => void showSavedFile()}>Show in Folder</button>}
-            <button
-              type="button"
-              className={success?.kind === "copy" ? "success" : undefined}
-              title="Copy the edited image to the clipboard"
-              disabled={busy !== null}
-              onClick={() => void copyEditedImage()}
-            >
-              <EditorIcon name={success?.kind === "copy" ? "check" : "copy"} />
-              {success?.kind === "copy"
-                ? "Copied"
-                : busy === "copying"
-                  ? "Copying…"
-                  : "Copy image"}
-            </button>
             <button
               type="button"
               className="primary"
+              title={saveHint}
               disabled={busy !== null}
               onClick={() => void saveEditedImage()}
             >
