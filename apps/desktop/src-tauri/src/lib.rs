@@ -5796,14 +5796,7 @@ fn thumbnail_collapsed_peek(count: usize, hovered: bool) -> f64 {
     let extra = count.saturating_sub(1) as f64;
     let pose = thumbnail_stack_pose_depth(extra);
     // Keep in sync with THUMBNAIL_STACK_IDLE_PEEK_PX / HOVER_PEEK_PX.
-    let peek = pose * if hovered { 11.0 } else { 9.0 };
-    // Matches `THUMBNAIL_STACK_*_SKEW_PEEK_PX` in thumbnailLayout.ts: rotation
-    // corner rise plus max Y jitter, so a max-tilt rear card is not clipped.
-    if extra > 0.0 {
-        peek + if hovered { 7.0 } else { 6.0 }
-    } else {
-        peek
-    }
+    pose * if hovered { 11.0 } else { 9.0 }
 }
 
 fn thumbnail_stack_height(count: usize, collapsed: bool) -> f64 {
@@ -8694,6 +8687,38 @@ mod tests {
     }
 
     #[test]
+    fn keeps_a_dragged_collapsed_pile_on_its_origin_after_another_capture() {
+        let work = bounds((0, 0, 1_920, 1_040), (0, 0, 1_920, 1_080), 1.0);
+        let origin = ThumbnailStackOrigin {
+            x: 420.0,
+            edge: 640.0,
+            anchor: ThumbnailStackAnchor::Bottom,
+        };
+        let three = stack_geometry(work, 3, true, Some(origin));
+        let four = stack_geometry(work, 4, true, Some(origin));
+        assert_eq!(three.x, 420.0);
+        assert_eq!(four.x, 420.0);
+        assert_eq!(three.y + three.height, 640.0);
+        assert_eq!(four.y + four.height, 640.0);
+
+        // Auto-expanding that parked pile would size the window as the
+        // expanded bar and clamp it to the work-area top — the stuck-drag
+        // position users hit when the webview stayed collapsed.
+        let expanded = stack_geometry(work, 4, false, Some(origin));
+        assert_eq!(expanded.y, 0.0);
+        assert!(expanded.height > four.height);
+        assert_eq!(
+            thumbnail_window_top(
+                four.y,
+                expanded.height,
+                four.height,
+                ThumbnailStackAnchor::Bottom,
+            ),
+            640.0 - expanded.height,
+        );
+    }
+
+    #[test]
     fn restores_a_top_aligned_pile_without_consuming_preserved_slack() {
         let work = bounds((0, 0, 1_920, 1_040), (0, 0, 1_920, 1_080), 1.0);
         let geometry = thumbnail_geometry(
@@ -8924,7 +8949,7 @@ mod tests {
         assert!(thumbnail_stack_height(8, true) > thumbnail_stack_height(4, true));
         assert!(thumbnail_stack_height(8, true) < thumbnail_stack_height(8, false));
         let pose_3 = 3.0 * (24.0 + 0.55 * 3.0) / (3.0 + 24.0);
-        let peek = pose_3 * 11.0 + 7.0;
+        let peek = pose_3 * 11.0;
         let extra_above_padding = f64::max(peek - 28.0, 0.0);
         assert!((thumbnail_stack_height(4, true) - (240.0 + extra_above_padding)).abs() < 1e-9);
     }

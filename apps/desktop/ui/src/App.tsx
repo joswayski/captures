@@ -132,6 +132,7 @@ import {
   setThumbnailStackDragSwayReady,
   setThumbnailStackDragging,
   setThumbnailStackPressing,
+  thumbnailStackMeasuredFrameHeight,
   writeHarnessStackOffset,
 } from "./lib/thumbnailStackDrag";
 import {
@@ -164,8 +165,6 @@ import {
   thumbnailCollapsedPeekPx,
   captureThumbnailCardTransforms,
   thumbnailStackFanCollapseMs,
-  thumbnailStackSkewCssVars,
-  thumbnailStackSkewHitPadPx,
   thumbnailStackPeekJitterPx,
   THUMBNAIL_CARD_SLOT_PX,
   THUMBNAIL_STACK_EXPAND_COLLAPSE_MS,
@@ -6802,8 +6801,12 @@ export function Thumbnail() {
           let convertedAnchor = false;
           try {
             const scale = currentWindow ? await currentWindow.scaleFactor() : 1;
-            const size = currentWindow ? await currentWindow.outerSize() : null;
-            const frameHeight = size ? size.height / scale : contentHeight;
+            const size = currentWindow ? await currentWindow.innerSize() : null;
+            const frameHeight = thumbnailStackMeasuredFrameHeight(
+              size ? size.height / scale : null,
+              contentHeight,
+              window.innerHeight,
+            );
             const monitor = await currentMonitor();
             const workTop = monitor
               ? monitor.workArea.position.y / scale
@@ -7129,7 +7132,6 @@ export function Thumbnail() {
             style={{
               "--thumbnail-collapsed-peek": `${thumbnailCollapsedPeekPx(artifacts.length)}px`,
               "--thumbnail-collapsed-hover-peek": `${thumbnailCollapsedPeekPx(artifacts.length, true)}px`,
-              "--thumbnail-collapsed-skew-pad": `${thumbnailStackSkewHitPadPx(artifacts.length)}px`,
             } as CSSProperties}
             onPointerDown={onCollapsedStackPointerDown}
             onDragStart={(event) => preventThumbnailHtml5Drag(event.nativeEvent)}
@@ -7646,7 +7648,7 @@ export function ThumbnailCard({
       ].filter(Boolean).join(" ")}
       data-thumbnail-id={artifact.id}
       style={stackCollapsed ? {
-        ...thumbnailStackSkewCssVars(artifact.id, stackDepth),
+        "--thumbnail-stack-base-depth": stackDepth,
         "--thumbnail-stack-peek-jitter": `${thumbnailStackPeekJitterPx(stackDepth)}px`,
         ...(expandFromTransform
           ? { "--thumbnail-stack-expand-from": expandFromTransform }
