@@ -262,6 +262,11 @@ function requestCapturePointerPosition(): Promise<ThumbnailPointerPosition | nul
 // remains the primary completion path; fallback only covers missed events.
 const THUMBNAIL_DISMISS_FALLBACK_MS = 1_250;
 const THUMBNAIL_DELETE_FALLBACK_MS = 3_200;
+/** Newest card leaves first; cap so a tall stack still finishes with the fallback. */
+const THUMBNAIL_CLEAR_STAGGER_MS = 36;
+const THUMBNAIL_CLEAR_STAGGER_MAX_MS = 180;
+/** Sentinel so a stack Clear all does not issue per-card dismiss_artifact. */
+const STACK_CLEAR_EXIT_ACTION = "stack_clear";
 /** How long the mini-preview shows “Saved” before flipping to “Show in Folder”. */
 const THUMBNAIL_SAVED_FEEDBACK_MS = 1_000;
 const THUMBNAIL_HIT_TEST_CHANGED_EVENT = "captures-thumbnail-hit-test-changed";
@@ -5884,6 +5889,9 @@ export function Thumbnail() {
   const [exitingArtifactIds, setExitingArtifactIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const [clearingArtifactIds, setClearingArtifactIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [clipboardState, setClipboardState] = useState<ClipboardState>({
     revision: -1,
     artifact_id: null,
@@ -6734,10 +6742,32 @@ export function Thumbnail() {
     && rejectQuery !== "false";
   const stackAnimating = stackMotion === "collapsing" || stackMotion === "expanding";
   const exitingOnly = artifacts.every(({ id }) => exitingArtifactIds.has(id));
-  const controlsDisabled = stackAnimating || exitingOnly;
+  const livePreviewCount = artifacts.reduce(
+    (count, artifact) => (exitingArtifactIds.has(artifact.id) ? count : count + 1),
+    0,
+  );
+  // Clear all is the stack equivalent of Close: leave files and history, hide
+  // the dock. One preview already has Close/Delete, so this stays off a
+  // single card and off the collapsed pile.
+  const showClearAll = !collapsed && livePreviewCount >= 2;
+  const stackClearing = clearingArtifactIds.size > 0;
+  const controlsDisabled = stackAnimating || exitingOnly || stackClearing;
   const stackScrollport = (stackMotion === "expanding" || stackMotion === "expanded")
     && thumbnailStackNeedsScrollport(artifacts.length, stackViewportHeight);
-  const showOverflowCues = stackMotion === "expanded";
+  const showOverflowCues = stackMotion === "expanded" && !stackClearing;
+
+  const clearAllPreviews = () => {
+    if (controlsDisabled || livePreviewCount < 2) return;
+    // Skip cards already exiting so an in-flight Delete can still trash
+    // its folder file after the rest of the stack is dismissed.
+    const requested = artifacts
+      .filter((artifact) => !exitingArtifactIds.has(artifact.id))
+      .map((artifact) => artifact.id);
+    if (requested.length === 0) return;
+    setClearingArtifactIds(new Set(requested));
+    void invoke<string[]>("dismiss_all_artifacts", { artifactIds: requested })
+      .catch(() => undefined);
+  };
 
   const setStackCollapsed = (nextCollapsed: boolean) => {
     if (controlsDisabled || collapsed === nextCollapsed) return;
@@ -7184,6 +7214,7 @@ export function Thumbnail() {
           stackHoverReady ? "thumbnail-stack-hover-ready" : "",
           stackHoverLatched ? "thumbnail-stack-hover-latched" : "",
           stackAnchor === "top" ? "thumbnail-stack-anchor-top" : "",
+          stackClearing ? "thumbnail-stack-clearing" : "",
         ].filter(Boolean).join(" ")}
         onScroll={refreshStackOverflow}
         onDragStartCapture={(event) => {
@@ -7207,7 +7238,19 @@ export function Thumbnail() {
         {(stackAnchor === "top" && stackMotion !== "collapsed"
           ? [...artifacts].reverse()
           : artifacts
-        ).map((artifact) => (
+        ).map((artifact, _visualIndex, visualArtifacts) => {
+          const isStackClearTarget = clearingArtifactIds.has(artifact.id);
+          const clearingOrder = visualArtifacts
+            .map((item) => item.id)
+            .filter((id) => clearingArtifactIds.has(id));
+          const clearingIndex = clearingOrder.indexOf(artifact.id);
+          const clearDelayMs = isStackClearTarget && !prefersReducedMotion()
+            ? Math.min(
+              (clearingOrder.length - 1 - clearingIndex) * THUMBNAIL_CLEAR_STAGGER_MS,
+              THUMBNAIL_CLEAR_STAGGER_MAX_MS,
+            )
+            : 0;
+          return (
           <ThumbnailCard
             key={artifact.id}
             artifact={artifact}
@@ -7217,17 +7260,26 @@ export function Thumbnail() {
             stackCollapsed={compact}
             stackDepth={artifacts.length - artifacts.indexOf(artifact) - 1}
             expandFromTransform={expandFromTransforms.get(artifact.id)}
+            stackDismissing={isStackClearTarget}
+            clearDelayMs={clearDelayMs}
             previewDropReject={
               previewRejectShake
               && artifacts.length - artifacts.indexOf(artifact) - 1 === 0
             }
             onRemoved={(artifactId) => {
               setArtifactExiting(artifactId, false);
+              setClearingArtifactIds((current) => {
+                if (!current.has(artifactId)) return current;
+                const next = new Set(current);
+                next.delete(artifactId);
+                return next;
+              });
               setArtifacts((current) => current.filter(({ id }) => id !== artifactId));
             }}
             onExitChange={setArtifactExiting}
           />
-        ))}
+          );
+        })}
         {collapsed && (
           <button
             type="button"
@@ -7266,10 +7318,22 @@ export function Thumbnail() {
           stackSide === "right" ? "thumbnail-stack-toolbar-anchor-right" : "",
           stackMotion === "collapsing" ? "thumbnail-stack-toolbar-leaving" : "",
           stackMotion === "expanding" ? "thumbnail-stack-toolbar-entering" : "",
-          exitingOnly && stackMotion !== "collapsing"
+          (stackClearing || exitingOnly) && stackMotion !== "collapsing"
             ? "thumbnail-stack-toolbar-exiting"
             : "",
         ].filter(Boolean).join(" ")}>
+          {showClearAll && (
+            <button
+              type="button"
+              className="thumbnail-stack-control thumbnail-stack-clear"
+              aria-label="Clear all previews"
+              data-tooltip="Clear all"
+              disabled={controlsDisabled}
+              onClick={clearAllPreviews}
+            >
+              <CloseIcon />
+            </button>
+          )}
           <button
             type="button"
             className="thumbnail-stack-control thumbnail-stack-minimize"
@@ -7333,6 +7397,8 @@ export function ThumbnailCard({
   stackCollapsed = false,
   stackDepth = 0,
   expandFromTransform,
+  stackDismissing = false,
+  clearDelayMs = 0,
   previewDropReject = false,
   onRemoved,
   onExitChange,
@@ -7345,6 +7411,9 @@ export function ThumbnailCard({
   stackCollapsed?: boolean;
   stackDepth?: number;
   expandFromTransform?: string;
+  /** Parent Clear all: play Close without a per-card dismiss command. */
+  stackDismissing?: boolean;
+  clearDelayMs?: number;
   /** Dev harness: loop the self-drop “no” shake on this card. */
   previewDropReject?: boolean;
   onRemoved: (artifactId: string) => void;
@@ -7656,7 +7725,10 @@ export function ThumbnailCard({
     // the flex reflow race the in-flight compositor transition and visibly
     // snap. Wait for the browser's live stack transition, not a fixed estimate.
     void waitForThumbnailStackSettle(cardRef.current)
-      .then(() => invoke(action, { artifactId: artifact.id }))
+      .then(() => {
+        if (action === STACK_CLEAR_EXIT_ACTION) return;
+        return invoke(action, { artifactId: artifact.id });
+      })
       .then(() => {
         onRemoved(artifact.id);
         // The outgoing inert card can make the native thumbnail window
@@ -7727,9 +7799,17 @@ export function ThumbnailCard({
     // artifact waiting forever for animationend.
     exitFallbackTimer.current = setTimeout(
       completeExit,
-      kind === "delete" ? THUMBNAIL_DELETE_FALLBACK_MS : THUMBNAIL_DISMISS_FALLBACK_MS,
+      (kind === "delete" ? THUMBNAIL_DELETE_FALLBACK_MS : THUMBNAIL_DISMISS_FALLBACK_MS)
+        + (kind === "dismiss" ? clearDelayMs : 0),
     );
   };
+
+  useLayoutEffect(() => {
+    if (!stackDismissing) return;
+    exitWith("dismiss", STACK_CLEAR_EXIT_ACTION);
+    // One-shot when Clear all marks this live card. exitWith is a render closure.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stackDismissing]);
 
   const finishExit = (event: React.AnimationEvent<HTMLElement>) => {
     // Ignore bubbled animationend from image streak / dust chips / chrome wave / clip layer.
@@ -7784,11 +7864,16 @@ export function ThumbnailCard({
         isExiting ? "thumbnail-exiting" : "",
       ].filter(Boolean).join(" ")}
       data-thumbnail-id={artifact.id}
-      style={stackCollapsed ? {
-        "--thumbnail-stack-base-depth": stackDepth,
-        "--thumbnail-stack-peek-jitter": `${thumbnailStackPeekJitterPx(stackDepth)}px`,
-        ...(expandFromTransform
-          ? { "--thumbnail-stack-expand-from": expandFromTransform }
+      style={stackCollapsed || clearDelayMs > 0 ? {
+        ...(stackCollapsed ? {
+          "--thumbnail-stack-base-depth": stackDepth,
+          "--thumbnail-stack-peek-jitter": `${thumbnailStackPeekJitterPx(stackDepth)}px`,
+          ...(expandFromTransform
+            ? { "--thumbnail-stack-expand-from": expandFromTransform }
+            : {}),
+        } : {}),
+        ...(clearDelayMs > 0
+          ? { "--thumbnail-clear-delay": `${clearDelayMs}ms` }
           : {}),
       } as CSSProperties : undefined}
       // HTML inert disables all descendant input/focus while the card is decorative.

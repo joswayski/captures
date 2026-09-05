@@ -1024,7 +1024,8 @@ function clearTranslatePx(card: HTMLElement): void {
 
 /** Compact / collapsed / expanding piles pose with `transform`, not slot `translate`. */
 export function thumbnailStackSuppressesSlotShift(stack: HTMLElement): boolean {
-  return stack.classList.contains("thumbnail-stack-compact");
+  return stack.classList.contains("thumbnail-stack-compact")
+    || stack.classList.contains("thumbnail-stack-clearing");
 }
 
 /** True when survivors should slide up into holes (Show less is on the top edge). */

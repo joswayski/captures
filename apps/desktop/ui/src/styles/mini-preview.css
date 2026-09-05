@@ -1695,7 +1695,9 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
  * would freeze beside the 2nd/3rd card once the pile overflows. `fixed` keeps
  * it on the visible stack edge while the list scrolls. Left/right follows the
  * screen edge the pile is hugging; `--thumbnail-minimize-slide` flips the
- * Show less morph so the pill grows inward from that edge.
+ * Show less morph so the pill grows inward from that edge. Clear all sits to
+ * the left of Show less so the Show less hover morph cannot cover it. The
+ * collapsed pile stays one hit target.
  */
 .thumbnail-stack-toolbar {
   --thumbnail-minimize-slide: 1;
@@ -1707,6 +1709,26 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
   gap: var(--s-1);
   pointer-events: auto;
   cursor: pointer;
+}
+
+.thumbnail-stack-clearing,
+.thumbnail-stack-clearing ~ .thumbnail-stack-toolbar,
+.thumbnail-stack-clearing ~ .thumbnail-overflow-cue {
+  pointer-events: none;
+}
+
+/* Same Close streak as a single card: slide left with horizontal motion blur.
+ * Slot settle is suppressed while the whole live pile is leaving. */
+.thumbnail-stack-clearing > .thumbnail-card.thumbnail-exit-dismiss {
+  animation-delay: var(--thumbnail-clear-delay, 0ms);
+}
+
+.thumbnail-stack-clearing > .thumbnail-card.thumbnail-exit-dismiss img {
+  animation-delay: var(--thumbnail-clear-delay, 0ms);
+}
+
+.thumbnail-stack-clearing ~ .thumbnail-overflow-cue {
+  opacity: 0;
 }
 
 .thumbnail-stack-toolbar-leaving,
@@ -1831,6 +1853,10 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
   stroke-linecap: round;
   stroke-linejoin: round;
   pointer-events: none;
+}
+
+.thumbnail-stack-clear {
+  flex: 0 0 28px;
 }
 
 .thumbnail-stack-minimize {
@@ -1984,6 +2010,13 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
 .thumbnail-stack-control[data-tooltip]:focus-visible::after {
   opacity: 1;
   transform: translateY(0);
+}
+
+.thumbnail-stack-toolbar-leaving .thumbnail-stack-control[data-tooltip]::after,
+.thumbnail-stack-toolbar-exiting .thumbnail-stack-control[data-tooltip]::after,
+.thumbnail-stack-toolbar-entering .thumbnail-stack-control[data-tooltip]::after {
+  opacity: 0;
+  transition: none;
 }
 
 .thumbnail-stack-toolbar-anchor-top .thumbnail-stack-control {
