@@ -67,8 +67,9 @@ function shortcutEvent(event: PreferencesFindKeyEvent) {
   };
 }
 
-function isFindField(target: EventTarget | null): boolean {
-  return target instanceof HTMLElement && Boolean(target.closest(".preferences-find"));
+function isFindInput(target: EventTarget | null): boolean {
+  return target instanceof HTMLInputElement
+    && target.classList.contains("preferences-find-input");
 }
 
 /** Map a key event to the in-window find command, using each OS’s find chord. */
@@ -84,18 +85,18 @@ export function preferencesFindCommand(
   if (event.key === "Escape" && !event.metaKey && !event.ctrlKey && !event.altKey) {
     return "close";
   }
-  const inFindField = isFindField(event.target);
+  const inFindInput = isFindInput(event.target);
   if (
     eventMatchesShortcut(keys, "CommandOrControl+KeyG", platform)
     || (event.key === "F3" && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey)
-    || (inFindField && event.key === "Enter" && !event.shiftKey)
+    || (inFindInput && event.key === "Enter" && !event.shiftKey)
   ) {
     return "next";
   }
   if (
     eventMatchesShortcut(keys, "CommandOrControl+Shift+KeyG", platform)
     || (event.key === "F3" && event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey)
-    || (inFindField && event.key === "Enter" && event.shiftKey)
+    || (inFindInput && event.key === "Enter" && event.shiftKey)
   ) {
     return "previous";
   }

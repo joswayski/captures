@@ -644,6 +644,30 @@ describe("Preferences", () => {
     expect(screen.queryByRole("searchbox", { name: "Find settings" })).not.toBeInTheDocument();
   });
 
+  it("does not treat Enter on find-bar buttons as next-match", async () => {
+    render(<Preferences />);
+    await screen.findByRole("heading", { name: "Preferences" });
+
+    fireEvent.keyDown(window, { key: "f", code: "KeyF", ctrlKey: true });
+    const find = await screen.findByRole("searchbox", { name: "Find settings" });
+    fireEvent.change(find, { target: { value: "preview" } });
+    expect(await screen.findByText("1 of 4")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Next match" }));
+    expect(screen.getByText("2 of 4")).toBeInTheDocument();
+
+    const previous = screen.getByRole("button", { name: "Previous match" });
+    previous.focus();
+    fireEvent.keyDown(previous, { key: "Enter", code: "Enter" });
+    expect(screen.getByText("2 of 4")).toBeInTheDocument();
+
+    const close = screen.getByRole("button", { name: "Close find" });
+    close.focus();
+    fireEvent.keyDown(close, { key: "Enter", code: "Enter" });
+    expect(screen.getByText("2 of 4")).toBeInTheDocument();
+    expect(screen.getByRole("searchbox", { name: "Find settings" })).toBeInTheDocument();
+  });
+
   it("uses Command+F on macOS and ignores Control+F there", async () => {
     window.history.replaceState({}, "", "/?platform=macos");
     render(<Preferences />);

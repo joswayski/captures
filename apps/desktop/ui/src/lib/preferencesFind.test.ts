@@ -102,4 +102,28 @@ describe("preference find shortcuts", () => {
     expect(preferencesFindCommand(keyEvent("Escape", "Escape"), "linux", false)).toBeNull();
     expect(preferencesFindCommand(keyEvent("Escape", "Escape"), "linux", true)).toBe("close");
   });
+
+  it("uses Enter in the search field for next and previous, not find-bar buttons", () => {
+    const find = document.createElement("div");
+    find.className = "preferences-find";
+    const input = document.createElement("input");
+    input.className = "preferences-find-input";
+    const previous = document.createElement("button");
+    previous.setAttribute("aria-label", "Previous match");
+    const close = document.createElement("button");
+    close.setAttribute("aria-label", "Close find");
+    find.append(input, previous, close);
+
+    expect(preferencesFindCommand({ ...keyEvent("Enter", "Enter"), target: input }, "linux", true))
+      .toBe("next");
+    expect(preferencesFindCommand(
+      { ...keyEvent("Enter", "Enter", { shiftKey: true }), target: input },
+      "linux",
+      true,
+    )).toBe("previous");
+    expect(preferencesFindCommand({ ...keyEvent("Enter", "Enter"), target: previous }, "linux", true))
+      .toBeNull();
+    expect(preferencesFindCommand({ ...keyEvent("Enter", "Enter"), target: close }, "linux", true))
+      .toBeNull();
+  });
 });
