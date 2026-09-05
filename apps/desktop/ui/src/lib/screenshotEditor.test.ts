@@ -12,6 +12,7 @@ import {
   canvasExpandButtonAnchor,
   canvasOverflowEdges,
   canvasOverflowGaps,
+  closedShapePolygon,
   closestImageSnapEdge,
   closestPointOnArrow,
   collectAlignmentSnapLines,
@@ -51,6 +52,7 @@ import {
   imageSizeAtHeight,
   imageSizeAtWidth,
   insertArrowControl,
+  isClosedShapeKind,
   isCurveableStrokeShape,
   isFullyOutsideCanvas,
   isSupportedImageFile,
@@ -1046,6 +1048,18 @@ describe("screenshot editor geometry", () => {
     expect(isCurveableStrokeShape("arrow")).toBe(true);
     expect(isCurveableStrokeShape("ellipse")).toBe(false);
     expect(isCurveableStrokeShape("rectangle")).toBe(false);
+    expect(isCurveableStrokeShape("triangle")).toBe(false);
+    expect(isCurveableStrokeShape("star")).toBe(false);
+    expect(isClosedShapeKind("triangle")).toBe(true);
+    expect(isClosedShapeKind("diamond")).toBe(true);
+    expect(isClosedShapeKind("star")).toBe(true);
+    expect(isClosedShapeKind("line")).toBe(false);
+
+    const box = { x: 0, y: 0, width: 100, height: 80 };
+    expect(closedShapePolygon("triangle", box)).toHaveLength(3);
+    expect(closedShapePolygon("diamond", box)).toHaveLength(4);
+    expect(closedShapePolygon("star", box)).toHaveLength(10);
+    expect(closedShapePolygon("triangle", box)[0]).toEqual({ x: 50, y: 0 });
 
     const line: EditorShapeElement = {
       ...editableLayer,

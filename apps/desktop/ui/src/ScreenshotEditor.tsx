@@ -81,6 +81,8 @@ import {
   createScreenshotDocument,
   cropDocument,
   duplicateScreenshotElement,
+  closedShapePolygon,
+  editorPointsToSvgPath,
   elementBounds,
   elementLocalBounds,
   elementLocalPoint,
@@ -107,7 +109,9 @@ import {
   imageSourceDisplaySize,
   imageSizeAtHeight,
   imageSizeAtWidth,
+  isClosedShapeKind,
   isCurveableStrokeShape,
+  isPolygonShapeKind,
   isFullyOutsideCanvas,
   isSupportedImageFile,
   loadImageFile,
@@ -343,14 +347,21 @@ type MagnifyGestureEvent = Event & {
   scale?: number;
 };
 
-type EditorToolItem = { tool: ScreenshotTool; label: string; shortcut: string };
-type GroupedShapeTool = Extract<ScreenshotTool, "rectangle" | "ellipse" | "line">;
+type EditorToolItem = { tool: ScreenshotTool; label: string; shortcut?: string };
+type GroupedShapeTool = Extract<
+  ScreenshotTool,
+  "rectangle" | "ellipse" | "line" | "triangle" | "diamond" | "star"
+>;
 
-/** Rectangle, ellipse, and line share one rail button; arrows stay one click away. */
-const SHAPE_GROUP_ITEMS: Array<{ tool: GroupedShapeTool; label: string; shortcut: string }> = [
+/** Geometry tools share one rail button; arrows stay one click away. */
+const SHAPE_FLYOUT_COLUMNS = 3;
+const SHAPE_GROUP_ITEMS: Array<{ tool: GroupedShapeTool; label: string; shortcut?: string }> = [
   { tool: "rectangle", label: "Rectangle", shortcut: "R" },
   { tool: "ellipse", label: "Ellipse", shortcut: "O" },
   { tool: "line", label: "Line", shortcut: "L" },
+  { tool: "triangle", label: "Triangle" },
+  { tool: "diamond", label: "Diamond", shortcut: "D" },
+  { tool: "star", label: "Star", shortcut: "S" },
 ];
 
 const RAIL_TOOL_ITEMS: EditorToolItem[] = [
@@ -379,11 +390,20 @@ const TEXT_STYLE_ITEMS: Array<{ preset: TextStylePreset; label: string }> = [
 ];
 
 function isGroupedShapeTool(tool: ScreenshotTool): tool is GroupedShapeTool {
-  return tool === "rectangle" || tool === "ellipse" || tool === "line";
+  return tool === "rectangle"
+    || tool === "ellipse"
+    || tool === "line"
+    || tool === "triangle"
+    || tool === "diamond"
+    || tool === "star";
 }
 
 function isClosedShapeTool(tool: ScreenshotTool): boolean {
-  return tool === "rectangle" || tool === "ellipse";
+  return isClosedShapeKind(tool);
+}
+
+function shapeItemName(item: { label: string; shortcut?: string }): string {
+  return item.shortcut ? `${item.label} (${item.shortcut})` : item.label;
 }
 
 /** Tools that draw closed or open vector shapes (not freehand). */
@@ -935,7 +955,7 @@ function paintShapeGeometry(
 ): void {
   const { x, y, endX, endY, shape, style } = element;
 
-  if (shape === "rectangle" || shape === "ellipse") {
+  if (isClosedShapeKind(shape)) {
     const left = Math.min(x, endX);
     const top = Math.min(y, endY);
     const width = Math.abs(endX - x);
@@ -943,7 +963,7 @@ function paintShapeGeometry(
     context.beginPath();
     if (shape === "rectangle") {
       context.roundRect(left, top, width, height, Math.min(12, width / 6, height / 6));
-    } else {
+    } else if (shape === "ellipse") {
       context.ellipse(
         left + width / 2,
         top + height / 2,
@@ -953,6 +973,14 @@ function paintShapeGeometry(
         0,
         Math.PI * 2,
       );
+    } else if (isPolygonShapeKind(shape)) {
+      const points = closedShapePolygon(shape, { x: left, y: top, width, height });
+      if (points.length < 3) return;
+      context.moveTo(points[0].x, points[0].y);
+      for (let index = 1; index < points.length; index += 1) {
+        context.lineTo(points[index].x, points[index].y);
+      }
+      context.closePath();
     }
     if (style.fill) context.fill();
     context.stroke();
@@ -3099,7 +3127,10 @@ export function ScreenshotEditor() {
       else if (event.key === "ArrowUp") nudgeSelected(0, -multiplier);
       else if (event.key === "ArrowDown") nudgeSelected(0, multiplier);
       else if (!command && !event.altKey) {
-        const match = TOOL_ITEMS.find(({ shortcut }) => shortcut.toLowerCase() === event.key.toLowerCase());
+        const match = TOOL_ITEMS.find(({ shortcut }) => (
+          shortcut
+          && shortcut.toLowerCase() === event.key.toLowerCase()
+        ));
         if (match) {
           activateTool(match.tool);
         }
@@ -3832,7 +3863,7 @@ export function ScreenshotEditor() {
         controls: [],
         style: {
           ...defaultStyle,
-          fill: tool === "rectangle" || tool === "ellipse" ? defaultStyle.fill : null,
+          fill: isClosedShapeKind(tool) ? defaultStyle.fill : null,
         },
         locked: false,
         visible: true,
@@ -7057,7 +7088,7 @@ export function ScreenshotEditor() {
                   : element
               ))}
             />
-            {selected.kind === "shape" && (selected.shape === "rectangle" || selected.shape === "ellipse") && (
+            {selected.kind === "shape" && isClosedShapeKind(selected.shape) && (
               <>
                 <label className="screenshot-check-row">
                   <input
@@ -7166,7 +7197,7 @@ export function ScreenshotEditor() {
                         className={tool === item.tool ? "active" : ""}
                         aria-pressed={tool === item.tool}
                         aria-label={item.label}
-                        title={`${item.label} (${item.shortcut})`}
+                        title={shapeItemName(item)}
                         onClick={() => activateTool(item.tool)}
                       >
                         <EditorIcon name={item.tool} />
@@ -8111,8 +8142,8 @@ function ShapesRailButton({
     if (!trigger) return;
     const triggerBounds = trigger.getBoundingClientRect();
     const menuBounds = menuRef.current?.getBoundingClientRect();
-    const menuHeight = menuBounds?.height ?? 52;
-    const menuWidth = menuBounds?.width ?? 148;
+    const menuHeight = menuBounds?.height ?? 112;
+    const menuWidth = menuBounds?.width ?? 172;
     const gap = 10;
     const viewportPadding = 8;
     setMenuPosition({
@@ -8152,16 +8183,28 @@ function ShapesRailButton({
       closeAndRestoreFocus();
       return;
     }
-    if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+    if (event.key === "ArrowRight") {
       event.preventDefault();
       event.stopPropagation();
       focusFlyoutItem(index + 1);
       return;
     }
-    if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+    if (event.key === "ArrowLeft") {
       event.preventDefault();
       event.stopPropagation();
       focusFlyoutItem(index - 1);
+      return;
+    }
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      event.stopPropagation();
+      focusFlyoutItem(index + SHAPE_FLYOUT_COLUMNS);
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      event.stopPropagation();
+      focusFlyoutItem(index - SHAPE_FLYOUT_COLUMNS);
       return;
     }
     if (event.key === "Home") {
@@ -8222,7 +8265,7 @@ function ShapesRailButton({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label="Shapes"
-        title={`Shapes · ${currentItem.label} (${currentItem.shortcut})`}
+        title={`Shapes · ${shapeItemName(currentItem)}`}
         onClick={onToggle}
         onKeyDown={(event) => {
           if (
@@ -8236,14 +8279,7 @@ function ShapesRailButton({
           event.preventDefault();
           event.stopPropagation();
           if (!open) onToggle();
-          else {
-            const items = shapeFlyoutItems(menuRef.current);
-            const checkedIndex = items.findIndex(
-              (item) => item.getAttribute("aria-checked") === "true",
-            );
-            const delta = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1;
-            focusFlyoutItem((checkedIndex >= 0 ? checkedIndex : 0) + delta);
-          }
+          else handleMenuKeyDown(event);
         }}
       >
         <EditorIcon name="shapes" />
@@ -8265,8 +8301,8 @@ function ShapesRailButton({
               className={current === item.tool ? "active" : ""}
               role="menuitemradio"
               aria-checked={current === item.tool}
-              aria-label={`${item.label} (${item.shortcut})`}
-              title={`${item.label} (${item.shortcut})`}
+              aria-label={shapeItemName(item)}
+              title={shapeItemName(item)}
               tabIndex={-1}
               onClick={() => {
                 onChoose(item.tool);
@@ -8359,6 +8395,19 @@ function DrawToolPreview({
             strokeWidth={previewStroke}
             strokeLinecap="round"
           />
+        ) : isPolygonShapeKind(tool) ? (
+          <path
+            d={editorPointsToSvgPath(closedShapePolygon(tool, {
+              x: 38,
+              y: 12,
+              width: 84,
+              height: 48,
+            }))}
+            fill={fill ?? "none"}
+            stroke={color}
+            strokeWidth={previewStroke}
+            strokeLinejoin="round"
+          />
         ) : tool === "arrow" ? (
           <path
             d="M30 50 118 24M104 20h18v18"
@@ -8406,6 +8455,20 @@ function EditorIcon({ name }: { name: string }) {
   if (name === "rectangle") return <svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2" /></svg>;
   if (name === "ellipse") return <svg viewBox="0 0 24 24"><ellipse cx="12" cy="12" rx="8" ry="6.5" /></svg>;
   if (name === "line") return <svg viewBox="0 0 24 24"><path d="M5 19 19 5" /></svg>;
+  if (name === "triangle") return <svg viewBox="0 0 24 24"><path d="M12 4 20.5 19.5H3.5Z" /></svg>;
+  if (name === "diamond") return <svg viewBox="0 0 24 24"><path d="M12 3.5 20.5 12 12 20.5 3.5 12Z" /></svg>;
+  if (name === "star") {
+    return (
+      <svg viewBox="0 0 24 24">
+        <path d={editorPointsToSvgPath(closedShapePolygon("star", {
+          x: 3,
+          y: 3,
+          width: 18,
+          height: 18,
+        }))} />
+      </svg>
+    );
+  }
   if (name === "arrow") return <svg viewBox="0 0 24 24"><path d="M4 20 20 4M12 4h8v8" /></svg>;
   if (name === "pen") return <svg viewBox="0 0 24 24"><path d="M4 16c4-7 6-8 8-3s4 4 8-4M4 20h16" /></svg>;
   if (name === "remove-bg") {

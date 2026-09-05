@@ -636,10 +636,11 @@
 .screenshot-tool-flyout {
   position: fixed;
   z-index: 80;
-  display: flex;
-  padding: var(--s-2);
+  display: grid;
+  grid-template-columns: repeat(3, 44px);
+  padding: var(--s-3);
   align-items: center;
-  gap: var(--s-1);
+  gap: var(--s-2);
   border: 1px solid var(--editor-border);
   border-radius: var(--r-lg);
   background: var(--surface-overlay);
@@ -648,8 +649,8 @@
 
 .screenshot-tool-flyout button {
   display: grid;
-  width: 36px;
-  min-height: 36px;
+  width: 44px;
+  min-height: 44px;
   padding: 0;
   place-items: center;
   border: 1px solid transparent;
@@ -674,8 +675,8 @@
 }
 
 .screenshot-tool-flyout svg {
-  width: 16px;
-  height: 16px;
+  width: 22px;
+  height: 22px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.75;
@@ -2713,7 +2714,7 @@
 
 .screenshot-shape-picker button {
   display: grid;
-  min-height: 36px;
+  min-height: 40px;
   place-items: center;
   border: 1px solid var(--editor-border);
   border-radius: var(--r-sm);
@@ -2733,8 +2734,8 @@
 }
 
 .screenshot-shape-picker svg {
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.8;

@@ -188,7 +188,9 @@ function setCanvasBounds(canvas: HTMLCanvasElement, width = 1_440, height = 900)
   });
 }
 
-function chooseShapeTool(name: "Rectangle (R)" | "Ellipse (O)" | "Line (L)") {
+function chooseShapeTool(
+  name: "Rectangle (R)" | "Ellipse (O)" | "Line (L)" | "Triangle" | "Diamond (D)" | "Star (S)",
+) {
   if (!screen.queryByRole("menu", { name: "Shapes" })) {
     fireEvent.click(screen.getByRole("button", { name: "Shapes" }));
   }
@@ -400,7 +402,7 @@ describe("ScreenshotEditor", () => {
     expect(screen.queryByRole("button", { name: "Rectangle (R)" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Shapes" }));
     const shapesMenu = screen.getByRole("menu", { name: "Shapes" });
-    for (const name of ["Rectangle (R)", "Ellipse (O)", "Line (L)"]) {
+    for (const name of ["Rectangle (R)", "Ellipse (O)", "Line (L)", "Triangle", "Diamond (D)", "Star (S)"]) {
       expect(within(shapesMenu).getByRole("menuitemradio", { name })).toBeInTheDocument();
     }
     expect(screen.queryByRole("button", { name: /Curved arrow/ })).not.toBeInTheDocument();
@@ -447,6 +449,16 @@ describe("ScreenshotEditor", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "Filled shape" }));
     expect(screen.getByRole("checkbox", { name: "Filled shape" })).toBeChecked();
     expect(screen.getByRole("group", { name: "Fill color" })).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "s" });
+    expect(screen.getByRole("button", { name: "Star" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("checkbox", { name: "Filled shape" })).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "d" });
+    expect(screen.getByRole("button", { name: "Diamond" })).toHaveAttribute("aria-pressed", "true");
+    chooseShapeTool("Triangle");
+    expect(screen.getByRole("button", { name: "Triangle" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("Triangle", { selector: ".screenshot-properties-heading strong" }))
+      .toBeInTheDocument();
   });
 
   it("moves keyboard focus into the Shapes flyout and restores it on Escape", async () => {
@@ -461,6 +473,8 @@ describe("ScreenshotEditor", () => {
     const rectangle = within(menu).getByRole("menuitemradio", { name: "Rectangle (R)" });
     const ellipse = within(menu).getByRole("menuitemradio", { name: "Ellipse (O)" });
     const line = within(menu).getByRole("menuitemradio", { name: "Line (L)" });
+    const triangle = within(menu).getByRole("menuitemradio", { name: "Triangle" });
+    const star = within(menu).getByRole("menuitemradio", { name: "Star (S)" });
     expect(rectangle).toHaveFocus();
 
     fireEvent.keyDown(rectangle, { key: "ArrowRight" });
@@ -468,10 +482,14 @@ describe("ScreenshotEditor", () => {
     fireEvent.keyDown(ellipse, { key: "ArrowRight" });
     expect(line).toHaveFocus();
     fireEvent.keyDown(line, { key: "ArrowRight" });
+    expect(triangle).toHaveFocus();
+    fireEvent.keyDown(triangle, { key: "Home" });
     expect(rectangle).toHaveFocus();
-    fireEvent.keyDown(rectangle, { key: "End" });
-    expect(line).toHaveFocus();
-    fireEvent.keyDown(line, { key: "Home" });
+    fireEvent.keyDown(rectangle, { key: "ArrowDown" });
+    expect(triangle).toHaveFocus();
+    fireEvent.keyDown(triangle, { key: "End" });
+    expect(star).toHaveFocus();
+    fireEvent.keyDown(star, { key: "Home" });
     expect(rectangle).toHaveFocus();
 
     fireEvent.keyDown(rectangle, { key: "Escape" });

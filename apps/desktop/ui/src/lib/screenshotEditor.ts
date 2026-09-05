@@ -15,12 +15,86 @@ export type ScreenshotTool =
   | "rectangle"
   | "ellipse"
   | "line"
+  | "triangle"
+  | "diamond"
+  | "star"
   | "arrow"
   | "pen"
   /** Magic wand + erase/restore brushes for punching alpha on image layers. */
   | "remove-bg";
 
-export type ShapeKind = "rectangle" | "ellipse" | "line" | "arrow";
+export type ShapeKind =
+  | "rectangle"
+  | "ellipse"
+  | "line"
+  | "triangle"
+  | "diamond"
+  | "star"
+  | "arrow";
+
+/** Closed annotation shapes that support fill (not line/arrow). */
+export type ClosedShapeKind = Extract<
+  ShapeKind,
+  "rectangle" | "ellipse" | "triangle" | "diamond" | "star"
+>;
+
+/** Closed shapes drawn as a vertex list inside the drag box. */
+export type PolygonShapeKind = Extract<ClosedShapeKind, "triangle" | "diamond" | "star">;
+
+export function isClosedShapeKind(shape: string): shape is ClosedShapeKind {
+  return shape === "rectangle"
+    || shape === "ellipse"
+    || shape === "triangle"
+    || shape === "diamond"
+    || shape === "star";
+}
+
+export function isPolygonShapeKind(shape: string): shape is PolygonShapeKind {
+  return shape === "triangle" || shape === "diamond" || shape === "star";
+}
+
+/**
+ * Vertices for triangle / diamond / star, stretched to `rect` the same way
+ * ellipse fills its drag box.
+ */
+export function closedShapePolygon(shape: PolygonShapeKind, rect: EditorRect): EditorPoint[] {
+  const cx = rect.x + rect.width / 2;
+  const cy = rect.y + rect.height / 2;
+  if (shape === "triangle") {
+    return [
+      { x: cx, y: rect.y },
+      { x: rect.x + rect.width, y: rect.y + rect.height },
+      { x: rect.x, y: rect.y + rect.height },
+    ];
+  }
+  if (shape === "diamond") {
+    return [
+      { x: cx, y: rect.y },
+      { x: rect.x + rect.width, y: cy },
+      { x: cx, y: rect.y + rect.height },
+      { x: rect.x, y: cy },
+    ];
+  }
+  const outerX = rect.width / 2;
+  const outerY = rect.height / 2;
+  const inner = 0.39;
+  return Array.from({ length: 10 }, (_, index) => {
+    const angle = -Math.PI / 2 + (index * Math.PI) / 5;
+    const radius = index % 2 === 0 ? 1 : inner;
+    return {
+      x: cx + Math.cos(angle) * outerX * radius,
+      y: cy + Math.sin(angle) * outerY * radius,
+    };
+  });
+}
+
+export function editorPointsToSvgPath(points: EditorPoint[], closed = true): string {
+  if (points.length === 0) return "";
+  const body = points
+    .map((point, index) => `${index === 0 ? "M" : "L"}${point.x} ${point.y}`)
+    .join(" ");
+  return closed ? `${body} Z` : body;
+}
 
 export type ElementStyle = {
   color: string;
@@ -2770,7 +2844,7 @@ export function shapeLocalBounds(element: EditorShapeElement): EditorRect {
   const strokePad = strokeExtent(element.style.strokeWidth)
     + annotationDropShadowPad(element.style);
 
-  if (element.shape === "rectangle" || element.shape === "ellipse") {
+  if (isClosedShapeKind(element.shape)) {
     const rect = normalizeRect(
       { x: element.x, y: element.y },
       { x: element.endX, y: element.endY },
