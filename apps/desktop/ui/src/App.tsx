@@ -60,6 +60,7 @@ import {
   frontmostCaptureTargetAtPoint,
   frontToBackWindows,
   isCapturableSelection,
+  keepReadyWindowTargets,
   parseAspectRatioPreset,
   REGION_ASPECT_PRESETS,
   roundedRectPath,
@@ -2236,31 +2237,32 @@ export function RecordingSelector() {
         && sessionRef.current?.id === selection.id
       ) {
         const previous = sessionRef.current;
-        const snapshotChanged = previous.snapshot_url !== selection.snapshot_url
-          || previous.frozen !== selection.frozen;
-        const revealKey = `${selection.id}:${freezeFrameRevealKey(selection)}`;
-        sessionRef.current = selection;
-        setSession(selection);
-        if (previous.initial_mode !== selection.initial_mode) {
-          setActionMode(selection.initial_mode);
+        const next = keepReadyWindowTargets(previous, selection);
+        const snapshotChanged = previous.snapshot_url !== next.snapshot_url
+          || previous.frozen !== next.frozen;
+        const revealKey = `${next.id}:${freezeFrameRevealKey(next)}`;
+        sessionRef.current = next;
+        setSession(next);
+        if (previous.initial_mode !== next.initial_mode) {
+          setActionMode(next.initial_mode);
         }
-        if (previous.initial_target !== selection.initial_target) {
-          setTargetMode(selection.initial_target);
+        if (previous.initial_target !== next.initial_target) {
+          setTargetMode(next.initial_target);
           setHoveredWindow(null);
           setHoveredDisplay(false);
-          if (selection.initial_target !== "window") {
+          if (next.initial_target !== "window") {
             setSelectedWindow(null);
           }
         }
-        const modeChanged = previous.initial_mode !== selection.initial_mode
-          || previous.initial_target !== selection.initial_target;
+        const modeChanged = previous.initial_mode !== next.initial_mode
+          || previous.initial_target !== next.initial_target;
         if (snapshotChanged) {
           visibleSnapshotRef.current = null;
           revealingSessionIdRef.current = null;
           setFocusVisibleSessionId(null);
         } else if (modeChanged && visibleSnapshotRef.current === revealKey) {
           visibleSnapshotRef.current = null;
-          revealSelector(selection.id, freezeFrameRevealKey(selection));
+          revealSelector(next.id, freezeFrameRevealKey(next));
         }
         setSwitchingDisplay(false);
         return;

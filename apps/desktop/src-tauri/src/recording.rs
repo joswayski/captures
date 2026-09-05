@@ -4001,20 +4001,25 @@ fn schedule_recording_selector_webview_wake(app: &AppHandle, selection: Recordin
             eprintln!("failed to schedule recording selector WebView wake: {error}");
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
-        let still_pending = app
+        // Listing can finish while this wake is sleeping. Re-emit the live
+        // summary so a deferred empty window list cannot wipe targets the
+        // selector already received — Window mode would keep the camera
+        // cursor but have nothing to highlight or click.
+        let Some(current) = app
             .state::<Arc<AppState>>()
             .recording_selection
             .lock()
             .as_ref()
-            .is_some_and(|pending| {
+            .filter(|pending| {
                 pending.summary.id == selection.id
                     && pending.summary.snapshot_url == selection.snapshot_url
-            });
-        if !still_pending {
+            })
+            .map(|pending| pending.summary.clone())
+        else {
             return;
-        }
+        };
         if let Some(window) = app.get_webview_window("recording-selector")
-            && let Err(error) = window.emit("recording-selection-ready", &selection)
+            && let Err(error) = window.emit("recording-selection-ready", &current)
         {
             eprintln!("failed to redeliver recording selector state after wake: {error}");
         }
