@@ -168,7 +168,7 @@ describe("placeCustomSelectMenu", () => {
 
   it("shifts right when a right-aligned menu would clip the left edge", () => {
     const layout = placeCustomSelectMenu(
-      { top: 400, left: 12, right: 120, bottom: 434, width: 108, height: 34 },
+      { top: 100, left: 12, right: 120, bottom: 134, width: 108, height: 34 },
       { width: 320, height: 180 },
       { width: 800, height: 600 },
       4,
