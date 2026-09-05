@@ -49,8 +49,25 @@ pub fn install_panic_hook() {
     }));
 }
 
+/// Keep the tray app running when a window closes, but quit for OS shutdown.
+pub fn should_prevent_exit(code: Option<i32>) -> bool {
+    should_prevent_exit_with(code, crate::session_end::is_ending())
+}
+
+pub(crate) fn should_prevent_exit_with(code: Option<i32>, session_ending: bool) -> bool {
+    code.is_none() && !session_ending
+}
+
 pub fn mark_clean_exit() {
     mark_clean_exit_at(&session_marker_path(), &last_panic_path());
+}
+
+pub(crate) fn session_marker_path() -> PathBuf {
+    settings_path().with_file_name("session-running")
+}
+
+pub(crate) fn last_panic_path() -> PathBuf {
+    settings_path().with_file_name(LAST_PANIC_FILE)
 }
 
 fn mark_clean_exit_at(session_marker: &Path, panic_file: &Path) {
@@ -58,7 +75,7 @@ fn mark_clean_exit_at(session_marker: &Path, panic_file: &Path) {
     let _ = fs::remove_file(panic_file);
 }
 
-fn mark_session_started() {
+pub(crate) fn mark_session_started() {
     let path = session_marker_path();
     if let Some(parent) = path
         .parent()
@@ -67,14 +84,6 @@ fn mark_session_started() {
         let _ = fs::create_dir_all(parent);
     }
     let _ = fs::write(path, RUNNING_MARKER);
-}
-
-fn session_marker_path() -> PathBuf {
-    settings_path().with_file_name("session-running")
-}
-
-fn last_panic_path() -> PathBuf {
-    settings_path().with_file_name(LAST_PANIC_FILE)
 }
 
 fn take_dirty_shutdown() -> Option<DirtyShutdown> {
@@ -927,8 +936,8 @@ mod tests {
     use super::{
         RUNNING_MARKER, decode_report_bytes, format_crash_message, format_panic_report,
         latest_wer_snippet_from, mark_clean_exit_at, redact_user_paths,
-        redact_user_paths_with_homes, summarize_os_report, take_dirty_shutdown_at,
-        take_last_panic_at,
+        redact_user_paths_with_homes, should_prevent_exit_with, summarize_os_report,
+        take_dirty_shutdown_at, take_last_panic_at,
     };
     use std::time::{Duration, SystemTime};
 
@@ -1197,5 +1206,17 @@ Stacktrace:
     fn crash_message_notes_when_no_exception_was_found() {
         let message = format_crash_message(Vec::new());
         assert!(message.contains("No exception summary was available"));
+    }
+
+    #[test]
+    fn window_close_keeps_the_tray_app_running() {
+        assert!(should_prevent_exit_with(None, false));
+    }
+
+    #[test]
+    fn explicit_quit_and_os_session_end_are_allowed_to_exit() {
+        assert!(!should_prevent_exit_with(Some(0), false));
+        assert!(!should_prevent_exit_with(None, true));
+        assert!(!should_prevent_exit_with(Some(0), true));
     }
 }

@@ -1,4 +1,4 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 use std::process::Command;
 #[cfg(target_os = "windows")]
@@ -45,6 +45,7 @@ mod feedback;
 mod models;
 mod recording;
 mod screenshot_editor;
+mod session_end;
 mod state;
 mod storage;
 mod updates;
@@ -131,6 +132,7 @@ struct ClipboardWrite {
 
 pub fn run() {
     crash_report::install_panic_hook();
+    session_end::install();
     let state = AppState::new();
     let protocol_state = state.clone();
 
@@ -406,9 +408,11 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building Captures")
         .run(|_app, event| match event {
-            tauri::RunEvent::ExitRequested {
-                code: None, api, ..
-            } => api.prevent_exit(),
+            tauri::RunEvent::ExitRequested { code, api, .. } => {
+                if crash_report::should_prevent_exit(code) {
+                    api.prevent_exit();
+                }
+            }
             tauri::RunEvent::Exit => crash_report::mark_clean_exit(),
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => focus_or_show_primary_app_window(_app),
