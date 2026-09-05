@@ -1539,6 +1539,8 @@ describe("Thumbnail", () => {
     expect(toolbar).toHaveClass("thumbnail-stack-toolbar-anchor-top");
     expect(toolbar).toHaveClass("thumbnail-stack-toolbar-anchor-right");
   });
+
+  it("scrolls to the newest card when settings move an expanded pile between top and bottom", async () => {
     const stacked = Array.from({ length: 8 }, (_, index) => ({
       ...artifact,
       id: `capture-${index + 1}`,
