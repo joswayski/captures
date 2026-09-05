@@ -119,6 +119,18 @@ export function shouldRecoverThumbnailAfterNullPolls(
   return consecutiveNullOrFailed >= threshold;
 }
 
+/**
+ * Recover from hung pointer polls only when the stack is still eating desktop
+ * input. Click-through with an unknown pointer is the safe state: looping
+ * recover there would keep re-arming a tall window over other apps.
+ */
+export function thumbnailNullPollNeedsDesktopInputRecovery(
+  ignoringCursorEvents: boolean,
+  nativeTracking: boolean,
+): boolean {
+  return !ignoringCursorEvents || nativeTracking;
+}
+
 export function thumbnailCursorSyncAction(
   current: ThumbnailCursorKind,
   next: ThumbnailCursorKind,
@@ -273,6 +285,10 @@ export function thumbnailStackHasLiveHitTarget(root: Document = document): boole
  * When every card is exiting (or the stack is empty), ignore the cursor even
  * without a pointer sample. Platforms that cannot poll the cursor would
  * otherwise leave the native window blocking clicks until the animation ends.
+ *
+ * A pointer sample that is not inside the window must also pass through. The
+ * collapsed stack keeps a tall always-on-top frame; leaving that frame
+ * hit-testable after a drag covers other apps and can steal typing.
  */
 export function shouldIgnoreThumbnailCursorEvents(
   position: ThumbnailPointerPosition,
@@ -280,12 +296,23 @@ export function shouldIgnoreThumbnailCursorEvents(
 ): boolean {
   if (root.querySelector(".thumbnail-stack-dragging")) return false;
   if (!thumbnailStackHasLiveHitTarget(root)) return true;
-  if (!position.inside) return false;
+  if (!position.inside) return true;
   const target = thumbnailElementFromPoint(position.x, position.y, root);
   if (thumbnailStackControlAtPoint(position.x, position.y, target, root)) return false;
   if (!target) return true;
   const card = target.closest(".thumbnail-card");
   return !card || card.classList.contains("thumbnail-exiting");
+}
+
+/**
+ * Unknown pointer samples must not make the tall always-on-top stack eat
+ * desktop input. Only an in-progress pile drag may keep the window interactive
+ * without a live hit test.
+ */
+export function thumbnailUnknownPointerShouldIgnoreCursorEvents(
+  isDragging: boolean,
+): boolean {
+  return !isDragging;
 }
 
 export function clearThumbnailNativeHover(root: ParentNode = document) {

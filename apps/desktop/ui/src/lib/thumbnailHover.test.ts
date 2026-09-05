@@ -19,9 +19,11 @@ import {
   thumbnailCardHoverLockReleased,
   thumbnailCssCursor,
   thumbnailCursorSyncAction,
+  thumbnailNullPollNeedsDesktopInputRecovery,
   thumbnailStackHasLiveHitTarget,
   thumbnailStackHoldsCollapsedPose,
   thumbnailStackSuppressesCardHover,
+  thumbnailUnknownPointerShouldIgnoreCursorEvents,
   THUMBNAIL_CARD_HOVER_LOCK_SLOP_PX,
   THUMBNAIL_CURSOR_HANDOFF_REASSERT_DELAYS_MS,
   THUMBNAIL_CURSOR_KIND_ATTRIBUTE,
@@ -660,7 +662,7 @@ describe("shouldIgnoreThumbnailCursorEvents", () => {
       value: vi.fn(() => overflowCue),
     });
     expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: true })).toBe(false);
-    expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: false })).toBe(false);
+    expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: false })).toBe(true);
   });
 
   it("keeps preview toolbar controls interactive while live cards remain", () => {
@@ -945,6 +947,12 @@ describe("shouldIgnoreThumbnailCursorEvents", () => {
     `;
     expect(thumbnailStackHasLiveHitTarget()).toBe(true);
     expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: false })).toBe(false);
+    expect(thumbnailUnknownPointerShouldIgnoreCursorEvents(true)).toBe(false);
+  });
+
+  it("passes desktop input through when the pointer sample is unknown", () => {
+    expect(thumbnailUnknownPointerShouldIgnoreCursorEvents(false)).toBe(true);
+    expect(thumbnailUnknownPointerShouldIgnoreCursorEvents(true)).toBe(false);
   });
 
   it("keeps a minimized stack toolbar control interactive", () => {
@@ -1095,6 +1103,10 @@ describe("thumbnail interactivity recovery helpers", () => {
     expect(shouldRecoverThumbnailAfterNullPolls(0)).toBe(false);
     expect(shouldRecoverThumbnailAfterNullPolls(THUMBNAIL_NULL_POLL_RECOVER_COUNT - 1)).toBe(false);
     expect(shouldRecoverThumbnailAfterNullPolls(THUMBNAIL_NULL_POLL_RECOVER_COUNT)).toBe(true);
+    expect(thumbnailNullPollNeedsDesktopInputRecovery(true, false)).toBe(false);
+    expect(thumbnailNullPollNeedsDesktopInputRecovery(false, false)).toBe(true);
+    expect(thumbnailNullPollNeedsDesktopInputRecovery(true, true)).toBe(true);
+    expect(thumbnailNullPollNeedsDesktopInputRecovery(false, true)).toBe(true);
   });
 
   it("times out hung pointer polls so sleep cannot stall the loop", async () => {

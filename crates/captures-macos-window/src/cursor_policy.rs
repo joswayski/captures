@@ -173,15 +173,13 @@ impl ThumbnailHoverCursor {
         !matches!(self, Self::Default)
     }
 
-    /// Pointer is already over the stack, but JS may not have hit-tested yet
-    /// (inactive WKWebView timers are frozen). Show a pointing hand immediately
-    /// instead of leaving the frontmost app's arrow until the panel is focused.
+    /// Keep the last known interactive cursor when JS is frozen. Never promote
+    /// empty panel chrome to a live card: the collapsed stack keeps a tall
+    /// window, and treating that frame as a hit target steals keystrokes from
+    /// apps underneath.
     #[must_use]
     pub const fn unpolled_hover(self) -> Self {
-        match self {
-            Self::Default => Self::Pointer,
-            other => other,
-        }
+        self
     }
 
     /// Grab/pointer are AppKit-owned. Default is a hole in the always-on-top
@@ -274,15 +272,62 @@ pub const fn macos_key_code_is_escape(key_code: u16) -> bool {
 }
 
 /// Native Escape monitors must fire even when the overlay is not key: another
-/// screenshot tool can steal activation, the freeze-frame may still be
-/// click-through, or the cursor-claim panel can be the key window.
+/// screenshot tool can steal activation, or the freeze-frame may still be
+/// painting.
+///
+/// Cursor ownership is not enough. A leftover claim after dismiss would keep
+/// intercepting Escape in other apps. Arming and a still-visible overlay are
+/// the only safe signals.
 #[must_use]
 pub const fn capture_escape_should_dispatch(
     armed: bool,
     overlay_visible: bool,
     overlay_owns_cursor: bool,
 ) -> bool {
-    armed || overlay_visible || overlay_owns_cursor
+    let _ = overlay_owns_cursor;
+    armed || overlay_visible
+}
+
+/// A stale JS poll must not disable click-through just because the pointer is
+/// somewhere in the (often tall) mini-preview frame.
+#[must_use]
+pub const fn thumbnail_stale_poll_may_disable_click_through() -> bool {
+    false
+}
+
+/// Same for key-window status: becoming key over empty chrome swallows typing
+/// in whichever app the panel happens to cover.
+#[must_use]
+pub const fn thumbnail_stale_poll_may_take_key_window() -> bool {
+    false
+}
+
+/// Click-through mini-preview panels must drop key status. Clicks already reach
+/// the app underneath; leftover key status is what steals typing.
+#[must_use]
+pub const fn thumbnail_passthrough_must_resign_key(click_through: bool) -> bool {
+    click_through
+}
+
+/// After Captures resigns active, do not immediately reclaim key because the
+/// pointer still sits in empty panel chrome covering the app the user clicked.
+#[must_use]
+pub const fn thumbnail_resign_active_may_retake_key() -> bool {
+    false
+}
+
+/// A mouse click that AppKit delivered to another app (global monitor) must
+/// release mini-preview key status so that app can receive typing.
+#[must_use]
+pub const fn thumbnail_foreign_mouse_click_must_resign_key() -> bool {
+    true
+}
+
+/// Sleep/resume recovery must not force the whole stack hit-testable. The
+/// preserved-height collapsed window would cover other apps until JS polls.
+#[must_use]
+pub const fn thumbnail_refresh_must_not_force_hit_testing() -> bool {
+    true
 }
 
 /// Region screenshot (⌘⇧4) claims the crosshair on key-down, not after
@@ -336,8 +381,12 @@ mod tests {
         cursor_claim_panel_should_resign_key, cursor_claim_panel_should_show,
         macos_key_code_is_escape, overlay_prepare_keeps_native_cursor,
         region_shortcut_claims_cursor_on_press, suppress_document_cursor_rects_for_thumbnail,
-        thumbnail_may_take_key_window, thumbnail_passthrough_disables_cursor_rects,
-        thumbnail_poll_is_live, thumbnail_resets_cursor_on_exit, thumbnail_unpolled_hover,
+        thumbnail_foreign_mouse_click_must_resign_key, thumbnail_may_take_key_window,
+        thumbnail_passthrough_disables_cursor_rects, thumbnail_passthrough_must_resign_key,
+        thumbnail_poll_is_live, thumbnail_refresh_must_not_force_hit_testing,
+        thumbnail_resets_cursor_on_exit, thumbnail_resign_active_may_retake_key,
+        thumbnail_stale_poll_may_disable_click_through, thumbnail_stale_poll_may_take_key_window,
+        thumbnail_unpolled_hover,
     };
 
     #[test]
@@ -511,7 +560,9 @@ mod tests {
         assert!(!macos_key_code_is_escape(0));
         assert!(capture_escape_should_dispatch(true, false, false));
         assert!(capture_escape_should_dispatch(false, true, false));
-        assert!(capture_escape_should_dispatch(false, false, true));
+        // Leftover cursor ownership after dismiss must not keep intercepting
+        // Escape in other apps.
+        assert!(!capture_escape_should_dispatch(false, false, true));
         assert!(!capture_escape_should_dispatch(false, false, false));
     }
 
@@ -523,10 +574,10 @@ mod tests {
     }
 
     #[test]
-    fn unpolled_thumbnail_hover_uses_a_pointing_hand_when_poll_is_stale() {
+    fn unpolled_thumbnail_hover_does_not_promote_empty_chrome() {
         assert_eq!(
             ThumbnailHoverCursor::Default.unpolled_hover(),
-            ThumbnailHoverCursor::Pointer
+            ThumbnailHoverCursor::Default
         );
         assert_eq!(
             ThumbnailHoverCursor::Pointer.unpolled_hover(),
@@ -545,7 +596,7 @@ mod tests {
         assert!(thumbnail_passthrough_disables_cursor_rects());
         assert_eq!(
             thumbnail_unpolled_hover(false, ThumbnailHoverCursor::Default),
-            ThumbnailHoverCursor::Pointer
+            ThumbnailHoverCursor::Default
         );
         assert_eq!(
             thumbnail_unpolled_hover(true, ThumbnailHoverCursor::Default),
@@ -555,6 +606,16 @@ mod tests {
             thumbnail_unpolled_hover(false, ThumbnailHoverCursor::Grab),
             ThumbnailHoverCursor::Grab
         );
+    }
+
+    fn stale_thumbnail_frame_hover_must_not_steal_desktop_input() {
+        assert!(!thumbnail_stale_poll_may_disable_click_through());
+        assert!(!thumbnail_stale_poll_may_take_key_window());
+        assert!(thumbnail_passthrough_must_resign_key(true));
+        assert!(!thumbnail_passthrough_must_resign_key(false));
+        assert!(!thumbnail_resign_active_may_retake_key());
+        assert!(thumbnail_foreign_mouse_click_must_resign_key());
+        assert!(thumbnail_refresh_must_not_force_hit_testing());
     }
 
     #[test]
