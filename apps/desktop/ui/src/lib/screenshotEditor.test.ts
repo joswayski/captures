@@ -110,6 +110,8 @@ import {
   annotationHasDropShadow,
   dropShadowCanvasColor,
   resolvedDropShadowStyle,
+  textDropShadowStyle,
+  textLayoutBounds,
   editorTextCanvasFont,
   editorTextFontStack,
   resolveEditorTextCanvasFamily,
@@ -1377,6 +1379,73 @@ describe("screenshot editor geometry", () => {
       style: custom,
     };
     expect(elementBounds(wide).width).toBeGreaterThan(elementBounds(autoShadow).width);
+  });
+
+  it("applies a drop shadow to the whole text label, including a background plate", () => {
+    const label: EditorTextElement = {
+      ...editableLayer,
+      id: "label-shadow",
+      kind: "text",
+      x: 40,
+      y: 50,
+      text: "Choke point",
+      fontSize: 48,
+      width: 280,
+      fontFamily: "rounded",
+      bold: false,
+      italic: false,
+      align: "center",
+      color: "#fff",
+      background: "#111318",
+      outlined: false,
+      roundedBackground: true,
+    };
+    const shadowed: EditorTextElement = { ...label, dropShadow: true };
+
+    expect(annotationHasDropShadow(textDropShadowStyle(label))).toBe(false);
+    expect(annotationDropShadowPad(textDropShadowStyle(label))).toBe(0);
+    expect(annotationHasDropShadow(textDropShadowStyle(shadowed))).toBe(true);
+    expect(annotationDropShadowPad(textDropShadowStyle(shadowed))).toBeGreaterThan(0);
+
+    const layout = textLayoutBounds(label);
+    const painted = elementBounds(shadowed);
+    expect(layout).toEqual(textLayoutBounds(shadowed));
+    expect(painted.x).toBeLessThan(layout.x);
+    expect(painted.y).toBeLessThan(layout.y);
+    expect(painted.width).toBeGreaterThan(layout.width);
+    expect(painted.height).toBeGreaterThan(layout.height);
+    expect(elementBounds(label)).toEqual(layout);
+
+    const outlined: EditorTextElement = {
+      ...label,
+      background: null,
+      outlined: true,
+      roundedBackground: false,
+      dropShadow: true,
+    };
+    expect(elementBounds(outlined).width).toBeGreaterThan(textLayoutBounds(outlined).width);
+
+    const kept = applyTextStylePreset({ ...shadowed, dropShadowStyle: {
+      color: "#000000",
+      opacity: 70,
+      blur: 12,
+      offsetX: 4,
+      offsetY: 8,
+    } }, "outlined");
+    expect(kept.dropShadow).toBe(true);
+    expect(kept.dropShadowStyle?.blur).toBe(12);
+    expect(kept.outlined).toBe(true);
+    expect(kept.background).toBeNull();
+
+    const placed = createPlacedTextElement({
+      id: "placed-shadow",
+      point: { x: 10, y: 10 },
+      fontSize: 32,
+      color: "#fff",
+      preset: "box",
+      dropShadow: true,
+    });
+    expect(placed.dropShadow).toBe(true);
   });
 
   it("hit-tests corner and edge resize handles and resizes from the opposite side", () => {

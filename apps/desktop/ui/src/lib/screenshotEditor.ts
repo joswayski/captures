@@ -280,6 +280,12 @@ export type EditorTextElement = EditorElementBase & {
   outlined: boolean;
   /** Soft rounded-rect background used by the Rounded Box preset. */
   roundedBackground: boolean;
+  /**
+   * Soft contact shadow under the whole label (plate if present, otherwise
+   * the glyphs). Omitted in older documents; treat missing as off.
+   */
+  dropShadow?: boolean;
+  dropShadowStyle?: DropShadowStyle;
 };
 
 /**
@@ -724,6 +730,8 @@ export function createPlacedTextElement(options: {
   fontSize: number;
   color: string;
   preset: TextStylePreset;
+  dropShadow?: boolean;
+  dropShadowStyle?: DropShadowStyle;
 }): EditorTextElement {
   const width = composingTextBoxWidth(options.fontSize);
   const align: EditorTextElement["align"] = textPresetPrefersCenter(options.preset)
@@ -746,6 +754,8 @@ export function createPlacedTextElement(options: {
     background: null,
     outlined: false,
     roundedBackground: false,
+    dropShadow: options.dropShadow,
+    dropShadowStyle: options.dropShadowStyle,
     locked: false,
     visible: true,
     opacity: 100,
@@ -766,6 +776,26 @@ export function textHasBackgroundPlate(element: Pick<EditorTextElement, "backgro
   return element.background !== null && element.background !== "";
 }
 
+/** Map type size onto the drawing shadow scale so a 48px label gets a similar pool to an 8–12px stroke. */
+export const TEXT_DROP_SHADOW_SIZE_RATIO = 0.22;
+
+export function textDropShadowReferenceSize(fontSize: number): number {
+  return Math.max(4, fontSize * TEXT_DROP_SHADOW_SIZE_RATIO);
+}
+
+/** Drawing-style shadow knobs for a text label, scaled from type size until customized. */
+export function textDropShadowStyle(
+  element: Pick<EditorTextElement, "color" | "fontSize" | "dropShadow" | "dropShadowStyle">,
+): ElementStyle {
+  return {
+    color: element.color,
+    fill: null,
+    strokeWidth: textDropShadowReferenceSize(element.fontSize),
+    dropShadow: element.dropShadow,
+    dropShadowStyle: element.dropShadowStyle,
+  };
+}
+
 /**
  * Layout size of wrapped text (no background padding).
  * Origin stays at `element.x` / `element.y`.
@@ -779,6 +809,41 @@ export function textContentSize(
     width: boxWidth,
     height: Math.max(1, lines.length) * element.fontSize * TEXT_LINE_HEIGHT_RATIO,
   };
+}
+
+/**
+ * Painted plate or glyph box without drop-shadow padding. Inline editing and
+ * type layout use this; selection/trim bounds add the shadow separately.
+ */
+export function textLayoutBounds(element: EditorTextElement): EditorRect {
+  const content = textContentSize(element);
+  if (!textHasBackgroundPlate(element)) {
+    return {
+      x: element.x,
+      y: element.y,
+      width: content.width,
+      height: content.height,
+    };
+  }
+  const pad = textBackgroundPad(element.fontSize);
+  return {
+    x: element.x - pad.x,
+    y: element.y - pad.y,
+    width: content.width + pad.x * 2,
+    height: content.height + pad.y * 2,
+  };
+}
+
+/** Background inset plus drop-shadow pad used when mapping resize handles back to type layout. */
+export function textInteractionPad(
+  element: EditorTextElement,
+  fontSize: number = element.fontSize,
+): { x: number; y: number } {
+  const plate = textHasBackgroundPlate(element)
+    ? textBackgroundPad(fontSize)
+    : { x: 0, y: 0 };
+  const shadow = annotationDropShadowPad(textDropShadowStyle({ ...element, fontSize }));
+  return { x: plate.x + shadow, y: plate.y + shadow };
 }
 
 /** Whether new text of this preset should default to centered alignment. */
@@ -3596,9 +3661,7 @@ export function resizeElement(
     const heightOnly = Math.abs(scaleX - 1) < 0.001 && Math.abs(scaleY - 1) >= 0.001;
     const autoWidth = isAutoWidthText(element);
     if (widthOnly && !autoWidth) {
-      const pad = textHasBackgroundPlate(element)
-        ? textBackgroundPad(element.fontSize)
-        : { x: 0, y: 0 };
+      const pad = textInteractionPad(element);
       return {
         ...element,
         x: nextBounds.x + pad.x,
@@ -3620,9 +3683,7 @@ export function resizeElement(
       8,
       512,
     );
-    const pad = textHasBackgroundPlate(element)
-      ? textBackgroundPad(nextFontSize)
-      : { x: 0, y: 0 };
+    const pad = textInteractionPad(element, nextFontSize);
     const originX = nextBounds.x + pad.x;
     const originY = nextBounds.y + pad.y;
     if (autoWidth) {
@@ -3700,22 +3761,14 @@ export function elementLocalBounds(element: ScreenshotElement): EditorRect {
     };
   }
   if (element.kind === "text") {
-    const content = textContentSize(element);
-    if (!textHasBackgroundPlate(element)) {
-      return {
-        x: element.x,
-        y: element.y,
-        width: content.width,
-        height: content.height,
-      };
-    }
-    // Include the painted bubble so Trim edges / selection hug the plate.
-    const pad = textBackgroundPad(element.fontSize);
+    const layout = textLayoutBounds(element);
+    const shadowPad = annotationDropShadowPad(textDropShadowStyle(element));
+    if (shadowPad <= 0) return layout;
     return {
-      x: element.x - pad.x,
-      y: element.y - pad.y,
-      width: content.width + pad.x * 2,
-      height: content.height + pad.y * 2,
+      x: layout.x - shadowPad,
+      y: layout.y - shadowPad,
+      width: layout.width + shadowPad * 2,
+      height: layout.height + shadowPad * 2,
     };
   }
   if (element.kind === "shape") {

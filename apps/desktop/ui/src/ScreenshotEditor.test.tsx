@@ -1044,6 +1044,36 @@ describe("ScreenshotEditor", () => {
       .toBe("transparent");
   });
 
+  it("lets a selected text label toggle a drop shadow", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Canvas width");
+
+    fireEvent.click(screen.getByRole("button", { name: "Text (T)" }));
+    const defaults = screen.getByRole("checkbox", { name: "Drop shadow" });
+    expect(defaults).not.toBeChecked();
+    expect(screen.queryByRole("slider", { name: "Shadow opacity" })).not.toBeInTheDocument();
+
+    setCanvasZoomPercent(100);
+    const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
+    canvas.setPointerCapture = vi.fn();
+    canvas.hasPointerCapture = vi.fn(() => true);
+    canvas.releasePointerCapture = vi.fn();
+    setCanvasBounds(canvas);
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 91,
+      clientX: 160,
+      clientY: 120,
+    });
+
+    const shadow = await screen.findByRole("checkbox", { name: "Drop shadow" });
+    expect(shadow).not.toBeChecked();
+    fireEvent.click(shadow);
+    expect(shadow).toBeChecked();
+    expect(screen.getByRole("slider", { name: "Shadow opacity" })).toBeInTheDocument();
+    expect(screen.getByText("Shadow color")).toBeInTheDocument();
+  });
+
   it("keeps inline edit chrome separate and portaled style samples contrast-safe", () => {
     expect(screenshotEditorStyles).toMatch(
       /\.screenshot-inline-text-frame::after\s*\{[^}]*border:\s*1px solid var\(--theme-accent\)/s,

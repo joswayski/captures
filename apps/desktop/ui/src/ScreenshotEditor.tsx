@@ -145,8 +145,10 @@ import {
   TEXT_OPTICAL_CENTER_NUDGE_RATIO,
   textBackgroundPad,
   textBackgroundRadius,
+  textDropShadowStyle,
   textGlyphDrawY,
   textHasBackgroundPlate,
+  textLayoutBounds,
   textStylePreset,
   wrapTextLines,
   translateElement,
@@ -995,8 +997,8 @@ function drawText(
   const anchorX = element.align === "center"
     ? element.x + boxWidth / 2
     : element.align === "right" ? element.x + boxWidth : element.x;
-  if (textHasBackgroundPlate(element)) {
-    context.fillStyle = element.background!;
+  const shadowStyle = textDropShadowStyle(element);
+  const paintPlate = () => {
     const pad = textBackgroundPad(element.fontSize);
     const backgroundX = element.x - pad.x;
     const backgroundY = element.y - pad.y;
@@ -1020,26 +1022,36 @@ function drawText(
     } else {
       context.fillRect(backgroundX, backgroundY, backgroundWidth, backgroundHeight);
     }
+  };
+  const paintGlyphs = () => {
+    context.fillStyle = element.color;
+    context.strokeStyle = element.color;
+    context.lineWidth = textOutlineWidth(element.fontSize);
+    context.lineJoin = "round";
+    lines.forEach((line, index) => {
+      const sample = line || " ";
+      const draw = textGlyphDrawY(
+        element.y,
+        element.fontSize,
+        index,
+        context.measureText(sample),
+      );
+      context.textBaseline = draw.baseline;
+      if (element.outlined) {
+        context.strokeText(sample, anchorX, draw.y);
+      } else {
+        context.fillText(sample, anchorX, draw.y);
+      }
+    });
+  };
+  if (textHasBackgroundPlate(element)) {
+    // Shadow the plate once so glyphs sitting on it do not cast a second pool.
+    context.fillStyle = element.background!;
+    paintAnnotationInk(context, shadowStyle, paintPlate);
+    paintGlyphs();
+  } else {
+    paintAnnotationInk(context, shadowStyle, paintGlyphs);
   }
-  context.fillStyle = element.color;
-  context.strokeStyle = element.color;
-  context.lineWidth = textOutlineWidth(element.fontSize);
-  context.lineJoin = "round";
-  lines.forEach((line, index) => {
-    const sample = line || " ";
-    const draw = textGlyphDrawY(
-      element.y,
-      element.fontSize,
-      index,
-      context.measureText(sample),
-    );
-    context.textBaseline = draw.baseline;
-    if (element.outlined) {
-      context.strokeText(sample, anchorX, draw.y);
-    } else {
-      context.fillText(sample, anchorX, draw.y);
-    }
-  });
   context.restore();
 }
 
@@ -2534,7 +2546,7 @@ export function ScreenshotEditor() {
 
   const inlineTextLayout = useMemo(() => {
     if (!editingText) return null;
-    const localBounds = elementLocalBounds(editingText);
+    const localBounds = textLayoutBounds(editingText);
     const pad = textHasBackgroundPlate(editingText)
       ? textBackgroundPad(editingText.fontSize)
       : { x: 0, y: 0 };
@@ -3649,6 +3661,8 @@ export function ScreenshotEditor() {
         fontSize: defaultFontSize,
         color: defaultStyle.color,
         preset: defaultTextStyle,
+        dropShadow: defaultStyle.dropShadow,
+        dropShadowStyle: defaultStyle.dropShadowStyle,
       });
       // Fully off-canvas text still grows the document so the label is not lost.
       const withText = { ...current, elements: [...current.elements, element] };
@@ -5728,10 +5742,10 @@ export function ScreenshotEditor() {
                   color: editingText.outlined ? "transparent" : editingText.color,
                   backgroundColor: editingText.background ?? "transparent",
                   borderRadius: editingText.roundedBackground
-                    ? textBackgroundRadius(
+                      ? textBackgroundRadius(
                       editingText,
-                      elementLocalBounds(editingText).width,
-                      elementLocalBounds(editingText).height,
+                      textLayoutBounds(editingText).width,
+                      textLayoutBounds(editingText).height,
                     ) * displayScale
                     : undefined,
                   caretColor: editingText.color,
@@ -6831,6 +6845,18 @@ export function ScreenshotEditor() {
                 ))}
               />
             )}
+            <DropShadowFields
+              style={textDropShadowStyle(selected)}
+              onChange={(next) => updateSelected((element) => (
+                element.kind === "text"
+                  ? {
+                    ...element,
+                    dropShadow: next.dropShadow,
+                    dropShadowStyle: next.dropShadowStyle,
+                  }
+                  : element
+              ))}
+            />
           </section>
         )}
 
@@ -7044,6 +7070,19 @@ export function ScreenshotEditor() {
                     onChange={setDefaultFontSize}
                   />
                 </label>
+                <DropShadowFields
+                  style={textDropShadowStyle({
+                    color: defaultStyle.color,
+                    fontSize: defaultFontSize,
+                    dropShadow: defaultStyle.dropShadow,
+                    dropShadowStyle: defaultStyle.dropShadowStyle,
+                  })}
+                  onChange={(next) => setDefaultStyle((style) => ({
+                    ...style,
+                    dropShadow: next.dropShadow,
+                    dropShadowStyle: next.dropShadowStyle,
+                  }))}
+                />
               </>
             ) : (
               <>
