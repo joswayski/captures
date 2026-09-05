@@ -42,7 +42,7 @@ describe("mini-preview file-drop landing", () => {
   it("shakes with shared duration and spacing tokens", () => {
     expect(designTokens).toMatch(/--thumbnail-drop-reject-duration:\s*var\(--dur-5\)/);
     expect(designTokens).toMatch(/--thumbnail-drop-reject-ease:\s*linear/);
-    expect(designTokens).toMatch(/--thumbnail-drop-reject-x-1:\s*var\(--s-4\)/);
+    expect(designTokens).toMatch(/--thumbnail-drop-reject-x-1:\s*var\(--s-5\)/);
     expect(designTokens).not.toMatch(/--thumbnail-drop-reject-x-5:/);
     expect(THUMBNAIL_DROP_REJECT_MS).toBe(420);
     expect(thumbnailStyles).toMatch(

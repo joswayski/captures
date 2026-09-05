@@ -7339,8 +7339,8 @@ export function ThumbnailCard({
         setDropRejected(true);
       });
     };
-    const start = window.setTimeout(kick, 640);
-    const loop = window.setInterval(kick, 1_600);
+    const start = window.setTimeout(kick, 400);
+    const loop = window.setInterval(kick, 1_000);
     return () => {
       window.clearTimeout(start);
       window.clearInterval(loop);
