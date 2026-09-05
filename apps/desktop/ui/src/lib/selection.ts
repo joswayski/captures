@@ -86,6 +86,41 @@ export function windowListingIsReady(windowsReady: boolean | undefined): boolean
   return windowsReady !== false;
 }
 
+type WindowTargetSelection = {
+  id: string;
+  snapshot_url: string;
+  display: { id: string };
+  windows: readonly unknown[];
+  shell_chrome?: readonly unknown[];
+  windows_ready?: boolean;
+};
+
+/**
+ * A New Capture wake can re-emit the original deferred payload after window
+ * listing has already finished. Keep the ready targets so switching to Window
+ * still has something to highlight and click.
+ */
+export function keepReadyWindowTargets<T extends WindowTargetSelection>(
+  previous: T,
+  incoming: T,
+): T {
+  if (
+    previous.id !== incoming.id
+    || previous.snapshot_url !== incoming.snapshot_url
+    || previous.display.id !== incoming.display.id
+    || !windowListingIsReady(previous.windows_ready)
+    || windowListingIsReady(incoming.windows_ready)
+  ) {
+    return incoming;
+  }
+  return {
+    ...incoming,
+    windows: previous.windows,
+    shell_chrome: previous.shell_chrome,
+    windows_ready: previous.windows_ready,
+  } as T;
+}
+
 export type CapturePointerHitKind = "window" | "chrome";
 
 /**
