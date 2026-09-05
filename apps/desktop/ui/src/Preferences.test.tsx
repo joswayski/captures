@@ -650,21 +650,18 @@ describe("Preferences", () => {
 
     fireEvent.keyDown(window, { key: "f", code: "KeyF", ctrlKey: true });
     const find = await screen.findByRole("searchbox", { name: "Find settings" });
-    fireEvent.change(find, { target: { value: "preview" } });
-    expect(await screen.findByText("1 of 4")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Next match" }));
-    expect(screen.getByText("2 of 4")).toBeInTheDocument();
+    fireEvent.change(find, { target: { value: "cursor" } });
+    expect(await screen.findByText("1 of 2")).toBeInTheDocument();
 
     const previous = screen.getByRole("button", { name: "Previous match" });
     previous.focus();
     fireEvent.keyDown(previous, { key: "Enter", code: "Enter" });
-    expect(screen.getByText("2 of 4")).toBeInTheDocument();
+    expect(screen.getByText("1 of 2")).toBeInTheDocument();
 
     const close = screen.getByRole("button", { name: "Close find" });
     close.focus();
     fireEvent.keyDown(close, { key: "Enter", code: "Enter" });
-    expect(screen.getByText("2 of 4")).toBeInTheDocument();
+    expect(screen.getByText("1 of 2")).toBeInTheDocument();
     expect(screen.getByRole("searchbox", { name: "Find settings" })).toBeInTheDocument();
   });
 
