@@ -1684,6 +1684,16 @@ describe("ScreenshotEditor", () => {
       .toHaveValue("100");
     expect(within(layerSettings).getByRole("combobox", { name: "Blend mode" }))
       .toHaveTextContent("Normal");
+    fireEvent.click(within(layerSettings).getByRole("combobox", { name: "Blend mode" }));
+    const blendMenu = screen.getByRole("listbox", { name: "Blend mode" });
+    expect(blendMenu.parentElement).toBe(document.body);
+    const multiply = screen.getByRole("option", { name: "Multiply" });
+    fireEvent.pointerDown(multiply);
+    fireEvent.click(multiply);
+    expect(screen.getByRole("dialog", {
+      name: "Layer settings for Reference image",
+    })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Blend mode" })).toHaveTextContent("Multiply");
     fireEvent.change(within(layerSettings).getByRole("slider", { name: "Layer opacity" }), {
       target: { value: "65" },
     });
@@ -3265,6 +3275,22 @@ describe("ScreenshotEditor", () => {
     } finally {
       window.Image = originalImage;
     }
+  });
+
+  it("portals the output size menu so the editor cannot clip it", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Canvas width");
+    openExportSettings();
+    fireEvent.click(screen.getByRole("combobox", { name: "Output size" }));
+    const listbox = screen.getByRole("listbox", { name: "Output size" });
+    expect(listbox.parentElement).toBe(document.body);
+    expect(document.querySelector(".screenshot-editor")?.contains(listbox)).toBe(false);
+    fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
+    expect(screen.getByRole("listbox", { name: "Save quality" }).parentElement)
+      .toBe(document.body);
+    fireEvent.click(screen.getByRole("combobox", { name: "Format" }));
+    expect(screen.getByRole("listbox", { name: "Format" }).parentElement)
+      .toBe(document.body);
   });
 
   it("supports explicit custom output width and height", async () => {
