@@ -533,6 +533,30 @@ describe("ThumbnailCard", () => {
     expect(invoke).not.toHaveBeenCalledWith("dismiss_artifact", expect.anything());
   });
 
+  it("loops the self-drop shake in the design harness after the card arrives", async () => {
+    render(
+      <ThumbnailCard
+        artifact={artifact(null)}
+        clipboardCurrent
+        viewerActive={false}
+        previewDropReject
+        onRemoved={() => undefined}
+      />,
+    );
+    const card = screen.getByRole("article");
+    await act(async () => {
+      fireEvent.load(screen.getByRole("img", { name: "Screenshot preview" }));
+      await Promise.resolve();
+    });
+    const arrived = new Event("animationend", { bubbles: true });
+    Object.defineProperty(arrived, "animationName", { value: "thumbnail-arrive" });
+    fireEvent(card, arrived);
+
+    await waitFor(() => {
+      expect(card).toHaveClass("thumbnail-drop-rejected");
+    }, { timeout: 2_000 });
+  });
+
   it("keeps the preview when the native file drag is cancelled", async () => {
     vi.mocked(invoke).mockImplementation(async (command: string) => {
       if (command === "prepare_artifact_drag") {

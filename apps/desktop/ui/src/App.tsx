@@ -121,6 +121,7 @@ import {
   previewFileDropShouldDismiss,
   previewFileDropShouldReject,
   THUMBNAIL_DROP_REJECT_ANIMATION,
+  THUMBNAIL_DROP_REJECT_MS,
 } from "./lib/thumbnailFileDrag";
 import {
   CollapsedThumbnailStackDrag,
@@ -6643,6 +6644,11 @@ export function Thumbnail() {
 
   const collapsed = stackMotion === "collapsed";
   const compact = stackMotion !== "expanded";
+  const rejectQuery = query("reject");
+  const previewRejectShake = !compact
+    && rejectQuery !== null
+    && rejectQuery !== "0"
+    && rejectQuery !== "false";
   const stackAnimating = stackMotion === "collapsing" || stackMotion === "expanding";
   const exitingOnly = artifacts.every(({ id }) => exitingArtifactIds.has(id));
   const controlsDisabled = stackAnimating || exitingOnly;
@@ -7115,6 +7121,10 @@ export function Thumbnail() {
             stackCollapsed={compact}
             stackDepth={artifacts.length - artifacts.indexOf(artifact) - 1}
             expandFromTransform={expandFromTransforms.get(artifact.id)}
+            previewDropReject={
+              previewRejectShake
+              && artifacts.length - artifacts.indexOf(artifact) - 1 === 0
+            }
             onRemoved={(artifactId) => {
               setArtifactExiting(artifactId, false);
               setArtifacts((current) => current.filter(({ id }) => id !== artifactId));
@@ -7227,6 +7237,7 @@ export function ThumbnailCard({
   stackCollapsed = false,
   stackDepth = 0,
   expandFromTransform,
+  previewDropReject = false,
   onRemoved,
   onExitChange,
 }: {
@@ -7238,6 +7249,8 @@ export function ThumbnailCard({
   stackCollapsed?: boolean;
   stackDepth?: number;
   expandFromTransform?: string;
+  /** Dev harness: loop the self-drop “no” shake on this card. */
+  previewDropReject?: boolean;
   onRemoved: (artifactId: string) => void;
   onExitChange?: (artifactId: string, exiting: boolean) => void;
 }) {
@@ -7313,6 +7326,7 @@ export function ThumbnailCard({
   const exitingRef = useRef(false);
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const exitFallbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dropRejectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   /** Synchronous lock check for async/timer paths (state may lag a frame). */
   const isExitLocked = () => exitingRef.current;
@@ -7333,12 +7347,30 @@ export function ThumbnailCard({
     return () => {
       if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
       if (exitFallbackTimer.current) clearTimeout(exitFallbackTimer.current);
+      if (dropRejectTimer.current) clearTimeout(dropRejectTimer.current);
     };
   }, []);
 
   useLayoutEffect(() => {
     restoreThumbnailStackShiftClass(cardRef.current);
   });
+
+  useEffect(() => {
+    if (!previewDropReject || !arrived || stackCollapsed) return;
+    const kick = () => {
+      setDropRejected(false);
+      requestAnimationFrame(() => {
+        if (exitingRef.current) return;
+        setDropRejected(true);
+      });
+    };
+    const start = window.setTimeout(kick, 400);
+    const loop = window.setInterval(kick, 1_000);
+    return () => {
+      window.clearTimeout(start);
+      window.clearInterval(loop);
+    };
+  }, [previewDropReject, arrived, stackCollapsed]);
 
   // After presence leaves, drop leave-held labels/ring once the ease finishes,
   // then hold the plain Edit icon for a short recovery window.
@@ -7428,9 +7460,18 @@ export function ThumbnailCard({
 
   const playDropReject = () => {
     setDropRejected(false);
+    if (dropRejectTimer.current) {
+      clearTimeout(dropRejectTimer.current);
+      dropRejectTimer.current = null;
+    }
     requestAnimationFrame(() => {
       if (isExitLocked() || isExiting) return;
       setDropRejected(true);
+      // animationend can be skipped in a hidden webview; don’t leave the class on.
+      dropRejectTimer.current = setTimeout(() => {
+        dropRejectTimer.current = null;
+        setDropRejected(false);
+      }, THUMBNAIL_DROP_REJECT_MS);
     });
   };
 
@@ -7667,6 +7708,10 @@ export function ThumbnailCard({
           setArrived(true);
         }
         if (event.animationName === THUMBNAIL_DROP_REJECT_ANIMATION) {
+          if (dropRejectTimer.current) {
+            clearTimeout(dropRejectTimer.current);
+            dropRejectTimer.current = null;
+          }
           setDropRejected(false);
         }
       }}

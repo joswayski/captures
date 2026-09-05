@@ -169,7 +169,7 @@ html[data-preview-harness-view="thumbnail"] #root {
   filter: blur(3px);
 }
 
-.thumbnail-card.thumbnail-ready:not(.thumbnail-exiting) {
+.thumbnail-card.thumbnail-ready:not(.thumbnail-exiting):not(.thumbnail-drop-rejected) {
   animation: thumbnail-arrive 0.52s cubic-bezier(0.22, 0.65, 0.28, 1);
 }
 
@@ -186,7 +186,7 @@ html[data-preview-harness-view="thumbnail"] #root {
   }
 }
 
-.thumbnail-card.thumbnail-ready.thumbnail-arrived {
+.thumbnail-card.thumbnail-ready.thumbnail-arrived:not(.thumbnail-drop-rejected) {
   animation: none;
 }
 
@@ -215,9 +215,26 @@ html[data-preview-harness-view="thumbnail"] #root {
  * macOS-style “no” shake when the file is dropped back on this stack.
  * Use `translate` so compact-pile `transform` still composes if a reject
  * somehow runs there; expanded cards are the file-drag source.
+ *
+ * Arrive / arrived set `animation` at (0,3,0). Keep reject at least that
+ * specific so a settled card actually shakes instead of replaying arrive
+ * (fade + rise) or staying still under `animation: none`.
  */
-.thumbnail-card.thumbnail-drop-rejected {
-  animation: thumbnail-drop-reject var(--thumbnail-drop-reject-duration) var(--ease-out);
+.thumbnail-card.thumbnail-drop-rejected,
+.thumbnail-card.thumbnail-ready.thumbnail-drop-rejected,
+.thumbnail-card.thumbnail-ready.thumbnail-arrived.thumbnail-drop-rejected {
+  animation: thumbnail-drop-reject var(--thumbnail-drop-reject-duration)
+    var(--thumbnail-drop-reject-ease);
+}
+
+.thumbnail-card.thumbnail-drop-rejected img,
+html:not(.thumbnail-native-tracking) .thumbnail-card.thumbnail-drop-rejected:hover img,
+.thumbnail-card.thumbnail-drop-rejected:focus-within img,
+.thumbnail-card.thumbnail-drop-rejected[data-thumbnail-native-active="true"] img {
+  opacity: 1;
+  filter: blur(0) brightness(1);
+  transform: scale(1);
+  transition: none;
 }
 
 @keyframes thumbnail-drop-reject {
@@ -225,20 +242,23 @@ html[data-preview-harness-view="thumbnail"] #root {
   100% {
     translate: 0 0;
   }
-  16% {
+  10% {
     translate: calc(-1 * var(--thumbnail-drop-reject-x-1)) 0;
   }
-  32% {
-    translate: var(--thumbnail-drop-reject-x-2) 0;
+  30% {
+    translate: var(--thumbnail-drop-reject-x-1) 0;
   }
-  48% {
-    translate: calc(-1 * var(--thumbnail-drop-reject-x-3)) 0;
+  50% {
+    translate: calc(-1 * var(--thumbnail-drop-reject-x-2)) 0;
   }
-  64% {
-    translate: var(--thumbnail-drop-reject-x-4) 0;
+  65% {
+    translate: var(--thumbnail-drop-reject-x-3) 0;
   }
   80% {
-    translate: calc(-1 * var(--thumbnail-drop-reject-x-5)) 0;
+    translate: calc(-1 * var(--thumbnail-drop-reject-x-4)) 0;
+  }
+  90% {
+    translate: var(--thumbnail-drop-reject-x-4) 0;
   }
 }
 
@@ -2478,7 +2498,9 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
     transform: scale(1.015);
   }
 
-  .thumbnail-card.thumbnail-drop-rejected {
+  .thumbnail-card.thumbnail-drop-rejected,
+  .thumbnail-card.thumbnail-ready.thumbnail-drop-rejected,
+  .thumbnail-card.thumbnail-ready.thumbnail-arrived.thumbnail-drop-rejected {
     animation: none;
   }
 

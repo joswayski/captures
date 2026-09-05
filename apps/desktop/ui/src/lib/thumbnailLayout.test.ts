@@ -410,6 +410,7 @@ describe("thumbnail stack layout", () => {
     );
 
     expect(arrival?.[1]).toContain(":not(.thumbnail-exiting)");
+    expect(arrival?.[1]).toContain(":not(.thumbnail-drop-rejected)");
     expect(arrival?.[2]).not.toMatch(/\b(?:both|forwards)\b/);
   });
 
