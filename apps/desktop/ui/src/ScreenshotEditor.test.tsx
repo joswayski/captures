@@ -2259,7 +2259,9 @@ describe("ScreenshotEditor", () => {
     expect(screen.queryByText(/JPEG will fill in transparent areas/i))
       .not.toBeInTheDocument();
     expect(
-      screen.getByText("Keeps original quality as JPEG and saves a new file."),
+      screen.getByText(
+        "Save writes a new JPEG at original quality and leaves the original untouched.",
+      ),
     ).toBeInTheDocument();
 
     const canvasToolbar = screen.getByRole("group", { name: "Canvas" });
@@ -2273,7 +2275,9 @@ describe("ScreenshotEditor", () => {
     expect(warning).toHaveClass("screenshot-export-hint", "is-warning");
     expect(warning).toHaveAttribute("role", "status");
     expect(
-      screen.queryByText("Keeps original quality as JPEG and saves a new file."),
+      screen.queryByText(
+        "Save writes a new JPEG at original quality and leaves the original untouched.",
+      ),
     ).not.toBeInTheDocument();
 
     fireEvent.click(format);
@@ -2285,7 +2289,9 @@ describe("ScreenshotEditor", () => {
     expect(screen.queryByText(/JPEG will fill in transparent areas/i))
       .not.toBeInTheDocument();
     expect(
-      screen.getByText("Keeps original quality as PNG and replaces the original."),
+      screen.getByText(
+        "Save keeps original quality as PNG and overwrites the original.",
+      ),
     ).toBeInTheDocument();
   });
 
@@ -2954,7 +2960,9 @@ describe("ScreenshotEditor", () => {
     expect(screen.queryByRole("spinbutton", { name: "Maximum file size" }))
       .not.toBeInTheDocument();
     expect(
-      screen.getByText("Keeps original quality as PNG and replaces the original."),
+      screen.getByText(
+        "Save keeps original quality as PNG and overwrites the original.",
+      ),
     ).toBeInTheDocument();
     expect(screen.queryByRole("group", { name: "Compression comparison" }))
       .not.toBeInTheDocument();
@@ -2978,7 +2986,9 @@ describe("ScreenshotEditor", () => {
     expect(screen.queryByRole("spinbutton", { name: "Maximum file size" }))
       .not.toBeInTheDocument();
     expect(
-      screen.getByText("Compressed PNG replaces the original; turn on Save as new file to keep it."),
+      screen.getByText(
+        "Save overwrites the original with compressed PNG. Turn on Save as new file to keep it.",
+      ),
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Compare before / after" }))
       .not.toBeInTheDocument();
@@ -3032,7 +3042,9 @@ describe("ScreenshotEditor", () => {
       .toHaveTextContent("Balanced");
     // Source is still a PNG path, so a JPEG save is always a new file.
     expect(
-      screen.getByText("Compressed JPEG saves as a new file and leaves the original untouched."),
+      screen.getByText(
+        "Save writes a compressed JPEG and leaves the original untouched.",
+      ),
     ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
@@ -3534,6 +3546,9 @@ describe("ScreenshotEditor", () => {
     // No permanent original yet — Save as new file is hidden until the first save.
     expect(screen.queryByRole("checkbox", { name: "Save as new file" }))
       .not.toBeInTheDocument();
+    expect(
+      screen.getByText("Save writes a PNG at original quality."),
+    ).toBeInTheDocument();
     expect(invoke).toHaveBeenCalledWith("default_screenshot_edit_path", {
       artifactId: pathless.id,
       format: "png",
@@ -3684,6 +3699,34 @@ describe("ScreenshotEditor", () => {
     }
   });
 
+  it("places the save hint next to Save, not Copy, and only writes a new file when asked", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Canvas width");
+
+    const copy = screen.getByRole("button", { name: "Copy image" });
+    const save = screen.getByRole("button", { name: "Save" });
+    const overwriteHint = "Save keeps original quality as PNG and overwrites the original.";
+    const newFileHint = "Save writes a new PNG at original quality and leaves the original untouched.";
+    const hint = screen.getByText(overwriteHint);
+
+    expect(copy.compareDocumentPosition(hint) & Node.DOCUMENT_POSITION_FOLLOWING)
+      .not.toBe(0);
+    expect(hint.compareDocumentPosition(save) & Node.DOCUMENT_POSITION_FOLLOWING)
+      .not.toBe(0);
+    expect(copy.closest(".screenshot-export-secondary")).not.toBeNull();
+    expect(save.closest(".screenshot-export-actions")).not.toBeNull();
+    expect(hint.closest(".screenshot-export-status")).not.toBeNull();
+    expect(save).toHaveAttribute("title", overwriteHint);
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Save as new file" }));
+    expect(screen.getByText(newFileHint)).toBeInTheDocument();
+    expect(screen.queryByText(overwriteHint)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save" })).toHaveAttribute(
+      "title",
+      newFileHint,
+    );
+  });
+
   it("keeps copy and save available when the original capture is deleted", async () => {
     type ArtifactRemovedHandler = (event: { payload: string }) => void;
     let artifactRemoved: ArtifactRemovedHandler | null = null;
@@ -3700,12 +3743,14 @@ describe("ScreenshotEditor", () => {
     expect(screen.getByRole("button", { name: "Copy image" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Copy image" })).toHaveAttribute(
       "title",
-      "Copy the edited image to the clipboard",
+      "Copy the edited image to the clipboard. Does not save a file.",
     );
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
     expect(screen.getByRole("checkbox", { name: "Save as new file" })).not.toBeChecked();
     expect(
-      screen.getByText("Keeps original quality as PNG and replaces the original."),
+      screen.getByText(
+        "Save keeps original quality as PNG and overwrites the original.",
+      ),
     ).toBeInTheDocument();
 
     expect(artifactRemoved).not.toBeNull();
@@ -3719,7 +3764,9 @@ describe("ScreenshotEditor", () => {
       ),
     ).toHaveClass("screenshot-export-hint");
     expect(
-      screen.queryByText("Keeps original quality as PNG and replaces the original."),
+      screen.queryByText(
+        "Save keeps original quality as PNG and overwrites the original.",
+      ),
     ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy image" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
@@ -3754,7 +3801,7 @@ describe("ScreenshotEditor", () => {
       render(<ScreenshotEditor />);
       await screen.findByLabelText("Canvas width");
 
-      const hint = "Keeps original quality as PNG and replaces the original.";
+      const hint = "Save keeps original quality as PNG and overwrites the original.";
       expect(screen.getByText(hint)).toBeInTheDocument();
 
       fireEvent.click(screen.getByRole("button", { name: "Copy image" }));
