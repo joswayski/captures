@@ -228,9 +228,23 @@ export const THUMBNAIL_STACK_ANCHOR_TOP_GRAVITY = -0.2;
 /** Switch back to a bottom pile once gravity is clearly in the lower band. */
 export const THUMBNAIL_STACK_ANCHOR_BOTTOM_GRAVITY = 0.2;
 
-function clampGravity(value: number): number {
-  if (!Number.isFinite(value)) return 1;
+/** Switch Show less to the right once travel is clearly in the right band. */
+export const THUMBNAIL_STACK_SIDE_RIGHT_BIAS = 0.2;
+
+/** Switch Show less back to the left once travel is clearly in the left band. */
+export const THUMBNAIL_STACK_SIDE_LEFT_BIAS = -0.2;
+
+function clampSignedAxis(value: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback;
   return Math.min(1, Math.max(-1, value));
+}
+
+function clampGravity(value: number): number {
+  return clampSignedAxis(value, 1);
+}
+
+function clampBias(value: number): number {
+  return clampSignedAxis(value, -1);
 }
 
 /**
@@ -304,6 +318,47 @@ export function thumbnailStackHarnessCardTop({
     - THUMBNAIL_STACK_CONTROL_GUTTER_PX
     - THUMBNAIL_CARD_HEIGHT_PX
   );
+}
+
+/**
+ * Map a 0 (left) … 1 (right) travel through the work area onto signed side
+ * bias. -1 = left, +1 = right.
+ */
+export function thumbnailStackBiasFromNormalizedX(xFromLeft: number): number {
+  if (!Number.isFinite(xFromLeft)) return -1;
+  return clampBias(2 * xFromLeft - 1);
+}
+
+/** Horizontal travel of a 340px stack frame through a work area. */
+export function thumbnailStackBiasFromFrameX(
+  x: number,
+  workX: number,
+  workWidth: number,
+  frameWidth = 340,
+): number {
+  const travel = Math.max(1, workWidth - frameWidth);
+  return thumbnailStackBiasFromNormalizedX((x - workX) / travel);
+}
+
+export function thumbnailStackBiasFromHarness(
+  offsetX: number,
+  viewportWidth: number,
+  frameWidth = 340,
+): number {
+  return thumbnailStackBiasFromFrameX(offsetX, 0, viewportWidth, frameWidth);
+}
+
+export function thumbnailStackSideFromBias(
+  bias: number,
+  current: ThumbnailStackSide = "left",
+): ThumbnailStackSide {
+  if (current === "left" && bias >= THUMBNAIL_STACK_SIDE_RIGHT_BIAS) {
+    return "right";
+  }
+  if (current === "right" && bias <= THUMBNAIL_STACK_SIDE_LEFT_BIAS) {
+    return "left";
+  }
+  return current;
 }
 
 /** Convert a harness `#root` translation between top and bottom anchoring. */

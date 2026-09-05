@@ -150,10 +150,14 @@ import {
   thumbnailCollapsedFrameHeight,
   thumbnailStackAnchorFromGravity,
   thumbnailStackAnchorFromPlacement,
+  thumbnailStackBiasFromFrameX,
+  thumbnailStackBiasFromHarness,
   thumbnailStackContentHeight,
   thumbnailStackGravityFromHarness,
   thumbnailStackGravityFromPlacement,
   thumbnailStackGravityFromWorkArea,
+  thumbnailStackSideFromBias,
+  thumbnailStackSideFromPlacement,
   thumbnailStackVisualPileBottom,
   thumbnailStackNeedsScrollport,
   thumbnailStackOverflow,
@@ -167,6 +171,7 @@ import {
   THUMBNAIL_STACK_SCROLLPORT_CLASS,
   waitForThumbnailStackSettle,
   type ThumbnailStackAnchor,
+  type ThumbnailStackSide,
 } from "./lib/thumbnailLayout";
 import {
   EDITOR_PRESENCE_LEAVE_MS,
@@ -5805,6 +5810,8 @@ export function Thumbnail() {
   >("expanded");
   const [stackAnchor, setStackAnchor] = useState<ThumbnailStackAnchor>("bottom");
   const stackAnchorRef = useRef<ThumbnailStackAnchor>("bottom");
+  const [stackSide, setStackSide] = useState<ThumbnailStackSide>("left");
+  const stackSideRef = useRef<ThumbnailStackSide>("left");
   const placementRef = useRef<MiniPreviewPlacement>(DEFAULT_MINI_PREVIEW_PLACEMENT);
   const [stackHoverReady, setStackHoverReady] = useState(false);
   const [stackMinimizeRun, setStackMinimizeRun] = useState(false);
@@ -5891,10 +5898,17 @@ export function Thumbnail() {
     pendingNewestReveal.current = true;
   }, []);
 
+  const commitStackSide = useCallback((nextSide: ThumbnailStackSide) => {
+    if (stackSideRef.current === nextSide) return;
+    stackSideRef.current = nextSide;
+    setStackSide(nextSide);
+  }, []);
+
   const applyMiniPreviewHome = useCallback((placement: MiniPreviewPlacement) => {
     placementRef.current = placement;
     const nextAnchor = thumbnailStackAnchorFromPlacement(placement);
     commitStackAnchor(nextAnchor);
+    commitStackSide(thumbnailStackSideFromPlacement(placement));
     applyThumbnailStackGravity(
       stackRef.current,
       thumbnailStackGravityFromPlacement(placement),
@@ -5905,7 +5919,7 @@ export function Thumbnail() {
     writeHarnessStackOffset(home.x, home.y, document.documentElement, viewport, {
       anchor: home.anchor,
     });
-  }, [commitStackAnchor]);
+  }, [commitStackAnchor, commitStackSide]);
 
   useEffect(() => {
     let active = true;
@@ -6840,6 +6854,10 @@ export function Thumbnail() {
             bottomGap: 12,
           }),
         );
+        commitStackSide(thumbnailStackSideFromBias(
+          thumbnailStackBiasFromFrameX(next.x, work.x, work.width),
+          stackSideRef.current,
+        ));
         collapsedFrameRef.current = next;
         return next;
       } catch {
@@ -6872,6 +6890,10 @@ export function Thumbnail() {
         contentHeight,
       }),
     );
+    commitStackSide(thumbnailStackSideFromBias(
+      thumbnailStackBiasFromHarness(written.x, viewport.width),
+      stackSideRef.current,
+    ));
     collapsedFrameRef.current = written;
     return written;
   };
@@ -7153,6 +7175,7 @@ export function Thumbnail() {
         <div className={[
           "thumbnail-stack-toolbar",
           stackAnchor === "top" ? "thumbnail-stack-toolbar-anchor-top" : "",
+          stackSide === "right" ? "thumbnail-stack-toolbar-anchor-right" : "",
           stackMotion === "collapsing" ? "thumbnail-stack-toolbar-leaving" : "",
           stackMotion === "expanding" ? "thumbnail-stack-toolbar-entering" : "",
           exitingOnly && stackMotion !== "collapsing"
