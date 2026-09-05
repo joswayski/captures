@@ -9271,10 +9271,21 @@ mod tests {
                 .is_armed()
         );
         assert!(!captures_session::windows_escape_hook_should_swallow(false));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn leftover_mini_preview_chrome_must_not_steal_desktop_input() {
         assert!(captures_macos_window::thumbnail_refresh_must_not_force_hit_testing());
         assert!(captures_macos_window::thumbnail_passthrough_must_resign_key(true));
         assert!(!captures_macos_window::thumbnail_stale_poll_may_take_key_window());
         assert!(!captures_macos_window::thumbnail_stale_poll_may_disable_click_through());
+        assert!(captures_macos_window::thumbnail_stale_poll_must_resign_key());
+        assert!(!captures_macos_window::thumbnail_resign_active_may_retake_key());
+        assert!(captures_macos_window::thumbnail_foreign_mouse_click_must_resign_key());
+        assert!(!captures_macos_window::capture_escape_should_dispatch(
+            false, false, true
+        ));
     }
 
     #[test]

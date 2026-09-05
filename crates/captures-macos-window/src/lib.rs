@@ -13,7 +13,7 @@ pub use cursor_policy::{
     thumbnail_poll_is_live, thumbnail_refresh_must_not_force_hit_testing,
     thumbnail_resets_cursor_on_exit, thumbnail_resign_active_may_retake_key,
     thumbnail_stale_poll_may_disable_click_through, thumbnail_stale_poll_may_take_key_window,
-    thumbnail_unpolled_hover,
+    thumbnail_stale_poll_must_resign_key, thumbnail_unpolled_hover,
 };
 
 #[cfg(target_os = "macos")]

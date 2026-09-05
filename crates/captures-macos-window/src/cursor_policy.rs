@@ -173,13 +173,13 @@ impl ThumbnailHoverCursor {
         !matches!(self, Self::Default)
     }
 
-    /// Keep the last known interactive cursor when JS is frozen. Never promote
-    /// empty panel chrome to a live card: the collapsed stack keeps a tall
-    /// window, and treating that frame as a hit target steals keystrokes from
-    /// apps underneath.
+    /// Frozen JS cannot prove the pointer is still on a live card. Drop to
+    /// Default so leftover grab/pointer cannot keep the tall panel key over
+    /// empty chrome and steal typing from apps underneath.
     #[must_use]
     pub const fn unpolled_hover(self) -> Self {
-        self
+        let _ = self;
+        Self::Default
     }
 
     /// Grab/pointer are AppKit-owned. Default is a hole in the always-on-top
@@ -199,7 +199,7 @@ pub const fn thumbnail_poll_is_live(elapsed_ms: u64) -> bool {
 }
 
 /// Use the hit-tested kind while the JavaScript pointer poll is live. When
-/// WebKit timers are frozen, promote a pointer inside the stack immediately.
+/// WebKit timers are frozen, drop to Default instead of guessing.
 #[must_use]
 pub const fn thumbnail_unpolled_hover(
     poll_is_live: bool,
@@ -330,6 +330,13 @@ pub const fn thumbnail_refresh_must_not_force_hit_testing() -> bool {
     true
 }
 
+/// Frozen JS also cannot keep leftover key status. Remaining key over empty
+/// chrome is what lets clicks reach another app while typing stays in Captures.
+#[must_use]
+pub const fn thumbnail_stale_poll_must_resign_key() -> bool {
+    true
+}
+
 /// Region screenshot (⌘⇧4) claims the crosshair on key-down, not after
 /// modifiers come up or the freeze-frame paints.
 #[must_use]
@@ -386,7 +393,7 @@ mod tests {
         thumbnail_poll_is_live, thumbnail_refresh_must_not_force_hit_testing,
         thumbnail_resets_cursor_on_exit, thumbnail_resign_active_may_retake_key,
         thumbnail_stale_poll_may_disable_click_through, thumbnail_stale_poll_may_take_key_window,
-        thumbnail_unpolled_hover,
+        thumbnail_stale_poll_must_resign_key, thumbnail_unpolled_hover,
     };
 
     #[test]
@@ -581,11 +588,11 @@ mod tests {
         );
         assert_eq!(
             ThumbnailHoverCursor::Pointer.unpolled_hover(),
-            ThumbnailHoverCursor::Pointer
+            ThumbnailHoverCursor::Default
         );
         assert_eq!(
             ThumbnailHoverCursor::Grab.unpolled_hover(),
-            ThumbnailHoverCursor::Grab
+            ThumbnailHoverCursor::Default
         );
         assert!(ThumbnailHoverCursor::Pointer.is_interactive());
         assert!(ThumbnailHoverCursor::Pointer.claims_ns_cursor());
@@ -604,10 +611,15 @@ mod tests {
         );
         assert_eq!(
             thumbnail_unpolled_hover(false, ThumbnailHoverCursor::Grab),
+            ThumbnailHoverCursor::Default
+        );
+        assert_eq!(
+            thumbnail_unpolled_hover(true, ThumbnailHoverCursor::Grab),
             ThumbnailHoverCursor::Grab
         );
     }
 
+    #[test]
     fn stale_thumbnail_frame_hover_must_not_steal_desktop_input() {
         assert!(!thumbnail_stale_poll_may_disable_click_through());
         assert!(!thumbnail_stale_poll_may_take_key_window());
@@ -616,6 +628,7 @@ mod tests {
         assert!(!thumbnail_resign_active_may_retake_key());
         assert!(thumbnail_foreign_mouse_click_must_resign_key());
         assert!(thumbnail_refresh_must_not_force_hit_testing());
+        assert!(thumbnail_stale_poll_must_resign_key());
     }
 
     #[test]
