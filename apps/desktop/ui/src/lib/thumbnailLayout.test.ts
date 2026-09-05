@@ -389,6 +389,18 @@ describe("thumbnail stack layout", () => {
 
     expect(arrival?.[1]).toContain(":not(.thumbnail-exiting)");
     expect(arrival?.[2]).not.toMatch(/\b(?:both|forwards)\b/);
+    // `thumbnail-arrived { animation: none }` is more specific than dismiss /
+    // drop-reject. Keep those states out of the kill switch so Close can still
+    // slide the card out with the motion-blur streak.
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-card\.thumbnail-ready\.thumbnail-arrived:not\(\.thumbnail-exiting\):not\(\.thumbnail-drop-rejected\)\s*\{\s*animation:\s*none;/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-exit-dismiss\s*\{[^}]*animation:\s*thumbnail-dismiss/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /@keyframes thumbnail-dismiss\s*\{[\s\S]*?transform:\s*translateX\(-118px\)/,
+    );
   });
 
   it("keeps the blurred source above delete dust during the handoff", () => {
