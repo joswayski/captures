@@ -1108,7 +1108,7 @@ describe("Thumbnail", () => {
         path: null,
       },
     ];
-    vi.mocked(invoke).mockImplementation(async (command) => {
+    vi.mocked(invoke).mockImplementation(async (command, payload) => {
       if (command === "get_artifacts") return stacked;
       if (command === "get_clipboard_state") {
         return { revision: 0, artifact_id: stacked.at(-1)?.id };
@@ -1117,7 +1117,8 @@ describe("Thumbnail", () => {
         return new Promise(() => undefined);
       }
       if (command === "dismiss_all_artifacts") {
-        return stacked.map((item) => item.id);
+        const requested = (payload as { artifactIds?: string[] } | undefined)?.artifactIds;
+        return Array.isArray(requested) ? requested : [];
       }
       return undefined;
     });
@@ -1139,10 +1140,74 @@ describe("Thumbnail", () => {
     });
 
     expect(screen.queryByRole("article")).not.toBeInTheDocument();
-    expect(invoke).toHaveBeenCalledWith("dismiss_all_artifacts");
+    expect(invoke).toHaveBeenCalledWith("dismiss_all_artifacts", {
+      artifactIds: ["capture-1", "capture-2"],
+    });
     expect(invoke).not.toHaveBeenCalledWith("trash_artifact", expect.anything());
     expect(invoke).not.toHaveBeenCalledWith("save_artifact", expect.anything());
     expect(invoke).not.toHaveBeenCalledWith("dismiss_artifact", expect.anything());
+  });
+
+  it("leaves an in-flight saved delete on the stack so trash can still run", async () => {
+    const stacked = [
+      { ...artifact, id: "capture-1" },
+      { ...artifact, id: "capture-2" },
+      {
+        ...artifact,
+        id: "capture-3",
+        path: "/Users/example/Captures/three.png",
+      },
+    ];
+    vi.mocked(invoke).mockImplementation(async (command, payload) => {
+      if (command === "get_artifacts") return stacked;
+      if (command === "get_clipboard_state") {
+        return { revision: 0, artifact_id: stacked.at(-1)?.id };
+      }
+      if (command === "get_thumbnail_pointer_position") {
+        return new Promise(() => undefined);
+      }
+      if (command === "dismiss_all_artifacts") {
+        // Over-return every stack id the way a whole-stack drain would, so
+        // the frontend must ignore ids that were not requested.
+        return stacked.map((item) => item.id);
+      }
+      return undefined;
+    });
+
+    render(<Thumbnail />);
+    const cards = await screen.findAllByRole("article");
+    expect(cards).toHaveLength(3);
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(within(cards[2]).getByRole("button", { name: "Delete" }));
+      expect(cards[2]).toHaveClass("thumbnail-exit-delete");
+      expect(invoke).not.toHaveBeenCalledWith("trash_artifact", expect.anything());
+      expect(screen.getByRole("button", { name: "Clear all previews" })).toBeEnabled();
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Clear all previews" }));
+        await Promise.resolve();
+      });
+
+      expect(invoke).toHaveBeenCalledWith("dismiss_all_artifacts", {
+        artifactIds: ["capture-1", "capture-2"],
+      });
+      expect(invoke).not.toHaveBeenCalledWith("trash_artifact", expect.anything());
+      expect(screen.getAllByRole("article")).toHaveLength(1);
+      expect(cards[2]).toBeInTheDocument();
+      expect(cards[2]).toHaveClass("thumbnail-exit-delete");
+      expect(screen.queryByRole("button", { name: "Clear all previews" })).toBeNull();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3_201);
+      });
+      expect(invoke).toHaveBeenCalledWith("trash_artifact", {
+        artifactId: "capture-3",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("latches the live compact pose so expand can start from a partial fan", async () => {

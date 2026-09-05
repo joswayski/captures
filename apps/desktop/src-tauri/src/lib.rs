@@ -2915,7 +2915,7 @@ fn remove_artifact(app: &AppHandle, state: &Arc<AppState>, artifact_id: &str) ->
     };
     if !removed {
         // Dismiss is idempotent so an in-flight card exit can finish after
-        // Clear all has already drained the stack.
+        // the artifact was already taken off the stack.
         return Ok(());
     }
     app.emit("artifact-removed", artifact_id)
@@ -2928,9 +2928,10 @@ fn remove_artifact(app: &AppHandle, state: &Arc<AppState>, artifact_id: &str) ->
 fn dismiss_all_artifacts(
     app: AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
+    artifact_ids: Vec<String>,
 ) -> CommandResult<Vec<String>> {
     let ids: Vec<String> = state
-        .take_preview_stack()
+        .take_preview_stack(&artifact_ids)
         .into_iter()
         .map(|artifact| artifact.id)
         .collect();

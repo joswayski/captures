@@ -6646,14 +6646,19 @@ export function Thumbnail() {
 
   const clearAllPreviews = () => {
     if (controlsDisabled || livePreviewCount < 2) return;
+    // Skip cards already exiting so an in-flight Delete can still trash
+    // its folder file after the rest of the stack is dismissed.
     const requested = artifacts
       .filter((artifact) => !exitingArtifactIds.has(artifact.id))
       .map((artifact) => artifact.id);
+    if (requested.length === 0) return;
+    const requestedSet = new Set(requested);
     setStackClearing(true);
-    void invoke<string[]>("dismiss_all_artifacts")
+    void invoke<string[]>("dismiss_all_artifacts", { artifactIds: requested })
       .then((dismissed) => {
         const removed = new Set(
-          Array.isArray(dismissed) && dismissed.length > 0 ? dismissed : requested,
+          (Array.isArray(dismissed) && dismissed.length > 0 ? dismissed : requested)
+            .filter((id) => requestedSet.has(id)),
         );
         setExitingArtifactIds((current) => {
           const next = new Set(current);

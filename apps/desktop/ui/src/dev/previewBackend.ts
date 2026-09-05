@@ -785,9 +785,18 @@ export function installPreviewBackend(): void {
     if (command === "get_recording_selection") return selection;
     if (command === "get_artifacts") return previewArtifacts;
     if (command === "dismiss_all_artifacts") {
-      const ids = previewArtifacts.map((artifact) => artifact.id);
-      previewArtifacts = [];
-      return ids;
+      const requested = new Set(
+        Array.isArray((payload as { artifactIds?: string[] } | undefined)?.artifactIds)
+          ? (payload as { artifactIds: string[] }).artifactIds
+          : [],
+      );
+      const removed: string[] = [];
+      previewArtifacts = previewArtifacts.filter((artifact) => {
+        if (!requested.has(artifact.id)) return true;
+        removed.push(artifact.id);
+        return false;
+      });
+      return removed;
     }
     if (command === "dismiss_artifact" || command === "trash_artifact") {
       const artifactId = (payload as { artifactId?: string } | undefined)?.artifactId;
