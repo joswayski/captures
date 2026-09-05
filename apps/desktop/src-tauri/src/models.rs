@@ -83,6 +83,10 @@ pub struct AppSettings {
     /// lossless PNG until that save.
     #[serde(default)]
     pub screenshot_format: ScreenshotFormat,
+    /// When true, the update notice lists every Preview since the installed
+    /// version. Off keeps a compact Update now prompt.
+    #[serde(default = "default_true")]
+    pub show_update_changelog: bool,
     #[serde(default)]
     pub recording: RecordingSettings,
 }
@@ -286,6 +290,7 @@ impl Default for AppSettings {
             freeze_screen: true,
             show_cursor_in_screenshots: true,
             screenshot_format: ScreenshotFormat::default(),
+            show_update_changelog: true,
             recording: RecordingSettings::default(),
         }
     }
@@ -1445,6 +1450,7 @@ mod tests {
         assert_eq!(settings.screenshot_countdown_seconds, 0);
         assert!(settings.freeze_screen);
         assert!(settings.show_cursor_in_screenshots);
+        assert!(settings.show_update_changelog);
         assert_eq!(settings.screenshot_format, ScreenshotFormat::Png);
         assert_eq!(settings.recording.video_format, VideoFormat::Mp4);
     }
@@ -1454,6 +1460,7 @@ mod tests {
         assert_eq!(AppSettings::default().screenshot_countdown_seconds, 0);
         assert!(AppSettings::default().freeze_screen);
         assert!(AppSettings::default().show_cursor_in_screenshots);
+        assert!(AppSettings::default().show_update_changelog);
         assert_eq!(
             AppSettings::default().screenshot_format,
             ScreenshotFormat::Png
@@ -1565,6 +1572,7 @@ mod tests {
         assert!(settings.recording.open_editor_after_recording);
         assert_eq!(settings.recording.video_format, VideoFormat::Mp4);
         assert!(settings.show_cursor_in_screenshots);
+        assert!(settings.show_update_changelog);
     }
 
     #[test]

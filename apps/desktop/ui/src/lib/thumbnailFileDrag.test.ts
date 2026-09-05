@@ -59,7 +59,7 @@ describe("mini-preview file-drop landing", () => {
 
   it("lets the reject shake override the settled arrive animation", () => {
     expect(thumbnailStyles).toMatch(
-      /\.thumbnail-card\.thumbnail-ready\.thumbnail-arrived:not\(\.thumbnail-drop-rejected\)/,
+      /\.thumbnail-card\.thumbnail-ready\.thumbnail-arrived:not\(\.thumbnail-exiting\):not\(\.thumbnail-drop-rejected\)/,
     );
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-card\.thumbnail-ready\.thumbnail-arrived\.thumbnail-drop-rejected/,

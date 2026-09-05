@@ -48,6 +48,7 @@ const THUMBNAIL_STACK_CONTROL_SELECTOR = [
   ".thumbnail-stack-control",
   ".thumbnail-collapsed-hit-target",
 ].join(", ");
+const THUMBNAIL_STACK_TOOLBAR_SELECTOR = ".thumbnail-stack-toolbar";
 /**
  * Marker on `.thumbnail-stack` while card hover chrome must stay idle after a
  * collapse/expand. Clicking the pile leaves the pointer over a card; applying
@@ -246,7 +247,7 @@ export function shouldLockThumbnailCardHoverOnStackMotion(
 export function thumbnailStackHasLiveHitTarget(root: Document = document): boolean {
   if (root.querySelector(".thumbnail-stack-dragging")) return true;
   if (root.querySelector(
-    ".thumbnail-stack-minimizing, .thumbnail-stack-expanding",
+    ".thumbnail-stack-minimizing, .thumbnail-stack-expanding, .thumbnail-stack-clearing",
   )) {
     return false;
   }
@@ -487,6 +488,28 @@ function minimizedStackExpandControlAtPoint(
   return null;
 }
 
+function thumbnailStackMinimizeControlAtPoint(
+  x: number,
+  y: number,
+  directTarget: Element | null,
+  root: Document,
+): HTMLElement | null {
+  let toolbar = directTarget?.closest<HTMLElement>(THUMBNAIL_STACK_TOOLBAR_SELECTOR) ?? null;
+  if (!toolbar) {
+    for (const candidate of root.querySelectorAll<HTMLElement>(THUMBNAIL_STACK_TOOLBAR_SELECTOR)) {
+      if (containsPoint(candidate, x, y)) {
+        toolbar = candidate;
+        break;
+      }
+    }
+  }
+  if (!toolbar || !thumbnailStackControlIsInteractive(toolbar)) return null;
+  if (!containsPoint(toolbar, x, y)) return null;
+  const minimize = toolbar.querySelector<HTMLElement>(".thumbnail-stack-control:not(:disabled)");
+  if (minimize && thumbnailStackControlIsInteractive(minimize)) return minimize;
+  return null;
+}
+
 function thumbnailStackControlAtPoint(
   x: number,
   y: number,
@@ -495,6 +518,9 @@ function thumbnailStackControlAtPoint(
 ): HTMLElement | null {
   const expandControl = minimizedStackExpandControlAtPoint(x, y, directTarget, root);
   if (expandControl) return expandControl;
+
+  const toolbarControl = thumbnailStackMinimizeControlAtPoint(x, y, directTarget, root);
+  if (toolbarControl) return toolbarControl;
 
   const directControl = directTarget?.closest<HTMLElement>(THUMBNAIL_STACK_CONTROL_SELECTOR);
   if (directControl && thumbnailStackControlIsInteractive(directControl)) {

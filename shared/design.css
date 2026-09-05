@@ -114,6 +114,8 @@
   --glass-text-muted: rgba(246, 246, 248, 0.64);
   --glass-text-subtle: rgba(246, 246, 248, 0.42);
   --glass-shadow: 0 16px 44px rgba(0, 0, 0, 0.44), 0 2px 8px rgba(0, 0, 0, 0.3);
+  /* Silhouette for compact HUD tooltips so the caret and pill share one shadow. */
+  --tooltip-shadow: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.32));
   --glass-blur: blur(24px) saturate(1.4);
   --glass-veil: rgba(15, 15, 18, 0.38);
   --glass-veil-soft: rgba(15, 15, 18, 0.18);

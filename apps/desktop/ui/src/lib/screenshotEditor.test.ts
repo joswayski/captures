@@ -89,9 +89,16 @@ import {
   TEXT_OPTICAL_CENTER_NUDGE_RATIO,
   visibleContentBounds,
   wrapTextLines,
+  composingTextBoxWidth,
+  createPlacedTextElement,
+  defaultTextBoxWidth,
   fitAutoWidthTextElement,
+  fitEditingAutoWidthTextElement,
   fittedAutoWidthTextBox,
   isAutoWidthText,
+  isBlankTextElement,
+  textBackgroundPad,
+  textBackgroundRadius,
   arrowChordLength,
   arrowDrawnStrokeWidth,
   arrowFillPolygon,
@@ -1992,6 +1999,76 @@ describe("screenshot editor geometry", () => {
     expect(wrapped.width).toBe(80);
     expect(wrapTextLines(wrapped.text, wrapped.width, wrapped.fontSize).length)
       .toBeGreaterThan(1);
+  });
+
+  it("opens a wide empty text field, then hugs glyphs, with a rounded rect not a capsule", () => {
+    const fontSize = 48;
+    const composing = composingTextBoxWidth(fontSize);
+    expect(defaultTextBoxWidth(fontSize)).toBe(composing);
+    expect(composing).toBe(fontSize * 8);
+    expect(composing).toBeGreaterThan(fittedAutoWidthTextBox("Text", fontSize) * 2);
+
+    const placed = createPlacedTextElement({
+      id: "new-label",
+      point: { x: 400, y: 120 },
+      fontSize,
+      color: "#ff3b5c",
+      preset: "rounded-box",
+    });
+    expect(placed).toMatchObject({
+      text: "",
+      autoWidth: true,
+      width: composing,
+      align: "center",
+      roundedBackground: true,
+      fontFamily: "rounded",
+    });
+    expect(placed.x).toBeCloseTo(400 - composing / 2, 5);
+    expect(isBlankTextElement(placed)).toBe(true);
+
+    const centerX = placed.x + placed.width / 2;
+    const emptyEditing = fitEditingAutoWidthTextElement({
+      ...placed,
+      width: 40,
+      x: centerX - 20,
+    });
+    expect(emptyEditing.width).toBe(composing);
+    expect(emptyEditing.x + emptyEditing.width / 2).toBeCloseTo(centerX, 5);
+
+    const typed = fitEditingAutoWidthTextElement({
+      ...placed,
+      text: "tomato",
+    });
+    expect(typed.width).toBe(fittedAutoWidthTextBox("tomato", fontSize));
+    expect(typed.width).toBeLessThan(composing);
+    expect(isBlankTextElement(typed)).toBe(false);
+
+    const leftPlaced = createPlacedTextElement({
+      id: "plain",
+      point: { x: 80, y: 40 },
+      fontSize,
+      color: "#fff",
+      preset: "standard",
+    });
+    expect(leftPlaced).toMatchObject({
+      text: "",
+      align: "left",
+      x: 80,
+      roundedBackground: false,
+      background: null,
+    });
+
+    const pad = textBackgroundPad(fontSize);
+    const bubbleHeight = fontSize * TEXT_LINE_HEIGHT_RATIO + pad.y * 2;
+    const bubbleWidth = typed.width + pad.x * 2;
+    const radius = textBackgroundRadius(placed, bubbleWidth, bubbleHeight);
+    expect(radius).toBeGreaterThan(8);
+    expect(radius).toBeLessThan(bubbleHeight * 0.45);
+    expect(textBackgroundRadius(
+      { ...placed, roundedBackground: false },
+      bubbleWidth,
+      bubbleHeight,
+    )).toBe(0);
   });
 
   it("scales arrow heads with stroke and shaft length", () => {

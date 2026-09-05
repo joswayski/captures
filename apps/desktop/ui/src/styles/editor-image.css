@@ -901,7 +901,7 @@
   outline: 0;
 }
 
-/* Keep select-all useful for replacing “Text” without hiding the style itself. */
+/* Keep select-all useful for replacing a label without hiding the style itself. */
 .screenshot-inline-text-editor::selection {
   color: var(--inline-text-selection-color);
   background: rgba(var(--theme-accent-rgb), 0.2);
@@ -2844,7 +2844,7 @@
 }
 
 .screenshot-text-style-preview.style-rounded-box {
-  border-radius: var(--r-pill);
+  border-radius: var(--r-lg);
 }
 
 @media (prefers-contrast: more) {
@@ -3241,7 +3241,7 @@
 .screenshot-save-row {
   display: grid;
   min-width: 0;
-  grid-template-columns: minmax(178px, 210px) minmax(240px, 390px) minmax(120px, 1fr) auto;
+  grid-template-columns: minmax(178px, 210px) minmax(240px, 390px) auto minmax(120px, 1fr) auto;
   align-items: end;
   gap: var(--s-5);
 }
@@ -3371,6 +3371,7 @@
   display: none;
 }
 
+.screenshot-export-secondary,
 .screenshot-export-actions {
   display: flex;
   min-height: var(--h-lg);
@@ -3379,7 +3380,7 @@
   gap: var(--s-3);
 }
 
-.screenshot-export-actions > button.success {
+.screenshot-export-secondary > button.success {
   border-color: transparent;
   color: var(--positive-text);
   background: var(--positive-surface);
@@ -3435,6 +3436,7 @@
   opacity: 0.55;
 }
 
+.screenshot-export-secondary > button,
 .screenshot-export-actions > button {
   display: inline-flex;
   min-width: 86px;
@@ -3453,6 +3455,7 @@
   white-space: nowrap;
 }
 
+.screenshot-export-secondary button:hover:not(:disabled),
 .screenshot-export-actions button:hover:not(:disabled) {
   border-color: var(--border-strong);
   background: var(--editor-control-hover);
@@ -3470,11 +3473,13 @@
   background: var(--theme-accent-hover);
 }
 
+.screenshot-export-secondary button:disabled,
 .screenshot-export-actions button:disabled {
   cursor: wait;
   opacity: 0.5;
 }
 
+.screenshot-export-secondary svg,
 .screenshot-export-actions svg {
   width: 14px;
   height: 14px;
@@ -3592,7 +3597,7 @@
   }
 
   .screenshot-save-row {
-    grid-template-columns: minmax(170px, 200px) minmax(230px, 1fr) auto;
+    grid-template-columns: minmax(170px, 200px) minmax(230px, 1fr) auto auto;
     gap: var(--s-4);
   }
 
@@ -3606,9 +3611,14 @@
     grid-column: 2;
   }
 
-  .screenshot-export-actions {
+  .screenshot-export-secondary {
     grid-row: 1;
     grid-column: 3;
+  }
+
+  .screenshot-export-actions {
+    grid-row: 1;
+    grid-column: 4;
   }
 
   .screenshot-export-status {

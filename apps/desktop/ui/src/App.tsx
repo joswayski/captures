@@ -73,6 +73,7 @@ import {
 import {
   detectShortcutPlatform,
   eventMatchesShortcut,
+  isCaptureEscapeKey,
   isModifierCode,
   modifierDisplayTokens,
   platformShortcutHelp,
@@ -222,6 +223,17 @@ function dismissCaptureOverlayWindow() {
   void currentWindow?.hide().catch(() => undefined);
 }
 
+function onCaptureEscape(handler: () => void): () => void {
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (!isCaptureEscapeKey(event)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    handler();
+  };
+  window.addEventListener("keydown", onKeyDown, true);
+  return () => window.removeEventListener("keydown", onKeyDown, true);
+}
+
 function overlayPointFromClient(
   surface: HTMLElement | null,
   clientX: number,
@@ -248,6 +260,11 @@ function requestCapturePointerPosition(): Promise<ThumbnailPointerPosition | nul
 // remains the primary completion path; fallback only covers missed events.
 const THUMBNAIL_DISMISS_FALLBACK_MS = 1_250;
 const THUMBNAIL_DELETE_FALLBACK_MS = 3_200;
+/** Newest card leaves first; cap so a tall stack still finishes with the fallback. */
+const THUMBNAIL_CLEAR_STAGGER_MS = 36;
+const THUMBNAIL_CLEAR_STAGGER_MAX_MS = 180;
+/** Sentinel so a stack Clear all does not issue per-card dismiss_artifact. */
+const STACK_CLEAR_EXIT_ACTION = "stack_clear";
 /** How long the mini-preview shows “Saved” before flipping to “Show in Folder”. */
 const THUMBNAIL_SAVED_FEEDBACK_MS = 1_000;
 const THUMBNAIL_HIT_TEST_CHANGED_EVENT = "captures-thumbnail-hit-test-changed";
@@ -433,39 +450,11 @@ function TrayNoticeShell({
 }
 
 export function StartupNotice() {
-  const [shortcut, setShortcut] = useState("CommandOrControl+Shift+Space");
-
-  useEffect(() => {
-    void invoke<AppSettings>("get_settings")
-      .then((settings) => {
-        if (settings.new_capture_shortcut.trim()) {
-          setShortcut(settings.new_capture_shortcut);
-        }
-      })
-      .catch(() => undefined);
-  }, []);
-
-  const keys = shortcutDisplayTokens(shortcut);
-  const trayLabel = captureChromeLabel();
-
   return (
     <TrayNoticeShell className="startup-notice">
-      <div className="tray-notice-card">
-        <div className="startup-notice-body">
-          <div className="startup-icon" aria-hidden="true">
-            <CaptureIcon />
-          </div>
-          <div>
-            <p>
-              Use the {trayLabel} icon, or press{" "}
-              {keys.map((key, index) => (
-                <kbd key={`${key}-${index}`}>{key}</kbd>
-              ))}
-              {" "}to start.
-            </p>
-          </div>
-        </div>
-      </div>
+      <p className="startup-notice-card" role="status">
+        Captures is ready to use
+      </p>
     </TrayNoticeShell>
   );
 }
@@ -664,9 +653,38 @@ function UpdateDownloadFallback() {
 
 export function UpdateNotice() {
   const status = useUpdateStatus();
+  const [showChangelog, setShowChangelog] = useState(true);
   const [actionError, setActionError] = useState("");
   const [installing, setInstalling] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let active = true;
+    const cleanup = createCleanupRegistry();
+    void invoke<AppSettings>("get_settings")
+      .then((settings) => {
+        if (active) setShowChangelog(settings.show_update_changelog !== false);
+      })
+      .catch(() => undefined);
+    void listen<AppSettings>("settings-changed", ({ payload }) => {
+      if (active) setShowChangelog(payload.show_update_changelog !== false);
+    }).then((unlisten) => {
+      cleanup.add(unlisten);
+    }).catch(() => undefined);
+    return () => {
+      active = false;
+      cleanup.dispose();
+    };
+  }, []);
+
+  const persistShowChangelog = (next: boolean) => {
+    setShowChangelog(next);
+    void invoke<AppSettings>("get_settings")
+      .then((current) => invoke("update_settings", {
+        settings: { ...current, show_update_changelog: next },
+      }))
+      .catch(() => undefined);
+  };
 
   const close = () => {
     setActionError("");
@@ -693,6 +711,7 @@ export function UpdateNotice() {
     ? stackedReleaseNotes(available.changelog, available.notes, available.display_version)
     : [];
   const stacked = groups.length > 1;
+  const notesVisible = Boolean(available && !error && showChangelog);
   const progress = downloading?.total
     ? Math.min(100, Math.round((downloading.downloaded / downloading.total) * 100))
     : null;
@@ -704,13 +723,13 @@ export function UpdateNotice() {
   const state = status?.state ?? "loading";
   const visualState = error ? "error" : state;
   const title = restarting
-    ? "Update complete"
+    ? "Updated"
     : downloading
       ? "Updating Captures"
       : error
         ? "Update failed"
         : available
-          ? "An update is available"
+          ? "Update available"
           : status?.state === "up_to_date"
             ? "You’re up to date"
             : status?.state === "checking"
@@ -735,7 +754,7 @@ export function UpdateNotice() {
     const primary = root.querySelector<HTMLButtonElement>("button.primary");
     const dismiss = root.querySelector<HTMLButtonElement>("button.update-dismiss");
     (primary ?? dismiss ?? root).focus({ preventScroll: true });
-  }, [visualState, available, error, downloading, restarting]);
+  }, [visualState, available, error, downloading, restarting, notesVisible]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -752,7 +771,12 @@ export function UpdateNotice() {
     <TrayNoticeShell>
       <div
         ref={dialogRef}
-        className={`update-notice update-notice-${visualState} tray-notice-card`}
+        className={[
+          "update-notice",
+          `update-notice-${visualState}`,
+          "tray-notice-card",
+          notesVisible ? "" : "update-notice-compact",
+        ].filter(Boolean).join(" ")}
         role="dialog"
         tabIndex={-1}
         aria-labelledby="update-notice-title"
@@ -760,18 +784,44 @@ export function UpdateNotice() {
       >
       <header className="update-notice-header">
         <div className="update-app-icon" aria-hidden="true">
-          <CaptureIcon />
+          {visualState === "restarting" ? (
+            <CheckIcon />
+          ) : visualState === "error" ? (
+            <WarningIcon />
+          ) : visualState === "downloading" || visualState === "checking" || visualState === "loading" ? (
+            <span className="update-spinner" />
+          ) : (
+            <CaptureIcon />
+          )}
         </div>
         <div className="update-notice-copy">
           <h1 id="update-notice-title">{title}</h1>
           <p id="update-notice-description">{description}</p>
         </div>
+        {available && !error && !notesVisible && (
+          <button
+            type="button"
+            className="update-notes-reveal"
+            onClick={() => persistShowChangelog(true)}
+          >
+            What’s new
+          </button>
+        )}
       </header>
 
-      <div className={`update-notice-body${available && !error ? "" : " update-notice-body-status"}`}>
-        {available && !error && (
+      <div className={`update-notice-body${notesVisible ? "" : " update-notice-body-status"}`}>
+        {notesVisible && (
           <section className={`update-notes${stacked ? " update-notes-stacked" : ""}`} aria-label="What's new">
-            <h2>What’s new</h2>
+            <div className="update-notes-heading">
+              <h2>What’s new</h2>
+              <button
+                type="button"
+                className="update-notes-toggle"
+                onClick={() => persistShowChangelog(false)}
+              >
+                Hide
+              </button>
+            </div>
             {stacked && (
               <p className="update-notes-intro">
                 This update includes all of the following changes:
@@ -789,7 +839,7 @@ export function UpdateNotice() {
                     >
                       {stacked && <h3 id={headingId}>{group.displayVersion}</h3>}
                       {group.items.length > 0 ? (
-                        <ul>
+                        <ul className="update-notes-list">
                           {group.items.map((note, index) => (
                             <li key={`${group.version}-${index}-${note}`}>{note}</li>
                           ))}
@@ -830,9 +880,17 @@ export function UpdateNotice() {
         )}
 
         {restarting && (
-          <p className="update-status-message update-restarting" role="status">
-            Reopening in {restarting.seconds_remaining} seconds…
-          </p>
+          <section className="update-restart" role="status">
+            <p className="update-status-message update-restarting">
+              Reopening in {restarting.seconds_remaining} seconds…
+            </p>
+            <div
+              className="update-restart-progress"
+              aria-hidden="true"
+            >
+              <span />
+            </div>
+          </section>
         )}
 
         {error && (
@@ -848,7 +906,7 @@ export function UpdateNotice() {
 
         {!available && !downloading && !restarting && !error && status?.state !== "up_to_date" && (
           <p className="update-status-message update-checking" role="status">
-            <span className="update-spinner" aria-hidden="true" />Checking…
+            Checking…
           </p>
         )}
       </div>
@@ -908,7 +966,13 @@ export function UpdateNotice() {
   );
 }
 
-function UpdatePreferences() {
+function UpdatePreferences({
+  showChangelog,
+  updateShowChangelog,
+}: {
+  showChangelog: boolean;
+  updateShowChangelog: (value: boolean) => void;
+}) {
   const status = useUpdateStatus();
   const [actionError, setActionError] = useState("");
   const currentVersion = status?.current_display_version ?? "…";
@@ -1007,6 +1071,20 @@ function UpdatePreferences() {
       )}
       {actionError && <p className="update-settings-error" role="alert">{actionError}</p>}
       {(actionError || status?.state === "error") && <UpdateDownloadFallback />}
+      <label className="check-row switch-row">
+        <input
+          type="checkbox"
+          checked={showChangelog}
+          onChange={(event) => updateShowChangelog(event.target.checked)}
+        />
+        <span>
+          Show what’s new on update notices
+          <small>
+            Lists every Preview since the version you have. Turn this off for a
+            compact Update now prompt.
+          </small>
+        </span>
+      </label>
     </section>
   );
 }
@@ -1766,25 +1844,19 @@ export function ScreenshotCountdown() {
     setCancelling(true);
     setExiting(true);
     try {
+      await invoke("cancel_screenshot_countdown");
       if (!prefersReducedMotion()) {
         await new Promise((resolve) => setTimeout(resolve, RECORDING_COUNTDOWN_FADE_OUT_MS));
       }
-      await invoke("cancel_screenshot_countdown");
     } finally {
       cancellingRef.current = false;
       setCancelling(false);
     }
   }, []);
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      void cancel();
-    };
-    window.addEventListener("keydown", onKeyDown, true);
-    return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [cancel]);
+  useEffect(() => onCaptureEscape(() => {
+    void cancel();
+  }), [cancel]);
 
   return (
     <main
@@ -1844,25 +1916,19 @@ export function RecordingCountdown() {
     setCancelling(true);
     setExiting(true);
     try {
+      await invoke("discard_recording", { sessionId: snapshot.id });
       if (!prefersReducedMotion()) {
         await new Promise((resolve) => setTimeout(resolve, RECORDING_COUNTDOWN_FADE_OUT_MS));
       }
-      await invoke("discard_recording", { sessionId: snapshot.id });
     } finally {
       cancellingRef.current = false;
       setCancelling(false);
     }
   }, [snapshot]);
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      void cancel();
-    };
-    window.addEventListener("keydown", onKeyDown, true);
-    return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [cancel]);
+  useEffect(() => onCaptureEscape(() => {
+    void cancel();
+  }), [cancel]);
 
   const count = snapshot?.state === "countdown"
     ? remaining ?? snapshot.countdown_remaining_seconds ?? snapshot.options.countdown_seconds
@@ -2326,8 +2392,9 @@ export function RecordingSelector() {
     const onKeyDown = (event: KeyboardEvent) => {
       const currentSession = sessionRef.current;
       if (!currentSession) return;
-      if (event.key === "Escape") {
+      if (isCaptureEscapeKey(event)) {
         event.preventDefault();
+        event.stopImmediatePropagation();
         cancelSelection(currentSession);
         return;
       }
@@ -5240,20 +5307,17 @@ function CaptureOverlay() {
     if (selectionFeedbackTimerRef.current) clearTimeout(selectionFeedbackTimerRef.current);
   }, []);
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || !sessionId) return;
-      // Match the region commit fast path: hide the native surface before the
-      // async command crosses into Rust. The backend repeats the hide while it
-      // restores the previous app and capture UI, so this remains best-effort.
-      dismissCaptureOverlayWindow();
+  useEffect(() => onCaptureEscape(() => {
+    // Match the region commit fast path: hide the native surface before the
+    // async command crosses into Rust. The backend repeats the hide while it
+    // restores the previous app and capture UI, so this remains best-effort.
+    dismissCaptureOverlayWindow();
+    if (sessionId) {
       void invoke("cancel_capture", { sessionId });
-    };
-    window.addEventListener("keydown", onKeyDown, true);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown, true);
-    };
-  }, [sessionId]);
+    } else {
+      void invoke("cancel_active_capture");
+    }
+  }), [sessionId]);
 
   useEffect(() => {
     const onShift = (event: KeyboardEvent) => {
@@ -5823,6 +5887,9 @@ export function Thumbnail() {
   const [exitingArtifactIds, setExitingArtifactIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const [clearingArtifactIds, setClearingArtifactIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [clipboardState, setClipboardState] = useState<ClipboardState>({
     revision: -1,
     artifact_id: null,
@@ -5844,6 +5911,11 @@ export function Thumbnail() {
   ));
   const stackRef = useRef<HTMLElement>(null);
   const stackDrag = useRef<CollapsedThumbnailStackDrag | null>(null);
+  // Keep the press-time top/bottom layout for the whole drag. Flipping it
+  // mid-screen teleports compact cards across the tall window until the
+  // converted frame catches up.
+  const collapsedLayoutAnchorRef = useRef<ThumbnailStackAnchor>("bottom");
+  const collapsedFrameRef = useRef<{ x: number; y: number } | null>(null);
   const collapsedStackPointerCleanup = useRef<(() => void) | null>(null);
   const skipCollapsedStackClick = useRef(false);
   const stackFanCollapseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -6146,9 +6218,10 @@ export function Thumbnail() {
   const hasThumbnailCards = artifacts.length > 0;
 
   useEffect(() => {
-    // Dust-delete and dismiss both hold layout; survivors above slide by N
-    // slots with the same ease. Pure CSS only moved one fixed step (or reflowed
-    // flex on dismiss), which jittered multi-exit batches.
+    // Dust-delete and dismiss both hold layout; survivors slide toward the
+    // stack anchor by N slots with the same ease. Pure CSS only moved one
+    // fixed step (or reflowed flex on dismiss), which jittered multi-exit
+    // batches.
     if (!hasThumbnailCards) return;
     const stack = stackRef.current;
     if (!stack) return;
@@ -6651,10 +6724,32 @@ export function Thumbnail() {
     && rejectQuery !== "false";
   const stackAnimating = stackMotion === "collapsing" || stackMotion === "expanding";
   const exitingOnly = artifacts.every(({ id }) => exitingArtifactIds.has(id));
-  const controlsDisabled = stackAnimating || exitingOnly;
+  const livePreviewCount = artifacts.reduce(
+    (count, artifact) => (exitingArtifactIds.has(artifact.id) ? count : count + 1),
+    0,
+  );
+  // Clear all is the stack equivalent of Close: leave files and history, hide
+  // the dock. One preview already has Close/Delete, so this stays off a
+  // single card and off the collapsed pile.
+  const showClearAll = !collapsed && livePreviewCount >= 2;
+  const stackClearing = clearingArtifactIds.size > 0;
+  const controlsDisabled = stackAnimating || exitingOnly || stackClearing;
   const stackScrollport = (stackMotion === "expanding" || stackMotion === "expanded")
     && thumbnailStackNeedsScrollport(artifacts.length, stackViewportHeight);
-  const showOverflowCues = stackMotion === "expanded";
+  const showOverflowCues = stackMotion === "expanded" && !stackClearing;
+
+  const clearAllPreviews = () => {
+    if (controlsDisabled || livePreviewCount < 2) return;
+    // Skip cards already exiting so an in-flight Delete can still trash
+    // its folder file after the rest of the stack is dismissed.
+    const requested = artifacts
+      .filter((artifact) => !exitingArtifactIds.has(artifact.id))
+      .map((artifact) => artifact.id);
+    if (requested.length === 0) return;
+    setClearingArtifactIds(new Set(requested));
+    void invoke<string[]>("dismiss_all_artifacts", { artifactIds: requested })
+      .catch(() => undefined);
+  };
 
   const setStackCollapsed = (nextCollapsed: boolean) => {
     if (controlsDisabled || collapsed === nextCollapsed) return;
@@ -6788,6 +6883,175 @@ export function Thumbnail() {
     ),
   );
 
+  const collapsedNativeGeometry = async () => {
+    const contentHeight = collapsedContentHeight();
+    const scale = currentWindow ? await currentWindow.scaleFactor() : 1;
+    const size = currentWindow ? await currentWindow.innerSize() : null;
+    const monitor = await currentMonitor();
+    const workTop = monitor ? monitor.workArea.position.y / scale : 0;
+    const workHeight = monitor
+      ? monitor.workArea.size.height / scale
+      : window.screen.availHeight;
+    return {
+      contentHeight,
+      frameHeight: thumbnailStackMeasuredFrameHeight(
+        size ? size.height / scale : null,
+        contentHeight,
+        window.innerHeight,
+      ),
+      work: {
+        x: monitor ? monitor.workArea.position.x / scale : 0,
+        y: workTop,
+        width: monitor
+          ? monitor.workArea.size.width / scale
+          : window.screen.availWidth,
+        height: workHeight,
+        bottomGap: 12,
+      },
+      workTop,
+      workHeight,
+    };
+  };
+
+  const placeCollapsedStackFrame = async (
+    x: number,
+    y: number,
+    anchor: ThumbnailStackAnchor,
+  ) => {
+    const contentHeight = collapsedContentHeight();
+    if (isTauri()) {
+      try {
+        const { frameHeight, work, workTop, workHeight } = await collapsedNativeGeometry();
+        const clamped = clampThumbnailStackFrame(
+          x,
+          y,
+          340,
+          frameHeight,
+          work,
+          contentHeight,
+          anchor,
+        );
+        const next = await invoke<{ x: number; y: number }>(
+          "set_mini_preview_stack_position",
+          { x: clamped.x, y: clamped.y, anchor },
+        );
+        applyThumbnailStackGravity(
+          stackRef.current,
+          thumbnailStackGravityFromWorkArea({
+            pileBottom: thumbnailStackVisualPileBottom({
+              y: next.y,
+              frameHeight,
+              contentHeight,
+              anchor,
+            }),
+            workTop,
+            workHeight,
+            contentHeight,
+            bottomGap: 12,
+          }),
+        );
+        commitStackSide(thumbnailStackSideFromBias(
+          thumbnailStackBiasFromFrameX(next.x, work.x, work.width),
+          stackSideRef.current,
+        ));
+        collapsedFrameRef.current = next;
+        return next;
+      } catch {
+        applyThumbnailStackGravity(
+          stackRef.current,
+          thumbnailStackGravityFromPlacement(placementRef.current),
+        );
+        const next = await invoke<{ x: number; y: number }>(
+          "set_mini_preview_stack_position",
+          { x, y, anchor },
+        );
+        collapsedFrameRef.current = next;
+        return next;
+      }
+    }
+    const viewport = { width: window.innerWidth, height: window.innerHeight };
+    const written = writeHarnessStackOffset(
+      x,
+      y,
+      document.documentElement,
+      viewport,
+      { anchor, contentHeight },
+    );
+    applyThumbnailStackGravity(
+      stackRef.current,
+      thumbnailStackGravityFromHarness({
+        offsetY: written.y,
+        anchor,
+        viewportHeight: viewport.height,
+        contentHeight,
+      }),
+    );
+    commitStackSide(thumbnailStackSideFromBias(
+      thumbnailStackBiasFromHarness(written.x, viewport.width),
+      stackSideRef.current,
+    ));
+    collapsedFrameRef.current = written;
+    return written;
+  };
+
+  const settleCollapsedStackAnchor = async () => {
+    const frame = collapsedFrameRef.current;
+    if (!frame) return;
+    const from = collapsedLayoutAnchorRef.current;
+    const contentHeight = collapsedContentHeight();
+    if (isTauri()) {
+      try {
+        const { frameHeight, workTop, workHeight } = await collapsedNativeGeometry();
+        const gravity = thumbnailStackGravityFromWorkArea({
+          pileBottom: thumbnailStackVisualPileBottom({
+            y: frame.y,
+            frameHeight,
+            contentHeight,
+            anchor: from,
+          }),
+          workTop,
+          workHeight,
+          contentHeight,
+          bottomGap: 12,
+        });
+        const nextAnchor = thumbnailStackAnchorFromGravity(gravity, from);
+        if (nextAnchor === from) return;
+        const converted = convertThumbnailStackFrameAnchor(
+          frame,
+          from,
+          nextAnchor,
+          frameHeight,
+          contentHeight,
+        );
+        collapsedLayoutAnchorRef.current = nextAnchor;
+        await placeCollapsedStackFrame(converted.x, converted.y, nextAnchor);
+        commitStackAnchor(nextAnchor);
+        return;
+      } catch {
+        return;
+      }
+    }
+    const viewport = { width: window.innerWidth, height: window.innerHeight };
+    const gravity = thumbnailStackGravityFromHarness({
+      offsetY: frame.y,
+      anchor: from,
+      viewportHeight: viewport.height,
+      contentHeight,
+    });
+    const nextAnchor = thumbnailStackAnchorFromGravity(gravity, from);
+    if (nextAnchor === from) return;
+    const converted = convertHarnessStackOffsetAnchor(
+      frame,
+      from,
+      nextAnchor,
+      viewport.height,
+      contentHeight,
+    );
+    collapsedLayoutAnchorRef.current = nextAnchor;
+    await placeCollapsedStackFrame(converted.x, converted.y, nextAnchor);
+    commitStackAnchor(nextAnchor);
+  };
+
   const collapsedStackDrag = () => {
     stackDrag.current ??= new CollapsedThumbnailStackDrag({
       getFrame: async () => {
@@ -6798,169 +7062,11 @@ export function Thumbnail() {
         }
         return readHarnessStackOffset();
       },
-      moveFrame: async (x, y) => {
-        const contentHeight = collapsedContentHeight();
-        if (isTauri()) {
-          let frameX = x;
-          let frameY = y;
-          let anchor = stackAnchorRef.current;
-          let convertedAnchor = false;
-          try {
-            const scale = currentWindow ? await currentWindow.scaleFactor() : 1;
-            const size = currentWindow ? await currentWindow.innerSize() : null;
-            const frameHeight = thumbnailStackMeasuredFrameHeight(
-              size ? size.height / scale : null,
-              contentHeight,
-              window.innerHeight,
-            );
-            const monitor = await currentMonitor();
-            const workTop = monitor
-              ? monitor.workArea.position.y / scale
-              : 0;
-            const workHeight = monitor
-              ? monitor.workArea.size.height / scale
-              : window.screen.availHeight;
-            const work = {
-              x: monitor ? monitor.workArea.position.x / scale : 0,
-              y: workTop,
-              width: monitor
-                ? monitor.workArea.size.width / scale
-                : window.screen.availWidth,
-              height: workHeight,
-              bottomGap: 12,
-            };
-            const clamped = clampThumbnailStackFrame(
-              frameX,
-              frameY,
-              340,
-              frameHeight,
-              work,
-              contentHeight,
-              anchor,
-            );
-            frameX = clamped.x;
-            frameY = clamped.y;
-            const gravity = thumbnailStackGravityFromWorkArea({
-              pileBottom: thumbnailStackVisualPileBottom({
-                y: frameY,
-                frameHeight,
-                contentHeight,
-                anchor,
-              }),
-              workTop,
-              workHeight,
-              contentHeight,
-              bottomGap: 12,
-            });
-            const nextAnchor = thumbnailStackAnchorFromGravity(gravity, anchor);
-            if (nextAnchor !== anchor) {
-              const converted = convertThumbnailStackFrameAnchor(
-                { x: frameX, y: frameY },
-                anchor,
-                nextAnchor,
-                frameHeight,
-                contentHeight,
-              );
-              const reclamped = clampThumbnailStackFrame(
-                converted.x,
-                converted.y,
-                340,
-                frameHeight,
-                work,
-                contentHeight,
-                nextAnchor,
-              );
-              frameX = reclamped.x;
-              frameY = reclamped.y;
-              commitStackAnchor(nextAnchor);
-              anchor = nextAnchor;
-              convertedAnchor = true;
-            }
-            const next = await invoke<{ x: number; y: number }>(
-              "set_mini_preview_stack_position",
-              { x: frameX, y: frameY, anchor },
-            );
-            applyThumbnailStackGravity(
-              stackRef.current,
-              thumbnailStackGravityFromWorkArea({
-                pileBottom: thumbnailStackVisualPileBottom({
-                  y: next.y,
-                  frameHeight,
-                  contentHeight,
-                  anchor,
-                }),
-                workTop,
-                workHeight,
-                contentHeight,
-                bottomGap: 12,
-              }),
-            );
-            commitStackSide(thumbnailStackSideFromBias(
-              thumbnailStackBiasFromFrameX(next.x, work.x, work.width),
-              stackSideRef.current,
-            ));
-            if (convertedAnchor) stackDrag.current?.rebaseFrame(next);
-            return next;
-          } catch {
-            applyThumbnailStackGravity(
-              stackRef.current,
-              thumbnailStackGravityFromPlacement(placementRef.current),
-            );
-            return invoke<{ x: number; y: number }>(
-              "set_mini_preview_stack_position",
-              { x, y, anchor: stackAnchorRef.current },
-            );
-          }
-        }
-        const viewport = { width: window.innerWidth, height: window.innerHeight };
-        const anchor = stackAnchorRef.current;
-        const written = writeHarnessStackOffset(
-          x,
-          y,
-          document.documentElement,
-          viewport,
-          { anchor, contentHeight },
-        );
-        commitStackSide(thumbnailStackSideFromBias(
-          thumbnailStackBiasFromHarness(written.x, viewport.width),
-          stackSideRef.current,
-        ));
-        const gravity = thumbnailStackGravityFromHarness({
-          offsetY: written.y,
-          anchor,
-          viewportHeight: viewport.height,
-          contentHeight,
-        });
-        applyThumbnailStackGravity(stackRef.current, gravity);
-        const nextAnchor = thumbnailStackAnchorFromGravity(gravity, anchor);
-        if (nextAnchor === anchor) return written;
-        const converted = convertHarnessStackOffsetAnchor(
-          written,
-          anchor,
-          nextAnchor,
-          viewport.height,
-          contentHeight,
-        );
-        const nextWritten = writeHarnessStackOffset(
-          converted.x,
-          converted.y,
-          document.documentElement,
-          viewport,
-          { anchor: nextAnchor, contentHeight },
-        );
-        commitStackAnchor(nextAnchor);
-        applyThumbnailStackGravity(
-          stackRef.current,
-          thumbnailStackGravityFromHarness({
-            offsetY: nextWritten.y,
-            anchor: nextAnchor,
-            viewportHeight: viewport.height,
-            contentHeight,
-          }),
-        );
-        stackDrag.current?.rebaseFrame(nextWritten);
-        return nextWritten;
-      },
+      moveFrame: async (x, y) => placeCollapsedStackFrame(
+        x,
+        y,
+        collapsedLayoutAnchorRef.current,
+      ),
       reducedMotion: prefersReducedMotion,
       onSway: (sway) => applyThumbnailStackDragSway(stackRef.current, sway),
       onDraggingChange: (dragging) => {
@@ -6981,6 +7087,7 @@ export function Thumbnail() {
     collapsedStackPointerCleanup.current?.();
     const drag = collapsedStackDrag();
     if (!drag.pointerDown(event.nativeEvent)) return;
+    collapsedLayoutAnchorRef.current = stackAnchorRef.current;
     skipCollapsedStackClick.current = true;
     setThumbnailStackPressing(stackRef.current, true);
     if (stackFanCollapseTimer.current) {
@@ -7037,8 +7144,9 @@ export function Thumbnail() {
         x: upEvent.clientX,
         y: upEvent.clientY,
       });
-      void drag.pointerUp({ pointerId: upEvent.pointerId }).then((outcome) => {
+      void drag.pointerUp({ pointerId: upEvent.pointerId }).then(async (outcome) => {
         if (outcome === "ignored") return;
+        if (outcome === "drop") await settleCollapsedStackAnchor();
         setThumbnailStackDragging(stackRef.current, false);
         window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
         if (options.expand !== false && outcome === "expand") setStackCollapsed(false);
@@ -7088,6 +7196,7 @@ export function Thumbnail() {
           stackHoverReady ? "thumbnail-stack-hover-ready" : "",
           stackHoverLatched ? "thumbnail-stack-hover-latched" : "",
           stackAnchor === "top" ? "thumbnail-stack-anchor-top" : "",
+          stackClearing ? "thumbnail-stack-clearing" : "",
         ].filter(Boolean).join(" ")}
         onScroll={refreshStackOverflow}
         onDragStartCapture={(event) => {
@@ -7111,7 +7220,19 @@ export function Thumbnail() {
         {(stackAnchor === "top" && stackMotion !== "collapsed"
           ? [...artifacts].reverse()
           : artifacts
-        ).map((artifact) => (
+        ).map((artifact, _visualIndex, visualArtifacts) => {
+          const isStackClearTarget = clearingArtifactIds.has(artifact.id);
+          const clearingOrder = visualArtifacts
+            .map((item) => item.id)
+            .filter((id) => clearingArtifactIds.has(id));
+          const clearingIndex = clearingOrder.indexOf(artifact.id);
+          const clearDelayMs = isStackClearTarget && !prefersReducedMotion()
+            ? Math.min(
+              (clearingOrder.length - 1 - clearingIndex) * THUMBNAIL_CLEAR_STAGGER_MS,
+              THUMBNAIL_CLEAR_STAGGER_MAX_MS,
+            )
+            : 0;
+          return (
           <ThumbnailCard
             key={artifact.id}
             artifact={artifact}
@@ -7121,17 +7242,26 @@ export function Thumbnail() {
             stackCollapsed={compact}
             stackDepth={artifacts.length - artifacts.indexOf(artifact) - 1}
             expandFromTransform={expandFromTransforms.get(artifact.id)}
+            stackDismissing={isStackClearTarget}
+            clearDelayMs={clearDelayMs}
             previewDropReject={
               previewRejectShake
               && artifacts.length - artifacts.indexOf(artifact) - 1 === 0
             }
             onRemoved={(artifactId) => {
               setArtifactExiting(artifactId, false);
+              setClearingArtifactIds((current) => {
+                if (!current.has(artifactId)) return current;
+                const next = new Set(current);
+                next.delete(artifactId);
+                return next;
+              });
               setArtifacts((current) => current.filter(({ id }) => id !== artifactId));
             }}
             onExitChange={setArtifactExiting}
           />
-        ))}
+          );
+        })}
         {collapsed && (
           <button
             type="button"
@@ -7170,10 +7300,22 @@ export function Thumbnail() {
           stackSide === "right" ? "thumbnail-stack-toolbar-anchor-right" : "",
           stackMotion === "collapsing" ? "thumbnail-stack-toolbar-leaving" : "",
           stackMotion === "expanding" ? "thumbnail-stack-toolbar-entering" : "",
-          exitingOnly && stackMotion !== "collapsing"
+          (stackClearing || exitingOnly) && stackMotion !== "collapsing"
             ? "thumbnail-stack-toolbar-exiting"
             : "",
         ].filter(Boolean).join(" ")}>
+          {showClearAll && (
+            <button
+              type="button"
+              className="thumbnail-stack-control thumbnail-stack-clear"
+              aria-label="Clear all previews"
+              data-tooltip="Clear all"
+              disabled={controlsDisabled}
+              onClick={clearAllPreviews}
+            >
+              <CloseIcon />
+            </button>
+          )}
           <button
             type="button"
             className="thumbnail-stack-control thumbnail-stack-minimize"
@@ -7237,6 +7379,8 @@ export function ThumbnailCard({
   stackCollapsed = false,
   stackDepth = 0,
   expandFromTransform,
+  stackDismissing = false,
+  clearDelayMs = 0,
   previewDropReject = false,
   onRemoved,
   onExitChange,
@@ -7249,6 +7393,9 @@ export function ThumbnailCard({
   stackCollapsed?: boolean;
   stackDepth?: number;
   expandFromTransform?: string;
+  /** Parent Clear all: play Close without a per-card dismiss command. */
+  stackDismissing?: boolean;
+  clearDelayMs?: number;
   /** Dev harness: loop the self-drop “no” shake on this card. */
   previewDropReject?: boolean;
   onRemoved: (artifactId: string) => void;
@@ -7560,7 +7707,10 @@ export function ThumbnailCard({
     // the flex reflow race the in-flight compositor transition and visibly
     // snap. Wait for the browser's live stack transition, not a fixed estimate.
     void waitForThumbnailStackSettle(cardRef.current)
-      .then(() => invoke(action, { artifactId: artifact.id }))
+      .then(() => {
+        if (action === STACK_CLEAR_EXIT_ACTION) return;
+        return invoke(action, { artifactId: artifact.id });
+      })
       .then(() => {
         onRemoved(artifact.id);
         // The outgoing inert card can make the native thumbnail window
@@ -7631,9 +7781,17 @@ export function ThumbnailCard({
     // artifact waiting forever for animationend.
     exitFallbackTimer.current = setTimeout(
       completeExit,
-      kind === "delete" ? THUMBNAIL_DELETE_FALLBACK_MS : THUMBNAIL_DISMISS_FALLBACK_MS,
+      (kind === "delete" ? THUMBNAIL_DELETE_FALLBACK_MS : THUMBNAIL_DISMISS_FALLBACK_MS)
+        + (kind === "dismiss" ? clearDelayMs : 0),
     );
   };
+
+  useLayoutEffect(() => {
+    if (!stackDismissing) return;
+    exitWith("dismiss", STACK_CLEAR_EXIT_ACTION);
+    // One-shot when Clear all marks this live card. exitWith is a render closure.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stackDismissing]);
 
   const finishExit = (event: React.AnimationEvent<HTMLElement>) => {
     // Ignore bubbled animationend from image streak / dust chips / chrome wave / clip layer.
@@ -7688,11 +7846,16 @@ export function ThumbnailCard({
         isExiting ? "thumbnail-exiting" : "",
       ].filter(Boolean).join(" ")}
       data-thumbnail-id={artifact.id}
-      style={stackCollapsed ? {
-        "--thumbnail-stack-base-depth": stackDepth,
-        "--thumbnail-stack-peek-jitter": `${thumbnailStackPeekJitterPx(stackDepth)}px`,
-        ...(expandFromTransform
-          ? { "--thumbnail-stack-expand-from": expandFromTransform }
+      style={stackCollapsed || clearDelayMs > 0 ? {
+        ...(stackCollapsed ? {
+          "--thumbnail-stack-base-depth": stackDepth,
+          "--thumbnail-stack-peek-jitter": `${thumbnailStackPeekJitterPx(stackDepth)}px`,
+          ...(expandFromTransform
+            ? { "--thumbnail-stack-expand-from": expandFromTransform }
+            : {}),
+        } : {}),
+        ...(clearDelayMs > 0
+          ? { "--thumbnail-clear-delay": `${clearDelayMs}ms` }
           : {}),
       } as CSSProperties : undefined}
       // HTML inert disables all descendant input/focus while the card is decorative.
@@ -9011,7 +9174,10 @@ function PreferencesSections({
         </div>
       </section>
 
-      <UpdatePreferences />
+      <UpdatePreferences
+        showChangelog={settings.show_update_changelog !== false}
+        updateShowChangelog={(value) => update("show_update_changelog", value)}
+      />
 
       <section className="settings-card" id="about" aria-labelledby="about-heading">
         <header className="settings-card-header">

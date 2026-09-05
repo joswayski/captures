@@ -265,6 +265,26 @@ pub const fn capture_surface_focus_retry_allowed(
     scheduled_generation == current_generation && surface_is_visible
 }
 
+/// macOS hardware key code for Escape (`kVK_Escape`).
+pub const MACOS_ESCAPE_KEY_CODE: u16 = 53;
+
+#[must_use]
+pub const fn macos_key_code_is_escape(key_code: u16) -> bool {
+    key_code == MACOS_ESCAPE_KEY_CODE
+}
+
+/// Native Escape monitors must fire even when the overlay is not key: another
+/// screenshot tool can steal activation, the freeze-frame may still be
+/// click-through, or the cursor-claim panel can be the key window.
+#[must_use]
+pub const fn capture_escape_should_dispatch(
+    armed: bool,
+    overlay_visible: bool,
+    overlay_owns_cursor: bool,
+) -> bool {
+    armed || overlay_visible || overlay_owns_cursor
+}
+
 /// Region screenshot (⌘⇧4) claims the crosshair during the key-down hold, not
 /// after modifiers come up or the overlay paints.
 ///
@@ -323,12 +343,14 @@ pub const fn suppress_document_cursor_rects_for_thumbnail(
 mod tests {
     use super::{
         CaptureCursor, CaptureCursorEvent, CaptureCursorKind, CaptureCursorMonitorAction,
-        ThumbnailHoverCursor, capture_cursor_monitor_action, capture_surface_focus_retry_allowed,
+        MACOS_ESCAPE_KEY_CODE, ThumbnailHoverCursor, capture_cursor_monitor_action,
+        capture_escape_should_dispatch, capture_surface_focus_retry_allowed,
         cursor_claim_panel_should_resign_key, cursor_claim_panel_should_show,
-        overlay_prepare_keeps_native_cursor, region_cursor_claim_waits_for_freeze_frame,
-        region_shortcut_claims_cursor_on_press, suppress_document_cursor_rects_for_thumbnail,
-        thumbnail_may_take_key_window, thumbnail_passthrough_disables_cursor_rects,
-        thumbnail_poll_is_live, thumbnail_resets_cursor_on_exit, thumbnail_unpolled_hover,
+        macos_key_code_is_escape, overlay_prepare_keeps_native_cursor,
+        region_cursor_claim_waits_for_freeze_frame, region_shortcut_claims_cursor_on_press,
+        suppress_document_cursor_rects_for_thumbnail, thumbnail_may_take_key_window,
+        thumbnail_passthrough_disables_cursor_rects, thumbnail_poll_is_live,
+        thumbnail_resets_cursor_on_exit, thumbnail_unpolled_hover,
     };
 
     #[test]
@@ -496,6 +518,16 @@ mod tests {
         assert!(capture_surface_focus_retry_allowed(3, 3, true));
         assert!(!capture_surface_focus_retry_allowed(3, 4, true));
         assert!(!capture_surface_focus_retry_allowed(3, 3, false));
+    }
+
+    #[test]
+    fn escape_cancels_when_another_tool_stole_key_focus() {
+        assert!(macos_key_code_is_escape(MACOS_ESCAPE_KEY_CODE));
+        assert!(!macos_key_code_is_escape(0));
+        assert!(capture_escape_should_dispatch(true, false, false));
+        assert!(capture_escape_should_dispatch(false, true, false));
+        assert!(capture_escape_should_dispatch(false, false, true));
+        assert!(!capture_escape_should_dispatch(false, false, false));
     }
 
     #[test]

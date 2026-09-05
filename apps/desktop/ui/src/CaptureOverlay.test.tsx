@@ -98,7 +98,7 @@ async function movePointerOverGuidance(
 }
 
 describe("CaptureOverlay guidance", () => {
-  let activeSession: ActiveSession;
+  let activeSession: ActiveSession | null;
   let capturePointer: { x: number; y: number; inside: boolean } | null;
 
   beforeEach(() => {
@@ -121,6 +121,7 @@ describe("CaptureOverlay guidance", () => {
         || command === "commit_display"
         || command === "commit_region"
         || command === "dismiss_capture_surface"
+        || command === "cancel_active_capture"
       ) {
         return undefined;
       }
@@ -461,6 +462,49 @@ describe("CaptureOverlay guidance", () => {
     expect(hideCurrentWindow.mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(invoke).mock.invocationCallOrder[cancelCall],
     );
+  });
+
+  it("cancels on Escape even when the session id has not loaded yet", async () => {
+    activeSession = null;
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_active_session" || command === "get_pending_session") {
+        return null;
+      }
+      if (
+        command === "show_capture_overlay"
+        || command === "reveal_capture_overlay"
+        || command === "sync_capture_cursor"
+        || command === "cancel_capture"
+        || command === "cancel_active_capture"
+        || command === "dismiss_capture_surface"
+      ) {
+        return undefined;
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+    window.history.replaceState({}, "", "/?view=overlay&mode=region");
+    render(<App />);
+    await screen.findByText("Preparing capture…");
+
+    fireEvent.keyDown(window, { code: "Escape" });
+
+    expect(hideCurrentWindow).toHaveBeenCalledOnce();
+    expect(invoke).toHaveBeenCalledWith("cancel_active_capture");
+  });
+
+  it("cancels a live overlay with the Escape key code", async () => {
+    activeSession = { ...session, frozen: false, snapshot_url: "" };
+    window.history.replaceState(
+      {},
+      "",
+      "/?view=overlay&mode=region&session_id=capture-1&frozen=0",
+    );
+    render(<App />);
+    await screen.findByText("Drag to select a region");
+
+    fireEvent.keyDown(window, { key: "Esc", code: "Escape" });
+
+    expect(invoke).toHaveBeenCalledWith("cancel_capture", { sessionId: "capture-1" });
   });
 
   it("keeps a top-left region square and moves its dimensions on-screen", async () => {
@@ -849,7 +893,9 @@ describe("CaptureOverlay guidance", () => {
     await act(async () => {
       sessionReady?.({
         payload: {
-          ...activeSession,
+          ...session,
+          mode: "window",
+          windows_ready: false,
           windows: [{
             id: "notes",
             title: "Notes",

@@ -54,7 +54,10 @@ export type CompressionPreviewProps = {
   /** Starting split when this overlay mounts. */
   initialSplit?: number;
   onSplitChange?: (split: number) => void;
-  /** When false, the divider handle ignores pointers so drawing can pass through. */
+  /**
+   * When false, the hidden full-width range ignores pointers so drawing can
+   * pass through. The circular divider handle stays draggable.
+   */
   splitDragEnabled?: boolean;
   className?: string;
 };
@@ -220,7 +223,10 @@ export function CompressionPreview({
   }, [afterHint, split, suppressed]);
 
   const processing = pending && !suppressed;
-  const canDragSplit = splitDragEnabled && !processing;
+  // Keep the circular handle draggable even while a drawing tool is selected.
+  // The hidden range still yields so strokes can start on the canvas.
+  const canDragHandle = !processing;
+  const canDragRange = splitDragEnabled && canDragHandle;
 
   const setSplitFromClientX = useCallback((clientX: number) => {
     const frame = frameRef.current;
@@ -231,10 +237,10 @@ export function CompressionPreview({
   }, [setSplit]);
 
   const beginSplitDrag = useCallback((clientX: number) => {
-    if (!canDragSplit) return;
+    if (!canDragHandle) return;
     draggingRef.current = true;
     setSplitFromClientX(clientX);
-  }, [canDragSplit, setSplitFromClientX]);
+  }, [canDragHandle, setSplitFromClientX]);
 
   const savings = beforeBytes !== null
     && afterBytes !== null
@@ -262,7 +268,7 @@ export function CompressionPreview({
         liveBefore ? "is-live" : "",
         waiting ? "is-waiting" : "",
         suppressed ? "is-suppressed" : "",
-        canDragSplit ? "" : "is-draw-locked",
+        canDragRange ? "" : "is-draw-locked",
         processing ? "is-processing" : "",
         className,
       ].filter(Boolean).join(" ")}
@@ -330,16 +336,16 @@ export function CompressionPreview({
               type="button"
               className="compression-preview-handle"
               aria-label="Drag to compare before and after"
-              disabled={!canDragSplit}
+              disabled={!canDragHandle}
               onPointerDown={(event) => {
-                if (!canDragSplit) return;
+                if (!canDragHandle) return;
                 event.preventDefault();
                 event.stopPropagation();
                 event.currentTarget.setPointerCapture(event.pointerId);
                 beginSplitDrag(event.clientX);
               }}
               onPointerMove={(event) => {
-                if (!canDragSplit || !draggingRef.current) return;
+                if (!canDragHandle || !draggingRef.current) return;
                 setSplitFromClientX(event.clientX);
               }}
               onPointerUp={() => {
@@ -360,9 +366,9 @@ export function CompressionPreview({
             step={0.1}
             value={split}
             aria-label="Before and after comparison"
-            disabled={!canDragSplit}
+            disabled={!canDragRange}
             onChange={(event) => {
-              if (!canDragSplit) return;
+              if (!canDragRange) return;
               setSplit(Number(event.target.value));
             }}
           />

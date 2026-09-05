@@ -158,6 +158,11 @@ function previewVideoFormat(): AppSettings["recording"]["video_format"] {
   return value === "gif" || value === "webm" ? value : "mp4";
 }
 
+function previewShowUpdateChangelog(): boolean {
+  const value = query().get("changelog");
+  return value !== "0" && value !== "false";
+}
+
 function previewShortcutSettings(
   platform: "macos" | "windows" | "linux" = previewPlatform(),
 ): Pick<
@@ -233,6 +238,7 @@ const SETTINGS: AppSettings = {
   freeze_screen: previewFreezeScreen(),
   show_cursor_in_screenshots: true,
   screenshot_format: previewScreenshotFormat(),
+  show_update_changelog: previewShowUpdateChangelog(),
 };
 
 const DISPLAY: DisplayDescriptor = {
@@ -337,6 +343,8 @@ function mockArtifacts(): CaptureArtifact[] {
     created_at: new Date(Date.parse("2026-08-27T09:41:12Z") + index * 60_000).toISOString(),
   }));
 }
+
+let previewArtifacts: CaptureArtifact[] = mockArtifacts();
 
 /**
  * Optional local clip for reviewing the recording editor. Generate one with
@@ -473,6 +481,15 @@ function updateStatus(): UpdateStatus {
       display_version: "2026.08.27.5",
       downloaded: 7_340_032,
       total: 12_582_912,
+    };
+  }
+  if (state === "restarting") {
+    return {
+      ...base,
+      state: "restarting",
+      version: "2026.8.2705",
+      display_version: "2026.08.27.5",
+      seconds_remaining: 3,
     };
   }
   if (state === "up_to_date") return { ...base, state: "up_to_date" };
@@ -654,7 +671,6 @@ const RESPONSES: Record<string, unknown> = {
   get_update_status: updateStatus(),
   get_capture_history: HISTORY,
   get_recording_drafts: DRAFTS,
-  get_artifacts: mockArtifacts(),
   get_artifact: ARTIFACT,
   get_recording_artifact: RECORDING,
   get_clipboard_state: CLIPBOARD,
@@ -779,8 +795,29 @@ export function installPreviewBackend(): void {
   applyPreviewStage();
   trackThumbnailPointerForHarness();
   selection = createSelection();
+  previewArtifacts = mockArtifacts();
   mockIPC(async (command, payload) => {
     if (command === "get_recording_selection") return selection;
+    if (command === "get_artifacts") return previewArtifacts;
+    if (command === "dismiss_all_artifacts") {
+      const requested = new Set(
+        Array.isArray((payload as { artifactIds?: string[] } | undefined)?.artifactIds)
+          ? (payload as { artifactIds: string[] }).artifactIds
+          : [],
+      );
+      const removed: string[] = [];
+      previewArtifacts = previewArtifacts.filter((artifact) => {
+        if (!requested.has(artifact.id)) return true;
+        removed.push(artifact.id);
+        return false;
+      });
+      return removed;
+    }
+    if (command === "dismiss_artifact" || command === "trash_artifact") {
+      const artifactId = (payload as { artifactId?: string } | undefined)?.artifactId;
+      previewArtifacts = previewArtifacts.filter((artifact) => artifact.id !== artifactId);
+      return undefined;
+    }
     if (command === "update_settings") {
       const next = (payload as { settings?: AppSettings } | undefined)?.settings;
       if (!next) return SETTINGS;

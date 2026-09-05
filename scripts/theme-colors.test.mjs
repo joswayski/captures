@@ -203,7 +203,14 @@ test("mini-preview stack controls use opaque glass tokens and contained shadows"
     desktopCss,
     /\.thumbnail-stack-control\s*\{[\s\S]*?box-shadow:\s*var\(--thumbnail-card-shadow\)/u,
   );
-  assert.doesNotMatch(desktopCss, /\.thumbnail-stack-clear/u);
+  const stackClear =
+    desktopCss.match(/\.thumbnail-stack-clear\s*\{([\s\S]*?)\n\}/u)?.[1];
+  assert.ok(stackClear, "missing .thumbnail-stack-clear rule");
+  assert.match(stackClear, /flex:\s*0 0 28px/u);
+  assert.doesNotMatch(stackClear, /background:/u);
+  assert.doesNotMatch(stackClear, /color:/u);
+  assert.doesNotMatch(stackClear, /rgb\(/u);
+  assert.doesNotMatch(stackClear, /var\(--theme-signal/u);
 });
 
 test("preset accent and signal values are not duplicated outside the shared palette", async () => {

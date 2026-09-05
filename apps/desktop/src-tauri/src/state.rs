@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{
     Arc,
@@ -380,6 +380,30 @@ impl AppState {
         });
     }
 
+    /// Take matching captures off the mini-preview stack.
+    ///
+    /// IDs that are not on the stack are ignored. Saved folder files, Capture
+    /// History, editor-retained exports, and any leftover stack entries stay.
+    /// A later capture starts a fresh stack.
+    pub fn take_preview_stack(&self, artifact_ids: &[String]) -> Vec<CaptureArtifact> {
+        if artifact_ids.is_empty() {
+            return Vec::new();
+        }
+        let requested: HashSet<&str> = artifact_ids.iter().map(String::as_str).collect();
+        let mut artifacts = self.artifacts.lock();
+        let mut dismissed = Vec::with_capacity(requested.len().min(artifacts.len()));
+        let mut kept = Vec::with_capacity(artifacts.len());
+        for artifact in artifacts.drain(..) {
+            if requested.contains(artifact.id.as_str()) {
+                dismissed.push(artifact);
+            } else {
+                kept.push(artifact);
+            }
+        }
+        *artifacts = kept;
+        dismissed
+    }
+
     /// Replace a capture already on the mini-preview stack or retained from an
     /// editor export. Returns false when neither store has this id.
     pub fn replace_artifact(&self, artifact: CaptureArtifact) -> bool {
@@ -729,5 +753,88 @@ mod tests {
                 .and_then(|artifact| artifact.path),
             Some("/tmp/keep-again.png".to_owned())
         );
+    }
+
+    #[test]
+    fn clearing_the_preview_stack_keeps_saved_files_and_editor_exports() {
+        use captures_capture::CaptureMode;
+
+        use crate::models::{CaptureArtifact, ClipboardCopyStatus};
+
+        use super::AppState;
+
+        let state = AppState::new();
+        let unsaved = CaptureArtifact {
+            id: "capture-1".to_owned(),
+            path: None,
+            preview_url: String::new(),
+            full_url: String::new(),
+            width: 8,
+            height: 8,
+            size_bytes: 12,
+            created_at: "2026-08-29T00:00:00Z".to_owned(),
+            mode: CaptureMode::Region,
+            history_saved: true,
+            clipboard_copy_status: ClipboardCopyStatus::Skipped,
+            image_png: vec![1],
+            preview_png: vec![2],
+        };
+        let saved = CaptureArtifact {
+            id: "capture-2".to_owned(),
+            path: Some("/tmp/saved.png".to_owned()),
+            ..unsaved.clone()
+        };
+        let editor_export = CaptureArtifact {
+            id: "editor-1".to_owned(),
+            path: Some("/tmp/editor.png".to_owned()),
+            ..unsaved.clone()
+        };
+        let pending_delete = CaptureArtifact {
+            id: "capture-3".to_owned(),
+            path: Some("/tmp/pending-delete.png".to_owned()),
+            ..unsaved.clone()
+        };
+        state.artifacts.lock().push(unsaved);
+        state.artifacts.lock().push(saved);
+        state.artifacts.lock().push(pending_delete);
+        state.store_editor_artifact("capture-1", editor_export);
+
+        let dismissed = state.take_preview_stack(&["capture-1".to_owned(), "capture-2".to_owned()]);
+        assert_eq!(
+            dismissed
+                .iter()
+                .map(|artifact| artifact.id.as_str())
+                .collect::<Vec<_>>(),
+            ["capture-1", "capture-2"]
+        );
+        let remaining: Vec<String> = state
+            .artifacts
+            .lock()
+            .iter()
+            .map(|artifact| artifact.id.clone())
+            .collect();
+        assert_eq!(remaining, ["capture-3"]);
+        assert_eq!(
+            dismissed
+                .iter()
+                .find(|artifact| artifact.id == "capture-2")
+                .and_then(|artifact| artifact.path.as_deref()),
+            Some("/tmp/saved.png")
+        );
+        assert_eq!(
+            state
+                .find_artifact("capture-3")
+                .and_then(|artifact| artifact.path),
+            Some("/tmp/pending-delete.png".to_owned())
+        );
+        assert_eq!(
+            state
+                .find_artifact("editor-1")
+                .and_then(|artifact| artifact.path),
+            Some("/tmp/editor.png".to_owned())
+        );
+        assert!(state.take_preview_stack(&[]).is_empty());
+        assert!(state.take_preview_stack(&["missing".to_owned()]).is_empty());
+        assert!(state.find_artifact("capture-3").is_some());
     }
 }
