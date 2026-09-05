@@ -75,7 +75,7 @@ fn mark_clean_exit_at(session_marker: &Path, panic_file: &Path) {
     let _ = fs::remove_file(panic_file);
 }
 
-fn mark_session_started() {
+pub(crate) fn mark_session_started() {
     let path = session_marker_path();
     if let Some(parent) = path
         .parent()

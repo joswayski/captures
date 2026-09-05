@@ -9,21 +9,77 @@
 use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+#[cfg_attr(not(windows), allow(dead_code))]
+const WM_QUERYENDSESSION: u32 = 0x0011;
+#[cfg_attr(not(windows), allow(dead_code))]
+const WM_ENDSESSION: u32 = 0x0016;
+
 static INSTALLED: Once = Once::new();
 static ENDING: AtomicBool = AtomicBool::new(false);
+static PENDING: AtomicBool = AtomicBool::new(false);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(windows), allow(dead_code))]
+enum SessionMessage {
+    QueryEnd,
+    SessionEnding,
+    SessionCanceled,
+}
 
 pub fn install() {
     INSTALLED.call_once(install_platform);
 }
 
 pub fn is_ending() -> bool {
-    ENDING.load(Ordering::SeqCst) || os_reports_session_ending()
+    ENDING.load(Ordering::SeqCst) || PENDING.load(Ordering::SeqCst) || os_reports_session_ending()
 }
 
-#[cfg(windows)]
-fn note_ending() {
+#[cfg_attr(not(windows), allow(dead_code))]
+fn begin_os_session_end() {
+    PENDING.store(true, Ordering::SeqCst);
+    crate::crash_report::mark_clean_exit();
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn confirm_os_session_end() {
+    PENDING.store(false, Ordering::SeqCst);
     ENDING.store(true, Ordering::SeqCst);
     crate::crash_report::mark_clean_exit();
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn cancel_os_session_end() {
+    PENDING.store(false, Ordering::SeqCst);
+    ENDING.store(false, Ordering::SeqCst);
+    crate::crash_report::mark_session_started();
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn classify_session_message(message: u32, wparam: usize) -> Option<SessionMessage> {
+    match message {
+        WM_QUERYENDSESSION => Some(SessionMessage::QueryEnd),
+        WM_ENDSESSION if wparam != 0 => Some(SessionMessage::SessionEnding),
+        WM_ENDSESSION => Some(SessionMessage::SessionCanceled),
+        _ => None,
+    }
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn apply_session_message(kind: SessionMessage) -> isize {
+    match kind {
+        SessionMessage::QueryEnd => {
+            begin_os_session_end();
+            1
+        }
+        SessionMessage::SessionEnding => {
+            confirm_os_session_end();
+            0
+        }
+        SessionMessage::SessionCanceled => {
+            cancel_os_session_end();
+            0
+        }
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -107,7 +163,7 @@ mod unix {
 
 #[cfg(windows)]
 mod windows {
-    use super::note_ending;
+    use super::{apply_session_message, classify_session_message, confirm_os_session_end};
     use std::ptr;
     use windows_sys::Win32::{
         Foundation::{HWND, LPARAM, LRESULT, WPARAM},
@@ -119,8 +175,8 @@ mod windows {
             Threading::SetProcessShutdownParameters,
         },
         UI::WindowsAndMessaging::{
-            CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, RegisterClassW, WM_ENDSESSION,
-            WM_QUERYENDSESSION, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_OVERLAPPED,
+            CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, RegisterClassW, WNDCLASSW,
+            WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_OVERLAPPED,
         },
     };
 
@@ -173,7 +229,7 @@ mod windows {
             control,
             CTRL_CLOSE_EVENT | CTRL_LOGOFF_EVENT | CTRL_SHUTDOWN_EVENT
         ) {
-            note_ending();
+            confirm_os_session_end();
             1
         } else {
             0
@@ -186,13 +242,45 @@ mod windows {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
-        if message == WM_QUERYENDSESSION || message == WM_ENDSESSION {
-            note_ending();
-            if message == WM_QUERYENDSESSION {
-                return 1;
-            }
-            return 0;
+        if let Some(kind) = classify_session_message(message, wparam) {
+            return apply_session_message(kind);
         }
         unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SessionMessage, WM_ENDSESSION, WM_QUERYENDSESSION, classify_session_message};
+    use crate::crash_report::should_prevent_exit_with;
+
+    #[test]
+    fn query_end_session_is_not_a_confirmed_end() {
+        assert_eq!(
+            classify_session_message(WM_QUERYENDSESSION, 0),
+            Some(SessionMessage::QueryEnd)
+        );
+        assert_eq!(
+            classify_session_message(WM_QUERYENDSESSION, 1),
+            Some(SessionMessage::QueryEnd)
+        );
+    }
+
+    #[test]
+    fn end_session_wparam_distinguishes_confirm_from_cancel() {
+        assert_eq!(
+            classify_session_message(WM_ENDSESSION, 1),
+            Some(SessionMessage::SessionEnding)
+        );
+        assert_eq!(
+            classify_session_message(WM_ENDSESSION, 0),
+            Some(SessionMessage::SessionCanceled)
+        );
+    }
+
+    #[test]
+    fn canceled_shutdown_keeps_the_tray_app_running() {
+        assert!(!should_prevent_exit_with(None, true));
+        assert!(should_prevent_exit_with(None, false));
     }
 }
