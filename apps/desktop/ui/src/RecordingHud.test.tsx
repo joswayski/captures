@@ -202,6 +202,7 @@ describe("RecordingHud", () => {
 
     expect(screen.getByText("Captures is ready to use")).toBeInTheDocument();
     expect(notice).toHaveAttribute("data-caret", "top");
+    expect(container.querySelector(".tray-notice-card")).not.toBeInTheDocument();
     expect((notice as HTMLElement | null)?.style.getPropertyValue("--tray-caret-x")).toBe(
       "180px",
     );

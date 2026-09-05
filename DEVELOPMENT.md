@@ -42,12 +42,14 @@ open "http://127.0.0.1:1420/?view=update&mock=1&update=downloading"
 open "http://127.0.0.1:1420/?view=update&mock=1&update=restarting"
 open "http://127.0.0.1:1420/?view=update&mock=1&update=error"
 open "http://127.0.0.1:1420/?view=startup&mock=1"
+open "http://127.0.0.1:1420/?view=startup&mock=1&stage=1&caret=top&caret_x=148"
 ```
 
 - `mock` installs the sample backend (`apps/desktop/ui/src/dev/previewBackend.ts`).
 - `stage` paints a sample desktop behind transparent overlay windows.
 - Other parameters set variants: `mode`, `target`, `state`, `update`, `platform`, `granted`, `drafts`, `captures`, `count`, `placement`, `changelog`.
 - `changelog=0` hides stacked release notes on the update notice (Preferences default is on).
+- `caret=top` or `caret=bottom` plus `caret_x` places the tray-pointing triangle on the update and launch notices.
 - `placement` sets the mini-preview home corner in the thumbnail and Preferences harness (`top-left`, `top-right`, `bottom-left`, `bottom-right`).
 - `auto=1` enables automatic capture in the selector harness so its compact controls and Preferences link can be reviewed.
 - `live=1` or `frozen=0` shows the capture overlay and recording selector over the live desktop instead of a freeze-frame.
@@ -68,11 +70,12 @@ module per family of surfaces from `apps/desktop/ui/src/styles/`.
 
 - Regular windows follow the light/dark/system appearance setting.
 - Surfaces that float over the desktop — capture overlay, capture menu, recording
-  controls, mini previews, saved/hidden recording notices — use the fixed `--glass-*`
-  media palette so they stay legible on any wallpaper.
+  controls, mini previews, saved/hidden recording notices, the post-update / launch
+  tooltip — use the fixed `--glass-*` media palette so they stay legible on any
+  wallpaper.
 - The update notice is a solid `--surface-raised` card in a transparent native
-  window. The post-update / launch notice is a pill tooltip. Both use a triangular
-  caret that points at the tray or menu bar icon.
+  window. The launch notice is a dark glass pill with a CSS triangle caret pointing
+  at the tray or menu bar icon, not a rotated square.
 - Accent is reserved for the primary capture action, selection, and focus. Status
   colors keep stable meanings: signal for recording and destructive, green for saved,
   blue for progress.

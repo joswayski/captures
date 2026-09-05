@@ -434,7 +434,7 @@ function TrayNoticeShell({
 export function StartupNotice() {
   return (
     <TrayNoticeShell className="startup-notice">
-      <p className="tray-notice-card startup-notice-card" role="status">
+      <p className="startup-notice-card" role="status">
         Captures is ready to use
       </p>
     </TrayNoticeShell>

@@ -1916,6 +1916,7 @@
   --tray-caret-size: 8px;
   --tray-caret-span: 14px;
   --tray-caret-overlap: 1px;
+  --tray-caret-fill: var(--surface-raised);
   /* Match TRAY_NOTICE_FRAME_PAD: dark --shadow-md is 0 8px 20px (28px down). */
   --tray-frame-pad: 28px;
   position: relative;
@@ -1949,25 +1950,32 @@
   box-shadow: var(--shadow-md);
 }
 
+/* CSS border triangle — a real tooltip pointer, not a rotated square. */
 .tray-notice-caret {
   position: absolute;
   z-index: 2;
   left: var(--tray-caret-x, 50%);
-  width: var(--tray-caret-span);
-  height: var(--tray-caret-size);
+  width: 0;
+  height: 0;
   pointer-events: none;
-  background: var(--surface-raised);
+  background: none;
+  border-style: solid;
+  border-color: transparent;
   transform: translateX(-50%);
 }
 
 .tray-notice[data-caret="top"] .tray-notice-caret {
   top: 0;
-  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+  border-width: 0 calc(var(--tray-caret-span) / 2) var(--tray-caret-size)
+    calc(var(--tray-caret-span) / 2);
+  border-bottom-color: var(--tray-caret-fill);
 }
 
 .tray-notice[data-caret="bottom"] .tray-notice-caret {
   bottom: 0;
-  clip-path: polygon(0 0, 100% 0, 50% 100%);
+  border-width: var(--tray-caret-size) calc(var(--tray-caret-span) / 2) 0
+    calc(var(--tray-caret-span) / 2);
+  border-top-color: var(--tray-caret-fill);
 }
 
 .update-notice {
@@ -2429,7 +2437,25 @@
 
 /* ------------------------------------------------- transient notices ------ */
 
+/* Native window is STARTUP_NOTICE_WIDTH + 2*FRAME_PAD by HEIGHT + FRAME_PAD + CARET. */
+html[data-preview-harness-view="startup"] #root {
+  position: fixed;
+  top: 28px;
+  left: 50%;
+  width: 296px;
+  height: 72px;
+  transform: translateX(-50%);
+}
+
+html[data-preview-harness-view="startup"]:has([data-caret="bottom"]) #root {
+  top: auto;
+  bottom: 28px;
+}
+
 .startup-notice {
+  --tray-caret-fill: var(--glass-strong-solid);
+  --tray-caret-span: 12px;
+  filter: var(--tooltip-shadow);
   animation: startup-arrive var(--dur-4) var(--ease-out);
 }
 
@@ -2440,11 +2466,13 @@
 .startup-notice-card {
   display: grid;
   margin: 0;
-  padding: var(--s-5) var(--s-7);
+  padding: var(--s-3) var(--s-6);
+  flex: 1;
   place-items: center;
   border: 0;
   border-radius: var(--r-pill);
-  color: var(--text);
+  color: var(--glass-text);
+  background: var(--glass-strong-solid);
   font-size: var(--text-md);
   font-weight: var(--weight-semibold);
   letter-spacing: var(--tracking-tight);

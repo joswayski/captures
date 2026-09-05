@@ -4574,15 +4574,16 @@ fn create_overlay_window(app: &AppHandle) -> Result<(), tauri::Error> {
     Ok(())
 }
 
-const STARTUP_NOTICE_WIDTH: f64 = 252.0;
-const STARTUP_NOTICE_HEIGHT: f64 = 44.0;
+const STARTUP_NOTICE_WIDTH: f64 = 240.0;
+const STARTUP_NOTICE_HEIGHT: f64 = 36.0;
 /// Transparent padding around the rounded card so `--shadow-md` is not clipped.
 /// Dark `--shadow-md` is `0 8px 20px`, so the blur plus Y offset needs 28px.
 const TRAY_NOTICE_FRAME_PAD: f64 = 28.0;
 /// Extra window height reserved for the tray-pointing caret.
 const TRAY_NOTICE_CARET_SIZE: f64 = 8.0;
-/// Keep the caret off the rounded ends of the notice.
-const TRAY_NOTICE_CARET_INSET: f64 = 22.0;
+/// Keep the caret off the rounded ends of the notice. The launch pill is 36px
+/// tall, so its end-caps are 18px; half the 12px caret span is 6px more.
+const TRAY_NOTICE_CARET_INSET: f64 = 24.0;
 /// Pull the transparent window over the tray so the caret tip sits on the icon.
 const TRAY_NOTICE_TRAY_OVERLAP: f64 = 2.0;
 const TRAY_NOTICE_SCREEN_MARGIN: f64 = 10.0;
