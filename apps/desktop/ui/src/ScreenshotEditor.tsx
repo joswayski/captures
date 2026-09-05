@@ -132,20 +132,20 @@ import {
   snapTranslatedBounds,
   stackDropLightFocusAtPoint,
   createDocumentPaintCanvas,
-  defaultTextBoxWidth,
+  createPlacedTextElement,
   editorTextCanvasFont,
   editorTextFontStack,
   estimateTextWidth,
-  fitAutoWidthTextElement,
-  fittedAutoWidthTextBox,
+  fitEditingAutoWidthTextElement,
   isAutoWidthText,
+  isBlankTextElement,
   loadEditorTextFonts,
   TEXT_LINE_HEIGHT_RATIO,
   TEXT_OPTICAL_CENTER_NUDGE_RATIO,
   textBackgroundPad,
+  textBackgroundRadius,
   textGlyphDrawY,
   textHasBackgroundPlate,
-  textPresetPrefersCenter,
   textStylePreset,
   wrapTextLines,
   translateElement,
@@ -669,7 +669,7 @@ function measureTextElementLine(element: EditorTextElement, line: string): numbe
 }
 
 function fitLiveText(element: EditorTextElement): EditorTextElement {
-  return fitAutoWidthTextElement(
+  return fitEditingAutoWidthTextElement(
     element,
     (line) => measureTextElementLine(element, line),
   );
@@ -677,16 +677,6 @@ function fitLiveText(element: EditorTextElement): EditorTextElement {
 
 function textOutlineWidth(fontSize: number): number {
   return Math.max(1.5, fontSize * 0.08);
-}
-
-function textBackgroundRadius(
-  element: Extract<ScreenshotElement, { kind: "text" }>,
-  backgroundWidth: number,
-  backgroundHeight: number,
-): number {
-  if (!element.roundedBackground) return 0;
-  // Full capsule when the plate is wider than tall (the usual bubble label).
-  return Math.min(backgroundWidth / 2, backgroundHeight / 2);
 }
 
 function drawSmoothPath(
@@ -1625,6 +1615,62 @@ function formatScreenshotMaximumFileSizeInput(
 ): string {
   const value = bytes / SCREENSHOT_FILE_SIZE_UNIT_BYTES[unit];
   return Number(value.toPrecision(8)).toString();
+}
+
+/** Footer copy next to Save: first write, overwrite, or a separate file. */
+function screenshotSaveHint({
+  sourceMissing,
+  jpegDropsTransparency,
+  qualityMode,
+  exportFormat,
+  hasOriginalFile,
+  savingCopy,
+}: {
+  sourceMissing: boolean;
+  jpegDropsTransparency: boolean;
+  qualityMode: ScreenshotQualityMode;
+  exportFormat: ExportFormat;
+  hasOriginalFile: boolean;
+  savingCopy: boolean;
+}): string {
+  const formatLabel = exportFormat === "jpeg"
+    ? "JPEG"
+    : exportFormat === "webp"
+      ? "WebP"
+      : "PNG";
+  if (sourceMissing) {
+    return "The original was deleted. You can still copy or save this edit.";
+  }
+  if (jpegDropsTransparency) {
+    return "JPEG will fill in transparent areas. Use PNG or WebP to keep them.";
+  }
+  const firstSave = !hasOriginalFile;
+  if (qualityMode === "preserve") {
+    if (firstSave) return `Save writes a ${formatLabel} at original quality.`;
+    if (savingCopy) {
+      return `Save writes a new ${formatLabel} at original quality and leaves the original untouched.`;
+    }
+    return `Save keeps original quality as ${formatLabel} and overwrites the original.`;
+  }
+  if (qualityMode === "maximum") {
+    if (exportFormat === "jpeg") {
+      if (firstSave) return "Save writes a JPEG within the selected limit.";
+      if (savingCopy) {
+        return "Save writes a new JPEG within the selected limit and leaves the original untouched.";
+      }
+      return "Save writes a JPEG within the selected limit and overwrites the original.";
+    }
+    if (firstSave) return `Save writes a ${formatLabel} within the selected size limit.`;
+    if (savingCopy) {
+      return `Save writes a new ${formatLabel} within the selected size limit and leaves the original untouched.`;
+    }
+    return `Save writes a ${formatLabel} within the selected size limit and overwrites the original.`;
+  }
+  if (firstSave) return `Save writes a compressed ${formatLabel}.`;
+  if (savingCopy) {
+    return `Save writes a compressed ${formatLabel} and leaves the original untouched.`;
+  }
+  return `Save overwrites the original with compressed ${formatLabel}. Turn on Save as new file to keep it.`;
 }
 
 /**
@@ -3590,38 +3636,13 @@ export function ScreenshotEditor() {
       }
       // Keep the coming textarea focused; otherwise the canvas click steals it.
       event.preventDefault();
-      const styled = applyTextStylePreset({
+      const element = createPlacedTextElement({
         id: editorId(),
-        kind: "text",
-        x: point.x,
-        y: point.y,
-        text: "Text",
+        point,
         fontSize: defaultFontSize,
-        width: defaultTextBoxWidth(defaultFontSize),
-        autoWidth: true,
-        fontFamily: "sans",
-        bold: false,
-        italic: false,
-        // Bubble / plate styles look off when left-aligned in a wider box.
-        align: textPresetPrefersCenter(defaultTextStyle) ? "center" : "left",
         color: defaultStyle.color,
-        background: null,
-        outlined: false,
-        roundedBackground: false,
-        locked: false,
-        visible: true,
-        opacity: 100,
-        blendMode: "source-over",
-      }, defaultTextStyle);
-      const element = {
-        ...styled,
-        autoWidth: true as const,
-        width: fittedAutoWidthTextBox(
-          styled.text,
-          styled.fontSize,
-          (line) => measureTextElementLine(styled, line),
-        ),
-      };
+        preset: defaultTextStyle,
+      });
       // Fully off-canvas text still grows the document so the label is not lost.
       const withText = { ...current, elements: [...current.elements, element] };
       const next = isFullyOutsideCanvas(elementBounds(element), current)
@@ -3632,7 +3653,7 @@ export function ScreenshotEditor() {
         next.elements.find(({ id }) => id === element.id),
         next,
       );
-      beginTextEditingFromPointerDown(element.id, true);
+      beginTextEditingFromPointerDown(element.id);
       return;
     }
 
@@ -5227,6 +5248,16 @@ export function ScreenshotEditor() {
   const formatRequiresCopy = sourceMissing
     || !screenshotPathMatchesFormat(artifact.path, exportFormat);
   const savingCopy = makeCopy || formatRequiresCopy;
+  const hasOriginalFile = Boolean(artifact.path) && !sourceMissing;
+  const saveHint = screenshotSaveHint({
+    sourceMissing,
+    jpegDropsTransparency: exportFormat === "jpeg"
+      && editorDocument.background == null,
+    qualityMode,
+    exportFormat,
+    hasOriginalFile,
+    savingCopy,
+  });
   const sourceDirectory = artifact.path ? screenshotParentDirectory(artifact.path) : "";
   const sourceStem = artifact.path ? screenshotFileStem(artifact.path) : "";
   const maximumSizeBytes = qualityMode === "maximum"
@@ -5742,9 +5773,21 @@ export function ScreenshotEditor() {
                     return;
                   }
                   setSubduedInlineSelectionId(null);
+                  const textId = editingText.id;
+                  const shouldDiscard = isBlankTextElement(editingText);
                   setEditingTextId((current) => (
-                    current === editingText.id ? null : current
+                    current === textId ? null : current
                   ));
+                  if (!shouldDiscard) return;
+                  const currentDocument = documentRef.current;
+                  if (!currentDocument) return;
+                  commitDocument({
+                    ...currentDocument,
+                    elements: currentDocument.elements.filter((element) => (
+                      element.id !== textId
+                    )),
+                  });
+                  setSelectedId((current) => (current === textId ? null : current));
                 }}
                 onKeyDown={(event) => {
                   if (event.key !== "Escape") return;
@@ -7291,6 +7334,23 @@ export function ScreenshotEditor() {
               />
             </span>
           </div>
+          <div className="screenshot-export-secondary">
+            {saved && <button type="button" onClick={() => void showSavedFile()}>Show in Folder</button>}
+            <button
+              type="button"
+              className={success?.kind === "copy" ? "success" : undefined}
+              title="Copy the edited image to the clipboard. Does not save a file."
+              disabled={busy !== null}
+              onClick={() => void copyEditedImage()}
+            >
+              <EditorIcon name={success?.kind === "copy" ? "check" : "copy"} />
+              {success?.kind === "copy"
+                ? "Copied"
+                : busy === "copying"
+                  ? "Copying…"
+                  : "Copy image"}
+            </button>
+          </div>
           <div
             className={[
               "screenshot-export-status",
@@ -7324,29 +7384,7 @@ export function ScreenshotEditor() {
                 ].filter(Boolean).join(" ")}
                 role={jpegDropsTransparency ? "status" : undefined}
               >
-                {sourceMissing
-                  ? "The original was deleted. You can still copy or save this edit."
-                  : jpegDropsTransparency
-                    ? "JPEG will fill in transparent areas. Use PNG or WebP to keep them."
-                    : qualityMode === "preserve"
-                    ? savingCopy
-                      ? `Keeps original quality as ${formatLabel} and saves a new file.`
-                      : `Keeps original quality as ${formatLabel} and replaces the original.`
-                    : qualityMode === "maximum"
-                      ? exportFormat === "jpeg"
-                        ? savingCopy
-                          ? "The JPEG stays within the selected limit and saves as a new file."
-                          : "The JPEG stays within the selected limit and replaces the original."
-                        : savingCopy
-                          ? `Compresses ${formatLabel} to aim for the size limit and saves a new file.`
-                          : `Compresses ${formatLabel} to aim for the size limit and replaces the original.`
-                      : qualityMode === "compress"
-                        ? savingCopy
-                          ? `Compressed ${formatLabel} saves as a new file and leaves the original untouched.`
-                          : `Compressed ${formatLabel} replaces the original; turn on Save as new file to keep it.`
-                        : savingCopy
-                          ? "Save creates a new file and leaves the original untouched."
-                          : "Save replaces the original; turn on Save as new file to keep it."}
+                {saveHint}
               </div>
             )}
           </div>
@@ -7367,24 +7405,10 @@ export function ScreenshotEditor() {
                 <span>Save as new file</span>
               </label>
             )}
-            {saved && <button type="button" onClick={() => void showSavedFile()}>Show in Folder</button>}
-            <button
-              type="button"
-              className={success?.kind === "copy" ? "success" : undefined}
-              title="Copy the edited image to the clipboard"
-              disabled={busy !== null}
-              onClick={() => void copyEditedImage()}
-            >
-              <EditorIcon name={success?.kind === "copy" ? "check" : "copy"} />
-              {success?.kind === "copy"
-                ? "Copied"
-                : busy === "copying"
-                  ? "Copying…"
-                  : "Copy image"}
-            </button>
             <button
               type="button"
               className="primary"
+              title={saveHint}
               disabled={busy !== null}
               onClick={() => void saveEditedImage()}
             >

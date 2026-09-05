@@ -352,6 +352,38 @@ describe("applyThumbnailNativeHover", () => {
     expect(card).not.toHaveAttribute("data-thumbnail-native-active");
   });
 
+  it("keeps pointer on Show less when the hit is the toolbar around the pill", () => {
+    document.body.innerHTML = `
+      <main class="thumbnail-stack">
+        <article class="thumbnail-card"><img alt=""></article>
+      </main>
+      <div class="thumbnail-stack-toolbar">
+        <button class="thumbnail-stack-control thumbnail-stack-minimize">Show less</button>
+      </div>
+    `;
+    const toolbar = document.querySelector<HTMLElement>(".thumbnail-stack-toolbar")!;
+    const control = document.querySelector<HTMLButtonElement>(".thumbnail-stack-control")!;
+    vi.spyOn(toolbar, "getBoundingClientRect").mockReturnValue({
+      x: 28,
+      y: 8,
+      top: 8,
+      right: 120,
+      bottom: 36,
+      left: 28,
+      width: 92,
+      height: 28,
+      toJSON: () => ({}),
+    });
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => toolbar),
+    });
+
+    expect(applyThumbnailNativeHover({ x: 30, y: 10, inside: true })).toBe("pointer");
+    expectNativePointerHover(control, true);
+    expect(shouldIgnoreThumbnailCursorEvents({ x: 30, y: 10, inside: true })).toBe(false);
+  });
+
   it("moves hover directly to a remaining card after the stack changes", () => {
     document.body.innerHTML = `
       <article id="removed" class="thumbnail-card"><button>Delete</button></article>

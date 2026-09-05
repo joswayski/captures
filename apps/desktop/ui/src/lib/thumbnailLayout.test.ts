@@ -6,7 +6,9 @@ import {
   createThumbnailStackShiftController,
   computeThumbnailStackShifts,
   countMotionReadySlotsBelow,
+  hasThumbnailStackShiftPx,
   thumbnailStackSuppressesSlotShift,
+  thumbnailStackShiftsFromTop,
   thumbnailStackShiftSlots,
   easeOutCubic,
   resolveThumbnailStackShiftPx,
@@ -30,6 +32,7 @@ import {
   thumbnailStackGravityFromWorkArea,
   thumbnailStackAnchorFromGravity,
   thumbnailStackHarnessPileTop,
+  thumbnailStackHarnessCardTop,
   convertHarnessStackOffsetAnchor,
   convertThumbnailStackFrameAnchor,
   thumbnailStackVisualPileBottom,
@@ -297,6 +300,26 @@ describe("thumbnail stack layout", () => {
     expect(THUMBNAIL_STACK_ANCHOR_TOP_GRAVITY).toBeLessThan(0);
     expect(THUMBNAIL_STACK_ANCHOR_BOTTOM_GRAVITY).toBeGreaterThan(0);
 
+    const bottomCardTop = thumbnailStackHarnessCardTop({
+      offsetY: -280,
+      anchor: "bottom",
+      viewportHeight,
+    });
+    const flippedCardTop = thumbnailStackHarnessCardTop({
+      offsetY: convertHarnessStackOffsetAnchor(
+        { x: 0, y: -280 },
+        "bottom",
+        "top",
+        viewportHeight,
+        contentHeight,
+      ).y,
+      anchor: "top",
+      viewportHeight,
+    });
+    expect(Math.abs(flippedCardTop - bottomCardTop)).toBe(
+      THUMBNAIL_STACK_CONTROL_GUTTER_PX - THUMBNAIL_STACK_PADDING_PX,
+    );
+
     expect(thumbnailStackBiasFromNormalizedX(0)).toBe(-1);
     expect(thumbnailStackBiasFromNormalizedX(0.5)).toBe(0);
     expect(thumbnailStackBiasFromNormalizedX(1)).toBe(1);
@@ -410,7 +433,23 @@ describe("thumbnail stack layout", () => {
     );
 
     expect(arrival?.[1]).toContain(":not(.thumbnail-exiting)");
+    expect(arrival?.[1]).toContain(":not(.thumbnail-drop-rejected)");
     expect(arrival?.[2]).not.toMatch(/\b(?:both|forwards)\b/);
+    // Arrived `animation: none` is more specific than dismiss. Skip exit so
+    // Close can still slide the card out with the motion-blur streak, and skip
+    // drop-reject so a self-drop is not held still.
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-card\.thumbnail-ready\.thumbnail-arrived:not\(\.thumbnail-exiting\):not\(\.thumbnail-drop-rejected\)\s*\{\s*animation:\s*none;/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-card\.thumbnail-ready\.thumbnail-arrived:not\(\.thumbnail-exiting\):not\(\.thumbnail-drop-rejected\)\s*\{\s*animation:\s*none;/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-exit-dismiss\s*\{[^}]*animation:\s*thumbnail-dismiss/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /@keyframes thumbnail-dismiss\s*\{[\s\S]*?transform:\s*translateX\(-118px\)/,
+    );
   });
 
   it("keeps the blurred source above delete dust during the handoff", () => {
@@ -482,7 +521,9 @@ describe("thumbnail stack layout", () => {
     );
 
     expect(hitTarget?.[1]).toMatch(/cursor:\s*pointer/);
+    expect(hitTarget?.[1]).toMatch(/--thumbnail-collapsed-hover-peek/);
     expect(hitTarget?.[1]).toMatch(/--thumbnail-collapsed-peek/);
+    expect(hitTarget?.[1]).toMatch(/border-radius:\s*0/);
     expect(hitTarget?.[1]).toMatch(/left:\s*28px/);
     expect(hitTarget?.[1]).toMatch(/right:\s*28px/);
     expect(hitTarget?.[1]).not.toMatch(/--thumbnail-collapsed-skew-pad/);
@@ -496,13 +537,28 @@ describe("thumbnail stack layout", () => {
       /html\.thumbnail-native-tracking \.thumbnail-stack-minimized \.thumbnail-card img/,
     );
     expect(thumbnailStyles).toMatch(
-      /html:has\(\.thumbnail-card:hover\)\s*\{[\s\S]*?cursor:\s*grab/,
+      /html:has\(\.thumbnail-card:hover\):not\(:has\(/,
     );
     expect(thumbnailStyles).toMatch(
-      /html:has\(\s*:is\(\s*\.thumbnail-stack-control/,
+      /html:has\(\.thumbnail-card:hover\):not\(:has\([\s\S]*?cursor:\s*grab/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /html:not\(:has\(\.thumbnail-stack-dragging\)\):not\(:has\(\.thumbnail-card\.thumbnail-file-dragging\)\):has\(\s*:is\(\s*\.thumbnail-stack-toolbar/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /html:not\(:has\(\.thumbnail-stack-dragging\)\):not\(:has\(\.thumbnail-card\.thumbnail-file-dragging\)\):has\([\s\S]*?\) \*\s*\{[\s\S]*?cursor:\s*pointer !important/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /html\.thumbnail-native-tracking:not\(:has\(\.thumbnail-stack-dragging\)\) :is\(\.thumbnail-stack-toolbar/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /html:has\(\.thumbnail-stack-dragging\),\s*\nhtml:has\(\.thumbnail-stack-dragging\) \*,\s*\nhtml:has\(\.thumbnail-card\.thumbnail-file-dragging\),\s*\nhtml:has\(\.thumbnail-card\.thumbnail-file-dragging\) \*\s*\{[\s\S]*?cursor:\s*-webkit-grabbing !important/,
     );
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-card:hover :is\(button, \.icon-button, \.thumbnail-editor-control\):not\(:disabled\)/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-toolbar:hover,\s*\n\.thumbnail-stack-toolbar:hover \*/,
     );
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-control:hover:not\(:disabled\),\s*\n\.thumbnail-stack-control:hover:not\(:disabled\) \*/,
@@ -544,7 +600,10 @@ describe("thumbnail stack layout", () => {
       /\.thumbnail-stack-toolbar:not\(\.thumbnail-stack-toolbar-leaving\):not\(\.thumbnail-stack-toolbar-exiting\):not\(\.thumbnail-stack-toolbar-entering\) \.thumbnail-stack-minimize:hover/,
     );
     expect(thumbnailStyles).toMatch(
-      /\.thumbnail-stack-toolbar:not\(\.thumbnail-stack-toolbar-leaving\):not\(\.thumbnail-stack-toolbar-exiting\):not\(\.thumbnail-stack-toolbar-entering\) \.thumbnail-stack-minimize:focus-visible \{[\s\S]*?cursor:\s*pointer[\s\S]*?transform:\s*translateY\(-1px\)/,
+      /\.thumbnail-stack-toolbar:not\(\.thumbnail-stack-toolbar-leaving\):not\(\.thumbnail-stack-toolbar-exiting\):not\(\.thumbnail-stack-toolbar-entering\) \.thumbnail-stack-minimize:focus-visible \{[\s\S]*?cursor:\s*pointer/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-toolbar\s*\{[\s\S]*?cursor:\s*pointer/,
     );
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-toolbar:not\(\.thumbnail-stack-toolbar-leaving\):not\(\.thumbnail-stack-toolbar-exiting\):not\(\.thumbnail-stack-toolbar-entering\) \.thumbnail-stack-minimize:active/,
@@ -595,6 +654,41 @@ describe("thumbnail stack layout", () => {
     );
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-anchor-top\.thumbnail-stack-minimizing\.thumbnail-stack-minimize-run > \.thumbnail-card\s*\{[\s\S]*?top:\s*28px/,
+    );
+  });
+
+  it("centers mini-preview tooltips on their icons and flips them away from the stack edge", () => {
+    const iconTip = thumbnailStyles.match(/\.icon-button::after\s*\{([^}]*)\}/);
+    const editorTip = thumbnailStyles.match(/\.thumbnail-editor-control-tip\s*\{([^}]*)\}/);
+    const stackTip = thumbnailStyles.match(
+      /\.thumbnail-stack-control\[data-tooltip\]::after\s*\{([^}]*)\}/,
+    );
+    const deleteFreeze = thumbnailStyles.match(
+      /\.thumbnail-exit-delete \.icon-button\.delete::after\s*\{([^}]*)\}/,
+    );
+
+    expect(iconTip?.[1]).toMatch(/left:\s*50%/);
+    expect(iconTip?.[1]).toMatch(/translate:\s*-50% 0/);
+    expect(iconTip?.[1]).toMatch(/justify-self:\s*start/);
+    expect(editorTip?.[1]).toMatch(/left:\s*50%/);
+    expect(editorTip?.[1]).toMatch(/translate:\s*-50% 0/);
+    expect(stackTip?.[1]).toMatch(/left:\s*50%/);
+    expect(stackTip?.[1]).toMatch(/translate:\s*-50% 0/);
+    expect(stackTip?.[1]).toMatch(/bottom:\s*calc\(100% \+ 6px\)/);
+    expect(deleteFreeze?.[1]).toMatch(/transform:\s*translateY\(0\)/);
+
+    expect(thumbnailStyles).not.toMatch(/\.thumbnail-top-left \.icon-button::after/);
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-top-actions \.icon-button::after\s*\{[\s\S]*?bottom:\s*calc\(100% \+ 6px\)/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-anchor-top \.thumbnail-top-actions \.icon-button::after\s*\{[\s\S]*?top:\s*calc\(100% \+ 6px\)/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-anchor-top \.thumbnail-editor-control-tip\s*\{[\s\S]*?top:\s*calc\(100% \+ 6px\)/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-toolbar-anchor-top \.thumbnail-stack-control\[data-tooltip\]::after\s*\{[\s\S]*?top:\s*calc\(100% \+ 6px\)/,
     );
   });
 
@@ -950,16 +1044,22 @@ describe("thumbnail stack layout", () => {
     ]);
   });
 
-  it("animates only when the required shift increases", () => {
+  it("animates only when the required shift magnitude increases", () => {
     expect(shouldAnimateThumbnailStackShift(0, THUMBNAIL_CARD_SLOT_PX)).toBe(true);
     expect(shouldAnimateThumbnailStackShift(THUMBNAIL_CARD_SLOT_PX, THUMBNAIL_CARD_SLOT_PX * 2))
       .toBe(true);
-    // Slot removal reflows layout; transform must snap down to cancel the jump.
+    // Slot removal reflows layout; transform must snap to cancel the jump.
     expect(shouldAnimateThumbnailStackShift(THUMBNAIL_CARD_SLOT_PX * 2, THUMBNAIL_CARD_SLOT_PX))
       .toBe(false);
     expect(shouldAnimateThumbnailStackShift(THUMBNAIL_CARD_SLOT_PX, 0)).toBe(false);
     expect(shouldAnimateThumbnailStackShift(THUMBNAIL_CARD_SLOT_PX, THUMBNAIL_CARD_SLOT_PX))
       .toBe(false);
+    expect(shouldAnimateThumbnailStackShift(0, -THUMBNAIL_CARD_SLOT_PX)).toBe(true);
+    expect(shouldAnimateThumbnailStackShift(-THUMBNAIL_CARD_SLOT_PX, -THUMBNAIL_CARD_SLOT_PX * 2))
+      .toBe(true);
+    expect(shouldAnimateThumbnailStackShift(-THUMBNAIL_CARD_SLOT_PX * 2, -THUMBNAIL_CARD_SLOT_PX))
+      .toBe(false);
+    expect(shouldAnimateThumbnailStackShift(-THUMBNAIL_CARD_SLOT_PX, 0)).toBe(false);
   });
 
   it("clamps exiting cards to their current shift so they cannot jump up or chase new holes", () => {
@@ -1067,6 +1167,67 @@ describe("thumbnail stack layout", () => {
     ]);
   });
 
+  it("slides later cards up into a top-anchored hole instead of earlier cards down", () => {
+    // Top-anchored DOM is newest-first. Delete the middle preview: Show less
+    // and preview 1 stay put, preview 3 slides up into the hole.
+    const cards = [
+      card({}),
+      card({ exiting: true, holdsLayoutSlot: true, motionReady: true }),
+      card({}),
+    ];
+    expect(computeThumbnailStackShifts(cards, { fromTop: true })).toEqual([
+      0,
+      0,
+      -thumbnailStackShiftPx(1),
+    ]);
+  });
+
+  it("slides every live card below a top pair of exits up by two slots", () => {
+    const cards = [
+      card({ exiting: true, holdsLayoutSlot: true, motionReady: true }),
+      card({ exiting: true, holdsLayoutSlot: true, motionReady: true }),
+      card({}),
+      card({}),
+    ];
+    expect(computeThumbnailStackShifts(cards, { fromTop: true })).toEqual([
+      0,
+      0,
+      -thumbnailStackShiftPx(2),
+      -thumbnailStackShiftPx(2),
+    ]);
+  });
+
+  it("keeps live cards ahead of a neighbor that froze mid-settle when top-anchored", () => {
+    // Delete 2, then delete 3 before 3 finishes sliding up into 2. 4 must stay
+    // behind 3 instead of completing the slide into a still-solid preview.
+    const cards = [
+      card({}),
+      card({ exiting: true, holdsLayoutSlot: true, motionReady: true }),
+      card({
+        exiting: true,
+        holdsLayoutSlot: true,
+        motionReady: false,
+        currentShiftPx: -thumbnailStackShiftPx(1) * 0.85,
+      }),
+      card({}),
+    ];
+    expect(computeThumbnailStackShifts(cards, { fromTop: true })).toEqual([
+      0,
+      0,
+      -thumbnailStackShiftPx(1) * 0.85,
+      -thumbnailStackShiftPx(1) * 0.85,
+    ]);
+  });
+
+  it("does not slide earlier cards down when a top-anchored hole is ready", () => {
+    const cards = [
+      card({}),
+      card({ exiting: true, holdsLayoutSlot: true, motionReady: true }),
+      card({}),
+    ];
+    expect(computeThumbnailStackShifts(cards, { fromTop: true })[0]).toBe(0);
+  });
+
   it("snaps an exiting card's shift down when a hole below is removed", () => {
     const cards = [
       card({ exiting: true, currentShiftPx: thumbnailStackShiftPx(1) }),
@@ -1081,6 +1242,12 @@ describe("thumbnail stack layout", () => {
     );
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-card\.thumbnail-stack-shifting\.thumbnail-exiting\s*\{[^}]*filter:\s*none/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack:not\(\.thumbnail-stack-anchor-top\) \.thumbnail-card:not\(\.thumbnail-exiting\):has\(~ \.thumbnail-exit-delete\.thumbnail-exit-dust\)::before/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-anchor-top \.thumbnail-exit-delete\.thumbnail-exit-dust ~ \.thumbnail-card:not\(\.thumbnail-exiting\)::before/,
     );
   });
 
@@ -1245,14 +1412,190 @@ describe("thumbnail stack layout", () => {
     }
   });
 
+  it("slides later cards up on a top-anchored stack and leaves earlier cards put", async () => {
+    vi.useFakeTimers();
+    const stack = document.createElement("main");
+    stack.className = "thumbnail-stack thumbnail-stack-anchor-top";
+    const first = document.createElement("article");
+    first.className = "thumbnail-card";
+    const second = document.createElement("article");
+    second.className = "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
+    const third = document.createElement("article");
+    third.className = "thumbnail-card";
+    stack.append(first, second, third);
+    const dispose = createThumbnailStackShiftController(stack);
+
+    try {
+      await Promise.resolve();
+      vi.advanceTimersByTime(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16);
+      expect(first).not.toHaveClass("thumbnail-stack-shifting");
+      expect(first.style.getPropertyValue("--thumbnail-stack-shift")).toBe("");
+      expect(first.style.translate).toBe("");
+      expect(third).toHaveClass("thumbnail-stack-shifting");
+      expect(third.style.getPropertyValue("--thumbnail-stack-shift")).toBe(
+        `${-THUMBNAIL_CARD_SLOT_PX}px`,
+      );
+      expect(third.style.translate).toBe(`0 ${-THUMBNAIL_CARD_SLOT_PX}px`);
+    } finally {
+      dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("snaps a top-anchored upward shift off when the hole above is removed", async () => {
+    vi.useFakeTimers();
+    const stack = document.createElement("main");
+    stack.className = "thumbnail-stack thumbnail-stack-anchor-top";
+    const exiting = document.createElement("article");
+    exiting.className = "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
+    const survivor = document.createElement("article");
+    survivor.className = "thumbnail-card";
+    stack.append(exiting, survivor);
+    const dispose = createThumbnailStackShiftController(stack);
+
+    try {
+      await Promise.resolve();
+      vi.advanceTimersByTime(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16);
+      expect(survivor).toHaveClass("thumbnail-stack-shifting");
+      expect(survivor.style.getPropertyValue("--thumbnail-stack-shift")).toBe(
+        `${-THUMBNAIL_CARD_SLOT_PX}px`,
+      );
+
+      exiting.remove();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(survivor).not.toHaveClass("thumbnail-stack-shifting");
+      expect(survivor.style.getPropertyValue("--thumbnail-stack-shift")).toBe("");
+      expect(survivor.style.translate).toBe("");
+    } finally {
+      dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("snapshots a top-anchored upward settle as compact depth when collapsing", async () => {
+    vi.useFakeTimers();
+    const stack = document.createElement("main");
+    stack.className = "thumbnail-stack thumbnail-stack-anchor-top";
+    const exiting = document.createElement("article");
+    exiting.className = "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
+    const survivor = document.createElement("article");
+    survivor.className = "thumbnail-card";
+    stack.append(exiting, survivor);
+    const dispose = createThumbnailStackShiftController(stack);
+
+    try {
+      await Promise.resolve();
+      vi.advanceTimersByTime(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16);
+      expect(survivor.style.translate).toBe(`0 ${-THUMBNAIL_CARD_SLOT_PX}px`);
+
+      stack.classList.add("thumbnail-stack-compact");
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(survivor).not.toHaveClass("thumbnail-stack-shifting");
+      expect(survivor.style.translate).toBe("");
+      expect(survivor.style.getPropertyValue("--thumbnail-stack-shift-slots")).toBe("1");
+
+      exiting.remove();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(survivor.style.getPropertyValue("--thumbnail-stack-shift-slots")).toBe("");
+    } finally {
+      dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("rebases compact shift-slots when one of two held exits unmounts", async () => {
+    vi.useFakeTimers();
+    const stack = document.createElement("main");
+    stack.className = "thumbnail-stack thumbnail-stack-anchor-top";
+    const first = document.createElement("article");
+    first.className = "thumbnail-card";
+    const second = document.createElement("article");
+    second.className = "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
+    const third = document.createElement("article");
+    third.className = "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
+    const fourth = document.createElement("article");
+    fourth.className = "thumbnail-card";
+    stack.append(first, second, third, fourth);
+    const dispose = createThumbnailStackShiftController(stack);
+
+    try {
+      await Promise.resolve();
+      vi.advanceTimersByTime(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16);
+      expect(fourth.style.translate).toBe(`0 ${-THUMBNAIL_CARD_SLOT_PX * 2}px`);
+
+      stack.classList.add("thumbnail-stack-compact");
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(fourth.style.getPropertyValue("--thumbnail-stack-shift-slots")).toBe("2");
+
+      second.remove();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(fourth.style.getPropertyValue("--thumbnail-stack-shift-slots")).toBe("1");
+
+      third.remove();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(fourth.style.getPropertyValue("--thumbnail-stack-shift-slots")).toBe("");
+    } finally {
+      dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears compact shift-slots on a lower survivor after a top-anchored middle delete unmounts", async () => {
+    vi.useFakeTimers();
+    const stack = document.createElement("main");
+    stack.className = "thumbnail-stack thumbnail-stack-anchor-top";
+    const first = document.createElement("article");
+    first.className = "thumbnail-card";
+    const exiting = document.createElement("article");
+    exiting.className = "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
+    const third = document.createElement("article");
+    third.className = "thumbnail-card";
+    stack.append(first, exiting, third);
+    const dispose = createThumbnailStackShiftController(stack);
+
+    try {
+      await Promise.resolve();
+      vi.advanceTimersByTime(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16);
+      expect(first.style.translate).toBe("");
+      expect(third.style.translate).toBe(`0 ${-THUMBNAIL_CARD_SLOT_PX}px`);
+
+      stack.classList.add("thumbnail-stack-compact");
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(first.style.getPropertyValue("--thumbnail-stack-shift-slots")).toBe("");
+      expect(third.style.getPropertyValue("--thumbnail-stack-shift-slots")).toBe("1");
+
+      exiting.remove();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(third.style.getPropertyValue("--thumbnail-stack-shift-slots")).toBe("");
+    } finally {
+      dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("treats a compact pile as suppressing expanded slot shifts", () => {
     const stack = document.createElement("main");
     stack.className = "thumbnail-stack";
     expect(thumbnailStackSuppressesSlotShift(stack)).toBe(false);
+    expect(thumbnailStackShiftsFromTop(stack)).toBe(false);
     stack.classList.add("thumbnail-stack-compact");
     expect(thumbnailStackSuppressesSlotShift(stack)).toBe(true);
+    stack.classList.add("thumbnail-stack-anchor-top");
+    expect(thumbnailStackShiftsFromTop(stack)).toBe(true);
     expect(thumbnailStackShiftSlots(THUMBNAIL_CARD_SLOT_PX)).toBe(1);
+    expect(thumbnailStackShiftSlots(-THUMBNAIL_CARD_SLOT_PX)).toBe(1);
     expect(thumbnailStackShiftSlots(0)).toBe(0);
+    expect(hasThumbnailStackShiftPx(THUMBNAIL_CARD_SLOT_PX)).toBe(true);
+    expect(hasThumbnailStackShiftPx(-THUMBNAIL_CARD_SLOT_PX)).toBe(true);
+    expect(hasThumbnailStackShiftPx(0)).toBe(false);
   });
 
   it("clears slot shifts while the stack is compact and restores them after expand", async () => {
@@ -1369,6 +1712,10 @@ describe("thumbnail stack layout", () => {
   it("restores the shifting class from a leftover stack offset", () => {
     const card = document.createElement("article");
     card.style.setProperty("--thumbnail-stack-shift", `${THUMBNAIL_CARD_SLOT_PX}px`);
+    restoreThumbnailStackShiftClass(card);
+    expect(card).toHaveClass("thumbnail-stack-shifting");
+    card.style.setProperty("--thumbnail-stack-shift", `${-THUMBNAIL_CARD_SLOT_PX}px`);
+    card.classList.remove("thumbnail-stack-shifting");
     restoreThumbnailStackShiftClass(card);
     expect(card).toHaveClass("thumbnail-stack-shifting");
     card.style.removeProperty("--thumbnail-stack-shift");
