@@ -2200,7 +2200,8 @@
 /*
  * Secondary layer settings open from ⋯. Fixed positioning is set inline so the
  * scrollable layer list cannot clip the popover; the card sits beside the
- * sidebar (over the canvas) rather than covering the list.
+ * sidebar (over the canvas) rather than covering the list. Select menus portal
+ * to the document so they can also escape this card.
  */
 .screenshot-layer-menu {
   position: relative;

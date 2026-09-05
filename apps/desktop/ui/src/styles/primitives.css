@@ -644,12 +644,9 @@
 }
 
 .custom-select-listbox {
-  position: absolute;
-  z-index: 100;
-  top: calc(100% + 6px);
-  right: 0;
+  position: fixed;
+  z-index: 400;
   width: max-content;
-  min-width: 100%;
   max-width: min(360px, calc(100vw - 16px));
   max-height: 260px;
   padding: var(--s-2);
@@ -659,11 +656,6 @@
   background: var(--surface-overlay);
   box-shadow: var(--shadow-lg);
   animation: ui-pop-in var(--dur-2) var(--ease-out);
-}
-
-.custom-select.open-above .custom-select-listbox {
-  top: auto;
-  bottom: calc(100% + 6px);
 }
 
 .custom-select-listbox button {

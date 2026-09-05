@@ -4,9 +4,12 @@ use crate::cursor_policy::{
     ThumbnailHoverCursor, capture_cursor_monitor_action, capture_escape_should_dispatch,
     capture_surface_focus_retry_allowed, cursor_claim_panel_should_resign_key,
     cursor_claim_panel_should_show, macos_key_code_is_escape, overlay_prepare_keeps_native_cursor,
-    suppress_document_cursor_rects_for_thumbnail, thumbnail_may_take_key_window,
-    thumbnail_passthrough_disables_cursor_rects, thumbnail_poll_is_live,
-    thumbnail_resets_cursor_on_exit, thumbnail_unpolled_hover,
+    suppress_document_cursor_rects_for_thumbnail, thumbnail_foreign_mouse_click_must_resign_key,
+    thumbnail_may_take_key_window, thumbnail_passthrough_disables_cursor_rects,
+    thumbnail_passthrough_must_resign_key, thumbnail_poll_is_live, thumbnail_resets_cursor_on_exit,
+    thumbnail_resign_active_may_retake_key, thumbnail_stale_poll_may_disable_click_through,
+    thumbnail_stale_poll_may_take_key_window, thumbnail_stale_poll_must_resign_key,
+    thumbnail_unpolled_hover,
 };
 
 use std::{
@@ -309,6 +312,11 @@ impl CursorTrackingOwner {
         if let Some(window) = self.event_or_tracked_window(Some(event))
             && !window.isKeyWindow()
         {
+            if self.ivars().surface == CursorSurface::Thumbnail
+                && thumbnail_passthrough_must_resign_key(window.ignoresMouseEvents())
+            {
+                return;
+            }
             if self.ivars().surface == CursorSurface::Thumbnail {
                 remember_frontmost_app_before_thumbnail_key();
             }
@@ -562,6 +570,15 @@ fn resign_passthrough_thumbnail_if_key() {
     }
 }
 
+fn resign_thumbnail_key_if_held() {
+    let Some(thumbnail) = thumbnail_ns_window() else {
+        return;
+    };
+    if thumbnail.isKeyWindow() {
+        resign_ns_window_key_without_raising_documents(thumbnail);
+    }
+}
+
 fn point_in_ns_rect(point: NSPoint, rect: NSRect) -> bool {
     point.x >= rect.origin.x
         && point.y >= rect.origin.y
@@ -625,7 +642,12 @@ fn thumbnail_key_window_for_mouse_up(event: &NSEvent) -> Option<usize> {
         return None;
     }
     let main_thread = MainThreadMarker::new()?;
-    let window = event.window(main_thread)?;
+    let Some(window) = event.window(main_thread) else {
+        // Dragging the stack can deliver mouse-up without `event.window()`.
+        // Resign immediately so leftover key status cannot swallow typing.
+        resign_thumbnail_key_if_held();
+        return None;
+    };
     if !should_release_thumbnail_key_after_event(cursor_surface_for_window(&window), event.r#type())
         || !window.isKeyWindow()
     {
@@ -794,6 +816,17 @@ fn handle_global_cursor_event(event: &NSEvent) {
     if event.r#type() == NSEventType::FlagsChanged {
         return;
     }
+    if matches!(
+        event.r#type(),
+        NSEventType::LeftMouseDown | NSEventType::LeftMouseUp
+    ) && thumbnail_foreign_mouse_click_must_resign_key()
+    {
+        // This click went to another app, including through click-through
+        // empty mini-preview chrome. Drop key so that app can receive typing.
+        THUMBNAIL_KEY_WINDOW_ALLOWED.store(false, Ordering::Release);
+        resign_thumbnail_key_if_held();
+        return;
+    }
     apply_thumbnail_hover_from_global_pointer();
 }
 
@@ -804,20 +837,32 @@ fn apply_thumbnail_hover_from_global_pointer() {
     let Some(window) = thumbnail_ns_window() else {
         return;
     };
-    if !point_in_ns_rect(NSEvent::mouseLocation(), window.frame()) {
+    if !point_in_ns_rect(NSEvent::mouseLocation(), window.frame())
+        || thumbnail_passthrough_must_resign_key(window.ignoresMouseEvents())
+    {
+        resign_thumbnail_key_if_held();
         return;
     }
-    if !thumbnail_pointer_poll_is_live() {
-        // Frozen JS poll can leave the stack click-through. Tracking areas do
-        // not fire on a window that ignores mouse events, so enable them before
-        // hover.
+    if thumbnail_pointer_poll_is_live() {
+        return;
+    }
+    // Frozen JS must not treat the whole (often tall) panel as a live card.
+    // Disabling click-through or taking/keeping key here covers whichever app
+    // sits under empty chrome after a collapse/drag and swallows typing.
+    if thumbnail_stale_poll_must_resign_key() {
+        resign_thumbnail_key_if_held();
+    } else if cursor_mode_is_interactive(thumbnail_cursor_mode()) {
+        let _ = apply_unpolled_thumbnail_hover_cursor();
+    }
+    if thumbnail_stale_poll_may_disable_click_through() {
         window.setIgnoresMouseEvents(false);
+    }
+    if thumbnail_stale_poll_may_take_key_window() {
         THUMBNAIL_KEY_WINDOW_ALLOWED.store(true, Ordering::Release);
         if cursor_surface_can_take_key_window(CursorSurface::Thumbnail) && !window.isKeyWindow() {
             remember_frontmost_app_before_thumbnail_key();
             window.makeKeyWindow();
         }
-        let _ = apply_unpolled_thumbnail_hover_cursor();
     }
 }
 
@@ -828,8 +873,13 @@ fn ensure_thumbnail_resign_active_observer() {
             return;
         }
         let block = RcBlock::new(|_notification: ptr::NonNull<NSNotification>| {
-            THUMBNAIL_KEY_WINDOW_ALLOWED.store(true, Ordering::Release);
-            apply_thumbnail_hover_from_global_pointer();
+            if thumbnail_resign_active_may_retake_key() {
+                THUMBNAIL_KEY_WINDOW_ALLOWED.store(true, Ordering::Release);
+                apply_thumbnail_hover_from_global_pointer();
+                return;
+            }
+            THUMBNAIL_KEY_WINDOW_ALLOWED.store(false, Ordering::Release);
+            resign_thumbnail_key_if_held();
         });
         let center = NSNotificationCenter::defaultCenter();
         let queue = NSOperationQueue::mainQueue();
@@ -2947,6 +2997,9 @@ pub fn set_thumbnail_cursor(
     }
     let native_window = native_window(window)?;
     remember_thumbnail_window(native_window);
+    if thumbnail_passthrough_must_resign_key(native_window.ignoresMouseEvents()) {
+        return reset_pointing_cursor_state(window);
+    }
     let interactive = thumbnail_kind_to_hover(kind).is_interactive();
     let mode = match kind {
         ThumbnailCursorKind::Default => CursorMode::WebView,
@@ -3010,6 +3063,9 @@ pub fn reassert_thumbnail_cursor(
         return reset_pointing_cursor_state(window);
     }
     let native_window = native_window(window)?;
+    if thumbnail_passthrough_must_resign_key(native_window.ignoresMouseEvents()) {
+        return reset_pointing_cursor_state(window);
+    }
     if cursor_surface_can_take_key_window(CursorSurface::Thumbnail) && !native_window.isKeyWindow()
     {
         remember_frontmost_app_before_thumbnail_key();
@@ -3241,6 +3297,9 @@ fn cursor_surface_can_take_key_window_with_thumbnail_allowed(
 }
 
 fn cursor_surface_can_take_key_window(surface: CursorSurface) -> bool {
+    if surface == CursorSurface::Thumbnail && !thumbnail_pointer_poll_is_live() {
+        return false;
+    }
     cursor_surface_can_take_key_window_with_thumbnail_allowed(
         surface,
         THUMBNAIL_KEY_WINDOW_ALLOWED.load(Ordering::Acquire),
@@ -3581,10 +3640,17 @@ mod tests {
         let previous_overlay = CAPTURE_OVERLAY_OWNS_CURSOR.swap(false, Ordering::AcqRel);
 
         assert!(!reassert_thumbnail_cursor_after_click());
-        assert!(apply_unpolled_thumbnail_hover_cursor());
+        assert!(
+            !apply_unpolled_thumbnail_hover_cursor(),
+            "empty chrome must not become a live card when the JS poll is stale"
+        );
 
         THUMBNAIL_CURSOR_MODE.store(CursorMode::PointingHand as u8, Ordering::Release);
         assert!(reassert_thumbnail_cursor_after_click());
+        assert!(
+            !apply_unpolled_thumbnail_hover_cursor(),
+            "a stale poll must drop leftover pointer/grab instead of keeping the panel key"
+        );
 
         THUMBNAIL_CURSOR_MODE.store(CursorMode::OpenHand as u8, Ordering::Release);
         assert!(reassert_thumbnail_cursor_after_click());
@@ -3630,18 +3696,18 @@ mod tests {
     }
 
     #[test]
-    fn unpolled_thumbnail_hover_promotes_the_arrow_to_a_pointing_hand() {
+    fn unpolled_thumbnail_hover_does_not_promote_empty_chrome() {
         assert_eq!(
             thumbnail_hover_to_cursor_mode(
                 cursor_mode_to_thumbnail_hover(CursorMode::Arrow).unpolled_hover()
             ),
-            CursorMode::PointingHand
+            CursorMode::WebView
         );
         assert_eq!(
             thumbnail_hover_to_cursor_mode(
                 cursor_mode_to_thumbnail_hover(CursorMode::OpenHand).unpolled_hover()
             ),
-            CursorMode::OpenHand
+            CursorMode::WebView
         );
     }
 

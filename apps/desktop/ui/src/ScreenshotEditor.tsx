@@ -16,6 +16,7 @@ import { createPortal } from "react-dom";
 
 import { CompressionPreview } from "./CompressionPreview";
 import { createCleanupRegistry } from "./lib/cleanupRegistry";
+import { eventTargetBelongsToSelectIn } from "./lib/customSelectMenu";
 import { sameSortedIds } from "./lib/editorPresence";
 import { fileSizeDeltaBaseline, formatFileSize, formatFileSizeDelta } from "./lib/format";
 import {
@@ -2068,6 +2069,8 @@ export function ScreenshotEditor() {
       if (target && (
         layerMenuRootRef.current?.contains(target)
         || layerMenuPanelRef.current?.contains(target)
+        || eventTargetBelongsToSelectIn(layerMenuPanelRef.current, target)
+        || eventTargetBelongsToSelectIn(layerMenuRootRef.current, target)
       )) return;
       setLayerMenuId(null);
     };

@@ -734,28 +734,34 @@ html.capture-selector-display {
   color: var(--glass-text-subtle);
 }
 
-.recording-selector-panel .custom-select-listbox {
+.recording-selector-panel .custom-select-listbox,
+.custom-select-listbox-glass {
   border-color: var(--glass-border);
   color: var(--glass-text);
   background: var(--glass-raised);
   backdrop-filter: var(--glass-blur);
 }
 
-.recording-selector-panel .custom-select-listbox button {
+.recording-selector-panel .custom-select-listbox button,
+.custom-select-listbox-glass button {
   color: var(--glass-text-muted);
 }
 
 .recording-selector-panel .custom-select-listbox button.active,
-.recording-selector-panel .custom-select-listbox button:hover:not(:disabled) {
+.recording-selector-panel .custom-select-listbox button:hover:not(:disabled),
+.custom-select-listbox-glass button.active,
+.custom-select-listbox-glass button:hover:not(:disabled) {
   color: var(--glass-text);
   background: var(--glass-hover);
 }
 
-.recording-selector-panel .custom-select-listbox button[aria-selected="true"] {
+.recording-selector-panel .custom-select-listbox button[aria-selected="true"],
+.custom-select-listbox-glass button[aria-selected="true"] {
   color: var(--glass-text);
 }
 
-.recording-selector-panel .custom-select-option-copy small {
+.recording-selector-panel .custom-select-option-copy small,
+.custom-select-listbox-glass .custom-select-option-copy small {
   color: var(--glass-text-subtle);
 }
 

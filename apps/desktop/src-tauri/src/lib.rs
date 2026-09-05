@@ -299,6 +299,7 @@ pub fn run() {
             set_mini_preview_stack_position,
             get_thumbnail_pointer_position,
             get_capture_pointer_position,
+            thumbnail_pointer_poll_available,
             set_thumbnail_cursor,
             reassert_thumbnail_cursor,
             set_thumbnail_ignore_cursor_events,
@@ -788,7 +789,8 @@ async fn prepare_capture(
     }
     let active = capture_session_to_active(&session);
     state.sessions.lock().insert(id, session);
-    CAPTURE_ESCAPE_INTENT.store(false, Ordering::Release);
+    // Keep shortcut intent until the overlay is actually on screen. Clearing
+    // it here unregisters Escape on Windows/Linux while show() is still queued.
     show_capture_window(&app, &active);
     sync_capture_escape(&app);
     if let Some(task) = pending_windows {
@@ -2008,6 +2010,7 @@ fn show_capture_overlay(
             window.set_focus().map_err(|error| error.to_string())?;
             let _ = mode;
         }
+        handoff_capture_escape_from_intent(&app, window.is_visible().unwrap_or(false));
         Ok(())
     } else {
         Err("capture overlay is unavailable".to_owned())
@@ -2049,6 +2052,7 @@ fn reveal_capture_overlay(
         window.set_focus().map_err(|error| error.to_string())?;
         apply_overlay_capture_cursor(&window, mode)?;
     }
+    handoff_capture_escape_from_intent(&app, window.is_visible().unwrap_or(false));
     Ok(())
 }
 
@@ -2241,6 +2245,23 @@ fn get_capture_pointer_position(window: tauri::WebviewWindow) -> Option<Thumbnai
     webview_pointer_position(&window)
 }
 
+/// False on Wayland-only Linux, where `mouse_position` cannot sample the cursor.
+#[tauri::command]
+fn thumbnail_pointer_poll_available() -> bool {
+    thumbnail_global_pointer_poll_available(cfg!(target_os = "linux"), x11_display_is_present())
+}
+
+const fn thumbnail_global_pointer_poll_available(is_linux: bool, x11_display: bool) -> bool {
+    !is_linux || x11_display
+}
+
+fn x11_display_is_present() -> bool {
+    #[cfg(target_os = "linux")]
+    return x11_display_available();
+    #[cfg(not(target_os = "linux"))]
+    false
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum ThumbnailCursorKind {
@@ -2422,7 +2443,12 @@ fn set_thumbnail_ignore_cursor_events(
     let window = app
         .get_webview_window("thumbnail")
         .ok_or_else(|| "capture thumbnail is unavailable".to_owned())?;
-    set_click_through(&window, effective_ignore).map_err(|error| error.to_string())
+    set_click_through(&window, effective_ignore).map_err(|error| error.to_string())?;
+    #[cfg(target_os = "macos")]
+    if captures_macos_window::thumbnail_passthrough_must_resign_key(effective_ignore) {
+        let _ = captures_macos_window::resign_panel_key_without_raising_documents(&window);
+    }
+    Ok(())
 }
 
 /// Re-arm the preview stack after sleep/resume or a hung WebView.
@@ -2447,9 +2473,10 @@ fn refresh_thumbnail_interactivity(
         state.thumbnail_visibility.lock().reset_session_placement();
         return Ok(());
     }
-    // Always re-enable hit testing first — a stuck click-through state is the
-    // usual "frozen previews" symptom after sleep.
-    let _ = set_click_through(&window, false);
+    // Never force the tall stack hit-testable. Collapsed piles keep the
+    // expanded window height; empty chrome would cover other apps and steal
+    // clicks and typing until JS polls. Restore z-order only. The pointer poll
+    // re-enables hits while the cursor is actually on a live card.
     let _ = window.set_always_on_top(true);
     if !suppressed {
         // Re-apply geometry after display sleep (DPI / work area can change).
@@ -4168,6 +4195,15 @@ pub(crate) fn disarm_capture_escape_intent(app: &AppHandle) {
     sync_capture_escape(app);
 }
 
+/// Drop shortcut intent only after a capture surface is visible so Windows and
+/// Linux keep the Escape hook registered through the async overlay show.
+fn handoff_capture_escape_from_intent(app: &AppHandle, surface_visible: bool) {
+    if captures_session::capture_escape_may_drop_intent(surface_visible) {
+        CAPTURE_ESCAPE_INTENT.store(false, Ordering::Release);
+    }
+    sync_capture_escape(app);
+}
+
 pub(crate) fn sync_capture_escape(app: &AppHandle) {
     let state = app.state::<Arc<AppState>>().inner().clone();
     let active = capture_escape_ui_is_active(app, &state);
@@ -4182,17 +4218,14 @@ pub(crate) fn sync_capture_escape(app: &AppHandle) {
 }
 
 fn capture_escape_ui_is_active(app: &AppHandle, state: &AppState) -> bool {
-    captures_session::CaptureEscapeUi {
-        screenshot_overlay: CAPTURE_ESCAPE_INTENT.load(Ordering::Acquire)
-            || !state.sessions.lock().is_empty()
-            || window_is_visible(app, "overlay"),
-        recording_selector: state.recording_selection.lock().is_some()
-            || window_is_visible(app, "recording-selector"),
-        screenshot_countdown: screenshot_countdown_is_active(state)
-            || window_is_visible(app, "screenshot-countdown"),
-        recording_countdown: recording::recording_countdown_is_active(state)
+    captures_session::CaptureEscapeUi::from_live_surfaces(
+        CAPTURE_ESCAPE_INTENT.load(Ordering::Acquire),
+        window_is_visible(app, "overlay"),
+        state.recording_selection.lock().is_some() || window_is_visible(app, "recording-selector"),
+        screenshot_countdown_is_active(state) || window_is_visible(app, "screenshot-countdown"),
+        recording::recording_countdown_is_active(state)
             || window_is_visible(app, "recording-countdown"),
-    }
+    )
     .is_armed()
 }
 
@@ -6218,9 +6251,10 @@ fn show_thumbnail_window(window: &tauri::WebviewWindow) {
 }
 
 fn show_thumbnail_window_inner(window: &tauri::WebviewWindow) {
-    // Sleep/resume and compositor handoffs can leave the window click-through.
-    // Showing always re-arms hit testing; the JS hover poll then re-applies
-    // ignore-cursor for empty stack chrome within a frame.
+    // Showing after a capture re-arms hit testing because the new card is
+    // typically under the pointer. Sleep/resume recovery must not do this:
+    // a preserved-height collapsed window would cover other apps. The JS
+    // hover poll then re-applies ignore-cursor for empty stack chrome.
     let _ = set_click_through(window, false);
     // Tauri's hide pauses the WebView lifecycle on macOS. Resume it through
     // Tauri before raising the native panel so React hover and IPC polling do
@@ -9114,7 +9148,7 @@ mod tests {
                 false,
                 captures_macos_window::ThumbnailHoverCursor::Default,
             ),
-            captures_macos_window::ThumbnailHoverCursor::Pointer
+            captures_macos_window::ThumbnailHoverCursor::Default
         );
         assert_eq!(
             captures_macos_window::thumbnail_unpolled_hover(
@@ -9852,6 +9886,45 @@ mod tests {
         assert_eq!(thumbnail_cursor_ignore_update(false, false), Some(false));
         assert_eq!(thumbnail_cursor_ignore_update(false, true), Some(true));
         assert_eq!(thumbnail_cursor_ignore_update(true, false), None);
+    }
+
+    #[test]
+    fn leftover_capture_sessions_do_not_keep_escape_armed() {
+        assert!(
+            !captures_session::CaptureEscapeUi::from_live_surfaces(
+                false, false, false, false, false
+            )
+            .is_armed()
+        );
+        assert!(
+            captures_session::CaptureEscapeUi::from_live_surfaces(true, false, false, false, false)
+                .is_armed()
+        );
+        assert!(!captures_session::windows_escape_hook_should_swallow(false));
+        assert!(!captures_session::capture_escape_may_drop_intent(false));
+        assert!(captures_session::capture_escape_may_drop_intent(true));
+    }
+
+    #[test]
+    fn wayland_only_sessions_cannot_poll_the_thumbnail_pointer() {
+        assert!(super::thumbnail_global_pointer_poll_available(false, false));
+        assert!(super::thumbnail_global_pointer_poll_available(true, true));
+        assert!(!super::thumbnail_global_pointer_poll_available(true, false));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn leftover_mini_preview_chrome_must_not_steal_desktop_input() {
+        assert!(captures_macos_window::thumbnail_refresh_must_not_force_hit_testing());
+        assert!(captures_macos_window::thumbnail_passthrough_must_resign_key(true));
+        assert!(!captures_macos_window::thumbnail_stale_poll_may_take_key_window());
+        assert!(!captures_macos_window::thumbnail_stale_poll_may_disable_click_through());
+        assert!(captures_macos_window::thumbnail_stale_poll_must_resign_key());
+        assert!(!captures_macos_window::thumbnail_resign_active_may_retake_key());
+        assert!(captures_macos_window::thumbnail_foreign_mouse_click_must_resign_key());
+        assert!(!captures_macos_window::capture_escape_should_dispatch(
+            false, false, true
+        ));
     }
 
     #[test]

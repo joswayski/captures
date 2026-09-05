@@ -335,7 +335,7 @@ describe("Thumbnail", () => {
     await waitFor(() => {
       expect(vi.mocked(invoke)).toHaveBeenCalledWith(
         "set_thumbnail_ignore_cursor_events",
-        { ignore: false },
+        { ignore: true },
       );
     });
     expect(vi.mocked(invoke).mock.calls.some(([command]) => (
@@ -951,7 +951,7 @@ describe("Thumbnail", () => {
     expect(ignoreCalls.at(-1)?.[1]).toEqual({ ignore: false });
   });
 
-  it("serializes native hit-test updates so a delayed click-through cannot beat re-arming", async () => {
+  it("does not re-arm the tall stack from a hit-test change without a live pointer sample", async () => {
     const clickThroughGate = { release: null as (() => void) | null };
     let nativeClickThrough = false;
     let pointerPoll = 0;
@@ -995,9 +995,9 @@ describe("Thumbnail", () => {
     await waitFor(() => {
       const ignoreCalls = vi.mocked(invoke).mock.calls
         .filter(([command]) => command === "set_thumbnail_ignore_cursor_events");
-      expect(ignoreCalls.at(-1)?.[1]).toEqual({ ignore: false });
+      expect(ignoreCalls.at(-1)?.[1]).toEqual({ ignore: true });
     });
-    expect(nativeClickThrough).toBe(false);
+    expect(nativeClickThrough).toBe(true);
   });
 
   it("minimizes previews into a layered stack and expands them again", async () => {

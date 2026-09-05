@@ -22,6 +22,25 @@ impl CaptureEscapeUi {
             || self.screenshot_countdown
             || self.recording_countdown
     }
+
+    /// Live capture surfaces that may own Escape. A leftover session map entry
+    /// is not enough: that would keep swallowing Escape after the overlay is
+    /// gone and block the rest of the computer.
+    #[must_use]
+    pub const fn from_live_surfaces(
+        capture_intent: bool,
+        overlay_visible: bool,
+        recording_selector: bool,
+        screenshot_countdown: bool,
+        recording_countdown: bool,
+    ) -> Self {
+        Self {
+            screenshot_overlay: capture_intent || overlay_visible,
+            recording_selector,
+            screenshot_countdown,
+            recording_countdown,
+        }
+    }
 }
 
 #[must_use]
@@ -32,6 +51,22 @@ pub const fn macos_key_code_is_escape(key_code: u16) -> bool {
 #[must_use]
 pub const fn windows_vk_is_escape(vk: u32) -> bool {
     vk == WINDOWS_VK_ESCAPE
+}
+
+/// True when the Windows low-level hook may swallow Escape. Never swallow
+/// while capture UI is not armed; a stuck hook would lock the key on the
+/// whole computer.
+#[must_use]
+pub const fn windows_escape_hook_should_swallow(enabled: bool) -> bool {
+    enabled
+}
+
+/// Shortcut intent may drop only after a capture surface is on screen.
+/// Clearing it earlier unregisters the Windows hook and the global Escape
+/// hotkey while `show()` is still queued, so Escape cannot cancel.
+#[must_use]
+pub const fn capture_escape_may_drop_intent(surface_visible: bool) -> bool {
+    surface_visible
 }
 
 /// Escape cancels even if freeze-frame has not painted and another overlay is
@@ -109,7 +144,10 @@ mod windows_hook {
     }
 
     extern "system" fn capture_escape_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-        if code >= 0 && should_handle(wparam, lparam) {
+        if code >= 0
+            && super::windows_escape_hook_should_swallow(ENABLED.load(Ordering::Acquire))
+            && should_handle(wparam, lparam)
+        {
             return 1;
         }
         unsafe { CallNextHookEx(ptr::null_mut(), code, wparam, lparam) }
@@ -130,12 +168,12 @@ mod windows_hook {
             return false;
         }
         if is_down {
-            dispatch();
-            if ENABLED.load(Ordering::Acquire) {
-                SWALLOWED.store(true, Ordering::Release);
-                return true;
+            if !ENABLED.load(Ordering::Acquire) {
+                return false;
             }
-            return false;
+            dispatch();
+            SWALLOWED.store(true, Ordering::Release);
+            return true;
         }
         SWALLOWED.swap(false, Ordering::AcqRel)
     }
@@ -173,8 +211,9 @@ pub fn ensure_capture_escape_hook() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CaptureEscapeUi, MACOS_ESCAPE_KEY_CODE, WINDOWS_VK_ESCAPE,
-        capture_escape_overrides_focus_and_freeze, macos_key_code_is_escape, windows_vk_is_escape,
+        CaptureEscapeUi, MACOS_ESCAPE_KEY_CODE, WINDOWS_VK_ESCAPE, capture_escape_may_drop_intent,
+        capture_escape_overrides_focus_and_freeze, macos_key_code_is_escape,
+        windows_escape_hook_should_swallow, windows_vk_is_escape,
     };
 
     #[test]
@@ -221,5 +260,35 @@ mod tests {
     #[test]
     fn escape_cancels_even_when_focus_or_freeze_is_lost() {
         assert!(capture_escape_overrides_focus_and_freeze());
+    }
+
+    #[test]
+    fn leftover_sessions_do_not_keep_escape_armed() {
+        assert!(
+            CaptureEscapeUi::from_live_surfaces(true, false, false, false, false).is_armed(),
+            "shortcut intent must arm Escape before the overlay paints"
+        );
+        assert!(
+            CaptureEscapeUi::from_live_surfaces(false, true, false, false, false).is_armed(),
+            "a visible overlay must still be cancellable"
+        );
+        assert!(
+            !CaptureEscapeUi::from_live_surfaces(false, false, false, false, false).is_armed(),
+            "idle Captures must not swallow Escape"
+        );
+        assert!(CaptureEscapeUi::from_live_surfaces(false, false, true, false, false).is_armed());
+        assert!(CaptureEscapeUi::from_live_surfaces(false, false, false, true, false).is_armed());
+        assert!(CaptureEscapeUi::from_live_surfaces(false, false, false, false, true).is_armed());
+        assert!(
+            !capture_escape_may_drop_intent(false),
+            "intent must stay armed until the overlay or selector is visible"
+        );
+        assert!(capture_escape_may_drop_intent(true));
+    }
+
+    #[test]
+    fn windows_escape_hook_never_swallows_while_disarmed() {
+        assert!(windows_escape_hook_should_swallow(true));
+        assert!(!windows_escape_hook_should_swallow(false));
     }
 }
